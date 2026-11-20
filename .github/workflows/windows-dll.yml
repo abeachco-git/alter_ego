@@ -35,9 +35,28 @@ jobs:
           test -s build/AlterEgo.dll
           file build/AlterEgo.dll
           x86_64-w64-mingw32-objdump -f build/AlterEgo.dll | grep -E 'pei-x86-64|pe-x86-64'
-      - name: Upload DLL artifact
+      - name: Upload diagnostic DLL
         uses: actions/upload-artifact@v4
         with:
-          name: AlterEgo-saved-vs-live-Windows-x64
+          name: AlterEgo-DIAG-A1-Windows-x64
           path: build/AlterEgo.dll
+          if-no-files-found: error
+      # Build the untouched main branch using the *same* runner/toolchain.
+      # This controls for GCC/linker changes when diagnosing the in-game crash.
+      - name: Checkout unchanged upstream baseline
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: upstream-baseline
+      - name: Compile upstream baseline with matching toolchain
+        run: |
+          cmake -S upstream-baseline -B upstream-baseline/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build upstream-baseline/build --parallel 2
+          test -s upstream-baseline/build/AlterEgo.dll
+          x86_64-w64-mingw32-objdump -f upstream-baseline/build/AlterEgo.dll | grep -E 'pei-x86-64|pe-x86-64'
+      - name: Upload upstream baseline DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlterEgo-UPSTREAM-REBUILT-Windows-x64
+          path: upstream-baseline/build/AlterEgo.dll
           if-no-files-found: error
