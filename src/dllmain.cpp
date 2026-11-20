@@ -8930,17 +8930,34 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     info->details["infix_upgrade"]["id"].is_number_unsigned())
                     liveStat = info->details["infix_upgrade"]["id"].get<uint32_t>();
             }
-            if ((gs.stat_id || !gs.stat_name.empty()) && liveStat) {
-                auto statName = [&](uint32_t id) {
-                    const auto* info = AlterEgo::GW2API::GetItemStatInfo(id);
-                    return info ? info->name : numberLabel(id);
-                };
-                if (gs.stat_id)
-                    addId("Equipment stats", slot, gs.stat_id, liveStat, statName);
-                else {
-                    auto liveName = statName(liveStat);
-                    result.Add("Equipment stats", slot, gs.stat_name, liveName,
-                               gs.stat_name, liveName);
+            if (gs.stat_id || !gs.stat_name.empty()) {
+                const auto* savedInfo = gs.stat_id
+                    ? AlterEgo::GW2API::GetItemStatInfo(gs.stat_id) : nullptr;
+                const auto* liveInfo = liveStat
+                    ? AlterEgo::GW2API::GetItemStatInfo(liveStat) : nullptr;
+                const std::string savedName =
+                    (savedInfo && !savedInfo->name.empty()) ? savedInfo->name
+                    : (!gs.stat_name.empty() ? gs.stat_name : numberLabel(gs.stat_id));
+                const std::string liveName =
+                    (liveInfo && !liveInfo->name.empty()) ? liveInfo->name
+                    : (liveStat ? numberLabel(liveStat) : "(unknown)");
+                const std::vector<std::string> emptyAttributes;
+                const auto verdict = AlterEgo::CompareStatDefinitions(
+                    gs.stat_id, liveStat, savedName,
+                    liveInfo ? liveInfo->name : std::string(),
+                    savedInfo ? savedInfo->attributes : emptyAttributes,
+                    liveInfo ? liveInfo->attributes : emptyAttributes);
+                if (verdict == AlterEgo::StatEquivalence::Matches) {
+                    // Identical itemstat IDs, or different IDs with the same
+                    // public name and attribute definition, are equivalent.
+                    result.Add("Equipment stats", slot, "equivalent", "equivalent",
+                               savedName, liveName);
+                } else if (verdict == AlterEgo::StatEquivalence::Different) {
+                    result.Add("Equipment stats", slot, "saved-different", "live-different",
+                               savedName, liveName);
+                } else {
+                    result.AddUnverified("Equipment stats", slot, savedName,
+                        liveName + " (not verified)");
                 }
             }
             if (compareExactItems && gs.item_id)
@@ -9139,8 +9156,9 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         return; // delivery can replace the character cache
     }
     ImGui::SameLine();
-    ImGui::Text("%zu differences across %zu compared fields",
-                result.DifferenceCount(), result.Rows().size());
+    ImGui::Text("%zu differences, %zu not verified across %zu compared fields",
+                result.DifferenceCount(), result.UnverifiedCount(),
+                result.Rows().size());
     if (g_LibCompareRefreshPending && fetchStatus != AlterEgo::FetchStatus::InProgress) {
         g_LibCompareRefreshPending = false;
         if (fetchStatus == AlterEgo::FetchStatus::Success)
@@ -9183,9 +9201,12 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
             ImGui::TableSetColumnIndex(1);
             ImGui::TextWrapped("%s", row.saved.c_str());
             ImGui::TableSetColumnIndex(2);
-            if (!row.matches) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.58f, 0.50f, 1));
+            if (!row.verified)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.81f, 0.50f, 1));
+            else if (!row.matches)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.58f, 0.50f, 1));
             ImGui::TextWrapped("%s", row.current.c_str());
-            if (!row.matches) ImGui::PopStyleColor();
+            if (!row.verified || !row.matches) ImGui::PopStyleColor();
         }
         ImGui::EndTable();
     }
@@ -9232,6 +9253,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
         const auto result = CalculateSavedVsLiveComparison(
             saved, *character, build, equipTab, false);
         bool buildMatch = true;
+        bool requiredDataMissing = false;
         size_t checkedGearFields = 0, differentGearFields = 0, missingItems = 0;
         for (const auto& row : result.Rows()) {
             const bool isGear = row.group == "Equipment" ||
@@ -9239,12 +9261,16 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
                 row.group == "Weapon types" || row.group == "Infusions" ||
                 row.group == "Relic" || row.group == "Exact item IDs";
             if (isGear) {
+                if (!row.verified) {
+                    requiredDataMissing = true;
+                    continue;
+                }
                 ++checkedGearFields;
                 if (!row.matches) {
                     ++differentGearFields;
                     if (row.group == "Equipment") ++missingItems;
                 }
-            } else if (!row.matches) {
+            } else if (!row.verified || !row.matches) {
                 buildMatch = false;
                 break;
             }
@@ -9254,7 +9280,6 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
 
         // The comparison can skip fields when GW2 API item information is
         // unavailable. A skipped recorded field must not establish a full match.
-        bool requiredDataMissing = false;
         for (const auto& entry : saved.gear) {
             const auto& slot = entry.first;
             const auto& gs = entry.second;

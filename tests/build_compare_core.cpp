@@ -1,5 +1,6 @@
 #include "../src/BuildCompareCore.h"
 #include <cassert>
+#include <vector>
 int main() {
     AlterEgo::BuildComparison c;
     c.Add("Skills", "Heal", "100", "100", "Skill (name available)", "#100 (name missing)");
@@ -7,6 +8,34 @@ int main() {
     assert(c.Rows().size() == 2);
     assert(c.DifferenceCount() == 1);
     assert(c.Rows()[0].matches && !c.Rows()[1].matches);
+    c.AddUnverified("Equipment stats", "Helm", "Assassin's", "Assassin's (not verified)");
+    assert(c.Rows().size() == 3);
+    assert(!c.Rows()[2].verified && !c.Rows()[2].matches);
+    assert(c.DifferenceCount() == 1); // unknown isn't a mismatch
+    assert(c.UnverifiedCount() == 1);
+    using AlterEgo::StatEquivalence;
+    using AlterEgo::CompareStatDefinitions;
+    const std::vector<std::string> assassinStats = {"Power", "Precision", "CritDamage"};
+    const std::vector<std::string> assassinReordered = {"CritDamage", "Power", "Precision"};
+    const std::vector<std::string> otherStats = {"Power", "Precision", "ConditionDamage"};
+    // Different GW2 itemstat IDs with the same name + attributes are equivalent.
+    assert(CompareStatDefinitions(1050, 1070, "Assassin's", "Assassin's",
+        assassinStats, assassinReordered) == StatEquivalence::Matches);
+    assert(CompareStatDefinitions(1050, 1050, "", "", {}, {}) == StatEquivalence::Matches);
+    // Attribute mismatches and distinct stat names remain genuine differences.
+    assert(CompareStatDefinitions(1050, 1070, "Assassin's", "Assassin's",
+        assassinStats, otherStats) == StatEquivalence::Different);
+    assert(CompareStatDefinitions(1050, 1070, "Assassin's", "Berserker's",
+        assassinStats, assassinStats) == StatEquivalence::Different);
+    // Same name is insufficient when itemstat metadata is incomplete.
+    assert(CompareStatDefinitions(1050, 1070, "Assassin's", "Assassin's",
+        {}, assassinReordered) == StatEquivalence::NotVerified);
+    assert(CompareStatDefinitions(1050, 1070, "Assassin's", "Assassin's",
+        {}, {}) == StatEquivalence::NotVerified);
+    assert(CompareStatDefinitions(1050, 1070, "", "",
+        assassinStats, assassinStats) == StatEquivalence::NotVerified);
+    assert(CompareStatDefinitions(1050, 0, "Assassin's", "",
+        assassinStats, {}) == StatEquivalence::NotVerified);
 
     // Regressions: a shared relic is visible in every equipment tab and must
     // be captured there; ordinary gear and gathering tools must not leak in.

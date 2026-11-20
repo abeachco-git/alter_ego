@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <cstddef>
+#include <algorithm>
+#include <cstdint>
 
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
 // labels are resolved names and may differ when cache lookups are incomplete.
@@ -71,12 +73,42 @@ inline bool PreferGearMatchCandidate(const GearMatchCandidate& candidate,
     return false;
 }
 
+// Itemstat IDs are not canonical across all gear variants. Match different
+// IDs only when the public metadata agrees on both name and attributes.
+// If that metadata hasn't loaded, do not label identical names as a mismatch
+// (or assume the gear is equivalent).
+enum class StatEquivalence { Matches, Different, NotVerified };
+inline StatEquivalence CompareStatDefinitions(
+    uint32_t savedId, uint32_t liveId,
+    const std::string& savedName, const std::string& liveName,
+    const std::vector<std::string>& savedAttrs,
+    const std::vector<std::string>& liveAttrs) {
+    if (savedId != 0 && savedId == liveId) return StatEquivalence::Matches;
+    if (!savedName.empty() && !liveName.empty() && savedName != liveName)
+        return StatEquivalence::Different;
+    if (!savedAttrs.empty() && !liveAttrs.empty()) {
+        // Empty attribute entries are incomplete metadata, not evidence of
+        // matching characteristics.
+        if (std::find(savedAttrs.begin(), savedAttrs.end(), std::string()) != savedAttrs.end() ||
+            std::find(liveAttrs.begin(), liveAttrs.end(), std::string()) != liveAttrs.end())
+            return StatEquivalence::NotVerified;
+        auto a = savedAttrs, b = liveAttrs;
+        std::sort(a.begin(), a.end());
+        std::sort(b.begin(), b.end());
+        if (a != b) return StatEquivalence::Different;
+        if (!savedName.empty() && !liveName.empty())
+            return StatEquivalence::Matches;
+    }
+    return StatEquivalence::NotVerified;
+}
+
 struct ComparisonRow {
     std::string group;
     std::string field;
     std::string saved;
     std::string current;
     bool matches = false;
+    bool verified = true; // NotVerified rows are neither matches nor differences
 };
 
 class BuildComparison {
@@ -89,11 +121,19 @@ public:
         if (savedKey != currentKey) ++differences;
     }
 
+    void AddUnverified(const std::string& group, const std::string& field,
+                       const std::string& savedDisplay, const std::string& currentDisplay) {
+        rows.push_back({group, field, savedDisplay, currentDisplay, false, false});
+        ++unverified;
+    }
+
     size_t DifferenceCount() const { return differences; }
+    size_t UnverifiedCount() const { return unverified; }
     const std::vector<ComparisonRow>& Rows() const { return rows; }
 
 private:
     std::vector<ComparisonRow> rows;
     size_t differences = 0;
+    size_t unverified = 0;
 };
 } // namespace AlterEgo

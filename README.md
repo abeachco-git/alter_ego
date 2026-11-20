@@ -138,9 +138,12 @@ template, it displays the **closest equipment match** (preferring a verified
 full gear match, then fewer known differences) and shows how many saved
 variants share the template. Equipment receives its own explicit status:
 **MATCHES**, **DOES NOT MATCH**, **MISSING ITEM**, **DATA MISSING**, or
-**NOT SAVED**. Missing data is never treated as a verified full match.
-These labels reflect the latest retrieved H&S character snapshot, not a
-live memory read.
+**NOT SAVED**. Different itemstat IDs are compared by public
+stat name and attribute definitions when possible. If the metadata is
+incomplete, the field is marked **not verified** rather than reported
+as a mismatch or match; these fields do not count toward a confirmed full
+gear match. These labels reflect the latest retrieved H&S character snapshot,
+not a live memory read.
 
 **Data limitations:** The comparison uses the most recently retrieved Hoard & Seek
 data, not an instantaneous memory read from the game. Older library entries
