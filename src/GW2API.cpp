@@ -2858,6 +2858,9 @@ namespace AlterEgo {
             json gearJ = json::object();
             for (const auto& [slot, gs] : b.gear) {
                 json gsj;
+                if (gs.item_id != 0) gsj["item_id"] = gs.item_id;
+                if (gs.infusion_snapshot) gsj["infusion_snapshot"] = true;
+                if (!gs.infusion_ids.empty()) gsj["infusion_ids"] = gs.infusion_ids;
                 gsj["stat_id"] = gs.stat_id;
                 gsj["stat_name"] = gs.stat_name;
                 if (!gs.rune.empty()) gsj["rune"] = gs.rune;
@@ -2966,6 +2969,13 @@ namespace AlterEgo {
             for (auto it = bj["gear"].begin(); it != bj["gear"].end(); ++it) {
                 BuildGearSlot gs;
                 gs.slot = it.key();
+                gs.item_id = it.value().value("item_id", (uint32_t)0);
+                gs.infusion_snapshot = it.value().value("infusion_snapshot", false);
+                if (it.value().contains("infusion_ids") && it.value()["infusion_ids"].is_array()) {
+                    for (const auto& infusion : it.value()["infusion_ids"]) {
+                        if (infusion.is_number_unsigned()) gs.infusion_ids.push_back(infusion.get<uint32_t>());
+                    }
+                }
                 gs.stat_id = it.value().value("stat_id", (uint32_t)0);
                 gs.stat_name = it.value().value("stat_name", "");
                 gs.rune = it.value().value("rune", "");

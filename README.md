@@ -99,3 +99,36 @@ Output: `build/AlterEgo.dll`
 ## License
 
 MIT
+
+## Save a retrieved build and compare it to a saved build (local extension)
+
+In **Characters → Builds**, select a character and build tab. Click **Save Current
+Build + Gear to Library...** (or right-click the build tab and select **Save to
+Library...**). Give the snapshot a name, choose a game mode, and select which
+retrieved equipment tab to capture. **Include equipment set** defaults to on.
+The capture copies the retrieved trait and skill IDs directly, so it works even
+when the build-link palette is still loading. Your previously saved sets are
+not changed.
+
+In **Build Library**, select a saved build and click **Compare to Retrieved
+Character...**. Choose a character of the same profession, a retrieved build
+tab, and (if gear was saved) an equipment tab. The default view shows only
+differences; check **Show matches** for all compared fields. **Compare exact item
+IDs** is optional because identical functional gear may use different item IDs.
+You can refresh the chosen character through Hoard & Seek from the comparison
+panel. Comparisons do not apply equipment, skills, or changes to saved builds.
+
+**Data limitations:** The comparison uses the most recently retrieved Hoard & Seek
+data, not an instantaneous memory read from the game. Older library entries
+only contain the gear values they previously recorded: missing fields are not
+assumed to be absent from the original build. Newly captured library entries
+also record the original item IDs and infusion lists for optional comparison.
+The existing AE2 chat/relay sharing formats do not include those extra fields,
+so an AE2-imported build may support fewer equipment comparisons. GW2 may not
+expose a selected legendary relic effect as a conventional item ID; verify
+those cases in-game.
+
+To produce a Windows DLL on GitHub without maintaining a build server, fork
+this repository and use **Actions → Build Alter Ego Windows DLL → Run workflow**.
+Download the `AlterEgo-saved-vs-live-Windows-x64` artifact from the successful
+run. You can also cross-compile on Debian with MinGW by following **Building**.

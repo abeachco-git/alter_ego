@@ -1,0 +1,43 @@
+name: Build Alter Ego Windows DLL
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feature/save-and-compare-retrieved-sets]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'lib/**'
+      - 'CMakeLists.txt'
+      - 'AlterEgo.def'
+      - '.github/workflows/windows-dll.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install MinGW cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+      - name: Test platform-independent comparator
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_compare_core.cpp -o /tmp/build_compare_core
+          /tmp/build_compare_core
+      - name: Configure Windows release build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Compile DLL
+        run: cmake --build build --parallel 2
+      - name: Verify Windows x64 DLL exists
+        run: |
+          test -s build/AlterEgo.dll
+          file build/AlterEgo.dll
+          x86_64-w64-mingw32-objdump -f build/AlterEgo.dll | grep -E 'pei-x86-64|pe-x86-64'
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlterEgo-saved-vs-live-Windows-x64
+          path: build/AlterEgo.dll
+          if-no-files-found: error

@@ -24,6 +24,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "GW2API.h"
+#include "BuildCompareCore.h"
 #include "FontResolve.h"
 #include "FontManager.h"
 #include "IconManager.h"
@@ -43,7 +44,7 @@
 #define V_MAJOR 1
 #define V_MINOR 1
 #define V_BUILD 2
-#define V_REVISION 0
+#define V_REVISION 1 // Local saved-vs-live comparison build
 
 // Quick Access icon identifiers
 #define QA_ID "QA_ALTER_EGO"
@@ -1268,6 +1269,16 @@ static int g_SaveLibEquipTab = 0;          // Selected equipment tab number (1-b
 static std::string g_SaveLibChatLink;      // Pre-built chat link
 static std::string g_SaveLibCharName;      // Character name (to find equipment)
 static std::string g_SaveLibProfession;    // Profession name
+static int g_SaveLibBuildTab = 0;       // Live build tab ID being captured
+
+// Saved vs. retrieved character comparison state (never mutates a saved build).
+static bool g_LibCompareOpen = false;
+static std::string g_LibCompareBuildId;
+static std::string g_LibCompareChar;
+static int g_LibCompareBuildTab = 0;     // Index into the chosen character's build_tabs
+static int g_LibCompareEquipTab = 0;     // Equipment tab number; 0 disables gear comparison
+static bool g_LibCompareShowMatches = false;
+static bool g_LibCompareExactItems = false;
 
 // Compute days until next character birthday from ISO date string (e.g. "2013-06-25T...")
 // Returns -1 if the date can't be parsed. Returns 0 on the birthday itself.
@@ -4312,6 +4323,28 @@ static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
     return AlterEgo::ChatLink::EncodeBuild(link);
 }
 
+// Capture an H&S build tab directly rather than round-tripping through a chat link.
+// A link is still recorded when the profession palette is available, but missing
+// palette data cannot prevent saving the real skill/trait IDs already in memory.
+static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
+                                    const AlterEgo::BuildTemplate& bt) {
+    g_SaveLibCharName = ch.name;
+    g_SaveLibBuildTab = bt.tab;
+    g_SaveLibProfession = bt.profession.empty() ? ch.profession : bt.profession;
+    g_SaveLibChatLink.clear();
+    if (AlterEgo::GW2API::HasPaletteData(g_SaveLibProfession))
+        g_SaveLibChatLink = EncodeBuildTabChatLink(bt);
+    else
+        AlterEgo::GW2API::FetchProfessionPaletteAsync(g_SaveLibProfession);
+    std::string defaultName = ch.name + " - " +
+        (bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name);
+    snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", defaultName.c_str());
+    g_SaveLibMode = 0;
+    g_SaveLibIncludeEquip = true;
+    g_SaveLibEquipTab = ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
+    g_SaveLibDialogOpen = true;
+}
+
 static void RenderBuildPanel(const AlterEgo::Character& ch) {
     if (ch.build_tabs.empty()) {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No build tabs available.");
@@ -4352,18 +4385,8 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
             CopyToClipboard(EncodeBuildTabChatLink(mbt));
             if (APIDefs) APIDefs->GUI_SendAlert("Build link copied!");
         }
-        if (ImGui::Selectable(hasPalette ? "Save to Library..." : "Save to Library (loading...)") && hasPalette) {
-            g_SaveLibChatLink = EncodeBuildTabChatLink(mbt);
-            std::string defaultName = ch.name + " - " +
-                (mbt.name.empty() ? ("Tab " + std::to_string(mbt.tab)) : mbt.name);
-            snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", defaultName.c_str());
-            g_SaveLibMode = 0;
-            g_SaveLibIncludeEquip = false;
-            g_SaveLibEquipTab = ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
-            g_SaveLibCharName = ch.name;
-            g_SaveLibProfession = ch.profession;
-            g_SaveLibDialogOpen = true;
-        }
+        if (ImGui::Selectable("Save to Library..."))
+            OpenSaveLiveBuildDialog(ch, mbt);
         ImGui::EndPopup();
     }
 
@@ -4378,6 +4401,10 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
     }
 
     const auto& bt = ch.build_tabs[buildIdx];
+    if (ImGui::SmallButton("Save Current Build + Gear to Library..."))
+        OpenSaveLiveBuildDialog(ch, bt);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Save this retrieved build tab; choose the equipment tab in the dialog.");
     ImGui::Separator();
 
     // Small left/right padding so spec hex portraits & trait selection borders
@@ -7522,7 +7549,32 @@ static void RenderSaveToLibraryDialog() {
         if (name.empty()) name = "Unnamed Build";
 
         AlterEgo::SavedBuild sb;
-        if (DecodeBuildLink(g_SaveLibChatLink, name, GameModeFromIndex(g_SaveLibMode), sb)) {
+        const auto* capturedChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
+        const AlterEgo::BuildTemplate* capturedTab = nullptr;
+        if (capturedChar) {
+            for (const auto& bt : capturedChar->build_tabs) {
+                if (bt.tab == g_SaveLibBuildTab) { capturedTab = &bt; break; }
+            }
+        }
+        if (capturedTab) {
+            sb.name = name;
+            sb.profession = capturedTab->profession.empty() ? capturedChar->profession : capturedTab->profession;
+            sb.game_mode = GameModeFromIndex(g_SaveLibMode);
+            sb.chat_link = g_SaveLibChatLink;
+            for (int i = 0; i < 3; ++i) sb.specializations[i] = capturedTab->specializations[i];
+            sb.terrestrial_skills = capturedTab->terrestrial_skills;
+            sb.aquatic_skills = capturedTab->aquatic_skills;
+            sb.pets = capturedTab->pets;
+            sb.weapons = capturedTab->weapons;
+            auto legendCode = [](const std::string& value) -> uint8_t {
+                if (value.rfind("Legend", 0) != 0) return 0;
+                int v = std::atoi(value.c_str() + 6);
+                return (v > 0 && v <= 255) ? static_cast<uint8_t>(v) : 0;
+            };
+            sb.legend_codes[0] = legendCode(capturedTab->legends.terrestrial[0]);
+            sb.legend_codes[1] = legendCode(capturedTab->legends.terrestrial[1]);
+            sb.legend_codes[2] = legendCode(capturedTab->legends.aquatic[0]);
+            sb.legend_codes[3] = legendCode(capturedTab->legends.aquatic[1]);
             // Optionally populate gear from character equipment
             if (g_SaveLibIncludeEquip) {
                 const auto* ch = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
@@ -7547,11 +7599,21 @@ static void RenderSaveToLibraryDialog() {
 
                         AlterEgo::BuildGearSlot gs;
                         gs.slot = eq.slot;
+                        gs.item_id = eq.id;
+                        gs.infusion_ids = eq.infusions;
+                        gs.infusion_snapshot = true;
 
                         // Resolve stat name
-                        if (eq.stat_id != 0) {
-                            gs.stat_id = eq.stat_id;
-                            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(eq.stat_id);
+                        gs.stat_id = eq.stat_id;
+                        if (!gs.stat_id && eq.id) {
+                            const auto* item = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            if (item && item->details.contains("infix_upgrade") &&
+                                item->details["infix_upgrade"].contains("id") &&
+                                item->details["infix_upgrade"]["id"].is_number_unsigned())
+                                gs.stat_id = item->details["infix_upgrade"]["id"].get<uint32_t>();
+                        }
+                        if (gs.stat_id) {
+                            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                             if (statInfo) gs.stat_name = statInfo->name;
                         }
 
@@ -7620,14 +7682,26 @@ static void RenderSaveToLibraryDialog() {
                 }
             }
 
-            AlterEgo::GW2API::AddSavedBuild(std::move(sb));
-            if (APIDefs) APIDefs->GUI_SendAlert("Build saved to library!");
-            g_SaveLibDialogOpen = false;
+            int idx = AlterEgo::GW2API::AddSavedBuild(std::move(sb));
+            if (idx >= 0) {
+                g_LibSelectedIdx = idx;
+                g_LibDetailsFetched = false;
+                if (APIDefs) APIDefs->GUI_SendAlert("Build saved to library!");
+                g_SaveLibDialogOpen = false;
+            } else if (APIDefs) {
+                APIDefs->GUI_SendAlert("Unable to persist build library - check file permissions.");
+            }
+        } else {
+            ImGui::OpenPopup("Live build unavailable##save");
         }
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(80, 0))) {
         g_SaveLibDialogOpen = false;
+    }
+    if (ImGui::BeginPopup("Live build unavailable##save")) {
+        ImGui::TextWrapped("The character's retrieved build tab is no longer available. Refresh character data and try again.");
+        ImGui::EndPopup();
     }
 
     ImGui::End();
@@ -8708,6 +8782,334 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build, bool show
 }
 
 // Render the full Build Library tab
+// Read-only saved-vs-retrieved comparison. Only checks gear fields that were
+// actually recorded in the saved set, so legacy builds don't produce false
+// mismatches for unknown infusions or exact item IDs.
+static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
+    if (!g_LibCompareOpen || g_LibEditMode) return;
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.90f, 0.79f, 0.45f, 1), "Compare saved vs. retrieved character");
+    ImGui::TextWrapped("Uses the latest Hoard & Seek character cache, not an instantaneous in-game equipment read.");
+
+    const auto& characters = AlterEgo::GW2API::GetCharacters();
+    std::vector<const AlterEgo::Character*> matches;
+    for (const auto& ch : characters)
+        if (ch.profession == saved.profession && !ch.build_tabs.empty())
+            matches.push_back(&ch);
+    if (matches.empty()) {
+        ImGui::TextWrapped("No retrieved characters with this profession. Refresh character data in the Characters tab.");
+        return;
+    }
+    const AlterEgo::Character* character = nullptr;
+    for (const auto* ch : matches)
+        if (ch->name == g_LibCompareChar) { character = ch; break; }
+    if (!character) {
+        for (const auto* ch : matches)
+            if (ch->name == g_CurrentCharName) { character = ch; break; }
+        if (!character) character = matches[0];
+        g_LibCompareChar = character->name;
+        g_LibCompareBuildTab = 0;
+        for (int i = 0; i < (int)character->build_tabs.size(); ++i)
+            if (character->build_tabs[i].is_active) { g_LibCompareBuildTab = i; break; }
+        g_LibCompareEquipTab = character->active_equipment_tab > 0
+                            ? character->active_equipment_tab : 1;
+    }
+
+    if (ImGui::BeginCombo("Character##compare", character->name.c_str())) {
+        for (const auto* ch : matches) {
+            bool selected = ch->name == character->name;
+            std::string label = ch->name;
+            if (ch->name == g_CurrentCharName) label += " (logged in)";
+            if (ImGui::Selectable(label.c_str(), selected)) {
+                g_LibCompareChar = ch->name;
+                g_LibCompareBuildTab = 0;
+                for (int i = 0; i < (int)ch->build_tabs.size(); ++i)
+                    if (ch->build_tabs[i].is_active) { g_LibCompareBuildTab = i; break; }
+                g_LibCompareEquipTab = ch->active_equipment_tab > 0
+                                    ? ch->active_equipment_tab : 1;
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    if (g_LibCompareBuildTab < 0 ||
+        g_LibCompareBuildTab >= (int)character->build_tabs.size())
+        g_LibCompareBuildTab = 0;
+    auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
+        return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
+    };
+    const auto& live = character->build_tabs[g_LibCompareBuildTab];
+    std::string currentTabLabel = tabLabel(live);
+    if (ImGui::BeginCombo("Live build tab##compare", currentTabLabel.c_str())) {
+        for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
+            const auto& bt = character->build_tabs[i];
+            std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
+            if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab))
+                g_LibCompareBuildTab = i;
+        }
+        ImGui::EndCombo();
+    }
+    if (!saved.gear.empty()) {
+        int maxTab = 0;
+        for (const auto& eq : character->equipment)
+            if (eq.tab > maxTab) maxTab = eq.tab;
+        if (maxTab > 0) {
+            if (g_LibCompareEquipTab < 1 || g_LibCompareEquipTab > maxTab)
+                g_LibCompareEquipTab = character->active_equipment_tab > 0
+                                    ? character->active_equipment_tab : 1;
+            std::string label = "Tab " + std::to_string(g_LibCompareEquipTab);
+            auto nameIt = character->equipment_tab_names.find(g_LibCompareEquipTab);
+            if (nameIt != character->equipment_tab_names.end() && !nameIt->second.empty())
+                label = nameIt->second;
+            if (ImGui::BeginCombo("Live equipment tab##compare", label.c_str())) {
+                for (int tab = 1; tab <= maxTab; ++tab) {
+                    std::string tabName = "Tab " + std::to_string(tab);
+                    auto it = character->equipment_tab_names.find(tab);
+                    if (it != character->equipment_tab_names.end() && !it->second.empty())
+                        tabName = it->second;
+                    if (tab == character->active_equipment_tab) tabName += " (active)";
+                    if (ImGui::Selectable(tabName.c_str(), tab == g_LibCompareEquipTab))
+                        g_LibCompareEquipTab = tab;
+                }
+                ImGui::EndCombo();
+            }
+        } else {
+            ImGui::TextDisabled("No retrieved equipment tabs; build-only comparison.");
+        }
+    }
+    ImGui::Checkbox("Show matches##compare", &g_LibCompareShowMatches);
+    if (!saved.gear.empty()) {
+        ImGui::SameLine();
+        ImGui::Checkbox("Compare exact item IDs##compare", &g_LibCompareExactItems);
+    }
+
+    AlterEgo::BuildComparison result;
+    auto idKey = [](uint32_t id) { return std::to_string(id); };
+    auto numberLabel = [](uint32_t id) { return id ? ("#" + std::to_string(id)) : "(empty)"; };
+    auto specName = [&](uint32_t id) {
+        const auto* info = AlterEgo::GW2API::GetSpecInfo(id);
+        return info ? info->name : numberLabel(id);
+    };
+    auto traitName = [&](uint32_t id) {
+        const auto* info = AlterEgo::GW2API::GetTraitInfo(id);
+        return info ? info->name : numberLabel(id);
+    };
+    auto skillName = [&](uint32_t id) {
+        const auto* info = AlterEgo::GW2API::GetSkillInfo(id);
+        return info ? info->name : numberLabel(id);
+    };
+    auto itemName = [&](uint32_t id) {
+        const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+        return info ? info->name : numberLabel(id);
+    };
+    auto addId = [&](const std::string& group, const std::string& field,
+                     uint32_t a, uint32_t b, const std::function<std::string(uint32_t)>& display) {
+        result.Add(group, field, idKey(a), idKey(b), display(a), display(b));
+    };
+    auto traitId = [&](uint32_t spec, int tier, int id) -> uint32_t {
+        if (id >= 0) return (uint32_t)id;
+        // Negative values in older imports encode an unresolved trait choice.
+        const auto* info = AlterEgo::GW2API::GetSpecInfo(spec);
+        int choice = -id;
+        if (info && info->major_traits.size() >= 9 && choice >= 1 && choice <= 3)
+            return info->major_traits[tier * 3 + choice - 1];
+        return 0; // unresolved: skip rather than report a fictitious difference
+    };
+
+    for (int i = 0; i < 3; ++i) {
+        const auto& s = saved.specializations[i];
+        const auto& l = live.specializations[i];
+        std::string slot = "Line " + std::to_string(i + 1);
+        addId("Specializations", slot, s.spec_id, l.spec_id, specName);
+        if (s.spec_id != l.spec_id || !s.spec_id) continue;
+        const char* tiers[] = {"Adept", "Master", "Grandmaster"};
+        for (int t = 0; t < 3; ++t) {
+            uint32_t a = traitId(s.spec_id, t, s.traits[t]);
+            uint32_t b = traitId(l.spec_id, t, l.traits[t]);
+            if ((s.traits[t] < 0 && !a) || (l.traits[t] < 0 && !b)) continue;
+            if (a || b) addId("Traits", slot + " " + tiers[t], a, b, traitName);
+        }
+    }
+    auto compareSkills = [&](const char* group, const AlterEgo::SkillBar& a,
+                             const AlterEgo::SkillBar& b) {
+        addId(group, "Heal", a.heal, b.heal, skillName);
+        for (int i = 0; i < 3; ++i)
+            addId(group, "Utility " + std::to_string(i + 1),
+                  a.utilities[i], b.utilities[i], skillName);
+        addId(group, "Elite", a.elite, b.elite, skillName);
+    };
+    compareSkills("Terrestrial skills", saved.terrestrial_skills, live.terrestrial_skills);
+    compareSkills("Aquatic skills", saved.aquatic_skills, live.aquatic_skills);
+    if (saved.profession == "Ranger") {
+        for (int i = 0; i < 2; ++i) {
+            addId("Ranger pets", "Terrestrial " + std::to_string(i + 1),
+                  saved.pets.terrestrial[i], live.pets.terrestrial[i], numberLabel);
+            addId("Ranger pets", "Aquatic " + std::to_string(i + 1),
+                  saved.pets.aquatic[i], live.pets.aquatic[i], numberLabel);
+        }
+    }
+    if (saved.profession == "Revenant") {
+        auto legendCode = [](const std::string& value) -> uint32_t {
+            return value.rfind("Legend", 0) == 0 ? (uint32_t)std::atoi(value.c_str() + 6) : 0;
+        };
+        for (int i = 0; i < 2; ++i) {
+            addId("Revenant legends", "Terrestrial " + std::to_string(i + 1),
+                  saved.legend_codes[i], legendCode(live.legends.terrestrial[i]), numberLabel);
+            addId("Revenant legends", "Aquatic " + std::to_string(i + 1),
+                  saved.legend_codes[i + 2], legendCode(live.legends.aquatic[i]), numberLabel);
+        }
+    }
+    auto weaponList = [](const std::vector<uint32_t>& ids) {
+        std::string str;
+        for (uint32_t id : ids) {
+            if (!str.empty()) str += ", ";
+            str += std::to_string(id);
+        }
+        return str;
+    };
+    result.Add("Build", "Weapon proficiency IDs", weaponList(saved.weapons),
+               weaponList(live.weapons),
+               saved.weapons.empty() ? "(none)" : weaponList(saved.weapons),
+               live.weapons.empty() ? "(none)" : weaponList(live.weapons));
+
+    if (!saved.gear.empty() && !character->equipment.empty()) {
+        auto getEquipped = [&](const std::string& slot) -> const AlterEgo::EquipmentItem* {
+            for (const auto& eq : character->equipment)
+                if (eq.tab == g_LibCompareEquipTab && eq.slot == slot) return &eq;
+            return nullptr;
+        };
+        for (const auto& entry : saved.gear) {
+            const std::string& slot = entry.first;
+            const auto& gs = entry.second;
+            const auto* eq = getEquipped(slot);
+            if (!eq) {
+                // A saved slot is equipped in the source set but missing in live gear.
+                result.Add("Equipment", slot, "present", "missing", "Equipped", "Not equipped");
+                continue;
+            }
+            uint32_t liveStat = eq->stat_id;
+            if (!liveStat && eq->id) {
+                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                if (info && info->details.contains("infix_upgrade") &&
+                    info->details["infix_upgrade"].contains("id") &&
+                    info->details["infix_upgrade"]["id"].is_number_unsigned())
+                    liveStat = info->details["infix_upgrade"]["id"].get<uint32_t>();
+            }
+            if ((gs.stat_id || !gs.stat_name.empty()) && liveStat) {
+                auto statName = [&](uint32_t id) {
+                    const auto* info = AlterEgo::GW2API::GetItemStatInfo(id);
+                    return info ? info->name : numberLabel(id);
+                };
+                if (gs.stat_id)
+                    addId("Equipment stats", slot, gs.stat_id, liveStat, statName);
+                else {
+                    auto liveName = statName(liveStat);
+                    result.Add("Equipment stats", slot, gs.stat_name, liveName,
+                               gs.stat_name, liveName);
+                }
+            }
+            if (g_LibCompareExactItems && gs.item_id)
+                addId("Exact item IDs", slot, gs.item_id, eq->id, itemName);
+            auto compareUpgrade = [&](const char* field, uint32_t savedId, const std::string& savedName,
+                                      size_t liveIndex) {
+                uint32_t liveId = eq->upgrades.size() > liveIndex ? eq->upgrades[liveIndex] : 0;
+                if (savedId) addId("Upgrades", slot + " " + field, savedId, liveId, itemName);
+                else if (!savedName.empty()) {
+                    const auto* liveInfo = AlterEgo::GW2API::GetItemInfo(liveId);
+                    if (liveInfo)
+                        result.Add("Upgrades", slot + " " + field,
+                                   savedName, liveInfo->name, savedName, liveInfo->name);
+                } else if (gs.item_id) {
+                    // A newly captured set explicitly had no upgrade here.
+                    addId("Upgrades", slot + " " + field, 0, liveId, itemName);
+                }
+            };
+            if (slot == "Helm" || slot == "Shoulders" || slot == "Coat" ||
+                slot == "Gloves" || slot == "Leggings" || slot == "Boots")
+                compareUpgrade("rune", gs.rune_id ? gs.rune_id : saved.rune_id,
+                               gs.rune.empty() ? saved.rune_name : gs.rune, 0);
+            if (slot.rfind("Weapon", 0) == 0) {
+                compareUpgrade("sigil", gs.sigil_id, gs.sigil, 0);
+                if (gs.sigil2_id || !gs.sigil2.empty() ||
+                    (gs.item_id && eq->upgrades.size() > 1))
+                    compareUpgrade("sigil 2", gs.sigil2_id, gs.sigil2, 1);
+                if (!gs.weapon_type.empty()) {
+                    const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                    if (info && info->details.contains("type") &&
+                        info->details["type"].is_string()) {
+                        auto liveType = info->details["type"].get<std::string>();
+                        result.Add("Weapon types", slot, gs.weapon_type, liveType,
+                                   gs.weapon_type, liveType);
+                    }
+                }
+            }
+            if (gs.infusion_snapshot || !gs.infusion_ids.empty()) {
+                auto ids = [](std::vector<uint32_t> v) {
+                    std::sort(v.begin(), v.end());
+                    std::string out;
+                    for (auto id : v) { if (!out.empty()) out += ", "; out += std::to_string(id); }
+                    return out;
+                };
+                std::string a = ids(gs.infusion_ids), b = ids(eq->infusions);
+                result.Add("Infusions", slot, a, b,
+                           a.empty() ? "(none)" : a, b.empty() ? "(none)" : b);
+            }
+        }
+        if (saved.relic_id || !saved.relic_name.empty()) {
+            const auto* eq = getEquipped("Relic");
+            uint32_t id = eq ? eq->id : 0;
+            const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+            if (info && !saved.relic_name.empty())
+                result.Add("Relic", "Effect / item name", saved.relic_name, info->name,
+                           saved.relic_name, info->name);
+            else if (saved.relic_id && id)
+                addId("Relic", "Item ID", saved.relic_id, id, itemName);
+        }
+    }
+
+    if (ImGui::Button("Refresh this character##compare")) {
+        std::string name = character->name;
+        AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+        return; // event delivery may replace character storage
+    }
+    ImGui::SameLine();
+    ImGui::Text("%zu differences across %zu compared fields",
+                result.DifferenceCount(), result.Rows().size());
+    if (saved.gear.empty())
+        ImGui::TextDisabled("Saved build has no gear; equipment comparison skipped.");
+    else if (character->equipment.empty())
+        ImGui::TextDisabled("Retrieved character has no equipment data; gear comparison skipped.");
+    ImGui::TextDisabled("Unknown legacy fields are skipped, not counted as matches.");
+
+    if (ImGui::BeginTable("##comparison", 3,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+        ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+        ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("Retrieved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableHeadersRow();
+        std::string lastGroup;
+        for (const auto& row : result.Rows()) {
+            if (row.matches && !g_LibCompareShowMatches) continue;
+            if (row.group != lastGroup) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextColored(ImVec4(0.9f, 0.77f, 0.45f, 1), "%s", row.group.c_str());
+                lastGroup = row.group;
+            }
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(row.field.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextWrapped("%s", row.saved.c_str());
+            ImGui::TableSetColumnIndex(2);
+            if (!row.matches) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.58f, 0.50f, 1));
+            ImGui::TextWrapped("%s", row.current.c_str());
+            if (!row.matches) ImGui::PopStyleColor();
+        }
+        ImGui::EndTable();
+    }
+}
+
 static void RenderBuildLibrary() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
@@ -9332,6 +9734,9 @@ static void RenderBuildLibrary() {
 
         // Inline rename + notes editing
         if (g_LibEditBuildId != build.id) {
+            g_LibCompareOpen = false;
+            g_LibCompareBuildId = build.id;
+            g_LibCompareChar.clear();
             g_LibEditBuildId = build.id;
             g_LibEditName = build.name;
             g_LibEditNotes = build.notes;
@@ -9374,6 +9779,16 @@ static void RenderBuildLibrary() {
         ImGui::Separator();
 
         RenderSavedBuildPreview(build, /*showEditButton=*/true);
+        if (!g_LibEditMode) {
+            if (ImGui::Button(g_LibCompareOpen ? "Hide Comparison##lib" : "Compare to Retrieved Character...##lib")) {
+                g_LibCompareOpen = !g_LibCompareOpen;
+                if (g_LibCompareOpen) {
+                    g_LibCompareBuildId = build.id;
+                    g_LibCompareChar.clear();  // prefer the currently logged-in character
+                }
+            }
+            if (g_LibCompareOpen) RenderSavedVsLiveComparison(build);
+        }
 
         // Deferred: a cancelled brand-new build is removed here, after the preview
         // has finished using `build` (removing it mid-draw would dangle the ref).

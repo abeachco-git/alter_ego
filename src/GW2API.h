@@ -53,6 +53,9 @@ namespace AlterEgo {
     // A gear slot in a saved build (user-entered stats/upgrades)
     struct BuildGearSlot {
         std::string slot;           // "Helm", "Shoulders", "Coat", etc.
+        uint32_t item_id = 0;      // Original live item ID (optional; older saves omit this)
+        std::vector<uint32_t> infusion_ids; // Original infusions (optional)
+        bool infusion_snapshot = false; // True even if captured with no infusions
         uint32_t stat_id = 0;       // /v2/itemstats ID
         std::string stat_name;      // "Berserker's", etc.
         std::string rune;           // Rune name (armor only)
