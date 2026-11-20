@@ -351,7 +351,7 @@ namespace AlterEgo {
     void GW2API::QueryAccounts() {
         if (!s_api) return;
 
-        s_api->Log(LOGL_INFO, "AlterEgo", "[AE-DIAG A1] QueryAccounts: before synchronous H&S event; thread=" + std::to_string(GetCurrentThreadId()));
+        s_api->Log(LOGL_INFO, "AlterEgo", ("[AE-DIAG A1] QueryAccounts: before synchronous H&S event; thread=" + std::to_string(GetCurrentThreadId())).c_str());
         HoardQueryAccountsRequest req{};
         req.api_version = HOARD_API_VERSION;
         strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
