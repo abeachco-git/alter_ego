@@ -80,15 +80,17 @@ The addon stores its data (settings, build library, portraits, caches) in:
 
 ## Building
 
-Cross-compiled for Windows on Linux using MinGW:
+Cross-compiled for Windows on Linux using the **UCRT** MinGW-w64 toolchain
+(rather than the legacy MSVCRT target). On Debian 13:
 
 ```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+sudo apt-get install cmake make g++-mingw-w64-ucrt64 gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-mcrtdll=ucrtbase -DCMAKE_C_FLAGS=-mcrtdll=ucrtbase
+cmake --build build --parallel 2
 ```
 
-Output: `build/AlterEgo.dll`
+Output: `build/AlterEgo.dll`. Use `objdump -p build/AlterEgo.dll` to verify
+a UCRT import and no import from `msvcrt.dll`.
 
 ## Dependencies
 
@@ -132,5 +134,5 @@ those cases in-game.
 
 To produce a Windows DLL on GitHub without maintaining a build server, fork
 this repository and use **Actions → Build Alter Ego Windows DLL → Run workflow**.
-Download the `AlterEgo-saved-vs-live-Windows-x64` artifact from the successful
+Download the `AlterEgo-UCRT-Windows-x64` artifact from the successful
 run. You can also cross-compile on Debian with MinGW by following **Building**.

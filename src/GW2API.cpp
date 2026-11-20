@@ -351,13 +351,13 @@ namespace AlterEgo {
     void GW2API::QueryAccounts() {
         if (!s_api) return;
 
-        s_api->Log(LOGL_INFO, "AlterEgo", ("[AE-DIAG A1] QueryAccounts: before synchronous H&S event; thread=" + std::to_string(GetCurrentThreadId())).c_str());
+        s_api->Log(LOGL_INFO, "AlterEgo", "QueryAccounts: sending EV_HOARD_QUERY_ACCOUNTS");
         HoardQueryAccountsRequest req{};
         req.api_version = HOARD_API_VERSION;
         strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
         strncpy(req.response_event, EV_AE_ACCOUNTS_RESP, sizeof(req.response_event) - 1);
         s_api->Events_Raise(EV_HOARD_QUERY_ACCOUNTS, &req);
-        s_api->Log(LOGL_INFO, "AlterEgo", "[AE-DIAG A1] QueryAccounts: H&S event returned successfully");
+        s_api->Log(LOGL_INFO, "AlterEgo", "QueryAccounts: event raised");
     }
 
     void GW2API::OnAccountsResponse(void* eventArgs) {
@@ -373,9 +373,6 @@ namespace AlterEgo {
             return;
         }
 
-        // Keep response processing inside its own scope; release the mutex
-        // BEFORE releasing the H&S response. Instrument all exit boundaries.
-        {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_accounts.clear();
         s_char_to_account.clear();
@@ -412,10 +409,6 @@ namespace AlterEgo {
                      "' char_count=" + std::to_string(resp->accounts[i].character_count)).c_str());
             }
         }
-        }
-        if (s_api) s_api->Log(LOGL_INFO, "AlterEgo", "[AE-DIAG A1] OnAccountsResponse: account mutex released, before response delete");
-        respGuard.reset();
-        if (s_api) s_api->Log(LOGL_INFO, "AlterEgo", "[AE-DIAG A1] OnAccountsResponse: response deleted, returning to H&S");
     }
 
     void GW2API::OnAccountsChanged(void* /*eventArgs*/) {
