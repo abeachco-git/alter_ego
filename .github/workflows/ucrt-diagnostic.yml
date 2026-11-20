@@ -1,0 +1,53 @@
+name: Diagnostic UCRT DLL (experimental)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/save-and-compare-retrieved-sets]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/ucrt-diagnostic.yml'
+
+jobs:
+  build-ucrt:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+      - name: Install Debian 13 UCRT toolchain
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake make file g++-mingw-w64-ucrt64 gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
+          x86_64-w64-mingw32ucrt-g++ --version
+      - name: Configure with UCRT toolchain
+        run: |
+          # The project's original CMakeLists forces the MSVCRT compiler.
+          # Rewrite a disposable copy to select the UCRT tools instead.
+          mkdir -p /tmp/ae-source
+          cp -a . /tmp/ae-source/
+          cd /tmp/ae-source
+          sed -i 's/x86_64-w64-mingw32-gcc/x86_64-w64-mingw32ucrt-gcc/g; s/x86_64-w64-mingw32-g++/x86_64-w64-mingw32ucrt-g++/g; s/x86_64-w64-mingw32-windres/x86_64-w64-mingw32ucrt-windres/g' CMakeLists.txt
+          cmake -S . -B /tmp/ae-ucrt-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
+          cmake --build /tmp/ae-ucrt-build --parallel 2
+      - name: Check UCRT and copy artifact
+        run: |
+          mkdir -p ucrt-output
+          cp /tmp/ae-ucrt-build/AlterEgo.dll ucrt-output/AlterEgo.dll
+          test -s ucrt-output/AlterEgo.dll
+          x86_64-w64-mingw32ucrt-objdump -f ucrt-output/AlterEgo.dll | grep -E 'pei-x86-64|pe-x86-64'
+          x86_64-w64-mingw32ucrt-objdump -p ucrt-output/AlterEgo.dll | grep 'DLL Name:'
+          # Prevent distribution of the wrong-runtime artifact.
+          if x86_64-w64-mingw32ucrt-objdump -p ucrt-output/AlterEgo.dll | grep -i 'DLL Name: msvcrt.dll'; then
+            echo "ERROR: MSVCRT import detected instead of expected UCRT runtime" >&2
+            exit 1
+          fi
+          x86_64-w64-mingw32ucrt-objdump -p ucrt-output/AlterEgo.dll | grep -Ei 'DLL Name: (ucrtbase.dll|api-ms-win-crt-)'
+      - name: Upload UCRT diagnostic DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlterEgo-UCRT-DIAGNOSTIC-Windows-x64
+          path: ucrt-output/AlterEgo.dll
+          if-no-files-found: error
