@@ -142,6 +142,9 @@ data, not an instantaneous memory read from the game. Older library entries
 only contain the gear values they previously recorded: missing fields are not
 assumed to be absent from the original build. Newly captured library entries
 also record the original item IDs and infusion lists for optional comparison.
+Shared relics from the supplemental equipment endpoint (equipment tab 0)
+are captured into the selected numbered equipment set and compared correctly;
+unrelated shared tool slots are excluded.
 The existing AE2 chat/relay sharing formats do not include those extra fields,
 so an AE2-imported build may support fewer equipment comparisons. GW2 may not
 expose a selected legendary relic effect as a conventional item ID; verify

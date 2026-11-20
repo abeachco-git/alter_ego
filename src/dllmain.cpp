@@ -7589,7 +7589,8 @@ static void RenderSaveToLibraryDialog() {
                     // Pre-fetch any item details not yet cached (weapons, upgrades)
                     std::vector<uint32_t> missingIds;
                     for (const auto& eq : ch->equipment) {
-                        if (eq.tab != g_SaveLibEquipTab) continue;
+                        if (!AlterEgo::IsEquipmentInCapturedBuild(
+                                eq.slot, eq.tab, g_SaveLibEquipTab)) continue;
                         if (eq.id != 0 && !AlterEgo::GW2API::GetItemInfo(eq.id))
                             missingIds.push_back(eq.id);
                         for (auto uid : eq.upgrades) {
@@ -7602,7 +7603,8 @@ static void RenderSaveToLibraryDialog() {
 
                     std::string sharedRune;
                     for (const auto& eq : ch->equipment) {
-                        if (eq.tab != g_SaveLibEquipTab) continue;
+                        if (!AlterEgo::IsEquipmentInCapturedBuild(
+                                eq.slot, eq.tab, g_SaveLibEquipTab)) continue;
 
                         AlterEgo::BuildGearSlot gs;
                         gs.slot = eq.slot;
@@ -7672,10 +7674,14 @@ static void RenderSaveToLibraryDialog() {
                         }
                     }
 
-                    // Check for relic — resolve name from API, but store exotic relic ID
+                    // Relics from /equipment can be shared (tab 0) even when
+                    // displayed in a numbered tab. Keep the original item ID
+                    // if public item details have not loaded yet.
                     for (const auto& eq : ch->equipment) {
-                        if (eq.tab != g_SaveLibEquipTab) continue;
-                        if (eq.slot == "Relic" && eq.id != 0) {
+                        if (eq.slot == "Relic" &&
+                            AlterEgo::IsEquipmentInCapturedBuild(
+                                eq.slot, eq.tab, g_SaveLibEquipTab) &&
+                            eq.id != 0) {
                             const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
                             if (relicInfo) {
                                 sb.relic_name = relicInfo->name;
@@ -7729,7 +7735,10 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
     auto it = build.gear.find(slot);
     bool hasStat = (it != build.gear.end() && it->second.stat_id != 0);
     bool hasWeaponType = (it != build.gear.end() && !it->second.weapon_type.empty());
-    bool hasData = hasStat || hasWeaponType;
+    bool hasRelic = (strcmp(slot, "Relic") == 0 &&
+                     (build.relic_id != 0 || !build.relic_name.empty() ||
+                      (it != build.gear.end() && it->second.item_id != 0)));
+    bool hasData = hasStat || hasWeaponType || hasRelic;
 
     ImGui::PushID(slot);
 
@@ -8901,9 +8910,8 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
 
     if (!saved.gear.empty() && !liveCharacter.equipment.empty()) {
         auto getEquipped = [&](const std::string& slot) -> const AlterEgo::EquipmentItem* {
-            for (const auto& eq : liveCharacter.equipment)
-                if (eq.tab == equipmentTab && eq.slot == slot) return &eq;
-            return nullptr;
+            // Same shared-tab lookup used by Characters > Equipment.
+            return FindEquipment(liveCharacter, slot, equipmentTab);
         };
         for (const auto& entry : saved.gear) {
             const std::string& slot = entry.first;

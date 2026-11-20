@@ -6,6 +6,14 @@
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
 // labels are resolved names and may differ when cache lookups are incomplete.
 namespace AlterEgo {
+// Relics can be shared across equipment tabs (tab 0) in Hoard & Seek's
+// /equipment response, while regular gear belongs to one specific tab.
+// Do not accidentally save other shared slots, such as gathering tools.
+inline bool IsEquipmentInCapturedBuild(const std::string& slot,
+                                       int itemTab, int selectedTab) {
+    return itemTab == selectedTab || (slot == "Relic" && itemTab == 0);
+}
+
 struct ComparisonRow {
     std::string group;
     std::string field;
