@@ -19,4 +19,15 @@ int main() {
     assert(!IsEquipmentInCapturedBuild("Coat", 0, 2));
     assert(!IsEquipmentInCapturedBuild("PowerCore", 0, 1));
     assert(!IsEquipmentInCapturedBuild("Sickle", 0, 1));
+
+    // A true mismatch must be explicit; missing or incomplete data must not
+    // be presented as an equipment mismatch.
+    using AlterEgo::GearMatchStatus;
+    using AlterEgo::ClassifyGearMatch;
+    assert(ClassifyGearMatch(true, true, 3, false, true) == GearMatchStatus::Different);
+    assert(ClassifyGearMatch(true, true, 3, true, true) == GearMatchStatus::Matches);
+    assert(ClassifyGearMatch(true, true, 3, true, false) == GearMatchStatus::NotVerified);
+    assert(ClassifyGearMatch(true, true, 0, true, false) == GearMatchStatus::NotVerified);
+    assert(ClassifyGearMatch(false, true, 0, true, false) == GearMatchStatus::NoSavedGear);
+    assert(ClassifyGearMatch(true, false, 0, true, false) == GearMatchStatus::NoRetrievedGear);
 }

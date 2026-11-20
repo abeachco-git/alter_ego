@@ -9197,7 +9197,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
 struct ActiveSavedBuildMatch {
     std::string name;
     bool build = false;
-    bool gear = false;
+    AlterEgo::GearMatchStatus gear = AlterEgo::GearMatchStatus::NotVerified;
 };
 static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
     static ActiveSavedBuildMatch cached;
@@ -9245,18 +9245,21 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
             }
         }
         if (!buildMatch) continue;
-        // Require a complete recorded set before declaring a full match.
-        const bool fullMatch = gearMatch && checkedGearFields > 0 &&
-            !saved.gear.empty() && saved.gear.size() == equippedCount;
-        if (fullMatch) {
+        // Only a field difference establishes a mismatch. Missing saved gear,
+        // missing fetched gear and incomplete coverage are not mismatches.
+        const auto gearStatus = AlterEgo::ClassifyGearMatch(
+            !saved.gear.empty(), equippedCount > 0,
+            checkedGearFields, gearMatch, saved.gear.size() == equippedCount);
+        if (gearStatus == AlterEgo::GearMatchStatus::Matches) {
             cached.name = saved.name;
             cached.build = true;
-            cached.gear = true;
+            cached.gear = gearStatus;
             return cached;
         }
         if (!cached.build) {
             cached.name = saved.name;
             cached.build = true;
+            cached.gear = gearStatus;
         }
     }
     return cached;
@@ -14208,7 +14211,7 @@ void AddonRender() {
                     // Only the logged-in character gets a saved-build match line.
                     if (!g_CompactCharList && !g_CurrentCharName.empty() &&
                         ch.name == g_CurrentCharName && GetLoggedInSavedBuildMatch().build)
-                        rowHeight += lineH;
+                        rowHeight += 2.0f * lineH;
 
                     // Profession-tinted selection highlight
                     ImVec4 selCol(profColor.x * 0.35f, profColor.y * 0.35f, profColor.z * 0.35f, 0.65f);
@@ -14352,17 +14355,33 @@ void AddonRender() {
                     if (isLoggedIn && !g_CompactCharList) {
                         const auto& match = GetLoggedInSavedBuildMatch();
                         if (match.build) {
-                            std::string label = std::string(match.gear ? "Build + gear: " : "Build: ") + match.name;
-                            // Keep long saved-build names inside the narrow character list.
+                            // Always state build matching and equipment status separately:
+                            // the old "Build: X" line obscured equipment differences.
+                            std::string label = "Build matches: " + match.name;
                             std::string shortLabel = label;
-                            if (shortLabel.size() > 32)
-                                shortLabel = shortLabel.substr(0, 29) + "...";
-                            ImGui::TextColored(match.gear
-                                ? ImVec4(0.55f, 0.88f, 0.58f, 1.0f)
-                                : ImVec4(0.85f, 0.78f, 0.56f, 1.0f),
+                            if (shortLabel.size() > 31)
+                                shortLabel = shortLabel.substr(0, 28) + "...";
+                            ImGui::TextColored(ImVec4(0.55f, 0.88f, 0.58f, 1.0f),
                                 "%s", shortLabel.c_str());
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s", label.c_str());
+                                ImGui::SetTooltip("%s (cached H&S data)", label.c_str());
+
+                            const char* gearText = "Equipment: NOT VERIFIED";
+                            ImVec4 gearColor(0.65f, 0.65f, 0.65f, 1.0f);
+                            if (match.gear == AlterEgo::GearMatchStatus::Matches) {
+                                gearText = "Equipment: MATCHES";
+                                gearColor = ImVec4(0.55f, 0.88f, 0.58f, 1.0f);
+                            } else if (match.gear == AlterEgo::GearMatchStatus::Different) {
+                                gearText = "Equipment: DOES NOT MATCH";
+                                gearColor = ImVec4(1.0f, 0.56f, 0.44f, 1.0f);
+                            } else if (match.gear == AlterEgo::GearMatchStatus::NoSavedGear) {
+                                gearText = "Equipment: NOT SAVED";
+                            } else if (match.gear == AlterEgo::GearMatchStatus::NoRetrievedGear) {
+                                gearText = "Equipment: DATA UNAVAILABLE";
+                            }
+                            ImGui::TextColored(gearColor, "%s", gearText);
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("%s (last retrieved H&S data)", gearText);
                         }
                     }
                     // Extra lines (each on its own line with prefix)

@@ -14,6 +14,20 @@ inline bool IsEquipmentInCapturedBuild(const std::string& slot,
     return itemTab == selectedTab || (slot == "Relic" && itemTab == 0);
 }
 
+// Distinguish a real equipment mismatch from incomplete or missing API data.
+enum class GearMatchStatus {
+    NoSavedGear, NoRetrievedGear, NotVerified, Different, Matches
+};
+inline GearMatchStatus ClassifyGearMatch(
+    bool hasSavedGear, bool hasRetrievedGear,
+    size_t comparedGearFields, bool fieldsMatch, bool completeSet) {
+    if (!hasSavedGear) return GearMatchStatus::NoSavedGear;
+    if (!hasRetrievedGear) return GearMatchStatus::NoRetrievedGear;
+    if (comparedGearFields == 0) return GearMatchStatus::NotVerified;
+    if (!fieldsMatch) return GearMatchStatus::Different;
+    return completeSet ? GearMatchStatus::Matches : GearMatchStatus::NotVerified;
+}
+
 struct ComparisonRow {
     std::string group;
     std::string field;
