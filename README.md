@@ -122,6 +122,21 @@ optional because identical functional gear may use different item IDs. You can
 refresh the chosen character through Hoard & Seek from the comparison tab.
 Comparisons do not apply equipment, skills, or changes to saved builds.
 
+Newly captured library builds store an optional source-character name. Compare
+prefers that exact character on first opening; older snapshots with an
+unambiguous "<character name> - Tab N" title can infer it without migrating
+existing data. The build and equipment selectors default to **Active (auto)**,
+which follows the latest Hoard & Seek active-tab data after refreshing;
+manually selecting a tab overrides that behavior. The Compare refresh button
+shows progress and success/error feedback, but a completed fetch does not
+guarantee that the GW2 API has already published the most recent in-game change.
+
+The Characters list shows the logged-in character's matching saved build (when
+one exists). It checks **only the logged-in character**, caching the comparison
+until character data, the saved library, or the logged-in character changes.
+"Build" denotes matching template fields; "Build + gear" additionally requires
+that the saved gear slot set is complete and its recorded fields match.
+
 **Data limitations:** The comparison uses the most recently retrieved Hoard & Seek
 data, not an instantaneous memory read from the game. Older library entries
 only contain the gear values they previously recorded: missing fields are not

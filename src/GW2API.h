@@ -270,6 +270,7 @@ namespace AlterEgo {
     struct SavedBuild {
         std::string id;             // Unique ID (timestamp-based)
         std::string name;           // User-given name
+        std::string source_character; // Origin character, empty for legacy/imported builds
         std::string chat_link;      // Original chat link [&...]
         std::string profession;     // Profession name (decoded)
         GameMode game_mode = GameMode::PvE;
@@ -351,6 +352,8 @@ namespace AlterEgo {
         // --- Query ---
         static bool HasCharacterData();
         static time_t GetLastUpdated();
+        static uint64_t GetCharacterDataRevision();
+        static uint64_t GetBuildLibraryRevision();
 
         // Character access
         static const std::vector<Character>& GetCharacters();

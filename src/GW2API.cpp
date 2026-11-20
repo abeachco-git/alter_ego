@@ -28,6 +28,8 @@ namespace AlterEgo {
     namespace {
         std::atomic<int>       g_busyRetryAction{0};
         std::atomic<long long> g_busyRetryAtMs{0};
+        std::atomic<uint64_t> g_characterDataRevision{1};
+        std::atomic<uint64_t> g_buildLibraryRevision{1};
 
         long long NowMs() {
             return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1267,6 +1269,7 @@ namespace AlterEgo {
                     }
                     s_has_character_data = true;
                     s_last_updated = std::time(nullptr);
+                    g_characterDataRevision.fetch_add(1);
                     s_chars_fetched++;
                     s_pending_char_idx++;
 
@@ -1516,6 +1519,14 @@ namespace AlterEgo {
         return s_last_updated;
     }
 
+    uint64_t GW2API::GetCharacterDataRevision() {
+        return g_characterDataRevision.load();
+    }
+
+    uint64_t GW2API::GetBuildLibraryRevision() {
+        return g_buildLibraryRevision.load();
+    }
+
     const std::vector<Character>& GW2API::GetCharacters() {
         return s_characters;
     }
@@ -1549,7 +1560,10 @@ namespace AlterEgo {
                     }),
                 s_characters.end());
             changed = (s_characters.size() != before);
-            if (changed) s_has_character_data = !s_characters.empty();
+            if (changed) {
+                s_has_character_data = !s_characters.empty();
+                g_characterDataRevision.fetch_add(1);
+            }
         }
         if (changed) {
             if (s_api) s_api->Log(LOGL_INFO, "AlterEgo",
@@ -2359,6 +2373,7 @@ namespace AlterEgo {
 
             std::lock_guard<std::mutex> lock(s_mutex);
             s_last_updated = j.value("last_updated", (int64_t)0);
+            g_characterDataRevision.fetch_add(1);
 
             if (j.contains("characters") && j["characters"].is_array()) {
                 s_characters.clear();
@@ -2820,6 +2835,7 @@ namespace AlterEgo {
         json bj;
         bj["id"] = b.id;
         bj["name"] = b.name;
+        if (!b.source_character.empty()) bj["source_character"] = b.source_character;
         bj["chat_link"] = b.chat_link;
         if (!b.ae2_code.empty()) bj["ae2_code"] = b.ae2_code;
         bj["profession"] = b.profession;
@@ -2883,6 +2899,7 @@ namespace AlterEgo {
     }
 
     bool GW2API::SaveBuildLibrary() {
+        g_buildLibraryRevision.fetch_add(1);
         EnsureDataDirectory();
         std::string path = GetDataDirectory() + "/build_library.json";
 
@@ -2906,6 +2923,7 @@ namespace AlterEgo {
         if (!bj.is_object()) return false;
         b.id = bj.value("id", "");
         b.name = bj.value("name", "");
+        b.source_character = bj.value("source_character", "");
         b.chat_link = bj.value("chat_link", "");
         b.ae2_code = bj.value("ae2_code", "");
         b.profession = bj.value("profession", "");
@@ -3003,6 +3021,7 @@ namespace AlterEgo {
         try {
             json j; file >> j;
             std::lock_guard<std::mutex> lock(s_mutex);
+            g_buildLibraryRevision.fetch_add(1);
             s_saved_builds.clear();
             if (j.contains("builds") && j["builds"].is_array()) {
                 for (const auto& bj : j["builds"]) {
