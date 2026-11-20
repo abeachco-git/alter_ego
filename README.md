@@ -162,3 +162,14 @@ To produce a Windows DLL on GitHub without maintaining a build server, fork
 this repository and use **Actions → Build Alter Ego Windows DLL → Run workflow**.
 Download the `AlterEgo-UCRT-Windows-x64` artifact from the successful
 run. You can also cross-compile on Debian with MinGW by following **Building**.
+
+### Character sorting: Last Login
+
+The Characters sort dropdown includes **Last Login** (newest first). It uses
+locally recorded MumbleLink character-login timestamps already shown in the
+character header and saved to `login_times.json`; it does not request the
+GW2 API's `last_modified` field. Switching characters automatically updates
+the order without changing the currently selected roster entry. The direction
+arrow reverses oldest/newest among known logins; unobserved characters remain
+at the bottom in either direction. Existing Custom sorting and saved sort IDs
+are preserved. Logins before Alter Ego began recording are not recoverable.

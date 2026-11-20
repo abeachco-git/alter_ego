@@ -1097,13 +1097,15 @@ struct ThemeGuard {
 };
 
 // Character list sorting
-enum CharSortMode { Sort_Custom = 0, Sort_Name, Sort_Profession, Sort_Level, Sort_Age, Sort_Birthday };
+// Append new modes to preserve values already stored in char_sort.json.
+enum CharSortMode { Sort_Custom = 0, Sort_Name, Sort_Profession, Sort_Level, Sort_Age, Sort_Birthday, Sort_LastLogin };
 static int g_CharSortMode = Sort_Custom;
 static bool g_CharSortAscending = true;            // true = default direction, false = reversed
 static std::vector<int> g_CharDisplayOrder;        // indices into GetCharacters()
 static std::vector<std::string> g_CustomCharOrder;  // saved custom name order
 static int g_CharDragIdx = -1;                      // drag-and-drop source index in display order
 static size_t g_LastCharCount = 0;                  // detect character list changes
+static bool g_CharLastLoginSortDirty = false;        // rebuild recency sort after Mumble character change
 
 static void SaveCharSortConfig();
 static void LoadCharSortConfig();
@@ -1159,6 +1161,20 @@ static void RebuildCharDisplayOrder() {
                     if (da != db)
                         return asc ? da < db : da > db;  // asc = soonest first
                     return chars[a].name < chars[b].name;
+                });
+            break;
+        case Sort_LastLogin:
+            // Local MumbleLink login timestamps: newest first by default.
+            // Unknown characters go last in either direction. stable_sort
+            // preserves incoming order when timestamps tie or are unavailable.
+            std::stable_sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
+                [&](int a, int b) {
+                    const auto ia = g_LoginTimestamps.find(chars[a].name);
+                    const auto ib = g_LoginTimestamps.find(chars[b].name);
+                    const int64_t ta = ia == g_LoginTimestamps.end() ? 0 : ia->second;
+                    const int64_t tb = ib == g_LoginTimestamps.end() ? 0 : ib->second;
+                    if (ta <= 0 || tb <= 0) return ta > 0 && tb <= 0;
+                    return asc ? ta > tb : ta < tb;
                 });
             break;
         case Sort_Custom:
@@ -10603,6 +10619,7 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
     if (newName != g_CurrentCharName) {
         g_LoginTimestamps[newName] = (int64_t)std::time(nullptr);
         g_LoginTimestampsDirty = true;
+        g_CharLastLoginSortDirty = true;
         g_CurrentCharName = newName;
         // Resolve which account this character belongs to
         AlterEgo::GW2API::SetCurrentAccountFromCharacter(newName);
@@ -14041,12 +14058,33 @@ void AddonRender() {
             }
 
             if (!characters.empty()) {
-                // Rebuild display order when character count or current account changes
+                // Rebuild when the roster, account, or Mumble-observed last
+                // login changes. Preserve the selected character by NAME so
+                // auto-resorting does not silently select another character.
                 static std::string s_lastCurrentAcct;
                 const std::string& curAcct = AlterEgo::GW2API::GetCurrentAccountName();
-                if (characters.size() != g_LastCharCount || curAcct != s_lastCurrentAcct) {
+                const bool recencyChanged = g_CharSortMode == Sort_LastLogin &&
+                                            g_CharLastLoginSortDirty;
+                if (characters.size() != g_LastCharCount ||
+                    curAcct != s_lastCurrentAcct || recencyChanged) {
+                    std::string selectedName;
+                    if (g_SelectedCharIdx >= 0 &&
+                        g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
+                        const int currentIndex = g_CharDisplayOrder[g_SelectedCharIdx];
+                        if (currentIndex >= 0 && currentIndex < (int)characters.size())
+                            selectedName = characters[currentIndex].name;
+                    }
                     s_lastCurrentAcct = curAcct;
                     RebuildCharDisplayOrder();
+                    if (!selectedName.empty()) {
+                        for (int i = 0; i < (int)g_CharDisplayOrder.size(); ++i) {
+                            if (characters[g_CharDisplayOrder[i]].name == selectedName) {
+                                g_SelectedCharIdx = i;
+                                break;
+                            }
+                        }
+                    }
+                    if (recencyChanged) g_CharLastLoginSortDirty = false;
                 }
 
                 // Auto-select first character if none selected, or restore session
@@ -14131,7 +14169,7 @@ void AddonRender() {
                     float avail = ImGui::GetContentRegionAvail().x;
                     float comboWidth = avail - arrowBtnWidth - (arrowBtnWidth > 0 ? 4.0f : 0.0f);
                     ImGui::SetNextItemWidth(comboWidth);
-                    const char* sortLabels[] = { "Custom", "Name", "Class", "Level", "Age", "Birthday" };
+                    const char* sortLabels[] = { "Custom", "Name", "Class", "Level", "Age", "Birthday", "Last Login" };
                     if (ImGui::Combo("##sort", &g_CharSortMode, sortLabels, IM_ARRAYSIZE(sortLabels))) {
                         g_CharSortAscending = true; // reset direction on mode change
                         std::string selName;
