@@ -9222,7 +9222,8 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
     const int equipTab = GetActiveEquipmentTab(*character);
     size_t equippedCount = 0;
     for (const auto& item : character->equipment)
-        if (item.tab == equipTab) ++equippedCount;
+        if (AlterEgo::IsEquipmentInCapturedBuild(item.slot, item.tab, equipTab))
+            ++equippedCount;
 
     for (const auto& saved : AlterEgo::GW2API::GetSavedBuilds()) {
         if (saved.profession != character->profession) continue;
