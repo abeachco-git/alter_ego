@@ -110,13 +110,15 @@ The capture copies the retrieved trait and skill IDs directly, so it works even
 when the build-link palette is still loading. Your previously saved sets are
 not changed.
 
-In **Build Library**, select a saved build and click **Compare to Retrieved
-Character...**. Choose a character of the same profession, a retrieved build
-tab, and (if gear was saved) an equipment tab. The default view shows only
-differences; check **Show matches** for all compared fields. **Compare exact item
-IDs** is optional because identical functional gear may use different item IDs.
-You can refresh the chosen character through Hoard & Seek from the comparison
-panel. Comparisons do not apply equipment, skills, or changes to saved builds.
+Open the dedicated **Compare** top-level tab, select a **Saved build**, then
+choose a character of the same profession, a retrieved build tab, and (if gear
+was saved) an equipment tab. You can also click **Compare to Retrieved
+Character...** from the selected build in **Build Library** to open the Compare
+tab with that build preselected. The default view shows only differences;
+check **Show matches** for all compared fields. **Compare exact item IDs** is
+optional because identical functional gear may use different item IDs. You can
+refresh the chosen character through Hoard & Seek from the comparison tab.
+Comparisons do not apply equipment, skills, or changes to saved builds.
 
 **Data limitations:** The comparison uses the most recently retrieved Hoard & Seek
 data, not an instantaneous memory read from the game. Older library entries

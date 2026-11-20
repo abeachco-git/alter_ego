@@ -383,7 +383,7 @@ static bool g_ShowLastLogin = false;
 static int g_BirthdayMode = 1;         // 0 = Always, 1 = A week out, 2 = Never
 static float g_CharListWidth = 200.0f; // Resizable character list column width
 static bool g_DetailsFetched = false;  // Track if we've requested details for current character
-static int g_MainTab = 0;             // 0 = Characters, 1 = Build Library, 2 = Skinventory
+static int g_MainTab = 0;             // Stable session IDs: 0=Characters, 1=Build Library, 2=Skinventory, 3=Vault, 4=Achievements, 5=Compare
 static std::chrono::steady_clock::time_point g_FetchDoneTime{}; // For status message fade-out
 
 // Skinventory UI state
@@ -401,6 +401,7 @@ static int  g_SkinViewMode = 0; // 0 = List, 1 = Grid
 static bool g_SkinRefreshOwned = false;
 static bool g_SkinInitialized = false;
 static bool g_SwitchToSkinventory = false; // set by achievements tab to navigate to Skinventory
+static bool g_SwitchToCompare = false;     // set by Build Library to open Compare with its selected build
 
 // Portrait cache (for character screenshots in equipment panel)
 struct PortraitEntry {
@@ -1272,7 +1273,6 @@ static std::string g_SaveLibProfession;    // Profession name
 static int g_SaveLibBuildTab = 0;       // Live build tab ID being captured
 
 // Saved vs. retrieved character comparison state (never mutates a saved build).
-static bool g_LibCompareOpen = false;
 static std::string g_LibCompareBuildId;
 static std::string g_LibCompareChar;
 static int g_LibCompareBuildTab = 0;     // Index into the chosen character's build_tabs
@@ -1572,6 +1572,7 @@ static void SaveSession() {
     if (g_LibSelectedIdx >= 0 && g_LibSelectedIdx < (int)builds.size())
         j["lib_selected_id"] = builds[g_LibSelectedIdx].id;
     j["lib_filter"] = g_LibFilterMode;
+    if (!g_LibCompareBuildId.empty()) j["compare_saved_id"] = g_LibCompareBuildId;
 
     // Account selector
     j["selected_account"] = g_SelectedAccountFilter;
@@ -1616,6 +1617,8 @@ static void LoadSession() {
             }
         }
         if (j.contains("lib_filter")) g_LibFilterMode = j["lib_filter"].get<int>();
+        if (j.contains("compare_saved_id"))
+            g_LibCompareBuildId = j["compare_saved_id"].get<std::string>();
 
         // Account selector
         if (j.contains("selected_account"))
@@ -8786,9 +8789,6 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build, bool show
 // actually recorded in the saved set, so legacy builds don't produce false
 // mismatches for unknown infusions or exact item IDs.
 static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
-    if (!g_LibCompareOpen || g_LibEditMode) return;
-    ImGui::Separator();
-    ImGui::TextColored(ImVec4(0.90f, 0.79f, 0.45f, 1), "Compare saved vs. retrieved character");
     ImGui::TextWrapped("Uses the latest Hoard & Seek character cache, not an instantaneous in-game equipment read.");
 
     const auto& characters = AlterEgo::GW2API::GetCharacters();
@@ -9108,6 +9108,55 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         }
         ImGui::EndTable();
     }
+}
+
+// Dedicated top-level Compare tab. Keep the selection by saved build ID so
+// reordering or deleting entries in Build Library doesn't select a wrong build.
+static void RenderCompareTab() {
+    const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
+    ImGui::TextColored(ImVec4(0.90f, 0.79f, 0.45f, 1), "Saved vs. Retrieved Character");
+    ImGui::TextWrapped("Select a saved library build and compare it against a retrieved character's build and equipment tabs.");
+    if (builds.empty()) {
+        ImGui::Spacing();
+        ImGui::TextWrapped("No saved builds yet. Use Characters > Builds > Save Current Build + Gear to Library, or create one in Build Library.");
+        return;
+    }
+
+    const AlterEgo::SavedBuild* saved = nullptr;
+    for (const auto& build : builds) {
+        if (build.id == g_LibCompareBuildId) { saved = &build; break; }
+    }
+    if (!saved) {
+        // Default to the library's selected build, when available.
+        if (g_LibSelectedIdx >= 0 && g_LibSelectedIdx < (int)builds.size())
+            saved = &builds[g_LibSelectedIdx];
+        else
+            saved = &builds.front();
+        g_LibCompareBuildId = saved->id;
+        g_LibCompareChar.clear();
+    }
+
+    const std::string selectedName = saved->name + " (" + saved->profession + ")";
+    if (ImGui::BeginCombo("Saved build##compare", selectedName.c_str())) {
+        for (const auto& build : builds) {
+            const bool selected = (build.id == g_LibCompareBuildId);
+            const std::string label = build.name + " (" + build.profession + " / " +
+                                      GameModeLabel(build.game_mode) + ")";
+            if (ImGui::Selectable(label.c_str(), selected)) {
+                if (!selected) {
+                    g_LibCompareBuildId = build.id;
+                    g_LibCompareChar.clear(); // choose active matching character for new profession
+                    g_LibCompareBuildTab = 0;
+                    g_LibCompareEquipTab = 0;
+                }
+                saved = &build; // show the new comparison without a one-frame delay
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Separator();
+    RenderSavedVsLiveComparison(*saved);
 }
 
 static void RenderBuildLibrary() {
@@ -9734,9 +9783,6 @@ static void RenderBuildLibrary() {
 
         // Inline rename + notes editing
         if (g_LibEditBuildId != build.id) {
-            g_LibCompareOpen = false;
-            g_LibCompareBuildId = build.id;
-            g_LibCompareChar.clear();
             g_LibEditBuildId = build.id;
             g_LibEditName = build.name;
             g_LibEditNotes = build.notes;
@@ -9779,15 +9825,11 @@ static void RenderBuildLibrary() {
         ImGui::Separator();
 
         RenderSavedBuildPreview(build, /*showEditButton=*/true);
-        if (!g_LibEditMode) {
-            if (ImGui::Button(g_LibCompareOpen ? "Hide Comparison##lib" : "Compare to Retrieved Character...##lib")) {
-                g_LibCompareOpen = !g_LibCompareOpen;
-                if (g_LibCompareOpen) {
-                    g_LibCompareBuildId = build.id;
-                    g_LibCompareChar.clear();  // prefer the currently logged-in character
-                }
-            }
-            if (g_LibCompareOpen) RenderSavedVsLiveComparison(build);
+        if (!g_LibEditMode && ImGui::Button("Compare to Retrieved Character...##lib")) {
+            // Pass this build to the dedicated Compare tab; never change the saved build.
+            if (g_LibCompareBuildId != build.id) g_LibCompareChar.clear();
+            g_LibCompareBuildId = build.id;
+            g_SwitchToCompare = true;
         }
 
         // Deferred: a cancelled brand-new build is removed here, after the preview
@@ -14795,6 +14837,17 @@ void AddonRender() {
             ImGui::EndTabItem();
         }
 
+        ImGuiTabItemFlags compareTabFlags = 0;
+        if (g_SwitchToCompare) {
+            compareTabFlags = ImGuiTabItemFlags_SetSelected;
+            g_SwitchToCompare = false;
+        }
+        if (ImGui::BeginTabItem("Compare", nullptr, compareTabFlags)) {
+            g_MainTab = 5; // Do not renumber existing session tab IDs.
+            RenderCompareTab();
+            ImGui::EndTabItem();
+        }
+
         // Disable account-scoped tabs when viewing "All Accounts"
         bool acctTabsDisabled = AlterEgo::GW2API::IsMultiAccount() && g_SelectedAccountFilter.empty();
         const char* acctTabTooltip = "Select a specific account to use this tab.";
@@ -14861,7 +14914,7 @@ void AddonRender() {
                 std::string prevFilter = g_SelectedAccountFilter;
                 if (ImGui::Selectable("All Accounts", g_SelectedAccountFilter.empty())) {
                     g_SelectedAccountFilter.clear();
-                    if (g_MainTab >= 2) g_ForceCharactersTab = true;
+                    if (g_MainTab >= 2 && g_MainTab <= 4) g_ForceCharactersTab = true;
                 }
                 for (const auto& acct : accounts) {
                     bool selected = (g_SelectedAccountFilter == acct.name);
