@@ -131,11 +131,16 @@ manually selecting a tab overrides that behavior. The Compare refresh button
 shows progress and success/error feedback, but a completed fetch does not
 guarantee that the GW2 API has already published the most recent in-game change.
 
-The Characters list shows the logged-in character's matching saved build (when
-one exists). It checks **only the logged-in character**, caching the comparison
-until character data, the saved library, or the logged-in character changes.
-"Build" denotes matching template fields; "Build + gear" additionally requires
-that the saved gear slot set is complete and its recorded fields match.
+The Characters list shows a matching saved build for the **logged-in character
+only**, caching comparisons until the active character, its retrieved data, or
+the saved library changes. When several saved builds share the same build
+template, it displays the **closest equipment match** (preferring a verified
+full gear match, then fewer known differences) and shows how many saved
+variants share the template. Equipment receives its own explicit status:
+**MATCHES**, **DOES NOT MATCH**, **MISSING ITEM**, **DATA MISSING**, or
+**NOT SAVED**. Missing data is never treated as a verified full match.
+These labels reflect the latest retrieved H&S character snapshot, not a
+live memory read.
 
 **Data limitations:** The comparison uses the most recently retrieved Hoard & Seek
 data, not an instantaneous memory read from the game. Older library entries

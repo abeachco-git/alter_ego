@@ -9197,6 +9197,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
 struct ActiveSavedBuildMatch {
     std::string name;
     bool build = false;
+    size_t matchingBuilds = 0;
     AlterEgo::GearMatchStatus gear = AlterEgo::GearMatchStatus::NotVerified;
 };
 static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
@@ -9225,12 +9226,13 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
         if (AlterEgo::IsEquipmentInCapturedBuild(item.slot, item.tab, equipTab))
             ++equippedCount;
 
+    AlterEgo::GearMatchCandidate best;
     for (const auto& saved : AlterEgo::GW2API::GetSavedBuilds()) {
         if (saved.profession != character->profession) continue;
         const auto result = CalculateSavedVsLiveComparison(
             saved, *character, build, equipTab, false);
-        bool buildMatch = true, gearMatch = true;
-        size_t checkedGearFields = 0;
+        bool buildMatch = true;
+        size_t checkedGearFields = 0, differentGearFields = 0, missingItems = 0;
         for (const auto& row : result.Rows()) {
             const bool isGear = row.group == "Equipment" ||
                 row.group == "Equipment stats" || row.group == "Upgrades" ||
@@ -9238,28 +9240,66 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
                 row.group == "Relic" || row.group == "Exact item IDs";
             if (isGear) {
                 ++checkedGearFields;
-                if (!row.matches) gearMatch = false;
+                if (!row.matches) {
+                    ++differentGearFields;
+                    if (row.group == "Equipment") ++missingItems;
+                }
             } else if (!row.matches) {
                 buildMatch = false;
                 break;
             }
         }
         if (!buildMatch) continue;
-        // Only a field difference establishes a mismatch. Missing saved gear,
-        // missing fetched gear and incomplete coverage are not mismatches.
-        const auto gearStatus = AlterEgo::ClassifyGearMatch(
-            !saved.gear.empty(), equippedCount > 0,
-            checkedGearFields, gearMatch, saved.gear.size() == equippedCount);
-        if (gearStatus == AlterEgo::GearMatchStatus::Matches) {
-            cached.name = saved.name;
-            cached.build = true;
-            cached.gear = gearStatus;
-            return cached;
+        ++cached.matchingBuilds;
+
+        // The comparison can skip fields when GW2 API item information is
+        // unavailable. A skipped recorded field must not establish a full match.
+        bool requiredDataMissing = false;
+        for (const auto& entry : saved.gear) {
+            const auto& slot = entry.first;
+            const auto& gs = entry.second;
+            const auto* eq = FindEquipment(*character, slot, equipTab);
+            if (!eq) continue; // recorded missing slot already counted above
+            if (gs.item_id != 0 && eq->id == 0) {
+                ++missingItems;
+                continue;
+            }
+            if (gs.stat_id != 0 || !gs.stat_name.empty()) {
+                uint32_t liveStat = eq->stat_id;
+                if (!liveStat && eq->id) {
+                    const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                    if (info && info->details.contains("infix_upgrade") &&
+                        info->details["infix_upgrade"].contains("id") &&
+                        info->details["infix_upgrade"]["id"].is_number_unsigned())
+                        liveStat = info->details["infix_upgrade"]["id"].get<uint32_t>();
+                }
+                if (!liveStat) requiredDataMissing = true;
+            }
+            if (!gs.weapon_type.empty()) {
+                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                if (!info || !info->details.contains("type") ||
+                    !info->details["type"].is_string()) requiredDataMissing = true;
+            }
+            if (slot == "Relic" && !saved.relic_name.empty() && saved.relic_id == 0) {
+                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                if (!info) requiredDataMissing = true;
+            }
         }
-        if (!cached.build) {
+
+        AlterEgo::GearMatchCandidate candidate;
+        candidate.status = AlterEgo::ClassifyGearMatch(
+            !saved.gear.empty(), equippedCount > 0,
+            checkedGearFields, differentGearFields == 0,
+            saved.gear.size() == equippedCount, missingItems, requiredDataMissing);
+        candidate.differingFields = differentGearFields;
+        candidate.missingItems = missingItems;
+        candidate.comparedFields = checkedGearFields;
+        candidate.savedSlots = saved.gear.size();
+        if (!cached.build || AlterEgo::PreferGearMatchCandidate(candidate, best)) {
             cached.name = saved.name;
             cached.build = true;
-            cached.gear = gearStatus;
+            cached.gear = candidate.status;
+            best = candidate;
         }
     }
     return cached;
@@ -14208,10 +14248,13 @@ void AddonRender() {
                     float lineH = ImGui::GetTextLineHeightWithSpacing();
                     float rowHeight = g_CompactCharList ? 18.0f
                         : (28.0f + extraLines * lineH);
-                    // Only the logged-in character gets a saved-build match line.
+                    // Only the logged-in character gets cached match details.
                     if (!g_CompactCharList && !g_CurrentCharName.empty() &&
-                        ch.name == g_CurrentCharName && GetLoggedInSavedBuildMatch().build)
-                        rowHeight += 2.0f * lineH;
+                        ch.name == g_CurrentCharName) {
+                        const auto& match = GetLoggedInSavedBuildMatch();
+                        if (match.build)
+                            rowHeight += (match.matchingBuilds > 1 ? 3.0f : 2.0f) * lineH;
+                    }
 
                     // Profession-tinted selection highlight
                     ImVec4 selCol(profColor.x * 0.35f, profColor.y * 0.35f, profColor.z * 0.35f, 0.65f);
@@ -14355,8 +14398,8 @@ void AddonRender() {
                     if (isLoggedIn && !g_CompactCharList) {
                         const auto& match = GetLoggedInSavedBuildMatch();
                         if (match.build) {
-                            // Always state build matching and equipment status separately:
-                            // the old "Build: X" line obscured equipment differences.
+                            // Every candidate shares the exact build template.
+                            // The named one is the best gear match, when known.
                             std::string label = "Build matches: " + match.name;
                             std::string shortLabel = label;
                             if (shortLabel.size() > 31)
@@ -14366,22 +14409,28 @@ void AddonRender() {
                             if (ImGui::IsItemHovered())
                                 ImGui::SetTooltip("%s (cached H&S data)", label.c_str());
 
-                            const char* gearText = "Equipment: NOT VERIFIED";
-                            ImVec4 gearColor(0.65f, 0.65f, 0.65f, 1.0f);
+                            const char* gearText = "Equipment: DATA MISSING";
+                            ImVec4 gearColor(1.0f, 0.56f, 0.44f, 1.0f);
                             if (match.gear == AlterEgo::GearMatchStatus::Matches) {
                                 gearText = "Equipment: MATCHES";
                                 gearColor = ImVec4(0.55f, 0.88f, 0.58f, 1.0f);
+                            } else if (match.gear == AlterEgo::GearMatchStatus::MissingItem) {
+                                gearText = "Equipment: MISSING ITEM";
                             } else if (match.gear == AlterEgo::GearMatchStatus::Different) {
                                 gearText = "Equipment: DOES NOT MATCH";
-                                gearColor = ImVec4(1.0f, 0.56f, 0.44f, 1.0f);
                             } else if (match.gear == AlterEgo::GearMatchStatus::NoSavedGear) {
                                 gearText = "Equipment: NOT SAVED";
-                            } else if (match.gear == AlterEgo::GearMatchStatus::NoRetrievedGear) {
-                                gearText = "Equipment: DATA UNAVAILABLE";
+                                gearColor = ImVec4(0.65f, 0.65f, 0.65f, 1.0f);
                             }
                             ImGui::TextColored(gearColor, "%s", gearText);
                             if (ImGui::IsItemHovered())
                                 ImGui::SetTooltip("%s (last retrieved H&S data)", gearText);
+                            if (match.matchingBuilds > 1) {
+                                ImGui::TextDisabled("%zu saved builds share this template",
+                                    match.matchingBuilds);
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip("Showing the saved build with the closest equipment match.");
+                            }
                         }
                     }
                     // Extra lines (each on its own line with prefix)

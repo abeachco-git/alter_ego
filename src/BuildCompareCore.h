@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <cstddef>
 
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
 // labels are resolved names and may differ when cache lookups are incomplete.
@@ -16,16 +17,58 @@ inline bool IsEquipmentInCapturedBuild(const std::string& slot,
 
 // Distinguish a real equipment mismatch from incomplete or missing API data.
 enum class GearMatchStatus {
-    NoSavedGear, NoRetrievedGear, NotVerified, Different, Matches
+    NoSavedGear, NoRetrievedGear, NotVerified, Different, MissingItem, Matches
 };
 inline GearMatchStatus ClassifyGearMatch(
     bool hasSavedGear, bool hasRetrievedGear,
-    size_t comparedGearFields, bool fieldsMatch, bool completeSet) {
+    size_t comparedGearFields, bool fieldsMatch, bool completeSet,
+    size_t missingItems = 0, bool requiredDataMissing = false) {
     if (!hasSavedGear) return GearMatchStatus::NoSavedGear;
     if (!hasRetrievedGear) return GearMatchStatus::NoRetrievedGear;
-    if (comparedGearFields == 0) return GearMatchStatus::NotVerified;
+    if (missingItems != 0) return GearMatchStatus::MissingItem;
     if (!fieldsMatch) return GearMatchStatus::Different;
-    return completeSet ? GearMatchStatus::Matches : GearMatchStatus::NotVerified;
+    if (comparedGearFields == 0 || requiredDataMissing || !completeSet)
+        return GearMatchStatus::NotVerified;
+    return GearMatchStatus::Matches;
+}
+
+// Rank gear variants *after* checking that their build templates match.
+// A full gear match wins. Otherwise prefer fewer confirmed mismatches over
+// incomplete snapshots or missing API data. Ties retain library order.
+struct GearMatchCandidate {
+    GearMatchStatus status = GearMatchStatus::NotVerified;
+    size_t differingFields = 0;
+    size_t missingItems = 0;
+    size_t comparedFields = 0;
+    size_t savedSlots = 0;
+};
+inline int GearMatchRank(GearMatchStatus status) {
+    switch (status) {
+        case GearMatchStatus::Matches: return 0;
+        case GearMatchStatus::Different:
+        case GearMatchStatus::MissingItem: return 1;
+        case GearMatchStatus::NotVerified: return 2;
+        case GearMatchStatus::NoRetrievedGear: return 3;
+        case GearMatchStatus::NoSavedGear: return 4;
+    }
+    return 5;
+}
+inline bool PreferGearMatchCandidate(const GearMatchCandidate& candidate,
+                                     const GearMatchCandidate& current) {
+    const int a = GearMatchRank(candidate.status), b = GearMatchRank(current.status);
+    if (a != b) return a < b;
+    if (a == 1) {
+        // Missing an entire item is more significant than a single changed
+        // upgrade or stat; count the missing-field row plus an extra penalty.
+        const size_t aDiff = candidate.differingFields + candidate.missingItems * 2;
+        const size_t bDiff = current.differingFields + current.missingItems * 2;
+        if (aDiff != bDiff) return aDiff < bDiff;
+    }
+    if (candidate.comparedFields != current.comparedFields)
+        return candidate.comparedFields > current.comparedFields;
+    if (candidate.savedSlots != current.savedSlots)
+        return candidate.savedSlots > current.savedSlots;
+    return false;
 }
 
 struct ComparisonRow {

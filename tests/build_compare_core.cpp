@@ -30,4 +30,32 @@ int main() {
     assert(ClassifyGearMatch(true, true, 0, true, false) == GearMatchStatus::NotVerified);
     assert(ClassifyGearMatch(false, true, 0, true, false) == GearMatchStatus::NoSavedGear);
     assert(ClassifyGearMatch(true, false, 0, true, false) == GearMatchStatus::NoRetrievedGear);
+
+    // Missing a recorded equipment slot is a real, visible mismatch.
+    assert(ClassifyGearMatch(true, true, 2, false, false, 1) == GearMatchStatus::MissingItem);
+    assert(ClassifyGearMatch(true, true, 2, true, true, 1) == GearMatchStatus::MissingItem);
+    // Missing API details must be flagged, but not called a verified match.
+    assert(ClassifyGearMatch(true, true, 3, true, true, 0, true) == GearMatchStatus::NotVerified);
+    assert(ClassifyGearMatch(true, true, 3, false, true, 0, true) == GearMatchStatus::Different);
+
+    // Variant selection: complete match wins even if another candidate is first.
+    using AlterEgo::GearMatchCandidate;
+    using AlterEgo::PreferGearMatchCandidate;
+    GearMatchCandidate full{GearMatchStatus::Matches, 0, 0, 25, 16};
+    GearMatchCandidate oneDiff{GearMatchStatus::Different, 1, 0, 25, 16};
+    GearMatchCandidate fourDiff{GearMatchStatus::Different, 4, 0, 25, 16};
+    GearMatchCandidate missing{GearMatchStatus::MissingItem, 1, 1, 24, 16};
+    GearMatchCandidate unknown{GearMatchStatus::NotVerified, 0, 0, 9, 16};
+    GearMatchCandidate notSaved{GearMatchStatus::NoSavedGear, 0, 0, 0, 0};
+    GearMatchCandidate notFetched{GearMatchStatus::NoRetrievedGear, 0, 0, 0, 16};
+    assert(PreferGearMatchCandidate(full, oneDiff));
+    assert(!PreferGearMatchCandidate(oneDiff, full));
+    assert(PreferGearMatchCandidate(oneDiff, fourDiff));
+    assert(PreferGearMatchCandidate(oneDiff, missing));
+    assert(PreferGearMatchCandidate(missing, unknown));
+    assert(PreferGearMatchCandidate(unknown, notFetched));
+    assert(PreferGearMatchCandidate(notFetched, notSaved));
+    assert(!PreferGearMatchCandidate(oneDiff, oneDiff)); // stable library order
+    assert(PreferGearMatchCandidate(
+        GearMatchCandidate{GearMatchStatus::NotVerified, 0, 0, 12, 15}, unknown));
 }
