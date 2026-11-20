@@ -625,6 +625,9 @@ namespace AlterEgo {
 
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            // Never overwrite a manual or in-flight H&S character fetch.
+            // This also protects against an auto-refresh race at dispatch time.
+            if (s_fetch_status == FetchStatus::InProgress) return;
             s_fetch_status = FetchStatus::InProgress;
             s_pending_char_names = names;
             s_pending_char_idx = 0;

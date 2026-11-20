@@ -173,3 +173,26 @@ the order without changing the currently selected roster entry. The direction
 arrow reverses oldest/newest among known logins; unobserved characters remain
 at the bottom in either direction. Existing Custom sorting and saved sort IDs
 are preserved. Logins before Alter Ego began recording are not recoverable.
+
+### Optional live specialization warning and automatic refresh
+
+Nexus options > **Data Source: Hoard & Seek** now has an **Automatic Character
+Refresh** subsection. Automatic refresh is **off by default** (explicit opt-in).
+When enabled, the independent **When a character logs in** and **When
+specialization changes** options schedule a refresh for the currently played
+character only. Both use Nexus's existing MumbleLink identity event; **RTAPI
+is not required**. Rapid events are coalesced with an 8-second debounce, and
+only one automatic request per character is dispatched within a 90-second
+cooldown. Requests wait for Hoard & Seek to be ready and an in-flight fetch to
+finish; selected-character refreshes also refuse to overwrite an active fetch.
+
+The separately configurable **Warn when live specialization differs from
+retrieved build** option is on by default and compares MumbleLink's third
+specialization ID against the *cached active build*'s third specialization.
+When both values are known but differ, a warning appears for the logged-in
+character in the roster and on Compare. Unknown/zero values do not trigger a
+warning. The warning does **not** imply that full gear details are available
+from live memory: both equipment and build templates still come from the GW2
+API through Hoard & Seek, and the API may return stale cached data. Automatic
+refresh does not detect two builds that share the same third specialization or
+equipment-only switches.

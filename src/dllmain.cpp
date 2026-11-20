@@ -25,6 +25,7 @@
 #include "imgui_internal.h"
 #include "GW2API.h"
 #include "BuildCompareCore.h"
+#include "AutoRefreshCore.h"
 #include "FontResolve.h"
 #include "FontManager.h"
 #include "IconManager.h"
@@ -380,6 +381,11 @@ static bool g_ShowCraftingIcons = false;
 static bool g_ShowAge = false;
 static bool g_ShowPlaytime = false;
 static bool g_ShowLastLogin = false;
+// Explicit opt-in: no additional H&S requests unless enabled in Nexus options.
+static bool g_AutoRefreshEnabled = false;
+static bool g_AutoRefreshOnLogin = true;
+static bool g_AutoRefreshOnSpecialization = true;
+static bool g_WarnStaleSpecialization = true;
 static int g_BirthdayMode = 1;         // 0 = Always, 1 = A week out, 2 = Never
 static float g_CharListWidth = 200.0f; // Resizable character list column width
 static bool g_DetailsFetched = false;  // Track if we've requested details for current character
@@ -798,6 +804,7 @@ struct MumbleIdentity {
     unsigned UISize;
 };
 static std::string g_CurrentCharName; // currently logged-in character name from MumbleLink
+static AlterEgo::AutoRefreshTracker g_AutoRefreshTracker;
 
 // Local login timestamps (character name -> unix epoch)
 static std::unordered_map<std::string, int64_t> g_LoginTimestamps;
@@ -1481,6 +1488,10 @@ static void SaveSettings() {
     j["show_age"] = g_ShowAge;
     j["show_playtime"] = g_ShowPlaytime;
     j["show_last_login"] = g_ShowLastLogin;
+    j["auto_refresh_enabled"] = g_AutoRefreshEnabled;
+    j["auto_refresh_on_login"] = g_AutoRefreshOnLogin;
+    j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
+    j["warn_stale_specialization"] = g_WarnStaleSpecialization;
     j["birthday_mode"] = g_BirthdayMode;
     j["char_list_width"] = g_CharListWidth;
     j["lib_list_width"] = g_LibListWidth;
@@ -1518,6 +1529,10 @@ static void LoadSettings() {
     getBool("show_age", g_ShowAge);
     getBool("show_playtime", g_ShowPlaytime);
     getBool("show_last_login", g_ShowLastLogin);
+    getBool("auto_refresh_enabled", g_AutoRefreshEnabled);
+    getBool("auto_refresh_on_login", g_AutoRefreshOnLogin);
+    getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
+    getBool("warn_stale_specialization", g_WarnStaleSpecialization);
     getInt("birthday_mode", g_BirthdayMode);
     getFloat("char_list_width", g_CharListWidth);
     getFloat("lib_list_width", g_LibListWidth);
@@ -8824,6 +8839,17 @@ static int GetActiveBuildIndex(const AlterEgo::Character& ch) {
         if (ch.build_tabs[i].tab == ch.active_build_tab) return i;
     return ch.build_tabs.empty() ? -1 : 0;
 }
+static bool HasLiveSpecCacheMismatch(const AlterEgo::Character& ch) {
+    if (!g_WarnStaleSpecialization) return false;
+    const int index = GetActiveBuildIndex(ch);
+    if (index < 0) return false;
+    return g_AutoRefreshTracker.LiveSpecializationDiffers(
+        ch.name, ch.build_tabs[index].specializations[2].spec_id);
+}
+static const char* GetSpecNameForWarning(uint32_t id) {
+    const auto* info = AlterEgo::GW2API::GetSpecInfo(id);
+    return info && !info->name.empty() ? info->name.c_str() : "Unknown";
+}
 static int GetActiveEquipmentTab(const AlterEgo::Character& ch) {
     return ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
 }
@@ -9091,6 +9117,18 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
             if (selected) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
+    }
+    if (character->name == g_CurrentCharName &&
+        HasLiveSpecCacheMismatch(*character)) {
+        const int cachedIndex = GetActiveBuildIndex(*character);
+        const uint32_t currentId = g_AutoRefreshTracker.LiveSpecialization();
+        const uint32_t cachedId =
+            character->build_tabs[cachedIndex].specializations[2].spec_id;
+        ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
+            "Live specialization: %s (#%u); retrieved active build: %s (#%u).",
+            GetSpecNameForWarning(currentId), currentId,
+            GetSpecNameForWarning(cachedId), cachedId);
+        ImGui::TextDisabled("Retrieved build may be outdated; refresh the character.");
     }
     if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
         g_LibCompareBuildTab = -1;
@@ -10615,8 +10653,12 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
         if (c == ' ' || c == '-' || isalpha(c) || c >= 0x80) continue;
         return; // invalid — likely garbage data from uninitialized MumbleLink
     }
+    const auto observed = g_AutoRefreshTracker.ObserveIdentity(
+        newName, id->Specialization,
+        AlterEgo::AutoRefreshTracker::Clock::now(),
+        g_AutoRefreshEnabled, g_AutoRefreshOnLogin, g_AutoRefreshOnSpecialization);
     if (newName.empty()) return;
-    if (newName != g_CurrentCharName) {
+    if (observed.login) {
         g_LoginTimestamps[newName] = (int64_t)std::time(nullptr);
         g_LoginTimestampsDirty = true;
         g_CharLastLoginSortDirty = true;
@@ -13915,6 +13957,27 @@ struct DefaultFontScope {
     ~DefaultFontScope() { if (pushed) ImGui::PopFont(); }
 };
 
+// Never dispatch H&S requests inside a MumbleLink event callback. The
+// render-driven scheduler checks readiness, throttling, and existing activity.
+static void PollAutoCharacterRefresh() {
+    if (!g_AutoRefreshEnabled) {
+        g_AutoRefreshTracker.CancelPending();
+        return;
+    }
+    if (g_AutoRefreshTracker.PendingCharacter().empty()) return;
+    const auto status = AlterEgo::GW2API::GetHoardStatus();
+    const bool ready = status == AlterEgo::HoardStatus::Available ||
+                       status == AlterEgo::HoardStatus::Ready;
+    const bool busy = AlterEgo::GW2API::GetFetchStatus() ==
+                      AlterEgo::FetchStatus::InProgress;
+    std::string name;
+    if (g_AutoRefreshTracker.TakeDueRequest(
+            AlterEgo::AutoRefreshTracker::Clock::now(),
+            g_AutoRefreshEnabled, ready, busy, name)) {
+        AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+    }
+}
+
 void AddonRender() {
     DefaultFontScope _fontScope(g_FontConfig);
     // Process icon download queue every frame
@@ -13922,6 +13985,7 @@ void AddonRender() {
     Skinventory::WikiImage::Tick();
     Skinventory::OwnedSkins::Tick();
     AlterEgo::GW2API::PollRetries();   // fire any scheduled H&S BUSY backoff retry
+    PollAutoCharacterRefresh();     // MumbleLink-triggered requests (debounced, cooldown, no overlap)
 
     // Persist login timestamps when dirty (crash-safe)
     if (g_LoginTimestampsDirty) SaveLoginTimestamps();
@@ -14311,12 +14375,14 @@ void AddonRender() {
                     float lineH = ImGui::GetTextLineHeightWithSpacing();
                     float rowHeight = g_CompactCharList ? 18.0f
                         : (28.0f + extraLines * lineH);
-                    // Only the logged-in character gets cached match details.
+                    // Show mismatch even when no library build happens to match.
                     if (!g_CompactCharList && !g_CurrentCharName.empty() &&
                         ch.name == g_CurrentCharName) {
                         const auto& match = GetLoggedInSavedBuildMatch();
                         if (match.build)
                             rowHeight += (match.matchingBuilds > 1 ? 3.0f : 2.0f) * lineH;
+                        if (HasLiveSpecCacheMismatch(ch))
+                            rowHeight += lineH;
                     }
 
                     // Profession-tinted selection highlight
@@ -14459,6 +14525,14 @@ void AddonRender() {
                         ImGui::Dummy(ImVec2(iconR * 2.0f + 2.0f, 0));
                     }
                     if (isLoggedIn && !g_CompactCharList) {
+                        if (HasLiveSpecCacheMismatch(ch)) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
+                                "Live spec differs - refresh");
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("MumbleLink reports %s, cached active build reports %s.",
+                                    GetSpecNameForWarning(g_AutoRefreshTracker.LiveSpecialization()),
+                                    GetSpecNameForWarning(ch.build_tabs[GetActiveBuildIndex(ch)].specializations[2].spec_id));
+                        }
                         const auto& match = GetLoggedInSavedBuildMatch();
                         if (match.build) {
                             // Every candidate shares the exact build template.
@@ -15313,6 +15387,31 @@ void AddonOptions() {
             break;
     }
 
+    ImGui::Spacing();
+    RenderSectionHeader("Automatic Character Refresh", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    if (ImGui::Checkbox("Automatically refresh character data##ae_auto", &g_AutoRefreshEnabled)) {
+        if (!g_AutoRefreshEnabled) g_AutoRefreshTracker.CancelPending();
+        SaveSettings();
+    }
+    ImGui::Indent(16.0f);
+    if (!g_AutoRefreshEnabled) {
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+    }
+    if (ImGui::Checkbox("When a character logs in##ae_auto_login", &g_AutoRefreshOnLogin))
+        SaveSettings();
+    if (ImGui::Checkbox("When specialization changes##ae_auto_spec", &g_AutoRefreshOnSpecialization))
+        SaveSettings();
+    if (!g_AutoRefreshEnabled) {
+        ImGui::PopStyleVar();
+        ImGui::PopItemFlag();
+    }
+    ImGui::Unindent(16.0f);
+    if (ImGui::Checkbox("Warn when live specialization differs from retrieved build##ae_warn_spec",
+                        &g_WarnStaleSpecialization))
+        SaveSettings();
+    ImGui::TextDisabled("MumbleLink only; no RTAPI required. 8s delay, 90s per-character cooldown.");
+    ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     ImGui::Spacing();
     RenderSectionHeader("UI Settings", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
     if (ImGui::Checkbox("Show Quick Access icon", &g_ShowQAIcon)) {
