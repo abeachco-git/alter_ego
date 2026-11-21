@@ -1752,6 +1752,91 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     ImGui::SetCursorScreenPos(ImVec2(cmin.x, cmax.y + 1.0f));
 }
 
+// Compact wide-window raid layout: W1 [+modifiers] | encounter chips | 4/4.
+// Preserve original two-row wing banners as the narrow-window fallback.
+static void RenderCompactWingBanner(const std::string& wingShortName,
+                                   const std::string& wingFullName,
+                                   int doneCount, int totalCount, bool fetched,
+                                   const std::vector<WingEncChip>& chips,
+                                   bool isEmboldened, bool isCallOfTheMists) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = 29.0f;
+    const ImVec2 max(min.x + width, min.y + height);
+    const bool fullyDone = fetched && totalCount > 0 && doneCount == totalCount;
+    AlterEgo::CompletionTheme::DrawGroup(dl, min, max);
+    const float textY = min.y + (height - ImGui::GetTextLineHeight()) * 0.5f;
+    const float leftX = min.x + 10.0f;
+    dl->AddText(ImVec2(leftX, textY),
+        AlterEgo::CompletionTheme::Text(fullyDone), wingShortName.c_str());
+
+    // Hovering W1, W2, etc. gives the full wing name and completion summary.
+    ImGui::SetCursorScreenPos(ImVec2(leftX - 3.0f, min.y + 2.0f));
+    ImGui::InvisibleButton("##wingLabel", ImVec2(31.0f, height - 4.0f));
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s\n%d / %d encounters completed",
+                          wingFullName.c_str(), doneCount, totalCount);
+
+    // Keep both weekly modifier icons beside the abbreviated wing label.
+    float iconX = min.x + 40.0f;
+    auto modifier = [&](bool enabled, const char* key, const char* tip) {
+        if (!enabled) return;
+        const float iconSize = 16.0f;
+        const ImVec2 iMin(iconX, min.y + (height - iconSize) * 0.5f);
+        const ImVec2 iMax(iMin.x + iconSize, iMin.y + iconSize);
+        Texture_t* tex = Skinventory::WikiImage::GetCurrencyIcon(key);
+        if (tex && tex->Resource) dl->AddImage(tex->Resource, iMin, iMax);
+        else dl->AddText(iMin, AlterEgo::CompletionTheme::kUnknownText, "?");
+        ImGui::SetCursorScreenPos(iMin);
+        ImGui::PushID(key);
+        ImGui::InvisibleButton("##wingModifier", ImVec2(iconSize, iconSize));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        ImGui::PopID();
+        iconX += iconSize + 3.0f;
+    };
+    modifier(isCallOfTheMists, "Call_of_the_Mists",
+             "Call of the Mists - boss gold and XP are doubled this week.");
+    modifier(isEmboldened, "Emboldened",
+             "Emboldened Mode - stacking buff for easier clears this week.");
+
+    char fraction[32];
+    snprintf(fraction, sizeof(fraction), "%d / %d", doneCount, totalCount);
+    const float fractionWidth = ImGui::CalcTextSize(fraction).x;
+    const ImU32 counterColor = fullyDone ? AlterEgo::CompletionTheme::kCompleteText
+        : doneCount > 0 ? AlterEgo::CompletionTheme::kInProgressGold
+        : AlterEgo::CompletionTheme::kAvailableText;
+    dl->AddText(ImVec2(max.x - fractionWidth - 9.0f, textY),
+                counterColor, fraction);
+
+    // Reserve an icon gutter on every wing so encounter columns align.
+    const float chipStart = min.x + 85.0f;
+    const float chipEnd = max.x - fractionWidth - 20.0f;
+    const float chipWTotal = ImMax(0.0f, chipEnd - chipStart);
+    const float gap = 4.0f;
+    if (!chips.empty() && chipWTotal > gap * (chips.size() - 1)) {
+        const float chipW = (chipWTotal - gap * (chips.size() - 1)) / chips.size();
+        const float chipY = min.y + (height - 19.0f) * 0.5f;
+        for (size_t i = 0; i < chips.size(); ++i) {
+            const ImVec2 cMin(chipStart + i * (chipW + gap), chipY);
+            const ImVec2 cMax(cMin.x + chipW, chipY + 19.0f);
+            DrawEncounterChip(dl, chips[i], cMin, cMax, 3.5f, true);
+            ImGui::SetCursorScreenPos(cMin);
+            ImGui::PushID((int)i);
+            ImGui::InvisibleButton("##chip", ImVec2(chipW, 19.0f));
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(chips[i].fullName.c_str());
+                if (!chips[i].bountyDate.empty())
+                    ImGui::Text("Daily raid bounty: %s", chips[i].bountyDate.c_str());
+                ImGui::EndTooltip();
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::SetCursorScreenPos(ImVec2(min.x, max.y + 2.0f));
+}
+
 // Get wing short name "W1"-"W8" from wing ID, fallback empty string.
 static const char* WingShortName(uint32_t wingId) {
     return BountyWingShortName(wingId);
@@ -2648,12 +2733,18 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             if (g_ClearsHideComplete && g_ClearsFetched && chips.empty()) continue;
             ++visibleWings;
             ImGui::PushID((int)wing.id);
-            RenderWingBanner(shortW ? shortW : "", cleanName,
-                doneCount, totalCount, g_ClearsFetched,
-                WingTheme(wing.id), chips,
-                /*bannerKey*/ "wing:" + std::to_string(wing.id),
-                /*isEmboldened*/ wing.id == embWingId,
-                /*isCallOfTheMists*/ wing.id == cotmWingId);
+            if (ImGui::GetContentRegionAvail().x >= 830.0f) {
+                RenderCompactWingBanner(shortW ? shortW : "", cleanName,
+                    doneCount, totalCount, g_ClearsFetched, chips,
+                    wing.id == embWingId, wing.id == cotmWingId);
+            } else {
+                RenderWingBanner(shortW ? shortW : "", cleanName,
+                    doneCount, totalCount, g_ClearsFetched,
+                    WingTheme(wing.id), chips,
+                    /*bannerKey*/ "wing:" + std::to_string(wing.id),
+                    /*isEmboldened*/ wing.id == embWingId,
+                    /*isCallOfTheMists*/ wing.id == cotmWingId);
+            }
             ImGui::PopID();
         }
         if (visibleWings == 0)
