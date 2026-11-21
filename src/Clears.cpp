@@ -386,8 +386,13 @@ void OnVaultSeasonResponse(void* eventArgs) {
         if (!endStr.empty()) {
             auto tp = ParseISO8601(endStr);
             if (tp != std::chrono::system_clock::time_point{}) {
-                std::lock_guard<std::mutex> lock(g_ClearsMutex);
-                g_VaultSeasonEnd = tp;
+                {
+                    std::lock_guard<std::mutex> lock(g_ClearsMutex);
+                    g_VaultSeasonEnd = tp;
+                }
+                // Save the asynchronously delivered timestamp so a restart
+                // can retain the countdown without another successful fetch.
+                SaveVaultCache();
             }
         }
     } catch (...) {}
@@ -1989,6 +1994,22 @@ static bool RenderVaultSectionToggle(int index, const char* title,
     }
     AlterEgo::CompletionTheme::SectionHeading(title, suffix, summary,
         AlterEgo::CompletionTheme::Text(summaryComplete));
+    // The heading is a single invisible layout item, so the season's exact
+    // end timestamp can be shown on hover without adding visible clutter.
+    if (index == 2 &&
+        g_VaultSeasonEnd != std::chrono::system_clock::time_point{} &&
+        ImGui::IsItemHovered()) {
+        const std::time_t tt = std::chrono::system_clock::to_time_t(g_VaultSeasonEnd);
+        std::tm utc{};
+#ifdef _WIN32
+        gmtime_s(&utc, &tt);
+#else
+        gmtime_r(&tt, &utc);
+#endif
+        char when[64]{};
+        if (std::strftime(when, sizeof(when), "%a %b %d, %Y at %H:%M UTC", &utc))
+            ImGui::SetTooltip("Wizard's Vault season ends: %s", when);
+    }
     ImGui::PopID();
     ImGui::PopID();
     return g_VaultOpen[index];
