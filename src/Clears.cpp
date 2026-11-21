@@ -1910,9 +1910,9 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         FetchVaultData();
 
     const bool fetching = g_VaultFetching;
-    if (fetching) ImGui::BeginDisabled();
+    if (fetching) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
     if (ImGui::SmallButton("Refresh##vault") && !fetching) FetchVaultData();
-    if (fetching) ImGui::EndDisabled();
+    if (fetching) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     ImGui::SameLine();
     LoadClearUiSettings();
     const char* filterLabel = g_VaultHideComplete
@@ -2093,9 +2093,9 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
 {
     const bool fetching = g_ClearsFetching || g_ClearsQueryPending.load() ||
         g_ClearsRetryAtMs.load() != 0;
-    if (fetching) ImGui::BeginDisabled();
+    if (fetching) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
     if (ImGui::SmallButton("Refresh##clears") && !fetching) FetchClears();
-    if (fetching) ImGui::EndDisabled();
+    if (fetching) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     ImGui::SameLine();
     LoadClearUiSettings();
     const char* filterLabel = g_ClearsHideComplete
