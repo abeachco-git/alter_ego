@@ -1308,7 +1308,7 @@ static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
                         const char* canonical = FractalScales::NameForScale(scale);
                         const std::string name = canonical ? canonical :
                             ShortenFractalName(rec->name);
-                        info += "\\nT" + std::to_string(tier + 1) +
+                        info += "\nT" + std::to_string(tier + 1) +
                             " (" + (scale > 0 ? std::to_string(scale) : "?") +
                             ") " + name;
                     }
@@ -1350,17 +1350,17 @@ static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
                     const char* canonical = FractalScales::NameForScale(scale);
                     const std::string name = canonical ? canonical :
                         (entry ? ShortenFractalName(entry->name) : "Unknown");
-                    info = "Recommended\\nT" + std::to_string(tier + 1) +
+                    info = "Recommended\nT" + std::to_string(tier + 1) +
                         " (" + (scale > 0 ? std::to_string(scale) : "?") +
                         ") " + name;
                 } else {
                     info = FractalScales::DailyTooltip(card.title);
-                    info += "\\nSelected: " +
+                    info += "\nSelected: " +
                         FractalScales::TierScales(card.title, tier + 1);
                 }
-                info += !entry ? "\\nNo objective data" :
-                    !fetched ? "\\nProgress unknown" :
-                    done ? "\\nCompleted" : "\\nRemaining";
+                info += !entry ? "\nNo objective data" :
+                    !fetched ? "\nProgress unknown" :
+                    done ? "\nCompleted" : "\nRemaining";
                 ImGui::SetTooltip("%s", info.c_str());
             }
             ImGui::PopID();
@@ -2239,8 +2239,8 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                             next->recNames[i];
                         ImGui::TextUnformatted(label.c_str());
                         if (ImGui::IsItemHovered()) {
-                            const std::string info = "Recommended\\n" + label +
-                                "\\nSpecific scale required";
+                            const std::string info = "Recommended\n" + label +
+                                "\nSpecific scale required";
                             ImGui::SetTooltip("%s", info.c_str());
                         }
                     }
