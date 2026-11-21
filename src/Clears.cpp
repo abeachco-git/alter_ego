@@ -1203,27 +1203,53 @@ static uint32_t BountyBossToWing(const std::string& bossName) {
     return (it != map.end()) ? it->second : 0;
 }
 
-// Per-wiki: zone/map a strike mission is located in.
-static const char* StrikeZone(const std::string& name) {
-    static const std::unordered_map<std::string, std::string> map = {
-        {"Shiverpeaks Pass",                          "Lornar's Pass"},
-        {"Voice of the Fallen and Claw of the Fallen","Bjora Marches"},
-        {"Fraenir of Jormag",                         "Bjora Marches"},
-        {"Boneskinner",                               "Bjora Marches"},
-        {"Whisper of Jormag",                         "Bjora Marches"},
-        {"Forging Steel",                             "Drizzlewood Coast"},
-        {"Cold War",                                  "Drizzlewood Coast"},
-        {"Aetherblade Hideout",                       "Seitung Province"},
-        {"Xunlai Jade Junkyard",                      "Echovald Wilds"},
-        {"Kaineng Overlook",                          "New Kaineng City"},
-        {"Harvest Temple",                            "Dragon's End"},
-        {"Old Lion's Court",                          "Lion's Arch"},
-        {"Cosmic Observatory",                        "Skywatch Archipelago"},
-        {"Temple of Febe",                            "Inner Nayos"},
-        {"Guardian's Glade",                          "Janthir Syntri"},
+// Match the in-game raid picker without changing the source achievement-bit order.
+// Forging Steel has no corresponding objective in the current 14-bit list.
+static const char* StrikePickerCategory(const std::string& name) {
+    const std::string key = ClearsRotation::Normalize(name);
+    if (key == "oldlionscourt") return "Core Game";
+    if (key == "shiverpeakspass" || key == "voiceofthefallenandclawofthefallen" ||
+        key == "fraenirofjormag" || key == "boneskinner" ||
+        key == "whisperofjormag" || key == "coldwar") return "Icebrood Saga";
+    if (key == "aetherbladehideout" || key == "xunlaijadejunkyard" ||
+        key == "kainengoverlook" || key == "harvesttemple") return "End of Dragons";
+    if (key == "cosmicobservatory" || key == "templeoffebe") return "Secrets of the Obscure";
+    if (key == "guardiansglade" || key == "kela") return "Janthir Wilds";
+    if (key == "nexusofeternity" || key == "vloxx") return "Visions of Eternity";
+    return "Strike Mission";
+}
+
+static int StrikePickerOrder(const std::string& name) {
+    static const std::unordered_map<std::string, int> ranks = {
+        {"oldlionscourt", 10},
+        {"shiverpeakspass", 20}, {"voiceofthefallenandclawofthefallen", 21},
+        {"fraenirofjormag", 22}, {"boneskinner", 23},
+        {"whisperofjormag", 24}, {"coldwar", 26},
+        {"aetherbladehideout", 30}, {"xunlaijadejunkyard", 31},
+        {"kainengoverlook", 32}, {"harvesttemple", 33},
+        {"cosmicobservatory", 40}, {"templeoffebe", 41},
+        {"guardiansglade", 50}, {"kela", 50}, {"nexusofeternity", 60}
     };
-    auto it = map.find(name);
-    return (it != map.end()) ? it->second.c_str() : "";
+    const auto it = ranks.find(ClearsRotation::Normalize(name));
+    return it != ranks.end() ? it->second : 100;
+}
+
+static const char* WingExpansion(uint32_t wingId) {
+    switch (wingId) {
+        case 9128: case 9147: case 9182: case 9144: return "Heart of Thorns";
+        case 9111: case 9120: case 9156: return "Path of Fire";
+        case 9181: return "Janthir Wilds";
+    }
+    return "Raid";
+}
+
+static bool IsSecondaryRaidEncounter(const std::string& displayName) {
+    static const std::unordered_set<std::string> secondary = {
+        "Spirit Woods", "Trio", "Escort", "Twisted Castle",
+        "River", "Broken King", "Eater", "Eyes",
+        "Sorting", "Qadim's Minions", "Gate", "Camp", "Conduit"
+    };
+    return secondary.count(displayName) != 0;
 }
 
 static ThemeGrad StrikeTheme(const std::string& name) {
@@ -1263,7 +1289,8 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
                               const char* tooltip = nullptr,
                               float widthOverride = 0.0f,
                               const std::string& bannerKey = "",
-                              const std::string& bountyDate = "") {
+                              const std::string& bountyDate = "",
+                              const char* fullTooltipTitle = nullptr) {
     (void)theme;
     (void)bannerKey;
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1296,7 +1323,8 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     ImGui::InvisibleButton("##clear", ImVec2(width, height));
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
-        ImGui::TextUnformatted(title.c_str());
+        ImGui::TextUnformatted(fullTooltipTitle && *fullTooltipTitle ?
+            fullTooltipTitle : title.c_str());
         if (!subtitle.empty()) ImGui::TextDisabled("%s", subtitle.c_str());
         if (tooltip && *tooltip) ImGui::TextWrapped("%s", tooltip);
         if (!bountyDate.empty())
@@ -1307,14 +1335,14 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     ImGui::Dummy(ImVec2(0, 1.0f));
 }
 
-struct WingEncChip { std::string label; std::string fullName; bool done = false; std::string bountyDate; };
+struct WingEncChip { std::string label; std::string fullName; bool done = false; bool secondary = false; std::string bountyDate; };
 
 // Shared drawing only: tier and wing layouts still own their hit areas,
 // hover details, positions, and completion rules.
 static void DrawEncounterChip(ImDrawList* dl, const WingEncChip& chip,
                               ImVec2 chmin, ImVec2 chmax,
                               float dotRadius, bool showBountyDate) {
-    AlterEgo::CompletionTheme::DrawRow(dl, chmin, chmax, chip.done, 3.0f);
+    AlterEgo::CompletionTheme::DrawRow(dl, chmin, chmax, chip.done, 3.0f, chip.secondary);
     const float dotX = chmin.x + 7.0f;
     const float dotY = chmin.y + (chmax.y - chmin.y) * 0.5f;
     AlterEgo::CompletionTheme::DrawCompleteMark(
@@ -1324,7 +1352,7 @@ static void DrawEncounterChip(ImDrawList* dl, const WingEncChip& chip,
     const float labelY = chmin.y + (chmax.y - chmin.y - labelSize.y) * 0.5f;
     dl->PushClipRect(chmin, chmax, true);
     dl->AddText(ImVec2(labelX, labelY),
-        AlterEgo::CompletionTheme::Text(chip.done), chip.label.c_str());
+        AlterEgo::CompletionTheme::Text(chip.done, chip.secondary), chip.label.c_str());
     if (showBountyDate && !chip.bountyDate.empty()) {
         const std::string date = " - " + chip.bountyDate;
         dl->AddText(ImVec2(labelX + labelSize.x, labelY),
@@ -2537,9 +2565,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 bannerKey = "wing:" + std::to_string(wingId);
                 theme = WingTheme(wingId);
             } else if (!strikeName.empty()) {
-                subtitle = "Strike Mission";
-                const char* zone = StrikeZone(strikeName);
-                if (zone && *zone) { subtitle += " \xC2\xB7 "; subtitle += zone; }
+                subtitle = StrikePickerCategory(strikeName);
                 bannerKey = "strike:" + strikeName;
                 theme = StrikeTheme(strikeName);
             } else {
@@ -2725,6 +2751,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 c.label = shortEnc;
                 c.fullName = wing.bitNames[i];
                 c.done = bitDone;
+                c.secondary = IsSecondaryRaidEncounter(shortEnc);
                 c.bountyDate = UpcomingBountyLabel(shortEnc, g_DailyBounties,
                     utcNow, weeklyEndUtc, g_ClearsFetched);
                 chips.push_back(c);
