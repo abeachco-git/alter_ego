@@ -8225,6 +8225,22 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src, float sz, bool 
     cell(src.terrestrial_skills.elite, 4);
 }
 
+// The saved-build game mode should be legible against both dark and bright
+// profession-tinted header backgrounds, without turning it into a button.
+static void RenderBuildModeBadge(const char* mode) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    const ImVec2 label = ImGui::CalcTextSize(mode);
+    const float padX = 7.0f, padY = 2.0f;
+    const ImVec2 size(label.x + 2.0f * padX, label.y + 2.0f * padY);
+    const ImVec2 end(start.x + size.x, start.y + size.y);
+    dl->AddRectFilled(start, end, IM_COL32(54, 65, 62, 235), 3.0f);
+    dl->AddRect(start, end, IM_COL32(129, 157, 142, 220), 3.0f);
+    dl->AddText(ImVec2(start.x + padX, start.y + padY),
+        IM_COL32(237, 240, 233, 255), mode);
+    ImGui::Dummy(size);
+}
+
 // Render the build preview panel for a saved build (reuses spec/trait rendering logic)
 static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build, bool showEditButton = false) {
     // Try to resolve any placeholder traits (negative values from import without spec cache)
@@ -8334,13 +8350,14 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build, bool show
         std::string sub;
         if (eliteSpec) { sub = eliteSpec->name; sub += " "; }
         sub += build.profession;
-        sub += "  -  ";
+        // Brighten the specialization/profession text. Show the read-only mode
+        // in a compact high-contrast badge; editing keeps its existing chips.
+        ImGui::TextColored(ImVec4(0.87f, 0.86f, 0.79f, 1.0f),
+            "%s", sub.c_str());
+        ImGui::SameLine(0, 8);
         if (!g_LibEditMode) {
-            sub += GameModeLabel(build.game_mode);
-            ImGui::TextColored(ImVec4(0.55f, 0.50f, 0.40f, 1.0f), "%s", sub.c_str());
+            RenderBuildModeBadge(GameModeLabel(build.game_mode));
         } else {
-            ImGui::TextColored(ImVec4(0.55f, 0.50f, 0.40f, 1.0f), "%s", sub.c_str());
-            ImGui::SameLine(0, 6);
             struct MC { AlterEgo::GameMode mode; const char* lbl; };
             const MC modes[] = {
                 { AlterEgo::GameMode::PvE,     "PvE" },
