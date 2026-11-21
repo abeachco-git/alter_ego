@@ -14912,8 +14912,10 @@ void AddonRender() {
                         }
                     }
 
-                    // Draw profession icon + character info on top of selectable
-                    ImGui::SameLine(4);
+                    // Place the overlay relative to the selectable rect, not to
+                    // window X=4 (SameLine(4) could clip profession icons).
+                    // Reserve a small inset for the accent bar and row border.
+                    ImGui::SetCursorScreenPos(ImVec2(rMin.x + 8.0f, rMin.y));
                     ImGui::BeginGroup();
                     if (!g_CompactCharList) {
                         const float iconSz = 20.0f;
@@ -15008,9 +15010,14 @@ void AddonRender() {
                             // with identical gear is orange and includes the changed
                             // heal, utility or elite slots in its tooltip.
                             const std::string label = (match.checkUtilities ? "Build: " : "Build matches: ") + match.name;
-                            std::string shortLabel = label;
-                            if (shortLabel.size() > 31)
-                                shortLabel = shortLabel.substr(0, 28) + "...";
+                            // Fit the rendered text to the actual list width,
+                            // including user-resized narrow character panels.
+                            const float labelWidth = ImMax(0.0f,
+                                rMax.x - ImGui::GetCursorScreenPos().x - 6.0f);
+                            const std::string shortLabel =
+                                labelWidth >= ImGui::CalcTextSize("...").x
+                                    ? TruncateToWidth(label, labelWidth)
+                                    : std::string();
                             const ImVec4 buildColor = match.checkUtilities
                                 ? ImVec4(1.0f, 0.70f, 0.32f, 1.0f)
                                 : ImVec4(0.55f, 0.88f, 0.58f, 1.0f);
@@ -15042,7 +15049,13 @@ void AddonRender() {
                                 gearText = "Equipment: NOT SAVED";
                                 gearColor = ImVec4(0.65f, 0.65f, 0.65f, 1.0f);
                             }
-                            ImGui::TextColored(gearColor, "%s", gearText);
+                            const float gearWidth = ImMax(0.0f,
+                                rMax.x - ImGui::GetCursorScreenPos().x - 6.0f);
+                            const std::string shownGearText =
+                                gearWidth >= ImGui::CalcTextSize("...").x
+                                    ? TruncateToWidth(gearText, gearWidth)
+                                    : std::string();
+                            ImGui::TextColored(gearColor, "%s", shownGearText.c_str());
                             if (ImGui::IsItemHovered())
                                 ImGui::SetTooltip("%s (last retrieved H&S data)", gearText);
                             if (match.matchingBuilds > 1) {
