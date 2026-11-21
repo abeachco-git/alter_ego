@@ -376,6 +376,8 @@ namespace AlterEgo {
         // Item/Skin/Spec/Trait/Skill/Color caches (public endpoints, fetched directly)
         static const ItemInfo* GetItemInfo(uint32_t item_id);
         static uint32_t FindItemIdByName(const std::string& name); // searches item cache + name cache
+        static std::vector<std::pair<std::string, uint32_t>> SearchKnownInfusions(
+            const std::string& query, size_t maxResults = 100); // cached names only
         static void CacheItemNameId(const std::string& name, uint32_t id); // add to persistent name→ID cache
         static bool LoadItemNameCache();
         static bool SaveItemNameCache();
