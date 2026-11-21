@@ -9311,53 +9311,32 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     return result;
 }
 
-// Shared by the top refresh toolbar and the detailed comparison selectors.
+// Selection is character-first: empty means follow the active MumbleLink
+// character, even if the previously selected saved build came from another hero.
 static const AlterEgo::Character* ResolveComparisonCharacter(
-    const AlterEgo::SavedBuild& saved,
     const std::vector<const AlterEgo::Character*>& matches) {
     if (matches.empty()) return nullptr;
-    const AlterEgo::Character* character = nullptr;
-    for (const auto* ch : matches)
-        if (ch->name == g_LibCompareChar) { character = ch; break; }
-    if (!character) {
-        if (!saved.source_character.empty()) {
-            for (const auto* ch : matches)
-                if (ch->name == saved.source_character) { character = ch; break; }
-        } else {
-            const AlterEgo::Character* inferred = nullptr;
-            int candidateCount = 0;
-            for (const auto* ch : matches) {
-                if (MatchesLegacySourceName(saved.name, ch->name)) {
-                    inferred = ch;
-                    ++candidateCount;
-                }
-            }
-            if (candidateCount == 1) character = inferred;
-        }
-        if (!character) {
-            for (const auto* ch : matches)
-                if (ch->name == g_CurrentCharName) { character = ch; break; }
-        }
-        if (!character) character = matches[0];
-        g_LibCompareChar = character->name;
-        g_LibCompareBuildTab = -1;
-        g_LibCompareEquipTab = 0;
+    if (!g_LibCompareChar.empty()) {
+        for (const auto* ch : matches)
+            if (ch->name == g_LibCompareChar) return ch;
+        g_LibCompareChar.clear(); // stale character override
     }
-
-    return character;
+    for (const auto* ch : matches)
+        if (ch->name == g_CurrentCharName) return ch;
+    return matches.front();
 }
 
 static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     const auto& characters = AlterEgo::GW2API::GetCharacters();
     std::vector<const AlterEgo::Character*> matches;
     for (const auto& ch : characters)
-        if (ch.profession == saved.profession && !ch.build_tabs.empty())
+        if (!ch.build_tabs.empty())
             matches.push_back(&ch);
     if (matches.empty()) {
         ImGui::TextWrapped("No retrieved characters with this profession. Refresh character data in the Characters tab.");
         return;
     }
-    const AlterEgo::Character* character = ResolveComparisonCharacter(saved, matches);
+    const AlterEgo::Character* character = ResolveComparisonCharacter(matches);
     if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
         g_LibCompareBuildTab = -1;
     const int activeBuildIndex = GetActiveBuildIndex(*character);
