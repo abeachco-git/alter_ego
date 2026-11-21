@@ -5,6 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include <string>
+#include <ctime>
 #include "nexus/Nexus.h"
 
 #include <nlohmann/json.hpp>
@@ -57,6 +58,7 @@ namespace Skinventory {
 
         // Status message for UI
         static std::string GetStatusMessage();
+        static std::time_t GetLastSuccessTime();
 
         // Get counts
         static size_t GetOwnedCount();
@@ -84,6 +86,7 @@ namespace Skinventory {
         static std::atomic<bool> s_querying;
         static std::atomic<bool> s_data_updated;
         static std::string s_status_message;
+        static std::time_t s_last_success_time;
         static std::atomic<uint64_t> s_generation;
         static std::unordered_set<uint32_t> s_locally_marked; // skins marked via alerts, protected from API overwrites
 
