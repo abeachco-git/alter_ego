@@ -2334,8 +2334,10 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             (ClearsRotation::FloorDay(utcNow) + 1) * ClearsRotation::kDay);
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.13f, 0.16f, 0.92f));
+        // The preview is a fixed-height read-only card, not a scroll area.
+        // Forward mouse-wheel scrolling to the surrounding Clears page.
         if (ImGui::BeginChild("##nextFractalPreview", ImVec2(0, 79.0f),
-                              true, ImGuiWindowFlags_NoScrollbar)) {
+                              true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
             ImGui::TextColored(ImVec4(0.64f, 0.74f, 0.86f, 1.0f),
                 "Next Reset - %s", date.c_str());
             if (next) {
