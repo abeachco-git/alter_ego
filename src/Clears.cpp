@@ -1224,107 +1224,139 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
 
 struct WingEncChip { std::string label; std::string fullName; bool done = false; std::string bountyDate; };
 
-// Daily T1–T4 use the same three maps. Group once by map, then give every
-// tier a fixed-width cell with a fixed reserved checkmark gutter. Neither
-// completion status nor Hide Complete changes any tier column's position.
-struct DailyFractalMap {
-    std::string name;
-    std::array<const ClearEntry*, 4> tiers{};
+// All four cells are one-line entries, arranged as two columns by two rows
+// at normal addon widths. A single-column fallback prevents overlap in small
+// windows. The last cell shows the T1/T2/T3 Recommended SCALE numbers.
+struct DailyFractalCard {
+    std::string title;
+    std::array<const ClearEntry*, 4> entries{};
+    std::array<std::string, 4> labels{};
+    bool recommended = false;
 };
-static void RenderDailyFractalMatrix(const std::vector<DailyFractalMap>& maps,
-                                     bool fetched) {
-    if (maps.empty()) return;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+static int RecommendedFractalScale(const ClearEntry& entry) {
+    // API names use "Scale 11"; ShortenFractalName can produce
+    // "Deepstone (11)". Accept either form, but never fabricate a scale.
+    const std::size_t pos = entry.name.find("Scale ");
+    if (pos != std::string::npos) {
+        const int scale = std::atoi(entry.name.c_str() + pos + 6);
+        if (scale >= 1 && scale <= 100) return scale;
+    }
+    const std::string shortName = ShortenFractalName(entry.name);
+    const std::size_t open = shortName.rfind('(');
+    if (open != std::string::npos && !shortName.empty() && shortName.back() == ')') {
+        const int scale = std::atoi(shortName.c_str() + open + 1);
+        if (scale >= 1 && scale <= 100) return scale;
+    }
+    return 0;
+}
+
+static bool FractalCardComplete(const DailyFractalCard& card, bool fetched) {
+    if (!fetched) return false;
+    const int count = card.recommended ? 3 : 4;
+    for (int tier = 0; tier < count; ++tier)
+        if (!card.entries[tier] || !card.entries[tier]->done) return false;
+    return true;
+}
+
+static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
+                                    bool fetched, bool hideComplete) {
+    if (cards.empty()) return;
+    bool anythingVisible = false;
+    for (const auto& card : cards)
+        if (!hideComplete || !FractalCardComplete(card, fetched))
+            anythingVisible = true;
+    if (!anythingVisible) {
+        ImGui::TextDisabled("  All daily fractals and recommendations completed.");
+        return;
+    }
+
+    ImDrawList* draw = ImGui::GetWindowDrawList();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    const float pad = 8.0f, gap = 4.0f, topHeight = 24.0f;
-    const float rowHeight = 25.0f, rowGap = 3.0f;
-    const float fontHeight = ImGui::GetTextLineHeight();
-    const float tierWidth = std::max(44.0f, ImGui::CalcTextSize("T4").x + 25.0f);
-    const float tiersWidth = 4 * tierWidth + 3 * gap;
-    const float height = topHeight + pad
-        + static_cast<float>(maps.size()) * (rowHeight + rowGap);
-    const ImVec2 outerEnd(origin.x + width, origin.y + height);
-    AlterEgo::CompletionTheme::DrawGroup(dl, origin, outerEnd, 3.0f);
+    const float pad = 7.0f, xgap = 6.0f, ygap = 5.0f, cardHeight = 27.0f;
+    const float chipWidth = 39.0f, chipGap = 3.0f, chipHeight = 20.0f;
+    const float chipsWidth = 4.0f * chipWidth + 3.0f * chipGap;
+    // Two columns need enough room for the longest daily name plus chips.
+    const int columns = width >= 680.0f ? 2 : 1;
+    const int rows = (static_cast<int>(cards.size()) + columns - 1) / columns;
+    const float cardWidth = (width - 2.0f * pad - (columns - 1) * xgap) / columns;
+    const float height = 2.0f * pad + rows * cardHeight + (rows - 1) * ygap;
+    AlterEgo::CompletionTheme::DrawGroup(
+        draw, origin, ImVec2(origin.x + width, origin.y + height));
 
-    int completed = 0, available = 0;
-    for (const auto& map : maps)
-        for (const ClearEntry* e : map.tiers)
-            if (e) { ++available; if (fetched && e->done) ++completed; }
-    const std::string count = fetched
-        ? std::to_string(completed) + "/" + std::to_string(available)
-        : "?/" + std::to_string(available);
-    const ImVec2 countSize = ImGui::CalcTextSize(count.c_str());
-    dl->AddText(ImVec2(origin.x + pad, origin.y + 5.0f),
-        AlterEgo::CompletionTheme::kAvailableText, "Dailies");
-    dl->AddText(ImVec2(outerEnd.x - pad - countSize.x, origin.y + 5.0f),
-        completed > 0 && completed < available
-            ? AlterEgo::CompletionTheme::kInProgressGold
-            : AlterEgo::CompletionTheme::kMetaText, count.c_str());
+    for (size_t i = 0; i < cards.size(); ++i) {
+        const auto& card = cards[i];
+        const bool complete = FractalCardComplete(card, fetched);
+        // Hide Complete does not reorder other cards. An empty slot remains
+        // where a completed card was, so the two-column grid never jumps.
+        if (hideComplete && complete) continue;
+        const int col = static_cast<int>(i) % columns;
+        const int row = static_cast<int>(i) / columns;
+        const ImVec2 cmin(origin.x + pad + col * (cardWidth + xgap),
+                          origin.y + pad + row * (cardHeight + ygap));
+        const ImVec2 cmax(cmin.x + cardWidth, cmin.y + cardHeight);
+        AlterEgo::CompletionTheme::DrawRow(draw, cmin, cmax, complete);
 
-    for (size_t index = 0; index < maps.size(); ++index) {
-        const auto& map = maps[index];
-        const float y = origin.y + topHeight + index * (rowHeight + rowGap);
-        const ImVec2 rowMin(origin.x + pad, y);
-        const ImVec2 rowMax(outerEnd.x - pad, y + rowHeight);
-        bool allDone = fetched;
-        for (const ClearEntry* e : map.tiers)
-            if (e && !e->done) allDone = false;
-        AlterEgo::CompletionTheme::DrawRow(dl, rowMin, rowMax, allDone, 2.0f);
+        const float chipStart = cmax.x - 6.0f - chipsWidth;
+        const float centerY = (cmin.y + cmax.y) * 0.5f;
+        const float lineH = ImGui::GetTextLineHeight();
+        // Entire card title dims when all constituent tiers are complete.
+        draw->PushClipRect(ImVec2(cmin.x + 7.0f, cmin.y),
+                           ImVec2(chipStart - 6.0f, cmax.y), true);
+        draw->AddText(ImVec2(cmin.x + 7.0f, centerY - lineH * 0.5f),
+                      AlterEgo::CompletionTheme::Text(complete),
+                      card.title.c_str());
+        draw->PopClipRect();
 
-        const float tierStartX = rowMax.x - tiersWidth - 4.0f;
-        dl->PushClipRect(ImVec2(rowMin.x + 7.0f, y),
-                         ImVec2(tierStartX - 5.0f, y + rowHeight), true);
-        dl->AddText(ImVec2(rowMin.x + 7.0f,
-                           y + (rowHeight - fontHeight) * 0.5f),
-                    AlterEgo::CompletionTheme::Text(allDone), map.name.c_str());
-        dl->PopClipRect();
-
-        ImGui::PushID(static_cast<int>(index));
-        for (int tier = 0; tier < 4; ++tier) {
-            const ClearEntry* entry = map.tiers[tier];
+        const int slots = card.recommended ? 3 : 4;
+        ImGui::PushID(static_cast<int>(i));
+        for (int tier = 0; tier < slots; ++tier) {
+            const ClearEntry* entry = card.entries[tier];
             const bool done = fetched && entry && entry->done;
-            const float x = tierStartX + tier * (tierWidth + gap);
-            const ImVec2 cmin(x, y + 2.0f);
-            const ImVec2 cmax(x + tierWidth, y + rowHeight - 2.0f);
-            AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, done, 2.0f);
-
-            const float checkX = cmin.x + 8.5f;
-            const float centerY = (cmin.y + cmax.y) * 0.5f;
+            const float x = chipStart + tier * (chipWidth + chipGap);
+            const ImVec2 slotMin(x, centerY - chipHeight * 0.5f);
+            const ImVec2 slotMax(x + chipWidth, centerY + chipHeight * 0.5f);
+            draw->AddRectFilled(slotMin, slotMax,
+                done ? AlterEgo::CompletionTheme::kCompletedIndicator
+                     : AlterEgo::CompletionTheme::kAvailableIndicator, 2.0f);
+            // Each slot reserves exactly the same space for its check,
+            // whether it is completed or not. Labels never shift.
             AlterEgo::CompletionTheme::DrawCompleteMark(
-                dl, ImVec2(checkX, centerY), done, 3.4f);
-            // This label always starts at the SAME position, regardless
-            // of whether the reserved check gutter contains a check.
-            const std::string tierLabel = "T" + std::to_string(tier + 1);
-            const ImU32 ink = entry
-                ? (fetched ? AlterEgo::CompletionTheme::Text(done)
-                           : AlterEgo::CompletionTheme::kUnknownText)
-                : AlterEgo::CompletionTheme::kUnknownText;
-            dl->AddText(ImVec2(cmin.x + 19.0f,
-                               centerY - fontHeight * 0.5f),
-                        ink, entry ? tierLabel.c_str() : "-");
+                draw, ImVec2(x + 7.0f, centerY), done, 3.0f);
+            const std::string& text = card.labels[tier];
+            const ImU32 ink = !entry ? AlterEgo::CompletionTheme::kUnknownText
+                : !fetched ? AlterEgo::CompletionTheme::kUnknownText
+                : AlterEgo::CompletionTheme::Text(done);
+            draw->PushClipRect(slotMin, slotMax, true);
+            draw->AddText(ImVec2(x + 15.0f, centerY - lineH * 0.5f),
+                          ink, text.empty() ? "?" : text.c_str());
+            draw->PopClipRect();
 
-            ImGui::SetCursorScreenPos(cmin);
+            ImGui::SetCursorScreenPos(slotMin);
             ImGui::PushID(tier);
-            ImGui::InvisibleButton("##dailyTier", ImVec2(tierWidth, cmax.y-cmin.y));
+            ImGui::InvisibleButton("##fractalStatus", ImVec2(chipWidth, chipHeight));
             if (ImGui::IsItemHovered()) {
                 if (!entry)
-                    ImGui::SetTooltip("%s - Tier %d: no objective in this tier",
-                                      map.name.c_str(), tier + 1);
-                else if (!fetched)
-                    ImGui::SetTooltip("%s - Tier %d: progress not loaded",
-                                      map.name.c_str(), tier + 1);
-                else
-                    ImGui::SetTooltip("%s - Tier %d: %s",
-                                      map.name.c_str(), tier + 1,
-                                      done ? "completed" : "remaining");
+                    ImGui::SetTooltip("%s - %s: data unavailable",
+                        card.title.c_str(),
+                        card.recommended ? "Recommended" : card.labels[tier].c_str());
+                else if (card.recommended) {
+                    const std::string full = ShortenFractalName(entry->name);
+                    ImGui::SetTooltip("T%d Recommended: %s (%s)",
+                        tier + 1, full.c_str(),
+                        !fetched ? "progress unknown" : done ? "completed" : "remaining");
+                } else
+                    ImGui::SetTooltip("%s - %s: %s", card.title.c_str(),
+                        card.labels[tier].c_str(),
+                        !fetched ? "progress unknown" : done ? "completed" : "remaining");
             }
             ImGui::PopID();
         }
         ImGui::PopID();
     }
-    ImGui::SetCursorScreenPos(ImVec2(origin.x, outerEnd.y + 2.0f));
-    ImGui::Dummy(ImVec2(0, 2.0f));
+    ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height + 2.0f));
+    ImGui::Dummy(ImVec2(0, 1.0f));
 }
 
 // Compact single-row tier banner with inline chips — for recommended fractals.
@@ -1979,13 +2011,11 @@ static bool RenderVaultSectionToggle(int index, const char* title,
     LoadClearUiSettings();
     ImGui::PushID("VaultSection");
     ImGui::PushID(index);
-    if (ImGui::SmallButton(g_VaultOpen[index] ? "-" : "+")) {
+    if (AlterEgo::CompletionTheme::CenteredSectionToggle(
+            g_VaultOpen[index], title)) {
         g_VaultOpen[index] = !g_VaultOpen[index];
         SaveClearUiSettings();
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s %s", g_VaultOpen[index] ? "Collapse" : "Expand", title);
-    ImGui::SameLine(0, 5.0f);
     AlterEgo::CompletionTheme::SectionHeading(title, suffix, summary);
     ImGui::PopID();
     ImGui::PopID();
@@ -1996,13 +2026,11 @@ static bool RenderClearSectionToggle(int index, const char* title,
     (void)color;
     LoadClearUiSettings();
     ImGui::PushID(index);
-    if (ImGui::SmallButton(g_ClearOpen[index] ? "-" : "+")) {
+    if (AlterEgo::CompletionTheme::CenteredSectionToggle(
+            g_ClearOpen[index], title)) {
         g_ClearOpen[index] = !g_ClearOpen[index];
         SaveClearUiSettings();
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s %s", g_ClearOpen[index] ? "Collapse" : "Expand", title);
-    ImGui::SameLine(0, 5.0f);
     AlterEgo::CompletionTheme::SectionHeading(title, suffix);
     ImGui::PopID();
     return g_ClearOpen[index];
@@ -2083,85 +2111,64 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
         ImGui::Indent(4.0f);
-        // The four daily tiers share their map names. Render one compact
-        // map-first matrix instead of repeating those maps four times.
-        std::vector<DailyFractalMap> maps;
+        // Build three daily map cards, then a fourth Recommended card.
+        // Status comes from the existing H&S achievement completion data.
+        std::vector<DailyFractalCard> cards;
         for (const auto& e : g_DailyFractals) {
-            int tierIndex = -1;
-            if      (e.tier == "T1") tierIndex = 0;
-            else if (e.tier == "T2") tierIndex = 1;
-            else if (e.tier == "T3") tierIndex = 2;
-            else if (e.tier == "T4") tierIndex = 3;
-            if (tierIndex < 0) continue;
+            int tier = -1;
+            if      (e.tier == "T1") tier = 0;
+            else if (e.tier == "T2") tier = 1;
+            else if (e.tier == "T3") tier = 2;
+            else if (e.tier == "T4") tier = 3;
+            if (tier < 0) continue;
             const std::string name = ShortenFractalName(e.name);
-            auto it = std::find_if(maps.begin(), maps.end(),
-                [&](const DailyFractalMap& m) { return m.name == name; });
-            if (it == maps.end()) {
-                maps.push_back(DailyFractalMap{});
-                maps.back().name = name;
-                it = maps.end() - 1;
+            auto it = std::find_if(cards.begin(), cards.end(),
+                [&](const DailyFractalCard& c) { return c.title == name; });
+            if (it == cards.end()) {
+                cards.emplace_back();
+                cards.back().title = name;
+                it = cards.end() - 1;
             }
-            it->tiers[tierIndex] = &e;
+            it->entries[tier] = &e;
         }
-        std::sort(maps.begin(), maps.end(),
-            [](const DailyFractalMap& a, const DailyFractalMap& b) {
-                return a.name < b.name;
+        std::sort(cards.begin(), cards.end(),
+            [](const DailyFractalCard& a, const DailyFractalCard& b) {
+                return a.title < b.title;
             });
-        if (g_ClearsHideComplete && g_ClearsFetched) {
-            // Hide wholly completed maps without removing individual tier
-            // columns or causing remaining rows to shift horizontally.
-            maps.erase(std::remove_if(maps.begin(), maps.end(),
-                [](const DailyFractalMap& m) {
-                    bool any = false;
-                    for (const ClearEntry* e : m.tiers) {
-                        if (e) { any = true; if (!e->done) return false; }
-                    }
-                    return any;
-                }), maps.end());
-        }
-        if (!maps.empty())
-            RenderDailyFractalMatrix(maps, g_ClearsFetched);
-        else if (g_ClearsHideComplete && g_ClearsFetched)
-            ImGui::TextDisabled("  All daily fractals completed.");
-
-        // Recommended fractals are different scales; keep the existing
-        // compact REC row rather than forcing them into the tier matrix.
-        struct TierInfo { const char* tier; const char* label; const char* fullName; ImU32 accent; };
-        const TierInfo tierOrder[] = {
-            {"Rec", "REC", "Recommended", IM_COL32(197, 161, 85, 255)},
-        };
-        for (const auto& ti : tierOrder) {
-            std::vector<const ClearEntry*> tierEntries;
-            for (const auto& e : g_DailyFractals) {
-                if (e.tier == ti.tier) tierEntries.push_back(&e);
+        DailyFractalCard recommended;
+        recommended.title = "Recommended";
+        recommended.recommended = true;
+        std::vector<const ClearEntry*> recs;
+        for (const auto& e : g_DailyFractals)
+            if (e.tier == "Rec") recs.push_back(&e);
+        std::sort(recs.begin(), recs.end(),
+            [](const ClearEntry* a, const ClearEntry* b) {
+                return RecommendedFractalScale(*a) < RecommendedFractalScale(*b);
+            });
+        for (const ClearEntry* e : recs) {
+            const int scale = RecommendedFractalScale(*e);
+            int slot = scale >= 1 && scale <= 75 ? (scale - 1) / 25 : -1;
+            if (slot < 0 || recommended.entries[slot]) {
+                // Unknown/duplicate scales: keep the entry visible rather
+                // than overwriting another scale or inventing a tier.
+                slot = -1;
+                for (int t = 0; t < 3; ++t)
+                    if (!recommended.entries[t]) { slot = t; break; }
             }
-            if (tierEntries.empty()) continue;
-
-            std::sort(tierEntries.begin(), tierEntries.end(),
-                [](const ClearEntry* a, const ClearEntry* b) {
-                    return ShortenFractalName(a->name) < ShortenFractalName(b->name);
-                });
-
-            std::vector<WingEncChip> chips;
-            int doneCount = 0;
-            for (const auto* e : tierEntries) {
-                WingEncChip c;
-                c.label = ShortenFractalName(e->name);
-                c.fullName = e->name;
-                c.done = e->done;
-                if (e->done) doneCount++;
-                if (g_ClearsHideComplete && g_ClearsFetched && e->done)
-                    continue;
-                chips.push_back(c);
-            }
-
-            if (chips.empty() && g_ClearsHideComplete && g_ClearsFetched) continue;
-            ImGui::PushID(ti.tier);
-            RenderTierRow(ti.label, ti.fullName,
-                doneCount, (int)tierEntries.size(), g_ClearsFetched,
-                FractalTierTheme(ti.tier), ti.accent, chips);
-            ImGui::PopID();
+            if (slot < 0) continue;
+            recommended.entries[slot] = e;
+            recommended.labels[slot] = scale ? std::to_string(scale) : "?";
         }
+        for (int t = 0; t < 4; ++t) {
+            const std::string tier = "T" + std::to_string(t + 1);
+            for (auto& card : cards) card.labels[t] = tier;
+            if (t < 3 && recommended.labels[t].empty())
+                recommended.labels[t] = "?";
+        }
+        cards.push_back(std::move(recommended));
+        RenderDailyFractalCards(cards, g_ClearsFetched,
+                                g_ClearsHideComplete && g_ClearsFetched);
+
         // Uncategorized fractals (no tier) — show as plain rows
         for (const auto& e : g_DailyFractals) {
             if (!e.tier.empty() || (g_ClearsHideComplete && g_ClearsFetched && e.done)) continue;
@@ -2176,24 +2183,50 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         for (const auto& e : g_DailyFractals)
             if (e.tier == "T4")
                 todaysT4.push_back(ShortenFractalName(e.name));
-        // Validate today's live dailies against the schedule first. If
-        // anything differs or is incomplete, do not advertise a guess.
         const auto* next = ClearsRotation::NextFractalsFromLive(todaysT4);
         const std::string date = ClearsRotation::DateLabel(
             (ClearsRotation::FloorDay(utcNow) + 1) * ClearsRotation::kDay);
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.13f, 0.16f, 0.92f));
-        if (ImGui::BeginChild("##nextFractalPreview", ImVec2(0, 81.0f),
+        if (ImGui::BeginChild("##nextFractalPreview", ImVec2(0, 79.0f),
                               true, ImGuiWindowFlags_NoScrollbar)) {
             ImGui::TextColored(ImVec4(0.64f, 0.74f, 0.86f, 1.0f),
-                "NEXT RESET - %s", date.c_str());
+                "Next Reset - %s", date.c_str());
             if (next) {
-                ImGui::TextDisabled("Dailies: %s | %s | %s",
-                    next->dailies[0], next->dailies[1], next->dailies[2]);
-                ImGui::TextDisabled("RECS: T1 %d %s | T2 %d %s | T3 %d %s",
-                    next->recScales[0], next->recNames[0],
-                    next->recScales[1], next->recNames[1],
-                    next->recScales[2], next->recNames[2]);
+                // Two rows x four invisible columns. The left column holds
+                // the category; the other three hold daily maps / recs.
+                // Use normal bright text, keeping only the heading blue.
+                if (ImGui::BeginTable("##nextResetGrid", 4,
+                                      ImGuiTableFlags_SizingStretchProp)) {
+                    ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 105.0f);
+                    ImGui::TableSetupColumn("One", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Two", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Three", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                        ImGui::ColorConvertU32ToFloat4(
+                            AlterEgo::CompletionTheme::kAvailableText));
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Dailies");
+                    for (int i = 0; i < 3; ++i) {
+                        ImGui::TableSetColumnIndex(i + 1);
+                        ImGui::TextUnformatted(next->dailies[i]);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s", next->dailies[i]);
+                    }
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Recommended");
+                    for (int i = 0; i < 3; ++i) {
+                        ImGui::TableSetColumnIndex(i + 1);
+                        const std::string label = "T" + std::to_string(i + 1) +
+                            " " + std::to_string(next->recScales[i]) + " " +
+                            next->recNames[i];
+                        ImGui::TextUnformatted(label.c_str());
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s", label.c_str());
+                    }
+                    ImGui::PopStyleColor();
+                    ImGui::EndTable();
+                }
             } else {
                 ImGui::TextDisabled("Next reset forecast unavailable");
                 ImGui::TextDisabled("Today's daily schedule could not be verified.");
