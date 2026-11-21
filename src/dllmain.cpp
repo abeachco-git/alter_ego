@@ -530,6 +530,7 @@ static std::atomic<long long> g_AchProgressQueryStartMs{0}; // watchdog for miss
 static bool g_AchNeedRequery = false;      // deferred requery on account change
 static bool g_AchProgressDirty = false;    // persistent cache needs flushing
 static std::string g_AchCachedAccount;     // account whose data is currently in g_AchProgress
+static int64_t g_AchProgressCacheSavedAt = 0; // timestamp of loaded/saved account progress
 static std::chrono::steady_clock::time_point g_AchLastSave;
 static void SaveAchProgress(const std::string& account);
 static void LoadAchProgress(const std::string& account);
@@ -10637,7 +10638,8 @@ static void SaveAchProgress(const std::string& account) {
     }
 
     nlohmann::json j = nlohmann::json::object();
-    j["saved_at"] = (int64_t)std::time(nullptr);
+    const int64_t savedAt = (int64_t)std::time(nullptr);
+    j["saved_at"] = savedAt;
     nlohmann::json entries = nlohmann::json::object();
     for (const auto& [id, p] : snapshot) {
         nlohmann::json e;
@@ -10656,7 +10658,11 @@ static void SaveAchProgress(const std::string& account) {
     j["entries"] = entries;
 
     std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
+    if (file.is_open()) {
+        file << j.dump();
+        if (file.good() && g_AchCachedAccount == account)
+            g_AchProgressCacheSavedAt = savedAt;
+    }
 }
 
 // Load achievement progress for an account from disk. Bumps the progress gen
@@ -10667,7 +10673,13 @@ static void LoadAchProgress(const std::string& account) {
                        SanitizeForFilename(account) + ".json";
     std::ifstream file(path);
     if (!file.is_open()) {
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        if (g_AchCachedAccount != account) {
+            g_AchProgress.clear();
+            ++g_AchProgressGen;
+        }
         g_AchCachedAccount = account;
+        g_AchProgressCacheSavedAt = 0;
         return;
     }
     try {
@@ -10692,8 +10704,13 @@ static void LoadAchProgress(const std::string& account) {
         }
         g_AchProgressGen++;
         g_AchCachedAccount = account;
+        g_AchProgressCacheSavedAt = j.value("saved_at", (int64_t)0);
     } catch (...) {
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        g_AchProgress.clear();
+        ++g_AchProgressGen;
         g_AchCachedAccount = account;
+        g_AchProgressCacheSavedAt = 0;
     }
 }
 
@@ -12998,20 +13015,35 @@ static void RenderAchievements() {
         if (s_prefetchedAccount != currentAccount) {
             s_prefetchedAccount = currentAccount;
             s_progressQueue.clear();
-            // Build the queue so pinned achievements end up at the back —
-            // the drain consumes from the back, so pinned go first.
-            {
+            // Account progress is already persisted. Re-query known progress
+            // only if the snapshot is stale (30 min or prior daily reset).
+            // On fresh login, fetch only missing achievement IDs instead of
+            // replaying the entire ~8,000-achievement prefetch every time.
+            const int64_t nowEpoch = (int64_t)std::time(nullptr);
+            const int64_t dailyEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+                CalcLastDailyReset(std::chrono::system_clock::now()).time_since_epoch()).count();
+            const bool cacheFresh = g_AchCachedAccount == currentAccount &&
+                g_AchProgressCacheSavedAt > 0 &&
+                nowEpoch >= g_AchProgressCacheSavedAt &&
+                nowEpoch - g_AchProgressCacheSavedAt < 1800 &&
+                g_AchProgressCacheSavedAt >= dailyEpoch;
+            if (!currentAccount.empty()) {
                 std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
                 std::unordered_set<uint32_t> pinnedSet(g_AchPinned.begin(), g_AchPinned.end());
+                std::unordered_set<uint32_t> queued;
                 for (const auto& [catId, cat] : g_AchCategories) {
                     if (g_AchHiddenCatIds.count(catId)) continue;
                     for (uint32_t aid : cat.achievements) {
                         if (pinnedSet.count(aid)) continue;
-                        s_progressQueue.push_back(aid);
+                        if (cacheFresh && g_AchProgress.count(aid)) continue;
+                        if (queued.insert(aid).second) s_progressQueue.push_back(aid);
                     }
                 }
-                // Append pinned last → drained first.
-                for (uint32_t aid : g_AchPinned) s_progressQueue.push_back(aid);
+                // Put pinned last: drained first; pinned also get periodic refresh.
+                for (uint32_t aid : g_AchPinned) {
+                    if (cacheFresh && g_AchProgress.count(aid)) continue;
+                    if (queued.insert(aid).second) s_progressQueue.push_back(aid);
+                }
             }
         }
     }
