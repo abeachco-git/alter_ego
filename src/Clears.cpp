@@ -101,7 +101,8 @@ static void LoadClearUiSettings();
 static void SaveClearUiSettings();
 static bool RenderVaultSectionToggle(int index, const char* title,
                                      ImVec4 color, const char* suffix,
-                                     const char* summary);
+                                     const char* summary,
+                                     bool summaryComplete);
 static std::chrono::system_clock::time_point g_VaultLastDailyReset{};
 static std::chrono::system_clock::time_point g_VaultLastWeeklyReset{};
 static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
