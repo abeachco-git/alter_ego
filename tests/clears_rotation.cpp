@@ -19,5 +19,19 @@ int main() {
     assert(std::string(NextFractals(nov21).dailies[0]) == "Sunqua Peak");
     assert(NextFractals(nov21).recScales[2] == 59);
     assert(FractalSetIndex(nov21 + 15 * kDay) == FractalSetIndex(nov21));
+    // Never display a misleading next-day forecast when the current
+    // schedule differs from a hard-coded date anchor.
+    assert(FindDailyFractalSet({"Aquatic Ruins", "Lonely Tower",
+                                "Thaumanova Reactor"}) == 9);
+    assert(FindDailyFractalSet({"Urban Battleground", "Sunqua Peak",
+                                "Underground Facility"}) == 10);
+    assert(FindDailyFractalSet({"Sunqua Peak", "Sunqua Peak", "Urban Battleground"}) == -1);
+    assert(FindDailyFractalSet({"Sunqua Peak", "Unknown", "Urban Battleground"}) == -1);
+    assert(FindDailyFractalSet({"Sunqua Peak", "Urban Battleground"}) == -1);
+    auto next = NextFractalsFromLive({"Sunqua Peak", "Underground Facility",
+                                     "Urban Battleground"});
+    assert(next != nullptr);
+    assert(std::string(next->dailies[0]) == "Aetherblade");
+    assert(NextFractalsFromLive({"Unrecognized", "Example", "Fractal"}) == nullptr);
     assert(DateLabel(nov21) == "11/21");
 }

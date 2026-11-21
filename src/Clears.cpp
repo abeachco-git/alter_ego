@@ -2172,7 +2172,13 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         ImGui::Unindent(4.0f);
     }
     if (g_ClearsFetched) {
-        const auto& next = ClearsRotation::NextFractals(utcNow);
+        std::vector<std::string> today'sT4;
+        for (const auto& e : g_DailyFractals)
+            if (e.tier == "T4")
+                today'sT4.push_back(ShortenFractalName(e.name));
+        // Validate today's live dailies against the schedule first. If
+        // anything differs or is incomplete, do not advertise a guess.
+        const auto* next = ClearsRotation::NextFractalsFromLive(today'sT4);
         const std::string date = ClearsRotation::DateLabel(
             (ClearsRotation::FloorDay(utcNow) + 1) * ClearsRotation::kDay);
         ImGui::Spacing();
@@ -2180,13 +2186,18 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         if (ImGui::BeginChild("##nextFractalPreview", ImVec2(0, 81.0f),
                               true, ImGuiWindowFlags_NoScrollbar)) {
             ImGui::TextColored(ImVec4(0.64f, 0.74f, 0.86f, 1.0f),
-                "NEXT RESET - %s UTC (PREVIEW ONLY)", date.c_str());
-            ImGui::TextDisabled("T4: %s | %s | %s",
-                next.dailies[0], next.dailies[1], next.dailies[2]);
-            ImGui::TextDisabled("RECS: T1 %d %s | T2 %d %s | T3 %d %s",
-                next.recScales[0], next.recNames[0],
-                next.recScales[1], next.recNames[1],
-                next.recScales[2], next.recNames[2]);
+                "NEXT RESET - %s UTC", date.c_str());
+            if (next) {
+                ImGui::TextDisabled("Dailies: %s | %s | %s",
+                    next->dailies[0], next->dailies[1], next->dailies[2]);
+                ImGui::TextDisabled("RECS: T1 %d %s | T2 %d %s | T3 %d %s",
+                    next->recScales[0], next->recNames[0],
+                    next->recScales[1], next->recNames[1],
+                    next->recScales[2], next->recNames[2]);
+            } else {
+                ImGui::TextDisabled("Next reset forecast unavailable");
+                ImGui::TextDisabled("Today's daily schedule could not be verified.");
+            }
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();

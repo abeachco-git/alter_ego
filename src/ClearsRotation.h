@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <ctime>
 #include <string>
+#include <vector>
 
 namespace ClearsRotation {
 static constexpr int64_t kDay = 86400;
@@ -122,9 +123,43 @@ inline const FractalSet& Fractals(int index) {
     };
     return kSets[Mod(index, 15)];
 }
+// The rotation table is fixed, but its absolute date anchor can drift if
+// ArenaNet adds/removes a fractal. Resolve TODAY's index using the three
+// actual daily fractal names returned by H&S before forecasting tomorrow.
+// We require exactly three unique names and exactly one matching set.
+inline int FindDailyFractalSet(const std::vector<std::string>& currentDailyNames) {
+    if (currentDailyNames.size() != 3) return -1;
+    std::array<std::string, 3> live{};
+    for (size_t i = 0; i < live.size(); ++i) {
+        live[i] = Normalize(currentDailyNames[i]);
+        if (live[i].empty()) return -1;
+    }
+    if (live[0] == live[1] || live[1] == live[2] || live[0] == live[2])
+        return -1;
+    int match = -1;
+    for (int index = 0; index < 15; ++index) {
+        const auto& set = Fractals(index);
+        bool allMatch = true;
+        for (const std::string& value : live) {
+            bool found = false;
+            for (const char* name : set.dailies)
+                if (Normalize(name) == value) { found = true; break; }
+            if (!found) { allMatch = false; break; }
+        }
+        if (allMatch) {
+            if (match >= 0) return -1; // ambiguous: don't predict
+            match = index;
+        }
+    }
+    return match;
+}
+inline const FractalSet* NextFractalsFromLive(const std::vector<std::string>& today) {
+    const int index = FindDailyFractalSet(today);
+    return index < 0 ? nullptr : &Fractals(index + 1);
+}
+// The date-anchored helpers remain for compatibility/regression tests; the
+// UI must use NextFractalsFromLive rather than trusting this anchor.
 inline int FractalSetIndex(int64_t utcSeconds) {
-    // 2026-11-21: Aquatic Ruins, Lonely Tower, Thaumanova Reactor
-    // (set 10; zero-based 9). Keeps daily + recommended schedules in sync.
     return Mod(FloorDay(utcSeconds) - FloorDay(kAnchorUtc) + 9, 15);
 }
 inline const FractalSet& NextFractals(int64_t utcSeconds) {
