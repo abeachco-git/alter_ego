@@ -98,7 +98,8 @@ static bool g_VaultOpen[3] = {true, true, true}; // Daily, Weekly, Special
 static void LoadClearUiSettings();
 static void SaveClearUiSettings();
 static bool RenderVaultSectionToggle(int index, const char* title,
-                                     ImVec4 color, const char* suffix);
+                                     ImVec4 color, const char* suffix,
+                                     const char* summary);
 static std::chrono::system_clock::time_point g_VaultLastDailyReset{};
 static std::chrono::system_clock::time_point g_VaultLastWeeklyReset{};
 static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
@@ -1666,46 +1667,35 @@ static void RenderVaultPeriodSection(int sectionIndex, const char* title,
                                      const char* resetLabel, ImVec4 color,
                                      const VaultPeriod& period)
 {
-    char suffix[64];
-    snprintf(suffix, sizeof(suffix), "(%s)", resetLabel);
-    if (!RenderVaultSectionToggle(sectionIndex, title, color, suffix))
-        return;
-
-    if (period.objectives.empty()) {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
-        return;
-    }
-
-    // Inline summary: claimed count + total AA earned.
-    // Meta bonus AA is added to the totals so users see the true cap
-    // (e.g. daily 4/5 grants a meta bonus; weekly 6/8 grants a meta bonus).
-    int claimedCount = 0, totalAA = 0, earnedAA = 0;
+    // One heading for title, reset, claimed count and Astral Acclaim.
+    // Count progress by completed objectives, independent of claiming rewards.
+    int claimedCount = 0, completedCount = 0, totalAA = 0, earnedAA = 0;
     for (const auto& o : period.objectives) {
-        if (o.claimed) { claimedCount++; earnedAA += o.acclaim; }
+        if (o.claimed) { ++claimedCount; earnedAA += o.acclaim; }
+        if (o.claimed || o.isDone()) ++completedCount;
         totalAA += o.acclaim;
     }
     totalAA += period.meta_reward_astral;
     if (period.meta_reward_claimed) earnedAA += period.meta_reward_astral;
-
-    ImGui::Indent(4.0f);
-    ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f),
-        "%d / %d claimed   %d / %d AA",
-        claimedCount, (int)period.objectives.size(),
-        earnedAA, totalAA);
-
-    // Thin meta progress bar (only if API gave us meta data)
-    if (period.meta_progress_complete > 0) {
-        float frac = std::min(1.0f,
-            (float)period.meta_progress_current / (float)period.meta_progress_complete);
-        ImVec4 barColor = period.meta_reward_claimed
-            ? ImVec4(0.35f, 0.82f, 0.35f, 1.0f) : color;
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, barColor);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.10f, 0.10f, 0.13f, 1.0f));
-        ImGui::ProgressBar(frac, ImVec2(-4.0f, 3.0f), "");
-        ImGui::PopStyleColor(2);
+    char suffix[64], summary[96];
+    snprintf(suffix, sizeof(suffix), "(%s)", resetLabel);
+    snprintf(summary, sizeof(summary), "%d/%zu claimed   %d/%d AA",
+             claimedCount, period.objectives.size(), earnedAA, totalAA);
+    if (!RenderVaultSectionToggle(sectionIndex, title, color, suffix, summary))
+        return;
+    if (period.objectives.empty()) {
+        ImGui::TextDisabled("  No data");
+        return;
     }
 
-    ImGui::Spacing();
+    ImGui::Indent(4.0f);
+    // Gold while partial; no redundant bar for 0% or 100%.
+    if (completedCount > 0 &&
+        completedCount < static_cast<int>(period.objectives.size())) {
+        AlterEgo::CompletionTheme::RenderPartialProgress(
+            completedCount, static_cast<int>(period.objectives.size()), 4.0f);
+        ImGui::Spacing();
+    }
 
     // Hide claimed objectives only; completed but unclaimed rewards remain visible.
     size_t visibleCount = 0;
@@ -1794,6 +1784,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
     }
 
     ImGui::Separator();
+    ImGui::BeginChild("##VaultContentScroll", ImVec2(0, 0), false);
 
     std::lock_guard<std::mutex> lock(g_ClearsMutex);
 
@@ -1825,6 +1816,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         RenderVaultPeriodSection(2, "Special Objectives", seasonLabel.c_str(),
             ImVec4(0.9f, 0.70f, 0.30f, 1.0f), g_VaultSpecial);
     }
+    ImGui::EndChild();
 }
 
 // =========================================================================
@@ -1871,7 +1863,9 @@ static void SaveClearUiSettings() {
     } catch (...) {}
 }
 static bool RenderVaultSectionToggle(int index, const char* title,
-                                     ImVec4 color, const char* suffix) {
+                                     ImVec4 color, const char* suffix,
+                                     const char* summary) {
+    (void)color;
     LoadClearUiSettings();
     ImGui::PushID("VaultSection");
     ImGui::PushID(index);
@@ -1882,13 +1876,14 @@ static bool RenderVaultSectionToggle(int index, const char* title,
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s %s", g_VaultOpen[index] ? "Collapse" : "Expand", title);
     ImGui::SameLine(0, 5.0f);
-    RenderSectionHeader(title, color, suffix);
+    AlterEgo::CompletionTheme::SectionHeading(title, suffix, summary);
     ImGui::PopID();
     ImGui::PopID();
     return g_VaultOpen[index];
 }
 static bool RenderClearSectionToggle(int index, const char* title,
                                      ImVec4 color, const char* suffix) {
+    (void)color;
     LoadClearUiSettings();
     ImGui::PushID(index);
     if (ImGui::SmallButton(g_ClearOpen[index] ? "-" : "+")) {
@@ -1898,7 +1893,7 @@ static bool RenderClearSectionToggle(int index, const char* title,
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s %s", g_ClearOpen[index] ? "Collapse" : "Expand", title);
     ImGui::SameLine(0, 5.0f);
-    RenderSectionHeader(title, color, suffix);
+    AlterEgo::CompletionTheme::SectionHeading(title, suffix);
     ImGui::PopID();
     return g_ClearOpen[index];
 }
@@ -1956,6 +1951,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     }
 
     ImGui::Separator();
+    ImGui::BeginChild("##ClearsContentScroll", ImVec2(0, 0), false);
 
     std::lock_guard<std::mutex> lock(g_ClearsMutex);
     const int64_t utcNow = std::chrono::duration_cast<std::chrono::seconds>(
@@ -2250,6 +2246,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     }
     } // expanded section
 
+    ImGui::EndChild();
 }
 
 static void RenderClearsShared(bool showVault) {
