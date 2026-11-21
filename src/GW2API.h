@@ -219,6 +219,7 @@ namespace AlterEgo {
         int age = 0;                // Seconds played
         std::string created;        // ISO date
         std::string last_modified;  // ISO date — last login/modification
+        time_t data_refreshed = 0; // Last successful character snapshot from H&S
         int deaths = 0;
         std::vector<std::string> crafting;      // Crafting disciplines (active first)
         std::vector<int> crafting_levels;
