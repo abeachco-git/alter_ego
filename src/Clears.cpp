@@ -966,11 +966,11 @@ static std::string ShortenEncounterName(const std::string& text) {
 // Helper: render a done/not-done/unknown indicator
 static void RenderClearStatus(bool fetched, bool done, const char* label) {
     if (!fetched)
-        ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "[?] %s", label);
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "[?] %s", label);
     else if (done)
-        ImGui::TextColored(ImVec4(0.35f, 0.82f, 0.35f, 1.0f), "[x] %s", label);
+        ImGui::TextColored(ImVec4(0.56f, 0.59f, 0.56f, 1.0f), "[x] %s", label);
     else
-        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "[ ] %s", label);
+        ImGui::TextColored(ImVec4(0.94f, 0.92f, 0.87f, 1.0f), "%s", label);
 }
 
 // ============= Banner-row helpers (strikes / raid wings) =============
@@ -1172,20 +1172,24 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     const float width = widthOverride > 0.0f ? widthOverride : ImGui::GetContentRegionAvail().x;
     const float height = 24.0f;
     const ImVec2 end(pos.x + width, pos.y + height);
+    const bool complete = fetched && done;
     dl->AddRectFilled(pos, end, IM_COL32(29, 31, 37, 245), 2.0f);
-    dl->AddRect(pos, end, (fetched && done)
-        ? IM_COL32(105, 194, 126, 240) : IM_COL32(135, 125, 102, 175), 2.0f);
-    const float dotX = pos.x + 9.0f, dotY = pos.y + height / 2.0f;
-    if (fetched && done)
-        dl->AddCircleFilled(ImVec2(dotX, dotY), 3.8f, IM_COL32(105, 204, 126, 255));
-    else if (!fetched)
-        dl->AddText(ImVec2(dotX - 4.0f, dotY - 7.0f), IM_COL32(160, 155, 140, 255), "?");
-    else
-        dl->AddCircle(ImVec2(dotX, dotY), 3.8f, IM_COL32(175, 163, 131, 240), 12, 1.3f);
+    // An unfinished encounter has no border or status dot, so it stands
+    // out by its bright text. Completion is green and deliberately muted.
+    if (complete) {
+        dl->AddRect(pos, end, IM_COL32(105, 194, 126, 240), 2.0f);
+        dl->AddCircleFilled(ImVec2(pos.x + 9.0f, pos.y + height * 0.5f),
+                            3.8f, IM_COL32(105, 204, 126, 255));
+    } else if (!fetched) {
+        dl->AddText(ImVec2(pos.x + 5.0f, pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f),
+                    IM_COL32(160, 155, 140, 255), "?");
+    }
 
-    const ImVec2 titlePos(pos.x + 19.0f, pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f);
+    const ImVec2 titlePos(pos.x + (complete || !fetched ? 19.0f : 8.0f),
+                          pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f);
     dl->PushClipRect(ImVec2(titlePos.x, pos.y), end, true);
-    dl->AddText(titlePos, IM_COL32(236, 232, 221, 255), title.c_str());
+    dl->AddText(titlePos, complete ? IM_COL32(146, 148, 142, 240)
+                                   : IM_COL32(236, 232, 221, 255), title.c_str());
     if (!bountyDate.empty()) {
         const std::string suffix = " - " + bountyDate;
         dl->AddText(ImVec2(titlePos.x + ImGui::CalcTextSize(title.c_str()).x, titlePos.y),
@@ -1195,7 +1199,6 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
 
     ImGui::InvisibleButton("##clear", ImVec2(width, height));
     if (ImGui::IsItemHovered()) {
-        dl->AddRect(pos, end, IM_COL32(225, 184, 108, 240), 2.0f);
         ImGui::BeginTooltip();
         ImGui::TextUnformatted(title.c_str());
         if (!subtitle.empty()) ImGui::TextDisabled("%s", subtitle.c_str());
@@ -1227,7 +1230,8 @@ static void RenderTierRow(const char* tierLabel,
 
     // Neutral solid background, consistent with strike and raid cells.
     dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 245), 3.0f);
-    dl->AddRect(cmin, cmax, IM_COL32(75, 78, 85, 210), 3.0f);
+    const bool fullyDone = fetched && totalCount > 0 && doneCount == totalCount;
+    if (fullyDone) dl->AddRect(cmin, cmax, IM_COL32(105, 194, 126, 220), 3.0f);
     (void)theme;
 
     // Left accent strip
@@ -1244,7 +1248,8 @@ static void RenderTierRow(const char* tierLabel,
 
     // Title
     float titleX = tierX + tierSz.x + 10.0f;
-    ImU32 titleCol = IM_COL32(230, 225, 210, 255);
+    ImU32 titleCol = fullyDone ? IM_COL32(146, 148, 142, 240)
+                               : IM_COL32(230, 225, 210, 255);
     ImVec2 titleSz = ImGui::CalcTextSize(title.c_str());
     dl->AddText(ImVec2(titleX, midY - titleSz.y * 0.5f), titleCol, title.c_str());
 
@@ -1275,23 +1280,19 @@ static void RenderTierRow(const char* tierLabel,
             ImVec2 chmax(chmin.x + chipW, chmin.y + chipH);
 
             dl->AddRectFilled(chmin, chmax, IM_COL32(0, 0, 0, 175), 3.0f);
-            ImU32 cborder = chips[i].done
-                ? IM_COL32(111, 204, 122, 200)
-                : IM_COL32(160, 145, 110, 110);
-            dl->AddRect(chmin, chmax, cborder, 3.0f, 0, 1.0f);
+            if (chips[i].done)
+                dl->AddRect(chmin, chmax, IM_COL32(111, 204, 122, 200), 3.0f);
 
-            float dotR = 3.5f;
-            float dotX = chmin.x + 7.0f;
-            float dotY = chmin.y + chipH * 0.5f;
+            const float dotR = 3.5f;
+            const float dotX = chmin.x + 7.0f;
+            const float dotY = chmin.y + chipH * 0.5f;
             if (chips[i].done)
                 dl->AddCircleFilled(ImVec2(dotX, dotY), dotR, IM_COL32(111, 204, 122, 255));
-            else
-                dl->AddCircle(ImVec2(dotX, dotY), dotR, IM_COL32(160, 145, 110, 220), 16, 1.4f);
 
             ImU32 lblCol = chips[i].done
-                ? IM_COL32(240, 235, 215, 255)
-                : IM_COL32(170, 160, 135, 220);
-            float lblX = dotX + dotR + 5.0f;
+                ? IM_COL32(146, 148, 142, 240)
+                : IM_COL32(240, 235, 220, 255);
+            float lblX = chips[i].done ? dotX + dotR + 5.0f : chmin.x + 7.0f;
             ImVec2 lblSz = ImGui::CalcTextSize(chips[i].label.c_str());
             float lblY = chmin.y + (chipH - lblSz.y) * 0.5f;
             dl->PushClipRect(chmin, chmax, true);
@@ -1306,7 +1307,7 @@ static void RenderTierRow(const char* tierLabel,
                 ImGui::BeginTooltip();
                 ImGui::TextUnformatted(chips[i].fullName.c_str());
                 ImGui::EndTooltip();
-                dl->AddRect(chmin, chmax, IM_COL32(197, 161, 85, 220), 3.0f, 0, 1.0f);
+                // Tooltip supplies hover feedback without creating a false completion border.
             }
             ImGui::PopID();
         }
@@ -1383,7 +1384,9 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
 
     // Quiet wing header and status cells. No embedded artwork.
     dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 242), 3.0f);
-    dl->AddRect(cmin, cmax, IM_COL32(75, 78, 85, 215), 3.0f);
+    const bool fullyDone = fetched && totalCount > 0 && doneCount == totalCount;
+    if (fullyDone)
+        dl->AddRect(cmin, cmax, IM_COL32(105, 194, 126, 220), 3.0f);
     dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 2.0f),
                       ImVec2(cmin.x + 3.0f, cmax.y - 2.0f), theme.b);
 
@@ -1396,7 +1399,8 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     // Name
     ImVec2 wsSz = ImGui::CalcTextSize(wingShortName.c_str());
     dl->AddText(ImVec2(cmin.x + padX + wsSz.x + 10.0f, topY),
-        IM_COL32(240, 235, 220, 255), wingFullName.c_str());
+        fullyDone ? IM_COL32(146, 148, 142, 240) : IM_COL32(240, 235, 220, 255),
+        wingFullName.c_str());
     ImVec2 nameSz = ImGui::CalcTextSize(wingFullName.c_str());
     // Progress fraction (right-aligned)
     char prog[32];
@@ -1479,28 +1483,22 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
 
             // Chip bg
             dl->AddRectFilled(chmin, chmax, IM_COL32(0, 0, 0, 165), 3.0f);
-            ImU32 cborder = chips[i].done
-                ? IM_COL32(111, 204, 122, 200)
-                : IM_COL32(160, 145, 110, 110);
-            dl->AddRect(chmin, chmax, cborder, 3.0f, 0, 1.0f);
+            if (chips[i].done)
+                dl->AddRect(chmin, chmax, IM_COL32(111, 204, 122, 200), 3.0f);
 
-            // Dot
-            float dotR = 4.0f;
-            float dotX = chmin.x + 7.0f;
-            float dotY = chmin.y + chipH * 0.5f;
-            if (chips[i].done) {
+            // Completed: green status dot. Available: no dot, no border.
+            const float dotR = 4.0f;
+            const float dotX = chmin.x + 7.0f;
+            const float dotY = chmin.y + chipH * 0.5f;
+            if (chips[i].done)
                 dl->AddCircleFilled(ImVec2(dotX, dotY), dotR,
                     IM_COL32(111, 204, 122, 255));
-            } else {
-                dl->AddCircle(ImVec2(dotX, dotY), dotR,
-                    IM_COL32(160, 145, 110, 220), 16, 1.4f);
-            }
 
-            // Label
+            // De-emphasize completed encounters; brighter text shows what's left.
             ImU32 lblCol = chips[i].done
-                ? IM_COL32(240, 235, 215, 255)
-                : IM_COL32(170, 160, 135, 220);
-            float lblX = dotX + dotR + 5.0f;
+                ? IM_COL32(146, 148, 142, 240)
+                : IM_COL32(240, 235, 220, 255);
+            float lblX = chips[i].done ? dotX + dotR + 5.0f : chmin.x + 7.0f;
             ImVec2 lblSz = ImGui::CalcTextSize(chips[i].label.c_str());
             float lblY = chmin.y + (chipH - lblSz.y) * 0.5f;
             // Clip text to chip width
@@ -1526,7 +1524,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
                     ImGui::Text("Daily raid bounty: %s (UTC)", chips[i].bountyDate.c_str());
                 ImGui::EndTooltip();
                 // Brighten border on hover
-                dl->AddRect(chmin, chmax, IM_COL32(197, 161, 85, 220), 3.0f, 0, 1.0f);
+                // Tooltip supplies hover feedback without a completion-like border.
             }
             ImGui::PopID();
         }
@@ -1581,23 +1579,20 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     const bool done = claimed || obj.isDone();
     const ImU32 green = IM_COL32(105, 204, 126, 255);
     dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 245), 2.0f);
-    dl->AddRect(cmin, cmax, done
-        ? IM_COL32(105, 194, 126, 240)
-        : IM_COL32(135, 125, 102, 175), 2.0f);
+    if (done)
+        dl->AddRect(cmin, cmax, IM_COL32(105, 194, 126, 240), 2.0f);
     const float midY = cmin.y + h * 0.5f;
     const float dotX = cmin.x + 10.0f;
     if (done)
         dl->AddCircleFilled(ImVec2(dotX, midY), 3.8f, green);
-    else
-        dl->AddCircle(ImVec2(dotX, midY), 3.8f,
-                      IM_COL32(175, 163, 131, 240), 12, 1.3f);
 
     float padX = 8.0f;
-    float tagX = cmin.x + 20.0f;
+    float tagX = done ? cmin.x + 20.0f : cmin.x + 8.0f;
     if (!obj.track.empty()) {
         ImVec2 tagSz = ImGui::CalcTextSize(obj.track.c_str());
         dl->AddText(ImVec2(tagX, midY - tagSz.y * 0.5f),
-                    VaultTrackColor(obj.track), obj.track.c_str());
+                    done ? IM_COL32(122, 146, 125, 230) : VaultTrackColor(obj.track),
+                    obj.track.c_str());
         tagX += tagSz.x + 8.0f;
     }
 
@@ -1630,8 +1625,10 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     dl->AddRect(pillMin, pillMax, pillBorder, 3.0f, 0, 1.0f);
     dl->AddText(ImVec2(pillMin.x + pillPadX, pillMin.y + pillPadY), pillText, pill);
 
-    // Status uses the green border and dot; completed text stays readable.
-    const ImU32 titleCol = IM_COL32(236, 232, 221, 255);
+    // A dimmed title means already complete; unfinished tasks remain bright.
+    // The gold unclaimed AA pill above is intentionally still prominent.
+    const ImU32 titleCol = done ? IM_COL32(146, 148, 142, 240)
+                                : IM_COL32(236, 232, 221, 255);
 
     ImVec2 titleSz = ImGui::CalcTextSize(obj.title.c_str());
     float titleX = tagX;
@@ -1669,7 +1666,7 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
         else
             ImGui::TextDisabled("Not completed");
         ImGui::EndTooltip();
-        dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 130), 2.0f);
+        // Hover never changes an unfinished row into a bordered cell.
     }
 }
 
