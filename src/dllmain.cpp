@@ -9306,16 +9306,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     return result;
 }
 
-static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
-    const auto& characters = AlterEgo::GW2API::GetCharacters();
-    std::vector<const AlterEgo::Character*> matches;
-    for (const auto& ch : characters)
-        if (ch.profession == saved.profession && !ch.build_tabs.empty())
-            matches.push_back(&ch);
-    if (matches.empty()) {
-        ImGui::TextWrapped("No retrieved characters with this profession. Refresh character data in the Characters tab.");
-        return;
-    }
+// Shared by the top refresh toolbar and the detailed comparison selectors.
+static const AlterEgo::Character* ResolveComparisonCharacter(
+    const AlterEgo::SavedBuild& saved,
+    const std::vector<const AlterEgo::Character*>& matches) {
+    if (matches.empty()) return nullptr;
     const AlterEgo::Character* character = nullptr;
     for (const auto* ch : matches)
         if (ch->name == g_LibCompareChar) { character = ch; break; }
@@ -9344,6 +9339,20 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         g_LibCompareEquipTab = 0;
     }
 
+    return character;
+}
+
+static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
+    const auto& characters = AlterEgo::GW2API::GetCharacters();
+    std::vector<const AlterEgo::Character*> matches;
+    for (const auto& ch : characters)
+        if (ch.profession == saved.profession && !ch.build_tabs.empty())
+            matches.push_back(&ch);
+    if (matches.empty()) {
+        ImGui::TextWrapped("No retrieved characters with this profession. Refresh character data in the Characters tab.");
+        return;
+    }
+    const AlterEgo::Character* character = ResolveComparisonCharacter(saved, matches);
     if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
         g_LibCompareBuildTab = -1;
     const int activeBuildIndex = GetActiveBuildIndex(*character);
@@ -9504,46 +9513,6 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::SetTooltip("Saved vs. retrieved Hoard & Seek character data.\n"
                           "Unknown legacy fields are skipped rather than counted as matches.\n"
                           "Unverified fields lack enough API data to determine a match.");
-    // Keep comparison counts separate from interactive refresh controls.
-    if (busy) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
-    const bool clicked = ImGui::SmallButton("Refresh##compare");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Re-fetch this character from Hoard & Seek.\n"
-                          "Data may still lag behind GW2 due to API caching.");
-    if (busy) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
-    AlterEgo::RefreshUI::Timestamp(character->data_refreshed, "character build/equipment");
-    if (clicked && !busy) {
-        g_LibCompareRefreshChar = character->name;
-        g_LibCompareRefreshPending = true;
-        g_LibCompareRefreshResult.clear();
-        AlterEgo::GW2API::RequestCharacterRefreshSelected({character->name});
-        return; // delivery can replace the character cache
-    }
-    if (g_LibCompareRefreshPending && fetchStatus != AlterEgo::FetchStatus::InProgress) {
-        g_LibCompareRefreshPending = false;
-        if (fetchStatus == AlterEgo::FetchStatus::Success) {
-            g_LibCompareRefreshResult = "Refresh complete (Hoard & Seek data may lag behind GW2)";
-            g_LibCompareSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
-        } else if (fetchStatus == AlterEgo::FetchStatus::Error)
-            g_LibCompareRefreshResult = "Refresh failed: " + AlterEgo::GW2API::GetFetchStatusMessage();
-        else
-            g_LibCompareRefreshResult = "Refresh stopped before completion";
-    }
-    if (busy) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-            AlterEgo::GW2API::GetFetchStatusMessage());
-    } else if (!g_LibCompareRefreshResult.empty() && g_LibCompareRefreshChar == character->name) {
-        const bool error = g_LibCompareRefreshResult.find("failed") != std::string::npos ||
-            g_LibCompareRefreshResult.find("stopped") != std::string::npos;
-        if (error)
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_LibCompareRefreshResult);
-        else if (std::chrono::steady_clock::now() < g_LibCompareSuccessUntil)
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, g_LibCompareRefreshResult);
-        else
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready");
-    } else {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready");
-    }
     if (saved.gear.empty())
         ImGui::TextDisabled("Saved build has no gear; equipment comparison skipped.");
     else if (character->equipment.empty())
@@ -9736,6 +9705,60 @@ static void RenderCompareTab() {
         g_LibCompareBuildId = saved->id;
         g_LibCompareChar.clear();
     }
+
+    // Place refresh/status at the top, consistently with Vault/Clears.
+    // Match the target character resolver used by the result view.
+    std::vector<const AlterEgo::Character*> compareMatches;
+    for (const auto& ch : AlterEgo::GW2API::GetCharacters())
+        if (ch.profession == saved->profession && !ch.build_tabs.empty())
+            compareMatches.push_back(&ch);
+    const AlterEgo::Character* target = ResolveComparisonCharacter(*saved, compareMatches);
+    const auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
+    const bool busy = fetchStatus == AlterEgo::FetchStatus::InProgress;
+    if (busy || !target) {
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+    }
+    const bool refreshClicked = ImGui::SmallButton("Refresh##compare");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Re-fetch the selected character from Hoard & Seek.");
+    if (busy || !target) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
+    AlterEgo::RefreshUI::Timestamp(target ? target->data_refreshed : 0, "character build/equipment");
+
+    if (refreshClicked && !busy && target) {
+        g_LibCompareRefreshChar = target->name;
+        g_LibCompareRefreshPending = true;
+        g_LibCompareRefreshResult.clear();
+        AlterEgo::GW2API::RequestCharacterRefreshSelected({target->name});
+        return; // cache might be replaced during event delivery
+    }
+    if (g_LibCompareRefreshPending && fetchStatus != AlterEgo::FetchStatus::InProgress) {
+        g_LibCompareRefreshPending = false;
+        if (fetchStatus == AlterEgo::FetchStatus::Success) {
+            g_LibCompareRefreshResult = "Refresh complete";
+            g_LibCompareSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        } else if (fetchStatus == AlterEgo::FetchStatus::Error) {
+            g_LibCompareRefreshResult = "Refresh failed: " +
+                AlterEgo::GW2API::GetFetchStatusMessage();
+        } else {
+            g_LibCompareRefreshResult = "Refresh stopped before completion";
+        }
+    }
+    if (busy) {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+            AlterEgo::GW2API::GetFetchStatusMessage());
+    } else if (target && target->name == g_LibCompareRefreshChar &&
+               (g_LibCompareRefreshResult.find("failed") != std::string::npos ||
+                g_LibCompareRefreshResult.find("stopped") != std::string::npos)) {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error,
+            g_LibCompareRefreshResult);
+    } else if (target && target->name == g_LibCompareRefreshChar &&
+               std::chrono::steady_clock::now() < g_LibCompareSuccessUntil) {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
+    } else {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready");
+    }
+    ImGui::Separator();
 
     const std::string selectedName = saved->name + " (" + saved->profession + ")";
     ImGui::TextDisabled("Saved build");
@@ -14296,7 +14319,7 @@ static void RenderSkinventory() {
         }
 
         if (!canRefresh) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
-        if (ImGui::SmallButton("Refresh Owned") && canRefresh)
+        if (ImGui::SmallButton("Refresh") && canRefresh)
             g_SkinRefreshOwned = true;
         if (!canRefresh) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
 
@@ -14338,7 +14361,7 @@ static void RenderSkinventory() {
                 "Waiting for Hoard & Seek...");
         } else {
             AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-                "No ownership data - click Refresh Owned");
+                "No ownership data - click Refresh");
         }
 
         if (cacheStatus == Skinventory::CacheStatus::Updating) {
@@ -14667,40 +14690,26 @@ void AddonRender() {
 
                     if (refreshDisabled) ImGui::PopStyleVar();
 
-                    // Compact status line
+                    // Always show an inline status row, never a toast or a
+                    // global timestamp (the selected character has its own).
                     if (fetchStatus == AlterEgo::FetchStatus::InProgress) {
                         g_FetchDoneTime = std::chrono::steady_clock::time_point{};
-                        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "%s",
-                            AlterEgo::GW2API::GetFetchStatusMessage().c_str());
-                    } else if (fetchStatus == AlterEgo::FetchStatus::Error ||
-                               fetchStatus == AlterEgo::FetchStatus::Success) {
+                        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+                            AlterEgo::GW2API::GetFetchStatusMessage());
+                    } else if (fetchStatus == AlterEgo::FetchStatus::Error) {
+                        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error,
+                            AlterEgo::GW2API::GetFetchStatusMessage());
+                    } else if (fetchStatus == AlterEgo::FetchStatus::Success) {
                         if (g_FetchDoneTime == std::chrono::steady_clock::time_point{})
                             g_FetchDoneTime = std::chrono::steady_clock::now();
-                        float elapsed = std::chrono::duration<float>(
-                            std::chrono::steady_clock::now() - g_FetchDoneTime).count();
-                        if (elapsed < 5.0f) {
-                            float alpha = (elapsed < 4.0f) ? 1.0f : (5.0f - elapsed);
-                            ImVec4 col = (fetchStatus == AlterEgo::FetchStatus::Error)
-                                ? ImVec4(1.0f, 0.3f, 0.3f, alpha)
-                                : ImVec4(0.35f, 0.82f, 0.35f, alpha);
-                            ImGui::TextColored(col, "%s",
-                                AlterEgo::GW2API::GetFetchStatusMessage().c_str());
-                        }
-                    }
-                    if (!scanning) {
-                        time_t last = AlterEgo::GW2API::GetLastUpdated();
-                        if (last > 0) {
-                            time_t now_t = std::time(nullptr);
-                            int el = (int)difftime(now_t, last);
-                            std::string ago;
-                            if (el < 60) ago = "just now";
-                            else if (el < 3600) ago = std::to_string(el / 60) + "m ago";
-                            else if (el < 86400) ago = std::to_string(el / 3600) + "h ago";
-                            else ago = std::to_string(el / 86400) + "d ago";
-                            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Updated %s", ago.c_str());
-                        } else if (hoardReady && !AlterEgo::GW2API::HasCharacterData()) {
-                            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Click Refresh to load");
-                        }
+                        const bool recent = std::chrono::steady_clock::now() - g_FetchDoneTime <
+                            std::chrono::seconds(4);
+                        AlterEgo::RefreshUI::Status(
+                            recent ? AlterEgo::RefreshUI::State::Success : AlterEgo::RefreshUI::State::Ready,
+                            recent ? "Refresh complete" : "Ready");
+                    } else {
+                        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
+                            hoardReady ? "Ready" : "Waiting for Hoard & Seek...");
                     }
                     ImGui::Separator();
                 }
