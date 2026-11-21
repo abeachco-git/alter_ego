@@ -9515,7 +9515,9 @@ static void RenderCompareTab() {
         ImGui::EndCombo();
     }
     ImGui::Separator();
+    ImGui::BeginChild("##CompareResultScroll", ImVec2(0, 0), false);
     RenderSavedVsLiveComparison(*saved);
+    ImGui::EndChild();
 }
 
 static void RenderBuildLibrary() {
@@ -12568,15 +12570,11 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     ImVec2 cmin = ImGui::GetCursorScreenPos();
     ImVec2 cmax(cmin.x + availRowW, cmin.y + rowH);
 
-    // Shared completion theme. A pinned/in-progress achievement is still
-    // AVAILABLE: it must not inherit a completed-looking status indicator.
-    const ImU32 stateCol = done ? AlterEgo::CompletionTheme::kCompleteDot
-        : inProgress ? AlterEgo::CompletionTheme::kInProgressGold
-        : AlterEgo::CompletionTheme::kSelectedGold;
+    // Shared quiet completion theme. Gold still identifies pinned state
+    // through the independent pin action; done no longer adds green outlines.
     AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, done);
-    if (done)
-        AlterEgo::CompletionTheme::DrawCompleteDot(
-            dl, ImVec2(cmin.x + 10.0f, cmin.y + rowH * 0.5f), true);
+    AlterEgo::CompletionTheme::DrawCompleteMark(
+        dl, ImVec2(cmin.x + 10.0f, cmin.y + rowH * 0.5f), done);
 
     // Main row hit area (excluding the pin button + WP button on the right)
     float pinReserve = showPinButton ? 22.0f : 0.0f;
@@ -12633,8 +12631,8 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
         ImVec2 pMax(rightX, pMin.y + pillH);
         ImU32 pBg, pBorder, pText;
         if (done) {
-            pBg = IM_COL32(40, 60, 40, 180); pBorder = IM_COL32(120, 200, 130, 200);
-            pText = IM_COL32(160, 220, 170, 255);
+            pBg = IM_COL32(35, 37, 41, 190); pBorder = IM_COL32(89, 93, 96, 140);
+            pText = AlterEgo::CompletionTheme::kCompleteText;
         } else {
             pBg = IM_COL32(54, 38, 14, 200); pBorder = IM_COL32(200, 160, 90, 200);
             pText = IM_COL32(232, 196, 122, 255);
@@ -12655,8 +12653,8 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
         ImVec2 bMax(rightX, bMin.y + bdH);
         ImU32 bBg, bBorder, bText;
         if (done) {
-            bBg = IM_COL32(40, 60, 40, 180); bBorder = IM_COL32(120, 200, 130, 200);
-            bText = IM_COL32(160, 220, 170, 255);
+            bBg = IM_COL32(35, 37, 41, 190); bBorder = IM_COL32(89, 93, 96, 140);
+            bText = AlterEgo::CompletionTheme::kCompleteText;
         } else {
             bBg = IM_COL32(0, 0, 0, 110); bBorder = IM_COL32(160, 145, 110, 170);
             bText = IM_COL32(220, 210, 180, 240);
@@ -12677,16 +12675,18 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     dl->AddText(ImVec2(titleX, midY - tSz.y * 0.5f - 1.0f), titleCol, def.name.c_str());
     dl->PopClipRect();
 
-    // 2px progress strip at the bottom of the row
-    if (max > 0) {
-        float frac = done ? 1.0f : (float)current / (float)max;
-        float stripY = cmax.y - 4.0f;
-        ImVec2 sMin(cmin.x + 4.0f, stripY);
-        ImVec2 sMax(cmax.x - 4.0f, stripY + 2.0f);
-        dl->AddRectFilled(sMin, sMax, IM_COL32(255, 255, 255, 18), 1.0f);
-        float fillEnd = sMin.x + (sMax.x - sMin.x) * frac;
-        if (fillEnd > sMin.x)
-            dl->AddRectFilled(sMin, ImVec2(fillEnd, sMax.y), stateCol, 1.0f);
+    // Gold only for genuinely partial progress; a full green strip on every
+    // completed row would overpower the few remaining achievements.
+    if (inProgress) {
+        const float frac = ImMin(1.0f, (float)current / (float)max);
+        const float stripY = cmax.y - 4.0f;
+        const ImVec2 stripMin(cmin.x + 4.0f, stripY);
+        const ImVec2 stripMax(cmax.x - 4.0f, stripY + 2.0f);
+        dl->AddRectFilled(stripMin, stripMax,
+            AlterEgo::CompletionTheme::kProgressTrack, 1.0f);
+        dl->AddRectFilled(stripMin,
+            ImVec2(stripMin.x + (stripMax.x - stripMin.x) * frac, stripMax.y),
+            AlterEgo::CompletionTheme::kInProgressGold, 1.0f);
     }
 
     // Hover tooltip with requirement text (so the row stays one line)
@@ -12796,7 +12796,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                 if (subAchId > 0) {
                     // Completed sub-achievement — still clickable to navigate
                     ImGui::TextColored(
-                        ImGui::ColorConvertU32ToFloat4(AlterEgo::CompletionTheme::kCompleteDot), "[x]");
+                        ImGui::ColorConvertU32ToFloat4(AlterEgo::CompletionTheme::kCompleteMark), "[x]");
                     ImGui::SameLine(0.0f, 4.0f);
                     std::string selLabel = label + "###subach";
                     ImGui::PushStyleColor(ImGuiCol_Text, AlterEgo::CompletionTheme::TextColor(true));
@@ -12809,7 +12809,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                     }
                 } else {
                     ImGui::TextColored(
-                        ImGui::ColorConvertU32ToFloat4(AlterEgo::CompletionTheme::kCompleteDot), "[x]");
+                        ImGui::ColorConvertU32ToFloat4(AlterEgo::CompletionTheme::kCompleteMark), "[x]");
                     ImGui::SameLine(0.0f, 4.0f);
                     ImGui::TextColored(AlterEgo::CompletionTheme::TextColor(true), "%s", label.c_str());
                 }
@@ -13251,7 +13251,7 @@ static void RenderAchievements() {
                 ImVec2 cSz = ImGui::CalcTextSize(buf);
                 float cx = startPos.x + availW - cSz.x - 6.0f;
                 float cy = startPos.y + (rowH - cSz.y) * 0.5f - 1.0f;
-                ImU32 countCol = complete ? IM_COL32(120, 200, 130, 230)
+                ImU32 countCol = complete ? AlterEgo::CompletionTheme::kMetaText
                                 : isSelected ? IM_COL32(232, 196, 122, 230)
                                              : IM_COL32(140, 132, 110, 220);
                 dl->AddText(ImVec2(cx, cy), countCol, buf);
