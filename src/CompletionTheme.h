@@ -15,6 +15,8 @@ namespace AlterEgo::CompletionTheme {
 inline constexpr ImU32 kGroupBackground = IM_COL32(26, 28, 32, 246);
 inline constexpr ImU32 kAvailableBackground = IM_COL32(55, 58, 64, 245);
 inline constexpr ImU32 kCompletedBackground = IM_COL32(40, 43, 47, 245);
+inline constexpr ImU32 kAvailableIndicator = IM_COL32(69, 72, 79, 245);
+inline constexpr ImU32 kCompletedIndicator = IM_COL32(35, 38, 42, 245);
 inline constexpr ImU32 kRowBackground = kAvailableBackground;
 inline constexpr ImU32 kCompleteBorder = IM_COL32(105, 194, 126, 240);
 inline constexpr ImU32 kCompleteDot = IM_COL32(105, 204, 126, 255);
@@ -71,6 +73,26 @@ inline void RenderPartialProgress(int done, int total, float height = 4.0f) {
     ImGui::ProgressBar(fraction, ImVec2(-1.0f, height), "");
     ImGui::PopStyleColor(2);
 }
+// Shared vertical metrics prevent the small expand/collapse control from
+// appearing top-aligned next to a larger heading in Vault and Clears.
+inline float SectionHeadingRowHeight() {
+    const float big = ImGui::GetFontSize() * kHeadingScale;
+    const float frame = ImGui::GetFrameHeight();
+    return (big > frame ? big : frame) + 4.0f;
+}
+inline bool CenteredSectionToggle(bool expanded, const char* title) {
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    const float buttonHeight = ImGui::GetFontSize(); // ImGui::SmallButton
+    const float offset = (SectionHeadingRowHeight() - buttonHeight) * 0.5f;
+    ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + offset));
+    const bool clicked = ImGui::SmallButton(expanded ? "-" : "+");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s %s", expanded ? "Collapse" : "Expand", title);
+    ImGui::SameLine(0.0f, 5.0f);
+    const ImVec2 labelPos = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(ImVec2(labelPos.x, start.y));
+    return clicked;
+}
 // Unified section title: large neutral title, small reset text, counts
 // right-aligned. Keeps all parts on one line when space allows, otherwise
 // places the right-hand summary on a second line rather than clipping.
@@ -84,7 +106,7 @@ inline void SectionHeading(const char* title, const char* reset,
     const ImVec2 titleSize = font->CalcTextSizeA(big, 1.0e8f, 0.0f, title);
     const float resetWidth = (reset && *reset) ? ImGui::CalcTextSize(reset).x : 0.0f;
     const float summaryWidth = (summary && *summary) ? ImGui::CalcTextSize(summary).x : 0.0f;
-    const float rowHeight = (big > ImGui::GetFrameHeight() ? big : ImGui::GetFrameHeight()) + 4.0f;
+    const float rowHeight = SectionHeadingRowHeight();
     const bool wrapSummary = summaryWidth > 0 &&
         titleSize.x + resetWidth + summaryWidth + 35.0f > available;
     const float totalHeight = rowHeight + (wrapSummary ? small+4.0f : 0.0f);
