@@ -1306,7 +1306,9 @@ static int g_SaveLibBuildTab = 0;       // Live build tab ID being captured
 
 // Saved vs. retrieved character comparison state (never mutates a saved build).
 static std::string g_LibCompareBuildId;
-static std::string g_LibCompareChar;
+static std::string g_LibCompareChar; // empty = active character (auto)
+static bool g_LibCompareSavedManual = false;
+static std::string g_LibComparePreviousTarget;
 static int g_LibCompareBuildTab = -1;    // -1 follows active build tab
 static int g_LibCompareEquipTab = 0;     // 0 follows active equipment tab
 static bool g_LibCompareShowMatches = false;
@@ -8435,6 +8437,9 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                     g_LibCompareEquipTab = 0;
                 }
                 g_LibCompareBuildId = build.id;
+                g_LibCompareSavedManual = true;
+                g_LibCompareChar = build.source_character;
+                g_LibComparePreviousTarget.clear();
                 g_SwitchToCompare = true;
             }
 
