@@ -1574,62 +1574,38 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             : AlterEgo::CompletionTheme::kAvailableText;
     dl->AddText(ImVec2(cmax.x - padX - pSz.x, topY), progCol, prog);
 
-    // Rotation badges (Emboldened / Call of the Mists) — drawn between the
-    // wing name and the progress fraction, with a wiki icon + label.
+    // Weekly modifiers: unobtrusive, icon-only, with the full explanation
+    // on hover. These are independent of the wing's completion state.
     if (isEmboldened || isCallOfTheMists) {
-        float badgeStartX = cmin.x + padX + wsSz.x + 10.0f + nameSz.x + 12.0f;
-        float rightLimit = cmax.x - padX - pSz.x - 10.0f;
-        float curX = badgeStartX;
-        float iconSz = 16.0f;
-        float padIn = 5.0f;
-        float badgeH = iconSz + 4.0f;
-        float badgeY = topY - 2.0f;
-
-        auto drawBadge = [&](const char* iconKey, const char* label,
-                             const char* tip, ImU32 borderCol) {
-            ImVec2 lblSz = ImGui::CalcTextSize(label);
-            float badgeW = padIn + iconSz + 5.0f + lblSz.x + padIn;
-            if (curX + badgeW > rightLimit) return;
-            ImVec2 bmin(curX, badgeY);
-            ImVec2 bmax(bmin.x + badgeW, bmin.y + badgeH);
-            dl->AddRectFilled(bmin, bmax, IM_COL32(0, 0, 0, 170), 3.0f);
-            dl->AddRect(bmin, bmax, borderCol, 3.0f, 0, 1.0f);
-            Texture_t* tex = Skinventory::WikiImage::GetCurrencyIcon(iconKey);
+        const float iconSz = 19.0f;
+        const float iconY = topY + (ImGui::GetTextLineHeight() - iconSz) * 0.5f;
+        float iconX = cmin.x + padX + wsSz.x + 10.0f + nameSz.x + 10.0f;
+        const float rightLimit = cmax.x - padX - pSz.x - 10.0f;
+        auto drawModifierIcon = [&](const char* key, const char* tooltip) {
+            if (iconX + iconSz > rightLimit) return;
+            const ImVec2 min(iconX, iconY);
+            const ImVec2 max(iconX + iconSz, iconY + iconSz);
+            Texture_t* tex = Skinventory::WikiImage::GetCurrencyIcon(key);
             if (tex && tex->Resource) {
-                dl->AddImage(tex->Resource,
-                    ImVec2(bmin.x + padIn, bmin.y + 2.0f),
-                    ImVec2(bmin.x + padIn + iconSz, bmin.y + 2.0f + iconSz));
+                dl->AddImage(tex->Resource, min, max);
+            } else {
+                dl->AddText(min, AlterEgo::CompletionTheme::kUnknownText, "?");
             }
-            float lblX = bmin.x + padIn + iconSz + 5.0f;
-            float lblY = bmin.y + (badgeH - lblSz.y) * 0.5f;
-            dl->AddText(ImVec2(lblX, lblY),
-                IM_COL32(240, 235, 220, 255), label);
-            ImVec2 saveCursor = ImGui::GetCursorScreenPos();
-            ImGui::SetCursorScreenPos(bmin);
-            ImGui::PushID(iconKey);
-            ImGui::InvisibleButton("##rb", ImVec2(badgeW, badgeH));
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip();
-                ImGui::TextUnformatted(tip);
-                ImGui::EndTooltip();
-                dl->AddRect(bmin, bmax,
-                    IM_COL32(255, 220, 130, 230), 3.0f, 0, 1.4f);
-            }
+            const ImVec2 previous = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos(min);
+            ImGui::PushID(key);
+            ImGui::InvisibleButton("##weeklyModifier", ImVec2(iconSz, iconSz));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
             ImGui::PopID();
-            ImGui::SetCursorScreenPos(saveCursor);
-            curX += badgeW + 6.0f;
+            ImGui::SetCursorScreenPos(previous);
+            iconX += iconSz + 6.0f;
         };
-
-        if (isCallOfTheMists) {
-            drawBadge("Call_of_the_Mists", "Call of the Mists",
-                "Call of the Mists — boss gold and XP are doubled this week.",
-                IM_COL32(227, 196, 122, 220));
-        }
-        if (isEmboldened) {
-            drawBadge("Emboldened", "Emboldened",
-                "Emboldened Mode — stacking buff for easier clears this week.",
-                IM_COL32(120, 180, 240, 220));
-        }
+        if (isCallOfTheMists)
+            drawModifierIcon("Call_of_the_Mists",
+                "Call of the Mists - boss gold and XP are doubled this week.");
+        if (isEmboldened)
+            drawModifierIcon("Emboldened",
+                "Emboldened Mode - stacking buff for easier clears this week.");
     }
 
     // Encounter chips along the bottom
