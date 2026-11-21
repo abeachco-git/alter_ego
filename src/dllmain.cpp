@@ -12667,7 +12667,8 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
 
     // The title conveys remaining work; pin state is shown by the
     // independent gold pin button, not by overriding completion colors.
-    float titleX = cmin.x + padX + (done ? 10.0f : 0.0f);
+    // Always reserve the status-mark gutter. Text positions must not shift.
+    float titleX = cmin.x + padX + 10.0f;
     float titleEndX = rightX - 8.0f;
     const ImU32 titleCol = AlterEgo::CompletionTheme::Text(done);
     ImVec2 tSz = ImGui::CalcTextSize(def.name.c_str());
