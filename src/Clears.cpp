@@ -1316,7 +1316,8 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     if (!bountyDate.empty()) {
         const std::string suffix = " - " + bountyDate;
         dl->AddText(ImVec2(titlePos.x + ImGui::CalcTextSize(title.c_str()).x, titlePos.y),
-            BountyDateColor(bountyDate), suffix.c_str());
+            complete ? AlterEgo::CompletionTheme::kCompleteText :
+                BountyDateColor(bountyDate), suffix.c_str());
     }
     dl->PopClipRect();
 
@@ -1356,7 +1357,8 @@ static void DrawEncounterChip(ImDrawList* dl, const WingEncChip& chip,
     if (showBountyDate && !chip.bountyDate.empty()) {
         const std::string date = " - " + chip.bountyDate;
         dl->AddText(ImVec2(labelX + labelSize.x, labelY),
-            BountyDateColor(chip.bountyDate), date.c_str());
+            chip.done ? AlterEgo::CompletionTheme::kCompleteText :
+                BountyDateColor(chip.bountyDate), date.c_str());
     }
     dl->PopClipRect();
 }
@@ -1669,6 +1671,7 @@ static uint32_t CurrentCallOfTheMistsWingId() {
 
 static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
                              const std::string& wingFullName,     // e.g. "Bastion of the Penitent"
+                             uint32_t wingId,
                              int doneCount, int totalCount,
                              bool fetched,
                              ThemeGrad theme,
@@ -1700,6 +1703,15 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
         AlterEgo::CompletionTheme::Text(fullyDone),
         wingFullName.c_str());
     ImVec2 nameSz = ImGui::CalcTextSize(wingFullName.c_str());
+    // Make the full wing heading a hover target on narrow windows too.
+    const ImVec2 restoredCursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(ImVec2(cmin.x + padX, cmin.y + 2.0f));
+    ImGui::InvisibleButton("##wingHeadingHover",
+        ImVec2(wsSz.x + 10.0f + nameSz.x, 23.0f));
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s - %s\n%d / %d encounters completed",
+            WingExpansion(wingId), wingFullName.c_str(), doneCount, totalCount);
+    ImGui::SetCursorScreenPos(restoredCursor);
     // Progress fraction (right-aligned)
     char prog[32];
     snprintf(prog, sizeof(prog), "%d / %d", doneCount, totalCount);
@@ -1784,6 +1796,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
 // Preserve original two-row wing banners as the narrow-window fallback.
 static void RenderCompactWingBanner(const std::string& wingShortName,
                                    const std::string& wingFullName,
+                                   uint32_t wingId,
                                    int doneCount, int totalCount, bool fetched,
                                    const std::vector<WingEncChip>& chips,
                                    bool isEmboldened, bool isCallOfTheMists) {
@@ -1803,8 +1816,9 @@ static void RenderCompactWingBanner(const std::string& wingShortName,
     ImGui::SetCursorScreenPos(ImVec2(leftX - 3.0f, min.y + 2.0f));
     ImGui::InvisibleButton("##wingLabel", ImVec2(31.0f, height - 4.0f));
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s\n%d / %d encounters completed",
-                          wingFullName.c_str(), doneCount, totalCount);
+        ImGui::SetTooltip("%s - %s\n%d / %d encounters completed",
+                          WingExpansion(wingId), wingFullName.c_str(),
+                          doneCount, totalCount);
 
     // Keep both weekly modifier icons beside the abbreviated wing label.
     float iconX = min.x + 40.0f;
@@ -2770,11 +2784,11 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             ImGui::PushID((int)wing.id);
             if (ImGui::GetContentRegionAvail().x >= 830.0f) {
                 RenderCompactWingBanner(shortW ? shortW : "", cleanName,
-                    doneCount, totalCount, g_ClearsFetched, chips,
+                    wing.id, doneCount, totalCount, g_ClearsFetched, chips,
                     wing.id == embWingId, wing.id == cotmWingId);
             } else {
                 RenderWingBanner(shortW ? shortW : "", cleanName,
-                    doneCount, totalCount, g_ClearsFetched,
+                    wing.id, doneCount, totalCount, g_ClearsFetched,
                     WingTheme(wing.id), chips,
                     /*bannerKey*/ "wing:" + std::to_string(wing.id),
                     /*isEmboldened*/ wing.id == embWingId,
