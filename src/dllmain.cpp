@@ -15316,14 +15316,22 @@ void AddonRender() {
 
         if (acctTabsDisabled) {
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.4f);
-            ImGui::TabItemButton("Vault & Clears", ImGuiTabItemFlags_NoReorder);
+            ImGui::TabItemButton("Vault", ImGuiTabItemFlags_NoReorder);
+            ImGui::TabItemButton("Clears", ImGuiTabItemFlags_NoReorder);
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", acctTabTooltip);
-        } else if (ImGui::BeginTabItem("Vault & Clears")) {
-            g_MainTab = 3;
-            RenderClears();
-            ImGui::EndTabItem();
+        } else {
+            if (ImGui::BeginTabItem("Vault")) {
+                g_MainTab = 3; // Keep original session tab ID.
+                RenderVault();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Clears")) {
+                g_MainTab = 6; // New session ID; do not renumber older tabs.
+                RenderClears();
+                ImGui::EndTabItem();
+            }
         }
 
         if (acctTabsDisabled) {
@@ -15359,7 +15367,8 @@ void AddonRender() {
                 std::string prevFilter = g_SelectedAccountFilter;
                 if (ImGui::Selectable("All Accounts", g_SelectedAccountFilter.empty())) {
                     g_SelectedAccountFilter.clear();
-                    if (g_MainTab >= 2 && g_MainTab <= 4) g_ForceCharactersTab = true;
+                    if ((g_MainTab >= 2 && g_MainTab <= 4) || g_MainTab == 6)
+                        g_ForceCharactersTab = true;
                 }
                 for (const auto& acct : accounts) {
                     bool selected = (g_SelectedAccountFilter == acct.name);

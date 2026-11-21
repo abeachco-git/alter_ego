@@ -18,6 +18,7 @@ extern bool g_VaultNeedRequery;
 // Public API
 void LoadClearsCache();
 void LoadVaultCache();
+void RenderVault();
 void RenderClears();
 void OnClearsAchResponse(void* eventArgs);
 void OnVaultResponse(void* eventArgs);

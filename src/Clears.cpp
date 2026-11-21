@@ -1981,14 +1981,14 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         std::chrono::hours(24 * 7)).time_since_epoch()).count();
 
     // ---- Daily Fractals ----
-    bool showSection = true;
+    bool showFractals = true;
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", dailyResetStr.c_str());
-        showSection = RenderClearSectionToggle(0, "Daily Fractals", ImVec4(0.3f, 0.7f, 0.9f, 1.0f), suffix);
+        showFractals = RenderClearSectionToggle(0, "Daily Fractals", ImVec4(0.3f, 0.7f, 0.9f, 1.0f), suffix);
     }
 
-    if (showSection) {
+    if (showFractals) {
     if (g_DailyFractals.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
@@ -2066,14 +2066,14 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     ImGui::Separator();
 
     // ---- Daily Raid Bounties ----
-    bool showSection = true;
+    bool showBounties = true;
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", dailyResetStr.c_str());
-        showSection = RenderClearSectionToggle(1, "Daily Raid Bounties", ImVec4(0.9f, 0.6f, 0.3f, 1.0f), suffix);
+        showBounties = RenderClearSectionToggle(1, "Daily Raid Bounties", ImVec4(0.9f, 0.6f, 0.3f, 1.0f), suffix);
     }
 
-    if (showSection) {
+    if (showBounties) {
     if (g_DailyBounties.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
@@ -2135,14 +2135,14 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     ImGui::Separator();
 
     // ---- Weekly Strikes ----
-    bool showSection = true;
+    bool showStrikes = true;
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", weeklyResetStr.c_str());
-        showSection = RenderClearSectionToggle(2, "Weekly Strikes", ImVec4(0.7f, 0.4f, 0.9f, 1.0f), suffix);
+        showStrikes = RenderClearSectionToggle(2, "Weekly Strikes", ImVec4(0.7f, 0.4f, 0.9f, 1.0f), suffix);
     }
 
-    if (showSection) {
+    if (showStrikes) {
     if (g_WeeklyStrikes.id == 0) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
@@ -2189,14 +2189,14 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     ImGui::Separator();
 
     // ---- Weekly Raids ----
-    bool showSection = true;
+    bool showRaids = true;
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", weeklyResetStr.c_str());
-        showSection = RenderClearSectionToggle(3, "Weekly Raids", ImVec4(0.9f, 0.7f, 0.3f, 1.0f), suffix);
+        showRaids = RenderClearSectionToggle(3, "Weekly Raids", ImVec4(0.9f, 0.7f, 0.3f, 1.0f), suffix);
     }
 
-    if (showSection) {
+    if (showRaids) {
     if (g_WeeklyWings.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
@@ -2235,7 +2235,8 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             ImGui::PopID();
         }
         ImGui::Unindent(4.0f);
-    }    } // expanded section
+    }
+    } // expanded section
 
 }
 
