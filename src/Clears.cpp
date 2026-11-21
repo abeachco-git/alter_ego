@@ -1901,37 +1901,39 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
             g_VaultDaily = {}; g_VaultWeekly = {}; g_VaultSpecial = {};
         }
         g_VaultFetched = false;
-        FetchVaultData();
+        g_VaultLastSuccessTime = 0;
+        g_VaultInitialAttempted = false;
     }
 
-    // Auto-fetch on first open (or after reset invalidation)
-    if (!g_VaultFetched && !g_VaultFetching)
+    // Avoid silently re-querying every frame if H&S fails.
+    if (!g_VaultFetched && !g_VaultFetching && !g_VaultInitialAttempted)
         FetchVaultData();
 
-    // Refresh button + status
-    bool fetching = g_VaultFetching;
-    if (fetching) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-    if (ImGui::SmallButton("Refresh##vault") && !fetching) {
-        g_VaultFetched = false;
-        FetchVaultData();
-    }
-    if (fetching) ImGui::PopStyleVar();
+    const bool fetching = g_VaultFetching;
+    if (fetching) ImGui::BeginDisabled();
+    if (ImGui::SmallButton("Refresh##vault") && !fetching) FetchVaultData();
+    if (fetching) ImGui::EndDisabled();
     ImGui::SameLine();
-    if (fetching)
-        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "Loading...");
-    else if (!g_VaultFetched)
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No data — click Refresh");
-    else
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Data loaded");
-
     LoadClearUiSettings();
-    ImGui::SameLine();
     const char* filterLabel = g_VaultHideComplete
         ? "Show Complete##vault" : "Hide Complete##vault";
     if (ImGui::SmallButton(filterLabel)) {
         g_VaultHideComplete = !g_VaultHideComplete;
         SaveClearUiSettings();
     }
+    AlterEgo::RefreshUI::Timestamp(g_VaultLastSuccessTime, "Vault");
+    if (g_VaultFetching)
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working, g_VaultStatusMessage);
+    else if (g_VaultRetryAtMs.load() != 0)
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+            "Hoard & Seek busy - retrying shortly...");
+    else if (g_VaultLastAttemptFailed)
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_VaultStatusMessage);
+    else if (std::chrono::steady_clock::now() < g_VaultSuccessUntil)
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
+    else
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
+            g_VaultFetched ? "Ready" : "No Vault data available - click Refresh");
 
     ImGui::Separator();
     ImGui::BeginChild("##VaultContentScroll", ImVec2(0, 0), false);
@@ -2089,34 +2091,32 @@ static std::string UpcomingBountyLabel(const std::string& encounter,
 
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr)
 {
-    // Refresh button + status
-    bool fetching = g_ClearsFetching;
-    if (fetching) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-    if (ImGui::SmallButton("Refresh##clears") && !fetching) {
-        FetchClears();
-    }
-    if (fetching) ImGui::PopStyleVar();
+    const bool fetching = g_ClearsFetching || g_ClearsQueryPending.load() ||
+        g_ClearsRetryAtMs.load() != 0;
+    if (fetching) ImGui::BeginDisabled();
+    if (ImGui::SmallButton("Refresh##clears") && !fetching) FetchClears();
+    if (fetching) ImGui::EndDisabled();
     ImGui::SameLine();
-    {
-        std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (fetching) {
-            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "%s", g_ClearsStatusMsg.c_str());
-        } else if (!g_ClearsFetched && g_DailyFractals.empty()) {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Click Refresh to load data");
-        } else if (!g_ClearsStatusMsg.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", g_ClearsStatusMsg.c_str());
-        } else {
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Data loaded");
-        }
-    }
-
     LoadClearUiSettings();
-    ImGui::SameLine();
     const char* filterLabel = g_ClearsHideComplete
         ? "Show Complete##clears" : "Hide Complete##clears";
     if (ImGui::SmallButton(filterLabel)) {
         g_ClearsHideComplete = !g_ClearsHideComplete;
         SaveClearUiSettings();
+    }
+    AlterEgo::RefreshUI::Timestamp(g_ClearsLastSuccessTime, "Clears");
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (fetching)
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+                g_ClearsStatusMsg.empty() ? "Querying completion..." : g_ClearsStatusMsg);
+        else if (!g_ClearsStatusMsg.empty())
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_ClearsStatusMsg);
+        else if (std::chrono::steady_clock::now() < g_ClearsSuccessUntil)
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
+        else
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
+                g_ClearsFetched ? "Ready" : "No Clears data available - click Refresh");
     }
 
     ImGui::Separator();
@@ -2575,12 +2575,14 @@ static void RenderClearsShared(bool showVault) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_VaultDaily = {};
         g_VaultFetched = false;
+        g_VaultInitialAttempted = false;
     }
     if (g_VaultLastWeeklyReset != std::chrono::system_clock::time_point{} &&
         weeklyReset > g_VaultLastWeeklyReset && now >= weeklyBuffered) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_VaultWeekly = {};
         g_VaultFetched = false;
+        g_VaultInitialAttempted = false;
     }
     g_VaultLastDailyReset  = dailyReset;
     g_VaultLastWeeklyReset = weeklyReset;
