@@ -1989,10 +1989,13 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 c.label = ShortenFractalName(e->name);
                 c.fullName = e->name;
                 c.done = e->done;
-                chips.push_back(c);
                 if (e->done) doneCount++;
+                if (g_ClearsHideComplete && g_ClearsFetched && e->done)
+                    continue;
+                chips.push_back(c);
             }
 
+            if (chips.empty() && g_ClearsHideComplete && g_ClearsFetched) continue;
             ImGui::PushID(ti.tier);
             RenderTierRow(ti.label, ti.fullName,
                 doneCount, (int)tierEntries.size(), g_ClearsFetched,
@@ -2001,7 +2004,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         }
         // Uncategorized fractals (no tier) — show as plain rows
         for (const auto& e : g_DailyFractals) {
-            if (!e.tier.empty()) continue;
+            if (!e.tier.empty() || (g_ClearsHideComplete && g_ClearsFetched && e.done)) continue;
             ImGui::Text("  ");
             ImGui::SameLine();
             RenderClearStatus(g_ClearsFetched, e.done, e.name.c_str());
@@ -2050,8 +2053,13 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         float availW = ImGui::GetContentRegionAvail().x - 4.0f;
         float gapBnty = 6.0f;
         float halfWBnty = (availW - gapBnty) * 0.5f;
+        size_t visibleCount = 0;
+        for (const auto& e : g_DailyBounties)
+            if (!g_ClearsHideComplete || !g_ClearsFetched || !e.done) ++visibleCount;
+        size_t shown = 0;
         for (size_t i = 0; i < g_DailyBounties.size(); i++) {
             const auto& e = g_DailyBounties[i];
+            if (g_ClearsHideComplete && g_ClearsFetched && e.done) continue;
             std::string display = e.name;
             if (display.find("Raid Bounty: ") == 0)
                 display = display.substr(13);
@@ -2091,10 +2099,13 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 bannerKey);
             ImGui::PopID();
 
-            if (i % 2 == 0 && i + 1 < g_DailyBounties.size()) {
+            ++shown;
+            if (shown % 2 == 1 && shown < visibleCount) {
                 ImGui::SetCursorScreenPos(ImVec2(startPos.x + halfWBnty + gapBnty, startPos.y));
             }
         }
+        if (visibleCount == 0)
+            ImGui::TextDisabled("  All daily bounties completed.");
         ImGui::Unindent(4.0f);
     }
 
@@ -2121,8 +2132,16 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         float gap = 6.0f;
         float halfW = (availW - gap) * 0.5f;
 
+        size_t visibleCount = 0;
+        for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); ++i) {
+            const bool done = i < g_WeeklyStrikes.bitDone.size() &&
+                g_WeeklyStrikes.bitDone[i];
+            if (!g_ClearsHideComplete || !g_ClearsFetched || !done) ++visibleCount;
+        }
+        size_t shown = 0;
         for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); i++) {
             bool bitDone = (i < g_WeeklyStrikes.bitDone.size()) ? g_WeeklyStrikes.bitDone[i] : false;
+            if (g_ClearsHideComplete && g_ClearsFetched && bitDone) continue;
             const std::string& name = g_WeeklyStrikes.bitNames[i];
             ImGui::PushID((int)i);
             ImVec2 startPos = ImGui::GetCursorScreenPos();
@@ -2138,11 +2157,14 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             ImGui::PopID();
 
             // Place next banner on same row or move to next row
-            if (i % 2 == 0 && i + 1 < g_WeeklyStrikes.bitNames.size()) {
+            ++shown;
+            if (shown % 2 == 1 && shown < visibleCount) {
                 // Reset cursor to right side of just-rendered banner
                 ImGui::SetCursorScreenPos(ImVec2(startPos.x + halfW + gap, startPos.y));
             }
         }
+        if (visibleCount == 0)
+            ImGui::TextDisabled("  All weekly strikes completed.");
         ImGui::Unindent(4.0f);
         if (g_ClearsFetched && g_WeeklyStrikes.max > 0) {
             int doneCount = 0;
@@ -2172,6 +2194,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         ImGui::Indent(4.0f);
         uint32_t embWingId = CurrentEmboldenedWingId();
         uint32_t cotmWingId = CurrentCallOfTheMistsWingId();
+        size_t visibleWings = 0;
         for (const auto& wing : g_WeeklyWings) {
             std::string cleanName = CleanWingName(wing.name);
             const char* shortW = WingShortName(wing.id);
@@ -2183,6 +2206,9 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 std::string shortEnc = ShortenEncounterName(wing.bitNames[i]);
                 if (shortEnc.empty()) continue; // skip
                 bool bitDone = (i < wing.bitDone.size()) ? wing.bitDone[i] : false;
+                ++totalCount;
+                if (bitDone) ++doneCount;
+                if (g_ClearsHideComplete && g_ClearsFetched && bitDone) continue;
                 WingEncChip c;
                 c.label = shortEnc;
                 c.fullName = wing.bitNames[i];
@@ -2190,10 +2216,10 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 c.bountyDate = UpcomingBountyLabel(shortEnc, g_DailyBounties,
                     utcNow, weeklyEndUtc, g_ClearsFetched);
                 chips.push_back(c);
-                totalCount++;
-                if (bitDone) doneCount++;
             }
 
+            if (g_ClearsHideComplete && g_ClearsFetched && chips.empty()) continue;
+            ++visibleWings;
             ImGui::PushID((int)wing.id);
             RenderWingBanner(shortW ? shortW : "", cleanName,
                 doneCount, totalCount, g_ClearsFetched,
@@ -2203,6 +2229,8 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 /*isCallOfTheMists*/ wing.id == cotmWingId);
             ImGui::PopID();
         }
+        if (visibleWings == 0)
+            ImGui::TextDisabled("  All weekly raids completed.");
         ImGui::Unindent(4.0f);
     }
     } // expanded section
