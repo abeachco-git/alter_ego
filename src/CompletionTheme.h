@@ -2,7 +2,7 @@
 
 // Unified progress/completion visual language for Alter Ego.
 // Shared by the Characters-independent Achievements, Vault, and Clears views.
-//   Complete: muted text + subtle checkmark; no loud border or full bar.
+//   Complete: distinctly darker cells and muted text + subtle checkmark.
 //   Available/incomplete: bright text, no status border or dot.
 //   Gold: partial progress, selection/pins, and unclaimed rewards.
 //   Green: completed sections and full (only when shown) progress bars.
@@ -13,10 +13,12 @@
 namespace AlterEgo::CompletionTheme {
 // Layered surfaces: dark group = structure, individual cells = actionable work.
 inline constexpr ImU32 kGroupBackground = IM_COL32(26, 28, 32, 246);
-inline constexpr ImU32 kAvailableBackground = IM_COL32(55, 58, 64, 245);
-inline constexpr ImU32 kCompletedBackground = IM_COL32(40, 43, 47, 245);
+inline constexpr ImU32 kAvailableBackground = IM_COL32(58, 61, 68, 245);
+// Secondary encounters are still available, but intentionally less prominent.
+inline constexpr ImU32 kSecondaryBackground = IM_COL32(43, 46, 51, 245);
+inline constexpr ImU32 kCompletedBackground = IM_COL32(32, 35, 39, 245);
 inline constexpr ImU32 kAvailableIndicator = IM_COL32(69, 72, 79, 245);
-inline constexpr ImU32 kCompletedIndicator = IM_COL32(35, 38, 42, 245);
+inline constexpr ImU32 kCompletedIndicator = IM_COL32(30, 33, 37, 245);
 inline constexpr ImU32 kRowBackground = kAvailableBackground;
 inline constexpr ImU32 kCompleteBorder = IM_COL32(105, 194, 126, 240);
 inline constexpr ImU32 kCompleteDot = IM_COL32(105, 204, 126, 255);
@@ -26,21 +28,26 @@ inline constexpr ImU32 kBountyToday = IM_COL32(255, 166, 92, 255);
 inline constexpr ImU32 kBountyFuture = IM_COL32(101, 207, 203, 255);
 inline constexpr ImU32 kMetaText = IM_COL32(162, 163, 160, 230);
 inline constexpr float kHeadingScale = 1.18f;
-inline constexpr ImU32 kCompleteText = IM_COL32(126, 133, 128, 235);
+inline constexpr ImU32 kCompleteText = IM_COL32(112, 120, 114, 235);
+inline constexpr ImU32 kSecondaryText = IM_COL32(174, 177, 172, 245);
 inline constexpr ImU32 kAvailableText = IM_COL32(236, 232, 221, 255);
 inline constexpr ImU32 kSelectedGold = IM_COL32(232, 196, 122, 230);
 inline constexpr ImU32 kInProgressGold = IM_COL32(244, 196, 122, 230);
 inline constexpr ImU32 kUnknownText = IM_COL32(160, 155, 140, 255);
 
-inline ImU32 Text(bool complete) {
-    return complete ? kCompleteText : kAvailableText;
+inline ImU32 Text(bool complete, bool secondary = false) {
+    // Completion always wins over priority: all completed cells use the exact
+    // same shared palette, whether they are bosses or secondary encounters.
+    return complete ? kCompleteText : secondary ? kSecondaryText : kAvailableText;
 }
 inline void DrawRow(ImDrawList* draw, const ImVec2& min, const ImVec2& max,
-                    bool complete, float rounding = 3.0f) {
-    // No item-level completion outline: dozens of green borders obscured the
-    // remaining work. A slightly quieter filled background is sufficient.
+                    bool complete, float rounding = 3.0f, bool secondary = false) {
+    // Group backgrounds never change with completion. A completed cell must
+    // remain perceptibly distinct from its group but noticeably darker than
+    // unfinished bosses; incomplete secondary cells sit between the two.
     draw->AddRectFilled(min, max,
-        complete ? kCompletedBackground : kAvailableBackground, rounding);
+        complete ? kCompletedBackground :
+        secondary ? kSecondaryBackground : kAvailableBackground, rounding);
 }
 // Group backgrounds visually separate wings and daily fractals from their
 // item cells. Never color an outer group based on completion state.
