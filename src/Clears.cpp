@@ -1557,7 +1557,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     float topY = cmin.y + 6.0f;
     // Roman
     dl->AddText(ImVec2(cmin.x + padX, topY),
-        AlterEgo::CompletionTheme::kAvailableText, wingShortName.c_str());
+        AlterEgo::CompletionTheme::Text(fullyDone), wingShortName.c_str());
     // Name
     ImVec2 wsSz = ImGui::CalcTextSize(wingShortName.c_str());
     dl->AddText(ImVec2(cmin.x + padX + wsSz.x + 10.0f, topY),
@@ -1568,9 +1568,10 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     char prog[32];
     snprintf(prog, sizeof(prog), "%d / %d", doneCount, totalCount);
     ImVec2 pSz = ImGui::CalcTextSize(prog);
-    ImU32 progCol = doneCount > 0 && doneCount < totalCount
-        ? AlterEgo::CompletionTheme::kInProgressGold
-        : AlterEgo::CompletionTheme::kMetaText;
+    ImU32 progCol = fullyDone ? AlterEgo::CompletionTheme::kCompleteText
+        : doneCount > 0 && doneCount < totalCount
+            ? AlterEgo::CompletionTheme::kInProgressGold
+            : AlterEgo::CompletionTheme::kAvailableText;
     dl->AddText(ImVec2(cmax.x - padX - pSz.x, topY), progCol, prog);
 
     // Rotation badges (Emboldened / Call of the Mists) — drawn between the
@@ -2007,7 +2008,9 @@ static bool RenderVaultSectionToggle(int index, const char* title,
     return g_VaultOpen[index];
 }
 static bool RenderClearSectionToggle(int index, const char* title,
-                                     ImVec4 color, const char* suffix) {
+                                     ImVec4 color, const char* suffix,
+                                     const char* summary = nullptr,
+                                     bool summaryComplete = false) {
     (void)color;
     LoadClearUiSettings();
     ImGui::PushID(index);
@@ -2016,7 +2019,9 @@ static bool RenderClearSectionToggle(int index, const char* title,
         g_ClearOpen[index] = !g_ClearOpen[index];
         SaveClearUiSettings();
     }
-    AlterEgo::CompletionTheme::SectionHeading(title, suffix);
+    AlterEgo::CompletionTheme::SectionHeading(title, suffix, summary,
+        summary ? AlterEgo::CompletionTheme::Text(summaryComplete)
+                : AlterEgo::CompletionTheme::kMetaText);
     ImGui::PopID();
     return g_ClearOpen[index];
 }
@@ -2239,7 +2244,18 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", dailyResetStr.c_str());
-        showBounties = RenderClearSectionToggle(1, "Daily Raid Bounties", ImVec4(0.9f, 0.6f, 0.3f, 1.0f), suffix);
+        char summary[64] = {};
+        int completed = 0;
+        if (g_ClearsFetched && !g_DailyBounties.empty()) {
+            for (const auto& bounty : g_DailyBounties)
+                if (bounty.done) ++completed;
+            snprintf(summary, sizeof(summary), "%d / %zu completed",
+                completed, g_DailyBounties.size());
+        }
+        showBounties = RenderClearSectionToggle(1, "Daily Raid Bounties",
+            ImVec4(0.9f, 0.6f, 0.3f, 1.0f), suffix,
+            summary[0] ? summary : nullptr,
+            summary[0] && completed == static_cast<int>(g_DailyBounties.size()));
     }
 
     if (showBounties) {
@@ -2316,7 +2332,20 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", weeklyResetStr.c_str());
-        showStrikes = RenderClearSectionToggle(2, "Weekly Strikes", ImVec4(0.7f, 0.4f, 0.9f, 1.0f), suffix);
+        char summary[64] = {};
+        int completed = 0;
+        if (g_ClearsFetched && g_WeeklyStrikes.id != 0 &&
+            !g_WeeklyStrikes.bitNames.empty()) {
+            for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); ++i)
+                if (i < g_WeeklyStrikes.bitDone.size() &&
+                    g_WeeklyStrikes.bitDone[i]) ++completed;
+            snprintf(summary, sizeof(summary), "%d / %zu completed",
+                completed, g_WeeklyStrikes.bitNames.size());
+        }
+        showStrikes = RenderClearSectionToggle(2, "Weekly Strikes",
+            ImVec4(0.7f, 0.4f, 0.9f, 1.0f), suffix,
+            summary[0] ? summary : nullptr,
+            summary[0] && completed == static_cast<int>(g_WeeklyStrikes.bitNames.size()));
     }
 
     if (showStrikes) {
@@ -2385,12 +2414,6 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             /*bannerKey*/ "strike:vloxx");
 
         ImGui::Unindent(4.0f);
-        if (g_ClearsFetched && g_WeeklyStrikes.max > 0) {
-            int doneCount = 0;
-            for (bool b : g_WeeklyStrikes.bitDone) { if (b) doneCount++; }
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  %d / %d completed",
-                doneCount, (int)g_WeeklyStrikes.bitNames.size());
-        }
     }
 
     } // expanded section
@@ -2403,7 +2426,23 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", weeklyResetStr.c_str());
-        showRaids = RenderClearSectionToggle(3, "Weekly Raids", ImVec4(0.9f, 0.7f, 0.3f, 1.0f), suffix);
+        char summary[64] = {};
+        int completed = 0, total = 0;
+        if (g_ClearsFetched && !g_WeeklyWings.empty()) {
+            for (const auto& wing : g_WeeklyWings)
+                for (size_t i = 0; i < wing.bitNames.size(); ++i)
+                    if (!ShortenEncounterName(wing.bitNames[i]).empty()) {
+                        ++total;
+                        if (i < wing.bitDone.size() && wing.bitDone[i])
+                            ++completed;
+                    }
+            if (total > 0)
+                snprintf(summary, sizeof(summary), "%d / %d completed",
+                    completed, total);
+        }
+        showRaids = RenderClearSectionToggle(3, "Weekly Raids",
+            ImVec4(0.9f, 0.7f, 0.3f, 1.0f), suffix,
+            summary[0] ? summary : nullptr, total > 0 && completed == total);
     }
 
     if (showRaids) {
