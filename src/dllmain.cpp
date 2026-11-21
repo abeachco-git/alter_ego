@@ -9794,26 +9794,35 @@ static void RenderCompareTab() {
     ImGui::EndTable();
     }
 
-    const std::string selectedName = saved->name + " (" + saved->profession + ")";
+    ImGui::Spacing();
     ImGui::TextDisabled("Saved build");
+    const std::string chosenName = saved ?
+        (g_LibCompareSavedManual ? "" : "Auto-match - ") +
+            saved->name + " (" + saved->profession + ")" :
+        "No matching saved build - select manually";
     ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::BeginCombo("##savedBuildCompare", selectedName.c_str())) {
-        for (const auto& build : builds) {
-            const bool selected = (build.id == g_LibCompareBuildId);
-            const std::string label = build.name + " (" + build.profession + " / " +
-                                      GameModeLabel(build.game_mode) + ")";
+    if (ImGui::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
+        if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
+            g_LibCompareSavedManual = false;
+            g_LibCompareBuildId.clear();
+        }
+        for (const auto& b : builds) {
+            if (b.profession != target->profession) continue;
+            const bool selected = saved && b.id == saved->id;
+            const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
             if (ImGui::Selectable(label.c_str(), selected)) {
-                if (!selected) {
-                    g_LibCompareBuildId = build.id;
-                    g_LibCompareChar.clear(); // choose active matching character for new profession
-                    g_LibCompareBuildTab = -1;
-                    g_LibCompareEquipTab = 0;
-                }
-                saved = &build; // show the new comparison without a one-frame delay
+                g_LibCompareBuildId = b.id;
+                g_LibCompareSavedManual = true;
+                saved = &b;
             }
             if (selected) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
+    }
+    if (!saved) {
+        ImGui::TextDisabled("No saved build matches %s. Choose one above or save a build for this character.",
+            target->name.c_str());
+        return;
     }
     ImGui::Spacing();
     ImGui::BeginChild("##CompareResultScroll", ImVec2(0, 0), false);
