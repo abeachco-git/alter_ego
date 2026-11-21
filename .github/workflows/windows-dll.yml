@@ -28,6 +28,8 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_compare_core.cpp -o /tmp/build_compare_core
           /tmp/build_compare_core
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_match_core.cpp -o /tmp/infusion_match_core
+          /tmp/infusion_match_core
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/clears_rotation.cpp -o /tmp/clears_rotation
           /tmp/clears_rotation
       - name: Configure Windows release build
