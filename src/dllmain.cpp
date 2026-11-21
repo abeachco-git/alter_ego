@@ -40,6 +40,7 @@
 #include <nlohmann/json.hpp>
 #include "AddonShared.h"
 #include "Clears.h"
+#include "CompletionTheme.h"
 
 // Version constants
 #define V_MAJOR 1
@@ -12567,23 +12568,15 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     ImVec2 cmin = ImGui::GetCursorScreenPos();
     ImVec2 cmax(cmin.x + availRowW, cmin.y + rowH);
 
-    // State colour
-    ImU32 stateCol;
-    if (done)            stateCol = IM_COL32(111, 204, 122, 255);
-    else if (pinned)     stateCol = IM_COL32(232, 196, 122, 255);
-    else if (inProgress) stateCol = IM_COL32(244, 196, 122, 230);
-    else                 stateCol = IM_COL32(120, 110, 90, 200);
-
-    // Background
-    ImU32 bg = pinned ? IM_COL32(80, 64, 28, 65)
-             : done   ? IM_COL32(28, 38, 28, 60)
-                      : IM_COL32(255, 255, 255, 14);
-    dl->AddRectFilled(cmin, cmax, bg, 3.0f);
-    dl->AddRect(cmin, cmax, IM_COL32(0, 0, 0, 130), 3.0f, 0, 1.0f);
-
-    // Left state bar
-    dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 3),
-                      ImVec2(cmin.x + 3, cmax.y - 3), stateCol);
+    // Shared completion theme. A pinned/in-progress achievement is still
+    // AVAILABLE: it must not inherit a completed-looking status indicator.
+    const ImU32 stateCol = done ? AlterEgo::CompletionTheme::kCompleteDot
+        : inProgress ? AlterEgo::CompletionTheme::kInProgressGold
+        : AlterEgo::CompletionTheme::kSelectedGold;
+    AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, done);
+    if (done)
+        AlterEgo::CompletionTheme::DrawCompleteDot(
+            dl, ImVec2(cmin.x + 10.0f, cmin.y + rowH * 0.5f), true);
 
     // Main row hit area (excluding the pin button + WP button on the right)
     float pinReserve = showPinButton ? 22.0f : 0.0f;
@@ -12607,8 +12600,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     bool rowHovered = ImGui::IsItemHovered();
     bool rowClicked = ImGui::IsItemClicked();
 
-    if (rowHovered)
-        dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 130), 3.0f, 0, 1.0f);
+    // Hover does not draw a gold outline; borders mean completed only.
 
     // Right-click context (open wiki)
     if (ImGui::BeginPopupContextItem("##ach_ctx")) {
@@ -12675,13 +12667,11 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
         rightX = bMin.x - 6.0f;
     }
 
-    // Title (clipped between left bar and remaining right space)
-    float titleX = cmin.x + padX + 4.0f;
+    // The title conveys remaining work; pin state is shown by the
+    // independent gold pin button, not by overriding completion colors.
+    float titleX = cmin.x + padX + (done ? 10.0f : 0.0f);
     float titleEndX = rightX - 8.0f;
-    ImU32 titleCol;
-    if (done)        titleCol = IM_COL32(150, 200, 150, 255);
-    else if (pinned) titleCol = IM_COL32(245, 220, 150, 255);
-    else             titleCol = IM_COL32(230, 224, 208, 255);
+    const ImU32 titleCol = AlterEgo::CompletionTheme::Text(done);
     ImVec2 tSz = ImGui::CalcTextSize(def.name.c_str());
     dl->PushClipRect(ImVec2(titleX, cmin.y), ImVec2(titleEndX, cmax.y), true);
     dl->AddText(ImVec2(titleX, midY - tSz.y * 0.5f - 1.0f), titleCol, def.name.c_str());
@@ -12805,8 +12795,11 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
             if (bitDone) {
                 if (subAchId > 0) {
                     // Completed sub-achievement — still clickable to navigate
-                    std::string selLabel = "[x] " + label + "###subach";
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.82f, 0.35f, 0.7f));
+                    ImGui::TextColored(
+                        ImGui::ColorConvertU32ToFloat4(AlterEgo::CompletionTheme::kCompleteDot), "[x]");
+                    ImGui::SameLine(0.0f, 4.0f);
+                    std::string selLabel = label + "###subach";
+                    ImGui::PushStyleColor(ImGuiCol_Text, AlterEgo::CompletionTheme::TextColor(true));
                     if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
                         NavigateToAchievement(subAchId);
                     }
@@ -12815,11 +12808,14 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                         ImGui::SetTooltip("Click to navigate to achievement");
                     }
                 } else {
-                    ImGui::TextColored(ImVec4(0.35f, 0.82f, 0.35f, 0.7f), "[x] %s", label.c_str());
+                    ImGui::TextColored(
+                        ImGui::ColorConvertU32ToFloat4(AlterEgo::CompletionTheme::kCompleteDot), "[x]");
+                    ImGui::SameLine(0.0f, 4.0f);
+                    ImGui::TextColored(AlterEgo::CompletionTheme::TextColor(true), "%s", label.c_str());
                 }
             } else if (skinId > 0 && skinInfo.has_value()) {
                 // Clickable skin entry → navigate to Skinventory
-                std::string selLabel = "[ ] " + label + "###skinbit";
+                std::string selLabel = label + "###skinbit";
                 if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
                     g_SkinSelectedId = skinId;
                     g_SkinSelectedType = skinInfo->type;
@@ -12838,7 +12834,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                 }
             } else if (subAchId > 0) {
                 // Clickable sub-achievement → navigate to it
-                std::string selLabel = "[ ] " + label + "###subach";
+                std::string selLabel = label + "###subach";
                 if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
                     NavigateToAchievement(subAchId);
                 }
@@ -12846,7 +12842,8 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                     ImGui::SetTooltip("Click to navigate to achievement");
                 }
             } else {
-                ImGui::Text("[ ] %s", label.c_str());
+                ImGui::TextColored(AlterEgo::CompletionTheme::TextColor(false),
+                                        "%s", label.c_str());
             }
             // Waypoint copy button for this bit
             if (!bitWaypoint.empty()) {
@@ -13236,8 +13233,10 @@ static void RenderAchievements() {
                                   IM_COL32(232, 196, 122, 230));
             }
 
-            ImVec4 textCol = isSelected ? ImVec4(0.95f, 0.85f, 0.55f, 1.0f)
-                                        : ImVec4(0.85f, 0.83f, 0.75f, 1.0f);
+            ImVec4 textCol = complete
+                ? AlterEgo::CompletionTheme::TextColor(true)
+                : isSelected ? ImVec4(0.95f, 0.85f, 0.55f, 1.0f)
+                             : AlterEgo::CompletionTheme::TextColor(false);
             ImGui::PushStyleColor(ImGuiCol_Text, textCol);
             ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(1, 1, 1, 0.04f));
@@ -13351,8 +13350,13 @@ static void RenderAchievements() {
             // ImGui treat it as a new node and forget the open state.
             bool forceOpen = g_AchRestoreScroll && (group.id == g_AchSelectedGroupId);
             if (forceOpen) ImGui::SetNextItemOpen(true);
-            if (ImGui::TreeNodeEx(group.id.c_str(),
-                ImGuiTreeNodeFlags_SpanAvailWidth, "%s", groupHeader.c_str())) {
+            const bool groupComplete = grpTotal > 0 && grpDone == grpTotal && grpHasAny;
+            if (groupComplete)
+                ImGui::PushStyleColor(ImGuiCol_Text, AlterEgo::CompletionTheme::TextColor(true));
+            const bool groupOpen = ImGui::TreeNodeEx(group.id.c_str(),
+                ImGuiTreeNodeFlags_SpanAvailWidth, "%s", groupHeader.c_str());
+            if (groupComplete) ImGui::PopStyleColor();
+            if (groupOpen) {
                 // For Daily group: show active event dailies first
                 if (isDaily && !g_AchActiveDailyCatIds.empty()) {
                     for (uint32_t catId : g_AchActiveDailyCatIds) {

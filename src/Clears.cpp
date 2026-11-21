@@ -21,6 +21,7 @@
 #include "AddonShared.h"
 #include "Clears.h"
 #include "ClearsRotation.h"
+#include "CompletionTheme.h"
 #include "WikiImage.h"
 
 // =========================================================================
@@ -113,7 +114,8 @@ static void SendClearsAchQuery();
 static void FetchVaultData();
 static void SaveVaultCache();
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr);
-static void RenderVaultPeriodSection(const char* title, const char* resetLabel, ImVec4 color, const VaultPeriod& period);
+static void RenderVaultPeriodSection(int sectionIndex, const char* title, const char* resetLabel,
+                                     ImVec4 color, const VaultPeriod& period);
 static void RenderVaultTab(const std::string& dailyResetStr, const std::string& weeklyResetStr);
 
 // Calculate the most recent daily reset (00:00 UTC) before 'now'
@@ -1173,14 +1175,11 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     const float height = 24.0f;
     const ImVec2 end(pos.x + width, pos.y + height);
     const bool complete = fetched && done;
-    dl->AddRectFilled(pos, end, IM_COL32(29, 31, 37, 245), 2.0f);
-    // An unfinished encounter has no border or status dot, so it stands
-    // out by its bright text. Completion is green and deliberately muted.
-    if (complete) {
-        dl->AddRect(pos, end, IM_COL32(105, 194, 126, 240), 2.0f);
-        dl->AddCircleFilled(ImVec2(pos.x + 9.0f, pos.y + height * 0.5f),
-                            3.8f, IM_COL32(105, 204, 126, 255));
-    } else if (!fetched) {
+    // Shared completion state: completed muted/green; available bright/borderless.
+    AlterEgo::CompletionTheme::DrawRow(dl, pos, end, complete, 2.0f);
+    AlterEgo::CompletionTheme::DrawCompleteDot(
+        dl, ImVec2(pos.x + 9.0f, pos.y + height * 0.5f), complete);
+    if (!fetched) {
         dl->AddText(ImVec2(pos.x + 5.0f, pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f),
                     IM_COL32(160, 155, 140, 255), "?");
     }
@@ -1188,8 +1187,7 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     const ImVec2 titlePos(pos.x + (complete || !fetched ? 19.0f : 8.0f),
                           pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f);
     dl->PushClipRect(ImVec2(titlePos.x, pos.y), end, true);
-    dl->AddText(titlePos, complete ? IM_COL32(146, 148, 142, 240)
-                                   : IM_COL32(236, 232, 221, 255), title.c_str());
+    dl->AddText(titlePos, AlterEgo::CompletionTheme::Text(complete), title.c_str());
     if (!bountyDate.empty()) {
         const std::string suffix = " - " + bountyDate;
         dl->AddText(ImVec2(titlePos.x + ImGui::CalcTextSize(title.c_str()).x, titlePos.y),
@@ -1229,9 +1227,8 @@ static void RenderTierRow(const char* tierLabel,
     ImVec2 cmax(cmin.x + w, cmin.y + h);
 
     // Neutral solid background, consistent with strike and raid cells.
-    dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 245), 3.0f);
     const bool fullyDone = fetched && totalCount > 0 && doneCount == totalCount;
-    if (fullyDone) dl->AddRect(cmin, cmax, IM_COL32(105, 194, 126, 220), 3.0f);
+    AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, fullyDone);
     (void)theme;
 
     // Left accent strip
@@ -1248,8 +1245,7 @@ static void RenderTierRow(const char* tierLabel,
 
     // Title
     float titleX = tierX + tierSz.x + 10.0f;
-    ImU32 titleCol = fullyDone ? IM_COL32(146, 148, 142, 240)
-                               : IM_COL32(230, 225, 210, 255);
+    ImU32 titleCol = AlterEgo::CompletionTheme::Text(fullyDone);
     ImVec2 titleSz = ImGui::CalcTextSize(title.c_str());
     dl->AddText(ImVec2(titleX, midY - titleSz.y * 0.5f), titleCol, title.c_str());
 
@@ -1281,17 +1277,15 @@ static void RenderTierRow(const char* tierLabel,
 
             dl->AddRectFilled(chmin, chmax, IM_COL32(0, 0, 0, 175), 3.0f);
             if (chips[i].done)
-                dl->AddRect(chmin, chmax, IM_COL32(111, 204, 122, 200), 3.0f);
+                dl->AddRect(chmin, chmax, AlterEgo::CompletionTheme::kCompleteBorder, 3.0f);
 
             const float dotR = 3.5f;
             const float dotX = chmin.x + 7.0f;
             const float dotY = chmin.y + chipH * 0.5f;
-            if (chips[i].done)
-                dl->AddCircleFilled(ImVec2(dotX, dotY), dotR, IM_COL32(111, 204, 122, 255));
+            AlterEgo::CompletionTheme::DrawCompleteDot(
+                dl, ImVec2(dotX, dotY), chips[i].done, dotR);
 
-            ImU32 lblCol = chips[i].done
-                ? IM_COL32(146, 148, 142, 240)
-                : IM_COL32(240, 235, 220, 255);
+            ImU32 lblCol = AlterEgo::CompletionTheme::Text(chips[i].done);
             float lblX = chips[i].done ? dotX + dotR + 5.0f : chmin.x + 7.0f;
             ImVec2 lblSz = ImGui::CalcTextSize(chips[i].label.c_str());
             float lblY = chmin.y + (chipH - lblSz.y) * 0.5f;
@@ -1383,10 +1377,8 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     ImVec2 cmax(cmin.x + w, cmin.y + h);
 
     // Quiet wing header and status cells. No embedded artwork.
-    dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 242), 3.0f);
     const bool fullyDone = fetched && totalCount > 0 && doneCount == totalCount;
-    if (fullyDone)
-        dl->AddRect(cmin, cmax, IM_COL32(105, 194, 126, 220), 3.0f);
+    AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, fullyDone);
     dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 2.0f),
                       ImVec2(cmin.x + 3.0f, cmax.y - 2.0f), theme.b);
 
@@ -1399,7 +1391,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     // Name
     ImVec2 wsSz = ImGui::CalcTextSize(wingShortName.c_str());
     dl->AddText(ImVec2(cmin.x + padX + wsSz.x + 10.0f, topY),
-        fullyDone ? IM_COL32(146, 148, 142, 240) : IM_COL32(240, 235, 220, 255),
+        AlterEgo::CompletionTheme::Text(fullyDone),
         wingFullName.c_str());
     ImVec2 nameSz = ImGui::CalcTextSize(wingFullName.c_str());
     // Progress fraction (right-aligned)
@@ -1484,20 +1476,17 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             // Chip bg
             dl->AddRectFilled(chmin, chmax, IM_COL32(0, 0, 0, 165), 3.0f);
             if (chips[i].done)
-                dl->AddRect(chmin, chmax, IM_COL32(111, 204, 122, 200), 3.0f);
+                dl->AddRect(chmin, chmax, AlterEgo::CompletionTheme::kCompleteBorder, 3.0f);
 
             // Completed: green status dot. Available: no dot, no border.
             const float dotR = 4.0f;
             const float dotX = chmin.x + 7.0f;
             const float dotY = chmin.y + chipH * 0.5f;
-            if (chips[i].done)
-                dl->AddCircleFilled(ImVec2(dotX, dotY), dotR,
-                    IM_COL32(111, 204, 122, 255));
+            AlterEgo::CompletionTheme::DrawCompleteDot(
+                dl, ImVec2(dotX, dotY), chips[i].done, dotR);
 
             // De-emphasize completed encounters; brighter text shows what's left.
-            ImU32 lblCol = chips[i].done
-                ? IM_COL32(146, 148, 142, 240)
-                : IM_COL32(240, 235, 220, 255);
+            ImU32 lblCol = AlterEgo::CompletionTheme::Text(chips[i].done);
             float lblX = chips[i].done ? dotX + dotR + 5.0f : chmin.x + 7.0f;
             ImVec2 lblSz = ImGui::CalcTextSize(chips[i].label.c_str());
             float lblY = chmin.y + (chipH - lblSz.y) * 0.5f;
@@ -1577,14 +1566,11 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     // progress is absent. Completed entries stay green like Clears.
     const bool claimed = obj.claimed;
     const bool done = claimed || obj.isDone();
-    const ImU32 green = IM_COL32(105, 204, 126, 255);
-    dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 245), 2.0f);
-    if (done)
-        dl->AddRect(cmin, cmax, IM_COL32(105, 194, 126, 240), 2.0f);
+    AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, done, 2.0f);
     const float midY = cmin.y + h * 0.5f;
     const float dotX = cmin.x + 10.0f;
-    if (done)
-        dl->AddCircleFilled(ImVec2(dotX, midY), 3.8f, green);
+    AlterEgo::CompletionTheme::DrawCompleteDot(
+        dl, ImVec2(dotX, midY), done);
 
     float padX = 8.0f;
     float tagX = done ? cmin.x + 20.0f : cmin.x + 8.0f;
@@ -1627,8 +1613,7 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
 
     // A dimmed title means already complete; unfinished tasks remain bright.
     // The gold unclaimed AA pill above is intentionally still prominent.
-    const ImU32 titleCol = done ? IM_COL32(146, 148, 142, 240)
-                                : IM_COL32(236, 232, 221, 255);
+    const ImU32 titleCol = AlterEgo::CompletionTheme::Text(done);
 
     ImVec2 titleSz = ImGui::CalcTextSize(obj.title.c_str());
     float titleX = tagX;
