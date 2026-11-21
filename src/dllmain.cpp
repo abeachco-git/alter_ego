@@ -7973,9 +7973,13 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
     bool hasData = hasStat || hasWeaponType || hasRelic;
     const auto* gearSlot = it != build.gear.end() ? &it->second : nullptr;
     size_t infusionCount = 0;
-    if (gearSlot)
-        for (uint32_t id : gearSlot->infusion_ids)
-            if (id != 0) ++infusionCount;
+    if (gearSlot) {
+        for (size_t i = 0; i < gearSlot->infusion_ids.size(); ++i) {
+            const bool hasAttribute = i < gearSlot->infusion_attributes.size() &&
+                !gearSlot->infusion_attributes[i].empty();
+            if (hasAttribute || gearSlot->infusion_ids[i] != 0) ++infusionCount;
+        }
+    }
 
     ImGui::PushID(slot);
 
@@ -8153,13 +8157,19 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.62f, 0.88f, 1.0f, 1.0f),
                 "Infusions (%zu)", infusionCount);
-            for (uint32_t id : gearSlot->infusion_ids) {
-                if (id == 0) continue;
-                const auto* info = AlterEgo::GW2API::GetItemInfo(id);
-                if (info && !info->name.empty())
-                    ImGui::BulletText("%s", info->name.c_str());
-                else
-                    ImGui::BulletText("Infusion #%u", id);
+            for (size_t i = 0; i < gearSlot->infusion_ids.size(); ++i) {
+                const uint32_t id = gearSlot->infusion_ids[i];
+                const std::string attribute = i < gearSlot->infusion_attributes.size()
+                    ? gearSlot->infusion_attributes[i] : std::string();
+                if (!attribute.empty()) {
+                    ImGui::BulletText("Any %s infusion", InfusionAttributeLabel(attribute));
+                } else if (id != 0) {
+                    const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+                    if (info && !info->name.empty())
+                        ImGui::BulletText("%s (exact)", info->name.c_str());
+                    else
+                        ImGui::BulletText("Infusion #%u (exact)", id);
+                }
             }
         }
         ImGui::EndTooltip();
