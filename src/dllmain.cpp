@@ -9504,12 +9504,12 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                           "Unknown legacy fields are skipped rather than counted as matches.\n"
                           "Unverified fields lack enough API data to determine a match.");
     // Keep comparison counts separate from interactive refresh controls.
-    if (busy) ImGui::BeginDisabled();
+    if (busy) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
     const bool clicked = ImGui::SmallButton("Refresh##compare");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Re-fetch this character from Hoard & Seek.\n"
                           "Data may still lag behind GW2 due to API caching.");
-    if (busy) ImGui::EndDisabled();
+    if (busy) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     AlterEgo::RefreshUI::Timestamp(character->data_refreshed, "character build/equipment");
     if (clicked && !busy) {
         g_LibCompareRefreshChar = character->name;
@@ -14289,10 +14289,10 @@ static void RenderSkinventory() {
             }
         }
 
-        if (!canRefresh) ImGui::BeginDisabled();
+        if (!canRefresh) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
         if (ImGui::SmallButton("Refresh Owned") && canRefresh)
             g_SkinRefreshOwned = true;
-        if (!canRefresh) ImGui::EndDisabled();
+        if (!canRefresh) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
 
         if (g_SkinRefreshOwned && canRefresh) {
             g_SkinRefreshOwned = false;
