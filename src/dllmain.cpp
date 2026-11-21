@@ -3917,6 +3917,33 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     ImGui::Unindent(6.0f);
 }
 
+// Keep every specialization name readable inside the left trait-art gutter.
+// Wrapping avoids hiding longer names such as Soul Reaping and Wilderness
+// Survival under the trait icons. Both the live and saved-build views use this.
+static ImVec2 DrawSpecializationNameBadge(
+    ImDrawList* dl, const std::string& name, ImVec4 color,
+    ImVec2 rowOrigin, float rowH, ImVec2& badgePos) {
+    const float width = SPEC_PORTRAIT_SIZE + 8.0f;
+    const float padding = 6.0f;
+    const float textWidth = width - 2.0f * padding;
+    const float fontSize = ImGui::GetFontSize() * 1.20f;
+    ImFont* font = ImGui::GetFont();
+    const ImVec2 textSize = font->CalcTextSizeA(
+        fontSize, 1.0e8f, textWidth, name.c_str());
+    const float height = std::min(rowH - 4.0f, std::max(26.0f, textSize.y + 9.0f));
+    badgePos = ImVec2(rowOrigin.x + 5.0f,
+        rowOrigin.y + (rowH - height) * 0.5f);
+    const ImVec2 badgeEnd(badgePos.x + width, badgePos.y + height);
+    dl->AddRectFilled(badgePos, badgeEnd, IM_COL32(13, 16, 22, 217), 4.0f);
+    dl->AddRect(badgePos, badgeEnd, IM_COL32(158, 155, 140, 90), 4.0f);
+    const ImVec2 textPos(badgePos.x + padding, badgePos.y + (height - textSize.y) * 0.5f);
+    dl->PushClipRect(badgePos, badgeEnd, true);
+    dl->AddText(font, fontSize, textPos,
+        ImGui::ColorConvertFloat4ToU32(color), name.c_str(), nullptr, textWidth);
+    dl->PopClipRect();
+    return ImVec2(width, height);
+}
+
 // Render the build panel
 // Draw a marching ants animated line between two points
 static void DrawDottedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, float thickness = 1.5f, float dashLen = 4.0f, float gapLen = 3.0f) {
@@ -4455,19 +4482,10 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
             // for legibility against bright banner art. Tooltip is attached
             // to an invisible button covering the same area.
             {
-                const float nameScale = 1.5f;
-                float nameSize = ImGui::GetFontSize() * nameScale;
-                ImVec2 nameAnchor(rowOrigin.x + 14.0f,
-                                  rowOrigin.y + rowH * 0.5f - nameSize * 0.5f);
-                dl->AddText(NULL, nameSize,
-                    ImVec2(nameAnchor.x + 1.0f, nameAnchor.y + 1.0f),
-                    IM_COL32(0, 0, 0, 220), specName.c_str());
-                dl->AddText(NULL, nameSize, nameAnchor,
-                    ImGui::ColorConvertFloat4ToU32(specColor), specName.c_str());
-
-                ImVec2 hitSz = ImGui::CalcTextSize(specName.c_str());
-                hitSz.x *= nameScale; hitSz.y *= nameScale;
+                ImVec2 nameAnchor;
                 ImVec2 prevPos = ImGui::GetCursorScreenPos();
+                const ImVec2 hitSz = DrawSpecializationNameBadge(
+                    dl, specName, specColor, rowOrigin, rowH, nameAnchor);
                 ImGui::SetCursorScreenPos(nameAnchor);
                 ImGui::InvisibleButton("##specname", hitSz);
                 if (ImGui::IsItemHovered()) {
@@ -8558,19 +8576,10 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build, bool show
 
             // Spec name overlay on the banner's left.
             {
-                const float nameScale = 1.5f;
-                float nameSize = ImGui::GetFontSize() * nameScale;
-                ImVec2 nameAnchor(rowOrigin.x + 14.0f,
-                                  rowOrigin.y + rowH * 0.5f - nameSize * 0.5f);
-                dl->AddText(NULL, nameSize,
-                    ImVec2(nameAnchor.x + 1.0f, nameAnchor.y + 1.0f),
-                    IM_COL32(0, 0, 0, 220), specName.c_str());
-                dl->AddText(NULL, nameSize, nameAnchor,
-                    ImGui::ColorConvertFloat4ToU32(specColor), specName.c_str());
-
-                ImVec2 hitSz = ImGui::CalcTextSize(specName.c_str());
-                hitSz.x *= nameScale; hitSz.y *= nameScale;
+                ImVec2 nameAnchor;
                 ImVec2 prevPos = ImGui::GetCursorScreenPos();
+                const ImVec2 hitSz = DrawSpecializationNameBadge(
+                    dl, specName, specColor, rowOrigin, rowH, nameAnchor);
                 ImGui::SetCursorScreenPos(nameAnchor);
                 ImGui::InvisibleButton("##specname", hitSz);
                 if (g_LibEditMode) {
