@@ -533,7 +533,9 @@ static std::atomic<long long> g_AchProgressQueryStartMs{0}; // watchdog for miss
 static bool g_AchNeedRequery = false;      // deferred requery on account change
 static bool g_AchProgressDirty = false;    // persistent cache needs flushing
 static std::string g_AchCachedAccount;     // account whose data is currently in g_AchProgress
-static int64_t g_AchProgressCacheSavedAt = 0; // timestamp of loaded/saved account progress
+static int64_t g_AchProgressCacheSavedAt = 0; // last successful achievement progress retrieval
+static std::chrono::steady_clock::time_point g_AchRefreshSuccessUntil{};
+static std::string g_AchRefreshError;
 static std::chrono::steady_clock::time_point g_AchLastSave;
 static void SaveAchProgress(const std::string& account);
 static void LoadAchProgress(const std::string& account);
@@ -2438,6 +2440,9 @@ static void OnAchProgressResponse(void* eventArgs) {
         if (resp->status == HOARD_STATUS_BUSY) {
             // Schedule a single backoff retry (fired from the render thread).
             g_AchRetryAtMs = NowMs() + (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
+        } else {
+            g_AchRefreshError = resp->status == HOARD_STATUS_DENIED
+                ? "Hoard & Seek permission denied" : "Achievement progress refresh failed";
         }
         g_AchProgressFetching = false;
         g_AchProgressQueryStartMs = 0;
@@ -2491,6 +2496,9 @@ static void OnAchProgressResponse(void* eventArgs) {
             g_AchProgress[e.id] = std::move(p);
         }
         g_LastAchProgressQuery = std::chrono::steady_clock::now();
+        g_AchProgressCacheSavedAt = (int64_t)std::time(nullptr);
+        g_AchRefreshSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        g_AchRefreshError.clear();
         g_AchProgressGen++;
         g_AchProgressDirty = true;
     }
@@ -10922,7 +10930,7 @@ static void SaveAchProgress(const std::string& account) {
     }
 
     nlohmann::json j = nlohmann::json::object();
-    const int64_t savedAt = (int64_t)std::time(nullptr);
+    const int64_t savedAt = g_AchProgressCacheSavedAt;
     j["saved_at"] = savedAt;
     nlohmann::json entries = nlohmann::json::object();
     for (const auto& [id, p] : snapshot) {
