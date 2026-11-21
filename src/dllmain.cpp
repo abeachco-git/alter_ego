@@ -8408,19 +8408,33 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 }
                 ImGui::SetCursorScreenPos(prevCursor);
             } else {
-            float wDel   = btnWidth("Delete");
-            float wShare = btnWidth("Share");
-            float wEdit  = btnWidth("Edit");
-            float totalW = wDel + gap + wShare + gap + wEdit;
-            float startX = pos.x + w - totalW - 8.0f;
+            const float wCompare = btnWidth("Compare");
+            const float wShare = btnWidth("Share");
+            const float wEdit = btnWidth("Edit");
+            const float wDel = btnWidth("Delete");
+            const float totalW = wCompare + wShare + wEdit + wDel + 3.0f * gap;
+            const float startX = pos.x + w - totalW - 8.0f;
 
             ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
+            if (ImGui::SmallButton("Compare##headerBuild")) {
+                // Same saved-build selection behavior as the former button
+                // below the scrollable equipment panel.
+                if (g_LibCompareBuildId != build.id) {
+                    g_LibCompareChar.clear();
+                    g_LibCompareBuildTab = -1;
+                    g_LibCompareEquipTab = 0;
+                }
+                g_LibCompareBuildId = build.id;
+                g_SwitchToCompare = true;
+            }
+
+            ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap, btnY));
             if (ImGui::SmallButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
 
-            ImGui::SetCursorScreenPos(ImVec2(startX + wShare + gap, btnY));
+            ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap, btnY));
             if (ImGui::SmallButton("Edit##headerBuild")) EnterBuildEditMode(build);
 
-            ImGui::SetCursorScreenPos(ImVec2(startX + wShare + gap + wEdit + gap, btnY));
+            ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap + wEdit + gap, btnY));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
             if (ImGui::SmallButton("Delete##headerBuild")) g_LibCtxDeleteIdx = g_LibSelectedIdx;
             ImGui::PopStyleColor();
