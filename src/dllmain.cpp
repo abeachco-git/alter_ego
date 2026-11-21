@@ -526,6 +526,7 @@ static std::string g_AchSelectedGroupId;   // currently selected group UUID
 static uint32_t g_AchSelectedCatId = 0;    // currently selected category ID
 static std::atomic<bool> g_AchCatFetching{false};      // fetching defs for selected category
 static std::atomic<bool> g_AchProgressFetching{false}; // fetching account progress
+static std::atomic<long long> g_AchProgressQueryStartMs{0}; // watchdog for missing H&S responses
 static bool g_AchNeedRequery = false;      // deferred requery on account change
 static bool g_AchProgressDirty = false;    // persistent cache needs flushing
 static std::string g_AchCachedAccount;     // account whose data is currently in g_AchProgress
@@ -2413,9 +2414,12 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids) {
         for (size_t i = start; i < end; i++) {
             req.ids[i - start] = ids[i];
         }
+        // Mark busy BEFORE dispatch. H&S may respond synchronously, in which
+        // case the callback must be allowed to clear the flag permanently.
+        g_AchProgressQueryStartMs = NowMs();
+        g_AchProgressFetching = true;
         APIDefs->Events_Raise(EV_HOARD_QUERY_ACHIEVEMENT, &req);
     }
-    g_AchProgressFetching = true;
 }
 
 static void OnAchProgressResponse(void* eventArgs) {
@@ -2430,6 +2434,7 @@ static void OnAchProgressResponse(void* eventArgs) {
             g_AchRetryAtMs = NowMs() + (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
         }
         g_AchProgressFetching = false;
+        g_AchProgressQueryStartMs = 0;
         return;
     }
 
@@ -2484,6 +2489,7 @@ static void OnAchProgressResponse(void* eventArgs) {
         g_AchProgressDirty = true;
     }
     g_AchProgressFetching = false;
+    g_AchProgressQueryStartMs = 0;
 }
 
 static void FetchAchNameIndex() {
@@ -12941,9 +12947,15 @@ static void RenderAchievements() {
         SaveAchTrackerState();
     }
     ImGui::SameLine();
-    if (g_AchProgressFetching) {
-        RenderSpinner("", ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-    } else if (ImGui::Button("Refresh", ImVec2(refreshWidth, 0))) {
+    // A background prefetch may run before the user presses Refresh. Keep the
+    // button visible and actionable instead of replacing it with a spinner.
+    if (ImGui::Button("Refresh", ImVec2(refreshWidth, 0))) {
+        g_AchProgressFetching = false; // allow a manual retry after a lost response
+        g_AchProgressQueryStartMs = 0;
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchStatusMsg.clear();
+        }
         g_AchGroupsFetched = false;
         g_AchActiveEventFetched = false;
         FetchAchGroups();
@@ -12957,6 +12969,12 @@ static void RenderAchievements() {
         if (!pinnedCopy.empty()) {
             SendAchProgressQuery(pinnedCopy);
         }
+    }
+    if (g_AchProgressFetching) {
+        ImGui::SameLine();
+        RenderSpinner("", ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Refreshing achievement progress in the background");
     }
 
     // Status message
@@ -14049,6 +14067,18 @@ void AddonRender() {
     Skinventory::OwnedSkins::Tick();
     AlterEgo::GW2API::PollRetries();   // fire any scheduled H&S BUSY backoff retry
     PollAutoCharacterRefresh();     // MumbleLink-triggered requests (debounced, cooldown, no overlap)
+
+    // H&S can drop a progress response (or an addon can be reloaded during a
+    // query). Never leave the Achievements Refresh action stuck indefinitely.
+    if (g_AchProgressFetching) {
+        const long long started = g_AchProgressQueryStartMs.load();
+        if (started > 0 && NowMs() - started > 20000) {
+            g_AchProgressFetching = false;
+            g_AchProgressQueryStartMs = 0;
+            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchStatusMsg = "Achievement progress timed out. Click Refresh to retry.";
+        }
+    }
 
     // Persist login timestamps when dirty (crash-safe)
     if (g_LoginTimestampsDirty) SaveLoginTimestamps();
