@@ -136,4 +136,37 @@ private:
     size_t differences = 0;
     size_t unverified = 0;
 };
+
+/* Classify the saved-vs-retrieved build template separately from equipment.
+   A near-match is credible only when all non-skill fields agree and every
+   changed skill slot has a known ID on both sides. The caller must verify
+   complete matching gear before showing a skills-only warning. */
+enum class TemplateMatchStatus { Different, SkillsDiffer, Exact };
+
+inline bool IsGearComparisonGroup(const std::string& group) {
+    return group == "Equipment" || group == "Equipment stats" ||
+           group == "Upgrades" || group == "Weapon types" ||
+           group == "Infusions" || group == "Relic" ||
+           group == "Exact item IDs";
+}
+inline bool IsSkillComparisonGroup(const std::string& group) {
+    return group == "Terrestrial skills" || group == "Aquatic skills";
+}
+inline TemplateMatchStatus ClassifyTemplateMatch(const BuildComparison& comparison) {
+    bool skillsDiffer = false;
+    for (const auto& row : comparison.Rows()) {
+        if (IsGearComparisonGroup(row.group)) continue;
+        if (!row.verified) return TemplateMatchStatus::Different;
+        if (row.matches) continue;
+        const bool isSkillSlot = row.field == "Heal" || row.field == "Elite" ||
+                                 row.field.rfind("Utility ", 0) == 0;
+        // Unknown/empty skill data is not a confirmed skill change.
+        if (!IsSkillComparisonGroup(row.group) || !isSkillSlot ||
+            row.saved == "(empty)" || row.current == "(empty)")
+            return TemplateMatchStatus::Different;
+        skillsDiffer = true;
+    }
+    return skillsDiffer ? TemplateMatchStatus::SkillsDiffer
+                        : TemplateMatchStatus::Exact;
+}
 } // namespace AlterEgo

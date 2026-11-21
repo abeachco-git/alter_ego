@@ -9271,7 +9271,9 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
 // the same comparison rules as the dedicated Compare tab.
 struct ActiveSavedBuildMatch {
     std::string name;
+    std::string skillDifferences;
     bool build = false;
+    bool checkUtilities = false;
     size_t matchingBuilds = 0;
     AlterEgo::GearMatchStatus gear = AlterEgo::GearMatchStatus::NotVerified;
 };
@@ -9306,31 +9308,24 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
         if (saved.profession != character->profession) continue;
         const auto result = CalculateSavedVsLiveComparison(
             saved, *character, build, equipTab, false);
-        bool buildMatch = true;
+        const auto templateStatus = AlterEgo::ClassifyTemplateMatch(result);
+        if (templateStatus == AlterEgo::TemplateMatchStatus::Different) continue;
+        const bool skillsDiffer = templateStatus == AlterEgo::TemplateMatchStatus::SkillsDiffer;
         bool requiredDataMissing = false;
         size_t checkedGearFields = 0, differentGearFields = 0, missingItems = 0;
         for (const auto& row : result.Rows()) {
-            const bool isGear = row.group == "Equipment" ||
-                row.group == "Equipment stats" || row.group == "Upgrades" ||
-                row.group == "Weapon types" || row.group == "Infusions" ||
-                row.group == "Relic" || row.group == "Exact item IDs";
-            if (isGear) {
-                if (!row.verified) {
-                    requiredDataMissing = true;
-                    continue;
-                }
-                ++checkedGearFields;
-                if (!row.matches) {
-                    ++differentGearFields;
-                    if (row.group == "Equipment") ++missingItems;
-                }
-            } else if (!row.verified || !row.matches) {
-                buildMatch = false;
-                break;
+            if (!AlterEgo::IsGearComparisonGroup(row.group)) continue;
+            if (!row.verified) {
+                requiredDataMissing = true;
+                continue;
+            }
+            ++checkedGearFields;
+            if (!row.matches) {
+                ++differentGearFields;
+                if (row.group == "Equipment") ++missingItems;
             }
         }
-        if (!buildMatch) continue;
-        ++cached.matchingBuilds;
+        if (!skillsDiffer) ++cached.matchingBuilds;
 
         // The comparison can skip fields when GW2 API item information is
         // unavailable. A skipped recorded field must not establish a full match.
@@ -9374,10 +9369,27 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
         candidate.missingItems = missingItems;
         candidate.comparedFields = checkedGearFields;
         candidate.savedSlots = saved.gear.size();
-        if (!cached.build || AlterEgo::PreferGearMatchCandidate(candidate, best)) {
+        // Only a fully verified equipment match can support a skills-only
+        // warning. Exact template matches always outrank near matches.
+        if (skillsDiffer && candidate.status != AlterEgo::GearMatchStatus::Matches)
+            continue;
+        if (!cached.build || (cached.checkUtilities && !skillsDiffer) ||
+            (cached.checkUtilities == skillsDiffer &&
+             AlterEgo::PreferGearMatchCandidate(candidate, best))) {
             cached.name = saved.name;
             cached.build = true;
+            cached.checkUtilities = skillsDiffer;
             cached.gear = candidate.status;
+            cached.skillDifferences.clear();
+            if (skillsDiffer) {
+                for (const auto& row : result.Rows()) {
+                    if (AlterEgo::IsSkillComparisonGroup(row.group) && !row.matches) {
+                        if (!cached.skillDifferences.empty()) cached.skillDifferences += "\n";
+                        cached.skillDifferences += row.group + " / " + row.field +
+                            ": " + row.saved + " -> " + row.current;
+                    }
+                }
+            }
             best = candidate;
         }
     }
@@ -14380,7 +14392,8 @@ void AddonRender() {
                         ch.name == g_CurrentCharName) {
                         const auto& match = GetLoggedInSavedBuildMatch();
                         if (match.build)
-                            rowHeight += (match.matchingBuilds > 1 ? 3.0f : 2.0f) * lineH;
+                            rowHeight += (match.matchingBuilds > 1 ? 3.0f : 2.0f) * lineH +
+                                         (match.checkUtilities ? lineH : 0.0f);
                         if (HasLiveSpecCacheMismatch(ch))
                             rowHeight += lineH;
                     }
@@ -14535,16 +14548,30 @@ void AddonRender() {
                         }
                         const auto& match = GetLoggedInSavedBuildMatch();
                         if (match.build) {
-                            // Every candidate shares the exact build template.
-                            // The named one is the best gear match, when known.
-                            std::string label = "Build matches: " + match.name;
+                            // Exact templates stay green. A skills-only near-match
+                            // with identical gear is orange and includes the changed
+                            // heal, utility or elite slots in its tooltip.
+                            const std::string label = (match.checkUtilities ? "Build: " : "Build matches: ") + match.name;
                             std::string shortLabel = label;
                             if (shortLabel.size() > 31)
                                 shortLabel = shortLabel.substr(0, 28) + "...";
-                            ImGui::TextColored(ImVec4(0.55f, 0.88f, 0.58f, 1.0f),
-                                "%s", shortLabel.c_str());
-                            if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s (cached H&S data)", label.c_str());
+                            const ImVec4 buildColor = match.checkUtilities
+                                ? ImVec4(1.0f, 0.70f, 0.32f, 1.0f)
+                                : ImVec4(0.55f, 0.88f, 0.58f, 1.0f);
+                            ImGui::TextColored(buildColor, "%s", shortLabel.c_str());
+                            if (ImGui::IsItemHovered()) {
+                                if (match.checkUtilities)
+                                    ImGui::SetTooltip("%s - Check Utilities\n%s\n(cached H&S data)",
+                                        label.c_str(), match.skillDifferences.c_str());
+                                else
+                                    ImGui::SetTooltip("%s (cached H&S data)", label.c_str());
+                            }
+                            if (match.checkUtilities) {
+                                ImGui::TextColored(buildColor, "Check Utilities");
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip("Saved vs retrieved skills:\n%s\n(cached H&S data)",
+                                        match.skillDifferences.c_str());
+                            }
 
                             const char* gearText = "Equipment: DATA MISSING";
                             ImVec4 gearColor(1.0f, 0.56f, 0.44f, 1.0f);

@@ -90,6 +90,39 @@ int main() {
     assert(PreferGearMatchCandidate(
         GearMatchCandidate{GearMatchStatus::NotVerified, 0, 0, 12, 15}, unknown));
 
+
+    // Saved Build Library recognition: a confirmed change restricted to
+    // heal/utility/elite skills can be a near-match once gear matches.
+    using AlterEgo::TemplateMatchStatus;
+    using AlterEgo::ClassifyTemplateMatch;
+    AlterEgo::BuildComparison exactTemplate;
+    exactTemplate.Add("Specializations", "Line 3", "34", "34", "Reaper", "Reaper");
+    exactTemplate.Add("Traits", "Line 3 Adept", "111", "111", "A", "A");
+    exactTemplate.Add("Terrestrial skills", "Utility 2", "101", "101", "A", "A");
+    exactTemplate.Add("Equipment stats", "Helm", "1", "2", "Berserker", "Assassin");
+    assert(ClassifyTemplateMatch(exactTemplate) == TemplateMatchStatus::Exact);
+    // Gear is classified independently; gear differences alone must never
+    // masquerade as changed skills.
+    AlterEgo::BuildComparison skillChange;
+    skillChange.Add("Specializations", "Line 3", "34", "34", "Reaper", "Reaper");
+    skillChange.Add("Terrestrial skills", "Heal", "10", "11", "Heal A", "Heal B");
+    skillChange.Add("Terrestrial skills", "Utility 1", "100", "200", "A", "B");
+    skillChange.Add("Terrestrial skills", "Elite", "400", "401", "C", "D");
+    skillChange.Add("Aquatic skills", "Utility 3", "50", "51", "E", "F");
+    skillChange.Add("Equipment stats", "Helm", "1", "1", "Same", "Same");
+    assert(ClassifyTemplateMatch(skillChange) == TemplateMatchStatus::SkillsDiffer);
+    skillChange.Add("Traits", "Line 3 Master", "22", "23", "X", "Y");
+    assert(ClassifyTemplateMatch(skillChange) == TemplateMatchStatus::Different);
+    AlterEgo::BuildComparison unknownSkill;
+    unknownSkill.Add("Terrestrial skills", "Utility 2", "0", "200", "(empty)", "B");
+    assert(ClassifyTemplateMatch(unknownSkill) == TemplateMatchStatus::Different);
+    AlterEgo::BuildComparison nonSkill;
+    nonSkill.Add("Build", "Weapon proficiency IDs", "1", "2", "A", "B");
+    assert(ClassifyTemplateMatch(nonSkill) == TemplateMatchStatus::Different);
+    AlterEgo::BuildComparison unverifiedTemplate;
+    unverifiedTemplate.AddUnverified("Traits", "Line 2 Adept", "?", "?");
+    assert(ClassifyTemplateMatch(unverifiedTemplate) == TemplateMatchStatus::Different);
+
     // MumbleLink-only auto-refresh scheduling, independent of GW2 or Nexus.
     using Clock = AlterEgo::AutoRefreshTracker::Clock;
     const auto t0 = Clock::time_point{} + std::chrono::seconds(100);
