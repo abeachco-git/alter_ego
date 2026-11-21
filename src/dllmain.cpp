@@ -13149,6 +13149,14 @@ static void RenderAchievements() {
             return st;
         };
 
+        // Hide fully completed categories only when every achievement's
+        // completion is known. Unknown/partially loaded categories stay visible.
+        auto hideCompletedCategory = [&](uint32_t catId) {
+            if (!g_AchHideCompletedCats) return false;
+            const CatStats stats = getCatStats(catId);
+            return stats.total > 0 && stats.done == stats.total;
+        };
+
         // Render a category row with gold-bar selection, owned/total badge, dim if no progress
         auto renderCatRow = [&](const AchCategoryDef* cat, const std::string& groupId,
                                 bool isSelected) -> bool {
@@ -13220,7 +13228,8 @@ static void RenderAchievements() {
                 }
                 for (uint32_t catId : g_AchActiveMainCatIds) {
                     auto it = g_AchCategories.find(catId);
-                    if (it == g_AchCategories.end() || it->second.name.empty()) continue;
+                    if (it == g_AchCategories.end() || it->second.name.empty() ||
+                        hideCompletedCategory(catId)) continue;
                     renderCatRow(&it->second, kEventGroupId, g_AchSelectedCatId == catId);
                 }
                 ImGui::TreePop();
@@ -13243,15 +13252,30 @@ static void RenderAchievements() {
             for (uint32_t catId : group.categories) {
                 if (g_AchHiddenCatIds.count(catId)) continue;
                 auto it = g_AchCategories.find(catId);
-                if (it != g_AchCategories.end() && !it->second.name.empty()) {
+                if (it != g_AchCategories.end() && !it->second.name.empty() &&
+                    !hideCompletedCategory(catId)) {
                     sortedCats.push_back(&it->second);
                     CatStats st = getCatStats(catId);
                     grpDone += st.done; grpTotal += st.total;
                     if (st.hasAny) grpHasAny = true;
                 }
             }
-            bool grpComplete = (grpDone == grpTotal && grpTotal > 0 && grpHasAny);
-            (void)grpComplete;
+            // A group with no remaining categories is not useful while the
+            // filter is enabled. Keep Daily active-event categories in mind.
+            bool hasVisibleActiveDaily = false;
+            if (isDaily) {
+                for (uint32_t activeId : g_AchActiveDailyCatIds) {
+                    auto activeIt = g_AchCategories.find(activeId);
+                    if (activeIt != g_AchCategories.end() &&
+                        !activeIt->second.name.empty() &&
+                        !hideCompletedCategory(activeId)) {
+                        hasVisibleActiveDaily = true;
+                        break;
+                    }
+                }
+            }
+            if (g_AchHideCompletedCats && sortedCats.empty() && !hasVisibleActiveDaily)
+                continue;
 
             std::sort(sortedCats.begin(), sortedCats.end(),
                 [](const AchCategoryDef* a, const AchCategoryDef* b) { return a->order < b->order; });
@@ -13276,7 +13300,8 @@ static void RenderAchievements() {
                 if (isDaily && !g_AchActiveDailyCatIds.empty()) {
                     for (uint32_t catId : g_AchActiveDailyCatIds) {
                         auto it = g_AchCategories.find(catId);
-                        if (it == g_AchCategories.end() || it->second.name.empty()) continue;
+                        if (it == g_AchCategories.end() || it->second.name.empty() ||
+                            hideCompletedCategory(catId)) continue;
                         renderCatRow(&it->second, group.id, g_AchSelectedCatId == catId);
                     }
                 }
@@ -13361,7 +13386,7 @@ static void RenderAchievements() {
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
                         }
                         ImGui::SameLine(ImGui::GetContentRegionMax().x - 110.0f);
-                        if (ImGui::SmallButton("Hide Complete##list")) {
+                        if (ImGui::SmallButton(active ? "Show Complete##list" : "Hide Complete##list")) {
                             g_AchHideCompletedCats = !g_AchHideCompletedCats;
                             SaveAchTrackerState();
                         }
@@ -13393,13 +13418,17 @@ static void RenderAchievements() {
                         RenderSpinner("Loading...", ImVec4(1.0f, 0.85f, 0.0f, 1.0f));
                     }
 
+                    int visibleAchievements = 0;
                     for (uint32_t achId : catIt->second.achievements) {
                         if (g_AchHideCompletedCats) {
                             auto pit = g_AchProgress.find(achId);
                             if (pit != g_AchProgress.end() && pit->second.done) continue;
                         }
+                        ++visibleAchievements;
                         RenderAchEntry(achId, true);
                     }
+                    if (g_AchHideCompletedCats && visibleAchievements == 0)
+                        ImGui::TextDisabled("All achievements in this category completed.");
                 }
             } else {
                 ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Select a category from the left panel");
