@@ -27,6 +27,8 @@ inline bool CanMatchInfusion(const InfusionRequirement& req,
                              const ObservedInfusion& item,
                              bool allowUnknownMetadata) {
     if (req.attribute.empty()) return req.exactId != 0 && req.exactId == item.itemId;
+    // An empty equipment slot is a mismatch, not missing metadata.
+    if (item.itemId == 0) return false;
     if (!item.metadataKnown) return allowUnknownMetadata;
     return std::find(item.positiveAttributes.begin(), item.positiveAttributes.end(),
                      req.attribute) != item.positiveAttributes.end();
