@@ -6,6 +6,7 @@ on:
     branches: [main, feature/save-and-compare-retrieved-sets]
     paths:
       - 'src/**'
+      - 'tests/**'
       - 'include/**'
       - 'lib/**'
       - 'CMakeLists.txt'
