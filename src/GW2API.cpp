@@ -1598,6 +1598,36 @@ namespace AlterEgo {
         return 0;
     }
 
+    std::vector<std::pair<std::string, uint32_t>> GW2API::SearchKnownInfusions(
+        const std::string& query, size_t maxResults) {
+        std::vector<std::pair<std::string, uint32_t>> results;
+        if (query.empty() || maxResults == 0) return results;
+        auto lower = [](std::string str) {
+            std::transform(str.begin(), str.end(), str.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return str;
+        };
+        const std::string needle = lower(query);
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for (const auto& [name, id] : s_item_name_id_cache) {
+            const std::string folded = lower(name);
+            // Do not treat arbitrary item names as eligible infusions.
+            if (folded.find("infusion") == std::string::npos &&
+                folded.find("enrichment") == std::string::npos)
+                continue;
+            if (folded.find(needle) != std::string::npos ||
+                std::to_string(id).find(needle) != std::string::npos)
+                results.emplace_back(name, id);
+        }
+        std::sort(results.begin(), results.end(),
+            [](const auto& a, const auto& b) {
+                if (a.first != b.first) return a.first < b.first;
+                return a.second < b.second;
+            });
+        if (results.size() > maxResults) results.resize(maxResults);
+        return results;
+    }
+
     void GW2API::CacheItemNameId(const std::string& name, uint32_t id) {
         if (name.empty() || id == 0) return;
         std::lock_guard<std::mutex> lock(s_mutex);
