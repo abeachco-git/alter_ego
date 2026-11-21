@@ -14380,6 +14380,9 @@ static void RenderSkinventory() {
         }
         if (ImGui::BeginTabItem("Browser", nullptr, browserFlags)) {
             g_SkinActiveTab = 0;
+            // Give the three bordered panes breathing room below the sub-tab
+            // underline; otherwise their top borders crowd the tab header.
+            ImGui::Spacing();
             RenderSkinCategoryNav();
             ImGui::SameLine();
             RenderSkinList();
@@ -14389,6 +14392,7 @@ static void RenderSkinventory() {
         }
         if (ImGui::BeginTabItem("Shopping List")) {
             g_SkinActiveTab = 1;
+            ImGui::Spacing();
             RenderSkinShoppingList();
             ImGui::EndTabItem();
         }
