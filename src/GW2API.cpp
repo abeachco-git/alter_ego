@@ -1282,6 +1282,7 @@ namespace AlterEgo {
                     s_fetch_message = s_current_char.name + ": Fetching hero challenges...";
                     break;
                 case 6: { // heropoints done → add/update this character, then next
+                    s_current_char.data_refreshed = std::time(nullptr);
                     // Add or update this character in the list
                     bool found = false;
                     for (auto& existing : s_characters) {
@@ -2325,6 +2326,7 @@ namespace AlterEgo {
                 cj["age"] = ch.age;
                 cj["created"] = ch.created;
                 cj["last_modified"] = ch.last_modified;
+                cj["data_refreshed"] = (int64_t)ch.data_refreshed;
                 cj["deaths"] = ch.deaths;
                 cj["crafting_cached"] = ch.crafting_cached;
                 if (!ch.crafting.empty()) {
@@ -2446,6 +2448,7 @@ namespace AlterEgo {
                     ch.age = cj.value("age", 0);
                     ch.created = cj.value("created", "");
                     ch.last_modified = cj.value("last_modified", "");
+                    ch.data_refreshed = (time_t)cj.value("data_refreshed", (int64_t)0);
                     ch.deaths = cj.value("deaths", 0);
                     // Older character caches contain crafting arrays but no
                     // explicit fetched marker. Keep them valid automatically.
