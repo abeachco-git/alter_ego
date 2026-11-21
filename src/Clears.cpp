@@ -91,6 +91,10 @@ static bool g_VaultFetching = false;
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 static std::atomic<long long> g_VaultRetryAtMs{0};
 bool g_VaultNeedRequery = false;
+static bool g_VaultHideComplete = false;   // hide claimed vault objectives
+static bool g_ClearsHideComplete = false;  // hide completed clear encounters
+static void LoadClearUiSettings();
+static void SaveClearUiSettings();
 static std::chrono::system_clock::time_point g_VaultLastDailyReset{};
 static std::chrono::system_clock::time_point g_VaultLastWeeklyReset{};
 static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
@@ -1780,20 +1784,32 @@ static void RenderVaultPeriodSection(const char* title, const char* resetLabel,
 
     ImGui::Spacing();
 
+    // Hide claimed objectives only; completed but unclaimed rewards remain visible.
+    size_t visibleCount = 0;
+    for (const auto& obj : period.objectives)
+        if (!g_VaultHideComplete || !obj.claimed) ++visibleCount;
+    if (visibleCount == 0) {
+        ImGui::TextDisabled("All objectives claimed.");
+        ImGui::Unindent(4.0f);
+        return;
+    }
+
     // Two-column grid of objective rows
     float availW = ImGui::GetContentRegionAvail().x - 4.0f;
     float gap = 6.0f;
     float halfW = (availW - gap) * 0.5f;
 
+    size_t shown = 0;
     for (size_t i = 0; i < period.objectives.size(); i++) {
         const auto& obj = period.objectives[i];
-
+        if (g_VaultHideComplete && obj.claimed) continue;
         ImGui::PushID((int)i);
         ImVec2 startPos = ImGui::GetCursorScreenPos();
         RenderVaultObjectiveRow(obj, halfW);
         ImGui::PopID();
 
-        if (i % 2 == 0 && i + 1 < period.objectives.size()) {
+        ++shown;
+        if (shown % 2 == 1 && shown < visibleCount) {
             ImGui::SetCursorScreenPos(ImVec2(startPos.x + halfW + gap, startPos.y));
         } else {
             ImGui::Dummy(ImVec2(0, 2));
@@ -1844,6 +1860,15 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No data — click Refresh");
     else
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Data loaded");
+
+    LoadClearUiSettings();
+    ImGui::SameLine();
+    const char* filterLabel = g_VaultHideComplete
+        ? "Show Complete##vault" : "Hide Complete##vault";
+    if (ImGui::SmallButton(filterLabel)) {
+        g_VaultHideComplete = !g_VaultHideComplete;
+        SaveClearUiSettings();
+    }
 
     ImGui::Separator();
 
@@ -1900,6 +1925,8 @@ static void LoadClearUiSettings() {
         const auto& a = j["expanded"];
         for (size_t i = 0; i < 4 && i < a.size(); ++i)
             if (a[i].is_boolean()) g_ClearOpen[i] = a[i].get<bool>();
+        g_VaultHideComplete = j.value("hide_vault_complete", false);
+        g_ClearsHideComplete = j.value("hide_clears_complete", false);
     } catch (...) {}
 }
 static void SaveClearUiSettings() {
@@ -1908,6 +1935,8 @@ static void SaveClearUiSettings() {
         std::filesystem::create_directories(std::filesystem::path(path).parent_path());
         nlohmann::json j;
         j["expanded"] = {g_ClearOpen[0], g_ClearOpen[1], g_ClearOpen[2], g_ClearOpen[3]};
+        j["hide_vault_complete"] = g_VaultHideComplete;
+        j["hide_clears_complete"] = g_ClearsHideComplete;
         std::ofstream f(path, std::ios::trunc);
         if (f.good()) f << j.dump(2);
     } catch (...) {}
@@ -1969,6 +1998,15 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         } else {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Data loaded");
         }
+    }
+
+    LoadClearUiSettings();
+    ImGui::SameLine();
+    const char* filterLabel = g_ClearsHideComplete
+        ? "Show Complete##clears" : "Hide Complete##clears";
+    if (ImGui::SmallButton(filterLabel)) {
+        g_ClearsHideComplete = !g_ClearsHideComplete;
+        SaveClearUiSettings();
     }
 
     ImGui::Separator();
