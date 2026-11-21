@@ -1785,7 +1785,13 @@ static void RenderVaultPeriodSection(int sectionIndex, const char* title,
     snprintf(suffix, sizeof(suffix), "(%s)", resetLabel);
     snprintf(summary, sizeof(summary), "%d/%zu claimed   %d/%d AA",
              claimedCount, period.objectives.size(), earnedAA, totalAA);
-    if (!RenderVaultSectionToggle(sectionIndex, title, color, suffix, summary))
+    // A Vault period is fully claimed only after both its objectives and
+    // all available Astral Acclaim (including its meta reward) are claimed.
+    const bool fullyClaimed = !period.objectives.empty() &&
+        claimedCount == static_cast<int>(period.objectives.size()) &&
+        earnedAA >= totalAA;
+    if (!RenderVaultSectionToggle(sectionIndex, title, color, suffix,
+                                  summary, fullyClaimed))
         return;
     if (period.objectives.empty()) {
         ImGui::TextDisabled("  No data");
@@ -1968,7 +1974,8 @@ static void SaveClearUiSettings() {
 }
 static bool RenderVaultSectionToggle(int index, const char* title,
                                      ImVec4 color, const char* suffix,
-                                     const char* summary) {
+                                     const char* summary,
+                                     bool summaryComplete) {
     (void)color;
     LoadClearUiSettings();
     ImGui::PushID("VaultSection");
@@ -1978,7 +1985,8 @@ static bool RenderVaultSectionToggle(int index, const char* title,
         g_VaultOpen[index] = !g_VaultOpen[index];
         SaveClearUiSettings();
     }
-    AlterEgo::CompletionTheme::SectionHeading(title, suffix, summary);
+    AlterEgo::CompletionTheme::SectionHeading(title, suffix, summary,
+        AlterEgo::CompletionTheme::Text(summaryComplete));
     ImGui::PopID();
     ImGui::PopID();
     return g_VaultOpen[index];
