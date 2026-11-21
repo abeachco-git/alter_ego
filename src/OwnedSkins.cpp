@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>
 #include <chrono>
+#include <ctime>
 
 using json = nlohmann::json;
 
@@ -22,6 +23,7 @@ namespace Skinventory {
     std::atomic<bool> OwnedSkins::s_querying{false};
     std::atomic<bool> OwnedSkins::s_data_updated{false};
     std::string OwnedSkins::s_status_message = "Waiting for Hoard & Seek...";
+    std::time_t OwnedSkins::s_last_success_time = 0;
     std::atomic<uint64_t> OwnedSkins::s_generation{0};
     std::unordered_set<uint32_t> OwnedSkins::s_locally_marked;
     std::vector<uint32_t> OwnedSkins::s_pending_ids;
@@ -113,6 +115,7 @@ namespace Skinventory {
         s_queried_skins.clear();
         s_locally_marked.clear();
         s_has_data = false;
+        s_last_success_time = 0;
         s_generation++;
         s_status_message = "Click Refresh Owned to query skins";
     }
@@ -219,6 +222,7 @@ namespace Skinventory {
                     }
                     s_has_data = true;
                     s_querying = false;
+                    s_last_success_time = std::time(nullptr);
                     s_generation++;
                     s_status_message = "Owned: " + std::to_string(s_owned_skins.size());
                 }
@@ -261,6 +265,7 @@ namespace Skinventory {
             if (s_batch_index >= s_pending_ids.size()) {
                 s_querying = false;
                 s_has_data = true;
+                s_last_success_time = std::time(nullptr);
                 s_status_message = "Owned: " + std::to_string(s_owned_skins.size()) +
                                    " / " + std::to_string(s_queried_skins.size());
                 allDone = true;
@@ -362,6 +367,11 @@ namespace Skinventory {
     std::string OwnedSkins::GetStatusMessage() {
         std::lock_guard<std::mutex> lock(s_mutex);
         return s_status_message;
+    }
+
+    std::time_t OwnedSkins::GetLastSuccessTime() {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        return s_last_success_time;
     }
 
     size_t OwnedSkins::GetOwnedCount() {
