@@ -14785,9 +14785,11 @@ void AddonRender() {
                         }
                     }
 
-                    // Place the overlay relative to the selectable rect, not to
-                    // window X=4 (SameLine(4) could clip profession icons).
-                    // Reserve a small inset for the accent bar and row border.
+                    // Draw character details on top of the selectable, with an
+                    // inset that keeps the profession icon clear of the accent.
+                    // SetCursorScreenPos jumps back to the top of the card,
+                    // so save the original layout position for the next row.
+                    const ImVec2 nextCharacterPos = ImGui::GetCursorScreenPos();
                     ImGui::SetCursorScreenPos(ImVec2(rMin.x + 8.0f, rMin.y));
                     ImGui::BeginGroup();
                     if (!g_CompactCharList) {
@@ -15043,6 +15045,12 @@ void AddonRender() {
                         ImGui::Unindent(6.0f);
                     }
                     ImGui::EndGroup();
+                    // Keep the next character below BOTH the selectable and
+                    // the overlay content. Without restoring this position,
+                    // short overlays cause later entries to overlap vertically.
+                    const float overlayNextY = ImGui::GetCursorScreenPos().y;
+                    ImGui::SetCursorScreenPos(ImVec2(nextCharacterPos.x,
+                        ImMax(nextCharacterPos.y, overlayNextY)));
 
                     ImGui::PopStyleColor(3);
 
