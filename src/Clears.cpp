@@ -20,6 +20,7 @@
 #include "HttpClient.h"
 #include "AddonShared.h"
 #include "Clears.h"
+#include "ClearsRotation.h"
 #include "WikiImage.h"
 
 // =========================================================================
@@ -1153,7 +1154,8 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
                               bool fetched, bool done, ThemeGrad theme,
                               const char* tooltip = nullptr,
                               float widthOverride = 0.0f,
-                              const std::string& bannerKey = "") {
+                              const std::string& bannerKey = "",
+                              const std::string& bountyDate = "") {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 cmin = ImGui::GetCursorScreenPos();
     float w = widthOverride > 0.0f ? widthOverride : ImGui::GetContentRegionAvail().x;
@@ -1230,6 +1232,12 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     ImU32 titleCol = (fetched && done) ? IM_COL32(240, 240, 230, 255) : IM_COL32(220, 215, 200, 255);
     ImU32 subCol = IM_COL32(160, 152, 130, 230);
     dl->AddText(ImVec2(textX, titleY), titleCol, title.c_str());
+    if (!bountyDate.empty()) {
+        const std::string label = " - " + bountyDate;
+        float x = textX + ImGui::CalcTextSize(title.c_str()).x;
+        if (x + ImGui::CalcTextSize(label.c_str()).x < cmax.x - 8.0f)
+            dl->AddText(ImVec2(x, titleY), IM_COL32(255, 194, 108, 255), label.c_str());
+    }
     if (!subtitle.empty())
         dl->AddText(ImVec2(textX, subY), subCol, subtitle.c_str());
 
@@ -1237,7 +1245,7 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     ImGui::Dummy(ImVec2(0, 2));
 }
 
-struct WingEncChip { std::string label; std::string fullName; bool done = false; };
+struct WingEncChip { std::string label; std::string fullName; bool done = false; std::string bountyDate; };
 
 // Compact single-row tier banner with inline chips — for daily fractals.
 // Layout: [accent] [TIER] [title]   [chip][chip][chip]   X/Y
@@ -1562,6 +1570,11 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             dl->PushClipRect(chmin, chmax, true);
             (void)maxLblW;
             dl->AddText(ImVec2(lblX, lblY), lblCol, chips[i].label.c_str());
+            if (!chips[i].bountyDate.empty()) {
+                const std::string date = " - " + chips[i].bountyDate;
+                dl->AddText(ImVec2(lblX + lblSz.x, lblY),
+                    IM_COL32(255, 194, 108, 255), date.c_str());
+            }
             dl->PopClipRect();
 
             // Hover area + tooltip with full encounter name
@@ -1571,6 +1584,8 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             if (ImGui::IsItemHovered() && !chips[i].fullName.empty()) {
                 ImGui::BeginTooltip();
                 ImGui::TextUnformatted(chips[i].fullName.c_str());
+                if (!chips[i].bountyDate.empty())
+                    ImGui::Text("Daily raid bounty: %s (UTC)", chips[i].bountyDate.c_str());
                 ImGui::EndTooltip();
                 // Brighten border on hover
                 dl->AddRect(chmin, chmax, IM_COL32(197, 161, 85, 220), 3.0f, 0, 1.0f);
@@ -1868,6 +1883,71 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
 // Clears - Main render function
 // =========================================================================
 
+// UI-only preferences. Completion fetching remains active while collapsed.
+static bool g_ClearOpen[4] = {true, true, true, true};
+static bool g_ClearUiLoaded = false;
+static std::string ClearUiSettingsPath() {
+    return AlterEgo::GW2API::GetDataDirectory() + "/clears_ui.json";
+}
+static void LoadClearUiSettings() {
+    if (g_ClearUiLoaded) return;
+    g_ClearUiLoaded = true;
+    try {
+        std::ifstream f(ClearUiSettingsPath());
+        if (!f.good()) return;
+        nlohmann::json j; f >> j;
+        if (!j.is_object() || !j.contains("expanded") || !j["expanded"].is_array()) return;
+        const auto& a = j["expanded"];
+        for (size_t i = 0; i < 4 && i < a.size(); ++i)
+            if (a[i].is_boolean()) g_ClearOpen[i] = a[i].get<bool>();
+    } catch (...) {}
+}
+static void SaveClearUiSettings() {
+    try {
+        auto path = ClearUiSettingsPath();
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+        nlohmann::json j;
+        j["expanded"] = {g_ClearOpen[0], g_ClearOpen[1], g_ClearOpen[2], g_ClearOpen[3]};
+        std::ofstream f(path, std::ios::trunc);
+        if (f.good()) f << j.dump(2);
+    } catch (...) {}
+}
+static bool RenderClearSectionToggle(int index, const char* title,
+                                     ImVec4 color, const char* suffix) {
+    LoadClearUiSettings();
+    ImGui::PushID(index);
+    if (ImGui::SmallButton(g_ClearOpen[index] ? "-" : "+")) {
+        g_ClearOpen[index] = !g_ClearOpen[index];
+        SaveClearUiSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s %s", g_ClearOpen[index] ? "Collapse" : "Expand", title);
+    ImGui::SameLine(0, 5.0f);
+    RenderSectionHeader(title, color, suffix);
+    ImGui::PopID();
+    return g_ClearOpen[index];
+}
+static std::string UpcomingBountyLabel(const std::string& encounter,
+                                       const std::vector<ClearEntry>& daily,
+                                       int64_t utcNow, int64_t weeklyEndUtc,
+                                       bool completionKnown) {
+    if (!completionKnown) return "";
+    const std::string boss = ClearsRotation::Normalize(encounter);
+    bool todayOffered = false, todayCompleted = false;
+    const int set = ClearsRotation::BountySet(utcNow);
+    for (int j = 0; j < 4; ++j)
+        if (ClearsRotation::Normalize(ClearsRotation::BountyName(set,j)) == boss)
+            todayOffered = true;
+    if (todayOffered) {
+        for (const auto& entry : daily) {
+            if (ClearsRotation::Normalize(entry.name) == boss && entry.done)
+                todayCompleted = true;
+        }
+    }
+    return ClearsRotation::NextBountyDate(
+        encounter, utcNow, weeklyEndUtc, todayCompleted);
+}
+
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr)
 {
     // Refresh button + status
@@ -1894,14 +1974,21 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     ImGui::Separator();
 
     std::lock_guard<std::mutex> lock(g_ClearsMutex);
+    const int64_t utcNow = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const int64_t weeklyEndUtc = std::chrono::duration_cast<std::chrono::seconds>(
+        (CalcLastWeeklyReset(std::chrono::system_clock::now()) +
+        std::chrono::hours(24 * 7)).time_since_epoch()).count();
 
     // ---- Daily Fractals ----
+    bool showSection = true;
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", dailyResetStr.c_str());
-        RenderSectionHeader("Daily Fractals", ImVec4(0.3f, 0.7f, 0.9f, 1.0f), suffix);
+        showSection = RenderClearSectionToggle(0, "Daily Fractals", ImVec4(0.3f, 0.7f, 0.9f, 1.0f), suffix);
     }
 
+    if (showSection) {
     if (g_DailyFractals.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
@@ -1952,17 +2039,41 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         }
         ImGui::Unindent(4.0f);
     }
+    if (g_ClearsFetched) {
+        const auto& next = ClearsRotation::NextFractals(utcNow);
+        const std::string date = ClearsRotation::DateLabel(
+            (ClearsRotation::FloorDay(utcNow) + 1) * ClearsRotation::kDay);
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.13f, 0.16f, 0.92f));
+        if (ImGui::BeginChild("##nextFractalPreview", ImVec2(0, 81.0f),
+                              true, ImGuiWindowFlags_NoScrollbar)) {
+            ImGui::TextColored(ImVec4(0.64f, 0.74f, 0.86f, 1.0f),
+                "NEXT RESET - %s UTC (PREVIEW ONLY)", date.c_str());
+            ImGui::TextDisabled("T4: %s | %s | %s",
+                next.dailies[0], next.dailies[1], next.dailies[2]);
+            ImGui::TextDisabled("RECS: T1 %d %s | T2 %d %s | T3 %d %s",
+                next.recScales[0], next.recNames[0],
+                next.recScales[1], next.recNames[1],
+                next.recScales[2], next.recNames[2]);
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
+
+    } // expanded section
 
     ImGui::Spacing();
     ImGui::Separator();
 
     // ---- Daily Raid Bounties ----
+    bool showSection = true;
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", dailyResetStr.c_str());
-        RenderSectionHeader("Daily Raid Bounties", ImVec4(0.9f, 0.6f, 0.3f, 1.0f), suffix);
+        showSection = RenderClearSectionToggle(1, "Daily Raid Bounties", ImVec4(0.9f, 0.6f, 0.3f, 1.0f), suffix);
     }
 
+    if (showSection) {
     if (g_DailyBounties.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
@@ -2018,16 +2129,20 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         ImGui::Unindent(4.0f);
     }
 
+    } // expanded section
+
     ImGui::Spacing();
     ImGui::Separator();
 
     // ---- Weekly Strikes ----
+    bool showSection = true;
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", weeklyResetStr.c_str());
-        RenderSectionHeader("Weekly Strikes", ImVec4(0.7f, 0.4f, 0.9f, 1.0f), suffix);
+        showSection = RenderClearSectionToggle(2, "Weekly Strikes", ImVec4(0.7f, 0.4f, 0.9f, 1.0f), suffix);
     }
 
+    if (showSection) {
     if (g_WeeklyStrikes.id == 0) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
@@ -2045,10 +2160,12 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             const char* zone = StrikeZone(name);
             std::string subtitle = "Strike Mission";
             if (zone && *zone) { subtitle += " \xC2\xB7 "; subtitle += zone; }
+            const std::string date = UpcomingBountyLabel(
+                name, g_DailyBounties, utcNow, weeklyEndUtc, g_ClearsFetched);
             RenderClearBanner(name, subtitle,
                 g_ClearsFetched, bitDone, StrikeTheme(name),
                 /*tooltip*/ nullptr, /*widthOverride*/ halfW,
-                /*bannerKey*/ "strike:" + name);
+                /*bannerKey*/ "strike:" + name, date);
             ImGui::PopID();
 
             // Place next banner on same row or move to next row
@@ -2066,16 +2183,20 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         }
     }
 
+    } // expanded section
+
     ImGui::Spacing();
     ImGui::Separator();
 
     // ---- Weekly Raids ----
+    bool showSection = true;
     {
         char suffix[64];
         snprintf(suffix, sizeof(suffix), "(resets in %s)", weeklyResetStr.c_str());
-        RenderSectionHeader("Weekly Raids", ImVec4(0.9f, 0.7f, 0.3f, 1.0f), suffix);
+        showSection = RenderClearSectionToggle(3, "Weekly Raids", ImVec4(0.9f, 0.7f, 0.3f, 1.0f), suffix);
     }
 
+    if (showSection) {
     if (g_WeeklyWings.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
@@ -2097,6 +2218,8 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 c.label = shortEnc;
                 c.fullName = wing.bitNames[i];
                 c.done = bitDone;
+                c.bountyDate = UpcomingBountyLabel(shortEnc, g_DailyBounties,
+                    utcNow, weeklyEndUtc, g_ClearsFetched);
                 chips.push_back(c);
                 totalCount++;
                 if (bitDone) doneCount++;
@@ -2112,10 +2235,11 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             ImGui::PopID();
         }
         ImGui::Unindent(4.0f);
-    }
+    }    } // expanded section
+
 }
 
-void RenderClears() {
+static void RenderClearsShared(bool showVault) {
     auto now = std::chrono::system_clock::now();
 
     auto dailyReset  = CalcLastDailyReset(now);
@@ -2196,19 +2320,12 @@ void RenderClears() {
         SendClearsAchQuery();
     }
 
-    // ---- Sub-tabs ----
-    std::string dailyResetStr  = FormatTimeUntilReset(dailyReset, std::chrono::hours(24));
+    std::string dailyResetStr = FormatTimeUntilReset(dailyReset, std::chrono::hours(24));
     std::string weeklyResetStr = FormatTimeUntilReset(weeklyReset, std::chrono::hours(24 * 7));
-
-    if (ImGui::BeginTabBar("##ClearsSubTabs")) {
-        if (ImGui::BeginTabItem("Vault")) {
-            RenderVaultTab(dailyResetStr, weeklyResetStr);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Clears")) {
-            RenderClearsTabContent(dailyResetStr, weeklyResetStr);
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-    }
+    if (showVault)
+        RenderVaultTab(dailyResetStr, weeklyResetStr);
+    else
+        RenderClearsTabContent(dailyResetStr, weeklyResetStr);
 }
+void RenderVault() { RenderClearsShared(true); }
+void RenderClears() { RenderClearsShared(false); }
