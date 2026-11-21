@@ -2172,13 +2172,13 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         ImGui::Unindent(4.0f);
     }
     if (g_ClearsFetched) {
-        std::vector<std::string> today'sT4;
+        std::vector<std::string> todaysT4;
         for (const auto& e : g_DailyFractals)
             if (e.tier == "T4")
-                today'sT4.push_back(ShortenFractalName(e.name));
+                todaysT4.push_back(ShortenFractalName(e.name));
         // Validate today's live dailies against the schedule first. If
         // anything differs or is incomplete, do not advertise a guess.
-        const auto* next = ClearsRotation::NextFractalsFromLive(today'sT4);
+        const auto* next = ClearsRotation::NextFractalsFromLive(todaysT4);
         const std::string date = ClearsRotation::DateLabel(
             (ClearsRotation::FloorDay(utcNow) + 1) * ClearsRotation::kDay);
         ImGui::Spacing();
