@@ -7022,6 +7022,8 @@ static void RenderPetPickerDialog() {
     if (!open) g_PetPickerSlot = -1;
 }
 
+static const char* InfusionAttributeLabel(const std::string& attribute);
+
 static void RenderGearCustomizeDialog() {
     if (!g_GearDialogOpen) return;
 
@@ -7605,6 +7607,103 @@ static void RenderGearCustomizeDialog() {
                     ImGui::PopID();
                 }
                 ImGui::EndChild();
+            }
+        }
+
+        else if (g_GearSelectorTab == 3 && !isRelic &&
+                 g_GearEditingInfusionIndex >= 0 &&
+                 g_GearEditingInfusionIndex < static_cast<int>(gs.infusion_ids.size())) {
+            // Edit one infusion requirement at a time. Names are searched
+            // locally from the existing item cache; a manual ID always works
+            // even if the catalog has not encountered that infusion yet.
+            const size_t index = static_cast<size_t>(g_GearEditingInfusionIndex);
+            gs.infusion_attributes.resize(gs.infusion_ids.size());
+            auto& attribute = gs.infusion_attributes[index];
+            const bool byAttribute = !attribute.empty();
+            ImGui::Text("Infusion slot %d", g_GearEditingInfusionIndex + 1);
+            if (ImGui::RadioButton("By Attribute", byAttribute)) {
+                if (!byAttribute) {
+                    attribute = "Power";
+                    gs.infusion_snapshot = true;
+                    commitGear();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Exact item", !byAttribute)) {
+                if (byAttribute) {
+                    attribute.clear(); // Never discard the original captured ID.
+                    g_GearExactInfusionId = static_cast<int>(gs.infusion_ids[index]);
+                    gs.infusion_snapshot = true;
+                    commitGear();
+                }
+            }
+            if (!attribute.empty()) {
+                ImGui::TextWrapped("Match any positive amount of this attribute. "
+                    "Agony resistance and cosmetic appearance are ignored.");
+                static constexpr struct { const char* key; const char* label; } choices[] = {
+                    {"Power", "Power"}, {"Precision", "Precision"},
+                    {"ConditionDamage", "Condition Damage"},
+                    {"ConditionDuration", "Expertise"},
+                    {"BoonDuration", "Concentration"},
+                    {"Healing", "Healing Power"},
+                    {"Toughness", "Toughness"}, {"Vitality", "Vitality"},
+                    {"CritDamage", "Ferocity"}
+                };
+                ImGui::BeginChild("##infusionAttributes", ImVec2(0, -30), true);
+                for (const auto& choice : choices) {
+                    if (g_GearStatSearch[0]) {
+                        std::string needle = g_GearStatSearch;
+                        std::string label = choice.label;
+                        std::transform(needle.begin(), needle.end(), needle.begin(),
+                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                        std::transform(label.begin(), label.end(), label.begin(),
+                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                        if (label.find(needle) == std::string::npos) continue;
+                    }
+                    if (ImGui::Selectable(choice.label, attribute == choice.key)) {
+                        attribute = choice.key;
+                        gs.infusion_snapshot = true;
+                        commitGear();
+                    }
+                }
+                ImGui::EndChild();
+            } else {
+                const uint32_t exactId = gs.infusion_ids[index];
+                const auto* exactInfo = exactId
+                    ? AlterEgo::GW2API::GetItemInfo(exactId) : nullptr;
+                ImGui::TextWrapped("Exact ID: %u (%s)", exactId,
+                    exactInfo ? exactInfo->name.c_str() : "name not cached");
+                ImGui::SetNextItemWidth(130.0f);
+                ImGui::InputInt("Item ID", &g_GearExactInfusionId, 0, 0);
+                if (g_GearExactInfusionId > 0 && ImGui::Button("Set exact ID")) {
+                    gs.infusion_ids[index] = static_cast<uint32_t>(g_GearExactInfusionId);
+                    gs.infusion_snapshot = true;
+                    AlterEgo::GW2API::FetchItemDetailsAsync({gs.infusion_ids[index]});
+                    commitGear();
+                }
+                ImGui::TextDisabled("Search infusions already found in the item cache:");
+                if (g_GearStatSearch[0]) {
+                    const auto entries = AlterEgo::GW2API::SearchKnownInfusions(
+                        g_GearStatSearch, 100);
+                    ImGui::BeginChild("##knownInfusions", ImVec2(0, -30), true);
+                    for (const auto& entry : entries) {
+                        const std::string itemLabel = entry.first + " (ID " +
+                            std::to_string(entry.second) + ")";
+                        if (ImGui::Selectable(itemLabel.c_str(),
+                            gs.infusion_ids[index] == entry.second)) {
+                            gs.infusion_ids[index] = entry.second;
+                            g_GearExactInfusionId = static_cast<int>(entry.second);
+                            gs.infusion_snapshot = true;
+                            AlterEgo::GW2API::FetchItemDetailsAsync({entry.second});
+                            commitGear();
+                        }
+                    }
+                    if (entries.empty())
+                        ImGui::TextDisabled("No cached matches. Enter an item ID instead.");
+                    ImGui::EndChild();
+                } else {
+                    ImGui::TextDisabled("Use Search above to filter known infusion names.");
+                }
             }
         }
 
