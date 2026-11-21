@@ -8077,8 +8077,6 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
 
 // Render the full gear section for a saved build
 static void RenderBuildGearPanel(AlterEgo::SavedBuild& build) {
-    RenderSectionHeader("Gear", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-
     if (ImGui::BeginTable("##buildGear", 2, ImGuiTableFlags_None)) {
         ImGui::TableSetupColumn("##gearLeft", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("##gearRight", ImGuiTableColumnFlags_WidthStretch);
@@ -8948,9 +8946,9 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build, bool show
     }
 
     ImGui::Spacing();
-    ImGui::Separator();
+    ImGui::Spacing();
 
-    // Gear section (clickable slots to customize stats/runes/sigils)
+    // Gear slots are already grouped as Armor, Weapons, and Trinkets.
     RenderBuildGearPanel(g_LibEditMode ? g_EditDraft
                                        : const_cast<AlterEgo::SavedBuild&>(build));
 
@@ -15610,7 +15608,7 @@ void AddonRender() {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Build Library")) {
+        if (ImGui::BeginTabItem("Builds")) {
             g_MainTab = 1;
             RenderBuildLibrary();
             ImGui::EndTabItem();
