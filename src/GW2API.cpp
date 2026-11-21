@@ -30,6 +30,10 @@ namespace AlterEgo {
         std::atomic<long long> g_busyRetryAtMs{0};
         std::atomic<uint64_t> g_characterDataRevision{1};
         std::atomic<uint64_t> g_buildLibraryRevision{1};
+        // A manual character refresh also refreshes crafting; a debounced
+        // automatic equipment/spec refresh reuses persisted crafting details.
+        // Access only while s_mutex is held.
+        bool g_refreshCraftingForRequest = true;
 
         long long NowMs() {
             return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -505,6 +509,7 @@ namespace AlterEgo {
             s_chars_fetched = 0;
             s_chars_total = 0;
             s_priority_char_name = priorityChar;
+            g_refreshCraftingForRequest = true; // Full explicit refresh
             s_list_only_mode = false;
             s_fetch_message = "Requesting character list from H&S...";
         }
@@ -620,7 +625,8 @@ namespace AlterEgo {
         s_api->Events_Raise(EV_HOARD_QUERY_API, &req);
     }
 
-    void GW2API::RequestCharacterRefreshSelected(const std::vector<std::string>& names) {
+    void GW2API::RequestCharacterRefreshSelected(
+        const std::vector<std::string>& names, bool refreshCrafting) {
         if (!s_api || names.empty()) return;
 
         {
@@ -630,6 +636,7 @@ namespace AlterEgo {
             if (s_fetch_status == FetchStatus::InProgress) return;
             s_fetch_status = FetchStatus::InProgress;
             s_pending_char_names = names;
+            g_refreshCraftingForRequest = refreshCrafting;
             s_pending_char_idx = 0;
             s_chars_total = (int)names.size();
             s_chars_fetched = 0;
@@ -1171,6 +1178,7 @@ namespace AlterEgo {
                     if (cj.contains("crafting") && cj["crafting"].is_array())
                         craftArr = cj["crafting"];
                     if (craftArr.is_array()) {
+                        s_current_char.crafting_cached = true;
                         // Collect active first, then inactive, all with rating >= 1
                         std::vector<std::tuple<std::string, int, bool>> allCrafts;
                         for (const auto& craft : craftArr) {
@@ -1249,10 +1257,26 @@ namespace AlterEgo {
                     s_fetch_phase = 4;
                     s_fetch_message = s_current_char.name + ": Fetching builds...";
                     break;
-                case 4: // buildtabs done → crafting
-                    s_fetch_phase = 5;
-                    s_fetch_message = s_current_char.name + ": Fetching crafting...";
+                case 4: { // buildtabs done → crafting, or reuse the persisted snapshot
+                    bool reusedCrafting = false;
+                    if (!g_refreshCraftingForRequest) {
+                        for (const auto& cached : s_characters) {
+                            if (cached.name != s_current_char.name ||
+                                !cached.crafting_cached) continue;
+                            s_current_char.crafting = cached.crafting;
+                            s_current_char.crafting_levels = cached.crafting_levels;
+                            s_current_char.crafting_active = cached.crafting_active;
+                            s_current_char.crafting_cached = true;
+                            reusedCrafting = true;
+                            break;
+                        }
+                    }
+                    s_fetch_phase = reusedCrafting ? 6 : 5;
+                    s_fetch_message = s_current_char.name +
+                        (reusedCrafting ? ": Fetching hero challenges..."
+                                       : ": Fetching crafting...");
                     break;
+                }
                 case 5: // crafting done → heropoints
                     s_fetch_phase = 6;
                     s_fetch_message = s_current_char.name + ": Fetching hero challenges...";
@@ -1456,6 +1480,7 @@ namespace AlterEgo {
         ch.active_equipment_tab = cj.value("active_equipment_tab", 0);
 
         if (cj.contains("crafting") && cj["crafting"].is_array()) {
+            ch.crafting_cached = true;
             std::vector<std::tuple<std::string, int, bool>> allCrafts;
             for (const auto& craft : cj["crafting"]) {
                 int rating = craft.value("rating", 0);
@@ -2301,6 +2326,7 @@ namespace AlterEgo {
                 cj["created"] = ch.created;
                 cj["last_modified"] = ch.last_modified;
                 cj["deaths"] = ch.deaths;
+                cj["crafting_cached"] = ch.crafting_cached;
                 if (!ch.crafting.empty()) {
                     json craft_arr = json::array();
                     for (size_t ci = 0; ci < ch.crafting.size(); ci++) {
@@ -2421,6 +2447,9 @@ namespace AlterEgo {
                     ch.created = cj.value("created", "");
                     ch.last_modified = cj.value("last_modified", "");
                     ch.deaths = cj.value("deaths", 0);
+                    // Older character caches contain crafting arrays but no
+                    // explicit fetched marker. Keep them valid automatically.
+                    ch.crafting_cached = cj.value("crafting_cached", cj.contains("crafting"));
                     if (cj.contains("crafting") && cj["crafting"].is_array()) {
                         for (const auto& craft : cj["crafting"]) {
                             ch.crafting.push_back(craft.value("discipline", ""));
