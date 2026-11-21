@@ -149,6 +149,12 @@ inline bool IsGearComparisonGroup(const std::string& group) {
            group == "Infusions" || group == "Relic" ||
            group == "Exact item IDs";
 }
+// The Characters page summarizes equipment suitability without treating
+// interchangeable infusion slots as incorrect gear. The dedicated Compare
+// tab still reports every infusion ID difference as before.
+inline bool IsCharacterEquipmentMatchGroup(const std::string& group) {
+    return IsGearComparisonGroup(group) && group != "Infusions";
+}
 inline bool IsSkillComparisonGroup(const std::string& group) {
     return group == "Terrestrial skills" || group == "Aquatic skills";
 }

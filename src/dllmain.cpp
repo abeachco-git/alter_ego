@@ -3058,6 +3058,25 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 AlterEgo::IconManager::RequestIcon(display_id, icon_url);
         }
 
+        // Same infusion-count badge as the saved Build Library gear view.
+        // This is display-only; all equipment comparison remains separate.
+        size_t infusionCount = 0;
+        for (uint32_t id : eq->infusions)
+            if (id != 0) ++infusionCount;
+        if (infusionCount > 0) {
+            const std::string marker = "Inf " + std::to_string(infusionCount);
+            const ImVec2 ts = ImGui::CalcTextSize(marker.c_str());
+            const ImVec2 pos = ImGui::GetItemRectMin();
+            const ImVec2 badgePos(pos.x + ICON_SIZE - ts.x - 5.0f,
+                                  pos.y + ICON_SIZE - ts.y - 3.0f);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(
+                ImVec2(badgePos.x - 3.0f, badgePos.y - 1.0f),
+                ImVec2(pos.x + ICON_SIZE - 1.0f, pos.y + ICON_SIZE - 1.0f),
+                IM_COL32(22, 27, 34, 235), 2.0f);
+            dl->AddText(badgePos, IM_COL32(160, 225, 255, 255), marker.c_str());
+        }
+
         // Tooltip
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
@@ -3129,12 +3148,19 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 }
             }
 
-            // Infusions (name only)
-            for (auto inf_id : eq->infusions) {
-                if (inf_id == 0) continue;
-                const auto* iinfo = AlterEgo::GW2API::GetItemInfo(inf_id);
-                if (iinfo) {
-                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "%s", iinfo->name.c_str());
+            // Show the recorded infusion slots, including IDs whose public
+            // item metadata hasn't loaded yet.
+            if (infusionCount > 0) {
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.62f, 0.88f, 1.0f, 1.0f),
+                    "Infusions (%zu)", infusionCount);
+                for (uint32_t id : eq->infusions) {
+                    if (id == 0) continue;
+                    const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+                    if (info && !info->name.empty())
+                        ImGui::BulletText("%s", info->name.c_str());
+                    else
+                        ImGui::BulletText("Infusion #%u", id);
                 }
             }
 
@@ -9358,7 +9384,9 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
         bool requiredDataMissing = false;
         size_t checkedGearFields = 0, differentGearFields = 0, missingItems = 0;
         for (const auto& row : result.Rows()) {
-            if (!AlterEgo::IsGearComparisonGroup(row.group)) continue;
+            // General character summary intentionally ignores infusion
+            // mismatches; Compare remains the authoritative detailed view.
+            if (!AlterEgo::IsCharacterEquipmentMatchGroup(row.group)) continue;
             if (!row.verified) {
                 requiredDataMissing = true;
                 continue;

@@ -91,6 +91,26 @@ int main() {
         GearMatchCandidate{GearMatchStatus::NotVerified, 0, 0, 12, 15}, unknown));
 
 
+    // Infusions remain a detailed Compare-only mismatch, not a reason
+    // to flag equipment incorrect in the Characters summary.
+    assert(AlterEgo::IsGearComparisonGroup("Infusions"));
+    assert(!AlterEgo::IsCharacterEquipmentMatchGroup("Infusions"));
+    assert(AlterEgo::IsCharacterEquipmentMatchGroup("Equipment stats"));
+    assert(AlterEgo::IsCharacterEquipmentMatchGroup("Upgrades"));
+    assert(AlterEgo::IsCharacterEquipmentMatchGroup("Relic"));
+    AlterEgo::BuildComparison infusionMismatch;
+    infusionMismatch.Add("Equipment stats", "Ring1", "161", "161", "Berserker", "Berserker");
+    infusionMismatch.Add("Infusions", "Ring1", "1", "2", "Infusion A", "Infusion B");
+    size_t characterMismatches = 0, detailedMismatches = 0;
+    for (const auto& row : infusionMismatch.Rows()) {
+        if (AlterEgo::IsGearComparisonGroup(row.group) && !row.matches)
+            ++detailedMismatches;
+        if (AlterEgo::IsCharacterEquipmentMatchGroup(row.group) && !row.matches)
+            ++characterMismatches;
+    }
+    assert(detailedMismatches == 1);
+    assert(characterMismatches == 0);
+
     // Saved Build Library recognition: a confirmed change restricted to
     // heal/utility/elite skills can be a near-match once gear matches.
     using AlterEgo::TemplateMatchStatus;
