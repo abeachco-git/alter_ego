@@ -24,6 +24,7 @@
 #include "ClearsRotation.h"
 #include "FractalScales.h"
 #include "CompletionTheme.h"
+#include "RefreshUI.h"
 #include "WikiImage.h"
 
 // =========================================================================
@@ -57,6 +58,8 @@ static std::string g_ClearsStatusMsg;
 static std::chrono::system_clock::time_point g_LastDailyReset{};
 static std::chrono::system_clock::time_point g_LastWeeklyReset{};
 static std::chrono::steady_clock::time_point g_LastClearsCompletionQuery{};
+static std::time_t g_ClearsLastSuccessTime = 0;
+static std::chrono::steady_clock::time_point g_ClearsSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 static std::atomic<long long> g_ClearsRetryAtMs{0};
 
@@ -91,6 +94,13 @@ static VaultPeriod g_VaultWeekly;
 static VaultPeriod g_VaultSpecial;
 static bool g_VaultFetched = false;
 static bool g_VaultFetching = false;
+static bool g_VaultInitialAttempted = false;
+static bool g_VaultResponsesOK[3] = {};
+static VaultPeriod g_VaultPending[3];
+static std::time_t g_VaultLastSuccessTime = 0;
+static std::string g_VaultStatusMessage;
+static bool g_VaultLastAttemptFailed = false;
+static std::chrono::steady_clock::time_point g_VaultSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 static std::atomic<long long> g_VaultRetryAtMs{0};
 bool g_VaultNeedRequery = false;
@@ -324,6 +334,8 @@ void OnClearsAchResponse(void* eventArgs) {
         g_ClearsFetched = true;
         g_ClearsFetching = false;
         g_ClearsStatusMsg = "";
+        g_ClearsLastSuccessTime = std::time(nullptr);
+        g_ClearsSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
         g_LastClearsCompletionQuery = std::chrono::steady_clock::now();
     }
 
@@ -504,7 +516,7 @@ static void FetchClears() {
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_ClearsStatusMsg = "Fetching achievement data...";
-        g_ClearsFetched = false;
+        // Keep successfully cached data displayed during a refresh.
     }
 
     std::thread([]() {
@@ -594,7 +606,7 @@ static void SaveClearsCache() {
     // Store fetch timestamp as seconds since epoch
     auto epochSecs = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    j["fetch_time"] = epochSecs;
+    j["fetch_time"] = g_ClearsLastSuccessTime > 0 ? (int64_t)g_ClearsLastSuccessTime : (int64_t)epochSecs;
 
     auto serializeEntry = [](const ClearEntry& e) -> nlohmann::json {
         nlohmann::json ej;
@@ -661,6 +673,7 @@ void LoadClearsCache() {
 
         int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
         auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
+        g_ClearsLastSuccessTime = (std::time_t)fetchEpoch;
 
         // Check if a reset has occurred since the cached data was fetched
         // Add 60s buffer so we don't treat cache as stale before the API has updated
@@ -779,7 +792,7 @@ static void SaveVaultCache() {
         std::chrono::system_clock::now().time_since_epoch()).count();
 
     nlohmann::json j;
-    j["fetch_time"] = epochSecs;
+    j["fetch_time"] = (int64_t)g_VaultLastSuccessTime;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         j["daily"]      = serializePeriod(g_VaultDaily);
@@ -824,6 +837,7 @@ void LoadVaultCache() {
         auto j = nlohmann::json::parse(file);
         int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
         auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
+        g_VaultLastSuccessTime = (std::time_t)fetchEpoch;
 
         auto now         = std::chrono::system_clock::now();
         auto dailyReset  = CalcLastDailyReset(now)  + std::chrono::seconds(60);
