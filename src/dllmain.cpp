@@ -9428,7 +9428,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
             "Cached specialization may be outdated (hover for details)");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Live: %s (#%u) | Retrieved: %s (#%u)\\nRefresh character data to update.",
+            ImGui::SetTooltip("Live: %s (#%u) | Retrieved: %s (#%u)\nRefresh character data to update.",
                 GetSpecNameForWarning(currentId), currentId,
                 GetSpecNameForWarning(cachedId), cachedId);
     }
@@ -9484,10 +9484,6 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
 
     const auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetchStatus == AlterEgo::FetchStatus::InProgress;
-    if (busy) {
-        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-    }
     ImGui::Text("%zu differences", result.DifferenceCount());
     ImGui::SameLine();
     ImGui::TextDisabled("· %zu unverified · %zu fields",
@@ -9495,17 +9491,21 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Saved vs. retrieved Hoard & Seek character data.\\n"
-                          "Unknown legacy fields are skipped rather than counted as matches.\\n"
+        ImGui::SetTooltip("Saved vs. retrieved Hoard & Seek character data.\n"
+                          "Unknown legacy fields are skipped rather than counted as matches.\n"
                           "Unverified fields lack enough API data to determine a match.");
     ImGui::SameLine();
     const float refreshW = ImGui::CalcTextSize("Refresh").x +
         2.0f * ImGui::GetStyle().FramePadding.x + 12.0f;
     ImGui::SetCursorPosX(ImMax(ImGui::GetCursorPosX(),
         ImGui::GetWindowContentRegionMax().x - refreshW));
+    if (busy) {
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+    }
     const bool clicked = ImGui::Button("Refresh##compare");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Re-fetch this character from Hoard & Seek.\\n"
+        ImGui::SetTooltip("Re-fetch this character from Hoard & Seek.\n"
                           "Data is cached and may lag behind changes in game.");
     if (busy) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     if (clicked && !busy) {
@@ -9883,7 +9883,8 @@ static void RenderBuildLibrary() {
         ImGui::Spacing();
         ImGui::TextUnformatted("Build code or link");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputText("##import_link", g_LibImportBuf, sizeof(g_LibImportBuf));
+        ImGui::InputTextMultiline("##import_link", g_LibImportBuf,
+            sizeof(g_LibImportBuf), ImVec2(-1.0f, 75.0f));
 
         ImGui::TextUnformatted("Build name");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -9925,6 +9926,7 @@ static void RenderBuildLibrary() {
                     if (!name.empty()) sharedBuild.name = name;
                     int newIdx = AlterEgo::GW2API::AddSavedBuild(std::move(sharedBuild));
                     g_LibShowImport = false;
+                    ImGui::CloseCurrentPopup();
                     g_LibImportBuf[0] = '\0';
                     g_LibImportName[0] = '\0';
                     g_LibImportError.clear();
@@ -9969,6 +9971,7 @@ static void RenderBuildLibrary() {
                                             GameModeFromIndex(g_LibImportMode), build)) {
                                         int newIdx = AlterEgo::GW2API::AddSavedBuild(std::move(build));
                                         g_LibShowImport = false;
+                                        ImGui::CloseCurrentPopup();
                                         g_LibImportBuf[0] = '\0';
                                         g_LibImportName[0] = '\0';
                                         g_LibImportError.clear();
