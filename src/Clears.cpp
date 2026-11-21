@@ -350,11 +350,20 @@ void OnClearsAchResponse(void* eventArgs) {
 static void FetchVaultData() {
     if (g_VaultFetching || !APIDefs) return;
     g_VaultFetching = true;
-    g_VaultFetched = false;
+    g_VaultInitialAttempted = true;
+    g_VaultLastAttemptFailed = false;
+    g_VaultStatusMessage = "Contacting Hoard & Seek...";
+    for (int i = 0; i < 3; ++i) {
+        g_VaultResponsesOK[i] = false;
+        g_VaultPending[i] = {};
+    }
 
     std::string acctName = GetEffectiveAccountName();
-    // H&S dispatches synchronously — responses handled inline inside Events_Raise
+    // H&S responds synchronously via Nexus events. Stage all three periods;
+    // only commit and timestamp a complete, successful set.
     for (uint8_t type = 0; type <= 2; type++) {
+        g_VaultStatusMessage = type == 0 ? "Fetching daily objectives..."
+            : type == 1 ? "Fetching weekly objectives..." : "Fetching special objectives...";
         HoardQueryWizardsVaultRequest req{};
         req.api_version = HOARD_API_VERSION;
         strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
@@ -364,22 +373,36 @@ static void FetchVaultData() {
             strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
         APIDefs->Events_Raise(EV_HOARD_QUERY_WIZARDSVAULT, &req);
     }
-
-    // Also fetch season info (for the special objectives end date)
-    {
-        HoardQueryApiRequest req{};
-        req.api_version = HOARD_API_VERSION;
-        strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
-        strncpy(req.endpoint, "/v2/wizardsvault", sizeof(req.endpoint) - 1);
-        strncpy(req.response_event, EV_AE_VAULT_SEASON_RESP, sizeof(req.response_event) - 1);
-        if (!acctName.empty())
-            strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
-        APIDefs->Events_Raise(EV_HOARD_QUERY_API, &req);
+    const bool complete = g_VaultResponsesOK[0] && g_VaultResponsesOK[1] && g_VaultResponsesOK[2];
+    if (complete) {
+        {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            g_VaultDaily = std::move(g_VaultPending[0]);
+            g_VaultWeekly = std::move(g_VaultPending[1]);
+            g_VaultSpecial = std::move(g_VaultPending[2]);
+            g_VaultFetched = true;
+            g_VaultLastSuccessTime = std::time(nullptr);
+        }
+        g_VaultStatusMessage = "Refresh complete";
+        g_VaultSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        SaveVaultCache();
+    } else {
+        g_VaultLastAttemptFailed = true;
+        g_VaultStatusMessage = g_VaultRetryAtMs.load() != 0
+            ? "Hoard & Seek busy - retrying shortly..."
+            : "Refresh failed - one or more objective requests failed";
     }
-
     g_VaultFetching = false;
-    g_VaultFetched = true;
-    SaveVaultCache();
+
+    // Season-end metadata is optional and must not mark a failed Vault fetch successful.
+    HoardQueryApiRequest req{};
+    req.api_version = HOARD_API_VERSION;
+    strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
+    strncpy(req.endpoint, "/v2/wizardsvault", sizeof(req.endpoint) - 1);
+    strncpy(req.response_event, EV_AE_VAULT_SEASON_RESP, sizeof(req.response_event) - 1);
+    if (!acctName.empty())
+        strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
+    APIDefs->Events_Raise(EV_HOARD_QUERY_API, &req);
 }
 
 void OnVaultSeasonResponse(void* eventArgs) {
@@ -440,12 +463,9 @@ void OnVaultResponse(void* eventArgs) {
         period.objectives.push_back(std::move(obj));
     }
 
-    std::lock_guard<std::mutex> lock(g_ClearsMutex);
-    switch (resp->type) {
-        case 0: g_VaultDaily   = std::move(period); break;
-        case 1: g_VaultWeekly  = std::move(period); break;
-        case 2: g_VaultSpecial = std::move(period); break;
-    }
+    if (!g_VaultFetching || resp->type > 2) return;
+    g_VaultPending[resp->type] = std::move(period);
+    g_VaultResponsesOK[resp->type] = true;
 }
 
 // Helper: fetch a category's achievement IDs from public API
