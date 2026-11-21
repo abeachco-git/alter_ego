@@ -14303,7 +14303,9 @@ static void PollAutoCharacterRefresh() {
     if (g_AutoRefreshTracker.TakeDueRequest(
             AlterEgo::AutoRefreshTracker::Clock::now(),
             g_AutoRefreshEnabled, ready, busy, name)) {
-        AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+        // Login/spec-change refreshes need equipment and builds, not crafting
+        // professions that are already present in the persistent character cache.
+        AlterEgo::GW2API::RequestCharacterRefreshSelected({name}, false);
     }
 }
 
