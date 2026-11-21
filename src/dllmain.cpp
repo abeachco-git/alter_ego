@@ -42,6 +42,7 @@
 #include "AddonShared.h"
 #include "Clears.h"
 #include "CompletionTheme.h"
+#include "RefreshUI.h"
 
 // Version constants
 #define V_MAJOR 1
@@ -15351,6 +15352,13 @@ void AddonRender() {
                         snprintf(meta, sizeof(meta), "LV %d  -  %s  -  %s",
                             ch.level, raceUp.c_str(), profUp.c_str());
                         ImGui::TextColored(ImVec4(0.55f, 0.50f, 0.40f, 1.0f), "%s", meta);
+                        const std::string buildFreshness = ch.data_refreshed > 0
+                            ? "Build data updated " + AlterEgo::RefreshUI::Age(ch.data_refreshed)
+                            : "Build data update time unavailable";
+                        ImGui::TextDisabled("%s", buildFreshness.c_str());
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Last successful character snapshot from Hoard & Seek.\\n"
+                                              "This is not the date the build changed in GW2.");
                         ImGui::PopTextWrapPos();
                         ImGui::EndGroup();
 
