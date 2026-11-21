@@ -15,6 +15,7 @@
 #include <array>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include <nlohmann/json.hpp>
 #include "GW2API.h"
 #include "HoardAndSeekAPI.h"
