@@ -8240,14 +8240,8 @@ static void RenderBuildModeBadge(const char* mode) {
 }
 
 // Render the build preview panel for a saved build (reuses spec/trait rendering logic)
-static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build, bool showEditButton = false) {
-    // Try to resolve any placeholder traits (negative values from import without spec cache)
-    // Safe to cast: we only mutate trait values from negative to positive
-    ResolveBuildTraitPlaceholders(const_cast<AlterEgo::SavedBuild&>(build));
-    // Re-resolve any item/stat names that weren't available at import time
-    // (e.g. API rate-limited or offline). Queues async fetches for missing IDs.
-    ResolveBuildItemNames(const_cast<AlterEgo::SavedBuild&>(build));
-
+// Fixed build identity and actions; kept outside the scrolling detail child.
+static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showEditButton = true) {
     ImVec4 profColor = GetProfessionColor(build.profession);
     {
         // Detect elite spec — use its icon and name in the header when present
@@ -8484,6 +8478,16 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build, bool show
 
         ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h + 4));
     }
+
+}
+
+static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
+    // Try to resolve any placeholder traits (negative values from import without spec cache)
+    // Safe to cast: we only mutate trait values from negative to positive
+    ResolveBuildTraitPlaceholders(const_cast<AlterEgo::SavedBuild&>(build));
+    // Re-resolve any item/stat names that weren't available at import time
+    // (e.g. API rate-limited or offline). Queues async fetches for missing IDs.
+    ResolveBuildItemNames(const_cast<AlterEgo::SavedBuild&>(build));
 
     // Notes editor, just under the header, while editing.
     if (g_LibEditMode) {
@@ -10335,9 +10339,15 @@ static void RenderBuildLibrary() {
         // while actively editing (that would clobber unsaved changes).
         if (!g_LibEditMode && g_EditDraftId != build.id) { g_EditDraft = build; g_EditDraftId = build.id; }
 
+        // Build identity and actions never scroll away. Only the detail
+        // section below has a scroll bar.
+        RenderSavedBuildHeader(build, /*showEditButton=*/true);
+        ImGui::Separator();
+        ImGui::BeginChild("##LibDetailScroll", ImVec2(0, 0), false);
+
         if (!g_LibEditMode) {
-            // Read-only: notes (if any) above the preview. Edit button is
-            // drawn inside the preview header's top-right.
+            // Read-only notes above the scrollable preview. Action buttons
+            // remain visible in the pinned build header.
             if (!build.notes.empty()) {
                 ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "Notes:");
                 ImGui::SameLine();
@@ -10365,18 +10375,9 @@ static void RenderBuildLibrary() {
         }
 
         ImGui::Separator();
+        RenderSavedBuildPreview(build);
+        ImGui::EndChild(); // ##LibDetailScroll
 
-        RenderSavedBuildPreview(build, /*showEditButton=*/true);
-        if (!g_LibEditMode && ImGui::Button("Compare to Retrieved Character...##lib")) {
-            // Pass this build to the dedicated Compare tab; never change the saved build.
-            if (g_LibCompareBuildId != build.id) {
-                g_LibCompareChar.clear();
-                g_LibCompareBuildTab = -1;
-                g_LibCompareEquipTab = 0;
-            }
-            g_LibCompareBuildId = build.id;
-            g_SwitchToCompare = true;
-        }
 
         // Deferred: a cancelled brand-new build is removed here, after the preview
         // has finished using `build` (removing it mid-draw would dangle the ref).
