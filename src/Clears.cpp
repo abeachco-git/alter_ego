@@ -1288,6 +1288,34 @@ static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
 
         const int slots = card.recommended ? 3 : 4;
         ImGui::PushID(static_cast<int>(i));
+        // The card title is a hover target as well as its individual chips.
+        // Keep this hit box entirely to the left of the first tier chip.
+        ImGui::SetCursorScreenPos(ImVec2(cmin.x + 5.0f, cmin.y));
+        const float titleWidth = chipStart - cmin.x - 12.0f;
+        if (titleWidth > 1.0f) {
+            ImGui::InvisibleButton("##fractalCardTitle",
+                ImVec2(titleWidth, cardHeight));
+            if (ImGui::IsItemHovered()) {
+                std::string info;
+                if (!card.recommended) {
+                    info = FractalScales::DailyTooltip(card.title);
+                } else {
+                    info = "Recommended";
+                    for (int tier = 0; tier < 3; ++tier) {
+                        const ClearEntry* rec = card.entries[tier];
+                        if (!rec) continue;
+                        const int scale = RecommendedFractalScale(*rec);
+                        const char* canonical = FractalScales::NameForScale(scale);
+                        const std::string name = canonical ? canonical :
+                            ShortenFractalName(rec->name);
+                        info += "\\nT" + std::to_string(tier + 1) +
+                            " (" + (scale > 0 ? std::to_string(scale) : "?") +
+                            ") " + name;
+                    }
+                }
+                ImGui::SetTooltip("%s", info.c_str());
+            }
+        }
         for (int tier = 0; tier < slots; ++tier) {
             const ClearEntry* entry = card.entries[tier];
             const bool done = fetched && entry && entry->done;
@@ -1314,19 +1342,26 @@ static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
             ImGui::PushID(tier);
             ImGui::InvisibleButton("##fractalStatus", ImVec2(chipWidth, chipHeight));
             if (ImGui::IsItemHovered()) {
-                if (!entry)
-                    ImGui::SetTooltip("%s - %s: data unavailable",
-                        card.title.c_str(),
-                        card.recommended ? "Recommended" : card.labels[tier].c_str());
-                else if (card.recommended) {
-                    const std::string full = ShortenFractalName(entry->name);
-                    ImGui::SetTooltip("T%d Recommended: %s (%s)",
-                        tier + 1, full.c_str(),
-                        !fetched ? "progress unknown" : done ? "completed" : "remaining");
-                } else
-                    ImGui::SetTooltip("%s - %s: %s", card.title.c_str(),
-                        card.labels[tier].c_str(),
-                        !fetched ? "progress unknown" : done ? "completed" : "remaining");
+                // Daily: the map name and every qualifying tier scale.
+                // Recommended: only the exact numbered scale grants credit.
+                std::string info;
+                if (card.recommended) {
+                    const int scale = entry ? RecommendedFractalScale(*entry) : 0;
+                    const char* canonical = FractalScales::NameForScale(scale);
+                    const std::string name = canonical ? canonical :
+                        (entry ? ShortenFractalName(entry->name) : "Unknown");
+                    info = "Recommended\\nT" + std::to_string(tier + 1) +
+                        " (" + (scale > 0 ? std::to_string(scale) : "?") +
+                        ") " + name;
+                } else {
+                    info = FractalScales::DailyTooltip(card.title);
+                    info += "\\nSelected: " +
+                        FractalScales::TierScales(card.title, tier + 1);
+                }
+                info += !entry ? "\\nNo objective data" :
+                    !fetched ? "\\nProgress unknown" :
+                    done ? "\\nCompleted" : "\\nRemaining";
+                ImGui::SetTooltip("%s", info.c_str());
             }
             ImGui::PopID();
         }
@@ -2187,19 +2222,27 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                     for (int i = 0; i < 3; ++i) {
                         ImGui::TableSetColumnIndex(i + 1);
                         ImGui::TextUnformatted(next->dailies[i]);
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("%s", next->dailies[i]);
+                        if (ImGui::IsItemHovered()) {
+                            const std::string info =
+                                FractalScales::DailyTooltip(next->dailies[i]);
+                            ImGui::SetTooltip("%s", info.c_str());
+                        }
                     }
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Recommended");
                     for (int i = 0; i < 3; ++i) {
                         ImGui::TableSetColumnIndex(i + 1);
+                        // Match the current Recommended tooltip ordering:
+                        // tier, exact scale in parentheses, fractal name.
                         const std::string label = "T" + std::to_string(i + 1) +
-                            " " + std::to_string(next->recScales[i]) + " " +
+                            " (" + std::to_string(next->recScales[i]) + ") " +
                             next->recNames[i];
                         ImGui::TextUnformatted(label.c_str());
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("%s", label.c_str());
+                        if (ImGui::IsItemHovered()) {
+                            const std::string info = "Recommended\\n" + label +
+                                "\\nSpecific scale required";
+                            ImGui::SetTooltip("%s", info.c_str());
+                        }
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndTable();

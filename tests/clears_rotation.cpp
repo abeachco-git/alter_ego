@@ -50,6 +50,16 @@ int main() {
     assert(FractalScales::ForTier("Aetherblade", 4) == std::vector<int>{92});
     assert(FractalScales::ForTier("Solitary Throne", 3) == std::vector<int>{64});
     assert(FractalScales::ForTier("Volcanic", 1) == std::vector<int>{1});
+    // Current rotation's recommended scales and names must remain aligned.
+    for (int i = 0; i < 15; ++i) {
+        const auto& set = Fractals(i);
+        for (int j = 0; j < 3; ++j) {
+            const char* actual = FractalScales::NameForScale(set.recScales[j]);
+            assert(actual != nullptr);
+            assert(FractalScales::Normalized(actual) ==
+                   FractalScales::Normalized(set.recNames[j]));
+        }
+    }
     assert(FractalScales::DailyTooltip("Sunqua Peak").find("T4 (98)") != std::string::npos);
     for (int scale = 1; scale <= 100; ++scale)
         assert(FractalScales::NameForScale(scale) != nullptr);
