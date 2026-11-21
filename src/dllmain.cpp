@@ -1314,6 +1314,7 @@ static bool g_LibCompareExactItems = false;
 static bool g_LibCompareRefreshPending = false;
 static std::string g_LibCompareRefreshChar;
 static std::string g_LibCompareRefreshResult;
+static std::chrono::steady_clock::time_point g_LibCompareSuccessUntil{};
 
 // Compute days until next character birthday from ISO date string (e.g. "2013-06-25T...")
 // Returns -1 if the date can't be parsed. Returns 0 on the birthday itself.
@@ -9520,9 +9521,10 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     }
     if (g_LibCompareRefreshPending && fetchStatus != AlterEgo::FetchStatus::InProgress) {
         g_LibCompareRefreshPending = false;
-        if (fetchStatus == AlterEgo::FetchStatus::Success)
+        if (fetchStatus == AlterEgo::FetchStatus::Success) {
             g_LibCompareRefreshResult = "Refresh complete (Hoard & Seek data may lag behind GW2)";
-        else if (fetchStatus == AlterEgo::FetchStatus::Error)
+            g_LibCompareSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        } else if (fetchStatus == AlterEgo::FetchStatus::Error)
             g_LibCompareRefreshResult = "Refresh failed: " + AlterEgo::GW2API::GetFetchStatusMessage();
         else
             g_LibCompareRefreshResult = "Refresh stopped before completion";
@@ -9533,8 +9535,12 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     } else if (!g_LibCompareRefreshResult.empty() && g_LibCompareRefreshChar == character->name) {
         const bool error = g_LibCompareRefreshResult.find("failed") != std::string::npos ||
             g_LibCompareRefreshResult.find("stopped") != std::string::npos;
-        AlterEgo::RefreshUI::Status(error ? AlterEgo::RefreshUI::State::Error
-            : AlterEgo::RefreshUI::State::Success, g_LibCompareRefreshResult);
+        if (error)
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_LibCompareRefreshResult);
+        else if (std::chrono::steady_clock::now() < g_LibCompareSuccessUntil)
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, g_LibCompareRefreshResult);
+        else
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready");
     } else {
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready");
     }
