@@ -9722,25 +9722,50 @@ static void RenderCompareTab() {
 static void RenderBuildLibrary() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
-    // Import toggle button
-    if (RenderGoldButton(g_LibShowImport ? "Cancel Import" : "+ Import Build")) {
-        g_LibShowImport = !g_LibShowImport;
+    // Build-level actions remain visible; library-wide backup/restore is
+    // grouped separately so importing one build is never confused with
+    // replacing an entire JSON library.
+    if (RenderChipButton("New Build", false)) {
+        g_NewBuildDialogOpen = true;
+        g_NewBuildGameMode = 0;
+    }
+    ImGui::SameLine();
+    if (RenderChipButton("Import Build", false)) {
+        g_LibShowImport = true;
         g_LibImportBuf[0] = '\0';
         g_LibImportName[0] = '\0';
         g_LibImportMode = 0;
         g_LibImportError.clear();
+        g_LibImportPending = false;
+        g_LibImportPendingProfession.clear();
+    }
+    ImGui::SameLine();
+    if (RenderChipButton("Library", false))
+        ImGui::OpenPopup("##libraryActions");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Import or export the complete build library (JSON file).");
+
+    bool openLibraryImportModal = false;
+    if (ImGui::BeginPopup("##libraryActions")) {
+        ImGui::TextDisabled("Whole library (JSON)");
+        ImGui::Separator();
+    if (ImGui::Selectable("Import Library")) {
+        OPENFILENAMEA ofn = {};
+        char buf[MAX_PATH] = {};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.lpstrFilter = "JSON files\0*.json\0All files\0*.*\0";
+        ofn.lpstrFile = buf;
+        ofn.nMaxFile = sizeof(buf);
+        ofn.lpstrTitle = "Import Build Library";
+        ofn.lpstrDefExt = "json";
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (GetOpenFileNameA(&ofn)) {
+            g_LibImportFilePath = buf;
+            openLibraryImportModal = true;
+        }
     }
 
-    // Create a build from scratch
-    ImGui::SameLine();
-    if (RenderChipButton("+ New Build", false)) {
-        g_NewBuildDialogOpen = true;
-        g_NewBuildGameMode = 0;
-    }
-
-    // Library backup / restore
-    ImGui::SameLine();
-    if (RenderChipButton("Export Library", false)) {
+    if (ImGui::Selectable("Export Library")) {
         OPENFILENAMEA ofn = {};
         char buf[MAX_PATH] = {};
         // Default filename: alter_ego_builds_YYYYMMDD.json
@@ -9765,22 +9790,10 @@ static void RenderBuildLibrary() {
             }
         }
     }
-    ImGui::SameLine();
-    if (RenderChipButton("Import from File...", false)) {
-        OPENFILENAMEA ofn = {};
-        char buf[MAX_PATH] = {};
-        ofn.lStructSize = sizeof(ofn);
-        ofn.lpstrFilter = "JSON files\0*.json\0All files\0*.*\0";
-        ofn.lpstrFile = buf;
-        ofn.nMaxFile = sizeof(buf);
-        ofn.lpstrTitle = "Import Build Library";
-        ofn.lpstrDefExt = "json";
-        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-        if (GetOpenFileNameA(&ofn)) {
-            g_LibImportFilePath = buf;
-            ImGui::OpenPopup("Import library");
-        }
+
+        ImGui::EndPopup();
     }
+    if (openLibraryImportModal) ImGui::OpenPopup("Import library");
 
     // Modal: choose Merge vs Replace for library file import
     {
@@ -9823,41 +9836,38 @@ static void RenderBuildLibrary() {
         ImGui::EndPopup();
     }
 
-    // Events: Chat addon status
-    ImGui::SameLine();
-    {
-        ImVec4 green(0.35f, 0.82f, 0.35f, 1.0f);
-        ImVec4 red  (1.00f, 0.40f, 0.40f, 1.0f);
-        (void)RenderChipButton(g_ChatAddonConnected ? "Chat: Connected" : "Chat: Not detected",
-                               /*active=*/g_ChatAddonConnected,
-                               g_ChatAddonConnected ? green : red);
-        if (!g_ChatAddonConnected && ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::Text("Install 'Events: Chat' from the Nexus addon library");
-            ImGui::Text("to import builds shared in GW2 chat.");
-            ImGui::EndTooltip();
-        }
-    }
-
-    // Import panel
-    if (g_LibShowImport) {
+    // Keep the import form and its asynchronous palette-data retry inside a
+    // modal; it no longer shifts the library list and details while open.
+    if (g_LibShowImport && !ImGui::IsPopupOpen("Import Build##lib"))
+        ImGui::OpenPopup("Import Build##lib");
+    const ImVec2 popupDisplay = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(
+        ImVec2(popupDisplay.x * 0.5f, popupDisplay.y * 0.5f),
+        ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(550.0f, 0.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Import Build##lib", &g_LibShowImport,
+                              ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Separator();
-        ImGui::Text("Paste chat link, AE2 build code, or relay code:");
+        ImGui::TextWrapped("Paste a GW2 chat link, AE2 build code, or relay code.");
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Build code or link");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::InputText("##import_link", g_LibImportBuf, sizeof(g_LibImportBuf));
 
-        ImGui::Text("Name:");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(200.0f);
+        ImGui::TextUnformatted("Build name");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
-        ImGui::SameLine();
-        ImGui::Text("Mode:");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(100.0f);
+        ImGui::TextUnformatted("Game mode (used for GW2 chat links)");
+        ImGui::SetNextItemWidth(150.0f);
         ImGui::Combo("##import_mode", &g_LibImportMode, GameModeImportNames,
                       IM_ARRAYSIZE(GameModeImportNames));
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(for chat links)");
+        ImGui::Spacing();
+        ImGui::TextColored(g_ChatAddonConnected
+                ? ImVec4(0.57f, 0.78f, 0.57f, 1.0f)
+                : ImVec4(0.68f, 0.65f, 0.57f, 1.0f),
+            "Chat: %s", g_ChatAddonConnected ? "Connected" : "Not detected");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Events: Chat integration is optional. Install it from the Nexus addon library to import links shared in GW2 chat.");
 
         // Auto-retry once the profession's palette data finishes loading
         bool autoRetry = false;
@@ -9868,8 +9878,8 @@ static void RenderBuildLibrary() {
             autoRetry = true;
         }
 
-        ImGui::SameLine();
-        if (RenderGoldButton("Import") || autoRetry) {
+        ImGui::Spacing();
+        if (RenderChipButton("Import", false) || autoRetry) {
             std::string input(g_LibImportBuf);
             std::string name(g_LibImportName);
             if (input.empty()) {
@@ -9948,7 +9958,19 @@ static void RenderBuildLibrary() {
         if (!g_LibImportError.empty()) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", g_LibImportError.c_str());
         }
-        ImGui::Separator();
+        ImGui::SameLine();
+        if (RenderChipButton("Cancel", false)) {
+            g_LibShowImport = false;
+            g_LibImportPending = false;
+            g_LibImportPendingProfession.clear();
+            g_LibImportError.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (!g_LibShowImport) {
+        g_LibImportPending = false;
+        g_LibImportPendingProfession.clear();
     }
 
     ImGui::Spacing();
