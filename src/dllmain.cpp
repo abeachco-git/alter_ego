@@ -12916,20 +12916,34 @@ static void RenderAchievements() {
         }
     }
 
-    // Toolbar: search + popout toggle + refresh
-    float searchWidth = ImGui::GetContentRegionAvail().x - 180.0f;
-    if (searchWidth < 100.0f) searchWidth = 100.0f;
+    // Toolbar: size the search to the actual action widths, not a fixed
+    // 180px allowance (which clipped Refresh at normal window sizes).
+    const ImGuiStyle& achStyle = ImGui::GetStyle();
+    const char* popoutLabel = g_AchPopoutVisible
+        ? "Hide Popout Tracker" : "Show Popout Tracker";
+    const float popoutWidth = ImGui::CalcTextSize("Show Popout Tracker").x +
+        achStyle.FramePadding.x * 2.0f;
+    const float refreshWidth = ImGui::CalcTextSize("Refresh").x +
+        achStyle.FramePadding.x * 2.0f;
+    const float buttonReserve = popoutWidth + refreshWidth +
+        achStyle.ItemSpacing.x * 2.0f;
+    const float toolbarWidth = ImGui::GetContentRegionAvail().x;
+    // Avoid a horizontally clipped toolbar in smaller windows: put the
+    // controls on a second row when the search would become too narrow.
+    const bool wrapToolbar = toolbarWidth < buttonReserve + 150.0f;
+    const float searchWidth = wrapToolbar ? toolbarWidth
+        : toolbarWidth - buttonReserve;
     ImGui::SetNextItemWidth(searchWidth);
     ImGui::InputTextWithHint("##AchSearch", "Search achievements...", g_AchSearchBuf, sizeof(g_AchSearchBuf));
-    ImGui::SameLine();
-    if (ImGui::Button(g_AchPopoutVisible ? "Hide Popout Tracker" : "Show Popout Tracker")) {
+    if (!wrapToolbar) ImGui::SameLine();
+    if (ImGui::Button(popoutLabel, ImVec2(popoutWidth, 0))) {
         g_AchPopoutVisible = !g_AchPopoutVisible;
         SaveAchTrackerState();
     }
     ImGui::SameLine();
     if (g_AchProgressFetching) {
         RenderSpinner("", ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-    } else if (ImGui::Button("Refresh")) {
+    } else if (ImGui::Button("Refresh", ImVec2(refreshWidth, 0))) {
         g_AchGroupsFetched = false;
         g_AchActiveEventFetched = false;
         FetchAchGroups();
