@@ -9503,20 +9503,14 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::SetTooltip("Saved vs. retrieved Hoard & Seek character data.\n"
                           "Unknown legacy fields are skipped rather than counted as matches.\n"
                           "Unverified fields lack enough API data to determine a match.");
-    ImGui::SameLine();
-    const float refreshW = ImGui::CalcTextSize("Refresh").x +
-        2.0f * ImGui::GetStyle().FramePadding.x + 12.0f;
-    ImGui::SetCursorPosX(ImMax(ImGui::GetCursorPosX(),
-        ImGui::GetWindowContentRegionMax().x - refreshW));
-    if (busy) {
-        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-    }
-    const bool clicked = ImGui::Button("Refresh##compare");
+    // Keep comparison counts separate from interactive refresh controls.
+    if (busy) ImGui::BeginDisabled();
+    const bool clicked = ImGui::SmallButton("Refresh##compare");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Re-fetch this character from Hoard & Seek.\n"
-                          "Data is cached and may lag behind changes in game.");
-    if (busy) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
+                          "Data may still lag behind GW2 due to API caching.");
+    if (busy) ImGui::EndDisabled();
+    AlterEgo::RefreshUI::Timestamp(character->data_refreshed, "character build/equipment");
     if (clicked && !busy) {
         g_LibCompareRefreshChar = character->name;
         g_LibCompareRefreshPending = true;
@@ -9527,17 +9521,22 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     if (g_LibCompareRefreshPending && fetchStatus != AlterEgo::FetchStatus::InProgress) {
         g_LibCompareRefreshPending = false;
         if (fetchStatus == AlterEgo::FetchStatus::Success)
-            g_LibCompareRefreshResult = "Refresh complete (Hoard & Seek data may lag behind GW2).";
+            g_LibCompareRefreshResult = "Refresh complete (Hoard & Seek data may lag behind GW2)";
         else if (fetchStatus == AlterEgo::FetchStatus::Error)
             g_LibCompareRefreshResult = "Refresh failed: " + AlterEgo::GW2API::GetFetchStatusMessage();
         else
-            g_LibCompareRefreshResult = "Refresh stopped before completion.";
+            g_LibCompareRefreshResult = "Refresh stopped before completion";
     }
     if (busy) {
-        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "%s",
-            AlterEgo::GW2API::GetFetchStatusMessage().c_str());
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+            AlterEgo::GW2API::GetFetchStatusMessage());
     } else if (!g_LibCompareRefreshResult.empty() && g_LibCompareRefreshChar == character->name) {
-        ImGui::TextWrapped("%s", g_LibCompareRefreshResult.c_str());
+        const bool error = g_LibCompareRefreshResult.find("failed") != std::string::npos ||
+            g_LibCompareRefreshResult.find("stopped") != std::string::npos;
+        AlterEgo::RefreshUI::Status(error ? AlterEgo::RefreshUI::State::Error
+            : AlterEgo::RefreshUI::State::Success, g_LibCompareRefreshResult);
+    } else {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready");
     }
     if (saved.gear.empty())
         ImGui::TextDisabled("Saved build has no gear; equipment comparison skipped.");
