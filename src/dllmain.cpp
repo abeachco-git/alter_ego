@@ -25,6 +25,7 @@
 #include "imgui_internal.h"
 #include "GW2API.h"
 #include "BuildCompareCore.h"
+#include "InfusionMatchCore.h"
 #include "AutoRefreshCore.h"
 #include "FontResolve.h"
 #include "FontManager.h"
@@ -8929,6 +8930,44 @@ static bool MatchesLegacySourceName(const std::string& title, const std::string&
         title.compare(0, name.size(), name) == 0 &&
         title.compare(name.size(), 3, " - ") == 0);
 }
+// GW2 API infusion attributes use internal names rather than the UI labels.
+// Only a known *positive* modifier satisfies an attribute requirement;
+// agony resistance and cosmetic effects never count as stat matches.
+static const char* InfusionAttributeLabel(const std::string& attribute) {
+    if (attribute == "Power") return "Power";
+    if (attribute == "Precision") return "Precision";
+    if (attribute == "ConditionDamage") return "Condition Damage";
+    if (attribute == "ConditionDuration") return "Expertise";
+    if (attribute == "BoonDuration") return "Concentration";
+    if (attribute == "Healing") return "Healing Power";
+    if (attribute == "Toughness") return "Toughness";
+    if (attribute == "Vitality") return "Vitality";
+    if (attribute == "CritDamage") return "Ferocity";
+    return attribute.c_str();
+}
+
+static AlterEgo::ObservedInfusion GetObservedInfusion(uint32_t itemId) {
+    AlterEgo::ObservedInfusion observed;
+    observed.itemId = itemId;
+    if (!itemId) return observed;
+    const auto* info = AlterEgo::GW2API::GetItemInfo(itemId);
+    if (!info || !info->details.is_object()) return observed;
+    auto upgrade = info->details.find("infix_upgrade");
+    if (upgrade == info->details.end() || !upgrade->is_object()) return observed;
+    auto attrs = upgrade->find("attributes");
+    if (attrs == upgrade->end() || !attrs->is_array()) return observed;
+    observed.metadataKnown = true;
+    for (const auto& attr : *attrs) {
+        if (!attr.is_object()) continue;
+        const auto name = attr.value("attribute", std::string());
+        auto modifier = attr.find("modifier");
+        if (!name.empty() && modifier != attr.end() &&
+            modifier->is_number() && modifier->get<double>() > 0)
+            observed.positiveAttributes.push_back(name);
+    }
+    return observed;
+}
+
 static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     const AlterEgo::SavedBuild& saved, const AlterEgo::Character& liveCharacter,
     const AlterEgo::BuildTemplate& live, int equipmentTab, bool compareExactItems) {
@@ -9116,8 +9155,39 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     return out;
                 };
                 std::string a = ids(gs.infusion_ids), b = ids(eq->infusions);
-                result.Add("Infusions", slot, a, b,
-                           a.empty() ? "(none)" : a, b.empty() ? "(none)" : b);
+                const bool attributeMode = std::any_of(
+                    gs.infusion_attributes.begin(), gs.infusion_attributes.end(),
+                    [](const std::string& attr) { return !attr.empty(); });
+                if (!attributeMode) {
+                    // Unmodified legacy builds retain their original exact-ID
+                    // comparison, including order-independent matching.
+                    result.Add("Infusions", slot, a, b,
+                               a.empty() ? "(none)" : a, b.empty() ? "(none)" : b);
+                } else {
+                    std::vector<AlterEgo::InfusionRequirement> requirements;
+                    std::string savedLabel;
+                    for (size_t i = 0; i < gs.infusion_ids.size(); ++i) {
+                        const std::string attr = i < gs.infusion_attributes.size()
+                            ? gs.infusion_attributes[i] : std::string();
+                        requirements.push_back({gs.infusion_ids[i], attr});
+                        if (!savedLabel.empty()) savedLabel += ", ";
+                        savedLabel += attr.empty() ? ("#" + std::to_string(gs.infusion_ids[i]))
+                                                   : InfusionAttributeLabel(attr);
+                    }
+                    std::vector<AlterEgo::ObservedInfusion> observed;
+                    for (uint32_t id : eq->infusions)
+                        observed.push_back(GetObservedInfusion(id));
+                    const auto verdict = AlterEgo::CompareInfusionRequirements(requirements, observed);
+                    if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified) {
+                        result.AddUnverified("Infusions", slot, savedLabel,
+                            (b.empty() ? "(none)" : b) + " (metadata unavailable)");
+                    } else {
+                        const bool matches = verdict == AlterEgo::InfusionMatchVerdict::Matches;
+                        result.Add("Infusions", slot, "required",
+                            matches ? "required" : "different", savedLabel,
+                            b.empty() ? "(none)" : b);
+                    }
+                }
             }
         }
         if (saved.relic_id || !saved.relic_name.empty()) {
