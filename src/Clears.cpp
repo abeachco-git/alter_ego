@@ -1154,99 +1154,55 @@ static ThemeGrad StrikeTheme(const std::string& name) {
 // use that width instead of the full available width (used for multi-column layouts).
 // If bannerKey resolves to an embedded loading-screen JPEG, that image is used
 // as the background; otherwise the gradient theme is used.
+// Unified one-line clear cell. Background artwork made the trackers visually
+// inconsistent and obscured labels; raid dates and completion remain visible.
 static void RenderClearBanner(const std::string& title, const std::string& subtitle,
                               bool fetched, bool done, ThemeGrad theme,
                               const char* tooltip = nullptr,
                               float widthOverride = 0.0f,
                               const std::string& bannerKey = "",
                               const std::string& bountyDate = "") {
+    (void)theme;
+    (void)bannerKey;
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 cmin = ImGui::GetCursorScreenPos();
-    float w = widthOverride > 0.0f ? widthOverride : ImGui::GetContentRegionAvail().x;
-    float h = 46.0f;
-    ImVec2 cmax(cmin.x + w, cmin.y + h);
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float width = widthOverride > 0.0f ? widthOverride : ImGui::GetContentRegionAvail().x;
+    const float height = 24.0f;
+    const ImVec2 end(pos.x + width, pos.y + height);
+    dl->AddRectFilled(pos, end, IM_COL32(29, 31, 37, 245), 2.0f);
+    dl->AddRect(pos, end, (fetched && done)
+        ? IM_COL32(105, 194, 126, 240) : IM_COL32(135, 125, 102, 175), 2.0f);
+    const float dotX = pos.x + 9.0f, dotY = pos.y + height / 2.0f;
+    if (fetched && done)
+        dl->AddCircleFilled(ImVec2(dotX, dotY), 3.8f, IM_COL32(105, 204, 126, 255));
+    else if (!fetched)
+        dl->AddText(ImVec2(dotX - 4.0f, dotY - 7.0f), IM_COL32(160, 155, 140, 255), "?");
+    else
+        dl->AddCircle(ImVec2(dotX, dotY), 3.8f, IM_COL32(175, 163, 131, 240), 12, 1.3f);
 
-    // Background: embedded loading screen if available, else gradient
-    Texture_t* bnrTex = bannerKey.empty() ? nullptr : GetBannerTexture(bannerKey);
-    if (bnrTex && bnrTex->Resource) {
-        dl->AddImage(bnrTex->Resource, cmin, cmax,
-            ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255));
-    } else {
-        dl->AddRectFilledMultiColor(cmin, cmax,
-            theme.a, theme.b,
-            IM_COL32(theme.b & 0xFF, (theme.b >> 8) & 0xFF, (theme.b >> 16) & 0xFF, 255),
-            theme.a);
-    }
-
-    // Dark scrim — solid on the left, fading right
-    ImU32 scrimL = IM_COL32(14, 14, 18, 235);
-    ImU32 scrimR = IM_COL32(14, 14, 18, 26);
-    dl->AddRectFilledMultiColor(cmin, cmax, scrimL, scrimR, scrimR, scrimL);
-
-    // Border
-    dl->AddRect(cmin, cmax, IM_COL32(0, 0, 0, 200), 4.0f, 0, 1.0f);
-
-    // Hit test (whole banner)
-    ImGui::InvisibleButton("##banner", ImVec2(w, h));
-    bool hovered = ImGui::IsItemHovered();
-    if (hovered) {
-        dl->AddRect(cmin, cmax,
-            IM_COL32(197, 161, 85, 130), 4.0f, 0, 1.0f);
-        if (tooltip) {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted(tooltip);
-            ImGui::EndTooltip();
-        }
-    }
-
-    // Status circle on the left
-    float cx = cmin.x + 18.0f;
-    float cy = cmin.y + h * 0.5f;
-    float r = 10.0f;
-    ImU32 ringCol, fillCol, checkCol;
-    if (!fetched) {
-        ringCol = IM_COL32(120, 110, 90, 220);
-        fillCol = IM_COL32(0, 0, 0, 130);
-        checkCol = IM_COL32(160, 150, 120, 200);
-    } else if (done) {
-        ringCol = IM_COL32(111, 204, 122, 255);
-        fillCol = IM_COL32(50, 110, 60, 130);
-        checkCol = IM_COL32(180, 240, 180, 255);
-    } else {
-        ringCol = IM_COL32(160, 150, 120, 200);
-        fillCol = IM_COL32(0, 0, 0, 130);
-        checkCol = IM_COL32(160, 150, 120, 200);
-    }
-    dl->AddCircleFilled(ImVec2(cx, cy), r, fillCol);
-    dl->AddCircle(ImVec2(cx, cy), r, ringCol, 24, 1.6f);
-    if (fetched && done) {
-        // Draw checkmark
-        dl->AddLine(ImVec2(cx - 4, cy + 0),  ImVec2(cx - 1, cy + 3),  checkCol, 2.0f);
-        dl->AddLine(ImVec2(cx - 1, cy + 3),  ImVec2(cx + 5, cy - 4),  checkCol, 2.0f);
-    } else if (!fetched) {
-        // ?
-        ImVec2 ts = ImGui::CalcTextSize("?");
-        dl->AddText(ImVec2(cx - ts.x * 0.5f, cy - ts.y * 0.5f), checkCol, "?");
-    }
-
-    // Title (top) + subtitle (bottom)
-    float textX = cmin.x + 36.0f;
-    float titleY = cmin.y + 6.0f;
-    float subY = cmin.y + h - 6.0f - ImGui::GetTextLineHeight();
-    ImU32 titleCol = (fetched && done) ? IM_COL32(240, 240, 230, 255) : IM_COL32(220, 215, 200, 255);
-    ImU32 subCol = IM_COL32(160, 152, 130, 230);
-    dl->AddText(ImVec2(textX, titleY), titleCol, title.c_str());
+    const ImVec2 titlePos(pos.x + 19.0f, pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f);
+    dl->PushClipRect(ImVec2(titlePos.x, pos.y), end, true);
+    dl->AddText(titlePos, IM_COL32(236, 232, 221, 255), title.c_str());
     if (!bountyDate.empty()) {
-        const std::string label = " - " + bountyDate;
-        float x = textX + ImGui::CalcTextSize(title.c_str()).x;
-        if (x + ImGui::CalcTextSize(label.c_str()).x < cmax.x - 8.0f)
-            dl->AddText(ImVec2(x, titleY), IM_COL32(255, 194, 108, 255), label.c_str());
+        const std::string suffix = " - " + bountyDate;
+        dl->AddText(ImVec2(titlePos.x + ImGui::CalcTextSize(title.c_str()).x, titlePos.y),
+            IM_COL32(255, 194, 108, 255), suffix.c_str());
     }
-    if (!subtitle.empty())
-        dl->AddText(ImVec2(textX, subY), subCol, subtitle.c_str());
+    dl->PopClipRect();
 
-    // Spacing for next item
-    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::InvisibleButton("##clear", ImVec2(width, height));
+    if (ImGui::IsItemHovered()) {
+        dl->AddRect(pos, end, IM_COL32(225, 184, 108, 240), 2.0f);
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(title.c_str());
+        if (!subtitle.empty()) ImGui::TextDisabled("%s", subtitle.c_str());
+        if (tooltip && *tooltip) ImGui::TextWrapped("%s", tooltip);
+        if (!bountyDate.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.42f, 1.0f),
+                               "Daily bounty: %s UTC", bountyDate.c_str());
+        ImGui::EndTooltip();
+    }
+    ImGui::Dummy(ImVec2(0, 1.0f));
 }
 
 struct WingEncChip { std::string label; std::string fullName; bool done = false; std::string bountyDate; };
@@ -1263,21 +1219,13 @@ static void RenderTierRow(const char* tierLabel,
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 cmin = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x;
-    float h = 46.0f;
+    float h = 34.0f;
     ImVec2 cmax(cmin.x + w, cmin.y + h);
 
-    // Gradient background
-    dl->AddRectFilledMultiColor(cmin, cmax,
-        theme.a, theme.b,
-        IM_COL32(theme.b & 0xFF, (theme.b >> 8) & 0xFF, (theme.b >> 16) & 0xFF, 255),
-        theme.a);
-
-    // Left-biased scrim
-    ImU32 scrimL = IM_COL32(14, 14, 18, 235);
-    ImU32 scrimR = IM_COL32(14, 14, 18, 80);
-    dl->AddRectFilledMultiColor(cmin, cmax, scrimL, scrimR, scrimR, scrimL);
-
-    dl->AddRect(cmin, cmax, IM_COL32(0, 0, 0, 200), 4.0f, 0, 1.0f);
+    // Neutral solid background, consistent with strike and raid cells.
+    dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 245), 3.0f);
+    dl->AddRect(cmin, cmax, IM_COL32(75, 78, 85, 210), 3.0f);
+    (void)theme;
 
     // Left accent strip
     dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 3), ImVec2(cmin.x + 3, cmax.y - 3),
@@ -1427,35 +1375,18 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 cmin = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x;
-    float h = 78.0f;
+    float h = 52.0f;
     ImVec2 cmax(cmin.x + w, cmin.y + h);
 
-    // Background: embedded loading screen if available, else gradient
-    Texture_t* bnrTex = bannerKey.empty() ? nullptr : GetBannerTexture(bannerKey);
-    if (bnrTex && bnrTex->Resource) {
-        dl->AddImage(bnrTex->Resource, cmin, cmax,
-            ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255));
-    } else {
-        dl->AddRectFilledMultiColor(cmin, cmax,
-            theme.a, theme.b,
-            IM_COL32(theme.b & 0xFF, (theme.b >> 8) & 0xFF, (theme.b >> 16) & 0xFF, 255),
-            theme.a);
-    }
-
-    // Vertical scrim — fade top to bottom so the lower chip area is readable
-    ImU32 topScrim = IM_COL32(14, 14, 18, 100);
-    ImU32 botScrim = IM_COL32(14, 14, 18, 235);
-    dl->AddRectFilledMultiColor(cmin, cmax, topScrim, topScrim, botScrim, botScrim);
-    // Slight left bias too
-    ImU32 leftScrim = IM_COL32(14, 14, 18, 130);
-    ImU32 rightScrim = IM_COL32(14, 14, 18, 0);
-    dl->AddRectFilledMultiColor(cmin, cmax, leftScrim, rightScrim, rightScrim, leftScrim);
-
-    dl->AddRect(cmin, cmax, IM_COL32(0, 0, 0, 200), 5.0f, 0, 1.0f);
+    // Quiet wing header and status cells. No embedded artwork.
+    dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 242), 3.0f);
+    dl->AddRect(cmin, cmax, IM_COL32(75, 78, 85, 215), 3.0f);
+    dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 2.0f),
+                      ImVec2(cmin.x + 3.0f, cmax.y - 2.0f), theme.b);
 
     // Top row text
     float padX = 10.0f;
-    float topY = cmin.y + 8.0f;
+    float topY = cmin.y + 6.0f;
     // Roman
     dl->AddText(ImVec2(cmin.x + padX, topY),
         IM_COL32(227, 196, 122, 255), wingShortName.c_str());
@@ -1532,7 +1463,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     }
 
     // Encounter chips along the bottom
-    float chipsY = cmin.y + h - 24.0f;
+    float chipsY = cmin.y + h - 22.0f;
     float chipsX = cmin.x + padX;
     float chipsW = w - padX * 2;
     float chipH = 18.0f;
@@ -1599,7 +1530,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     }
 
     // Final cursor advance for the whole banner
-    ImGui::SetCursorScreenPos(ImVec2(cmin.x, cmax.y + 4.0f));
+    ImGui::SetCursorScreenPos(ImVec2(cmin.x, cmax.y + 1.0f));
 }
 
 // Get wing short name "W1"-"W8" from wing ID, fallback empty string.
