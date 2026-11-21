@@ -223,6 +223,7 @@ namespace AlterEgo {
         std::vector<std::string> crafting;      // Crafting disciplines (active first)
         std::vector<int> crafting_levels;
         std::vector<bool> crafting_active;      // Whether each discipline is active
+        bool crafting_cached = false;          // Fetched once (even if no disciplines)
         std::vector<EquipmentItem> equipment;
         std::vector<BuildTemplate> build_tabs;
         std::map<int, std::string> equipment_tab_names; // tab number -> name
@@ -317,7 +318,8 @@ namespace AlterEgo {
         static void PingHoard();                    // Check if H&S is available
         static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via H&S
         static void RequestCharacterList();              // Fetch just the character name list
-        static void RequestCharacterRefreshSelected(const std::vector<std::string>& names); // Fetch specific characters
+        static void RequestCharacterRefreshSelected(
+            const std::vector<std::string>& names, bool refreshCrafting = true); // Manual=true; auto=false
         static void PollRetries();                       // Per-frame: fire a scheduled HOARD_STATUS_BUSY backoff retry
 
         // H&S cached queries (synchronous, from H&S in-memory cache)
