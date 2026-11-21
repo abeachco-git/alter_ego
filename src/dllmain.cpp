@@ -1287,6 +1287,8 @@ static char g_GearStatSearch[128] = "";       // Search filter for stat combos
 static uint32_t g_GearSelectedStatId = 0;     // Currently selected stat in dialog
 static int g_GearSelectorTab = 0;             // 0 = Stats, 1 = Rune/Sigil, 2 = Weapon Type
 static bool g_GearEditingSigil2 = false;      // true = editing second sigil slot (two-handed)
+static int g_GearEditingInfusionIndex = 0;
+static int g_GearExactInfusionId = 0;
 
 // Save to Library dialog state
 static bool g_SaveLibDialogOpen = false;
@@ -6551,6 +6553,9 @@ static void OpenGearDialog(const std::string& buildId, const std::string& slot,
     bool isWeaponSlot = (slot.find("Weapon") == 0);
     g_GearSelectorTab = isWeaponSlot ? 2 : 0;
     g_GearEditingSigil2 = false;
+    g_GearEditingInfusionIndex = 0;
+    g_GearExactInfusionId = current.infusion_ids.empty()
+        ? 0 : static_cast<int>(current.infusion_ids.front());
     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
 }
 
@@ -7218,6 +7223,68 @@ static void RenderGearCustomizeDialog() {
                 }
                 tp.y += 14.0f;
                 ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + h + 4));
+            }
+        }
+
+        // Infusion requirements are per physical equipment slot. Captured
+        // infusions remain exact by default; newly added requirements default
+        // to a stat and leave the exact ID empty.
+        if (!isRelic && g_GearDialogSlot != "Amulet") {
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Infusions");
+            if (!gs.infusion_attributes.empty() &&
+                gs.infusion_attributes.size() != gs.infusion_ids.size())
+                gs.infusion_attributes.resize(gs.infusion_ids.size());
+            for (size_t i = 0; i < gs.infusion_ids.size(); ++i) {
+                const std::string attr = i < gs.infusion_attributes.size()
+                    ? gs.infusion_attributes[i] : std::string();
+                const uint32_t id = gs.infusion_ids[i];
+                const auto* item = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
+                const std::string selected = !attr.empty()
+                    ? std::string("Stat: ") + InfusionAttributeLabel(attr)
+                    : (id ? (std::string("Exact: ") +
+                        (item ? item->name : "#" + std::to_string(id)))
+                          : "Exact: (choose item)");
+                const std::string label = "Slot " + std::to_string(i + 1) + ": " + selected;
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Selectable(label.c_str(),
+                    g_GearSelectorTab == 3 && g_GearEditingInfusionIndex == static_cast<int>(i))) {
+                    g_GearSelectorTab = 3;
+                    g_GearEditingInfusionIndex = static_cast<int>(i);
+                    g_GearExactInfusionId = static_cast<int>(id);
+                    memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("X##removeInfusion")) {
+                    gs.infusion_ids.erase(gs.infusion_ids.begin() + i);
+                    if (i < gs.infusion_attributes.size())
+                        gs.infusion_attributes.erase(gs.infusion_attributes.begin() + i);
+                    gs.infusion_snapshot = true;
+                    if (g_GearEditingInfusionIndex >= static_cast<int>(gs.infusion_ids.size()))
+                        g_GearEditingInfusionIndex = gs.infusion_ids.empty()
+                            ? 0 : static_cast<int>(gs.infusion_ids.size() - 1);
+                    commitGear();
+                    ImGui::PopID();
+                    break;
+                }
+                ImGui::PopID();
+            }
+            int maxSlots = 1;
+            if (g_GearDialogSlot == "Ring1" || g_GearDialogSlot == "Ring2") maxSlots = 3;
+            else if (g_GearDialogSlot == "Backpack") maxSlots = 2;
+            else if (isWeapon && IsWeaponTwoHanded(editBuild->profession, gs.weapon_type))
+                maxSlots = 2;
+            if (gs.infusion_ids.size() < static_cast<size_t>(maxSlots) &&
+                ImGui::SmallButton("+ Add infusion")) {
+                gs.infusion_ids.push_back(0);
+                gs.infusion_attributes.resize(gs.infusion_ids.size());
+                gs.infusion_attributes.back() = "Power";
+                gs.infusion_snapshot = true;
+                g_GearEditingInfusionIndex = static_cast<int>(gs.infusion_ids.size() - 1);
+                g_GearExactInfusionId = 0;
+                g_GearSelectorTab = 3;
+                memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
+                commitGear();
             }
         }
 
