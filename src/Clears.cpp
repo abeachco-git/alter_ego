@@ -2511,51 +2511,65 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
         ImGui::Indent(4.0f);
-        // Two-column layout
-        float availW = ImGui::GetContentRegionAvail().x - 4.0f;
-        float gap = 6.0f;
-        float halfW = (availW - gap) * 0.5f;
-
-        size_t visibleCount = 0;
-        for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); ++i) {
-            const bool done = i < g_WeeklyStrikes.bitDone.size() &&
-                g_WeeklyStrikes.bitDone[i];
-            if (!g_ClearsHideComplete || !g_ClearsFetched || !done) ++visibleCount;
-        }
+        // Three columns at wider widths, two at narrower widths. Use an
+        // ImGui table so rows wrap predictably even with Hide Complete enabled.
+        // All 14 completion bits remain in their original order.
+        const float gridWidth = ImGui::GetContentRegionAvail().x;
+        const int strikeColumns = gridWidth >= 900.0f ? 3 : 2;
         size_t shown = 0;
-        for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); i++) {
-            bool bitDone = (i < g_WeeklyStrikes.bitDone.size()) ? g_WeeklyStrikes.bitDone[i] : false;
-            if (g_ClearsHideComplete && g_ClearsFetched && bitDone) continue;
-            const std::string& name = g_WeeklyStrikes.bitNames[i];
-            // The achievement calls Kela's encounter "Guardian's Glade".
-            // Surface the boss name without changing the API bit index.
-            const bool isKela = ClearsRotation::Normalize(name) ==
-                "guardiansglade";
-            const std::string displayName = isKela
-                ? "Kela (Guardian's Glade)" : name;
-            ImGui::PushID((int)i);
-            ImVec2 startPos = ImGui::GetCursorScreenPos();
-            const char* zone = StrikeZone(name);
-            std::string subtitle = "Strike Mission";
-            if (zone && *zone) { subtitle += " \xC2\xB7 "; subtitle += zone; }
-            const std::string date = UpcomingBountyLabel(
-                isKela ? "Kela" : name, g_DailyBounties,
-                utcNow, weeklyEndUtc, g_ClearsFetched);
-            RenderClearBanner(displayName, subtitle,
-                g_ClearsFetched, bitDone, StrikeTheme(name),
-                /*tooltip*/ isKela ? "Kela, Seneschal of Waves. Weekly completion comes from Guardian's Glade." : nullptr,
-                /*widthOverride*/ halfW,
-                /*bannerKey*/ "strike:" + name, date);
-            ImGui::PopID();
 
-            // Place next banner on same row or move to next row
-            ++shown;
-            if (shown % 2 == 1 && shown < visibleCount) {
-                // Reset cursor to right side of just-rendered banner
-                ImGui::SetCursorScreenPos(ImVec2(startPos.x + halfW + gap, startPos.y));
+        if (ImGui::BeginTable("##WeeklyStrikesGrid", strikeColumns,
+                              ImGuiTableFlags_SizingStretchSame)) {
+            for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); ++i) {
+                const bool bitDone = i < g_WeeklyStrikes.bitDone.size() &&
+                    g_WeeklyStrikes.bitDone[i];
+                if (g_ClearsHideComplete && g_ClearsFetched && bitDone) continue;
+
+                const std::string& name = g_WeeklyStrikes.bitNames[i];
+                // Display aliases only: never change the source achievement
+                // name, bit index, theme, or bounty matching.
+                const std::string normalized = ClearsRotation::Normalize(name);
+                const bool isKela = normalized == "guardiansglade";
+                std::string displayName = name;
+                if (isKela)
+                    displayName = "Kela";
+                else if (normalized == "voiceofthefallenandclawofthefallen" ||
+                         normalized == "voiceandclaw")
+                    displayName = "Voice & Claw";
+                else if (normalized == "fraenirofjormag")
+                    displayName = "Fraenir";
+                else if (normalized == "whisperofjormag")
+                    displayName = "Whisper";
+
+                std::string fullNameTooltip;
+                if (isKela) {
+                    fullNameTooltip = "Kela, Seneschal of Waves. "
+                        "Weekly completion comes from Guardian's Glade.";
+                } else if (displayName != name) {
+                    fullNameTooltip = name;
+                }
+
+                const char* zone = StrikeZone(name);
+                std::string subtitle = "Strike Mission";
+                if (zone && *zone) { subtitle += " \xC2\xB7 "; subtitle += zone; }
+                const std::string date = UpcomingBountyLabel(
+                    isKela ? "Kela" : name, g_DailyBounties,
+                    utcNow, weeklyEndUtc, g_ClearsFetched);
+
+                if (shown % strikeColumns == 0) ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex((int)(shown % strikeColumns));
+                ImGui::PushID((int)i);
+                RenderClearBanner(displayName, subtitle,
+                    g_ClearsFetched, bitDone, StrikeTheme(name),
+                    /*tooltip*/ fullNameTooltip.empty() ? nullptr : fullNameTooltip.c_str(),
+                    /*widthOverride*/ ImGui::GetContentRegionAvail().x,
+                    /*bannerKey*/ "strike:" + name, date);
+                ImGui::PopID();
+                ++shown;
             }
+            ImGui::EndTable();
         }
-        if (visibleCount == 0)
+        if (shown == 0)
             ImGui::TextDisabled("  All weekly raid encounter objectives completed.");
 
         // Nexus of Eternity is a standalone raid encounter released after
