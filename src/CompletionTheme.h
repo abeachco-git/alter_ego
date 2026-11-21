@@ -2,9 +2,10 @@
 
 // Unified progress/completion visual language for Alter Ego.
 // Shared by the Characters-independent Achievements, Vault, and Clears views.
-//   Complete: muted text + green border + green status dot.
+//   Complete: muted text + subtle checkmark; no loud border or full bar.
 //   Available/incomplete: bright text, no status border or dot.
-//   Gold: pin/selection and claimable rewards, NOT completion.
+//   Gold: partial progress, selection/pins, and unclaimed rewards.
+//   Green: completed sections and full (only when shown) progress bars.
 //   Unknown: never imply completion when account data is missing.
 // Keep all completion colors and row primitives here so these tabs stay aligned.
 #include "imgui.h"
@@ -13,6 +14,12 @@ namespace AlterEgo::CompletionTheme {
 inline constexpr ImU32 kRowBackground = IM_COL32(29, 31, 37, 245);
 inline constexpr ImU32 kCompleteBorder = IM_COL32(105, 194, 126, 240);
 inline constexpr ImU32 kCompleteDot = IM_COL32(105, 204, 126, 255);
+inline constexpr ImU32 kCompleteMark = IM_COL32(137, 148, 141, 205);
+inline constexpr ImU32 kProgressTrack = IM_COL32(47, 49, 55, 200);
+inline constexpr ImU32 kBountyToday = IM_COL32(255, 166, 92, 255);
+inline constexpr ImU32 kBountyFuture = IM_COL32(101, 207, 203, 255);
+inline constexpr ImU32 kMetaText = IM_COL32(162, 163, 160, 230);
+inline constexpr float kHeadingScale = 1.18f;
 inline constexpr ImU32 kCompleteText = IM_COL32(146, 148, 142, 240);
 inline constexpr ImU32 kAvailableText = IM_COL32(236, 232, 221, 255);
 inline constexpr ImU32 kSelectedGold = IM_COL32(232, 196, 122, 230);
@@ -24,14 +31,72 @@ inline ImU32 Text(bool complete) {
 }
 inline void DrawRow(ImDrawList* draw, const ImVec2& min, const ImVec2& max,
                     bool complete, float rounding = 3.0f) {
-    draw->AddRectFilled(min, max, kRowBackground, rounding);
-    if (complete)
-        draw->AddRect(min, max, kCompleteBorder, rounding);
+    // No item-level completion outline: dozens of green borders obscured the
+    // remaining work. A slightly quieter filled background is sufficient.
+    draw->AddRectFilled(min, max,
+        complete ? IM_COL32(32, 34, 39, 205) : kRowBackground, rounding);
 }
-inline void DrawCompleteDot(ImDrawList* draw, const ImVec2& center,
-                            bool complete, float radius = 3.8f) {
-    if (complete)
-        draw->AddCircleFilled(center, radius, kCompleteDot);
+inline void DrawCompleteMark(ImDrawList* draw, const ImVec2& center,
+                             bool complete, float radius = 3.8f) {
+    if (!complete) return;
+    // A neutral checkmark, rather than a saturated green dot.
+    draw->AddLine(ImVec2(center.x-radius, center.y),
+                  ImVec2(center.x-radius*0.2f, center.y+radius*0.8f),
+                  kCompleteMark, 1.5f);
+    draw->AddLine(ImVec2(center.x-radius*0.2f, center.y+radius*0.8f),
+                  ImVec2(center.x+radius, center.y-radius*0.8f),
+                  kCompleteMark, 1.5f);
+}
+inline ImU32 ProgressColor(int done, int total) {
+    if (total <= 0 || done <= 0) return kProgressTrack;
+    return done >= total ? kCompleteDot : kInProgressGold;
+}
+// Section-level bars: show only when partly complete. Fully complete is
+// already represented by the right-hand count; zero is not actionable.
+inline void RenderPartialProgress(int done, int total, float height = 4.0f) {
+    if (total <= 0 || done <= 0 || done >= total) return;
+    const float fraction = ImClamp(static_cast<float>(done)/total, 0.0f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kInProgressGold);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, kProgressTrack);
+    ImGui::ProgressBar(fraction, ImVec2(-1.0f, height), "");
+    ImGui::PopStyleColor(2);
+}
+// Unified section title: large neutral title, small reset text, counts
+// right-aligned. Keeps all parts on one line when space allows, otherwise
+// places the right-hand summary on a second line rather than clipping.
+inline void SectionHeading(const char* title, const char* reset,
+                           const char* summary = nullptr) {
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    const float available = ImGui::GetContentRegionAvail().x;
+    const ImFont* font = ImGui::GetFont();
+    const float small = ImGui::GetFontSize();
+    const float big = small * kHeadingScale;
+    const ImVec2 titleSize = font->CalcTextSizeA(big, 1.0e8f, 0.0f, title);
+    const float resetWidth = (reset && *reset) ? ImGui::CalcTextSize(reset).x : 0.0f;
+    const float summaryWidth = (summary && *summary) ? ImGui::CalcTextSize(summary).x : 0.0f;
+    const float rowHeight = ImMax(big, ImGui::GetFrameHeight()) + 4.0f;
+    const bool wrapSummary = summaryWidth > 0 &&
+        titleSize.x + resetWidth + summaryWidth + 35.0f > available;
+    const float totalHeight = rowHeight + (wrapSummary ? small+4.0f : 0.0f);
+    ImGui::Dummy(ImVec2(ImMax(1.0f, available), totalHeight));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(start,
+        ImVec2(start.x+available, start.y+totalHeight), true);
+    dl->AddText(font, big, ImVec2(start.x, start.y+(rowHeight-big)*0.5f),
+        kAvailableText, title);
+    if (reset && *reset) {
+        const float resetX = start.x+titleSize.x+9.0f;
+        const float resetLimit = wrapSummary ? start.x+available : start.x+available-summaryWidth-10.0f;
+        if (resetX+resetWidth <= resetLimit)
+            dl->AddText(ImVec2(resetX, start.y+(rowHeight-small)*0.5f),
+                kMetaText, reset);
+    }
+    if (summary && *summary) {
+        const float rightX = start.x+ImMax(0.0f, available-summaryWidth-2.0f);
+        const float y = start.y + (wrapSummary ? rowHeight : (rowHeight-small)*0.5f);
+        dl->AddText(ImVec2(rightX,y), kMetaText, summary);
+    }
+    dl->PopClipRect();
 }
 inline ImVec4 TextColor(bool complete) {
     return ImGui::ColorConvertU32ToFloat4(Text(complete));
