@@ -2880,6 +2880,8 @@ namespace AlterEgo {
                 if (gs.item_id != 0) gsj["item_id"] = gs.item_id;
                 if (gs.infusion_snapshot) gsj["infusion_snapshot"] = true;
                 if (!gs.infusion_ids.empty()) gsj["infusion_ids"] = gs.infusion_ids;
+                if (!gs.infusion_attributes.empty())
+                    gsj["infusion_attributes"] = gs.infusion_attributes;
                 gsj["stat_id"] = gs.stat_id;
                 gsj["stat_name"] = gs.stat_name;
                 if (!gs.rune.empty()) gsj["rune"] = gs.rune;
@@ -2996,6 +2998,13 @@ namespace AlterEgo {
                     for (const auto& infusion : it.value()["infusion_ids"]) {
                         if (infusion.is_number_unsigned()) gs.infusion_ids.push_back(infusion.get<uint32_t>());
                     }
+                }
+                if (it.value().contains("infusion_attributes") &&
+                    it.value()["infusion_attributes"].is_array()) {
+                    for (const auto& attr : it.value()["infusion_attributes"])
+                        gs.infusion_attributes.push_back(attr.is_string() ? attr.get<std::string>() : "");
+                    // Never trust mismatched lengths in hand-edited or older JSON.
+                    gs.infusion_attributes.resize(gs.infusion_ids.size());
                 }
                 gs.stat_id = it.value().value("stat_id", (uint32_t)0);
                 gs.stat_name = it.value().value("stat_name", "");
