@@ -8439,7 +8439,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 g_LibCompareBuildId = build.id;
                 g_LibCompareSavedManual = true;
                 g_LibCompareChar = build.source_character;
-                g_LibComparePreviousTarget.clear();
+                g_LibComparePreviousTarget = build.source_character;
                 g_SwitchToCompare = true;
             }
 
@@ -9706,12 +9706,14 @@ static void RenderCompareTab() {
                std::chrono::steady_clock::now() < g_LibCompareSuccessUntil) {
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
     } else {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready");
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready - " + target->name + (g_LibCompareChar.empty() ? " (active auto)" : ""));
     }
     ImGui::Separator();
 
     // Character stays first in the original three-column selector row.
     const AlterEgo::Character* character = target;
+    if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
+        g_LibCompareBuildTab = -1;
     const auto& live = character->build_tabs[g_LibCompareBuildTab < 0
         ? GetActiveBuildIndex(*character) : g_LibCompareBuildTab];
     if (ImGui::BeginTable("##compareSelectors", 3, ImGuiTableFlags_SizingStretchSame)) {
@@ -9722,13 +9724,15 @@ static void RenderCompareTab() {
     if (ImGui::BeginCombo("##compareCharacter", g_LibCompareChar.empty() ? ("Active (auto) - " + character->name).c_str() : character->name.c_str())) {
         if (ImGui::Selectable(g_CurrentCharName.empty() ? "Active (auto)" : ("Active (auto) - " + g_CurrentCharName).c_str(), g_LibCompareChar.empty())) {
             g_LibCompareChar.clear();
+            g_LibCompareSavedManual = false;
         }
-        for (const auto* ch : matches) {
+        for (const auto* ch : compareMatches) {
             bool selected = ch->name == g_LibCompareChar;
             std::string label = ch->name;
             if (ch->name == g_CurrentCharName) label += " (logged in)";
             if (ImGui::Selectable(label.c_str(), selected)) {
                 g_LibCompareChar = ch->name;
+                g_LibCompareSavedManual = false;
                 g_LibCompareBuildTab = -1;
                 g_LibCompareEquipTab = 0;
             }
