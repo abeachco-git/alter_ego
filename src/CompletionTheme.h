@@ -55,7 +55,7 @@ inline ImU32 ProgressColor(int done, int total) {
 // already represented by the right-hand count; zero is not actionable.
 inline void RenderPartialProgress(int done, int total, float height = 4.0f) {
     if (total <= 0 || done <= 0 || done >= total) return;
-    const float fraction = ImClamp(static_cast<float>(done)/total, 0.0f, 1.0f);
+    const float fraction = static_cast<float>(done) / static_cast<float>(total);
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kInProgressGold);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, kProgressTrack);
     ImGui::ProgressBar(fraction, ImVec2(-1.0f, height), "");
