@@ -1,4 +1,5 @@
 #include "../src/ClearsRotation.h"
+#include "../src/FractalScales.h"
 #include <cassert>
 #include <string>
 int main() {
@@ -34,4 +35,22 @@ int main() {
     assert(std::string(next->dailies[0]) == "Aetherblade");
     assert(NextFractalsFromLive({"Unrecognized", "Example", "Fractal"}) == nullptr);
     assert(DateLabel(nov21) == "11/21");
+    // 2026 Solitary Throne reshuffle and late-tier scale shifts.
+    assert(std::string(FractalScales::NameForScale(19)) == "Solitary Throne");
+    assert(std::string(FractalScales::NameForScale(44)) == "Solitary Throne");
+    assert(std::string(FractalScales::NameForScale(64)) == "Solitary Throne");
+    assert(std::string(FractalScales::NameForScale(94)) == "Solitary Throne");
+    assert(std::string(FractalScales::NameForScale(89)) == "Molten Boss");
+    assert(std::string(FractalScales::NameForScale(90)) == "Captain Mai Trin Boss");
+    assert(std::string(FractalScales::NameForScale(91)) == "Volcanic");
+    assert(std::string(FractalScales::NameForScale(92)) == "Aetherblade");
+    assert(FractalScales::NameForScale(0) == nullptr);
+    assert(FractalScales::NameForScale(101) == nullptr);
+    assert(FractalScales::ForTier("Aetherblade", 1) == std::vector<int>{14});
+    assert(FractalScales::ForTier("Aetherblade", 4) == std::vector<int>{92});
+    assert(FractalScales::ForTier("Solitary Throne", 3) == std::vector<int>{64});
+    assert(FractalScales::ForTier("Volcanic", 1) == std::vector<int>{1});
+    assert(FractalScales::DailyTooltip("Sunqua Peak").find("T4 (98)") != std::string::npos);
+    for (int scale = 1; scale <= 100; ++scale)
+        assert(FractalScales::NameForScale(scale) != nullptr);
 }
