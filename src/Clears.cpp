@@ -1144,7 +1144,7 @@ static ImU32 BountyDateColor(const std::string& date) {
     // GW2 uses UTC resets, not local midnight.
     const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    const std::string today = ClearsRotation::DateLabel(
+    const std::string today = ClearsRotation::BountyDateLabel(
         ClearsRotation::FloorDay(now) * ClearsRotation::kDay);
     return date == today ? AlterEgo::CompletionTheme::kBountyToday
                          : AlterEgo::CompletionTheme::kBountyFuture;
