@@ -14266,81 +14266,79 @@ static void RenderSkinventory() {
         return;
     }
 
-    // Status bar + manual refresh
+    // Compact toolbar; show the last *successful* owned-skins retrieval, not
+    // the time at which an unsuccessful request happened to finish.
     {
-        static auto s_lastRefreshTime = std::chrono::steady_clock::time_point{};
         static bool s_refreshPending = false;
+        static uint64_t s_refreshStartingGeneration = 0;
+        static auto s_successUntil = std::chrono::steady_clock::time_point{};
 
-        // Consume H&S data-updated flag (e.g. user refreshed in H&S)
-        if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag()) {
+        if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag())
             g_SkinRefreshOwned = true;
-        }
 
         bool isQuerying = Skinventory::OwnedSkins::IsQuerying();
         bool canRefresh = Skinventory::OwnedSkins::IsHoardAndSeekAvailable() && !isQuerying;
 
-        // Auto-refresh once per (account, session) when we land on the tab with no data
+        // Initial automatic lookup, once per selected account.
         {
             static std::string s_autoRefreshAccount;
-            std::string currentAccount = GetEffectiveAccountName();
-            if (canRefresh
-                && !Skinventory::OwnedSkins::HasData()
-                && s_autoRefreshAccount != currentAccount) {
+            const std::string currentAccount = GetEffectiveAccountName();
+            if (canRefresh && !Skinventory::OwnedSkins::HasData() &&
+                s_autoRefreshAccount != currentAccount) {
                 s_autoRefreshAccount = currentAccount;
                 g_SkinRefreshOwned = true;
             }
         }
 
-        if (!canRefresh) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-        if (ImGui::SmallButton("Refresh Owned") && canRefresh) {
+        if (!canRefresh) ImGui::BeginDisabled();
+        if (ImGui::SmallButton("Refresh Owned") && canRefresh)
             g_SkinRefreshOwned = true;
-        }
-        if (!canRefresh) ImGui::PopStyleVar();
+        if (!canRefresh) ImGui::EndDisabled();
 
-        // Kick off query when requested — use API proxy (single request, 64KB buffer)
         if (g_SkinRefreshOwned && canRefresh) {
             g_SkinRefreshOwned = false;
             s_refreshPending = true;
-
-            // Update account for the query
+            s_refreshStartingGeneration = Skinventory::OwnedSkins::GetGeneration();
             Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
-
             Skinventory::OwnedSkins::RequestOwnedSkinsViaApi();
         }
 
-        // Detect when query finishes
+        isQuerying = Skinventory::OwnedSkins::IsQuerying();
         if (s_refreshPending && !isQuerying) {
             s_refreshPending = false;
-            s_lastRefreshTime = std::chrono::steady_clock::now();
+            if (Skinventory::OwnedSkins::GetGeneration() != s_refreshStartingGeneration)
+                s_successUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
         }
 
-        // Status text
-        ImGui::SameLine();
-        if (isQuerying) {
-            std::string hsMsg = Skinventory::OwnedSkins::GetStatusMessage();
-            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "%s", hsMsg.c_str());
+        const std::time_t updated = Skinventory::OwnedSkins::GetLastSuccessTime();
+        AlterEgo::RefreshUI::Timestamp(updated, "owned skins");
+
+        const std::string msg = Skinventory::OwnedSkins::GetStatusMessage();
+        if (isQuerying || msg.find("busy") != std::string::npos) {
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+                msg.empty() ? "Querying owned skins..." : msg);
+        } else if (msg.find("denied") != std::string::npos ||
+                   msg.find("Failed") != std::string::npos ||
+                   msg.find("truncated") != std::string::npos) {
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, msg);
+        } else if (std::chrono::steady_clock::now() < s_successUntil) {
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success,
+                "Refresh complete - " +
+                std::to_string(Skinventory::OwnedSkins::GetOwnedCount()) + " owned");
         } else if (Skinventory::OwnedSkins::HasData()) {
-            size_t owned = Skinventory::OwnedSkins::GetOwnedCount();
-            if (s_lastRefreshTime != std::chrono::steady_clock::time_point{}) {
-                auto elapsed = std::chrono::steady_clock::now() - s_lastRefreshTime;
-                int secs = (int)std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-                if (secs < 60)
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%zu owned  |  Refreshed %ds ago", owned, secs);
-                else
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%zu owned  |  Refreshed %dm ago", owned, secs / 60);
-            } else {
-                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%zu owned (cached)", owned);
-            }
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
+                "Ready - " + std::to_string(Skinventory::OwnedSkins::GetOwnedCount()) + " owned");
         } else if (!Skinventory::OwnedSkins::IsHoardAndSeekAvailable()) {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Waiting for Hoard & Seek...");
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
+                "Waiting for Hoard & Seek...");
         } else {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Click Refresh Owned to query skins");
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
+                "No ownership data - click Refresh Owned");
         }
 
         if (cacheStatus == Skinventory::CacheStatus::Updating) {
-            ImGui::SameLine();
-            std::string updateMsg = Skinventory::SkinCache::GetStatusMessage();
-            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "| %s", updateMsg.c_str());
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+                Skinventory::SkinCache::GetStatusMessage());
         }
     }
 
