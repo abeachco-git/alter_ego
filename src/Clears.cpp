@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <set>
 #include <memory>
+#include <array>
 
 #include "imgui.h"
 #include <nlohmann/json.hpp>
@@ -1222,7 +1223,110 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
 
 struct WingEncChip { std::string label; std::string fullName; bool done = false; std::string bountyDate; };
 
-// Compact single-row tier banner with inline chips — for daily fractals.
+// Daily T1–T4 use the same three maps. Group once by map, then give every
+// tier a fixed-width cell with a fixed reserved checkmark gutter. Neither
+// completion status nor Hide Complete changes any tier column's position.
+struct DailyFractalMap {
+    std::string name;
+    std::array<const ClearEntry*, 4> tiers{};
+};
+static void RenderDailyFractalMatrix(const std::vector<DailyFractalMap>& maps,
+                                     bool fetched) {
+    if (maps.empty()) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float pad = 8.0f, gap = 4.0f, topHeight = 24.0f;
+    const float rowHeight = 25.0f, rowGap = 3.0f;
+    const float fontHeight = ImGui::GetTextLineHeight();
+    const float tierWidth = std::max(44.0f, ImGui::CalcTextSize("T4").x + 25.0f);
+    const float tiersWidth = 4 * tierWidth + 3 * gap;
+    const float height = topHeight + pad
+        + static_cast<float>(maps.size()) * (rowHeight + rowGap);
+    const ImVec2 outerEnd(origin.x + width, origin.y + height);
+    AlterEgo::CompletionTheme::DrawGroup(dl, origin, outerEnd, 3.0f);
+
+    int completed = 0, available = 0;
+    for (const auto& map : maps)
+        for (const ClearEntry* e : map.tiers)
+            if (e) { ++available; if (fetched && e->done) ++completed; }
+    const std::string count = fetched
+        ? std::to_string(completed) + "/" + std::to_string(available)
+        : "?/" + std::to_string(available);
+    const ImVec2 countSize = ImGui::CalcTextSize(count.c_str());
+    dl->AddText(ImVec2(origin.x + pad, origin.y + 5.0f),
+        AlterEgo::CompletionTheme::kAvailableText, "Dailies");
+    dl->AddText(ImVec2(outerEnd.x - pad - countSize.x, origin.y + 5.0f),
+        completed > 0 && completed < available
+            ? AlterEgo::CompletionTheme::kInProgressGold
+            : AlterEgo::CompletionTheme::kMetaText, count.c_str());
+
+    for (size_t index = 0; index < maps.size(); ++index) {
+        const auto& map = maps[index];
+        const float y = origin.y + topHeight + index * (rowHeight + rowGap);
+        const ImVec2 rowMin(origin.x + pad, y);
+        const ImVec2 rowMax(outerEnd.x - pad, y + rowHeight);
+        bool allDone = fetched;
+        for (const ClearEntry* e : map.tiers)
+            if (e && !e->done) allDone = false;
+        AlterEgo::CompletionTheme::DrawRow(dl, rowMin, rowMax, allDone, 2.0f);
+
+        const float tierStartX = rowMax.x - tiersWidth - 4.0f;
+        dl->PushClipRect(ImVec2(rowMin.x + 7.0f, y),
+                         ImVec2(tierStartX - 5.0f, y + rowHeight), true);
+        dl->AddText(ImVec2(rowMin.x + 7.0f,
+                           y + (rowHeight - fontHeight) * 0.5f),
+                    AlterEgo::CompletionTheme::Text(allDone), map.name.c_str());
+        dl->PopClipRect();
+
+        ImGui::PushID(static_cast<int>(index));
+        for (int tier = 0; tier < 4; ++tier) {
+            const ClearEntry* entry = map.tiers[tier];
+            const bool done = fetched && entry && entry->done;
+            const float x = tierStartX + tier * (tierWidth + gap);
+            const ImVec2 cmin(x, y + 2.0f);
+            const ImVec2 cmax(x + tierWidth, y + rowHeight - 2.0f);
+            AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, done, 2.0f);
+
+            const float checkX = cmin.x + 8.5f;
+            const float centerY = (cmin.y + cmax.y) * 0.5f;
+            AlterEgo::CompletionTheme::DrawCompleteMark(
+                dl, ImVec2(checkX, centerY), done, 3.4f);
+            // This label always starts at the SAME position, regardless
+            // of whether the reserved check gutter contains a check.
+            const std::string tierLabel = "T" + std::to_string(tier + 1);
+            const ImU32 ink = entry
+                ? (fetched ? AlterEgo::CompletionTheme::Text(done)
+                           : AlterEgo::CompletionTheme::kUnknownText)
+                : AlterEgo::CompletionTheme::kUnknownText;
+            dl->AddText(ImVec2(cmin.x + 19.0f,
+                               centerY - fontHeight * 0.5f),
+                        ink, entry ? tierLabel.c_str() : "-");
+
+            ImGui::SetCursorScreenPos(cmin);
+            ImGui::PushID(tier);
+            ImGui::InvisibleButton("##dailyTier", ImVec2(tierWidth, cmax.y-cmin.y));
+            if (ImGui::IsItemHovered()) {
+                if (!entry)
+                    ImGui::SetTooltip("%s - Tier %d: no objective in this tier",
+                                      map.name.c_str(), tier + 1);
+                else if (!fetched)
+                    ImGui::SetTooltip("%s - Tier %d: progress not loaded",
+                                      map.name.c_str(), tier + 1);
+                else
+                    ImGui::SetTooltip("%s - Tier %d: %s",
+                                      map.name.c_str(), tier + 1,
+                                      done ? "completed" : "remaining");
+            }
+            ImGui::PopID();
+        }
+        ImGui::PopID();
+    }
+    ImGui::SetCursorScreenPos(ImVec2(origin.x, outerEnd.y + 2.0f));
+    ImGui::Dummy(ImVec2(0, 2.0f));
+}
+
+// Compact single-row tier banner with inline chips — for recommended fractals.
 // Layout: [accent] [TIER] [title]   [chip][chip][chip]   X/Y
 static void RenderTierRow(const char* tierLabel,
                           const std::string& title,
@@ -1973,13 +2077,52 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
         ImGui::Indent(4.0f);
+        // The four daily tiers share their map names. Render one compact
+        // map-first matrix instead of repeating those maps four times.
+        std::vector<DailyFractalMap> maps;
+        for (const auto& e : g_DailyFractals) {
+            int tierIndex = -1;
+            if      (e.tier == "T1") tierIndex = 0;
+            else if (e.tier == "T2") tierIndex = 1;
+            else if (e.tier == "T3") tierIndex = 2;
+            else if (e.tier == "T4") tierIndex = 3;
+            if (tierIndex < 0) continue;
+            const std::string name = ShortenFractalName(e.name);
+            auto it = std::find_if(maps.begin(), maps.end(),
+                [&](const DailyFractalMap& m) { return m.name == name; });
+            if (it == maps.end()) {
+                maps.push_back(DailyFractalMap{});
+                maps.back().name = name;
+                it = maps.end() - 1;
+            }
+            it->tiers[tierIndex] = &e;
+        }
+        std::sort(maps.begin(), maps.end(),
+            [](const DailyFractalMap& a, const DailyFractalMap& b) {
+                return a.name < b.name;
+            });
+        if (g_ClearsHideComplete && g_ClearsFetched) {
+            // Hide wholly completed maps without removing individual tier
+            // columns or causing remaining rows to shift horizontally.
+            maps.erase(std::remove_if(maps.begin(), maps.end(),
+                [](const DailyFractalMap& m) {
+                    bool any = false;
+                    for (const ClearEntry* e : m.tiers) {
+                        if (e) { any = true; if (!e->done) return false; }
+                    }
+                    return any;
+                }), maps.end());
+        }
+        if (!maps.empty())
+            RenderDailyFractalMatrix(maps, g_ClearsFetched);
+        else if (g_ClearsHideComplete && g_ClearsFetched)
+            ImGui::TextDisabled("  All daily fractals completed.");
+
+        // Recommended fractals are different scales; keep the existing
+        // compact REC row rather than forcing them into the tier matrix.
         struct TierInfo { const char* tier; const char* label; const char* fullName; ImU32 accent; };
         const TierInfo tierOrder[] = {
-            {"T1",  "T1",  "Tier 1 Fractal", IM_COL32(111, 204, 122, 255)},
-            {"T2",  "T2",  "Tier 2 Fractal", IM_COL32(110, 192, 224, 255)},
-            {"T3",  "T3",  "Tier 3 Fractal", IM_COL32(216, 161, 74, 255)},
-            {"T4",  "T4",  "Tier 4 Fractal", IM_COL32(217, 106, 106, 255)},
-            {"Rec", "REC", "Recommended",    IM_COL32(197, 161, 85, 255)},
+            {"Rec", "REC", "Recommended", IM_COL32(197, 161, 85, 255)},
         };
         for (const auto& ti : tierOrder) {
             std::vector<const ClearEntry*> tierEntries;
