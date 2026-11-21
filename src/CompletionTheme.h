@@ -11,7 +11,11 @@
 #include "imgui.h"
 
 namespace AlterEgo::CompletionTheme {
-inline constexpr ImU32 kRowBackground = IM_COL32(29, 31, 37, 245);
+// Layered surfaces: dark group = structure, individual cells = actionable work.
+inline constexpr ImU32 kGroupBackground = IM_COL32(26, 28, 32, 246);
+inline constexpr ImU32 kAvailableBackground = IM_COL32(55, 58, 64, 245);
+inline constexpr ImU32 kCompletedBackground = IM_COL32(40, 43, 47, 245);
+inline constexpr ImU32 kRowBackground = kAvailableBackground;
 inline constexpr ImU32 kCompleteBorder = IM_COL32(105, 194, 126, 240);
 inline constexpr ImU32 kCompleteDot = IM_COL32(105, 204, 126, 255);
 inline constexpr ImU32 kCompleteMark = IM_COL32(137, 148, 141, 205);
@@ -20,7 +24,7 @@ inline constexpr ImU32 kBountyToday = IM_COL32(255, 166, 92, 255);
 inline constexpr ImU32 kBountyFuture = IM_COL32(101, 207, 203, 255);
 inline constexpr ImU32 kMetaText = IM_COL32(162, 163, 160, 230);
 inline constexpr float kHeadingScale = 1.18f;
-inline constexpr ImU32 kCompleteText = IM_COL32(146, 148, 142, 240);
+inline constexpr ImU32 kCompleteText = IM_COL32(126, 133, 128, 235);
 inline constexpr ImU32 kAvailableText = IM_COL32(236, 232, 221, 255);
 inline constexpr ImU32 kSelectedGold = IM_COL32(232, 196, 122, 230);
 inline constexpr ImU32 kInProgressGold = IM_COL32(244, 196, 122, 230);
@@ -34,7 +38,13 @@ inline void DrawRow(ImDrawList* draw, const ImVec2& min, const ImVec2& max,
     // No item-level completion outline: dozens of green borders obscured the
     // remaining work. A slightly quieter filled background is sufficient.
     draw->AddRectFilled(min, max,
-        complete ? IM_COL32(32, 34, 39, 205) : kRowBackground, rounding);
+        complete ? kCompletedBackground : kAvailableBackground, rounding);
+}
+// Group backgrounds visually separate wings and daily fractals from their
+// item cells. Never color an outer group based on completion state.
+inline void DrawGroup(ImDrawList* draw, const ImVec2& min,
+                      const ImVec2& max, float rounding = 3.0f) {
+    draw->AddRectFilled(min, max, kGroupBackground, rounding);
 }
 inline void DrawCompleteMark(ImDrawList* draw, const ImVec2& center,
                              bool complete, float radius = 3.8f) {
