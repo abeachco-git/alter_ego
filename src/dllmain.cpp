@@ -7770,6 +7770,11 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
                      (build.relic_id != 0 || !build.relic_name.empty() ||
                       (it != build.gear.end() && it->second.item_id != 0)));
     bool hasData = hasStat || hasWeaponType || hasRelic;
+    const auto* gearSlot = it != build.gear.end() ? &it->second : nullptr;
+    size_t infusionCount = 0;
+    if (gearSlot)
+        for (uint32_t id : gearSlot->infusion_ids)
+            if (id != 0) ++infusionCount;
 
     ImGui::PushID(slot);
 
@@ -7834,8 +7839,21 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
         ImGui::Dummy(ImVec2(iconSz, iconSz));
     }
 
-    // Invisible button over icon area (overlaid on top for click handling).
-    // Gear is only editable in edit mode; read-only slots are inert (no click/hover).
+    // Compact infusion count badge; hover over the gear icon for item names.
+    if (infusionCount > 0) {
+        std::string marker = "Inf " + std::to_string(infusionCount);
+        ImVec2 ts = ImGui::CalcTextSize(marker.c_str());
+        ImVec2 badgePos(pos.x + iconSz - ts.x - 5.0f,
+                        pos.y + iconSz - ts.y - 3.0f);
+        ImDrawList* badgeDraw = ImGui::GetWindowDrawList();
+        badgeDraw->AddRectFilled(
+            ImVec2(badgePos.x - 3.0f, badgePos.y - 1.0f),
+            ImVec2(pos.x + iconSz - 1.0f, pos.y + iconSz - 1.0f),
+            IM_COL32(22, 27, 34, 235), 2.0f);
+        badgeDraw->AddText(badgePos, IM_COL32(160, 225, 255, 255), marker.c_str());
+    }
+
+    // Only editable in edit mode; read-only gear can still show tooltips.
     ImGui::SetCursorScreenPos(pos);
     if (disabled || !g_LibEditMode) {
         ImGui::Dummy(ImVec2(iconSz, iconSz));
@@ -7845,7 +7863,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
         current.slot = slot;
         OpenGearDialog(build.id, slot, current);
     }
-    bool hovered = !disabled && g_LibEditMode && ImGui::IsItemHovered();
+    bool hovered = !disabled && ImGui::IsItemHovered();
 
     // Name text next to icon — draw directly so lines fit within icon height
     bool isRelicSlot = (strcmp(slot, "Relic") == 0);
@@ -7915,7 +7933,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
             }
         }
         ImGui::EndTooltip();
-    } else if (hovered && hasData) {
+    } else if (hovered && (hasData || infusionCount > 0)) {
         ImGui::BeginTooltip();
         if (hasWeaponType) {
             ImGui::TextColored(ImVec4(0.8f, 0.75f, 0.5f, 1.0f), "%s", WeaponDisplayName(it->second.weapon_type));
@@ -7930,10 +7948,25 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
                 }
             }
         }
+        if (gearSlot && infusionCount > 0) {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.62f, 0.88f, 1.0f, 1.0f),
+                "Infusions (%zu)", infusionCount);
+            for (uint32_t id : gearSlot->infusion_ids) {
+                if (id == 0) continue;
+                const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+                if (info && !info->name.empty())
+                    ImGui::BulletText("%s", info->name.c_str());
+                else
+                    ImGui::BulletText("Infusion #%u", id);
+            }
+        }
         ImGui::EndTooltip();
     } else if (hovered) {
         ImGui::BeginTooltip();
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s (click to customize)", GearSlotDisplayName(slot));
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+            "%s%s", GearSlotDisplayName(slot),
+            g_LibEditMode ? " (click to customize)" : "");
         ImGui::EndTooltip();
     }
 
@@ -8011,6 +8044,10 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
     for (auto& [slot, gs] : build.gear) {
         tryItem(gs.sigil_id, gs.sigil);
         tryItem(gs.sigil2_id, gs.sigil2);
+        for (uint32_t infId : gs.infusion_ids) {
+            if (infId != 0 && !AlterEgo::GW2API::GetItemInfo(infId))
+                missingItems.push_back(infId);
+        }
         if (gs.rune_id == 0 && build.rune_id != 0) {
             // Propagate shared rune to armor slot if not yet set
             static const char* armorSlots[] = {"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
