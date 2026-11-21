@@ -9205,8 +9205,9 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         g_LibCompareBuildTab = -1;
     const int activeBuildIndex = GetActiveBuildIndex(*character);
     if (activeBuildIndex < 0) return;
-    const auto& live = character->build_tabs[
-        g_LibCompareBuildTab < 0 ? activeBuildIndex : g_LibCompareBuildTab];
+    const int displayedBuildTab = g_LibCompareBuildTab < 0
+        ? activeBuildIndex : g_LibCompareBuildTab;
+    const auto& live = character->build_tabs[displayedBuildTab];
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
         return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
     };
@@ -9260,10 +9261,47 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::Checkbox("Compare exact item IDs##compare", &g_LibCompareExactItems);
     }
 
-    const AlterEgo::BuildComparison result = CalculateSavedVsLiveComparison(
-        saved, *character, live,
-        g_LibCompareEquipTab == 0 ? GetActiveEquipmentTab(*character) : g_LibCompareEquipTab,
-        g_LibCompareExactItems);
+    // A detailed comparison can perform many metadata lookups. Reuse its result
+    // while the inputs are unchanged, rather than recomputing every render frame.
+    // Expire after 500 ms as public item/stat metadata may arrive asynchronously
+    // without changing the character or saved-build revision.
+    struct ComparisonCache {
+        AlterEgo::BuildComparison result;
+        std::string savedBuildId;
+        std::string characterName;
+        uint64_t characterRevision = 0;
+        uint64_t libraryRevision = 0;
+        int buildTab = -1;
+        int equipmentTab = -1;
+        bool exactItems = false;
+        std::chrono::steady_clock::time_point updated{};
+    };
+    static ComparisonCache cache;
+    const int equipmentTab = g_LibCompareEquipTab == 0
+        ? GetActiveEquipmentTab(*character) : g_LibCompareEquipTab;
+    const uint64_t characterRevision = AlterEgo::GW2API::GetCharacterDataRevision();
+    const uint64_t libraryRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
+    const auto now = std::chrono::steady_clock::now();
+    if (cache.savedBuildId != saved.id ||
+        cache.characterName != character->name ||
+        cache.characterRevision != characterRevision ||
+        cache.libraryRevision != libraryRevision ||
+        cache.buildTab != displayedBuildTab ||
+        cache.equipmentTab != equipmentTab ||
+        cache.exactItems != g_LibCompareExactItems ||
+        now - cache.updated >= std::chrono::milliseconds(500)) {
+        cache.result = CalculateSavedVsLiveComparison(
+            saved, *character, live, equipmentTab, g_LibCompareExactItems);
+        cache.savedBuildId = saved.id;
+        cache.characterName = character->name;
+        cache.characterRevision = characterRevision;
+        cache.libraryRevision = libraryRevision;
+        cache.buildTab = displayedBuildTab;
+        cache.equipmentTab = equipmentTab;
+        cache.exactItems = g_LibCompareExactItems;
+        cache.updated = now;
+    }
+    const auto& result = cache.result;
 
     const auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetchStatus == AlterEgo::FetchStatus::InProgress;
