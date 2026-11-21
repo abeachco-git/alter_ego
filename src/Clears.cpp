@@ -93,8 +93,11 @@ static std::atomic<long long> g_VaultRetryAtMs{0};
 bool g_VaultNeedRequery = false;
 static bool g_VaultHideComplete = false;   // hide claimed vault objectives
 static bool g_ClearsHideComplete = false;  // hide completed clear encounters
+static bool g_VaultOpen[3] = {true, true, true}; // Daily, Weekly, Special
 static void LoadClearUiSettings();
 static void SaveClearUiSettings();
+static bool RenderVaultSectionToggle(int index, const char* title,
+                                     ImVec4 color, const char* suffix);
 static std::chrono::system_clock::time_point g_VaultLastDailyReset{};
 static std::chrono::system_clock::time_point g_VaultLastWeeklyReset{};
 static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
@@ -1572,31 +1575,29 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     float h = 26.0f;
     ImVec2 cmax(cmin.x + width, cmin.y + h);
 
-    bool done = obj.isDone();
-    bool claimed = obj.claimed;
-
-    // Subtle background (slightly lifted for unclaimed)
-    ImU32 bg = claimed ? IM_COL32(18, 20, 24, 200)
-                       : IM_COL32(26, 28, 34, 220);
-    dl->AddRectFilled(cmin, cmax, bg, 3.0f);
-    dl->AddRect(cmin, cmax, IM_COL32(0, 0, 0, 160), 3.0f, 0, 1.0f);
-
-    // Left accent strip — track colour, dimmed when claimed
-    ImU32 accent = VaultTrackColor(obj.track);
-    if (claimed) accent = (accent & 0x00FFFFFF) | (110 << 24);
-    dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 2),
-                      ImVec2(cmin.x + 3, cmax.y - 2), accent);
+    // Claimed rewards are complete, including in older snapshots where
+    // progress is absent. Completed entries stay green like Clears.
+    const bool claimed = obj.claimed;
+    const bool done = claimed || obj.isDone();
+    const ImU32 green = IM_COL32(105, 204, 126, 255);
+    dl->AddRectFilled(cmin, cmax, IM_COL32(29, 31, 37, 245), 2.0f);
+    dl->AddRect(cmin, cmax, done
+        ? IM_COL32(105, 194, 126, 240)
+        : IM_COL32(135, 125, 102, 175), 2.0f);
+    const float midY = cmin.y + h * 0.5f;
+    const float dotX = cmin.x + 10.0f;
+    if (done)
+        dl->AddCircleFilled(ImVec2(dotX, midY), 3.8f, green);
+    else
+        dl->AddCircle(ImVec2(dotX, midY), 3.8f,
+                      IM_COL32(175, 163, 131, 240), 12, 1.3f);
 
     float padX = 8.0f;
-    float midY = cmin.y + h * 0.5f;
-
-    // Track tag (compact)
-    float tagX = cmin.x + padX;
+    float tagX = cmin.x + 20.0f;
     if (!obj.track.empty()) {
-        ImU32 tagCol = claimed ? IM_COL32(140, 130, 110, 200)
-                               : VaultTrackColor(obj.track);
         ImVec2 tagSz = ImGui::CalcTextSize(obj.track.c_str());
-        dl->AddText(ImVec2(tagX, midY - tagSz.y * 0.5f), tagCol, obj.track.c_str());
+        dl->AddText(ImVec2(tagX, midY - tagSz.y * 0.5f),
+                    VaultTrackColor(obj.track), obj.track.c_str());
         tagX += tagSz.x + 8.0f;
     }
 
@@ -1629,11 +1630,8 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     dl->AddRect(pillMin, pillMax, pillBorder, 3.0f, 0, 1.0f);
     dl->AddText(ImVec2(pillMin.x + pillPadX, pillMin.y + pillPadY), pillText, pill);
 
-    // Title (clipped between tagX and pillMin.x)
-    ImU32 titleCol;
-    if (claimed)   titleCol = IM_COL32(130, 130, 120, 230);
-    else if (done) titleCol = IM_COL32(200, 200, 190, 255);
-    else           titleCol = IM_COL32(235, 230, 215, 255);
+    // Status uses the green border and dot; completed text stays readable.
+    const ImU32 titleCol = IM_COL32(236, 232, 221, 255);
 
     ImVec2 titleSz = ImGui::CalcTextSize(obj.title.c_str());
     float titleX = tagX;
@@ -1662,22 +1660,27 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     // Hit test (whole row) — tooltip with full title if it was truncated
     ImGui::InvisibleButton("##vobj", ImVec2(width, h));
     if (ImGui::IsItemHovered()) {
-        bool overflowed = (titleSz.x > (titleClipEnd - titleX));
-        if (overflowed) {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted(obj.title.c_str());
-            ImGui::EndTooltip();
-        }
-        dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 130), 3.0f, 0, 1.0f);
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(obj.title.c_str());
+        if (claimed)
+            ImGui::TextColored(ImVec4(0.55f, 0.88f, 0.58f, 1.0f), "Completed - reward claimed");
+        else if (done)
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.45f, 1.0f), "Completed - reward unclaimed");
+        else
+            ImGui::TextDisabled("Not completed");
+        ImGui::EndTooltip();
+        dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 130), 2.0f);
     }
 }
 
-static void RenderVaultPeriodSection(const char* title, const char* resetLabel,
-                                      ImVec4 color, const VaultPeriod& period)
+static void RenderVaultPeriodSection(int sectionIndex, const char* title,
+                                     const char* resetLabel, ImVec4 color,
+                                     const VaultPeriod& period)
 {
     char suffix[64];
     snprintf(suffix, sizeof(suffix), "(%s)", resetLabel);
-    RenderSectionHeader(title, color, suffix);
+    if (!RenderVaultSectionToggle(sectionIndex, title, color, suffix))
+        return;
 
     if (period.objectives.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
@@ -1805,13 +1808,13 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
 
     std::lock_guard<std::mutex> lock(g_ClearsMutex);
 
-    RenderVaultPeriodSection("Daily Objectives", dailyResetStr.c_str(),
+    RenderVaultPeriodSection(0, "Daily Objectives", dailyResetStr.c_str(),
         ImVec4(0.61f, 0.43f, 0.92f, 1.0f), g_VaultDaily);
 
     ImGui::Spacing();
     ImGui::Separator();
 
-    RenderVaultPeriodSection("Weekly Objectives", weeklyResetStr.c_str(),
+    RenderVaultPeriodSection(1, "Weekly Objectives", weeklyResetStr.c_str(),
         ImVec4(0.91f, 0.78f, 0.29f, 1.0f), g_VaultWeekly);
 
     if (!g_VaultSpecial.objectives.empty()) {
@@ -1830,7 +1833,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
                 seasonLabel = "ended";
             }
         }
-        RenderVaultPeriodSection("Special Objectives", seasonLabel.c_str(),
+        RenderVaultPeriodSection(2, "Special Objectives", seasonLabel.c_str(),
             ImVec4(0.9f, 0.70f, 0.30f, 1.0f), g_VaultSpecial);
     }
 }
@@ -1856,6 +1859,11 @@ static void LoadClearUiSettings() {
         const auto& a = j["expanded"];
         for (size_t i = 0; i < 4 && i < a.size(); ++i)
             if (a[i].is_boolean()) g_ClearOpen[i] = a[i].get<bool>();
+        if (j.contains("vault_expanded") && j["vault_expanded"].is_array()) {
+            const auto& v = j["vault_expanded"];
+            for (size_t i = 0; i < 3 && i < v.size(); ++i)
+                if (v[i].is_boolean()) g_VaultOpen[i] = v[i].get<bool>();
+        }
         g_VaultHideComplete = j.value("hide_vault_complete", false);
         g_ClearsHideComplete = j.value("hide_clears_complete", false);
     } catch (...) {}
@@ -1866,11 +1874,29 @@ static void SaveClearUiSettings() {
         std::filesystem::create_directories(std::filesystem::path(path).parent_path());
         nlohmann::json j;
         j["expanded"] = {g_ClearOpen[0], g_ClearOpen[1], g_ClearOpen[2], g_ClearOpen[3]};
+        j["vault_expanded"] = {g_VaultOpen[0], g_VaultOpen[1], g_VaultOpen[2]};
         j["hide_vault_complete"] = g_VaultHideComplete;
         j["hide_clears_complete"] = g_ClearsHideComplete;
         std::ofstream f(path, std::ios::trunc);
         if (f.good()) f << j.dump(2);
     } catch (...) {}
+}
+static bool RenderVaultSectionToggle(int index, const char* title,
+                                     ImVec4 color, const char* suffix) {
+    LoadClearUiSettings();
+    ImGui::PushID("VaultSection");
+    ImGui::PushID(index);
+    if (ImGui::SmallButton(g_VaultOpen[index] ? "-" : "+")) {
+        g_VaultOpen[index] = !g_VaultOpen[index];
+        SaveClearUiSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s %s", g_VaultOpen[index] ? "Collapse" : "Expand", title);
+    ImGui::SameLine(0, 5.0f);
+    RenderSectionHeader(title, color, suffix);
+    ImGui::PopID();
+    ImGui::PopID();
+    return g_VaultOpen[index];
 }
 static bool RenderClearSectionToggle(int index, const char* title,
                                      ImVec4 color, const char* suffix) {
