@@ -2367,16 +2367,24 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             bool bitDone = (i < g_WeeklyStrikes.bitDone.size()) ? g_WeeklyStrikes.bitDone[i] : false;
             if (g_ClearsHideComplete && g_ClearsFetched && bitDone) continue;
             const std::string& name = g_WeeklyStrikes.bitNames[i];
+            // The achievement calls Kela's encounter "Guardian's Glade".
+            // Surface the boss name without changing the API bit index.
+            const bool isKela = ClearsRotation::Normalize(name) ==
+                "guardiansglade";
+            const std::string displayName = isKela
+                ? "Kela (Guardian's Glade)" : name;
             ImGui::PushID((int)i);
             ImVec2 startPos = ImGui::GetCursorScreenPos();
             const char* zone = StrikeZone(name);
             std::string subtitle = "Strike Mission";
             if (zone && *zone) { subtitle += " \xC2\xB7 "; subtitle += zone; }
             const std::string date = UpcomingBountyLabel(
-                name, g_DailyBounties, utcNow, weeklyEndUtc, g_ClearsFetched);
-            RenderClearBanner(name, subtitle,
+                isKela ? "Kela" : name, g_DailyBounties,
+                utcNow, weeklyEndUtc, g_ClearsFetched);
+            RenderClearBanner(displayName, subtitle,
                 g_ClearsFetched, bitDone, StrikeTheme(name),
-                /*tooltip*/ nullptr, /*widthOverride*/ halfW,
+                /*tooltip*/ isKela ? "Kela, Seneschal of Waves. Weekly completion comes from Guardian's Glade." : nullptr,
+                /*widthOverride*/ halfW,
                 /*bannerKey*/ "strike:" + name, date);
             ImGui::PopID();
 
@@ -2388,7 +2396,21 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             }
         }
         if (visibleCount == 0)
-            ImGui::TextDisabled("  All weekly strikes completed.");
+            ImGui::TextDisabled("  All weekly raid encounter objectives completed.");
+
+        // Nexus of Eternity is a standalone raid encounter released after
+        // the 14-objective Weekly Raid Encounters achievement was defined.
+        // Do not infer a weekly clear from a permanent achievement or
+        // mark it incomplete: the current H&S bits do not supply its status.
+        ImGui::Spacing();
+        RenderClearBanner("Vloxx (Nexus of Eternity)",
+            "Standalone raid encounter",
+            /*fetched*/ false, /*done*/ false,
+            StrikeTheme("Vloxx"),
+            /*tooltip*/ "Weekly clear status unavailable from the current Weekly Raid Encounters achievement. Vloxx is not included in its 14 objectives.",
+            /*widthOverride*/ ImGui::GetContentRegionAvail().x,
+            /*bannerKey*/ "strike:vloxx");
+
         ImGui::Unindent(4.0f);
         if (g_ClearsFetched && g_WeeklyStrikes.max > 0) {
             int doneCount = 0;
