@@ -9599,27 +9599,70 @@ static void RenderCompareTab() {
         return;
     }
 
-    const AlterEgo::SavedBuild* saved = nullptr;
-    for (const auto& build : builds) {
-        if (build.id == g_LibCompareBuildId) { saved = &build; break; }
-    }
-    if (!saved) {
-        // Default to the library's selected build, when available.
-        if (g_LibSelectedIdx >= 0 && g_LibSelectedIdx < (int)builds.size())
-            saved = &builds[g_LibSelectedIdx];
-        else
-            saved = &builds.front();
-        g_LibCompareBuildId = saved->id;
-        g_LibCompareChar.clear();
-    }
-
-    // Place refresh/status at the top, consistently with Vault/Clears.
-    // Match the target character resolver used by the result view.
+    // Resolve the active/manual hero FIRST, independent of saved builds.
     std::vector<const AlterEgo::Character*> compareMatches;
     for (const auto& ch : AlterEgo::GW2API::GetCharacters())
-        if (ch.profession == saved->profession && !ch.build_tabs.empty())
-            compareMatches.push_back(&ch);
-    const AlterEgo::Character* target = ResolveComparisonCharacter(*saved, compareMatches);
+        if (!ch.build_tabs.empty()) compareMatches.push_back(&ch);
+    const AlterEgo::Character* target = ResolveComparisonCharacter(compareMatches);
+    if (!target) {
+        ImGui::TextDisabled("No retrieved characters. Refresh characters first.");
+        return;
+    }
+    if (g_LibComparePreviousTarget != target->name) {
+        if (!g_LibComparePreviousTarget.empty()) g_LibCompareSavedManual = false;
+        g_LibComparePreviousTarget = target->name;
+        g_LibCompareBuildTab = -1;
+        g_LibCompareEquipTab = 0;
+    }
+
+    static std::string autoChar, autoId;
+    static uint64_t autoRev = 0, autoLibraryRev = 0;
+    static int autoBuildTab = -99;
+    const uint64_t charRev = AlterEgo::GW2API::GetCharacterDataRevision();
+    const uint64_t libraryRev = AlterEgo::GW2API::GetBuildLibraryRevision();
+    const int currentBuild = GetActiveBuildIndex(*target);
+    if (!g_LibCompareSavedManual &&
+        (autoChar != target->name || autoRev != charRev ||
+         autoLibraryRev != libraryRev || autoBuildTab != currentBuild)) {
+        autoChar = target->name; autoRev = charRev;
+        autoLibraryRev = libraryRev; autoBuildTab = currentBuild;
+        autoId.clear();
+        int bestScore = 0x7fffffff;
+        for (const auto& b : builds) {
+            if (b.profession != target->profession || currentBuild < 0) continue;
+            const bool fromChar = b.source_character == target->name;
+            const bool legacyName = b.source_character.empty() &&
+                MatchesLegacySourceName(b.name, target->name);
+            const auto comparison = CalculateSavedVsLiveComparison(
+                b, *target, target->build_tabs[currentBuild],
+                GetActiveEquipmentTab(*target), false);
+            const auto type = AlterEgo::ClassifyTemplateMatch(comparison);
+            if (!fromChar && !legacyName &&
+                type == AlterEgo::TemplateMatchStatus::Different) continue;
+            const int score = (type == AlterEgo::TemplateMatchStatus::SkillsDiffer ? 500 : 0)
+                + (fromChar ? 0 : legacyName ? 40 : 100)
+                + (int)std::min<size_t>(comparison.DifferenceCount(), 200);
+            if (score < bestScore) { bestScore = score; autoId = b.id; }
+        }
+    }
+    if (!g_LibCompareSavedManual) g_LibCompareBuildId = autoId;
+
+    const AlterEgo::SavedBuild* saved = nullptr;
+    for (const auto& b : builds) {
+        if (b.id == g_LibCompareBuildId && b.profession == target->profession) {
+            saved = &b;
+            break;
+        }
+    }
+    if (g_LibCompareSavedManual && !saved) {
+        g_LibCompareSavedManual = false;
+        g_LibCompareBuildId = autoId;
+        for (const auto& b : builds)
+            if (b.id == autoId && b.profession == target->profession) {
+                saved = &b; break;
+            }
+    }
+    // The toolbar always refers to the same target as Characters.
     const auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetchStatus == AlterEgo::FetchStatus::InProgress;
     if (busy || !target) {
