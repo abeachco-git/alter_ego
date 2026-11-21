@@ -1196,7 +1196,8 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
                     IM_COL32(160, 155, 140, 255), "?");
     }
 
-    const ImVec2 titlePos(pos.x + (complete || !fetched ? 19.0f : 8.0f),
+    // Check gutter is fixed even when unfinished, as in raid/fractal chips.
+    const ImVec2 titlePos(pos.x + 19.0f,
                           pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f);
     dl->PushClipRect(ImVec2(titlePos.x, pos.y), end, true);
     dl->AddText(titlePos, AlterEgo::CompletionTheme::Text(complete), title.c_str());
@@ -1341,9 +1342,9 @@ static void RenderTierRow(const char* tierLabel,
     float h = 34.0f;
     ImVec2 cmax(cmin.x + w, cmin.y + h);
 
-    // Neutral solid background, consistent with strike and raid cells.
+    // Outer group is dark; inner REC cells use the shared item backgrounds.
     const bool fullyDone = fetched && totalCount > 0 && doneCount == totalCount;
-    AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, fullyDone);
+    AlterEgo::CompletionTheme::DrawGroup(dl, cmin, cmax);
     (void)theme;
 
     // Neutral group heading; no category-colored stripe.
@@ -1390,8 +1391,8 @@ static void RenderTierRow(const char* tierLabel,
             ImVec2 chmin(chipsStartX + (chipW + gap) * i, chipY);
             ImVec2 chmax(chmin.x + chipW, chmin.y + chipH);
 
-            dl->AddRectFilled(chmin, chmax, IM_COL32(0, 0, 0, 175), 3.0f);
-            // No completion outline around individual cells.
+            AlterEgo::CompletionTheme::DrawRow(
+                dl, chmin, chmax, chips[i].done, 3.0f);
 
             const float dotR = 3.5f;
             const float dotX = chmin.x + 7.0f;
@@ -1400,7 +1401,8 @@ static void RenderTierRow(const char* tierLabel,
                 dl, ImVec2(dotX, dotY), chips[i].done, dotR);
 
             ImU32 lblCol = AlterEgo::CompletionTheme::Text(chips[i].done);
-            float lblX = chips[i].done ? dotX + dotR + 5.0f : chmin.x + 7.0f;
+            // Check gutter is reserved for all states: labels never move.
+            float lblX = dotX + dotR + 5.0f;
             ImVec2 lblSz = ImGui::CalcTextSize(chips[i].label.c_str());
             float lblY = chmin.y + (chipH - lblSz.y) * 0.5f;
             dl->PushClipRect(chmin, chmax, true);
@@ -1490,9 +1492,10 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     float h = 52.0f;
     ImVec2 cmax(cmin.x + w, cmin.y + h);
 
-    // Quiet wing header and status cells. No embedded artwork.
+    // A dark outer group separates wings, with brighter/dimmer shared
+    // item surfaces inside. Do not color the entire group when completed.
     const bool fullyDone = fetched && totalCount > 0 && doneCount == totalCount;
-    AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, fullyDone);
+    AlterEgo::CompletionTheme::DrawGroup(dl, cmin, cmax);
     (void)theme; // Neutral wing heading, like the other groups.
 
     // Top row text
@@ -1586,9 +1589,9 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             ImVec2 chmin(chipsX + (chipW + gap) * i, chipsY);
             ImVec2 chmax(chmin.x + chipW, chmin.y + chipH);
 
-            // Chip bg
-            dl->AddRectFilled(chmin, chmax, IM_COL32(0, 0, 0, 165), 3.0f);
-            // Completed chips are muted, without noisy green outlines.
+            // Each encounter uses the SAME item styling as Vault/Achievements.
+            AlterEgo::CompletionTheme::DrawRow(
+                dl, chmin, chmax, chips[i].done, 3.0f);
 
             // Completed: green status dot. Available: no dot, no border.
             const float dotR = 4.0f;
@@ -1599,7 +1602,9 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
 
             // De-emphasize completed encounters; brighter text shows what's left.
             ImU32 lblCol = AlterEgo::CompletionTheme::Text(chips[i].done);
-            float lblX = chips[i].done ? dotX + dotR + 5.0f : chmin.x + 7.0f;
+            // Reserve checkmark space for unfinished encounters too, so the
+            // label does not shift when the completion state changes.
+            float lblX = dotX + dotR + 5.0f;
             ImVec2 lblSz = ImGui::CalcTextSize(chips[i].label.c_str());
             float lblY = chmin.y + (chipH - lblSz.y) * 0.5f;
             // Clip text to chip width
@@ -1685,7 +1690,8 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
         dl, ImVec2(dotX, midY), done);
 
     float padX = 8.0f;
-    float tagX = done ? cmin.x + 20.0f : cmin.x + 8.0f;
+    // Fixed gutter for the completion check: labels do not jump.
+    float tagX = cmin.x + 20.0f;
     if (!obj.track.empty()) {
         ImVec2 tagSz = ImGui::CalcTextSize(obj.track.c_str());
         dl->AddText(ImVec2(tagX, midY - tagSz.y * 0.5f),
