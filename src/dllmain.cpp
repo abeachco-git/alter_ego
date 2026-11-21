@@ -11858,6 +11858,10 @@ static void RenderSkinDetailPanel() {
             dl->AddRect(chipMin, chipMax, chipBorder, 3.0f, 0, 1.2f);
             dl->AddText(ImVec2(chipMin.x + chipPadX, chipMin.y + chipPadY), chipFg, chipText);
         }
+        // The banner's text was drawn with SetCursorScreenPos, so its final
+        // layout cursor is inside the card. Restore it below the card before
+        // drawing the independent ID line (with deliberate vertical padding).
+        ImGui::SetCursorScreenPos(ImVec2(cmin.x, cmax.y + 6.0f));
     }
     ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.45f, 1.0f), "ID: %u", skin.id);
 
