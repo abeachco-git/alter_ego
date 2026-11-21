@@ -1201,6 +1201,31 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
 
 struct WingEncChip { std::string label; std::string fullName; bool done = false; std::string bountyDate; };
 
+// Shared drawing only: tier and wing layouts still own their hit areas,
+// hover details, positions, and completion rules.
+static void DrawEncounterChip(ImDrawList* dl, const WingEncChip& chip,
+                              ImVec2 chmin, ImVec2 chmax,
+                              float dotRadius, bool showBountyDate) {
+    AlterEgo::CompletionTheme::DrawRow(dl, chmin, chmax, chip.done, 3.0f);
+    const float dotX = chmin.x + 7.0f;
+    const float dotY = chmin.y + (chmax.y - chmin.y) * 0.5f;
+    AlterEgo::CompletionTheme::DrawCompleteMark(
+        dl, ImVec2(dotX, dotY), chip.done, dotRadius);
+    const float labelX = dotX + dotRadius + 5.0f;
+    const ImVec2 labelSize = ImGui::CalcTextSize(chip.label.c_str());
+    const float labelY = chmin.y + (chmax.y - chmin.y - labelSize.y) * 0.5f;
+    dl->PushClipRect(chmin, chmax, true);
+    dl->AddText(ImVec2(labelX, labelY),
+        AlterEgo::CompletionTheme::Text(chip.done), chip.label.c_str());
+    if (showBountyDate && !chip.bountyDate.empty()) {
+        const std::string date = " - " + chip.bountyDate;
+        dl->AddText(ImVec2(labelX + labelSize.x, labelY),
+            BountyDateColor(chip.bountyDate), date.c_str());
+    }
+    dl->PopClipRect();
+}
+
+
 // All four cells are one-line entries, arranged as two columns by two rows
 // at normal addon widths. A single-column fallback prevents overlap in small
 // windows. The last cell shows the T1/T2/T3 Recommended SCALE numbers.
@@ -1435,23 +1460,8 @@ static void RenderTierRow(const char* tierLabel,
             ImVec2 chmin(chipsStartX + (chipW + gap) * i, chipY);
             ImVec2 chmax(chmin.x + chipW, chmin.y + chipH);
 
-            AlterEgo::CompletionTheme::DrawRow(
-                dl, chmin, chmax, chips[i].done, 3.0f);
-
-            const float dotR = 3.5f;
-            const float dotX = chmin.x + 7.0f;
-            const float dotY = chmin.y + chipH * 0.5f;
-            AlterEgo::CompletionTheme::DrawCompleteMark(
-                dl, ImVec2(dotX, dotY), chips[i].done, dotR);
-
-            ImU32 lblCol = AlterEgo::CompletionTheme::Text(chips[i].done);
-            // Check gutter is reserved for all states: labels never move.
-            float lblX = dotX + dotR + 5.0f;
-            ImVec2 lblSz = ImGui::CalcTextSize(chips[i].label.c_str());
-            float lblY = chmin.y + (chipH - lblSz.y) * 0.5f;
-            dl->PushClipRect(chmin, chmax, true);
-            dl->AddText(ImVec2(lblX, lblY), lblCol, chips[i].label.c_str());
-            dl->PopClipRect();
+            DrawEncounterChip(dl, chips[i], chmin, chmax,
+                              /*dotRadius*/ 3.5f, /*showBountyDate*/ false);
 
             // Per-chip hover (overlay on top of the row hit area)
             ImGui::SetCursorScreenPos(chmin);
@@ -1633,35 +1643,8 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             ImVec2 chmin(chipsX + (chipW + gap) * i, chipsY);
             ImVec2 chmax(chmin.x + chipW, chmin.y + chipH);
 
-            // Each encounter uses the SAME item styling as Vault/Achievements.
-            AlterEgo::CompletionTheme::DrawRow(
-                dl, chmin, chmax, chips[i].done, 3.0f);
-
-            // Completed: green status dot. Available: no dot, no border.
-            const float dotR = 4.0f;
-            const float dotX = chmin.x + 7.0f;
-            const float dotY = chmin.y + chipH * 0.5f;
-            AlterEgo::CompletionTheme::DrawCompleteMark(
-                dl, ImVec2(dotX, dotY), chips[i].done, dotR);
-
-            // De-emphasize completed encounters; brighter text shows what's left.
-            ImU32 lblCol = AlterEgo::CompletionTheme::Text(chips[i].done);
-            // Reserve checkmark space for unfinished encounters too, so the
-            // label does not shift when the completion state changes.
-            float lblX = dotX + dotR + 5.0f;
-            ImVec2 lblSz = ImGui::CalcTextSize(chips[i].label.c_str());
-            float lblY = chmin.y + (chipH - lblSz.y) * 0.5f;
-            // Clip text to chip width
-            float maxLblW = chipW - (lblX - chmin.x) - 4.0f;
-            dl->PushClipRect(chmin, chmax, true);
-            (void)maxLblW;
-            dl->AddText(ImVec2(lblX, lblY), lblCol, chips[i].label.c_str());
-            if (!chips[i].bountyDate.empty()) {
-                const std::string date = " - " + chips[i].bountyDate;
-                dl->AddText(ImVec2(lblX + lblSz.x, lblY),
-                    BountyDateColor(chips[i].bountyDate), date.c_str());
-            }
-            dl->PopClipRect();
+            DrawEncounterChip(dl, chips[i], chmin, chmax,
+                              /*dotRadius*/ 4.0f, /*showBountyDate*/ true);
 
             // Hover area + tooltip with full encounter name
             ImGui::SetCursorScreenPos(chmin);
@@ -1686,17 +1669,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
 
 // Get wing short name "W1"-"W8" from wing ID, fallback empty string.
 static const char* WingShortName(uint32_t wingId) {
-    switch (wingId) {
-        case 9128: return "W1";
-        case 9147: return "W2";
-        case 9182: return "W3";
-        case 9144: return "W4";
-        case 9111: return "W5";
-        case 9120: return "W6";
-        case 9156: return "W7";
-        case 9181: return "W8";
-    }
-    return "";
+    return BountyWingShortName(wingId);
 }
 
 // Get clean wing name with "Weekly " stripped
