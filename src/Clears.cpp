@@ -93,8 +93,8 @@ struct VaultPeriod {
 static VaultPeriod g_VaultDaily;
 static VaultPeriod g_VaultWeekly;
 static VaultPeriod g_VaultSpecial;
-static bool g_VaultFetched = false;
-static bool g_VaultFetching = false;
+static std::atomic<bool> g_VaultFetched{false};
+static std::atomic<bool> g_VaultFetching{false};
 static bool g_VaultInitialAttempted = false;
 static bool g_VaultResponsesOK[3] = {};
 static VaultPeriod g_VaultPending[3];
@@ -103,7 +103,14 @@ static std::string g_VaultStatusMessage;
 static bool g_VaultLastAttemptFailed = false;
 static std::chrono::steady_clock::time_point g_VaultSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
-static std::atomic<long long> g_VaultRetryAtMs{0};
+// These per-type retry states and the staged responses are protected by
+// g_ClearsMutex: H&S delivers Vault responses from a worker thread.
+static long long g_VaultRetryAtMs = 0;
+static bool g_VaultRetryNeeded[3] = {};
+static int g_VaultRetryAttempts[3] = {};
+static long long g_VaultRequestStartMs = 0;
+static std::string g_VaultRequestAccount;
+static constexpr long long VAULT_TIMEOUT_MS = 45000;
 bool g_VaultNeedRequery = false;
 static bool g_VaultHideComplete = false;   // hide claimed vault objectives
 static bool g_ClearsHideComplete = false;  // hide completed clear encounters
@@ -127,6 +134,7 @@ static void SaveClearsCache();
 static void FetchClears();
 static void SendClearsAchQuery();
 static void FetchVaultData();
+static void RequestVaultSection(uint8_t type, const std::string& account);
 static void SaveVaultCache();
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr);
 static void RenderVaultPeriodSection(int sectionIndex, const char* title, const char* resetLabel,
@@ -348,62 +356,61 @@ void OnClearsAchResponse(void* eventArgs) {
 // Clears - Wizard's Vault fetch and response
 // =========================================================================
 
-static void FetchVaultData() {
-    if (g_VaultFetching || !APIDefs) return;
-    g_VaultFetching = true;
-    g_VaultInitialAttempted = true;
-    g_VaultLastAttemptFailed = false;
-    g_VaultStatusMessage = "Contacting Hoard & Seek...";
-    for (int i = 0; i < 3; ++i) {
-        g_VaultResponsesOK[i] = false;
-        g_VaultPending[i] = {};
-    }
+static const char* VaultSectionName(uint8_t type) {
+    static const char* names[] = {"daily", "weekly", "special"};
+    return type < 3 ? names[type] : "unknown";
+}
 
-    std::string acctName = GetEffectiveAccountName();
-    // H&S responds synchronously via Nexus events. Stage all three periods;
-    // only commit and timestamp a complete, successful set.
-    for (uint8_t type = 0; type <= 2; type++) {
-        g_VaultStatusMessage = type == 0 ? "Fetching daily objectives..."
-            : type == 1 ? "Fetching weekly objectives..." : "Fetching special objectives...";
-        HoardQueryWizardsVaultRequest req{};
-        req.api_version = HOARD_API_VERSION;
-        strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
-        strncpy(req.response_event, EV_AE_VAULT_RESPONSE, sizeof(req.response_event) - 1);
-        req.type = type;
-        if (!acctName.empty())
-            strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
-        APIDefs->Events_Raise(EV_HOARD_QUERY_WIZARDSVAULT, &req);
-    }
-    const bool complete = g_VaultResponsesOK[0] && g_VaultResponsesOK[1] && g_VaultResponsesOK[2];
-    if (complete) {
-        {
-            std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            g_VaultDaily = std::move(g_VaultPending[0]);
-            g_VaultWeekly = std::move(g_VaultPending[1]);
-            g_VaultSpecial = std::move(g_VaultPending[2]);
-            g_VaultFetched = true;
-            g_VaultLastSuccessTime = std::time(nullptr);
-        }
-        g_VaultStatusMessage = "Refresh complete";
-        g_VaultSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
-        SaveVaultCache();
-    } else {
-        g_VaultLastAttemptFailed = true;
-        g_VaultStatusMessage = g_VaultRetryAtMs.load() != 0
-            ? "Hoard & Seek busy - retrying shortly..."
-            : "Refresh failed - one or more objective requests failed";
-    }
-    g_VaultFetching = false;
-
-    // Season-end metadata is optional and must not mark a failed Vault fetch successful.
-    HoardQueryApiRequest req{};
+// Called only from the render thread. Never hold g_ClearsMutex around
+// Events_Raise: H&S may also respond synchronously for cached data.
+static void RequestVaultSection(uint8_t type, const std::string& account) {
+    HoardQueryWizardsVaultRequest req{};
     req.api_version = HOARD_API_VERSION;
     strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
-    strncpy(req.endpoint, "/v2/wizardsvault", sizeof(req.endpoint) - 1);
-    strncpy(req.response_event, EV_AE_VAULT_SEASON_RESP, sizeof(req.response_event) - 1);
-    if (!acctName.empty())
-        strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
-    APIDefs->Events_Raise(EV_HOARD_QUERY_API, &req);
+    strncpy(req.response_event, EV_AE_VAULT_RESPONSE, sizeof(req.response_event) - 1);
+    req.type = type;
+    if (!account.empty())
+        strncpy(req.account_name, account.c_str(), sizeof(req.account_name) - 1);
+    APIDefs->Events_Raise(EV_HOARD_QUERY_WIZARDSVAULT, &req);
+}
+
+// Start one asynchronous batch; each response is delivered separately later.
+// Previous successful data and its timestamp remain valid while refreshing.
+static void FetchVaultData() {
+    if (!APIDefs || g_VaultFetching.load()) return;
+    const std::string account = GetEffectiveAccountName();
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (g_VaultFetching.load()) return;
+        g_VaultFetching = true;
+        g_VaultInitialAttempted = true;
+        g_VaultLastAttemptFailed = false;
+        g_VaultStatusMessage = "Fetching Vault objectives (0/3)...";
+        g_VaultRequestStartMs = NowMs();
+        g_VaultRequestAccount = account;
+        g_VaultRetryAtMs = 0;
+        for (int i = 0; i < 3; ++i) {
+            g_VaultResponsesOK[i] = false;
+            g_VaultPending[i] = {};
+            g_VaultRetryNeeded[i] = false;
+            g_VaultRetryAttempts[i] = 0;
+        }
+    }
+
+    for (uint8_t type = 0; type < 3; ++type) {
+        if (!g_VaultFetching.load()) break; // permission/terminal error already received
+        RequestVaultSection(type, account);
+    }
+
+    // Best-effort season end date, independent of the three objective responses.
+    HoardQueryApiRequest season{};
+    season.api_version = HOARD_API_VERSION;
+    strncpy(season.requester, "Alter Ego", sizeof(season.requester) - 1);
+    strncpy(season.endpoint, "/v2/wizardsvault", sizeof(season.endpoint) - 1);
+    strncpy(season.response_event, EV_AE_VAULT_SEASON_RESP, sizeof(season.response_event) - 1);
+    if (!account.empty())
+        strncpy(season.account_name, account.c_str(), sizeof(season.account_name) - 1);
+    APIDefs->Events_Raise(EV_HOARD_QUERY_API, &season);
 }
 
 void OnVaultSeasonResponse(void* eventArgs) {
@@ -411,8 +418,7 @@ void OnVaultSeasonResponse(void* eventArgs) {
     auto* resp = static_cast<HoardQueryApiResponse*>(eventArgs);
     std::unique_ptr<HoardQueryApiResponse> respGuard(resp); // caller owns the response
     if (resp->status == HOARD_STATUS_BUSY) {
-        // Best-effort enrichment query — let the main vault retry re-fetch it.
-        g_VaultRetryAtMs = NowMs() + (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
+        // Optional season metadata: don't restart otherwise successful objectives.
         return;
     }
     if (resp->status != HOARD_STATUS_OK || resp->json_length == 0) return;
@@ -437,36 +443,97 @@ void OnVaultSeasonResponse(void* eventArgs) {
 void OnVaultResponse(void* eventArgs) {
     if (!eventArgs) return;
     auto* resp = (HoardQueryWizardsVaultResponse*)eventArgs;
-    std::unique_ptr<HoardQueryWizardsVaultResponse> respGuard(resp); // caller owns the response
-    if (resp->api_version < 2) return;
+    std::unique_ptr<HoardQueryWizardsVaultResponse> respGuard(resp);
+    if (resp->api_version < 2 || resp->type > 2) return;
 
-    if (resp->status != HOARD_STATUS_OK) {
-        if (resp->status == HOARD_STATUS_BUSY)
-            g_VaultRetryAtMs = NowMs() + (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
-        return;
-    }
-
+    // Parse into local memory first; publish only under the shared mutex.
     VaultPeriod period;
-    period.meta_progress_current  = resp->meta_progress_current;
-    period.meta_progress_complete = resp->meta_progress_complete;
-    period.meta_reward_astral     = resp->meta_reward_astral;
-    period.meta_reward_claimed    = resp->meta_reward_claimed != 0;
-    for (uint32_t i = 0; i < resp->objective_count && i < 16; i++) {
-        const auto& o = resp->objectives[i];
-        VaultObjective obj;
-        obj.id                = o.id;
-        obj.title             = o.title;
-        obj.track             = o.track;
-        obj.acclaim           = o.acclaim;
-        obj.progress_current  = o.progress_current;
-        obj.progress_complete = o.progress_complete;
-        obj.claimed           = o.claimed != 0;
-        period.objectives.push_back(std::move(obj));
+    if (resp->status == HOARD_STATUS_OK) {
+        period.meta_progress_current  = resp->meta_progress_current;
+        period.meta_progress_complete = resp->meta_progress_complete;
+        period.meta_reward_astral     = resp->meta_reward_astral;
+        period.meta_reward_claimed    = resp->meta_reward_claimed != 0;
+        for (uint32_t i = 0; i < resp->objective_count && i < 16; ++i) {
+            const auto& o = resp->objectives[i];
+            VaultObjective obj;
+            obj.id = o.id;
+            obj.title = o.title;
+            obj.track = o.track;
+            obj.acclaim = o.acclaim;
+            obj.progress_current = o.progress_current;
+            obj.progress_complete = o.progress_complete;
+            obj.claimed = o.claimed != 0;
+            period.objectives.push_back(std::move(obj));
+        }
     }
 
-    if (!g_VaultFetching || resp->type > 2) return;
-    g_VaultPending[resp->type] = std::move(period);
-    g_VaultResponsesOK[resp->type] = true;
+    bool save = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (!g_VaultFetching.load()) return;
+
+        // Reject delayed responses for an account that is no longer being queried.
+        const std::string echoedAccount(resp->account_name,
+            strnlen(resp->account_name, sizeof(resp->account_name)));
+        if (!g_VaultRequestAccount.empty() && !echoedAccount.empty() &&
+            echoedAccount != g_VaultRequestAccount) return;
+
+        const int type = resp->type;
+        if (g_VaultResponsesOK[type]) return; // duplicate response
+        if (resp->status == HOARD_STATUS_BUSY) {
+            if (++g_VaultRetryAttempts[type] <= 3) {
+                g_VaultRetryNeeded[type] = true;
+                const long long next = NowMs() +
+                    (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
+                // Wait for the latest required backoff before re-sending pending sections.
+                g_VaultRetryAtMs = std::max(g_VaultRetryAtMs, next);
+                g_VaultStatusMessage = std::string("Hoard & Seek busy - retrying ") +
+                    VaultSectionName((uint8_t)type) + " objectives...";
+            } else {
+                g_VaultFetching = false;
+                g_VaultLastAttemptFailed = true;
+                g_VaultRetryAtMs = 0;
+                g_VaultStatusMessage = std::string("Refresh failed - H&S busy after retries (") +
+                    VaultSectionName((uint8_t)type) + ")";
+            }
+        } else if (resp->status != HOARD_STATUS_OK) {
+            g_VaultFetching = false;
+            g_VaultLastAttemptFailed = true;
+            g_VaultRetryAtMs = 0;
+            if (resp->status == HOARD_STATUS_DENIED)
+                g_VaultStatusMessage = std::string("Hoard & Seek permission denied (") +
+                    VaultSectionName((uint8_t)type) + ")";
+            else
+                g_VaultStatusMessage = std::string("Vault ") + VaultSectionName((uint8_t)type) +
+                    " request failed (status " + std::to_string((int)resp->status) + ")";
+        } else {
+            g_VaultPending[type] = std::move(period);
+            g_VaultResponsesOK[type] = true;
+            g_VaultRetryNeeded[type] = false;
+            int received = 0;
+            for (bool ok : g_VaultResponsesOK) if (ok) ++received;
+            if (received == 3) {
+                // Commit atomically when *all* three sections have responded.
+                g_VaultDaily   = std::move(g_VaultPending[0]);
+                g_VaultWeekly  = std::move(g_VaultPending[1]);
+                g_VaultSpecial = std::move(g_VaultPending[2]);
+                g_VaultLastSuccessTime = std::time(nullptr);
+                g_VaultFetched = true;
+                g_VaultFetching = false;
+                g_VaultRetryAtMs = 0;
+                g_VaultLastAttemptFailed = false;
+                g_VaultStatusMessage = "Refresh complete";
+                g_VaultSuccessUntil = std::chrono::steady_clock::now() +
+                    std::chrono::seconds(4);
+                save = true;
+            } else if (g_VaultRetryAtMs == 0) {
+                g_VaultStatusMessage = "Fetching Vault objectives (" +
+                    std::to_string(received) + "/3)...";
+            }
+        }
+    }
+    // Persist after releasing the callback mutex; SaveVaultCache takes it again.
+    if (save) SaveVaultCache();
 }
 
 // Helper: fetch a category's achievement IDs from public API
@@ -813,9 +880,9 @@ static void SaveVaultCache() {
         std::chrono::system_clock::now().time_since_epoch()).count();
 
     nlohmann::json j;
-    j["fetch_time"] = (int64_t)g_VaultLastSuccessTime;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        j["fetch_time"] = (int64_t)g_VaultLastSuccessTime;
         j["daily"]      = serializePeriod(g_VaultDaily);
         j["weekly"]     = serializePeriod(g_VaultWeekly);
         j["special"]    = serializePeriod(g_VaultSpecial);
@@ -1885,33 +1952,66 @@ static void RenderVaultPeriodSection(int sectionIndex, const char* title,
 
 static void RenderVaultTab(const std::string& dailyResetStr, const std::string& weeklyResetStr)
 {
-    // Fire a scheduled BUSY backoff retry once its delay has elapsed.
+    // Handle retry/timeout on the render thread; callbacks never call Events_Raise.
+    std::vector<uint8_t> dueRetryTypes;
+    std::string retryAccount;
     {
-        long long retryAt = g_VaultRetryAtMs.load();
-        if (retryAt != 0 && NowMs() >= retryAt && !g_VaultFetching) {
-            g_VaultRetryAtMs = 0;
-            FetchVaultData();
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (g_VaultFetching.load()) {
+            const long long now = NowMs();
+            if (g_VaultRequestStartMs != 0 &&
+                now - g_VaultRequestStartMs >= VAULT_TIMEOUT_MS) {
+                g_VaultFetching = false;
+                g_VaultLastAttemptFailed = true;
+                g_VaultRetryAtMs = 0;
+                std::string missing;
+                for (int i = 0; i < 3; ++i) {
+                    if (!g_VaultResponsesOK[i]) {
+                        if (!missing.empty()) missing += ", ";
+                        missing += VaultSectionName((uint8_t)i);
+                    }
+                }
+                g_VaultStatusMessage = "Vault refresh timed out waiting for: " + missing;
+            } else if (g_VaultRetryAtMs != 0 && now >= g_VaultRetryAtMs) {
+                for (uint8_t i = 0; i < 3; ++i) {
+                    if (g_VaultRetryNeeded[i] && !g_VaultResponsesOK[i]) {
+                        g_VaultRetryNeeded[i] = false;
+                        dueRetryTypes.push_back(i);
+                    }
+                }
+                retryAccount = g_VaultRequestAccount;
+                g_VaultRetryAtMs = 0;
+                g_VaultStatusMessage = "Retrying Vault objectives...";
+            }
         }
     }
+    for (uint8_t type : dueRetryTypes) {
+        if (!g_VaultFetching.load()) break;
+        RequestVaultSection(type, retryAccount);
+    }
 
-    // Account change: clear stale data and re-fetch
-    if (g_VaultNeedRequery && !g_VaultFetching) {
+    // Account switches invalidate the old snapshot and cancel pending retries.
+    if (g_VaultNeedRequery) {
         g_VaultNeedRequery = false;
-        {
-            std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            g_VaultDaily = {}; g_VaultWeekly = {}; g_VaultSpecial = {};
-        }
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        g_VaultFetching = false;
+        g_VaultRetryAtMs = 0;
+        g_VaultDaily = {}; g_VaultWeekly = {}; g_VaultSpecial = {};
         g_VaultFetched = false;
         g_VaultLastSuccessTime = 0;
         g_VaultInitialAttempted = false;
+        g_VaultLastAttemptFailed = false;
+        g_VaultStatusMessage.clear();
     }
 
-    // Avoid silently re-querying every frame if H&S fails.
-    if (!g_VaultFetched && !g_VaultFetching && !g_VaultInitialAttempted)
+    if (!g_VaultFetched.load() && !g_VaultFetching.load() && !g_VaultInitialAttempted)
         FetchVaultData();
 
-    const bool fetching = g_VaultFetching;
-    if (fetching) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
+    const bool fetching = g_VaultFetching.load();
+    if (fetching) {
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+    }
     if (ImGui::SmallButton("Refresh##vault") && !fetching) FetchVaultData();
     if (fetching) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     ImGui::SameLine();
@@ -1922,19 +2022,33 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         g_VaultHideComplete = !g_VaultHideComplete;
         SaveClearUiSettings();
     }
-    AlterEgo::RefreshUI::Timestamp(g_VaultLastSuccessTime, "Vault");
-    if (g_VaultFetching)
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working, g_VaultStatusMessage);
-    else if (g_VaultRetryAtMs.load() != 0)
+
+    // Snapshot the response-thread state before giving it to ImGui.
+    std::time_t updated;
+    bool showingData, failed, pending;
+    std::string status;
+    std::chrono::steady_clock::time_point successUntil;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        updated = g_VaultLastSuccessTime;
+        showingData = g_VaultFetched.load();
+        failed = g_VaultLastAttemptFailed;
+        pending = g_VaultFetching.load();
+        status = g_VaultStatusMessage;
+        successUntil = g_VaultSuccessUntil;
+    }
+    AlterEgo::RefreshUI::Timestamp(updated, "Vault");
+    if (pending) {
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-            "Hoard & Seek busy - retrying shortly...");
-    else if (g_VaultLastAttemptFailed)
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_VaultStatusMessage);
-    else if (std::chrono::steady_clock::now() < g_VaultSuccessUntil)
+            status.empty() ? "Fetching Vault objectives..." : status);
+    } else if (failed) {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, status);
+    } else if (std::chrono::steady_clock::now() < successUntil) {
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
-    else
+    } else {
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-            g_VaultFetched ? "Ready" : "No Vault data available - click Refresh");
+            showingData ? "Ready" : "No Vault data available - click Refresh");
+    }
 
     ImGui::Separator();
     ImGui::BeginChild("##VaultContentScroll", ImVec2(0, 0), false);
