@@ -9345,83 +9345,6 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ? activeBuildIndex : g_LibCompareBuildTab;
     const auto& live = character->build_tabs[displayedBuildTab];
 
-    if (ImGui::BeginTable("##compareSelectors", 3, ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextDisabled("Character");
-        ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::BeginCombo("##compareCharacter", character->name.c_str())) {
-        for (const auto* ch : matches) {
-            bool selected = ch->name == character->name;
-            std::string label = ch->name;
-            if (ch->name == g_CurrentCharName) label += " (logged in)";
-            if (ImGui::Selectable(label.c_str(), selected)) {
-                g_LibCompareChar = ch->name;
-                g_LibCompareBuildTab = -1;
-                g_LibCompareEquipTab = 0;
-            }
-            if (selected) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::TableNextColumn();
-    ImGui::TextDisabled("Build tab");
-    ImGui::SetNextItemWidth(-1.0f);
-    auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
-        return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
-    };
-    std::string currentTabLabel = g_LibCompareBuildTab < 0
-        ? "Active (auto) - " + tabLabel(live) : tabLabel(live);
-    if (ImGui::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
-        if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
-            g_LibCompareBuildTab = -1;
-        for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
-            const auto& bt = character->build_tabs[i];
-            std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
-            if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab))
-                g_LibCompareBuildTab = i;
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::TableNextColumn();
-    ImGui::TextDisabled("Equipment");
-    ImGui::SetNextItemWidth(-1.0f);
-    if (!saved.gear.empty()) {
-        int maxTab = 0;
-        for (const auto& eq : character->equipment)
-            if (eq.tab > maxTab) maxTab = eq.tab;
-        if (maxTab > 0) {
-            if (g_LibCompareEquipTab > maxTab) g_LibCompareEquipTab = 0;
-            const int eqTab = g_LibCompareEquipTab == 0
-                ? GetActiveEquipmentTab(*character) : g_LibCompareEquipTab;
-            std::string label = "Tab " + std::to_string(eqTab);
-            auto nameIt = character->equipment_tab_names.find(eqTab);
-            if (nameIt != character->equipment_tab_names.end() && !nameIt->second.empty())
-                label = nameIt->second;
-            if (g_LibCompareEquipTab == 0) label = "Active (auto) - " + label;
-            if (ImGui::BeginCombo("##compareEquipTab", label.c_str())) {
-                if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
-                    g_LibCompareEquipTab = 0;
-                for (int tab = 1; tab <= maxTab; ++tab) {
-                    std::string tabName = "Tab " + std::to_string(tab);
-                    auto it = character->equipment_tab_names.find(tab);
-                    if (it != character->equipment_tab_names.end() && !it->second.empty())
-                        tabName = it->second;
-                    if (tab == character->active_equipment_tab) tabName += " (active)";
-                    if (ImGui::Selectable(tabName.c_str(), tab == g_LibCompareEquipTab))
-                        g_LibCompareEquipTab = tab;
-                }
-                ImGui::EndCombo();
-            }
-        } else {
-            ImGui::TextDisabled("No equipment tabs");
-        }
-    } else {
-        ImGui::TextDisabled("No saved gear");
-    }
-    ImGui::EndTable();
-    }
-
     if (character->name == g_CurrentCharName &&
         HasLiveSpecCacheMismatch(*character)) {
         const int cachedIndex = GetActiveBuildIndex(*character);
@@ -9743,6 +9666,90 @@ static void RenderCompareTab() {
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready");
     }
     ImGui::Separator();
+
+    // Character stays first in the original three-column selector row.
+    const AlterEgo::Character* character = target;
+    const auto& live = character->build_tabs[g_LibCompareBuildTab < 0
+        ? GetActiveBuildIndex(*character) : g_LibCompareBuildTab];
+    if (ImGui::BeginTable("##compareSelectors", 3, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("Character");
+        ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##compareCharacter", g_LibCompareChar.empty() ? ("Active (auto) - " + character->name).c_str() : character->name.c_str())) {
+        if (ImGui::Selectable(g_CurrentCharName.empty() ? "Active (auto)" : ("Active (auto) - " + g_CurrentCharName).c_str(), g_LibCompareChar.empty())) {
+            g_LibCompareChar.clear();
+        }
+        for (const auto* ch : matches) {
+            bool selected = ch->name == g_LibCompareChar;
+            std::string label = ch->name;
+            if (ch->name == g_CurrentCharName) label += " (logged in)";
+            if (ImGui::Selectable(label.c_str(), selected)) {
+                g_LibCompareChar = ch->name;
+                g_LibCompareBuildTab = -1;
+                g_LibCompareEquipTab = 0;
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TableNextColumn();
+    ImGui::TextDisabled("Build tab");
+    ImGui::SetNextItemWidth(-1.0f);
+    auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
+        return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
+    };
+    std::string currentTabLabel = g_LibCompareBuildTab < 0
+        ? "Active (auto) - " + tabLabel(live) : tabLabel(live);
+    if (ImGui::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
+        if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
+            g_LibCompareBuildTab = -1;
+        for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
+            const auto& bt = character->build_tabs[i];
+            std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
+            if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab))
+                g_LibCompareBuildTab = i;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TableNextColumn();
+    ImGui::TextDisabled("Equipment");
+    ImGui::SetNextItemWidth(-1.0f);
+    if (saved && !saved->gear.empty()) {
+        int maxTab = 0;
+        for (const auto& eq : character->equipment)
+            if (eq.tab > maxTab) maxTab = eq.tab;
+        if (maxTab > 0) {
+            if (g_LibCompareEquipTab > maxTab) g_LibCompareEquipTab = 0;
+            const int eqTab = g_LibCompareEquipTab == 0
+                ? GetActiveEquipmentTab(*character) : g_LibCompareEquipTab;
+            std::string label = "Tab " + std::to_string(eqTab);
+            auto nameIt = character->equipment_tab_names.find(eqTab);
+            if (nameIt != character->equipment_tab_names.end() && !nameIt->second.empty())
+                label = nameIt->second;
+            if (g_LibCompareEquipTab == 0) label = "Active (auto) - " + label;
+            if (ImGui::BeginCombo("##compareEquipTab", label.c_str())) {
+                if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
+                    g_LibCompareEquipTab = 0;
+                for (int tab = 1; tab <= maxTab; ++tab) {
+                    std::string tabName = "Tab " + std::to_string(tab);
+                    auto it = character->equipment_tab_names.find(tab);
+                    if (it != character->equipment_tab_names.end() && !it->second.empty())
+                        tabName = it->second;
+                    if (tab == character->active_equipment_tab) tabName += " (active)";
+                    if (ImGui::Selectable(tabName.c_str(), tab == g_LibCompareEquipTab))
+                        g_LibCompareEquipTab = tab;
+                }
+                ImGui::EndCombo();
+            }
+        } else {
+            ImGui::TextDisabled("No equipment tabs");
+        }
+    } else {
+        ImGui::TextDisabled("No saved gear");
+    }
+    ImGui::EndTable();
+    }
 
     const std::string selectedName = saved->name + " (" + saved->profession + ")";
     ImGui::TextDisabled("Saved build");
