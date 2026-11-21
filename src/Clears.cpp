@@ -2567,23 +2567,20 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 ImGui::PopID();
                 ++shown;
             }
+            // Nexus is a fifteenth visual cell, but NOT a fifteenth
+            // achievement bit. Keep unknown rather than claiming a clear.
+            if (shown % strikeColumns == 0) ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex((int)(shown % strikeColumns));
+            ImGui::PushID("vloxx");
+            RenderClearBanner("Nexus", "Vloxx - Nexus of Eternity",
+                /*fetched*/ false, /*done*/ false, StrikeTheme("Vloxx"),
+                "Weekly clear not verified: the 14-bit Weekly Raid Encounters achievement excludes Nexus of Eternity.",
+                ImGui::GetContentRegionAvail().x, "strike:vloxx");
+            ImGui::PopID();
             ImGui::EndTable();
         }
         if (shown == 0)
             ImGui::TextDisabled("  All weekly raid encounter objectives completed.");
-
-        // Nexus of Eternity is a standalone raid encounter released after
-        // the 14-objective Weekly Raid Encounters achievement was defined.
-        // Do not infer a weekly clear from a permanent achievement or
-        // mark it incomplete: the current H&S bits do not supply its status.
-        ImGui::Spacing();
-        RenderClearBanner("Vloxx (Nexus of Eternity)",
-            "Standalone raid encounter",
-            /*fetched*/ false, /*done*/ false,
-            StrikeTheme("Vloxx"),
-            /*tooltip*/ "Weekly clear status unavailable from the current Weekly Raid Encounters achievement. Vloxx is not included in its 14 objectives.",
-            /*widthOverride*/ ImGui::GetContentRegionAvail().x,
-            /*bannerKey*/ "strike:vloxx");
 
         ImGui::Unindent(4.0f);
     }
