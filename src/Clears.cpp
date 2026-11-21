@@ -1216,7 +1216,7 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
         if (tooltip && *tooltip) ImGui::TextWrapped("%s", tooltip);
         if (!bountyDate.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.42f, 1.0f),
-                               "Daily bounty: %s UTC", bountyDate.c_str());
+                               "Daily bounty: %s", bountyDate.c_str());
         ImGui::EndTooltip();
     }
     ImGui::Dummy(ImVec2(0, 1.0f));
@@ -1627,7 +1627,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
                 ImGui::BeginTooltip();
                 ImGui::TextUnformatted(chips[i].fullName.c_str());
                 if (!chips[i].bountyDate.empty())
-                    ImGui::Text("Daily raid bounty: %s (UTC)", chips[i].bountyDate.c_str());
+                    ImGui::Text("Daily raid bounty: %s", chips[i].bountyDate.c_str());
                 ImGui::EndTooltip();
                 // Brighten border on hover
                 // Tooltip supplies hover feedback without a completion-like border.
@@ -2186,7 +2186,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         if (ImGui::BeginChild("##nextFractalPreview", ImVec2(0, 81.0f),
                               true, ImGuiWindowFlags_NoScrollbar)) {
             ImGui::TextColored(ImVec4(0.64f, 0.74f, 0.86f, 1.0f),
-                "NEXT RESET - %s UTC", date.c_str());
+                "NEXT RESET - %s", date.c_str());
             if (next) {
                 ImGui::TextDisabled("Dailies: %s | %s | %s",
                     next->dailies[0], next->dailies[1], next->dailies[2]);
