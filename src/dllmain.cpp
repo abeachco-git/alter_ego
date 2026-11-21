@@ -13226,35 +13226,13 @@ static void RenderAchievements() {
         }
     }
 
-    // Toolbar: size the search to the actual action widths, not a fixed
-    // 180px allowance (which clipped Refresh at normal window sizes).
-    const ImGuiStyle& achStyle = ImGui::GetStyle();
+    // Compact toolbar shared with the other account tabs: actions, freshness,
+    // permanent status row, then the achievement search control.
     const char* popoutLabel = g_AchPopoutVisible
         ? "Hide Popout Tracker" : "Show Popout Tracker";
-    const float popoutWidth = ImGui::CalcTextSize("Show Popout Tracker").x +
-        achStyle.FramePadding.x * 2.0f;
-    const float refreshWidth = ImGui::CalcTextSize("Refresh").x +
-        achStyle.FramePadding.x * 2.0f;
-    const float buttonReserve = popoutWidth + refreshWidth +
-        achStyle.ItemSpacing.x * 2.0f;
-    const float toolbarWidth = ImGui::GetContentRegionAvail().x;
-    // Avoid a horizontally clipped toolbar in smaller windows: put the
-    // controls on a second row when the search would become too narrow.
-    const bool wrapToolbar = toolbarWidth < buttonReserve + 150.0f;
-    const float searchWidth = wrapToolbar ? toolbarWidth
-        : toolbarWidth - buttonReserve;
-    ImGui::SetNextItemWidth(searchWidth);
-    ImGui::InputTextWithHint("##AchSearch", "Search achievements...", g_AchSearchBuf, sizeof(g_AchSearchBuf));
-    if (!wrapToolbar) ImGui::SameLine();
-    if (ImGui::Button(popoutLabel, ImVec2(popoutWidth, 0))) {
-        g_AchPopoutVisible = !g_AchPopoutVisible;
-        SaveAchTrackerState();
-    }
-    ImGui::SameLine();
-    // A background prefetch may run before the user presses Refresh. Keep the
-    // button visible and actionable instead of replacing it with a spinner.
-    if (ImGui::Button("Refresh", ImVec2(refreshWidth, 0))) {
-        g_AchProgressFetching = false; // allow a manual retry after a lost response
+    if (ImGui::SmallButton("Refresh##achievements")) {
+        g_AchRefreshError.clear();
+        g_AchProgressFetching = false; // retry after a lost H&S response
         g_AchProgressQueryStartMs = 0;
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -13264,27 +13242,42 @@ static void RenderAchievements() {
         g_AchActiveEventFetched = false;
         FetchAchGroups();
         if (g_AchSelectedCatId > 0) FetchAchCategoryDefs(g_AchSelectedCatId);
-        // Also refresh pinned achievement progress
         std::vector<uint32_t> pinnedCopy;
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             pinnedCopy = g_AchPinned;
         }
-        if (!pinnedCopy.empty()) {
-            SendAchProgressQuery(pinnedCopy);
-        }
+        if (!pinnedCopy.empty()) SendAchProgressQuery(pinnedCopy);
     }
-    // No extra inline spinner: the search field and the two toolbar
-    // buttons already use the entire calculated width. Progress prefetches
-    // run in the background and must not alter the toolbar layout.
+    ImGui::SameLine();
+    if (ImGui::SmallButton(popoutLabel)) {
+        g_AchPopoutVisible = !g_AchPopoutVisible;
+        SaveAchTrackerState();
+    }
+    AlterEgo::RefreshUI::Timestamp((std::time_t)g_AchProgressCacheSavedAt, "achievement progress");
 
-    // Status message
+    const bool achWorking = g_AchGroupsFetching || g_AchCatFetching ||
+        g_AchProgressFetching || g_AchRetryAtMs.load() != 0;
+    std::string achMessage;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        if (!g_AchStatusMsg.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "%s", g_AchStatusMsg.c_str());
-        }
+        achMessage = g_AchStatusMsg;
     }
+    if (achWorking) {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+            achMessage.empty() ? "Querying achievement progress..." : achMessage);
+    } else if (!g_AchRefreshError.empty()) {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_AchRefreshError);
+    } else if (std::chrono::steady_clock::now() < g_AchRefreshSuccessUntil) {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
+    } else {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
+            g_AchGroupsFetched ? "Ready" : "Loading achievement categories...");
+    }
+
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##AchSearch", "Search achievements...",
+                            g_AchSearchBuf, sizeof(g_AchSearchBuf));
 
     if (!g_AchGroupsFetched) return;
 
