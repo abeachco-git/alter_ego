@@ -15190,13 +15190,11 @@ void AddonRender() {
                         g_DetailsFetched = true;
                     }
 
-                    // Character header — avatar + name + meta + right-aligned profession emblem
+                    // Character header — avatar + name + meta (no duplicate emblem at right)
                     {
                         ImVec4 profColor = GetProfessionColor(ch.profession);
                         const float avatarSize = 46.0f;
-                        const float emblemSize = 46.0f;
                         float startY = ImGui::GetCursorPosY();
-                        float startX = ImGui::GetCursorPosX();
                         float availW = ImGui::GetContentRegionAvail().x;
 
                         // Avatar (left)
@@ -15205,8 +15203,9 @@ void AddonRender() {
                         ImGui::EndGroup();
                         ImGui::SameLine(0, 10);
 
-                        // Name + meta (middle) — clip width so it doesn't overlap the emblem
-                        float middleW = availW - avatarSize - 10.0f - emblemSize - 8.0f;
+                        // Use the available space; the left avatar already
+                        // identifies the profession and makes a second emblem redundant.
+                        float middleW = ImMax(1.0f, availW - avatarSize - 18.0f);
                         ImGui::BeginGroup();
                         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + middleW);
                         ImGui::SetCursorPosY(startY + 2.0f);
@@ -15223,13 +15222,7 @@ void AddonRender() {
                         ImGui::PopTextWrapPos();
                         ImGui::EndGroup();
 
-                        // Profession emblem (right) — fetched from GW2 wiki via IconManager
-                        ImGui::SameLine();
-                        ImGui::SetCursorPosX(startX + availW - emblemSize);
-                        ImGui::SetCursorPosY(startY);
-                        RenderProfessionEmblem(ch.profession, emblemSize);
-
-                        // Make sure cursor sits below the row
+                        // Make sure cursor sits below the avatar/text row
                         float endY = ImGui::GetCursorPosY();
                         float minY = startY + avatarSize + 4.0f;
                         if (endY < minY) ImGui::SetCursorPosY(minY);
