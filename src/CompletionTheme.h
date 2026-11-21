@@ -97,7 +97,8 @@ inline bool CenteredSectionToggle(bool expanded, const char* title) {
 // right-aligned. Keeps all parts on one line when space allows, otherwise
 // places the right-hand summary on a second line rather than clipping.
 inline void SectionHeading(const char* title, const char* reset,
-                           const char* summary = nullptr) {
+                           const char* summary = nullptr,
+                           ImU32 summaryColor = kMetaText) {
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float available = ImGui::GetContentRegionAvail().x;
     const ImFont* font = ImGui::GetFont();
@@ -126,7 +127,7 @@ inline void SectionHeading(const char* title, const char* reset,
     if (summary && *summary) {
         const float rightX = start.x+(available > summaryWidth+2.0f ? available-summaryWidth-2.0f : 0.0f);
         const float y = start.y + (wrapSummary ? rowHeight : (rowHeight-small)*0.5f);
-        dl->AddText(ImVec2(rightX,y), kMetaText, summary);
+        dl->AddText(ImVec2(rightX,y), summaryColor, summary);
     }
     dl->PopClipRect();
 }
