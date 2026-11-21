@@ -358,7 +358,7 @@ static void FetchVaultData() {
         HoardQueryApiRequest req{};
         req.api_version = HOARD_API_VERSION;
         strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
-        strncpy(req.endpoint, "/v2/account/wizardsvault", sizeof(req.endpoint) - 1);
+        strncpy(req.endpoint, "/v2/wizardsvault", sizeof(req.endpoint) - 1);
         strncpy(req.response_event, EV_AE_VAULT_SEASON_RESP, sizeof(req.response_event) - 1);
         if (!acctName.empty())
             strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
@@ -1916,10 +1916,11 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
             auto sNow = std::chrono::system_clock::now();
             if (g_VaultSeasonEnd > sNow) {
                 auto rem = std::chrono::duration_cast<std::chrono::seconds>(g_VaultSeasonEnd - sNow).count();
-                int d = (int)(rem / 86400), h = (int)((rem % 86400) / 3600);
-                char buf[32];
-                snprintf(buf, sizeof(buf), "%dd %dh", d, h);
-                seasonLabel = buf;
+                // Count calendar days remaining, consistent with the in-game
+                // Wizard's Vault display; never show 0 while time remains.
+                const int days = static_cast<int>((rem + 86399) / 86400);
+                seasonLabel = std::to_string(days) +
+                    (days == 1 ? " day remaining" : " days remaining");
             } else {
                 seasonLabel = "ended";
             }
@@ -2159,7 +2160,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             if (e.tier == "T4")
                 todaysT4.push_back(ShortenFractalName(e.name));
         const auto* next = ClearsRotation::NextFractalsFromLive(todaysT4);
-        const std::string date = ClearsRotation::DateLabel(
+        const std::string date = ClearsRotation::BountyDateLabel(
             (ClearsRotation::FloorDay(utcNow) + 1) * ClearsRotation::kDay);
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.13f, 0.16f, 0.92f));
