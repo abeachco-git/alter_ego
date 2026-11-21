@@ -77,6 +77,20 @@ inline std::string DateLabel(int64_t midnightUtc) {
     std::snprintf(text, sizeof(text), "%02d/%02d", tm.tm_mon + 1, tm.tm_mday);
     return text;
 }
+// Raid-bounty labels include the weekday and abbreviated month so they
+// cannot be mistaken for a numerical completed/total progress fraction.
+inline std::string BountyDateLabel(int64_t midnightUtc) {
+    std::time_t ts = static_cast<std::time_t>(midnightUtc);
+    std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &ts);
+#else
+    gmtime_r(&ts, &tm);
+#endif
+    char text[24]{};
+    if (std::strftime(text, sizeof(text), "%a %b %d", &tm) == 0) return "";
+    return text;
+}
 // Shows today unless that bounty has been completed; otherwise the NEXT
 // occurrence only, stopping before weekly reset. Weekly raid completion is
 // deliberately ignored: the daily bounty is a separate reward.
@@ -93,7 +107,7 @@ inline std::string NextBountyDate(const std::string& encounter,
         if (daysAhead == 0 && bountyCompletedToday) continue;
         for (int column = 0; column < 4; ++column)
             if (Normalize(BountyName(BountySet(start), column)) == needle)
-                return DateLabel(start);
+                return BountyDateLabel(start);
     }
     return "";
 }
