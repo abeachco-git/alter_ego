@@ -87,8 +87,18 @@ inline std::string BountyDateLabel(int64_t midnightUtc) {
 #else
     gmtime_r(&ts, &tm);
 #endif
+    static constexpr const char* kWeekdays[] = {
+        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+    };
+    static constexpr const char* kMonths[] = {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    };
+    if (tm.tm_wday < 0 || tm.tm_wday > 6 ||
+        tm.tm_mon < 0 || tm.tm_mon > 11) return "";
     char text[24]{};
-    if (std::strftime(text, sizeof(text), "%a %b %d", &tm) == 0) return "";
+    std::snprintf(text, sizeof(text), "%s %s %d",
+        kWeekdays[tm.tm_wday], kMonths[tm.tm_mon], tm.tm_mday);
     return text;
 }
 // Shows today unless that bounty has been completed; otherwise the NEXT
