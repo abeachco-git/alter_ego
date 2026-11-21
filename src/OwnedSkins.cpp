@@ -403,10 +403,16 @@ namespace Skinventory {
             }
         }
 
+        json cache;
+        cache["skins"] = std::move(j);
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            cache["last_success"] = (int64_t)s_last_success_time;
+        }
         std::ofstream file(path);
         if (!file.is_open()) return false;
-        file << j.dump();
-        return true;
+        file << cache.dump();
+        return file.good();
     }
 
     bool OwnedSkins::LoadFromCache() {
@@ -418,13 +424,22 @@ namespace Skinventory {
         try {
             json j;
             file >> j;
-            if (!j.is_array() || j.empty()) return false;
+            // Accept both legacy array caches and timestamped object caches.
+            const json* skins = &j;
+            std::time_t lastSuccess = 0;
+            if (j.is_object()) {
+                if (!j.contains("skins") || !j["skins"].is_array()) return false;
+                skins = &j["skins"];
+                lastSuccess = (std::time_t)j.value("last_success", (int64_t)0);
+            }
+            if (!skins->is_array()) return false;
 
             std::lock_guard<std::mutex> lock(s_mutex);
             s_owned_skins.clear();
-            for (const auto& id : j) {
+            for (const auto& id : *skins) {
                 s_owned_skins.insert(id.get<uint32_t>());
             }
+            s_last_success_time = lastSuccess;
             return true;
         } catch (...) {
             return false;
