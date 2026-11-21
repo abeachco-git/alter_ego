@@ -9297,8 +9297,6 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
 }
 
 static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
-    ImGui::TextWrapped("Uses the latest Hoard & Seek character cache, not an instantaneous in-game equipment read.");
-
     const auto& characters = AlterEgo::GW2API::GetCharacters();
     std::vector<const AlterEgo::Character*> matches;
     for (const auto& ch : characters)
@@ -9336,7 +9334,20 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         g_LibCompareEquipTab = 0;
     }
 
-    if (ImGui::BeginCombo("Character##compare", character->name.c_str())) {
+    if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
+        g_LibCompareBuildTab = -1;
+    const int activeBuildIndex = GetActiveBuildIndex(*character);
+    if (activeBuildIndex < 0) return;
+    const int displayedBuildTab = g_LibCompareBuildTab < 0
+        ? activeBuildIndex : g_LibCompareBuildTab;
+    const auto& live = character->build_tabs[displayedBuildTab];
+
+    if (ImGui::BeginTable("##compareSelectors", 3, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("Character");
+        ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##compareCharacter", character->name.c_str())) {
         for (const auto* ch : matches) {
             bool selected = ch->name == character->name;
             std::string label = ch->name;
@@ -9350,31 +9361,15 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         }
         ImGui::EndCombo();
     }
-    if (character->name == g_CurrentCharName &&
-        HasLiveSpecCacheMismatch(*character)) {
-        const int cachedIndex = GetActiveBuildIndex(*character);
-        const uint32_t currentId = g_AutoRefreshTracker.LiveSpecialization();
-        const uint32_t cachedId =
-            character->build_tabs[cachedIndex].specializations[2].spec_id;
-        ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
-            "Live specialization: %s (#%u); retrieved active build: %s (#%u).",
-            GetSpecNameForWarning(currentId), currentId,
-            GetSpecNameForWarning(cachedId), cachedId);
-        ImGui::TextDisabled("Retrieved build may be outdated; refresh the character.");
-    }
-    if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
-        g_LibCompareBuildTab = -1;
-    const int activeBuildIndex = GetActiveBuildIndex(*character);
-    if (activeBuildIndex < 0) return;
-    const int displayedBuildTab = g_LibCompareBuildTab < 0
-        ? activeBuildIndex : g_LibCompareBuildTab;
-    const auto& live = character->build_tabs[displayedBuildTab];
+    ImGui::TableNextColumn();
+    ImGui::TextDisabled("Build tab");
+    ImGui::SetNextItemWidth(-1.0f);
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
         return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
     };
     std::string currentTabLabel = g_LibCompareBuildTab < 0
         ? "Active (auto) - " + tabLabel(live) : tabLabel(live);
-    if (ImGui::BeginCombo("Live build tab##compare", currentTabLabel.c_str())) {
+    if (ImGui::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
         if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
             g_LibCompareBuildTab = -1;
         for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
@@ -9385,6 +9380,9 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         }
         ImGui::EndCombo();
     }
+    ImGui::TableNextColumn();
+    ImGui::TextDisabled("Equipment");
+    ImGui::SetNextItemWidth(-1.0f);
     if (!saved.gear.empty()) {
         int maxTab = 0;
         for (const auto& eq : character->equipment)
@@ -9398,7 +9396,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
             if (nameIt != character->equipment_tab_names.end() && !nameIt->second.empty())
                 label = nameIt->second;
             if (g_LibCompareEquipTab == 0) label = "Active (auto) - " + label;
-            if (ImGui::BeginCombo("Live equipment tab##compare", label.c_str())) {
+            if (ImGui::BeginCombo("##compareEquipTab", label.c_str())) {
                 if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
                     g_LibCompareEquipTab = 0;
                 for (int tab = 1; tab <= maxTab; ++tab) {
@@ -9413,13 +9411,33 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                 ImGui::EndCombo();
             }
         } else {
-            ImGui::TextDisabled("No retrieved equipment tabs; build-only comparison.");
+            ImGui::TextDisabled("No equipment tabs");
         }
+    } else {
+        ImGui::TextDisabled("No saved gear");
+    }
+    ImGui::EndTable();
+    }
+
+    if (character->name == g_CurrentCharName &&
+        HasLiveSpecCacheMismatch(*character)) {
+        const int cachedIndex = GetActiveBuildIndex(*character);
+        const uint32_t currentId = g_AutoRefreshTracker.LiveSpecialization();
+        const uint32_t cachedId =
+            character->build_tabs[cachedIndex].specializations[2].spec_id;
+        ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
+            "Cached specialization may be outdated (hover for details)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Live: %s (#%u) | Retrieved: %s (#%u)\\nRefresh character data to update.",
+                GetSpecNameForWarning(currentId), currentId,
+                GetSpecNameForWarning(cachedId), cachedId);
     }
     ImGui::Checkbox("Show matches##compare", &g_LibCompareShowMatches);
     if (!saved.gear.empty()) {
         ImGui::SameLine();
-        ImGui::Checkbox("Compare exact item IDs##compare", &g_LibCompareExactItems);
+        ImGui::Checkbox("Exact item IDs##compare", &g_LibCompareExactItems);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Require identical item IDs instead of matching equivalent equipment stats.");
     }
 
     // A detailed comparison can perform many metadata lookups. Reuse its result
@@ -9470,7 +9488,25 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
-    const bool clicked = ImGui::Button("Refresh this character##compare");
+    ImGui::Text("%zu differences", result.DifferenceCount());
+    ImGui::SameLine();
+    ImGui::TextDisabled("· %zu unverified · %zu fields",
+        result.UnverifiedCount(), result.Rows().size());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Saved vs. retrieved Hoard & Seek character data.\\n"
+                          "Unknown legacy fields are skipped rather than counted as matches.\\n"
+                          "Unverified fields lack enough API data to determine a match.");
+    ImGui::SameLine();
+    const float refreshW = ImGui::CalcTextSize("Refresh").x +
+        2.0f * ImGui::GetStyle().FramePadding.x + 12.0f;
+    ImGui::SetCursorPosX(ImMax(ImGui::GetCursorPosX(),
+        ImGui::GetWindowContentRegionMax().x - refreshW));
+    const bool clicked = ImGui::Button("Refresh##compare");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Re-fetch this character from Hoard & Seek.\\n"
+                          "Data is cached and may lag behind changes in game.");
     if (busy) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     if (clicked && !busy) {
         g_LibCompareRefreshChar = character->name;
@@ -9479,10 +9515,6 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         AlterEgo::GW2API::RequestCharacterRefreshSelected({character->name});
         return; // delivery can replace the character cache
     }
-    ImGui::SameLine();
-    ImGui::Text("%zu differences, %zu not verified across %zu compared fields",
-                result.DifferenceCount(), result.UnverifiedCount(),
-                result.Rows().size());
     if (g_LibCompareRefreshPending && fetchStatus != AlterEgo::FetchStatus::InProgress) {
         g_LibCompareRefreshPending = false;
         if (fetchStatus == AlterEgo::FetchStatus::Success)
@@ -9502,8 +9534,6 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::TextDisabled("Saved build has no gear; equipment comparison skipped.");
     else if (character->equipment.empty())
         ImGui::TextDisabled("Retrieved character has no equipment data; gear comparison skipped.");
-    ImGui::TextDisabled("Unknown legacy fields are skipped, not counted as matches.");
-
     if (ImGui::BeginTable("##comparison", 3,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.2f);
@@ -9672,8 +9702,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
 // reordering or deleting entries in Build Library doesn't select a wrong build.
 static void RenderCompareTab() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
-    ImGui::TextColored(ImVec4(0.90f, 0.79f, 0.45f, 1), "Saved vs. Retrieved Character");
-    ImGui::TextWrapped("Select a saved library build and compare it against a retrieved character's build and equipment tabs.");
+    // The tab already supplies the context. Keep only functional controls.
     if (builds.empty()) {
         ImGui::Spacing();
         ImGui::TextWrapped("No saved builds yet. Use Characters > Builds > Save Current Build + Gear to Library, or create one in Build Library.");
@@ -9695,7 +9724,9 @@ static void RenderCompareTab() {
     }
 
     const std::string selectedName = saved->name + " (" + saved->profession + ")";
-    if (ImGui::BeginCombo("Saved build##compare", selectedName.c_str())) {
+    ImGui::TextDisabled("Saved build");
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##savedBuildCompare", selectedName.c_str())) {
         for (const auto& build : builds) {
             const bool selected = (build.id == g_LibCompareBuildId);
             const std::string label = build.name + " (" + build.profession + " / " +
@@ -9713,7 +9744,7 @@ static void RenderCompareTab() {
         }
         ImGui::EndCombo();
     }
-    ImGui::Separator();
+    ImGui::Spacing();
     ImGui::BeginChild("##CompareResultScroll", ImVec2(0, 0), false);
     RenderSavedVsLiveComparison(*saved);
     ImGui::EndChild();
