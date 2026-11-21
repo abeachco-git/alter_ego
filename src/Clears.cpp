@@ -2628,10 +2628,20 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         const float gridWidth = ImGui::GetContentRegionAvail().x;
         const int strikeColumns = gridWidth >= 900.0f ? 3 : 2;
         size_t shown = 0;
+        std::vector<size_t> pickerOrder;
+        pickerOrder.reserve(g_WeeklyStrikes.bitNames.size());
+        for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); ++i)
+            pickerOrder.push_back(i);
+        // Presentation order only: original achievement indices remain intact.
+        std::stable_sort(pickerOrder.begin(), pickerOrder.end(),
+            [](size_t left, size_t right) {
+                return StrikePickerOrder(g_WeeklyStrikes.bitNames[left]) <
+                       StrikePickerOrder(g_WeeklyStrikes.bitNames[right]);
+            });
 
         if (ImGui::BeginTable("##WeeklyStrikesGrid", strikeColumns,
                               ImGuiTableFlags_SizingStretchSame)) {
-            for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); ++i) {
+            for (const size_t i : pickerOrder) {
                 const bool bitDone = i < g_WeeklyStrikes.bitDone.size() &&
                     g_WeeklyStrikes.bitDone[i];
                 if (g_ClearsHideComplete && g_ClearsFetched && bitDone) continue;
@@ -2646,23 +2656,19 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                     displayName = "Kela";
                 else if (normalized == "voiceofthefallenandclawofthefallen" ||
                          normalized == "voiceandclaw")
-                    displayName = "Voice & Claw";
+                    displayName = "Voice and Claw of Fallen";
                 else if (normalized == "fraenirofjormag")
                     displayName = "Fraenir";
                 else if (normalized == "whisperofjormag")
                     displayName = "Whisper";
 
-                std::string fullNameTooltip;
-                if (isKela) {
-                    fullNameTooltip = "Kela, Seneschal of Waves. "
-                        "Weekly completion comes from Guardian's Glade.";
-                } else if (displayName != name) {
-                    fullNameTooltip = name;
-                }
-
-                const char* zone = StrikeZone(name);
-                std::string subtitle = "Strike Mission";
-                if (zone && *zone) { subtitle += " \xC2\xB7 "; subtitle += zone; }
+                // One full encounter title, then its raid picker category;
+                // never include historical map/zone locations.
+                const char* fullTitle = isKela ? "Guardian's Glade" : name.c_str();
+                const char* description = isKela
+                    ? "Kela, Seneschal of Waves. Weekly completion is from Guardian's Glade."
+                    : nullptr;
+                const std::string subtitle = StrikePickerCategory(name);
                 const std::string date = UpcomingBountyLabel(
                     isKela ? "Kela" : name, g_DailyBounties,
                     utcNow, weeklyEndUtc, g_ClearsFetched);
@@ -2672,9 +2678,10 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 ImGui::PushID((int)i);
                 RenderClearBanner(displayName, subtitle,
                     g_ClearsFetched, bitDone, StrikeTheme(name),
-                    /*tooltip*/ fullNameTooltip.empty() ? nullptr : fullNameTooltip.c_str(),
+                    /*tooltip*/ description,
                     /*widthOverride*/ ImGui::GetContentRegionAvail().x,
-                    /*bannerKey*/ "strike:" + name, date);
+                    /*bannerKey*/ "strike:" + name, date,
+                    /*fullTooltipTitle*/ fullTitle);
                 ImGui::PopID();
                 ++shown;
             }
@@ -2683,10 +2690,11 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             if (shown % strikeColumns == 0) ImGui::TableNextRow();
             ImGui::TableSetColumnIndex((int)(shown % strikeColumns));
             ImGui::PushID("vloxx");
-            RenderClearBanner("Nexus", "Vloxx - Nexus of Eternity",
+            RenderClearBanner("Nexus", "Visions of Eternity",
                 /*fetched*/ false, /*done*/ false, StrikeTheme("Vloxx"),
-                "Weekly clear not verified: the 14-bit Weekly Raid Encounters achievement excludes Nexus of Eternity.",
-                ImGui::GetContentRegionAvail().x, "strike:vloxx");
+                "Vloxx. Weekly clear not verified because the 14-bit Weekly Raid Encounters achievement excludes Nexus of Eternity.",
+                ImGui::GetContentRegionAvail().x, "strike:vloxx", "",
+                "Nexus of Eternity");
             ImGui::PopID();
             ImGui::EndTable();
         }
