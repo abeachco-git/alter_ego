@@ -74,11 +74,11 @@ inline void SectionHeading(const char* title, const char* reset,
     const ImVec2 titleSize = font->CalcTextSizeA(big, 1.0e8f, 0.0f, title);
     const float resetWidth = (reset && *reset) ? ImGui::CalcTextSize(reset).x : 0.0f;
     const float summaryWidth = (summary && *summary) ? ImGui::CalcTextSize(summary).x : 0.0f;
-    const float rowHeight = ImMax(big, ImGui::GetFrameHeight()) + 4.0f;
+    const float rowHeight = (big > ImGui::GetFrameHeight() ? big : ImGui::GetFrameHeight()) + 4.0f;
     const bool wrapSummary = summaryWidth > 0 &&
         titleSize.x + resetWidth + summaryWidth + 35.0f > available;
     const float totalHeight = rowHeight + (wrapSummary ? small+4.0f : 0.0f);
-    ImGui::Dummy(ImVec2(ImMax(1.0f, available), totalHeight));
+    ImGui::Dummy(ImVec2((available > 1.0f ? available : 1.0f), totalHeight));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(start,
         ImVec2(start.x+available, start.y+totalHeight), true);
@@ -92,7 +92,7 @@ inline void SectionHeading(const char* title, const char* reset,
                 kMetaText, reset);
     }
     if (summary && *summary) {
-        const float rightX = start.x+ImMax(0.0f, available-summaryWidth-2.0f);
+        const float rightX = start.x+(available > summaryWidth+2.0f ? available-summaryWidth-2.0f : 0.0f);
         const float y = start.y + (wrapSummary ? rowHeight : (rowHeight-small)*0.5f);
         dl->AddText(ImVec2(rightX,y), kMetaText, summary);
     }
