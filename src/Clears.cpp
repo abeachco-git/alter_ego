@@ -1161,6 +1161,16 @@ static ThemeGrad StrikeTheme(const std::string& name) {
 // as the background; otherwise the gradient theme is used.
 // Unified one-line clear cell. Background artwork made the trackers visually
 // inconsistent and obscured labels; raid dates and completion remain visible.
+static ImU32 BountyDateColor(const std::string& date) {
+    // GW2 uses UTC resets, not local midnight.
+    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string today = ClearsRotation::DateLabel(
+        ClearsRotation::FloorDay(now) * ClearsRotation::kDay);
+    return date == today ? AlterEgo::CompletionTheme::kBountyToday
+                         : AlterEgo::CompletionTheme::kBountyFuture;
+}
+
 static void RenderClearBanner(const std::string& title, const std::string& subtitle,
                               bool fetched, bool done, ThemeGrad theme,
                               const char* tooltip = nullptr,
@@ -1177,7 +1187,7 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     const bool complete = fetched && done;
     // Shared completion state: completed muted/green; available bright/borderless.
     AlterEgo::CompletionTheme::DrawRow(dl, pos, end, complete, 2.0f);
-    AlterEgo::CompletionTheme::DrawCompleteDot(
+    AlterEgo::CompletionTheme::DrawCompleteMark(
         dl, ImVec2(pos.x + 9.0f, pos.y + height * 0.5f), complete);
     if (!fetched) {
         dl->AddText(ImVec2(pos.x + 5.0f, pos.y + (height - ImGui::GetTextLineHeight()) * 0.5f),
@@ -1191,7 +1201,7 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     if (!bountyDate.empty()) {
         const std::string suffix = " - " + bountyDate;
         dl->AddText(ImVec2(titlePos.x + ImGui::CalcTextSize(title.c_str()).x, titlePos.y),
-            IM_COL32(255, 194, 108, 255), suffix.c_str());
+            BountyDateColor(bountyDate), suffix.c_str());
     }
     dl->PopClipRect();
 
@@ -1231,9 +1241,8 @@ static void RenderTierRow(const char* tierLabel,
     AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, fullyDone);
     (void)theme;
 
-    // Left accent strip
-    dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 3), ImVec2(cmin.x + 3, cmax.y - 3),
-        accentColor);
+    // Neutral group heading; no category-colored stripe.
+    (void)accentColor;
 
     float padX = 10.0f;
     float midY = cmin.y + h * 0.5f;
@@ -1241,7 +1250,8 @@ static void RenderTierRow(const char* tierLabel,
     // Tier label (left, tier-coloured)
     float tierX = cmin.x + padX;
     ImVec2 tierSz = ImGui::CalcTextSize(tierLabel);
-    dl->AddText(ImVec2(tierX, midY - tierSz.y * 0.5f), accentColor, tierLabel);
+    dl->AddText(ImVec2(tierX, midY - tierSz.y * 0.5f),
+        AlterEgo::CompletionTheme::kAvailableText, tierLabel);
 
     // Title
     float titleX = tierX + tierSz.x + 10.0f;
@@ -1253,9 +1263,9 @@ static void RenderTierRow(const char* tierLabel,
     char prog[32];
     snprintf(prog, sizeof(prog), "%d / %d", doneCount, totalCount);
     ImVec2 progSz = ImGui::CalcTextSize(prog);
-    ImU32 progCol = (fetched && doneCount == totalCount && totalCount > 0)
-        ? IM_COL32(180, 240, 180, 255)
-        : IM_COL32(227, 196, 122, 255);
+    ImU32 progCol = doneCount > 0 && doneCount < totalCount
+        ? AlterEgo::CompletionTheme::kInProgressGold
+        : AlterEgo::CompletionTheme::kMetaText;
     float progX = cmax.x - padX - progSz.x;
     dl->AddText(ImVec2(progX, midY - progSz.y * 0.5f), progCol, prog);
 
@@ -1276,13 +1286,12 @@ static void RenderTierRow(const char* tierLabel,
             ImVec2 chmax(chmin.x + chipW, chmin.y + chipH);
 
             dl->AddRectFilled(chmin, chmax, IM_COL32(0, 0, 0, 175), 3.0f);
-            if (chips[i].done)
-                dl->AddRect(chmin, chmax, AlterEgo::CompletionTheme::kCompleteBorder, 3.0f);
+            // No completion outline around individual cells.
 
             const float dotR = 3.5f;
             const float dotX = chmin.x + 7.0f;
             const float dotY = chmin.y + chipH * 0.5f;
-            AlterEgo::CompletionTheme::DrawCompleteDot(
+            AlterEgo::CompletionTheme::DrawCompleteMark(
                 dl, ImVec2(dotX, dotY), chips[i].done, dotR);
 
             ImU32 lblCol = AlterEgo::CompletionTheme::Text(chips[i].done);
@@ -1379,15 +1388,14 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     // Quiet wing header and status cells. No embedded artwork.
     const bool fullyDone = fetched && totalCount > 0 && doneCount == totalCount;
     AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, fullyDone);
-    dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 2.0f),
-                      ImVec2(cmin.x + 3.0f, cmax.y - 2.0f), theme.b);
+    (void)theme; // Neutral wing heading, like the other groups.
 
     // Top row text
     float padX = 10.0f;
     float topY = cmin.y + 6.0f;
     // Roman
     dl->AddText(ImVec2(cmin.x + padX, topY),
-        IM_COL32(227, 196, 122, 255), wingShortName.c_str());
+        AlterEgo::CompletionTheme::kAvailableText, wingShortName.c_str());
     // Name
     ImVec2 wsSz = ImGui::CalcTextSize(wingShortName.c_str());
     dl->AddText(ImVec2(cmin.x + padX + wsSz.x + 10.0f, topY),
@@ -1398,9 +1406,9 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     char prog[32];
     snprintf(prog, sizeof(prog), "%d / %d", doneCount, totalCount);
     ImVec2 pSz = ImGui::CalcTextSize(prog);
-    ImU32 progCol = (fetched && doneCount == totalCount && totalCount > 0)
-        ? IM_COL32(180, 240, 180, 255)
-        : IM_COL32(227, 196, 122, 255);
+    ImU32 progCol = doneCount > 0 && doneCount < totalCount
+        ? AlterEgo::CompletionTheme::kInProgressGold
+        : AlterEgo::CompletionTheme::kMetaText;
     dl->AddText(ImVec2(cmax.x - padX - pSz.x, topY), progCol, prog);
 
     // Rotation badges (Emboldened / Call of the Mists) — drawn between the
@@ -1475,14 +1483,13 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
 
             // Chip bg
             dl->AddRectFilled(chmin, chmax, IM_COL32(0, 0, 0, 165), 3.0f);
-            if (chips[i].done)
-                dl->AddRect(chmin, chmax, AlterEgo::CompletionTheme::kCompleteBorder, 3.0f);
+            // Completed chips are muted, without noisy green outlines.
 
             // Completed: green status dot. Available: no dot, no border.
             const float dotR = 4.0f;
             const float dotX = chmin.x + 7.0f;
             const float dotY = chmin.y + chipH * 0.5f;
-            AlterEgo::CompletionTheme::DrawCompleteDot(
+            AlterEgo::CompletionTheme::DrawCompleteMark(
                 dl, ImVec2(dotX, dotY), chips[i].done, dotR);
 
             // De-emphasize completed encounters; brighter text shows what's left.
@@ -1498,7 +1505,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             if (!chips[i].bountyDate.empty()) {
                 const std::string date = " - " + chips[i].bountyDate;
                 dl->AddText(ImVec2(lblX + lblSz.x, lblY),
-                    IM_COL32(255, 194, 108, 255), date.c_str());
+                    BountyDateColor(chips[i].bountyDate), date.c_str());
             }
             dl->PopClipRect();
 
@@ -1569,7 +1576,7 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     AlterEgo::CompletionTheme::DrawRow(dl, cmin, cmax, done, 2.0f);
     const float midY = cmin.y + h * 0.5f;
     const float dotX = cmin.x + 10.0f;
-    AlterEgo::CompletionTheme::DrawCompleteDot(
+    AlterEgo::CompletionTheme::DrawCompleteMark(
         dl, ImVec2(dotX, midY), done);
 
     float padX = 8.0f;
@@ -1594,9 +1601,9 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
 
     ImU32 pillBg, pillBorder, pillText;
     if (claimed) {
-        pillBg     = IM_COL32(40, 60, 40, 180);
-        pillBorder = IM_COL32(80, 140, 90, 160);
-        pillText   = IM_COL32(140, 200, 150, 220);
+        pillBg     = IM_COL32(35, 37, 41, 190);
+        pillBorder = IM_COL32(89, 93, 96, 140);
+        pillText   = AlterEgo::CompletionTheme::kCompleteText;
     } else if (done) {
         // earned but unclaimed — the actionable state, brightest
         pillBg     = IM_COL32(80, 60, 18, 230);
