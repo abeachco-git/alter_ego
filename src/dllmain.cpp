@@ -12987,12 +12987,9 @@ static void RenderAchievements() {
             SendAchProgressQuery(pinnedCopy);
         }
     }
-    if (g_AchProgressFetching) {
-        ImGui::SameLine();
-        RenderSpinner("", ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Refreshing achievement progress in the background");
-    }
+    // No extra inline spinner: the search field and the two toolbar
+    // buttons already use the entire calculated width. Progress prefetches
+    // run in the background and must not alter the toolbar layout.
 
     // Status message
     {
