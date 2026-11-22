@@ -9704,6 +9704,39 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
     return cached;
 }
 
+// Render the same GW2 profession image used in the Characters roster in
+// Compare's character combo. Drawn over the normal ImGui combo/selectable
+// background so hover, keyboard navigation, popup sizing and text remain native.
+static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
+                                               ImVec2 itemMin, float itemHeight,
+                                               const std::string& profession) {
+    constexpr float iconSize = 17.0f;
+    const ImVec2 iconMin(itemMin.x + 8.0f,
+                         itemMin.y + (itemHeight - iconSize) * 0.5f);
+    const ImVec2 iconMax(iconMin.x + iconSize, iconMin.y + iconSize);
+    const uint32_t iconId = GetProfessionIconId(profession);
+    const char* iconUrl = GetProfessionIconUrl(profession);
+    if (iconId && !iconUrl) {
+        AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
+    }
+    if (iconId && iconUrl) {
+        Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
+        if (tex && tex->Resource) {
+            dl->AddImage(tex->Resource, iconMin, iconMax);
+            return;
+        }
+        AlterEgo::IconManager::RequestIcon(iconId, iconUrl);
+    }
+    // Keep a readable fallback while profession artwork is still downloading.
+    if (!profession.empty()) {
+        const std::string initial = profession.substr(0, 1);
+        dl->AddText(ImVec2(iconMin.x + 3.0f,
+                           itemMin.y + (itemHeight - ImGui::GetTextLineHeight()) * 0.5f),
+                    ImGui::ColorConvertFloat4ToU32(GetProfessionColor(profession)),
+                    initial.c_str());
+    }
+}
+
 // Dedicated top-level Compare tab. Keep the selection by saved build ID so
 // reordering or deleting entries in Build Library doesn't select a wrong build.
 static void RenderCompareTab() {
@@ -9846,16 +9879,39 @@ static void RenderCompareTab() {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::BeginCombo("##compareCharacter", g_LibCompareChar.empty() ? ("Active (auto) - " + character->name).c_str() : character->name.c_str())) {
-        if (ImGui::Selectable(g_CurrentCharName.empty() ? "Active (auto)" : ("Active (auto) - " + g_CurrentCharName).c_str(), g_LibCompareChar.empty())) {
+    // Reserve a narrow icon gutter in both the collapsed preview and each
+    // open-list row. The icon is overlaid after ImGui renders the widget, so
+    // native selection highlights, borders, arrows and keyboard handling stay.
+    constexpr const char* compareIconIndent = "      ";
+    const std::string selectedCharPreview =
+        g_LibCompareChar.empty() ? "Active (auto) - " + character->name : character->name;
+    const std::string previewWithIcon = std::string(compareIconIndent) + selectedCharPreview;
+    const ImVec2 previewPos = ImGui::GetCursorScreenPos();
+    const float previewHeight = ImGui::GetFrameHeight();
+    ImDrawList* previewDrawList = ImGui::GetWindowDrawList();
+    if (ImGui::BeginCombo("##compareCharacter", previewWithIcon.c_str())) {
+        const AlterEgo::Character* autoCharacter = character;
+        for (const auto* ch : compareMatches) {
+            if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
+        }
+        const std::string autoLabel = std::string(compareIconIndent) +
+            (g_CurrentCharName.empty() ? "Active (auto)" :
+                "Active (auto) - " + g_CurrentCharName);
+        const bool autoClicked = ImGui::Selectable(autoLabel.c_str(), g_LibCompareChar.empty());
+        DrawCompareCharacterProfessionIcon(ImGui::GetWindowDrawList(),
+            ImGui::GetItemRectMin(), ImGui::GetItemRectSize().y, autoCharacter->profession);
+        if (autoClicked) {
             g_LibCompareChar.clear();
             g_LibCompareSavedManual = false;
         }
         for (const auto* ch : compareMatches) {
-            bool selected = ch->name == g_LibCompareChar;
-            std::string label = ch->name;
-            if (ch->name == g_CurrentCharName) label += " (logged in)";
-            if (ImGui::Selectable(label.c_str(), selected)) {
+            const bool selected = ch->name == g_LibCompareChar;
+            // Keep each option to the profession icon and character name.
+            const std::string label = std::string(compareIconIndent) + ch->name;
+            const bool clicked = ImGui::Selectable(label.c_str(), selected);
+            DrawCompareCharacterProfessionIcon(ImGui::GetWindowDrawList(),
+                ImGui::GetItemRectMin(), ImGui::GetItemRectSize().y, ch->profession);
+            if (clicked) {
                 g_LibCompareChar = ch->name;
                 g_LibCompareSavedManual = false;
                 g_LibCompareBuildTab = -1;
@@ -9865,6 +9921,8 @@ static void RenderCompareTab() {
         }
         ImGui::EndCombo();
     }
+    DrawCompareCharacterProfessionIcon(previewDrawList,
+        previewPos, previewHeight, character->profession);
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1.0f);
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
