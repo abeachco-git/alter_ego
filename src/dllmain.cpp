@@ -13,6 +13,7 @@
 #include <thread>
 #include <fstream>
 #include <filesystem>
+#include <stdexcept>
 #include <chrono>
 #include <ctime>
 #include <cctype>
@@ -507,6 +508,7 @@ static std::unordered_set<uint32_t> g_AchHiddenCatIds;          // categories to
 static std::recursive_mutex g_AchMutex;
 static bool g_AchGroupsFetched = false;
 static int64_t g_AchGroupsCacheFetchedAt = 0; // last successful groups/categories snapshot
+static uint64_t g_AchGroupsGeneration = 0;   // changes after cache load / network refresh
 static std::atomic<bool> g_AchGroupsFetching{false};
 static bool g_AchNameIndexReady = false;
 static std::atomic<bool> g_AchNameIndexFetching{false};
@@ -545,6 +547,7 @@ static std::string g_AchRefreshError;
 static std::chrono::steady_clock::time_point g_AchLastSave;
 static void SaveAchProgress(const std::string& account);
 static void LoadAchProgress(const std::string& account);
+static std::string GetAchievementCacheAccount();
 static std::atomic<uint32_t> g_AchCatProgressPending{0}; // render-thread progress continuation
 static std::atomic<bool> g_AchCatProgressAutomatic{false};
 // Monotonic ms helper for scheduling deferred/backoff queries on the render thread.
@@ -1035,6 +1038,13 @@ static void OnHoardPongForAch(void* eventArgs) {
 
 static void OnEvAlertAchievementCompleted(void* eventArgs) {
     if (!eventArgs) return;
+    // This alert describes the logged-in character, not necessarily the
+    // account selected in the Achievements view. Never apply it to another
+    // account's progress file.
+    if (g_AchCachedAccount.empty() ||
+        g_AchCachedAccount != GetAchievementCacheAccount()) return;
+    const std::string loggedIn = AlterEgo::GW2API::GetCurrentAccountName();
+    if (!loggedIn.empty() && loggedIn != g_AchCachedAccount) return;
     auto* payload = (AlertUnlockPayload*)eventArgs;
     if (payload->ID != 0) {
         {
@@ -1930,6 +1940,7 @@ static void LoadAchGroupCache() {
         if (!g_AchGroups.empty() && !g_AchCategories.empty()) {
             g_AchGroupsFetched = true;
             g_AchGroupsCacheFetchedAt = fetchEpoch;
+            ++g_AchGroupsGeneration;
         }
     } catch (...) {}
 }
@@ -2289,6 +2300,7 @@ static void FetchAchGroups() {
                 }
             }
             g_AchGroupsFetched = true;
+            ++g_AchGroupsGeneration;
             g_AchGroupsFetching = false;
             g_AchStatusMsg = "";
         }
@@ -14227,10 +14239,13 @@ static void RenderAchievements() {
     // batch per ~750ms while idle.
     static std::vector<uint32_t> s_progressQueue;
     static std::string s_prefetchedAccount;
+    static uint64_t s_prefetchedGroupsGeneration = 0;
     {
-        std::string currentAccount = GetEffectiveAccountName();
-        if (s_prefetchedAccount != currentAccount) {
+        std::string currentAccount = GetAchievementCacheAccount();
+        if (s_prefetchedAccount != currentAccount ||
+            s_prefetchedGroupsGeneration != g_AchGroupsGeneration) {
             s_prefetchedAccount = currentAccount;
+            s_prefetchedGroupsGeneration = g_AchGroupsGeneration;
             s_progressQueue.clear();
             // Account progress is already persisted. Re-query known progress
             // only if the snapshot is stale (30 min or prior daily reset).
