@@ -1291,7 +1291,17 @@ static std::string g_SelectedAccountFilter;    // empty = "All Accounts", else s
 
 // Returns the account name to use for per-account queries (dropdown selection only)
 std::string GetEffectiveAccountName() {
-    return g_SelectedAccountFilter;
+    if (!g_SelectedAccountFilter.empty()) return g_SelectedAccountFilter;
+    // "All Accounts" is a valid character/Compare view but never a source
+    // for account-scoped ownership, Vault, Clears or achievement data.
+    if (AlterEgo::GW2API::IsMultiAccount()) return {};
+    const std::string loggedIn = AlterEgo::GW2API::GetCurrentAccountName();
+    if (!loggedIn.empty()) return loggedIn;
+    if (AlterEgo::GW2API::HasAccountsData()) {
+        const auto& accounts = AlterEgo::GW2API::GetAccounts();
+        if (accounts.size() == 1) return accounts.front().name;
+    }
+    return {};
 }
 
  // Achievement progress is per-account, not per-currently-logged-in character.
