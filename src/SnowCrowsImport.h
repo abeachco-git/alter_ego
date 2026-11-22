@@ -10,6 +10,7 @@
 #include <regex>
 #include <string>
 #include <vector>
+#include "AscendedStatNames.h"
 
 namespace AlterEgo {
 namespace SnowCrows {
@@ -31,6 +32,7 @@ struct InfusionTotal {
 };
 struct Page {
     std::string sourceUrl;
+    std::string templateCode; // original GW2 chat link when published by the source
     std::string name;
     std::string profession;
     std::string gameMode;
@@ -213,6 +215,8 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
             }
         }
         while (!g.statName.empty() && g.statName.back() == ' ') g.statName.pop_back();
+        const auto canonical = NamedStats::CanonicalStatName(g.statName);
+        if (!canonical.empty()) g.statName = canonical;
         // Armor has one rune per piece; upgrades on weapons are sigils.
         if (slot == "Helm" || slot == "Shoulders" || slot == "Coat" ||
             slot == "Gloves" || slot == "Leggings" || slot == "Boots")
