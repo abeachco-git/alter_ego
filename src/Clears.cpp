@@ -894,8 +894,6 @@ static void SaveClearsCache() {
 
     nlohmann::json j;
     // Store fetch timestamp as seconds since epoch
-    auto epochSecs = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
     j["account"] = account;
 
     auto serializeEntry = [](const ClearEntry& e) -> nlohmann::json {
@@ -3305,6 +3303,15 @@ void SyncCompletionAccountCaches() {
     if (!account.empty()) {
         LoadClearsCache();
         LoadVaultCache();
+        // A change of account while already on Vault/Clears does not trigger
+        // a new ImGui tab-entry event. Check staleness here as well.
+        const auto hoard = AlterEgo::GW2API::GetHoardStatus();
+        const bool hoardReady = hoard == AlterEgo::HoardStatus::Available ||
+                                hoard == AlterEgo::HoardStatus::Ready;
+        if (AlterEgo::AutoRefreshPolicy::Enabled() && hoardReady) {
+            RefreshClearsOnEntry();
+            RefreshVaultOnEntry();
+        }
     }
 }
 
