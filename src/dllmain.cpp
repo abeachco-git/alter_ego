@@ -9656,20 +9656,39 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     info->details["infix_upgrade"]["id"].is_number_unsigned())
                     liveStat = info->details["infix_upgrade"]["id"].get<uint32_t>();
             }
-            if (gs.stat_id || !gs.stat_name.empty()) {
-                const auto* savedInfo = gs.stat_id
-                    ? AlterEgo::GW2API::GetItemStatInfo(gs.stat_id) : nullptr;
+            // A MetaBattle tile may supply a fixed ascended item ID and
+            // canonical text but no selected itemstat ID. Resolve the saved
+            // side from the same public item metadata as live equipment,
+            // even if the library detail page has not yet been opened.
+            uint32_t savedStat = gs.stat_id;
+            if (!savedStat && gs.item_id) {
+                const auto* savedItem = AlterEgo::GW2API::GetItemInfo(gs.item_id);
+                if (savedItem && savedItem->details.is_object() &&
+                    savedItem->details.contains("infix_upgrade") &&
+                    savedItem->details["infix_upgrade"].is_object() &&
+                    savedItem->details["infix_upgrade"].contains("id") &&
+                    savedItem->details["infix_upgrade"]["id"].is_number_unsigned()) {
+                    const uint32_t possible = savedItem->details["infix_upgrade"]["id"].get<uint32_t>();
+                    const auto* definition = AlterEgo::GW2API::GetItemStatInfo(possible);
+                    if (definition && (gs.stat_name.empty() ||
+                        AlterEgo::NamedStats::SameCanonicalStat(gs.stat_name, definition->name)))
+                        savedStat = possible;
+                }
+            }
+            if (savedStat || !gs.stat_name.empty()) {
+                const auto* savedInfo = savedStat
+                    ? AlterEgo::GW2API::GetItemStatInfo(savedStat) : nullptr;
                 const auto* liveInfo = liveStat
                     ? AlterEgo::GW2API::GetItemStatInfo(liveStat) : nullptr;
                 const std::string savedName =
                     (savedInfo && !savedInfo->name.empty()) ? savedInfo->name
-                    : (!gs.stat_name.empty() ? gs.stat_name : numberLabel(gs.stat_id));
+                    : (!gs.stat_name.empty() ? gs.stat_name : numberLabel(savedStat));
                 const std::string liveName =
                     (liveInfo && !liveInfo->name.empty()) ? liveInfo->name
                     : (liveStat ? numberLabel(liveStat) : "(unknown)");
                 const std::vector<std::string> emptyAttributes;
                 const auto verdict = AlterEgo::CompareStatDefinitions(
-                    gs.stat_id, liveStat, savedName,
+                    savedStat, liveStat, savedName,
                     liveInfo ? liveInfo->name : std::string(),
                     savedInfo ? savedInfo->attributes : emptyAttributes,
                     liveInfo ? liveInfo->attributes : emptyAttributes);
