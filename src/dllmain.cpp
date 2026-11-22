@@ -4560,7 +4560,7 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
 // nothing has been selected). Equipment view additionally preselects its
 // currently displayed equipment set; the dialog can still change that choice.
 static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
-    const AlterEgo::Character* liveCharacter = nullptr, int equipmentTab = 0);
+    const AlterEgo::Character* liveCharacter = nullptr);
 
 // Resolve the same live snapshot regardless of which UI entry point was used.
 static int ActiveBuildIndex(const AlterEgo::Character& ch) {
@@ -4639,7 +4639,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
             ImGui::TextDisabled("Build-link data is loading. Build sharing may be unavailable.");
         // Fashion sharing uses the character's active equipment tab and stays
         // available even while the build palette is still loading.
-        RenderBuildShareMenuItems(shareSnapshot, &ch, ActiveEquipmentTab(ch));
+        RenderBuildShareMenuItems(shareSnapshot, &ch);
         ImGui::EndPopup();
     }
 }
@@ -5755,7 +5755,7 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
 // Both saved-library builds and retrieved character snapshots share the same
 // export actions. The caller owns the popup and supplies the exact build data.
 static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
-    const AlterEgo::Character* liveCharacter, int equipmentTab) {
+    const AlterEgo::Character* liveCharacter) {
                 if (ImGui::Selectable("Copy build-only chat link")) {
                     if (build.chat_link.empty()) {
                         if (APIDefs) APIDefs->GUI_SendAlert("Build link unavailable; refresh or retry.");
@@ -15797,7 +15797,7 @@ void AddonRender() {
                                 contextSnapshot = MakeLiveShareSnapshot(ch, activeBuild, activeEquip);
                                 contextKey = key;
                             }
-                            RenderBuildShareMenuItems(contextSnapshot, &ch, activeEquip);
+                            RenderBuildShareMenuItems(contextSnapshot, &ch);
                             ImGui::EndMenu();
                         }
                         if (ImGui::MenuItem("Save Active Fashion..."))
