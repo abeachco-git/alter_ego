@@ -1,31 +1,34 @@
 # Alter Ego
 
-A Guild Wars 2 addon for [Raidcore Nexus](https://raidcore.gg/Nexus) that lets you view and manage all your characters, equipment, builds, and saved build templates — all without logging in to each character.
-
 > [!IMPORTANT]
-> **This is an unofficial feature fork of [PieOrCake/alter_ego](https://github.com/PieOrCake/alter_ego), not an upstream release.**
+> **Unofficial Alter Ego feature fork — not an upstream release.** This repository is forked from [PieOrCake/alter_ego](https://github.com/PieOrCake/alter_ego). Credit for the original addon and its existing features belongs to the upstream project.
 >
-> All enhanced addon code is currently on **[`feature/save-and-compare-retrieved-sets`](https://github.com/abeachco-git/alter_ego/tree/feature/save-and-compare-retrieved-sets)**. This default **`main` branch retains the original upstream addon code**; the changes listed below are **not included in `main`**.
+> **Enhanced version:** This fork's **`main`** branch contains the enhancements described below. This is an unofficial fork, separate from the original upstream release; these changes have not been submitted upstream.
 >
-> The enhanced version is undergoing in-game testing. It has not been submitted as a pull request or endorsed by the original maintainer. Development has been AI-assisted.
+> **Status:** personally tested in Guild Wars 2 and still undergoing further in-game evaluation; not an official or maintainer-endorsed release. Development has been AI-assisted.
 
-## Enhancements compared with upstream
+## What's different in this fork?
 
-These are additions in the [development branch](https://github.com/abeachco-git/alter_ego/tree/feature/save-and-compare-retrieved-sets), **not claims about the `main` version shown here**.
+The following are **additions or changes relative to the original [PieOrCake Alter Ego](https://github.com/PieOrCake/alter_ego)**, not a list of features inherited unchanged from upstream.
 
-| Feature area | Fork enhancements |
+| Area | Changes in this fork |
 | --- | --- |
-| **Saved builds / Compare** | Save retrieved character builds with equipment; dedicated detailed saved-vs-retrieved comparison; automatic character-first selection, manual overrides, and clearer missing/unverified gear and skill differences. |
-| **Character data** | One-click selected-character refresh with multi-character picker; optional auto-refresh on login/specialization change; live specialization mismatch warning and Last Login ordering. |
-| **Clears / Vault** | Compact responsive layouts for strikes, weekly raid wings, and daily fractals; raid-picker ordering and contextual tooltips; more reliable refresh feedback; clearer completion state. |
-| **Visual prioritization** | Stronger consistent contrast for completed items, muted secondary/commonly skipped raid encounters, and consistent wing/group backgrounds. |
-| **Usability and stability** | Numerous refinements to controls, timestamps, status indicators, padding, and hover information; automated Windows x64 UCRT build checks. |
+| **Saved builds and Compare** | Capture a retrieved character's build **and gear** into the library; dedicated saved-vs-retrieved comparison with build, skill, equipment, stat, infusion, and relic checks; differences and unverified fields; optional exact-item comparison. |
+| **Character-first comparison** | Compare follows the logged-in character by default, auto-selects an appropriate saved build, keeps the **Character / Build tab / Equipment** selectors together, and shares the Characters tab's per-character refresh timestamp. Manual selection remains available. |
+| **Character refresh and live signals** | Refresh the selected character directly, or use `...` to refresh multiple; optional auto-refresh on login or specialization change; warning when live specialization and cached build differ; locally tracked **Last Login** sorting. |
+| **Vault and daily Clears** | Revised compact displays, clearer refresh status and retry handling, daily fractal tier/scale information on hover, and unified achievement-completion visuals. |
+| **Weekly Strikes** | Three-column responsive layout; encounters ordered like the in-game raid picker; shortened labels and full-name/expansion tooltips; `? Nexus` shown as **unknown**, not falsely completed or included in the existing 14-objective count. |
+| **Weekly Raids** | Single-row **W1–W8** encounter grids at normal widths, with compact labels, per-wing completion totals, expansion/name tooltips, and Emboldened / Call of the Mists indicators. Often-skipped or secondary encounters are visually quieter. |
+| **Shared completion styling** | More distinction between available, secondary, and completed entries across the relevant Clears/Vault/Achievements views, without darkening entire raid-wing groups when a wing is complete. |
+| **Other UI refinements** | Consistent inline refresh feedback, improved clipping/padding, Skinventory spacing and refresh label, and several smaller usability fixes. |
 
-For the detailed behavior and build instructions, read the **[enhanced branch README](https://github.com/abeachco-git/alter_ego/blob/feature/save-and-compare-retrieved-sets/README.md)**. The source of the original project remains **[PieOrCake/alter_ego](https://github.com/PieOrCake/alter_ego)**; credit for the original addon and its inherited features belongs to that project.
+**What hasn't changed:** This is still Alter Ego, using [Raidcore Nexus](https://raidcore.gg/Nexus) and [Hoard & Seek](https://github.com/PieOrCake/hoard_and_seek). The fork does not introduce a separate GW2 API credential store or live memory-based gear reads. It keeps the original build-library data and upstream attribution.
+
+**Code and build:** The enhanced code lives on **`main`**; [GitHub Actions](https://github.com/abeachco-git/alter_ego/actions) builds and checks the Windows x64 **UCRT** DLL. CI success does not mean every game/UI interaction has been tested. If you want the original upstream behavior, use [PieOrCake/alter_ego](https://github.com/PieOrCake/alter_ego).
 
 ---
 
-*The documentation below is inherited from the upstream project and describes its original features.*
+A Guild Wars 2 addon for [Raidcore Nexus](https://raidcore.gg/Nexus) that lets you view and manage all your characters, equipment, builds, and saved build templates — all without logging in to each character.
 
 ## AI Notice
 
@@ -105,15 +108,17 @@ The addon stores its data (settings, build library, portraits, caches) in:
 
 ## Building
 
-Cross-compiled for Windows on Linux using MinGW:
+Cross-compiled for Windows on Linux using the **UCRT** MinGW-w64 toolchain
+(rather than the legacy MSVCRT target). On Debian 13:
 
 ```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+sudo apt-get install cmake make g++-mingw-w64-ucrt64 gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-mcrtdll=ucrtbase -DCMAKE_C_FLAGS=-mcrtdll=ucrtbase
+cmake --build build --parallel 2
 ```
 
-Output: `build/AlterEgo.dll`
+Output: `build/AlterEgo.dll`. Use `objdump -p build/AlterEgo.dll` to verify
+a UCRT import and no import from `msvcrt.dll`.
 
 ## Dependencies
 
@@ -124,3 +129,102 @@ Output: `build/AlterEgo.dll`
 ## License
 
 MIT
+
+## Save a retrieved build and compare it to a saved build (local extension)
+
+In **Characters → Builds**, select a character and build tab. Click **Save Current
+Build + Gear to Library...** (or right-click the build tab and select **Save to
+Library...**). Give the snapshot a name, choose a game mode, and select which
+retrieved equipment tab to capture. **Include equipment set** defaults to on.
+The capture copies the retrieved trait and skill IDs directly, so it works even
+when the build-link palette is still loading. Your previously saved sets are
+not changed.
+
+Open the dedicated **Compare** top-level tab. By default, **Character**
+follows the currently logged-in hero (**Active (auto)**) and the **Saved
+build** selection auto-matches that character. The existing three-column
+**Character / Build tab / Equipment** selector row is retained, with Saved
+build underneath. You can manually select another character or saved build.
+You can also click **Compare** in **Build Library** to preselect that saved
+build. The default view shows only differences;
+check **Show matches** for all compared fields. **Compare exact item IDs** is
+optional because identical functional gear may use different item IDs. You can
+refresh the chosen character through Hoard & Seek from the comparison tab.
+Comparisons do not apply equipment, skills, or changes to saved builds.
+
+Newly captured library builds store an optional source-character name. This
+helps identify their origin but does **not** override the active character
+when Compare is in automatic mode. Only same-profession library builds are
+offered for manual comparison; if no suitable saved build is found, Compare
+shows that explicitly rather than silently comparing the wrong character.
+The build and equipment selectors default to **Active (auto)**, which follows
+the latest Hoard & Seek active-tab data after refreshing; manually selecting
+a tab overrides that behavior. The Compare refresh button
+shows progress and success/error feedback, but a completed fetch does not
+guarantee that the GW2 API has already published the most recent in-game change.
+
+The Characters list shows a matching saved build for the **logged-in character
+only**, caching comparisons until the active character, its retrieved data, or
+the saved library changes. When several saved builds share the same build
+template, it displays the **closest equipment match** (preferring a verified
+full gear match, then fewer known differences) and shows how many saved
+variants share the template. Equipment receives its own explicit status:
+**MATCHES**, **DOES NOT MATCH**, **MISSING ITEM**, **DATA MISSING**, or
+**NOT SAVED**. Different itemstat IDs are compared by public
+stat name and attribute definitions when possible. If the metadata is
+incomplete, the field is marked **not verified** rather than reported
+as a mismatch or match; these fields do not count toward a confirmed full
+gear match. These labels reflect the latest retrieved H&S character snapshot,
+not a live memory read.
+
+**Data limitations:** The comparison uses the most recently retrieved Hoard & Seek
+data, not an instantaneous memory read from the game. Older library entries
+only contain the gear values they previously recorded: missing fields are not
+assumed to be absent from the original build. Newly captured library entries
+also record the original item IDs and infusion lists for optional comparison.
+Shared relics from the supplemental equipment endpoint (equipment tab 0)
+are captured into the selected numbered equipment set and compared correctly;
+unrelated shared tool slots are excluded.
+The existing AE2 chat/relay sharing formats do not include those extra fields,
+so an AE2-imported build may support fewer equipment comparisons. GW2 may not
+expose a selected legendary relic effect as a conventional item ID; verify
+those cases in-game.
+
+To produce a Windows DLL on GitHub without maintaining a build server, fork
+this repository and use **Actions → Build Alter Ego Windows DLL → Run workflow**.
+Download the `AlterEgo-UCRT-Windows-x64` artifact from the successful
+run. You can also cross-compile on Debian with MinGW by following **Building**.
+
+### Character sorting: Last Login
+
+The Characters sort dropdown includes **Last Login** (newest first). It uses
+locally recorded MumbleLink character-login timestamps already shown in the
+character header and saved to `login_times.json`; it does not request the
+GW2 API's `last_modified` field. Switching characters automatically updates
+the order without changing the currently selected roster entry. The direction
+arrow reverses oldest/newest among known logins; unobserved characters remain
+at the bottom in either direction. Existing Custom sorting and saved sort IDs
+are preserved. Logins before Alter Ego began recording are not recoverable.
+
+### Optional live specialization warning and automatic refresh
+
+Nexus options > **Data Source: Hoard & Seek** now has an **Automatic Character
+Refresh** subsection. Automatic refresh is **off by default** (explicit opt-in).
+When enabled, the independent **When a character logs in** and **When
+specialization changes** options schedule a refresh for the currently played
+character only. Both use Nexus's existing MumbleLink identity event; **RTAPI
+is not required**. Rapid events are coalesced with an 8-second debounce, and
+only one automatic request per character is dispatched within a 90-second
+cooldown. Requests wait for Hoard & Seek to be ready and an in-flight fetch to
+finish; selected-character refreshes also refuse to overwrite an active fetch.
+
+The separately configurable **Warn when live specialization differs from
+retrieved build** option is on by default and compares MumbleLink's third
+specialization ID against the *cached active build*'s third specialization.
+When both values are known but differ, a warning appears for the logged-in
+character in the roster and on Compare. Unknown/zero values do not trigger a
+warning. The warning does **not** imply that full gear details are available
+from live memory: both equipment and build templates still come from the GW2
+API through Hoard & Seek, and the API may return stale cached data. Automatic
+refresh does not detect two builds that share the same third specialization or
+equipment-only switches.

@@ -28,6 +28,12 @@ namespace AlterEgo {
     namespace {
         std::atomic<int>       g_busyRetryAction{0};
         std::atomic<long long> g_busyRetryAtMs{0};
+        std::atomic<uint64_t> g_characterDataRevision{1};
+        std::atomic<uint64_t> g_buildLibraryRevision{1};
+        // A manual character refresh also refreshes crafting; a debounced
+        // automatic equipment/spec refresh reuses persisted crafting details.
+        // Access only while s_mutex is held.
+        bool g_refreshCraftingForRequest = true;
 
         long long NowMs() {
             return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -503,6 +509,7 @@ namespace AlterEgo {
             s_chars_fetched = 0;
             s_chars_total = 0;
             s_priority_char_name = priorityChar;
+            g_refreshCraftingForRequest = true; // Full explicit refresh
             s_list_only_mode = false;
             s_fetch_message = "Requesting character list from H&S...";
         }
@@ -618,13 +625,18 @@ namespace AlterEgo {
         s_api->Events_Raise(EV_HOARD_QUERY_API, &req);
     }
 
-    void GW2API::RequestCharacterRefreshSelected(const std::vector<std::string>& names) {
+    void GW2API::RequestCharacterRefreshSelected(
+        const std::vector<std::string>& names, bool refreshCrafting) {
         if (!s_api || names.empty()) return;
 
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            // Never overwrite a manual or in-flight H&S character fetch.
+            // This also protects against an auto-refresh race at dispatch time.
+            if (s_fetch_status == FetchStatus::InProgress) return;
             s_fetch_status = FetchStatus::InProgress;
             s_pending_char_names = names;
+            g_refreshCraftingForRequest = refreshCrafting;
             s_pending_char_idx = 0;
             s_chars_total = (int)names.size();
             s_chars_fetched = 0;
@@ -1166,6 +1178,7 @@ namespace AlterEgo {
                     if (cj.contains("crafting") && cj["crafting"].is_array())
                         craftArr = cj["crafting"];
                     if (craftArr.is_array()) {
+                        s_current_char.crafting_cached = true;
                         // Collect active first, then inactive, all with rating >= 1
                         std::vector<std::tuple<std::string, int, bool>> allCrafts;
                         for (const auto& craft : craftArr) {
@@ -1244,15 +1257,32 @@ namespace AlterEgo {
                     s_fetch_phase = 4;
                     s_fetch_message = s_current_char.name + ": Fetching builds...";
                     break;
-                case 4: // buildtabs done → crafting
-                    s_fetch_phase = 5;
-                    s_fetch_message = s_current_char.name + ": Fetching crafting...";
+                case 4: { // buildtabs done → crafting, or reuse the persisted snapshot
+                    bool reusedCrafting = false;
+                    if (!g_refreshCraftingForRequest) {
+                        for (const auto& cached : s_characters) {
+                            if (cached.name != s_current_char.name ||
+                                !cached.crafting_cached) continue;
+                            s_current_char.crafting = cached.crafting;
+                            s_current_char.crafting_levels = cached.crafting_levels;
+                            s_current_char.crafting_active = cached.crafting_active;
+                            s_current_char.crafting_cached = true;
+                            reusedCrafting = true;
+                            break;
+                        }
+                    }
+                    s_fetch_phase = reusedCrafting ? 6 : 5;
+                    s_fetch_message = s_current_char.name +
+                        (reusedCrafting ? ": Fetching hero challenges..."
+                                       : ": Fetching crafting...");
                     break;
+                }
                 case 5: // crafting done → heropoints
                     s_fetch_phase = 6;
                     s_fetch_message = s_current_char.name + ": Fetching hero challenges...";
                     break;
                 case 6: { // heropoints done → add/update this character, then next
+                    s_current_char.data_refreshed = std::time(nullptr);
                     // Add or update this character in the list
                     bool found = false;
                     for (auto& existing : s_characters) {
@@ -1267,6 +1297,7 @@ namespace AlterEgo {
                     }
                     s_has_character_data = true;
                     s_last_updated = std::time(nullptr);
+                    g_characterDataRevision.fetch_add(1);
                     s_chars_fetched++;
                     s_pending_char_idx++;
 
@@ -1450,6 +1481,7 @@ namespace AlterEgo {
         ch.active_equipment_tab = cj.value("active_equipment_tab", 0);
 
         if (cj.contains("crafting") && cj["crafting"].is_array()) {
+            ch.crafting_cached = true;
             std::vector<std::tuple<std::string, int, bool>> allCrafts;
             for (const auto& craft : cj["crafting"]) {
                 int rating = craft.value("rating", 0);
@@ -1516,6 +1548,14 @@ namespace AlterEgo {
         return s_last_updated;
     }
 
+    uint64_t GW2API::GetCharacterDataRevision() {
+        return g_characterDataRevision.load();
+    }
+
+    uint64_t GW2API::GetBuildLibraryRevision() {
+        return g_buildLibraryRevision.load();
+    }
+
     const std::vector<Character>& GW2API::GetCharacters() {
         return s_characters;
     }
@@ -1549,7 +1589,10 @@ namespace AlterEgo {
                     }),
                 s_characters.end());
             changed = (s_characters.size() != before);
-            if (changed) s_has_character_data = !s_characters.empty();
+            if (changed) {
+                s_has_character_data = !s_characters.empty();
+                g_characterDataRevision.fetch_add(1);
+            }
         }
         if (changed) {
             if (s_api) s_api->Log(LOGL_INFO, "AlterEgo",
@@ -1579,6 +1622,36 @@ namespace AlterEgo {
         auto it = s_item_name_id_cache.find(name);
         if (it != s_item_name_id_cache.end()) return it->second;
         return 0;
+    }
+
+    std::vector<std::pair<std::string, uint32_t>> GW2API::SearchKnownInfusions(
+        const std::string& query, size_t maxResults) {
+        std::vector<std::pair<std::string, uint32_t>> results;
+        if (query.empty() || maxResults == 0) return results;
+        auto lower = [](std::string str) {
+            std::transform(str.begin(), str.end(), str.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return str;
+        };
+        const std::string needle = lower(query);
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for (const auto& [name, id] : s_item_name_id_cache) {
+            const std::string folded = lower(name);
+            // Do not treat arbitrary item names as eligible infusions.
+            if (folded.find("infusion") == std::string::npos &&
+                folded.find("enrichment") == std::string::npos)
+                continue;
+            if (folded.find(needle) != std::string::npos ||
+                std::to_string(id).find(needle) != std::string::npos)
+                results.emplace_back(name, id);
+        }
+        std::sort(results.begin(), results.end(),
+            [](const auto& a, const auto& b) {
+                if (a.first != b.first) return a.first < b.first;
+                return a.second < b.second;
+            });
+        if (results.size() > maxResults) results.resize(maxResults);
+        return results;
     }
 
     void GW2API::CacheItemNameId(const std::string& name, uint32_t id) {
@@ -2253,7 +2326,9 @@ namespace AlterEgo {
                 cj["age"] = ch.age;
                 cj["created"] = ch.created;
                 cj["last_modified"] = ch.last_modified;
+                cj["data_refreshed"] = (int64_t)ch.data_refreshed;
                 cj["deaths"] = ch.deaths;
+                cj["crafting_cached"] = ch.crafting_cached;
                 if (!ch.crafting.empty()) {
                     json craft_arr = json::array();
                     for (size_t ci = 0; ci < ch.crafting.size(); ci++) {
@@ -2359,6 +2434,7 @@ namespace AlterEgo {
 
             std::lock_guard<std::mutex> lock(s_mutex);
             s_last_updated = j.value("last_updated", (int64_t)0);
+            g_characterDataRevision.fetch_add(1);
 
             if (j.contains("characters") && j["characters"].is_array()) {
                 s_characters.clear();
@@ -2372,7 +2448,11 @@ namespace AlterEgo {
                     ch.age = cj.value("age", 0);
                     ch.created = cj.value("created", "");
                     ch.last_modified = cj.value("last_modified", "");
+                    ch.data_refreshed = (time_t)cj.value("data_refreshed", (int64_t)0);
                     ch.deaths = cj.value("deaths", 0);
+                    // Older character caches contain crafting arrays but no
+                    // explicit fetched marker. Keep them valid automatically.
+                    ch.crafting_cached = cj.value("crafting_cached", cj.contains("crafting"));
                     if (cj.contains("crafting") && cj["crafting"].is_array()) {
                         for (const auto& craft : cj["crafting"]) {
                             ch.crafting.push_back(craft.value("discipline", ""));
@@ -2820,6 +2900,7 @@ namespace AlterEgo {
         json bj;
         bj["id"] = b.id;
         bj["name"] = b.name;
+        if (!b.source_character.empty()) bj["source_character"] = b.source_character;
         bj["chat_link"] = b.chat_link;
         if (!b.ae2_code.empty()) bj["ae2_code"] = b.ae2_code;
         bj["profession"] = b.profession;
@@ -2858,6 +2939,11 @@ namespace AlterEgo {
             json gearJ = json::object();
             for (const auto& [slot, gs] : b.gear) {
                 json gsj;
+                if (gs.item_id != 0) gsj["item_id"] = gs.item_id;
+                if (gs.infusion_snapshot) gsj["infusion_snapshot"] = true;
+                if (!gs.infusion_ids.empty()) gsj["infusion_ids"] = gs.infusion_ids;
+                if (!gs.infusion_attributes.empty())
+                    gsj["infusion_attributes"] = gs.infusion_attributes;
                 gsj["stat_id"] = gs.stat_id;
                 gsj["stat_name"] = gs.stat_name;
                 if (!gs.rune.empty()) gsj["rune"] = gs.rune;
@@ -2880,6 +2966,7 @@ namespace AlterEgo {
     }
 
     bool GW2API::SaveBuildLibrary() {
+        g_buildLibraryRevision.fetch_add(1);
         EnsureDataDirectory();
         std::string path = GetDataDirectory() + "/build_library.json";
 
@@ -2903,6 +2990,7 @@ namespace AlterEgo {
         if (!bj.is_object()) return false;
         b.id = bj.value("id", "");
         b.name = bj.value("name", "");
+        b.source_character = bj.value("source_character", "");
         b.chat_link = bj.value("chat_link", "");
         b.ae2_code = bj.value("ae2_code", "");
         b.profession = bj.value("profession", "");
@@ -2966,6 +3054,20 @@ namespace AlterEgo {
             for (auto it = bj["gear"].begin(); it != bj["gear"].end(); ++it) {
                 BuildGearSlot gs;
                 gs.slot = it.key();
+                gs.item_id = it.value().value("item_id", (uint32_t)0);
+                gs.infusion_snapshot = it.value().value("infusion_snapshot", false);
+                if (it.value().contains("infusion_ids") && it.value()["infusion_ids"].is_array()) {
+                    for (const auto& infusion : it.value()["infusion_ids"]) {
+                        if (infusion.is_number_unsigned()) gs.infusion_ids.push_back(infusion.get<uint32_t>());
+                    }
+                }
+                if (it.value().contains("infusion_attributes") &&
+                    it.value()["infusion_attributes"].is_array()) {
+                    for (const auto& attr : it.value()["infusion_attributes"])
+                        gs.infusion_attributes.push_back(attr.is_string() ? attr.get<std::string>() : "");
+                    // Never trust mismatched lengths in hand-edited or older JSON.
+                    gs.infusion_attributes.resize(gs.infusion_ids.size());
+                }
                 gs.stat_id = it.value().value("stat_id", (uint32_t)0);
                 gs.stat_name = it.value().value("stat_name", "");
                 gs.rune = it.value().value("rune", "");
@@ -2993,6 +3095,7 @@ namespace AlterEgo {
         try {
             json j; file >> j;
             std::lock_guard<std::mutex> lock(s_mutex);
+            g_buildLibraryRevision.fetch_add(1);
             s_saved_builds.clear();
             if (j.contains("builds") && j["builds"].is_array()) {
                 for (const auto& bj : j["builds"]) {

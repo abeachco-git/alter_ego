@@ -53,6 +53,10 @@ namespace AlterEgo {
     // A gear slot in a saved build (user-entered stats/upgrades)
     struct BuildGearSlot {
         std::string slot;           // "Helm", "Shoulders", "Coat", etc.
+        uint32_t item_id = 0;      // Original live item ID (optional; older saves omit this)
+        std::vector<uint32_t> infusion_ids; // Original infusions (optional)
+        std::vector<std::string> infusion_attributes; // Optional per-position stat override; blank = exact ID
+        bool infusion_snapshot = false; // True even if captured with no infusions
         uint32_t stat_id = 0;       // /v2/itemstats ID
         std::string stat_name;      // "Berserker's", etc.
         std::string rune;           // Rune name (armor only)
@@ -215,10 +219,12 @@ namespace AlterEgo {
         int age = 0;                // Seconds played
         std::string created;        // ISO date
         std::string last_modified;  // ISO date — last login/modification
+        time_t data_refreshed = 0; // Last successful character snapshot from H&S
         int deaths = 0;
         std::vector<std::string> crafting;      // Crafting disciplines (active first)
         std::vector<int> crafting_levels;
         std::vector<bool> crafting_active;      // Whether each discipline is active
+        bool crafting_cached = false;          // Fetched once (even if no disciplines)
         std::vector<EquipmentItem> equipment;
         std::vector<BuildTemplate> build_tabs;
         std::map<int, std::string> equipment_tab_names; // tab number -> name
@@ -267,6 +273,7 @@ namespace AlterEgo {
     struct SavedBuild {
         std::string id;             // Unique ID (timestamp-based)
         std::string name;           // User-given name
+        std::string source_character; // Origin character, empty for legacy/imported builds
         std::string chat_link;      // Original chat link [&...]
         std::string profession;     // Profession name (decoded)
         GameMode game_mode = GameMode::PvE;
@@ -312,7 +319,8 @@ namespace AlterEgo {
         static void PingHoard();                    // Check if H&S is available
         static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via H&S
         static void RequestCharacterList();              // Fetch just the character name list
-        static void RequestCharacterRefreshSelected(const std::vector<std::string>& names); // Fetch specific characters
+        static void RequestCharacterRefreshSelected(
+            const std::vector<std::string>& names, bool refreshCrafting = true); // Manual=true; auto=false
         static void PollRetries();                       // Per-frame: fire a scheduled HOARD_STATUS_BUSY backoff retry
 
         // H&S cached queries (synchronous, from H&S in-memory cache)
@@ -348,6 +356,8 @@ namespace AlterEgo {
         // --- Query ---
         static bool HasCharacterData();
         static time_t GetLastUpdated();
+        static uint64_t GetCharacterDataRevision();
+        static uint64_t GetBuildLibraryRevision();
 
         // Character access
         static const std::vector<Character>& GetCharacters();
@@ -369,6 +379,8 @@ namespace AlterEgo {
         // Item/Skin/Spec/Trait/Skill/Color caches (public endpoints, fetched directly)
         static const ItemInfo* GetItemInfo(uint32_t item_id);
         static uint32_t FindItemIdByName(const std::string& name); // searches item cache + name cache
+        static std::vector<std::pair<std::string, uint32_t>> SearchKnownInfusions(
+            const std::string& query, size_t maxResults = 100); // cached names only
         static void CacheItemNameId(const std::string& name, uint32_t id); // add to persistent name→ID cache
         static bool LoadItemNameCache();
         static bool SaveItemNameCache();

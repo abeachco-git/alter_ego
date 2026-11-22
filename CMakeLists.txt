@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 
-# Cross-compilation setup for Windows on Linux (must be before project())
+# Cross-compilation setup for Windows on Linux (must be before project()).
+# Use the UCRT variant to match the upstream DLL runtime family. Do not switch
+# to generic x86_64-w64-mingw32 (MSVCRT) for production builds.
 set(CMAKE_SYSTEM_NAME Windows)
-set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
-set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
-set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
+set(CMAKE_C_COMPILER x86_64-w64-mingw32ucrt-gcc)
+set(CMAKE_CXX_COMPILER x86_64-w64-mingw32ucrt-g++)
+set(CMAKE_RC_COMPILER x86_64-w64-mingw32ucrt-windres)
 
 project(AlterEgo)
 

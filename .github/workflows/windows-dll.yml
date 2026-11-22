@@ -1,0 +1,56 @@
+name: Build Alter Ego Windows DLL (UCRT)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feature/save-and-compare-retrieved-sets]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'include/**'
+      - 'lib/**'
+      - 'CMakeLists.txt'
+      - 'AlterEgo.def'
+      - '.github/workflows/windows-dll.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install matching UCRT cross-compiler
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
+          x86_64-w64-mingw32ucrt-g++ --version
+      - name: Test platform-independent comparator
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_compare_core.cpp -o /tmp/build_compare_core
+          /tmp/build_compare_core
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_match_core.cpp -o /tmp/infusion_match_core
+          /tmp/infusion_match_core
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/clears_rotation.cpp -o /tmp/clears_rotation
+          /tmp/clears_rotation
+      - name: Configure Windows release build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
+      - name: Compile Windows DLL
+        run: cmake --build build --parallel 2
+      - name: Verify Windows x64 UCRT DLL
+        run: |
+          test -s build/AlterEgo.dll
+          file build/AlterEgo.dll
+          x86_64-w64-mingw32ucrt-objdump -f build/AlterEgo.dll | grep -E 'pei-x86-64|pe-x86-64'
+          x86_64-w64-mingw32ucrt-objdump -p build/AlterEgo.dll | grep -Ei 'DLL Name: (ucrtbase.dll|api-ms-win-crt-)'
+          if x86_64-w64-mingw32ucrt-objdump -p build/AlterEgo.dll | grep -qi 'DLL Name: msvcrt.dll'; then
+            echo "Wrong CRT imported (MSVCRT)" >&2
+            exit 1
+          fi
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlterEgo-UCRT-Windows-x64
+          path: build/AlterEgo.dll
+          if-no-files-found: error
