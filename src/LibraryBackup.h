@@ -53,7 +53,7 @@ inline bool SupportedName(const std::string& name) {
 inline unsigned GroupForName(const std::string& name) {
     if (name == "build_library.json") return Builds;
     if (name == "fashion_library.json") return Fashion;
-    return IsOtherJson(name) || UserAsset(name) ? Other : 0;
+    return IsOtherJson(name) || UserAsset(name) ? static_cast<unsigned>(Other) : 0u;
 }
 inline bool Exists(const std::string& path) {
     std::error_code ec;
