@@ -16652,8 +16652,9 @@ void AddonRender() {
             ImGui::EndTabItem();
         }
 
-        // Library itself is the menu: clicking its tab header must not
-        // implicitly select the last viewed collection from another page.
+        // Split navigation: clicking Library goes directly to Builds.
+        // The chevron opens the collection/actions menu without navigation;
+        // hovering over the tab opens that same menu after a short dwell.
         ImGuiTabBar* libraryTabBar = GImGui->CurrentTabBar;
         const ImGuiID previousSelectedTab = libraryTabBar ? libraryTabBar->SelectedTabId : 0;
         ImGuiTabItemFlags libraryFlags = 0;
@@ -16661,17 +16662,14 @@ void AddonRender() {
             libraryFlags |= ImGuiTabItemFlags_SetSelected;
             g_SwitchToLibrary = false;
         }
-        // Reserve space for an arrow but draw it ourselves: the font used by
-        // Nexus cannot render the Unicode down-triangle used previously.
+        // Keep the extra tab-label space for the drawn chevron. The Nexus
+        // font cannot reliably render the Unicode down-triangle.
         const bool libraryVisible = ImGui::BeginTabItem("Library    ##ae_library_dropdown", nullptr, libraryFlags);
         const bool libraryHeaderClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Saved builds and fashion templates stored locally");
+        const bool libraryHeaderHovered = ImGui::IsItemHovered();
         const ImVec2 libraryTabMin = ImGui::GetItemRectMin();
         const ImVec2 libraryTabMax = ImGui::GetItemRectMax();
         const ImVec2 libraryMenuAnchor(libraryTabMin.x, libraryTabMax.y);
-        // Two short line segments form a small down-chevron without requiring
-        // a glyph in the selected font. Keep it inside the actual tab header.
         const ImVec2 arrowCenter(libraryTabMax.x - 13.0f,
                                   (libraryTabMin.y + libraryTabMax.y) * 0.5f);
         ImDrawList* tabDraw = ImGui::GetWindowDrawList();
@@ -16684,19 +16682,49 @@ void AddonRender() {
                          arrowColor, 1.6f);
         const ImGuiID libraryTabId = libraryTabBar && libraryTabBar->LastTabItemIdx >= 0
             ? libraryTabBar->Tabs[libraryTabBar->LastTabItemIdx].ID : 0;
+
+        static float libraryHoverSeconds = 0.0f;
+        // A click should not trigger another hover-popup until the pointer
+        // leaves the tab. Without this, the menu opens over the newly selected
+        // Builds page while the user is still holding the mouse in place.
+        static bool librarySuppressHoverUntilLeave = false;
+        if (!libraryHeaderHovered) {
+            libraryHoverSeconds = 0.0f;
+            librarySuppressHoverUntilLeave = false;
+        }
+        if (libraryHeaderClicked) {
+            libraryHoverSeconds = 0.0f;
+            librarySuppressHoverUntilLeave = true;
+            const bool chevronClicked =
+                ImGui::GetIO().MousePos.x >= libraryTabMax.x - 26.0f;
+            if (chevronClicked) {
+                // BeginTabItem queued a tab change: restore the previous tab,
+                // leaving a hover/chevron menu visit completely non-navigating.
+                if (libraryTabBar && previousSelectedTab &&
+                    previousSelectedTab != libraryTabId)
+                    libraryTabBar->NextSelectedTabId = previousSelectedTab;
+                ImGui::OpenPopup("Library menu##ae_main");
+            } else {
+                NavigateToLibraryCollection(0);
+                if (libraryTabBar)
+                    libraryTabBar->NextSelectedTabId = libraryTabId;
+                // Clicking Library is navigation, even if its menu was open.
+                ImGui::CloseCurrentPopup();
+            }
+        } else if (libraryHeaderHovered && !librarySuppressHoverUntilLeave &&
+                   !ImGui::IsPopupOpen("Library menu##ae_main")) {
+            libraryHoverSeconds += ImGui::GetIO().DeltaTime;
+            if (libraryHoverSeconds >= 0.18f) {
+                libraryHoverSeconds = 0.0f;
+                ImGui::OpenPopup("Library menu##ae_main");
+            }
+        }
+
         if (libraryVisible) {
             g_MainTab = 1;
             if (g_LibraryCollection == 0) RenderBuildLibrary();
             else RenderFashionLibrary();
             ImGui::EndTabItem();
-        }
-        if (libraryHeaderClicked) {
-            // BeginTabItem queues selection on click. Cancel that implicit
-            // navigation; only Builds/Fashion selections should switch pages.
-            if (libraryTabBar && previousSelectedTab &&
-                previousSelectedTab != libraryTabId)
-                libraryTabBar->NextSelectedTabId = previousSelectedTab;
-            ImGui::OpenPopup("Library menu##ae_main");
         }
         ImGui::SetNextWindowPos(libraryMenuAnchor, ImGuiCond_Appearing);
         if (ImGui::BeginPopup("Library menu##ae_main")) {
