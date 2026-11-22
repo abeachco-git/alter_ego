@@ -2450,11 +2450,24 @@ namespace AlterEgo {
             j["characters"] = chars_arr;
         }
 
-        std::ofstream file(path);
-        if (!file.is_open()) return false;
-        file << j.dump(2);
-        file.flush();
-        return true;
+        // Character data is a shared multi-account index with account_name
+        // stored on each character. Write atomically because it may be saved
+        // after each character, not just when the full roster completes.
+        const std::string tmp = path + ".tmp";
+        try {
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                if (!out.is_open()) return false;
+                const std::string payload = j.dump(2);
+                out.write(payload.data(), (std::streamsize)payload.size());
+                out.flush();
+                if (!out.good()) return false;
+            }
+            return MoveFileExA(tmp.c_str(), path.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+        } catch (...) {
+            return false;
+        }
     }
 
     bool GW2API::LoadCharacterData() {
@@ -2467,11 +2480,11 @@ namespace AlterEgo {
             file >> j;
 
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_last_updated = j.value("last_updated", (int64_t)0);
-            g_characterDataRevision.fetch_add(1);
-
-            if (j.contains("characters") && j["characters"].is_array()) {
-                s_characters.clear();
+            if (!j.contains("characters") || !j["characters"].is_array())
+                return false;
+            std::vector<Character> restored;
+            const int64_t loadedAt = j.value("last_updated", (int64_t)0);
+            {
                 for (const auto& cj : j["characters"]) {
                     Character ch;
                     ch.name = cj.value("name", "");
@@ -2588,11 +2601,20 @@ namespace AlterEgo {
                     }
                     ch.account_name = cj.value("account_name", "");
 
-                    s_characters.push_back(ch);
+                    if (!ch.name.empty()) restored.push_back(std::move(ch));
                 }
-                s_has_character_data = !s_characters.empty();
             }
 
+            // Do not mutate the previous working cache until the entire file
+            // parses successfully. Also reconstruct account ownership before
+            // H&S sends a fresh accounts response.
+            s_characters = std::move(restored);
+            s_char_to_account.clear();
+            for (const auto& ch : s_characters)
+                if (!ch.account_name.empty()) s_char_to_account[ch.name] = ch.account_name;
+            s_has_character_data = !s_characters.empty();
+            s_last_updated = loadedAt;
+            g_characterDataRevision.fetch_add(1);
             return true;
         } catch (...) {
             return false;
