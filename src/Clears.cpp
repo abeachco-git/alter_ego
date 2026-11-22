@@ -1341,23 +1341,8 @@ static void RenderClearStatus(bool fetched, bool done, const char* label) {
 
 // ============= Banner-row helpers (strikes / raid wings) =============
 
-#include "EmbeddedBanners.h"
-
-// Look up the embedded banner JPEG for a key (e.g. "wing:9128", "strike:Cold War")
-// and return a loaded Nexus texture, or nullptr if none.
-static Texture_t* GetBannerTexture(const std::string& key) {
-    unsigned int len = 0;
-    const unsigned char* data = AlterEgo::EmbeddedBanners::FindBanner(key, len);
-    if (!data || len == 0) return nullptr;
-
-    std::string texId = "AE_BNR_" + key;
-    Texture_t* tex = APIDefs->Textures_Get(texId.c_str());
-    if (!tex || !tex->Resource) {
-        tex = APIDefs->Textures_GetOrCreateFromMemory(
-            texId.c_str(), const_cast<unsigned char*>(data), (uint64_t)len);
-    }
-    return (tex && tex->Resource) ? tex : nullptr;
-}
+// Raid/strike rows now use CompletionTheme styling; historical loading-screen
+// JPEG banner resources are unused and deliberately excluded from this DLL.
 
 struct ThemeGrad { ImU32 a, b; };
 
@@ -1548,8 +1533,7 @@ static ThemeGrad StrikeTheme(const std::string& name) {
 
 // Render a single banner row (strike / generic clear). If widthOverride > 0,
 // use that width instead of the full available width (used for multi-column layouts).
-// If bannerKey resolves to an embedded loading-screen JPEG, that image is used
-// as the background; otherwise the gradient theme is used.
+// Retain the bannerKey argument for existing caller compatibility only.
 // Unified one-line clear cell. Background artwork made the trackers visually
 // inconsistent and obscured labels; raid dates and completion remain visible.
 static ImU32 BountyDateColor(const std::string& date,
