@@ -15331,6 +15331,112 @@ static void PollAutoCharacterRefresh() {
     }
 }
 
+
+struct TabDropdownState {
+    bool pinned = false;
+    bool popupOpen = false;
+    bool suppressHoverUntilLeave = false;
+    bool requestOpen = false;
+    bool requestClose = false;
+    bool labelClicked = false;
+    bool headerHovered = false;
+    float hoverSeconds = 0.0f;
+    float outsideSeconds = 0.0f;
+    ImVec2 anchor{};
+};
+
+// This is the Library tab's proven interaction model, shared unchanged by
+// the Achievements, Vault and Clears menus. The tab's label navigates; its
+// chevron pins or unpins; hovering opens temporarily and dismisses on leave.
+static void HandleTabDropdown(TabDropdownState& state, ImGuiTabBar* tabBar,
+                              ImGuiID previousTab, ImGuiID currentTab,
+                              ImVec2 tabMin, ImVec2 tabMax) {
+    state.requestOpen = false;
+    state.requestClose = false;
+    state.labelClicked = false;
+    state.anchor = ImVec2(tabMin.x, tabMax.y);
+
+    const ImVec2 arrow(tabMax.x - 13.0f, (tabMin.y + tabMax.y) * 0.5f);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+    draw->AddLine(ImVec2(arrow.x - 4.0f, arrow.y - 2.0f),
+                  ImVec2(arrow.x, arrow.y + 2.0f), color, 1.6f);
+    draw->AddLine(ImVec2(arrow.x, arrow.y + 2.0f),
+                  ImVec2(arrow.x + 4.0f, arrow.y - 2.0f), color, 1.6f);
+
+    // IsItemHovered is blocked by active popups, especially for the active tab.
+    state.headerHovered = ImGui::IsMouseHoveringRect(tabMin, tabMax, false);
+    const bool clicked = state.headerHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    if (!state.headerHovered) {
+        state.hoverSeconds = 0.0f;
+        state.suppressHoverUntilLeave = false;
+    }
+    if (clicked) {
+        state.hoverSeconds = 0.0f;
+        state.suppressHoverUntilLeave = true;
+        if (ImGui::GetIO().MousePos.x >= tabMax.x - 26.0f) {
+            if (state.pinned && state.popupOpen)
+                state.requestClose = true;
+            else {
+                state.pinned = true;
+                state.requestOpen = true;
+                state.outsideSeconds = 0.0f;
+            }
+            // BeginTabItem may have queued a selection; a chevron never navigates.
+            if (tabBar && previousTab && previousTab != currentTab)
+                tabBar->NextSelectedTabId = previousTab;
+        } else {
+            state.labelClicked = true;
+            if (tabBar) tabBar->NextSelectedTabId = currentTab;
+        }
+    } else if (state.headerHovered && !state.suppressHoverUntilLeave &&
+               !state.popupOpen) {
+        state.hoverSeconds += ImGui::GetIO().DeltaTime;
+        if (state.hoverSeconds >= 0.18f) {
+            state.hoverSeconds = 0.0f;
+            state.pinned = false;
+            state.outsideSeconds = 0.0f;
+            state.requestOpen = true;
+        }
+    }
+}
+
+static bool TabDropdownMenuHovered() {
+    const ImVec2 pos = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    return ImGui::IsMouseHoveringRect(pos,
+        ImVec2(pos.x + size.x, pos.y + size.y), false);
+}
+
+static void FinishTabDropdown(TabDropdownState& state, bool actionSelected,
+                              bool mouseOverMenu, bool mouseOverSubmenu = false) {
+    if (state.labelClicked || state.requestClose || actionSelected) {
+        state.pinned = false;
+        state.outsideSeconds = 0.0f;
+        ImGui::CloseCurrentPopup();
+    } else if (!state.pinned) {
+        // Same 250ms bridge as Library, also protecting nested flyouts.
+        if (state.headerHovered || mouseOverMenu || mouseOverSubmenu) {
+            state.outsideSeconds = 0.0f;
+        } else {
+            state.outsideSeconds += ImGui::GetIO().DeltaTime;
+            if (state.outsideSeconds >= 0.25f) {
+                state.outsideSeconds = 0.0f;
+                state.suppressHoverUntilLeave = true;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+    }
+}
+
+static void SyncTabDropdownOpen(TabDropdownState& state, const char* popup) {
+    state.popupOpen = ImGui::IsPopupOpen(popup);
+    if (!state.popupOpen) {
+        state.pinned = false;
+        state.outsideSeconds = 0.0f;
+    }
+}
+
 void AddonRender() {
     DefaultFontScope _fontScope(g_FontConfig);
     // Process icon download queue every frame
@@ -15460,6 +15566,8 @@ void AddonRender() {
     // Top-level tab bar: Characters | Build Library
     PollBuildSource();
     if (ImGui::BeginTabBar("##main_tabs")) {
+        static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu;
+
         ImGuiTabItemFlags charTabFlags = 0;
         if (g_ForceCharactersTab) {
             charTabFlags = ImGuiTabItemFlags_SetSelected;
@@ -16594,8 +16702,8 @@ void AddonRender() {
             ImGui::EndTabItem();
         }
 
-        // Library label navigates directly to Builds. Chevron and hover
-        // invoke the same menu with different dismissal policies.
+
+        // Library, Vault, Clears and Achievements share the same tab dropdown.
         ImGuiTabBar* libraryTabBar = GImGui->CurrentTabBar;
         const ImGuiID previousSelectedTab = libraryTabBar ? libraryTabBar->SelectedTabId : 0;
         ImGuiTabItemFlags libraryFlags = 0;
@@ -16604,70 +16712,13 @@ void AddonRender() {
             g_SwitchToLibrary = false;
         }
         const bool libraryVisible = ImGui::BeginTabItem("Library    ##ae_library_dropdown", nullptr, libraryFlags);
-        const ImVec2 libraryTabMin = ImGui::GetItemRectMin();
-        const ImVec2 libraryTabMax = ImGui::GetItemRectMax();
-        const ImVec2 libraryMenuAnchor(libraryTabMin.x, libraryTabMax.y);
-        const ImVec2 arrowCenter(libraryTabMax.x - 13.0f,
-                                  (libraryTabMin.y + libraryTabMax.y) * 0.5f);
-        ImDrawList* tabDraw = ImGui::GetWindowDrawList();
-        const ImU32 arrowColor = ImGui::GetColorU32(ImGuiCol_Text);
-        tabDraw->AddLine(ImVec2(arrowCenter.x - 4.0f, arrowCenter.y - 2.0f),
-                         ImVec2(arrowCenter.x, arrowCenter.y + 2.0f),
-                         arrowColor, 1.6f);
-        tabDraw->AddLine(ImVec2(arrowCenter.x, arrowCenter.y + 2.0f),
-                         ImVec2(arrowCenter.x + 4.0f, arrowCenter.y - 2.0f),
-                         arrowColor, 1.6f);
-        const ImGuiID libraryTabId = libraryTabBar && libraryTabBar->LastTabItemIdx >= 0
-            ? libraryTabBar->Tabs[libraryTabBar->LastTabItemIdx].ID : 0;
-
-        // The raw tab rectangle is used intentionally. ImGui::IsItemHovered
-        // becomes blocked by a popup, especially for the already-active tab.
-        const bool libraryHeaderHovered = ImGui::IsMouseHoveringRect(
-            libraryTabMin, libraryTabMax, false);
-        const bool libraryHeaderClicked = libraryHeaderHovered &&
-            ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-        static bool libraryMenuPinned = false;
-        static bool libraryPopupOpen = false; // updated after the stable-scope BeginPopup
-        static float libraryHoverSeconds = 0.0f;
-        static float libraryOutsideSeconds = 0.0f;
-        static bool librarySuppressHoverUntilLeave = false;
-        bool libraryRequestOpen = false;
-        bool libraryRequestClose = false;
-        bool libraryDirectNavigationClick = false;
-        if (!libraryHeaderHovered) {
-            libraryHoverSeconds = 0.0f;
-            librarySuppressHoverUntilLeave = false;
-        }
-        if (libraryHeaderClicked) {
-            libraryHoverSeconds = 0.0f;
-            librarySuppressHoverUntilLeave = true;
-            if (ImGui::GetIO().MousePos.x >= libraryTabMax.x - 26.0f) {
-                if (libraryMenuPinned && libraryPopupOpen) {
-                    libraryRequestClose = true; // chevron toggles the pinned menu
-                } else {
-                    libraryMenuPinned = true;
-                    libraryRequestOpen = true;
-                    libraryOutsideSeconds = 0.0f;
-                }
-                // Chevron clicks must never navigate.
-                if (libraryTabBar && previousSelectedTab &&
-                    previousSelectedTab != libraryTabId)
-                    libraryTabBar->NextSelectedTabId = previousSelectedTab;
-            } else {
-                libraryDirectNavigationClick = true;
-                NavigateToLibraryCollection(0);
-                if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
-            }
-        } else if (libraryHeaderHovered && !librarySuppressHoverUntilLeave &&
-                   !libraryPopupOpen) {
-            libraryHoverSeconds += ImGui::GetIO().DeltaTime;
-            if (libraryHoverSeconds >= 0.18f) {
-                libraryHoverSeconds = 0.0f;
-                libraryMenuPinned = false;
-                libraryOutsideSeconds = 0.0f;
-                libraryRequestOpen = true;
-            }
-        }
+        const ImGuiTabItem* libItem = (libraryTabBar && libraryTabBar->LastTabItemIdx >= 0)
+            ? &libraryTabBar->Tabs[libraryTabBar->LastTabItemIdx] : nullptr;
+        const ImGuiID libraryTabId = libItem ? libItem->ID : 0;
+        HandleTabDropdown(libraryMenu, libraryTabBar, previousSelectedTab,
+            libraryTabId, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        const bool libraryDirectNavigationClick = libraryMenu.labelClicked;
+        if (libraryDirectNavigationClick) NavigateToLibraryCollection(0);
         if (libraryVisible) {
             g_MainTab = 1;
             if (g_LibraryCollection == 0) RenderBuildLibrary();
@@ -16720,7 +16771,14 @@ void AddonRender() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", acctTabTooltip);
         } else {
-            if (ImGui::BeginTabItem("Vault")) {
+            ImGuiTabBar* accountTabBar = GImGui->CurrentTabBar;
+            ImGuiID beforeVault = accountTabBar ? accountTabBar->SelectedTabId : 0;
+            const bool vaultVisible = ImGui::BeginTabItem("Vault    ##ae_vault_dropdown");
+            const ImGuiID vaultId = accountTabBar && accountTabBar->LastTabItemIdx >= 0
+                ? accountTabBar->Tabs[accountTabBar->LastTabItemIdx].ID : 0;
+            HandleTabDropdown(vaultMenu, accountTabBar, beforeVault, vaultId,
+                ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+            if (vaultVisible) {
                 g_MainTab = 3; // Keep original session tab ID.
                 ImGui::BeginChild("##vault_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
                 RenderVault();
@@ -16728,7 +16786,13 @@ void AddonRender() {
                 RenderVaultStatusRow();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Clears")) {
+            ImGuiID beforeClears = accountTabBar ? accountTabBar->SelectedTabId : 0;
+            const bool clearsVisible = ImGui::BeginTabItem("Clears    ##ae_clears_dropdown");
+            const ImGuiID clearsId = accountTabBar && accountTabBar->LastTabItemIdx >= 0
+                ? accountTabBar->Tabs[accountTabBar->LastTabItemIdx].ID : 0;
+            HandleTabDropdown(clearsMenu, accountTabBar, beforeClears, clearsId,
+                ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+            if (clearsVisible) {
                 g_MainTab = 6; // New session ID; do not renumber older tabs.
                 ImGui::BeginChild("##clears_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
                 RenderClears();
@@ -16744,13 +16808,22 @@ void AddonRender() {
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", acctTabTooltip);
-        } else if (ImGui::BeginTabItem("Achievements")) {
+        } else {
+            ImGuiTabBar* achTabBar = GImGui->CurrentTabBar;
+            const ImGuiID beforeAchievements = achTabBar ? achTabBar->SelectedTabId : 0;
+            const bool achievementsVisible = ImGui::BeginTabItem("Achievements    ##ae_achievements_dropdown");
+            const ImGuiID achievementsId = achTabBar && achTabBar->LastTabItemIdx >= 0
+                ? achTabBar->Tabs[achTabBar->LastTabItemIdx].ID : 0;
+            HandleTabDropdown(achievementsMenu, achTabBar, beforeAchievements,
+                achievementsId, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+            if (achievementsVisible) {
             g_MainTab = 4;
             ImGui::BeginChild("##achievements_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderAchievements();
             ImGui::EndChild();
             RenderAchievementsStatusRow();
             ImGui::EndTabItem();
+            }
         }
 
         // Right-aligned account selector on the same row as the tab strip.
@@ -16809,9 +16882,9 @@ void AddonRender() {
 
         // Render OpenPopup and BeginPopup together in the stable main-window
         // scope, *after* EndTabBar. This works when Library itself is selected.
-        if (libraryRequestOpen)
+        if (libraryMenu.requestOpen)
             ImGui::OpenPopup("Library menu##ae_main");
-        ImGui::SetNextWindowPos(libraryMenuAnchor, ImGuiCond_Appearing);
+        ImGui::SetNextWindowPos(libraryMenu.anchor, ImGuiCond_Appearing);
         if (ImGui::BeginPopup("Library menu##ae_main")) {
             bool libraryActionSelected = false;
             bool libraryMouseOverSubmenu = false;
@@ -16923,32 +16996,62 @@ void AddonRender() {
                 libraryActionSelected = true;
                 BeginLibraryBackupExport();
             }
-            if (libraryDirectNavigationClick || libraryRequestClose || libraryActionSelected) {
-                libraryMenuPinned = false;
-                libraryOutsideSeconds = 0.0f;
-                ImGui::CloseCurrentPopup();
-            } else if (!libraryMenuPinned) {
-                // Hover menus dismiss only after leaving the header, menu,
-                // and any nested Builds -> New flyout. Grace time bridges
-                // the small gap between adjacent popup rectangles.
-                if (libraryHeaderHovered || libraryMouseOverMenu || libraryMouseOverSubmenu) {
-                    libraryOutsideSeconds = 0.0f;
-                } else {
-                    libraryOutsideSeconds += ImGui::GetIO().DeltaTime;
-                    if (libraryOutsideSeconds >= 0.25f) {
-                        libraryOutsideSeconds = 0.0f;
-                        librarySuppressHoverUntilLeave = true;
-                        ImGui::CloseCurrentPopup();
-                    }
-                }
-            }
+            FinishTabDropdown(libraryMenu, libraryActionSelected,
+                libraryMouseOverMenu, libraryMouseOverSubmenu);
             ImGui::EndPopup();
         }
-        libraryPopupOpen = ImGui::IsPopupOpen("Library menu##ae_main");
-        if (!libraryPopupOpen) {
-            libraryMenuPinned = false;
-            libraryOutsideSeconds = 0.0f;
+        SyncTabDropdownOpen(libraryMenu, "Library menu##ae_main");
+
+        if (!acctTabsDisabled) {
+            if (vaultMenu.requestOpen) ImGui::OpenPopup("Vault menu##ae_main");
+            ImGui::SetNextWindowPos(vaultMenu.anchor, ImGuiCond_Appearing);
+            if (ImGui::BeginPopup("Vault menu##ae_main")) {
+                bool chosen = false;
+                const bool hovered = TabDropdownMenuHovered();
+                if (ImGui::MenuItem("Hide Complete", nullptr, VaultHideComplete())) {
+                    ToggleVaultHideComplete();
+                    chosen = true;
+                }
+                FinishTabDropdown(vaultMenu, chosen, hovered);
+                ImGui::EndPopup();
+            }
+            SyncTabDropdownOpen(vaultMenu, "Vault menu##ae_main");
+
+            if (clearsMenu.requestOpen) ImGui::OpenPopup("Clears menu##ae_main");
+            ImGui::SetNextWindowPos(clearsMenu.anchor, ImGuiCond_Appearing);
+            if (ImGui::BeginPopup("Clears menu##ae_main")) {
+                bool chosen = false;
+                const bool hovered = TabDropdownMenuHovered();
+                if (ImGui::MenuItem("Hide Complete", nullptr, ClearsHideComplete())) {
+                    ToggleClearsHideComplete();
+                    chosen = true;
+                }
+                FinishTabDropdown(clearsMenu, chosen, hovered);
+                ImGui::EndPopup();
+            }
+            SyncTabDropdownOpen(clearsMenu, "Clears menu##ae_main");
+
+            if (achievementsMenu.requestOpen) ImGui::OpenPopup("Achievements menu##ae_main");
+            ImGui::SetNextWindowPos(achievementsMenu.anchor, ImGuiCond_Appearing);
+            if (ImGui::BeginPopup("Achievements menu##ae_main")) {
+                bool chosen = false;
+                const bool hovered = TabDropdownMenuHovered();
+                if (ImGui::MenuItem("Show Popout Tracker", nullptr, g_AchPopoutVisible)) {
+                    g_AchPopoutVisible = !g_AchPopoutVisible;
+                    SaveAchTrackerState();
+                    chosen = true;
+                }
+                if (ImGui::MenuItem("Hide Complete", nullptr, g_AchHideCompletedCats)) {
+                    g_AchHideCompletedCats = !g_AchHideCompletedCats;
+                    SaveAchTrackerState();
+                    chosen = true;
+                }
+                FinishTabDropdown(achievementsMenu, chosen, hovered);
+                ImGui::EndPopup();
+            }
+            SyncTabDropdownOpen(achievementsMenu, "Achievements menu##ae_main");
         }
+
     }
     // Import/export dialogs are available from every top-level tab.
     RenderLibraryImportDialog();
