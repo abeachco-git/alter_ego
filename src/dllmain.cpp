@@ -9748,10 +9748,54 @@ static void RenderCompareTab() {
         return;
     }
 
-    // Resolve the active/manual hero FIRST, independent of saved builds.
+    // Use the exact character ordering selected on the Characters tab:
+    // Custom, Name, Class, Level, Age, Birthday and Last Login, including the
+    // ascending/descending toggle and multi-account grouping.
+    // Active (auto) remains the first popup option regardless of sort mode.
+    const auto& compareRoster = AlterEgo::GW2API::GetCharacters();
+    static std::string s_compareAccount;
+    const std::string compareAccount = AlterEgo::GW2API::GetCurrentAccountName();
+    if (g_CharDisplayOrder.size() != compareRoster.size() ||
+        (g_CharSortMode == Sort_LastLogin && g_CharLastLoginSortDirty) ||
+        compareAccount != s_compareAccount) {
+        // Roster/last-login refresh may require a rebuild while Compare is
+        // active. Keep the Characters tab's highlighted hero selected by name.
+        std::string selectedName;
+        if (g_SelectedCharIdx >= 0 &&
+            g_SelectedCharIdx < static_cast<int>(g_CharDisplayOrder.size())) {
+            const int oldIdx = g_CharDisplayOrder[g_SelectedCharIdx];
+            if (oldIdx >= 0 && oldIdx < static_cast<int>(compareRoster.size()))
+                selectedName = compareRoster[oldIdx].name;
+        }
+        RebuildCharDisplayOrder();
+        s_compareAccount = compareAccount;
+        if (!selectedName.empty()) {
+            for (int i = 0; i < static_cast<int>(g_CharDisplayOrder.size()); ++i) {
+                if (compareRoster[g_CharDisplayOrder[i]].name == selectedName) {
+                    g_SelectedCharIdx = i;
+                    break;
+                }
+            }
+        }
+        if (g_CharSortMode == Sort_LastLogin)
+            g_CharLastLoginSortDirty = false;
+    }
+
     std::vector<const AlterEgo::Character*> compareMatches;
-    for (const auto& ch : AlterEgo::GW2API::GetCharacters())
+    compareMatches.reserve(compareRoster.size());
+    std::vector<bool> added(compareRoster.size(), false);
+    for (const int realIdx : g_CharDisplayOrder) {
+        if (realIdx < 0 || realIdx >= static_cast<int>(compareRoster.size()) ||
+            added[realIdx]) continue;
+        added[realIdx] = true;
+        const auto& ch = compareRoster[realIdx];
         if (!ch.build_tabs.empty()) compareMatches.push_back(&ch);
+    }
+    // Defensive fallback if roster data changed while order was rebuilt.
+    for (size_t i = 0; i < compareRoster.size(); ++i)
+        if (!added[i] && !compareRoster[i].build_tabs.empty())
+            compareMatches.push_back(&compareRoster[i]);
+
     const AlterEgo::Character* target = ResolveComparisonCharacter(compareMatches);
     if (!target) {
         ImGui::TextDisabled("No retrieved characters. Refresh characters first.");
