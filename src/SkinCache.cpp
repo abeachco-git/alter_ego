@@ -119,6 +119,14 @@ namespace Skinventory {
         }
     }
 
+    std::vector<uint32_t> SkinCache::GetAllSkinIds() {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        std::vector<uint32_t> ids;
+        ids.reserve(s_skins.size());
+        for (const auto& [id, skin] : s_skins) ids.push_back(id);
+        return ids;
+    }
+
     bool SkinCache::SaveToDisk() {
         if (!EnsureDataDirectory()) return false;
         std::string path = s_data_dir + "/skin_cache.json";
