@@ -3728,9 +3728,8 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
 static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab = 0);
 
 static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
-    // Add padding so icons don't touch the pane edges
-    ImVec2 cursor = ImGui::GetCursorPos();
-    ImGui::SetCursorPos(ImVec2(cursor.x + 6, cursor.y + 4));
+    // Both detail views start at the same origin below the Equipment / Build tabs.
+    // Equipment items supply their own padding further down the pane.
 
     // Equipment tab selector
     int maxTab = 1;
@@ -4343,15 +4342,167 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     g_SaveLibDialogOpen = true;
 }
 
+// Capture the same retrieved data for both Save and Share. This is a temporary
+// in-memory snapshot; only the Save dialog calls AddSavedBuild and persists it.
+static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
+    const AlterEgo::Character& character,
+    const AlterEgo::BuildTemplate& buildTab,
+    int equipTab, bool includeGear, const std::string& name,
+    AlterEgo::GameMode gameMode, const std::string& chatLink) {
+    AlterEgo::SavedBuild sb;
+    const auto* capturedChar = &character;
+    const auto* capturedTab = &buildTab;
+            sb.name = name;
+            sb.source_character = capturedChar->name;
+            sb.profession = capturedTab->profession.empty() ? capturedChar->profession : capturedTab->profession;
+            sb.game_mode = gameMode;
+            sb.chat_link = chatLink;
+            for (int i = 0; i < 3; ++i) sb.specializations[i] = capturedTab->specializations[i];
+            sb.terrestrial_skills = capturedTab->terrestrial_skills;
+            sb.aquatic_skills = capturedTab->aquatic_skills;
+            sb.pets = capturedTab->pets;
+            sb.weapons = capturedTab->weapons;
+            auto legendCode = [](const std::string& value) -> uint8_t {
+                if (value.rfind("Legend", 0) != 0) return 0;
+                int v = std::atoi(value.c_str() + 6);
+                return (v > 0 && v <= 255) ? static_cast<uint8_t>(v) : 0;
+            };
+            sb.legend_codes[0] = legendCode(capturedTab->legends.terrestrial[0]);
+            sb.legend_codes[1] = legendCode(capturedTab->legends.terrestrial[1]);
+            sb.legend_codes[2] = legendCode(capturedTab->legends.aquatic[0]);
+            sb.legend_codes[3] = legendCode(capturedTab->legends.aquatic[1]);
+            // Optionally populate gear from character equipment
+            if (includeGear) {
+                const auto* ch = capturedChar;
+                if (ch) {
+                    // Pre-fetch any item details not yet cached (weapons, upgrades)
+                    std::vector<uint32_t> missingIds;
+                    for (const auto& eq : ch->equipment) {
+                        if (!AlterEgo::IsEquipmentInCapturedBuild(
+                                eq.slot, eq.tab, equipTab)) continue;
+                        if (eq.id != 0 && !AlterEgo::GW2API::GetItemInfo(eq.id))
+                            missingIds.push_back(eq.id);
+                        for (auto uid : eq.upgrades) {
+                            if (uid != 0 && !AlterEgo::GW2API::GetItemInfo(uid))
+                                missingIds.push_back(uid);
+                        }
+                    }
+                    if (!missingIds.empty())
+                        AlterEgo::GW2API::FetchItemDetails(missingIds);
+
+                    std::string sharedRune;
+                    for (const auto& eq : ch->equipment) {
+                        if (!AlterEgo::IsEquipmentInCapturedBuild(
+                                eq.slot, eq.tab, equipTab)) continue;
+
+                        AlterEgo::BuildGearSlot gs;
+                        gs.slot = eq.slot;
+                        gs.item_id = eq.id;
+                        gs.infusion_ids = eq.infusions;
+                        gs.infusion_snapshot = true;
+
+                        // Resolve stat name
+                        gs.stat_id = eq.stat_id;
+                        if (!gs.stat_id && eq.id) {
+                            const auto* item = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            if (item && item->details.contains("infix_upgrade") &&
+                                item->details["infix_upgrade"].contains("id") &&
+                                item->details["infix_upgrade"]["id"].is_number_unsigned())
+                                gs.stat_id = item->details["infix_upgrade"]["id"].get<uint32_t>();
+                        }
+                        if (gs.stat_id) {
+                            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+                            if (statInfo) gs.stat_name = statInfo->name;
+                        }
+
+                        // Determine if this is an armor or weapon slot for rune/sigil
+                        bool isArmor = (eq.slot == "Helm" || eq.slot == "Shoulders" ||
+                                        eq.slot == "Coat" || eq.slot == "Gloves" ||
+                                        eq.slot == "Leggings" || eq.slot == "Boots");
+                        bool isWeapon = (eq.slot.find("Weapon") == 0);
+
+                        // Resolve upgrades (runes for armor, sigils for weapons)
+                        for (size_t ui = 0; ui < eq.upgrades.size(); ui++) {
+                            if (eq.upgrades[ui] == 0) continue;
+                            const auto* upInfo = AlterEgo::GW2API::GetItemInfo(eq.upgrades[ui]);
+                            if (!upInfo) continue;
+                            std::string upName = upInfo->name;
+                            AlterEgo::GW2API::CacheItemNameId(upName, eq.upgrades[ui]);
+                            if (isArmor && ui == 0) {
+                                gs.rune = upName;
+                                gs.rune_id = eq.upgrades[ui];
+                                if (sharedRune.empty()) sharedRune = upName;
+                            } else if (isWeapon && ui == 0) {
+                                gs.sigil = upName;
+                                gs.sigil_id = eq.upgrades[ui];
+                            } else if (isWeapon && ui == 1) {
+                                gs.sigil2 = upName;
+                                gs.sigil2_id = eq.upgrades[ui];
+                            }
+                        }
+
+                        // Resolve weapon type from item details
+                        if (isWeapon && eq.id != 0) {
+                            const auto* itemInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            if (itemInfo && itemInfo->details.contains("type"))
+                                gs.weapon_type = itemInfo->details["type"].get<std::string>();
+                        }
+
+                        sb.gear[eq.slot] = gs;
+                    }
+                    sb.rune_name = sharedRune;
+                    // Store shared rune ID from first armor piece
+                    for (const auto& eq2 : ch->equipment) {
+                        if (eq2.tab != equipTab) continue;
+                        bool isArmor2 = (eq2.slot == "Helm" || eq2.slot == "Shoulders" ||
+                                         eq2.slot == "Coat" || eq2.slot == "Gloves" ||
+                                         eq2.slot == "Leggings" || eq2.slot == "Boots");
+                        if (isArmor2 && !eq2.upgrades.empty() && eq2.upgrades[0] != 0) {
+                            sb.rune_id = eq2.upgrades[0];
+                            break;
+                        }
+                    }
+
+                    // Relics from /equipment can be shared (tab 0) even when
+                    // displayed in a numbered tab. Keep the original item ID
+                    // if public item details have not loaded yet.
+                    for (const auto& eq : ch->equipment) {
+                        if (eq.slot == "Relic" &&
+                            AlterEgo::IsEquipmentInCapturedBuild(
+                                eq.slot, eq.tab, equipTab) &&
+                            eq.id != 0) {
+                            const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            if (relicInfo) {
+                                sb.relic_name = relicInfo->name;
+                                // Use exotic relic ID from name cache (legendary relic has a shared ID)
+                                sb.relic_id = AlterEgo::GW2API::FindItemIdByName(relicInfo->name);
+                            }
+                            if (sb.relic_id == 0) sb.relic_id = eq.id; // fallback
+                            break;
+                        }
+                    }
+                }
+            }
+
+    return sb;
+}
+
 // One Save action, rendered in the same place in both character detail views.
 // It always captures the selected build tab (or the currently active build if
 // nothing has been selected). Equipment view additionally preselects its
 // currently displayed equipment set; the dialog can still change that choice.
-static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab) {
-    if (ch.build_tabs.empty()) return;
+static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build);
 
+static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab) {
+    // Keep a snapshot for the Share popup so it never accidentally uses a
+    // similarly named entry from the saved library.
+    static AlterEgo::SavedBuild shareSnapshot;
+    static int shareBuildIdx = -1;
+    static std::string shareCharacter;
+
+    const bool hasBuilds = !ch.build_tabs.empty();
     int buildIdx = g_SelectedBuildTab;
-    if (buildIdx < 0 || buildIdx >= static_cast<int>(ch.build_tabs.size())) {
+    if (hasBuilds && (buildIdx < 0 || buildIdx >= static_cast<int>(ch.build_tabs.size()))) {
         buildIdx = 0;
         for (int i = 0; i < static_cast<int>(ch.build_tabs.size()); ++i) {
             if (ch.build_tabs[i].is_active) { buildIdx = i; break; }
@@ -4359,15 +4510,54 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         g_SelectedBuildTab = buildIdx;
     }
 
-    if (RenderActionButton("Save Current Build + Gear to Library...")) {
-        OpenSaveLiveBuildDialog(ch, ch.build_tabs[buildIdx]);
-        if (preferredEquipTab > 0)
-            g_SaveLibEquipTab = preferredEquipTab;
+    if (!hasBuilds) {
+        ImGui::TextDisabled("No retrieved build available to save or share.");
+        return;
     }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(preferredEquipTab > 0
-            ? "Save the selected build with this equipment set; both can be reviewed in the dialog."
-            : "Save the selected build; choose an equipment set in the dialog.");
+
+    if (RenderActionButton("Save##live_save")) {
+        OpenSaveLiveBuildDialog(ch, ch.build_tabs[buildIdx]);
+        if (preferredEquipTab > 0) g_SaveLibEquipTab = preferredEquipTab;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Save Current Build + Gear to Library...\n"
+            "Save the selected retrieved build and choose the equipment set to include.");
+
+    ImGui::SameLine();
+    if (RenderActionButton("Share##live_share")) {
+        const auto& bt = ch.build_tabs[buildIdx];
+        const std::string profession = bt.profession.empty() ? ch.profession : bt.profession;
+        const bool paletteReady = AlterEgo::GW2API::HasPaletteData(profession);
+        if (!paletteReady)
+            AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+        const std::string link = paletteReady ? EncodeBuildTabChatLink(bt) : "";
+        const int equipTab = preferredEquipTab > 0 ? preferredEquipTab :
+            (g_SelectedEquipTab > 0 ? g_SelectedEquipTab :
+                (ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1));
+        const std::string name = ch.name + " - " +
+            (bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name);
+        shareSnapshot = CaptureRetrievedBuildSnapshot(ch, bt, equipTab,
+            true, name, AlterEgo::GameMode::PvE, link);
+        shareCharacter = ch.name;
+        shareBuildIdx = buildIdx;
+        ImGui::OpenPopup("##live_share_menu");
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Share the selected character's retrieved build and equipment, not a saved build.");
+
+    if (ImGui::BeginPopup("##live_share_menu")) {
+        if (shareSnapshot.chat_link.empty() && shareCharacter == ch.name &&
+            shareBuildIdx >= 0 && shareBuildIdx < static_cast<int>(ch.build_tabs.size())) {
+            const auto& bt = ch.build_tabs[shareBuildIdx];
+            const std::string profession = bt.profession.empty() ? ch.profession : bt.profession;
+            if (AlterEgo::GW2API::HasPaletteData(profession))
+                shareSnapshot.chat_link = EncodeBuildTabChatLink(bt);
+        }
+        if (shareSnapshot.chat_link.empty())
+            ImGui::TextDisabled("Waiting for build-link data. Share options require it.");
+        else
+            RenderBuildShareMenuItems(shareSnapshot);
+        ImGui::EndPopup();
     }
 }
 
@@ -5425,6 +5615,40 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
         g_RelaySending = false;
     }).detach();
 }
+
+// Both saved-library builds and retrieved character snapshots share the same
+// export actions. The caller owns the popup and supplies the exact build data.
+static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build) {
+                if (ImGui::Selectable("Copy build-only chat link")) {
+                    if (build.chat_link.empty()) {
+                        if (APIDefs) APIDefs->GUI_SendAlert("Build link unavailable; refresh or retry.");
+                    } else {
+                        CopyToClipboard(build.chat_link);
+                        if (APIDefs) APIDefs->GUI_SendAlert("Build link copied to clipboard!");
+                    }
+                }
+                if (ImGui::Selectable("Copy entire build + equipment code")) {
+                    std::string ae2 = ExportBuildToAE2(build);
+                    if (!ae2.empty()) {
+                        CopyToClipboard(ae2);
+                        char info[196];
+                        snprintf(info, sizeof(info), "Build code copied to clipboard (%d chars). Paste in GW2 chat to share!", (int)ae2.size());
+                        if (APIDefs) APIDefs->GUI_SendAlert(info);
+                    } else {
+                        if (APIDefs) APIDefs->GUI_SendAlert("Failed to generate build code. Build may be missing a chat link.");
+                    }
+                }
+                if (!g_RelaySending && ImGui::Selectable("Share complete build via one-time code")) {
+                    if (build.chat_link.empty()) {
+                        if (APIDefs) APIDefs->GUI_SendAlert("Cannot send: build has no chat link.");
+                    } else {
+                        SendBuildToRelay(build);
+                    }
+                }
+                if (g_RelaySending) {
+                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Sending...");
+                }
+ }
 
 // Returns true if input is a shared build (AE2, chat link, or relay code)
 // On success, populates 'out' with the imported build
@@ -7720,7 +7944,6 @@ static void RenderSaveToLibraryDialog() {
         std::string name = g_SaveLibName;
         if (name.empty()) name = "Unnamed Build";
 
-        AlterEgo::SavedBuild sb;
         const auto* capturedChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
         const AlterEgo::BuildTemplate* capturedTab = nullptr;
         if (capturedChar) {
@@ -7729,137 +7952,12 @@ static void RenderSaveToLibraryDialog() {
             }
         }
         if (capturedTab) {
-            sb.name = name;
-            sb.source_character = capturedChar->name;
-            sb.profession = capturedTab->profession.empty() ? capturedChar->profession : capturedTab->profession;
-            sb.game_mode = GameModeFromIndex(g_SaveLibMode);
-            sb.chat_link = g_SaveLibChatLink;
-            for (int i = 0; i < 3; ++i) sb.specializations[i] = capturedTab->specializations[i];
-            sb.terrestrial_skills = capturedTab->terrestrial_skills;
-            sb.aquatic_skills = capturedTab->aquatic_skills;
-            sb.pets = capturedTab->pets;
-            sb.weapons = capturedTab->weapons;
-            auto legendCode = [](const std::string& value) -> uint8_t {
-                if (value.rfind("Legend", 0) != 0) return 0;
-                int v = std::atoi(value.c_str() + 6);
-                return (v > 0 && v <= 255) ? static_cast<uint8_t>(v) : 0;
-            };
-            sb.legend_codes[0] = legendCode(capturedTab->legends.terrestrial[0]);
-            sb.legend_codes[1] = legendCode(capturedTab->legends.terrestrial[1]);
-            sb.legend_codes[2] = legendCode(capturedTab->legends.aquatic[0]);
-            sb.legend_codes[3] = legendCode(capturedTab->legends.aquatic[1]);
-            // Optionally populate gear from character equipment
-            if (g_SaveLibIncludeEquip) {
-                const auto* ch = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
-                if (ch) {
-                    // Pre-fetch any item details not yet cached (weapons, upgrades)
-                    std::vector<uint32_t> missingIds;
-                    for (const auto& eq : ch->equipment) {
-                        if (!AlterEgo::IsEquipmentInCapturedBuild(
-                                eq.slot, eq.tab, g_SaveLibEquipTab)) continue;
-                        if (eq.id != 0 && !AlterEgo::GW2API::GetItemInfo(eq.id))
-                            missingIds.push_back(eq.id);
-                        for (auto uid : eq.upgrades) {
-                            if (uid != 0 && !AlterEgo::GW2API::GetItemInfo(uid))
-                                missingIds.push_back(uid);
-                        }
-                    }
-                    if (!missingIds.empty())
-                        AlterEgo::GW2API::FetchItemDetails(missingIds);
-
-                    std::string sharedRune;
-                    for (const auto& eq : ch->equipment) {
-                        if (!AlterEgo::IsEquipmentInCapturedBuild(
-                                eq.slot, eq.tab, g_SaveLibEquipTab)) continue;
-
-                        AlterEgo::BuildGearSlot gs;
-                        gs.slot = eq.slot;
-                        gs.item_id = eq.id;
-                        gs.infusion_ids = eq.infusions;
-                        gs.infusion_snapshot = true;
-
-                        // Resolve stat name
-                        gs.stat_id = eq.stat_id;
-                        if (!gs.stat_id && eq.id) {
-                            const auto* item = AlterEgo::GW2API::GetItemInfo(eq.id);
-                            if (item && item->details.contains("infix_upgrade") &&
-                                item->details["infix_upgrade"].contains("id") &&
-                                item->details["infix_upgrade"]["id"].is_number_unsigned())
-                                gs.stat_id = item->details["infix_upgrade"]["id"].get<uint32_t>();
-                        }
-                        if (gs.stat_id) {
-                            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
-                            if (statInfo) gs.stat_name = statInfo->name;
-                        }
-
-                        // Determine if this is an armor or weapon slot for rune/sigil
-                        bool isArmor = (eq.slot == "Helm" || eq.slot == "Shoulders" ||
-                                        eq.slot == "Coat" || eq.slot == "Gloves" ||
-                                        eq.slot == "Leggings" || eq.slot == "Boots");
-                        bool isWeapon = (eq.slot.find("Weapon") == 0);
-
-                        // Resolve upgrades (runes for armor, sigils for weapons)
-                        for (size_t ui = 0; ui < eq.upgrades.size(); ui++) {
-                            if (eq.upgrades[ui] == 0) continue;
-                            const auto* upInfo = AlterEgo::GW2API::GetItemInfo(eq.upgrades[ui]);
-                            if (!upInfo) continue;
-                            std::string upName = upInfo->name;
-                            AlterEgo::GW2API::CacheItemNameId(upName, eq.upgrades[ui]);
-                            if (isArmor && ui == 0) {
-                                gs.rune = upName;
-                                gs.rune_id = eq.upgrades[ui];
-                                if (sharedRune.empty()) sharedRune = upName;
-                            } else if (isWeapon && ui == 0) {
-                                gs.sigil = upName;
-                                gs.sigil_id = eq.upgrades[ui];
-                            } else if (isWeapon && ui == 1) {
-                                gs.sigil2 = upName;
-                                gs.sigil2_id = eq.upgrades[ui];
-                            }
-                        }
-
-                        // Resolve weapon type from item details
-                        if (isWeapon && eq.id != 0) {
-                            const auto* itemInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
-                            if (itemInfo && itemInfo->details.contains("type"))
-                                gs.weapon_type = itemInfo->details["type"].get<std::string>();
-                        }
-
-                        sb.gear[eq.slot] = gs;
-                    }
-                    sb.rune_name = sharedRune;
-                    // Store shared rune ID from first armor piece
-                    for (const auto& eq2 : ch->equipment) {
-                        if (eq2.tab != g_SaveLibEquipTab) continue;
-                        bool isArmor2 = (eq2.slot == "Helm" || eq2.slot == "Shoulders" ||
-                                         eq2.slot == "Coat" || eq2.slot == "Gloves" ||
-                                         eq2.slot == "Leggings" || eq2.slot == "Boots");
-                        if (isArmor2 && !eq2.upgrades.empty() && eq2.upgrades[0] != 0) {
-                            sb.rune_id = eq2.upgrades[0];
-                            break;
-                        }
-                    }
-
-                    // Relics from /equipment can be shared (tab 0) even when
-                    // displayed in a numbered tab. Keep the original item ID
-                    // if public item details have not loaded yet.
-                    for (const auto& eq : ch->equipment) {
-                        if (eq.slot == "Relic" &&
-                            AlterEgo::IsEquipmentInCapturedBuild(
-                                eq.slot, eq.tab, g_SaveLibEquipTab) &&
-                            eq.id != 0) {
-                            const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
-                            if (relicInfo) {
-                                sb.relic_name = relicInfo->name;
-                                // Use exotic relic ID from name cache (legendary relic has a shared ID)
-                                sb.relic_id = AlterEgo::GW2API::FindItemIdByName(relicInfo->name);
-                            }
-                            if (sb.relic_id == 0) sb.relic_id = eq.id; // fallback
-                            break;
-                        }
-                    }
-                }
-            }
+            const std::string chatLink = !g_SaveLibChatLink.empty() ? g_SaveLibChatLink :
+                (AlterEgo::GW2API::HasPaletteData(capturedTab->profession)
+                    ? EncodeBuildTabChatLink(*capturedTab) : std::string());
+            AlterEgo::SavedBuild sb = CaptureRetrievedBuildSnapshot(*capturedChar, *capturedTab,
+                g_SaveLibEquipTab, g_SaveLibIncludeEquip, name,
+                GameModeFromIndex(g_SaveLibMode), chatLink);
 
             int idx = AlterEgo::GW2API::AddSavedBuild(std::move(sb));
             if (idx >= 0) {
@@ -8499,31 +8597,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             // Share menu: the three share actions that used to live in the
             // (now-removed) right-click context menu.
             if (ImGui::BeginPopup("##share_menu")) {
-                if (ImGui::Selectable("Copy build-only chat link")) {
-                    CopyToClipboard(build.chat_link);
-                    if (APIDefs) APIDefs->GUI_SendAlert("Build link copied to clipboard!");
-                }
-                if (ImGui::Selectable("Copy entire build + equipment code")) {
-                    std::string ae2 = ExportBuildToAE2(build);
-                    if (!ae2.empty()) {
-                        CopyToClipboard(ae2);
-                        char info[196];
-                        snprintf(info, sizeof(info), "Build code copied to clipboard (%d chars). Paste in GW2 chat to share!", (int)ae2.size());
-                        if (APIDefs) APIDefs->GUI_SendAlert(info);
-                    } else {
-                        if (APIDefs) APIDefs->GUI_SendAlert("Failed to generate build code. Build may be missing a chat link.");
-                    }
-                }
-                if (!g_RelaySending && ImGui::Selectable("Share complete build via one-time code")) {
-                    if (build.chat_link.empty()) {
-                        if (APIDefs) APIDefs->GUI_SendAlert("Cannot send: build has no chat link.");
-                    } else {
-                        SendBuildToRelay(build);
-                    }
-                }
-                if (g_RelaySending) {
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Sending...");
-                }
+                RenderBuildShareMenuItems(build);
                 ImGui::EndPopup();
             }
 
@@ -9758,10 +9832,19 @@ static void RenderCompareTab() {
         g_LibCompareBuildTab = -1;
     const auto& live = character->build_tabs[g_LibCompareBuildTab < 0
         ? GetActiveBuildIndex(*character) : g_LibCompareBuildTab];
-    if (ImGui::BeginTable("##compareSelectors", 3, ImGuiTableFlags_SizingStretchSame)) {
+    if (ImGui::BeginTable("##compareSelectors", 3,
+        ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX)) {
+        // Separate label and combo rows guarantee identical vertical baselines
+        // for Character, Build tab and Equipment regardless of font scaling.
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::TextDisabled("Character");
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("Build tab");
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("Equipment");
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::BeginCombo("##compareCharacter", g_LibCompareChar.empty() ? ("Active (auto) - " + character->name).c_str() : character->name.c_str())) {
         if (ImGui::Selectable(g_CurrentCharName.empty() ? "Active (auto)" : ("Active (auto) - " + g_CurrentCharName).c_str(), g_LibCompareChar.empty())) {
@@ -9783,7 +9866,6 @@ static void RenderCompareTab() {
         ImGui::EndCombo();
     }
     ImGui::TableNextColumn();
-    ImGui::TextDisabled("Build tab");
     ImGui::SetNextItemWidth(-1.0f);
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
         return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
@@ -9802,7 +9884,6 @@ static void RenderCompareTab() {
         ImGui::EndCombo();
     }
     ImGui::TableNextColumn();
-    ImGui::TextDisabled("Equipment");
     ImGui::SetNextItemWidth(-1.0f);
     if (saved && !saved->gear.empty()) {
         int maxTab = 0;
@@ -10588,6 +10669,12 @@ static void RenderBuildLibrary() {
     }
     ImGui::EndChild();
 
+
+}
+
+// Share relay progress/result popups must render regardless of the selected
+// main tab, because Share is now also available from Characters.
+static void RenderShareRelayPopups() {
     // Relay code result popup (triggered by SendBuildToRelay)
     if (g_RelaySending && g_RelayResultCode.empty() && g_RelayResultError.empty()) {
         ImGui::OpenPopup("Sending to Mobile...##relay");
@@ -13824,6 +13911,7 @@ static void RenderAchievements() {
                 auto catIt = g_AchCategories.find(g_AchSelectedCatId);
                 if (catIt != g_AchCategories.end()) {
                     float startY = ImGui::GetCursorPosY();
+                    ImGui::AlignTextToFramePadding();
                     ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.25f, 1.0f), "%s", catIt->second.name.c_str());
 
                     // Hide Complete chip — focuses the list on remaining work
@@ -15962,6 +16050,7 @@ void AddonRender() {
 
         ImGui::EndTabBar();
     }
+    RenderShareRelayPopups();
 
     ImGui::End();
 }
