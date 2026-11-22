@@ -309,7 +309,9 @@ static void RenderFashionLibrary() {
         ImGui::SameLine();
         if (RenderActionButton("Edit##fashion")) StartFashionEdit(look, g_FashionSelected);
         ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
         if (RenderActionButton("Delete##fashion")) ImGui::OpenPopup("Delete appearance##fashion");
+        ImGui::PopStyleColor();
         if (ImGui::BeginPopupModal("Delete appearance##fashion", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextWrapped("Delete '%s' from the Fashion Library?", look.name.c_str());
             if (RenderGoldButton("Delete")) { toDelete = g_FashionSelected; ImGui::CloseCurrentPopup(); }
@@ -318,8 +320,6 @@ static void RenderFashionLibrary() {
             ImGui::EndPopup();
         }
         if (!look.notes.empty()) { ImGui::Spacing(); ImGui::TextWrapped("%s", look.notes.c_str()); }
-        if (!look.complete)
-            ImGui::TextDisabled("The equipment API may omit outfit / visibility settings.");
         const std::string assocLabel = "Associated characters (" + std::to_string(look.characters.size()) + ")";
         if (ImGui::TreeNode(assocLabel.c_str())) {
             for (const auto& ch : look.characters) ImGui::BulletText("%s", ch.c_str());
