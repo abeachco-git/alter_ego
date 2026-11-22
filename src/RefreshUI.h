@@ -25,6 +25,7 @@ inline void Timestamp(std::time_t stamp, const char* source = "data") {
     const float x = right - ImGui::CalcTextSize(label.c_str()).x;
     ImGui::SameLine();
     if (x > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(x);
+    ImGui::AlignTextToFramePadding(); // Align with adjacent full-height button.
     ImGui::TextDisabled("%s", label.c_str());
     if (ImGui::IsItemHovered()) {
         if (stamp > 0) {

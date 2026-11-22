@@ -4337,6 +4337,22 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
         return;
     }
 
+    // Put Save directly below Equipment / Build and above the build selection.
+    int buildIdx = g_SelectedBuildTab;
+    if (buildIdx < 0 || buildIdx >= (int)ch.build_tabs.size()) {
+        for (int i = 0; i < (int)ch.build_tabs.size(); ++i) {
+            if (ch.build_tabs[i].is_active) { buildIdx = i; break; }
+        }
+        if (buildIdx < 0 || buildIdx >= (int)ch.build_tabs.size()) buildIdx = 0;
+        g_SelectedBuildTab = buildIdx;
+    }
+    const auto& saveBt = ch.build_tabs[buildIdx];
+    if (RenderActionButton("Save Current Build + Gear to Library..."))
+        OpenSaveLiveBuildDialog(ch, saveBt);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Save this retrieved build tab; choose the equipment tab in the dialog.");
+    ImGui::Spacing();
+
     // Build tab selector — chip strip
     {
         std::vector<std::string> labels;
@@ -4376,22 +4392,9 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
         ImGui::EndPopup();
     }
 
-    int buildIdx = g_SelectedBuildTab;
-    if (buildIdx < 0 || buildIdx >= (int)ch.build_tabs.size()) {
-        // Find active tab
-        for (int i = 0; i < (int)ch.build_tabs.size(); i++) {
-            if (ch.build_tabs[i].is_active) { buildIdx = i; break; }
-        }
-        if (buildIdx < 0) buildIdx = 0;
-        g_SelectedBuildTab = buildIdx;
-    }
+    // Chip selections may change within this frame; use the current selection.
+    const auto& bt = ch.build_tabs[g_SelectedBuildTab];
 
-    const auto& bt = ch.build_tabs[buildIdx];
-    if (ImGui::SmallButton("Save Current Build + Gear to Library..."))
-        OpenSaveLiveBuildDialog(ch, bt);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Save this retrieved build tab; choose the equipment tab in the dialog.");
-    ImGui::Separator();
 
     // Small left/right padding so spec hex portraits & trait selection borders
     // don't sit flush against the scroll-child edges (icon borders extend ~1px).
@@ -7180,7 +7183,7 @@ static void RenderGearCustomizeDialog() {
             else if (isWeapon && IsWeaponTwoHanded(editBuild->profession, gs.weapon_type))
                 maxSlots = 2;
             if (gs.infusion_ids.size() < static_cast<size_t>(maxSlots) &&
-                ImGui::SmallButton("+ Add infusion")) {
+                RenderActionButton("+ Add infusion")) {
                 gs.infusion_ids.push_back(0);
                 gs.infusion_attributes.resize(gs.infusion_ids.size());
                 gs.infusion_attributes.back() = "Power";
@@ -8271,7 +8274,8 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         float w = ImGui::GetContentRegionAvail().x;
         float lineH = ImGui::GetTextLineHeightWithSpacing();
         const float headerIconSz = 44.0f;
-        float h = std::max(lineH * 2.0f + 6.0f, headerIconSz + 10.0f);
+        float h = std::max(lineH * 2.0f + 6.0f,
+            g_LibEditMode ? 68.0f : headerIconSz + 10.0f);
         // Gradient bg using profession color
         ImU32 left = ImGui::ColorConvertFloat4ToU32(
             ImVec4(profColor.x * 0.24f, profColor.y * 0.24f, profColor.z * 0.24f, 0.55f));
@@ -8373,7 +8377,8 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             for (int m = 0; m < 5; m++) {
                 if (m) ImGui::SameLine(0, 3);
                 ImGui::PushID(m + 800);
-                if (RenderChipButton(modes[m].lbl, g_EditDraft.game_mode == modes[m].mode)) {
+                if (RenderChipButton(modes[m].lbl, g_EditDraft.game_mode == modes[m].mode,
+                                     ImVec4(0, 0, 0, 0), true)) {
                     g_EditDraft.game_mode = modes[m].mode;
                     MarkEditDirty();
                 }
@@ -8398,7 +8403,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 if (!canSave) ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
                                                   ImGui::GetStyle().Alpha * 0.5f);
                 ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
-                if (ImGui::SmallButton("Save##hdr") && canSave) {
+                if (RenderActionButton("Save##hdr") && canSave) {
                     AlterEgo::GW2API::UpdateSavedBuild(build.id, g_LibEditName.c_str(), g_LibEditNotes.c_str());
                     AlterEgo::GW2API::SetSavedBuildGameMode(build.id, g_EditDraft.game_mode);
                     AlterEgo::GW2API::ReplaceSavedBuildDefinition(build.id, g_EditDraft);
@@ -8409,7 +8414,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 if (!canSave) ImGui::PopStyleVar();
 
                 ImGui::SetCursorScreenPos(ImVec2(startX + wSave + gap, btnY));
-                if (ImGui::SmallButton("Cancel##hdr")) {
+                if (RenderActionButton("Cancel##hdr")) {
                     if (g_EditDirty) ImGui::OpenPopup("Discard changes?##editcancel");
                     else {
                         // Clean cancel: a brand-new build is discarded (deferred to
@@ -8428,7 +8433,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             const float startX = pos.x + w - totalW - 8.0f;
 
             ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
-            if (ImGui::SmallButton("Compare##headerBuild")) {
+            if (RenderActionButton("Compare##headerBuild")) {
                 // Same saved-build selection behavior as the former button
                 // below the scrollable equipment panel.
                 if (g_LibCompareBuildId != build.id) {
@@ -8444,14 +8449,14 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             }
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap, btnY));
-            if (ImGui::SmallButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
+            if (RenderActionButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap, btnY));
-            if (ImGui::SmallButton("Edit##headerBuild")) EnterBuildEditMode(build);
+            if (RenderActionButton("Edit##headerBuild")) EnterBuildEditMode(build);
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap + wEdit + gap, btnY));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-            if (ImGui::SmallButton("Delete##headerBuild")) g_LibCtxDeleteIdx = g_LibSelectedIdx;
+            if (RenderActionButton("Delete##headerBuild")) g_LibCtxDeleteIdx = g_LibSelectedIdx;
             ImGui::PopStyleColor();
 
             // Share menu: the three share actions that used to live in the
@@ -9669,7 +9674,7 @@ static void RenderCompareTab() {
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
-    const bool refreshClicked = ImGui::SmallButton("Refresh##compare");
+    const bool refreshClicked = RenderActionButton("Refresh##compare");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Re-fetch the selected character from Hoard & Seek.");
     if (busy || !target) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
@@ -9840,12 +9845,12 @@ static void RenderBuildLibrary() {
     // Build-level actions remain visible; library-wide backup/restore is
     // grouped separately so importing one build is never confused with
     // replacing an entire JSON library.
-    if (RenderChipButton("New Build", false)) {
+    if (RenderActionButton("New Build")) {
         g_NewBuildDialogOpen = true;
         g_NewBuildGameMode = 0;
     }
     ImGui::SameLine();
-    if (RenderChipButton("Import Build", false)) {
+    if (RenderActionButton("Import Build")) {
         g_LibShowImport = true;
         g_LibImportBuf[0] = '\0';
         g_LibImportName[0] = '\0';
@@ -9855,7 +9860,7 @@ static void RenderBuildLibrary() {
         g_LibImportPendingProfession.clear();
     }
     ImGui::SameLine();
-    if (RenderChipButton("Library", false))
+    if (RenderActionButton("Library"))
         ImGui::OpenPopup("##libraryActions");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Import or export the complete build library (JSON file).");
@@ -10646,8 +10651,10 @@ static void BuildGW2Theme() {
 
     // Spacing & padding
     s.WindowPadding     = ImVec2(10, 10);
-    s.FramePadding      = ImVec2(6, 4);
-    s.ItemSpacing       = ImVec2(8, 5);
+    // Tabs, buttons and combos share a font-responsive baseline.
+    // Toolbars use RenderActionButton instead of SmallButton (which drops Y padding).
+    s.FramePadding      = ImVec2(8, 7);
+    s.ItemSpacing       = ImVec2(8, 6);
     s.ItemInnerSpacing  = ImVec2(6, 4);
     s.ScrollbarSize     = 12.0f;
     s.GrabMinSize       = 8.0f;
@@ -11445,7 +11452,7 @@ static void RenderSkinList() {
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
             }
-            if (ImGui::SmallButton(chips[i].lbl)) {
+            if (RenderActionButton(chips[i].lbl)) {
                 g_SkinShowOwned = chips[i].sOwned;
                 g_SkinShowUnowned = chips[i].sUnowned;
             }
@@ -12037,7 +12044,7 @@ static void RenderSkinDetailPanel() {
                 ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.6f, 1.0f), "Waypoint:");
                 ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
-                if (ImGui::SmallButton(wikiData.vendor_waypoint.c_str())) {
+                if (RenderActionButton(wikiData.vendor_waypoint.c_str())) {
                     if (OpenClipboard(NULL)) {
                         EmptyClipboard();
                         HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE,
@@ -12130,7 +12137,7 @@ static void RenderSkinShoppingList() {
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
         }
-        bool clicked = ImGui::SmallButton(lbl);
+        bool clicked = RenderActionButton(lbl);
         if (active) ImGui::PopStyleColor(4);
         return clicked;
     };
@@ -12419,7 +12426,7 @@ static bool RenderChipStrip(const std::vector<std::string>& labels,
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float chipMinW = 90.0f;
-    const float chipH = 30.0f;
+    const float chipH = ImMax(kAlterEgoActionButtonHeight, ImGui::GetFrameHeight());
     const float gap = 5.0f;
     const float arrowW = 22.0f;
     const float arrowGap = 4.0f;
@@ -12586,7 +12593,7 @@ static bool RenderChipStrip(const std::vector<std::string>& labels,
 void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix) {
     ImVec2 pos = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x;
-    float h = ImGui::GetTextLineHeightWithSpacing() + 6.0f;
+    float h = ImMax(kAlterEgoActionButtonHeight, ImGui::GetTextLineHeightWithSpacing() + 8.0f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     // Gradient background
@@ -12614,13 +12621,21 @@ void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix) {
     dl->AddLine(ImVec2(pos.x + 4.0f, pos.y + h), ImVec2(pos.x + w * 0.55f, pos.y + h),
         ImGui::ColorConvertFloat4ToU32(ImVec4(color.x, color.y, color.z, 0.35f)), 1.0f);
 
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + 10.0f, pos.y + 3.0f));
+    ImGui::SetCursorScreenPos(ImVec2(pos.x + 10.0f,
+        pos.y + (h - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::TextColored(color, "%s", label);
     if (suffix) {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.50f, 0.47f, 0.40f, 1.0f), "%s", suffix);
     }
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h + 3.0f));
+}
+
+// Standard action button: font-responsive height and centered label.
+bool RenderActionButton(const char* label, ImVec2 size) {
+    if (size.y <= 0.0f)
+        size.y = ImMax(kAlterEgoActionButtonHeight, ImGui::GetFrameHeight());
+    return ImGui::Button(label, size);
 }
 
 // Gold-trimmed button — primary-action vocabulary matching RenderSectionHeader.
@@ -12633,8 +12648,8 @@ bool RenderGoldButton(const char* label, ImVec2 size) {
     ImGui::PushStyleColor(ImGuiCol_Border,        ImVec4(0.70f, 0.58f, 0.20f, 1.00f));
     ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(0.95f, 0.85f, 0.55f, 1.00f));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 4.0f));
-    bool clicked = ImGui::Button(label, size);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 7.0f));
+    bool clicked = RenderActionButton(label, size);
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(5);
     return clicked;
@@ -12644,7 +12659,7 @@ bool RenderGoldButton(const char* label, ImVec2 size) {
 // active: highlighted (gold tint) when true.
 // accentColor: optional accent (e.g. profession colour or status colour). Pass ImVec4(0,0,0,0) for default gold.
 // Returns true on click.
-bool RenderChipButton(const char* label, bool active, ImVec4 accentColor) {
+bool RenderChipButton(const char* label, bool active, ImVec4 accentColor, bool compact) {
     bool hasAccent = (accentColor.w > 0.01f);
     ImVec4 base    = hasAccent ? ImVec4(accentColor.x * 0.30f, accentColor.y * 0.30f, accentColor.z * 0.30f, 0.55f)
                                : ImVec4(0.15f, 0.13f, 0.09f, 0.55f);
@@ -12659,7 +12674,10 @@ bool RenderChipButton(const char* label, bool active, ImVec4 accentColor) {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  actVar);
     ImGui::PushStyleColor(ImGuiCol_Text,          text);
-    bool clicked = ImGui::SmallButton(label);
+    // Only embedded header game-mode badges are compact.
+    bool clicked = compact
+        ? ImGui::Button(label, ImVec2(0.0f, ImMax(22.0f, ImGui::GetTextLineHeight() + 4.0f)))
+        : RenderActionButton(label);
     ImGui::PopStyleColor(4);
     return clicked;
 }
@@ -13309,7 +13327,7 @@ static void RenderAchievements() {
     // permanent status row, then the achievement search control.
     const char* popoutLabel = g_AchPopoutVisible
         ? "Hide Popout Tracker" : "Show Popout Tracker";
-    if (ImGui::SmallButton("Refresh##achievements")) {
+    if (RenderActionButton("Refresh##achievements")) {
         g_AchRefreshError.clear();
         g_AchProgressFetching = false; // retry after a lost H&S response
         g_AchProgressQueryStartMs = 0;
@@ -13329,7 +13347,7 @@ static void RenderAchievements() {
         if (!pinnedCopy.empty()) SendAchProgressQuery(pinnedCopy);
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton(popoutLabel)) {
+    if (RenderActionButton(popoutLabel)) {
         g_AchPopoutVisible = !g_AchPopoutVisible;
         SaveAchTrackerState();
     }
@@ -13478,9 +13496,9 @@ static void RenderAchievements() {
                 ImGui::PushID((int)id);
                 bool pinned = IsAchPinned(id);
                 if (pinned) {
-                    if (ImGui::SmallButton("Unpin")) ToggleAchPin(id);
+                    if (RenderActionButton("Unpin")) ToggleAchPin(id);
                 } else {
-                    if (ImGui::SmallButton("Pin")) ToggleAchPin(id);
+                    if (RenderActionButton("Pin")) ToggleAchPin(id);
                 }
                 ImGui::PopID();
                 ImGui::Spacing();
@@ -13780,8 +13798,11 @@ static void RenderAchievements() {
                             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
                         }
-                        ImGui::SameLine(ImGui::GetContentRegionMax().x - 110.0f);
-                        if (ImGui::SmallButton(active ? "Show Complete##list" : "Hide Complete##list")) {
+                        const char* filterLabel = active ? "Show Complete##list" : "Hide Complete##list";
+                        const float filterWidth = ImGui::CalcTextSize(filterLabel).x
+                            + ImGui::GetStyle().FramePadding.x * 2.0f + 4.0f;
+                        ImGui::SameLine(ImGui::GetContentRegionMax().x - filterWidth - 6.0f);
+                        if (RenderActionButton(filterLabel)) {
                             g_AchHideCompletedCats = !g_AchHideCompletedCats;
                             SaveAchTrackerState();
                         }
@@ -14370,7 +14391,7 @@ static void RenderSkinventory() {
         }
 
         if (!canRefresh) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
-        if (ImGui::SmallButton("Refresh") && canRefresh)
+        if (RenderActionButton("Refresh") && canRefresh)
             g_SkinRefreshOwned = true;
         if (!canRefresh) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
 
@@ -15694,17 +15715,17 @@ void AddonRender() {
                 ImGui::Text("Select characters to refresh:");
                 ImGui::Spacing();
 
-                if (ImGui::SmallButton("All")) {
+                if (RenderActionButton("All")) {
                     for (size_t i = 0; i < g_RefreshSelection.size(); i++)
                         g_RefreshSelection[i] = true;
                 }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("None")) {
+                if (RenderActionButton("None")) {
                     for (size_t i = 0; i < g_RefreshSelection.size(); i++)
                         g_RefreshSelection[i] = false;
                 }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("Lv80")) {
+                if (RenderActionButton("Lv80")) {
                     const auto& cachedChars = AlterEgo::GW2API::GetCharacters();
                     for (size_t i = 0; i < g_RefreshNames.size(); i++) {
                         g_RefreshSelection[i] = false;

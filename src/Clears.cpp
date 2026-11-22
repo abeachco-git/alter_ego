@@ -2280,13 +2280,13 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
-    if (ImGui::SmallButton("Refresh##vault") && !fetching) FetchVaultData();
+    if (RenderActionButton("Refresh##vault") && !fetching) FetchVaultData();
     if (fetching) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     ImGui::SameLine();
     LoadClearUiSettings();
     const char* filterLabel = g_VaultHideComplete
         ? "Show Complete##vault" : "Hide Complete##vault";
-    if (ImGui::SmallButton(filterLabel)) {
+    if (RenderActionButton(filterLabel)) {
         g_VaultHideComplete = !g_VaultHideComplete;
         SaveClearUiSettings();
     }
@@ -2482,13 +2482,13 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     const bool fetching = g_ClearsFetching || g_ClearsQueryPending.load() ||
         g_ClearsRetryAtMs.load() != 0;
     if (fetching) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
-    if (ImGui::SmallButton("Refresh##clears") && !fetching) FetchClears();
+    if (RenderActionButton("Refresh##clears") && !fetching) FetchClears();
     if (fetching) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     ImGui::SameLine();
     LoadClearUiSettings();
     const char* filterLabel = g_ClearsHideComplete
         ? "Show Complete##clears" : "Hide Complete##clears";
-    if (ImGui::SmallButton(filterLabel)) {
+    if (RenderActionButton(filterLabel)) {
         g_ClearsHideComplete = !g_ClearsHideComplete;
         SaveClearUiSettings();
     }

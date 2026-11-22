@@ -17,13 +17,18 @@ void CopyToClipboard(const std::string& text);
 // Used by equipment panel, clears, and other tabs.
 void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix = nullptr);
 
+// Shared height for ordinary actions. Dense completion chips/icon hit targets stay compact.
+inline constexpr float kAlterEgoActionButtonHeight = 30.0f;
+// Neutral full-height button with a font-responsive minimum. Optional fixed width.
+bool RenderActionButton(const char* label, ImVec2 size = ImVec2(0, 0));
+
 // Gold-trimmed button matching the RenderSectionHeader primary-action vocabulary.
 // Returns true on click. Pass explicit size for fixed-width rows.
 bool RenderGoldButton(const char* label, ImVec2 size = ImVec2(0, 0));
 
 // Small chip-style button — secondary action vocabulary.
 // active: highlighted when true. accentColor: pass ImVec4(0,0,0,0) for default gold tint.
-bool RenderChipButton(const char* label, bool active, ImVec4 accentColor = ImVec4(0, 0, 0, 0));
+bool RenderChipButton(const char* label, bool active, ImVec4 accentColor = ImVec4(0, 0, 0, 0), bool compact = false);
 
 // Gold-bordered combo box. Wraps ImGui::BeginCombo with themed styling.
 // width <= 0: caller sets width via SetNextItemWidth; > 0: sets width here.
