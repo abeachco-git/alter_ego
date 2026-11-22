@@ -102,11 +102,11 @@ jobs:
       - name: Verify embedded fixed UI assets
         run: |
           test -s build/embedded_icons.rc
-          grep -q '"AE_9000008"' build/embedded_icons.rc
-          grep -q '"AE_9200008"' build/embedded_icons.rc
-          grep -q '"AE_9100001"' build/embedded_icons.rc
-          grep -q '"AE_68326"' build/embedded_icons.rc
-          test "$(grep -c '^"AE_' build/embedded_icons.rc)" -ge 80
+          grep -q 'AE_9000008"' build/embedded_icons.rc
+          grep -q 'AE_9200008"' build/embedded_icons.rc
+          grep -q 'AE_9100001"' build/embedded_icons.rc
+          grep -q 'AE_68326"' build/embedded_icons.rc
+          test "$(grep -c '^AE_' build/embedded_icons.rc)" -ge 80
       - name: Verify Windows x64 UCRT DLL
         run: |
           test -s build/AlterEgo.dll
