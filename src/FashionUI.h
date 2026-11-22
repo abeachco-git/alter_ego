@@ -250,6 +250,12 @@ static void RenderFashionSlot(const char* label, uint16_t skinID, const uint16_t
     ImGui::PopID();
 }
 
+// Shared actions for the detail toolbar and the list context menu.
+static void CopyFashionWardrobeLink(const AlterEgo::Fashion::Look& look) {
+    CopyToClipboard(look.wardrobe_link);
+    if (APIDefs) APIDefs->GUI_SendAlert("Wardrobe link copied.");
+}
+
 static void RenderFashionLibrary() {
     // Collection-wide actions remain in the top-level Library dropdown.
     // Controls match the Characters and Builds lists: filter, then search,
@@ -264,6 +270,8 @@ static void RenderFashionLibrary() {
     ImGui::InputTextWithHint("##fashion_search", "Search looks / characters",
                              g_FashionSearch, sizeof(g_FashionSearch));
     ImGui::Separator();
+    // Defer destructive actions until the details pane owns the confirmation popup.
+    int pendingDelete = -1;
     if (g_FashionLibrary.looks.empty())
         ImGui::TextWrapped("No saved fashion. Capture an Equipment tab or import a Wardrobe Template.");
     for (int i = 0; i < (int)g_FashionLibrary.looks.size(); ++i) {
@@ -272,6 +280,22 @@ static void RenderFashionLibrary() {
         if (g_FashionFilter && look.weight != filters[g_FashionFilter]) continue;
         ImGui::PushID(i);
         if (ImGui::Selectable(look.name.c_str(), i == g_FashionSelected)) g_FashionSelected = i;
+        if (ImGui::BeginPopupContextItem("##fashion_actions")) {
+            if (ImGui::MenuItem("Copy Wardrobe Link"))
+                CopyFashionWardrobeLink(look);
+            if (ImGui::MenuItem("Edit")) {
+                g_FashionSelected = i;
+                StartFashionEdit(look, i);
+            }
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
+            if (ImGui::MenuItem("Delete")) {
+                g_FashionSelected = i;
+                pendingDelete = i;
+            }
+            ImGui::PopStyleColor();
+            ImGui::EndPopup();
+        }
         ImGui::PopID();
     }
     ImGui::EndChild();
@@ -298,10 +322,8 @@ static void RenderFashionLibrary() {
         ImGui::TextUnformatted(look.name.c_str());
         ImGui::TextDisabled("%s | %s", look.weight.c_str(),
             look.complete ? "Wardrobe Template" : "Equipment-derived (partial)");
-        if (RenderActionButton("Copy Wardrobe Link")) {
-            CopyToClipboard(look.wardrobe_link);
-            if (APIDefs) APIDefs->GUI_SendAlert("Wardrobe link copied.");
-        }
+        if (RenderActionButton("Copy Wardrobe Link"))
+            CopyFashionWardrobeLink(look);
         if (g_PieUIPresent.load()) {
             ImGui::SameLine();
             if (RenderActionButton("Preview")) PieUI_PreviewChatLink(look.wardrobe_link);
@@ -310,13 +332,19 @@ static void RenderFashionLibrary() {
         if (RenderActionButton("Edit##fashion")) StartFashionEdit(look, g_FashionSelected);
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-        if (RenderActionButton("Delete##fashion")) ImGui::OpenPopup("Delete appearance##fashion");
+        if (RenderActionButton("Delete##fashion") || pendingDelete == g_FashionSelected)
+            ImGui::OpenPopup("Delete appearance##fashion");
         ImGui::PopStyleColor();
         if (ImGui::BeginPopupModal("Delete appearance##fashion", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextWrapped("Delete '%s' from the Fashion Library?", look.name.c_str());
-            if (RenderGoldButton("Delete")) { toDelete = g_FashionSelected; ImGui::CloseCurrentPopup(); }
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
+            if (RenderActionButton("Delete##confirm_fashion")) {
+                toDelete = g_FashionSelected;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::PopStyleColor();
             ImGui::SameLine();
-            if (RenderChipButton("Cancel##delete_fashion", false)) ImGui::CloseCurrentPopup();
+            if (RenderActionButton("Cancel##delete_fashion")) ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
         if (!look.notes.empty()) { ImGui::Spacing(); ImGui::TextWrapped("%s", look.notes.c_str()); }
