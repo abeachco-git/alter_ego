@@ -1,4 +1,5 @@
 #include "IconManager.h"
+#include "GW2API.h"
 
 #include <windows.h>
 #include <wininet.h>
@@ -20,6 +21,38 @@ std::thread IconManager::s_DownloadThread;
 std::condition_variable IconManager::s_QueueCV;
 std::atomic<bool> IconManager::s_StopWorker{false};
 std::vector<uint32_t> IconManager::s_ReadyQueue;
+
+
+static HMODULE GetEmbeddedResourceModule() {
+    HMODULE module = nullptr;
+    GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        (LPCSTR)&GetEmbeddedResourceModule, &module);
+    return module;
+}
+
+// Fixed UI graphics are compiled into RCDATA by generate_embedded_icons.py.
+// Reading them never needs profession metadata or an HTTP request.
+static Texture_t* LoadEmbeddedIcon(AddonAPI_t* api, uint32_t id,
+                                   const std::string& identifier) {
+    HMODULE module = GetEmbeddedResourceModule();
+    if (!module || !api || !api->Textures_GetOrCreateFromMemory) return nullptr;
+    const std::string name = "AE_" + std::to_string(id);
+    HRSRC resource = FindResourceA(module, name.c_str(), RT_RCDATA);
+    if (!resource) return nullptr;
+    HGLOBAL handle = LoadResource(module, resource);
+    if (!handle) return nullptr;
+    const DWORD len = SizeofResource(module, resource);
+    const void* bytes = LockResource(handle);
+    if (!bytes || !len) return nullptr;
+    try {
+        return api->Textures_GetOrCreateFromMemory(
+            identifier.c_str(), const_cast<void*>(bytes), static_cast<uint64_t>(len));
+    } catch (...) {
+        return nullptr;
+    }
+}
 
 void IconManager::Initialize(AddonAPI_t* api) {
     s_API = api;
@@ -44,15 +77,9 @@ void IconManager::Shutdown() {
 std::string IconManager::GetIconsDir() {
     if (!s_IconsDir.empty()) return s_IconsDir;
 
-    char dllPath[MAX_PATH];
-    GetModuleFileNameA(NULL, dllPath, MAX_PATH);
-    std::string dllDir(dllPath);
-    size_t lastSlash = dllDir.find_last_of("\\/");
-    if (lastSlash != std::string::npos) {
-        dllDir = dllDir.substr(0, lastSlash);
-    }
-
-    std::string addonDir = dllDir + "\\addons\\AlterEgo";
+    // Always resolve beside this DLL, not beside the GW2 process executable.
+    // This is also where character data and other AlterEgo caches are stored.
+    std::string addonDir = GW2API::GetDataDirectory();
     CreateDirectoryA(addonDir.c_str(), NULL);
     s_IconsDir = addonDir + "\\icons";
     CreateDirectoryA(s_IconsDir.c_str(), NULL);
@@ -200,11 +227,25 @@ Texture_t* IconManager::GetIcon(uint32_t id) {
         }
     }
 
+    // Built-in static icons win over network and disk lookup. The first frame
+    // can render these even before the GW2 profession API has responded.
+    if (Texture_t* embedded = LoadEmbeddedIcon(s_API, id, identifier)) {
+        if (embedded->Resource) {
+            std::lock_guard<std::mutex> lock(s_Mutex);
+            s_IconCache[id] = embedded;
+            s_LoadingIcons.erase(id);
+            s_FailedIcons.erase(id);
+            return embedded;
+        }
+    }
     return nullptr;
 }
 
 void IconManager::RequestIcon(uint32_t id, const std::string& iconUrl, bool priority) {
     if (!s_API) return;
+    // Embedded assets can be resolved without a URL; this also avoids queuing
+    // needless downloads for the nine professions, elite specs, and UI glyphs.
+    if (GetIcon(id)) return;
 
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
