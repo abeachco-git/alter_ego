@@ -141,6 +141,38 @@ int main(int argc, char** argv) {
     assert(noInfusionsParsed.infusions.empty());
     assert(noInfusionsParsed.gear.size() == 15);
 
+    // Selected-stat ascended equipment stores the stat ID alongside the item
+    // ID, sometimes BEFORE data-armory-ids. It must survive extraction.
+    std::string selectedStatFixture = html;
+    const std::string sourceEmbed = "data-armory-ids=\"37009\"";
+    const std::string selectedEmbed =
+        "data-armory-96008-stat=\"1697\" data-armory-ids=\"96008\"";
+    const size_t embedAt = selectedStatFixture.find(sourceEmbed);
+    assert(embedAt != std::string::npos);
+    selectedStatFixture.replace(embedAt, sourceEmbed.size(), selectedEmbed);
+    const std::string backpackLabel = "Backpiece<br />Berserker";
+    const size_t backpackLabelAt = selectedStatFixture.find(backpackLabel);
+    assert(backpackLabelAt != std::string::npos);
+    selectedStatFixture.replace(backpackLabelAt, backpackLabel.size(),
+                                "Backpiece<br />Dragon");
+    SnowCrows::Page withSelectedStat;
+    assert(MetaBattle::Parse(url, selectedStatFixture, withSelectedStat, error));
+    assert(error.empty());
+    assert(withSelectedStat.gear.at("Backpack").itemId == 96008);
+    assert(withSelectedStat.gear.at("Backpack").statId == 1697);
+    assert(withSelectedStat.gear.at("Backpack").statName == "Dragon");
+
+    // A missing trinket must fail even when two weapon sets keep the total
+    // count at 12 or more. Never silently save a partially populated build.
+    std::string missingBackpackFixture = html;
+    const std::string backpackTile = Tile(37009, "Backpiece<br />Berserker");
+    const size_t backpackAt = missingBackpackFixture.find(backpackTile);
+    assert(backpackAt != std::string::npos);
+    missingBackpackFixture.erase(backpackAt, backpackTile.size());
+    SnowCrows::Page rejected;
+    assert(!MetaBattle::Parse(url, missingBackpackFixture, rejected, error));
+    assert(error.find("Backpack") != std::string::npos);
+
     const auto original = parsed.gear.size();
     const auto pos = html.find("<small>Relic</small>");
     assert(pos != std::string::npos);
@@ -152,7 +184,7 @@ int main(int argc, char** argv) {
     assert(parsed.relicId == 0);
     assert(parsed.importWarning.find("Relic not resolved") != std::string::npos);
 
-    // Local four-page regression verification against actual server-rendered
+    // Six live-page regression checks against actual server-rendered
     // MetaBattle snapshots. The CI workflow downloads these files, so this
     // runs the same parser called by the in-game Import dialog.
     if (argc > 1) {
@@ -241,6 +273,36 @@ int main(int argc, char** argv) {
         assert(mechanist.gear.at("WeaponA1").weaponType == "Spear");
         assert(mechanist.gear.at("WeaponB1").weaponType == "Pistol");
         assert(mechanist.gear.at("WeaponB2").weaponType == "Pistol");
+        assert(mechanist.gear.at("Backpack").statId == 1064);
+        assert(mechanist.gear.at("Accessory1").statId == 1130);
+        assert(mechanist.gear.at("Ring2").statId == 1130);
+
+        const auto scrapper = verify(
+            "scrapper", "Scrapper_-_Power_Scrapper", "Engineer", 13, {});
+        assert(scrapper.gear.at("Backpack").itemId == 96008);
+        assert(scrapper.gear.at("Backpack").statName == "Dragon");
+        assert(scrapper.gear.at("Backpack").statId == 1697);
+        assert(scrapper.gear.at("Ring1").itemId == 37075);
+        assert(scrapper.gear.at("Ring2").itemId == 37086);
+        assert(scrapper.gear.at("WeaponA1").weaponType == "Hammer");
+
+        const auto holosmith = verify(
+            "holosmith", "Holosmith_-_Condi_Holo", "Engineer", 14, {});
+        assert(holosmith.gear.at("Backpack").itemId == 79830);
+        assert(holosmith.gear.at("Backpack").statId == 1064);
+        assert(holosmith.gear.at("Backpack").statName == "Sinister");
+        for (const char* trinket : {
+                "Accessory1", "Accessory2", "Amulet", "Ring1", "Ring2"}) {
+            assert(holosmith.gear.at(trinket).itemId > 0);
+            assert(holosmith.gear.at(trinket).statName == "Viper");
+            assert(holosmith.gear.at(trinket).statId == 1130);
+        }
+        assert(holosmith.gear.at("WeaponA1").weaponType == "Pistol");
+        assert(holosmith.gear.at("WeaponA2").weaponType == "Pistol");
+
+        assert(harbinger.gear.at("Backpack").statId == 1130);
+        assert(harbinger.gear.at("Accessory1").statId == 1130);
+        assert(harbinger.gear.at("Ring2").statId == 1130);
     }
     return 0;
 }
