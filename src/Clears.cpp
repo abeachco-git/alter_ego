@@ -2480,6 +2480,11 @@ static void LoadClearUiSettings() {
         g_ClearsHideComplete = j.value("hide_clears_complete", false);
     } catch (...) {}
 }
+void ReloadClearUiSettings() {
+    g_ClearUiLoaded = false;
+    LoadClearUiSettings();
+}
+
 static void SaveClearUiSettings() {
     try {
         auto path = ClearUiSettingsPath();
