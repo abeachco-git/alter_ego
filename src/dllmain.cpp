@@ -10340,54 +10340,6 @@ static void RenderCompareTab() {
                 saved = &b; break;
             }
     }
-    // The toolbar always refers to the same target as Characters.
-    const auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
-    const bool busy = fetchStatus == AlterEgo::FetchStatus::InProgress;
-    if (busy || !target) {
-        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-    }
-    const bool refreshClicked = RenderActionButton("Refresh##compare");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Re-fetch the selected character from Hoard & Seek.");
-    if (busy || !target) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
-    AlterEgo::RefreshUI::Timestamp(target ? target->data_refreshed : 0, "character build/equipment");
-
-    if (refreshClicked && !busy && target) {
-        g_LibCompareRefreshChar = target->name;
-        g_LibCompareRefreshPending = true;
-        g_LibCompareRefreshResult.clear();
-        AlterEgo::GW2API::RequestCharacterRefreshSelected({target->name});
-        return; // cache might be replaced during event delivery
-    }
-    if (g_LibCompareRefreshPending && fetchStatus != AlterEgo::FetchStatus::InProgress) {
-        g_LibCompareRefreshPending = false;
-        if (fetchStatus == AlterEgo::FetchStatus::Success) {
-            g_LibCompareRefreshResult = "Refresh complete";
-            g_LibCompareSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
-        } else if (fetchStatus == AlterEgo::FetchStatus::Error) {
-            g_LibCompareRefreshResult = "Refresh failed: " +
-                AlterEgo::GW2API::GetFetchStatusMessage();
-        } else {
-            g_LibCompareRefreshResult = "Refresh stopped before completion";
-        }
-    }
-    if (busy) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-            AlterEgo::GW2API::GetFetchStatusMessage());
-    } else if (target && target->name == g_LibCompareRefreshChar &&
-               (g_LibCompareRefreshResult.find("failed") != std::string::npos ||
-                g_LibCompareRefreshResult.find("stopped") != std::string::npos)) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error,
-            g_LibCompareRefreshResult);
-    } else if (target && target->name == g_LibCompareRefreshChar &&
-               std::chrono::steady_clock::now() < g_LibCompareSuccessUntil) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
-    } else {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready, "Ready - " + target->name + (g_LibCompareChar.empty() ? " (active auto)" : ""));
-    }
-    ImGui::Separator();
-
     // Character stays first in the original three-column selector row.
     const AlterEgo::Character* character = target;
     if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
@@ -14124,55 +14076,6 @@ static void RenderAchievements() {
         }
     }
 
-    // Compact toolbar shared with the other account tabs: actions, freshness,
-    // permanent status row, then the achievement search control.
-    const char* popoutLabel = g_AchPopoutVisible
-        ? "Hide Popout Tracker" : "Show Popout Tracker";
-    if (RenderActionButton("Refresh##achievements")) {
-        g_AchRefreshError.clear();
-        g_AchProgressFetching = false; // retry after a lost H&S response
-        g_AchProgressQueryStartMs = 0;
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchStatusMsg.clear();
-        }
-        g_AchGroupsFetched = false;
-        g_AchActiveEventFetched = false;
-        FetchAchGroups();
-        if (g_AchSelectedCatId > 0) FetchAchCategoryDefs(g_AchSelectedCatId);
-        std::vector<uint32_t> pinnedCopy;
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            pinnedCopy = g_AchPinned;
-        }
-        if (!pinnedCopy.empty()) SendAchProgressQuery(pinnedCopy);
-    }
-    ImGui::SameLine();
-    if (RenderActionButton(popoutLabel)) {
-        g_AchPopoutVisible = !g_AchPopoutVisible;
-        SaveAchTrackerState();
-    }
-    AlterEgo::RefreshUI::Timestamp((std::time_t)g_AchProgressCacheSavedAt, "achievement progress");
-
-    const bool achWorking = g_AchGroupsFetching || g_AchCatFetching ||
-        g_AchProgressFetching || g_AchRetryAtMs.load() != 0;
-    std::string achMessage;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        achMessage = g_AchStatusMsg;
-    }
-    if (achWorking) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-            achMessage.empty() ? "Querying achievement progress..." : achMessage);
-    } else if (!g_AchRefreshError.empty()) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_AchRefreshError);
-    } else if (std::chrono::steady_clock::now() < g_AchRefreshSuccessUntil) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
-    } else {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-            g_AchGroupsFetched ? "Ready" : "Loading achievement categories...");
-    }
-
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##AchSearch", "Search achievements...",
                             g_AchSearchBuf, sizeof(g_AchSearchBuf));
@@ -14595,12 +14498,6 @@ static void RenderAchievements() {
                     // Hide Complete chip — focuses the list on remaining work
                     {
                         bool active = g_AchHideCompletedCats;
-                        if (active) {
-                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.40f, 0.18f, 0.80f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-                        }
                         const char* filterLabel = active ? "Show Complete##list" : "Hide Complete##list";
                         const float filterWidth = ImGui::CalcTextSize(filterLabel).x
                             + ImGui::GetStyle().FramePadding.x * 2.0f + 4.0f;
@@ -14609,7 +14506,6 @@ static void RenderAchievements() {
                             g_AchHideCompletedCats = !g_AchHideCompletedCats;
                             SaveAchTrackerState();
                         }
-                        if (active) ImGui::PopStyleColor(4);
                     }
 
                     if (!catIt->second.description.empty()) {
@@ -15171,84 +15067,6 @@ static void RenderSkinventory() {
         return;
     }
 
-    // Compact toolbar; show the last *successful* owned-skins retrieval, not
-    // the time at which an unsuccessful request happened to finish.
-    {
-        static bool s_refreshPending = false;
-        static uint64_t s_refreshStartingGeneration = 0;
-        static auto s_successUntil = std::chrono::steady_clock::time_point{};
-
-        if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag() &&
-            AlterEgo::AutoRefreshPolicy::Enabled())
-            g_SkinRefreshOwned = true;
-
-        bool isQuerying = Skinventory::OwnedSkins::IsQuerying();
-        bool canRefresh = Skinventory::OwnedSkins::IsHoardAndSeekAvailable() && !isQuerying;
-
-        // Initial automatic lookup, once per selected account.
-        {
-            static std::string s_autoRefreshAccount;
-            const std::string currentAccount = GetEffectiveAccountName();
-            if (AlterEgo::AutoRefreshPolicy::Enabled() && canRefresh &&
-                !Skinventory::OwnedSkins::HasData() &&
-                s_autoRefreshAccount != currentAccount) {
-                s_autoRefreshAccount = currentAccount;
-                g_SkinRefreshOwned = true;
-            }
-        }
-
-        if (!canRefresh) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
-        if (RenderActionButton("Refresh") && canRefresh)
-            g_SkinRefreshOwned = true;
-        if (!canRefresh) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
-
-        if (g_SkinRefreshOwned && canRefresh) {
-            g_SkinRefreshOwned = false;
-            s_refreshPending = true;
-            s_refreshStartingGeneration = Skinventory::OwnedSkins::GetGeneration();
-            Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
-            Skinventory::OwnedSkins::RequestOwnedSkinsViaApi();
-        }
-
-        isQuerying = Skinventory::OwnedSkins::IsQuerying();
-        if (s_refreshPending && !isQuerying) {
-            s_refreshPending = false;
-            if (Skinventory::OwnedSkins::GetGeneration() != s_refreshStartingGeneration)
-                s_successUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
-        }
-
-        const std::time_t updated = Skinventory::OwnedSkins::GetLastSuccessTime();
-        AlterEgo::RefreshUI::Timestamp(updated, "owned skins");
-
-        const std::string msg = Skinventory::OwnedSkins::GetStatusMessage();
-        if (isQuerying || msg.find("busy") != std::string::npos) {
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-                msg.empty() ? "Querying owned skins..." : msg);
-        } else if (msg.find("denied") != std::string::npos ||
-                   msg.find("Failed") != std::string::npos ||
-                   msg.find("truncated") != std::string::npos) {
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, msg);
-        } else if (std::chrono::steady_clock::now() < s_successUntil) {
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success,
-                "Refresh complete - " +
-                std::to_string(Skinventory::OwnedSkins::GetOwnedCount()) + " owned");
-        } else if (Skinventory::OwnedSkins::HasData()) {
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-                "Ready - " + std::to_string(Skinventory::OwnedSkins::GetOwnedCount()) + " owned");
-        } else if (!Skinventory::OwnedSkins::IsHoardAndSeekAvailable()) {
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-                "Waiting for Hoard & Seek...");
-        } else {
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-                "No ownership data - click Refresh");
-        }
-
-        if (cacheStatus == Skinventory::CacheStatus::Updating) {
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-                Skinventory::SkinCache::GetStatusMessage());
-        }
-    }
-
     ImGui::Separator();
 
     if (ImGui::BeginTabBar("##skin_tabs")) {
@@ -15276,6 +15094,204 @@ static void RenderSkinventory() {
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
+    }
+}
+
+
+static void RenderCharactersStatusRow() {
+    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const AlterEgo::Character* selected = nullptr;
+    if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
+        const int ri = g_CharDisplayOrder[g_SelectedCharIdx];
+        if (ri >= 0 && ri < (int)chars.size()) selected = &chars[ri];
+    }
+    const auto hoard = AlterEgo::GW2API::GetHoardStatus();
+    const bool hoardReady = hoard == AlterEgo::HoardStatus::Available ||
+                            hoard == AlterEgo::HoardStatus::Ready;
+    const auto fetch = AlterEgo::GW2API::GetFetchStatus();
+    const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
+    AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
+    std::string detail = hoardReady ? "Ready" : "Waiting for Hoard & Seek...";
+    if (busy) {
+        g_FetchDoneTime = std::chrono::steady_clock::time_point{};
+        state = AlterEgo::RefreshUI::State::Working;
+        detail = AlterEgo::GW2API::GetFetchStatusMessage();
+    } else if (fetch == AlterEgo::FetchStatus::Error) {
+        state = AlterEgo::RefreshUI::State::Error;
+        detail = AlterEgo::GW2API::GetFetchStatusMessage();
+    } else if (fetch == AlterEgo::FetchStatus::Success) {
+        if (g_FetchDoneTime == std::chrono::steady_clock::time_point{})
+            g_FetchDoneTime = std::chrono::steady_clock::now();
+        if (std::chrono::steady_clock::now() - g_FetchDoneTime < std::chrono::seconds(4)) {
+            state = AlterEgo::RefreshUI::State::Success;
+            detail = "Refresh complete";
+        }
+    }
+    bool more = false;
+    if (AlterEgo::RefreshUI::Row("characters", selected ? selected->data_refreshed : 0,
+          "selected character", state, detail, !hoardReady || busy, &more)) {
+        if (selected) {
+            const std::string name = selected->name;
+            AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+            g_DetailsFetched = false;
+        } else {
+            g_RefreshListFetching = true;
+            AlterEgo::GW2API::RequestCharacterList();
+        }
+    }
+    if (more && hoardReady && !busy) {
+        g_RefreshListFetching = true;
+        AlterEgo::GW2API::RequestCharacterList();
+    }
+}
+
+static void RenderCompareStatusRow() {
+    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const AlterEgo::Character* target = nullptr;
+    for (const auto& ch : chars) {
+        if (ch.name == g_LibComparePreviousTarget) { target = &ch; break; }
+    }
+    const auto fetch = AlterEgo::GW2API::GetFetchStatus();
+    const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
+    if (g_LibCompareRefreshPending && !busy) {
+        g_LibCompareRefreshPending = false;
+        if (fetch == AlterEgo::FetchStatus::Success) {
+            g_LibCompareRefreshResult = "Refresh complete";
+            g_LibCompareSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        } else if (fetch == AlterEgo::FetchStatus::Error) {
+            g_LibCompareRefreshResult = "Refresh failed: " +
+                AlterEgo::GW2API::GetFetchStatusMessage();
+        } else {
+            g_LibCompareRefreshResult = "Refresh stopped before completion";
+        }
+    }
+    AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
+    std::string detail = target ? "Ready - " + target->name : "No retrieved character selected";
+    if (busy) {
+        state = AlterEgo::RefreshUI::State::Working;
+        detail = AlterEgo::GW2API::GetFetchStatusMessage();
+    } else if (target && target->name == g_LibCompareRefreshChar &&
+               (g_LibCompareRefreshResult.find("failed") != std::string::npos ||
+                g_LibCompareRefreshResult.find("stopped") != std::string::npos)) {
+        state = AlterEgo::RefreshUI::State::Error;
+        detail = g_LibCompareRefreshResult;
+    } else if (target && target->name == g_LibCompareRefreshChar &&
+               std::chrono::steady_clock::now() < g_LibCompareSuccessUntil) {
+        state = AlterEgo::RefreshUI::State::Success;
+        detail = "Refresh complete";
+    }
+    if (AlterEgo::RefreshUI::Row("compare", target ? target->data_refreshed : 0,
+            "character build/equipment", state, detail, busy || !target)) {
+        const std::string name = target->name;
+        g_LibCompareRefreshChar = name;
+        g_LibCompareRefreshPending = true;
+        g_LibCompareRefreshResult.clear();
+        AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+    }
+}
+
+static void RenderSkinventoryStatusRow() {
+    // Run the same ownership refresh scheduler as before; the only change is
+    // that the action, result and timestamp are drawn together at the bottom.
+    static bool s_refreshPending = false;
+    static uint64_t s_refreshStartingGeneration = 0;
+    static auto s_successUntil = std::chrono::steady_clock::time_point{};
+    Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
+    if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag() &&
+        AlterEgo::AutoRefreshPolicy::Enabled())
+        g_SkinRefreshOwned = true;
+    bool querying = Skinventory::OwnedSkins::IsQuerying();
+    bool canRefresh = Skinventory::OwnedSkins::IsHoardAndSeekAvailable() && !querying;
+    {
+        static std::string s_autoRefreshAccount;
+        const std::string currentAccount = GetEffectiveAccountName();
+        if (AlterEgo::AutoRefreshPolicy::Enabled() && canRefresh &&
+            !Skinventory::OwnedSkins::HasData() &&
+            s_autoRefreshAccount != currentAccount) {
+            s_autoRefreshAccount = currentAccount;
+            g_SkinRefreshOwned = true;
+        }
+    }
+    if (g_SkinRefreshOwned && canRefresh) {
+        g_SkinRefreshOwned = false;
+        s_refreshPending = true;
+        s_refreshStartingGeneration = Skinventory::OwnedSkins::GetGeneration();
+        Skinventory::OwnedSkins::RequestOwnedSkinsViaApi();
+    }
+    querying = Skinventory::OwnedSkins::IsQuerying();
+    if (s_refreshPending && !querying) {
+        s_refreshPending = false;
+        if (Skinventory::OwnedSkins::GetGeneration() != s_refreshStartingGeneration)
+            s_successUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    }
+    AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
+    const auto msg = Skinventory::OwnedSkins::GetStatusMessage();
+    std::string detail = Skinventory::OwnedSkins::HasData()
+        ? "Ready - " + std::to_string(Skinventory::OwnedSkins::GetOwnedCount()) + " owned"
+        : "No ownership data - click Refresh";
+    if (querying || msg.find("busy") != std::string::npos) {
+        state = AlterEgo::RefreshUI::State::Working;
+        detail = msg.empty() ? "Querying owned skins..." : msg;
+    } else if (msg.find("denied") != std::string::npos ||
+               msg.find("Failed") != std::string::npos ||
+               msg.find("truncated") != std::string::npos) {
+        state = AlterEgo::RefreshUI::State::Error;
+        detail = msg;
+    } else if (std::chrono::steady_clock::now() < s_successUntil) {
+        state = AlterEgo::RefreshUI::State::Success;
+        detail = "Refresh complete - " + std::to_string(Skinventory::OwnedSkins::GetOwnedCount()) + " owned";
+    } else if (!Skinventory::OwnedSkins::IsHoardAndSeekAvailable()) {
+        detail = "Waiting for Hoard & Seek...";
+    }
+    if (Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Updating) {
+        state = AlterEgo::RefreshUI::State::Working;
+        detail = Skinventory::SkinCache::GetStatusMessage();
+    }
+    if (AlterEgo::RefreshUI::Row("skinventory", Skinventory::OwnedSkins::GetLastSuccessTime(),
+             "owned skins", state, detail, !canRefresh))
+        g_SkinRefreshOwned = true;
+}
+
+static void RenderAchievementsStatusRow() {
+    const bool working = g_AchGroupsFetching || g_AchCatFetching ||
+        g_AchProgressFetching || g_AchRetryAtMs.load() != 0;
+    std::string detail;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        detail = g_AchStatusMsg;
+    }
+    AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
+    if (working) {
+        state = AlterEgo::RefreshUI::State::Working;
+        if (detail.empty()) detail = "Querying achievement progress...";
+    } else if (!g_AchRefreshError.empty()) {
+        state = AlterEgo::RefreshUI::State::Error;
+        detail = g_AchRefreshError;
+    } else if (std::chrono::steady_clock::now() < g_AchRefreshSuccessUntil) {
+        state = AlterEgo::RefreshUI::State::Success;
+        detail = "Refresh complete";
+    } else {
+        detail = g_AchGroupsFetched ? "Ready" : "Loading achievement categories...";
+    }
+    if (AlterEgo::RefreshUI::Row("achievements", (std::time_t)g_AchProgressCacheSavedAt,
+            "achievement progress", state, detail)) {
+        g_AchRefreshError.clear();
+        g_AchProgressFetching = false; // allow manual retry of a lost response
+        g_AchProgressQueryStartMs = 0;
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchStatusMsg.clear();
+        }
+        g_AchGroupsFetched = false;
+        g_AchActiveEventFetched = false;
+        FetchAchGroups();
+        if (g_AchSelectedCatId > 0) FetchAchCategoryDefs(g_AchSelectedCatId);
+        std::vector<uint32_t> pinnedCopy;
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            pinnedCopy = g_AchPinned;
+        }
+        if (!pinnedCopy.empty()) SendAchProgressQuery(pinnedCopy);
     }
 }
 
@@ -15388,7 +15404,9 @@ void AddonRender() {
     if (!g_WindowVisible) { return; }
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(FLT_MAX, FLT_MAX));
-    if (!ImGui::Begin("Alter Ego", &g_WindowVisible, ImGuiWindowFlags_NoCollapse)) {
+    if (!ImGui::Begin("Alter Ego", &g_WindowVisible,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoScrollWithMouse)) {
         ImGui::End();
         return;
     }
@@ -15452,6 +15470,8 @@ void AddonRender() {
             ImGui::SetTooltip("Live and cached character data from your GW2 account");
         if (charactersTabVisible) {
             g_MainTab = 0;
+            ImGui::BeginChild("##characters_page",
+                ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
 
             // Re-trigger detail fetch when character data finishes loading
             {
@@ -15533,75 +15553,6 @@ void AddonRender() {
                 g_CharListWidth = (g_CharListWidth < 120.0f) ? 120.0f : (g_CharListWidth > availW - 200.0f) ? availW - 200.0f : g_CharListWidth;
 
                 ImGui::BeginChild("CharList", ImVec2(g_CharListWidth, 0), true);
-
-                // Refresh the highlighted character directly; use "..." for
-                // the existing multi-character picker.
-                {
-                    bool refreshDisabled = scanning || !hoardReady;
-                    if (refreshDisabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-
-                    std::string selectedRefreshName;
-                    if (g_SelectedCharIdx >= 0 &&
-                        g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
-                        const int ri = g_CharDisplayOrder[g_SelectedCharIdx];
-                        if (ri >= 0 && ri < (int)characters.size())
-                            selectedRefreshName = characters[ri].name;
-                    }
-
-                    const float pickerBtnW = 28.0f;
-                    const float refreshBtnW = ImGui::GetContentRegionAvail().x -
-                        pickerBtnW - ImGui::GetStyle().ItemSpacing.x;
-                    if (ImGui::Button("Refresh", ImVec2(refreshBtnW, 0)) && !refreshDisabled) {
-                        if (!selectedRefreshName.empty()) {
-                            AlterEgo::GW2API::RequestCharacterRefreshSelected({selectedRefreshName});
-                            g_DetailsFetched = false;
-                        } else {
-                            // No cached selection yet: use the roster/picker workflow.
-                            g_RefreshListFetching = true;
-                            AlterEgo::GW2API::RequestCharacterList();
-                        }
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        if (selectedRefreshName.empty())
-                            ImGui::SetTooltip("Load character list and choose what to refresh");
-                        else
-                            ImGui::SetTooltip("Refresh only %s", selectedRefreshName.c_str());
-                    }
-
-                    ImGui::SameLine();
-                    if (ImGui::Button("...##refreshPicker", ImVec2(pickerBtnW, 0)) &&
-                        !refreshDisabled) {
-                        g_RefreshListFetching = true;
-                        AlterEgo::GW2API::RequestCharacterList();
-                    }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Choose characters to refresh (one, several, or all)");
-
-                    if (refreshDisabled) ImGui::PopStyleVar();
-
-                    // Always show an inline status row, never a toast or a
-                    // global timestamp (the selected character has its own).
-                    if (fetchStatus == AlterEgo::FetchStatus::InProgress) {
-                        g_FetchDoneTime = std::chrono::steady_clock::time_point{};
-                        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-                            AlterEgo::GW2API::GetFetchStatusMessage());
-                    } else if (fetchStatus == AlterEgo::FetchStatus::Error) {
-                        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error,
-                            AlterEgo::GW2API::GetFetchStatusMessage());
-                    } else if (fetchStatus == AlterEgo::FetchStatus::Success) {
-                        if (g_FetchDoneTime == std::chrono::steady_clock::time_point{})
-                            g_FetchDoneTime = std::chrono::steady_clock::now();
-                        const bool recent = std::chrono::steady_clock::now() - g_FetchDoneTime <
-                            std::chrono::seconds(4);
-                        AlterEgo::RefreshUI::Status(
-                            recent ? AlterEgo::RefreshUI::State::Success : AlterEgo::RefreshUI::State::Ready,
-                            recent ? "Refresh complete" : "Ready");
-                    } else {
-                        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-                            hoardReady ? "Ready" : "Waiting for Hoard & Seek...");
-                    }
-                    ImGui::Separator();
-                }
 
                 // Sort mode selector + direction toggle (inside the list child)
                 {
@@ -16294,13 +16245,6 @@ void AddonRender() {
                         snprintf(meta, sizeof(meta), "LV %d  -  %s  -  %s",
                             ch.level, raceUp.c_str(), profUp.c_str());
                         ImGui::TextColored(ImVec4(0.55f, 0.50f, 0.40f, 1.0f), "%s", meta);
-                        const std::string buildFreshness = ch.data_refreshed > 0
-                            ? "Build data updated " + AlterEgo::RefreshUI::Age(ch.data_refreshed)
-                            : "Build data update time unavailable";
-                        ImGui::TextDisabled("%s", buildFreshness.c_str());
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Last successful character snapshot from Hoard & Seek.\\n"
-                                              "This is not the date the build changed in GW2.");
                         ImGui::PopTextWrapPos();
                         ImGui::EndGroup();
 
@@ -16454,36 +16398,6 @@ void AddonRender() {
 
                 ImGui::BeginChild("CharListEmpty", ImVec2(g_CharListWidth, 0), true);
 
-                // Refresh button (opens the standard refresh popup when names are available)
-                {
-                    bool refreshDisabled = scanning || !hoardReady;
-                    if (refreshDisabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-                    if (ImGui::Button("Refresh", ImVec2(-1, 0)) && !refreshDisabled) {
-                        g_RefreshListFetching = true;
-                        AlterEgo::GW2API::RequestCharacterList();
-                    }
-                    if (refreshDisabled) ImGui::PopStyleVar();
-                }
-
-                // Status messages
-                if (fetchStatus == AlterEgo::FetchStatus::InProgress) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "%s",
-                        AlterEgo::GW2API::GetFetchStatusMessage().c_str());
-                } else if (fetchStatus == AlterEgo::FetchStatus::Error) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
-                        AlterEgo::GW2API::GetFetchStatusMessage().c_str());
-                } else if (!pendingNames.empty()) {
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
-                        "Click Refresh to fetch full data.");
-                } else if (hoardReady) {
-                    RenderSpinner("Loading character list...");
-                } else if (hoardStatus == AlterEgo::HoardStatus::Unknown) {
-                    RenderSpinner("Waiting for Hoard & Seek...");
-                } else {
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
-                        "Hoard & Seek required for character data.");
-                }
-
                 // Show pending character names grouped by account
                 if (!pendingNames.empty() && AlterEgo::GW2API::IsMultiAccount()) {
                     ImGui::Separator();
@@ -16536,6 +16450,8 @@ void AddonRender() {
                 ImGui::EndChild();
             }
 
+            ImGui::EndChild();
+            RenderCharactersStatusRow();
             // When the character list fetch completes, populate the refresh popup
             if (g_RefreshListFetching &&
                 AlterEgo::GW2API::GetFetchStatus() != AlterEgo::FetchStatus::InProgress) {
@@ -16569,11 +16485,15 @@ void AddonRender() {
                             g_RefreshSelection[i] = true;
                     }
                     g_RefreshPopupOpen = true;
-                    ImGui::OpenPopup("Select Characters to Refresh");
                 }
             }
 
-            // Character refresh selection popup
+            // Character refresh selection popup: OpenPopup and BeginPopup share
+            // the same parent window scope after the content child has ended.
+            if (g_RefreshPopupOpen) {
+                ImGui::OpenPopup("Select Characters to Refresh");
+                g_RefreshPopupOpen = false;
+            }
             if (ImGui::BeginPopup("Select Characters to Refresh")) {
                 ImGui::Text("Select characters to refresh:");
                 ImGui::Spacing();
@@ -16761,7 +16681,10 @@ void AddonRender() {
         }
         if (ImGui::BeginTabItem("Compare", nullptr, compareTabFlags)) {
             g_MainTab = 5; // Do not renumber existing session tab IDs.
+            ImGui::BeginChild("##compare_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderCompareTab();
+            ImGui::EndChild();
+            RenderCompareStatusRow();
             ImGui::EndTabItem();
         }
 
@@ -16782,7 +16705,10 @@ void AddonRender() {
                 ImGui::SetTooltip("%s", acctTabTooltip);
         } else if (g_SkinInitialized && ImGui::BeginTabItem("Skinventory", nullptr, skinTabFlags)) {
             g_MainTab = 2;
+            ImGui::BeginChild("##skinventory_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderSkinventory();
+            ImGui::EndChild();
+            RenderSkinventoryStatusRow();
             ImGui::EndTabItem();
         }
 
@@ -16796,12 +16722,18 @@ void AddonRender() {
         } else {
             if (ImGui::BeginTabItem("Vault")) {
                 g_MainTab = 3; // Keep original session tab ID.
+                ImGui::BeginChild("##vault_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
                 RenderVault();
+                ImGui::EndChild();
+                RenderVaultStatusRow();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Clears")) {
                 g_MainTab = 6; // New session ID; do not renumber older tabs.
+                ImGui::BeginChild("##clears_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
                 RenderClears();
+                ImGui::EndChild();
+                RenderClearsStatusRow();
                 ImGui::EndTabItem();
             }
         }
@@ -16814,7 +16746,10 @@ void AddonRender() {
                 ImGui::SetTooltip("%s", acctTabTooltip);
         } else if (ImGui::BeginTabItem("Achievements")) {
             g_MainTab = 4;
+            ImGui::BeginChild("##achievements_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderAchievements();
+            ImGui::EndChild();
+            RenderAchievementsStatusRow();
             ImGui::EndTabItem();
         }
 
