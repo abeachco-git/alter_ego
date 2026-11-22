@@ -3245,6 +3245,70 @@ static void RenderClearsShared(bool showVault) {
 void RenderVault() { RenderClearsShared(true); }
 void RenderClears() { RenderClearsShared(false); }
 
+// Called globally on startup and whenever the selected account changes, not
+// only while Vault/Clears is visible. Each selected account restores its own
+// disk cache immediately; the old account's status must never be displayed.
+void SyncCompletionAccountCaches() {
+    const std::string account = GetEffectiveAccountName();
+    if (account == g_ClearsCacheAccount && account == g_VaultCacheAccount)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        g_ClearsCacheAccount = account;
+        g_VaultCacheAccount = account;
+        g_ClearsNeedRequery = false;
+        g_VaultNeedRequery = false;
+        g_ClearsFetched = false;
+        g_ClearsFetching = false;
+        g_ClearsQueryPending = false;
+        g_ClearsAutoBootPending = false;
+        g_ClearsCompletionInFlight = false;
+        g_ClearsQueryStartedAtMs = 0;
+        g_ClearsRetryAtMs = 0;
+        g_ClearsDailyRolloverRetryAtMs = 0;
+        g_ClearsDailyRolloverPending = false;
+        g_ClearsLastSuccessTime = 0;
+        g_ClearsSuccessUntil = {};
+        g_LastClearsCompletionQuery = {};
+        g_DailyFractals.clear();
+        g_DailyBounties.clear();
+        g_WeeklyWings.clear();
+        g_WeeklyStrikes = {};
+        g_ClearsPriorDailyFractalIds.clear();
+        g_ClearsPriorDailyBountyIds.clear();
+        g_LastDailyReset = {};
+        g_LastWeeklyReset = {};
+        g_ClearsStatusMsg.clear();
+
+        g_VaultFetching = false;
+        g_VaultFetched = false;
+        g_VaultInitialAttempted = false;
+        g_VaultRequestAccount.clear();
+        g_VaultRetryAtMs = 0;
+        g_VaultRequestStartMs = 0;
+        g_VaultDailyRolloverPending = false;
+        g_VaultDailyRolloverRetryAtMs = 0;
+        g_VaultLastAttemptFailed = false;
+        g_VaultLastSuccessTime = 0;
+        g_VaultSuccessUntil = {};
+        g_VaultResponsesOK[0] = g_VaultResponsesOK[1] = g_VaultResponsesOK[2] = false;
+        g_VaultDaily = {};
+        g_VaultWeekly = {};
+        g_VaultSpecial = {};
+        g_VaultPending[0] = g_VaultPending[1] = g_VaultPending[2] = {};
+        g_VaultSeasonEnd = {};
+        g_VaultPriorDailyIds.clear();
+        g_VaultLastDailyReset = {};
+        g_VaultLastWeeklyReset = {};
+        g_VaultStatusMessage.clear();
+    }
+    if (!account.empty()) {
+        LoadClearsCache();
+        LoadVaultCache();
+    }
+}
+
+
 bool VaultHideComplete() { LoadClearUiSettings(); return g_VaultHideComplete; }
 bool ClearsHideComplete() { LoadClearUiSettings(); return g_ClearsHideComplete; }
 void ToggleVaultHideComplete() {
