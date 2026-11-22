@@ -2867,6 +2867,7 @@ namespace AlterEgo {
         SavedBuild b;
         b.profession = profession;
         b.game_mode = mode;
+        b.game_modes = {mode};
         b.name = profession + " Build";
         b.created = time(nullptr);
         return b;
@@ -2899,6 +2900,8 @@ namespace AlterEgo {
                 b.rune_id = def.rune_id;
                 b.relic_name = def.relic_name;
                 b.relic_id = def.relic_id;
+                b.game_modes = def.game_modes.empty() ? std::vector<GameMode>{def.game_mode} : def.game_modes;
+                b.game_mode = b.game_modes.front();
                 snapshot = b;
                 found = true;
                 break;
@@ -2918,8 +2921,29 @@ namespace AlterEgo {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (auto& b : s_saved_builds) {
-                if (b.id == id) { b.game_mode = mode; break; }
+                if (b.id == id) { b.game_mode = mode; b.game_modes = {mode}; break; }
             }
+        }
+        return SaveBuildLibrary();
+    }
+
+    bool GW2API::SetSavedBuildGameModes(const std::string& id, const std::vector<GameMode>& modes) {
+        if (modes.empty()) return false;
+        std::vector<GameMode> unique;
+        for (auto mode : modes)
+            if (std::find(unique.begin(), unique.end(), mode) == unique.end())
+                unique.push_back(mode);
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            bool found = false;
+            for (auto& b : s_saved_builds) {
+                if (b.id != id) continue;
+                b.game_modes = unique;
+                b.game_mode = unique.front();
+                found = true;
+                break;
+            }
+            if (!found) return false;
         }
         return SaveBuildLibrary();
     }
@@ -2973,7 +2997,10 @@ namespace AlterEgo {
         bj["chat_link"] = b.chat_link;
         if (!b.ae2_code.empty()) bj["ae2_code"] = b.ae2_code;
         bj["profession"] = b.profession;
-        bj["game_mode"] = GameModeToStr(b.game_mode);
+        bj["game_mode"] = GameModeToStr(b.game_mode); // Legacy compatibility
+        bj["game_modes"] = json::array();
+        for (auto mode : (b.game_modes.empty() ? std::vector<GameMode>{b.game_mode} : b.game_modes))
+            bj["game_modes"].push_back(GameModeToStr(mode));
         bj["notes"] = b.notes;
         bj["created"] = (int64_t)b.created;
 
@@ -3077,6 +3104,16 @@ namespace AlterEgo {
         b.ae2_code = bj.value("ae2_code", "");
         b.profession = bj.value("profession", "");
         b.game_mode = StrToGameMode(bj.value("game_mode", "PvE"));
+        if (bj.contains("game_modes") && bj["game_modes"].is_array()) {
+            for (const auto& entry : bj["game_modes"]) {
+                if (!entry.is_string()) continue;
+                auto mode = StrToGameMode(entry.get<std::string>());
+                if (std::find(b.game_modes.begin(), b.game_modes.end(), mode) == b.game_modes.end())
+                    b.game_modes.push_back(mode);
+            }
+        }
+        if (b.game_modes.empty()) b.game_modes.push_back(b.game_mode);
+        b.game_mode = b.game_modes.front();
         b.notes = bj.value("notes", "");
         b.created = bj.value("created", (int64_t)0);
 
