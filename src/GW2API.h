@@ -286,7 +286,8 @@ namespace AlterEgo {
         std::string source_url;     // Snow Crows page, empty for local/other imports
         std::string chat_link;      // Original chat link [&...]
         std::string profession;     // Profession name (decoded)
-        GameMode game_mode = GameMode::PvE;
+        GameMode game_mode = GameMode::PvE; // Primary/legacy mode for existing integrations
+        std::vector<GameMode> game_modes; // Additional classification tags; empty means legacy primary only
         std::string notes;          // User notes
         time_t created = 0;
         // Decoded build data (populated on import)
@@ -452,6 +453,7 @@ namespace AlterEgo {
         static bool RemoveSavedBuild(const std::string& id);
         static bool UpdateSavedBuild(const std::string& id, const std::string& name, const std::string& notes);
         static bool SetSavedBuildGameMode(const std::string& id, GameMode mode);
+        static bool SetSavedBuildGameModes(const std::string& id, const std::vector<GameMode>& modes);
         static bool ReorderSavedBuild(int fromIdx, int toIdx);
         // Move a whole profession block, or an individual build within its own group.
         static bool ReorderSavedBuildGroup(const std::string& movedProfession,
