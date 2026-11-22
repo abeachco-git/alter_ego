@@ -251,6 +251,15 @@ inline bool Parse(const std::string& url, const std::string& html,
         if (slot.empty()) continue;
         SnowCrows::Gear g;
         g.itemId = id;
+        // MetaBattle's selectable-stat ascended items put the selected GW2
+        // itemstat ID directly in the Armory embed, e.g.
+        // data-armory-96008-stat="1697" for a Dragon backpiece. Without it,
+        // the saved-build gear view treats the slot as unconfigured even when
+        // its item ID and displayed stat name were correctly extracted.
+        // The ID may precede data-armory-ids, so inspect the entire item tag.
+        g.statId = SnowCrows::Unsigned(SnowCrows::Match(
+            beforeSmall, "data-armory-" + std::to_string(id) +
+                R"MB(-stat="([0-9]+)")MB"));
         g.statName = NamedStats::CanonicalStatName(stat);
         if (g.statName.empty()) g.statName = stat;
         if (slot.compare(0, 6, "Weapon") == 0) {
@@ -271,12 +280,26 @@ inline bool Parse(const std::string& url, const std::string& html,
         error = "MetaBattle build title was not found.";
         return false;
     }
-    // Never silently save a gearless build when the source displays a
-    // complete equipment grid. Missing infusions are explicitly valid.
-    if (page.gear.size() < 12) {
-        error = "MetaBattle equipment grid incomplete: only " +
-            std::to_string(page.gear.size()) +
-            " slots resolved (expected at least 12). Nothing was imported.";
+    // Require every standard armor and trinket slot independently. A simple
+    // "12 or more slots" count still accepted pages that dropped a backpiece
+    // or rings while having enough weapon entries to pass that threshold.
+    std::vector<std::string> missingSlots;
+    for (const char* required : {
+            "Helm", "Shoulders", "Coat", "Gloves", "Leggings", "Boots",
+            "Backpack", "Accessory1", "Accessory2", "Amulet",
+            "Ring1", "Ring2"}) {
+        const auto it = page.gear.find(required);
+        if (it == page.gear.end() || it->second.itemId == 0 ||
+            it->second.statName.empty())
+            missingSlots.emplace_back(required);
+    }
+    if (!missingSlots.empty()) {
+        error = "MetaBattle equipment incomplete: missing ";
+        for (size_t i = 0; i < missingSlots.size(); ++i) {
+            if (i) error += ", ";
+            error += missingSlots[i];
+        }
+        error += ". Nothing was imported.";
         return false;
     }
     if (!page.relicId) {
