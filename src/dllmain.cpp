@@ -15359,7 +15359,14 @@ static void RenderSkinventoryStatusRow() {
     static bool s_refreshPending = false;
     static uint64_t s_refreshStartingGeneration = 0;
     static auto s_successUntil = std::chrono::steady_clock::time_point{};
-    Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
+    static std::string s_statusAccount;
+    const std::string visibleAccount = GetEffectiveAccountName();
+    if (s_statusAccount != visibleAccount) {
+        s_statusAccount = visibleAccount;
+        s_refreshPending = false;
+        s_successUntil = {};
+    }
+    Skinventory::OwnedSkins::SetAccountName(visibleAccount);
     if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag() &&
         AlterEgo::AutoRefreshPolicy::Enabled())
         g_SkinRefreshOwned = true;
@@ -15368,8 +15375,12 @@ static void RenderSkinventoryStatusRow() {
     {
         static std::string s_autoRefreshAccount;
         const std::string currentAccount = GetEffectiveAccountName();
+        const std::time_t lastSuccess = Skinventory::OwnedSkins::GetLastSuccessTime();
+        const std::time_t now = std::time(nullptr);
+        const bool stale = !Skinventory::OwnedSkins::HasData() ||
+            lastSuccess <= 0 || (now > lastSuccess && now - lastSuccess > 15 * 60);
         if (AlterEgo::AutoRefreshPolicy::Enabled() && canRefresh &&
-            !Skinventory::OwnedSkins::HasData() &&
+            !currentAccount.empty() && stale &&
             s_autoRefreshAccount != currentAccount) {
             s_autoRefreshAccount = currentAccount;
             g_SkinRefreshOwned = true;
