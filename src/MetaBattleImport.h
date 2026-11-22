@@ -38,7 +38,10 @@ inline std::string NormalizeUrl(std::string url) {
     if (!direct && !encoded) return {};
     const size_t prefix = direct ? 12 : 14;
     if (path.size() <= prefix || path.size() > 300) return {};
-    for (unsigned char c : path) {
+    // The URL prefix contains its two expected slashes. The article slug
+    // must not contain additional path separators.
+    for (size_t i = prefix; i < path.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(path[i]);
         const bool valid = std::isalnum(c) || c == '_' || c == '-' ||
                            c == ':' || c == '%' || c == '(' || c == ')' ||
                            c == '.' || c == '+' || c == ',';
