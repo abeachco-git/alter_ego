@@ -2251,6 +2251,10 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         g_VaultLastSuccessTime = 0;
         g_VaultInitialAttempted = false;
         g_VaultLastAttemptFailed = false;
+        g_VaultDailyRolloverPending = false;
+        g_VaultPriorDailyIds.clear();
+        g_VaultDailyRolloverRetries = 0;
+        g_VaultDailyRolloverRetryAtMs = 0;
         g_VaultStatusMessage.clear();
     }
 
@@ -2275,7 +2279,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
 
     // Snapshot the response-thread state before giving it to ImGui.
     std::time_t updated;
-    bool showingData, failed, pending;
+    bool showingData, failed, pending, waitingForDailyRollover;
     std::string status;
     std::chrono::steady_clock::time_point successUntil;
     {
@@ -2284,6 +2288,8 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         showingData = g_VaultFetched.load();
         failed = g_VaultLastAttemptFailed;
         pending = g_VaultFetching.load();
+        waitingForDailyRollover = g_VaultDailyRolloverPending &&
+            g_VaultDailyRolloverRetryAtMs != 0;
         status = g_VaultStatusMessage;
         successUntil = g_VaultSuccessUntil;
     }
@@ -2293,6 +2299,9 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
             status.empty() ? "Fetching Vault objectives..." : status);
     } else if (failed) {
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, status);
+    } else if (waitingForDailyRollover) {
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+            status.empty() ? "Waiting for updated daily Vault objectives..." : status);
     } else if (std::chrono::steady_clock::now() < successUntil) {
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
     } else {
@@ -2475,6 +2484,10 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         if (fetching)
             AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
                 g_ClearsStatusMsg.empty() ? "Querying completion..." : g_ClearsStatusMsg);
+        else if (g_ClearsDailyRolloverPending &&
+                 g_ClearsDailyRolloverRetryAtMs.load() != 0)
+            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
+                g_ClearsStatusMsg.empty() ? "Waiting for updated daily clears..." : g_ClearsStatusMsg);
         else if (!g_ClearsStatusMsg.empty())
             AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_ClearsStatusMsg);
         else if (std::chrono::steady_clock::now() < g_ClearsSuccessUntil)
@@ -2997,7 +3010,7 @@ static void RenderClearsShared(bool showVault) {
         g_VaultDailyRolloverPending = true;
         g_VaultDaily = {};  // do not display previous-day daily objectives
         g_VaultFetched = false;
-        g_VaultInitialAttempted = false;
+        g_VaultInitialAttempted = true; // explicit FetchVaultData/retry owns this batch
         g_VaultStatusMessage = "New daily reset detected; fetching current Vault...";
         g_VaultLastDailyReset = dailyReset;
         vaultResetTriggered = true;
@@ -3006,7 +3019,7 @@ static void RenderClearsShared(bool showVault) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_VaultWeekly = {};
         g_VaultFetched = false;
-        g_VaultInitialAttempted = false;
+        g_VaultInitialAttempted = true; // explicit FetchVaultData/retry owns this batch
         g_VaultLastWeeklyReset = weeklyReset;
         vaultResetTriggered = true;
     }
