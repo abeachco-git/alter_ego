@@ -11,6 +11,7 @@ namespace AlterEgo {
 
 AddonAPI_t* IconManager::s_API = nullptr;
 std::unordered_map<uint32_t, Texture_t*> IconManager::s_IconCache;
+std::unordered_set<uint32_t> IconManager::s_DiskCheckedMissing;
 std::unordered_map<uint32_t, bool> IconManager::s_LoadingIcons;
 std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> IconManager::s_FailedIcons;
 std::mutex IconManager::s_Mutex;
@@ -69,6 +70,7 @@ void IconManager::Shutdown() {
 
     std::lock_guard<std::mutex> lock(s_Mutex);
     s_IconCache.clear();
+    s_DiskCheckedMissing.clear();
     s_LoadingIcons.clear();
     s_ReadyQueue.clear();
     s_RequestQueue.clear();
@@ -238,6 +240,19 @@ Texture_t* IconManager::GetIcon(uint32_t id) {
             return embedded;
         }
     }
+    // Offline-first fallback for EVERY cached icon, not only class artwork:
+    // a saved item/skin/skill PNG is usable even if its metadata URL has not
+    // arrived yet. Avoid checking the same missing disk file each frame.
+    bool shouldCheckDisk = false;
+    {
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        shouldCheckDisk = s_DiskCheckedMissing.insert(id).second;
+    }
+    if (shouldCheckDisk && LoadIconFromDisk(id)) {
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        auto found = s_IconCache.find(id);
+        if (found != s_IconCache.end()) return found->second;
+    }
     return nullptr;
 }
 
@@ -277,9 +292,14 @@ void IconManager::RequestIcon(uint32_t id, const std::string& iconUrl, bool prio
         s_LoadingIcons[id] = true;
     }
 
-    // Try disk cache first — works even when the caller has no URL because
-    // item details haven't been fetched (e.g. GW2 API down or rate-limited).
-    if (LoadIconFromDisk(id)) return;
+    // GetIcon has already attempted the disk cache on the render thread;
+    // callers which reach RequestIcon without GetIcon get that check too.
+    bool wasChecked = false;
+    {
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        wasChecked = s_DiskCheckedMissing.count(id) != 0;
+    }
+    if (!wasChecked && LoadIconFromDisk(id)) return;
 
     // No URL and no disk cache → nothing we can do right now. Clear the loading
     // flag without marking failed so a later call (with URL) can retry.
