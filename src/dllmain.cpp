@@ -16708,8 +16708,9 @@ void AddonRender() {
                 NavigateToLibraryCollection(0);
                 if (libraryTabBar)
                     libraryTabBar->NextSelectedTabId = libraryTabId;
-                // Clicking Library is navigation, even if its menu was open.
-                ImGui::CloseCurrentPopup();
+                // A tab navigation does not need to close a popup via
+                // CloseCurrentPopup(): that API is only valid while rendering
+                // inside the popup itself.
             }
         } else if (libraryHeaderHovered && !librarySuppressHoverUntilLeave &&
                    !ImGui::IsPopupOpen("Library menu##ae_main")) {
