@@ -16,6 +16,13 @@ int main() {
     original.weapon_a_main = 321;
     original.visibility_flags = 0x14fa;
     const std::string link = ChatLink::EncodeWardrobe(original);
+    // Real 2026 in-game wardrobe template sample: verify complete 97-byte
+    // payload compatibility, not only our own encoder's generated links.
+    const std::string gameLink =
+        "[&D1gDMhwBAAEAAQABAHEdUAALAFAANwDgHFAACwA3ADcAHx5QAAsAYQX5BBAePAALAHIAPADCHQsANwALAFAAAx0LAFAAYQX5BAMAAQABAAEAAQA/EqISXxIAAGoZnR39fg==]";
+    DecodedWardrobeLink gameDecoded{};
+    assert(DecodeValid(gameLink, gameDecoded));
+    assert(CanonicalLink(gameLink) == gameLink);
     DecodedWardrobeLink decoded{};
     assert(DecodeValid(link, decoded));
     assert(decoded.helm_dyes[0] == 1);
