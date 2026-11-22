@@ -122,9 +122,11 @@ static void RenderFashionDialog() {
         ImGui::End();
         return;
     }
-    ImGui::TextUnformatted(g_FashionEditing >= 0 ? "Edit saved look" : "Save wardrobe appearance");
+    // Identical form vocabulary for creating and editing a saved appearance.
+    ImGui::TextUnformatted("Name");
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##fashion_name", "Appearance name", g_FashionName, sizeof(g_FashionName));
+    ImGui::InputTextWithHint("##fashion_name", "Fashion Template Name",
+                             g_FashionName, sizeof(g_FashionName));
     ImGui::TextUnformatted("Armor weight");
     ImGui::SetNextItemWidth(150);
     ImGui::Combo("##fashion_weight", &g_FashionWeightIndex, kFashionWeights, IM_ARRAYSIZE(kFashionWeights));
@@ -156,9 +158,10 @@ static void RenderFashionDialog() {
         }
         ImGui::SameLine();
     }
-    const char* saveLabel = duplicate >= 0 ? "Save Separate Copy" :
-                            (g_FashionEditing >= 0 ? "Save Changes" : "Save Fashion");
-    if (RenderGoldButton(saveLabel)) {
+    // Shared standard-height action buttons, consistent with the existing
+    // Save to Library dialog. Keep the duplicate action explicit.
+    const char* saveLabel = duplicate >= 0 ? "Save Separate Copy" : "Save";
+    if (RenderActionButton(saveLabel, ImVec2(duplicate >= 0 ? 0.0f : 90.0f, 0.0f))) {
         AlterEgo::Fashion::Look next = g_FashionDraft;
         next.name = g_FashionName;
         next.notes = g_FashionNotes;
@@ -188,7 +191,8 @@ static void RenderFashionDialog() {
         } else g_FashionError = "Could not save. Check the name and library file permissions.";
     }
     ImGui::SameLine();
-    if (RenderChipButton("Cancel##fashion", false)) g_FashionDialog = false;
+    if (RenderActionButton("Cancel##fashion", ImVec2(90.0f, 0.0f)))
+        g_FashionDialog = false;
     if (!g_FashionError.empty())
         ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", g_FashionError.c_str());
     ImGui::End();
