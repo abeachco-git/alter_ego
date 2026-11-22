@@ -9,6 +9,7 @@ set(CMAKE_CXX_COMPILER x86_64-w64-mingw32ucrt-g++)
 set(CMAKE_RC_COMPILER x86_64-w64-mingw32ucrt-windres)
 
 project(AlterEgo)
+enable_language(RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
