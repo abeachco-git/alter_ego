@@ -15,6 +15,7 @@ The following are **additions or changes relative to the original [PieOrCake Alt
 
 | Area | Changes in this fork |
 | --- | --- |
+| **Library / Fashion** | Builds and Fashion share a Library tab. Save the selected live equipment appearance with a visible **Save Fashion** button, or paste a GW2 Wardrobe Template link into the shared import dialog. Preserve per-slot dye IDs (including Dye Remover), skins, outfit data from imported links, and visibility flags. Search fashion by name/notes or associated characters; filter by armor weight; export a chat link or preview through Pie UI. Fashion is independent of profession. |
 | **Saved builds and Compare** | Capture a retrieved character's build **and gear** into the library; dedicated saved-vs-retrieved comparison with build, skill, equipment, stat, infusion, relic, and utility checks; optional exact-item comparison; clearer difference and verification status. |
 | **Character-first comparison** | Compare follows the logged-in character by default, auto-selects an appropriate saved build, keeps the **Character / Build Tab / Equipment Tab** selectors together, and shares the Characters tab's per-character refresh timestamp. Manual selection remains available. |
 | **Character refresh and live signals** | Refresh the selected character directly, or use `...` to refresh multiple; optional auto-refresh on login or specialization change; warning when live specialization and cached build differ; locally tracked **Last Login** sorting. |
@@ -25,6 +26,8 @@ The following are **additions or changes relative to the original [PieOrCake Alt
 | **Other UI refinements** | Cleaner refresh/status text, improved clipping and padding, Skinventory spacing improvements, and many smaller usability fixes across the addon. |
 
 **What hasn't changed:** This is still Alter Ego, using [Raidcore Nexus](https://raidcore.gg/Nexus) and [Hoard & Seek](https://github.com/PieOrCake/hoard_and_seek). The fork does not introduce a separate GW2 API credential store or live memory-based gear reads. It keeps the original build-library data and upstream attribution.
+
+**Fashion capture limitation:** The GW2 character-equipment API exposes equipped skin/dye data but not all saved in-game Fashion Template slots or outfit/visibility states. Equipment-derived captures are flagged partial. Import a complete in-game Wardrobe Template chat link for full fidelity. Travel Templates and an in-addon dye editor are intentionally not included. Fashion snapshots are saved separately in `fashion_library.json` under the addon data directory; existing saved builds are unchanged.
 
 **Code and build:** GitHub Actions builds and checks the Windows x64 **UCRT** DLL. CI success does not mean every game/UI interaction has been tested.
 
