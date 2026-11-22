@@ -39,9 +39,25 @@ set(IMGUI_SOURCES
     lib/imgui/imgui_widgets.cpp
 )
 
+# Fixed UI artwork is generated and embedded only at build time.
+# Runtime GW2 item/skin/skill artwork continues using the disk cache.
+find_program(PYTHON3_EXECUTABLE python3 REQUIRED)
+set(EMBEDDED_ICONS_RC "${CMAKE_BINARY_DIR}/embedded_icons.rc")
+add_custom_command(
+    OUTPUT "${EMBEDDED_ICONS_RC}"
+    COMMAND "${PYTHON3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/generate_embedded_icons.py" "${EMBEDDED_ICONS_RC}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/tools/generate_embedded_icons.py"
+    COMMENT "Embed fixed profession, elite specialization, crafting and status icons"
+    VERBATIM
+)
+configure_file("${CMAKE_SOURCE_DIR}/src/AlterEgoResources.rc.in"
+               "${CMAKE_BINARY_DIR}/AlterEgoResources.rc" @ONLY)
+
 # Source files
 set(SOURCES
     src/dllmain.cpp
+    "${EMBEDDED_ICONS_RC}"
+    "${CMAKE_BINARY_DIR}/AlterEgoResources.rc"
     src/Clears.cpp
     src/GW2API.cpp
     src/FontManager.cpp
