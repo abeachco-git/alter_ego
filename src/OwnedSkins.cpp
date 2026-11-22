@@ -2,12 +2,15 @@
 #include "HoardAndSeekAPI.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <fstream>
 #include <filesystem>
 #include <memory>
 #include <chrono>
 #include <ctime>
+#include <windows.h>
+#include "GW2API.h"
 
 using json = nlohmann::json;
 
@@ -78,12 +81,8 @@ namespace Skinventory {
         s_API = api;
         if (!s_API) return;
 
-        // Load cached owned skins from disk for instant UI
-        if (LoadFromCache()) {
-            s_has_data = true;
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_status_message = "Owned: " + std::to_string(s_owned_skins.size()) + " (cached)";
-        }
+        // The selected account is set by the main render loop; do not load
+        // legacy global ownership into an unknown account at startup.
 
         s_API->Events_Subscribe(EV_HOARD_PONG, OnPong);
         s_API->Events_Subscribe(EV_HOARD_DATA_UPDATED, OnDataUpdated);
@@ -107,17 +106,33 @@ namespace Skinventory {
     }
 
     void OwnedSkins::SetAccountName(const std::string& name) {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_account_name == name) return;
-        s_account_name = name;
-        // Clear stale data from previous account
-        s_owned_skins.clear();
-        s_queried_skins.clear();
-        s_locally_marked.clear();
-        s_has_data = false;
-        s_last_success_time = 0;
-        s_generation++;
-        s_status_message = "Click Refresh Owned to query skins";
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if (s_account_name == name) return;
+            s_account_name = name;
+            s_owned_skins.clear();
+            s_queried_skins.clear();
+            s_locally_marked.clear();
+            s_pending_ids.clear();
+            s_batch_index = 0;
+            s_batch_pending = false;
+            s_querying = false;
+            s_has_data = false;
+            s_last_success_time = 0;
+            s_generation++;
+            s_status_message = "No ownership data - click Refresh";
+        }
+        g_retryKind = 0;
+        g_retryAtMs = 0;
+        // Account-specific disk data is restored as soon as the dropdown
+        // changes, even with automatic API refresh disabled.
+        if (!name.empty() && LoadFromCache()) {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if (s_account_name == name) {
+                s_has_data = true;
+                s_status_message = "Owned: " + std::to_string(s_owned_skins.size()) + " (cached)";
+            }
+        }
     }
 
     void OwnedSkins::OnPong(void* eventArgs) {
@@ -180,6 +195,14 @@ namespace Skinventory {
         if (!eventArgs) return;
         auto* resp = (HoardQueryApiResponse*)eventArgs;
         std::unique_ptr<HoardQueryApiResponse> respGuard(resp); // caller owns the response
+
+        // Ignore delayed replies after an account switch.
+        if (resp->api_version >= 3) {
+            const std::string echoed(resp->account_name,
+                strnlen(resp->account_name, sizeof(resp->account_name)));
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if (s_account_name.empty() || echoed != s_account_name) return;
+        }
 
         if (resp->status == HOARD_STATUS_DENIED) {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -302,6 +325,14 @@ namespace Skinventory {
         auto* resp = (HoardQuerySkinsResponse*)eventArgs;
         std::unique_ptr<HoardQuerySkinsResponse> respGuard(resp); // caller owns the response
 
+        // Ignore delayed replies after an account switch.
+        if (resp->api_version >= 3) {
+            const std::string echoed(resp->account_name,
+                strnlen(resp->account_name, sizeof(resp->account_name)));
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if (s_account_name.empty() || echoed != s_account_name) return;
+        }
+
         if (resp->status == HOARD_STATUS_DENIED) {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_status_message = "Permission denied by Hoard & Seek";
@@ -390,60 +421,95 @@ namespace Skinventory {
 
     // --- Disk Cache ---
 
-    bool OwnedSkins::SaveToCache() {
-        if (s_data_dir.empty()) return false;
-        try { std::filesystem::create_directories(s_data_dir); } catch (...) { return false; }
+    static std::string AccountCachePath(const std::string& dir, const std::string& account) {
+        std::string slug;
+        slug.reserve(account.size());
+        for (unsigned char c : account)
+            slug.push_back(std::isalnum(c) || c == '-' || c == '_' ? (char)c : '_');
+        return dir + "/owned_skins_" + slug + ".json";
+    }
 
-        std::string path = s_data_dir + "/owned_skins.json";
-        json j = json::array();
+    bool OwnedSkins::SaveToCache() {
+        std::string account;
+        std::time_t success = 0;
+        json ids = json::array();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            for (uint32_t id : s_owned_skins) {
-                j.push_back(id);
-            }
+            account = s_account_name;
+            success = s_last_success_time;
+            for (uint32_t id : s_owned_skins) ids.push_back(id);
         }
+        if (s_data_dir.empty() || account.empty()) return false;
+        try { std::filesystem::create_directories(s_data_dir); }
+        catch (...) { return false; }
 
         json cache;
-        cache["skins"] = std::move(j);
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            cache["last_success"] = (int64_t)s_last_success_time;
-        }
-        std::ofstream file(path);
-        if (!file.is_open()) return false;
-        file << cache.dump();
-        return file.good();
+        cache["account"] = account;
+        cache["skins"] = std::move(ids);
+        cache["last_success"] = (int64_t)success;
+        const std::string path = AccountCachePath(s_data_dir, account);
+        const std::string tmp = path + ".tmp";
+        try {
+            {
+                std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
+                if (!file.is_open()) return false;
+                const std::string data = cache.dump();
+                file.write(data.data(), (std::streamsize)data.size());
+                file.flush();
+                if (!file.good()) return false;
+            }
+            // A response after changing accounts cannot overwrite the new
+            // account's file: the snapshot always carries its original name.
+            if (!MoveFileExA(tmp.c_str(), path.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                return false;
+            return true;
+        } catch (...) { return false; }
     }
 
     bool OwnedSkins::LoadFromCache() {
-        if (s_data_dir.empty()) return false;
-        std::string path = s_data_dir + "/owned_skins.json";
+        std::string account;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            account = s_account_name;
+        }
+        if (s_data_dir.empty() || account.empty()) return false;
+        const std::string path = AccountCachePath(s_data_dir, account);
         std::ifstream file(path);
+        bool legacy = false;
+        if (!file.is_open() && AlterEgo::GW2API::HasAccountsData() &&
+            AlterEgo::GW2API::GetAccountCount() == 1) {
+            // Only migrate an old unscoped cache when the configured account
+            // count proves it cannot belong to a different account.
+            file.open(s_data_dir + "/owned_skins.json");
+            legacy = file.is_open();
+        }
         if (!file.is_open()) return false;
-
         try {
-            json j;
-            file >> j;
-            // Accept both legacy array caches and timestamped object caches.
+            json j = json::parse(file);
             const json* skins = &j;
             std::time_t lastSuccess = 0;
             if (j.is_object()) {
                 if (!j.contains("skins") || !j["skins"].is_array()) return false;
+                if (j.contains("account") && j["account"].get<std::string>() != account)
+                    return false;
                 skins = &j["skins"];
                 lastSuccess = (std::time_t)j.value("last_success", (int64_t)0);
             }
             if (!skins->is_array()) return false;
-
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_owned_skins.clear();
-            for (const auto& id : *skins) {
-                s_owned_skins.insert(id.get<uint32_t>());
+            std::unordered_set<uint32_t> restored;
+            for (const auto& id : *skins) restored.insert(id.get<uint32_t>());
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                if (s_account_name != account) return false;
+                s_owned_skins = std::move(restored);
+                s_last_success_time = lastSuccess;
+                s_generation++;
+                s_has_data = true;
             }
-            s_last_success_time = lastSuccess;
+            if (legacy) SaveToCache();
             return true;
-        } catch (...) {
-            return false;
-        }
+        } catch (...) { return false; }
     }
 
 }
