@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <sstream>
+#include <windows.h>
 
 using json = nlohmann::json;
 
@@ -134,15 +135,27 @@ namespace Skinventory {
                 entry["weight_class"] = skin.weight_class;
                 entry["rarity"] = skin.rarity;
                 entry["icon"] = skin.icon_url;
-                j.push_back(entry);
+                entry["flags"] = skin.flags;
+                entry["restrictions"] = skin.restrictions;
+                j.push_back(std::move(entry));
             }
         }
 
-        std::ofstream file(path);
-        if (!file.is_open()) return false;
-        file << j.dump();
-        file.close();
-        return true;
+        // Keep the last good global skin-definition catalog if the game
+        // closes or a fetch fails partway through a disk update.
+        const std::string tmp = path + ".tmp";
+        try {
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                if (!out.is_open()) return false;
+                const std::string payload = j.dump();
+                out.write(payload.data(), (std::streamsize)payload.size());
+                out.flush();
+                if (!out.good()) return false;
+            }
+            return MoveFileExA(tmp.c_str(), path.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+        } catch (...) { return false; }
     }
 
     bool SkinCache::LoadFromDisk() {
@@ -166,6 +179,10 @@ namespace Skinventory {
                 skin.weight_class = entry.value("weight_class", "");
                 skin.rarity = entry.value("rarity", "");
                 skin.icon_url = entry.value("icon", "");
+                if (entry.contains("flags") && entry["flags"].is_array())
+                    skin.flags = entry["flags"].get<std::vector<std::string>>();
+                if (entry.contains("restrictions") && entry["restrictions"].is_array())
+                    skin.restrictions = entry["restrictions"].get<std::vector<std::string>>();
                 if (skin.id > 0) {
                     s_skins[skin.id] = skin;
                 }
