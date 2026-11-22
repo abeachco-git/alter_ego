@@ -154,7 +154,7 @@ static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
         ImGui::EndTable();
     }
     if (edit && !GetSavedGearInfusions(*edit).empty()) {
-        if (ImGui::SmallButton("Calculate##infusion_totals")) {
+        if (RenderActionButton("Calculate##infusion_totals")) {
             const auto ids = GetSavedGearInfusions(*edit);
             const auto computed = ComputeInfusionsFromIds(ids);
             if (computed.complete)
