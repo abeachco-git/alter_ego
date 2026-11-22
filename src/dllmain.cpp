@@ -10649,15 +10649,6 @@ static void RenderLibraryImportDialog() {
 static void RenderBuildLibrary() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
-    // Filter + Search
-    if (!builds.empty()) {
-        ImGui::SetNextItemWidth(80.0f);
-        ImGui::Combo("##lib_filter", &g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames));
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(150.0f);
-        ImGui::InputTextWithHint("##lib_search", "Search...", g_LibSearchBuf, sizeof(g_LibSearchBuf));
-    }
-
     // Left panel: build list, Right panel: preview
     float libAvailW = ImGui::GetContentRegionAvail().x;
     g_LibListWidth = (g_LibListWidth < 120.0f) ? 120.0f : (g_LibListWidth > libAvailW - 200.0f) ? libAvailW - 200.0f : g_LibListWidth;
@@ -10668,9 +10659,17 @@ static void RenderBuildLibrary() {
     bool pendingGroupAfter = false, pendingItemAfter = false;
     ImGui::BeginChild("LibList", ImVec2(g_LibListWidth, 0), true);
     {
+        // Match Characters: both controls live within the left list column,
+        // are full-width, and never take horizontal space from build details.
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        ImGui::Combo("##lib_filter", &g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames));
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        ImGui::InputTextWithHint("##lib_search", "Search...", g_LibSearchBuf, sizeof(g_LibSearchBuf));
+        ImGui::Separator();
+
         if (builds.empty()) {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-                "No saved builds.\nClick '+ Import Build'\nto add one from a\nchat link.");
+                "No saved builds.\nUse Library > New or\nImport from Link / URL\nto add one.");
         }
         // Build one visual profession section for every distinct profession.
         // Existing JSON is still a flat array and retains the original order.
