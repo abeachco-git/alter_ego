@@ -543,7 +543,8 @@ static std::string g_AchRefreshError;
 static std::chrono::steady_clock::time_point g_AchLastSave;
 static void SaveAchProgress(const std::string& account);
 static void LoadAchProgress(const std::string& account);
-static std::atomic<uint32_t> g_AchCatProgressPending{0}; // catId needing progress query (set by bg thread)
+static std::atomic<uint32_t> g_AchCatProgressPending{0}; // render-thread progress continuation
+static std::atomic<bool> g_AchCatProgressAutomatic{false};
 // Monotonic ms helper for scheduling deferred/backoff queries on the render thread.
 static long long NowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -790,7 +791,7 @@ static void LoadAchGroupCache();
 static void SaveAchDefCache();
 static void LoadAchDefCache();
 static void FetchAchGroups();
-static void FetchAchCategoryDefs(uint32_t catId);
+static void FetchAchCategoryDefs(uint32_t catId, bool automatic = false);
 static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic = false);
 static void FetchPinnedAchDefs();
 static void SaveAchWaypoints();
@@ -2388,7 +2389,7 @@ static AchDef ParseAchDef(const nlohmann::json& ach) {
     return d;
 }
 
-static void FetchAchCategoryDefs(uint32_t catId) {
+static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
     if (g_AchCatFetching) return;
     g_AchCatFetching = true;
 
@@ -2404,16 +2405,14 @@ static void FetchAchCategoryDefs(uint32_t catId) {
 
     if (toFetch.empty()) {
         g_AchCatFetching = false;
-        // Still need progress — trigger that
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        auto it = g_AchCategories.find(catId);
-        if (it != g_AchCategories.end()) {
-            SendAchProgressQuery(it->second.achievements);
-        }
+        // Even a fully cached definition must route its H&S progress query
+        // to the render thread. Startup callers mark it as automatic.
+        g_AchCatProgressAutomatic = automatic;
+        g_AchCatProgressPending = catId;
         return;
     }
 
-    std::thread([toFetch, catId]() {
+    std::thread([toFetch, catId, automatic]() {
         // Fetch in batches of 200
         for (size_t start = 0; start < toFetch.size(); start += 200) {
             size_t end = std::min(start + 200, toFetch.size());
@@ -2443,7 +2442,8 @@ static void FetchAchCategoryDefs(uint32_t catId) {
         g_AchCatFetching = false;
         SaveAchDefCache();
 
-        // Signal render thread to query progress (Events_Raise must be on render thread)
+        // Signal render thread; preserve the originating request's policy.
+        g_AchCatProgressAutomatic = automatic;
         g_AchCatProgressPending = catId;
     }).detach();
 }
@@ -11505,7 +11505,7 @@ void AddonLoad(AddonAPI_t* aApi) {
         uint32_t savedCat = g_AchSelectedCatId;
         std::thread([savedCat]() {
             FetchPinnedAchDefs();
-            if (savedCat > 0) FetchAchCategoryDefs(savedCat);
+            if (savedCat > 0) FetchAchCategoryDefs(savedCat, true);
         }).detach();
     }
 
@@ -13939,14 +13939,20 @@ static void RenderAchievements() {
         }
     }
 
-    // Consume deferred progress query from bg thread (FetchAchCategoryDefs)
-    {
-        uint32_t pendingCat = g_AchCatProgressPending.exchange(0);
-        if (pendingCat > 0 && !g_AchProgressFetching) {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            auto it = g_AchCategories.find(pendingCat);
-            if (it != g_AchCategories.end()) {
-                SendAchProgressQuery(it->second.achievements);
+    // Consume category progress continuation only while idle. Manual
+    // navigation remains enabled even if automatic API refresh is disabled.
+    if (!g_AchProgressFetching) {
+        const uint32_t pendingCat = g_AchCatProgressPending.exchange(0);
+        if (pendingCat > 0) {
+            const bool automatic = g_AchCatProgressAutomatic.exchange(false);
+            if (!automatic || AlterEgo::AutoRefreshPolicy::Enabled()) {
+                std::vector<uint32_t> ids;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+                    auto it = g_AchCategories.find(pendingCat);
+                    if (it != g_AchCategories.end()) ids = it->second.achievements;
+                }
+                if (!ids.empty()) SendAchProgressQuery(ids, automatic);
             }
         }
     }
@@ -16687,7 +16693,8 @@ void AddonOptions() {
             else if (g_MainTab == 6) RefreshClearsOnEntry();
             if (g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
                 Skinventory::SkinCache::UpdateCacheAsync();
-            if (!g_AchPinned.empty() || g_AchSelectedCatId > 0) {
+            if ((!g_AchPinned.empty() || g_AchSelectedCatId > 0) &&
+                g_AchRetryAtMs.load() == 0) {
                 g_AchRetryAutomatic = true;
                 g_AchRetryAtMs = NowMs();
             }
