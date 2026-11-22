@@ -297,7 +297,12 @@ namespace AlterEgo {
         std::vector<uint32_t> weapons;
         // Gear (user-entered)
         std::map<std::string, BuildGearSlot> gear; // slot name -> gear data
-        std::vector<BuildInfusionTotal> infusion_totals; // aggregate, no slot assignment
+        std::vector<BuildInfusionTotal> infusion_totals; // aggregate item requirements, no slot assignment
+        // Optional manually edited or calculated totals. Absence means unknown,
+        // not zero. Legacy/imported builds derive totals from their item IDs.
+        bool infusion_summary_present = false;
+        int infusion_ar_total = 0;
+        std::map<std::string, int> infusion_stat_totals;
         std::string rune_name;      // Shared rune for all armor pieces
         uint32_t rune_id = 0;       // Shared rune item ID
         std::string relic_name;     // Relic name

@@ -23,6 +23,7 @@
 #include "AddonShared.h"
 #include "Clears.h"
 #include "ClearsRotation.h"
+#include "StrikeDisplayName.h"
 #include "ClearsReset.h"
 #include "SectionRefresh.h"
 #include "FractalScales.h"
@@ -1348,6 +1349,7 @@ static std::string BountyToStrikeName(const std::string& name) {
         // Common boss-name aliases that resolve to the same banner
         {"Voice and Claw",                            "Voice of the Fallen and Claw of the Fallen"},
         {"Voice and Claw of the Fallen",              "Voice of the Fallen and Claw of the Fallen"},
+        {"Bears",                                    "Voice of the Fallen and Claw of the Fallen"},
         {"Fraenir",                                   "Fraenir of Jormag"},
         {"Whisper",                                   "Whisper of Jormag"},
         {"Mai Trin",                                  "Aetherblade Hideout"},
@@ -2818,6 +2820,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 bannerKey = "wing:" + std::to_string(wingId);
                 theme = WingTheme(wingId);
             } else if (!strikeName.empty()) {
+                display = AlterEgo::StrikeDisplayName(strikeName);
                 subtitle = StrikePickerCategory(strikeName);
                 bannerKey = "strike:" + strikeName;
                 theme = StrikeTheme(strikeName);
@@ -2904,16 +2907,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 // name, bit index, theme, or bounty matching.
                 const std::string normalized = ClearsRotation::Normalize(name);
                 const bool isKela = normalized == "guardiansglade";
-                std::string displayName = name;
-                if (isKela)
-                    displayName = "Kela";
-                else if (normalized == "voiceofthefallenandclawofthefallen" ||
-                         normalized == "voiceandclaw")
-                    displayName = "Bears";
-                else if (normalized == "fraenirofjormag")
-                    displayName = "Fraenir";
-                else if (normalized == "whisperofjormag")
-                    displayName = "Whisper";
+                const std::string displayName = AlterEgo::StrikeDisplayName(name);
 
                 // One full encounter title, then its raid picker category;
                 // never include historical map/zone locations.

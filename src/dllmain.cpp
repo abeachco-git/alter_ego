@@ -26,6 +26,7 @@
 #include "GW2API.h"
 #include "BuildCompareCore.h"
 #include "InfusionMatchCore.h"
+#include "InfusionTotalsCore.h"
 #include "SnowCrowsImport.h"
 #include "AutoRefreshCore.h"
 #include "FontResolve.h"
@@ -2703,6 +2704,7 @@ static const float SMALL_ICON_SIZE = 24.0f;
 static const float TRAIT_ICON_SIZE = 32.0f;
 static const float MINOR_TRAIT_SIZE = 26.0f;
 static const float SPEC_PORTRAIT_SIZE = 100.0f;
+static const float SPEC_NAME_BADGE_WIDTH = 190.0f;
 
 // Equipment slot display order (paper doll layout)
 static const char* EQUIPMENT_SLOTS_LEFT[] = {
@@ -3765,6 +3767,8 @@ static int GetRetrievedEquipmentTabCount(const AlterEgo::Character& ch) {
     return AlterEgo::EquipmentTabCore::Count(ch);
 }
 
+#include "InfusionTotalsView.h"
+
 static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Both detail views start at the same origin below the Equipment / Build tabs.
     // Equipment items supply their own padding further down the pane.
@@ -3973,6 +3977,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         ImGui::PopStyleVar(2);
     }
     ImGui::Unindent(6.0f);
+    RenderInfusionTotals(GetLiveInfusionSummary(ch, tab));
 }
 
 // Keep every specialization name readable inside the left trait-art gutter.
@@ -3981,7 +3986,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
 static ImVec2 DrawSpecializationNameBadge(
     ImDrawList* dl, const std::string& name, ImVec4 color,
     ImVec2 rowOrigin, float rowH, ImVec2& badgePos) {
-    const float width = SPEC_PORTRAIT_SIZE + 8.0f;
+    const float width = SPEC_NAME_BADGE_WIDTH;
     const float padding = 6.0f;
     const float textWidth = width - 2.0f * padding;
     const float fontSize = ImGui::GetFontSize() * 1.20f;
@@ -4727,8 +4732,8 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                         IM_COL32(255, 255, 255, 200));
                     // Fade-to-dark anchored to where the trait grid begins,
                     // not the banner. Trait icons start just past column 0.
-                    float fadeStart = rowOrigin.x + SPEC_PORTRAIT_SIZE + 20.0f;
-                    float fadeEnd   = rowOrigin.x + SPEC_PORTRAIT_SIZE + 80.0f;
+                    float fadeStart = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 12.0f;
+                    float fadeEnd   = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 72.0f;
                     dl->AddRectFilledMultiColor(
                         ImVec2(fadeStart, rowOrigin.y),
                         ImVec2(fadeEnd,   rowOrigin.y + rowH),
@@ -4785,14 +4790,14 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
             if (ImGui::BeginTable(outerId, 2,
                     ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
                 ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed,
-                    SPEC_PORTRAIT_SIZE + 8.0f);
+                    SPEC_NAME_BADGE_WIDTH);
                 ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableNextRow();
 
                 // Column 0: left gutter (banner art shows through; spec name
                 // is overlaid above via the drawlist).
                 ImGui::TableNextColumn();
-                ImGui::Dummy(ImVec2(SPEC_PORTRAIT_SIZE, rowH - 2.0f));
+                ImGui::Dummy(ImVec2(SPEC_NAME_BADGE_WIDTH - 8.0f, rowH - 2.0f));
 
                 // Column 1: 6-column × 3-row trait grid
                 ImGui::TableNextColumn();
@@ -4905,6 +4910,9 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
     }
 
     ImGui::Unindent(4.0f);
+    RenderInfusionTotals(GetLiveInfusionSummary(ch,
+        g_SelectedEquipTab > 0 ? g_SelectedEquipTab :
+        (ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1)));
 }
 
 // --- Build Library helpers ---
@@ -8931,26 +8939,6 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
     // (e.g. API rate-limited or offline). Queues async fetches for missing IDs.
     ResolveBuildItemNames(const_cast<AlterEgo::SavedBuild&>(build));
 
-    if (!build.infusion_totals.empty()) {
-        ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.52f, 1.0f), "Infusions (total, any slot):");
-        for (const auto& inf : build.infusion_totals) {
-            const auto* item = AlterEgo::GW2API::GetItemInfo(inf.item_id);
-            ImGui::BulletText("%d x %s", inf.count,
-                item ? item->name.c_str() : ("#" + std::to_string(inf.item_id)).c_str());
-        }
-        ImGui::Separator();
-    }
-
-    // Notes editor, just under the header, while editing.
-    if (g_LibEditMode) {
-        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "Notes:");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        if (InputTextMultilineString("##edit_notes", g_LibEditNotes, ImVec2(0, 50)))
-            MarkEditDirty();
-        if (ImGui::IsItemDeactivatedAfterEdit()) MarkEditDirty();
-        ImGui::Spacing();
-    }
-
     // Specializations with trait grid (same logic as RenderBuildPanel)
     const float iconSz = TRAIT_ICON_SIZE;
     const float colW = iconSz * 2.0f;
@@ -9026,8 +9014,8 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
                         IM_COL32(255, 255, 255, 200));
                     // Fade-to-dark anchored to where the trait grid begins,
                     // not the banner. Trait icons start just past column 0.
-                    float fadeStart = rowOrigin.x + SPEC_PORTRAIT_SIZE + 20.0f;
-                    float fadeEnd   = rowOrigin.x + SPEC_PORTRAIT_SIZE + 80.0f;
+                    float fadeStart = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 12.0f;
+                    float fadeEnd   = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 72.0f;
                     dl->AddRectFilledMultiColor(
                         ImVec2(fadeStart, rowOrigin.y),
                         ImVec2(fadeEnd,   rowOrigin.y + rowH),
@@ -9087,12 +9075,12 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
             if (ImGui::BeginTable(outerId, 2,
                     ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
                 ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed,
-                    SPEC_PORTRAIT_SIZE + 8.0f);
+                    SPEC_NAME_BADGE_WIDTH);
                 ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableNextRow();
 
                 ImGui::TableNextColumn();
-                ImGui::Dummy(ImVec2(SPEC_PORTRAIT_SIZE, rowH - 2.0f));
+                ImGui::Dummy(ImVec2(SPEC_NAME_BADGE_WIDTH - 8.0f, rowH - 2.0f));
 
                 ImGui::TableNextColumn();
                 char innerId[32];
@@ -9408,8 +9396,18 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
     RenderBuildGearPanel(g_LibEditMode ? g_EditDraft
                                        : const_cast<AlterEgo::SavedBuild&>(build));
 
-    if (!build.notes.empty()) {
-        ImGui::Spacing();
+    // One shared footer for Saved and Edit; notes always follow infusion totals.
+    const auto& snapshot = g_LibEditMode ? g_EditDraft : build;
+    RenderInfusionTotals(GetSavedInfusionSummary(snapshot),
+        g_LibEditMode ? &g_EditDraft : nullptr);
+    ImGui::Spacing();
+    if (g_LibEditMode) {
+        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "Notes:");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        if (InputTextMultilineString("##edit_notes", g_LibEditNotes, ImVec2(0, 50)))
+            MarkEditDirty();
+        if (ImGui::IsItemDeactivatedAfterEdit()) MarkEditDirty();
+    } else if (!build.notes.empty()) {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Notes: %s", build.notes.c_str());
     }
 
@@ -9719,74 +9717,6 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 }
             }
         }
-        // The two weapon sets are alternatives, not simultaneously equipped.
-        // Compare the 18 source-wide infusion requirements once for each
-        // available terrestrial weapon set, plus shared armor/trinket slots.
-        if (!saved.infusion_totals.empty()) {
-            std::vector<AlterEgo::InfusionRequirement> requirements;
-            std::string requiredLabel;
-            bool missingRequiredMetadata = false;
-            for (const auto& inf : saved.infusion_totals) {
-                if (!requiredLabel.empty()) requiredLabel += "; ";
-                requiredLabel += std::to_string(inf.count) + " x " + itemName(inf.item_id);
-                std::string attribute = inf.attribute;
-                if (attribute.empty()) {
-                    const auto meta = GetObservedInfusion(inf.item_id);
-                    if (!meta.positiveAttributes.empty())
-                        attribute = meta.positiveAttributes.front();
-                    else if (!meta.metadataKnown)
-                        missingRequiredMetadata = true;
-                }
-                for (int n = 0; n < inf.count; ++n)
-                    requirements.push_back({inf.item_id, attribute});
-            }
-
-            bool hasWeaponA = false, hasWeaponB = false;
-            for (const auto& [slot, gs] : saved.gear) {
-                (void)gs;
-                if (slot == "WeaponA1" || slot == "WeaponA2") hasWeaponA = true;
-                if (slot == "WeaponB1" || slot == "WeaponB2") hasWeaponB = true;
-            }
-            // If the build has two weapon sets, validate both independently.
-            const std::vector<std::string> sets = hasWeaponA && hasWeaponB
-                ? std::vector<std::string>{"A", "B"}
-                : std::vector<std::string>{hasWeaponB ? "B" : "A"};
-            for (const std::string& weaponSet : sets) {
-                std::vector<AlterEgo::ObservedInfusion> observed;
-                std::map<uint32_t, int> actualCounts;
-                for (const auto& [slot, gs] : saved.gear) {
-                    (void)gs;
-                    if (slot.compare(0, 6, "Weapon") == 0 &&
-                        slot.compare(0, 7, "Weapon" + weaponSet) != 0)
-                        continue;
-                    const auto* eq = getEquipped(slot);
-                    if (!eq) continue;
-                    for (uint32_t id : eq->infusions) {
-                        if (!id) continue;
-                        observed.push_back(GetObservedInfusion(id));
-                        ++actualCounts[id];
-                    }
-                }
-                std::string currentLabel;
-                for (const auto& [id, count] : actualCounts) {
-                    if (!currentLabel.empty()) currentLabel += "; ";
-                    currentLabel += std::to_string(count) + " x " + itemName(id);
-                }
-                const auto verdict = AlterEgo::CompareInfusionRequirements(requirements, observed);
-                const std::string field = sets.size() > 1 ?
-                    "Total (Weapon " + weaponSet + ")" : "Total";
-                if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified ||
-                    (missingRequiredMetadata && verdict != AlterEgo::InfusionMatchVerdict::Matches &&
-                     requirements.size() == observed.size())) {
-                    result.AddUnverified("Infusions", field, requiredLabel,
-                        currentLabel.empty() ? "(none)" : currentLabel);
-                } else {
-                    result.Add("Infusions", field, "required",
-                        verdict == AlterEgo::InfusionMatchVerdict::Matches ? "required" : "different",
-                        requiredLabel, currentLabel.empty() ? "(none)" : currentLabel);
-                }
-            }
-        }
         if (saved.relic_id || !saved.relic_name.empty()) {
             const auto* eq = getEquipped("Relic");
             uint32_t id = eq ? eq->id : 0;
@@ -9799,6 +9729,34 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         }
     }
 
+    // Compare the *total bonuses* as minimum requirements. AR caps at 150.
+    // Source-wide imported infusion counts and per-slot snapshots use the same
+    // calculator; unknown metadata is never reported as a mismatch.
+    const auto requiredTotals = GetSavedInfusionSummary(saved);
+    const auto liveTotals = GetLiveInfusionSummary(liveCharacter, equipmentTab);
+    if (requiredTotals.present) {
+        if (!requiredTotals.complete || !liveTotals.complete ||
+            liveCharacter.equipment.empty()) {
+            result.AddUnverified("Infusion totals", "Totals", "Unknown", "Metadata unavailable");
+        } else {
+            const int minAR = AlterEgo::AgonyRequirement(requiredTotals.agonyResistance);
+            if (minAR > 0) {
+                result.Add("Infusion totals", "Agony Resistance",
+                    "sufficient", liveTotals.agonyResistance >= minAR ? "sufficient" : "low",
+                    std::to_string(requiredTotals.agonyResistance) +
+                        " (minimum " + std::to_string(minAR) + ")",
+                    std::to_string(liveTotals.agonyResistance));
+            }
+            for (const auto& [attr, target] : requiredTotals.stats) {
+                if (target <= 0) continue;
+                auto it = liveTotals.stats.find(attr);
+                const int current = it == liveTotals.stats.end() ? 0 : it->second;
+                result.Add("Infusion totals", InfusionAttributeLabel(attr),
+                    "sufficient", current >= target ? "sufficient" : "low",
+                    "+" + std::to_string(target), "+" + std::to_string(current));
+            }
+        }
+    }
     return result;
 }
 
@@ -9953,6 +9911,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
 struct ActiveSavedBuildMatch {
     std::string name;
     std::string skillDifferences;
+    std::string infusionWarning;
     bool build = false;
     bool checkUtilities = false;
     size_t matchingBuilds = 0;
@@ -9985,6 +9944,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
             ++equippedCount;
 
     AlterEgo::GearMatchCandidate best;
+    size_t bestInfusionWarnings = static_cast<size_t>(-1);
     for (const auto& saved : AlterEgo::GW2API::GetSavedBuilds()) {
         if (saved.profession != character->profession) continue;
         const auto result = CalculateSavedVsLiveComparison(
@@ -9995,10 +9955,8 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
         bool requiredDataMissing = false;
         size_t checkedGearFields = 0, differentGearFields = 0, missingItems = 0;
         for (const auto& row : result.Rows()) {
-            // Exact per-slot infusion positions are intentionally ignored in the
-            // roster summary, but source-wide total requirements are meaningful.
-            if (!AlterEgo::IsCharacterEquipmentMatchGroup(row.group) &&
-                !(row.group == "Infusions" && row.field.rfind("Total", 0) == 0)) continue;
+            // Aggregate totals are warnings only; never affect primary matching.
+            if (!AlterEgo::IsCharacterEquipmentMatchGroup(row.group)) continue;
             if (!row.verified) {
                 requiredDataMissing = true;
                 continue;
@@ -10053,18 +10011,31 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
         candidate.missingItems = missingItems;
         candidate.comparedFields = checkedGearFields;
         candidate.savedSlots = saved.gear.size();
-        // Only a fully verified equipment match can support a skills-only
-        // warning. Exact template matches always outrank near matches.
+        // Reuse Compare's result for a secondary warning and last-resort
+        // tie-break. Never change the gear match classification for infusions.
+        size_t shortfalls = 0;
+        std::string infusionText;
+        for (const auto& row : result.Rows()) {
+            if (row.group != "Infusion totals" || !row.verified || row.matches) continue;
+            ++shortfalls;
+            if (!infusionText.empty()) infusionText += "; ";
+            infusionText += row.field + ": saved " + row.saved + ", live " + row.current;
+        }
         if (skillsDiffer && candidate.status != AlterEgo::GearMatchStatus::Matches)
             continue;
+        const bool betterGear = AlterEgo::PreferGearMatchCandidate(candidate, best);
+        const bool sameGear = !betterGear &&
+            !AlterEgo::PreferGearMatchCandidate(best, candidate);
         if (!cached.build || (cached.checkUtilities && !skillsDiffer) ||
             (cached.checkUtilities == skillsDiffer &&
-             AlterEgo::PreferGearMatchCandidate(candidate, best))) {
+             (betterGear || (sameGear && shortfalls < bestInfusionWarnings)))) {
             cached.name = saved.name;
             cached.build = true;
             cached.checkUtilities = skillsDiffer;
             cached.gear = candidate.status;
             cached.skillDifferences.clear();
+            cached.infusionWarning = infusionText;
+            bestInfusionWarnings = shortfalls;
             if (skillsDiffer) {
                 for (const auto& row : result.Rows()) {
                     if (AlterEgo::IsSkillComparisonGroup(row.group) && !row.matches) {
@@ -11153,20 +11124,8 @@ static void RenderBuildLibrary() {
         }
         ImGui::BeginChild("##LibDetailScroll", ImVec2(0, 0), false);
 
-        if (!g_LibEditMode) {
-            // Read-only notes above the scrollable preview. Action buttons
-            // remain visible in the pinned build header.
-            if (!build.notes.empty()) {
-                ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "Notes:");
-                ImGui::SameLine();
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextColored(ImVec4(0.78f, 0.76f, 0.66f, 1.0f), "%s", build.notes.c_str());
-                ImGui::PopTextWrapPos();
-            }
-        } else {
-            // Editing happens in-place in the card below (name/mode/notes/traits/
-            // skills/gear). Here we only queue the draft's reference data so the
-            // in-card editors resolve their icons/names.
+        if (g_LibEditMode) {
+            // Resolve draft reference data for the in-place editors.
             if (AlterEgo::GW2API::GetProfessionSpecIds(g_EditDraft.profession).empty())
                 AlterEgo::GW2API::FetchProfessionInfoAsync(g_EditDraft.profession);
             std::vector<uint32_t> cur = {
@@ -15618,7 +15577,8 @@ void AddonRender() {
                         const auto& match = GetLoggedInSavedBuildMatch();
                         if (match.build)
                             rowHeight += (match.matchingBuilds > 1 ? 3.0f : 2.0f) * lineH +
-                                         (match.checkUtilities ? lineH : 0.0f);
+                                         (match.checkUtilities ? lineH : 0.0f) +
+                                          (!match.infusionWarning.empty() ? lineH : 0.0f);
                         if (HasLiveSpecCacheMismatch(ch))
                             rowHeight += lineH;
                     }
@@ -15829,6 +15789,12 @@ void AddonRender() {
                             ImGui::TextColored(gearColor, "%s", shownGearText.c_str());
                             if (ImGui::IsItemHovered())
                                 ImGui::SetTooltip("%s (last retrieved H&S data)", gearText);
+                            if (!match.infusionWarning.empty()) {
+                                ImGui::TextColored(ImVec4(0.90f, 0.75f, 0.48f, 1.0f),
+                                    "Infusions: check totals");
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip("%s", match.infusionWarning.c_str());
+                            }
                             if (match.matchingBuilds > 1) {
                                 ImGui::TextDisabled("%zu saved builds share this template",
                                     match.matchingBuilds);

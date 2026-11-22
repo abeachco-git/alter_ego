@@ -146,14 +146,15 @@ enum class TemplateMatchStatus { Different, SkillsDiffer, Exact };
 inline bool IsGearComparisonGroup(const std::string& group) {
     return group == "Equipment" || group == "Equipment stats" ||
            group == "Upgrades" || group == "Weapon types" ||
-           group == "Infusions" || group == "Relic" ||
+           group == "Infusions" || group == "Infusion totals" || group == "Relic" ||
            group == "Exact item IDs";
 }
 // The Characters page ignores strict, interchangeable per-slot infusion
 // positions. Source-wide total requirements are included by the caller,
 // which recognizes the "Infusions" group's "Total" fields.
 inline bool IsCharacterEquipmentMatchGroup(const std::string& group) {
-    return IsGearComparisonGroup(group) && group != "Infusions";
+    return IsGearComparisonGroup(group) && group != "Infusions" &&
+           group != "Infusion totals";
 }
 inline bool IsSkillComparisonGroup(const std::string& group) {
     return group == "Terrestrial skills" || group == "Aquatic skills";

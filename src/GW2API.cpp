@@ -2629,6 +2629,12 @@ namespace AlterEgo {
                 merged.id = build.id;
                 merged.name = build.name;
                 merged.notes = build.notes;
+                // A source refresh must not discard user-entered infusion targets.
+                if (build.infusion_summary_present) {
+                    merged.infusion_summary_present = true;
+                    merged.infusion_ar_total = build.infusion_ar_total;
+                    merged.infusion_stat_totals = build.infusion_stat_totals;
+                }
                 merged.created = build.created;
                 merged.source_character = build.source_character;
                 build = std::move(merged);
@@ -2874,6 +2880,9 @@ namespace AlterEgo {
                 // Gear (so in-editor gear changes persist on Save).
                 b.gear = def.gear;
                 b.infusion_totals = def.infusion_totals;
+                b.infusion_summary_present = def.infusion_summary_present;
+                b.infusion_ar_total = def.infusion_ar_total;
+                b.infusion_stat_totals = def.infusion_stat_totals;
                 b.rune_name = def.rune_name;
                 b.rune_id = def.rune_id;
                 b.relic_name = def.relic_name;
@@ -3013,6 +3022,11 @@ namespace AlterEgo {
                                         {"attribute", inf.attribute}});
             bj["infusion_totals"] = requirements;
         }
+        if (b.infusion_summary_present) {
+            bj["infusion_summary_present"] = true;
+            bj["infusion_ar_total"] = b.infusion_ar_total;
+            bj["infusion_stat_totals"] = b.infusion_stat_totals;
+        }
         if (!b.rune_name.empty()) bj["rune_name"] = b.rune_name;
         if (b.rune_id != 0) bj["rune_id"] = b.rune_id;
         if (!b.relic_name.empty()) bj["relic_name"] = b.relic_name;
@@ -3146,6 +3160,16 @@ namespace AlterEgo {
                 requirement.attribute = inf.value("attribute", "");
                 if (requirement.item_id != 0 && requirement.count > 0 && requirement.count <= 25)
                     b.infusion_totals.push_back(std::move(requirement));
+            }
+        }
+        b.infusion_summary_present = bj.value("infusion_summary_present", false);
+        if (b.infusion_summary_present) {
+            b.infusion_ar_total = std::max(0, bj.value("infusion_ar_total", 0));
+            if (bj.contains("infusion_stat_totals") && bj["infusion_stat_totals"].is_object()) {
+                for (auto it = bj["infusion_stat_totals"].begin();
+                     it != bj["infusion_stat_totals"].end(); ++it)
+                    if (it.value().is_number_integer())
+                        b.infusion_stat_totals[it.key()] = std::max(0, it.value().get<int>());
             }
         }
         b.rune_name = bj.value("rune_name", "");

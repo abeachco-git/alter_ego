@@ -31,6 +31,10 @@ jobs:
           /tmp/build_compare_core
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_match_core.cpp -o /tmp/infusion_match_core
           /tmp/infusion_match_core
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_totals.cpp -o /tmp/infusion_totals
+          /tmp/infusion_totals
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/strike_display_name.cpp -o /tmp/strike_display_name
+          /tmp/strike_display_name
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/clears_rotation.cpp -o /tmp/clears_rotation
           /tmp/clears_rotation
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_group_order.cpp -o /tmp/build_group_order
