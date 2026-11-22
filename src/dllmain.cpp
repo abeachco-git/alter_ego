@@ -15277,6 +15277,7 @@ void AddonRender() {
     float tabRowY = ImGui::GetCursorPosY();
 
     // Top-level tab bar: Characters | Build Library
+    PollBuildSource();
     if (ImGui::BeginTabBar("##main_tabs")) {
         ImGuiTabItemFlags charTabFlags = 0;
         if (g_ForceCharactersTab) {
@@ -16464,25 +16465,70 @@ void AddonRender() {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Library")) {
+        // Library itself is the menu: clicking its tab header must not
+        // implicitly select the last viewed collection from another page.
+        ImGuiTabBar* libraryTabBar = GImGui->CurrentTabBar;
+        const ImGuiID previousSelectedTab = libraryTabBar ? libraryTabBar->SelectedTabId : 0;
+        ImGuiTabItemFlags libraryFlags = 0;
+        if (g_SwitchToLibrary) {
+            libraryFlags |= ImGuiTabItemFlags_SetSelected;
+            g_SwitchToLibrary = false;
+        }
+        const bool libraryVisible = ImGui::BeginTabItem("Library \xE2\x96\xBE", nullptr, libraryFlags);
+        const bool libraryHeaderClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        const ImVec2 libraryMenuAnchor(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y);
+        const ImGuiID libraryTabId = libraryTabBar && libraryTabBar->LastTabItemIdx >= 0
+            ? libraryTabBar->Tabs[libraryTabBar->LastTabItemIdx].ID : 0;
+        if (libraryVisible) {
             g_MainTab = 1;
-            PollBuildSource();
-            RenderLibraryBackupUI();
-            ImGui::SameLine();
-            if (RenderChipButton("Builds##library_collection", g_LibraryCollection == 0)) {
-                g_LibraryCollection = 0;
-                SaveSettings();
-            }
-            ImGui::SameLine();
-            if (RenderChipButton("Fashion##library_collection", g_LibraryCollection == 1)) {
-                g_LibraryCollection = 1;
-                SaveSettings();
-            }
-            ImGui::Spacing();
             if (g_LibraryCollection == 0) RenderBuildLibrary();
             else RenderFashionLibrary();
-            RenderLibraryImportDialog();
             ImGui::EndTabItem();
+        }
+        if (libraryHeaderClicked) {
+            // BeginTabItem queues selection on click. Cancel that implicit
+            // navigation; only Builds/Fashion selections should switch pages.
+            if (libraryTabBar && previousSelectedTab &&
+                previousSelectedTab != libraryTabId)
+                libraryTabBar->NextSelectedTabId = previousSelectedTab;
+            ImGui::OpenPopup("Library menu##ae_main");
+        }
+        ImGui::SetNextWindowPos(libraryMenuAnchor, ImGuiCond_Appearing);
+        if (ImGui::BeginPopup("Library menu##ae_main")) {
+            ImGui::TextDisabled("COLLECTIONS");
+            // The checkmark describes visible content, never a stale saved
+            // choice when Characters, Compare, Vault or another tab is active.
+            const bool onBuilds = g_MainTab == 1 && g_LibraryCollection == 0;
+            const bool onFashion = g_MainTab == 1 && g_LibraryCollection == 1;
+            if (ImGui::MenuItem("Builds", nullptr, onBuilds)) {
+                NavigateToLibraryCollection(0);
+                if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
+            }
+            if (ImGui::MenuItem("Fashion", nullptr, onFashion)) {
+                NavigateToLibraryCollection(1);
+                if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("New Build...")) {
+                g_NewBuildGameMode = 0;
+                g_NewBuildDialogOpen = true;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Import Build / Fashion Link...")) {
+                g_LibShowImport = true;
+                g_LibImportBuf[0] = '\0';
+                g_LibImportName[0] = '\0';
+                g_LibImportMode = 0;
+                g_LibImportError.clear();
+                g_LibImportPending = false;
+                g_LibImportPendingProfession.clear();
+            }
+            if (ImGui::MenuItem("Import Library..."))
+                BeginLibraryBackupImport();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Export Library / Backup..."))
+                BeginLibraryBackupExport();
+            ImGui::EndPopup();
         }
 
         ImGuiTabItemFlags compareTabFlags = 0;
@@ -16603,6 +16649,9 @@ void AddonRender() {
         }
         ImGui::EndTabBar();
     }
+    // Import/export dialogs are available from every top-level tab.
+    RenderLibraryImportDialog();
+    RenderLibraryBackupUI();
     RenderShareRelayPopups();
 
     ImGui::End();
