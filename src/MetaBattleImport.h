@@ -125,11 +125,9 @@ inline bool Parse(const std::string& url, const std::string& html,
     const auto skillIds = SnowCrows::Ids(SnowCrows::Match(
         utilitySection,
         R"MB(data-armory-embed="skills"[^>]*data-armory-ids="([0-9,]+)")MB"));
-    if (skillIds.size() != 5) {
-        error = "MetaBattle primary utility bar is incomplete.";
-        return false;
-    }
-    std::copy(skillIds.begin(), skillIds.end(), page.skills.begin());
+    if (skillIds.size() != 5)
+        page.importWarning = "Primary skills incomplete; review heal, utilities and elite.";
+    std::copy_n(skillIds.begin(), std::min(skillIds.size(), page.skills.size()), page.skills.begin());
 
     const std::string specializationSection = html.substr(specAt, gearAt - specAt);
     const std::regex specsRe(
@@ -143,8 +141,8 @@ inline bool Parse(const std::string& url, const std::string& html,
         ++countSpecs;
     }
     if (countSpecs != 3) {
-        error = "MetaBattle does not contain three complete specialization lines.";
-        return false;
+        if (!page.importWarning.empty()) page.importWarning += " ";
+        page.importWarning += "Specialization lines incomplete; review traits.";
     }
 
     // The equipment section includes secondary suggestions in prose. Only
@@ -254,9 +252,31 @@ inline bool Parse(const std::string& url, const std::string& html,
         html.substr(skillAt, gearAt - skillAt),
         R"(<div class="build-template-code[^"]*"[^>]*>(\[&amp;[A-Za-z0-9+/=]+\])</div>)"));
 
-    if (page.name.empty() || page.gear.size() < 12 ||
-        page.relicId == 0 || totalInfusions > 25) {
-        error = "Incomplete MetaBattle build: expected primary equipment and relic.";
+    if (page.name.empty()) {
+        error = "MetaBattle build title was not found.";
+        return false;
+    }
+    // Do not reject an otherwise identifiable build for intentionally blank
+    // equipment or for a source layout that omits some armory IDs.
+    if (page.gear.size() < 12) {
+        if (!page.importWarning.empty()) page.importWarning += " ";
+        page.importWarning += "Only " + std::to_string(page.gear.size()) +
+            " equipment slots resolved; review source gear.";
+    }
+    if (!page.relicId) {
+        if (!page.importWarning.empty()) page.importWarning += " ";
+        page.importWarning += "Relic not resolved; choose manually if needed.";
+    }
+    if (totalInfusions > 25) {
+        page.infusions.clear();
+        if (!page.importWarning.empty()) page.importWarning += " ";
+        page.importWarning += "Infusion counts ambiguous; review manually.";
+    }
+    bool hasSkills = false, hasSpecs = false;
+    for (auto id : page.skills) if (id) hasSkills = true;
+    for (const auto& spec : page.specs) if (spec.id) hasSpecs = true;
+    if (!hasSkills && !hasSpecs && page.gear.empty() && page.templateCode.empty()) {
+        error = "No usable MetaBattle build data could be extracted.";
         return false;
     }
     out = std::move(page);
