@@ -16474,9 +16474,25 @@ void AddonRender() {
             libraryFlags |= ImGuiTabItemFlags_SetSelected;
             g_SwitchToLibrary = false;
         }
-        const bool libraryVisible = ImGui::BeginTabItem("Library \xE2\x96\xBE", nullptr, libraryFlags);
+        // Reserve space for an arrow but draw it ourselves: the font used by
+        // Nexus cannot render the Unicode down-triangle used previously.
+        const bool libraryVisible = ImGui::BeginTabItem("Library    ##ae_library_dropdown", nullptr, libraryFlags);
         const bool libraryHeaderClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-        const ImVec2 libraryMenuAnchor(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y);
+        const ImVec2 libraryTabMin = ImGui::GetItemRectMin();
+        const ImVec2 libraryTabMax = ImGui::GetItemRectMax();
+        const ImVec2 libraryMenuAnchor(libraryTabMin.x, libraryTabMax.y);
+        // Two short line segments form a small down-chevron without requiring
+        // a glyph in the selected font. Keep it inside the actual tab header.
+        const ImVec2 arrowCenter(libraryTabMax.x - 13.0f,
+                                  (libraryTabMin.y + libraryTabMax.y) * 0.5f);
+        ImDrawList* tabDraw = ImGui::GetWindowDrawList();
+        const ImU32 arrowColor = ImGui::GetColorU32(ImGuiCol_Text);
+        tabDraw->AddLine(ImVec2(arrowCenter.x - 4.0f, arrowCenter.y - 2.0f),
+                         ImVec2(arrowCenter.x, arrowCenter.y + 2.0f),
+                         arrowColor, 1.6f);
+        tabDraw->AddLine(ImVec2(arrowCenter.x, arrowCenter.y + 2.0f),
+                         ImVec2(arrowCenter.x + 4.0f, arrowCenter.y - 2.0f),
+                         arrowColor, 1.6f);
         const ImGuiID libraryTabId = libraryTabBar && libraryTabBar->LastTabItemIdx >= 0
             ? libraryTabBar->Tabs[libraryTabBar->LastTabItemIdx].ID : 0;
         if (libraryVisible) {
@@ -16496,25 +16512,80 @@ void AddonRender() {
         ImGui::SetNextWindowPos(libraryMenuAnchor, ImGuiCond_Appearing);
         if (ImGui::BeginPopup("Library menu##ae_main")) {
             ImGui::TextDisabled("COLLECTIONS");
-            // The checkmark describes visible content, never a stale saved
-            // choice when Characters, Compare, Vault or another tab is active.
+            // Only the actually visible collection is checked. Merely opening
+            // this dropdown from another tab does not select either collection.
             const bool onBuilds = g_MainTab == 1 && g_LibraryCollection == 0;
             const bool onFashion = g_MainTab == 1 && g_LibraryCollection == 1;
-            if (ImGui::MenuItem("Builds", nullptr, onBuilds)) {
+
+            // The Builds label is a navigation target; its separate, right-
+            // hand arrow opens a collection-specific flyout. Do not turn the
+            // entire row into a submenu, or direct navigation stops working.
+            const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
+            const float buildsLabelWidth = 190.0f;
+            const bool buildsClicked = ImGui::Selectable("Builds##ae_library_collection",
+                onBuilds, ImGuiSelectableFlags_DontClosePopups,
+                ImVec2(buildsLabelWidth, rowHeight));
+            const ImVec2 buildsMin = ImGui::GetItemRectMin();
+            const ImVec2 buildsMax = ImGui::GetItemRectMax();
+            if (onBuilds) {
+                // Draw a checkmark aligned near the row's right edge, leaving
+                // a dedicated click target for the adjacent flyout arrow.
+                const ImVec2 check(buildsMax.x - 17.0f,
+                                   (buildsMin.y + buildsMax.y) * 0.5f);
+                const ImU32 checkColor = ImGui::GetColorU32(ImGuiCol_Text);
+                ImDrawList* draw = ImGui::GetWindowDrawList();
+                draw->AddLine(ImVec2(check.x - 4.0f, check.y),
+                              ImVec2(check.x - 1.0f, check.y + 3.0f),
+                              checkColor, 1.7f);
+                draw->AddLine(ImVec2(check.x - 1.0f, check.y + 3.0f),
+                              ImVec2(check.x + 5.0f, check.y - 4.0f),
+                              checkColor, 1.7f);
+            }
+            ImGui::SameLine(0.0f, 0.0f);
+            const ImVec2 flyoutButtonMin = ImGui::GetCursorScreenPos();
+            const ImVec2 flyoutButtonSize(27.0f, rowHeight);
+            if (ImGui::InvisibleButton("##ae_builds_actions", flyoutButtonSize))
+                ImGui::OpenPopup("Builds actions##ae_library");
+            const bool hoverFlyout = ImGui::IsItemHovered();
+            if (hoverFlyout && !ImGui::IsPopupOpen("Builds actions##ae_library"))
+                ImGui::OpenPopup("Builds actions##ae_library");
+            const ImVec2 flyoutButtonMax(flyoutButtonMin.x + flyoutButtonSize.x,
+                                          flyoutButtonMin.y + flyoutButtonSize.y);
+            const ImVec2 chevronCenter((flyoutButtonMin.x + flyoutButtonMax.x) * 0.5f,
+                                        (flyoutButtonMin.y + flyoutButtonMax.y) * 0.5f);
+            const ImU32 flyoutColor = ImGui::GetColorU32(ImGuiCol_Text);
+            ImDrawList* flyoutDraw = ImGui::GetWindowDrawList();
+            flyoutDraw->AddLine(ImVec2(chevronCenter.x - 2.0f, chevronCenter.y - 4.0f),
+                                ImVec2(chevronCenter.x + 2.0f, chevronCenter.y),
+                                flyoutColor, 1.6f);
+            flyoutDraw->AddLine(ImVec2(chevronCenter.x + 2.0f, chevronCenter.y),
+                                ImVec2(chevronCenter.x - 2.0f, chevronCenter.y + 4.0f),
+                                flyoutColor, 1.6f);
+            if (buildsClicked) {
                 NavigateToLibraryCollection(0);
                 if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SetNextWindowPos(ImVec2(flyoutButtonMax.x, buildsMin.y),
+                                    ImGuiCond_Appearing);
+            if (ImGui::BeginPopup("Builds actions##ae_library")) {
+                if (ImGui::MenuItem("New")) {
+                    g_NewBuildGameMode = 0;
+                    g_NewBuildDialogOpen = true;
+                    // The parent menu should also close when launching New.
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
             if (ImGui::MenuItem("Fashion", nullptr, onFashion)) {
                 NavigateToLibraryCollection(1);
                 if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
             }
+
             ImGui::Separator();
-            if (ImGui::MenuItem("New Build...")) {
-                g_NewBuildGameMode = 0;
-                g_NewBuildDialogOpen = true;
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem("Import Build / Fashion Link...")) {
+            ImGui::TextDisabled("TEMPLATE IMPORT");
+            if (ImGui::MenuItem("Import from Link / URL")) {
                 g_LibShowImport = true;
                 g_LibImportBuf[0] = '\0';
                 g_LibImportName[0] = '\0';
@@ -16523,10 +16594,14 @@ void AddonRender() {
                 g_LibImportPending = false;
                 g_LibImportPendingProfession.clear();
             }
-            if (ImGui::MenuItem("Import Library..."))
-                BeginLibraryBackupImport();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("GW2 build or wardrobe chat link, AE2 code, Snow Crows or MetaBattle URL");
+
             ImGui::Separator();
-            if (ImGui::MenuItem("Export Library / Backup..."))
+            ImGui::TextDisabled("LIBRARIES");
+            if (ImGui::MenuItem("Import"))
+                BeginLibraryBackupImport();
+            if (ImGui::MenuItem("Export"))
                 BeginLibraryBackupExport();
             ImGui::EndPopup();
         }
