@@ -5000,6 +5000,11 @@ static AlterEgo::GameMode GameModeFromIndex(int idx) {
 
 static const char* GameModeLabel(AlterEgo::GameMode m);
 // Shared across New, Import, Save and saved-build Edit. Always retain at least one mode.
+// Use one height for every compact mode chip, including the editor header.
+static float CompactGameModeChipHeight() {
+    return ImMax(22.0f, ImGui::GetTextLineHeight() + 4.0f);
+}
+
 static bool RenderGameModeSelector(const char* id, std::vector<AlterEgo::GameMode>& chosen) {
     static const AlterEgo::GameMode modes[] = {
         AlterEgo::GameMode::PvE, AlterEgo::GameMode::WvW,
@@ -8985,7 +8990,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             }
         } else {
             ImGui::SetCursorScreenPos(ImVec2(modeX, subtitleMidY -
-                ImMax(22.0f, ImGui::GetTextLineHeight()+4.0f)*0.5f));
+                CompactGameModeChipHeight() * 0.5f));
             if (g_EditDraft.game_modes.empty()) g_EditDraft.game_modes = {g_EditDraft.game_mode};
             if (RenderGameModeSelector("saved-build-edit", g_EditDraft.game_modes)) {
                 g_EditDraft.game_mode = g_EditDraft.game_modes.front();
@@ -13447,10 +13452,19 @@ bool RenderChipButton(const char* label, bool active, ImVec4 accentColor, bool c
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  actVar);
     ImGui::PushStyleColor(ImGuiCol_Text,          text);
-    // Only embedded header game-mode badges are compact.
-    bool clicked = compact
-        ? ImGui::Button(label, ImVec2(0.0f, ImMax(22.0f, ImGui::GetTextLineHeight() + 4.0f)))
-        : RenderActionButton(label);
+    bool clicked = false;
+    if (compact) {
+        // The normal 7px vertical FramePadding is taller than the spare room
+        // inside a 22px chip. ImGui clips its text content to the padded rect,
+        // placing the glyphs visibly too low. Match padding to compact height.
+        // This single renderer serves New, Import, Save and Edit game modes.
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 2.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+        clicked = ImGui::Button(label, ImVec2(0.0f, CompactGameModeChipHeight()));
+        ImGui::PopStyleVar(2);
+    } else {
+        clicked = RenderActionButton(label);
+    }
     ImGui::PopStyleColor(4);
     return clicked;
 }
