@@ -121,7 +121,7 @@ inline bool Parse(const std::string& url, const std::string& html,
     const std::string utilitySection = skillSection.substr(utilityAt);
     const auto skillIds = SnowCrows::Ids(SnowCrows::Match(
         utilitySection,
-        R"(data-armory-embed="skills"[^>]*data-armory-ids="([0-9,]+)")"));
+        R"MB(data-armory-embed="skills"[^>]*data-armory-ids="([0-9,]+)")MB"));
     if (skillIds.size() != 5) {
         error = "MetaBattle primary utility bar is incomplete.";
         return false;
@@ -130,7 +130,7 @@ inline bool Parse(const std::string& url, const std::string& html,
 
     const std::string specializationSection = html.substr(specAt, gearAt - specAt);
     const std::regex specsRe(
-        R"(data-armory-embed="specializations"[^>]*data-armory-ids="([0-9]+)"[^>]*data-armory-[0-9]+-traits="([0-9,]*)")",
+        R"MB(data-armory-embed="specializations"[^>]*data-armory-ids="([0-9]+)"[^>]*data-armory-[0-9]+-traits="([0-9,]*)")MB",
         std::regex::icase);
     size_t countSpecs = 0;
     for (std::sregex_iterator i(specializationSection.begin(), specializationSection.end(), specsRe), end;
@@ -185,7 +185,7 @@ inline bool Parse(const std::string& url, const std::string& html,
         if (divStart == std::string::npos) continue;
         const std::string beforeSmall = gearHtml.substr(divStart, smallAt - divStart);
         const uint32_t id = SnowCrows::Unsigned(SnowCrows::Match(
-            beforeSmall, R"(data-armory-ids="([0-9]+)")"));
+            beforeSmall, R"MB(data-armory-ids="([0-9]+)")MB"));
         if (!id) continue;
         const std::string label = TextFromSmall((*i)[1].str());
         const size_t split = label.find('|');
