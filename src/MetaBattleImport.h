@@ -180,7 +180,8 @@ inline bool Parse(const std::string& url, const std::string& html,
     for (std::sregex_iterator i(gearHtml.begin(), gearHtml.end(), smallRe), end;
          i != end; ++i) {
         const size_t smallAt = static_cast<size_t>(i->position());
-        const size_t wrapper = gearHtml.rfind("class=\"equipment-slot\"", smallAt);
+        // Match the equipment-slot class even when the page adds extra CSS classes.
+        const size_t wrapper = gearHtml.rfind("equipment-slot", smallAt);
         if (wrapper == std::string::npos) continue;
         const size_t divStart = gearHtml.rfind("<div", wrapper);
         if (divStart == std::string::npos) continue;
@@ -250,7 +251,7 @@ inline bool Parse(const std::string& url, const std::string& html,
     // one from still-loading palette metadata.
     page.templateCode = SnowCrows::Decode(SnowCrows::Match(
         html.substr(skillAt, gearAt - skillAt),
-        R"(<div class="build-template-code[^"]*"[^>]*>(\[&amp;[A-Za-z0-9+/=]+\])</div>)"));
+        R"(<div[^>]*class="[^"]*build-template-code[^"]*"[^>]*>(\[&amp;[A-Za-z0-9+/=]+\])</div>)"));
 
     if (page.name.empty()) {
         error = "MetaBattle build title was not found.";
