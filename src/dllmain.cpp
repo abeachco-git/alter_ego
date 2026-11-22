@@ -851,7 +851,7 @@ static bool g_LibShowImport = false;
 static std::string g_LibImportError;
 static std::string g_LibImportFilePath; // path picked from file dialog for library file import
 static bool g_LibDetailsFetched = false;
-static int g_LibDragIdx = -1;          // drag-and-drop source index
+static std::unordered_set<std::string> g_LibCollapsedProfessions; // session-persisted
 // Inline edit buffers — std::string + ImGui resize callback so long names
 // or notes are never silently truncated by a fixed buffer size.
 static std::string g_LibEditName;
@@ -1618,6 +1618,7 @@ static void SaveSession() {
     if (g_LibSelectedIdx >= 0 && g_LibSelectedIdx < (int)builds.size())
         j["lib_selected_id"] = builds[g_LibSelectedIdx].id;
     j["lib_filter"] = g_LibFilterMode;
+    j["lib_collapsed_professions"] = g_LibCollapsedProfessions;
     if (!g_LibCompareBuildId.empty()) j["compare_saved_id"] = g_LibCompareBuildId;
 
     // Account selector
@@ -1663,6 +1664,13 @@ static void LoadSession() {
             }
         }
         if (j.contains("lib_filter")) g_LibFilterMode = j["lib_filter"].get<int>();
+        if (j.contains("lib_collapsed_professions") &&
+            j["lib_collapsed_professions"].is_array()) {
+            g_LibCollapsedProfessions.clear();
+            for (const auto& prof : j["lib_collapsed_professions"])
+                if (prof.is_string())
+                    g_LibCollapsedProfessions.insert(prof.get<std::string>());
+        }
         if (j.contains("compare_saved_id"))
             g_LibCompareBuildId = j["compare_saved_id"].get<std::string>();
 
@@ -9910,16 +9918,18 @@ static void RenderCompareTab() {
     const auto& live = character->build_tabs[g_LibCompareBuildTab < 0
         ? GetActiveBuildIndex(*character) : g_LibCompareBuildTab];
     if (ImGui::BeginTable("##compareSelectors", 3,
-        ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX)) {
+        ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
         // Separate label and combo rows guarantee identical vertical baselines
         // for Character, Build tab and Equipment regardless of font scaling.
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        ImGui::TextDisabled("Character");
+        const ImVec4 compareLabelColor = ImGui::ColorConvertU32ToFloat4(
+            AlterEgo::CompletionTheme::kAvailableText);
+        ImGui::TextColored(compareLabelColor, "Character");
         ImGui::TableNextColumn();
-        ImGui::TextDisabled("Build tab");
+        ImGui::TextColored(compareLabelColor, "Build Tab");
         ImGui::TableNextColumn();
-        ImGui::TextDisabled("Equipment");
+        ImGui::TextColored(compareLabelColor, "Equipment Tab");
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
@@ -10024,7 +10034,8 @@ static void RenderCompareTab() {
     }
 
     ImGui::Spacing();
-    ImGui::TextDisabled("Saved build");
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(
+        AlterEgo::CompletionTheme::kAvailableText), "Saved Build");
     const std::string chosenName = saved ?
         (g_LibCompareSavedManual ? "" : "Auto-match - ") +
             saved->name + " (" + saved->profession + ")" :
@@ -10331,64 +10342,128 @@ static void RenderBuildLibrary() {
     float libAvailW = ImGui::GetContentRegionAvail().x;
     g_LibListWidth = (g_LibListWidth < 120.0f) ? 120.0f : (g_LibListWidth > libAvailW - 200.0f) ? libAvailW - 200.0f : g_LibListWidth;
 
+    // Defer drag operations until neither pane holds a reference to a build.
+    std::string pendingGroup, pendingGroupTarget;
+    std::string pendingItemId, pendingItemTarget;
+    bool pendingGroupAfter = false, pendingItemAfter = false;
     ImGui::BeginChild("LibList", ImVec2(g_LibListWidth, 0), true);
     {
         if (builds.empty()) {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
                 "No saved builds.\nClick '+ Import Build'\nto add one from a\nchat link.");
         }
-        struct LibItemRect { float yMin, yMax; int buildIdx; };
-        std::vector<LibItemRect> libItemRects;
-
-        // Group by profession
-        std::string lastProf;
-        for (int i = 0; i < (int)builds.size(); i++) {
+        // Build one visual profession section for every distinct profession.
+        // Existing JSON is still a flat array and retains the original order.
+        struct LibraryGroup {
+            std::string profession;
+            std::vector<int> visible;
+            int total = 0;
+        };
+        std::vector<LibraryGroup> groups;
+        std::unordered_map<std::string, size_t> groupLookup;
+        const bool searching = g_LibSearchBuf[0] != '\0';
+        std::string searchText;
+        if (searching) {
+            searchText = g_LibSearchBuf;
+            std::transform(searchText.begin(), searchText.end(),
+                searchText.begin(), ::tolower);
+        }
+        for (int i = 0; i < static_cast<int>(builds.size()); ++i) {
             const auto& b = builds[i];
-
-            // Apply filter
+            auto found = groupLookup.find(b.profession);
+            if (found == groupLookup.end()) {
+                const size_t index = groups.size();
+                found = groupLookup.emplace(b.profession, index).first;
+                groups.push_back(LibraryGroup{b.profession, {}, 0});
+            }
+            LibraryGroup& group = groups[found->second];
+            ++group.total;
             if (!GameModeMatchesFilter(b.game_mode, g_LibFilterMode)) continue;
-
-            // Apply search
-            if (g_LibSearchBuf[0] != '\0') {
-                std::string search(g_LibSearchBuf);
-                std::string nameLower = b.name;
-                std::transform(search.begin(), search.end(), search.begin(), ::tolower);
-                std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-                if (nameLower.find(search) == std::string::npos) continue;
+            if (searching) {
+                std::string lowerName = b.name;
+                std::transform(lowerName.begin(), lowerName.end(),
+                    lowerName.begin(), ::tolower);
+                if (lowerName.find(searchText) == std::string::npos) continue;
             }
+            group.visible.push_back(i);
+        }
 
-            // Profession group header — gold-bar treatment with prof-coloured dot
-            if (b.profession != lastProf) {
-                if (!lastProf.empty()) ImGui::Dummy(ImVec2(0, 6.0f));
-                ImVec4 profColor = GetProfessionColor(b.profession);
+        bool anyGroupDrawn = false;
+        for (const auto& group : groups) {
+            if (group.visible.empty()) continue;
+            const std::string& profession = group.profession;
+            ImGui::PushID(profession.c_str());
+            if (anyGroupDrawn) ImGui::Spacing();
+            anyGroupDrawn = true;
+            const bool storedExpanded = !g_LibCollapsedProfessions.count(profession);
+            const bool expanded = searching || storedExpanded;
 
-                ImVec2 hdrPos = ImGui::GetCursorScreenPos();
-                float hdrW = ImGui::GetContentRegionAvail().x;
-                float hdrH = ImGui::GetTextLineHeight() + 6.0f;
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-
-                // Gold left bar (matches RenderSectionHeader vocabulary)
-                dl->AddRectFilled(ImVec2(hdrPos.x, hdrPos.y + 2),
-                                  ImVec2(hdrPos.x + 2, hdrPos.y + hdrH - 2),
-                                  IM_COL32(232, 196, 122, 230));
-                // Profession-coloured dot
-                float dotR = 3.5f;
-                dl->AddCircleFilled(ImVec2(hdrPos.x + 11.0f, hdrPos.y + hdrH * 0.5f),
-                    dotR, ImGui::ColorConvertFloat4ToU32(profColor));
-                // Faint trailing rule
-                dl->AddLine(ImVec2(hdrPos.x + 18.0f + ImGui::CalcTextSize(b.profession.c_str()).x + 8.0f,
-                                   hdrPos.y + hdrH * 0.5f),
-                            ImVec2(hdrPos.x + hdrW - 4.0f, hdrPos.y + hdrH * 0.5f),
-                            IM_COL32(197, 161, 85, 60), 1.0f);
-
-                // Name (uppercase via Cinzel-style spacing not possible in ImGui — just bold/gold)
-                ImGui::Dummy(ImVec2(18.0f, 0)); ImGui::SameLine(0, 0);
-                ImGui::TextColored(ImVec4(0.93f, 0.86f, 0.65f, 1.0f), "%s",
-                    b.profession.c_str());
-
-                lastProf = b.profession;
+            // No sidebar font override: same heading scale, +/- control,
+            // and vertical metrics as Vault and Clears.
+            if (AlterEgo::CompletionTheme::CenteredSectionToggle(
+                    expanded, profession.c_str()) && !searching) {
+                if (storedExpanded) g_LibCollapsedProfessions.insert(profession);
+                else g_LibCollapsedProfessions.erase(profession);
+                SaveSession();
             }
+            const std::string displayName =
+                profession == "Necromancer" ? "Necro" : profession;
+            const std::string count = std::to_string(group.visible.size());
+            const uint32_t iconId = GetProfessionIconId(profession);
+            const char* iconUrl = GetProfessionIconUrl(profession);
+            if (iconId && !iconUrl)
+                AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
+            Texture_t* tex = iconId ? AlterEgo::IconManager::GetIcon(iconId) : nullptr;
+            if (iconId && iconUrl && (!tex || !tex->Resource))
+                AlterEgo::IconManager::RequestIcon(iconId, iconUrl, true);
+            AlterEgo::CompletionTheme::SectionHeading(displayName.c_str(), nullptr,
+                count.c_str(), AlterEgo::CompletionTheme::kAvailableText,
+                tex && tex->Resource ? tex->Resource : nullptr, 18.0f);
 
+            // SectionHeading lays out the real row. This overlay makes the
+            // title draggable while leaving the +/- button fully clickable.
+            const ImVec2 headerMin = ImGui::GetItemRectMin();
+            const ImVec2 headerMax = ImGui::GetItemRectMax();
+            const ImVec2 afterHeading = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos(headerMin);
+            ImGui::InvisibleButton("##moveProfession",
+                ImVec2(headerMax.x-headerMin.x,headerMax.y-headerMin.y));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Drag to reorder %s and all its builds.",
+                    profession.c_str());
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+                ImGui::SetDragDropPayload("AE_BUILD_GROUP",
+                    profession.c_str(), profession.size()+1);
+                ImGui::Text("Move %s (%d builds)", profession.c_str(), group.total);
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::BeginDragDropTarget()) {
+                const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                    "AE_BUILD_GROUP", ImGuiDragDropFlags_AcceptBeforeDelivery |
+                                      ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+                if (payload && payload->Data && payload->DataSize > 0) {
+                    const std::string moved(static_cast<const char*>(payload->Data));
+                    if (moved != profession) {
+                        const bool after = ImGui::GetMousePos().y >=
+                            (headerMin.y+headerMax.y)*0.5f;
+                        const float y = after ? headerMax.y : headerMin.y;
+                        ImGui::GetWindowDrawList()->AddLine(
+                            ImVec2(headerMin.x,y), ImVec2(headerMax.x,y),
+                            IM_COL32(100,180,255,240), 2.0f);
+                        if (payload->IsDelivery()) {
+                            pendingGroup = moved;
+                            pendingGroupTarget = profession;
+                            pendingGroupAfter = after;
+                        }
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::SetCursorScreenPos(afterHeading);
+            if (!expanded) { ImGui::PopID(); continue; }
+
+            for (const int i : group.visible) {
+                const auto& b = builds[i];
             ImGui::PushID(i);
             bool selected = (g_LibSelectedIdx == i);
             ImVec4 bProfColor = GetProfessionColor(b.profession);
@@ -10402,9 +10477,6 @@ static void RenderBuildLibrary() {
             ImGui::InvisibleButton("##buildrow", ImVec2(availW, rowH));
             bool hovered = ImGui::IsItemHovered();
             bool clicked = ImGui::IsItemClicked();
-            // Record rect for drag-and-drop (needs to wrap the InvisibleButton)
-            ImVec2 rMin = cmin, rMax = cmax;
-            libItemRects.push_back({ rMin.y, rMax.y, i });
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
 
@@ -10563,56 +10635,42 @@ static void RenderBuildLibrary() {
                 g_LibDetailsFetched = false;
             }
 
-            // Drag source
+            // Drag an item within its own profession only. A completed drop
+            // is applied after the preview pane finishes drawing.
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
-                g_LibDragIdx = i;
-                ImGui::SetDragDropPayload("BUILD_REORDER", &i, sizeof(int));
+                ImGui::SetDragDropPayload("AE_BUILD_ITEM", b.id.c_str(), b.id.size() + 1);
                 ImGui::Text("%s", b.name.c_str());
                 ImGui::EndDragDropSource();
             }
-
-            ImGui::PopID();
-        }
-
-        // Draw insertion line and handle drop
-        if (g_LibDragIdx >= 0 && ImGui::GetDragDropPayload() != nullptr) {
-            float mouseY = ImGui::GetMousePos().y;
-            int insertVisIdx = (int)libItemRects.size();
-            float bestLineY = 0;
-
-            for (int vi = 0; vi < (int)libItemRects.size(); vi++) {
-                float midY = (libItemRects[vi].yMin + libItemRects[vi].yMax) * 0.5f;
-                if (mouseY < midY) {
-                    insertVisIdx = vi;
-                    bestLineY = libItemRects[vi].yMin;
-                    break;
-                }
-            }
-            if (insertVisIdx == (int)libItemRects.size() && !libItemRects.empty())
-                bestLineY = libItemRects.back().yMax;
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            float xMin = ImGui::GetWindowPos().x + 2;
-            float xMax = xMin + ImGui::GetWindowContentRegionMax().x - 4;
-            dl->AddLine(ImVec2(xMin, bestLineY), ImVec2(xMax, bestLineY),
-                IM_COL32(100, 180, 255, 220), 2.0f);
-
-            if (ImGui::IsMouseReleased(0)) {
-                int targetBuildIdx = (insertVisIdx < (int)libItemRects.size())
-                    ? libItemRects[insertVisIdx].buildIdx : (int)builds.size();
-                if (g_LibDragIdx != targetBuildIdx) {
-                    AlterEgo::GW2API::ReorderSavedBuild(g_LibDragIdx, targetBuildIdx);
-                    // Fix selection to follow the moved build
-                    if (g_LibSelectedIdx == g_LibDragIdx) {
-                        int newIdx = (g_LibDragIdx < targetBuildIdx) ? targetBuildIdx - 1 : targetBuildIdx;
-                        g_LibSelectedIdx = newIdx;
+            if (ImGui::BeginDragDropTarget()) {
+                const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                    "AE_BUILD_ITEM", ImGuiDragDropFlags_AcceptBeforeDelivery |
+                                     ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+                if (payload && payload->Data && payload->DataSize > 0) {
+                    const std::string movedId(static_cast<const char*>(payload->Data));
+                    const auto dragged = std::find_if(builds.begin(), builds.end(),
+                        [&](const AlterEgo::SavedBuild& item) { return item.id == movedId; });
+                    if (movedId != b.id && dragged != builds.end() &&
+                        dragged->profession == b.profession) {
+                        const bool after = ImGui::GetMousePos().y >= (cmin.y+cmax.y)*0.5f;
+                        const float y = after ? cmax.y : cmin.y;
+                        dl->AddLine(ImVec2(cmin.x, y), ImVec2(cmax.x, y),
+                            IM_COL32(100, 180, 255, 240), 2.0f);
+                        if (payload->IsDelivery()) {
+                            pendingItemId = movedId;
+                            pendingItemTarget = b.id;
+                            pendingItemAfter = after;
+                        }
                     }
                 }
-                g_LibDragIdx = -1;
+                ImGui::EndDragDropTarget();
             }
-        } else if (ImGui::IsMouseReleased(0)) {
-            g_LibDragIdx = -1;
-        }
+
+
+            ImGui::PopID();
+            } // within the profession
+            ImGui::PopID();
+        } // profession groups
     }
 
     // Deferred delete confirmation from context menu
@@ -10771,7 +10829,25 @@ static void RenderBuildLibrary() {
     }
     ImGui::EndChild();
 
-
+    if (!pendingGroup.empty() || !pendingItemId.empty()) {
+        const auto& current = AlterEgo::GW2API::GetSavedBuilds();
+        std::string selectedId;
+        if (g_LibSelectedIdx >= 0 &&
+            g_LibSelectedIdx < static_cast<int>(current.size()))
+            selectedId = current[g_LibSelectedIdx].id;
+        const bool moved = !pendingGroup.empty()
+            ? AlterEgo::GW2API::ReorderSavedBuildGroup(
+                pendingGroup, pendingGroupTarget, pendingGroupAfter)
+            : AlterEgo::GW2API::ReorderSavedBuildInGroup(
+                pendingItemId, pendingItemTarget, pendingItemAfter);
+        if (moved) {
+            const auto& updated = AlterEgo::GW2API::GetSavedBuilds();
+            g_LibSelectedIdx = -1;
+            for (int i = 0; i < static_cast<int>(updated.size()); ++i)
+                if (updated[i].id == selectedId) { g_LibSelectedIdx = i; break; }
+            SaveSession();
+        }
+    }
 }
 
 // Share relay progress/result popups must render regardless of the selected

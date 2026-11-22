@@ -33,6 +33,8 @@ jobs:
           /tmp/infusion_match_core
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/clears_rotation.cpp -o /tmp/clears_rotation
           /tmp/clears_rotation
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_group_order.cpp -o /tmp/build_group_order
+          /tmp/build_group_order
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"

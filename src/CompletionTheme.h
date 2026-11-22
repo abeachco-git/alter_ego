@@ -105,7 +105,9 @@ inline bool CenteredSectionToggle(bool expanded, const char* title) {
 // places the right-hand summary on a second line rather than clipping.
 inline void SectionHeading(const char* title, const char* reset,
                            const char* summary = nullptr,
-                           ImU32 summaryColor = kMetaText) {
+                           ImU32 summaryColor = kMetaText,
+                           ImTextureID leadingIcon = nullptr,
+                           float leadingIconSize = 0.0f) {
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float available = ImGui::GetContentRegionAvail().x;
     const ImFont* font = ImGui::GetFont();
@@ -115,17 +117,28 @@ inline void SectionHeading(const char* title, const char* reset,
     const float resetWidth = (reset && *reset) ? ImGui::CalcTextSize(reset).x : 0.0f;
     const float summaryWidth = (summary && *summary) ? ImGui::CalcTextSize(summary).x : 0.0f;
     const float rowHeight = SectionHeadingRowHeight();
+    const float iconWidth = leadingIconSize > 0.0f ? leadingIconSize + 5.0f : 0.0f;
     const bool wrapSummary = summaryWidth > 0 &&
-        titleSize.x + resetWidth + summaryWidth + 35.0f > available;
+        iconWidth + titleSize.x + resetWidth + summaryWidth + 35.0f > available;
     const float totalHeight = rowHeight + (wrapSummary ? small+4.0f : 0.0f);
     ImGui::Dummy(ImVec2((available > 1.0f ? available : 1.0f), totalHeight));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(start,
         ImVec2(start.x+available, start.y+totalHeight), true);
-    dl->AddText(font, big, ImVec2(start.x, start.y+(rowHeight-big)*0.5f),
+    if (leadingIconSize > 0.0f) {
+        const ImVec2 iconMin(start.x, start.y + (rowHeight-leadingIconSize)*0.5f);
+        if (leadingIcon) {
+            dl->AddImage(leadingIcon, iconMin,
+                ImVec2(iconMin.x + leadingIconSize, iconMin.y + leadingIconSize));
+        } else if (title && *title) {
+            dl->AddText(ImVec2(iconMin.x+3.0f,iconMin.y),
+                kAvailableText, title, title+1);
+        }
+    }
+    dl->AddText(font, big, ImVec2(start.x+iconWidth, start.y+(rowHeight-big)*0.5f),
         kAvailableText, title);
     if (reset && *reset) {
-        const float resetX = start.x+titleSize.x+9.0f;
+        const float resetX = start.x+iconWidth+titleSize.x+9.0f;
         const float resetLimit = wrapSummary ? start.x+available : start.x+available-summaryWidth-10.0f;
         if (resetX+resetWidth <= resetLimit)
             dl->AddText(ImVec2(resetX, start.y+(rowHeight-small)*0.5f),

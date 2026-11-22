@@ -434,6 +434,13 @@ namespace AlterEgo {
         static bool UpdateSavedBuild(const std::string& id, const std::string& name, const std::string& notes);
         static bool SetSavedBuildGameMode(const std::string& id, GameMode mode);
         static bool ReorderSavedBuild(int fromIdx, int toIdx);
+        // Move a whole profession block, or an individual build within its own group.
+        static bool ReorderSavedBuildGroup(const std::string& movedProfession,
+                                           const std::string& targetProfession,
+                                           bool after);
+        static bool ReorderSavedBuildInGroup(const std::string& movedId,
+                                             const std::string& targetId,
+                                             bool after);
         static bool LoadBuildLibrary();
         static bool SaveBuildLibrary();
         // --- Build editor support ---

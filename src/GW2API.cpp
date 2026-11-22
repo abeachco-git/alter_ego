@@ -1,6 +1,7 @@
 #include "GW2API.h"
 #include "HoardAndSeekAPI.h"
 #include "ChatLink.h"
+#include "BuildGroupOrder.h"
 
 #include <windows.h>
 #include <wininet.h>
@@ -2892,6 +2893,30 @@ namespace AlterEgo {
             s_saved_builds.insert(s_saved_builds.begin() + insertAt, std::move(moved));
         }
         return SaveBuildLibrary();
+    }
+
+    bool GW2API::ReorderSavedBuildGroup(const std::string& movedProfession,
+                                         const std::string& targetProfession,
+                                         bool after) {
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            changed = BuildGroupOrder::MoveGroup(
+                s_saved_builds, movedProfession, targetProfession, after);
+        }
+        return changed && SaveBuildLibrary();
+    }
+
+    bool GW2API::ReorderSavedBuildInGroup(const std::string& movedId,
+                                           const std::string& targetId,
+                                           bool after) {
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            changed = BuildGroupOrder::MoveWithinGroup(
+                s_saved_builds, movedId, targetId, after);
+        }
+        return changed && SaveBuildLibrary();
     }
 
     // Serialize a single SavedBuild to JSON. Used by SaveBuildLibrary and
