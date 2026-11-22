@@ -3885,6 +3885,10 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     const bool focus_requested_by_tab = focus_requested && !focus_requested_by_code;
 
     const bool user_clicked = hovered && io.MouseClicked[0];
+    // Right-clicking a text input should also initialize its editing state,
+    // allowing the context menu to operate on the field even if it was not
+    // previously focused. It does not move or clear an existing selection.
+    const bool user_right_clicked = hovered && io.MouseClicked[1];
     const bool user_nav_input_start = (g.ActiveId != id) && ((g.NavInputId == id) || (g.NavActivateId == id && g.NavInputSource == ImGuiInputSource_NavKeyboard));
     const bool user_scroll_finish = is_multiline && state != NULL && g.ActiveId == 0 && g.ActiveIdPreviousFrame == GetWindowScrollbarID(draw_window, ImGuiAxis_Y);
     const bool user_scroll_active = is_multiline && state != NULL && g.ActiveId == GetWindowScrollbarID(draw_window, ImGuiAxis_Y);
@@ -3895,7 +3899,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     float scroll_y = is_multiline ? draw_window->Scroll.y : FLT_MAX;
 
     const bool init_changed_specs = (state != NULL && state->Stb.single_line != !is_multiline);
-    const bool init_make_active = (focus_requested || user_clicked || user_scroll_finish || user_nav_input_start);
+    const bool init_make_active = (focus_requested || user_clicked || user_right_clicked || user_scroll_finish || user_nav_input_start);
     const bool init_state = (init_make_active || user_scroll_active);
     if ((init_state && g.ActiveId != id) || init_changed_specs)
     {
@@ -3974,6 +3978,50 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     bool value_changed = false;
     bool enter_pressed = false;
 
+    // Alter Ego input context menu. This is inside InputTextEx rather than
+    // separate wrappers so the actual selection, cursor, UTF-8 filtering and
+    // resize callbacks remain the same for regular, hint and multiline inputs.
+    // Never expose password fields through the clipboard menu.
+    bool context_cut = false, context_copy = false;
+    bool context_paste = false, context_select_all = false;
+    if (!is_password)
+    {
+        PushID((int)id);
+        if (user_right_clicked)
+            OpenPopup("##AlterEgoTextContext");
+        if (BeginPopup("##AlterEgoTextContext"))
+        {
+            const bool has_text = state && state->CurLenW > 0;
+            const bool has_selection = state && state->HasSelection();
+            const bool can_copy = has_text && (!is_multiline || has_selection);
+            if (MenuItem("Cut", "Ctrl+X", false, !is_readonly && can_copy))
+                context_cut = true;
+            if (MenuItem("Copy", "Ctrl+C", false, can_copy))
+                context_copy = true;
+            if (MenuItem("Paste", "Ctrl+V", false, !is_readonly))
+                context_paste = true;
+            Separator();
+            if (MenuItem("Select All", "Ctrl+A", false, has_text))
+                context_select_all = true;
+            EndPopup();
+        }
+        PopID();
+    }
+    const bool context_action =
+        context_cut || context_copy || context_paste || context_select_all;
+
+    // When a menu item is clicked it becomes ActiveId instead of the input.
+    // Keep the input's edit state/callback configuration for this one action;
+    // without this, menu clicks would silently discard edits for string fields.
+    if (context_action && state && g.ActiveId != id)
+    {
+        state->Edited = false;
+        state->BufCapacityA = buf_size;
+        state->UserFlags = flags;
+        state->UserCallback = callback;
+        state->UserCallbackData = callback_user_data;
+    }
+
     // When read-only we always use the live data passed to the function
     // FIXME-OPT: Because our selection/cursor code currently needs the wide text we need to convert it when active, which is not ideal :(
     if (is_readonly && state != NULL && (render_cursor || render_selection))
@@ -4007,7 +4055,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     }
 
     // Process mouse inputs and character inputs
-    int backup_current_text_length = 0;
+    int backup_current_text_length = context_action && state ? state->CurLenA : 0;
     if (g.ActiveId == id)
     {
         IM_ASSERT(state != NULL);
@@ -4089,7 +4137,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
 
     // Process other shortcuts/key-presses
     bool cancel_edit = false;
-    if (g.ActiveId == id && !g.ActiveIdIsJustActivated && !clear_active_id)
+    if ((g.ActiveId == id && !g.ActiveIdIsJustActivated && !clear_active_id) || context_action)
     {
         IM_ASSERT(state != NULL);
         IM_ASSERT(io.KeyMods == GetMergedKeyModFlags() && "Mismatching io.KeyCtrl/io.KeyShift/io.KeyAlt/io.KeySuper vs io.KeyMods"); // We rarely do this check, but if anything let's do it here.
@@ -4106,22 +4154,23 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         const bool is_shift_key_only = (io.KeyMods == ImGuiKeyModFlags_Shift);
         const bool is_shortcut_key = g.IO.ConfigMacOSXBehaviors ? (io.KeyMods == ImGuiKeyModFlags_Super) : (io.KeyMods == ImGuiKeyModFlags_Ctrl);
 
-        const bool is_cut   = ((is_shortcut_key && IsKeyPressedMap(ImGuiKey_X)) || (is_shift_key_only && IsKeyPressedMap(ImGuiKey_Delete))) && !is_readonly && !is_password && (!is_multiline || state->HasSelection());
-        const bool is_copy  = ((is_shortcut_key && IsKeyPressedMap(ImGuiKey_C)) || (is_ctrl_key_only  && IsKeyPressedMap(ImGuiKey_Insert))) && !is_password && (!is_multiline || state->HasSelection());
-        const bool is_paste = ((is_shortcut_key && IsKeyPressedMap(ImGuiKey_V)) || (is_shift_key_only && IsKeyPressedMap(ImGuiKey_Insert))) && !is_readonly;
+        const bool is_cut   = (context_cut || (is_shortcut_key && IsKeyPressedMap(ImGuiKey_X)) || (is_shift_key_only && IsKeyPressedMap(ImGuiKey_Delete))) && !is_readonly && !is_password && (!is_multiline || state->HasSelection());
+        const bool is_copy  = (context_copy || (is_shortcut_key && IsKeyPressedMap(ImGuiKey_C)) || (is_ctrl_key_only  && IsKeyPressedMap(ImGuiKey_Insert))) && !is_password && (!is_multiline || state->HasSelection());
+        const bool is_paste = (context_paste || (is_shortcut_key && IsKeyPressedMap(ImGuiKey_V)) || (is_shift_key_only && IsKeyPressedMap(ImGuiKey_Insert))) && !is_readonly;
         const bool is_undo  = ((is_shortcut_key && IsKeyPressedMap(ImGuiKey_Z)) && !is_readonly && is_undoable);
         const bool is_redo  = ((is_shortcut_key && IsKeyPressedMap(ImGuiKey_Y)) || (is_osx_shift_shortcut && IsKeyPressedMap(ImGuiKey_Z))) && !is_readonly && is_undoable;
 
-        if (IsKeyPressedMap(ImGuiKey_LeftArrow))                        { state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_LINESTART : is_wordmove_key_down ? STB_TEXTEDIT_K_WORDLEFT : STB_TEXTEDIT_K_LEFT) | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_RightArrow))                  { state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_LINEEND : is_wordmove_key_down ? STB_TEXTEDIT_K_WORDRIGHT : STB_TEXTEDIT_K_RIGHT) | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_UpArrow) && is_multiline)     { if (io.KeyCtrl) SetScrollY(draw_window, ImMax(draw_window->Scroll.y - g.FontSize, 0.0f)); else state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_TEXTSTART : STB_TEXTEDIT_K_UP) | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_DownArrow) && is_multiline)   { if (io.KeyCtrl) SetScrollY(draw_window, ImMin(draw_window->Scroll.y + g.FontSize, GetScrollMaxY())); else state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_TEXTEND : STB_TEXTEDIT_K_DOWN) | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_PageUp) && is_multiline)      { state->OnKeyPressed(STB_TEXTEDIT_K_PGUP | k_mask); scroll_y -= row_count_per_page * g.FontSize; }
-        else if (IsKeyPressedMap(ImGuiKey_PageDown) && is_multiline)    { state->OnKeyPressed(STB_TEXTEDIT_K_PGDOWN | k_mask); scroll_y += row_count_per_page * g.FontSize; }
-        else if (IsKeyPressedMap(ImGuiKey_Home))                        { state->OnKeyPressed(io.KeyCtrl ? STB_TEXTEDIT_K_TEXTSTART | k_mask : STB_TEXTEDIT_K_LINESTART | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_End))                         { state->OnKeyPressed(io.KeyCtrl ? STB_TEXTEDIT_K_TEXTEND | k_mask : STB_TEXTEDIT_K_LINEEND | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_Delete) && !is_readonly)      { state->OnKeyPressed(STB_TEXTEDIT_K_DELETE | k_mask); }
-        else if (IsKeyPressedMap(ImGuiKey_Backspace) && !is_readonly)
+        if (context_select_all)                                    { state->SelectAll(); state->CursorFollow = true; }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_LeftArrow))                        { state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_LINESTART : is_wordmove_key_down ? STB_TEXTEDIT_K_WORDLEFT : STB_TEXTEDIT_K_LEFT) | k_mask); }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_RightArrow))                  { state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_LINEEND : is_wordmove_key_down ? STB_TEXTEDIT_K_WORDRIGHT : STB_TEXTEDIT_K_RIGHT) | k_mask); }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_UpArrow) && is_multiline)     { if (io.KeyCtrl) SetScrollY(draw_window, ImMax(draw_window->Scroll.y - g.FontSize, 0.0f)); else state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_TEXTSTART : STB_TEXTEDIT_K_UP) | k_mask); }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_DownArrow) && is_multiline)   { if (io.KeyCtrl) SetScrollY(draw_window, ImMin(draw_window->Scroll.y + g.FontSize, GetScrollMaxY())); else state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_TEXTEND : STB_TEXTEDIT_K_DOWN) | k_mask); }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_PageUp) && is_multiline)      { state->OnKeyPressed(STB_TEXTEDIT_K_PGUP | k_mask); scroll_y -= row_count_per_page * g.FontSize; }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_PageDown) && is_multiline)    { state->OnKeyPressed(STB_TEXTEDIT_K_PGDOWN | k_mask); scroll_y += row_count_per_page * g.FontSize; }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_Home))                        { state->OnKeyPressed(io.KeyCtrl ? STB_TEXTEDIT_K_TEXTSTART | k_mask : STB_TEXTEDIT_K_LINESTART | k_mask); }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_End))                         { state->OnKeyPressed(io.KeyCtrl ? STB_TEXTEDIT_K_TEXTEND | k_mask : STB_TEXTEDIT_K_LINEEND | k_mask); }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_Delete) && !is_readonly)      { state->OnKeyPressed(STB_TEXTEDIT_K_DELETE | k_mask); }
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_Backspace) && !is_readonly)
         {
             if (!state->HasSelection())
             {
@@ -4132,7 +4181,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
             }
             state->OnKeyPressed(STB_TEXTEDIT_K_BACKSPACE | k_mask);
         }
-        else if (IsKeyPressedMap(ImGuiKey_Enter) || IsKeyPressedMap(ImGuiKey_KeyPadEnter))
+        else if (!context_action && (IsKeyPressedMap(ImGuiKey_Enter) || IsKeyPressedMap(ImGuiKey_KeyPadEnter)))
         {
             bool ctrl_enter_for_new_line = (flags & ImGuiInputTextFlags_CtrlEnterForNewLine) != 0;
             if (!is_multiline || (ctrl_enter_for_new_line && !io.KeyCtrl) || (!ctrl_enter_for_new_line && io.KeyCtrl))
@@ -4146,16 +4195,16 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
                     state->OnKeyPressed((int)c);
             }
         }
-        else if (IsKeyPressedMap(ImGuiKey_Escape))
+        else if (!context_action && IsKeyPressedMap(ImGuiKey_Escape))
         {
             clear_active_id = cancel_edit = true;
         }
-        else if (is_undo || is_redo)
+        else if (!context_action && (is_undo || is_redo))
         {
             state->OnKeyPressed(is_undo ? STB_TEXTEDIT_K_UNDO : STB_TEXTEDIT_K_REDO);
             state->ClearSelection();
         }
-        else if (is_shortcut_key && IsKeyPressedMap(ImGuiKey_A))
+        else if (!context_action && is_shortcut_key && IsKeyPressedMap(ImGuiKey_A))
         {
             state->SelectAll();
             state->CursorFollow = true;
@@ -4214,7 +4263,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     }
 
     // Process callbacks and apply result back to user's buffer.
-    if (g.ActiveId == id)
+    if (g.ActiveId == id || context_action)
     {
         IM_ASSERT(state != NULL);
         const char* apply_new_text = NULL;
