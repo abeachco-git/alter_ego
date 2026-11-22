@@ -251,16 +251,19 @@ static void RenderFashionSlot(const char* label, uint16_t skinID, const uint16_t
 }
 
 static void RenderFashionLibrary() {
-    // Collection-wide actions live in the top-level Library dropdown.
-    ImGui::SetNextItemWidth(180);
-    ImGui::InputTextWithHint("##fashion_search", "Search looks / characters", g_FashionSearch, sizeof(g_FashionSearch));
-    ImGui::SameLine();
+    // Collection-wide actions remain in the top-level Library dropdown.
+    // Controls match the Characters and Builds lists: filter, then search,
+    // both full-width and contained entirely inside the left column.
     const char* filters[] = {"All weights", "Light", "Medium", "Heavy", "Any", "Unknown"};
-    ImGui::SetNextItemWidth(130);
-    ImGui::Combo("##fashion_filter", &g_FashionFilter, filters, IM_ARRAYSIZE(filters));
     float avail = ImGui::GetContentRegionAvail().x;
     float leftWidth = ImMax(130.f, ImMin(g_LibListWidth, ImMax(130.f, avail - 220.f)));
     ImGui::BeginChild("##fashion_list", ImVec2(leftWidth, 0), true);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::Combo("##fashion_filter", &g_FashionFilter, filters, IM_ARRAYSIZE(filters));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::InputTextWithHint("##fashion_search", "Search looks / characters",
+                             g_FashionSearch, sizeof(g_FashionSearch));
+    ImGui::Separator();
     if (g_FashionLibrary.looks.empty())
         ImGui::TextWrapped("No saved fashion. Capture an Equipment tab or import a Wardrobe Template.");
     for (int i = 0; i < (int)g_FashionLibrary.looks.size(); ++i) {
