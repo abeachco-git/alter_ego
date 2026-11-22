@@ -836,7 +836,7 @@ static int g_LibSelectedIdx = -1;
 // Build editor: "+ New Build" dialog state
 static bool g_NewBuildDialogOpen = false;
 static std::string g_NewBuildProfessionPending;
-static int  g_NewBuildGameMode = 0; // index into GameMode (0=PvE,1=WvW,2=PvP,3=Raid,4=Fractal)
+static std::vector<AlterEgo::GameMode> g_NewBuildModes{AlterEgo::GameMode::PvE};
 // Build editor: working draft + spec picker state
 static AlterEgo::SavedBuild g_EditDraft;   // working copy while editing a build's definition
 static std::string g_EditDraftId;          // id the draft currently mirrors
@@ -858,7 +858,7 @@ static std::string g_LibImportPendingProfession;
 // Right-pane edit mode: by default the Name/Mode/Notes inputs are hidden
 // behind an Edit button to keep the preview clean.
 static bool g_LibEditMode = false;
-static int g_LibImportMode = 0;        // GameMode for import
+static std::vector<AlterEgo::GameMode> g_LibImportModes{AlterEgo::GameMode::PvE};
 static bool g_LibShowImport = false;
 static std::string g_LibImportError;
 // A Snow Crows page is fetched and parsed on a worker; the library is only
@@ -1323,7 +1323,8 @@ static int g_GearExactInfusionId = 0;
 // Save to Library dialog state
 static bool g_SaveLibDialogOpen = false;
 static char g_SaveLibName[128] = "";
-static int g_SaveLibMode = 0;              // GameMode index
+static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
+static bool g_SaveLibNameManuallyEdited = false;
 static bool g_SaveLibIncludeEquip = false;
 static int g_SaveLibEquipTab = 0;          // Selected equipment tab number (1-based)
 static std::string g_SaveLibChatLink;      // Pre-built chat link
@@ -4981,6 +4982,32 @@ static AlterEgo::GameMode GameModeFromIndex(int idx) {
     }
 }
 
+// Shared across New, Import, Save and saved-build Edit. Always retain at least one mode.
+static bool RenderGameModeSelector(const char* id, std::vector<AlterEgo::GameMode>& chosen) {
+    static const AlterEgo::GameMode modes[] = {
+        AlterEgo::GameMode::PvE, AlterEgo::GameMode::WvW,
+        AlterEgo::GameMode::PvP, AlterEgo::GameMode::Raid,
+        AlterEgo::GameMode::Fractal, AlterEgo::GameMode::Other
+    };
+    if (chosen.empty()) chosen.push_back(AlterEgo::GameMode::PvE);
+    bool changed = false;
+    ImGui::PushID(id);
+    for (int i = 0; i < IM_ARRAYSIZE(modes); ++i) {
+        if (i) ImGui::SameLine(0.0f, 4.0f);
+        const auto mode = modes[i];
+        const bool active = std::find(chosen.begin(), chosen.end(), mode) != chosen.end();
+        if (RenderChipButton(GameModeLabel(mode), active, ImVec4(0,0,0,0), true)) {
+            if (active) {
+                if (chosen.size() > 1)
+                    chosen.erase(std::remove(chosen.begin(), chosen.end(), mode), chosen.end());
+            } else chosen.push_back(mode);
+            changed = true;
+        }
+    }
+    ImGui::PopID();
+    return changed;
+}
+
 static bool GameModeMatchesFilter(const AlterEgo::SavedBuild& build, int filter) {
     if (!build.game_modes.empty()) {
         if (filter == 0) return true;
@@ -6984,19 +7011,8 @@ static void RenderNewBuildDialog() {
     if (ImGui::BeginPopupModal("New Build##newbuild", &g_NewBuildDialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         constexpr float kGridWidth = 480.0f;
-        const char* modeLabels[] = {"PvE", "WvW", "PvP", "Raid", "Fractal"};
-        // Align the label vertically with the themed dropdown, rather than
-        // leaving the label at the unpadded text baseline.
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Game mode");
-        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
-        if (g_NewBuildGameMode < 0 || g_NewBuildGameMode > 4) g_NewBuildGameMode = 0;
-        if (RenderThemedCombo("##nbmode", modeLabels[g_NewBuildGameMode], 140.0f)) {
-            for (int m = 0; m < 5; ++m)
-                if (ImGui::Selectable(modeLabels[m], g_NewBuildGameMode == m))
-                    g_NewBuildGameMode = m;
-            ImGui::EndCombo();
-        }
+        ImGui::TextUnformatted("Game modes");
+        RenderGameModeSelector("new-build-modes", g_NewBuildModes);
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -7017,7 +7033,8 @@ static void RenderNewBuildDialog() {
                     profession, profession);
                 if (clicked) {
                     AlterEgo::SavedBuild blank = AlterEgo::GW2API::CreateBlankBuild(
-                        profession, (AlterEgo::GameMode)g_NewBuildGameMode);
+                        profession, g_NewBuildModes.front());
+                    blank.game_modes = g_NewBuildModes;
                     int idx = AlterEgo::GW2API::AddSavedBuild(std::move(blank));
                     if (idx >= 0) {
                         const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
@@ -8909,32 +8926,12 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 modeX = ImGui::GetItemRectMax().x + 3.0f;
             }
         } else {
-            struct MC { AlterEgo::GameMode mode; const char* lbl; };
-            const MC modes[] = {
-                { AlterEgo::GameMode::PvE,     "PvE" },
-                { AlterEgo::GameMode::WvW,     "WvW" },
-                { AlterEgo::GameMode::PvP,     "PvP" },
-                { AlterEgo::GameMode::Raid,    "Raid" },
-                { AlterEgo::GameMode::Fractal, "Fractal" },
-            };
-            for (int m = 0; m < 5; m++) {
-                const float chipH = ImMax(22.0f, ImGui::GetTextLineHeight() + 4.0f);
-                ImGui::SetCursorScreenPos(ImVec2(modeX, subtitleMidY - chipH * 0.5f));
-                ImGui::PushID(m + 800);
-                const auto& selected = g_EditDraft.game_modes;
-                const bool active = selected.empty() ? g_EditDraft.game_mode == modes[m].mode :
-                    std::find(selected.begin(), selected.end(), modes[m].mode) != selected.end();
-                if (RenderChipButton(modes[m].lbl, active, ImVec4(0, 0, 0, 0), true)) {
-                    if (g_EditDraft.game_modes.empty()) g_EditDraft.game_modes = {g_EditDraft.game_mode};
-                    auto& tags = g_EditDraft.game_modes;
-                    auto it = std::find(tags.begin(), tags.end(), modes[m].mode);
-                    if (it == tags.end()) tags.push_back(modes[m].mode);
-                    else if (tags.size() > 1) tags.erase(it);
-                    g_EditDraft.game_mode = tags.front();
-                    MarkEditDirty();
-                }
-                modeX = ImGui::GetItemRectMax().x + 3.0f;
-                ImGui::PopID();
+            ImGui::SetCursorScreenPos(ImVec2(modeX, subtitleMidY -
+                ImMax(22.0f, ImGui::GetTextLineHeight()+4.0f)*0.5f));
+            if (g_EditDraft.game_modes.empty()) g_EditDraft.game_modes = {g_EditDraft.game_mode};
+            if (RenderGameModeSelector("saved-build-edit", g_EditDraft.game_modes)) {
+                g_EditDraft.game_mode = g_EditDraft.game_modes.front();
+                MarkEditDirty();
             }
         }
 
