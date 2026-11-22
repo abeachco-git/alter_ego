@@ -105,7 +105,11 @@ int main() {
     const auto pos = html.find("<small>Relic</small>");
     assert(pos != std::string::npos);
     html.replace(pos, std::string("<small>Relic</small>").size(), "<small>Unknown</small>");
-    assert(!MetaBattle::Parse(url, html, parsed, error));
-    assert(!error.empty() && parsed.gear.size() == original);
+    // A missing relic is not fatal: preserve extractable gear and annotate the gap.
+    assert(MetaBattle::Parse(url, html, parsed, error));
+    assert(error.empty());
+    assert(parsed.gear.size() == original);
+    assert(parsed.relicId == 0);
+    assert(parsed.importWarning.find("Relic not resolved") != std::string::npos);
     return 0;
 }
