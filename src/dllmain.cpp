@@ -16667,11 +16667,15 @@ void AddonRender() {
         const bool libraryVisible = ImGui::BeginTabItem("Library    ##ae_library_dropdown", nullptr, libraryFlags);
         // An open hover-menu would normally block clicks on its parent tab.
         // Preserve direct Library navigation even while the menu is visible.
-        const bool libraryHeaderHovered = ImGui::IsItemHovered(
-            ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+        const bool libraryOwnPopupOpen = ImGui::IsPopupOpen("Library menu##ae_main");
+        const bool libraryNormalHovered = ImGui::IsItemHovered();
+        const bool libraryHeaderHovered = libraryNormalHovered ||
+            (libraryOwnPopupOpen && ImGui::IsItemHovered(
+                ImGuiHoveredFlags_AllowWhenBlockedByPopup));
         const bool libraryHeaderClicked =
             ImGui::IsItemClicked(ImGuiMouseButton_Left) ||
-            (libraryHeaderHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+            (libraryOwnPopupOpen && libraryHeaderHovered &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Left));
         bool libraryDirectNavigationClick = false;
         const ImVec2 libraryTabMin = ImGui::GetItemRectMin();
         const ImVec2 libraryTabMax = ImGui::GetItemRectMax();
