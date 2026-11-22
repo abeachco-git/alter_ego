@@ -8100,19 +8100,6 @@ static void RenderSaveToLibraryDialog() {
         return;
     }
 
-    ImGui::Text("Build Name:");
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName))) g_SaveLibNameManuallyEdited = true;
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Game modes");
-    RenderGameModeSelector("live-save-modes", g_SaveLibModes);
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::Checkbox("Include equipment set", &g_SaveLibIncludeEquip);
     const auto* sourceChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
     if (sourceChar) {
         ImGui::Text("Character: %s (%s)", sourceChar->name.c_str(), sourceChar->profession.c_str());
@@ -8126,7 +8113,8 @@ static void RenderSaveToLibraryDialog() {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Build tab");
         ImGui::SameLine(130);
-        if (RenderThemedCombo("##save_build_tab", selectedBuildName.c_str(), ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
+        if (RenderThemedCombo("##save_build_tab", selectedBuildName.c_str(),
+                             ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
             for (const auto& bt : sourceChar->build_tabs) {
                 std::string label = nameForBuild(bt) + (bt.is_active ? " (Active)" : "");
                 if (ImGui::Selectable(label.c_str(), bt.tab == g_SaveLibBuildTab)) {
@@ -8142,26 +8130,43 @@ static void RenderSaveToLibraryDialog() {
             }
             ImGui::EndCombo();
         }
-        if (g_SaveLibIncludeEquip) {
-            auto equipName = [&](int tab) {
-                auto it = sourceChar->equipment_tab_names.find(tab);
-                return it != sourceChar->equipment_tab_names.end() && !it->second.empty()
-                    ? it->second : "Tab " + std::to_string(tab);
-            };
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Equipment tab");
-            ImGui::SameLine(130);
-            const std::string shown = equipName(g_SaveLibEquipTab);
-            if (RenderThemedCombo("##save_equip_tab", shown.c_str(), ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
-                for (int t = 1; t <= GetRetrievedEquipmentTabCount(*sourceChar); ++t) {
-                    std::string label = equipName(t) +
-                        (t == sourceChar->active_equipment_tab ? " (Active)" : "");
-                    if (ImGui::Selectable(label.c_str(), t == g_SaveLibEquipTab)) g_SaveLibEquipTab = t;
-                }
-                ImGui::EndCombo();
-            }
-        }
     } else ImGui::TextDisabled("Character data unavailable");
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Build name");
+    ImGui::SameLine(130);
+    ImGui::SetNextItemWidth(ImMax(140.0f, ImGui::GetContentRegionAvail().x));
+    if (ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName)))
+        g_SaveLibNameManuallyEdited = true;
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Game modes");
+    RenderGameModeSelector("live-save-modes", g_SaveLibModes);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Checkbox("Include equipment set", &g_SaveLibIncludeEquip);
+    if (sourceChar && g_SaveLibIncludeEquip) {
+        auto equipName = [&](int tab) {
+            auto it = sourceChar->equipment_tab_names.find(tab);
+            return it != sourceChar->equipment_tab_names.end() && !it->second.empty()
+                ? it->second : "Tab " + std::to_string(tab);
+        };
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Equipment tab");
+        ImGui::SameLine(130);
+        const std::string shown = equipName(g_SaveLibEquipTab);
+        if (RenderThemedCombo("##save_equip_tab", shown.c_str(),
+                             ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
+            for (int t = 1; t <= GetRetrievedEquipmentTabCount(*sourceChar); ++t) {
+                std::string label = equipName(t) +
+                    (t == sourceChar->active_equipment_tab ? " (Active)" : "");
+                if (ImGui::Selectable(label.c_str(), t == g_SaveLibEquipTab))
+                    g_SaveLibEquipTab = t;
+            }
+            ImGui::EndCombo();
+        }
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
