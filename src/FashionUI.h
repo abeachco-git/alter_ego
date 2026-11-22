@@ -112,9 +112,13 @@ static void StartLiveFashionSave(const AlterEgo::Character& ch, int tab) {
 
 static void RenderFashionDialog() {
     if (!g_FashionDialog) return;
-    ImGui::SetNextWindowSize(ImVec2(470, 0), ImGuiCond_Appearing);
+    // Fixed initial dimensions, user-resizable thereafter. Do not combine
+    // an appearing-only width with AlwaysAutoResize: that made the window
+    // shrink and jump as optional character/duplicate fields changed.
+    ImGui::SetNextWindowSize(ImVec2(495, 350), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(475, 310), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Save Fashion##ae_fashion", &g_FashionDialog,
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
@@ -146,7 +150,7 @@ static void RenderFashionDialog() {
             }
             if (g_FashionError.empty()) {
                 g_FashionSelected = duplicate;
-                g_LibraryCollection = 1;
+                NavigateToLibraryCollection(1);
                 g_FashionDialog = false;
             }
         }
@@ -178,7 +182,7 @@ static void RenderFashionDialog() {
             if (ok) g_FashionSelected = added;
         }
         if (ok) {
-            g_LibraryCollection = 1;
+            NavigateToLibraryCollection(1);
             g_FashionDialog = false;
             if (APIDefs) APIDefs->GUI_SendAlert("Fashion saved.");
         } else g_FashionError = "Could not save. Check the name and library file permissions.";
@@ -243,17 +247,7 @@ static void RenderFashionSlot(const char* label, uint16_t skinID, const uint16_t
 }
 
 static void RenderFashionLibrary() {
-    if (RenderActionButton("Import")) {
-        g_LibShowImport = true;
-        g_LibImportBuf[0] = '\0';
-        g_LibImportName[0] = '\0';
-        g_LibImportError.clear();
-        g_LibImportPending = false;
-        g_LibImportPendingProfession.clear();
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("Save from Characters > Equipment, or import a Wardrobe Template.");
-    ImGui::Spacing();
+    // Collection-wide actions live in the top-level Library dropdown.
     ImGui::SetNextItemWidth(180);
     ImGui::InputTextWithHint("##fashion_search", "Search looks / characters", g_FashionSearch, sizeof(g_FashionSearch));
     ImGui::SameLine();
