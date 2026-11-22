@@ -1946,7 +1946,13 @@ namespace AlterEgo {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (uint32_t id : skin_ids) {
-                if (id != 0 && s_skin_cache.find(id) == s_skin_cache.end())
+                // Re-fetch legacy cached armor entries missing the new weight metadata.
+                // Otherwise a user updating from older Alter Ego builds could never
+                // determine Light/Medium/Heavy for imported wardrobe links.
+                if (id == 0) continue;
+                auto found = s_skin_cache.find(id);
+                if (found == s_skin_cache.end() ||
+                    (found->second.type == "Armor" && found->second.weight_class.empty()))
                     to_fetch.push_back(id);
             }
         }
