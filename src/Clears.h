@@ -27,6 +27,8 @@ void RenderClears();
 // sections only; the tab's manual Refresh continues to fetch everything.
 void RefreshVaultOnEntry();
 void RefreshClearsOnEntry();
+// Reload restored UI preferences without requiring the next disk write to overwrite them.
+void ReloadClearUiSettings();
 void OnClearsAchResponse(void* eventArgs);
 void OnVaultResponse(void* eventArgs);
 void OnVaultSeasonResponse(void* eventArgs);
