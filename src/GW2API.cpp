@@ -1806,42 +1806,63 @@ namespace AlterEgo {
     }
 
     void GW2API::FetchProfessionInfoAsync(const std::string& profession) {
+        // This function is called every frame by several views. Without an
+        // in-flight guard, a slow first response can create hundreds of
+        // simultaneous detached workers for the same profession.
+        static const std::set<std::string> validProfessions = {
+            "Guardian", "Warrior", "Engineer", "Ranger", "Thief",
+            "Elementalist", "Mesmer", "Necromancer", "Revenant"
+        };
+        static std::unordered_set<std::string> inFlight;
+        if (!validProfessions.count(profession)) return;
+
+        const std::string prof = profession; // own a stable copy before dispatch
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            if (s_profession_cache.find(profession) != s_profession_cache.end()) return;
+            if (s_profession_cache.find(prof) != s_profession_cache.end() ||
+                !inFlight.insert(prof).second) return;
         }
 
-        auto prof = profession;
-        std::thread([prof]() {
-            std::string url = "https://api.guildwars2.com/v2/professions/" + prof;
-            std::string response = HttpGet(url);
-            if (response.empty()) return;
+        try {
+            std::thread([prof]() {
+                try {
+                    const std::string url = "https://api.guildwars2.com/v2/professions/" + prof;
+                    const std::string response = HttpGet(url);
+                    if (!response.empty()) {
+                        json j = json::parse(response);
+                        ProfessionInfo info;
+                        info.name = j.value("name", prof);
+                        info.icon_url = j.value("icon", "");
+                        info.icon_big_url = j.value("icon_big", "");
+                        if (j.contains("specializations") && j["specializations"].is_array())
+                            for (const auto& spec : j["specializations"])
+                                if (spec.is_number_unsigned())
+                                    info.specialization_ids.push_back(spec.get<uint32_t>());
 
-            try {
-                json j = json::parse(response);
-                ProfessionInfo info;
-                info.name = j.value("name", prof);
-                info.icon_url = j.value("icon", "");
-                info.icon_big_url = j.value("icon_big", "");
-                if (j.contains("specializations") && j["specializations"].is_array())
-                    for (const auto& s : j["specializations"])
-                        if (s.is_number_unsigned()) info.specialization_ids.push_back(s.get<uint32_t>());
-
-                std::vector<uint32_t> specIds = info.specialization_ids;
-                {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    s_profession_cache[prof] = std::move(info);
-                }
-
-                // Populate s_spec_cache so the build editor can show trait grids.
-                if (!specIds.empty()) FetchSpecDetailsAsync(specIds);
-
-                if (s_api) {
-                    std::string msg = "Loaded profession info for " + prof;
-                    s_api->Log(LOGL_INFO, "AlterEgo", msg.c_str());
-                }
-            } catch (...) {}
-        }).detach();
+                        const auto specIds = info.specialization_ids;
+                        {
+                            std::lock_guard<std::mutex> lock(s_mutex);
+                            s_profession_cache[prof] = std::move(info);
+                        }
+                        if (!specIds.empty()) FetchSpecDetailsAsync(specIds);
+                        if (s_api) {
+                            const std::string msg = "Loaded profession info for " + prof;
+                            s_api->Log(LOGL_INFO, "AlterEgo", msg.c_str());
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    if (s_api) s_api->Log(LOGL_WARNING, "AlterEgo",
+                        (std::string("Profession metadata request failed: ") + e.what()).c_str());
+                } catch (...) {}
+                // Permit retry after failures; the cache prevents new requests
+                // after a successful response. Always clear on worker exit.
+                std::lock_guard<std::mutex> lock(s_mutex);
+                inFlight.erase(prof);
+            }).detach();
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            inFlight.erase(prof);
+        }
     }
 
     // =========================================================================
