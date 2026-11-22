@@ -3,6 +3,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <mutex>
 #include <condition_variable>
@@ -44,6 +45,8 @@ private:
 
     static AddonAPI_t* s_API;
     static std::unordered_map<uint32_t, Texture_t*> s_IconCache;
+    // One-time negative disk lookups prevent filesystem stats on every frame.
+    static std::unordered_set<uint32_t> s_DiskCheckedMissing;
     static std::unordered_map<uint32_t, bool> s_LoadingIcons;
     static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> s_FailedIcons;
     static const int RETRY_COOLDOWN_SEC = 300;
