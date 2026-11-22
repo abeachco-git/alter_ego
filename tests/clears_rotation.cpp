@@ -1,9 +1,25 @@
 #include "../src/ClearsRotation.h"
+#include "../src/ClearsReset.h"
 #include "../src/FractalScales.h"
 #include <cassert>
 #include <string>
 int main() {
     using namespace ClearsRotation;
+    using namespace ClearsReset;
+    // At 00:00 UTC we must NOT consume the reset marker before the API grace
+    // period. This was the cause of Vault + daily Fractals missing rollover.
+    constexpr int64_t day = 86400, reset = 1795305600;
+    assert(InitialMarker(reset, reset + 15, day) == reset - day);
+    assert(InitialMarker(reset, reset + 61, day) == reset);
+    assert(!Due(reset - day, reset, reset + 59));
+    assert(Due(reset - day, reset, reset + 60));
+    assert(!Due(reset, reset, reset + 3600));
+    assert(LooksUnrotated({101, 102}, {102, 101}));
+    assert(!LooksUnrotated({101, 102}, {101, 103}));
+    assert(LooksUnrotated({101, 102}, {}));
+    assert(!LooksUnrotated({}, {101, 102}));
+    assert(RetryDelaySeconds(1) == 30 && RetryDelaySeconds(2) == 60);
+    assert(RetryDelaySeconds(3) == 120 && RetryDelaySeconds(6) == 300);
     constexpr int64_t nov21 = 1795219200;
     assert(BountySet(nov21) == 1);
     assert(std::string(BountyName(BountySet(nov21), 1)) == "Cardinal Sabir");
