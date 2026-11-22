@@ -3262,8 +3262,23 @@ void RenderClears() { RenderClearsShared(false); }
 // disk cache immediately; the old account's status must never be displayed.
 void SyncCompletionAccountCaches() {
     const std::string account = GetEffectiveAccountName();
-    if (account == g_ClearsCacheAccount && account == g_VaultCacheAccount)
+    if (account == g_ClearsCacheAccount && account == g_VaultCacheAccount) {
+        // At cold startup the active account name can become known before
+        // H&S confirms there is exactly one configured account. Retry legacy
+        // migration once after that confirmation rather than losing the old
+        // disk snapshot until the next successful network refresh.
+        static std::string legacyCheckedAccount;
+        if (!account.empty() && AlterEgo::GW2API::HasAccountsData() &&
+            AlterEgo::GW2API::GetAccountCount() == 1 &&
+            legacyCheckedAccount != account) {
+            legacyCheckedAccount = account;
+            if (!std::filesystem::exists(AccountCacheFile("clears_cache", account)))
+                LoadClearsCache();
+            if (!std::filesystem::exists(AccountCacheFile("vault_cache", account)))
+                LoadVaultCache();
+        }
         return;
+    }
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_ClearsCacheAccount = account;
