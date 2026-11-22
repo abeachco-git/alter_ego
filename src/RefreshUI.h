@@ -61,4 +61,80 @@ inline void Status(State state, const std::string& message) {
         ImGui::TextColored(dim, "%s", message.c_str());
     }
 }
+
+inline float RowHeight() {
+    return std::max(30.0f, ImGui::GetFrameHeight()) + ImGui::GetStyle().ItemSpacing.y + 3.0f;
+}
+
+// One shared bottom status row for Characters, Compare, Skinventory, Vault,
+// Clears and Achievements. Status details appear on hover; the last successful
+// retrieval time is always right aligned and never replaced by a failure time.
+// The optional ellipsis reuses the Characters multi-character picker.
+inline bool Row(const char* id, std::time_t stamp, const char* source,
+                State state, const std::string& detail, bool disabled = false,
+                bool* moreClicked = nullptr) {
+    ImGui::PushID(id);
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float buttonH = std::max(30.0f, ImGui::GetFrameHeight());
+    if (disabled) {
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+    }
+    const bool clicked = ImGui::Button("Refresh", ImVec2(0, buttonH));
+    if (disabled) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
+    if (moreClicked) {
+        ImGui::SameLine(0.0f, 5.0f);
+        *moreClicked = ImGui::Button("...", ImVec2(29.0f, buttonH));
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Choose one or more characters to refresh");
+    }
+
+    ImGui::SameLine(0.0f, 9.0f);
+    const float statusX = ImGui::GetCursorScreenPos().x;
+    const std::string stampLabel = stamp > 0 ? "Updated " + Age(stamp) : "Not updated";
+    const float stampWidth = ImGui::CalcTextSize(stampLabel.c_str()).x;
+    const float rightX = start.x + width;
+    const float stampX = std::max(statusX, rightX - stampWidth);
+    const float maxStatus = std::max(0.0f, stampX - statusX - 8.0f);
+    const char* shortStatus = state == State::Working ? "Refreshing" :
+                              state == State::Success ? "Complete" :
+                              state == State::Error ? "Failed" : "Ready";
+    std::string statusText(shortStatus);
+    while (!statusText.empty() &&
+           ImGui::CalcTextSize(statusText.c_str()).x > maxStatus)
+        statusText.pop_back();
+    const ImVec4 statusColor = state == State::Working ? ImVec4(0.98f, 0.80f, 0.34f, 1.0f) :
+        state == State::Success ? ImVec4(0.48f, 0.82f, 0.52f, 1.0f) :
+        state == State::Error ? ImVec4(0.98f, 0.42f, 0.40f, 1.0f) :
+        ImVec4(0.58f, 0.58f, 0.58f, 1.0f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(statusColor, "%s", statusText.c_str());
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", detail.empty() ? shortStatus : detail.c_str());
+
+    // Keep timestamp in the same row even when a long API status is reported.
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::SetCursorScreenPos(ImVec2(stampX,
+        start.y + (buttonH - ImGui::GetTextLineHeight()) * 0.5f));
+    ImGui::TextDisabled("%s", stampLabel.c_str());
+    if (ImGui::IsItemHovered()) {
+        if (stamp > 0) {
+            std::tm local{};
+#ifdef _WIN32
+            localtime_s(&local, &stamp);
+#else
+            localtime_r(&stamp, &local);
+#endif
+            char when[64] = {};
+            std::strftime(when, sizeof(when), "%b %d, %Y at %I:%M:%S %p", &local);
+            ImGui::SetTooltip("Last successful %s retrieval:\\n%s (local time)", source, when);
+        } else {
+            ImGui::SetTooltip("No confirmed successful %s retrieval time", source);
+        }
+    }
+    ImGui::PopID();
+    return clicked;
+}
+
 } // namespace AlterEgo::RefreshUI
