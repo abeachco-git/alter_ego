@@ -8313,6 +8313,12 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
 
     tryItem(build.rune_id, build.rune_name);
     tryItem(build.relic_id, build.relic_name);
+    // Imported builds specify infusions across the entire equipment set.
+    // Resolve their display names after a restart even if the item cache
+    // was missing when the build was first imported.
+    for (const auto& inf : build.infusion_totals)
+        if (inf.item_id && !AlterEgo::GW2API::GetItemInfo(inf.item_id))
+            missingItems.push_back(inf.item_id);
 
     for (auto& [slot, gs] : build.gear) {
         tryItem(gs.sigil_id, gs.sigil);
@@ -8515,7 +8521,9 @@ static void FetchSnowCrowsBuild(const std::string& url, const std::string& refre
         if (normalized.empty()) {
             result.error = "Invalid Snow Crows build URL.";
         } else {
-            const auto response = Skinventory::HttpClient::GetEx(normalized);
+            const auto response = Skinventory::HttpClient::GetEx(normalized,
+                "User-Agent: Mozilla/5.0 (compatible; AlterEgo/1.0)\r\n"
+                "Accept: text/html\r\n");
             if (response.status_code != 200) {
                 result.error = "Snow Crows download failed (HTTP " +
                     std::to_string(response.status_code) + ").";
