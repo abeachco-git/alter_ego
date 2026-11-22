@@ -2,6 +2,7 @@
 #include <cassert>
 #include <fstream>
 #include <iterator>
+#include <iostream>
 #include <string>
 
 static std::string Tile(int id, const std::string& label) {
@@ -124,23 +125,95 @@ int main(int argc, char** argv) {
     assert(parsed.relicId == 0);
     assert(parsed.importWarning.find("Relic not resolved") != std::string::npos);
 
-    // Optional live-page verification: GitHub's diagnostic workflow supplies
-    // the fetched Reaper HTML. The fixture above remains fully offline.
+    // Local four-page regression verification against actual server-rendered
+    // MetaBattle snapshots. The CI workflow downloads these files, so this
+    // runs the same parser called by the in-game Import dialog.
     if (argc > 1) {
-        std::ifstream file(argv[1], std::ios::binary);
-        assert(file.good());
-        const std::string live((std::istreambuf_iterator<char>(file)),
-                                std::istreambuf_iterator<char>());
-        SnowCrows::Page reaper;
-        assert(MetaBattle::Parse("https://metabattle.com/wiki/Build:Reaper_-_Power_DPS",
-                                 live, reaper, error) && error.empty());
-        assert(reaper.profession == "Necromancer");
+        auto live = [&](const char* name) -> std::string {
+            const std::string path = std::string(argv[1]) + "/" + name + ".html";
+            std::ifstream file(path, std::ios::binary);
+            assert(file.good());
+            return std::string(std::istreambuf_iterator<char>(file),
+                               std::istreambuf_iterator<char>());
+        };
+        auto verify = [&](const char* tag, const char* article,
+                          const char* profession, size_t slots,
+                          const std::vector<std::pair<uint32_t, int>>& infusions) {
+            SnowCrows::Page page;
+            const std::string link = "https://metabattle.com/wiki/Build:" +
+                std::string(article);
+            const std::string body = live(tag);
+            const bool ok = MetaBattle::Parse(link, body, page, error);
+            if (!ok)
+                std::cerr << "MetaBattle " << tag << " failed: " << error << '\n';
+            assert(ok && error.empty());
+            assert(page.profession == profession);
+            assert(page.gear.size() == slots);
+            for (const char* slot : {"Helm", "Shoulders", "Coat", "Gloves",
+                                     "Leggings", "Boots", "Backpack",
+                                     "Accessory1", "Accessory2", "Amulet",
+                                     "Ring1", "Ring2"}) {
+                assert(page.gear.count(slot));
+                assert(page.gear.at(slot).itemId > 0);
+                assert(!page.gear.at(slot).statName.empty());
+            }
+            assert(page.runeId != 0 && page.relicId != 0);
+            assert(page.specs[0].id && page.specs[1].id && page.specs[2].id);
+            assert(page.skills[0] && page.skills[4]);
+            assert(page.infusions.size() == infusions.size());
+            for (size_t i = 0; i < infusions.size(); ++i) {
+                assert(page.infusions[i].itemId == infusions[i].first);
+                assert(page.infusions[i].count == infusions[i].second);
+            }
+            std::cout << "MetaBattle live PASS: " << tag
+                      << " gear=" << page.gear.size()
+                      << " infusions=" << page.infusions.size() << '\n';
+            return page;
+        };
+
+        const auto reaper = verify(
+            "reaper", "Reaper_-_Power_Greatsword_Reaper", "Necromancer", 15, {});
+        assert(reaper.gear.at("Helm").statName == "Assassin");
         assert(reaper.gear.at("Backpack").itemId == 37009);
         assert(reaper.gear.at("Ring1").itemId == 37075);
         assert(reaper.gear.at("Ring2").itemId == 37086);
-        assert(reaper.infusions.size() == 2);
-        assert(reaper.infusions[0].itemId == 37131 && reaper.infusions[0].count == 12);
-        assert(reaper.infusions[1].itemId == 37132 && reaper.infusions[1].count == 6);
+        assert(reaper.gear.at("WeaponA1").weaponType == "Greatsword");
+        assert(reaper.gear.at("WeaponB1").weaponType == "Sword");
+        assert(reaper.gear.at("WeaponB2").weaponType == "Sword");
+
+        const auto harbinger = verify(
+            "harbinger", "Harbinger_-_Boon_DPS_Condi_Harbinger_Open_World",
+            "Necromancer", 16, {});
+        assert(harbinger.gear.at("Helm").statName == "Ritualist");
+        assert(harbinger.gear.at("Backpack").itemId == 79830);
+        assert(harbinger.gear.at("Ring1").itemId == 79124);
+        assert(harbinger.gear.at("Ring2").itemId == 79712);
+        assert(harbinger.gear.at("WeaponA1").weaponType == "Pistol");
+        assert(harbinger.gear.at("WeaponA2").weaponType == "Dagger");
+        assert(harbinger.gear.at("WeaponB1").weaponType == "Scepter");
+        assert(harbinger.gear.at("WeaponB2").weaponType == "Torch");
+
+        const auto chronomancer = verify(
+            "chronomancer", "Chronomancer_-_Power_DPS",
+            "Mesmer", 15, {{37131, 14}, {37132, 4}});
+        assert(chronomancer.gear.at("Backpack").itemId == 37009);
+        assert(chronomancer.gear.at("Ring1").itemId == 37075);
+        assert(chronomancer.gear.at("Ring2").itemId == 37086);
+        assert(chronomancer.gear.at("WeaponA1").weaponType == "Dagger");
+        assert(chronomancer.gear.at("WeaponA2").weaponType == "Sword");
+        assert(chronomancer.gear.at("WeaponB1").weaponType == "Greatsword");
+
+        const auto mechanist = verify(
+            "mechanist", "Mechanist_-_Condi_DPS",
+            "Engineer", 15, {{37130, 18}});
+        assert(mechanist.gear.at("Helm").statName == "Viper");
+        assert(mechanist.gear.at("Shoulders").statName == "Sinister");
+        assert(mechanist.gear.at("Backpack").itemId == 79830);
+        assert(mechanist.gear.at("Ring1").itemId == 79124);
+        assert(mechanist.gear.at("Ring2").itemId == 79712);
+        assert(mechanist.gear.at("WeaponA1").weaponType == "Spear");
+        assert(mechanist.gear.at("WeaponB1").weaponType == "Pistol");
+        assert(mechanist.gear.at("WeaponB2").weaponType == "Pistol");
     }
     return 0;
 }
