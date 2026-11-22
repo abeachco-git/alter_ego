@@ -28,6 +28,7 @@
 #include "InfusionMatchCore.h"
 #include "InfusionTotalsCore.h"
 #include "SnowCrowsImport.h"
+#include "MetaBattleImport.h"
 #include "AutoRefreshCore.h"
 #include "AutoRefreshPolicy.h"
 #include "FontResolve.h"
@@ -860,17 +861,17 @@ static std::string g_LibImportError;
 static std::string g_LibImportFilePath; // path picked from file dialog for library file import
 // A Snow Crows page is fetched and parsed on a worker; the library is only
 // mutated by the main/UI thread after a complete, validated result arrives.
-struct SnowCrowsFetchResult {
+struct BuildSourceFetchResult {
     bool ready = false;
     bool refresh = false;
     std::string targetId;
     AlterEgo::SnowCrows::Page page;
     std::string error;
 };
-static bool g_SnowCrowsBusy = false; // Main thread only
-static std::mutex g_SnowCrowsResultMutex;
-static SnowCrowsFetchResult g_SnowCrowsResult;
-static std::string g_SnowCrowsRefreshError;
+static bool g_BuildSourceBusy = false; // Main thread only
+static std::mutex g_BuildSourceResultMutex;
+static BuildSourceFetchResult g_BuildSourceResult;
+static std::string g_BuildSourceRefreshError;
 static bool g_LibDetailsFetched = false;
 static std::unordered_set<std::string> g_LibCollapsedProfessions; // session-persisted
 // Inline edit buffers — std::string + ImGui resize callback so long names
@@ -8431,6 +8432,29 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
             gs.rune = build.rune_name;
             changed = true;
         }
+        if (gs.stat_id == 0 && gs.item_id != 0) {
+            const auto* item = AlterEgo::GW2API::GetItemInfo(gs.item_id);
+            if (!item) {
+                missingItems.push_back(gs.item_id);
+            } else if (item->details.is_object() &&
+                       item->details.contains("infix_upgrade") &&
+                       item->details["infix_upgrade"].is_object() &&
+                       item->details["infix_upgrade"].contains("id") &&
+                       item->details["infix_upgrade"]["id"].is_number_unsigned()) {
+                const uint32_t id = item->details["infix_upgrade"]["id"].get<uint32_t>();
+                const auto* info = AlterEgo::GW2API::GetItemStatInfo(id);
+                if (!info) missingStats.push_back(id);
+                // A fixed item's public stats verify the text prefix. If the
+                // source requested a different selected stat, do not silently
+                // replace it with the item's default.
+                if (info && (gs.stat_name.empty() ||
+                    AlterEgo::NamedStats::SameCanonicalStat(gs.stat_name, info->name))) {
+                    gs.stat_id = id;
+                    gs.stat_name = info->name;
+                    changed = true;
+                }
+            }
+        }
         if (gs.stat_id != 0 && gs.stat_name.empty()) {
             const auto* si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
             if (si && !si->name.empty()) {
@@ -8541,7 +8565,7 @@ static void RenderBuildModeBadge(const char* mode) {
 // Render the build preview panel for a saved build (reuses spec/trait rendering logic)
 // Fixed build identity and actions; kept outside the scrolling detail child.
 // Import exactly the loadout represented by the source's canonical GW2 IDs.
-static AlterEgo::SavedBuild SnowCrowsToSavedBuild(const AlterEgo::SnowCrows::Page& page) {
+static AlterEgo::SavedBuild SourcePageToSavedBuild(const AlterEgo::SnowCrows::Page& page) {
     using namespace AlterEgo;
     GameMode mode = page.gameMode == "Raid" ? GameMode::Raid :
         page.gameMode == "Fractal" ? GameMode::Fractal :
@@ -8550,6 +8574,7 @@ static AlterEgo::SavedBuild SnowCrowsToSavedBuild(const AlterEgo::SnowCrows::Pag
     auto build = GW2API::CreateBlankBuild(page.profession, mode);
     build.name = page.name;
     build.source_url = page.sourceUrl;
+    build.chat_link = page.templateCode;
     build.rune_id = page.runeId;
     build.relic_id = page.relicId;
     build.relic_name = page.relicName;
@@ -8602,51 +8627,58 @@ static AlterEgo::SavedBuild SnowCrowsToSavedBuild(const AlterEgo::SnowCrows::Pag
     return build;
 }
 
-static void FetchSnowCrowsBuild(const std::string& url, const std::string& refreshId = "") {
-    if (g_SnowCrowsBusy) return;
-    g_SnowCrowsBusy = true;
-    g_SnowCrowsRefreshError.clear();
-    const std::string normalized = AlterEgo::SnowCrows::NormalizeUrl(url);
+static void FetchBuildSource(const std::string& url, const std::string& refreshId = "") {
+    if (g_BuildSourceBusy) return;
+    g_BuildSourceBusy = true;
+    g_BuildSourceRefreshError.clear();
+    std::string normalized = AlterEgo::SnowCrows::NormalizeUrl(url);
+    if (normalized.empty()) normalized = AlterEgo::MetaBattle::NormalizeUrl(url);
     std::thread([normalized, refreshId]() {
-        SnowCrowsFetchResult result;
+        BuildSourceFetchResult result;
         result.refresh = !refreshId.empty();
         result.targetId = refreshId;
         if (normalized.empty()) {
-            result.error = "Invalid Snow Crows build URL.";
+            result.error = "Unsupported build URL. Use Snow Crows or MetaBattle.";
         } else {
+            const bool metaBattle = normalized.find("https://metabattle.com/") == 0;
+            const char* source = metaBattle ? "MetaBattle" : "Snow Crows";
             const auto response = Skinventory::HttpClient::GetEx(normalized,
                 "User-Agent: Mozilla/5.0 (compatible; AlterEgo/1.0)\r\n"
                 "Accept: text/html\r\n");
             if (response.status_code != 200) {
-                result.error = "Snow Crows download failed (HTTP " +
+                result.error = std::string(source) + " download failed (HTTP " +
                     std::to_string(response.status_code) + ").";
-            } else if (!AlterEgo::SnowCrows::Parse(
-                           normalized, response.body, result.page, result.error)) {
-                // Parse sets a useful reason; never replace a build on failure.
+            } else {
+                // All providers produce one common, validated Page structure.
+                // Never write an incomplete result to the build library.
+                const bool parsed = metaBattle
+                    ? AlterEgo::MetaBattle::Parse(normalized, response.body, result.page, result.error)
+                    : AlterEgo::SnowCrows::Parse(normalized, response.body, result.page, result.error);
+                (void)parsed; // parser provides the actionable error on failure
             }
         }
         result.ready = true;
-        std::lock_guard<std::mutex> lock(g_SnowCrowsResultMutex);
-        g_SnowCrowsResult = std::move(result);
+        std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex);
+        g_BuildSourceResult = std::move(result);
     }).detach();
 }
 
-static void PollSnowCrowsBuild() {
-    SnowCrowsFetchResult received;
+static void PollBuildSource() {
+    BuildSourceFetchResult received;
     {
-        std::lock_guard<std::mutex> lock(g_SnowCrowsResultMutex);
-        if (!g_SnowCrowsResult.ready) return;
-        received = std::move(g_SnowCrowsResult);
-        g_SnowCrowsResult = {};
+        std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex);
+        if (!g_BuildSourceResult.ready) return;
+        received = std::move(g_BuildSourceResult);
+        g_BuildSourceResult = {};
     }
-    g_SnowCrowsBusy = false;
+    g_BuildSourceBusy = false;
     if (!received.refresh && !g_LibShowImport) return; // dismissed import
     if (!received.error.empty()) {
-        if (received.refresh) g_SnowCrowsRefreshError = received.error;
+        if (received.refresh) g_BuildSourceRefreshError = received.error;
         else g_LibImportError = received.error;
         return;
     }
-    auto build = SnowCrowsToSavedBuild(received.page);
+    auto build = SourcePageToSavedBuild(received.page);
     // Opportunistic name/icon resolution; public API calls run asynchronously.
     std::vector<uint32_t> items, stats, traits, specs, skills;
     for (const auto& [slot, gs] : build.gear) {
@@ -8670,15 +8702,17 @@ static void PollSnowCrowsBuild() {
     AlterEgo::GW2API::FetchTraitDetailsAsync(traits);
     AlterEgo::GW2API::FetchSkillDetailsAsync(skills);
     AlterEgo::GW2API::FetchProfessionPaletteAsync(build.profession);
-    if (AlterEgo::GW2API::HasPaletteData(build.profession))
+    if (build.chat_link.empty() && AlterEgo::GW2API::HasPaletteData(build.profession))
         build.chat_link = AlterEgo::GW2API::EncodeSavedBuildToChatLink(build);
     if (received.refresh) {
         if (AlterEgo::GW2API::RefreshSavedBuildFromSource(received.targetId, build)) {
             g_LibDetailsFetched = false;
             g_EditDraftId.clear();
-            if (APIDefs) APIDefs->GUI_SendAlert("Snow Crows build refreshed.");
+            if (APIDefs) APIDefs->GUI_SendAlert(
+                received.page.sourceUrl.find("metabattle.com") != std::string::npos
+                    ? "MetaBattle build refreshed." : "Snow Crows build refreshed.");
         } else {
-            g_SnowCrowsRefreshError = "Could not update the original saved build.";
+            g_BuildSourceRefreshError = "Could not update the original saved build.";
         }
     } else {
         // Optional user-provided import name overrides the page's full title.
@@ -8691,7 +8725,9 @@ static void PollSnowCrowsBuild() {
             g_LibImportBuf[0] = '\0';
             g_LibImportName[0] = '\0';
             g_LibImportError.clear();
-            if (APIDefs) APIDefs->GUI_SendAlert("Snow Crows build imported.");
+            if (APIDefs) APIDefs->GUI_SendAlert(
+                received.page.sourceUrl.find("metabattle.com") != std::string::npos
+                    ? "MetaBattle build imported." : "Snow Crows build imported.");
         } else {
             g_LibImportError = "Could not save imported build.";
         }
@@ -10385,7 +10421,7 @@ static void RenderCompareTab() {
 }
 
 static void RenderBuildLibrary() {
-    PollSnowCrowsBuild();
+    PollBuildSource();
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
     // Build-level actions remain visible; library-wide backup/restore is
@@ -10528,11 +10564,11 @@ static void RenderBuildLibrary() {
             const ImVec2 pad = ImGui::GetStyle().FramePadding;
             dl->AddText(ImVec2(from.x + pad.x + 2.0f, from.y + pad.y + 1.0f),
                 ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                "Paste a GW2 chat link, AE2 build code, relay code,\nor a Snow Crows link.");
+                "GW2 chat link, AE2 build code, or relay code\nSnow Crows / MetaBattle build URL");
             dl->PopClipRect();
         }
 
-        ImGui::TextUnformatted("Build name (optional for Snow Crows / AE2)");
+        ImGui::TextUnformatted("Build name (optional for source URLs / AE2)");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
         ImGui::TextUnformatted("Game mode (for GW2 chat links)");
@@ -10560,16 +10596,18 @@ static void RenderBuildLibrary() {
         }
 
         ImGui::Spacing();
-        if ((RenderGoldButton("Import##libSnow") || autoRetry) && !g_SnowCrowsBusy) {
+        if ((RenderGoldButton("Import##libSnow") || autoRetry) && !g_BuildSourceBusy) {
             std::string input(g_LibImportBuf);
             std::string name(g_LibImportName);
             if (input.empty()) {
                 g_LibImportError = "Paste a build first.";
             } else if (input.find("://") != std::string::npos) {
-                const std::string url = AlterEgo::SnowCrows::NormalizeUrl(input);
-                if (url.empty()) g_LibImportError = "Only Snow Crows build-page URLs are supported.";
+                std::string url = AlterEgo::SnowCrows::NormalizeUrl(input);
+                if (url.empty()) url = AlterEgo::MetaBattle::NormalizeUrl(input);
+                if (url.empty())
+                    g_LibImportError = "Use a Snow Crows or MetaBattle build-page URL.";
                 else {
-                    FetchSnowCrowsBuild(url);
+                    FetchBuildSource(url);
                     g_LibImportError.clear();
                 }
             } else {
@@ -10653,8 +10691,8 @@ static void RenderBuildLibrary() {
             g_LibImportError.clear();
             ImGui::CloseCurrentPopup();
         }
-        if (g_SnowCrowsBusy)
-            ImGui::TextDisabled("Fetching Snow Crows build...");
+        if (g_BuildSourceBusy)
+            ImGui::TextDisabled("Fetching build source...");
         if (!g_LibImportError.empty())
             ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_Text),
                                "%s", g_LibImportError.c_str());
@@ -11123,14 +11161,14 @@ static void RenderBuildLibrary() {
             if (RenderActionButton("Open Source##snow"))
                 ShellExecuteA(NULL, "open", build.source_url.c_str(), NULL, NULL, SW_SHOWNORMAL);
             ImGui::SameLine();
-            if (RenderActionButton("Refresh Source##snow") && !g_SnowCrowsBusy)
-                FetchSnowCrowsBuild(build.source_url, build.id);
-            if (g_SnowCrowsBusy) {
+            if (RenderActionButton("Refresh Source##snow") && !g_BuildSourceBusy)
+                FetchBuildSource(build.source_url, build.id);
+            if (g_BuildSourceBusy) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("Fetching...");
             }
-            if (!g_SnowCrowsRefreshError.empty())
-                ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", g_SnowCrowsRefreshError.c_str());
+            if (!g_BuildSourceRefreshError.empty())
+                ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", g_BuildSourceRefreshError.c_str());
             ImGui::Separator();
         }
         ImGui::BeginChild("##LibDetailScroll", ImVec2(0, 0), false);
