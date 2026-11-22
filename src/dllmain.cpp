@@ -830,6 +830,7 @@ static void LoadLoginTimestamps();
 
 // Build Library UI state
 static float g_LibListWidth = 220.0f; // Resizable build list column width
+static int g_LibraryCollection = 0; // 0 Builds, 1 Fashion
 static int g_LibSelectedIdx = -1;
 // Build editor: "+ New Build" dialog state
 static bool g_NewBuildDialogOpen = false;
@@ -1543,6 +1544,7 @@ static void SaveSettings() {
     j["birthday_mode"] = g_BirthdayMode;
     j["char_list_width"] = g_CharListWidth;
     j["lib_list_width"] = g_LibListWidth;
+    j["library_collection"] = g_LibraryCollection;
     j["chat_build_detection"] = g_ChatBuildDetection;
     j["toast_pos_x"] = g_ToastPosX;
     j["toast_pos_y"] = g_ToastPosY;
@@ -1584,6 +1586,8 @@ static void LoadSettings() {
     getInt("birthday_mode", g_BirthdayMode);
     getFloat("char_list_width", g_CharListWidth);
     getFloat("lib_list_width", g_LibListWidth);
+    getInt("library_collection", g_LibraryCollection);
+    if (g_LibraryCollection != 1) g_LibraryCollection = 0;
     getBool("chat_build_detection", g_ChatBuildDetection);
     getFloat("toast_pos_x", g_ToastPosX);
     getFloat("toast_pos_y", g_ToastPosY);
@@ -3773,6 +3777,8 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
 // Shared action for both Characters detail sub-tabs. Implemented after the
 // save-dialog opener, so the Equipment view can call it without duplicating
 // build-selection logic.
+#include "FashionUI.h"
+
 static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab = 0);
 // Shared by Characters, Save, and Compare. Saved library data is irrelevant.
 static int GetRetrievedEquipmentTabCount(const AlterEgo::Character& ch) {
@@ -3795,6 +3801,10 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Keep the same Save action accessible from Equipment and Build. When
     // invoked here, preselect the equipment set being viewed in the dialog.
     RenderSaveLiveBuildAction(ch, tab);
+    ImGui::SameLine();
+    if (RenderActionButton("Save Fashion##live_fashion")) StartLiveFashionSave(ch, tab);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Save the selected equipment tab appearance to Library > Fashion.");
     ImGui::Spacing();
 
     // Equipment tab chips. Always shown (even for a single tab) so the tab is a
@@ -8720,6 +8730,7 @@ static void PollBuildSource() {
         int idx = AlterEgo::GW2API::AddSavedBuild(std::move(build));
         if (idx >= 0) {
             g_LibSelectedIdx = idx;
+            g_LibraryCollection = 0;
             g_LibDetailsFetched = false;
             g_LibShowImport = false;
             g_LibImportBuf[0] = '\0';
@@ -10439,8 +10450,189 @@ static void RenderCompareTab() {
     ImGui::EndChild();
 }
 
+static void RenderLibraryImportDialog() {
+    // Keep the import form and its asynchronous palette-data retry inside a
+    // modal; it no longer shifts the library list and details while open.
+    if (g_LibShowImport && !ImGui::IsPopupOpen("Import to Library##lib"))
+        ImGui::OpenPopup("Import to Library##lib");
+    const ImVec2 popupDisplay = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(
+        ImVec2(popupDisplay.x * 0.5f, popupDisplay.y * 0.5f),
+        ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(550.0f, 0.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Import to Library##lib", &g_LibShowImport,
+                              ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Build, wardrobe chat link, or URL");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        ImGui::InputTextMultiline("##import_link", g_LibImportBuf,
+            sizeof(g_LibImportBuf), ImVec2(-1.0f, 75.0f));
+        if (g_LibImportBuf[0] == '\0') {
+            // ImGui 1.80 has no InputTextMultilineWithHint. Draw the hint on
+            // top of the *empty* multiline input, with the normal disabled-text
+            // color and font; the native input remains the only hit target.
+            const ImVec2 from = ImGui::GetItemRectMin();
+            const ImVec2 to = ImGui::GetItemRectMax();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->PushClipRect(from, to, true);
+            const ImVec2 pad = ImGui::GetStyle().FramePadding;
+            dl->AddText(ImVec2(from.x + pad.x + 2.0f, from.y + pad.y + 1.0f),
+                ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                "GW2 build or wardrobe chat link, AE2 code\nSnow Crows or MetaBattle build URL");
+            dl->PopClipRect();
+        }
+
+        ImGui::TextUnformatted("Name (optional for wardrobe / source URLs / AE2)");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        ImGui::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
+        ImGui::TextUnformatted("Game mode (build chat links only)");
+        if (g_LibImportMode < 0 || g_LibImportMode >= IM_ARRAYSIZE(GameModeImportNames))
+            g_LibImportMode = 0;
+        if (RenderThemedCombo("##import_mode", GameModeImportNames[g_LibImportMode], 150.0f)) {
+            for (int m = 0; m < IM_ARRAYSIZE(GameModeImportNames); ++m)
+                if (ImGui::Selectable(GameModeImportNames[m], m == g_LibImportMode))
+                    g_LibImportMode = m;
+            ImGui::EndCombo();
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Chat: %s (optional)",
+            g_ChatAddonConnected ? "Connected" : "Not detected");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Events: Chat integration is optional. Install it from the Nexus addon library to import links shared in GW2 chat.");
+
+        // Auto-retry once the profession's palette data finishes loading
+        bool autoRetry = false;
+        if (g_LibImportPending && !g_LibImportPendingProfession.empty() &&
+            AlterEgo::GW2API::HasPaletteData(g_LibImportPendingProfession)) {
+            g_LibImportPending = false;
+            g_LibImportPendingProfession.clear();
+            autoRetry = true;
+        }
+
+        ImGui::Spacing();
+        if ((RenderGoldButton("Import##libSnow") || autoRetry) && !g_BuildSourceBusy) {
+            std::string input(g_LibImportBuf);
+            std::string name(g_LibImportName);
+            if (input.empty()) {
+                g_LibImportError = "Paste a GW2 build, wardrobe link, AE2 code, or source URL.";
+            } else if (input.find("://") != std::string::npos) {
+                std::string url = AlterEgo::SnowCrows::NormalizeUrl(input);
+                if (url.empty()) url = AlterEgo::MetaBattle::NormalizeUrl(input);
+                if (url.empty())
+                    g_LibImportError = "Use a Snow Crows or MetaBattle build-page URL.";
+                else {
+                    FetchBuildSource(url);
+                    g_LibImportError.clear();
+                }
+            } else if (AlterEgo::ChatLink::DetectType(input) == AlterEgo::LINK_WARDROBE_TMPL) {
+                if (StartFashionImport(input, name)) {
+                    g_LibShowImport = false;
+                    ImGui::CloseCurrentPopup();
+                    g_LibraryCollection = 1;
+                    g_LibImportBuf[0] = '\0';
+                    g_LibImportName[0] = '\0';
+                    g_LibImportError.clear();
+                } else {
+                    g_LibImportError = "Invalid or truncated Wardrobe Template chat link.";
+                }
+            } else {
+                // Try shared build format (AE2, relay code, or chat link)
+                AlterEgo::SavedBuild sharedBuild;
+                std::string sharedError;
+                if (ImportSharedBuild(input, sharedBuild, sharedError)) {
+                    // If the user entered a name, honour it (AE2/relay imports
+                    // fall back to the profession as a placeholder otherwise).
+                    if (!name.empty()) sharedBuild.name = name;
+                    int newIdx = AlterEgo::GW2API::AddSavedBuild(std::move(sharedBuild));
+                    g_LibShowImport = false;
+                    ImGui::CloseCurrentPopup();
+                    g_LibImportBuf[0] = '\0';
+                    g_LibImportName[0] = '\0';
+                    g_LibImportError.clear();
+                    if (newIdx >= 0) { g_LibSelectedIdx = newIdx; g_LibraryCollection = 0; }
+                    g_LibDetailsFetched = false;
+                    if (APIDefs) APIDefs->GUI_SendAlert("Shared build imported!");
+                } else if (!sharedError.empty()) {
+                    // Shared format detected but failed. If the failure is just
+                    // that the palette is still loading, arm an auto-retry so
+                    // the import happens once the data arrives.
+                    if (sharedError.rfind("Loading ", 0) == 0) {
+                        // Extract profession from "Loading <Prof> skill data..."
+                        size_t end = sharedError.find(' ', 8);
+                        if (end != std::string::npos) {
+                            g_LibImportPendingProfession = sharedError.substr(8, end - 8);
+                            g_LibImportPending = true;
+                        }
+                    }
+                    g_LibImportError = sharedError;
+                } else {
+                    // Not a shared format — try as chat link
+                    if (name.empty()) {
+                        g_LibImportError = "Enter a build name (required for chat links).";
+                    } else {
+                        auto linkType = AlterEgo::ChatLink::DetectType(input);
+                        if (linkType != AlterEgo::LINK_BUILD) {
+                            g_LibImportError = "Not a recognized build or wardrobe format.";
+                        } else {
+                            AlterEgo::DecodedBuildLink raw;
+                            if (!AlterEgo::ChatLink::DecodeBuild(input, raw)) {
+                                g_LibImportError = "Failed to decode build link.";
+                            } else {
+                                std::string prof = ProfessionFromCode(raw.profession);
+                                if (prof == "Unknown") {
+                                    g_LibImportError = "Unknown profession in link.";
+                                } else if (!AlterEgo::GW2API::HasPaletteData(prof)) {
+                                    AlterEgo::GW2API::FetchProfessionPaletteAsync(prof);
+                                    g_LibImportError = "Loading " + prof + " skill data... try again in a moment.";
+                                } else {
+                                    AlterEgo::SavedBuild build;
+                                    if (DecodeBuildLink(input, name,
+                                            GameModeFromIndex(g_LibImportMode), build)) {
+                                        int newIdx = AlterEgo::GW2API::AddSavedBuild(std::move(build));
+                                        g_LibShowImport = false;
+                                        ImGui::CloseCurrentPopup();
+                                        g_LibImportBuf[0] = '\0';
+                                        g_LibImportName[0] = '\0';
+                                        g_LibImportError.clear();
+                                        if (newIdx >= 0) { g_LibSelectedIdx = newIdx; g_LibraryCollection = 0; }
+                                        g_LibDetailsFetched = false;
+                                        if (APIDefs) APIDefs->GUI_SendAlert("Build imported!");
+                                    } else {
+                                        g_LibImportError = "Failed to decode build.";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ImGui::SameLine();
+        if (RenderChipButton("Cancel##libSnow", false)) {
+            g_LibShowImport = false;
+            g_LibImportPending = false;
+            g_LibImportPendingProfession.clear();
+            g_LibImportError.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        if (g_BuildSourceBusy)
+            ImGui::TextDisabled("Fetching build source...");
+        if (!g_LibImportError.empty())
+            ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_Text),
+                               "%s", g_LibImportError.c_str());
+        ImGui::EndPopup();
+    }
+    if (!g_LibShowImport) {
+        g_LibImportPending = false;
+        g_LibImportPendingProfession.clear();
+    }
+
+    ImGui::Spacing();
+
+
+}
+
 static void RenderBuildLibrary() {
-    PollBuildSource();
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
     // Build-level actions remain visible; library-wide backup/restore is
@@ -10451,7 +10643,7 @@ static void RenderBuildLibrary() {
         g_NewBuildGameMode = 0;
     }
     ImGui::SameLine();
-    if (RenderActionButton("Import Build")) {
+    if (RenderActionButton("Import")) {
         g_LibShowImport = true;
         g_LibImportBuf[0] = '\0';
         g_LibImportName[0] = '\0';
@@ -10461,10 +10653,10 @@ static void RenderBuildLibrary() {
         g_LibImportPendingProfession.clear();
     }
     ImGui::SameLine();
-    if (RenderActionButton("Library"))
+    if (RenderActionButton("Backup / Restore"))
         ImGui::OpenPopup("##libraryActions");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Import or export the complete build library (JSON file).");
+        ImGui::SetTooltip("Import or export the entire build collection (JSON file).");
 
     bool openLibraryImportModal = false;
     if (ImGui::BeginPopup("##libraryActions")) {
@@ -10556,173 +10748,6 @@ static void RenderBuildLibrary() {
         if (RenderChipButton("Cancel", false)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
-
-    // Keep the import form and its asynchronous palette-data retry inside a
-    // modal; it no longer shifts the library list and details while open.
-    if (g_LibShowImport && !ImGui::IsPopupOpen("Import Build##lib"))
-        ImGui::OpenPopup("Import Build##lib");
-    const ImVec2 popupDisplay = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(
-        ImVec2(popupDisplay.x * 0.5f, popupDisplay.y * 0.5f),
-        ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(550.0f, 0.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Import Build##lib", &g_LibShowImport,
-                              ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Build code or link");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputTextMultiline("##import_link", g_LibImportBuf,
-            sizeof(g_LibImportBuf), ImVec2(-1.0f, 75.0f));
-        if (g_LibImportBuf[0] == '\0') {
-            // ImGui 1.80 has no InputTextMultilineWithHint. Draw the hint on
-            // top of the *empty* multiline input, with the normal disabled-text
-            // color and font; the native input remains the only hit target.
-            const ImVec2 from = ImGui::GetItemRectMin();
-            const ImVec2 to = ImGui::GetItemRectMax();
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->PushClipRect(from, to, true);
-            const ImVec2 pad = ImGui::GetStyle().FramePadding;
-            dl->AddText(ImVec2(from.x + pad.x + 2.0f, from.y + pad.y + 1.0f),
-                ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                "GW2 chat link, AE2 build code, or relay code\nSnow Crows / MetaBattle build URL");
-            dl->PopClipRect();
-        }
-
-        ImGui::TextUnformatted("Build name (optional for source URLs / AE2)");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
-        ImGui::TextUnformatted("Game mode (for GW2 chat links)");
-        if (g_LibImportMode < 0 || g_LibImportMode >= IM_ARRAYSIZE(GameModeImportNames))
-            g_LibImportMode = 0;
-        if (RenderThemedCombo("##import_mode", GameModeImportNames[g_LibImportMode], 150.0f)) {
-            for (int m = 0; m < IM_ARRAYSIZE(GameModeImportNames); ++m)
-                if (ImGui::Selectable(GameModeImportNames[m], m == g_LibImportMode))
-                    g_LibImportMode = m;
-            ImGui::EndCombo();
-        }
-        ImGui::Spacing();
-        ImGui::TextDisabled("Chat: %s (optional)",
-            g_ChatAddonConnected ? "Connected" : "Not detected");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Events: Chat integration is optional. Install it from the Nexus addon library to import links shared in GW2 chat.");
-
-        // Auto-retry once the profession's palette data finishes loading
-        bool autoRetry = false;
-        if (g_LibImportPending && !g_LibImportPendingProfession.empty() &&
-            AlterEgo::GW2API::HasPaletteData(g_LibImportPendingProfession)) {
-            g_LibImportPending = false;
-            g_LibImportPendingProfession.clear();
-            autoRetry = true;
-        }
-
-        ImGui::Spacing();
-        if ((RenderGoldButton("Import##libSnow") || autoRetry) && !g_BuildSourceBusy) {
-            std::string input(g_LibImportBuf);
-            std::string name(g_LibImportName);
-            if (input.empty()) {
-                g_LibImportError = "Paste a build first.";
-            } else if (input.find("://") != std::string::npos) {
-                std::string url = AlterEgo::SnowCrows::NormalizeUrl(input);
-                if (url.empty()) url = AlterEgo::MetaBattle::NormalizeUrl(input);
-                if (url.empty())
-                    g_LibImportError = "Use a Snow Crows or MetaBattle build-page URL.";
-                else {
-                    FetchBuildSource(url);
-                    g_LibImportError.clear();
-                }
-            } else {
-                // Try shared build format (AE2, relay code, or chat link)
-                AlterEgo::SavedBuild sharedBuild;
-                std::string sharedError;
-                if (ImportSharedBuild(input, sharedBuild, sharedError)) {
-                    // If the user entered a name, honour it (AE2/relay imports
-                    // fall back to the profession as a placeholder otherwise).
-                    if (!name.empty()) sharedBuild.name = name;
-                    int newIdx = AlterEgo::GW2API::AddSavedBuild(std::move(sharedBuild));
-                    g_LibShowImport = false;
-                    ImGui::CloseCurrentPopup();
-                    g_LibImportBuf[0] = '\0';
-                    g_LibImportName[0] = '\0';
-                    g_LibImportError.clear();
-                    if (newIdx >= 0) g_LibSelectedIdx = newIdx;
-                    g_LibDetailsFetched = false;
-                    if (APIDefs) APIDefs->GUI_SendAlert("Shared build imported!");
-                } else if (!sharedError.empty()) {
-                    // Shared format detected but failed. If the failure is just
-                    // that the palette is still loading, arm an auto-retry so
-                    // the import happens once the data arrives.
-                    if (sharedError.rfind("Loading ", 0) == 0) {
-                        // Extract profession from "Loading <Prof> skill data..."
-                        size_t end = sharedError.find(' ', 8);
-                        if (end != std::string::npos) {
-                            g_LibImportPendingProfession = sharedError.substr(8, end - 8);
-                            g_LibImportPending = true;
-                        }
-                    }
-                    g_LibImportError = sharedError;
-                } else {
-                    // Not a shared format — try as chat link
-                    if (name.empty()) {
-                        g_LibImportError = "Enter a build name (required for chat links).";
-                    } else {
-                        auto linkType = AlterEgo::ChatLink::DetectType(input);
-                        if (linkType != AlterEgo::LINK_BUILD) {
-                            g_LibImportError = "Not a recognized build format.";
-                        } else {
-                            AlterEgo::DecodedBuildLink raw;
-                            if (!AlterEgo::ChatLink::DecodeBuild(input, raw)) {
-                                g_LibImportError = "Failed to decode build link.";
-                            } else {
-                                std::string prof = ProfessionFromCode(raw.profession);
-                                if (prof == "Unknown") {
-                                    g_LibImportError = "Unknown profession in link.";
-                                } else if (!AlterEgo::GW2API::HasPaletteData(prof)) {
-                                    AlterEgo::GW2API::FetchProfessionPaletteAsync(prof);
-                                    g_LibImportError = "Loading " + prof + " skill data... try again in a moment.";
-                                } else {
-                                    AlterEgo::SavedBuild build;
-                                    if (DecodeBuildLink(input, name,
-                                            GameModeFromIndex(g_LibImportMode), build)) {
-                                        int newIdx = AlterEgo::GW2API::AddSavedBuild(std::move(build));
-                                        g_LibShowImport = false;
-                                        ImGui::CloseCurrentPopup();
-                                        g_LibImportBuf[0] = '\0';
-                                        g_LibImportName[0] = '\0';
-                                        g_LibImportError.clear();
-                                        if (newIdx >= 0) g_LibSelectedIdx = newIdx;
-                                        g_LibDetailsFetched = false;
-                                        if (APIDefs) APIDefs->GUI_SendAlert("Build imported!");
-                                    } else {
-                                        g_LibImportError = "Failed to decode build.";
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        ImGui::SameLine();
-        if (RenderChipButton("Cancel##libSnow", false)) {
-            g_LibShowImport = false;
-            g_LibImportPending = false;
-            g_LibImportPendingProfession.clear();
-            g_LibImportError.clear();
-            ImGui::CloseCurrentPopup();
-        }
-        if (g_BuildSourceBusy)
-            ImGui::TextDisabled("Fetching build source...");
-        if (!g_LibImportError.empty())
-            ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_Text),
-                               "%s", g_LibImportError.c_str());
-        ImGui::EndPopup();
-    }
-    if (!g_LibShowImport) {
-        g_LibImportPending = false;
-        g_LibImportPendingProfession.clear();
-    }
-
-    ImGui::Spacing();
 
     // Filter + Search
     if (!builds.empty()) {
@@ -11467,6 +11492,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     // Load cached character data and build library from disk
     AlterEgo::GW2API::LoadCharacterData();
     AlterEgo::GW2API::LoadBuildLibrary();
+    g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory() + "/fashion_library.json");
     AlterEgo::GW2API::LoadItemNameCache();
     AlterEgo::GW2API::LoadReferenceCaches();
     SeedItemNameCache();
@@ -15288,6 +15314,7 @@ void AddonRender() {
     RenderLegendPickerDialog();
     RenderPetPickerDialog();
     RenderSaveToLibraryDialog();
+    RenderFashionDialog();
 
     // Render chat build detection toast (always visible, even when main window is hidden)
     RenderBuildToast();
@@ -16537,9 +16564,22 @@ void AddonRender() {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Builds")) {
+        if (ImGui::BeginTabItem("Library")) {
             g_MainTab = 1;
-            RenderBuildLibrary();
+            PollBuildSource();
+            if (RenderChipButton("Builds##library_collection", g_LibraryCollection == 0)) {
+                g_LibraryCollection = 0;
+                SaveSettings();
+            }
+            ImGui::SameLine();
+            if (RenderChipButton("Fashion##library_collection", g_LibraryCollection == 1)) {
+                g_LibraryCollection = 1;
+                SaveSettings();
+            }
+            ImGui::Spacing();
+            if (g_LibraryCollection == 0) RenderBuildLibrary();
+            else RenderFashionLibrary();
+            RenderLibraryImportDialog();
             ImGui::EndTabItem();
         }
 
