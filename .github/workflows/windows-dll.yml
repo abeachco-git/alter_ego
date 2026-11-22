@@ -23,7 +23,7 @@ jobs:
       - name: Install matching UCRT cross-compiler
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 ca-certificates g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
           x86_64-w64-mingw32ucrt-g++ --version
       - name: Fetch MetaBattle live pages for parser verification
         continue-on-error: true
@@ -97,6 +97,14 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
       - name: Compile Windows DLL
         run: cmake --build build --parallel 2
+      - name: Verify embedded fixed UI assets
+        run: |
+          test -s build/embedded_icons.rc
+          grep -q '"AE_9000008"' build/embedded_icons.rc
+          grep -q '"AE_9200008"' build/embedded_icons.rc
+          grep -q '"AE_9100001"' build/embedded_icons.rc
+          grep -q '"AE_68326"' build/embedded_icons.rc
+          test "$(grep -c '^"AE_' build/embedded_icons.rc)" -ge 80
       - name: Verify Windows x64 UCRT DLL
         run: |
           test -s build/AlterEgo.dll
