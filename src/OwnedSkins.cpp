@@ -1,4 +1,5 @@
 #include "OwnedSkins.h"
+#include "SkinCache.h"
 #include "HoardAndSeekAPI.h"
 
 #include <algorithm>
@@ -223,10 +224,20 @@ namespace Skinventory {
             // Check if truncated — if so, data is incomplete
             // Also check json_length vs buffer: /v2/account/skins can exceed 64KB
             if (resp->truncated || resp->json_length >= sizeof(resp->json)) {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_status_message = "API response truncated, falling back to batch query...";
-                s_querying = false;
-                // Caller should fall back to RequestOwnedSkins()
+                {
+                    std::lock_guard<std::mutex> lock(s_mutex);
+                    s_status_message = "API response truncated, querying skins in batches...";
+                    s_querying = false;
+                }
+                // Previously only displayed "falling back" but never started
+                // the fallback, leaving ownership stuck at the old snapshot.
+                const auto allIds = SkinCache::GetAllSkinIds();
+                if (!allIds.empty()) {
+                    RequestOwnedSkins(allIds);
+                } else {
+                    std::lock_guard<std::mutex> lock(s_mutex);
+                    s_status_message = "Ownership response truncated; load skin catalog to retry";
+                }
                 return;
             }
 
@@ -374,13 +385,21 @@ namespace Skinventory {
     }
 
     void OwnedSkins::MarkOwned(uint32_t skin_id) {
+        // Alerts are from the logged-in character, which may be on a different
+        // account than the one the user has selected in Skinventory.
+        const std::string loggedIn = AlterEgo::GW2API::GetCurrentAccountName();
+        bool persist = false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            if (s_account_name.empty() || loggedIn != s_account_name) return;
             s_owned_skins.insert(skin_id);
             s_locally_marked.insert(skin_id);
+            persist = s_has_data.load();
         }
         s_generation++;
-        SaveToCache();
+        // Do not replace a complete ownership snapshot with a partial
+        // one-item alert if no full ownership data has been loaded.
+        if (persist) SaveToCache();
     }
 
     bool OwnedSkins::HasData() {
@@ -436,6 +455,7 @@ namespace Skinventory {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             account = s_account_name;
+            if (!s_has_data.load()) return false;
             success = s_last_success_time;
             for (uint32_t id : s_owned_skins) ids.push_back(id);
         }
