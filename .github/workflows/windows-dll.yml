@@ -59,6 +59,7 @@ jobs:
           /tmp/library_backup
       - name: Capture source HTML for MetaBattle parser diagnosis
         run: |
+          apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
           mkdir -p /tmp/metabattle-debug
           curl --fail --location --retry 2 --silent --show-error \
             'https://metabattle.com/wiki/Build:Reaper_-_Power_DPS' \
