@@ -1,0 +1,33 @@
+name: Inspect Snow Crows markup (temporary)
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/snowcrows-inspect.yml']
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Examine Snow Crows HTML
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import urllib.request,re,html
+          url="https://snowcrows.com/builds/raids/mesmer/condition-boon-chronomancer-dueling-staff-scepter-pistol"
+          req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 (compatible; AlterEgoBuildImporter/1.0)'})
+          try:
+              with urllib.request.urlopen(req,timeout=25) as response:
+                  raw=response.read().decode('utf-8','replace')
+                  print("STATUS",response.status,"LEN",len(raw),"TYPE",response.headers.get('Content-Type'))
+          except Exception as ex:
+              print("FETCH ERROR",repr(ex))
+              raise
+          for term in ["Infusion", "Viper", "Relic of Akeem", "Rune of", "Sigil of", "__NEXT_DATA__", "__NUXT__", "data-page", 'application/json', "build-template", "gear", "buildTemplate", "state", "skills"]:
+              hits=list(re.finditer(re.escape(term),raw,re.I))
+              print("\nTERM",term,"COUNT",len(hits))
+              for m in hits[:3]:
+                  print(re.sub(r"\s+"," ",raw[max(0,m.start()-280):m.end()+350])[:800])
+          for m in list(re.finditer(r'<script\\b[^>]*>',raw,re.I))[:40]:
+              print("SCRIPT",m.group(0)[:320])
+          print("START",raw[:1000])
+          PY
