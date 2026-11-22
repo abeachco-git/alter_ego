@@ -4998,6 +4998,7 @@ static AlterEgo::GameMode GameModeFromIndex(int idx) {
     }
 }
 
+static const char* GameModeLabel(AlterEgo::GameMode m);
 // Shared across New, Import, Save and saved-build Edit. Always retain at least one mode.
 static bool RenderGameModeSelector(const char* id, std::vector<AlterEgo::GameMode>& chosen) {
     static const AlterEgo::GameMode modes[] = {
