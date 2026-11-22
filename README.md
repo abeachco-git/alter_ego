@@ -2,6 +2,31 @@
 
 A Guild Wars 2 addon for [Raidcore Nexus](https://raidcore.gg/Nexus) that lets you view and manage all your characters, equipment, builds, and saved build templates — all without logging in to each character.
 
+> [!IMPORTANT]
+> **This is an unofficial feature fork of [PieOrCake/alter_ego](https://github.com/PieOrCake/alter_ego), not an upstream release.**
+>
+> All enhanced addon code is currently on **[`feature/save-and-compare-retrieved-sets`](https://github.com/abeachco-git/alter_ego/tree/feature/save-and-compare-retrieved-sets)**. This default **`main` branch retains the original upstream addon code**; the changes listed below are **not included in `main`**.
+>
+> The enhanced version is undergoing in-game testing. It has not been submitted as a pull request or endorsed by the original maintainer. Development has been AI-assisted.
+
+## Enhancements compared with upstream
+
+These are additions in the [development branch](https://github.com/abeachco-git/alter_ego/tree/feature/save-and-compare-retrieved-sets), **not claims about the `main` version shown here**.
+
+| Feature area | Fork enhancements |
+| --- | --- |
+| **Saved builds / Compare** | Save retrieved character builds with equipment; dedicated detailed saved-vs-retrieved comparison; automatic character-first selection, manual overrides, and clearer missing/unverified gear and skill differences. |
+| **Character data** | One-click selected-character refresh with multi-character picker; optional auto-refresh on login/specialization change; live specialization mismatch warning and Last Login ordering. |
+| **Clears / Vault** | Compact responsive layouts for strikes, weekly raid wings, and daily fractals; raid-picker ordering and contextual tooltips; more reliable refresh feedback; clearer completion state. |
+| **Visual prioritization** | Stronger consistent contrast for completed items, muted secondary/commonly skipped raid encounters, and consistent wing/group backgrounds. |
+| **Usability and stability** | Numerous refinements to controls, timestamps, status indicators, padding, and hover information; automated Windows x64 UCRT build checks. |
+
+For the detailed behavior and build instructions, read the **[enhanced branch README](https://github.com/abeachco-git/alter_ego/blob/feature/save-and-compare-retrieved-sets/README.md)**. The source of the original project remains **[PieOrCake/alter_ego](https://github.com/PieOrCake/alter_ego)**; credit for the original addon and its inherited features belongs to that project.
+
+---
+
+*The documentation below is inherited from the upstream project and describes its original features.*
+
 ## AI Notice
 
 This addon has been largely created using Claude. I understand that some folks have a moral, financial or political objection to creating software using an LLM. I just wanted to make a useful tool for the GW2 community, and this was the only way I could do it.
