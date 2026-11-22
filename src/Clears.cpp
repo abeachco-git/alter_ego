@@ -865,6 +865,26 @@ void LoadClearsCache() {
                     }), vec.end());
             };
 
+            // Even when the previous-day cache must not be displayed, retain
+            // its daily IDs for validation of the first post-reset API fetch.
+            if (dailyStale) {
+                g_ClearsPriorDailyFractalIds.clear();
+                g_ClearsPriorDailyBountyIds.clear();
+                if (j.contains("dailyFractals") && j["dailyFractals"].is_array())
+                    for (const auto& ej : j["dailyFractals"])
+                        g_ClearsPriorDailyFractalIds.push_back(ej.value("id", 0u));
+                if (j.contains("dailyBounties") && j["dailyBounties"].is_array())
+                    for (const auto& ej : j["dailyBounties"])
+                        g_ClearsPriorDailyBountyIds.push_back(ej.value("id", 0u));
+                g_ClearsPriorDailyFractalIds = ClearsReset::SortedIds(
+                    std::move(g_ClearsPriorDailyFractalIds));
+                g_ClearsPriorDailyBountyIds = ClearsReset::SortedIds(
+                    std::move(g_ClearsPriorDailyBountyIds));
+                g_ClearsDailyRolloverPending = true;
+                g_ClearsDailyRolloverRetries = 0;
+                g_ClearsDailyRolloverRetryAtMs = 0;
+            }
+
             // Load daily data only if no daily reset has occurred since fetch
             if (!dailyStale) {
                 if (j.contains("dailyFractals") && j["dailyFractals"].is_array()) {
@@ -910,8 +930,17 @@ void LoadClearsCache() {
                 g_LastClearsCompletionQuery = std::chrono::steady_clock::now();
             }
 
-            g_LastDailyReset = dailyReset;
-            g_LastWeeklyReset = weeklyReset;
+            // The cache's fetch day (rather than the current day) is the last
+            // reset actually handled. This matters when loading during the
+            // first 60 seconds of a new day.
+            g_LastDailyReset = CalcLastDailyReset(fetchTime);
+            g_LastWeeklyReset = CalcLastWeeklyReset(fetchTime);
+            if (now < dailyReset)
+                g_LastDailyReset = dailyReset - std::chrono::hours(24 * 1)
+                    - std::chrono::seconds(60);
+            if (now < weeklyReset)
+                g_LastWeeklyReset = weeklyReset - std::chrono::hours(24 * 7)
+                    - std::chrono::seconds(60);
         }
 
         // If any data is stale, trigger a full re-fetch
@@ -1011,6 +1040,24 @@ void LoadVaultCache() {
 
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            // Keep a fingerprint of the previous day's objectives for the
+            // post-reset API freshness check. Never display stale daily rows.
+            if (dailyStale && j.contains("daily")) {
+                g_VaultPriorDailyIds = DailyIds(deserializePeriod(j["daily"]));
+                g_VaultDailyRolloverPending = true;
+                g_VaultDailyRolloverRetries = 0;
+                g_VaultDailyRolloverRetryAtMs = 0;
+            }
+            if (fetchEpoch > 0) {
+                g_VaultLastDailyReset = CalcLastDailyReset(fetchTime);
+                g_VaultLastWeeklyReset = CalcLastWeeklyReset(fetchTime);
+                if (now < dailyReset)
+                    g_VaultLastDailyReset = dailyReset
+                        - std::chrono::hours(24) - std::chrono::seconds(60);
+                if (now < weeklyReset)
+                    g_VaultLastWeeklyReset = weeklyReset
+                        - std::chrono::hours(24 * 7) - std::chrono::seconds(60);
+            }
             if (!dailyStale  && j.contains("daily"))   g_VaultDaily   = deserializePeriod(j["daily"]);
             if (!weeklyStale && j.contains("weekly"))  g_VaultWeekly  = deserializePeriod(j["weekly"]);
             if (j.contains("special"))                 g_VaultSpecial = deserializePeriod(j["special"]);
