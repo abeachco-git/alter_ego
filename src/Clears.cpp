@@ -3253,7 +3253,8 @@ void RefreshVaultOnEntry() {
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         stale = AlterEgo::SectionRefresh::Stale(
-            g_VaultLastSuccessTime, std::time(nullptr));
+            g_VaultLastSuccessTime, std::time(nullptr)) ||
+            g_VaultDailyRolloverPending;
         haveData = g_VaultFetched.load();
     }
     if (!stale) return;
@@ -3271,8 +3272,9 @@ void RefreshClearsOnEntry() {
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         stale = AlterEgo::SectionRefresh::Stale(
-            g_ClearsLastSuccessTime, std::time(nullptr));
-        haveData = g_ClearsFetched;
+            g_ClearsLastSuccessTime, std::time(nullptr)) ||
+            g_ClearsDailyRolloverPending;
+        haveData = g_ClearsFetched && !g_ClearsDailyRolloverPending;
     }
     if (!stale) return;
     if (!haveData) {
