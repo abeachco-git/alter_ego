@@ -15,16 +15,12 @@ PROFESSIONS = {
     "Thief": 5, "Elementalist": 6, "Mesmer": 7,
     "Necromancer": 8, "Revenant": 9,
 }
+# Local copies of the GW2 wiki-style crafting glyphs are mirrored by GW2Icon.
+# The main GW2 wiki image host rejects automated build runners (HTTP 403).
 CRAFTING = [
-    "https://wiki.guildwars2.com/images/3/32/Armorsmith_tango_icon_20px.png",
-    "https://wiki.guildwars2.com/images/b/b7/Artificer_tango_icon_20px.png",
-    "https://wiki.guildwars2.com/images/8/8f/Chef_tango_icon_20px.png",
-    "https://wiki.guildwars2.com/images/f/f3/Huntsman_tango_icon_20px.png",
-    "https://wiki.guildwars2.com/images/f/f2/Jeweler_tango_icon_20px.png",
-    "https://wiki.guildwars2.com/images/e/e5/Leatherworker_tango_icon_20px.png",
-    "https://wiki.guildwars2.com/images/0/0b/Scribe_tango_icon_20px.png",
-    "https://wiki.guildwars2.com/images/4/4d/Tailor_tango_icon_20px.png",
-    "https://wiki.guildwars2.com/images/4/46/Weaponsmith_tango_icon_20px.png",
+    "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/" + name + ".png"
+    for name in ("armorsmith", "artificer", "chef", "huntsman", "jeweler",
+                 "leatherworker", "scribe", "tailor", "weaponsmith")
 ]
 STATUS = {
     43766: "https://render.guildwars2.com/file/1932B731E2F70F2F1E3D453A4B7C26B24CF647C0/603246.png",
