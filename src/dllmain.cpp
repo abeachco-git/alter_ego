@@ -4567,8 +4567,31 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
 // It always captures the selected build tab (or the currently active build if
 // nothing has been selected). Equipment view additionally preselects its
 // currently displayed equipment set; the dialog can still change that choice.
-static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build);
+static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
+    const AlterEgo::Character* liveCharacter = nullptr, int equipmentTab = 0);
 
+// Resolve the same live snapshot regardless of which UI entry point was used.
+static int ActiveBuildIndex(const AlterEgo::Character& ch) {
+    for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
+        if (ch.build_tabs[i].is_active) return i;
+    return ch.build_tabs.empty() ? -1 : 0;
+}
+static int ActiveEquipmentTab(const AlterEgo::Character& ch) {
+    return ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
+}
+static AlterEgo::SavedBuild MakeLiveShareSnapshot(
+    const AlterEgo::Character& ch, int buildIndex, int equipmentTab) {
+    if (buildIndex < 0 || buildIndex >= (int)ch.build_tabs.size()) return {};
+    const auto& bt = ch.build_tabs[buildIndex];
+    const std::string profession = bt.profession.empty() ? ch.profession : bt.profession;
+    if (!AlterEgo::GW2API::HasPaletteData(profession))
+        AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+    const std::string link = AlterEgo::GW2API::HasPaletteData(profession)
+        ? EncodeBuildTabChatLink(bt) : std::string();
+    return CaptureRetrievedBuildSnapshot(ch, bt, equipmentTab, true,
+        ch.name + " - " + (bt.name.empty() ? "Tab " + std::to_string(bt.tab) : bt.name),
+        AlterEgo::GameMode::PvE, link);
+}
 static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab) {
     // Keep a snapshot for the Share popup so it never accidentally uses a
     // similarly named entry from the saved library.
@@ -4601,19 +4624,9 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
 
     ImGui::SameLine();
     if (RenderActionButton("Share##live_share")) {
-        const auto& bt = ch.build_tabs[buildIdx];
-        const std::string profession = bt.profession.empty() ? ch.profession : bt.profession;
-        const bool paletteReady = AlterEgo::GW2API::HasPaletteData(profession);
-        if (!paletteReady)
-            AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
-        const std::string link = paletteReady ? EncodeBuildTabChatLink(bt) : "";
         const int equipTab = preferredEquipTab > 0 ? preferredEquipTab :
-            (g_SelectedEquipTab > 0 ? g_SelectedEquipTab :
-                (ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1));
-        const std::string name = ch.name + " - " +
-            (bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name);
-        shareSnapshot = CaptureRetrievedBuildSnapshot(ch, bt, equipTab,
-            true, name, AlterEgo::GameMode::PvE, link);
+            (g_SelectedEquipTab > 0 ? g_SelectedEquipTab : ActiveEquipmentTab(ch));
+        shareSnapshot = MakeLiveShareSnapshot(ch, buildIdx, equipTab);
         shareCharacter = ch.name;
         shareBuildIdx = buildIdx;
         ImGui::OpenPopup("##live_share_menu");
@@ -4632,7 +4645,9 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         if (shareSnapshot.chat_link.empty())
             ImGui::TextDisabled("Waiting for build-link data. Share options require it.");
         else
-            RenderBuildShareMenuItems(shareSnapshot);
+            RenderBuildShareMenuItems(shareSnapshot, &ch,
+                preferredEquipTab > 0 ? preferredEquipTab :
+                (g_SelectedEquipTab > 0 ? g_SelectedEquipTab : ActiveEquipmentTab(ch)));
         ImGui::EndPopup();
     }
 }
@@ -5732,7 +5747,8 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
 
 // Both saved-library builds and retrieved character snapshots share the same
 // export actions. The caller owns the popup and supplies the exact build data.
-static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build) {
+static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
+    const AlterEgo::Character* liveCharacter, int equipmentTab) {
                 if (ImGui::Selectable("Copy build-only chat link")) {
                     if (build.chat_link.empty()) {
                         if (APIDefs) APIDefs->GUI_SendAlert("Build link unavailable; refresh or retry.");
@@ -5750,6 +5766,18 @@ static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build) {
                         if (APIDefs) APIDefs->GUI_SendAlert(info);
                     } else {
                         if (APIDefs) APIDefs->GUI_SendAlert("Failed to generate build code. Build may be missing a chat link.");
+                    }
+                }
+                if (liveCharacter) {
+                    if (ImGui::Selectable("Copy active fashion chat link")) {
+                        const int tab = equipmentTab > 0 ? equipmentTab
+                            : (liveCharacter->active_equipment_tab > 0
+                                ? liveCharacter->active_equipment_tab : 1);
+                        const std::string link = BuildWardrobeLink(*liveCharacter, tab);
+                        if (!link.empty()) {
+                            CopyToClipboard(link);
+                            if (APIDefs) APIDefs->GUI_SendAlert("Active fashion chat link copied.");
+                        } else if (APIDefs) APIDefs->GUI_SendAlert("Fashion link unavailable; refresh character data.");
                     }
                 }
                 if (!g_RelaySending && ImGui::Selectable("Share complete build via one-time code")) {
@@ -15729,6 +15757,34 @@ void AddonRender() {
                         // Refresh portrait detection for this character
                         s_portraitPathCache.erase(ch.name);
                         s_portraitMissing.erase(ch.name);
+                    }
+
+                    // Context actions resolve against the right-clicked character, not
+                    // the character whose details happen to be selected.
+                    if (ImGui::BeginPopupContextItem("##character_actions")) {
+                        const int activeBuild = ActiveBuildIndex(ch);
+                        const int activeEquip = ActiveEquipmentTab(ch);
+                        if (ImGui::MenuItem("Refresh")) {
+                            AlterEgo::GW2API::RequestCharacterRefreshSelected({ch.name});
+                            if (g_SelectedCharIdx == di) g_DetailsFetched = false;
+                        }
+                        if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild >= 0))
+                            OpenSaveLiveBuildDialog(ch, ch.build_tabs[activeBuild]);
+                        if (ImGui::BeginMenu("Share", activeBuild >= 0)) {
+                            static AlterEgo::SavedBuild contextSnapshot;
+                            static std::string contextKey;
+                            const std::string key = ch.name + "#" +
+                                std::to_string(activeBuild) + "#" + std::to_string(activeEquip);
+                            if (ImGui::IsWindowAppearing() || contextKey != key) {
+                                contextSnapshot = MakeLiveShareSnapshot(ch, activeBuild, activeEquip);
+                                contextKey = key;
+                            }
+                            RenderBuildShareMenuItems(contextSnapshot, &ch, activeEquip);
+                            ImGui::EndMenu();
+                        }
+                        if (ImGui::MenuItem("Save Active Fashion..."))
+                            StartLiveFashionSave(ch, activeEquip);
+                        ImGui::EndPopup();
                     }
 
                     // Draw profession-colored left accent bar (non-compact only)
