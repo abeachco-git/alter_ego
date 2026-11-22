@@ -204,6 +204,20 @@ struct Package {
     size_t fashionCount = 0;
     bool zip = false;
 };
+inline std::string DetectOtherJsonType(const nlohmann::json& j) {
+    // Individual backups may have been manually renamed. Prefer unmistakable
+    // structural markers before falling back to the historical filename.
+    if (j.contains("show_qa_icon") || j.contains("auto_refresh_enabled") ||
+        j.contains("font")) return "settings.json";
+    if (j.contains("pinned") && j["pinned"].is_array()) return "ach_tracked.json";
+    if (j.contains("sort_mode") && j["sort_mode"].is_number_integer()) return "char_sort.json";
+    if (j.contains("main_tab") && j["main_tab"].is_number_integer()) return "session.json";
+    if (j.contains("expanded") && j["expanded"].is_array()) return "clears_ui.json";
+    if (!j.empty() && std::all_of(j.begin(), j.end(),
+        [](const nlohmann::json& value) { return value.is_number_integer(); }))
+        return "login_times.json";
+    return {};
+}
 inline bool ReadPackage(const std::string& source, Package& package, std::string& error) {
     package = Package{};
     std::string raw;
@@ -220,9 +234,10 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
         if (j.contains("builds") && j["builds"].is_array()) name = "build_library.json";
         else if (j.contains("looks") && j["looks"].is_array()) name = "fashion_library.json";
         else {
-            name = std::filesystem::u8path(source).filename().u8string();
+            name = DetectOtherJsonType(j);
+            if (name.empty()) name = std::filesystem::u8path(source).filename().u8string();
             if (!IsOtherJson(name)) {
-                error = "Unknown JSON structure. Use a build/fashion library or named settings JSON."; return false;
+                error = "Unknown JSON structure. Use a build/fashion library or recognized settings JSON."; return false;
             }
         }
         package.files.emplace(name, std::move(raw));
