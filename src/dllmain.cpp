@@ -15295,7 +15295,10 @@ void AddonRender() {
             charTabFlags = ImGuiTabItemFlags_SetSelected;
             g_ForceCharactersTab = false;
         }
-        if (ImGui::BeginTabItem("Characters", nullptr, charTabFlags)) {
+        const bool charactersTabVisible = ImGui::BeginTabItem("Characters", nullptr, charTabFlags);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Live and cached character data from your GW2 account");
+        if (charactersTabVisible) {
             g_MainTab = 0;
 
             // Re-trigger detail fetch when character data finishes loading
@@ -16489,6 +16492,8 @@ void AddonRender() {
         // Nexus cannot render the Unicode down-triangle used previously.
         const bool libraryVisible = ImGui::BeginTabItem("Library    ##ae_library_dropdown", nullptr, libraryFlags);
         const bool libraryHeaderClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Saved builds and fashion templates stored locally");
         const ImVec2 libraryTabMin = ImGui::GetItemRectMin();
         const ImVec2 libraryTabMax = ImGui::GetItemRectMax();
         const ImVec2 libraryMenuAnchor(libraryTabMin.x, libraryTabMax.y);
