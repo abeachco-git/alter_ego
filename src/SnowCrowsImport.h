@@ -163,8 +163,13 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
         if (preceding.find("Secondary Weapon Set") != std::string::npos) weaponSet = "B";
         previousRowEnd = start + i->length();
         const std::string row = (*i)[1].str();
-        const uint32_t item = Unsigned(Match(row,
-            R"SC(data-armory-embed="items"\s+data-armory-ids="([0-9]+)")SC"));
+        // Snow Crows does not guarantee attribute ordering. Some gear rows
+        // put the selected stat BEFORE data-armory-ids, so read IDs from the
+        // entire first item embed rather than assuming adjacent attributes.
+        const std::string itemTag = Match(row,
+            R"SC(<div[^>]*data-armory-embed="items"[^>]*>)SC", 0);
+        const uint32_t item = Unsigned(Match(itemTag,
+            R"SC(data-armory-ids="([0-9]+)")SC"));
         if (!item) continue;
         const std::string label = Decode(Match(row, R"(<p\s+class="mb-1">([^<]+))"));
         const std::string hint = Decode(Match(row,

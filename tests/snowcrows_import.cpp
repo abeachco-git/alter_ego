@@ -8,7 +8,10 @@ static std::string row(unsigned id, const std::string& label,
                        const std::string& upgrades) {
     const std::string base = std::to_string(id);
     std::string attributes = "data-armory-embed=\"items\" data-armory-ids=\"" + base + "\"";
-    if (stat)
+    if (stat && id % 2 == 1)
+        attributes = "data-armory-embed=\"items\" data-armory-" + base +
+            "-stat=\"" + std::to_string(stat) + "\" data-armory-ids=\"" + base + "\"";
+    else if (stat)
         attributes += " data-armory-" + base + "-stat=\"" + std::to_string(stat) + "\"";
     if (!upgrades.empty())
         attributes += " data-armory-" + base + "-upgrades=\"" + upgrades + "\"";
