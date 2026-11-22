@@ -506,6 +506,7 @@ static std::unordered_set<uint32_t> g_AchHiddenCatIds;          // categories to
 
 static std::recursive_mutex g_AchMutex;
 static bool g_AchGroupsFetched = false;
+static int64_t g_AchGroupsCacheFetchedAt = 0; // last successful groups/categories snapshot
 static std::atomic<bool> g_AchGroupsFetching{false};
 static bool g_AchNameIndexReady = false;
 static std::atomic<bool> g_AchNameIndexFetching{false};
@@ -1856,8 +1857,12 @@ static void SaveAchGroupCache() {
         j["categories"] = cats;
     }
 
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump(2);
+    if (WriteFileAtomic(path, j.dump(2))) {
+        g_AchGroupsCacheFetchedAt = epochSecs;
+    } else if (APIDefs) {
+        APIDefs->Log(LOGL_WARNING, "AlterEgo",
+                     "Unable to save achievement group/category cache");
+    }
 }
 
 static void LoadAchGroupCache() {
@@ -1867,13 +1872,10 @@ static void LoadAchGroupCache() {
     try {
         auto j = nlohmann::json::parse(file);
 
-        // Check staleness — daily categories change each reset, so invalidate on daily reset
-        int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
-        auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
-        auto now = std::chrono::system_clock::now();
-        auto dailyReset = CalcLastDailyReset(now);
-        if (fetchTime < dailyReset) return; // stale — daily categories have rotated
-
+        // Restore the last-known categories immediately, even across the daily
+        // reset. A stale snapshot is usable offline and is refreshed in the
+        // background without blanking the navigation on every launch.
+        const int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
 
         if (j.contains("groups") && j["groups"].is_array()) {
@@ -1925,7 +1927,10 @@ static void LoadAchGroupCache() {
             }
         }
 
-        if (!g_AchGroups.empty()) g_AchGroupsFetched = true;
+        if (!g_AchGroups.empty() && !g_AchCategories.empty()) {
+            g_AchGroupsFetched = true;
+            g_AchGroupsCacheFetchedAt = fetchEpoch;
+        }
     } catch (...) {}
 }
 
@@ -14122,9 +14127,23 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
 }
 
 static void RenderAchievements() {
-    // On first open, trigger fetch if not cached
-    if (!g_AchGroupsFetched && !g_AchGroupsFetching) {
-        FetchAchGroups();
+    // Cached groups remain visible immediately on startup. Refresh stale
+    // groups/categories after a daily reset instead of discarding the file.
+    // Back off failed fetches to avoid retrying on every rendered frame.
+    {
+        const int64_t resetEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+            CalcLastDailyReset(std::chrono::system_clock::now())
+                .time_since_epoch()).count();
+        const bool groupsStale = !g_AchGroupsFetched ||
+            g_AchGroupsCacheFetchedAt < resetEpoch;
+        static auto s_lastGroupRefreshAttempt = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (groupsStale && !g_AchGroupsFetching &&
+            (s_lastGroupRefreshAttempt == std::chrono::steady_clock::time_point{} ||
+             now - s_lastGroupRefreshAttempt > std::chrono::minutes(5))) {
+            s_lastGroupRefreshAttempt = now;
+            FetchAchGroups();
+        }
     }
     if (!g_AchNameIndexReady && !g_AchNameIndexFetching) {
         FetchAchNameIndex();
