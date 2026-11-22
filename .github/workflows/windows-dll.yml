@@ -65,6 +65,10 @@ jobs:
             'https://metabattle.com/wiki/Build:Reaper_-_Power_DPS' \
             --output /tmp/metabattle-debug/reaper.html
           wc -c /tmp/metabattle-debug/reaper.html
+      - name: Verify live Reaper primary equipment imports intact
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/metabattle_import.cpp -o /tmp/metabattle_reaper_live
+          /tmp/metabattle_reaper_live /tmp/metabattle-debug/reaper.html
       - name: Upload MetaBattle source fixture
         uses: actions/upload-artifact@v4
         with:
