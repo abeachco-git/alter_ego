@@ -16685,6 +16685,7 @@ void AddonRender() {
         const bool libraryHeaderClicked = libraryHeaderHovered &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         static bool libraryMenuPinned = false;
+        static bool libraryPopupOpen = false; // updated after the stable-scope BeginPopup
         static float libraryHoverSeconds = 0.0f;
         static float libraryOutsideSeconds = 0.0f;
         static bool librarySuppressHoverUntilLeave = false;
@@ -16699,7 +16700,7 @@ void AddonRender() {
             libraryHoverSeconds = 0.0f;
             librarySuppressHoverUntilLeave = true;
             if (ImGui::GetIO().MousePos.x >= libraryTabMax.x - 26.0f) {
-                if (libraryMenuPinned && ImGui::IsPopupOpen("Library menu##ae_main")) {
+                if (libraryMenuPinned && libraryPopupOpen) {
                     libraryRequestClose = true; // chevron toggles the pinned menu
                 } else {
                     libraryMenuPinned = true;
@@ -16716,7 +16717,7 @@ void AddonRender() {
                 if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
             }
         } else if (libraryHeaderHovered && !librarySuppressHoverUntilLeave &&
-                   !ImGui::IsPopupOpen("Library menu##ae_main")) {
+                   !libraryPopupOpen) {
             libraryHoverSeconds += ImGui::GetIO().DeltaTime;
             if (libraryHoverSeconds >= 0.18f) {
                 libraryHoverSeconds = 0.0f;
@@ -16986,7 +16987,8 @@ void AddonRender() {
             }
             ImGui::EndPopup();
         }
-        if (!ImGui::IsPopupOpen("Library menu##ae_main")) {
+        libraryPopupOpen = ImGui::IsPopupOpen("Library menu##ae_main");
+        if (!libraryPopupOpen) {
             libraryMenuPinned = false;
             libraryOutsideSeconds = 0.0f;
         }
