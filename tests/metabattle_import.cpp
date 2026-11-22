@@ -114,6 +114,33 @@ int main(int argc, char** argv) {
            parsed.infusions[0].itemId == 37131 && parsed.infusions[0].count == 14 &&
            parsed.infusions[1].itemId == 37132 && parsed.infusions[1].count == 4);
 
+    // Open-world pages may place the first equipment grid below an <h3>
+    // ("Standard Equipment"). Never mistake this for an alternative loadout.
+    std::string openWorldFixture = html;
+    const size_t gridAt = openWorldFixture.find("<div id=\"eq-box-1\">");
+    assert(gridAt != std::string::npos);
+    openWorldFixture.insert(gridAt,
+        "<h3><span id=\"Standard_Equipment\">Standard Equipment</span></h3>");
+    SnowCrows::Page openWorldParsed;
+    assert(MetaBattle::Parse(url, openWorldFixture, openWorldParsed, error));
+    assert(error.empty());
+    assert(openWorldParsed.gear.size() == 15);
+    assert(openWorldParsed.gear.at("Backpack").itemId == 37009);
+    assert(openWorldParsed.gear.at("Ring2").itemId == 37086);
+    assert(openWorldParsed.infusions.size() == 2);
+
+    // Open-world pages legitimately omit statistical infusions. The
+    // equipment import must remain complete, not fall back to chat-code only.
+    std::string missingInfusions = openWorldFixture;
+    missingInfusions = std::regex_replace(missingInfusions,
+        std::regex(R"MB(<div class="equipment-slot"><div data-armory-embed="items" data-armory-ids="3713[12]"[^>]*></div><small>Infusion<br\s*/>x[0-9]+</small></div>)MB"),
+        "");
+    SnowCrows::Page noInfusionsParsed;
+    assert(MetaBattle::Parse(url, missingInfusions, noInfusionsParsed, error));
+    assert(error.empty());
+    assert(noInfusionsParsed.infusions.empty());
+    assert(noInfusionsParsed.gear.size() == 15);
+
     const auto original = parsed.gear.size();
     const auto pos = html.find("<small>Relic</small>");
     assert(pos != std::string::npos);
