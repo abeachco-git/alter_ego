@@ -145,18 +145,25 @@ inline bool Parse(const std::string& url, const std::string& html,
         page.importWarning += "Specialization lines incomplete; review traits.";
     }
 
-    // The default loadout appears directly below the Equipment heading.
-    // Later <h3> sections may contain complete *alternative* equipment grids
-    // (e.g. Reaper's Impact Sigil Variant): these can overwrite ring/backpiece
-    // slots and make infusion counts exceed 25, causing all totals to be lost.
-    // Bound the parser to the primary grid before the first subsection.
-    const size_t consumablesAt = html.find("id=\"Consumables\"", gearAt);
+    // Find the first primary grid, not just the first subsection. Open-world
+    // builds (Reaper, for example) place "Standard Equipment" in an <h3>
+    // BEFORE the gear. Stopping at that heading used to import zero gear.
+    //
+    // After the primary grid, <h3> typically introduces alternative equipment.
+    // Keep it out of the default set to avoid overwriting rings/backpiece or
+    // doubling infusions from another loadout.
+    const size_t primaryGrid = html.find("id=\"eq-box-1\"", gearAt);
+    if (primaryGrid == std::string::npos) {
+        error = "MetaBattle primary equipment grid was not found.";
+        return false;
+    }
+    const size_t consumablesAt = html.find("id=\"Consumables\"", primaryGrid);
     size_t equipmentEnd = consumablesAt == std::string::npos
         ? html.size() : consumablesAt;
-    const size_t subsectionAt = html.find("<h3", gearAt);
+    const size_t subsectionAt = html.find("<h3", primaryGrid);
     if (subsectionAt != std::string::npos && subsectionAt < equipmentEnd)
         equipmentEnd = subsectionAt;
-    const std::string gearHtml = html.substr(gearAt, equipmentEnd - gearAt);
+    const std::string gearHtml = html.substr(primaryGrid, equipmentEnd - primaryGrid);
     const std::regex smallRe(R"(<small\b[^>]*>([\s\S]*?)</small>)", std::regex::icase);
     int accessory = 0, ring = 0, weaponSet = 0;
     int sigilsSeen = 0;
@@ -264,12 +271,13 @@ inline bool Parse(const std::string& url, const std::string& html,
         error = "MetaBattle build title was not found.";
         return false;
     }
-    // Do not reject an otherwise identifiable build for intentionally blank
-    // equipment or for a source layout that omits some armory IDs.
+    // Never silently save a gearless build when the source displays a
+    // complete equipment grid. Missing infusions are explicitly valid.
     if (page.gear.size() < 12) {
-        if (!page.importWarning.empty()) page.importWarning += " ";
-        page.importWarning += "Only " + std::to_string(page.gear.size()) +
-            " equipment slots resolved; review source gear.";
+        error = "MetaBattle equipment grid incomplete: only " +
+            std::to_string(page.gear.size()) +
+            " slots resolved (expected at least 12). Nothing was imported.";
+        return false;
     }
     if (!page.relicId) {
         if (!page.importWarning.empty()) page.importWarning += " ";
