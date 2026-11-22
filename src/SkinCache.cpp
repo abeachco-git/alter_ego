@@ -176,8 +176,7 @@ namespace Skinventory {
             file >> j;
             if (!j.is_array() || j.empty()) return false;
 
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_skins.clear();
+            std::unordered_map<uint32_t, SkinInfo> parsed;
             for (const auto& entry : j) {
                 SkinInfo skin;
                 skin.id = entry.value("id", (uint32_t)0);
@@ -192,9 +191,13 @@ namespace Skinventory {
                 if (entry.contains("restrictions") && entry["restrictions"].is_array())
                     skin.restrictions = entry["restrictions"].get<std::vector<std::string>>();
                 if (skin.id > 0) {
-                    s_skins[skin.id] = skin;
+                    parsed[skin.id] = std::move(skin);
                 }
             }
+            // Publish only a fully parsed catalog. A legacy or damaged file
+            // must not replace an existing working index with partial data.
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_skins = std::move(parsed);
             RebuildIndex();
             s_status = CacheStatus::Ready;
             s_status_message = "Loaded " + std::to_string(s_skins.size()) + " skins from cache";
