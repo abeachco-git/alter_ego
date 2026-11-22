@@ -836,7 +836,6 @@ static int g_LibSelectedIdx = -1;
 // Build editor: "+ New Build" dialog state
 static bool g_NewBuildDialogOpen = false;
 static std::string g_NewBuildProfessionPending;
-static bool g_LibContextSharePending = false;
 static int  g_NewBuildGameMode = 0; // index into GameMode (0=PvE,1=WvW,2=PvP,3=Raid,4=Fractal)
 // Build editor: working draft + spec picker state
 static AlterEgo::SavedBuild g_EditDraft;   // working copy while editing a build's definition
@@ -7038,7 +7037,7 @@ static void RenderNewBuildDialog() {
             ImGui::EndTable();
         }
         ImGui::Separator();
-        if (RenderChipButton("Cancel##newBuild", false)) {
+        if (RenderActionButton("Cancel##newBuild")) {
             g_NewBuildDialogOpen = false;
             ImGui::CloseCurrentPopup();
         }
@@ -8607,6 +8606,7 @@ static AlterEgo::SavedBuild SourcePageToSavedBuild(const AlterEgo::SnowCrows::Pa
     auto build = GW2API::CreateBlankBuild(page.profession, mode);
     build.name = page.name;
     build.source_url = page.sourceUrl;
+    build.import_warning = page.importWarning;
     build.chat_link = page.templateCode;
     build.rune_id = page.runeId;
     build.relic_id = page.relicId;
@@ -8982,10 +8982,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             if (RenderActionButton("Compare##headerBuild")) ActivateSavedBuildCompare(build);
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap, btnY));
-            if (RenderActionButton("Share##headerBuild") || g_LibContextSharePending) {
-                g_LibContextSharePending = false;
-                ImGui::OpenPopup("##share_menu");
-            }
+            if (RenderActionButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap, btnY));
             if (RenderActionButton("Edit##headerBuild")) EnterBuildEditMode(build);
@@ -10540,7 +10537,7 @@ static void RenderLibraryImportDialog() {
         }
 
         ImGui::Spacing();
-        if ((RenderGoldButton("Import##libSnow") || autoRetry) && !g_BuildSourceBusy) {
+        if ((RenderActionButton("Import##libSnow") || autoRetry) && !g_BuildSourceBusy) {
             std::string input(g_LibImportBuf);
             std::string name(g_LibImportName);
             if (input.empty()) {
@@ -10639,7 +10636,7 @@ static void RenderLibraryImportDialog() {
         }
 
         ImGui::SameLine();
-        if (RenderChipButton("Cancel##libSnow", false)) {
+        if (RenderActionButton("Cancel##libSnow")) {
             g_LibShowImport = false;
             g_LibImportPending = false;
             g_LibImportPendingProfession.clear();
@@ -10981,9 +10978,9 @@ static void RenderBuildLibrary() {
                     g_LibSelectedIdx = i;
                     ActivateSavedBuildCompare(b);
                 }
-                if (ImGui::MenuItem("Share")) {
-                    g_LibSelectedIdx = i;
-                    g_LibContextSharePending = true;
+                if (ImGui::BeginMenu("Share")) {
+                    RenderBuildShareMenuItems(b);
+                    ImGui::EndMenu();
                 }
                 if (ImGui::MenuItem("Edit")) {
                     g_LibSelectedIdx = i;
@@ -11141,6 +11138,11 @@ static void RenderBuildLibrary() {
         // Build identity and actions never scroll away. Only the detail
         // section below has a scroll bar.
         RenderSavedBuildHeader(build, /*showEditButton=*/true);
+        if (!g_LibEditMode && !build.import_warning.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.76f, 0.38f, 1.0f));
+            ImGui::TextWrapped("Import needs review: %s", build.import_warning.c_str());
+            ImGui::PopStyleColor();
+        }
         ImGui::Separator();
         if (!g_LibEditMode && !build.source_url.empty()) {
             ImGui::TextWrapped("Source: %s", build.source_url.c_str());
