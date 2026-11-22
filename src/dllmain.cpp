@@ -3792,7 +3792,8 @@ static void NavigateToLibraryCollection(int collection) {
 
 #include "FashionUI.h"
 
-static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab = 0);
+static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab = 0,
+    bool stacked = false, float buttonWidth = 0.0f);
 // Shared by Characters, Save, and Compare. Saved library data is irrelevant.
 static int GetRetrievedEquipmentTabCount(const AlterEgo::Character& ch) {
     return AlterEgo::EquipmentTabCore::Count(ch);
@@ -3810,15 +3811,6 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     if (tab < 1 || tab > maxTab)
         tab = (ch.active_equipment_tab >= 1 && ch.active_equipment_tab <= maxTab)
                 ? ch.active_equipment_tab : 1;
-
-    // Keep the same Save action accessible from Equipment and Build. When
-    // invoked here, preselect the equipment set being viewed in the dialog.
-    RenderSaveLiveBuildAction(ch, tab);
-    ImGui::SameLine();
-    if (RenderActionButton("Save Fashion##live_fashion")) StartLiveFashionSave(ch, tab);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Save the selected equipment tab appearance to Library > Fashion.");
-    ImGui::Spacing();
 
     // Equipment tab chips. Always shown (even for a single tab) so the tab is a
     // consistent right-click target for the Fashion menu.
@@ -4592,7 +4584,8 @@ static AlterEgo::SavedBuild MakeLiveShareSnapshot(
         ch.name + " - " + (bt.name.empty() ? "Tab " + std::to_string(bt.tab) : bt.name),
         AlterEgo::GameMode::PvE, link);
 }
-static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab) {
+static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab,
+    bool stacked, float buttonWidth) {
     // Keep a snapshot for the Share popup so it never accidentally uses a
     // similarly named entry from the saved library.
     static AlterEgo::SavedBuild shareSnapshot;
@@ -4614,7 +4607,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         return;
     }
 
-    if (RenderActionButton("Save##live_save")) {
+    if (RenderActionButton("Save##live_save", ImVec2(buttonWidth, 0))) {
         OpenSaveLiveBuildDialog(ch, ch.build_tabs[buildIdx]);
         if (preferredEquipTab > 0) g_SaveLibEquipTab = preferredEquipTab;
     }
@@ -4622,8 +4615,8 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         ImGui::SetTooltip("Save Current Build + Gear to Library...\n"
             "Save the selected retrieved build and choose the equipment set to include.");
 
-    ImGui::SameLine();
-    if (RenderActionButton("Share##live_share")) {
+    if (!stacked) ImGui::SameLine();
+    if (RenderActionButton("Share##live_share", ImVec2(buttonWidth, 0))) {
         const int equipTab = preferredEquipTab > 0 ? preferredEquipTab :
             (g_SelectedEquipTab > 0 ? g_SelectedEquipTab : ActiveEquipmentTab(ch));
         shareSnapshot = MakeLiveShareSnapshot(ch, buildIdx, equipTab);
@@ -4643,13 +4636,25 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
                 shareSnapshot.chat_link = EncodeBuildTabChatLink(bt);
         }
         if (shareSnapshot.chat_link.empty())
-            ImGui::TextDisabled("Waiting for build-link data. Share options require it.");
-        else
-            RenderBuildShareMenuItems(shareSnapshot, &ch,
-                preferredEquipTab > 0 ? preferredEquipTab :
-                (g_SelectedEquipTab > 0 ? g_SelectedEquipTab : ActiveEquipmentTab(ch)));
+            ImGui::TextDisabled("Build-link data is loading. Build sharing may be unavailable.");
+        // Fashion sharing uses the character's active equipment tab and stays
+        // available even while the build palette is still loading.
+        RenderBuildShareMenuItems(shareSnapshot, &ch, ActiveEquipmentTab(ch));
         ImGui::EndPopup();
     }
+}
+
+// Character-wide actions live in the header, not in either detail tab.
+static void RenderCharacterHeaderActions(const AlterEgo::Character& ch, float buttonWidth) {
+    ImGui::PushID("##character_header_actions");
+    RenderSaveLiveBuildAction(ch, 0, true, buttonWidth);
+    if (RenderActionButton("Save Active Fashion##live_fashion",
+                           ImVec2(buttonWidth, 0))) {
+        StartLiveFashionSave(ch, ActiveEquipmentTab(ch));
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Save the character's active in-game equipment tab appearance to Library > Fashion.");
+    ImGui::PopID();
 }
 
 static void RenderBuildPanel(const AlterEgo::Character& ch) {
@@ -4657,10 +4662,6 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No build tabs available.");
         return;
     }
-
-    // Same action/position as the Equipment view, before the build-tab selector.
-    RenderSaveLiveBuildAction(ch);
-    ImGui::Spacing();
 
     // Build tab selector — chip strip
     {
@@ -5776,9 +5777,10 @@ static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
                 }
                 if (liveCharacter) {
                     if (ImGui::Selectable("Copy active fashion chat link")) {
-                        const int tab = equipmentTab > 0 ? equipmentTab
-                            : (liveCharacter->active_equipment_tab > 0
-                                ? liveCharacter->active_equipment_tab : 1);
+                        // "Active Fashion" is always the active in-game tab,
+                        // independent of the equipment tab being viewed.
+                        const int tab = liveCharacter->active_equipment_tab > 0
+                            ? liveCharacter->active_equipment_tab : 1;
                         const std::string link = BuildWardrobeLink(*liveCharacter, tab);
                         if (!link.empty()) {
                             CopyToClipboard(link);
@@ -16257,8 +16259,12 @@ void AddonRender() {
                     {
                         ImVec4 profColor = GetProfessionColor(ch.profession);
                         const float avatarSize = 46.0f;
-                        float startY = ImGui::GetCursorPosY();
-                        float availW = ImGui::GetContentRegionAvail().x;
+                        const ImVec2 headerStart = ImGui::GetCursorScreenPos();
+                        const float startY = ImGui::GetCursorPosY();
+                        const float availW = ImGui::GetContentRegionAvail().x;
+                        const float actionWidth = ImGui::CalcTextSize("Save Active Fashion").x +
+                            2.0f * ImGui::GetStyle().FramePadding.x + 12.0f;
+                        const bool actionsOnRight = availW >= avatarSize + actionWidth + 205.0f;
 
                         // Avatar (left)
                         ImGui::BeginGroup();
@@ -16268,7 +16274,8 @@ void AddonRender() {
 
                         // Use the available space; the left avatar already
                         // identifies the profession and makes a second emblem redundant.
-                        float middleW = ImMax(1.0f, availW - avatarSize - 18.0f);
+                        const float middleW = ImMax(1.0f, availW - avatarSize - 18.0f -
+                            (actionsOnRight ? actionWidth + 10.0f : 0.0f));
                         ImGui::BeginGroup();
                         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + middleW);
                         ImGui::SetCursorPosY(startY + 2.0f);
@@ -16292,11 +16299,21 @@ void AddonRender() {
                         ImGui::PopTextWrapPos();
                         ImGui::EndGroup();
 
-                        // Make sure cursor sits below the avatar/text row
-                        float endY = ImGui::GetCursorPosY();
-                        float minY = startY + avatarSize + 4.0f;
-                        if (endY < minY) ImGui::SetCursorPosY(minY);
-                        else ImGui::SetCursorPosY(endY + 2.0f);
+                        // Position the three actions at the top-right, as marked
+                        // in the screenshot. In narrow layouts they fall below
+                        // the name instead of overlapping or clipping it.
+                        const float textBottom = ImGui::GetCursorScreenPos().y;
+                        const float actionX = actionsOnRight
+                            ? headerStart.x + availW - actionWidth : headerStart.x;
+                        const float actionY = actionsOnRight
+                            ? headerStart.y : ImMax(textBottom, headerStart.y + avatarSize) + 4.0f;
+                        ImGui::SetCursorScreenPos(ImVec2(actionX, actionY));
+                        RenderCharacterHeaderActions(ch, actionsOnRight
+                            ? actionWidth : ImMin(actionWidth, availW));
+                        const float actionsBottom = ImGui::GetCursorScreenPos().y;
+                        ImGui::SetCursorScreenPos(ImVec2(headerStart.x,
+                            ImMax(ImMax(textBottom, actionsBottom),
+                                  headerStart.y + avatarSize) + 4.0f));
                     }
 
                     // Secondary info row: age / birthday / last login / crafting — all dim, single horizontal flow.
