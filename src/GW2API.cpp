@@ -1980,6 +1980,8 @@ namespace AlterEgo {
                         info.icon_url = skin.value("icon", "");
                         info.type = skin.value("type", "");
                         info.rarity = skin.value("rarity", "");
+                        if (skin.contains("details") && skin["details"].is_object())
+                            info.weight_class = skin["details"].value("weight_class", std::string());
                         // Extract dye slot count and per-channel material from details.dye_slots.default
                         // Null entries = unused channels, only count non-null
                         if (skin.contains("details") && skin["details"].contains("dye_slots") &&
@@ -3322,6 +3324,7 @@ namespace AlterEgo {
                 j["icon"] = info.icon_url;
                 j["type"] = info.type;
                 j["rarity"] = info.rarity;
+                if (!info.weight_class.empty()) j["weight_class"] = info.weight_class;
                 if (info.dye_slot_count >= 0) j["dye_slot_count"] = info.dye_slot_count;
                 if (!info.dye_slot_materials.empty()) j["dye_slot_materials"] = info.dye_slot_materials;
                 arr.push_back(std::move(j));
@@ -3493,6 +3496,7 @@ namespace AlterEgo {
                 info.icon_url = it.value("icon", "");
                 info.type = it.value("type", "");
                 info.rarity = it.value("rarity", "");
+                info.weight_class = it.value("weight_class", "");
                 info.dye_slot_count = it.value("dye_slot_count", -1);
                 if (it.contains("dye_slot_materials") && it["dye_slot_materials"].is_array()) {
                     for (const auto& m : it["dye_slot_materials"])
