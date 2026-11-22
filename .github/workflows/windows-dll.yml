@@ -35,7 +35,9 @@ jobs:
             'reaper|Reaper_-_Power_Greatsword_Reaper' \
             'harbinger|Harbinger_-_Boon_DPS_Condi_Harbinger_Open_World' \
             'chronomancer|Chronomancer_-_Power_DPS' \
-            'mechanist|Mechanist_-_Condi_DPS'; do
+            'mechanist|Mechanist_-_Condi_DPS' \
+            'scrapper|Scrapper_-_Power_Scrapper' \
+            'holosmith|Holosmith_-_Condi_Holo'; do
             file="${spec%%|*}"
             slug="${spec#*|}"
             curl -fLsS --retry 2 --max-time 35 -A 'Mozilla/5.0' \
