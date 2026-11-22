@@ -16665,8 +16665,14 @@ void AddonRender() {
         // Keep the extra tab-label space for the drawn chevron. The Nexus
         // font cannot reliably render the Unicode down-triangle.
         const bool libraryVisible = ImGui::BeginTabItem("Library    ##ae_library_dropdown", nullptr, libraryFlags);
-        const bool libraryHeaderClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-        const bool libraryHeaderHovered = ImGui::IsItemHovered();
+        // An open hover-menu would normally block clicks on its parent tab.
+        // Preserve direct Library navigation even while the menu is visible.
+        const bool libraryHeaderHovered = ImGui::IsItemHovered(
+            ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+        const bool libraryHeaderClicked =
+            ImGui::IsItemClicked(ImGuiMouseButton_Left) ||
+            (libraryHeaderHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+        bool libraryDirectNavigationClick = false;
         const ImVec2 libraryTabMin = ImGui::GetItemRectMin();
         const ImVec2 libraryTabMax = ImGui::GetItemRectMax();
         const ImVec2 libraryMenuAnchor(libraryTabMin.x, libraryTabMax.y);
@@ -16705,12 +16711,10 @@ void AddonRender() {
                     libraryTabBar->NextSelectedTabId = previousSelectedTab;
                 ImGui::OpenPopup("Library menu##ae_main");
             } else {
+                libraryDirectNavigationClick = true;
                 NavigateToLibraryCollection(0);
                 if (libraryTabBar)
                     libraryTabBar->NextSelectedTabId = libraryTabId;
-                // A tab navigation does not need to close a popup via
-                // CloseCurrentPopup(): that API is only valid while rendering
-                // inside the popup itself.
             }
         } else if (libraryHeaderHovered && !librarySuppressHoverUntilLeave &&
                    !ImGui::IsPopupOpen("Library menu##ae_main")) {
@@ -16729,6 +16733,11 @@ void AddonRender() {
         }
         ImGui::SetNextWindowPos(libraryMenuAnchor, ImGuiCond_Appearing);
         if (ImGui::BeginPopup("Library menu##ae_main")) {
+            if (libraryDirectNavigationClick) {
+                // Called while the popup is active, unlike a close from the tab
+                // header. Also dismisses the menu after a hover-opened visit.
+                ImGui::CloseCurrentPopup();
+            } else {
             ImGui::TextDisabled("COLLECTIONS");
             // Only the actually visible collection is checked. Merely opening
             // this dropdown from another tab does not select either collection.
@@ -16821,6 +16830,7 @@ void AddonRender() {
                 BeginLibraryBackupImport();
             if (ImGui::MenuItem("Export"))
                 BeginLibraryBackupExport();
+            }
             ImGui::EndPopup();
         }
 
