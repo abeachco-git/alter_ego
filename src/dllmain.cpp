@@ -8896,12 +8896,17 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         // in a compact high-contrast badge; editing keeps its existing chips.
         ImGui::TextColored(ImVec4(0.87f, 0.86f, 0.79f, 1.0f),
             "%s", sub.c_str());
-        ImGui::SameLine(0, 8);
+        // Center every game-mode chip on the subtitle's actual text line.
+        // SameLine alone aligns item baselines, not differently padded button centers.
+        float modeX = ImGui::GetItemRectMax().x + 8.0f;
+        const float subtitleMidY = (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f;
         if (!g_LibEditMode) {
             const auto displayModes = build.game_modes.empty() ? std::vector<AlterEgo::GameMode>{build.game_mode} : build.game_modes;
             for (size_t m = 0; m < displayModes.size(); ++m) {
-                if (m) ImGui::SameLine(0, 3);
+                const float badgeH = ImGui::GetTextLineHeight() + 4.0f;
+                ImGui::SetCursorScreenPos(ImVec2(modeX, subtitleMidY - badgeH * 0.5f));
                 RenderBuildModeBadge(GameModeLabel(displayModes[m]));
+                modeX = ImGui::GetItemRectMax().x + 3.0f;
             }
         } else {
             struct MC { AlterEgo::GameMode mode; const char* lbl; };
@@ -8913,7 +8918,8 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 { AlterEgo::GameMode::Fractal, "Fractal" },
             };
             for (int m = 0; m < 5; m++) {
-                if (m) ImGui::SameLine(0, 3);
+                const float chipH = ImMax(22.0f, ImGui::GetTextLineHeight() + 4.0f);
+                ImGui::SetCursorScreenPos(ImVec2(modeX, subtitleMidY - chipH * 0.5f));
                 ImGui::PushID(m + 800);
                 const auto& selected = g_EditDraft.game_modes;
                 const bool active = selected.empty() ? g_EditDraft.game_mode == modes[m].mode :
@@ -8927,6 +8933,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                     g_EditDraft.game_mode = tags.front();
                     MarkEditDirty();
                 }
+                modeX = ImGui::GetItemRectMax().x + 3.0f;
                 ImGui::PopID();
             }
         }
