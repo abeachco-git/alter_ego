@@ -6866,52 +6866,126 @@ static const char* LegendNameForCode(uint8_t code) {
     return "Choose legend";
 }
 
+// Render the same GW2 profession image used in the Characters roster in
+// Shared profession icon and class color renderer for character selectors and
+// build dialogs. Drawn on top of an existing ImGui control so all actions
+// retain native focus, hover, accessibility and theme styling.
+static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
+                                               ImVec2 itemMin, float itemHeight,
+                                               const std::string& profession) {
+    constexpr float iconSize = 17.0f;
+    const ImVec2 iconMin(itemMin.x + 8.0f,
+                         itemMin.y + (itemHeight - iconSize) * 0.5f);
+    const ImVec2 iconMax(iconMin.x + iconSize, iconMin.y + iconSize);
+    const uint32_t iconId = GetProfessionIconId(profession);
+    const char* iconUrl = GetProfessionIconUrl(profession);
+    if (iconId && !iconUrl) {
+        AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
+    }
+    if (iconId && iconUrl) {
+        Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
+        if (tex && tex->Resource) {
+            dl->AddImage(tex->Resource, iconMin, iconMax);
+            return;
+        }
+        AlterEgo::IconManager::RequestIcon(iconId, iconUrl);
+    }
+    // Keep a readable fallback while profession artwork is still downloading.
+    if (!profession.empty()) {
+        const std::string initial = profession.substr(0, 1);
+        dl->AddText(ImVec2(iconMin.x + 3.0f,
+                           itemMin.y + (itemHeight - ImGui::GetTextLineHeight()) * 0.5f),
+                    ImGui::ColorConvertFloat4ToU32(GetProfessionColor(profession)),
+                    initial.c_str());
+    }
+}
+
+// Use the same icon and profession color for Characters, Compare and the New
+// Build profession choices. Optional prefixes stay neutral.
+static void DrawCompareProfessionCharacterEntry(ImDrawList* draw,
+    ImVec2 min, ImVec2 max, const std::string& profession,
+    const std::string& name, const char* prefix = nullptr,
+    bool preview = false) {
+    const float h = max.y - min.y;
+    DrawCompareCharacterProfessionIcon(draw, min, h, profession);
+    const float y = min.y + (h - ImGui::GetTextLineHeight()) * 0.5f;
+    float x = min.x + 32.0f;
+    const float right = max.x - (preview ? 29.0f : 6.0f);
+    if (right <= x) return;
+    draw->PushClipRect(ImVec2(x,min.y), ImVec2(right,max.y), true);
+    if (prefix && *prefix) {
+        draw->AddText(ImVec2(x,y), ImGui::GetColorU32(ImGuiCol_Text), prefix);
+        x += ImGui::CalcTextSize(prefix).x;
+    }
+    DrawProfessionCharacterName(draw, ImVec2(x,y), name, profession);
+    draw->PopClipRect();
+}
+
 // "+ New Build" dialog: pick a profession + game mode, create a blank build,
 // and drop straight into edit mode.
 static void RenderNewBuildDialog() {
     if (g_NewBuildDialogOpen && !ImGui::IsPopupOpen("New Build##newbuild"))
         ImGui::OpenPopup("New Build##newbuild");
 
-    ImVec2 dispSize = ImGui::GetIO().DisplaySize;
+    const ImVec2 dispSize = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowPos(ImVec2(dispSize.x * 0.5f, dispSize.y * 0.5f),
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("New Build##newbuild", &g_NewBuildDialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
-        const char* modeLabels[] = { "PvE", "WvW", "PvP", "Raid", "Fractal" };
-        ImGui::Text("Game mode:");
-        ImGui::SameLine();
+        constexpr float kGridWidth = 480.0f;
+        const char* modeLabels[] = {"PvE", "WvW", "PvP", "Raid", "Fractal"};
+        // Align the label vertically with the themed dropdown, rather than
+        // leaving the label at the unpadded text baseline.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Game mode");
+        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
         if (g_NewBuildGameMode < 0 || g_NewBuildGameMode > 4) g_NewBuildGameMode = 0;
-        if (RenderThemedCombo("##nbmode", modeLabels[g_NewBuildGameMode], 120.0f)) {
-            for (int m = 0; m < 5; m++)
+        if (RenderThemedCombo("##nbmode", modeLabels[g_NewBuildGameMode], 140.0f)) {
+            for (int m = 0; m < 5; ++m)
                 if (ImGui::Selectable(modeLabels[m], g_NewBuildGameMode == m))
                     g_NewBuildGameMode = m;
             ImGui::EndCombo();
         }
 
+        ImGui::Spacing();
         ImGui::Separator();
-        ImGui::Text("Choose a profession:");
-        for (int i = 0; i < 9; i++) {
-            if (i % 3 != 0) ImGui::SameLine();
-            if (ImGui::Button(kBuildProfessions[i], ImVec2(110, 0))) {
-                AlterEgo::SavedBuild blank = AlterEgo::GW2API::CreateBlankBuild(
-                    kBuildProfessions[i], (AlterEgo::GameMode)g_NewBuildGameMode);
-                int idx = AlterEgo::GW2API::AddSavedBuild(std::move(blank));
-                if (idx >= 0) {
-                    const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
-                    g_LibSelectedIdx = idx;
-                    g_LibEditBuildId = builds[idx].id;
-                    EnterBuildEditMode(builds[idx]);
-                    g_EditIsNewBuild = true; // cancelling discards this blank build
-                    AlterEgo::GW2API::FetchProfessionInfoAsync(kBuildProfessions[i]);
-                    AlterEgo::GW2API::FetchProfessionPaletteAsync(kBuildProfessions[i]);
+        ImGui::TextUnformatted("Choose a profession");
+        // Keep the modal's profession choices consistent with Characters and
+        // Compare: shared icon loader, shared color, shared action button sizing.
+        if (ImGui::BeginTable("##newBuildProfessions", 3,
+                              ImGuiTableFlags_SizingStretchSame, ImVec2(kGridWidth, 0))) {
+            for (int i = 0; i < 9; ++i) {
+                ImGui::TableNextColumn();
+                ImGui::PushID(i);
+                const char* profession = kBuildProfessions[i];
+                const float width = ImGui::GetContentRegionAvail().x;
+                const bool clicked = RenderActionButton("##newProfession",
+                    ImVec2(width, ImMax(32.0f, ImGui::GetFrameHeight())));
+                DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
+                    ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                    profession, profession);
+                if (clicked) {
+                    AlterEgo::SavedBuild blank = AlterEgo::GW2API::CreateBlankBuild(
+                        profession, (AlterEgo::GameMode)g_NewBuildGameMode);
+                    int idx = AlterEgo::GW2API::AddSavedBuild(std::move(blank));
+                    if (idx >= 0) {
+                        const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
+                        g_LibSelectedIdx = idx;
+                        g_LibEditBuildId = builds[idx].id;
+                        EnterBuildEditMode(builds[idx]);
+                        g_EditIsNewBuild = true;
+                        AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
+                        AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+                    }
+                    g_NewBuildDialogOpen = false;
+                    ImGui::CloseCurrentPopup();
                 }
-                g_NewBuildDialogOpen = false;
-                ImGui::CloseCurrentPopup();
+                ImGui::PopID();
             }
+            ImGui::EndTable();
         }
-
         ImGui::Separator();
-        if (ImGui::Button("Cancel")) {
+        if (RenderChipButton("Cancel##newBuild", false)) {
             g_NewBuildDialogOpen = false;
             ImGui::CloseCurrentPopup();
         }
@@ -10006,59 +10080,6 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
     return cached;
 }
 
-// Render the same GW2 profession image used in the Characters roster in
-// Compare's character combo. Drawn over the normal ImGui combo/selectable
-// background so hover, keyboard navigation, popup sizing and text remain native.
-static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
-                                               ImVec2 itemMin, float itemHeight,
-                                               const std::string& profession) {
-    constexpr float iconSize = 17.0f;
-    const ImVec2 iconMin(itemMin.x + 8.0f,
-                         itemMin.y + (itemHeight - iconSize) * 0.5f);
-    const ImVec2 iconMax(iconMin.x + iconSize, iconMin.y + iconSize);
-    const uint32_t iconId = GetProfessionIconId(profession);
-    const char* iconUrl = GetProfessionIconUrl(profession);
-    if (iconId && !iconUrl) {
-        AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
-    }
-    if (iconId && iconUrl) {
-        Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
-        if (tex && tex->Resource) {
-            dl->AddImage(tex->Resource, iconMin, iconMax);
-            return;
-        }
-        AlterEgo::IconManager::RequestIcon(iconId, iconUrl);
-    }
-    // Keep a readable fallback while profession artwork is still downloading.
-    if (!profession.empty()) {
-        const std::string initial = profession.substr(0, 1);
-        dl->AddText(ImVec2(iconMin.x + 3.0f,
-                           itemMin.y + (itemHeight - ImGui::GetTextLineHeight()) * 0.5f),
-                    ImGui::ColorConvertFloat4ToU32(GetProfessionColor(profession)),
-                    initial.c_str());
-    }
-}
-
-// Draw the same icon and profession-colored name as Characters, leaving the
-// Active (auto) prefix neutral. Clip out the combo arrow and adjacent columns.
-static void DrawCompareProfessionCharacterEntry(ImDrawList* draw,
-    ImVec2 min, ImVec2 max, const std::string& profession,
-    const std::string& name, const char* prefix = nullptr,
-    bool preview = false) {
-    const float h = max.y - min.y;
-    DrawCompareCharacterProfessionIcon(draw, min, h, profession);
-    const float y = min.y + (h - ImGui::GetTextLineHeight()) * 0.5f;
-    float x = min.x + 32.0f;
-    const float right = max.x - (preview ? 29.0f : 6.0f);
-    if (right <= x) return;
-    draw->PushClipRect(ImVec2(x,min.y), ImVec2(right,max.y), true);
-    if (prefix && *prefix) {
-        draw->AddText(ImVec2(x,y), ImGui::GetColorU32(ImGuiCol_Text), prefix);
-        x += ImGui::CalcTextSize(prefix).x;
-    }
-    DrawProfessionCharacterName(draw, ImVec2(x,y), name, profession);
-    draw->PopClipRect();
-}
 // Dedicated top-level Compare tab. Keep the selection by saved build ID so
 // reordering or deleting entries in Build Library doesn't select a wrong build.
 static void RenderCompareTab() {
@@ -10510,26 +10531,40 @@ static void RenderBuildLibrary() {
     ImGui::SetNextWindowSize(ImVec2(550.0f, 0.0f), ImGuiCond_Appearing);
     if (ImGui::BeginPopupModal("Import Build##lib", &g_LibShowImport,
                               ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Separator();
-        ImGui::TextWrapped("Paste a Snow Crows build URL, GW2 chat link, AE2 build code, or relay code.");
-        ImGui::Spacing();
-        ImGui::TextUnformatted("Build code or Snow Crows URL");
+        ImGui::TextUnformatted("Build code or link");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::InputTextMultiline("##import_link", g_LibImportBuf,
             sizeof(g_LibImportBuf), ImVec2(-1.0f, 75.0f));
+        if (g_LibImportBuf[0] == '\0') {
+            // ImGui 1.80 has no InputTextMultilineWithHint. Draw the hint on
+            // top of the *empty* multiline input, with the normal disabled-text
+            // color and font; the native input remains the only hit target.
+            const ImVec2 from = ImGui::GetItemRectMin();
+            const ImVec2 to = ImGui::GetItemRectMax();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->PushClipRect(from, to, true);
+            const ImVec2 pad = ImGui::GetStyle().FramePadding;
+            dl->AddText(ImVec2(from.x + pad.x + 2.0f, from.y + pad.y + 1.0f),
+                ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                "Paste a GW2 chat link, AE2 build code, relay code,\nor a Snow Crows link.");
+            dl->PopClipRect();
+        }
 
-        ImGui::TextUnformatted("Build name");
+        ImGui::TextUnformatted("Build name (optional for Snow Crows / AE2)");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
-        ImGui::TextUnformatted("Game mode (used for GW2 chat links)");
-        ImGui::SetNextItemWidth(150.0f);
-        ImGui::Combo("##import_mode", &g_LibImportMode, GameModeImportNames,
-                      IM_ARRAYSIZE(GameModeImportNames));
+        ImGui::TextUnformatted("Game mode (for GW2 chat links)");
+        if (g_LibImportMode < 0 || g_LibImportMode >= IM_ARRAYSIZE(GameModeImportNames))
+            g_LibImportMode = 0;
+        if (RenderThemedCombo("##import_mode", GameModeImportNames[g_LibImportMode], 150.0f)) {
+            for (int m = 0; m < IM_ARRAYSIZE(GameModeImportNames); ++m)
+                if (ImGui::Selectable(GameModeImportNames[m], m == g_LibImportMode))
+                    g_LibImportMode = m;
+            ImGui::EndCombo();
+        }
         ImGui::Spacing();
-        ImGui::TextColored(g_ChatAddonConnected
-                ? ImVec4(0.57f, 0.78f, 0.57f, 1.0f)
-                : ImVec4(0.68f, 0.65f, 0.57f, 1.0f),
-            "Chat: %s", g_ChatAddonConnected ? "Connected" : "Not detected");
+        ImGui::TextDisabled("Chat: %s (optional)",
+            g_ChatAddonConnected ? "Connected" : "Not detected");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Events: Chat integration is optional. Install it from the Nexus addon library to import links shared in GW2 chat.");
 
@@ -10543,7 +10578,7 @@ static void RenderBuildLibrary() {
         }
 
         ImGui::Spacing();
-        if ((RenderActionButton("Import##libSnow") || autoRetry) && !g_SnowCrowsBusy) {
+        if ((RenderGoldButton("Import##libSnow") || autoRetry) && !g_SnowCrowsBusy) {
             std::string input(g_LibImportBuf);
             std::string name(g_LibImportName);
             if (input.empty()) {
@@ -10628,19 +10663,19 @@ static void RenderBuildLibrary() {
             }
         }
 
-        if (g_SnowCrowsBusy)
-            ImGui::TextDisabled("Fetching Snow Crows build...");
-        if (!g_LibImportError.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", g_LibImportError.c_str());
-        }
         ImGui::SameLine();
-        if (RenderChipButton("Cancel", false)) {
+        if (RenderChipButton("Cancel##libSnow", false)) {
             g_LibShowImport = false;
             g_LibImportPending = false;
             g_LibImportPendingProfession.clear();
             g_LibImportError.clear();
             ImGui::CloseCurrentPopup();
         }
+        if (g_SnowCrowsBusy)
+            ImGui::TextDisabled("Fetching Snow Crows build...");
+        if (!g_LibImportError.empty())
+            ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_Text),
+                               "%s", g_LibImportError.c_str());
         ImGui::EndPopup();
     }
     if (!g_LibShowImport) {

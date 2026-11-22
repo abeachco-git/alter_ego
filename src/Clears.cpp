@@ -1216,9 +1216,9 @@ static std::string ShortenEncounterName(const std::string& text) {
         {"Restore the Statue of Darkness.",                                "Eyes"},
         {"Defeat Dhuum.",                                                  "Dhuum"},
         // W6 — Mythwright Gambit
-        {"Destroy the conjured amalgamate.",                               "Conjured Amalgamate"},
+        {"Destroy the conjured amalgamate.",                               "CA"},
         {"Make your way through the sorting and appraisal rooms.",         "Sorting"},
-        {"Defeat the twin largos.",                                        "Twin Largos"},
+        {"Defeat the twin largos.",                                        "Twins"},
         {"Clear a path through Qadim's minions to the Mythwright Cauldron.", "Qadim's Minions"},
         {"Defeat Qadim.",                                                  "Qadim"},
         // W7 — Key of Ahdashim
@@ -3014,7 +3014,10 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 c.fullName = wing.bitNames[i];
                 c.done = bitDone;
                 c.secondary = IsSecondaryRaidEncounter(shortEnc);
-                c.bountyDate = UpcomingBountyLabel(shortEnc, g_DailyBounties,
+                const std::string bountyKey =
+                    shortEnc == "CA" ? "Conjured Amalgamate" :
+                    shortEnc == "Twins" ? "Twin Largos" : shortEnc;
+                c.bountyDate = UpcomingBountyLabel(bountyKey, g_DailyBounties,
                     utcNow, weeklyEndUtc, g_ClearsFetched, &c.dailyCompletedToday);
                 chips.push_back(c);
             }
