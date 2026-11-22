@@ -4411,7 +4411,8 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     std::string defaultName = ch.name + " - " +
         (bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name);
     snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", defaultName.c_str());
-    g_SaveLibMode = 0;
+    g_SaveLibModes = {AlterEgo::GameMode::PvE};
+    g_SaveLibNameManuallyEdited = false;
     g_SaveLibIncludeEquip = true;
     g_SaveLibEquipTab = ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
     g_SaveLibDialogOpen = true;
@@ -8072,50 +8073,72 @@ static void RenderSaveToLibraryDialog() {
 
     ImGui::Text("Build Name:");
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName));
+    if (ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName))) g_SaveLibNameManuallyEdited = true;
 
     ImGui::Spacing();
-    ImGui::Text("Game Mode:");
-    ImGui::SetNextItemWidth(120);
-    ImGui::Combo("##savelib_mode", &g_SaveLibMode, GameModeImportNames, IM_ARRAYSIZE(GameModeImportNames));
+    ImGui::TextUnformatted("Game modes");
+    RenderGameModeSelector("live-save-modes", g_SaveLibModes);
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
     ImGui::Checkbox("Include equipment set", &g_SaveLibIncludeEquip);
-
-    if (g_SaveLibIncludeEquip) {
-        const auto* ch = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
-        if (ch) {
-            // Same retrieved equipment tabs as Characters / Compare.
-            const int maxTab = GetRetrievedEquipmentTabCount(*ch);
-
-            ImGui::Indent(16);
-            for (int t = 1; t <= maxTab; t++) {
-                std::string label;
-                auto nameIt = ch->equipment_tab_names.find(t);
-                if (nameIt != ch->equipment_tab_names.end() && !nameIt->second.empty())
-                    label = nameIt->second;
-                else
-                    label = "Tab " + std::to_string(t);
-                if (ch->active_equipment_tab == t) label += " *";
-
-                bool sel = (g_SaveLibEquipTab == t);
-                if (ImGui::RadioButton(label.c_str(), sel))
-                    g_SaveLibEquipTab = t;
+    const auto* sourceChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
+    if (sourceChar) {
+        ImGui::Text("Character: %s (%s)", sourceChar->name.c_str(), sourceChar->profession.c_str());
+        auto nameForBuild = [](const AlterEgo::BuildTemplate& bt) {
+            return bt.name.empty() ? "Tab " + std::to_string(bt.tab) : bt.name;
+        };
+        auto currentBuild = std::find_if(sourceChar->build_tabs.begin(), sourceChar->build_tabs.end(),
+            [](const AlterEgo::BuildTemplate& bt){ return bt.tab == g_SaveLibBuildTab; });
+        const std::string selectedBuildName = currentBuild == sourceChar->build_tabs.end()
+            ? "(unavailable)" : nameForBuild(*currentBuild);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Build tab");
+        ImGui::SameLine(130);
+        if (RenderThemedCombo("##save_build_tab", selectedBuildName.c_str(), ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
+            for (const auto& bt : sourceChar->build_tabs) {
+                std::string label = nameForBuild(bt) + (bt.is_active ? " (Active)" : "");
+                if (ImGui::Selectable(label.c_str(), bt.tab == g_SaveLibBuildTab)) {
+                    g_SaveLibBuildTab = bt.tab;
+                    g_SaveLibProfession = bt.profession.empty() ? sourceChar->profession : bt.profession;
+                    g_SaveLibChatLink = AlterEgo::GW2API::HasPaletteData(g_SaveLibProfession)
+                        ? EncodeBuildTabChatLink(bt) : std::string();
+                    if (!g_SaveLibNameManuallyEdited) {
+                        auto newName = sourceChar->name + " - " + nameForBuild(bt);
+                        snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", newName.c_str());
+                    }
+                }
             }
-            ImGui::Unindent(16);
-        } else {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  Character data not available");
+            ImGui::EndCombo();
         }
-    }
+        if (g_SaveLibIncludeEquip) {
+            auto equipName = [&](int tab) {
+                auto it = sourceChar->equipment_tab_names.find(tab);
+                return it != sourceChar->equipment_tab_names.end() && !it->second.empty()
+                    ? it->second : "Tab " + std::to_string(tab);
+            };
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Equipment tab");
+            ImGui::SameLine(130);
+            const std::string shown = equipName(g_SaveLibEquipTab);
+            if (RenderThemedCombo("##save_equip_tab", shown.c_str(), ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
+                for (int t = 1; t <= GetRetrievedEquipmentTabCount(*sourceChar); ++t) {
+                    std::string label = equipName(t) +
+                        (t == sourceChar->active_equipment_tab ? " (Active)" : "");
+                    if (ImGui::Selectable(label.c_str(), t == g_SaveLibEquipTab)) g_SaveLibEquipTab = t;
+                }
+                ImGui::EndCombo();
+            }
+        }
+    } else ImGui::TextDisabled("Character data unavailable");
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (ImGui::Button("Save", ImVec2(80, 0))) {
+    if (RenderActionButton("Save##saveToLibrary", ImVec2(80, 0))) {
         std::string name = g_SaveLibName;
         if (name.empty()) name = "Unnamed Build";
 
@@ -8132,7 +8155,8 @@ static void RenderSaveToLibraryDialog() {
                     ? EncodeBuildTabChatLink(*capturedTab) : std::string());
             AlterEgo::SavedBuild sb = CaptureRetrievedBuildSnapshot(*capturedChar, *capturedTab,
                 g_SaveLibEquipTab, g_SaveLibIncludeEquip, name,
-                GameModeFromIndex(g_SaveLibMode), chatLink);
+                g_SaveLibModes.front(), chatLink);
+            sb.game_modes = g_SaveLibModes;
 
             int idx = AlterEgo::GW2API::AddSavedBuild(std::move(sb));
             if (idx >= 0) {
@@ -8148,7 +8172,7 @@ static void RenderSaveToLibraryDialog() {
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+    if (RenderActionButton("Cancel##saveToLibrary", ImVec2(80, 0))) {
         g_SaveLibDialogOpen = false;
     }
     if (ImGui::BeginPopup("Live build unavailable##save")) {
@@ -10516,14 +10540,12 @@ static void RenderLibraryImportDialog() {
         ImGui::TextUnformatted("Name (optional for wardrobe / source URLs / AE2)");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
-        ImGui::TextUnformatted("Game mode (build chat links only)");
-        if (g_LibImportMode < 0 || g_LibImportMode >= IM_ARRAYSIZE(GameModeImportNames))
-            g_LibImportMode = 0;
-        if (RenderThemedCombo("##import_mode", GameModeImportNames[g_LibImportMode], 150.0f)) {
-            for (int m = 0; m < IM_ARRAYSIZE(GameModeImportNames); ++m)
-                if (ImGui::Selectable(GameModeImportNames[m], m == g_LibImportMode))
-                    g_LibImportMode = m;
-            ImGui::EndCombo();
+        const std::string importInput(g_LibImportBuf);
+        const bool sourceUrl = importInput.find("://") != std::string::npos;
+        const bool wardrobe = AlterEgo::ChatLink::DetectType(importInput) == AlterEgo::LINK_WARDROBE_TMPL;
+        if (!sourceUrl && !wardrobe) {
+            ImGui::TextUnformatted("Game modes");
+            RenderGameModeSelector("import-modes", g_LibImportModes);
         }
         ImGui::Spacing();
         ImGui::TextDisabled("Chat: %s (optional)",
@@ -10574,6 +10596,8 @@ static void RenderLibraryImportDialog() {
                     // If the user entered a name, honour it (AE2/relay imports
                     // fall back to the profession as a placeholder otherwise).
                     if (!name.empty()) sharedBuild.name = name;
+                    sharedBuild.game_modes = g_LibImportModes;
+                    sharedBuild.game_mode = g_LibImportModes.front();
                     int newIdx = AlterEgo::GW2API::AddSavedBuild(std::move(sharedBuild));
                     g_LibShowImport = false;
                     ImGui::CloseCurrentPopup();
@@ -10618,7 +10642,8 @@ static void RenderLibraryImportDialog() {
                                 } else {
                                     AlterEgo::SavedBuild build;
                                     if (DecodeBuildLink(input, name,
-                                            GameModeFromIndex(g_LibImportMode), build)) {
+                                            g_LibImportModes.front(), build)) {
+                                        build.game_modes = g_LibImportModes;
                                         int newIdx = AlterEgo::GW2API::AddSavedBuild(std::move(build));
                                         g_LibShowImport = false;
                                         ImGui::CloseCurrentPopup();
@@ -16663,7 +16688,7 @@ void AddonRender() {
                                     ImGuiCond_Appearing);
             if (ImGui::BeginPopup("Builds actions##ae_library")) {
                 if (ImGui::MenuItem("New")) {
-                    g_NewBuildGameMode = 0;
+                    g_NewBuildModes = {AlterEgo::GameMode::PvE};
                     g_NewBuildDialogOpen = true;
                     // The parent menu should also close when launching New.
                     ImGui::CloseCurrentPopup();
@@ -16681,7 +16706,7 @@ void AddonRender() {
                 g_LibShowImport = true;
                 g_LibImportBuf[0] = '\0';
                 g_LibImportName[0] = '\0';
-                g_LibImportMode = 0;
+                g_LibImportModes = {AlterEgo::GameMode::PvE};
                 g_LibImportError.clear();
                 g_LibImportPending = false;
                 g_LibImportPendingProfession.clear();
