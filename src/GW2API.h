@@ -284,6 +284,7 @@ namespace AlterEgo {
         std::string name;           // User-given name
         std::string source_character; // Origin character, empty for legacy/imported builds
         std::string source_url;     // Snow Crows page, empty for local/other imports
+        std::string import_warning; // Source fields missing or not resolved during import
         std::string chat_link;      // Original chat link [&...]
         std::string profession;     // Profession name (decoded)
         GameMode game_mode = GameMode::PvE; // Primary/legacy mode for existing integrations
