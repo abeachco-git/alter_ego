@@ -44,6 +44,7 @@ int main() {
     assert(MatchesSearch(look, "HEAVY"));
     assert(!MatchesSearch(look, "Ranger"));
     const auto serialized = ToJson(look);
+    assert(serialized.at("name") == "Test Wardrobe");
     Look restored;
     assert(FromJson(nlohmann::json::object({{"id","abc"}, {"name","Test Wardrobe"},
         {"wardrobe_link",link}, {"characters",look.characters}}), restored));
