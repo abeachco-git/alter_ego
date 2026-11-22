@@ -1,5 +1,7 @@
 #include "../src/MetaBattleImport.h"
 #include <cassert>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 static std::string Tile(int id, const std::string& label) {
@@ -7,7 +9,7 @@ static std::string Tile(int id, const std::string& label) {
            "data-armory-ids=\"" + std::to_string(id) +
            "\" data-armory-size=\"46\"></div><small>" + label + "</small></div>";
 }
-int main() {
+int main(int argc, char** argv) {
     using namespace AlterEgo;
     const std::string url =
         "https://metabattle.com/wiki/Build:Chronomancer_-_Power_DPS";
@@ -63,6 +65,14 @@ int main() {
     html += Tile(37131, "Infusion<br />x14");
     html += Tile(37132, "Infusion<br />x4");
     html += Tile(103574, "Relic");
+    // Complete secondary loadout on the same wiki page. Never overwrite
+    // primary slots or count its separate +18 infusions.
+    html += R"(<h3><span id="Equipment_Variants">Equipment Variants</span></h3>
+        <h3><span id="Impact_Sigil_Variant">Impact Sigil Variant</span></h3>)";
+    html += Tile(79830, "Backpiece<br />Assassin");
+    html += Tile(79124, "Ring<br />Assassin");
+    html += Tile(79712, "Ring<br />Assassin");
+    html += Tile(37131, "Infusion<br />x18");
     html += R"(<h2><span id="Consumables">Consumables</span></h2>
         <div data-armory-embed="items" data-armory-ids="999999"></div>
         <p>Alternate gear: Viper's, Zojja's, Yassith's, and various optional relics.</p></body></html>)";
@@ -86,6 +96,7 @@ int main() {
     assert(parsed.gear.at("Accessory2").itemId == 39232);
     assert(parsed.gear.at("Ring1").itemId == 37075);
     assert(parsed.gear.at("Ring2").itemId == 37086);
+    assert(parsed.gear.at("Backpack").itemId == 37009);
     assert(parsed.gear.at("WeaponA1").statName == "Viper");
     assert(parsed.gear.at("WeaponA1").weaponType == "Dagger");
     assert(parsed.gear.at("WeaponA1").upgrades.size() == 1 &&
@@ -99,7 +110,8 @@ int main() {
     assert(!parsed.gear.count("WeaponB2"));
     assert(parsed.runeId == 74978 && parsed.relicId == 103574);
     assert(parsed.infusions.size() == 2 &&
-           parsed.infusions[0].count == 14 && parsed.infusions[1].count == 4);
+           parsed.infusions[0].itemId == 37131 && parsed.infusions[0].count == 14 &&
+           parsed.infusions[1].itemId == 37132 && parsed.infusions[1].count == 4);
 
     const auto original = parsed.gear.size();
     const auto pos = html.find("<small>Relic</small>");
@@ -111,5 +123,24 @@ int main() {
     assert(parsed.gear.size() == original);
     assert(parsed.relicId == 0);
     assert(parsed.importWarning.find("Relic not resolved") != std::string::npos);
+
+    // Optional live-page verification: GitHub's diagnostic workflow supplies
+    // the fetched Reaper HTML. The fixture above remains fully offline.
+    if (argc > 1) {
+        std::ifstream file(argv[1], std::ios::binary);
+        assert(file.good());
+        const std::string live((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+        SnowCrows::Page reaper;
+        assert(MetaBattle::Parse("https://metabattle.com/wiki/Build:Reaper_-_Power_DPS",
+                                 live, reaper, error) && error.empty());
+        assert(reaper.profession == "Necromancer");
+        assert(reaper.gear.at("Backpack").itemId == 37009);
+        assert(reaper.gear.at("Ring1").itemId == 37075);
+        assert(reaper.gear.at("Ring2").itemId == 37086);
+        assert(reaper.infusions.size() == 2);
+        assert(reaper.infusions[0].itemId == 37131 && reaper.infusions[0].count == 12);
+        assert(reaper.infusions[1].itemId == 37132 && reaper.infusions[1].count == 6);
+    }
     return 0;
 }
