@@ -3004,6 +3004,7 @@ namespace AlterEgo {
         for (auto mode : (b.game_modes.empty() ? std::vector<GameMode>{b.game_mode} : b.game_modes))
             bj["game_modes"].push_back(GameModeToStr(mode));
         bj["notes"] = b.notes;
+        if (!b.import_warning.empty()) bj["import_warning"] = b.import_warning;
         bj["created"] = (int64_t)b.created;
 
         json specs = json::array();
@@ -3117,6 +3118,7 @@ namespace AlterEgo {
         if (b.game_modes.empty()) b.game_modes.push_back(b.game_mode);
         b.game_mode = b.game_modes.front();
         b.notes = bj.value("notes", "");
+        b.import_warning = bj.value("import_warning", "");
         b.created = bj.value("created", (int64_t)0);
 
         if (bj.contains("specializations") && bj["specializations"].is_array()) {
