@@ -53,6 +53,8 @@ jobs:
           /tmp/ascended_stat_names
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/metabattle_import.cpp -o /tmp/metabattle_import
           /tmp/metabattle_import
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib/nlohmann tests/fashion_library.cpp src/ChatLink.cpp -o /tmp/fashion_library
+          /tmp/fashion_library
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
