@@ -89,7 +89,7 @@ def main(output):
             raise ValueError(f"Not a PNG/JPEG image: {asset_id} {url}")
         path = folder / f"{asset_id}.{extension}"
         path.write_bytes(content)
-        lines.append(f'"AE_{asset_id}" RCDATA "{path.as_posix()}"')
+        lines.append(f'AE_{asset_id} RCDATA "{path.as_posix()}"')
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Embedded {len(images)} icons including {elites} elite specializations")
 
