@@ -11713,8 +11713,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     // poll loads it as soon as that identity becomes available.
     const std::string startupAchAccount = GetAchievementCacheAccount();
     if (!startupAchAccount.empty()) LoadAchProgress(startupAchAccount);
-    LoadClearsCache();
-    LoadVaultCache();
+    SyncCompletionAccountCaches();
     LoadAchTrackerState();
     LoadAchGroupCache();
     LoadAchDefCache();
@@ -15636,6 +15635,8 @@ void AddonRender() {
     AlterEgo::GW2API::PollRetries();   // fire any scheduled H&S BUSY backoff retry
     PollAutoCharacterRefresh();     // MumbleLink-triggered requests (debounced, cooldown, no overlap)
     PollAchievementCachePersistence(); // load/save disk progress, even when window is hidden
+    SyncCompletionAccountCaches(); // selected-account Clears/Vault snapshots, even with UI hidden
+    Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
 
     // H&S can drop a progress response (or an addon can be reloaded during a
     // query). Never leave the Achievements Refresh action stuck indefinitely.
