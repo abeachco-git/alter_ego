@@ -535,9 +535,17 @@ void OnVaultResponse(void* eventArgs) {
             if (resp->status == HOARD_STATUS_DENIED)
                 g_VaultStatusMessage = std::string("Hoard & Seek permission denied (") +
                     VaultSectionName((uint8_t)type) + ")";
-            else
+            else {
                 g_VaultStatusMessage = std::string("Vault ") + VaultSectionName((uint8_t)type) +
                     " request failed (status " + std::to_string((int)resp->status) + ")";
+                if (g_VaultDailyRolloverPending) {
+                    const int attempt = ++g_VaultDailyRolloverRetries;
+                    const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
+                    g_VaultDailyRolloverRetryAtMs = NowMs() + delay * 1000;
+                    g_VaultStatusMessage += "; retrying in " + std::to_string(delay) + "s";
+                    g_VaultLastAttemptFailed = false;
+                }
+            }
         } else {
             g_VaultPending[type] = std::move(period);
             g_VaultResponsesOK[type] = true;
@@ -669,6 +677,12 @@ static void FetchClears() {
         if (fractalIds.empty() && bountyIds.empty() && weeklyIds.empty()) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
             g_ClearsStatusMsg = "Failed to fetch achievement categories";
+            if (g_ClearsDailyRolloverPending) {
+                const int attempt = ++g_ClearsDailyRolloverRetries;
+                const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
+                g_ClearsDailyRolloverRetryAtMs = NowMs() + delay * 1000;
+                g_ClearsStatusMsg += "; retrying in " + std::to_string(delay) + "s";
+            }
             g_ClearsFetching = false;
             return;
         }
@@ -2946,9 +2960,6 @@ static void RenderClearsShared(bool showVault) {
 
     auto dailyReset  = CalcLastDailyReset(now);
     auto weeklyReset = CalcLastWeeklyReset(now);
-    auto dailyBuffered  = dailyReset  + std::chrono::seconds(60);
-    auto weeklyBuffered = weeklyReset + std::chrono::seconds(60);
-
     // ---- Clears reset detection ----
     // Do not consume a reset before its API grace period has elapsed. A
     // timestamp recorded during those 60 seconds used to lose the event.
