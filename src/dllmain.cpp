@@ -835,6 +835,8 @@ static bool g_SwitchToLibrary = false; // select Library after creation/import/n
 static int g_LibSelectedIdx = -1;
 // Build editor: "+ New Build" dialog state
 static bool g_NewBuildDialogOpen = false;
+static std::string g_NewBuildProfessionPending;
+static bool g_LibContextSharePending = false;
 static int  g_NewBuildGameMode = 0; // index into GameMode (0=PvE,1=WvW,2=PvP,3=Raid,4=Fractal)
 // Build editor: working draft + spec picker state
 static AlterEgo::SavedBuild g_EditDraft;   // working copy while editing a build's definition
@@ -4980,7 +4982,16 @@ static AlterEgo::GameMode GameModeFromIndex(int idx) {
     }
 }
 
-static bool GameModeMatchesFilter(AlterEgo::GameMode mode, int filter) {
+static bool GameModeMatchesFilter(const AlterEgo::SavedBuild& build, int filter) {
+    if (!build.game_modes.empty()) {
+        if (filter == 0) return true;
+        for (auto mode : build.game_modes) {
+            if ((filter >= 1 && filter <= 5 && (int)mode == filter - 1) ||
+                (filter == 6 && mode == AlterEgo::GameMode::Other)) return true;
+        }
+        return false;
+    }
+    const auto mode = build.game_mode;
     if (filter == 0) return true; // All
     switch (filter) {
         case 1: return mode == AlterEgo::GameMode::PvE;
@@ -8757,6 +8768,19 @@ static void PollBuildSource() {
     }
 }
 
+static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
+    if (g_LibCompareBuildId != build.id) {
+        g_LibCompareChar.clear();
+        g_LibCompareBuildTab = -1;
+        g_LibCompareEquipTab = 0;
+    }
+    g_LibCompareBuildId = build.id;
+    g_LibCompareSavedManual = true;
+    g_LibCompareChar = build.source_character;
+    g_LibComparePreviousTarget = build.source_character;
+    g_SwitchToCompare = true;
+}
+
 static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showEditButton = true) {
     ImVec4 profColor = GetProfessionColor(build.profession);
     {
@@ -8874,7 +8898,11 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             "%s", sub.c_str());
         ImGui::SameLine(0, 8);
         if (!g_LibEditMode) {
-            RenderBuildModeBadge(GameModeLabel(build.game_mode));
+            const auto displayModes = build.game_modes.empty() ? std::vector<AlterEgo::GameMode>{build.game_mode} : build.game_modes;
+            for (size_t m = 0; m < displayModes.size(); ++m) {
+                if (m) ImGui::SameLine(0, 3);
+                RenderBuildModeBadge(GameModeLabel(displayModes[m]));
+            }
         } else {
             struct MC { AlterEgo::GameMode mode; const char* lbl; };
             const MC modes[] = {
@@ -8887,9 +8915,16 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             for (int m = 0; m < 5; m++) {
                 if (m) ImGui::SameLine(0, 3);
                 ImGui::PushID(m + 800);
-                if (RenderChipButton(modes[m].lbl, g_EditDraft.game_mode == modes[m].mode,
-                                     ImVec4(0, 0, 0, 0), true)) {
-                    g_EditDraft.game_mode = modes[m].mode;
+                const auto& selected = g_EditDraft.game_modes;
+                const bool active = selected.empty() ? g_EditDraft.game_mode == modes[m].mode :
+                    std::find(selected.begin(), selected.end(), modes[m].mode) != selected.end();
+                if (RenderChipButton(modes[m].lbl, active, ImVec4(0, 0, 0, 0), true)) {
+                    if (g_EditDraft.game_modes.empty()) g_EditDraft.game_modes = {g_EditDraft.game_mode};
+                    auto& tags = g_EditDraft.game_modes;
+                    auto it = std::find(tags.begin(), tags.end(), modes[m].mode);
+                    if (it == tags.end()) tags.push_back(modes[m].mode);
+                    else if (tags.size() > 1) tags.erase(it);
+                    g_EditDraft.game_mode = tags.front();
                     MarkEditDirty();
                 }
                 ImGui::PopID();
@@ -8915,7 +8950,8 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
                 if (RenderActionButton("Save##hdr") && canSave) {
                     AlterEgo::GW2API::UpdateSavedBuild(build.id, g_LibEditName.c_str(), g_LibEditNotes.c_str());
-                    AlterEgo::GW2API::SetSavedBuildGameMode(build.id, g_EditDraft.game_mode);
+                    AlterEgo::GW2API::SetSavedBuildGameModes(build.id,
+                        g_EditDraft.game_modes.empty() ? std::vector<AlterEgo::GameMode>{g_EditDraft.game_mode} : g_EditDraft.game_modes);
                     AlterEgo::GW2API::ReplaceSavedBuildDefinition(build.id, g_EditDraft);
                     g_EditDraftId.clear();   // force re-sync from the persisted build
                     g_LibEditMode = false; g_EditDirty = false;
@@ -8943,23 +8979,13 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             const float startX = pos.x + w - totalW - 8.0f;
 
             ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
-            if (RenderActionButton("Compare##headerBuild")) {
-                // Same saved-build selection behavior as the former button
-                // below the scrollable equipment panel.
-                if (g_LibCompareBuildId != build.id) {
-                    g_LibCompareChar.clear();
-                    g_LibCompareBuildTab = -1;
-                    g_LibCompareEquipTab = 0;
-                }
-                g_LibCompareBuildId = build.id;
-                g_LibCompareSavedManual = true;
-                g_LibCompareChar = build.source_character;
-                g_LibComparePreviousTarget = build.source_character;
-                g_SwitchToCompare = true;
-            }
+            if (RenderActionButton("Compare##headerBuild")) ActivateSavedBuildCompare(build);
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap, btnY));
-            if (RenderActionButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
+            if (RenderActionButton("Share##headerBuild") || g_LibContextSharePending) {
+                g_LibContextSharePending = false;
+                ImGui::OpenPopup("##share_menu");
+            }
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap, btnY));
             if (RenderActionButton("Edit##headerBuild")) EnterBuildEditMode(build);
@@ -10688,7 +10714,7 @@ static void RenderBuildLibrary() {
             }
             LibraryGroup& group = groups[found->second];
             ++group.total;
-            if (!GameModeMatchesFilter(b.game_mode, g_LibFilterMode)) continue;
+            if (!GameModeMatchesFilter(b, g_LibFilterMode)) continue;
             if (searching) {
                 std::string lowerName = b.name;
                 std::transform(lowerName.begin(), lowerName.end(),
@@ -10739,8 +10765,12 @@ static void RenderBuildLibrary() {
             ImGui::InvisibleButton("##moveProfession",
                 ImVec2(headerMax.x-headerMin.x,headerMax.y-headerMin.y));
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Drag to reorder %s and all its builds.",
+                ImGui::SetTooltip("Drag to reorder %s and all its builds. Right-click to create a build.",
                     profession.c_str());
+            if (ImGui::BeginPopupContextItem("##profession_actions")) {
+                if (ImGui::MenuItem("New Build")) g_NewBuildProfessionPending = profession;
+                ImGui::EndPopup();
+            }
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
                 ImGui::SetDragDropPayload("AE_BUILD_GROUP",
                     profession.c_str(), profession.size()+1);
@@ -10867,6 +10897,8 @@ static void RenderBuildLibrary() {
 
             // Game-mode chip (right side)
             const char* mode = GameModeLabel(b.game_mode);
+            const int extraModes = b.game_modes.size() > 1 ? (int)b.game_modes.size() - 1 : 0;
+            const std::string modeText = extraModes ? std::string(mode) + " +" + std::to_string(extraModes) : std::string(mode);
             ImU32 chipFg, chipBg, chipBorder;
             switch (b.game_mode) {
                 case AlterEgo::GameMode::PvE:
@@ -10900,7 +10932,7 @@ static void RenderBuildLibrary() {
                     chipBorder = IM_COL32(120, 110, 90, 170);
                     break;
             }
-            ImVec2 mSz = ImGui::CalcTextSize(mode);
+            ImVec2 mSz = ImGui::CalcTextSize(modeText.c_str());
             float chipPadX = 6.0f, chipPadY = 2.0f;
             float chipW = mSz.x + chipPadX * 2;
             float chipH = mSz.y + chipPadY * 2;
@@ -10908,7 +10940,7 @@ static void RenderBuildLibrary() {
             ImVec2 chipMax(chipMin.x + chipW, chipMin.y + chipH);
             dl->AddRectFilled(chipMin, chipMax, chipBg, 3.0f);
             dl->AddRect(chipMin, chipMax, chipBorder, 3.0f, 0, 1.0f);
-            dl->AddText(ImVec2(chipMin.x + chipPadX, chipMin.y + chipPadY), chipFg, mode);
+            dl->AddText(ImVec2(chipMin.x + chipPadX, chipMin.y + chipPadY), chipFg, modeText.c_str());
 
             // Build name (clipped between icon and chip)
             float nameX = iconX + iconSz + 8.0f;
@@ -10943,6 +10975,26 @@ static void RenderBuildLibrary() {
             if (clicked) {
                 g_LibSelectedIdx = i;
                 g_LibDetailsFetched = false;
+            }
+            if (ImGui::BeginPopupContextItem("##build_actions")) {
+                if (ImGui::MenuItem("Compare")) {
+                    g_LibSelectedIdx = i;
+                    ActivateSavedBuildCompare(b);
+                }
+                if (ImGui::MenuItem("Share")) {
+                    g_LibSelectedIdx = i;
+                    g_LibContextSharePending = true;
+                }
+                if (ImGui::MenuItem("Edit")) {
+                    g_LibSelectedIdx = i;
+                    g_LibEditBuildId = b.id;
+                    EnterBuildEditMode(b);
+                }
+                ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
+                if (ImGui::MenuItem("Delete")) g_LibCtxDeleteIdx = i;
+                ImGui::PopStyleColor();
+                ImGui::EndPopup();
             }
 
             // Drag an item within its own profession only. A completed drop
@@ -11162,6 +11214,24 @@ static void RenderBuildLibrary() {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Select a build from the list.");
     }
     ImGui::EndChild();
+
+    // Post-render insertion avoids invalidating the list's references.
+    if (!g_NewBuildProfessionPending.empty()) {
+        const std::string profession = g_NewBuildProfessionPending;
+        g_NewBuildProfessionPending.clear();
+        auto blank = AlterEgo::GW2API::CreateBlankBuild(profession, AlterEgo::GameMode::PvE);
+        const int idx = AlterEgo::GW2API::AddSavedBuild(std::move(blank));
+        if (idx >= 0) {
+            const auto& updated = AlterEgo::GW2API::GetSavedBuilds();
+            g_LibSelectedIdx = idx;
+            g_LibEditBuildId = updated[idx].id;
+            EnterBuildEditMode(updated[idx]);
+            g_EditIsNewBuild = true;
+            g_LibDetailsFetched = false;
+            AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
+            AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+        }
+    }
 
     if (!pendingGroup.empty() || !pendingItemId.empty()) {
         const auto& current = AlterEgo::GW2API::GetSavedBuilds();
