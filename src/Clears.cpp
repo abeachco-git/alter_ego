@@ -23,6 +23,7 @@
 #include "AddonShared.h"
 #include "Clears.h"
 #include "ClearsRotation.h"
+#include "ClearsReset.h"
 #include "FractalScales.h"
 #include "CompletionTheme.h"
 #include "RefreshUI.h"
@@ -59,6 +60,14 @@ static std::string g_ClearsStatusMsg;
 static std::chrono::system_clock::time_point g_LastDailyReset{};
 static std::chrono::system_clock::time_point g_LastWeeklyReset{};
 static std::chrono::steady_clock::time_point g_LastClearsCompletionQuery{};
+// Daily rollover verification keeps *old IDs* only, never old-day
+// completion values. Cleared daily entries stay unavailable until refreshed.
+// These vectors and bools are protected by g_ClearsMutex.
+static std::vector<uint32_t> g_ClearsPriorDailyFractalIds;
+static std::vector<uint32_t> g_ClearsPriorDailyBountyIds;
+static bool g_ClearsDailyRolloverPending = false;
+static int g_ClearsDailyRolloverRetries = 0;
+static std::atomic<long long> g_ClearsDailyRolloverRetryAtMs{0};
 static std::time_t g_ClearsLastSuccessTime = 0;
 static std::chrono::steady_clock::time_point g_ClearsSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
@@ -109,6 +118,11 @@ static long long g_VaultRetryAtMs = 0;
 static bool g_VaultRetryNeeded[3] = {};
 static int g_VaultRetryAttempts[3] = {};
 static long long g_VaultRequestStartMs = 0;
+// Rollover confirmation is separate from rate-limit/BUSY retries above.
+static std::vector<uint32_t> g_VaultPriorDailyIds;
+static bool g_VaultDailyRolloverPending = false;
+static int g_VaultDailyRolloverRetries = 0;
+static long long g_VaultDailyRolloverRetryAtMs = 0;
 static std::string g_VaultRequestAccount;
 static constexpr long long VAULT_TIMEOUT_MS = 45000;
 bool g_VaultNeedRequery = false;
@@ -134,6 +148,23 @@ static void SaveClearsCache();
 static void FetchClears();
 static void SendClearsAchQuery();
 static void FetchVaultData();
+// Sorted IDs are used for a conservative post-reset freshness check.
+static std::vector<uint32_t> DailyIds(const std::vector<ClearEntry>& entries) {
+    std::vector<uint32_t> ids;
+    ids.reserve(entries.size());
+    for (const auto& e : entries) if (e.id != 0) ids.push_back(e.id);
+    return ClearsReset::SortedIds(std::move(ids));
+}
+static std::vector<uint32_t> DailyIds(const VaultPeriod& period) {
+    std::vector<uint32_t> ids;
+    ids.reserve(period.objectives.size());
+    for (const auto& o : period.objectives) if (o.id != 0) ids.push_back(o.id);
+    return ClearsReset::SortedIds(std::move(ids));
+}
+static int64_t ResetEpoch(std::chrono::system_clock::time_point t) {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        t.time_since_epoch()).count();
+}
 static void RequestVaultSection(uint8_t type, const std::string& account);
 static void SaveVaultCache();
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr);
@@ -389,6 +420,7 @@ static void FetchVaultData() {
         g_VaultRequestStartMs = NowMs();
         g_VaultRequestAccount = account;
         g_VaultRetryAtMs = 0;
+        g_VaultDailyRolloverRetryAtMs = 0;
         for (int i = 0; i < 3; ++i) {
             g_VaultResponsesOK[i] = false;
             g_VaultPending[i] = {};
@@ -513,19 +545,40 @@ void OnVaultResponse(void* eventArgs) {
             int received = 0;
             for (bool ok : g_VaultResponsesOK) if (ok) ++received;
             if (received == 3) {
-                // Commit atomically when *all* three sections have responded.
-                g_VaultDaily   = std::move(g_VaultPending[0]);
-                g_VaultWeekly  = std::move(g_VaultPending[1]);
-                g_VaultSpecial = std::move(g_VaultPending[2]);
-                g_VaultLastSuccessTime = std::time(nullptr);
-                g_VaultFetched = true;
-                g_VaultFetching = false;
-                g_VaultRetryAtMs = 0;
-                g_VaultLastAttemptFailed = false;
-                g_VaultStatusMessage = "Refresh complete";
-                g_VaultSuccessUntil = std::chrono::steady_clock::now() +
-                    std::chrono::seconds(4);
-                save = true;
+                // A successful HTTP response is not evidence of a new day.
+                // Compare returned DAILY objective IDs against the snapshot
+                // seen before reset; don't publish yesterday as "just now".
+                if (g_VaultDailyRolloverPending &&
+                    ClearsReset::LooksUnrotated(
+                        g_VaultPriorDailyIds, DailyIds(g_VaultPending[0]))) {
+                    ++g_VaultDailyRolloverRetries;
+                    const int64_t waitSeconds = ClearsReset::RetryDelaySeconds(
+                        g_VaultDailyRolloverRetries);
+                    g_VaultDailyRolloverRetryAtMs =
+                        NowMs() + waitSeconds * 1000;
+                    g_VaultFetching = false;
+                    g_VaultLastAttemptFailed = false;
+                    g_VaultStatusMessage = "Waiting for new daily Vault objectives; "
+                        "retrying in " + std::to_string(waitSeconds) + "s";
+                } else {
+                    // Commit atomically only when all three sections are valid.
+                    g_VaultDaily   = std::move(g_VaultPending[0]);
+                    g_VaultWeekly  = std::move(g_VaultPending[1]);
+                    g_VaultSpecial = std::move(g_VaultPending[2]);
+                    g_VaultDailyRolloverPending = false;
+                    g_VaultPriorDailyIds.clear();
+                    g_VaultDailyRolloverRetryAtMs = 0;
+                    g_VaultDailyRolloverRetries = 0;
+                    g_VaultLastSuccessTime = std::time(nullptr);
+                    g_VaultFetched = true;
+                    g_VaultFetching = false;
+                    g_VaultRetryAtMs = 0;
+                    g_VaultLastAttemptFailed = false;
+                    g_VaultStatusMessage = "Refresh complete";
+                    g_VaultSuccessUntil = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(4);
+                    save = true;
+                }
             } else if (g_VaultRetryAtMs == 0) {
                 g_VaultStatusMessage = "Fetching Vault objectives (" +
                     std::to_string(received) + "/3)...";
@@ -668,10 +721,33 @@ static void FetchClears() {
 
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if (g_ClearsDailyRolloverPending &&
+                (ClearsReset::LooksUnrotated(g_ClearsPriorDailyFractalIds,
+                                            DailyIds(fractalEntries)) ||
+                 ClearsReset::LooksUnrotated(g_ClearsPriorDailyBountyIds,
+                                            DailyIds(bountyEntries)))) {
+                // The GW2 API can return yesterday's daily IDs shortly after
+                // reset. Never replace the daily state or mark it fresh in
+                // that case; try again later without touching weekly clears.
+                ++g_ClearsDailyRolloverRetries;
+                const int64_t waitSeconds = ClearsReset::RetryDelaySeconds(
+                    g_ClearsDailyRolloverRetries);
+                g_ClearsDailyRolloverRetryAtMs =
+                    NowMs() + waitSeconds * 1000;
+                g_ClearsStatusMsg = "Daily objectives have not rotated on the API; "
+                    "retrying in " + std::to_string(waitSeconds) + "s";
+                g_ClearsFetching = false;
+                return;
+            }
             g_DailyFractals = std::move(fractalEntries);
             g_DailyBounties = std::move(bountyEntries);
             g_WeeklyWings = std::move(wingEntries);
             g_WeeklyStrikes = std::move(strikesEntry);
+            g_ClearsDailyRolloverPending = false;
+            g_ClearsPriorDailyFractalIds.clear();
+            g_ClearsPriorDailyBountyIds.clear();
+            g_ClearsDailyRolloverRetries = 0;
+            g_ClearsDailyRolloverRetryAtMs = 0;
             g_ClearsStatusMsg = "Querying completion...";
         }
 
