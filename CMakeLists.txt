@@ -74,6 +74,8 @@ target_link_libraries(AlterEgo
 
 # Module definition file for clean DLL export
 target_link_options(AlterEgo PRIVATE -Wl,--out-implib,AlterEgo.lib -Wl,--strip-all)
+# Linker map for resolving stripped release-DLL crash RVAs (no runtime behavior change).
+target_link_options(AlterEgo PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/AlterEgo.map)
 target_sources(AlterEgo PRIVATE ${CMAKE_SOURCE_DIR}/AlterEgo.def)
 
 # Output directory
