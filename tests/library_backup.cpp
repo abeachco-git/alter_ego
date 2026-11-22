@@ -117,5 +117,11 @@ int main() {
     Put(settings, R"({"font":{"px":18}})");
     assert(ReadPackage(settings, individual, err));
     assert(individual.available == Other);
+    // Manually renamed JSON still resolves to the correct settings collection.
+    const std::string renamed = (base/"my_settings_backup.json").u8string();
+    Put(renamed, R"({"show_qa_icon":false,"auto_refresh_enabled":false})");
+    assert(ReadPackage(renamed, individual, err));
+    assert(individual.available == Other);
+    assert(individual.files.count("settings.json") == 1);
     fs::remove_all(base);
 }
