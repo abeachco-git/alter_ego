@@ -4645,6 +4645,96 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
 }
 
 // Character-wide actions live in the header, not in either detail tab.
+// Keep character metadata in the identity column beside the avatar, rather than
+// orphaned beneath the Save / Share / Fashion action column. Wrap complete
+// icon/value pairs to another line when the identity column gets narrow.
+static void RenderCharacterHeaderMetadata(const AlterEgo::Character& ch, float width) {
+    const int birthdayDays = DaysUntilBirthday(ch.created);
+    const int age = CharacterAgeYears(ch.created);
+    if (birthdayDays == 0 && age >= 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f),
+            "Happy Birthday! Turning %d today!", age + 1);
+        return;
+    }
+
+    const ImVec4 dim(0.50f, 0.47f, 0.40f, 1.0f);
+    const ImVec4 separatorColor(0.40f, 0.37f, 0.30f, 1.0f);
+    const float iconSize = ImGui::GetTextLineHeight();
+    const float rowHeight = ImGui::GetTextLineHeightWithSpacing() + 2.0f;
+    const float left = ImGui::GetCursorScreenPos().x;
+    const float top = ImGui::GetCursorScreenPos().y;
+    const float right = left + ImMax(1.0f, width);
+    const float itemGap = 8.0f;
+    const float separatorWidth = ImGui::CalcTextSize("-").x + 12.0f;
+    float nextX = left;
+    float rowY = top;
+    ImGui::BeginGroup();
+
+    auto drawPair = [&](uint32_t iconId, const char* url, const char* tooltip,
+                        const std::string& value, bool separate) {
+        Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
+        if ((!tex || !tex->Resource) && url)
+            AlterEgo::IconManager::RequestIcon(iconId, url);
+        const float imageWidth = tex && tex->Resource ? iconSize :
+            ImGui::CalcTextSize(tooltip).x;
+        const float pairWidth = imageWidth + 4.0f +
+            ImGui::CalcTextSize(value.c_str()).x;
+        bool hasPrevious = nextX > left + 0.5f;
+        float leading = hasPrevious && separate ? separatorWidth : 0.0f;
+        if (hasPrevious && nextX + leading + pairWidth > right) {
+            nextX = left;
+            rowY += rowHeight;
+            hasPrevious = false;
+            leading = 0.0f;
+        }
+        ImGui::SetCursorScreenPos(ImVec2(nextX, rowY));
+        ImGui::BeginGroup();
+        if (hasPrevious && separate) {
+            ImGui::TextColored(separatorColor, "-");
+            ImGui::SameLine(0.0f, 6.0f);
+        }
+        if (tex && tex->Resource) {
+            ImGui::Image(tex->Resource, ImVec2(iconSize, iconSize));
+        } else {
+            ImGui::TextColored(dim, "%s", tooltip);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+        ImGui::SameLine(0.0f, 4.0f);
+        ImGui::TextColored(dim, "%s", value.c_str());
+        ImGui::EndGroup();
+        nextX = ImGui::GetItemRectMax().x + itemGap;
+    };
+
+    if (age >= 0) {
+        drawPair(43766,
+            "https://render.guildwars2.com/file/1932B731E2F70F2F1E3D453A4B7C26B24CF647C0/603246.png",
+            "Age", std::to_string(age) + "y", true);
+    }
+    if (birthdayDays > 0) {
+        drawPair(98501,
+            "https://render.guildwars2.com/file/5C759EC1C95F3BE53C167A7D9F0D27BF3AE56277/625611.png",
+            "Birthday", std::to_string(birthdayDays) + "d away", true);
+    }
+    auto login = g_LoginTimestamps.find(ch.name);
+    if (login != g_LoginTimestamps.end()) {
+        const int elapsed = (int)difftime(std::time(nullptr), (time_t)login->second);
+        const std::string ago = elapsed < 60 ? "Just now" :
+            elapsed < 3600 ? std::to_string(elapsed / 60) + "m ago" :
+            elapsed < 86400 ? std::to_string(elapsed / 3600) + "h ago" :
+            std::to_string(elapsed / 86400) + "d ago";
+        drawPair(68326,
+            "https://render.guildwars2.com/file/01E7C8B0EB04F6E0CB25AA0403C96E0355B63A39/924581.png",
+            "Last login", ago, true);
+    }
+    for (size_t i = 0; i < ch.crafting.size(); ++i) {
+        const auto& craft = ch.crafting[i];
+        const int level = i < ch.crafting_levels.size() ? ch.crafting_levels[i] : 0;
+        drawPair(GetCraftingIconId(craft), GetCraftingIconUrl(craft),
+                 craft.c_str(), std::to_string(level), i == 0);
+    }
+    ImGui::EndGroup();
+}
+
 static void RenderCharacterHeaderActions(const AlterEgo::Character& ch, float buttonWidth) {
     ImGui::PushID("##character_header_actions");
     // GroupOffset preserves the manually positioned header X across multiple
@@ -15392,7 +15482,7 @@ static void HandleTabDropdown(TabDropdownState& state, ImGuiTabBar* tabBar,
     } else if (state.headerHovered && !state.suppressHoverUntilLeave &&
                !state.popupOpen) {
         state.hoverSeconds += ImGui::GetIO().DeltaTime;
-        if (state.hoverSeconds >= 0.18f) {
+        if (state.hoverSeconds >= 1.0f) {
             state.hoverSeconds = 0.0f;
             state.pinned = false;
             state.outsideSeconds = 0.0f;
@@ -16353,6 +16443,7 @@ void AddonRender() {
                         snprintf(meta, sizeof(meta), "LV %d  -  %s  -  %s",
                             ch.level, raceUp.c_str(), profUp.c_str());
                         ImGui::TextColored(ImVec4(0.55f, 0.50f, 0.40f, 1.0f), "%s", meta);
+                        RenderCharacterHeaderMetadata(ch, middleW);
                         ImGui::PopTextWrapPos();
                         ImGui::EndGroup();
 
@@ -16371,98 +16462,6 @@ void AddonRender() {
                         ImGui::SetCursorScreenPos(ImVec2(headerStart.x,
                             ImMax(ImMax(textBottom, actionsBottom),
                                   headerStart.y + avatarSize) + 4.0f));
-                    }
-
-                    // Secondary info row: age / birthday / last login / crafting — all dim, single horizontal flow.
-                    // Crafting professions render as small icons + level so the row fits all 9 disciplines without overflow.
-                    {
-                        int bdays = DaysUntilBirthday(ch.created);
-                        int age = CharacterAgeYears(ch.created);
-                        bool birthdayToday = (bdays == 0 && age >= 0);
-
-                        if (birthdayToday) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f),
-                                "Happy Birthday! Turning %d today!", age + 1);
-                        } else {
-                            const ImVec4 dim(0.50f, 0.47f, 0.40f, 1.0f);
-                            const ImVec4 dot(0.40f, 0.37f, 0.30f, 1.0f);
-                            bool first = true;
-                            float iconSize = ImGui::GetTextLineHeight();
-                            auto Sep = [&]() {
-                                ImGui::SameLine(0, 6);
-                                ImGui::TextColored(dot, "-");
-                                ImGui::SameLine(0, 6);
-                            };
-                            // Render an item-icon + value pair. Falls back to a
-                            // text label if the icon hasn't loaded yet.
-                            auto IconValue = [&](uint32_t iconId, const char* url,
-                                                 const char* tooltip, const char* fmt,
-                                                 auto value) {
-                                Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
-                                if ((!tex || !tex->Resource) && url) {
-                                    AlterEgo::IconManager::RequestIcon(iconId, url);
-                                }
-                                if (tex && tex->Resource) {
-                                    ImGui::Image(tex->Resource, ImVec2(iconSize, iconSize));
-                                } else {
-                                    ImGui::TextColored(dim, "%s", tooltip);
-                                }
-                                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
-                                ImGui::SameLine(0, 4);
-                                ImGui::TextColored(dim, fmt, value);
-                            };
-                            if (age >= 0) {
-                                IconValue(43766,
-                                    "https://render.guildwars2.com/file/1932B731E2F70F2F1E3D453A4B7C26B24CF647C0/603246.png",
-                                    "Age", "%dy", age);
-                                first = false;
-                            }
-                            if (bdays > 0) {
-                                if (!first) Sep(); else first = false;
-                                IconValue(98501,
-                                    "https://render.guildwars2.com/file/5C759EC1C95F3BE53C167A7D9F0D27BF3AE56277/625611.png",
-                                    "Birthday", "%dd away", bdays);
-                            }
-                            auto tsIt = g_LoginTimestamps.find(ch.name);
-                            if (tsIt != g_LoginTimestamps.end()) {
-                                time_t now_t = std::time(nullptr);
-                                int elapsed = (int)difftime(now_t, (time_t)tsIt->second);
-                                std::string ago;
-                                if (elapsed < 60) ago = "Just now";
-                                else if (elapsed < 3600) ago = std::to_string(elapsed / 60) + "m ago";
-                                else if (elapsed < 86400) ago = std::to_string(elapsed / 3600) + "h ago";
-                                else ago = std::to_string(elapsed / 86400) + "d ago";
-                                if (!first) Sep(); else first = false;
-                                IconValue(68326,
-                                    "https://render.guildwars2.com/file/01E7C8B0EB04F6E0CB25AA0403C96E0355B63A39/924581.png",
-                                    "Last login", "%s", ago.c_str());
-                            }
-                            if (!ch.crafting.empty()) {
-                                if (!first) Sep(); else first = false;
-                                float iconSize = ImGui::GetTextLineHeight();
-                                for (size_t ci = 0; ci < ch.crafting.size(); ci++) {
-                                    if (ci > 0) ImGui::SameLine(0, 8);
-                                    const std::string& disc = ch.crafting[ci];
-                                    uint32_t iconId = GetCraftingIconId(disc);
-                                    const char* iconUrl = GetCraftingIconUrl(disc);
-                                    Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
-                                    if ((!tex || !tex->Resource) && iconUrl) {
-                                        AlterEgo::IconManager::RequestIcon(iconId, iconUrl);
-                                    }
-                                    if (tex && tex->Resource) {
-                                        ImGui::Image(tex->Resource, ImVec2(iconSize, iconSize));
-                                    } else {
-                                        ImGui::TextColored(dim, "%.3s", disc.c_str());
-                                    }
-                                    if (ImGui::IsItemHovered()) {
-                                        ImGui::SetTooltip("%s", disc.c_str());
-                                    }
-                                    ImGui::SameLine(0, 3);
-                                    int lvl = (ci < ch.crafting_levels.size()) ? ch.crafting_levels[ci] : 0;
-                                    ImGui::TextColored(dim, "%d", lvl);
-                                }
-                            }
-                        }
                     }
 
                     ImGui::Spacing();
