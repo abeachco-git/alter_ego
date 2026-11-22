@@ -319,7 +319,8 @@ static void RenderFashionLibrary() {
         if (!look.notes.empty()) { ImGui::Spacing(); ImGui::TextWrapped("%s", look.notes.c_str()); }
         if (!look.complete)
             ImGui::TextDisabled("The equipment API may omit outfit / visibility settings.");
-        if (ImGui::TreeNode("Associated characters (%zu)", look.characters.size())) {
+        const std::string assocLabel = "Associated characters (" + std::to_string(look.characters.size()) + ")";
+        if (ImGui::TreeNode(assocLabel.c_str())) {
             for (const auto& ch : look.characters) ImGui::BulletText("%s", ch.c_str());
             if (look.characters.empty()) ImGui::TextDisabled("(none)");
             if (!look.source_character.empty()) ImGui::TextDisabled("Original: %s, equipment %d",
