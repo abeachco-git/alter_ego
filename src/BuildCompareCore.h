@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <cstdint>
+#include "AscendedStatNames.h"
 
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
 // labels are resolved names and may differ when cache lookups are incomplete.
@@ -84,7 +85,16 @@ inline StatEquivalence CompareStatDefinitions(
     const std::vector<std::string>& savedAttrs,
     const std::vector<std::string>& liveAttrs) {
     if (savedId != 0 && savedId == liveId) return StatEquivalence::Matches;
-    if (!savedName.empty() && !liveName.empty() && savedName != liveName)
+    const auto savedCanonical = NamedStats::CanonicalStatName(savedName);
+    const auto liveCanonical = NamedStats::CanonicalStatName(liveName);
+    // Cross-website names and GW2 itemstat labels can differ by prefix
+    // (Zojja's vs Berserker's, Yassith's vs Viper's). Do not claim a
+    // complete match from names alone unless the numeric ID or attributes
+    // corroborate them.
+    if (!savedName.empty() && !liveName.empty() &&
+        ((savedCanonical.empty() || liveCanonical.empty())
+            ? NamedStats::NormalizeKey(savedName) != NamedStats::NormalizeKey(liveName)
+            : savedCanonical != liveCanonical))
         return StatEquivalence::Different;
     if (!savedAttrs.empty() && !liveAttrs.empty()) {
         // Empty attribute entries are incomplete metadata, not evidence of
