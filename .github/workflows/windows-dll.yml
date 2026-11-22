@@ -76,5 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AlterEgo-UCRT-Windows-x64
-          path: build/AlterEgo.dll
+          path: |
+            build/AlterEgo.dll
+            build/AlterEgo.map
           if-no-files-found: error
