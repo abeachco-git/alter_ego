@@ -49,6 +49,10 @@ jobs:
           /tmp/raid_chip_widths
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/snowcrows_import.cpp -o /tmp/snowcrows_import
           /tmp/snowcrows_import
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/ascended_stat_names.cpp -o /tmp/ascended_stat_names
+          /tmp/ascended_stat_names
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/metabattle_import.cpp -o /tmp/metabattle_import
+          /tmp/metabattle_import
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
