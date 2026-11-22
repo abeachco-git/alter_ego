@@ -36,6 +36,7 @@ struct Page {
     std::string name;
     std::string profession;
     std::string gameMode;
+    std::string importWarning; // Non-fatal source gaps; do not fabricate unspecified values.
     std::array<Spec, 3> specs;
     std::array<uint32_t, 5> skills{};
     std::map<std::string, Gear> gear;
