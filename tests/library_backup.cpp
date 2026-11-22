@@ -29,11 +29,11 @@ int main() {
     w.helm_dyes[0] = 1;
     w.chest_dyes[2] = 642;
     const std::string wardrobe = ChatLink::EncodeWardrobe(w);
-    Fashion::Look f;
+    AlterEgo::Fashion::Look f;
     f.id = "fashion-1"; f.name = "Saved Wardrobe";
     f.wardrobe_link = wardrobe; f.weight = "Heavy";
-    Fashion::Associate(f, "Warrior");
-    nlohmann::json fashion = {{"version", 1}, {"looks", nlohmann::json::array({Fashion::ToJson(f)})}};
+    AlterEgo::Fashion::Associate(f, "Warrior");
+    nlohmann::json fashion = {{"version", 1}, {"looks", nlohmann::json::array({AlterEgo::Fashion::ToJson(f)})}};
     nlohmann::json builds = {{"builds", nlohmann::json::array({
         {{"id", "build-a"}, {"name", "Build A"}, {"profession", "Warrior"}}
     })}};
@@ -45,10 +45,10 @@ int main() {
     Put(FilePath(src,"portraits/a.png"),portrait);
     std::string err;
     const std::string allZip = (base / "full.zip").u8string();
-    assert(Export(src, Builds|Fashion|Other, allZip, true, err));
+    assert(Export(src, Builds|AlterEgo::Backup::Fashion|Other, allZip, true, err));
     Package full;
     assert(ReadPackage(allZip, full, err));
-    assert(full.zip && full.available == (Builds|Fashion|Other));
+    assert(full.zip && full.available == (Builds|AlterEgo::Backup::Fashion|Other));
     assert(full.buildCount == 1 && full.fashionCount == 1);
     assert(full.files.at("portraits/a.png") == portrait);
     assert(full.files.count("settings.json") == 1);
@@ -60,16 +60,16 @@ int main() {
     assert(ReadPackage(onlyBuilds, individual, err));
     assert(individual.available == Builds);
     const std::string onlyFashion = (base / "fashion_library.json").u8string();
-    assert(Export(src, Fashion, onlyFashion, false, err));
+    assert(Export(src, AlterEgo::Backup::Fashion, onlyFashion, false, err));
     assert(ReadPackage(onlyFashion, individual, err));
-    assert(individual.available == Fashion);
+    assert(individual.available == AlterEgo::Backup::Fashion);
 
     // Merge skips matching IDs, preserves existing values, and adds new entries.
     Put(FilePath(dst,"build_library.json"),R"({"builds":[{"id":"build-a","name":"Local version"},{"id":"build-b","name":"Local B"}]})");
     Put(FilePath(dst,"fashion_library.json"),R"({"version":1,"looks":[]})");
     Put(FilePath(dst,"settings.json"),R"({"show_age":false})");
     Plan plan;
-    assert(Prepare(dst, full, Builds|Fashion|Other, false, plan, err));
+    assert(Prepare(dst, full, Builds|AlterEgo::Backup::Fashion|Other, false, plan, err));
     assert(plan.buildAdded == 0 && plan.buildSkipped == 1);
     assert(plan.fashionAdded == 1 && plan.fashionSkipped == 0);
     assert(plan.otherSkipped == 1);
@@ -84,7 +84,7 @@ int main() {
     assert(Get(FilePath(dst,"portraits/a.png")) == portrait);
 
     // Replace a selected collection, never touch unchecked collections.
-    assert(Prepare(dst, full, Fashion, true, plan, err));
+    assert(Prepare(dst, full, AlterEgo::Backup::Fashion, true, plan, err));
     assert(plan.writeFiles.size() == 1);
     assert(Apply(dst, plan, recovery, err));
     assert(nlohmann::json::parse(Get(FilePath(dst,"build_library.json")))["builds"].size() == 2);
@@ -101,7 +101,7 @@ int main() {
     assert(Prepare(dst, empty, Builds, true, plan, err));
     assert(Apply(dst, plan, recovery, err));
     assert(nlohmann::json::parse(Get(FilePath(dst,"build_library.json")))["builds"].empty());
-    assert(!Prepare(dst, empty, Fashion, true, plan, err));
+    assert(!Prepare(dst, empty, AlterEgo::Backup::Fashion, true, plan, err));
 
     // Corrupt CRC and archive traversal must fail before touching any files.
     std::string bytes = Get(allZip);
