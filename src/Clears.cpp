@@ -27,6 +27,7 @@
 #include "SectionRefresh.h"
 #include "FractalScales.h"
 #include "CompletionTheme.h"
+#include "RaidChipWidths.h"
 #include "RefreshUI.h"
 #include "WikiImage.h"
 
@@ -1959,10 +1960,15 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
     float chipH = 18.0f;
     if (!chips.empty()) {
         float gap = 4.0f;
-        float chipW = (chipsW - gap * (chips.size() - 1)) / (float)chips.size();
+        std::vector<std::string> labels;
+        for (const auto& chip : chips) labels.push_back(chip.label);
+        const auto widths = AlterEgo::RaidChipWidths::Calculate(wingId, labels, chipsW, gap);
+        float chipX = chipsX;
         for (size_t i = 0; i < chips.size(); i++) {
-            ImVec2 chmin(chipsX + (chipW + gap) * i, chipsY);
+            const float chipW = widths[i];
+            ImVec2 chmin(chipX, chipsY);
             ImVec2 chmax(chmin.x + chipW, chmin.y + chipH);
+            chipX += chipW + gap;
 
             DrawEncounterChip(dl, chips[i], chmin, chmax,
                               /*dotRadius*/ 4.0f, /*showBountyDate*/ true);
@@ -2053,11 +2059,16 @@ static void RenderCompactWingBanner(const std::string& wingShortName,
     const float chipWTotal = ImMax(0.0f, chipEnd - chipStart);
     const float gap = 4.0f;
     if (!chips.empty() && chipWTotal > gap * (chips.size() - 1)) {
-        const float chipW = (chipWTotal - gap * (chips.size() - 1)) / chips.size();
+        std::vector<std::string> labels;
+        for (const auto& chip : chips) labels.push_back(chip.label);
+        const auto widths = AlterEgo::RaidChipWidths::Calculate(wingId, labels, chipWTotal, gap);
+        float chipX = chipStart;
         const float chipY = min.y + (height - 19.0f) * 0.5f;
         for (size_t i = 0; i < chips.size(); ++i) {
-            const ImVec2 cMin(chipStart + i * (chipW + gap), chipY);
+            const float chipW = widths[i];
+            const ImVec2 cMin(chipX, chipY);
             const ImVec2 cMax(cMin.x + chipW, chipY + 19.0f);
+            chipX += chipW + gap;
             DrawEncounterChip(dl, chips[i], cMin, cMax, 3.5f, true);
             ImGui::SetCursorScreenPos(cMin);
             ImGui::PushID((int)i);
@@ -2898,7 +2909,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                     displayName = "Kela";
                 else if (normalized == "voiceofthefallenandclawofthefallen" ||
                          normalized == "voiceandclaw")
-                    displayName = "Voice and Claw of Fallen";
+                    displayName = "Bears";
                 else if (normalized == "fraenirofjormag")
                     displayName = "Fraenir";
                 else if (normalized == "whisperofjormag")

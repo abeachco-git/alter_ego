@@ -8590,7 +8590,6 @@ static void PollSnowCrowsBuild() {
             g_LibImportBuf[0] = '\0';
             g_LibImportName[0] = '\0';
             g_LibImportError.clear();
-            ImGui::CloseCurrentPopup(); // only valid if a popup is active
             if (APIDefs) APIDefs->GUI_SendAlert("Snow Crows build imported.");
         } else {
             g_LibImportError = "Could not save imported build.";
@@ -9638,13 +9637,12 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 }
             }
         }
-        // Snow Crows defines infusion counts across the entire terrestrial set,
-        // independently of equipment slot arrangement. Captured local builds
-        // continue to use their original per-slot comparison above.
+        // The two weapon sets are alternatives, not simultaneously equipped.
+        // Compare the 18 source-wide infusion requirements once for each
+        // available terrestrial weapon set, plus shared armor/trinket slots.
         if (!saved.infusion_totals.empty()) {
             std::vector<AlterEgo::InfusionRequirement> requirements;
-            std::vector<AlterEgo::ObservedInfusion> observed;
-            std::string requiredLabel, currentLabel;
+            std::string requiredLabel;
             bool missingRequiredMetadata = false;
             for (const auto& inf : saved.infusion_totals) {
                 if (!requiredLabel.empty()) requiredLabel += "; ";
@@ -9660,32 +9658,51 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 for (int n = 0; n < inf.count; ++n)
                     requirements.push_back({inf.item_id, attribute});
             }
-            // Only the slots relevant to the saved source are counted; avoid
-            // duplicate shared-tab instances and exclude unrelated equipment.
-            std::map<uint32_t, int> actualCounts;
+
+            bool hasWeaponA = false, hasWeaponB = false;
             for (const auto& [slot, gs] : saved.gear) {
-                const auto* eq = getEquipped(slot);
-                if (!eq) continue;
-                for (auto id : eq->infusions) {
-                    if (!id) continue;
-                    observed.push_back(GetObservedInfusion(id));
-                    ++actualCounts[id];
+                (void)gs;
+                if (slot == "WeaponA1" || slot == "WeaponA2") hasWeaponA = true;
+                if (slot == "WeaponB1" || slot == "WeaponB2") hasWeaponB = true;
+            }
+            // If the build has two weapon sets, validate both independently.
+            const std::vector<std::string> sets = hasWeaponA && hasWeaponB
+                ? std::vector<std::string>{"A", "B"}
+                : std::vector<std::string>{hasWeaponB ? "B" : "A"};
+            for (const std::string& weaponSet : sets) {
+                std::vector<AlterEgo::ObservedInfusion> observed;
+                std::map<uint32_t, int> actualCounts;
+                for (const auto& [slot, gs] : saved.gear) {
+                    (void)gs;
+                    if (slot.compare(0, 6, "Weapon") == 0 &&
+                        slot.compare(0, 7, "Weapon" + weaponSet) != 0)
+                        continue;
+                    const auto* eq = getEquipped(slot);
+                    if (!eq) continue;
+                    for (uint32_t id : eq->infusions) {
+                        if (!id) continue;
+                        observed.push_back(GetObservedInfusion(id));
+                        ++actualCounts[id];
+                    }
                 }
-            }
-            for (const auto& [id, count] : actualCounts) {
-                if (!currentLabel.empty()) currentLabel += "; ";
-                currentLabel += std::to_string(count) + " x " + itemName(id);
-            }
-            const auto verdict = AlterEgo::CompareInfusionRequirements(requirements, observed);
-            if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified ||
-                (missingRequiredMetadata && verdict != AlterEgo::InfusionMatchVerdict::Matches &&
-                 requirements.size() == observed.size())) {
-                result.AddUnverified("Infusions", "Total", requiredLabel,
-                    currentLabel.empty() ? "(none)" : currentLabel);
-            } else {
-                result.Add("Infusions", "Total", "required",
-                    verdict == AlterEgo::InfusionMatchVerdict::Matches ? "required" : "different",
-                    requiredLabel, currentLabel.empty() ? "(none)" : currentLabel);
+                std::string currentLabel;
+                for (const auto& [id, count] : actualCounts) {
+                    if (!currentLabel.empty()) currentLabel += "; ";
+                    currentLabel += std::to_string(count) + " x " + itemName(id);
+                }
+                const auto verdict = AlterEgo::CompareInfusionRequirements(requirements, observed);
+                const std::string field = sets.size() > 1 ?
+                    "Total (Weapon " + weaponSet + ")" : "Total";
+                if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified ||
+                    (missingRequiredMetadata && verdict != AlterEgo::InfusionMatchVerdict::Matches &&
+                     requirements.size() == observed.size())) {
+                    result.AddUnverified("Infusions", field, requiredLabel,
+                        currentLabel.empty() ? "(none)" : currentLabel);
+                } else {
+                    result.Add("Infusions", field, "required",
+                        verdict == AlterEgo::InfusionMatchVerdict::Matches ? "required" : "different",
+                        requiredLabel, currentLabel.empty() ? "(none)" : currentLabel);
+                }
             }
         }
         if (saved.relic_id || !saved.relic_name.empty()) {
@@ -9899,7 +9916,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
             // Exact per-slot infusion positions are intentionally ignored in the
             // roster summary, but source-wide total requirements are meaningful.
             if (!AlterEgo::IsCharacterEquipmentMatchGroup(row.group) &&
-                !(row.group == "Infusions" && row.field == "Total")) continue;
+                !(row.group == "Infusions" && row.field.rfind("Total", 0) == 0)) continue;
             if (!row.verified) {
                 requiredDataMissing = true;
                 continue;

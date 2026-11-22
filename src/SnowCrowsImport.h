@@ -140,11 +140,11 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     const std::string gearHtml = html.substr(gearAt, skillsAt - gearAt);
     const std::string skillsHtml = html.substr(skillsAt);
     parsed.skills = {};
-    auto skillIds = Ids(Match(skillsHtml, R"(data-armory-embed="skills"\s+data-armory-ids="([0-9,]+)")"));
+    auto skillIds = Ids(Match(skillsHtml, R"SC(data-armory-embed="skills"\s+data-armory-ids="([0-9,]+)")SC"));
     if (skillIds.size() == 5)
         std::copy(skillIds.begin(), skillIds.end(), parsed.skills.begin());
 
-    const std::regex specsRe(R"(data-armory-embed="specializations"\s+data-armory-ids="([0-9]+)"\s+data-armory-[0-9]+-traits="([0-9,]*)")", std::regex::icase);
+    const std::regex specsRe(R"SC(data-armory-embed="specializations"\s+data-armory-ids="([0-9]+)"\s+data-armory-[0-9]+-traits="([0-9,]*)")SC", std::regex::icase);
     size_t specIndex = 0;
     for (std::sregex_iterator i(skillsHtml.begin(), skillsHtml.end(), specsRe), end; i != end && specIndex < 3; ++i) {
         parsed.specs[specIndex].id = Unsigned((*i)[1].str());
@@ -164,7 +164,7 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
         previousRowEnd = start + i->length();
         const std::string row = (*i)[1].str();
         const uint32_t item = Unsigned(Match(row,
-            R"(data-armory-embed="items"\s+data-armory-ids="([0-9]+)")"));
+            R"SC(data-armory-embed="items"\s+data-armory-ids="([0-9]+)")SC"));
         if (!item) continue;
         const std::string label = Decode(Match(row, R"(<p\s+class="mb-1">([^<]+))"));
         const std::string hint = Decode(Match(row,
@@ -217,7 +217,7 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     int totalInfusions = 0;
     for (const auto& inf : parsed.infusions) totalInfusions += inf.count;
     if (parsed.name.empty() || parsed.gear.size() < 12 || parsed.relicId == 0 ||
-        specIndex != 3 || skillIds.size() != 5 || totalInfusions > 25) {
+        specIndex != 3 || skillIds.size() != 5 || totalInfusions == 0 || totalInfusions > 25) {
         error = "Incomplete Snow Crows build: expected equipment, relic, skills, and three trait lines.";
         return false;
     }

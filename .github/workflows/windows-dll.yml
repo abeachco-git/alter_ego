@@ -39,6 +39,8 @@ jobs:
           /tmp/equipment_tab_core
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/section_refresh.cpp -o /tmp/section_refresh
           /tmp/section_refresh
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/raid_chip_widths.cpp -o /tmp/raid_chip_widths
+          /tmp/raid_chip_widths
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
