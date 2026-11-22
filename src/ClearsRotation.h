@@ -101,20 +101,19 @@ inline std::string BountyDateLabel(int64_t midnightUtc) {
         kWeekdays[tm.tm_wday], kMonths[tm.tm_mon], tm.tm_mday);
     return text;
 }
-// Shows today unless that bounty has been completed; otherwise the NEXT
-// occurrence only, stopping before weekly reset. Weekly raid completion is
-// deliberately ignored: the daily bounty is a separate reward.
+// The earliest daily-bounty occurrence in the CURRENT weekly period.
+// The horizon ends at Monday 07:30 UTC (weekly reset), never a rolling week.
+// Today's date stays visible even after its daily bounty is completed: the
+// caller colors that date gray, separately from its weekly encounter check.
 inline std::string NextBountyDate(const std::string& encounter,
                                   int64_t nowUtc,
-                                  int64_t nextWeeklyResetUtc,
-                                  bool bountyCompletedToday) {
+                                  int64_t nextWeeklyResetUtc) {
     const std::string needle = Normalize(encounter);
     const int64_t todayUtc = FloorDay(nowUtc) * kDay;
     if (needle.empty() || nextWeeklyResetUtc <= nowUtc) return "";
     for (int daysAhead = 0; daysAhead <= 8; ++daysAhead) {
-        int64_t start = todayUtc + static_cast<int64_t>(daysAhead) * kDay;
+        const int64_t start = todayUtc + static_cast<int64_t>(daysAhead) * kDay;
         if (start >= nextWeeklyResetUtc) break;
-        if (daysAhead == 0 && bountyCompletedToday) continue;
         for (int column = 0; column < 4; ++column)
             if (Normalize(BountyName(BountySet(start), column)) == needle)
                 return BountyDateLabel(start);

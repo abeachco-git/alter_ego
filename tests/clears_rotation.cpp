@@ -22,15 +22,37 @@ int main() {
     assert(RetryDelaySeconds(3) == 120 && RetryDelaySeconds(6) == 300);
     constexpr int64_t nov21 = 1795219200;
     assert(BountySet(nov21) == 1);
+    // Sun Nov 22: game day has already rolled over at 7 PM Eastern,
+    // but next reset is Monday 07:30 UTC; show only Sun/Mon before that.
+    constexpr int64_t nov22 = nov21 + kDay;
+    constexpr int64_t nov23 = nov22 + kDay;
+    const int64_t weeklyReset = nov23 + 7 * 3600 + 30 * 60;
+    assert(BountySet(nov22 - 1) == BountySet(nov21));
+    assert(BountySet(nov22) == 2);
+    assert(std::string(BountyName(BountySet(nov22), 0)) == "Fraenir of Jormag");
+    assert(std::string(BountyName(BountySet(nov22), 1)) == "Whisper of Jormag");
+    assert(std::string(BountyName(BountySet(nov22), 2)) == "Xera");
+    assert(std::string(BountyName(BountySet(nov22), 3)) == "Soulless Horror");
+    assert(std::string(BountyName(BountySet(nov23), 0)) == "Gorseval");
+    assert(std::string(BountyName(BountySet(nov23), 1)) == "Vale Guardian");
+    assert(std::string(BountyName(BountySet(nov23), 2)) == "Samarog");
+    assert(std::string(BountyName(BountySet(nov23), 3)) == "Harvest Temple");
+    // Weekly completion has no role in the schedule; today's bounty retains its date.
+    assert(NextBountyDate("Xera", nov22 + 3600, weeklyReset) == "Sun Nov 22");
+    assert(NextBountyDate("Gorseval", nov22 + 3600, weeklyReset) == "Mon Nov 23");
+    assert(NextBountyDate("Gorseval", nov23 + 3600, weeklyReset) == "Mon Nov 23");
+    assert(NextBountyDate("Gorseval", weeklyReset, weeklyReset).empty());
+    // The first day after the weekly reset must never leak into this week.
+    assert(NextBountyDate("Cairn", nov22 + 3600, weeklyReset).empty());
     assert(std::string(BountyName(BountySet(nov21), 1)) == "Cardinal Sabir");
     assert(std::string(BountyName(BountySet(nov21 + kDay), 2)) == "Xera");
-    assert(NextBountyDate("Matthias", nov21 + 3600, nov21 + 2 * kDay + 27000, false) == "Sat Nov 21");
-    assert(NextBountyDate("Matthias", nov21 + 3600, nov21 + 2 * kDay + 27000, true).empty());
-    assert(NextBountyDate("Vale Guardian", nov21 + 3600, nov21 + 2 * kDay, false).empty());
-    assert(NextBountyDate("Vale Guardian", nov21 + 3600, nov21 + 3 * kDay + 27000, false) == "Mon Nov 23");
-    assert(NextBountyDate("Sloth", nov21 + 3600, nov21 + 2 * kDay + 27000, false).empty());
+    assert(NextBountyDate("Matthias", nov21 + 3600, nov21 + 2 * kDay + 27000) == "Sat Nov 21");
+    assert(NextBountyDate("Matthias", nov21 + 3600, nov21 + 2 * kDay + 27000) == "Sat Nov 21");
+    assert(NextBountyDate("Vale Guardian", nov21 + 3600, nov21 + 2 * kDay).empty());
+    assert(NextBountyDate("Vale Guardian", nov21 + 3600, nov21 + 3 * kDay + 27000) == "Mon Nov 23");
+    assert(NextBountyDate("Sloth", nov21 + 3600, nov21 + 2 * kDay + 27000).empty());
     assert(NextBountyDate("Voice of the Fallen and Claw of the Fallen",
-                          nov21, nov21 + kDay, false) == "Sat Nov 21");
+                          nov21, nov21 + kDay) == "Sat Nov 21");
     assert(FractalSetIndex(nov21) == 9);
     assert(std::string(Fractals(FractalSetIndex(nov21)).dailies[0]) == "Aquatic Ruins");
     assert(std::string(NextFractals(nov21).dailies[0]) == "Sunqua Peak");

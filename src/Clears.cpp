@@ -1411,14 +1411,19 @@ static ThemeGrad StrikeTheme(const std::string& name) {
 // as the background; otherwise the gradient theme is used.
 // Unified one-line clear cell. Background artwork made the trackers visually
 // inconsistent and obscured labels; raid dates and completion remain visible.
-static ImU32 BountyDateColor(const std::string& date) {
-    // GW2 uses UTC resets, not local midnight.
+static ImU32 BountyDateColor(const std::string& date,
+                             bool dailyCompletedToday = false) {
+    // The day's color is determined by GW2's UTC calendar, never by the
+    // WEEKLY encounter checkmark. Today's claimed daily becomes gray;
+    // remaining daily today is orange, future daily is teal.
     const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     const std::string today = ClearsRotation::BountyDateLabel(
         ClearsRotation::FloorDay(now) * ClearsRotation::kDay);
-    return date == today ? AlterEgo::CompletionTheme::kBountyToday
-                         : AlterEgo::CompletionTheme::kBountyFuture;
+    if (date == today)
+        return dailyCompletedToday ? AlterEgo::CompletionTheme::kCompleteText
+                                   : AlterEgo::CompletionTheme::kBountyToday;
+    return AlterEgo::CompletionTheme::kBountyFuture;
 }
 
 static void RenderClearBanner(const std::string& title, const std::string& subtitle,
@@ -1427,7 +1432,8 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
                               float widthOverride = 0.0f,
                               const std::string& bannerKey = "",
                               const std::string& bountyDate = "",
-                              const char* fullTooltipTitle = nullptr) {
+                              const char* fullTooltipTitle = nullptr,
+                              bool dailyCompletedToday = false) {
     (void)theme;
     (void)bannerKey;
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1453,8 +1459,7 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     if (!bountyDate.empty()) {
         const std::string suffix = " - " + bountyDate;
         dl->AddText(ImVec2(titlePos.x + ImGui::CalcTextSize(title.c_str()).x, titlePos.y),
-            complete ? AlterEgo::CompletionTheme::kCompleteText :
-                BountyDateColor(bountyDate), suffix.c_str());
+            BountyDateColor(bountyDate, dailyCompletedToday), suffix.c_str());
     }
     dl->PopClipRect();
 
@@ -1473,7 +1478,13 @@ static void RenderClearBanner(const std::string& title, const std::string& subti
     ImGui::Dummy(ImVec2(0, 1.0f));
 }
 
-struct WingEncChip { std::string label; std::string fullName; bool done = false; bool secondary = false; std::string bountyDate; };
+struct WingEncChip {
+    std::string label, fullName;
+    bool done = false;                  // WEEKLY encounter completion
+    bool secondary = false;
+    std::string bountyDate;             // independent DAILY bounty date
+    bool dailyCompletedToday = false;   // only claimed today's bounty is gray
+};
 
 // Shared drawing only: tier and wing layouts still own their hit areas,
 // hover details, positions, and completion rules.
@@ -1494,8 +1505,7 @@ static void DrawEncounterChip(ImDrawList* dl, const WingEncChip& chip,
     if (showBountyDate && !chip.bountyDate.empty()) {
         const std::string date = " - " + chip.bountyDate;
         dl->AddText(ImVec2(labelX + labelSize.x, labelY),
-            chip.done ? AlterEgo::CompletionTheme::kCompleteText :
-                BountyDateColor(chip.bountyDate), date.c_str());
+            BountyDateColor(chip.bountyDate, chip.dailyCompletedToday), date.c_str());
     }
     dl->PopClipRect();
 }
@@ -2214,6 +2224,19 @@ static void RenderVaultPeriodSection(int sectionIndex, const char* title,
     ImGui::Unindent(4.0f);
 }
 
+// GW2's daily calendar rolls over at 00:00 UTC, independent of local time.
+// Keep this single helper identical for Vault and Clears.
+static void RenderGw2ServerDay() {
+    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string serverDay = ClearsRotation::BountyDateLabel(
+        ClearsRotation::FloorDay(now) * ClearsRotation::kDay);
+    ImGui::TextDisabled("GW2 Today: %s (UTC)", serverDay.c_str());
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Daily reset: 00:00 UTC. Weekly reset: Monday 07:30 UTC. "
+                          "GW2 Today can differ from your local date.");
+}
+
 static void RenderVaultTab(const std::string& dailyResetStr, const std::string& weeklyResetStr)
 {
     // Handle retry/timeout on the render thread; callbacks never call Events_Raise.
@@ -2323,6 +2346,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
             showingData ? "Ready" : "No Vault data available - click Refresh");
     }
 
+    RenderGw2ServerDay();
     ImGui::Separator();
     ImGui::BeginChild("##VaultContentScroll", ImVec2(0, 0), false);
 
@@ -2459,22 +2483,26 @@ static bool RenderClearSectionToggle(int index, const char* title,
 static std::string UpcomingBountyLabel(const std::string& encounter,
                                        const std::vector<ClearEntry>& daily,
                                        int64_t utcNow, int64_t weeklyEndUtc,
-                                       bool completionKnown) {
+                                       bool completionKnown,
+                                       bool* dailyCompletedToday = nullptr) {
+    if (dailyCompletedToday) *dailyCompletedToday = false;
     if (!completionKnown) return "";
-    const std::string boss = ClearsRotation::Normalize(encounter);
-    bool todayOffered = false, todayCompleted = false;
-    const int set = ClearsRotation::BountySet(utcNow);
-    for (int j = 0; j < 4; ++j)
-        if (ClearsRotation::Normalize(ClearsRotation::BountyName(set,j)) == boss)
-            todayOffered = true;
-    if (todayOffered) {
+    const std::string date = ClearsRotation::NextBountyDate(
+        encounter, utcNow, weeklyEndUtc);
+    if (date.empty()) return "";
+
+    // Only check today's DAILY achievement, never the weekly encounter bit.
+    const int64_t todayUtc = ClearsRotation::FloorDay(utcNow) * ClearsRotation::kDay;
+    if (dailyCompletedToday && date == ClearsRotation::BountyDateLabel(todayUtc)) {
+        const std::string boss = ClearsRotation::Normalize(encounter);
         for (const auto& entry : daily) {
-            if (ClearsRotation::Normalize(entry.name) == boss && entry.done)
-                todayCompleted = true;
+            if (ClearsRotation::Normalize(entry.name) == boss && entry.done) {
+                *dailyCompletedToday = true;
+                break;
+            }
         }
     }
-    return ClearsRotation::NextBountyDate(
-        encounter, utcNow, weeklyEndUtc, todayCompleted);
+    return date;
 }
 
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr)
@@ -2511,6 +2539,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 g_ClearsFetched ? "Ready" : "No Clears data available - click Refresh");
     }
 
+    RenderGw2ServerDay();
     ImGui::Separator();
     ImGui::BeginChild("##ClearsContentScroll", ImVec2(0, 0), false);
 
@@ -2833,9 +2862,10 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                     ? "Kela, Seneschal of Waves. Weekly completion is from Guardian's Glade."
                     : nullptr;
                 const std::string subtitle = StrikePickerCategory(name);
+                bool dailyCompletedToday = false;
                 const std::string date = UpcomingBountyLabel(
                     isKela ? "Kela" : name, g_DailyBounties,
-                    utcNow, weeklyEndUtc, g_ClearsFetched);
+                    utcNow, weeklyEndUtc, g_ClearsFetched, &dailyCompletedToday);
 
                 if (shown % strikeColumns == 0) ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex((int)(shown % strikeColumns));
@@ -2845,7 +2875,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                     /*tooltip*/ description,
                     /*widthOverride*/ ImGui::GetContentRegionAvail().x,
                     /*bannerKey*/ "strike:" + name, date,
-                    /*fullTooltipTitle*/ fullTitle);
+                    /*fullTooltipTitle*/ fullTitle, dailyCompletedToday);
                 ImGui::PopID();
                 ++shown;
             }
@@ -2925,7 +2955,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 c.done = bitDone;
                 c.secondary = IsSecondaryRaidEncounter(shortEnc);
                 c.bountyDate = UpcomingBountyLabel(shortEnc, g_DailyBounties,
-                    utcNow, weeklyEndUtc, g_ClearsFetched);
+                    utcNow, weeklyEndUtc, g_ClearsFetched, &c.dailyCompletedToday);
                 chips.push_back(c);
             }
 
