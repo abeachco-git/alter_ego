@@ -3722,6 +3722,11 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
     return ChatLink::EncodeWardrobe(w);
 }
 
+// Shared action for both Characters detail sub-tabs. Implemented after the
+// save-dialog opener, so the Equipment view can call it without duplicating
+// build-selection logic.
+static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab = 0);
+
 static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Add padding so icons don't touch the pane edges
     ImVec2 cursor = ImGui::GetCursorPos();
@@ -3733,7 +3738,14 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         if (eq.tab > maxTab) maxTab = eq.tab;
     }
     int tab = (g_SelectedEquipTab > 0) ? g_SelectedEquipTab : ch.active_equipment_tab;
-    if (tab == 0) tab = 1;
+    if (tab < 1 || tab > maxTab)
+        tab = (ch.active_equipment_tab >= 1 && ch.active_equipment_tab <= maxTab)
+                ? ch.active_equipment_tab : 1;
+
+    // Keep the same Save action accessible from Equipment and Build. When
+    // invoked here, preselect the equipment set being viewed in the dialog.
+    RenderSaveLiveBuildAction(ch, tab);
+    ImGui::Spacing();
 
     // Equipment tab chips. Always shown (even for a single tab) so the tab is a
     // consistent right-click target for the Fashion menu.
@@ -4331,26 +4343,42 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     g_SaveLibDialogOpen = true;
 }
 
+// One Save action, rendered in the same place in both character detail views.
+// It always captures the selected build tab (or the currently active build if
+// nothing has been selected). Equipment view additionally preselects its
+// currently displayed equipment set; the dialog can still change that choice.
+static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab) {
+    if (ch.build_tabs.empty()) return;
+
+    int buildIdx = g_SelectedBuildTab;
+    if (buildIdx < 0 || buildIdx >= static_cast<int>(ch.build_tabs.size())) {
+        buildIdx = 0;
+        for (int i = 0; i < static_cast<int>(ch.build_tabs.size()); ++i) {
+            if (ch.build_tabs[i].is_active) { buildIdx = i; break; }
+        }
+        g_SelectedBuildTab = buildIdx;
+    }
+
+    if (RenderActionButton("Save Current Build + Gear to Library...")) {
+        OpenSaveLiveBuildDialog(ch, ch.build_tabs[buildIdx]);
+        if (preferredEquipTab > 0)
+            g_SaveLibEquipTab = preferredEquipTab;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(preferredEquipTab > 0
+            ? "Save the selected build with this equipment set; both can be reviewed in the dialog."
+            : "Save the selected build; choose an equipment set in the dialog.");
+    }
+}
+
 static void RenderBuildPanel(const AlterEgo::Character& ch) {
     if (ch.build_tabs.empty()) {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No build tabs available.");
         return;
     }
 
-    // Put Save directly below Equipment / Build and above the build selection.
-    int buildIdx = g_SelectedBuildTab;
-    if (buildIdx < 0 || buildIdx >= (int)ch.build_tabs.size()) {
-        for (int i = 0; i < (int)ch.build_tabs.size(); ++i) {
-            if (ch.build_tabs[i].is_active) { buildIdx = i; break; }
-        }
-        if (buildIdx < 0 || buildIdx >= (int)ch.build_tabs.size()) buildIdx = 0;
-        g_SelectedBuildTab = buildIdx;
-    }
-    const auto& saveBt = ch.build_tabs[buildIdx];
-    if (RenderActionButton("Save Current Build + Gear to Library..."))
-        OpenSaveLiveBuildDialog(ch, saveBt);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Save this retrieved build tab; choose the equipment tab in the dialog.");
+    // Same action/position as the Equipment view, before the build-tab selector.
+    RenderSaveLiveBuildAction(ch);
     ImGui::Spacing();
 
     // Build tab selector — chip strip
