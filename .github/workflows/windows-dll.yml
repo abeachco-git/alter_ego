@@ -25,6 +25,31 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
           x86_64-w64-mingw32ucrt-g++ --version
+      - name: Fetch MetaBattle live pages for parser verification
+        continue-on-error: true
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
+          mkdir -p /tmp/metabattle-live
+          for spec in \
+            'reaper|Reaper_-_Power_Greatsword_Reaper' \
+            'harbinger|Harbinger_-_Boon_DPS_Condi_Harbinger_Open_World' \
+            'chronomancer|Chronomancer_-_Power_DPS' \
+            'mechanist|Mechanist_-_Condi_DPS'; do
+            file="${spec%%|*}"
+            slug="${spec#*|}"
+            curl -fLsS --retry 2 --max-time 35 -A 'Mozilla/5.0' \
+              "https://metabattle.com/wiki/Build:${slug}" \
+              -o "/tmp/metabattle-live/${file}.html" || true
+            wc -c "/tmp/metabattle-live/${file}.html" || true
+          done
+      - name: Upload MetaBattle live HTML snapshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: MetaBattle-Live-HTML
+          path: /tmp/metabattle-live/*.html
+          if-no-files-found: ignore
       - name: Test platform-independent comparator
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_compare_core.cpp -o /tmp/build_compare_core
