@@ -57,6 +57,19 @@ jobs:
           /tmp/fashion_library
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/library_backup.cpp src/ChatLink.cpp -o /tmp/library_backup
           /tmp/library_backup
+      - name: Capture source HTML for MetaBattle parser diagnosis
+        run: |
+          mkdir -p /tmp/metabattle-debug
+          curl --fail --location --retry 2 --silent --show-error \
+            'https://metabattle.com/wiki/Build:Reaper_-_Power_DPS' \
+            --output /tmp/metabattle-debug/reaper.html
+          wc -c /tmp/metabattle-debug/reaper.html
+      - name: Upload MetaBattle source fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: metabattle-reaper-source-diagnostic
+          path: /tmp/metabattle-debug/reaper.html
+          if-no-files-found: error
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
