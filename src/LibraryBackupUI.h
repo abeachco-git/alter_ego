@@ -122,39 +122,36 @@ static bool LibraryBackupApplyImport() {
     return true;
 }
 
+// Global Library menu actions: the dialogs are rendered each frame from the
+// main window, not nested inside a particular collection page.
+static void BeginLibraryBackupExport() {
+    g_LibraryBackupUI.error.clear();
+    g_LibraryBackupUI.openExport = true;
+}
+
+static void BeginLibraryBackupImport() {
+    auto& ui = g_LibraryBackupUI;
+    char path[MAX_PATH] = {};
+    if (!LibraryBackupFilePicker(false, false, path)) return;
+    ui.error.clear();
+    if (!AlterEgo::Backup::ReadPackage(path, ui.package, ui.error)) {
+        LibraryBackupNotify("Import failed: " + ui.error);
+        return;
+    }
+    ui.importedPath = path;
+    ui.lastRecovery.clear();
+    const unsigned available = ui.package.available;
+    ui.importBuilds = (available & AlterEgo::Backup::Builds) != 0;
+    ui.importFashion = (available & AlterEgo::Backup::Fashion) != 0;
+    ui.importOther = (available & AlterEgo::Backup::Other) != 0;
+    ui.replace = false;
+    ui.replaceAcknowledged = false;
+    ui.previewDirty = true;
+    ui.openRestore = true;
+}
+
 static void RenderLibraryBackupUI() {
     auto& ui = g_LibraryBackupUI;
-    if (RenderActionButton("Backup / Restore"))
-        ImGui::OpenPopup("##library_backup_actions");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Back up everything or choose Builds, Fashion and local settings.");
-    if (ImGui::BeginPopup("##library_backup_actions")) {
-        if (ImGui::Selectable("Export...")) {
-            ui.openExport = true;
-            ui.error.clear();
-        }
-        if (ImGui::Selectable("Import...")) {
-            char path[MAX_PATH] = {};
-            if (LibraryBackupFilePicker(false, false, path)) {
-                ui.error.clear();
-                if (AlterEgo::Backup::ReadPackage(path, ui.package, ui.error)) {
-                    ui.importedPath = path;
-                    ui.lastRecovery.clear();
-                    const unsigned available = ui.package.available;
-                    ui.importBuilds = (available & AlterEgo::Backup::Builds) != 0;
-                    ui.importFashion = (available & AlterEgo::Backup::Fashion) != 0;
-                    ui.importOther = (available & AlterEgo::Backup::Other) != 0;
-                    ui.replace = false;
-                    ui.replaceAcknowledged = false;
-                    ui.previewDirty = true;
-                    ui.openRestore = true;
-                } else {
-                    LibraryBackupNotify("Import failed: " + ui.error);
-                }
-            }
-        }
-        ImGui::EndPopup();
-    }
     if (ui.openExport) {
         ImGui::OpenPopup("Export Alter Ego Data##ae_backup");
         ui.openExport = false;
