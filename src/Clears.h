@@ -23,6 +23,12 @@ void LoadClearsCache();
 void LoadVaultCache();
 void RenderVault();
 void RenderClears();
+void RenderVaultStatusRow();
+void RenderClearsStatusRow();
+bool VaultHideComplete();
+bool ClearsHideComplete();
+void ToggleVaultHideComplete();
+void ToggleClearsHideComplete();
 // Called once when navigating into a tab. Refreshes stale, unfinished
 // sections only; the tab's manual Refresh continues to fetch everything.
 void RefreshVaultOnEntry();
