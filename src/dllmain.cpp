@@ -29,6 +29,7 @@
 #include "InfusionTotalsCore.h"
 #include "SnowCrowsImport.h"
 #include "AutoRefreshCore.h"
+#include "AutoRefreshPolicy.h"
 #include "FontResolve.h"
 #include "FontManager.h"
 #include "IconManager.h"
@@ -552,6 +553,9 @@ static long long NowMs() {
 // query: set to NowMs() for an immediate boot query, or NowMs()+retry_after_ms
 // for a single HOARD_STATUS_BUSY backoff retry. 0 = nothing pending.
 static std::atomic<long long> g_AchRetryAtMs{0};
+// Keep manual retries alive when the global auto-refresh switch changes.
+static std::atomic<bool> g_AchRetryAutomatic{false};
+static std::atomic<bool> g_AchQueryAutomatic{false};
 static uint64_t g_AchProgressGen = 0;      // incremented when progress updates, triggers popout cache rebuild
 static char g_AchSearchBuf[128] = "";
 static bool g_AchPopoutVisible = false;    // popout tracker window visibility
@@ -787,7 +791,7 @@ static void SaveAchDefCache();
 static void LoadAchDefCache();
 static void FetchAchGroups();
 static void FetchAchCategoryDefs(uint32_t catId);
-static void SendAchProgressQuery(const std::vector<uint32_t>& ids);
+static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic = false);
 static void FetchPinnedAchDefs();
 static void SaveAchWaypoints();
 static void LoadAchWaypoints();
@@ -1007,9 +1011,12 @@ static void OnHoardPongForAch(void* eventArgs) {
     auto* pong = (HoardPongPayload*)eventArgs;
     if (pong->api_version < 2) return;
 
+    // No automatic H&S API requests when the Nexus option is off.
+    if (!AlterEgo::AutoRefreshPolicy::Enabled()) return;
     // Signal render thread to query pinned achievement progress (once per session)
     if (!g_AchPinnedBootQueried) {
         g_AchPinnedBootQueried = true;
+        g_AchRetryAutomatic = true;
         g_AchRetryAtMs = NowMs();  // fire ASAP: render thread picks up pinned + selected cat
     }
 
@@ -1017,7 +1024,7 @@ static void OnHoardPongForAch(void* eventArgs) {
     static bool s_clearsBootQueried = false;
     if (!s_clearsBootQueried && g_ClearsFetched && !g_ClearsFetching) {
         s_clearsBootQueried = true;
-        g_ClearsQueryPending = true;
+        g_ClearsAutoBootPending = true;
     }
 }
 
@@ -2441,8 +2448,10 @@ static void FetchAchCategoryDefs(uint32_t catId) {
     }).detach();
 }
 
-static void SendAchProgressQuery(const std::vector<uint32_t>& ids) {
-    if (ids.empty() || !APIDefs) return;
+static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic) {
+    if (ids.empty() || !APIDefs ||
+        (automatic && !AlterEgo::AutoRefreshPolicy::Enabled())) return;
+    g_AchQueryAutomatic.store(automatic);
 
     // Send via H&S achievement query (same mechanism as Clears)
     std::string acctName = GetEffectiveAccountName();
@@ -2476,7 +2485,9 @@ static void OnAchProgressResponse(void* eventArgs) {
 
     if (resp->status != HOARD_STATUS_OK) {
         if (resp->status == HOARD_STATUS_BUSY) {
-            // Schedule a single backoff retry (fired from the render thread).
+            // Preserve provenance: a manual refresh retry is never suppressed
+            // by disabling automatic API refreshes.
+            g_AchRetryAutomatic = g_AchQueryAutomatic.load();
             g_AchRetryAtMs = NowMs() + (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
         } else {
             g_AchRefreshError = resp->status == HOARD_STATUS_DENIED
@@ -11457,6 +11468,7 @@ void AddonLoad(AddonAPI_t* aApi) {
 
     // Load settings, session, and cached data
     LoadSettings();
+    AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
     LoadSession();
     LoadClearsCache();
     LoadVaultCache();
@@ -11513,7 +11525,10 @@ void AddonLoad(AddonAPI_t* aApi) {
         Skinventory::WikiImage::DownloadCurrencyIcons("Emboldened,Call_of_the_Mists");
 
         if (Skinventory::SkinCache::LoadFromDisk()) {
-            Skinventory::SkinCache::UpdateCacheAsync();
+            // Refreshing cached API metadata obeys the global option;
+            // initial catalog creation is required to use Skinventory.
+            if (AlterEgo::AutoRefreshPolicy::Enabled())
+                Skinventory::SkinCache::UpdateCacheAsync();
         } else {
             Skinventory::SkinCache::FetchAllSkinsAsync();
         }
@@ -11734,7 +11749,8 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
     const auto observed = g_AutoRefreshTracker.ObserveIdentity(
         newName, id->Specialization,
         AlterEgo::AutoRefreshTracker::Clock::now(),
-        g_AutoRefreshEnabled, g_AutoRefreshOnLogin, g_AutoRefreshOnSpecialization);
+        AlterEgo::AutoRefreshPolicy::Enabled(),
+        g_AutoRefreshOnLogin, g_AutoRefreshOnSpecialization);
     if (newName.empty()) return;
     if (observed.login) {
         g_LoginTimestamps[newName] = (int64_t)std::time(nullptr);
@@ -13911,14 +13927,14 @@ static void RenderAchievements() {
         // below catches any updates since the cache was written).
         const std::string& newAcct = AlterEgo::GW2API::GetCurrentAccountName();
         if (!newAcct.empty()) LoadAchProgress(newAcct);
-        if (!pinnedCopy.empty()) {
-            SendAchProgressQuery(pinnedCopy);
+        if (AlterEgo::AutoRefreshPolicy::Enabled() && !pinnedCopy.empty()) {
+            SendAchProgressQuery(pinnedCopy, true);
         }
-        if (g_AchSelectedCatId > 0) {
+        if (AlterEgo::AutoRefreshPolicy::Enabled() && g_AchSelectedCatId > 0) {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             auto it = g_AchCategories.find(g_AchSelectedCatId);
             if (it != g_AchCategories.end()) {
-                SendAchProgressQuery(it->second.achievements);
+                SendAchProgressQuery(it->second.achievements, true);
             }
         }
     }
@@ -13950,8 +13966,9 @@ static void RenderAchievements() {
                 }
             }
         }
-        if (!retryIds.empty()) {
-            SendAchProgressQuery(retryIds);
+        if (!retryIds.empty() &&
+            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled())) {
+            SendAchProgressQuery(retryIds, g_AchRetryAutomatic.load());
         }
     }
 
@@ -14053,7 +14070,8 @@ static void RenderAchievements() {
             }
         }
     }
-    if (!s_progressQueue.empty() && !g_AchProgressFetching) {
+    if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+        !s_progressQueue.empty() && !g_AchProgressFetching) {
         static auto s_lastBatchTime = std::chrono::steady_clock::time_point{};
         auto now = std::chrono::steady_clock::now();
         if (s_lastBatchTime == std::chrono::steady_clock::time_point{} ||
@@ -14063,7 +14081,7 @@ static void RenderAchievements() {
             size_t take = std::min(BATCH, s_progressQueue.size());
             std::vector<uint32_t> batch(s_progressQueue.end() - take, s_progressQueue.end());
             s_progressQueue.erase(s_progressQueue.end() - take, s_progressQueue.end());
-            SendAchProgressQuery(batch);
+            SendAchProgressQuery(batch, true);
         }
     }
 
@@ -14727,9 +14745,10 @@ static void RenderAchPopout() {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             pinnedCopy = g_AchPinned;
         }
-        if (!pinnedCopy.empty() && !g_AchProgressFetching) {
+        if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+            !pinnedCopy.empty() && !g_AchProgressFetching) {
             g_LastAchProgressQuery = std::chrono::steady_clock::now();
-            SendAchProgressQuery(pinnedCopy);
+            SendAchProgressQuery(pinnedCopy, true);
         }
     }
 
@@ -14743,8 +14762,9 @@ static void RenderAchPopout() {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             pinnedCopy = g_AchPinned;
         }
-        if (!pinnedCopy.empty()) {
-            SendAchProgressQuery(pinnedCopy);
+        if (!pinnedCopy.empty() &&
+            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled())) {
+            SendAchProgressQuery(pinnedCopy, g_AchRetryAutomatic.load());
         }
     }
 
@@ -15006,7 +15026,8 @@ static void RenderSkinventory() {
         static uint64_t s_refreshStartingGeneration = 0;
         static auto s_successUntil = std::chrono::steady_clock::time_point{};
 
-        if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag())
+        if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag() &&
+            AlterEgo::AutoRefreshPolicy::Enabled())
             g_SkinRefreshOwned = true;
 
         bool isQuerying = Skinventory::OwnedSkins::IsQuerying();
@@ -15016,7 +15037,8 @@ static void RenderSkinventory() {
         {
             static std::string s_autoRefreshAccount;
             const std::string currentAccount = GetEffectiveAccountName();
-            if (canRefresh && !Skinventory::OwnedSkins::HasData() &&
+            if (AlterEgo::AutoRefreshPolicy::Enabled() && canRefresh &&
+                !Skinventory::OwnedSkins::HasData() &&
                 s_autoRefreshAccount != currentAccount) {
                 s_autoRefreshAccount = currentAccount;
                 g_SkinRefreshOwned = true;
@@ -15121,7 +15143,7 @@ struct DefaultFontScope {
 // Never dispatch H&S requests inside a MumbleLink event callback. The
 // render-driven scheduler checks readiness, throttling, and existing activity.
 static void PollAutoCharacterRefresh() {
-    if (!g_AutoRefreshEnabled) {
+    if (!AlterEgo::AutoRefreshPolicy::Enabled()) {
         g_AutoRefreshTracker.CancelPending();
         return;
     }
@@ -15134,7 +15156,7 @@ static void PollAutoCharacterRefresh() {
     std::string name;
     if (g_AutoRefreshTracker.TakeDueRequest(
             AlterEgo::AutoRefreshTracker::Clock::now(),
-            g_AutoRefreshEnabled, ready, busy, name)) {
+            AlterEgo::AutoRefreshPolicy::Enabled(), ready, busy, name)) {
         // Login/spec-change refreshes need equipment and builds, not crafting
         // professions that are already present in the persistent character cache.
         AlterEgo::GW2API::RequestCharacterRefreshSelected({name}, false);
@@ -15178,7 +15200,7 @@ void AddonRender() {
             bool firstRun = (s_lastPinnedRefresh == std::chrono::steady_clock::time_point{});
             bool expired  = !firstRun &&
                 (now - s_lastPinnedRefresh) >= std::chrono::minutes(10);
-            if (firstRun || expired) {
+            if (AlterEgo::AutoRefreshPolicy::Enabled() && (firstRun || expired)) {
                 std::vector<uint32_t> pinnedCopy;
                 {
                     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -15187,7 +15209,7 @@ void AddonRender() {
                 if (!pinnedCopy.empty()) {
                     s_lastPinnedRefresh = now;
                     g_LastAchProgressQuery = now;
-                    SendAchProgressQuery(pinnedCopy);
+                    SendAchProgressQuery(pinnedCopy, true);
                 }
             }
         }
@@ -15253,7 +15275,7 @@ void AddonRender() {
     // Auto-query accounts when H&S becomes available (multi-account)
     {
         static bool s_accountsQuerySent = false;
-        if (hoardReady && !s_accountsQuerySent) {
+        if (hoardReady && AlterEgo::AutoRefreshPolicy::Enabled() && !s_accountsQuerySent) {
             s_accountsQuerySent = true;
             AlterEgo::GW2API::QueryAccounts();
         }
@@ -15289,7 +15311,8 @@ void AddonRender() {
 
             // Auto-fetch character list when H&S first becomes ready and we have no data
             // Wait for accounts data so we get characters from ALL accounts
-            if (!g_AutoCharListRequested && hoardReady && !scanning &&
+            if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+                !g_AutoCharListRequested && hoardReady && !scanning &&
                 characters.empty() && pendingNames.empty() &&
                 AlterEgo::GW2API::HasAccountsData()) {
                 g_AutoCharListRequested = true;
@@ -16553,7 +16576,8 @@ void AddonRender() {
                 }
                 if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
                     Skinventory::OwnedSkins::SetAccountName(g_SelectedAccountFilter);
-                    g_SkinRefreshOwned = true;
+                    if (AlterEgo::AutoRefreshPolicy::Enabled())
+                        g_SkinRefreshOwned = true;
                     g_ClearsNeedRequery = true;
                     g_VaultNeedRequery = true;
                     g_AchNeedRequery = true;
@@ -16646,9 +16670,28 @@ void AddonOptions() {
     }
 
     ImGui::Spacing();
-    RenderSectionHeader("Automatic Character Refresh", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-    if (ImGui::Checkbox("Automatically refresh character data##ae_auto", &g_AutoRefreshEnabled)) {
-        if (!g_AutoRefreshEnabled) g_AutoRefreshTracker.CancelPending();
+    RenderSectionHeader("Automatic API Refresh", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    if (ImGui::Checkbox("Automatically refresh API data##ae_auto", &g_AutoRefreshEnabled)) {
+        AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
+        if (!g_AutoRefreshEnabled) {
+            g_AutoRefreshTracker.CancelPending();
+            g_SkinRefreshOwned = false;
+            // Discard deferred boot refreshes; manually initiated requests
+            // and the retry phases of ongoing requests remain available.
+            // Only cancel an automatic pending achievement query. A manually
+            // started H&S request and its busy-backoff retry must continue.
+            if (g_AchRetryAutomatic.load()) g_AchRetryAtMs = 0;
+        } else {
+            // Refresh a stale visible section immediately when re-enabled.
+            if (g_MainTab == 3) RefreshVaultOnEntry();
+            else if (g_MainTab == 6) RefreshClearsOnEntry();
+            if (g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
+                Skinventory::SkinCache::UpdateCacheAsync();
+            if (!g_AchPinned.empty() || g_AchSelectedCatId > 0) {
+                g_AchRetryAutomatic = true;
+                g_AchRetryAtMs = NowMs();
+            }
+        }
         SaveSettings();
     }
     ImGui::Indent(16.0f);
@@ -16668,7 +16711,8 @@ void AddonOptions() {
     if (ImGui::Checkbox("Warn when live specialization differs from retrieved build##ae_warn_spec",
                         &g_WarnStaleSpecialization))
         SaveSettings();
-    ImGui::TextDisabled("MumbleLink only; no RTAPI required. 8s delay, 90s per-character cooldown.");
+    ImGui::TextDisabled("Applies to automatic H&S API refreshes across all tabs.");
+    ImGui::TextDisabled("Manual Refresh still works; login/spec changes use MumbleLink (8s/90s).");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     ImGui::Spacing();
     RenderSectionHeader("UI Settings", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));

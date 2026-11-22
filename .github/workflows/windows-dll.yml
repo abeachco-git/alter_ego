@@ -31,6 +31,8 @@ jobs:
           /tmp/build_compare_core
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_match_core.cpp -o /tmp/infusion_match_core
           /tmp/infusion_match_core
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/auto_refresh_policy.cpp -o /tmp/auto_refresh_policy
+          /tmp/auto_refresh_policy
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_totals.cpp -o /tmp/infusion_totals
           /tmp/infusion_totals
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/strike_display_name.cpp -o /tmp/strike_display_name

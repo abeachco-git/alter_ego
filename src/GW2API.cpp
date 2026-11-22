@@ -1,4 +1,5 @@
 #include "GW2API.h"
+#include "AutoRefreshPolicy.h"
 #include "HoardAndSeekAPI.h"
 #include "ChatLink.h"
 #include "BuildGroupOrder.h"
@@ -223,7 +224,9 @@ namespace AlterEgo {
             s_account_count = payload->account_count;
         }
         if (s_api) {
-            s_api->Log(LOGL_INFO, "AlterEgo", "H&S data updated, refreshing characters...");
+            s_api->Log(LOGL_INFO, "AlterEgo",
+                AutoRefreshPolicy::Enabled() ? "H&S data updated; automatic refresh enabled"
+                                             : "H&S data updated; automatic refresh disabled");
         }
         // Don't hold lock while raising events — schedule refresh on next frame
         // (handled in dllmain render loop)
@@ -419,8 +422,9 @@ namespace AlterEgo {
     }
 
     void GW2API::OnAccountsChanged(void* /*eventArgs*/) {
-        // Re-query accounts when H&S notifies us of changes
-        QueryAccounts();
+        // Notification-driven account API queries are automatic, and must
+        // obey the same Nexus setting as the render-driven refresh scheduler.
+        if (AutoRefreshPolicy::Enabled()) QueryAccounts();
     }
 
     uint32_t GW2API::GetAccountCount() {
