@@ -23,6 +23,7 @@ void LoadClearsCache();
 void LoadVaultCache();
 void RenderVault();
 void RenderClears();
+void SyncCompletionAccountCaches();
 void RenderVaultStatusRow();
 void RenderClearsStatusRow();
 bool VaultHideComplete();
