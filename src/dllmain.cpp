@@ -11616,14 +11616,10 @@ void AddonLoad(AddonAPI_t* aApi) {
     // Register close-on-escape
     APIDefs->GUI_RegisterCloseOnEscape("Alter Ego", &g_WindowVisible);
 
-    // Start fetching dye colors and profession icons (public endpoints, no auth needed)
+    // Dye data loads independently. Profession metadata is now fetched lazily
+    // when a relevant view needs it: avoid a burst of nine background HTTP
+    // workers immediately during addon startup.
     AlterEgo::GW2API::FetchDyeColorsAsync();
-    static const char* allProfs[] = {
-        "Guardian", "Warrior", "Engineer", "Ranger", "Thief",
-        "Elementalist", "Mesmer", "Necromancer", "Revenant"
-    };
-    for (const char* p : allProfs)
-        AlterEgo::GW2API::FetchProfessionInfoAsync(p);
 
     // Ping H&S to check availability
     AlterEgo::GW2API::PingHoard();
