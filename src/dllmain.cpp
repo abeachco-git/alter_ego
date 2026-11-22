@@ -9471,30 +9471,21 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
     RenderInfusionTotals(GetSavedInfusionSummary(snapshot),
         g_LibEditMode ? &g_EditDraft : nullptr);
     ImGui::Spacing();
-    if (g_LibEditMode) {
-        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "Notes:");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        if (InputTextMultilineString("##edit_notes", g_LibEditNotes, ImVec2(0, 50)))
-            MarkEditDirty();
-        if (ImGui::IsItemDeactivatedAfterEdit()) MarkEditDirty();
-    } else if (!build.notes.empty()) {
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Notes: %s", build.notes.c_str());
+    // Use the standard white, regular-size section label in both modes.
+    // Editing previously used muted brown and the read-only view compressed
+    // the heading into the notes body.
+    if (g_LibEditMode || !build.notes.empty()) {
+        ImGui::TextUnformatted("Notes");
+        if (g_LibEditMode) {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            if (InputTextMultilineString("##edit_notes", g_LibEditNotes, ImVec2(0, 50)))
+                MarkEditDirty();
+            if (ImGui::IsItemDeactivatedAfterEdit()) MarkEditDirty();
+        } else {
+            ImGui::TextWrapped("%s", build.notes.c_str());
+        }
     }
 
-    // Edit mode: animated gold marching-ants frame (same motif as the trait
-    // connectors). Drawn around the VISIBLE pane (the scroll viewport's clip rect),
-    // not the full content height, so it never bleeds past the scroll region.
-    if (g_LibEditMode) {
-        ImDrawList* dl2 = ImGui::GetWindowDrawList();
-        ImVec2 a = dl2->GetClipRectMin();
-        ImVec2 b = dl2->GetClipRectMax();
-        a.x += 2; a.y += 2; b.x -= 2; b.y -= 2;
-        ImU32 gold = IM_COL32(227, 196, 122, 255);
-        DrawDottedLine(dl2, ImVec2(a.x, a.y), ImVec2(b.x, a.y), gold, 2.0f, 6.0f, 4.0f);
-        DrawDottedLine(dl2, ImVec2(b.x, a.y), ImVec2(b.x, b.y), gold, 2.0f, 6.0f, 4.0f);
-        DrawDottedLine(dl2, ImVec2(b.x, b.y), ImVec2(a.x, b.y), gold, 2.0f, 6.0f, 4.0f);
-        DrawDottedLine(dl2, ImVec2(a.x, b.y), ImVec2(a.x, a.y), gold, 2.0f, 6.0f, 4.0f);
-    }
 }
 
 // Render the full Build Library tab
@@ -11114,7 +11105,13 @@ static void RenderBuildLibrary() {
                 ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", g_BuildSourceRefreshError.c_str());
             ImGui::Separator();
         }
-        ImGui::BeginChild("##LibDetailScroll", ImVec2(0, 0), false);
+        // The animated edit outline sits just inside the viewport boundary.
+        // Keep a persistent inner gutter so labels, icons and input controls
+        // never run under that outline, including in the read-only view.
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+        ImGui::BeginChild("##LibDetailScroll", ImVec2(0, 0), false,
+                          ImGuiWindowFlags_AlwaysUseWindowPadding);
+        ImGui::PopStyleVar();
 
         if (g_LibEditMode) {
             // Resolve draft reference data for the in-place editors.
@@ -11136,6 +11133,21 @@ static void RenderBuildLibrary() {
         ImGui::Separator();
         RenderSavedBuildPreview(build);
         ImGui::EndChild(); // ##LibDetailScroll
+        // Paint the edit-state outline around the fixed viewport instead of
+        // inside its scrolling contents. The 12px inner padding above reserves
+        // space, so the dashes cannot overlap section labels or input text.
+        if (g_LibEditMode) {
+            ImVec2 a = ImGui::GetItemRectMin();
+            ImVec2 b = ImGui::GetItemRectMax();
+            a.x += 2.0f; a.y += 2.0f;
+            b.x -= 2.0f; b.y -= 2.0f;
+            ImDrawList* outline = ImGui::GetWindowDrawList();
+            const ImU32 gold = IM_COL32(227, 196, 122, 255);
+            DrawDottedLine(outline, ImVec2(a.x, a.y), ImVec2(b.x, a.y), gold, 2.0f, 6.0f, 4.0f);
+            DrawDottedLine(outline, ImVec2(b.x, a.y), ImVec2(b.x, b.y), gold, 2.0f, 6.0f, 4.0f);
+            DrawDottedLine(outline, ImVec2(b.x, b.y), ImVec2(a.x, b.y), gold, 2.0f, 6.0f, 4.0f);
+            DrawDottedLine(outline, ImVec2(a.x, b.y), ImVec2(a.x, a.y), gold, 2.0f, 6.0f, 4.0f);
+        }
 
 
         // Deferred: a cancelled brand-new build is removed here, after the preview
