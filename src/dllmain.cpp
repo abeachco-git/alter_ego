@@ -26,6 +26,7 @@
 #include "GW2API.h"
 #include "BuildCompareCore.h"
 #include "InfusionMatchCore.h"
+#include "SnowCrowsImport.h"
 #include "AutoRefreshCore.h"
 #include "FontResolve.h"
 #include "FontManager.h"
@@ -851,6 +852,19 @@ static int g_LibImportMode = 0;        // GameMode for import
 static bool g_LibShowImport = false;
 static std::string g_LibImportError;
 static std::string g_LibImportFilePath; // path picked from file dialog for library file import
+// A Snow Crows page is fetched and parsed on a worker; the library is only
+// mutated by the main/UI thread after a complete, validated result arrives.
+struct SnowCrowsFetchResult {
+    bool ready = false;
+    bool refresh = false;
+    std::string targetId;
+    AlterEgo::SnowCrows::Page page;
+    std::string error;
+};
+static bool g_SnowCrowsBusy = false; // Main thread only
+static std::mutex g_SnowCrowsResultMutex;
+static SnowCrowsFetchResult g_SnowCrowsResult;
+static std::string g_SnowCrowsRefreshError;
 static bool g_LibDetailsFetched = false;
 static std::unordered_set<std::string> g_LibCollapsedProfessions; // session-persisted
 // Inline edit buffers — std::string + ImGui resize callback so long names
@@ -8354,6 +8368,33 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
             }
         }
     }
+    if (!build.source_url.empty()) {
+        // Correct partially specified Snow Crows lines using the canonical
+        // specialization metadata once it has arrived from the GW2 API.
+        for (int i = 0; i < 3; ++i) {
+            const auto* spec = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
+            if (!spec || spec->major_traits.size() < 9) continue;
+            std::array<int, 3> arranged{};
+            bool allKnown = true;
+            for (int trait : build.specializations[i].traits) {
+                if (!trait) continue;
+                auto pos = std::find(spec->major_traits.begin(), spec->major_traits.end(), (uint32_t)trait);
+                if (pos == spec->major_traits.end()) { allKnown = false; break; }
+                arranged[(pos - spec->major_traits.begin()) / 3] = trait;
+            }
+            if (allKnown)
+                for (int tier = 0; tier < 3; ++tier)
+                    if (build.specializations[i].traits[tier] != arranged[tier]) {
+                        build.specializations[i].traits[tier] = arranged[tier];
+                        changed = true;
+                    }
+        }
+    }
+    if (!build.source_url.empty() && build.chat_link.empty() &&
+        AlterEgo::GW2API::HasPaletteData(build.profession)) {
+        build.chat_link = AlterEgo::GW2API::EncodeSavedBuildToChatLink(build);
+        changed = true;
+    }
     if (changed) AlterEgo::GW2API::SaveBuildLibrary();
 }
 
@@ -8400,6 +8441,163 @@ static void RenderBuildModeBadge(const char* mode) {
 
 // Render the build preview panel for a saved build (reuses spec/trait rendering logic)
 // Fixed build identity and actions; kept outside the scrolling detail child.
+// Import exactly the loadout represented by the source's canonical GW2 IDs.
+static AlterEgo::SavedBuild SnowCrowsToSavedBuild(const AlterEgo::SnowCrows::Page& page) {
+    using namespace AlterEgo;
+    GameMode mode = page.gameMode == "Raid" ? GameMode::Raid :
+        page.gameMode == "Fractal" ? GameMode::Fractal :
+        page.gameMode == "WvW" ? GameMode::WvW :
+        page.gameMode == "PvP" ? GameMode::PvP : GameMode::PvE;
+    auto build = GW2API::CreateBlankBuild(page.profession, mode);
+    build.name = page.name;
+    build.source_url = page.sourceUrl;
+    build.rune_id = page.runeId;
+    build.relic_id = page.relicId;
+    build.relic_name = page.relicName;
+    for (int s = 0; s < 3; ++s) {
+        build.specializations[s].spec_id = page.specs[s].id;
+        const auto* spec = GW2API::GetSpecInfo(page.specs[s].id);
+        for (size_t t = 0; t < page.specs[s].traits.size(); ++t) {
+            const uint32_t trait = page.specs[s].traits[t];
+            int tier = -1;
+            // Some Snow Crows trait lists deliberately omit one tier, so do
+            // not assume that two listed traits are the first two tiers.
+            if (spec && spec->major_traits.size() >= 9)
+                for (int pos = 0; pos < 9; ++pos)
+                    if (spec->major_traits[pos] == trait) tier = pos / 3;
+            if (tier < 0) {
+                const auto* info = GW2API::GetTraitInfo(trait);
+                if (info && info->tier >= 1 && info->tier <= 3)
+                    tier = info->tier - 1;
+            }
+            if (tier < 0 && t < 3) tier = static_cast<int>(t); // corrected when metadata loads
+            if (tier >= 0 && tier < 3)
+                build.specializations[s].traits[tier] = static_cast<int>(trait);
+        }
+    }
+    build.terrestrial_skills.heal = page.skills[0];
+    for (int i = 0; i < 3; ++i)
+        build.terrestrial_skills.utilities[i] = page.skills[i + 1];
+    build.terrestrial_skills.elite = page.skills[4];
+    for (const auto& [slot, item] : page.gear) {
+        BuildGearSlot gs;
+        gs.slot = slot;
+        gs.item_id = item.itemId;
+        gs.stat_id = item.statId;
+        gs.stat_name = item.statName;
+        gs.weapon_type = item.weaponType;
+        const bool armor = slot == "Helm" || slot == "Shoulders" ||
+            slot == "Coat" || slot == "Gloves" ||
+            slot == "Leggings" || slot == "Boots";
+        if (armor && !item.upgrades.empty()) gs.rune_id = item.upgrades.front();
+        if (slot.compare(0, 6, "Weapon") == 0) {
+            if (!item.upgrades.empty()) gs.sigil_id = item.upgrades[0];
+            if (item.upgrades.size() > 1) gs.sigil2_id = item.upgrades[1];
+        }
+        // The Snow Crows page defines global infusion counts. Per-slot infusion
+        // snapshots are deliberately absent; they are for captured live gear.
+        build.gear[slot] = std::move(gs);
+    }
+    for (const auto& inf : page.infusions)
+        build.infusion_totals.push_back({inf.itemId, inf.count, ""});
+    return build;
+}
+
+static void FetchSnowCrowsBuild(const std::string& url, const std::string& refreshId = "") {
+    if (g_SnowCrowsBusy) return;
+    g_SnowCrowsBusy = true;
+    g_SnowCrowsRefreshError.clear();
+    const std::string normalized = AlterEgo::SnowCrows::NormalizeUrl(url);
+    std::thread([normalized, refreshId]() {
+        SnowCrowsFetchResult result;
+        result.refresh = !refreshId.empty();
+        result.targetId = refreshId;
+        if (normalized.empty()) {
+            result.error = "Invalid Snow Crows build URL.";
+        } else {
+            const auto response = Skinventory::HttpClient::GetEx(normalized);
+            if (response.status_code != 200) {
+                result.error = "Snow Crows download failed (HTTP " +
+                    std::to_string(response.status_code) + ").";
+            } else if (!AlterEgo::SnowCrows::Parse(
+                           normalized, response.body, result.page, result.error)) {
+                // Parse sets a useful reason; never replace a build on failure.
+            }
+        }
+        result.ready = true;
+        std::lock_guard<std::mutex> lock(g_SnowCrowsResultMutex);
+        g_SnowCrowsResult = std::move(result);
+    }).detach();
+}
+
+static void PollSnowCrowsBuild() {
+    SnowCrowsFetchResult received;
+    {
+        std::lock_guard<std::mutex> lock(g_SnowCrowsResultMutex);
+        if (!g_SnowCrowsResult.ready) return;
+        received = std::move(g_SnowCrowsResult);
+        g_SnowCrowsResult = {};
+    }
+    g_SnowCrowsBusy = false;
+    if (!received.refresh && !g_LibShowImport) return; // dismissed import
+    if (!received.error.empty()) {
+        if (received.refresh) g_SnowCrowsRefreshError = received.error;
+        else g_LibImportError = received.error;
+        return;
+    }
+    auto build = SnowCrowsToSavedBuild(received.page);
+    // Opportunistic name/icon resolution; public API calls run asynchronously.
+    std::vector<uint32_t> items, stats, traits, specs, skills;
+    for (const auto& [slot, gs] : build.gear) {
+        if (gs.item_id) items.push_back(gs.item_id);
+        if (gs.stat_id) stats.push_back(gs.stat_id);
+        if (gs.rune_id) items.push_back(gs.rune_id);
+        if (gs.sigil_id) items.push_back(gs.sigil_id);
+        if (gs.sigil2_id) items.push_back(gs.sigil2_id);
+    }
+    if (build.relic_id) items.push_back(build.relic_id);
+    if (build.rune_id) items.push_back(build.rune_id);
+    for (const auto& req : build.infusion_totals) items.push_back(req.item_id);
+    for (const auto& spec : received.page.specs) {
+        specs.push_back(spec.id);
+        for (auto id : spec.traits) traits.push_back(id);
+    }
+    for (auto id : received.page.skills) skills.push_back(id);
+    AlterEgo::GW2API::FetchItemDetailsAsync(items);
+    AlterEgo::GW2API::FetchItemStatDetailsAsync(stats);
+    AlterEgo::GW2API::FetchSpecDetailsAsync(specs);
+    AlterEgo::GW2API::FetchTraitDetailsAsync(traits);
+    AlterEgo::GW2API::FetchSkillDetailsAsync(skills);
+    AlterEgo::GW2API::FetchProfessionPaletteAsync(build.profession);
+    if (AlterEgo::GW2API::HasPaletteData(build.profession))
+        build.chat_link = AlterEgo::GW2API::EncodeSavedBuildToChatLink(build);
+    if (received.refresh) {
+        if (AlterEgo::GW2API::RefreshSavedBuildFromSource(received.targetId, build)) {
+            g_LibDetailsFetched = false;
+            g_EditDraftId.clear();
+            if (APIDefs) APIDefs->GUI_SendAlert("Snow Crows build refreshed.");
+        } else {
+            g_SnowCrowsRefreshError = "Could not update the original saved build.";
+        }
+    } else {
+        // Optional user-provided import name overrides the page's full title.
+        if (g_LibImportName[0]) build.name = g_LibImportName;
+        int idx = AlterEgo::GW2API::AddSavedBuild(std::move(build));
+        if (idx >= 0) {
+            g_LibSelectedIdx = idx;
+            g_LibDetailsFetched = false;
+            g_LibShowImport = false;
+            g_LibImportBuf[0] = '\0';
+            g_LibImportName[0] = '\0';
+            g_LibImportError.clear();
+            ImGui::CloseCurrentPopup(); // only valid if a popup is active
+            if (APIDefs) APIDefs->GUI_SendAlert("Snow Crows build imported.");
+        } else {
+            g_LibImportError = "Could not save imported build.";
+        }
+    }
+}
+
 static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showEditButton = true) {
     ImVec4 profColor = GetProfessionColor(build.profession);
     {
@@ -8651,6 +8849,16 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
     // Re-resolve any item/stat names that weren't available at import time
     // (e.g. API rate-limited or offline). Queues async fetches for missing IDs.
     ResolveBuildItemNames(const_cast<AlterEgo::SavedBuild&>(build));
+
+    if (!build.infusion_totals.empty()) {
+        ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.52f, 1.0f), "Infusions (total, any slot):");
+        for (const auto& inf : build.infusion_totals) {
+            const auto* item = AlterEgo::GW2API::GetItemInfo(inf.item_id);
+            ImGui::BulletText("%d x %s", inf.count,
+                item ? item->name.c_str() : ("#" + std::to_string(inf.item_id)).c_str());
+        }
+        ImGui::Separator();
+    }
 
     // Notes editor, just under the header, while editing.
     if (g_LibEditMode) {
@@ -9295,12 +9503,12 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         }
         return str;
     };
-    result.Add("Build", "Weapon proficiency IDs", weaponList(saved.weapons),
-               weaponList(live.weapons),
-               saved.weapons.empty() ? "(none)" : weaponList(saved.weapons),
-               live.weapons.empty() ? "(none)" : weaponList(live.weapons));
+    if (!saved.weapons.empty())
+        result.Add("Build", "Weapon proficiency IDs", weaponList(saved.weapons),
+                   weaponList(live.weapons), weaponList(saved.weapons),
+                   live.weapons.empty() ? "(none)" : weaponList(live.weapons));
 
-    if (!saved.gear.empty() && !liveCharacter.equipment.empty()) {
+    if ((!saved.gear.empty() || !saved.infusion_totals.empty()) && !liveCharacter.equipment.empty()) {
         auto getEquipped = [&](const std::string& slot) -> const AlterEgo::EquipmentItem* {
             // Same shared-tab lookup used by Characters > Equipment.
             return FindEquipment(liveCharacter, slot, equipmentTab);
@@ -9387,7 +9595,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     }
                 }
             }
-            if (gs.infusion_snapshot || !gs.infusion_ids.empty()) {
+            if (saved.infusion_totals.empty() && (gs.infusion_snapshot || !gs.infusion_ids.empty())) {
                 auto ids = [](std::vector<uint32_t> v) {
                     std::sort(v.begin(), v.end());
                     std::string out;
@@ -9428,6 +9636,56 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                             b.empty() ? "(none)" : b);
                     }
                 }
+            }
+        }
+        // Snow Crows defines infusion counts across the entire terrestrial set,
+        // independently of equipment slot arrangement. Captured local builds
+        // continue to use their original per-slot comparison above.
+        if (!saved.infusion_totals.empty()) {
+            std::vector<AlterEgo::InfusionRequirement> requirements;
+            std::vector<AlterEgo::ObservedInfusion> observed;
+            std::string requiredLabel, currentLabel;
+            bool missingRequiredMetadata = false;
+            for (const auto& inf : saved.infusion_totals) {
+                if (!requiredLabel.empty()) requiredLabel += "; ";
+                requiredLabel += std::to_string(inf.count) + " x " + itemName(inf.item_id);
+                std::string attribute = inf.attribute;
+                if (attribute.empty()) {
+                    const auto meta = GetObservedInfusion(inf.item_id);
+                    if (!meta.positiveAttributes.empty())
+                        attribute = meta.positiveAttributes.front();
+                    else if (!meta.metadataKnown)
+                        missingRequiredMetadata = true;
+                }
+                for (int n = 0; n < inf.count; ++n)
+                    requirements.push_back({inf.item_id, attribute});
+            }
+            // Only the slots relevant to the saved source are counted; avoid
+            // duplicate shared-tab instances and exclude unrelated equipment.
+            std::map<uint32_t, int> actualCounts;
+            for (const auto& [slot, gs] : saved.gear) {
+                const auto* eq = getEquipped(slot);
+                if (!eq) continue;
+                for (auto id : eq->infusions) {
+                    if (!id) continue;
+                    observed.push_back(GetObservedInfusion(id));
+                    ++actualCounts[id];
+                }
+            }
+            for (const auto& [id, count] : actualCounts) {
+                if (!currentLabel.empty()) currentLabel += "; ";
+                currentLabel += std::to_string(count) + " x " + itemName(id);
+            }
+            const auto verdict = AlterEgo::CompareInfusionRequirements(requirements, observed);
+            if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified ||
+                (missingRequiredMetadata && verdict != AlterEgo::InfusionMatchVerdict::Matches &&
+                 requirements.size() == observed.size())) {
+                result.AddUnverified("Infusions", "Total", requiredLabel,
+                    currentLabel.empty() ? "(none)" : currentLabel);
+            } else {
+                result.Add("Infusions", "Total", "required",
+                    verdict == AlterEgo::InfusionMatchVerdict::Matches ? "required" : "different",
+                    requiredLabel, currentLabel.empty() ? "(none)" : currentLabel);
             }
         }
         if (saved.relic_id || !saved.relic_name.empty()) {
@@ -9638,9 +9896,10 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
         bool requiredDataMissing = false;
         size_t checkedGearFields = 0, differentGearFields = 0, missingItems = 0;
         for (const auto& row : result.Rows()) {
-            // General character summary intentionally ignores infusion
-            // mismatches; Compare remains the authoritative detailed view.
-            if (!AlterEgo::IsCharacterEquipmentMatchGroup(row.group)) continue;
+            // Exact per-slot infusion positions are intentionally ignored in the
+            // roster summary, but source-wide total requirements are meaningful.
+            if (!AlterEgo::IsCharacterEquipmentMatchGroup(row.group) &&
+                !(row.group == "Infusions" && row.field == "Total")) continue;
             if (!row.verified) {
                 requiredDataMissing = true;
                 continue;
@@ -10098,6 +10357,7 @@ static void RenderCompareTab() {
 }
 
 static void RenderBuildLibrary() {
+    PollSnowCrowsBuild();
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
     // Build-level actions remain visible; library-wide backup/restore is
@@ -10226,9 +10486,9 @@ static void RenderBuildLibrary() {
     if (ImGui::BeginPopupModal("Import Build##lib", &g_LibShowImport,
                               ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Separator();
-        ImGui::TextWrapped("Paste a GW2 chat link, AE2 build code, or relay code.");
+        ImGui::TextWrapped("Paste a Snow Crows build URL, GW2 chat link, AE2 build code, or relay code.");
         ImGui::Spacing();
-        ImGui::TextUnformatted("Build code or link");
+        ImGui::TextUnformatted("Build code or Snow Crows URL");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::InputTextMultiline("##import_link", g_LibImportBuf,
             sizeof(g_LibImportBuf), ImVec2(-1.0f, 75.0f));
@@ -10258,11 +10518,18 @@ static void RenderBuildLibrary() {
         }
 
         ImGui::Spacing();
-        if (RenderChipButton("Import", false) || autoRetry) {
+        if ((RenderActionButton("Import##libSnow") || autoRetry) && !g_SnowCrowsBusy) {
             std::string input(g_LibImportBuf);
             std::string name(g_LibImportName);
             if (input.empty()) {
                 g_LibImportError = "Paste a build first.";
+            } else if (input.find("://") != std::string::npos) {
+                const std::string url = AlterEgo::SnowCrows::NormalizeUrl(input);
+                if (url.empty()) g_LibImportError = "Only Snow Crows build-page URLs are supported.";
+                else {
+                    FetchSnowCrowsBuild(url);
+                    g_LibImportError.clear();
+                }
             } else {
                 // Try shared build format (AE2, relay code, or chat link)
                 AlterEgo::SavedBuild sharedBuild;
@@ -10336,6 +10603,8 @@ static void RenderBuildLibrary() {
             }
         }
 
+        if (g_SnowCrowsBusy)
+            ImGui::TextDisabled("Fetching Snow Crows build...");
         if (!g_LibImportError.empty()) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", g_LibImportError.c_str());
         }
@@ -10807,6 +11076,21 @@ static void RenderBuildLibrary() {
         // section below has a scroll bar.
         RenderSavedBuildHeader(build, /*showEditButton=*/true);
         ImGui::Separator();
+        if (!g_LibEditMode && !build.source_url.empty()) {
+            ImGui::TextWrapped("Source: %s", build.source_url.c_str());
+            if (RenderActionButton("Open Source##snow"))
+                ShellExecuteA(NULL, "open", build.source_url.c_str(), NULL, NULL, SW_SHOWNORMAL);
+            ImGui::SameLine();
+            if (RenderActionButton("Refresh Source##snow") && !g_SnowCrowsBusy)
+                FetchSnowCrowsBuild(build.source_url, build.id);
+            if (g_SnowCrowsBusy) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("Fetching...");
+            }
+            if (!g_SnowCrowsRefreshError.empty())
+                ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", g_SnowCrowsRefreshError.c_str());
+            ImGui::Separator();
+        }
         ImGui::BeginChild("##LibDetailScroll", ImVec2(0, 0), false);
 
         if (!g_LibEditMode) {

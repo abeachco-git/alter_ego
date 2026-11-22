@@ -2873,6 +2873,7 @@ namespace AlterEgo {
                 b.weapons = def.weapons;
                 // Gear (so in-editor gear changes persist on Save).
                 b.gear = def.gear;
+                b.infusion_totals = def.infusion_totals;
                 b.rune_name = def.rune_name;
                 b.rune_id = def.rune_id;
                 b.relic_name = def.relic_name;
