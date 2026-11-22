@@ -1,4 +1,4 @@
-name: Temporary MetaBattle HTML inspection
+name: Temporary MetaBattle live parser smoke test
 on:
   push:
     paths:
@@ -7,17 +7,42 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect live sources
+      - uses: actions/checkout@v4
+      - name: Test importer against current live MetaBattle page
         run: |
           python3 - <<'PY'
-          import urllib.request,re
-          req=urllib.request.Request('https://metabattle.com/wiki/Build:Chronomancer_-_Power_DPS',headers={'User-Agent':'Mozilla/5.0','Accept':'text/html'})
-          s=urllib.request.urlopen(req,timeout=30).read().decode('utf-8','replace')
-          for start,end in [('id="Skill_Bar"','id="Template_Code"'),('id="Template_Code"','id="Specializations"'),('id="Equipment"','id="Consumables"')]:
-           a=s.find(start);b=s.find(end,a+len(start)); chunk=s[a:b]
-           print('SECTION',start,'length',len(chunk))
-           print('FRAGMENT',chunk[:2600])
-           print('EMBEDS', re.findall(r'<[^>]*data-armory-embed="(?:skills|items|specializations)"[^>]*>(?:.*?)',chunk,re.S)[:5])
-           if start=='id="Equipment"':
-            print('SLOTS',re.findall(r'<div class="equipment-slot"[^>]*>.*?</small></div>',chunk,re.S)[:45])
+          import urllib.request
+          url='https://metabattle.com/wiki/Build:Chronomancer_-_Power_DPS'
+          req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36','Accept':'text/html'})
+          with urllib.request.urlopen(req,timeout=30) as r:
+              data=r.read(3100000)
+              print("MetaBattle HTTP",r.status,"bytes",len(data))
+          with open('/tmp/metabattle.html','wb') as f:f.write(data)
           PY
+          cat >/tmp/metabattle_live.cpp <<'CPP'
+          #include "src/MetaBattleImport.h"
+          #include <iostream>
+          #include <fstream>
+          #include <iterator>
+          int main() {
+              std::ifstream f("/tmp/metabattle.html",std::ios::binary);
+              std::string html((std::istreambuf_iterator<char>(f)),std::istreambuf_iterator<char>());
+              AlterEgo::SnowCrows::Page p;std::string error;
+              if(!AlterEgo::MetaBattle::Parse("https://metabattle.com/wiki/Build:Chronomancer_-_Power_DPS",html,p,error)) {
+                std::cerr<<"LIVE PARSE FAILED: "<<error<<"\n";
+                return 1;
+              }
+              std::cout<<"LIVE PARSE OK: "<<p.name<<", prof "<<p.profession
+                  <<", mode "<<p.gameMode<<", gear "<<p.gear.size()<<", relic "<<p.relicId
+                  <<", rune "<<p.runeId<<", infusion entries "<<p.infusions.size()
+                  <<", original template length "<<p.templateCode.size()<<"\n";
+              for(const auto& pair:p.gear)
+                std::cout<<"GEAR "<<pair.first<<" item="<<pair.second.itemId<<" stat="<<pair.second.statName
+                  <<" weapon="<<pair.second.weaponType<<" upgrades="<<pair.second.upgrades.size()<<"\n";
+              if(p.gear.size()<15 || p.skills[0]!=21750 || p.relicId==0 || p.runeId==0)
+                return 2;
+              return 0;
+          }
+          CPP
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -I. /tmp/metabattle_live.cpp -o /tmp/metabattle_live
+          /tmp/metabattle_live
