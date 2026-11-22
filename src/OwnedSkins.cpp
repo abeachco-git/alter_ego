@@ -107,27 +107,42 @@ namespace Skinventory {
     }
 
     void OwnedSkins::SetAccountName(const std::string& name) {
+        // Old installs used a global file. Retry its one-time migration after
+        // H&S confirms the account count, even if the selected name did not
+        // change between frames.
+        const bool singleKnown = AlterEgo::GW2API::HasAccountsData() &&
+                                 AlterEgo::GW2API::GetAccountCount() == 1;
+        static std::string legacyAttemptAccount;
+        bool load = false;
+        bool changed = false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            if (s_account_name == name) return;
-            s_account_name = name;
-            s_owned_skins.clear();
-            s_queried_skins.clear();
-            s_locally_marked.clear();
-            s_pending_ids.clear();
-            s_batch_index = 0;
-            s_batch_pending = false;
-            s_querying = false;
-            s_has_data = false;
-            s_last_success_time = 0;
-            s_generation++;
-            s_status_message = "No ownership data - click Refresh";
+            if (s_account_name != name) {
+                changed = true;
+                load = !name.empty();
+                s_account_name = name;
+                s_owned_skins.clear();
+                s_queried_skins.clear();
+                s_locally_marked.clear();
+                s_pending_ids.clear();
+                s_batch_index = 0;
+                s_batch_pending = false;
+                s_querying = false;
+                s_has_data = false;
+                s_last_success_time = 0;
+                s_generation++;
+                s_status_message = "No ownership data - click Refresh";
+            } else if (singleKnown && !name.empty() && !s_has_data &&
+                       legacyAttemptAccount != name) {
+                legacyAttemptAccount = name;
+                load = true;
+            }
         }
-        g_retryKind = 0;
-        g_retryAtMs = 0;
-        // Account-specific disk data is restored as soon as the dropdown
-        // changes, even with automatic API refresh disabled.
-        if (!name.empty() && LoadFromCache()) {
+        if (changed) {
+            g_retryKind = 0;
+            g_retryAtMs = 0;
+        }
+        if (load && LoadFromCache()) {
             std::lock_guard<std::mutex> lock(s_mutex);
             if (s_account_name == name) {
                 s_has_data = true;
