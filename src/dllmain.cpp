@@ -10450,6 +10450,8 @@ static void RenderCompareTab() {
     ImGui::EndChild();
 }
 
+#include "LibraryBackupUI.h"
+
 static void RenderLibraryImportDialog() {
     // Keep the import form and its asynchronous palette-data retry inside a
     // modal; it no longer shifts the library list and details while open.
@@ -10652,102 +10654,7 @@ static void RenderBuildLibrary() {
         g_LibImportPending = false;
         g_LibImportPendingProfession.clear();
     }
-    ImGui::SameLine();
-    if (RenderActionButton("Backup / Restore"))
-        ImGui::OpenPopup("##libraryActions");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Import or export the entire build collection (JSON file).");
-
-    bool openLibraryImportModal = false;
-    if (ImGui::BeginPopup("##libraryActions")) {
-        ImGui::TextDisabled("Whole library (JSON)");
-        ImGui::Separator();
-    if (ImGui::Selectable("Import Library")) {
-        OPENFILENAMEA ofn = {};
-        char buf[MAX_PATH] = {};
-        ofn.lStructSize = sizeof(ofn);
-        ofn.lpstrFilter = "JSON files\0*.json\0All files\0*.*\0";
-        ofn.lpstrFile = buf;
-        ofn.nMaxFile = sizeof(buf);
-        ofn.lpstrTitle = "Import Build Library";
-        ofn.lpstrDefExt = "json";
-        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-        if (GetOpenFileNameA(&ofn)) {
-            g_LibImportFilePath = buf;
-            openLibraryImportModal = true;
-        }
-    }
-
-    if (ImGui::Selectable("Export Library")) {
-        OPENFILENAMEA ofn = {};
-        char buf[MAX_PATH] = {};
-        // Default filename: alter_ego_builds_YYYYMMDD.json
-        {
-            std::time_t t = std::time(nullptr);
-            std::tm tm = *std::localtime(&t);
-            std::snprintf(buf, sizeof(buf), "alter_ego_builds_%04d%02d%02d.json",
-                          tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
-        }
-        ofn.lStructSize = sizeof(ofn);
-        ofn.lpstrFilter = "JSON files\0*.json\0All files\0*.*\0";
-        ofn.lpstrFile = buf;
-        ofn.nMaxFile = sizeof(buf);
-        ofn.lpstrTitle = "Export Build Library";
-        ofn.lpstrDefExt = "json";
-        ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
-        if (GetSaveFileNameA(&ofn)) {
-            if (AlterEgo::GW2API::ExportBuildLibraryToFile(buf)) {
-                if (APIDefs) APIDefs->GUI_SendAlert("Build library exported.");
-            } else {
-                if (APIDefs) APIDefs->GUI_SendAlert("Export failed: could not write file.");
-            }
-        }
-    }
-
-        ImGui::EndPopup();
-    }
-    if (openLibraryImportModal) ImGui::OpenPopup("Import library");
-
-    // Modal: choose Merge vs Replace for library file import
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                                 ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    }
-    if (ImGui::BeginPopupModal("Import library", nullptr,
-            ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Importing: %s", g_LibImportFilePath.c_str());
-        ImGui::Spacing();
-        ImGui::TextWrapped("Merge keeps your existing builds and adds new ones "
-            "(any with matching IDs are skipped). Replace wipes the current "
-            "library first.");
-        ImGui::Spacing();
-        auto doImport = [&](bool replaceAll) {
-            int added = 0, skipped = 0;
-            std::string err;
-            if (AlterEgo::GW2API::ImportBuildLibraryFromFile(
-                    g_LibImportFilePath, replaceAll, added, skipped, err)) {
-                char msg[256];
-                if (replaceAll)
-                    std::snprintf(msg, sizeof(msg), "Library replaced: %d builds loaded.", added);
-                else
-                    std::snprintf(msg, sizeof(msg), "Imported %d new build(s)%s.",
-                                  added, skipped > 0 ? (std::string(", skipped ")
-                                  + std::to_string(skipped) + " duplicate(s)").c_str() : "");
-                if (APIDefs) APIDefs->GUI_SendAlert(msg);
-            } else {
-                std::string m = "Import failed: " + err;
-                if (APIDefs) APIDefs->GUI_SendAlert(m.c_str());
-            }
-            ImGui::CloseCurrentPopup();
-        };
-        if (RenderGoldButton("Merge")) doImport(false);
-        ImGui::SameLine();
-        if (RenderChipButton("Replace All", false)) doImport(true);
-        ImGui::SameLine();
-        if (RenderChipButton("Cancel", false)) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
+    ImGui::Spacing();
 
     // Filter + Search
     if (!builds.empty()) {
@@ -16567,6 +16474,8 @@ void AddonRender() {
         if (ImGui::BeginTabItem("Library")) {
             g_MainTab = 1;
             PollBuildSource();
+            RenderLibraryBackupUI();
+            ImGui::SameLine();
             if (RenderChipButton("Builds##library_collection", g_LibraryCollection == 0)) {
                 g_LibraryCollection = 0;
                 SaveSettings();
