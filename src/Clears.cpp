@@ -426,6 +426,11 @@ void OnClearsAchResponse(void* eventArgs) {
 
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (g_ClearsCacheAccount.empty() ||
+            (resp->api_version >= 3 &&
+             std::string(resp->account_name,
+                strnlen(resp->account_name, sizeof(resp->account_name))) != g_ClearsCacheAccount))
+            return;
 
         // Apply to all tracked entries
         auto applyTo = [&](ClearEntry& ce) {
@@ -570,6 +575,9 @@ void OnVaultSeasonResponse(void* eventArgs) {
             if (tp != std::chrono::system_clock::time_point{}) {
                 {
                     std::lock_guard<std::mutex> lock(g_ClearsMutex);
+                    const std::string responseAccount(resp->account_name,
+                        strnlen(resp->account_name, sizeof(resp->account_name)));
+                    if (responseAccount != g_VaultCacheAccount) return;
                     g_VaultSeasonEnd = tp;
                 }
                 // Save the asynchronously delivered timestamp so a restart
@@ -614,7 +622,11 @@ void OnVaultResponse(void* eventArgs) {
     bool save = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (!g_VaultFetching.load()) return;
+        if (!g_VaultFetching.load() || g_VaultCacheAccount.empty()) return;
+        if (resp->api_version >= 3 &&
+            std::string(resp->account_name,
+                strnlen(resp->account_name, sizeof(resp->account_name))) != g_VaultCacheAccount)
+            return;
 
         // Reject delayed responses for an account that is no longer being queried.
         const std::string echoedAccount(resp->account_name,
@@ -914,6 +926,7 @@ static void SaveClearsCache() {
     // Snapshot data under lock to prevent concurrent modification
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (!g_ClearsFetched || g_ClearsCacheAccount != account) return;
         j["fetch_time"] = (int64_t)g_ClearsLastSuccessTime;
 
         nlohmann::json fractals = nlohmann::json::array();
@@ -1121,6 +1134,7 @@ static void SaveVaultCache() {
     j["account"] = account;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (!g_VaultFetched.load() || g_VaultCacheAccount != account) return;
         j["fetch_time"] = (int64_t)g_VaultLastSuccessTime;
         j["daily"]      = serializePeriod(g_VaultDaily);
         j["weekly"]     = serializePeriod(g_VaultWeekly);
