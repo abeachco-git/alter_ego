@@ -4647,6 +4647,10 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
 // Character-wide actions live in the header, not in either detail tab.
 static void RenderCharacterHeaderActions(const AlterEgo::Character& ch, float buttonWidth) {
     ImGui::PushID("##character_header_actions");
+    // GroupOffset preserves the manually positioned header X across multiple
+    // ImGui::Button calls. Without this, only Save stays right-aligned and the
+    // following Share / Save Active Fashion buttons jump to the left margin.
+    ImGui::BeginGroup();
     RenderSaveLiveBuildAction(ch, 0, true, buttonWidth);
     if (RenderActionButton("Save Active Fashion##live_fashion",
                            ImVec2(buttonWidth, 0))) {
@@ -4654,6 +4658,7 @@ static void RenderCharacterHeaderActions(const AlterEgo::Character& ch, float bu
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Save the character's active in-game equipment tab appearance to Library > Fashion.");
+    ImGui::EndGroup();
     ImGui::PopID();
 }
 
