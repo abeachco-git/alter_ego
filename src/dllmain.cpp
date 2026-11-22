@@ -8327,7 +8327,16 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         // Title + subtitle to the right of the icon. Use elite spec name as the
         // primary identifier when present; profession name as a subtitle line.
         float textX = iconLeft + headerIconSz + 10.0f;
-        float textTop = pos.y + (h - lineH * 2.0f) * 0.5f - 2.0f;
+        // An editable name is an input frame (taller than a text line).
+        // Calculate both row heights explicitly so its bottom never overlaps
+        // the game-mode chips when action controls gain vertical padding.
+        const float titleRowH = g_LibEditMode ? ImGui::GetFrameHeight()
+                                               : ImGui::GetTextLineHeight();
+        const float modeRowH = g_LibEditMode
+            ? ImMax(22.0f, ImGui::GetTextLineHeight() + 4.0f)
+            : ImGui::GetTextLineHeight();
+        const float headerTextGap = 3.0f;
+        float textTop = pos.y + (h - titleRowH - modeRowH - headerTextGap) * 0.5f;
 
         // Title: build name (editable input while editing). Subtitle: elite spec +
         // profession + mode (mode becomes clickable chips bound to the draft).
@@ -8354,7 +8363,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             ImGui::TextColored(profColor, "%s", build.name.c_str());
         }
 
-        ImGui::SetCursorScreenPos(ImVec2(textX, textTop + lineH));
+        ImGui::SetCursorScreenPos(ImVec2(textX, textTop + titleRowH + headerTextGap));
         std::string sub;
         if (eliteSpec) { sub = eliteSpec->name; sub += " "; }
         sub += build.profession;
