@@ -1283,6 +1283,21 @@ std::string GetEffectiveAccountName() {
     return g_SelectedAccountFilter;
 }
 
+ // Achievement progress is per-account, not per-currently-logged-in character.
+ // In multi-account mode the dropdown's selected account is authoritative.
+ // In single-account mode, use H&S's account name even when the dropdown is empty.
+static std::string GetAchievementCacheAccount() {
+    if (!g_SelectedAccountFilter.empty()) return g_SelectedAccountFilter;
+    if (AlterEgo::GW2API::IsMultiAccount()) return {};
+    const std::string current = AlterEgo::GW2API::GetCurrentAccountName();
+    if (!current.empty()) return current;
+    if (AlterEgo::GW2API::HasAccountsData()) {
+        const auto& accounts = AlterEgo::GW2API::GetAccounts();
+        if (accounts.size() == 1) return accounts.front().name;
+    }
+    return {};
+}
+
 bool WriteFileAtomic(const std::string& finalPath, const std::string& content) {
     std::string tmp = finalPath + ".tmp";
     try {
@@ -11822,24 +11837,26 @@ static std::string SanitizeForFilename(const std::string& s) {
 // switching accounts doesn't clobber the previous account's cache.
 static void SaveAchProgress(const std::string& account) {
     if (account.empty()) return;
-    std::string dir = AlterEgo::GW2API::GetDataDirectory() + "/cache";
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_progress_" + SanitizeForFilename(account) + ".json";
+    const std::string dir = AlterEgo::GW2API::GetDataDirectory() + "/cache";
+    const std::string path = dir + "/ach_progress_" + SanitizeForFilename(account) + ".json";
 
-    // Snapshot under the lock, then build/serialize JSON outside the lock
-    // so the render thread isn't blocked while we touch a large map.
+    // Capture one consistent account snapshot; newer H&S updates must not be
+    // marked saved if they arrive while the disk write is in progress.
     std::vector<std::pair<uint32_t, AchProgress>> snapshot;
+    int64_t fetchedAt = 0;
+    uint64_t generation = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        if (g_AchCachedAccount != account) return;
         snapshot.reserve(g_AchProgress.size());
         for (const auto& [id, p] : g_AchProgress) snapshot.emplace_back(id, p);
-        g_AchProgressDirty = false;
-        g_AchLastSave = std::chrono::steady_clock::now();
+        fetchedAt = g_AchProgressCacheSavedAt;
+        generation = g_AchProgressGen;
     }
 
     nlohmann::json j = nlohmann::json::object();
-    const int64_t savedAt = g_AchProgressCacheSavedAt;
-    j["saved_at"] = savedAt;
+    j["account"] = account;
+    j["saved_at"] = fetchedAt;
     nlohmann::json entries = nlohmann::json::object();
     for (const auto& [id, p] : snapshot) {
         nlohmann::json e;
@@ -11851,42 +11868,54 @@ static void SaveAchProgress(const std::string& account) {
         if (!p.completed_bits.empty()) {
             nlohmann::json bits = nlohmann::json::array();
             for (uint32_t b : p.completed_bits) bits.push_back(b);
-            e["b"] = bits;
+            e["b"] = std::move(bits);
         }
-        entries[std::to_string(id)] = e;
+        entries[std::to_string(id)] = std::move(e);
     }
-    j["entries"] = entries;
+    j["entries"] = std::move(entries);
 
-    std::ofstream file(path);
-    if (file.is_open()) {
-        file << j.dump();
-        if (file.good() && g_AchCachedAccount == account)
-            g_AchProgressCacheSavedAt = savedAt;
+    // Existing saved files use the same entries format and remain readable.
+    // Replace the file atomically so a partial write cannot destroy the cache.
+    bool saved = false;
+    try {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (!ec) saved = WriteFileAtomic(path, j.dump());
+    } catch (...) {
+        saved = false;
     }
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        g_AchLastSave = std::chrono::steady_clock::now();
+        if (saved && g_AchCachedAccount == account && g_AchProgressGen == generation)
+            g_AchProgressDirty = false;
+    }
+    if (!saved && APIDefs)
+        APIDefs->Log(LOGL_WARNING, "AlterEgo",
+                     "Could not save achievement progress cache (will retry)");
 }
 
 // Load achievement progress for an account from disk. Bumps the progress gen
 // so dependent UI caches (rail counts, popout) refresh.
 static void LoadAchProgress(const std::string& account) {
     if (account.empty()) return;
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/cache/ach_progress_" +
-                       SanitizeForFilename(account) + ".json";
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        if (g_AchCachedAccount != account) {
-            g_AchProgress.clear();
-            ++g_AchProgressGen;
-        }
-        g_AchCachedAccount = account;
-        g_AchProgressCacheSavedAt = 0;
-        return;
-    }
-    try {
-        auto j = nlohmann::json::parse(file);
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        g_AchProgress.clear();
-        if (j.contains("entries") && j["entries"].is_object()) {
+    const std::string path = AlterEgo::GW2API::GetDataDirectory() +
+        "/cache/ach_progress_" + SanitizeForFilename(account) + ".json";
+
+    // Parse into a temporary map first: malformed/incomplete files never
+    // partially populate the live progress map.
+    std::unordered_map<uint32_t, AchProgress> restored;
+    int64_t fetchedAt = 0;
+    bool valid = false;
+    std::ifstream file(path, std::ios::binary);
+    if (file.is_open()) {
+        try {
+            const auto j = nlohmann::json::parse(file);
+            if (!j.is_object() || !j.contains("entries") || !j["entries"].is_object() ||
+                (j.contains("account") && j["account"].get<std::string>() != account))
+                throw std::runtime_error("Invalid achievement cache");
+            fetchedAt = j.value("saved_at", (int64_t)0);
             for (auto it = j["entries"].begin(); it != j["entries"].end(); ++it) {
                 AchProgress p;
                 p.id = (uint32_t)std::stoul(it.key());
@@ -11897,20 +11926,27 @@ static void LoadAchProgress(const std::string& account) {
                 p.repeated = e.value("r", 0);
                 p.unlocked = e.value("u", true);
                 if (e.contains("b") && e["b"].is_array()) {
-                    for (const auto& b : e["b"]) p.completed_bits.insert(b.get<uint32_t>());
+                    for (const auto& b : e["b"])
+                        p.completed_bits.insert(b.get<uint32_t>());
                 }
-                g_AchProgress[p.id] = std::move(p);
+                restored.emplace(p.id, std::move(p));
             }
+            valid = true;
+        } catch (...) {
+            if (APIDefs)
+                APIDefs->Log(LOGL_WARNING, "AlterEgo",
+                             "Achievement progress cache is unreadable; retaining file");
         }
-        g_AchProgressGen++;
-        g_AchCachedAccount = account;
-        g_AchProgressCacheSavedAt = j.value("saved_at", (int64_t)0);
-    } catch (...) {
+    }
+
+    {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        g_AchProgress.clear();
-        ++g_AchProgressGen;
+        g_AchProgress = std::move(restored);
+        g_AchOptimisticTime.clear();
         g_AchCachedAccount = account;
-        g_AchProgressCacheSavedAt = 0;
+        g_AchProgressCacheSavedAt = valid ? fetchedAt : 0;
+        g_AchProgressDirty = false;
+        ++g_AchProgressGen;  // invalidate popout and category count caches
     }
 }
 
