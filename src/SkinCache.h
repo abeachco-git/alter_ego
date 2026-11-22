@@ -61,6 +61,7 @@ namespace Skinventory {
 
         // Total skin counts
         static size_t GetTotalSkinCount();
+        static std::vector<uint32_t> GetAllSkinIds();
         static size_t GetCategorySkinCount(const std::string& type,
                                            const std::string& subtype,
                                            const std::string& weight_class);
