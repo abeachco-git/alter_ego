@@ -1502,7 +1502,7 @@ static void DrawProfessionCharacterName(ImDrawList* draw, ImVec2 pos,
     draw->AddText(pos, ImGui::ColorConvertFloat4ToU32(
         GetProfessionColor(profession)), name.c_str());
 }
-// Core profession icon URL from API (fetched at startup via FetchProfessionInfoAsync)
+// Optional URL fallback: fixed profession artwork now comes from DLL resources.
 static const char* GetProfessionIconUrl(const std::string& prof) {
     const auto* info = AlterEgo::GW2API::GetProfessionInfo(prof);
     if (info && !info->icon_url.empty()) return info->icon_url.c_str();
@@ -1518,6 +1518,12 @@ static uint32_t GetProfessionIconId(const std::string& prof) {
     };
     auto it = ids.find(prof);
     return it != ids.end() ? it->second : 0;
+}
+
+// Stable large-emblem IDs; never depend on a compiler-specific string hash.
+static uint32_t GetProfessionBigIconId(const std::string& prof) {
+    const uint32_t small = GetProfessionIconId(prof);
+    return small ? small + 200000u : 0u;
 }
 
 // Crafting discipline icon helpers (wiki tango icons, stable IDs 9100001+)
@@ -2966,9 +2972,8 @@ static void RenderProfessionEmblem(const std::string& profession, float size) {
     dl->AddRect(pos, maxp, IM_COL32(140, 113, 55, 160), 4.0f, 0, 1.0f);
 
     bool drew = false;
-    if (prof && !prof->icon_big_url.empty()) {
-        // Use a stable synthetic ID so IconManager caches the texture by profession
-        uint32_t profIconId = 9100000u + (uint32_t)(std::hash<std::string>{}(profession) % 100000u);
+    if (GetProfessionBigIconId(profession)) {
+        uint32_t profIconId = GetProfessionBigIconId(profession);
         Texture_t* tex = AlterEgo::IconManager::GetIcon(profIconId);
         if (tex && tex->Resource) {
             float ir = size - 8.0f;
@@ -2980,7 +2985,7 @@ static void RenderProfessionEmblem(const std::string& profession, float size) {
                 IM_COL32(240, 226, 190, 230));
             drew = true;
         } else {
-            AlterEgo::IconManager::RequestIcon(profIconId, prof->icon_big_url);
+            AlterEgo::IconManager::RequestIcon(profIconId, prof ? prof->icon_big_url : "");
         }
     }
     if (!drew) {
@@ -3023,8 +3028,8 @@ static void RenderCharacterAvatar(const AlterEgo::Character& ch, float size) {
     } else {
         // Fallback: profession icon
         const auto* prof = AlterEgo::GW2API::GetProfessionInfo(ch.profession);
-        if (prof && !prof->icon_url.empty()) {
-            uint32_t profIconId = 9000000 + std::hash<std::string>{}(ch.profession) % 100000;
+        if (GetProfessionIconId(ch.profession)) {
+            uint32_t profIconId = GetProfessionIconId(ch.profession);
             Texture_t* ptex = AlterEgo::IconManager::GetIcon(profIconId);
             if (ptex && ptex->Resource) {
                 // Tinted, inset slightly so the gold ring shows
@@ -3036,7 +3041,7 @@ static void RenderCharacterAvatar(const AlterEgo::Character& ch, float size) {
                     IM_COL32(230, 220, 180, 255), ir, ImDrawCornerFlags_All);
                 drewImage = true;
             } else {
-                AlterEgo::IconManager::RequestIcon(profIconId, prof->icon_url);
+                AlterEgo::IconManager::RequestIcon(profIconId, prof ? prof->icon_url : "");
             }
         }
     }
@@ -7147,13 +7152,14 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
     if (iconId && !iconUrl) {
         AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
     }
-    if (iconId && iconUrl) {
+    if (iconId) {
         Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
         if (tex && tex->Resource) {
             dl->AddImage(tex->Resource, iconMin, iconMax);
             return;
         }
-        AlterEgo::IconManager::RequestIcon(iconId, iconUrl);
+        // The DLL image and disk cache both work without metadata.
+        AlterEgo::IconManager::RequestIcon(iconId, iconUrl ? iconUrl : "");
     }
     // Keep a readable fallback while profession artwork is still downloading.
     if (!profession.empty()) {
@@ -9057,8 +9063,8 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         float iconLeft = pos.x + 10.0f;
         float iconTop = pos.y + (h - headerIconSz) * 0.5f;
         Texture_t* iconTex = nullptr;
-        if (eliteSpec && !eliteSpec->profession_icon_big_url.empty()) {
-            uint32_t specIconId = 2000000u + (uint32_t)(std::hash<std::string>{}(eliteSpec->name) % 100000u);
+        if (eliteSpec) {
+            uint32_t specIconId = 2000000u + eliteSpec->id;
             iconTex = AlterEgo::IconManager::GetIcon(specIconId);
             if (!iconTex || !iconTex->Resource) {
                 AlterEgo::IconManager::RequestIcon(specIconId,
@@ -9066,12 +9072,12 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             }
         }
         if (!iconTex || !iconTex->Resource) {
-            uint32_t profIconId = 9100000u + (uint32_t)(std::hash<std::string>{}(build.profession) % 100000u);
+            uint32_t profIconId = GetProfessionBigIconId(build.profession);
             iconTex = AlterEgo::IconManager::GetIcon(profIconId);
             if (!iconTex || !iconTex->Resource) {
                 const auto* prof = AlterEgo::GW2API::GetProfessionInfo(build.profession);
-                if (prof && !prof->icon_big_url.empty())
-                    AlterEgo::IconManager::RequestIcon(profIconId, prof->icon_big_url, /*priority=*/true);
+                AlterEgo::IconManager::RequestIcon(profIconId,
+                    prof ? prof->icon_big_url : "", /*priority=*/true);
             }
         }
         if (iconTex && iconTex->Resource) {
@@ -10919,8 +10925,8 @@ static void RenderBuildLibrary() {
             if (iconId && !iconUrl)
                 AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
             Texture_t* tex = iconId ? AlterEgo::IconManager::GetIcon(iconId) : nullptr;
-            if (iconId && iconUrl && (!tex || !tex->Resource))
-                AlterEgo::IconManager::RequestIcon(iconId, iconUrl, true);
+            if (iconId && (!tex || !tex->Resource))
+                AlterEgo::IconManager::RequestIcon(iconId, iconUrl ? iconUrl : "", true);
             AlterEgo::CompletionTheme::SectionHeading(displayName.c_str(), nullptr,
                 count.c_str(), AlterEgo::CompletionTheme::kAvailableText,
                 tex && tex->Resource ? tex->Resource : nullptr, 18.0f);
@@ -11034,21 +11040,21 @@ static void RenderBuildLibrary() {
             float iconX = cmin.x + 8.0f;
             float iconY = cmin.y + (rowH - iconSz) * 0.5f;
             Texture_t* iconTex = nullptr;
-            if (eliteSpecId && eliteSpec && !eliteSpec->profession_icon_big_url.empty()) {
+            if (eliteSpecId) {
                 uint32_t specIconId = 2000000u + eliteSpecId;
                 iconTex = AlterEgo::IconManager::GetIcon(specIconId);
                 if (!iconTex || !iconTex->Resource) {
                     AlterEgo::IconManager::RequestIcon(specIconId,
-                        eliteSpec->profession_icon_big_url, /*priority=*/true);
+                        eliteSpec ? eliteSpec->profession_icon_big_url : "", /*priority=*/true);
                 }
             }
             if (!iconTex || !iconTex->Resource) {
-                uint32_t profIconId = 9100000u + (uint32_t)(std::hash<std::string>{}(b.profession) % 100000u);
+                uint32_t profIconId = GetProfessionBigIconId(b.profession);
                 iconTex = AlterEgo::IconManager::GetIcon(profIconId);
                 if (!iconTex || !iconTex->Resource) {
                     const auto* prof = AlterEgo::GW2API::GetProfessionInfo(b.profession);
-                    if (prof && !prof->icon_big_url.empty())
-                        AlterEgo::IconManager::RequestIcon(profIconId, prof->icon_big_url, /*priority=*/true);
+                    AlterEgo::IconManager::RequestIcon(profIconId,
+                        prof ? prof->icon_big_url : "", /*priority=*/true);
                 }
             }
             if (iconTex && iconTex->Resource) {
@@ -16124,14 +16130,16 @@ void AddonRender() {
                         const char* profIconUrl = GetProfessionIconUrl(ch.profession);
                         ImVec2 cpos = ImGui::GetCursorPos();
                         float yOff = (extraLines > 0) ? 2.0f : (rowHeight - iconSz) * 0.5f;
-                        if (profIconId && profIconUrl) {
+                        if (profIconId) {
+                            if (!profIconUrl)
+                                AlterEgo::GW2API::FetchProfessionInfoAsync(ch.profession);
                             auto* tex = AlterEgo::IconManager::GetIcon(profIconId);
+                            ImGui::SetCursorPos(ImVec2(cpos.x, cpos.y + yOff));
                             if (tex && tex->Resource) {
-                                ImGui::SetCursorPos(ImVec2(cpos.x, cpos.y + yOff));
                                 ImGui::Image(tex->Resource, ImVec2(iconSz, iconSz));
                             } else {
-                                AlterEgo::IconManager::RequestIcon(profIconId, profIconUrl);
-                                ImGui::SetCursorPos(ImVec2(cpos.x, cpos.y + yOff));
+                                AlterEgo::IconManager::RequestIcon(profIconId,
+                                    profIconUrl ? profIconUrl : "");
                                 ImGui::Dummy(ImVec2(iconSz, iconSz));
                             }
                         } else {
