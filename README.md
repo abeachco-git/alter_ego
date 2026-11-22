@@ -1,5 +1,33 @@
 # Alter Ego
 
+> [!IMPORTANT]
+> **Unofficial Alter Ego feature fork — not an upstream release.** This repository is forked from [PieOrCake/alter_ego](https://github.com/PieOrCake/alter_ego). Credit for the original addon and its existing features belongs to the upstream project.
+>
+> **Enhanced version:** [`feature/save-and-compare-retrieved-sets`](https://github.com/abeachco-git/alter_ego/tree/feature/save-and-compare-retrieved-sets) (this branch). **Default `main`:** unchanged upstream addon code. The enhancements below have **not** been merged into `main` or submitted upstream.
+>
+> **Status:** personally tested in Guild Wars 2 and still undergoing further in-game evaluation; not an official or maintainer-endorsed release. Development has been AI-assisted.
+
+## What's different in this fork?
+
+The following are **additions or changes relative to the original [PieOrCake Alter Ego](https://github.com/PieOrCake/alter_ego)**, not a list of features inherited unchanged from upstream.
+
+| Area | Changes in this feature branch |
+| --- | --- |
+| **Saved builds and Compare** | Capture a retrieved character's build **and gear** into the library; dedicated saved-vs-retrieved comparison with build, skill, equipment, stat, infusion, and relic checks; differences and unverified fields; optional exact-item comparison. |
+| **Character-first comparison** | Compare follows the logged-in character by default, auto-selects an appropriate saved build, keeps the **Character / Build tab / Equipment** selectors together, and shares the Characters tab's per-character refresh timestamp. Manual selection remains available. |
+| **Character refresh and live signals** | Refresh the selected character directly, or use `...` to refresh multiple; optional auto-refresh on login or specialization change; warning when live specialization and cached build differ; locally tracked **Last Login** sorting. |
+| **Vault and daily Clears** | Revised compact displays, clearer refresh status and retry handling, daily fractal tier/scale information on hover, and unified achievement-completion visuals. |
+| **Weekly Strikes** | Three-column responsive layout; encounters ordered like the in-game raid picker; shortened labels and full-name/expansion tooltips; `? Nexus` shown as **unknown**, not falsely completed or included in the existing 14-objective count. |
+| **Weekly Raids** | Single-row **W1–W8** encounter grids at normal widths, with compact labels, per-wing completion totals, expansion/name tooltips, and Emboldened / Call of the Mists indicators. Often-skipped or secondary encounters are visually quieter. |
+| **Shared completion styling** | More distinction between available, secondary, and completed entries across the relevant Clears/Vault/Achievements views, without darkening entire raid-wing groups when a wing is complete. |
+| **Other UI refinements** | Consistent inline refresh feedback, improved clipping/padding, Skinventory spacing and refresh label, and several smaller usability fixes. |
+
+**What hasn't changed:** This is still Alter Ego, using [Raidcore Nexus](https://raidcore.gg/Nexus) and [Hoard & Seek](https://github.com/PieOrCake/hoard_and_seek). The fork does not introduce a separate GW2 API credential store or live memory-based gear reads. It keeps the original build-library data and upstream attribution.
+
+**Code and build:** Changes are on the [feature branch](https://github.com/abeachco-git/alter_ego/tree/feature/save-and-compare-retrieved-sets); [GitHub Actions](https://github.com/abeachco-git/alter_ego/actions) builds and checks the Windows x64 **UCRT** DLL. CI success does not mean every game/UI interaction has been tested. If you want the upstream behavior, use the [original project](https://github.com/PieOrCake/alter_ego) or this fork's unchanged `main` code.
+
+---
+
 A Guild Wars 2 addon for [Raidcore Nexus](https://raidcore.gg/Nexus) that lets you view and manage all your characters, equipment, builds, and saved build templates — all without logging in to each character.
 
 ## AI Notice
@@ -112,22 +140,26 @@ The capture copies the retrieved trait and skill IDs directly, so it works even
 when the build-link palette is still loading. Your previously saved sets are
 not changed.
 
-Open the dedicated **Compare** top-level tab, select a **Saved build**, then
-choose a character of the same profession, a retrieved build tab, and (if gear
-was saved) an equipment tab. You can also click **Compare to Retrieved
-Character...** from the selected build in **Build Library** to open the Compare
-tab with that build preselected. The default view shows only differences;
+Open the dedicated **Compare** top-level tab. By default, **Character**
+follows the currently logged-in hero (**Active (auto)**) and the **Saved
+build** selection auto-matches that character. The existing three-column
+**Character / Build tab / Equipment** selector row is retained, with Saved
+build underneath. You can manually select another character or saved build.
+You can also click **Compare** in **Build Library** to preselect that saved
+build. The default view shows only differences;
 check **Show matches** for all compared fields. **Compare exact item IDs** is
 optional because identical functional gear may use different item IDs. You can
 refresh the chosen character through Hoard & Seek from the comparison tab.
 Comparisons do not apply equipment, skills, or changes to saved builds.
 
-Newly captured library builds store an optional source-character name. Compare
-prefers that exact character on first opening; older snapshots with an
-unambiguous "<character name> - Tab N" title can infer it without migrating
-existing data. The build and equipment selectors default to **Active (auto)**,
-which follows the latest Hoard & Seek active-tab data after refreshing;
-manually selecting a tab overrides that behavior. The Compare refresh button
+Newly captured library builds store an optional source-character name. This
+helps identify their origin but does **not** override the active character
+when Compare is in automatic mode. Only same-profession library builds are
+offered for manual comparison; if no suitable saved build is found, Compare
+shows that explicitly rather than silently comparing the wrong character.
+The build and equipment selectors default to **Active (auto)**, which follows
+the latest Hoard & Seek active-tab data after refreshing; manually selecting
+a tab overrides that behavior. The Compare refresh button
 shows progress and success/error feedback, but a completed fetch does not
 guarantee that the GW2 API has already published the most recent in-game change.
 
