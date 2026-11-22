@@ -37,6 +37,8 @@ jobs:
           /tmp/build_group_order
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/equipment_tab_core.cpp -o /tmp/equipment_tab_core
           /tmp/equipment_tab_core
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/section_refresh.cpp -o /tmp/section_refresh
+          /tmp/section_refresh
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"

@@ -66,8 +66,8 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
   - Detect AE2 codes in GW2 chat and offer one-click import
 - **Compare** — Dedicated saved-vs-retrieved comparison with automatic character/build selection, shared profession-colored names/icons, equipment tab selection even when no saved build matches, equipment status, optional exact-item matching, and refresh controls
 - **Skinventory** — Browse all skins, track ownership per account, filter owned/unowned, maintain a shopping list, and open wiki pages
-- **Vault** — Wizard's Vault daily, weekly, and special objectives with progress, claimed state, and compact completion styling
-- **Clears** — Daily fractals, daily raid bounties, weekly strikes, and weekly raids with compact layouts, improved completion visualization, and contextual hover detail
+- **Vault** — Wizard's Vault daily, weekly, and special objectives with progress, claimed state, and compact completion styling. When reopening after 15 minutes of stale data, automatically refresh only unclaimed sections; manual Refresh always fetches all three sections.
+- **Clears** — Daily fractals, daily raid bounties, weekly strikes, and weekly raids with compact layouts, improved completion visualization, and contextual hover detail. Stale completion data is refreshed on tab entry (15-minute threshold), skipping fully completed sections; manual Refresh still fetches all categories.
 - **Achievements** — Searchable achievement browser with pinning and a popout tracker
 - **Hoard & Seek Integration** — All API data is sourced through [Hoard & Seek](https://github.com/PieOrCake/hoard_and_seek)
 

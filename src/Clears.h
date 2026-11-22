@@ -20,6 +20,10 @@ void LoadClearsCache();
 void LoadVaultCache();
 void RenderVault();
 void RenderClears();
+// Called once when navigating into a tab. Refreshes stale, unfinished
+// sections only; the tab's manual Refresh continues to fetch everything.
+void RefreshVaultOnEntry();
+void RefreshClearsOnEntry();
 void OnClearsAchResponse(void* eventArgs);
 void OnVaultResponse(void* eventArgs);
 void OnVaultSeasonResponse(void* eventArgs);

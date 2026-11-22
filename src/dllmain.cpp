@@ -16253,6 +16253,15 @@ void AddonRender() {
             ImGui::SetCursorPosY(afterY);
         }
 
+        // ImGui restores the last selected main tab across sessions. Track
+        // actual navigation instead of comparing against the saved tab ID.
+        // Trigger after rendering so reset and account-switch checks run first.
+        static int s_previousVisibleMainTab = -1;
+        if (g_MainTab != s_previousVisibleMainTab) {
+            if (g_MainTab == 3) RefreshVaultOnEntry();
+            else if (g_MainTab == 6) RefreshClearsOnEntry();
+            s_previousVisibleMainTab = g_MainTab;
+        }
         ImGui::EndTabBar();
     }
     RenderShareRelayPopups();

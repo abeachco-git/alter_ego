@@ -24,6 +24,7 @@
 #include "Clears.h"
 #include "ClearsRotation.h"
 #include "ClearsReset.h"
+#include "SectionRefresh.h"
 #include "FractalScales.h"
 #include "CompletionTheme.h"
 #include "RefreshUI.h"
@@ -72,6 +73,12 @@ static std::time_t g_ClearsLastSuccessTime = 0;
 static std::chrono::steady_clock::time_point g_ClearsSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 static std::atomic<long long> g_ClearsRetryAtMs{0};
+// A completion query can be outstanding even though category fetching is done.
+// Track it separately so navigating between tabs cannot double-query H&S.
+static std::atomic<bool> g_ClearsCompletionInFlight{false};
+static std::atomic<long long> g_ClearsQueryStartedAtMs{0};
+static bool g_ClearsRetrySelective = false;
+static constexpr long long CLEARS_QUERY_TIMEOUT_MS = 45000;
 
 // Public globals — declared extern in Clears.h, accessed from dllmain.cpp
 bool g_ClearsFetched = false;
@@ -146,8 +153,8 @@ static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
 // Forward declarations of private helpers
 static void SaveClearsCache();
 static void FetchClears();
-static void SendClearsAchQuery();
-static void FetchVaultData();
+static void SendClearsAchQuery(bool skipCompletedSections = false);
+static void FetchVaultData(bool skipClaimedSections = false);
 // Sorted IDs are used for a conservative post-reset freshness check.
 static std::vector<uint32_t> DailyIds(const std::vector<ClearEntry>& entries) {
     std::vector<uint32_t> ids;
@@ -272,17 +279,36 @@ static long long NowMs() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// Send H&S achievement query for all currently tracked clears IDs
-static void SendClearsAchQuery() {
+// Query incomplete sections only when opportunistically refreshing.
+// Manual Refresh and reset fetching continue querying every achievement.
+static void SendClearsAchQuery(bool skipCompletedSections) {
+    if (!APIDefs || g_ClearsCompletionInFlight.load()) return;
     std::vector<uint32_t> allIds;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        for (const auto& e : g_DailyFractals) allIds.push_back(e.id);
-        for (const auto& e : g_DailyBounties) allIds.push_back(e.id);
-        for (const auto& e : g_WeeklyWings)   allIds.push_back(e.id);
-        if (g_WeeklyStrikes.id > 0) allIds.push_back(g_WeeklyStrikes.id);
+        const bool needFractals = !skipCompletedSections ||
+            !AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals);
+        const bool needBounties = !skipCompletedSections ||
+            !AlterEgo::SectionRefresh::ClearsDone(g_DailyBounties);
+        const bool needRaids = !skipCompletedSections ||
+            !AlterEgo::SectionRefresh::ClearsDone(g_WeeklyWings);
+        const bool needStrikes = !skipCompletedSections ||
+            !(g_WeeklyStrikes.id != 0 && g_WeeklyStrikes.done);
+        if (needFractals)
+            for (const auto& e : g_DailyFractals) if (e.id) allIds.push_back(e.id);
+        if (needBounties)
+            for (const auto& e : g_DailyBounties) if (e.id) allIds.push_back(e.id);
+        if (needRaids)
+            for (const auto& e : g_WeeklyWings) if (e.id) allIds.push_back(e.id);
+        if (needStrikes && g_WeeklyStrikes.id > 0)
+            allIds.push_back(g_WeeklyStrikes.id);
+        if (allIds.empty()) return; // every known section is done
+        g_ClearsRetrySelective = skipCompletedSections;
+        g_ClearsCompletionInFlight = true;
+        g_ClearsQueryStartedAtMs = NowMs();
+        g_ClearsStatusMsg = skipCompletedSections
+            ? "Refreshing incomplete sections..." : "Querying completion...";
     }
-    if (allIds.empty() || !APIDefs) return;
 
     std::string acctName = GetEffectiveAccountName();
     HoardQueryAchievementRequest req{};
@@ -307,6 +333,8 @@ void OnClearsAchResponse(void* eventArgs) {
 
     if (resp->status != HOARD_STATUS_OK) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        g_ClearsCompletionInFlight = false;
+        g_ClearsQueryStartedAtMs = 0;
         if (resp->status == HOARD_STATUS_BUSY) {
             g_ClearsStatusMsg = "Hoard & Seek busy, retrying shortly...";
             // Schedule a single backoff retry (Events_Raise must be on render thread)
@@ -373,6 +401,8 @@ void OnClearsAchResponse(void* eventArgs) {
 
         g_ClearsFetched = true;
         g_ClearsFetching = false;
+        g_ClearsCompletionInFlight = false;
+        g_ClearsQueryStartedAtMs = 0;
         g_ClearsStatusMsg = "";
         g_ClearsLastSuccessTime = std::time(nullptr);
         g_ClearsSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
@@ -407,34 +437,53 @@ static void RequestVaultSection(uint8_t type, const std::string& account) {
 
 // Start one asynchronous batch; each response is delivered separately later.
 // Previous successful data and its timestamp remain valid while refreshing.
-static void FetchVaultData() {
+static void FetchVaultData(bool skipClaimedSections) {
     if (!APIDefs || g_VaultFetching.load()) return;
     const std::string account = GetEffectiveAccountName();
+    std::array<bool, 3> request = {true, true, true};
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         if (g_VaultFetching.load()) return;
+        // A section is skippable only when all awards are CLAIMED, and the
+        // current period hasn't been invalidated by a reset. Never use an
+        // unknown/expired season end to suppress a new Special season.
+        if (skipClaimedSections && g_VaultFetched.load()) {
+            request[0] = !AlterEgo::SectionRefresh::VaultClaimed(g_VaultDaily);
+            request[1] = !AlterEgo::SectionRefresh::VaultClaimed(g_VaultWeekly);
+            request[2] = !AlterEgo::SectionRefresh::VaultClaimed(g_VaultSpecial) ||
+                g_VaultSeasonEnd == std::chrono::system_clock::time_point{} ||
+                std::chrono::system_clock::now() >= g_VaultSeasonEnd;
+        }
+        if (!request[0] && !request[1] && !request[2]) return;
         g_VaultFetching = true;
         g_VaultInitialAttempted = true;
         g_VaultLastAttemptFailed = false;
-        g_VaultStatusMessage = "Fetching Vault objectives (0/3)...";
+        g_VaultStatusMessage = skipClaimedSections
+            ? "Refreshing unclaimed Vault sections..." : "Fetching Vault objectives (0/3)...";
         g_VaultRequestStartMs = NowMs();
         g_VaultRequestAccount = account;
         g_VaultRetryAtMs = 0;
         g_VaultDailyRolloverRetryAtMs = 0;
         for (int i = 0; i < 3; ++i) {
-            g_VaultResponsesOK[i] = false;
-            g_VaultPending[i] = {};
+            // Completed sections are carried into the pending batch, so
+            // the existing all-three atomic commit/retry code is unchanged.
+            g_VaultResponsesOK[i] = !request[i];
+            g_VaultPending[i] = !request[i]
+                ? (i == 0 ? g_VaultDaily : i == 1 ? g_VaultWeekly : g_VaultSpecial)
+                : VaultPeriod{};
             g_VaultRetryNeeded[i] = false;
             g_VaultRetryAttempts[i] = 0;
         }
     }
 
     for (uint8_t type = 0; type < 3; ++type) {
-        if (!g_VaultFetching.load()) break; // permission/terminal error already received
-        RequestVaultSection(type, account);
+        if (!g_VaultFetching.load()) break;
+        if (request[type]) RequestVaultSection(type, account);
     }
 
-    // Best-effort season end date, independent of the three objective responses.
+    // Season metadata is independent; skip it only if Special was already
+    // fully claimed in a known, still-current season.
+    if (skipClaimedSections && !request[2]) return;
     HoardQueryApiRequest season{};
     season.api_version = HOARD_API_VERSION;
     strncpy(season.requester, "Alter Ego", sizeof(season.requester) - 1);
@@ -2508,7 +2557,7 @@ static std::string UpcomingBountyLabel(const std::string& encounter,
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr)
 {
     const bool fetching = g_ClearsFetching || g_ClearsQueryPending.load() ||
-        g_ClearsRetryAtMs.load() != 0;
+        g_ClearsCompletionInFlight.load() || g_ClearsRetryAtMs.load() != 0;
     if (fetching) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
     if (RenderActionButton("Refresh##clears") && !fetching) FetchClears();
     if (fetching) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
@@ -3017,6 +3066,8 @@ static void RenderClearsShared(bool showVault) {
         // Preserve the existing weekly state and its completion colors.
         g_ClearsFetched = !g_WeeklyWings.empty() || g_WeeklyStrikes.id != 0;
         g_ClearsQueryPending = false;
+        g_ClearsCompletionInFlight = false;
+        g_ClearsQueryStartedAtMs = 0;
         g_ClearsStatusMsg = "New daily reset detected; fetching current objectives...";
         g_LastDailyReset = dailyReset;
         resetTriggered = true;
@@ -3027,6 +3078,8 @@ static void RenderClearsShared(bool showVault) {
         g_WeeklyStrikes = ClearEntry{};
         g_ClearsFetched = !g_DailyFractals.empty() || !g_DailyBounties.empty();
         g_ClearsQueryPending = false;
+        g_ClearsCompletionInFlight = false;
+        g_ClearsQueryStartedAtMs = 0;
         g_LastWeeklyReset = weeklyReset;
         resetTriggered = true;
     }
@@ -3089,11 +3142,26 @@ static void RenderClearsShared(bool showVault) {
     }
     if (retryVaultRollover) FetchVaultData();
 
+    // A missing H&S response must not permanently suppress manual or
+    // automatic refreshes. An expired query can be replaced after 45s.
+    if (g_ClearsCompletionInFlight.load()) {
+        const long long started = g_ClearsQueryStartedAtMs.load();
+        if (started != 0 && NowMs() - started >= CLEARS_QUERY_TIMEOUT_MS) {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            g_ClearsCompletionInFlight = false;
+            g_ClearsQueryStartedAtMs = 0;
+            g_ClearsStatusMsg = "Completion query timed out; retry Refresh.";
+        }
+    }
+
     // ---- Clears deferred logic ----
     if (g_ClearsNeedRequery && g_ClearsFetched && !g_ClearsFetching) {
         g_ClearsNeedRequery = false;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            g_ClearsCompletionInFlight = false;
+            g_ClearsQueryStartedAtMs = 0;
+            g_ClearsRetryAtMs = 0;
             for (auto& e : g_DailyFractals) { e.done = false; e.current = 0; e.bitDone.assign(e.bitDone.size(), false); }
             for (auto& e : g_DailyBounties) { e.done = false; e.current = 0; e.bitDone.assign(e.bitDone.size(), false); }
             for (auto& e : g_WeeklyWings)   { e.done = false; e.current = 0; e.bitDone.assign(e.bitDone.size(), false); }
@@ -3110,16 +3178,24 @@ static void RenderClearsShared(bool showVault) {
         long long retryAt = g_ClearsRetryAtMs.load();
         if (retryAt != 0 && NowMs() >= retryAt && !g_ClearsFetching) {
             g_ClearsRetryAtMs = 0;
-            SendClearsAchQuery();
+            SendClearsAchQuery(g_ClearsRetrySelective);
         }
     }
 
     auto steadyNow = std::chrono::steady_clock::now();
-    if (g_ClearsFetched && !g_ClearsFetching &&
+    if (!showVault && g_ClearsFetched && !g_ClearsFetching &&
+        !g_ClearsDailyRolloverPending &&
+        !g_ClearsCompletionInFlight.load() && !g_ClearsQueryPending.load() &&
+        g_ClearsRetryAtMs.load() == 0 &&
         g_LastClearsCompletionQuery != std::chrono::steady_clock::time_point{} &&
-        (steadyNow - g_LastClearsCompletionQuery) >= std::chrono::minutes(10)) {
+        (steadyNow - g_LastClearsCompletionQuery) >= std::chrono::minutes(15) &&
+        ([&]() {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            return AlterEgo::SectionRefresh::Stale(
+                g_ClearsLastSuccessTime, std::time(nullptr));
+        })()) {
         g_LastClearsCompletionQuery = steadyNow;
-        SendClearsAchQuery();
+        SendClearsAchQuery(true);
     }
 
     std::string dailyResetStr = FormatTimeUntilReset(dailyReset, std::chrono::hours(24));
@@ -3131,3 +3207,42 @@ static void RenderClearsShared(bool showVault) {
 }
 void RenderVault() { RenderClearsShared(true); }
 void RenderClears() { RenderClearsShared(false); }
+
+// Called AFTER tab rendering: account changes and UTC reset invalidation
+// have already run. Navigation itself is the trigger; manual Refresh
+// intentionally continues to force a full request.
+void RefreshVaultOnEntry() {
+    if (g_VaultNeedRequery || g_VaultFetching.load()) return;
+    bool stale = false;
+    bool haveData = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        stale = AlterEgo::SectionRefresh::Stale(
+            g_VaultLastSuccessTime, std::time(nullptr));
+        haveData = g_VaultFetched.load();
+    }
+    if (!stale) return;
+    FetchVaultData(haveData);
+}
+
+void RefreshClearsOnEntry() {
+    if (g_ClearsNeedRequery || g_ClearsFetching ||
+        g_ClearsCompletionInFlight.load() ||
+        g_ClearsQueryPending.load() || g_ClearsRetryAtMs.load() != 0 ||
+        g_ClearsDailyRolloverRetryAtMs.load() != 0) return;
+    bool stale = false;
+    bool haveData = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        stale = AlterEgo::SectionRefresh::Stale(
+            g_ClearsLastSuccessTime, std::time(nullptr));
+        haveData = g_ClearsFetched;
+    }
+    if (!stale) return;
+    if (!haveData) {
+        FetchClears(); // no usable IDs yet: retrieve category definitions
+    } else {
+        g_LastClearsCompletionQuery = std::chrono::steady_clock::now();
+        SendClearsAchQuery(true);
+    }
+}
