@@ -831,6 +831,7 @@ static void LoadLoginTimestamps();
 // Build Library UI state
 static float g_LibListWidth = 220.0f; // Resizable build list column width
 static int g_LibraryCollection = 0; // 0 Builds, 1 Fashion
+static bool g_SwitchToLibrary = false; // select Library after creation/import/navigation
 static int g_LibSelectedIdx = -1;
 // Build editor: "+ New Build" dialog state
 static bool g_NewBuildDialogOpen = false;
@@ -859,7 +860,6 @@ static bool g_LibEditMode = false;
 static int g_LibImportMode = 0;        // GameMode for import
 static bool g_LibShowImport = false;
 static std::string g_LibImportError;
-static std::string g_LibImportFilePath; // path picked from file dialog for library file import
 // A Snow Crows page is fetched and parsed on a worker; the library is only
 // mutated by the main/UI thread after a complete, validated result arrives.
 struct BuildSourceFetchResult {
@@ -1686,7 +1686,10 @@ static void LoadSession() {
         auto j = nlohmann::json::parse(file);
 
         // g_WindowVisible intentionally not restored — always start closed
-        if (j.contains("main_tab")) g_MainTab = j["main_tab"].get<int>();
+        if (j.contains("main_tab")) {
+            g_MainTab = j["main_tab"].get<int>();
+            if (g_MainTab == 1) g_SwitchToLibrary = true;
+        }
 
         // Defer character selection — store name, resolve after chars load
         if (j.contains("selected_char"))
@@ -3777,6 +3780,14 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
 // Shared action for both Characters detail sub-tabs. Implemented after the
 // save-dialog opener, so the Equipment view can call it without duplicating
 // build-selection logic.
+// One navigation path for the Library menu, saved Fashion and imported builds.
+static void NavigateToLibraryCollection(int collection) {
+    g_LibraryCollection = collection == 1 ? 1 : 0;
+    g_SwitchToLibrary = true;
+    g_WindowVisible = true;
+    SaveSettings();
+}
+
 #include "FashionUI.h"
 
 static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab = 0);
@@ -7001,6 +7012,7 @@ static void RenderNewBuildDialog() {
                     if (idx >= 0) {
                         const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
                         g_LibSelectedIdx = idx;
+                        NavigateToLibraryCollection(0);
                         g_LibEditBuildId = builds[idx].id;
                         EnterBuildEditMode(builds[idx]);
                         g_EditIsNewBuild = true;
@@ -8730,7 +8742,7 @@ static void PollBuildSource() {
         int idx = AlterEgo::GW2API::AddSavedBuild(std::move(build));
         if (idx >= 0) {
             g_LibSelectedIdx = idx;
-            g_LibraryCollection = 0;
+            NavigateToLibraryCollection(0);
             g_LibDetailsFetched = false;
             g_LibShowImport = false;
             g_LibImportBuf[0] = '\0';
@@ -10529,7 +10541,7 @@ static void RenderLibraryImportDialog() {
                 if (StartFashionImport(input, name)) {
                     g_LibShowImport = false;
                     ImGui::CloseCurrentPopup();
-                    g_LibraryCollection = 1;
+                    NavigateToLibraryCollection(1);
                     g_LibImportBuf[0] = '\0';
                     g_LibImportName[0] = '\0';
                     g_LibImportError.clear();
@@ -10550,7 +10562,7 @@ static void RenderLibraryImportDialog() {
                     g_LibImportBuf[0] = '\0';
                     g_LibImportName[0] = '\0';
                     g_LibImportError.clear();
-                    if (newIdx >= 0) { g_LibSelectedIdx = newIdx; g_LibraryCollection = 0; }
+                    if (newIdx >= 0) { g_LibSelectedIdx = newIdx; NavigateToLibraryCollection(0); }
                     g_LibDetailsFetched = false;
                     if (APIDefs) APIDefs->GUI_SendAlert("Shared build imported!");
                 } else if (!sharedError.empty()) {
@@ -10595,7 +10607,7 @@ static void RenderLibraryImportDialog() {
                                         g_LibImportBuf[0] = '\0';
                                         g_LibImportName[0] = '\0';
                                         g_LibImportError.clear();
-                                        if (newIdx >= 0) { g_LibSelectedIdx = newIdx; g_LibraryCollection = 0; }
+                                        if (newIdx >= 0) { g_LibSelectedIdx = newIdx; NavigateToLibraryCollection(0); }
                                         g_LibDetailsFetched = false;
                                         if (APIDefs) APIDefs->GUI_SendAlert("Build imported!");
                                     } else {
@@ -10636,25 +10648,6 @@ static void RenderLibraryImportDialog() {
 
 static void RenderBuildLibrary() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
-
-    // Build-level actions remain visible; library-wide backup/restore is
-    // grouped separately so importing one build is never confused with
-    // replacing an entire JSON library.
-    if (RenderActionButton("New Build")) {
-        g_NewBuildDialogOpen = true;
-        g_NewBuildGameMode = 0;
-    }
-    ImGui::SameLine();
-    if (RenderActionButton("Import")) {
-        g_LibShowImport = true;
-        g_LibImportBuf[0] = '\0';
-        g_LibImportName[0] = '\0';
-        g_LibImportMode = 0;
-        g_LibImportError.clear();
-        g_LibImportPending = false;
-        g_LibImportPendingProfession.clear();
-    }
-    ImGui::Spacing();
 
     // Filter + Search
     if (!builds.empty()) {
