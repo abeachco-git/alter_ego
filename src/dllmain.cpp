@@ -2508,6 +2508,19 @@ static void OnAchProgressResponse(void* eventArgs) {
     std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
     if (resp->api_version < 2) { return; }
 
+    // Reject late responses from a previously selected account. H&S echoes the
+    // requested account (v3+); a response must never mix two accounts' progress.
+    const std::string cacheAccount = GetAchievementCacheAccount();
+    if (cacheAccount.empty() || g_AchCachedAccount != cacheAccount) return;
+    if (resp->api_version >= 3) {
+        const std::string responseAccount(resp->account_name,
+            std::find(resp->account_name, resp->account_name + sizeof(resp->account_name),
+                      '\0'));
+        if ((!responseAccount.empty() && responseAccount != cacheAccount) ||
+            (AlterEgo::GW2API::IsMultiAccount() && responseAccount.empty()))
+            return;
+    }
+
     if (resp->status != HOARD_STATUS_OK) {
         if (resp->status == HOARD_STATUS_BUSY) {
             // Preserve provenance: a manual refresh retry is never suppressed
@@ -11668,6 +11681,11 @@ void AddonLoad(AddonAPI_t* aApi) {
     LoadSettings();
     AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
     LoadSession();
+    // Restore the selected account's achievement progress during addon startup.
+    // If H&S has not revealed the single-account name yet, the global render
+    // poll loads it as soon as that identity becomes available.
+    const std::string startupAchAccount = GetAchievementCacheAccount();
+    if (!startupAchAccount.empty()) LoadAchProgress(startupAchAccount);
     LoadClearsCache();
     LoadVaultCache();
     LoadAchTrackerState();
@@ -11773,6 +11791,11 @@ void AddonUnload() {
     APIDefs->Events_Unsubscribe(EV_AE_ACCOUNTS_RESP, AlterEgo::GW2API::OnAccountsResponse);
     APIDefs->Events_Unsubscribe(EV_HOARD_ACCOUNTS_CHANGED, AlterEgo::GW2API::OnAccountsChanged);
 
+    // Persist achievement progress before shutting down the data subsystem,
+    // including updates received while the Achievements tab was not visible.
+    if (g_AchProgressDirty && !g_AchCachedAccount.empty())
+        SaveAchProgress(g_AchCachedAccount);
+
     // Shutdown Skinventory subsystems
     Skinventory::WikiImage::Shutdown();
     Skinventory::OwnedSkins::Shutdown();
@@ -11789,9 +11812,6 @@ void AddonUnload() {
     SaveSettings();
     SaveAchTrackerState();
     if (g_LoginTimestampsDirty) SaveLoginTimestamps();
-    if (g_AchProgressDirty && !g_AchCachedAccount.empty()) {
-        SaveAchProgress(g_AchCachedAccount);
-    }
     AlterEgo::GW2API::SaveItemNameCache();
     AlterEgo::FontManager::Shutdown();
     APIDefs = nullptr;
@@ -14116,41 +14136,15 @@ static void RenderAchievements() {
         FetchActiveSpecialEvent();
     }
 
-    // Hydrate cache for the current account on first opportunity (post-H&S handshake).
-    {
-        const std::string& curAcct = AlterEgo::GW2API::GetCurrentAccountName();
-        if (!curAcct.empty() && g_AchCachedAccount != curAcct) {
-            LoadAchProgress(curAcct);
-        }
-    }
-
-    // Periodic flush: write dirty cache every 30s instead of on every change.
-    if (g_AchProgressDirty && !g_AchCachedAccount.empty()) {
-        auto now = std::chrono::steady_clock::now();
-        if (now - g_AchLastSave > std::chrono::seconds(30)) {
-            SaveAchProgress(g_AchCachedAccount);
-        }
-    }
-
-    // Deferred requery on account change
+    // Cache is restored globally on startup/account selection, regardless of
+    // whether this tab is visible. Only schedule the new account's refresh here.
     if (g_AchNeedRequery && !g_AchProgressFetching) {
         g_AchNeedRequery = false;
-        // Persist the outgoing account's progress before swapping.
-        if (g_AchProgressDirty && !g_AchCachedAccount.empty()) {
-            SaveAchProgress(g_AchCachedAccount);
-        }
         std::vector<uint32_t> pinnedCopy;
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchProgress.clear();        // discard stale progress from previous account
-            g_AchOptimisticTime.clear();
-            g_AchProgressGen++;
             pinnedCopy = g_AchPinned;
         }
-        // Hydrate the new account from disk (instant rail counts; background refresh
-        // below catches any updates since the cache was written).
-        const std::string& newAcct = AlterEgo::GW2API::GetCurrentAccountName();
-        if (!newAcct.empty()) LoadAchProgress(newAcct);
         if (AlterEgo::AutoRefreshPolicy::Enabled() && !pinnedCopy.empty()) {
             SendAchProgressQuery(pinnedCopy, true);
         }
@@ -15421,6 +15415,32 @@ static void RenderAchievementsStatusRow() {
     }
 }
 
+
+static void PollAchievementCachePersistence() {
+    const std::string account = GetAchievementCacheAccount();
+    if (!account.empty() && account != g_AchCachedAccount) {
+        // Flush outgoing data before loading another account. Account switching
+        // must never overwrite the previous account's progress file.
+        if (g_AchProgressDirty && !g_AchCachedAccount.empty())
+            SaveAchProgress(g_AchCachedAccount);
+        LoadAchProgress(account);
+
+        // Responses/retries issued for the old account must not update the new
+        // cache. Fresh queries can be scheduled for the selected account.
+        g_AchProgressFetching = false;
+        g_AchProgressQueryStartMs = 0;
+        g_AchRetryAtMs = 0;
+        g_AchCatProgressPending = 0;
+    }
+
+    // Runs even while the Achievements tab (or the whole addon window) is
+    // closed, so API replies and alerts are persisted without opening the tab.
+    if (g_AchProgressDirty && !g_AchCachedAccount.empty()) {
+        if (std::chrono::steady_clock::now() - g_AchLastSave >= std::chrono::seconds(30))
+            SaveAchProgress(g_AchCachedAccount);
+    }
+}
+
 // --- Main Render ---
 
 // Pushes the configured default TTF for the whole frame (all windows + popouts).
@@ -15571,6 +15591,7 @@ void AddonRender() {
     Skinventory::OwnedSkins::Tick();
     AlterEgo::GW2API::PollRetries();   // fire any scheduled H&S BUSY backoff retry
     PollAutoCharacterRefresh();     // MumbleLink-triggered requests (debounced, cooldown, no overlap)
+    PollAchievementCachePersistence(); // load/save disk progress, even when window is hidden
 
     // H&S can drop a progress response (or an addon can be reloaded during a
     // query). Never leave the Achievements Refresh action stuck indefinitely.
