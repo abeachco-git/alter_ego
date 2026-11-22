@@ -8393,7 +8393,11 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
     }
 
     auto it = build.gear.find(slot);
-    bool hasStat = (it != build.gear.end() && it->second.stat_id != 0);
+    // Source builds can have an explicit, usable stat name before the item
+    // details cache resolves its numeric ID. Don't show an imported trinket
+    // as an empty slot just because its itemstat metadata is still loading.
+    bool hasStat = it != build.gear.end() &&
+        (it->second.stat_id != 0 || !it->second.stat_name.empty());
     bool hasWeaponType = (it != build.gear.end() && !it->second.weapon_type.empty());
     bool hasRelic = (strcmp(slot, "Relic") == 0 &&
                      (build.relic_id != 0 || !build.relic_name.empty() ||
