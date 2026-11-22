@@ -1,4 +1,5 @@
 name: Temporary MetaBattle live parser smoke test
+# Re-run current parser against the live HTML after URL validation fix.
 on:
   push:
     paths:
