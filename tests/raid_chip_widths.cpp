@@ -29,9 +29,14 @@ int main() {
     // two large chips stay equal rather than clipping their neighbors.
     const auto narrow = Calculate(9111, labels, 550.0f, 4.0f);
     assert(std::abs(narrow[0] - narrow[5]) < 0.01f);
-    assert(narrow[0] >= 99.9f);
+    assert(narrow[0] >= 169.9f);
     assert(narrow[1] < normal[1] && narrow[2] < normal[2]);
     assert(std::abs(Sum(narrow) + 5*4 - 550.0f) < 0.1f);
+    // Tiny sizes still leave nonzero hit targets for the short encounters.
+    const auto tiny = Calculate(9111, labels, 250.0f, 4.0f);
+    assert(std::abs(tiny[0]-tiny[5]) < 0.01f);
+    for (float chip : tiny) assert(chip > 0.0f);
+    assert(std::abs(Sum(tiny) + 5*4 - 250.0f) < 0.1f);
     // Responsive Hide Complete layout retains equal boss widths.
     const auto filtered = Calculate(9111, {"Dhuum","Eyes","Soulless Horror"}, 600.0f, 4.0f);
     assert(filtered.size() == 3 && std::abs(filtered[0]-filtered[2]) < 0.01f);

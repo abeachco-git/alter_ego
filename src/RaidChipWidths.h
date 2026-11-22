@@ -45,10 +45,14 @@ inline std::vector<float> Calculate(unsigned wingId,
             result.push_back(available * CompactWidth(label) / compactTotal);
         return result;
     }
-    // Preserve >=100px per boss where feasible. At narrow widths reduce the
-    // secondary chips together, keeping the two main bosses equal.
-    constexpr float kPreferredBossMin = 100.0f;
-    const float compactBudget = std::max(0.0f, available - kPreferredBossMin * wideCount);
+    // Reserve more space for boss names and a bounty date. When the window
+    // gets very narrow, keep a portion for the secondary chips instead of
+    // collapsing their hitboxes to zero.
+    constexpr float kPreferredBossMin = 170.0f;
+    constexpr float kMinimumCompactFraction = 0.25f;
+    const float compactBudget = std::min(compactTotal,
+        std::max(available * kMinimumCompactFraction,
+                 available - kPreferredBossMin * static_cast<float>(wideCount)));
     const float compactScale = compactTotal > 0
         ? std::min(1.0f, compactBudget / compactTotal) : 0.0f;
     const float bossWidth = std::max(0.0f,
