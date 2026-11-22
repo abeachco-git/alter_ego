@@ -2364,53 +2364,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         !g_VaultFetched.load() && !g_VaultFetching.load() && !g_VaultInitialAttempted)
         FetchVaultData();
 
-    const bool fetching = g_VaultFetching.load();
-    if (fetching) {
-        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-    }
-    if (RenderActionButton("Refresh##vault") && !fetching) FetchVaultData();
-    if (fetching) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
-    ImGui::SameLine();
     LoadClearUiSettings();
-    const char* filterLabel = g_VaultHideComplete
-        ? "Show Complete##vault" : "Hide Complete##vault";
-    if (RenderActionButton(filterLabel)) {
-        g_VaultHideComplete = !g_VaultHideComplete;
-        SaveClearUiSettings();
-    }
-
-    // Snapshot the response-thread state before giving it to ImGui.
-    std::time_t updated;
-    bool showingData, failed, pending, waitingForDailyRollover;
-    std::string status;
-    std::chrono::steady_clock::time_point successUntil;
-    {
-        std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        updated = g_VaultLastSuccessTime;
-        showingData = g_VaultFetched.load();
-        failed = g_VaultLastAttemptFailed;
-        pending = g_VaultFetching.load();
-        waitingForDailyRollover = AlterEgo::AutoRefreshPolicy::Enabled() &&
-            g_VaultDailyRolloverPending && g_VaultDailyRolloverRetryAtMs != 0;
-        status = g_VaultStatusMessage;
-        successUntil = g_VaultSuccessUntil;
-    }
-    AlterEgo::RefreshUI::Timestamp(updated, "Vault");
-    if (pending) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-            status.empty() ? "Fetching Vault objectives..." : status);
-    } else if (failed) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, status);
-    } else if (waitingForDailyRollover) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-            status.empty() ? "Waiting for updated daily Vault objectives..." : status);
-    } else if (std::chrono::steady_clock::now() < successUntil) {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
-    } else {
-        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-            showingData ? "Ready" : "No Vault data available - click Refresh");
-    }
 
     RenderGw2ServerDay();
     ImGui::Separator();
@@ -2578,37 +2532,7 @@ static std::string UpcomingBountyLabel(const std::string& encounter,
 
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr)
 {
-    const bool fetching = g_ClearsFetching || g_ClearsQueryPending.load() ||
-        g_ClearsCompletionInFlight.load() || g_ClearsRetryAtMs.load() != 0;
-    if (fetching) { ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true); ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f); }
-    if (RenderActionButton("Refresh##clears") && !fetching) FetchClears();
-    if (fetching) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
-    ImGui::SameLine();
     LoadClearUiSettings();
-    const char* filterLabel = g_ClearsHideComplete
-        ? "Show Complete##clears" : "Hide Complete##clears";
-    if (RenderActionButton(filterLabel)) {
-        g_ClearsHideComplete = !g_ClearsHideComplete;
-        SaveClearUiSettings();
-    }
-    AlterEgo::RefreshUI::Timestamp(g_ClearsLastSuccessTime, "Clears");
-    {
-        std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (fetching)
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-                g_ClearsStatusMsg.empty() ? "Querying completion..." : g_ClearsStatusMsg);
-        else if (g_ClearsDailyRolloverPending &&
-                 g_ClearsDailyRolloverRetryAtMs.load() != 0)
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Working,
-                g_ClearsStatusMsg.empty() ? "Waiting for updated daily clears..." : g_ClearsStatusMsg);
-        else if (!g_ClearsStatusMsg.empty())
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Error, g_ClearsStatusMsg);
-        else if (std::chrono::steady_clock::now() < g_ClearsSuccessUntil)
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Success, "Refresh complete");
-        else
-            AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Ready,
-                g_ClearsFetched ? "Ready" : "No Clears data available - click Refresh");
-    }
 
     RenderGw2ServerDay();
     ImGui::Separator();
@@ -3246,6 +3170,89 @@ static void RenderClearsShared(bool showVault) {
 }
 void RenderVault() { RenderClearsShared(true); }
 void RenderClears() { RenderClearsShared(false); }
+
+bool VaultHideComplete() { LoadClearUiSettings(); return g_VaultHideComplete; }
+bool ClearsHideComplete() { LoadClearUiSettings(); return g_ClearsHideComplete; }
+void ToggleVaultHideComplete() {
+    LoadClearUiSettings();
+    g_VaultHideComplete = !g_VaultHideComplete;
+    SaveClearUiSettings();
+}
+void ToggleClearsHideComplete() {
+    LoadClearUiSettings();
+    g_ClearsHideComplete = !g_ClearsHideComplete;
+    SaveClearUiSettings();
+}
+
+void RenderVaultStatusRow() {
+    // Snapshot worker-thread data before rendering; never keep the lock while
+    // invoking a manual refresh, which can initiate new API requests.
+    std::time_t updated;
+    bool showingData, failed, pending, waitingForDailyRollover;
+    std::string status;
+    std::chrono::steady_clock::time_point successUntil;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        updated = g_VaultLastSuccessTime;
+        showingData = g_VaultFetched.load();
+        failed = g_VaultLastAttemptFailed;
+        pending = g_VaultFetching.load();
+        waitingForDailyRollover = AlterEgo::AutoRefreshPolicy::Enabled() &&
+            g_VaultDailyRolloverPending && g_VaultDailyRolloverRetryAtMs != 0;
+        status = g_VaultStatusMessage;
+        successUntil = g_VaultSuccessUntil;
+    }
+    AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
+    std::string detail = showingData ? "Ready" : "No Vault data available - click Refresh";
+    if (pending) {
+        state = AlterEgo::RefreshUI::State::Working;
+        detail = status.empty() ? "Fetching Vault objectives..." : status;
+    } else if (failed) {
+        state = AlterEgo::RefreshUI::State::Error;
+        detail = status.empty() ? "Vault refresh failed" : status;
+    } else if (waitingForDailyRollover) {
+        state = AlterEgo::RefreshUI::State::Working;
+        detail = status.empty() ? "Waiting for updated daily Vault objectives..." : status;
+    } else if (std::chrono::steady_clock::now() < successUntil) {
+        state = AlterEgo::RefreshUI::State::Success;
+        detail = "Refresh complete";
+    }
+    if (AlterEgo::RefreshUI::Row("vault", updated, "Vault", state, detail, pending))
+        FetchVaultData();
+}
+
+void RenderClearsStatusRow() {
+    const bool fetching = g_ClearsFetching || g_ClearsQueryPending.load() ||
+        g_ClearsCompletionInFlight.load() || g_ClearsRetryAtMs.load() != 0;
+    std::time_t updated;
+    std::string status;
+    bool waitingForDailyRollover;
+    bool haveData;
+    std::chrono::steady_clock::time_point successUntil;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        updated = g_ClearsLastSuccessTime;
+        status = g_ClearsStatusMsg;
+        haveData = g_ClearsFetched;
+        waitingForDailyRollover = g_ClearsDailyRolloverPending &&
+                                  g_ClearsDailyRolloverRetryAtMs.load() != 0;
+        successUntil = g_ClearsSuccessUntil;
+    }
+    AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
+    std::string detail = haveData ? "Ready" : "No Clears data available - click Refresh";
+    if (fetching || waitingForDailyRollover) {
+        state = AlterEgo::RefreshUI::State::Working;
+        detail = status.empty() ? "Querying completion..." : status;
+    } else if (!status.empty()) {
+        state = AlterEgo::RefreshUI::State::Error;
+        detail = status;
+    } else if (std::chrono::steady_clock::now() < successUntil) {
+        state = AlterEgo::RefreshUI::State::Success;
+        detail = "Refresh complete";
+    }
+    if (AlterEgo::RefreshUI::Row("clears", updated, "Clears", state, detail, fetching))
+        FetchClears();
+}
 
 // Called AFTER tab rendering: account changes and UTC reset invalidation
 // have already run. Navigation itself is the trigger; manual Refresh
