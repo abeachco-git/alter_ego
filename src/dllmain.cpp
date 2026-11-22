@@ -42,6 +42,7 @@
 #include "AddonShared.h"
 #include "Clears.h"
 #include "CompletionTheme.h"
+#include "EquipmentTabCore.h"
 #include "RefreshUI.h"
 
 // Version constants
@@ -1427,6 +1428,17 @@ static ImVec4 GetProfessionColor(const std::string& prof) {
     return ImVec4(0.80f, 0.80f, 0.80f, 1.0f);
 }
 
+// One name-color palette for the roster, its header, and Compare.
+static void RenderProfessionCharacterName(const std::string& name,
+                                          const std::string& profession) {
+    ImGui::TextColored(GetProfessionColor(profession), "%s", name.c_str());
+}
+static void DrawProfessionCharacterName(ImDrawList* draw, ImVec2 pos,
+                                        const std::string& name,
+                                        const std::string& profession) {
+    draw->AddText(pos, ImGui::ColorConvertFloat4ToU32(
+        GetProfessionColor(profession)), name.c_str());
+}
 // Core profession icon URL from API (fetched at startup via FetchProfessionInfoAsync)
 static const char* GetProfessionIconUrl(const std::string& prof) {
     const auto* info = AlterEgo::GW2API::GetProfessionInfo(prof);
@@ -3734,16 +3746,17 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
 // save-dialog opener, so the Equipment view can call it without duplicating
 // build-selection logic.
 static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab = 0);
+// Shared by Characters, Save, and Compare. Saved library data is irrelevant.
+static int GetRetrievedEquipmentTabCount(const AlterEgo::Character& ch) {
+    return AlterEgo::EquipmentTabCore::Count(ch);
+}
 
 static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Both detail views start at the same origin below the Equipment / Build tabs.
     // Equipment items supply their own padding further down the pane.
 
     // Equipment tab selector
-    int maxTab = 1;
-    for (const auto& eq : ch.equipment) {
-        if (eq.tab > maxTab) maxTab = eq.tab;
-    }
+    const int maxTab = GetRetrievedEquipmentTabCount(ch);
     int tab = (g_SelectedEquipTab > 0) ? g_SelectedEquipTab : ch.active_equipment_tab;
     if (tab < 1 || tab > maxTab)
         tab = (ch.active_equipment_tab >= 1 && ch.active_equipment_tab <= maxTab)
@@ -7918,11 +7931,8 @@ static void RenderSaveToLibraryDialog() {
     if (g_SaveLibIncludeEquip) {
         const auto* ch = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
         if (ch) {
-            // Find max equipment tab
-            int maxTab = 1;
-            for (const auto& eq : ch->equipment) {
-                if (eq.tab > maxTab) maxTab = eq.tab;
-            }
+            // Same retrieved equipment tabs as Characters / Compare.
+            const int maxTab = GetRetrievedEquipmentTabCount(*ch);
 
             ImGui::Indent(16);
             for (int t = 1; t <= maxTab; t++) {
@@ -9745,17 +9755,31 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
     }
 }
 
+// Draw the same icon and profession-colored name as Characters, leaving the
+// Active (auto) prefix neutral. Clip out the combo arrow and adjacent columns.
+static void DrawCompareProfessionCharacterEntry(ImDrawList* draw,
+    ImVec2 min, ImVec2 max, const std::string& profession,
+    const std::string& name, const char* prefix = nullptr,
+    bool preview = false) {
+    const float h = max.y - min.y;
+    DrawCompareCharacterProfessionIcon(draw, min, h, profession);
+    const float y = min.y + (h - ImGui::GetTextLineHeight()) * 0.5f;
+    float x = min.x + 32.0f;
+    const float right = max.x - (preview ? 29.0f : 6.0f);
+    if (right <= x) return;
+    draw->PushClipRect(ImVec2(x,min.y), ImVec2(right,max.y), true);
+    if (prefix && *prefix) {
+        draw->AddText(ImVec2(x,y), ImGui::GetColorU32(ImGuiCol_Text), prefix);
+        x += ImGui::CalcTextSize(prefix).x;
+    }
+    DrawProfessionCharacterName(draw, ImVec2(x,y), name, profession);
+    draw->PopClipRect();
+}
 // Dedicated top-level Compare tab. Keep the selection by saved build ID so
 // reordering or deleting entries in Build Library doesn't select a wrong build.
 static void RenderCompareTab() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
-    // The tab already supplies the context. Keep only functional controls.
-    if (builds.empty()) {
-        ImGui::Spacing();
-        ImGui::TextWrapped("No saved builds yet. Use Characters > Builds > Save Current Build + Gear to Library, or create one in Build Library.");
-        return;
-    }
-
+    // Live selectors remain useful even with an empty saved-build library.
     // Use the exact character ordering selected on the Characters tab:
     // Custom, Name, Class, Level, Age, Birthday and Last Login, including the
     // ascending/descending toggle and multi-account grouping.
@@ -9933,38 +9957,35 @@ static void RenderCompareTab() {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
-    // Reserve a narrow icon gutter in both the collapsed preview and each
-    // open-list row. The icon is overlaid after ImGui renders the widget, so
-    // native selection highlights, borders, arrows and keyboard handling stay.
-    constexpr const char* compareIconIndent = "      ";
-    const std::string selectedCharPreview =
-        g_LibCompareChar.empty() ? "Active (auto) - " + character->name : character->name;
-    const std::string previewWithIcon = std::string(compareIconIndent) + selectedCharPreview;
-    const ImVec2 previewPos = ImGui::GetCursorScreenPos();
+    // Keep native ImGui popup/keyboard behavior, but draw profession names in
+    // the same colors as the character list, including the closed preview.
+    const char* autoPrefix = "Active (auto) - ";
+    const ImVec2 previewMin = ImGui::GetCursorScreenPos();
+    const float previewWidth = ImGui::GetContentRegionAvail().x;
     const float previewHeight = ImGui::GetFrameHeight();
-    ImDrawList* previewDrawList = ImGui::GetWindowDrawList();
-    if (ImGui::BeginCombo("##compareCharacter", previewWithIcon.c_str())) {
+    ImDrawList* previewDraw = ImGui::GetWindowDrawList();
+    if (ImGui::BeginCombo("##compareCharacter", "")) {
         const AlterEgo::Character* autoCharacter = character;
-        for (const auto* ch : compareMatches) {
+        for (const auto* ch : compareMatches)
             if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
-        }
-        const std::string autoLabel = std::string(compareIconIndent) +
-            (g_CurrentCharName.empty() ? "Active (auto)" :
-                "Active (auto) - " + g_CurrentCharName);
-        const bool autoClicked = ImGui::Selectable(autoLabel.c_str(), g_LibCompareChar.empty());
-        DrawCompareCharacterProfessionIcon(ImGui::GetWindowDrawList(),
-            ImGui::GetItemRectMin(), ImGui::GetItemRectSize().y, autoCharacter->profession);
+        const ImVec2 rowSize(0.0f, ImMax(24.0f, ImGui::GetTextLineHeightWithSpacing()+3.0f));
+        const bool autoClicked = ImGui::Selectable("##compareAutoCharacter",
+            g_LibCompareChar.empty(), ImGuiSelectableFlags_None, rowSize);
+        DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
+            ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+            autoCharacter->profession, autoCharacter->name, autoPrefix);
         if (autoClicked) {
             g_LibCompareChar.clear();
             g_LibCompareSavedManual = false;
         }
         for (const auto* ch : compareMatches) {
+            ImGui::PushID(ch->name.c_str());
             const bool selected = ch->name == g_LibCompareChar;
-            // Keep each option to the profession icon and character name.
-            const std::string label = std::string(compareIconIndent) + ch->name;
-            const bool clicked = ImGui::Selectable(label.c_str(), selected);
-            DrawCompareCharacterProfessionIcon(ImGui::GetWindowDrawList(),
-                ImGui::GetItemRectMin(), ImGui::GetItemRectSize().y, ch->profession);
+            const bool clicked = ImGui::Selectable("##compareCharacterEntry",
+                selected, ImGuiSelectableFlags_None, rowSize);
+            DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
+                ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                ch->profession, ch->name);
             if (clicked) {
                 g_LibCompareChar = ch->name;
                 g_LibCompareSavedManual = false;
@@ -9972,11 +9993,14 @@ static void RenderCompareTab() {
                 g_LibCompareEquipTab = 0;
             }
             if (selected) ImGui::SetItemDefaultFocus();
+            ImGui::PopID();
         }
         ImGui::EndCombo();
     }
-    DrawCompareCharacterProfessionIcon(previewDrawList,
-        previewPos, previewHeight, character->profession);
+    DrawCompareProfessionCharacterEntry(previewDraw, previewMin,
+        ImVec2(previewMin.x+previewWidth, previewMin.y+previewHeight),
+        character->profession, character->name,
+        g_LibCompareChar.empty() ? autoPrefix : nullptr, true);
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1.0f);
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
@@ -9997,38 +10021,35 @@ static void RenderCompareTab() {
     }
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1.0f);
-    if (saved && !saved->gear.empty()) {
-        int maxTab = 0;
-        for (const auto& eq : character->equipment)
-            if (eq.tab > maxTab) maxTab = eq.tab;
-        if (maxTab > 0) {
-            if (g_LibCompareEquipTab > maxTab) g_LibCompareEquipTab = 0;
-            const int eqTab = g_LibCompareEquipTab == 0
-                ? GetActiveEquipmentTab(*character) : g_LibCompareEquipTab;
-            std::string label = "Tab " + std::to_string(eqTab);
-            auto nameIt = character->equipment_tab_names.find(eqTab);
-            if (nameIt != character->equipment_tab_names.end() && !nameIt->second.empty())
-                label = nameIt->second;
-            if (g_LibCompareEquipTab == 0) label = "Active (auto) - " + label;
-            if (ImGui::BeginCombo("##compareEquipTab", label.c_str())) {
-                if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
-                    g_LibCompareEquipTab = 0;
-                for (int tab = 1; tab <= maxTab; ++tab) {
-                    std::string tabName = "Tab " + std::to_string(tab);
-                    auto it = character->equipment_tab_names.find(tab);
-                    if (it != character->equipment_tab_names.end() && !it->second.empty())
-                        tabName = it->second;
-                    if (tab == character->active_equipment_tab) tabName += " (active)";
-                    if (ImGui::Selectable(tabName.c_str(), tab == g_LibCompareEquipTab))
-                        g_LibCompareEquipTab = tab;
-                }
-                ImGui::EndCombo();
-            }
-        } else {
-            ImGui::TextDisabled("No equipment tabs");
+    // The equipment selector belongs to retrieved character data, not the
+    // saved library. It remains available when the character has no matching
+    // saved build or when a saved build contains no equipment snapshot.
+    const int maxTab = GetRetrievedEquipmentTabCount(*character);
+    if (g_LibCompareEquipTab < 0 || g_LibCompareEquipTab > maxTab)
+        g_LibCompareEquipTab = 0;
+    const int activeTab = GetActiveEquipmentTab(*character);
+    const int selectedEquipTab = g_LibCompareEquipTab == 0
+        ? ((activeTab >= 1 && activeTab <= maxTab) ? activeTab : 1)
+        : g_LibCompareEquipTab;
+    auto equipmentTabName = [&](int tab) {
+        const auto it = character->equipment_tab_names.find(tab);
+        if (it != character->equipment_tab_names.end() && !it->second.empty())
+            return it->second;
+        return std::string("Tab ") + std::to_string(tab);
+    };
+    std::string equipmentLabel = equipmentTabName(selectedEquipTab);
+    if (g_LibCompareEquipTab == 0)
+        equipmentLabel = "Active (auto) - " + equipmentLabel;
+    if (ImGui::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
+        if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
+            g_LibCompareEquipTab = 0;
+        for (int tab = 1; tab <= maxTab; ++tab) {
+            std::string name = equipmentTabName(tab);
+            if (tab == character->active_equipment_tab) name += " (active)";
+            if (ImGui::Selectable(name.c_str(), tab == g_LibCompareEquipTab))
+                g_LibCompareEquipTab = tab;
         }
-    } else {
-        ImGui::TextDisabled("No saved gear");
+        ImGui::EndCombo();
     }
     ImGui::EndTable();
     }
@@ -10060,9 +10081,15 @@ static void RenderCompareTab() {
         ImGui::EndCombo();
     }
     if (!saved) {
-        ImGui::TextDisabled("No saved build matches %s. Choose one above or save a build for this character.",
-            target->name.c_str());
+        if (builds.empty())
+            ImGui::TextDisabled("No builds saved yet. Use Save on Characters to capture this build and equipment.");
+        else
+            ImGui::TextDisabled("No saved build matches %s. Choose one above or save a build for this character.",
+                target->name.c_str());
         return;
+    }
+    if (saved->gear.empty()) {
+        ImGui::TextDisabled("This saved build has no equipment snapshot; only the saved skills/traits can be compared.");
     }
     ImGui::Spacing();
     ImGui::BeginChild("##CompareResultScroll", ImVec2(0, 0), false);
@@ -15305,7 +15332,7 @@ void AddonRender() {
                         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
                             g_CharDragIdx = di;
                             ImGui::SetDragDropPayload("CHAR_REORDER", &di, sizeof(int));
-                            ImGui::TextColored(profColor, "%s", ch.name.c_str());
+                            RenderProfessionCharacterName(ch.name, ch.profession);
                             ImGui::EndDragDropSource();
                         }
                     }
@@ -15342,7 +15369,7 @@ void AddonRender() {
                         ImGui::SetCursorPosY(cpos.y + textYOff);
                     }
                     // First line: name + level + green dot
-                    ImGui::TextColored(profColor, "%s", ch.name.c_str());
+                    RenderProfessionCharacterName(ch.name, ch.profession);
                     ImGui::SameLine();
                     ImGui::TextColored(selected ? ImVec4(0.75f, 0.75f, 0.75f, 1.0f) : ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Lv%d", ch.level);
                     if (isLoggedIn) {
@@ -15734,7 +15761,7 @@ void AddonRender() {
                         ImGui::BeginGroup();
                         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + middleW);
                         ImGui::SetCursorPosY(startY + 2.0f);
-                        ImGui::TextColored(profColor, "%s", ch.name.c_str());
+                        RenderProfessionCharacterName(ch.name, ch.profession);
 
                         char meta[160];
                         std::string raceUp = ch.race;
