@@ -29,6 +29,10 @@ The following are **additions or changes relative to the original [PieOrCake Alt
 
 **Fashion capture limitation:** The GW2 character-equipment API exposes equipped skin/dye data but not all saved in-game Fashion Template slots or outfit/visibility states. Equipment-derived captures are flagged partial. Import a complete in-game Wardrobe Template chat link for full fidelity. Travel Templates and an in-addon dye editor are intentionally not included. Fashion snapshots are saved separately in `fashion_library.json` under the addon data directory; existing saved builds are unchanged.
 
+**Backup and restore:** Open **Library → Backup / Restore** from either Builds or Fashion. Export defaults to all three collections (Builds, Fashion, and Other data) in one ZIP archive. You can deselect collections, or export just Builds or just Fashion as a standalone JSON file. ZIP backups preserve separate JSON files and include local settings, saved preferences, achievement pins, login timestamps, and local custom portraits/fonts; regenerable GW2 API and Skinventory caches are excluded. Alter Ego writes standard uncompressed ZIP entries.
+
+Import accepts an Alter Ego ZIP backup, an original build-library JSON export, a standalone Fashion Library JSON, and recognized preference JSON files, including renamed files with identifiable structure. You can select which collections to restore. **Merge** skips existing build/Fashion IDs and keeps existing preference files; **Replace selected** overwrites only selected collections/files present in the import. Empty Builds/Fashion arrays are valid. Before writing, Alter Ego saves a recovery ZIP under its `backups` directory and attempts rollback if a write fails. Restoring a custom font or other UI preferences may require restarting the addon. Compressed third-party ZIP files are not currently supported; their individual JSON files can be imported directly.
+
 **Code and build:** GitHub Actions builds and checks the Windows x64 **UCRT** DLL. CI success does not mean every game/UI interaction has been tested.
 
 ## AI Notice
