@@ -106,6 +106,8 @@ jobs:
           grep -q 'AE_9100001' build/embedded_icons.rc
           grep -q 'AE_68326' build/embedded_icons.rc
           test "$(grep -c '^AE_' build/embedded_icons.rc)" -ge 80
+          test "$(grep -c '^AE_15' build/embedded_icons.rc)" -ge 27
+          test "$(grep -c '^AE_20' build/embedded_icons.rc)" -ge 27
       - name: Verify Windows x64 UCRT DLL
         run: |
           test -s build/AlterEgo.dll
