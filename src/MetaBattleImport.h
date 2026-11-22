@@ -145,11 +145,18 @@ inline bool Parse(const std::string& url, const std::string& html,
         page.importWarning += "Specialization lines incomplete; review traits.";
     }
 
-    // The equipment section includes secondary suggestions in prose. Only
-    // parse actual equipment-slot tiles, not inline Armory embeds in variants.
-    const size_t endAt = html.find("id=\"Consumables\"", gearAt);
-    const std::string gearHtml = html.substr(gearAt,
-        (endAt == std::string::npos ? html.size() : endAt) - gearAt);
+    // The default loadout appears directly below the Equipment heading.
+    // Later <h3> sections may contain complete *alternative* equipment grids
+    // (e.g. Reaper's Impact Sigil Variant): these can overwrite ring/backpiece
+    // slots and make infusion counts exceed 25, causing all totals to be lost.
+    // Bound the parser to the primary grid before the first subsection.
+    const size_t consumablesAt = html.find("id=\"Consumables\"", gearAt);
+    size_t equipmentEnd = consumablesAt == std::string::npos
+        ? html.size() : consumablesAt;
+    const size_t subsectionAt = html.find("<h3", gearAt);
+    if (subsectionAt != std::string::npos && subsectionAt < equipmentEnd)
+        equipmentEnd = subsectionAt;
+    const std::string gearHtml = html.substr(gearAt, equipmentEnd - gearAt);
     const std::regex smallRe(R"(<small\b[^>]*>([\s\S]*?)</small>)", std::regex::icase);
     int accessory = 0, ring = 0, weaponSet = 0;
     int sigilsSeen = 0;
