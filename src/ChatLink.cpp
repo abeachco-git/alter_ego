@@ -287,7 +287,7 @@ bool ChatLink::DecodeBuild(const std::string& link, DecodedBuildLink& out) {
     auto bytes = Base64Decode(payload);
     if (bytes.size() < 2 || bytes[0] != LINK_BUILD) return false;
 
-    memset(&out, 0, sizeof(out));
+    out = DecodedBuildLink{};
     out.profession = bytes[1];
 
     // 3 specialization lines starting at byte 2
@@ -402,7 +402,7 @@ bool ChatLink::DecodeWardrobe(const std::string& link, DecodedWardrobeLink& out)
     auto bytes = Base64Decode(payload);
     if (bytes.size() < 2 || bytes[0] != LINK_WARDROBE_TMPL) return false;
 
-    memset(&out, 0, sizeof(out));
+    out = DecodedWardrobeLink{};
 
     // All values are uint16_t LE, sequentially
     size_t offset = 1;
