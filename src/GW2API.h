@@ -141,6 +141,7 @@ namespace AlterEgo {
         std::string icon_url;
         std::string type;
         std::string rarity;
+        std::string weight_class; // GW2 /v2/skins details.weight_class: Light, Medium, Heavy, Clothing
         int dye_slot_count = -1; // Number of dye channels (-1 = unknown)
         std::vector<std::string> dye_slot_materials; // Per-channel material: "cloth", "leather", "metal"
     };
