@@ -82,6 +82,16 @@ jobs:
           /tmp/fashion_library
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/library_backup.cpp src/ChatLink.cpp -o /tmp/library_backup
           /tmp/library_backup
+      - name: Verify four live MetaBattle equipment imports
+        continue-on-error: true
+        run: |
+          for name in reaper harbinger chronomancer mechanist; do
+            test -s "/tmp/metabattle-live/${name}.html" || {
+              echo "MetaBattle live page not available: ${name}" >&2
+              exit 1
+            }
+          done
+          /tmp/metabattle_import /tmp/metabattle-live
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
