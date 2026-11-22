@@ -84,10 +84,9 @@ jobs:
           /tmp/fashion_library
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/library_backup.cpp src/ChatLink.cpp -o /tmp/library_backup
           /tmp/library_backup
-      - name: Verify four live MetaBattle equipment imports
-        continue-on-error: true
+      - name: Verify all six live MetaBattle equipment imports
         run: |
-          for name in reaper harbinger chronomancer mechanist; do
+          for name in reaper harbinger chronomancer mechanist scrapper holosmith; do
             test -s "/tmp/metabattle-live/${name}.html" || {
               echo "MetaBattle live page not available: ${name}" >&2
               exit 1
