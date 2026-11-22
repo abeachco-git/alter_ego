@@ -269,11 +269,20 @@ namespace AlterEgo {
         Other
     };
 
+    // Source-wide infusion requirements; unlike captured equipment infusions,
+    // these can be installed in any eligible gear slot.
+    struct BuildInfusionTotal {
+        uint32_t item_id = 0;
+        int count = 0;
+        std::string attribute; // Optional stat-family override; exact ID by default.
+    };
+
     // A saved build in the build library
     struct SavedBuild {
         std::string id;             // Unique ID (timestamp-based)
         std::string name;           // User-given name
         std::string source_character; // Origin character, empty for legacy/imported builds
+        std::string source_url;     // Snow Crows page, empty for local/other imports
         std::string chat_link;      // Original chat link [&...]
         std::string profession;     // Profession name (decoded)
         GameMode game_mode = GameMode::PvE;
@@ -288,6 +297,7 @@ namespace AlterEgo {
         std::vector<uint32_t> weapons;
         // Gear (user-entered)
         std::map<std::string, BuildGearSlot> gear; // slot name -> gear data
+        std::vector<BuildInfusionTotal> infusion_totals; // aggregate, no slot assignment
         std::string rune_name;      // Shared rune for all armor pieces
         uint32_t rune_id = 0;       // Shared rune item ID
         std::string relic_name;     // Relic name
@@ -430,6 +440,9 @@ namespace AlterEgo {
         // instead of being appended as a new one. Returns the insertion index,
         // or -1 if persistence failed.
         static int AddSavedBuild(SavedBuild build);
+        // Atomically replace the source-derived fields without changing the
+        // saved build identity, custom name, notes, or creation timestamp.
+        static bool RefreshSavedBuildFromSource(const std::string& id, const SavedBuild& updated);
         static bool RemoveSavedBuild(const std::string& id);
         static bool UpdateSavedBuild(const std::string& id, const std::string& name, const std::string& notes);
         static bool SetSavedBuildGameMode(const std::string& id, GameMode mode);

@@ -2618,6 +2618,27 @@ namespace AlterEgo {
         return SaveBuildLibrary() ? insertIdx : -1;
     }
 
+    bool GW2API::RefreshSavedBuildFromSource(const std::string& id, const SavedBuild& updated) {
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            for (auto& build : s_saved_builds) {
+                if (build.id != id || build.source_url.empty() ||
+                    build.source_url != updated.source_url) continue;
+                SavedBuild merged = updated;
+                merged.id = build.id;
+                merged.name = build.name;
+                merged.notes = build.notes;
+                merged.created = build.created;
+                merged.source_character = build.source_character;
+                build = std::move(merged);
+                found = true;
+                break;
+            }
+        }
+        return found && SaveBuildLibrary();
+    }
+
     bool GW2API::RemoveSavedBuild(const std::string& id) {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -2926,6 +2947,7 @@ namespace AlterEgo {
         bj["id"] = b.id;
         bj["name"] = b.name;
         if (!b.source_character.empty()) bj["source_character"] = b.source_character;
+        if (!b.source_url.empty()) bj["source_url"] = b.source_url;
         bj["chat_link"] = b.chat_link;
         if (!b.ae2_code.empty()) bj["ae2_code"] = b.ae2_code;
         bj["profession"] = b.profession;
@@ -2983,6 +3005,13 @@ namespace AlterEgo {
             }
             bj["gear"] = gearJ;
         }
+        if (!b.infusion_totals.empty()) {
+            json requirements = json::array();
+            for (const auto& inf : b.infusion_totals)
+                requirements.push_back({{"item_id", inf.item_id}, {"count", inf.count},
+                                        {"attribute", inf.attribute}});
+            bj["infusion_totals"] = requirements;
+        }
         if (!b.rune_name.empty()) bj["rune_name"] = b.rune_name;
         if (b.rune_id != 0) bj["rune_id"] = b.rune_id;
         if (!b.relic_name.empty()) bj["relic_name"] = b.relic_name;
@@ -3016,6 +3045,7 @@ namespace AlterEgo {
         b.id = bj.value("id", "");
         b.name = bj.value("name", "");
         b.source_character = bj.value("source_character", "");
+        b.source_url = bj.value("source_url", "");
         b.chat_link = bj.value("chat_link", "");
         b.ae2_code = bj.value("ae2_code", "");
         b.profession = bj.value("profession", "");
@@ -3104,6 +3134,17 @@ namespace AlterEgo {
                 gs.infusion = it.value().value("infusion", "");
                 gs.weapon_type = it.value().value("weapon_type", "");
                 b.gear[gs.slot] = gs;
+            }
+        }
+        if (bj.contains("infusion_totals") && bj["infusion_totals"].is_array()) {
+            for (const auto& inf : bj["infusion_totals"]) {
+                if (!inf.is_object()) continue;
+                BuildInfusionTotal requirement;
+                requirement.item_id = inf.value("item_id", (uint32_t)0);
+                requirement.count = inf.value("count", 0);
+                requirement.attribute = inf.value("attribute", "");
+                if (requirement.item_id != 0 && requirement.count > 0 && requirement.count <= 25)
+                    b.infusion_totals.push_back(std::move(requirement));
             }
         }
         b.rune_name = bj.value("rune_name", "");
