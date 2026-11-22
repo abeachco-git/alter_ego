@@ -101,23 +101,8 @@ static bool LibraryBackupApplyImport() {
     const unsigned selected = LibraryBackupImportMask();
     const std::string dir = AlterEgo::GW2API::GetDataDirectory();
     ui.error.clear();
-    if (selected & AlterEgo::Backup::Builds) {
-        if (!AlterEgo::GW2API::SaveBuildLibrary()) {
-            ui.error = "Could not save existing builds before restore."; return false;
-        }
-    }
-    if (selected & AlterEgo::Backup::Fashion) {
-        if (!g_FashionLibrary.Save()) {
-            ui.error = "Could not save existing Fashion before restore."; return false;
-        }
-    }
-    if (selected & AlterEgo::Backup::Other) {
-        SaveSettings();
-        SaveSession();
-        SaveAchTrackerState();
-        SaveCharSortConfig();
-        SaveLoginTimestamps();
-    }
+    // Do NOT write any current file before Backup::Apply has created a
+    // recovery snapshot. Saved builds/fashion are already persisted on edit.
     AlterEgo::Backup::Plan plan;
     if (!AlterEgo::Backup::Prepare(dir, ui.package, selected, ui.replace, plan, ui.error))
         return false;
@@ -154,6 +139,7 @@ static void RenderLibraryBackupUI() {
                 ui.error.clear();
                 if (AlterEgo::Backup::ReadPackage(path, ui.package, ui.error)) {
                     ui.importedPath = path;
+                    ui.lastRecovery.clear();
                     const unsigned available = ui.package.available;
                     ui.importBuilds = (available & AlterEgo::Backup::Builds) != 0;
                     ui.importFashion = (available & AlterEgo::Backup::Fashion) != 0;
@@ -215,11 +201,9 @@ static void RenderLibraryBackupUI() {
                     local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
             }
             if (LibraryBackupFilePicker(true, zip, filename)) {
-                // Persist currently edited preferences before taking a snapshot.
-                if (mask & AlterEgo::Backup::Builds)
-                    AlterEgo::GW2API::SaveBuildLibrary();
-                if (mask & AlterEgo::Backup::Fashion)
-                    g_FashionLibrary.Save();
+                // Only local preferences need flushing; saved builds and
+                // fashion were persisted on every edit. Never overwrite a
+                // possibly damaged library file merely to export it.
                 if (mask & AlterEgo::Backup::Other) {
                     SaveSettings();
                     SaveSession();
@@ -306,7 +290,10 @@ static void RenderLibraryBackupUI() {
         }
         ImGui::TextDisabled("A recovery ZIP is saved in Alter Ego's backups folder before changes.");
         ImGui::Spacing();
+        if ((selected & AlterEgo::Backup::Builds) && g_EditDirty)
+            ImGui::TextWrapped("Save or cancel unsaved build edits before restoring Builds.");
         const bool canRestore = selected && ui.error.empty() &&
+            (!(selected & AlterEgo::Backup::Builds) || !g_EditDirty) &&
             (!ui.replace || ui.replaceAcknowledged);
         if (canRestore && RenderGoldButton(ui.replace ?
                  "Replace Selected##ae_backup_import" : "Merge##ae_backup_import")) {
