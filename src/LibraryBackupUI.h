@@ -183,7 +183,7 @@ static void RenderLibraryBackupUI() {
         }
         ImGui::TextDisabled("GW2 API caches are excluded; custom portraits and fonts are included.");
         ImGui::Spacing();
-        if (mask && RenderGoldButton("Export##ae_backup_export")) {
+        if (mask && RenderActionButton("Export##ae_backup_export")) {
             const bool zip = !single || ui.exportZip;
             char filename[MAX_PATH] = {};
             if (!zip) {
@@ -218,7 +218,7 @@ static void RenderLibraryBackupUI() {
             }
         }
         ImGui::SameLine();
-        if (RenderChipButton("Cancel##ae_backup_export", false)) ImGui::CloseCurrentPopup();
+        if (RenderActionButton("Cancel##ae_backup_export")) ImGui::CloseCurrentPopup();
         if (!ui.error.empty()) {
             ImGui::Spacing();
             ImGui::TextWrapped("Export failed: %s", ui.error.c_str());
@@ -292,19 +292,18 @@ static void RenderLibraryBackupUI() {
         const bool canRestore = selected && ui.error.empty() &&
             (!(selected & AlterEgo::Backup::Builds) || !g_EditDirty) &&
             (!ui.replace || ui.replaceAcknowledged);
-        if (canRestore && RenderGoldButton(ui.replace ?
-                 "Replace Selected##ae_backup_import" : "Merge##ae_backup_import")) {
+        if (!canRestore) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+        const bool restoreClicked = RenderActionButton(ui.replace ?
+            "Replace Selected##ae_backup_import" : "Merge##ae_backup_import");
+        if (!canRestore) ImGui::PopStyleVar();
+        if (canRestore && restoreClicked) {
             if (LibraryBackupApplyImport()) {
                 ImGui::CloseCurrentPopup();
             }
             ui.previewDirty = true;
         }
-        if (!canRestore) {
-            ImGui::TextDisabled(selected ? "Restore unavailable until validation/confirmation." :
-                                             "Select at least one collection.");
-        }
         ImGui::SameLine();
-        if (RenderChipButton("Cancel##ae_backup_import", false)) {
+        if (RenderActionButton("Cancel##ae_backup_import")) {
             ImGui::CloseCurrentPopup();
             ui.error.clear();
         }
