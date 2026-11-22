@@ -2937,46 +2937,103 @@ static void RenderClearsShared(bool showVault) {
     auto weeklyBuffered = weeklyReset + std::chrono::seconds(60);
 
     // ---- Clears reset detection ----
+    // Do not consume a reset before its API grace period has elapsed. A
+    // timestamp recorded during those 60 seconds used to lose the event.
+    const int64_t nowEpoch = ResetEpoch(now);
+    const int64_t dailyEpoch = ResetEpoch(dailyReset);
+    const int64_t weeklyEpoch = ResetEpoch(weeklyReset);
+    if (g_LastDailyReset == std::chrono::system_clock::time_point{})
+        g_LastDailyReset = std::chrono::system_clock::from_time_t(
+            (time_t)ClearsReset::InitialMarker(dailyEpoch, nowEpoch, 86400));
+    if (g_LastWeeklyReset == std::chrono::system_clock::time_point{})
+        g_LastWeeklyReset = std::chrono::system_clock::from_time_t(
+            (time_t)ClearsReset::InitialMarker(weeklyEpoch, nowEpoch, 7 * 86400));
+
     bool resetTriggered = false;
-    if (g_LastDailyReset != std::chrono::system_clock::time_point{} &&
-        dailyReset > g_LastDailyReset && now >= dailyBuffered) {
+    if (ClearsReset::Due(ResetEpoch(g_LastDailyReset), dailyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (!g_ClearsDailyRolloverPending) {
+            g_ClearsPriorDailyFractalIds = DailyIds(g_DailyFractals);
+            g_ClearsPriorDailyBountyIds = DailyIds(g_DailyBounties);
+            g_ClearsDailyRolloverRetries = 0;
+        }
+        g_ClearsDailyRolloverPending = true;
         g_DailyFractals.clear();
         g_DailyBounties.clear();
-        g_ClearsFetched = false;
+        // Preserve the existing weekly state and its completion colors.
+        g_ClearsFetched = !g_WeeklyWings.empty() || g_WeeklyStrikes.id != 0;
+        g_ClearsQueryPending = false;
+        g_ClearsStatusMsg = "New daily reset detected; fetching current objectives...";
+        g_LastDailyReset = dailyReset;
         resetTriggered = true;
     }
-    if (g_LastWeeklyReset != std::chrono::system_clock::time_point{} &&
-        weeklyReset > g_LastWeeklyReset && now >= weeklyBuffered) {
+    if (ClearsReset::Due(ResetEpoch(g_LastWeeklyReset), weeklyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_WeeklyWings.clear();
         g_WeeklyStrikes = ClearEntry{};
-        g_ClearsFetched = false;
+        g_ClearsFetched = !g_DailyFractals.empty() || !g_DailyBounties.empty();
+        g_ClearsQueryPending = false;
+        g_LastWeeklyReset = weeklyReset;
         resetTriggered = true;
     }
-    g_LastDailyReset  = dailyReset;
-    g_LastWeeklyReset = weeklyReset;
-
     if (resetTriggered && !g_ClearsFetching)
         FetchClears();
 
     // ---- Vault reset detection ----
-    if (g_VaultLastDailyReset != std::chrono::system_clock::time_point{} &&
-        dailyReset > g_VaultLastDailyReset && now >= dailyBuffered) {
+    if (g_VaultLastDailyReset == std::chrono::system_clock::time_point{})
+        g_VaultLastDailyReset = std::chrono::system_clock::from_time_t(
+            (time_t)ClearsReset::InitialMarker(dailyEpoch, nowEpoch, 86400));
+    if (g_VaultLastWeeklyReset == std::chrono::system_clock::time_point{})
+        g_VaultLastWeeklyReset = std::chrono::system_clock::from_time_t(
+            (time_t)ClearsReset::InitialMarker(weeklyEpoch, nowEpoch, 7 * 86400));
+
+    bool vaultResetTriggered = false;
+    if (ClearsReset::Due(ResetEpoch(g_VaultLastDailyReset), dailyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        g_VaultDaily = {};
+        if (!g_VaultDailyRolloverPending) {
+            g_VaultPriorDailyIds = DailyIds(g_VaultDaily);
+            g_VaultDailyRolloverRetries = 0;
+        }
+        g_VaultDailyRolloverPending = true;
+        g_VaultDaily = {};  // do not display previous-day daily objectives
         g_VaultFetched = false;
         g_VaultInitialAttempted = false;
+        g_VaultStatusMessage = "New daily reset detected; fetching current Vault...";
+        g_VaultLastDailyReset = dailyReset;
+        vaultResetTriggered = true;
     }
-    if (g_VaultLastWeeklyReset != std::chrono::system_clock::time_point{} &&
-        weeklyReset > g_VaultLastWeeklyReset && now >= weeklyBuffered) {
+    if (ClearsReset::Due(ResetEpoch(g_VaultLastWeeklyReset), weeklyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_VaultWeekly = {};
         g_VaultFetched = false;
         g_VaultInitialAttempted = false;
+        g_VaultLastWeeklyReset = weeklyReset;
+        vaultResetTriggered = true;
     }
-    g_VaultLastDailyReset  = dailyReset;
-    g_VaultLastWeeklyReset = weeklyReset;
+    // Keep Vault up to date even when the user is looking at Clears instead.
+    if (vaultResetTriggered && !g_VaultFetching.load())
+        FetchVaultData();
+
+    // Delayed retries run on the render thread (the only thread allowed to
+    // submit Nexus events), and never overlap with an in-flight fetch.
+    if (!g_ClearsFetching && !g_ClearsQueryPending.load()) {
+        const long long due = g_ClearsDailyRolloverRetryAtMs.load();
+        if (due != 0 && NowMs() >= due) {
+            g_ClearsDailyRolloverRetryAtMs = 0;
+            FetchClears();
+        }
+    }
+    bool retryVaultRollover = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (g_VaultDailyRolloverPending && !g_VaultFetching.load() &&
+            g_VaultDailyRolloverRetryAtMs != 0 &&
+            NowMs() >= g_VaultDailyRolloverRetryAtMs) {
+            g_VaultDailyRolloverRetryAtMs = 0;
+            retryVaultRollover = true;
+        }
+    }
+    if (retryVaultRollover) FetchVaultData();
 
     // ---- Clears deferred logic ----
     if (g_ClearsNeedRequery && g_ClearsFetched && !g_ClearsFetching) {
