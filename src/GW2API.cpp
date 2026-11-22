@@ -2641,6 +2641,8 @@ namespace AlterEgo {
                 merged.id = build.id;
                 merged.name = build.name;
                 merged.notes = build.notes;
+                merged.game_mode = build.game_mode;
+                merged.game_modes = build.game_modes;
                 // A source refresh must not discard user-entered infusion targets.
                 if (build.infusion_summary_present) {
                     merged.infusion_summary_present = true;
