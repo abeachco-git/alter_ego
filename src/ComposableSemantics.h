@@ -104,8 +104,10 @@ inline Summary Sigils(const Json& sigils) {
     for (auto it = sigils.at("gear").begin(); it != sigils.at("gear").end(); ++it) {
         if (!it.value().is_object()) continue;
         const std::string set = WeaponSet(it.key()) + ":";
-        Add(summary, set + Identity(it.value(), "sigil_id", "sigil"));
-        Add(summary, set + Identity(it.value(), "sigil2_id", "sigil2"));
+        const std::string first = Identity(it.value(), "sigil_id", "sigil");
+        const std::string second = Identity(it.value(), "sigil2_id", "sigil2");
+        if (!first.empty()) Add(summary, set + first);
+        if (!second.empty()) Add(summary, set + second);
     }
     summary.known = !summary.counts.empty();
     return summary;
