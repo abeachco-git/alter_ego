@@ -502,6 +502,8 @@ namespace AlterEgo {
         static bool SaveCapturedLoadoutComponent(const SavedBuild& capture,
                                                   const std::string& kind,
                                                   const std::string& name);
+    static bool ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
+        const std::string& kind, const std::string& componentId);
 
 
 
