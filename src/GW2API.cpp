@@ -3523,6 +3523,22 @@ namespace AlterEgo {
         return CreateLoadoutComponent(kind, name, selected->second);
     }
 
+    bool GW2API::ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
+                                                  const std::string& kind,
+                                                  const std::string& componentId) {
+        if (!Composable::IsKind(kind) || componentId.empty()) return false;
+        const auto parts = Composable::Split(SerializeSavedBuild(capture));
+        const auto selected = parts.find(kind);
+        if (selected == parts.end()) return false;
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            const auto* existing = Composable::Find(doc, kind, componentId);
+            if (!existing) return Composable::Fail(error, "Component not found.");
+            return Composable::UpdateShared(doc, kind, componentId,
+                Composable::ReplaceCapturedFieldsPreservingExtensions(
+                    existing->data, selected->second), error);
+        });
+    }
+
     bool GW2API::ExportBuildLibraryToFile(const std::string& path) {
         json j;
         {
