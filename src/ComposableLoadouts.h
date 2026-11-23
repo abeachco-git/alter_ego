@@ -307,6 +307,62 @@ inline bool FromJson(const Json& input, Document& output, std::string& error) {
     return true;
 }
 
+// A portable, single-component interchange format. The original upstream
+// monolithic Build format remains the compatibility interface; this v3-only
+// format never uses an existing component ID as its import identity.
+constexpr const char* kComponentFormat = "alter_ego_loadout_component";
+constexpr int kComponentVersion = 1;
+inline Json ExportComponent(const std::string& kind, const Component& component) {
+    return Json{{"format", kComponentFormat}, {"version", kComponentVersion},
+                {"kind", kind}, {"name", component.name}, {"data", component.data}};
+}
+inline bool ImportComponent(const Json& input, std::string& kind,
+                            Component& component, std::string& error) {
+    error.clear();
+    if (!input.is_object() || input.value("format", std::string()) != kComponentFormat ||
+        !input.contains("version") || !input.at("version").is_number_integer() ||
+        input.at("version").get<int>() != kComponentVersion ||
+        !input.contains("kind") || !input.at("kind").is_string() ||
+        !input.contains("name") || !input.at("name").is_string() ||
+        !input.contains("data") || !input.at("data").is_object())
+        return Fail(error, "Not a supported component export.");
+    const std::string parsedKind = input.at("kind").get<std::string>();
+    if (!IsKind(parsedKind) || input.at("name").get<std::string>().empty())
+        return Fail(error, "Invalid component type or name.");
+    const Json& data = input.at("data");
+    // A v3 component owns only its root fields. This makes exported pieces
+    // assignable without causing duplicate root ownership during Resolve().
+    for (auto it = data.begin(); it != data.end(); ++it) {
+        if (it.key() == "gear") {
+            if (!it.value().is_object())
+                return Fail(error, "Gear fields must form a slot object.");
+            for (auto slot = it.value().begin(); slot != it.value().end(); ++slot) {
+                if (parsedKind != "runes" && parsedKind != "sigils" &&
+                    parsedKind != "infusions" && SlotKind(slot.key()) != parsedKind)
+                    return Fail(error, "Equipment slot belongs to another component.");
+                if (!slot.value().is_object())
+                    return Fail(error, "Gear slot must contain named fields.");
+                for (auto field = slot.value().begin(); field != slot.value().end(); ++field) {
+                    const std::string upgrade = UpgradeKind(field.key());
+                    if (upgrade.empty()) {
+                        if (parsedKind == "runes" || parsedKind == "sigils" ||
+                            parsedKind == "infusions")
+                            return Fail(error, "Physical equipment field in upgrade component.");
+                    } else if (upgrade != parsedKind)
+                        return Fail(error, "Upgrade field belongs to another component.");
+                }
+            }
+        } else {
+            const auto owner = RootOwnership().find(it.key());
+            if (owner != RootOwnership().end() && owner->second != parsedKind)
+                return Fail(error, "Field belongs to another component: " + it.key());
+        }
+    }
+    kind = parsedKind;
+    component = {"", input.at("name").get<std::string>(), data};
+    return true;
+}
+
 // Transactional mutation utilities, shared by the future UI and the
 // compatibility adapter. Existing component updates are intentionally shared.
 inline bool Transaction(Document& doc,
