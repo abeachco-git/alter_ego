@@ -35,7 +35,7 @@ static const char* ComponentLabel(const std::string& kind) {
 }
 
 struct ComponentUICommand {
-    enum Type { None, Assign, CopyForLoadout, SetFashion, Create, Duplicate,
+    enum Type { None, Assign, CopyEditedForLoadout, SetFashion, Create, Duplicate,
                 Rename, EditShared, RemoveUnused, ImportPortableLoadout } type = None;
     std::string loadout_id, kind, component_id, name;
     ComponentJson data = ComponentJson::object();
@@ -54,7 +54,8 @@ static ComponentJson g_ComponentEditorDraft = ComponentJson::object();
 static std::string g_ComponentEditorError;
 static bool g_ComponentEditorOpen = false;
 static bool g_ComponentEditorNew = false;
-static std::string g_ComponentEditorMode; // create, duplicate, rename, edit
+static std::string g_ComponentEditorMode; // create, duplicate, rename, edit, copy_for_loadout
+static std::string g_ComponentEditorPrivateLoadoutId;
 static std::string g_ComponentStatus;
 
 
@@ -250,16 +251,28 @@ static void ComponentUIStartEditor(const std::string& mode,
     g_ComponentEditorMode = mode;
     g_ComponentEditorKind = kind;
     g_ComponentEditorId = id;
+    g_ComponentEditorPrivateLoadoutId.clear();
     g_ComponentSkillProfessionHint.clear();
+    g_ComponentCatalogSearch.clear();
+    g_ComponentStatSearch.clear();
     g_ComponentEditorName = component
         ? component->value("name", std::string()) : std::string("New ") + ComponentLabel(kind);
     if (mode == "duplicate") g_ComponentEditorName += " (Copy)";
+    if (mode == "copy_for_loadout") g_ComponentEditorName += " (Private)";
     g_ComponentEditorDraft = component && component->contains("data") &&
         component->at("data").is_object()
         ? component->at("data") : ComponentJson::object();
     g_ComponentEditorError.clear();
     g_ComponentEditorOpen = true;
 }
+static void ComponentUIStartPrivateEditor(const std::string& loadoutId,
+                                           const std::string& kind,
+                                           const std::string& componentId,
+                                           const ComponentJson* component) {
+    ComponentUIStartEditor("copy_for_loadout", kind, componentId, component);
+    g_ComponentEditorPrivateLoadoutId = loadoutId;
+}
+
 static bool ComponentUIEditorCanCommit() {
     if (g_ComponentEditorName.empty()) {
         g_ComponentEditorError = "Give the component a name.";
@@ -281,6 +294,7 @@ static void RenderComponentUIEditor() {
     ImGui::Text("%s - %s", ComponentLabel(g_ComponentEditorKind),
                 g_ComponentEditorMode == "edit" ? "Edit shared data" :
                 g_ComponentEditorMode == "duplicate" ? "Duplicate & edit" :
+                g_ComponentEditorMode == "copy_for_loadout" ? "Edit private copy" :
                 g_ComponentEditorMode == "create" ? "Create" : "Rename");
     const int uses = ComponentUIUsage(ComponentUISnapshot(), g_ComponentEditorKind,
                                       g_ComponentEditorId);
@@ -288,6 +302,10 @@ static void RenderComponentUIEditor() {
         ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.40f, 1.0f),
             "SHARED EDIT: updates %d referencing Loadout%s. Copy first for a private edit.",
             uses, uses == 1 ? "" : "s");
+    } else if (g_ComponentEditorMode == "copy_for_loadout") {
+        ImGui::TextColored(ImVec4(.73f,.92f,.76f,1.0f),
+            "PRIVATE COPY: Save creates a detached component for one Loadout.");
+        ImGui::TextDisabled("Cancel keeps the original shared reference unchanged.");
     } else if (g_ComponentEditorMode == "duplicate") {
         ImGui::TextDisabled("Creates an independent component; the source remains unchanged.");
     } else {
@@ -310,7 +328,11 @@ static void RenderComponentUIEditor() {
             cmd.kind = g_ComponentEditorKind;
             cmd.component_id = g_ComponentEditorId;
             cmd.name = g_ComponentEditorName;
-            if (g_ComponentEditorMode == "create" ||
+            if (g_ComponentEditorMode == "copy_for_loadout") {
+                cmd.type = ComponentUICommand::CopyEditedForLoadout;
+                cmd.loadout_id = g_ComponentEditorPrivateLoadoutId;
+                cmd.data = g_ComponentEditorDraft;
+            } else if (g_ComponentEditorMode == "create" ||
                 g_ComponentEditorMode == "duplicate") {
                 cmd.type = ComponentUICommand::Create;
                 cmd.data = g_ComponentEditorDraft;
@@ -477,8 +499,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
                     ComponentUIUsage(doc, kind, id));
             ImGui::SameLine();
             if (active && RenderActionButton("Copy & Edit##part")) {
-                g_ComponentCommand = {ComponentUICommand::CopyForLoadout,
-                    loadoutId, kind, id, shown + " (Private)", ComponentJson::object()};
+                ComponentUIStartPrivateEditor(loadoutId, kind, id, active);
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Create an independent copy, then edit without affecting other Loadouts.");
@@ -788,8 +809,7 @@ static void RenderComponentLibrary() {
                 const std::string targetName = meta.is_object()
                     ? meta.value("name", targetId) : targetId;
                 if (ImGui::Selectable((targetName + "##detach" + targetId).c_str())) {
-                    g_ComponentCommand = {ComponentUICommand::CopyForLoadout,
-                        targetId, kind, id, name + " (Private)", ComponentJson::object()};
+                    ComponentUIStartPrivateEditor(targetId, kind, id, item);
                 }
             }
             ImGui::EndCombo();
@@ -813,18 +833,15 @@ static void ProcessComponentUICommand() {
         success = API::AssignLoadoutComponent(
             command.loadout_id, command.kind, command.component_id);
         break;
-    case ComponentUICommand::CopyForLoadout:
-        success = API::CopyLoadoutComponent(
-            command.loadout_id, command.kind, command.name);
-        if (success) {
-            // The copy is selected by its new reference after a successful commit.
+    case ComponentUICommand::CopyEditedForLoadout:
+        success = API::CopyEditedLoadoutComponent(
+            command.loadout_id, command.kind, command.name, command.data);
+        if (success && g_LibraryCollection == 2) {
             const auto& latest = ComponentUISnapshot();
-            const auto* loadout = ComponentUIFindLoadout(latest, command.loadout_id);
-            if (loadout && loadout->contains("refs")) {
-                const auto id = loadout->at("refs").value(command.kind, std::string());
-                const auto* copy = ComponentUIFind(latest, command.kind, id);
-                if (copy) ComponentUIStartEditor("edit", command.kind, id, copy);
-            }
+            const auto* target = ComponentUIFindLoadout(latest, command.loadout_id);
+            if (target && target->contains("refs"))
+                ComponentUIOpenLibrary(command.kind,
+                    target->at("refs").value(command.kind, std::string()));
         }
         break;
     case ComponentUICommand::SetFashion:
