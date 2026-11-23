@@ -396,6 +396,43 @@ inline bool UpdateShared(Document& doc, const std::string& kind,
         return true;
     }, error);
 }
+// A live character snapshot may not know third-party/custom component fields.
+// Replace recorded fields, but retain only *unknown* root/gear extensions.
+// Known equipment or upgrade fields omitted by a new capture are intentionally
+// removed; they must not masquerade as current installed items.
+inline Json ReplaceCapturedFieldsPreservingExtensions(const Json& previous,
+                                                      const Json& captured) {
+    if (!previous.is_object() || !captured.is_object()) return captured;
+    Json result = captured;
+    for (auto it = previous.begin(); it != previous.end(); ++it) {
+        if (it.key() == "gear" && it.value().is_object()) {
+            for (auto slot = it.value().begin(); slot != it.value().end(); ++slot) {
+                if (!slot.value().is_object()) continue;
+                for (auto field = slot.value().begin();
+                     field != slot.value().end(); ++field) {
+                    static const std::set<std::string> knownFields = {
+                        "item_id", "infusion_snapshot", "infusion_ids",
+                        "infusion_attributes", "stat_id", "stat_name",
+                        "rune", "rune_id", "sigil", "sigil_id",
+                        "sigil2", "sigil2_id", "infusion", "weapon_type"
+                    };
+                    if (knownFields.count(field.key())) continue;
+                    if (!result.contains("gear")) result["gear"] = Json::object();
+                    if (!result["gear"].contains(slot.key()))
+                        result["gear"][slot.key()] = Json::object();
+                    if (result["gear"][slot.key()].is_object() &&
+                        !result["gear"][slot.key()].contains(field.key()))
+                        result["gear"][slot.key()][field.key()] = field.value();
+                }
+            }
+        } else if (!RootOwnership().count(it.key()) &&
+                   !result.contains(it.key())) {
+            result[it.key()] = it.value();
+        }
+    }
+    return result;
+}
+
 // Rename and edit together, with one validation/commit. A failure cannot
 // leave the component's name and payload at different revisions.
 inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
