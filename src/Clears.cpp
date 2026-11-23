@@ -25,6 +25,7 @@
 #include "Clears.h"
 #include "ClearsRotation.h"
 #include "StrikeDisplayName.h"
+#include "StrikePicker.h"
 #include "ClearsReset.h"
 #include "SectionRefresh.h"
 #include "AutoRefreshPolicy.h"
@@ -1508,39 +1509,6 @@ static uint32_t BountyBossToWing(const std::string& bossName) {
     return (it != map.end()) ? it->second : 0;
 }
 
-// Match the in-game raid picker without changing the source achievement-bit order.
-// Forging Steel has no corresponding objective in the current 14-bit list.
-static const char* StrikePickerCategory(const std::string& name) {
-    const std::string key = ClearsRotation::Normalize(name);
-    if (key == "oldlionscourt") return "Core Game";
-    if (key == "bears" || key == "shiverpeakspass" ||
-        key == "voiceofthefallenandclawofthefallen" ||
-        key == "fraenirofjormag" || key == "boneskinner" ||
-        key == "whisperofjormag" || key == "coldwar") return "Icebrood Saga";
-    if (key == "aetherbladehideout" || key == "xunlaijadejunkyard" ||
-        key == "kainengoverlook" || key == "harvesttemple") return "End of Dragons";
-    if (key == "cosmicobservatory" || key == "templeoffebe") return "Secrets of the Obscure";
-    if (key == "guardiansglade" || key == "kela") return "Janthir Wilds";
-    if (key == "nexusofeternity" || key == "vloxx") return "Visions of Eternity";
-    return "Strike Mission";
-}
-
-static int StrikePickerOrder(const std::string& name) {
-    static const std::unordered_map<std::string, int> ranks = {
-        {"bears", 10},
-        {"shiverpeakspass", 20}, {"voiceofthefallenandclawofthefallen", 21},
-        {"fraenirofjormag", 22}, {"boneskinner", 23},
-        {"whisperofjormag", 24}, {"coldwar", 26},
-        {"aetherbladehideout", 30}, {"xunlaijadejunkyard", 31},
-        {"kainengoverlook", 32}, {"harvesttemple", 33},
-        {"cosmicobservatory", 40}, {"templeoffebe", 41},
-        {"guardiansglade", 50}, {"kela", 50}, {"nexusofeternity", 60},
-        {"oldlionscourt", 100}
-    };
-    const auto it = ranks.find(ClearsRotation::Normalize(name));
-    return it != ranks.end() ? it->second : 100;
-}
-
 static const char* WingExpansion(uint32_t wingId) {
     switch (wingId) {
         case 9128: case 9147: case 9182: case 9144: return "Heart of Thorns";
@@ -2891,7 +2859,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 theme = WingTheme(wingId);
             } else if (!strikeName.empty()) {
                 display = AlterEgo::StrikeDisplayName(strikeName);
-                subtitle = StrikePickerCategory(strikeName);
+                subtitle = AlterEgo::StrikePickerCategory(strikeName);
                 bannerKey = "strike:" + strikeName;
                 theme = StrikeTheme(strikeName);
             } else {
@@ -2961,8 +2929,8 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         // Presentation order only: original achievement indices remain intact.
         std::stable_sort(pickerOrder.begin(), pickerOrder.end(),
             [](size_t left, size_t right) {
-                return StrikePickerOrder(g_WeeklyStrikes.bitNames[left]) <
-                       StrikePickerOrder(g_WeeklyStrikes.bitNames[right]);
+                return AlterEgo::StrikePickerOrder(g_WeeklyStrikes.bitNames[left]) <
+                       AlterEgo::StrikePickerOrder(g_WeeklyStrikes.bitNames[right]);
             });
 
         if (ImGui::BeginTable("##WeeklyStrikesGrid", strikeColumns,
@@ -2985,7 +2953,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 const char* description = isKela
                     ? "Kela, Seneschal of Waves. Weekly completion is from Guardian's Glade."
                     : nullptr;
-                const std::string subtitle = StrikePickerCategory(name);
+                const std::string subtitle = AlterEgo::StrikePickerCategory(name);
                 bool dailyCompletedToday = false;
                 const std::string date = UpcomingBountyLabel(
                     isKela ? "Kela" : name, g_DailyBounties,
