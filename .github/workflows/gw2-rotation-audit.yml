@@ -1,0 +1,30 @@
+name: Verify GW2 current daily category names
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/gw2-rotation-audit.yml']
+jobs:
+  check-daily:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch GW2 daily names from public API
+        run: |
+          python3 - <<'PY'
+          import json,urllib.request,datetime,time
+          print("UTC",datetime.datetime.now(datetime.timezone.utc).isoformat(),flush=True)
+          for cat in [88,475]:
+              def get(u):
+                  req=urllib.request.Request(u,headers={"User-Agent":"AlterEgo diagnostic","Cache-Control":"no-cache"})
+                  with urllib.request.urlopen(req,timeout=15) as r:
+                      print("URL",u,"HTTP",r.status,"Date",r.headers.get("Date"),"cache",r.headers.get("Cache-Control"),flush=True)
+                      return json.load(r)
+              url="https://api.guildwars2.com/v2/achievements/categories/"+str(cat)+"?ae_refresh="+str(int(time.time()*1000))
+              try:
+                  ids=get(url)["achievements"]
+                  print("CATEGORY",cat,"IDS",ids,flush=True)
+                  achievements=get("https://api.guildwars2.com/v2/achievements?ids="+",".join(map(str,ids)))
+                  for a in achievements:
+                      print(cat,a.get("id"),repr(a.get("name")),flush=True)
+              except Exception as e:
+                  print("ERROR",cat,str(e),flush=True)
+          PY
