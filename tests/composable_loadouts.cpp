@@ -196,6 +196,25 @@ int main() {
     assert(updatedRune->data["rune_name"] == "Updated Rune");
     assert(document.loadouts[0].refs.at("runes") == "runes:one");
 
+    // Save Active replacement drops stale known gear/upgrade fields while
+    // retaining foreign extension metadata and preserving other components.
+    Json previousCapture = {
+        {"gear", {{"Helm", {{"rune_id", 111},
+                            {"custom_mod", {{"label", "keep"}}}}}}},
+        {"extension", {{"source", "imported"}}}
+    };
+    Json newCapture = {{"gear", {{"Helm", {{"rune_id", 222}}}}}};
+    const Json overlay = ReplaceCapturedFieldsPreservingExtensions(
+        previousCapture, newCapture);
+    assert(overlay["gear"]["Helm"]["rune_id"] == 222);
+    assert(overlay["gear"]["Helm"]["custom_mod"]["label"] == "keep");
+    assert(overlay["extension"]["source"] == "imported");
+    Json cleared = ReplaceCapturedFieldsPreservingExtensions(
+        previousCapture, Json::object());
+    assert(cleared["gear"]["Helm"].contains("custom_mod"));
+    assert(!cleared["gear"]["Helm"].contains("rune_id"));
+    assert(cleared["extension"]["source"] == "imported");
+
     // Portable component packages have no stable ID. Importing them never
     // overwrites an existing shared component or changes existing references.
     const Component* reference = Find(document, "armor", "armor:one");
