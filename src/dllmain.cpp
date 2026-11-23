@@ -10608,7 +10608,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     size_t matchingComponents = 0, differentComponents = 0;
     size_t unknownComponents = 0;
     for (const auto& section : sections) {
-        if (section.differences) ++differentComponents;
+        if (section.kind != "other" && !section.recorded) ++unknownComponents;
+        else if (section.differences) ++differentComponents;
         else if (section.unverified || section.rows.empty()) ++unknownComponents;
         else ++matchingComponents;
     }
@@ -10620,8 +10621,10 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
 
     for (const auto& section : sections) {
         ImGui::PushID(section.kind.c_str());
-        const std::string status = section.differences
-            ? std::to_string(section.differences) + " differences"
+        const std::string status =
+            (section.kind != "other" && !section.recorded) ? "Not recorded"
+            : section.differences
+                ? std::to_string(section.differences) + " differences"
             : section.unverified
                 ? std::to_string(section.unverified) + " unverified"
                 : section.rows.empty()
@@ -10629,8 +10632,11 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     : "Matches";
         const std::string title = section.label + "  -  " + status +
             "###component_compare_section";
-        const ImGuiTreeNodeFlags flags = (section.differences || section.unverified)
-            ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+        const ImGuiTreeNodeFlags flags =
+            (section.kind != "other" && !section.recorded)
+                ? ImGuiTreeNodeFlags_None
+                : (section.differences || section.unverified)
+                    ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
         const bool expanded = ImGui::CollapsingHeader(title.c_str(), flags);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%zu match%s, %zu difference%s, %zu unverified\n%s",
@@ -10642,6 +10648,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         if (expanded) {
             if (!section.sourceName.empty())
                 ImGui::TextDisabled("Saved: %s", section.sourceName.c_str());
+            if (section.kind != "other" && !section.recorded)
+                ImGui::TextDisabled("No component data recorded. Default field values cannot establish a match.");
             if (section.rows.empty()) {
                 ImGui::TextDisabled(section.recorded
                     ? "No verifiable fields in retrieved character data."
