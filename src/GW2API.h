@@ -483,6 +483,18 @@ namespace AlterEgo {
                                                 const nlohmann::json& data);
         static bool SetLoadoutFashion(const std::string& loadoutId,
                                       const std::string& fashionId);
+        static bool CreateLoadoutComponent(const std::string& kind,
+                                           const std::string& name,
+                                           const nlohmann::json& data);
+        static bool DuplicateLoadoutComponent(const std::string& kind,
+                                              const std::string& componentId,
+                                              const std::string& name);
+        static bool RenameLoadoutComponent(const std::string& kind,
+                                           const std::string& componentId,
+                                           const std::string& name);
+        static bool DeleteUnusedLoadoutComponent(const std::string& kind,
+                                                 const std::string& componentId);
+
 
         // --- Build editor support ---
         // Encode a SavedBuild's definition (traits/skills/pets/legends/weapons) to a GW2 chat link.
