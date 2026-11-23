@@ -3329,6 +3329,122 @@ namespace AlterEgo {
         return true;
     }
 
+    // Apply a v3 edit atomically and rebuild the pre-existing SavedBuild UI
+    // projection. No UI or external importer needs to understand v3 yet.
+    static bool CommitComposableEdit(
+        const std::function<bool(Composable::Document&, std::string&)>& edit) {
+        std::lock_guard<std::mutex> persist(g_loadoutPersistenceMutex);
+        Composable::Document before;
+        {
+            std::lock_guard<std::mutex> lock(GW2API::s_mutex);
+            if (!g_loadoutDocumentLoaded) return false;
+            before = g_loadoutDocument;
+        }
+
+        Composable::Document next = before;
+        std::string error;
+        if (!edit(next, error) || !Composable::Validate(next, error))
+            return false;
+
+        // The game chat link is derived from specialization/skill selection.
+        // AE2 embeds both skills and gear; invalidate it whenever a component
+        // changes, instead of leaving an authoritative-looking stale code.
+        for (auto& loadout : next.loadouts) {
+            auto* previous = Composable::FindLoadout(before, loadout.id);
+            if (!previous) continue;
+            bool changed = false, buildChanged = false;
+            for (const auto& kind : Composable::Kinds()) {
+                auto oldRef = previous->refs.find(kind);
+                auto newRef = loadout.refs.find(kind);
+                if (oldRef == previous->refs.end() || newRef == loadout.refs.end()) {
+                    changed = true;
+                    continue;
+                }
+                const auto* oldPart = Composable::Find(before, kind, oldRef->second);
+                const auto* newPart = Composable::Find(next, kind, newRef->second);
+                if (oldRef->second != newRef->second ||
+                    (oldPart && newPart && oldPart->data != newPart->data)) {
+                    changed = true;
+                    if (kind == "base_build" || kind == "skills") buildChanged = true;
+                }
+            }
+            if (changed) loadout.metadata.erase("ae2_code");
+            if (buildChanged) {
+                json recomposed;
+                if (!Composable::Resolve(next, loadout, recomposed, error)) return false;
+                SavedBuild saved;
+                if (!DeserializeSavedBuild(recomposed, saved)) return false;
+                const auto link = GW2API::EncodeSavedBuildToChatLink(saved);
+                if (link.empty()) loadout.metadata.erase("chat_link");
+                else loadout.metadata["chat_link"] = link;
+            }
+        }
+        json view;
+        if (!Composable::ToLegacy(next, view, error)) return false;
+        std::vector<SavedBuild> projected;
+        try {
+            for (const auto& entry : view.at("builds")) {
+                SavedBuild record;
+                if (!DeserializeSavedBuild(entry, record)) return false;
+                projected.push_back(std::move(record));
+            }
+        } catch (...) { return false; }
+        if (!Composable::Store::Save(GW2API::GetDataDirectory(), next, error))
+            return false;
+
+        {
+            std::lock_guard<std::mutex> lock(GW2API::s_mutex);
+            GW2API::s_saved_builds = std::move(projected);
+            g_loadoutDocument = std::move(next);
+            g_loadoutDocumentLoaded = true;
+            g_buildLibraryRevision.fetch_add(1);
+        }
+        return true;
+    }
+
+    bool GW2API::GetComposableLoadouts(nlohmann::json& snapshot) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (!g_loadoutDocumentLoaded) return false;
+        snapshot = Composable::ToJson(g_loadoutDocument);
+        return true;
+    }
+
+    bool GW2API::AssignLoadoutComponent(const std::string& loadoutId,
+                                        const std::string& kind,
+                                        const std::string& componentId) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            return Composable::Assign(doc, loadoutId, kind, componentId, error);
+        });
+    }
+
+    bool GW2API::CopyLoadoutComponent(const std::string& loadoutId,
+                                      const std::string& kind,
+                                      const std::string& newComponentName) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            static std::atomic<uint64_t> counter{0};
+            const std::string prefix = kind + ":" + loadoutId + ":copy:";
+            const std::string id = prefix + std::to_string(std::time(nullptr)) +
+                ":" + std::to_string(counter.fetch_add(1));
+            return Composable::CopyForLoadout(doc, loadoutId, kind, id,
+                                               newComponentName, error);
+        });
+    }
+
+    bool GW2API::EditSharedLoadoutComponent(const std::string& kind,
+                                             const std::string& componentId,
+                                             const nlohmann::json& data) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            return Composable::UpdateShared(doc, kind, componentId, data, error);
+        });
+    }
+
+    bool GW2API::SetLoadoutFashion(const std::string& loadoutId,
+                                   const std::string& fashionId) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            return Composable::LinkFashion(doc, loadoutId, fashionId, error);
+        });
+    }
+
     bool GW2API::ExportBuildLibraryToFile(const std::string& path) {
         json j;
         {
