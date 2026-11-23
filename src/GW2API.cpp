@@ -3440,6 +3440,15 @@ namespace AlterEgo {
         });
     }
 
+    bool GW2API::EditAndRenameLoadoutComponent(const std::string& kind,
+                                               const std::string& componentId,
+                                               const std::string& name,
+                                               const nlohmann::json& data) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            return Composable::UpdateSharedNamed(doc, kind, componentId, name, data, error);
+        });
+    }
+
     bool GW2API::SetLoadoutFashion(const std::string& loadoutId,
                                    const std::string& fashionId) {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
