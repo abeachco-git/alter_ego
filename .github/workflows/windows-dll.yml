@@ -3,7 +3,7 @@ name: Build Alter Ego Windows DLL (UCRT)
 on:
   workflow_dispatch:
   push:
-    branches: [main, feature/save-and-compare-retrieved-sets]
+    branches: [main, feature/save-and-compare-retrieved-sets, experiment/composable-loadouts]
     paths:
       - 'src/**'
       - 'tests/**'
@@ -84,6 +84,8 @@ jobs:
           /tmp/fashion_library
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/library_backup.cpp src/ChatLink.cpp -o /tmp/library_backup
           /tmp/library_backup
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/composable_loadouts.cpp -o /tmp/composable_loadouts
+          /tmp/composable_loadouts
       - name: Verify all six live MetaBattle equipment imports
         run: |
           for name in reaper harbinger chronomancer mechanist scrapper holosmith; do
