@@ -1513,7 +1513,8 @@ static uint32_t BountyBossToWing(const std::string& bossName) {
 static const char* StrikePickerCategory(const std::string& name) {
     const std::string key = ClearsRotation::Normalize(name);
     if (key == "oldlionscourt") return "Core Game";
-    if (key == "shiverpeakspass" || key == "voiceofthefallenandclawofthefallen" ||
+    if (key == "bears" || key == "shiverpeakspass" ||
+        key == "voiceofthefallenandclawofthefallen" ||
         key == "fraenirofjormag" || key == "boneskinner" ||
         key == "whisperofjormag" || key == "coldwar") return "Icebrood Saga";
     if (key == "aetherbladehideout" || key == "xunlaijadejunkyard" ||
@@ -1526,14 +1527,15 @@ static const char* StrikePickerCategory(const std::string& name) {
 
 static int StrikePickerOrder(const std::string& name) {
     static const std::unordered_map<std::string, int> ranks = {
-        {"oldlionscourt", 10},
+        {"bears", 10},
         {"shiverpeakspass", 20}, {"voiceofthefallenandclawofthefallen", 21},
         {"fraenirofjormag", 22}, {"boneskinner", 23},
         {"whisperofjormag", 24}, {"coldwar", 26},
         {"aetherbladehideout", 30}, {"xunlaijadejunkyard", 31},
         {"kainengoverlook", 32}, {"harvesttemple", 33},
         {"cosmicobservatory", 40}, {"templeoffebe", 41},
-        {"guardiansglade", 50}, {"kela", 50}, {"nexusofeternity", 60}
+        {"guardiansglade", 50}, {"kela", 50}, {"nexusofeternity", 60},
+        {"oldlionscourt", 100}
     };
     const auto it = ranks.find(ClearsRotation::Normalize(name));
     return it != ranks.end() ? it->second : 100;
