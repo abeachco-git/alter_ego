@@ -10430,8 +10430,12 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     return result;
 }
 
-// The component collection renderer is defined later in this translation unit.
+// The component collection renderer is defined later in this translation unit
+// inside ComposableUI.h's anonymous namespace. Forward-declare in the same
+// namespace so this call resolves to that implementation at link time.
+namespace {
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id);
+}
 
 // Selection is character-first: empty means follow the active MumbleLink
 // character, even if the previously selected saved build came from another hero.
