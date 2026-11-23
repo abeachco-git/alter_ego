@@ -285,6 +285,41 @@ int main() {
     assert(!FromJson(bad,untouched,error));
     assert(ToJson(untouched) == ToJson(document));
 
+    // A Loadout can travel with all of its independent components; import
+    // creates fresh IDs and retains precise equipment/upgrade placement.
+    Json portablePacket;
+    assert(ExportPortableLoadout(document, "one", portablePacket, error));
+    assert(portablePacket["format"] == kPortableLoadoutFormat);
+    assert(portablePacket["components"]["armor"]["data"]["gear"]["Helm"]
+           ["future_stat"]["source"] == "third-party");
+    assert(!portablePacket["components"]["weapons"].contains("id"));
+    const Json beforePortable = ToJson(document);
+    assert(ImportPortableLoadout(document, portablePacket, "imported-one", error));
+    assert(document.loadouts.size() == 3);
+    auto* importedLoadout = FindLoadout(document, "imported-one");
+    assert(importedLoadout);
+    assert(importedLoadout->refs.at("weapons") !=
+           FindLoadout(document,"one")->refs.at("weapons"));
+    assert(importedLoadout->refs.at("runes") !=
+           FindLoadout(document,"one")->refs.at("runes"));
+    assert(Find(document, "armor", importedLoadout->refs.at("armor"))->data ==
+           Find(document, "armor", FindLoadout(document,"one")->refs.at("armor"))->data);
+    assert(ToLegacy(document,reconstructed,error));
+    assert(reconstructed["builds"].size() == 3);
+    assert(reconstructed["builds"][2]["gear"]["Helm"]["future_stat"]["source"]
+           == "third-party");
+    Json malformedPacket = portablePacket;
+    malformedPacket["components"]["armor"]["data"]["gear"]["Helm"]["sigil_id"] = 789;
+    const Json afterPortable = ToJson(document);
+    assert(!ImportPortableLoadout(document, malformedPacket, "bad-import", error));
+    assert(ToJson(document) == afterPortable);
+    assert(!ImportPortableLoadout(document, portablePacket, "imported-one", error));
+    assert(ToJson(document) == afterPortable);
+    assert(beforePortable["loadouts"].size() == 2);
+    // Do not alter downstream persistence fixture, which tests the original
+    // two-Loadout upstream library.
+    document = untouched;
+
     // Byte-identical source backup, verified migration and atomic persistence.
     const fs::path dir = FreshDir("migration");
     const std::string original = kExample.dump(1);
