@@ -102,6 +102,25 @@ int main() {
     assert(Find(document,"relic","relic:one")->data["relic_id"] == 400);
     assert(Find(document,"relic","relic:two-private")->data["relic_id"] == 401);
 
+    // Copy & Edit must be atomic: an invalid or canceled editor must never
+    // alter the Loadout or add orphan private components.
+    Document draftCopy = document;
+    const Json beforeDraftCopy = ToJson(draftCopy);
+    const Json preparedData = Find(draftCopy,"relic","relic:one")->data;
+    assert(!CopyEditedForLoadout(draftCopy,"two","relic","relic:one",
+                                 "Private", preparedData, error));
+    assert(ToJson(draftCopy) == beforeDraftCopy);
+    Json newPrivateData = preparedData;
+    newPrivateData["relic_id"] = 401;
+    assert(CopyEditedForLoadout(draftCopy, "one", "relic", "new:private",
+                                "Private Relic", newPrivateData, error));
+    assert(Find(draftCopy,"relic","new:private")->data["relic_id"] == 401);
+    assert(Find(draftCopy,"relic","relic:one")->data["relic_id"] == 400);
+    assert(FindLoadout(draftCopy,"one")->refs.at("relic") == "new:private");
+    assert(!CopyEditedForLoadout(draftCopy, "one", "relic", "new:private",
+                                 "Duplicate ID", newPrivateData, error));
+    assert(FindLoadout(draftCopy,"one")->refs.at("relic") == "new:private");
+
     // Legacy UI edits detach only the affected shared component.
     Json oldView;
     assert(ToLegacy(document,oldView,error));
