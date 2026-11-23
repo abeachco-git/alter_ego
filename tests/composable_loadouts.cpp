@@ -128,7 +128,7 @@ int main() {
     assert(FindLoadout(draftCopy, "one")->refs.at("relic") == "valid:copy");
     assert(!CopyEditedForLoadout(draftCopy, "one", "relic", "new:private",
                                  "Duplicate ID", newPrivateData, error));
-    assert(FindLoadout(draftCopy,"one")->refs.at("relic") == "new:private");
+    assert(FindLoadout(draftCopy,"one")->refs.at("relic") == "valid:copy");
 
     // Legacy UI edits detach only the affected shared component.
     Json oldView;
