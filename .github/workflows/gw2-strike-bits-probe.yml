@@ -1,0 +1,27 @@
+name: Temporary verify weekly raid encounter bit ordering
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/gw2-strike-bits-probe.yml']
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect public achievement bit names and numeric indices
+        run: |
+          python3 - <<'PY'
+          import urllib.request, json, datetime, time
+          ids=[9125,9128,9147,477]
+          for aid in ids:
+            path=f"https://api.guildwars2.com/v2/achievements/{aid}" if aid != 477 else "https://api.guildwars2.com/v2/achievements/categories/477"
+            req=urllib.request.Request(path+"?ae_probe="+str(int(time.time()*1000)),headers={"User-Agent":"AlterEgo issue verification"})
+            try:
+              with urllib.request.urlopen(req,timeout=20) as res: 
+                item=json.load(res)
+                print("HTTP",aid,res.status,res.headers.get("Date"))
+              print("ACH",aid,"name",item.get("name"),"total_bits",len(item.get("bits",[])))
+              for idx,bit in enumerate(item.get("bits",[])): print("BIT",aid,idx,repr(bit.get("text")),repr(bit.get("type")))
+              if aid==477: print("category ids",item.get("achievements"))
+            except Exception as e:
+              print("ERROR",aid,str(e))
+          PY
