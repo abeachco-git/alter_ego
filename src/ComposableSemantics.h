@@ -131,7 +131,6 @@ inline std::string ComparisonComponent(const std::string& group,
     if (group == "Weapon types") return "weapons";
     if (group == "Equipment" || group == "Equipment stats" ||
         group == "Exact item IDs") {
-        if (field == "Relic") return "relic";
         return SlotKind(field);
     }
     return {}; // unmapped rows remain visible in an Other section
