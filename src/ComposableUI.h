@@ -53,7 +53,7 @@ static bool g_ComponentEditorOpen = false;
 static bool g_ComponentEditorNew = false;
 static std::string g_ComponentEditorMode; // create, duplicate, rename, edit
 static std::string g_ComponentStatus;
-static bool g_ComponentPendingSelectNew = false;
+
 
 static const ComponentJson& ComponentUISnapshot() {
     static ComponentJson cached = ComponentJson::object();
@@ -500,6 +500,18 @@ static void RenderComponentLibrary() {
     ImGui::SetNextItemWidth(ImMax(150.f, ImGui::GetContentRegionAvail().x - 125.f));
     InputTextString("Search##component_search", g_ComponentSearch);
     const std::string kind = kComponentKinds[g_ComponentFilterKind].kind;
+    if (!g_ComponentSelectNamePending.empty()) {
+        const auto group = doc["components"].find(kind);
+        if (group != doc["components"].end() && group->is_array())
+            for (auto it = group->rbegin(); it != group->rend(); ++it)
+                if (it->is_object() &&
+                    it->value("name", std::string()) == g_ComponentSelectNamePending) {
+                    g_ComponentSelectedId = it->value("id", std::string());
+                    g_ComponentSelectedKind = kind;
+                    break;
+                }
+        g_ComponentSelectNamePending.clear();
+    }
     if (RenderActionButton("New Component##library_component"))
         ComponentUIStartEditor("create", kind, "", nullptr);
     ImGui::SameLine();
@@ -519,7 +531,6 @@ static void RenderComponentLibrary() {
                 else {
                     g_ComponentCommand = {ComponentUICommand::Create, "",
                         importedKind, "", imported.name, imported.data};
-                    g_ComponentPendingSelectNew = true;
                     for (int i = 0; i < 9; ++i)
                         if (importedKind == kComponentKinds[i].kind)
                             g_ComponentFilterKind = i;
@@ -700,7 +711,6 @@ static void ProcessComponentUICommand() {
                 }
             }
         }
-        g_ComponentPendingSelectNew = false;
         break;
     case ComponentUICommand::Duplicate:
         success = API::DuplicateLoadoutComponent(
