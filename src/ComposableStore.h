@@ -139,14 +139,39 @@ inline bool Open(const std::string& dir, Document& output,
                 std::error_code ecOld, ecNew;
                 const auto modifiedOld = std::filesystem::last_write_time(oldPath, ecOld);
                 const auto modifiedNew = std::filesystem::last_write_time(Path(dir, kFile), ecNew);
-                if (ecOld || ecNew || modifiedOld <= modifiedNew)
+                if (ecOld || ecNew)
                     return Fail(error,
-                        "Divergent Build and Loadout data; refusing automatic overwrite.");
-                Document reconciled;
-                if (!Reconcile(current, old, reconciled, error) ||
-                    !Save(dir, reconciled, error)) return false;
-                current = std::move(reconciled);
-                migrated = true;
+                        "Could not compare Build and Loadout modification times.");
+                if (modifiedOld <= modifiedNew) {
+                    // A terminated Save may have published canonical v3 but
+                    // not its legacy mirror. Only repair when the previous
+                    // verified canonical snapshot *exactly* projects onto
+                    // the existing mirror. Otherwise the divergence is
+                    // unexplained and the user's files remain untouched.
+                    const auto previousPath = Path(dir, kPrevious);
+                    if (!Exists(previousPath))
+                        return Fail(error,
+                            "Divergent Build and Loadout data; no verified recovery snapshot.");
+                    std::string previousRaw;
+                    Json previousJson, beforeMirror;
+                    Document previous;
+                    if (!Read(previousPath, previousRaw, error) ||
+                        !Parse(previousRaw, previousJson, error) ||
+                        !FromJson(previousJson, previous, error) ||
+                        !ToLegacy(previous, beforeMirror, error) ||
+                        beforeMirror.at("builds") != old.at("builds"))
+                        return Fail(error,
+                            "Divergent Build and Loadout data; recovery snapshot disagrees.");
+                    if (!Atomic(oldPath, projected.dump(2), false, error))
+                        return false;
+                    migrated = true; // mirror repaired from verified v3
+                } else {
+                    Document reconciled;
+                    if (!Reconcile(current, old, reconciled, error) ||
+                        !Save(dir, reconciled, error)) return false;
+                    current = std::move(reconciled);
+                    migrated = true;
+                }
             }
         }
         output = std::move(current);
@@ -202,19 +227,40 @@ inline bool Save(const std::string& dir, const Document& doc,
     if (!ToLegacy(verified, oldView, error)) return false;
 
     const auto path = Path(dir, kFile);
-    if (Exists(path)) {
+    const bool existed = Exists(path);
+    std::string previousRaw;
+    if (existed) {
         Document before;
         if (!LoadV3(dir, before, error))
             return Fail(error, "Refusing to overwrite corrupt v3 library: " + error);
-        std::string raw;
-        if (!Read(path, raw, error)) return false;
-        if (!Atomic(Path(dir, kPrevious), raw, false, error)) return false;
+        if (!Read(path, previousRaw, error)) return false;
+        if (!Atomic(Path(dir, kPrevious), previousRaw, false, error))
+            return false;
     } else if (Exists(Path(dir, kLegacy))) {
         // A first-time save must go through Open() to preserve the old file.
         return Fail(error, "Must migrate legacy library before saving v3.");
     }
     if (!Atomic(path, ToJson(verified).dump(2), false, error)) return false;
-    return Atomic(Path(dir, kLegacy), oldView.dump(2), false, error);
+    if (Atomic(Path(dir, kLegacy), oldView.dump(2), false, error))
+        return true;
+    const std::string mirrorError = error;
+    // Failure to publish the mirror must not leave the running process with
+    // an older document than the canonical file it just wrote. Roll back
+    // canonical to its last verified bytes; a power loss before this step
+    // is handled by the verified kPrevious recovery path in Open().
+    std::string rollbackError;
+    if (existed) {
+        if (!Atomic(path, previousRaw, false, rollbackError))
+            return Fail(error, "Legacy mirror write failed; canonical rollback also failed: " +
+                         rollbackError);
+    } else {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        if (ec)
+            return Fail(error, "Legacy mirror write failed; new canonical removal failed.");
+    }
+    return Fail(error, "Legacy mirror write failed; canonical data restored: " +
+                       mirrorError);
 }
 
 } } } // namespace AlterEgo::Composable::Store
