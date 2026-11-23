@@ -465,6 +465,23 @@ namespace AlterEgo {
                                              bool after);
         static bool LoadBuildLibrary();
         static bool SaveBuildLibrary();
+        // Experimental v3 component API. Existing Builds/Compare UI continues
+        // to consume SavedBuild compatibility views until the UI redesign.
+        // Kinds: base_build, skills, weapons, armor, trinkets, runes,
+        // sigils, infusions, relic. IDs are stable and names are independent.
+        static bool GetComposableLoadouts(nlohmann::json& snapshot);
+        static bool AssignLoadoutComponent(const std::string& loadoutId,
+                                           const std::string& kind,
+                                           const std::string& componentId);
+        static bool CopyLoadoutComponent(const std::string& loadoutId,
+                                         const std::string& kind,
+                                         const std::string& newComponentName);
+        static bool EditSharedLoadoutComponent(const std::string& kind,
+                                                const std::string& componentId,
+                                                const nlohmann::json& data);
+        static bool SetLoadoutFashion(const std::string& loadoutId,
+                                      const std::string& fashionId);
+
         // --- Build editor support ---
         // Encode a SavedBuild's definition (traits/skills/pets/legends/weapons) to a GW2 chat link.
         static std::string EncodeSavedBuildToChatLink(const SavedBuild& b);
