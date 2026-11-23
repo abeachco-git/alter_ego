@@ -6,6 +6,11 @@
 #include <climits>
 #include <cstdint>
 
+// Slot picker state is scoped to the active component draft and reset whenever
+// an editor opens. It never lives in canonical v3 component data.
+static std::string g_ComponentGearSelectedSlot;
+static std::string g_ComponentGearRemovalPending;
+
 static void ComponentNativeNumber(ComponentJson& data, const char* key,
                                   const char* label, int maximum = INT_MAX) {
     int number = 0;
@@ -398,6 +403,14 @@ static bool ComponentNativeSlotAllowed(const std::string& kind,
 }
 
 static void ComponentNativeInfusionSlots(ComponentJson& part) {
+    // Preserve unfamiliar imported formats instead of converting them merely
+    // because the user opened the graphical editor.
+    if ((part.contains("infusion_ids") && !part["infusion_ids"].is_array()) ||
+        (part.contains("infusion_attributes") &&
+         !part["infusion_attributes"].is_array())) {
+        ImGui::TextDisabled("Unsupported infusion array format; preserved.");
+        return;
+    }
     // Optional infusion arrays must stay absent until an actual edit.
     ComponentJson ids = part.contains("infusion_ids") &&
         part["infusion_ids"].is_array() ? part["infusion_ids"] : ComponentJson::array();
@@ -452,7 +465,10 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
                                           const char* family) {
     ImGui::PushID(idField);
     const std::string selected = item.value(nameField, std::string());
-    const std::string shown = selected.empty() ? "(choose item)" : selected;
+    const auto storedId = item.find(idField);
+    const std::string shown = !selected.empty() ? selected :
+        (storedId != item.end() && storedId->is_number_integer() && *storedId != 0)
+            ? ("#" + storedId->dump() + " (not in catalog)") : "(choose item)";
     if (ImGui::BeginCombo("##catalog", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
         ImGui::SetNextItemWidth(-1.0f);
         InputTextString("Search##catalog", g_ComponentCatalogSearch);
@@ -523,16 +539,29 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
 }
 
 static void ComponentNativeWeaponChoice(ComponentJson& item,
-                                        const std::string& profession) {
-    if (profession.empty()) return;
+                                        const std::string& profession,
+                                        const std::string& slot) {
+    if (profession.empty()) {
+        ImGui::TextDisabled("Assign to a Loadout for profession-filtered weapons.");
+        return;
+    }
     const auto* weapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
-    if (!weapons || weapons->empty()) return;
+    if (!weapons || weapons->empty()) {
+        ImGui::TextDisabled("Weapon definitions not available.");
+        if (RenderActionButton("Fetch weapon data##component"))
+            AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+        return;
+    }
     const std::string current = item.value("weapon_type", std::string());
     if (ImGui::BeginCombo("Weapon type##native_weapon", current.empty()
                          ? "(choose type)" : WeaponDisplayName(current))) {
         if (ImGui::Selectable("(none)", current.empty())) item.erase("weapon_type");
         for (const auto& [name, definition] : *weapons) {
-            (void)definition;
+            // Match the hand-eligibility policy of the original gear picker.
+            const bool mainhand = slot == "WeaponA1" || slot == "WeaponB1";
+            const bool offhand = slot == "WeaponA2" || slot == "WeaponB2";
+            if (mainhand && !definition.mainhand && !definition.two_handed) continue;
+            if (offhand && !definition.offhand) continue;
             if (ImGui::Selectable(WeaponDisplayName(name), name == current))
                 item["weapon_type"] = name;
         }
@@ -540,84 +569,155 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,
     }
 }
 
+// Same canonical slot order and readable details as Components > Inventory.
+// Graphical choice controls below reuse the original Loadout's profession,
+// stat, item, rune/sigil and relic metadata; all writes target only the draft.
 static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                                 const std::string& profession) {
     ImGui::TextUnformatted("Equipment slots");
-    ImGui::TextDisabled("Item and stat definitions use the same stored IDs as the Loadout viewer.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(select a slot to customize)");
     if (data.contains("gear") && !data["gear"].is_object()) {
         ImGui::TextDisabled("Unrecognized gear data; preserved without alteration.");
         return;
     }
-    ComponentJson placeholder = ComponentJson::object();
-    ComponentJson& gear = data.contains("gear") ? data["gear"] : placeholder;
-    if (ImGui::BeginCombo("Add slot##component_gear", "Choose slot...")) {
+    ComponentJson empty = ComponentJson::object();
+    const ComponentJson& savedGear = data.contains("gear") ? data["gear"] : empty;
+    if (ImGui::BeginCombo("Add equipment slot##component_gear", "Choose slot...")) {
         for (const char* slot : kNativeGearSlots) {
-            if (!ComponentNativeSlotAllowed(kind, slot) || gear.contains(slot)) continue;
+            if (!ComponentNativeSlotAllowed(kind, slot) || savedGear.contains(slot))
+                continue;
             if (ImGui::Selectable(slot)) {
-                // Defer display of new slot to the next frame if this
-                // component didn't already have a gear object.
                 data["gear"][slot] = ComponentJson::object();
+                g_ComponentGearSelectedSlot = slot;
+                g_ComponentGearRemovalPending.clear();
             }
         }
         ImGui::EndCombo();
     }
-    std::string remove;
-    for (auto it = gear.begin(); it != gear.end(); ++it) {
-        const std::string slot = it.key();
+
+    if (!data.contains("gear") || data["gear"].empty()) {
+        ImGui::TextDisabled("No equipment recorded. Add a slot to start.");
+        return;
+    }
+    const auto slots = AlterEgo::Composable::Presentation::SortedGearSlots(data["gear"]);
+    if (g_ComponentGearSelectedSlot.empty() ||
+        !data["gear"].contains(g_ComponentGearSelectedSlot)) {
+        g_ComponentGearSelectedSlot = slots.front();
+        g_ComponentGearRemovalPending.clear();
+    }
+    // List and details each have independent scrolling; opening one item's
+    // customization no longer expands every armor/weapon/trinket field.
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float listWidth = ImMin(195.0f, ImMax(135.0f, width * 0.30f));
+    const float height = ImMax(280.0f, ImMin(510.0f, ImGui::GetContentRegionAvail().y - 18.0f));
+    ImGui::BeginChild("##component_slot_list", ImVec2(listWidth, height), true);
+    for (const auto& slot : slots) {
         ImGui::PushID(slot.c_str());
-        if (ImGui::TreeNodeEx("##slot", ImGuiTreeNodeFlags_DefaultOpen, "%s", slot.c_str())) {
-            if (!it.value().is_object()) {
-                ImGui::TextDisabled("Unrecognized slot representation; kept unchanged.");
-            } else {
-                auto& item = it.value();
-                if (kind == "armor" || kind == "weapons" || kind == "trinkets") {
-                    ComponentNativeNumber(item, "item_id", "Exact item ID");
-                    const uint32_t id = item.value("item_id", uint32_t(0));
-                    if (const auto* info = AlterEgo::GW2API::GetItemInfo(id))
-                        ImGui::TextDisabled("%s", info->name.c_str());
-                    else if (id && RenderActionButton("Fetch item details##native"))
-                        AlterEgo::GW2API::FetchItemDetailsAsync({id});
-                    ComponentNativeStatChoice(item);
-                    if (kind == "weapons")
-                        ComponentNativeWeaponChoice(item, profession);
-                    if (ImGui::TreeNode("##advanced_gear_ids", "Advanced: exact stats and weapon type")) {
-                        ComponentNativeNumber(item, "stat_id", "Stat ID");
-                        ComponentNativeText(item, "stat_name", "Stat name");
-                        if (kind == "weapons")
-                            ComponentNativeText(item, "weapon_type", "Weapon type");
-                        ImGui::TreePop();
-                    }
-                } else if (kind == "runes") {
-                    ComponentNativeCatalogChoice(item, "rune_id", "rune", "runes");
-                    if (ImGui::TreeNode("##advanced_rune", "Advanced rune IDs")) {
-                        ComponentNativeNumber(item, "rune_id", "Rune ID");
-                        ComponentNativeText(item, "rune", "Rune name");
-                        ImGui::TreePop();
-                    }
-                } else if (kind == "sigils") {
-                    ImGui::TextDisabled("Sigil 1");
-                    ComponentNativeCatalogChoice(item, "sigil_id", "sigil", "sigils");
-                    ImGui::TextDisabled("Sigil 2");
-                    ComponentNativeCatalogChoice(item, "sigil2_id", "sigil2", "sigils");
-                    if (ImGui::TreeNode("##advanced_sigils", "Advanced sigil IDs")) {
-                        ComponentNativeNumber(item, "sigil_id", "Sigil 1 ID");
-                        ComponentNativeText(item, "sigil", "Sigil 1 name");
-                        ComponentNativeNumber(item, "sigil2_id", "Sigil 2 ID");
-                        ComponentNativeText(item, "sigil2", "Sigil 2 name");
-                        ImGui::TreePop();
-                    }
-                } else if (kind == "infusions") {
-                    ComponentNativeInfusionSlots(item);
-                    ComponentNativeText(item, "infusion", "Legacy infusion label");
-                }
-                if (RenderActionButton("Remove slot##component"))
-                    remove = slot;
-            }
-            ImGui::TreePop();
+        const bool selected = g_ComponentGearSelectedSlot == slot;
+        if (ImGui::Selectable(slot.c_str(), selected)) {
+            g_ComponentGearSelectedSlot = slot;
+            g_ComponentGearRemovalPending.clear();
+        }
+        if (ImGui::IsItemHovered()) {
+            const auto& entry = data["gear"].at(slot);
+            ImGui::SetTooltip("%s", AlterEgo::Composable::Presentation::
+                GearSlotSummary(kind, entry).c_str());
         }
         ImGui::PopID();
     }
-    if (!remove.empty()) data["gear"].erase(remove);
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##component_slot_editor", ImVec2(0, height), true);
+    const std::string slot = g_ComponentGearSelectedSlot;
+    ImGui::PushID(slot.c_str());
+    ImGui::Text("%s", slot.c_str());
+    const auto& recorded = data["gear"].at(slot);
+    ImGui::TextWrapped("%s", AlterEgo::Composable::Presentation::
+        GearSlotSummary(kind, recorded).c_str());
+    ImGui::Separator();
+    if (!recorded.is_object()) {
+        ImGui::TextDisabled("Unknown imported slot representation; retained as-is.");
+    } else {
+        auto& item = data["gear"][slot];
+        if (kind == "armor" || kind == "weapons" || kind == "trinkets") {
+            const uint32_t id = item.value("item_id", uint32_t(0));
+            const auto* info = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
+            if (info && !info->icon_url.empty()) {
+                AlterEgo::IconManager::RequestIcon(id, info->icon_url);
+                Texture_t* tex = AlterEgo::IconManager::GetIcon(id);
+                if (tex && tex->Resource) {
+                    ImGui::Image(tex->Resource, ImVec2(40, 40));
+                    ImGui::SameLine();
+                }
+            }
+            ImGui::TextWrapped("%s", info ? info->name.c_str() :
+                               (id ? "Item metadata pending" : "No exact item selected"));
+            if (id && !info && RenderActionButton("Fetch item details##component"))
+                AlterEgo::GW2API::FetchItemDetailsAsync({id});
+            if (ImGui::TreeNode("##exact_item", "Exact equipment item")) {
+                ComponentNativeNumber(item, "item_id", "Item ID");
+                ImGui::TreePop();
+            }
+            ImGui::TextUnformatted("Stats");
+            ComponentNativeStatChoice(item);
+            if (kind == "weapons")
+                ComponentNativeWeaponChoice(item, profession, slot);
+            if (ImGui::TreeNode("##advanced_gear_ids", "Advanced: exact stats and weapon type")) {
+                ComponentNativeNumber(item, "stat_id", "Stat ID");
+                ComponentNativeText(item, "stat_name", "Stat name");
+                if (kind == "weapons")
+                    ComponentNativeText(item, "weapon_type", "Weapon type");
+                ImGui::TreePop();
+            }
+        } else if (kind == "runes") {
+            ImGui::TextUnformatted("Rune");
+            ComponentNativeCatalogChoice(item, "rune_id", "rune", "runes");
+            if (ImGui::TreeNode("##advanced_rune", "Advanced rune ID and name")) {
+                ComponentNativeNumber(item, "rune_id", "Rune ID");
+                ComponentNativeText(item, "rune", "Rune name");
+                ImGui::TreePop();
+            }
+        } else if (kind == "sigils") {
+            ImGui::TextUnformatted("Sigil 1");
+            ComponentNativeCatalogChoice(item, "sigil_id", "sigil", "sigils");
+            ImGui::TextUnformatted("Sigil 2 (two-handed weapons)");
+            ComponentNativeCatalogChoice(item, "sigil2_id", "sigil2", "sigils");
+            if (ImGui::TreeNode("##advanced_sigils", "Advanced exact sigil IDs and names")) {
+                ComponentNativeNumber(item, "sigil_id", "Sigil 1 ID");
+                ComponentNativeText(item, "sigil", "Sigil 1 name");
+                ComponentNativeNumber(item, "sigil2_id", "Sigil 2 ID");
+                ComponentNativeText(item, "sigil2", "Sigil 2 name");
+                ImGui::TreePop();
+            }
+        } else if (kind == "infusions") {
+            ComponentNativeInfusionSlots(item);
+            ComponentNativeText(item, "infusion", "Legacy infusion label");
+        }
+        if (ImGui::TreeNode("##slot_exact", "Exact stored slot fields (read only)")) {
+            for (auto field = item.begin(); field != item.end(); ++field)
+                ImGui::TextWrapped("%s: %s", field.key().c_str(),
+                                   field.value().dump().c_str());
+            ImGui::TreePop();
+        }
+    }
+    ImGui::Separator();
+    if (g_ComponentGearRemovalPending == slot) {
+        ImGui::TextColored(ImVec4(1.0f, 0.67f, 0.47f, 1.0f),
+                           "Remove %s from this component draft?", slot.c_str());
+        if (RenderActionButton("Confirm remove##component_gear")) {
+            data["gear"].erase(slot);
+            g_ComponentGearSelectedSlot.clear();
+            g_ComponentGearRemovalPending.clear();
+        }
+        ImGui::SameLine();
+        if (RenderActionButton("Keep slot##component_gear"))
+            g_ComponentGearRemovalPending.clear();
+    } else if (RenderActionButton("Remove slot...##component_gear")) {
+        g_ComponentGearRemovalPending = slot;
+    }
+    ImGui::PopID();
+    ImGui::EndChild();
 }
 
 static void ComponentNativeInfusionRequirements(ComponentJson& data) {

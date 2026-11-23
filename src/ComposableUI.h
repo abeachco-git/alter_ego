@@ -5,6 +5,7 @@
 // All mutations are queued and applied after the visible panes finish
 // rendering: SavedBuild references remain stable for the whole frame.
 #include "ComposableSemantics.h"
+#include "ComposableGearPresentation.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <map>
@@ -55,6 +56,7 @@ static std::string g_ComponentEditorError;
 static bool g_ComponentEditorOpen = false;
 static bool g_ComponentEditorNew = false;
 static std::string g_ComponentEditorMode; // create, duplicate, rename, edit, copy_for_loadout
+static bool g_ComponentEditorSaveQueued = false;
 static std::string g_ComponentEditorPrivateLoadoutId;
 static std::string g_ComponentStatus;
 
@@ -213,22 +215,26 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
               ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
             ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 105.0f);
             ImGui::TableSetupColumn("Stored details", ImGuiTableColumnFlags_WidthStretch);
-            for (auto it = data["gear"].begin(); it != data["gear"].end(); ++it) {
+            for (const auto& slotName : AlterEgo::Composable::Presentation::SortedGearSlots(data["gear"])) {
+                const auto& item = data["gear"].at(slotName);
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(it.key().c_str());
+                ImGui::TextUnformatted(slotName.c_str());
                 ImGui::TableSetColumnIndex(1);
-                const auto& item = it.value();
-                if (!item.is_object()) {
-                    ImGui::TextWrapped("%s", item.dump().c_str());
-                } else {
-                    std::string detail;
-                    for (auto field = item.begin(); field != item.end(); ++field) {
-                        if (!detail.empty()) detail += " | ";
-                        detail += field.key() + ": " + field.value().dump();
+                ImGui::TextWrapped("%s", AlterEgo::Composable::Presentation::
+                    GearSlotSummary(kind, item).c_str());
+                ImGui::PushID(slotName.c_str());
+                if (ImGui::TreeNode("Exact stored fields##component_slot")) {
+                    if (item.is_object()) {
+                        for (auto field = item.begin(); field != item.end(); ++field)
+                            ImGui::TextWrapped("%s: %s", field.key().c_str(),
+                                               field.value().dump().c_str());
+                    } else {
+                        ImGui::TextWrapped("%s", item.dump(2).c_str());
                     }
-                    ImGui::TextWrapped("%s", detail.empty() ? "(no details)" : detail.c_str());
+                    ImGui::TreePop();
                 }
+                ImGui::PopID();
             }
             ImGui::EndTable();
         }
@@ -255,6 +261,9 @@ static void ComponentUIStartEditor(const std::string& mode,
     g_ComponentSkillProfessionHint.clear();
     g_ComponentCatalogSearch.clear();
     g_ComponentStatSearch.clear();
+    g_ComponentGearSelectedSlot.clear();
+    g_ComponentGearRemovalPending.clear();
+    g_ComponentEditorSaveQueued = false;
     g_ComponentEditorName = component
         ? component->value("name", std::string()) : std::string("New ") + ComponentLabel(kind);
     if (mode == "duplicate") g_ComponentEditorName += " (Copy)";
@@ -360,6 +369,7 @@ static void RenderComponentUIEditor() {
                 cmd.data = g_ComponentEditorDraft;
             }
             g_ComponentCommand = std::move(cmd);
+            g_ComponentEditorSaveQueued = true;
             g_ComponentEditorOpen = false;
             ImGui::CloseCurrentPopup();
         }
@@ -843,6 +853,8 @@ static void ProcessComponentUICommand() {
     if (g_ComponentCommand.type == ComponentUICommand::None) return;
     const auto command = g_ComponentCommand;
     g_ComponentCommand = ComponentUICommand{};
+    const bool fromEditor = g_ComponentEditorSaveQueued;
+    g_ComponentEditorSaveQueued = false;
     bool success = false;
     using API = AlterEgo::GW2API;
     switch (command.type) {
@@ -916,6 +928,12 @@ static void ProcessComponentUICommand() {
         g_ComponentStatus.clear();
     } else {
         g_ComponentStatus = "Could not apply component change. Check component compatibility or data fields.";
+        // Preserve the draft on a rejected transaction (e.g. the source
+        // Loadout was reassigned while Copy & Edit was open).
+        if (fromEditor) {
+            g_ComponentEditorError = g_ComponentStatus;
+            g_ComponentEditorOpen = true;
+        }
     }
     if (APIDefs) APIDefs->GUI_SendAlert(success
         ? "Loadout component updated." : g_ComponentStatus.c_str());
