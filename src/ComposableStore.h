@@ -103,6 +103,9 @@ inline bool Atomic(const std::filesystem::path& target,
                            target.filename().u8string());
     return true;
 }
+inline bool Save(const std::string& dir, const Document& doc,
+                 std::string& error);
+
 inline bool LoadV3(const std::string& dir, Document& output, std::string& error) {
     std::string data;
     if (!Read(Path(dir, kFile), data, error)) return false;
@@ -117,8 +120,38 @@ inline bool Open(const std::string& dir, Document& output,
                  bool& migrated, std::string& error) {
     migrated = false;
     error.clear();
-    if (Exists(Path(dir, kFile)))
-        return LoadV3(dir, output, error); // Fail closed if corrupt.
+    if (Exists(Path(dir, kFile))) {
+        Document current;
+        if (!LoadV3(dir, current, error)) return false;
+        // An older DLL may have written the legacy compatibility file while
+        // the user tested another branch. Import only if the legacy file is
+        // demonstrably newer than v3; never silently discard either version.
+        const auto oldPath = Path(dir, kLegacy);
+        if (Exists(oldPath)) {
+            std::string raw;
+            Json old, projected;
+            if (!Read(oldPath, raw, error) || !Parse(raw, old, error) ||
+                !ToLegacy(current, projected, error)) return false;
+            if (!old.is_object() || !old.contains("builds") ||
+                !old.at("builds").is_array())
+                return Fail(error, "Legacy mirror is not a valid Build library.");
+            if (projected.at("builds") != old.at("builds")) {
+                std::error_code ecOld, ecNew;
+                const auto modifiedOld = std::filesystem::last_write_time(oldPath, ecOld);
+                const auto modifiedNew = std::filesystem::last_write_time(Path(dir, kFile), ecNew);
+                if (ecOld || ecNew || modifiedOld <= modifiedNew)
+                    return Fail(error,
+                        "Divergent Build and Loadout data; refusing automatic overwrite.");
+                Document reconciled;
+                if (!Reconcile(current, old, reconciled, error) ||
+                    !Save(dir, reconciled, error)) return false;
+                current = std::move(reconciled);
+                migrated = true;
+            }
+        }
+        output = std::move(current);
+        return true;
+    }
 
     if (!Exists(Path(dir, kLegacy))) {
         output = Document{};
