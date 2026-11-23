@@ -178,6 +178,24 @@ int main() {
            "third-party");
     assert(reconstructed["builds"][0]["gear"]["Helm"]["stat_name"] == "Berserker");
 
+    // Renaming and changing a shared component is one transaction.
+    // Failure must not change either its name or its payload.
+    Document nameEdit = document;
+    const Json originalSnapshot = ToJson(nameEdit);
+    const auto* prior = Find(nameEdit,"runes","runes:one");
+    assert(prior);
+    assert(!UpdateSharedNamed(nameEdit, "runes", "runes:one",
+                              "", prior->data, error));
+    assert(ToJson(nameEdit) == originalSnapshot);
+    Json changedRune = prior->data;
+    changedRune["rune_name"] = "Updated Rune";
+    assert(UpdateSharedNamed(nameEdit, "runes", "runes:one",
+                             "Reusable Rune", changedRune, error));
+    const auto* updatedRune = Find(nameEdit,"runes","runes:one");
+    assert(updatedRune && updatedRune->name == "Reusable Rune");
+    assert(updatedRune->data["rune_name"] == "Updated Rune");
+    assert(document.loadouts[0].refs.at("runes") == "runes:one");
+
     // Portable component packages have no stable ID. Importing them never
     // overwrites an existing shared component or changes existing references.
     const Component* reference = Find(document, "armor", "armor:one");
