@@ -319,7 +319,9 @@ inline Json ExportComponent(const std::string& kind, const Component& component)
 inline bool ImportComponent(const Json& input, std::string& kind,
                             Component& component, std::string& error) {
     error.clear();
-    if (!input.is_object() || input.value("format", std::string()) != kComponentFormat ||
+    if (!input.is_object() || !input.contains("format") ||
+        !input.at("format").is_string() ||
+        input.at("format").get<std::string>() != kComponentFormat ||
         !input.contains("version") || !input.at("version").is_number_integer() ||
         input.at("version").get<int>() != kComponentVersion ||
         !input.contains("kind") || !input.at("kind").is_string() ||
