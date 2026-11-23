@@ -375,6 +375,38 @@ inline bool Transaction(Document& doc,
     doc = std::move(next);
     return true;
 }
+inline std::string ProfessionOf(const Document& doc, const Loadout& loadout) {
+    const auto ref = loadout.refs.find("base_build");
+    if (ref == loadout.refs.end()) return {};
+    const auto* part = Find(doc, "base_build", ref->second);
+    return part ? part->data.value("profession", std::string()) : std::string();
+}
+
+inline bool AssignCompatible(const Document& doc, const Loadout& target,
+                             const std::string& kind, const std::string& id,
+                             std::string& error) {
+    if (kind != "base_build" && kind != "skills") return true;
+    const auto* incoming = Find(doc, kind, id);
+    if (!incoming) return Fail(error, "Component does not exist.");
+    const std::string targetProfession = ProfessionOf(doc, target);
+    if (kind == "base_build") {
+        const std::string incomingProfession =
+            incoming->data.value("profession", std::string());
+        if (!incomingProfession.empty() && !targetProfession.empty() &&
+            incomingProfession != targetProfession)
+            return Fail(error, "Cannot assign a Base Build from another profession.");
+    } else if (!targetProfession.empty()) {
+        for (const auto& loadout : doc.loadouts) {
+            const auto ref = loadout.refs.find("skills");
+            if (ref == loadout.refs.end() || ref->second != id) continue;
+            const std::string usedBy = ProfessionOf(doc, loadout);
+            if (!usedBy.empty() && usedBy != targetProfession)
+                return Fail(error, "Skills component is used by another profession.");
+        }
+    }
+    return true;
+}
+
 inline bool Assign(Document& doc, const std::string& loadoutId,
                    const std::string& kind, const std::string& id,
                    std::string& error) {
@@ -382,6 +414,7 @@ inline bool Assign(Document& doc, const std::string& loadoutId,
         auto* item = FindLoadout(next, loadoutId);
         if (!item || !IsKind(kind) || !Find(next, kind, id))
             return Fail(err, "Loadout or component not found.");
+        if (!AssignCompatible(next, *item, kind, id, err)) return false;
         item->refs[kind] = id;
         return true;
     }, error);
@@ -392,6 +425,16 @@ inline bool UpdateShared(Document& doc, const std::string& kind,
     return Transaction(doc, [&](Document& next, std::string& err) {
         auto* item = Find(next, kind, id);
         if (!item || !data.is_object()) return Fail(err, "Invalid shared component.");
+        if (kind == "base_build") {
+            const auto previous = item->data.value("profession", std::string());
+            const auto nextProfession = data.value("profession", std::string());
+            if (previous != nextProfession)
+                for (const auto& loadout : next.loadouts) {
+                    auto ref = loadout.refs.find("base_build");
+                    if (ref != loadout.refs.end() && ref->second == id)
+                        return Fail(err, "Cannot change profession of a referenced Base Build.");
+                }
+        }
         item->data = data;
         return true;
     }, error);
@@ -474,6 +517,15 @@ inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
         auto* item = Find(next, kind, id);
         if (!item || name.empty() || !data.is_object())
             return Fail(err, "Invalid shared component name or payload.");
+        if (kind == "base_build" &&
+            item->data.value("profession", std::string()) !=
+            data.value("profession", std::string())) {
+            for (const auto& loadout : next.loadouts) {
+                const auto ref = loadout.refs.find("base_build");
+                if (ref != loadout.refs.end() && ref->second == id)
+                    return Fail(err, "Cannot change profession of a referenced Base Build.");
+            }
+        }
         item->name = name;
         item->data = data;
         return true;
