@@ -36,7 +36,7 @@ static const char* ComponentLabel(const std::string& kind) {
 
 struct ComponentUICommand {
     enum Type { None, Assign, CopyForLoadout, SetFashion, Create, Duplicate,
-                Rename, EditShared, RemoveUnused } type = None;
+                Rename, EditShared, RemoveUnused, ImportPortableLoadout } type = None;
     std::string loadout_id, kind, component_id, name;
     ComponentJson data = ComponentJson::object();
 };
@@ -375,6 +375,33 @@ static void ComponentUIOpenLibrary(const std::string& kind, const std::string& i
     g_LibraryCollection = 2;
 }
 
+static void RenderPortableLoadoutPasteButton() {
+    if (RenderActionButton("Paste Portable Loadout##library")) {
+        const char* clipboard = ImGui::GetClipboardText();
+        if (!clipboard || !*clipboard) {
+            if (APIDefs) APIDefs->GUI_SendAlert("Clipboard is empty.");
+        } else {
+            try {
+                const ComponentJson incoming = ComponentJson::parse(clipboard);
+                if (!incoming.is_object() ||
+                    incoming.value("format", std::string()) !=
+                        AlterEgo::Composable::kPortableLoadoutFormat) {
+                    if (APIDefs) APIDefs->GUI_SendAlert(
+                        "Clipboard is not an Alter Ego portable Loadout.");
+                } else {
+                    g_ComponentCommand = {ComponentUICommand::ImportPortableLoadout,
+                        "", "", "", "", incoming};
+                }
+            } catch (...) {
+                if (APIDefs) APIDefs->GUI_SendAlert("Invalid clipboard JSON.");
+            }
+        }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Import a copied Loadout as a new independent entry.\n"
+                          "Its equipment, skills, upgrades and Fashion reference are kept.");
+}
+
 static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     const ComponentJson& doc = ComponentUISnapshot();
     const auto* loadout = ComponentUIFindLoadout(doc, loadoutId);
@@ -387,6 +414,23 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
         ImGui::TextDisabled("Choose reusable components. Equipment details remain below.");
     }
     if (g_LibEditMode) return;
+    if (RenderActionButton("Copy Portable Loadout##portable_loadout")) {
+        AlterEgo::Composable::Document current;
+        std::string error;
+        ComponentJson packet;
+        if (AlterEgo::Composable::FromJson(doc, current, error) &&
+            AlterEgo::Composable::ExportPortableLoadout(current, loadoutId,
+                                                       packet, error)) {
+            const std::string text = packet.dump(2);
+            ImGui::SetClipboardText(text.c_str());
+            if (APIDefs) APIDefs->GUI_SendAlert(
+                "Portable Loadout copied with all referenced components.");
+        } else if (APIDefs) APIDefs->GUI_SendAlert(
+            "Could not export portable Loadout.");
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Copy this Loadout and its component payloads to the clipboard.\n"
+                          "Importing creates new independent component IDs.");
     if (ImGui::BeginTable("##loadout_component_grid", 2,
         ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("Component", ImGuiTableColumnFlags_WidthFixed, 110.0f);
@@ -814,6 +858,15 @@ static void ProcessComponentUICommand() {
     case ComponentUICommand::EditShared:
         success = API::EditAndRenameLoadoutComponent(
             command.kind, command.component_id, command.name, command.data);
+        break;
+    case ComponentUICommand::ImportPortableLoadout:
+        success = API::ImportPortableLoadout(command.data);
+        if (success) {
+            g_LibraryCollection = 0;
+            const auto& builds = API::GetSavedBuilds();
+            if (!builds.empty()) g_LibSelectedIdx = static_cast<int>(builds.size()) - 1;
+            g_LibDetailsFetched = false;
+        }
         break;
     case ComponentUICommand::RemoveUnused:
         success = API::DeleteUnusedLoadoutComponent(command.kind, command.component_id);
