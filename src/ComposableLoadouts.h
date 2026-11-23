@@ -396,6 +396,38 @@ inline bool UpdateShared(Document& doc, const std::string& kind,
         return true;
     }, error);
 }
+// A captured skill bar is profession-specific even though the Skills payload
+// intentionally has no profession root field. Verify ALL current users before
+// replacing an existing shared component from live character data.
+inline bool CaptureProfessionCompatible(const Document& doc,
+                                         const std::string& kind,
+                                         const std::string& id,
+                                         const std::string& profession,
+                                         std::string& error) {
+    if (kind != "base_build" && kind != "skills") return true;
+    if (profession.empty()) return Fail(error, "Captured profession is unknown.");
+    const auto* target = Find(doc, kind, id);
+    if (!target) return Fail(error, "Target component does not exist.");
+    if (kind == "base_build") {
+        const std::string prior = target->data.value("profession", std::string());
+        if (!prior.empty() && prior != profession)
+            return Fail(error, "Captured Build profession differs from saved profession.");
+    }
+    for (const auto& loadout : doc.loadouts) {
+        const auto ref = loadout.refs.find(kind);
+        if (ref == loadout.refs.end() || ref->second != id) continue;
+        const auto baseRef = loadout.refs.find("base_build");
+        if (baseRef == loadout.refs.end()) continue;
+        const auto* base = Find(doc, "base_build", baseRef->second);
+        if (!base) continue;
+        const std::string expected = base->data.value("profession", std::string());
+        if (!expected.empty() && expected != profession)
+            return Fail(error,
+                "Captured profession differs from a Loadout using this component.");
+    }
+    return true;
+}
+
 // A live character snapshot may not know third-party/custom component fields.
 // Replace recorded fields, but retain only *unknown* root/gear extensions.
 // Known equipment or upgrade fields omitted by a new capture are intentionally
