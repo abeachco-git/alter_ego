@@ -10393,35 +10393,92 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::TextDisabled("Saved build has no gear; equipment comparison skipped.");
     else if (character->equipment.empty())
         ImGui::TextDisabled("Retrieved character has no equipment data; gear comparison skipped.");
-    if (ImGui::BeginTable("##comparison", 3,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-        ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-        ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn("Retrieved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableHeadersRow();
-        std::string lastGroup;
-        for (const auto& row : result.Rows()) {
-            if (row.matches && !g_LibCompareShowMatches) continue;
-            if (row.group != lastGroup) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextColored(ImVec4(0.9f, 0.77f, 0.45f, 1), "%s", row.group.c_str());
-                lastGroup = row.group;
-            }
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(row.field.c_str());
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextWrapped("%s", row.saved.c_str());
-            ImGui::TableSetColumnIndex(2);
-            if (!row.verified)
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.81f, 0.50f, 1));
-            else if (!row.matches)
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.58f, 0.50f, 1));
-            ImGui::TextWrapped("%s", row.current.c_str());
-            if (!row.verified || !row.matches) ImGui::PopStyleColor();
+    // Components are the unit of comparison. Show an overview first;
+    // exact equipment slots and IDs remain available inside each category.
+    struct CompareSection {
+        std::string name;
+        std::vector<const AlterEgo::ComparisonRow*> rows;
+        size_t differences = 0, unverified = 0, matches = 0;
+    };
+    auto sectionFor = [](const std::string& group) -> const char* {
+        if (group == "Specializations" || group == "Traits" || group == "Build" ||
+            group == "Ranger pets" || group == "Revenant legends") return "Base Build";
+        if (group == "Terrestrial skills" || group == "Aquatic skills") return "Skills";
+        if (group == "Equipment" || group == "Equipment stats" ||
+            group == "Exact item IDs") return "Armor / Trinkets";
+        if (group == "Weapon types") return "Weapons";
+        if (group == "Upgrades") return "Other Upgrades";
+        if (group == "Runes") return "Runes";
+        if (group == "Sigils") return "Sigils";
+        if (group == "Infusions" || group == "Infusion totals") return "Infusions";
+        if (group == "Relic") return "Relic";
+        return "Other";
+    };
+    std::vector<CompareSection> sections;
+    for (const auto& row : result.Rows()) {
+        const std::string name = sectionFor(row.group);
+        auto found = std::find_if(sections.begin(), sections.end(),
+            [&](const CompareSection& x) { return x.name == name; });
+        if (found == sections.end()) {
+            sections.push_back({name});
+            found = sections.end() - 1;
         }
-        ImGui::EndTable();
+        found->rows.push_back(&row);
+        if (!row.verified) ++found->unverified;
+        else if (!row.matches) ++found->differences;
+        else ++found->matches;
+    }
+
+    for (const auto& section : sections) {
+        ImGui::PushID(section.name.c_str());
+        std::string status = section.differences > 0
+            ? std::to_string(section.differences) + " differences"
+            : section.unverified > 0
+                ? std::to_string(section.unverified) + " unverified"
+                : "Matches";
+        if (section.differences && section.unverified)
+            status += ", " + std::to_string(section.unverified) + " unverified";
+        const std::string heading = section.name + "  -  " + status;
+        const ImGuiTreeNodeFlags flags =
+            (section.differences || section.unverified)
+                ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+        if (ImGui::CollapsingHeader(heading.c_str(), flags)) {
+            if (ImGui::BeginTable("##comparison_section", 3,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable)) {
+                ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+                ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableSetupColumn("Live", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableHeadersRow();
+                size_t displayed = 0;
+                for (const auto* row : section.rows) {
+                    if (row->matches && !g_LibCompareShowMatches) continue;
+                    ++displayed;
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    const std::string field = row->group + " / " + row->field;
+                    ImGui::TextWrapped("%s", field.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextWrapped("%s", row->saved.c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    if (!row->verified)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImVec4(0.92f, 0.81f, 0.50f, 1));
+                    else if (!row->matches)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImVec4(1, 0.58f, 0.50f, 1));
+                    ImGui::TextWrapped("%s", row->current.c_str());
+                    if (!row->verified || !row->matches) ImGui::PopStyleColor();
+                }
+                if (displayed == 0) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextDisabled("No differences; enable Show matches for details.");
+                }
+                ImGui::EndTable();
+            }
+        }
+        ImGui::PopID();
     }
 }
 
