@@ -286,7 +286,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     } else {
         ImGui::TextDisabled("Choose reusable components. Equipment details remain below.");
     }
-    ImGui::BeginDisabled(g_LibEditMode);
+    if (g_LibEditMode) return;
     if (ImGui::BeginTable("##loadout_component_grid", 2,
         ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("Component", ImGuiTableColumnFlags_WidthFixed, 110.0f);
@@ -360,7 +360,6 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
                     loadoutId, "", look.id, "", ComponentJson::object()};
         ImGui::EndCombo();
     }
-    ImGui::EndDisabled();
     ImGui::Separator();
 }
 
