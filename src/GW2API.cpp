@@ -3533,6 +3533,8 @@ namespace AlterEgo {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
             const auto* existing = Composable::Find(doc, kind, componentId);
             if (!existing) return Composable::Fail(error, "Component not found.");
+            if (!Composable::CaptureProfessionCompatible(doc, kind, componentId,
+                    capture.profession, error)) return false;
             return Composable::UpdateShared(doc, kind, componentId,
                 Composable::ReplaceCapturedFieldsPreservingExtensions(
                     existing->data, selected->second), error);
