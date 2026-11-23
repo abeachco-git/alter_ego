@@ -1362,6 +1362,7 @@ static bool g_SaveLibIncludeEquip = false;
 static int g_SaveLibTarget = 0; // 0: complete Loadout, 1: independent component
 static int g_SaveLibComponentKind = 0;
 static int g_ComponentFilterKind = 0; // Library > Components category
+static std::string g_ComponentSelectNamePending; // Newly captured component to highlight
 
 static int g_SaveLibEquipTab = 0;          // Selected equipment tab number (1-based)
 static std::string g_SaveLibChatLink;      // Pre-built chat link
@@ -8425,6 +8426,7 @@ static void RenderSaveToLibraryDialog() {
                     sb, keys[g_SaveLibComponentKind], name);
                 if (saved) {
                     g_ComponentFilterKind = g_SaveLibComponentKind;
+                    g_ComponentSelectNamePending = name;
                     NavigateToLibraryCollection(2);
                     g_SaveLibDialogOpen = false;
                     if (APIDefs) APIDefs->GUI_SendAlert("Saved independent component.");
