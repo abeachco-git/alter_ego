@@ -840,7 +840,7 @@ static void LoadLoginTimestamps();
 
 // Build Library UI state
 static float g_LibListWidth = 220.0f; // Resizable build list column width
-static int g_LibraryCollection = 0; // 0 Builds, 1 Fashion
+static int g_LibraryCollection = 0; // 0 Loadouts, 1 Fashion, 2 Components
 static bool g_SwitchToLibrary = false; // select Library after creation/import/navigation
 static int g_LibSelectedIdx = -1;
 // Build editor: "+ New Build" dialog state
@@ -1627,7 +1627,7 @@ static void LoadSettings() {
     getFloat("char_list_width", g_CharListWidth);
     getFloat("lib_list_width", g_LibListWidth);
     getInt("library_collection", g_LibraryCollection);
-    if (g_LibraryCollection != 1) g_LibraryCollection = 0;
+    if (g_LibraryCollection < 0 || g_LibraryCollection > 2) g_LibraryCollection = 0;
     getBool("chat_build_detection", g_ChatBuildDetection);
     getFloat("toast_pos_x", g_ToastPosX);
     getFloat("toast_pos_y", g_ToastPosY);
@@ -3864,7 +3864,7 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
 // build-selection logic.
 // One navigation path for the Library menu, saved Fashion and imported builds.
 static void NavigateToLibraryCollection(int collection) {
-    g_LibraryCollection = collection == 1 ? 1 : 0;
+    g_LibraryCollection = (collection >= 0 && collection <= 2) ? collection : 0;
     g_SwitchToLibrary = true;
     g_WindowVisible = true;
     SaveSettings();
@@ -10678,6 +10678,7 @@ static void RenderCompareTab() {
 }
 
 #include "LibraryBackupUI.h"
+#include "ComposableUI.h"
 
 static void RenderLibraryImportDialog() {
     // Keep the import form and its asynchronous palette-data retry inside a
@@ -10885,7 +10886,7 @@ static void RenderBuildLibrary() {
 
         if (builds.empty()) {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-                "No saved builds.\nUse Library > New or\nImport from Link / URL\nto add one.");
+                "No saved Loadouts.\nUse Library > New or\nImport from Link / URL\nto add one.");
         }
         // Build one visual profession section for every distinct profession.
         // Existing JSON is still a flat array and retains the original order.
@@ -11387,6 +11388,7 @@ static void RenderBuildLibrary() {
         }
 
         ImGui::Separator();
+        RenderLoadoutComponentSelectors(build.id);
         RenderSavedBuildPreview(build);
         ImGui::EndChild(); // ##LibDetailScroll
         // Paint the edit-state outline around the fixed viewport instead of
@@ -11415,7 +11417,7 @@ static void RenderBuildLibrary() {
             g_LibSelectedIdx = -1;
         }
     } else {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Select a build from the list.");
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Select a Loadout from the list.");
     }
     ImGui::EndChild();
 
@@ -11456,6 +11458,8 @@ static void RenderBuildLibrary() {
             SaveSession();
         }
     }
+    RenderComponentUIEditor();
+    ProcessComponentUICommand();
 }
 
 // Share relay progress/result popups must render regardless of the selected
@@ -16883,7 +16887,8 @@ void AddonRender() {
         if (libraryVisible) {
             g_MainTab = 1;
             if (g_LibraryCollection == 0) RenderBuildLibrary();
-            else RenderFashionLibrary();
+            else if (g_LibraryCollection == 1) RenderFashionLibrary();
+            else { RenderComponentLibrary(); ProcessComponentUICommand(); }
             ImGui::EndTabItem();
         }
         ImGuiTabItemFlags compareTabFlags = 0;
@@ -17058,13 +17063,14 @@ void AddonRender() {
             // this dropdown from another tab does not select either collection.
             const bool onBuilds = g_MainTab == 1 && g_LibraryCollection == 0;
             const bool onFashion = g_MainTab == 1 && g_LibraryCollection == 1;
+            const bool onComponents = g_MainTab == 1 && g_LibraryCollection == 2;
 
             // The Builds label is a navigation target; its separate, right-
             // hand arrow opens a collection-specific flyout. Do not turn the
             // entire row into a submenu, or direct navigation stops working.
             const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
             const float buildsLabelWidth = 190.0f;
-            const bool buildsClicked = ImGui::Selectable("Builds##ae_library_collection",
+            const bool buildsClicked = ImGui::Selectable("Loadouts##ae_library_collection",
                 onBuilds, ImGuiSelectableFlags_DontClosePopups,
                 ImVec2(buildsLabelWidth, rowHeight));
             const ImVec2 buildsMin = ImGui::GetItemRectMin();
@@ -17125,6 +17131,11 @@ void AddonRender() {
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
+            }
+            if (ImGui::MenuItem("Components", nullptr, onComponents)) {
+                libraryActionSelected = true;
+                NavigateToLibraryCollection(2);
+                if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
             }
             if (ImGui::MenuItem("Fashion", nullptr, onFashion)) {
                 libraryActionSelected = true;
