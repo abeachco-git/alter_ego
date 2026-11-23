@@ -47,6 +47,7 @@ static std::string g_ComponentSelectedKind;
 static std::string g_ComponentEditorId;
 static std::string g_ComponentEditorKind;
 static std::string g_ComponentEditorName;
+static std::string g_ComponentSkillProfessionHint; // UI-only skill picker filter
 static ComponentJson g_ComponentEditorDraft = ComponentJson::object();
 static std::string g_ComponentEditorError;
 static bool g_ComponentEditorOpen = false;
@@ -247,6 +248,7 @@ static void ComponentUIStartEditor(const std::string& mode,
     g_ComponentEditorMode = mode;
     g_ComponentEditorKind = kind;
     g_ComponentEditorId = id;
+    g_ComponentSkillProfessionHint.clear();
     g_ComponentEditorName = component
         ? component->value("name", std::string()) : std::string("New ") + ComponentLabel(kind);
     if (mode == "duplicate") g_ComponentEditorName += " (Copy)";
@@ -593,7 +595,7 @@ static void RenderComponentLibrary() {
             ImGui::SetClipboardText(portable.c_str());
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Copy a portable independent component for importing elsewhere.\\n"
+            ImGui::SetTooltip("Copy a portable independent component for importing elsewhere.\n"
                               "Includes unknown stored fields but not the current library ID.");
         ImGui::SameLine();
         if (RenderActionButton("Rename##component_library"))
