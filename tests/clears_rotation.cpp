@@ -38,11 +38,15 @@ int main() {
     const int64_t weeklyReset = nov23 + 7 * 3600 + 30 * 60;
     assert(BountySet(nov22 - 1) == BountySet(nov21));
     assert(BountySet(nov22) == 2);
-    // When the public API lags rollover, the *forecast* is displayed without
-    // claiming achievement completion. Confirm the Nov 23 rotation anchor.
-    assert(std::string(Fractals(FractalSetIndex(nov23)).dailies[0]) == "Cliffside");
-    assert(std::string(Fractals(FractalSetIndex(nov23)).dailies[1]) == "Lonely Tower");
-    assert(std::string(Fractals(FractalSetIndex(nov23)).dailies[2]) == "Kinfall");
+    // The calendar anchor can drift; derive the provisional next set from a
+    // validated prior set rather than claiming the date anchor is always right.
+    auto* forecast = NextFractalsFromLive(
+        {"Aetherblade", "Chaos", "Nightmare"});
+    assert(forecast != nullptr);
+    assert(std::string(forecast->dailies[0]) == "Cliffside");
+    assert(std::string(forecast->dailies[1]) == "Lonely Tower");
+    assert(std::string(forecast->dailies[2]) == "Kinfall");
+    assert(NextFractalsFromLive({}) == nullptr);
     assert(std::string(BountyName(BountySet(nov22), 0)) == "Fraenir of Jormag");
     assert(std::string(BountyName(BountySet(nov22), 1)) == "Whisper of Jormag");
     assert(std::string(BountyName(BountySet(nov22), 2)) == "Xera");

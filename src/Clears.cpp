@@ -70,6 +70,8 @@ static std::chrono::steady_clock::time_point g_LastClearsCompletionQuery{};
 // These vectors and bools are protected by g_ClearsMutex.
 static std::vector<uint32_t> g_ClearsPriorDailyFractalIds;
 static std::vector<uint32_t> g_ClearsPriorDailyBountyIds;
+// Only yesterday's verified T4 names can seed an offline rotation preview.
+static std::vector<std::string> g_ClearsPriorDailyT4Names;
 static bool g_ClearsDailyRolloverPending = false;
 static int g_ClearsDailyRolloverRetries = 0;
 static std::atomic<long long> g_ClearsDailyRolloverRetryAtMs{0};
@@ -202,6 +204,7 @@ static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
 
 // Forward declarations of private helpers
 static void SaveClearsCache();
+static std::string ShortenFractalName(const std::string& name);
 static void FetchClears();
 static void SendClearsAchQuery(bool skipCompletedSections = false);
 static void FetchVaultData(bool skipClaimedSections = false);
@@ -911,6 +914,7 @@ static void FetchClears() {
             g_ClearsDailyRolloverPending = false;
             g_ClearsPriorDailyFractalIds.clear();
             g_ClearsPriorDailyBountyIds.clear();
+            g_ClearsPriorDailyT4Names.clear();
             g_ClearsDailyRolloverRetries = 0;
             g_ClearsDailyRolloverRetryAtMs = 0;
             g_ClearsStatusMsg = "Querying completion...";
@@ -1040,6 +1044,19 @@ void LoadClearsCache() {
             if (dailyStale) {
                 g_ClearsPriorDailyFractalIds.clear();
                 g_ClearsPriorDailyBountyIds.clear();
+                g_ClearsPriorDailyT4Names.clear();
+                // Only a snapshot from the immediately preceding UTC day
+                // can be used to extrapolate today's rotation.
+                if (fetchEpoch > 0 &&
+                    CalcLastDailyReset(fetchTime) + std::chrono::hours(24) ==
+                        CalcLastDailyReset(now) &&
+                    j.contains("dailyFractals") && j["dailyFractals"].is_array()) {
+                    for (const auto& ej : j["dailyFractals"]) {
+                        if (ej.value("tier", "") == "T4")
+                            g_ClearsPriorDailyT4Names.push_back(
+                                ShortenFractalName(ej.value("name", "")));
+                    }
+                }
                 if (j.contains("dailyFractals") && j["dailyFractals"].is_array())
                     for (const auto& ej : j["dailyFractals"])
                         g_ClearsPriorDailyFractalIds.push_back(ej.value("id", 0u));
@@ -2651,16 +2668,19 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     if (showFractals) {
     if (g_DailyFractals.empty()) {
         if (g_ClearsDailyRolloverPending) {
-            // The GW2 API can lag the 00:00 UTC reset for over an hour.
-            // Show a clearly unverified, offline rotation forecast rather
-            // than yesterday's achievements or a permanently empty section.
-            const auto& forecast = ClearsRotation::Fractals(
-                ClearsRotation::FractalSetIndex(utcNow));
-            ImGui::TextDisabled("Rotation forecast (not API-verified; completion unknown):");
-            for (const char* name : forecast.dailies)
-                ImGui::BulletText("%s", name);
-            ImGui::TextDisabled("Recommended: T1 %d, T2 %d, T3 %d",
-                forecast.recScales[0], forecast.recScales[1], forecast.recScales[2]);
+            // The hard-coded date anchor can drift. Only derive a forecast
+            // from yesterday's verified three T4 objectives, if available.
+            const auto* forecast = ClearsRotation::NextFractalsFromLive(
+                g_ClearsPriorDailyT4Names);
+            if (forecast) {
+                ImGui::TextDisabled("Forecast from yesterday (unverified; completion unknown):");
+                for (const char* name : forecast->dailies)
+                    ImGui::BulletText("%s", name);
+                ImGui::TextDisabled("Recommended: T1 %d, T2 %d, T3 %d",
+                    forecast->recScales[0], forecast->recScales[1], forecast->recScales[2]);
+            } else {
+                ImGui::TextDisabled("  Today's daily API schedule is pending.");
+            }
         } else {
             ImGui::TextDisabled("  No data");
         }
@@ -3114,6 +3134,11 @@ static void RenderClearsShared(bool showVault) {
         if (!g_ClearsDailyRolloverPending) {
             g_ClearsPriorDailyFractalIds = DailyIds(g_DailyFractals);
             g_ClearsPriorDailyBountyIds = DailyIds(g_DailyBounties);
+            g_ClearsPriorDailyT4Names.clear();
+            for (const auto& e : g_DailyFractals) {
+                if (e.tier == "T4")
+                    g_ClearsPriorDailyT4Names.push_back(ShortenFractalName(e.name));
+            }
             g_ClearsDailyRolloverRetries = 0;
         }
         g_ClearsDailyRolloverPending = true;
@@ -3334,6 +3359,7 @@ void SyncCompletionAccountCaches() {
         g_WeeklyStrikes = {};
         g_ClearsPriorDailyFractalIds.clear();
         g_ClearsPriorDailyBountyIds.clear();
+        g_ClearsPriorDailyT4Names.clear();
         g_LastDailyReset = {};
         g_LastWeeklyReset = {};
         g_ClearsStatusMsg.clear();
