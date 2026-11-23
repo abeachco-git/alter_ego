@@ -267,33 +267,43 @@ static bool ComponentNativeSlotAllowed(const std::string& kind,
 }
 
 static void ComponentNativeInfusionSlots(ComponentJson& part) {
-    if (!part.contains("infusion_ids") || !part["infusion_ids"].is_array())
-        part["infusion_ids"] = ComponentJson::array();
-    auto& ids = part["infusion_ids"];
-    if (!part.contains("infusion_attributes") || !part["infusion_attributes"].is_array())
-        part["infusion_attributes"] = ComponentJson::array();
-    auto& attrs = part["infusion_attributes"];
+    // Optional infusion arrays must stay absent until an actual edit.
+    ComponentJson ids = part.contains("infusion_ids") &&
+        part["infusion_ids"].is_array() ? part["infusion_ids"] : ComponentJson::array();
+    ComponentJson attrs = part.contains("infusion_attributes") &&
+        part["infusion_attributes"].is_array() ? part["infusion_attributes"] : ComponentJson::array();
     while (attrs.size() < ids.size()) attrs.push_back("");
     int remove = -1;
     for (size_t i = 0; i < ids.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
         ComponentJson value = {{"id", ids[i]}};
         ComponentNativeNumber(value, "id", "Infusion item ID");
-        ids[i] = value["id"];
+        if (value["id"] != ids[i]) {
+            ids[i] = value["id"];
+            part["infusion_ids"] = ids;
+        }
         ImGui::SameLine();
         if (RenderActionButton("Remove##infusion")) remove = static_cast<int>(i);
         ComponentJson attribute = {{"name", attrs[i]}};
         ComponentNativeText(attribute, "name", "Attribute");
-        attrs[i] = attribute["name"];
+        if (attribute["name"] != attrs[i]) {
+            attrs[i] = attribute["name"];
+            part["infusion_attributes"] = attrs;
+        }
         ImGui::PopID();
     }
     if (remove >= 0) {
         ids.erase(ids.begin() + remove);
         attrs.erase(attrs.begin() + remove);
+        part["infusion_ids"] = ids;
+        if (part.contains("infusion_attributes") || !attrs.empty())
+            part["infusion_attributes"] = attrs;
     }
     if (RenderActionButton("Add infusion##component")) {
         ids.push_back(0);
         attrs.push_back("");
+        part["infusion_ids"] = ids;
+        part["infusion_attributes"] = attrs;
     }
     bool snapshot = part.value("infusion_snapshot", false);
     if (ImGui::Checkbox("Recorded equipment snapshot", &snapshot))
@@ -303,13 +313,20 @@ static void ComponentNativeInfusionSlots(ComponentJson& part) {
 static void ComponentNativeGear(ComponentJson& data, const std::string& kind) {
     ImGui::TextUnformatted("Equipment slots");
     ImGui::TextDisabled("Item and stat definitions use the same stored IDs as the Loadout viewer.");
-    if (!data.contains("gear") || !data["gear"].is_object())
-        data["gear"] = ComponentJson::object();
-    auto& gear = data["gear"];
+    if (data.contains("gear") && !data["gear"].is_object()) {
+        ImGui::TextDisabled("Unrecognized gear data; preserved without alteration.");
+        return;
+    }
+    ComponentJson placeholder = ComponentJson::object();
+    ComponentJson& gear = data.contains("gear") ? data["gear"] : placeholder;
     if (ImGui::BeginCombo("Add slot##component_gear", "Choose slot...")) {
         for (const char* slot : kNativeGearSlots) {
             if (!ComponentNativeSlotAllowed(kind, slot) || gear.contains(slot)) continue;
-            if (ImGui::Selectable(slot)) gear[slot] = ComponentJson::object();
+            if (ImGui::Selectable(slot)) {
+                // Defer display of new slot to the next frame if this
+                // component didn't already have a gear object.
+                data["gear"][slot] = ComponentJson::object();
+            }
         }
         ImGui::EndCombo();
     }
@@ -350,45 +367,54 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind) {
         }
         ImGui::PopID();
     }
-    if (!remove.empty()) gear.erase(remove);
+    if (!remove.empty()) data["gear"].erase(remove);
 }
 
 static void ComponentNativeInfusionRequirements(ComponentJson& data) {
     if (!ImGui::TreeNodeEx("##infusion_reqs", ImGuiTreeNodeFlags_DefaultOpen,
                             "Aggregate infusion requirements")) return;
-    if (!data.contains("infusion_totals") || !data["infusion_totals"].is_array())
-        data["infusion_totals"] = ComponentJson::array();
-    auto& totals = data["infusion_totals"];
-    int remove = -1;
-    for (size_t i = 0; i < totals.size(); ++i) {
-        ImGui::PushID(static_cast<int>(i));
-        if (!totals[i].is_object()) totals[i] = ComponentJson::object();
-        ComponentNativeNumber(totals[i], "item_id", "Item ID");
-        ComponentNativeNumber(totals[i], "count", "Quantity", 25);
-        ComponentNativeText(totals[i], "attribute", "Attribute");
-        if (RenderActionButton("Remove requirement##native"))
-            remove = static_cast<int>(i);
-        ImGui::Separator();
-        ImGui::PopID();
+    if (data.contains("infusion_totals") && !data["infusion_totals"].is_array()) {
+        ImGui::TextDisabled("Unknown aggregate format; preserved.");
+    } else {
+        ComponentJson none = ComponentJson::array();
+        ComponentJson& totals = data.contains("infusion_totals")
+            ? data["infusion_totals"] : none;
+        int remove = -1;
+        for (size_t i = 0; i < totals.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            if (!totals[i].is_object()) {
+                ImGui::TextDisabled("Unrecognized requirement; preserved.");
+                ImGui::PopID();
+                continue;
+            }
+            ComponentNativeNumber(totals[i], "item_id", "Item ID");
+            ComponentNativeNumber(totals[i], "count", "Quantity", 25);
+            ComponentNativeText(totals[i], "attribute", "Attribute");
+            if (RenderActionButton("Remove requirement##native"))
+                remove = static_cast<int>(i);
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        if (remove >= 0) data["infusion_totals"].erase(remove);
+        if (RenderActionButton("Add requirement##native"))
+            data["infusion_totals"].push_back(
+                {{"item_id", 0}, {"count", 1}, {"attribute", ""}});
     }
-    if (remove >= 0) totals.erase(totals.begin() + remove);
-    if (RenderActionButton("Add requirement##native"))
-        totals.push_back({{"item_id", 0}, {"count", 1}, {"attribute", ""}});
     bool present = data.value("infusion_summary_present", false);
     if (ImGui::Checkbox("Saved aggregate totals available", &present))
         data["infusion_summary_present"] = present;
     if (present) {
         ComponentNativeNumber(data, "infusion_ar_total", "Agony resistance");
-        if (!data.contains("infusion_stat_totals") ||
-            !data["infusion_stat_totals"].is_object())
-            data["infusion_stat_totals"] = ComponentJson::object();
-        for (auto it = data["infusion_stat_totals"].begin();
-             it != data["infusion_stat_totals"].end(); ++it) {
-            ImGui::PushID(it.key().c_str());
-            ComponentJson value = {{"amount", it.value()}};
-            ComponentNativeNumber(value, "amount", it.key().c_str());
-            it.value() = value["amount"];
-            ImGui::PopID();
+        if (data.contains("infusion_stat_totals") &&
+            data["infusion_stat_totals"].is_object()) {
+            for (auto it = data["infusion_stat_totals"].begin();
+                 it != data["infusion_stat_totals"].end(); ++it) {
+                ImGui::PushID(it.key().c_str());
+                ComponentJson value = {{"amount", it.value()}};
+                ComponentNativeNumber(value, "amount", it.key().c_str());
+                if (value["amount"] != it.value()) it.value() = value["amount"];
+                ImGui::PopID();
+            }
         }
     }
     ImGui::TreePop();
@@ -405,24 +431,29 @@ static void RenderComponentNativeEditor(const std::string& kind,
         ComponentNativeIntegerArray(data, "pets", "Ranger pets (terrestrial, aquatic)", 4);
         ComponentNativeIntegerArray(data, "legend_codes", "Revenant legends", 4);
         if (ImGui::TreeNode("##weapon_proficiency", "Build template weapon IDs")) {
-            if (!data.contains("weapons") || !data["weapons"].is_array())
-                data["weapons"] = ComponentJson::array();
+            if (data.contains("weapons") && !data["weapons"].is_array()) {
+                ImGui::TextDisabled("Unrecognized weapon definition; preserved.");
+                ImGui::TreePop();
+            } else {
+            ComponentJson none = ComponentJson::array();
+            auto& weapons = data.contains("weapons") ? data["weapons"] : none;
             int remove = -1;
-            auto& weapons = data["weapons"];
             for (size_t i = 0; i < weapons.size(); ++i) {
                 ImGui::PushID(static_cast<int>(i));
                 ComponentJson temp = {{"id", weapons[i]}};
                 ComponentNativeNumber(temp, "id", "Weapon ID");
-                weapons[i] = temp["id"];
+                if (weapons[i] != temp["id"])
+                    data["weapons"][i] = temp["id"];
                 ImGui::SameLine();
                 if (RenderActionButton("Remove##template_weapon"))
                     remove = static_cast<int>(i);
                 ImGui::PopID();
             }
-            if (remove >= 0) weapons.erase(weapons.begin() + remove);
+            if (remove >= 0) data["weapons"].erase(remove);
             if (RenderActionButton("Add weapon ID##template"))
-                weapons.push_back(0);
+                data["weapons"].push_back(0);
             ImGui::TreePop();
+            }
         }
     } else if (kind == "skills") {
         if (profession.empty())
