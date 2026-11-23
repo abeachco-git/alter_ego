@@ -593,8 +593,7 @@ static void RenderComponentLibrary() {
             ImGui::SetClipboardText(portable.c_str());
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Copy a portable independent component for importing elsewhere.
-"
+            ImGui::SetTooltip("Copy a portable independent component for importing elsewhere.\\n"
                               "Includes unknown stored fields but not the current library ID.");
         ImGui::SameLine();
         if (RenderActionButton("Rename##component_library"))
