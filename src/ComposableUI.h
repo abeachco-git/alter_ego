@@ -144,6 +144,92 @@ static std::string ComponentUIShortDescription(const std::string& kind,
         return std::to_string(data["gear"].size()) + " equipment slots";
     return "No saved fields";
 }
+// Human-readable inventory before the advanced JSON representation. This
+// remains deliberately lossless: it reads the same component payload, without
+// interpreting missing item names as empty slots.
+static void RenderComponentInventory(const std::string& kind, const ComponentJson& data) {
+    if (!data.is_object()) return;
+    if (kind == "runes" || kind == "sigils" || kind == "infusions") {
+        AlterEgo::Composable::Semantics::Summary summary;
+        if (kind == "runes") summary = AlterEgo::Composable::Semantics::Runes(data);
+        else if (kind == "sigils") summary = AlterEgo::Composable::Semantics::Sigils(data);
+        else summary = AlterEgo::Composable::Semantics::Infusions(data);
+        ImGui::TextDisabled("%s", summary.known
+            ? "Functional totals (slot independent where applicable)"
+            : "Totals cannot be verified from saved fields");
+        for (const auto& entry : summary.counts)
+            ImGui::BulletText("%d x %s", entry.second, entry.first.c_str());
+        if (kind == "infusions" && data.contains("infusion_ar_total") &&
+            data["infusion_ar_total"].is_number_integer())
+            ImGui::Text("Saved agony resistance: %d",
+                data["infusion_ar_total"].get<int>());
+        if (kind == "infusions" && data.contains("infusion_stat_totals") &&
+            data["infusion_stat_totals"].is_object()) {
+            for (auto it = data["infusion_stat_totals"].begin();
+                 it != data["infusion_stat_totals"].end(); ++it)
+                if (it.value().is_number_integer())
+                    ImGui::BulletText("%s: %lld", it.key().c_str(),
+                        static_cast<long long>(it.value().get<int64_t>()));
+        }
+    }
+    if (kind == "relic") {
+        if (data.contains("relic_name") && data["relic_name"].is_string())
+            ImGui::Text("Relic: %s", data["relic_name"].get<std::string>().c_str());
+        if (data.contains("relic_id") && data["relic_id"].is_number_integer())
+            ImGui::Text("Item ID: %lld",
+                static_cast<long long>(data["relic_id"].get<int64_t>()));
+    }
+    if (kind == "base_build") {
+        ImGui::TextDisabled("Profession, specialization and trait definition");
+        if (data.contains("profession") && data["profession"].is_string())
+            ImGui::Text("Profession: %s", data["profession"].get<std::string>().c_str());
+        if (data.contains("specializations") && data["specializations"].is_array())
+            ImGui::Text("Specialization entries: %d", (int)data["specializations"].size());
+    }
+    if (kind == "skills") {
+        for (const auto& bar : {"skills", "aquatic_skills"}) {
+            if (!data.contains(bar) || !data[bar].is_object()) continue;
+            ImGui::TextDisabled("%s", std::string(bar) == "skills"
+                ? "Terrestrial skills" : "Aquatic skills");
+            const auto& skills = data[bar];
+            for (const auto& field : {"heal", "elite", "utilities"}) {
+                if (!skills.contains(field)) continue;
+                const std::string value = skills[field].is_array()
+                    ? skills[field].dump() : skills[field].dump();
+                ImGui::TextWrapped("%s: %s", field, value.c_str());
+            }
+        }
+    }
+    if (data.contains("gear") && data["gear"].is_object() &&
+        !data["gear"].empty()) {
+        ImGui::Separator();
+        ImGui::TextDisabled("Recorded physical equipment slots");
+        if (ImGui::BeginTable("##component_items", 2,
+              ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+            ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 105.0f);
+            ImGui::TableSetupColumn("Stored details", ImGuiTableColumnFlags_WidthStretch);
+            for (auto it = data["gear"].begin(); it != data["gear"].end(); ++it) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(it.key().c_str());
+                ImGui::TableSetColumnIndex(1);
+                const auto& item = it.value();
+                if (!item.is_object()) {
+                    ImGui::TextWrapped("%s", item.dump().c_str());
+                } else {
+                    std::string detail;
+                    for (auto field = item.begin(); field != item.end(); ++field) {
+                        if (!detail.empty()) detail += " | ";
+                        detail += field.key() + ": " + field.value().dump();
+                    }
+                    ImGui::TextWrapped("%s", detail.empty() ? "(no details)" : detail.c_str());
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+}
+
 static bool ComponentUISearchMatch(std::string text, std::string needle) {
     std::transform(text.begin(), text.end(), text.begin(),
                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
@@ -464,10 +550,31 @@ static void RenderComponentLibrary() {
             ImGui::TextDisabled("Referenced components cannot be deleted.");
         }
         ImGui::Spacing();
-        ImGui::TextDisabled("Saved fields (read-only preview)");
-        ImGui::BeginChild("##component_json_preview", ImVec2(0, 0), true);
-        ImGui::TextUnformatted(item->at("data").dump(2).c_str());
-        ImGui::EndChild();
+        RenderComponentInventory(kind, item->at("data"));
+        if (ImGui::CollapsingHeader("Advanced: raw component data##preview")) {
+            ImGui::BeginChild("##component_json_preview", ImVec2(0, 180), true);
+            ImGui::TextUnformatted(item->at("data").dump(2).c_str());
+            ImGui::EndChild();
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Used by:");
+        bool anyUsage = false;
+        if (doc.contains("loadouts") && doc["loadouts"].is_array()) {
+            for (const auto& loadout : doc["loadouts"]) {
+                if (!loadout.is_object() || !loadout.contains("refs") ||
+                    !loadout["refs"].is_object()) continue;
+                const auto& refs = loadout["refs"];
+                if (!refs.contains(kind) || !refs[kind].is_string() ||
+                    refs[kind].get<std::string>() != id) continue;
+                anyUsage = true;
+                const auto& meta = loadout.value("metadata", ComponentJson::object());
+                const std::string loadoutName = meta.is_object()
+                    ? meta.value("name", loadout.value("id", std::string()))
+                    : loadout.value("id", std::string());
+                ImGui::BulletText("%s", loadoutName.c_str());
+            }
+        }
+        if (!anyUsage) ImGui::TextDisabled("No Loadouts currently reference this component.");
     }
     ImGui::EndChild();
     RenderComponentUIEditor();
