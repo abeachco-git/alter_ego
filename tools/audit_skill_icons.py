@@ -252,7 +252,7 @@ def main():
         "methodology": [
             "Player subsets from /v2/professions skill and weapon listings plus [palette,skill] pairs",
             "Racial skill IDs from /v2/races; categories are not mutually exclusive",
-            "Every potentially displayable icon is an upper bound: all /v2/skills entries with icon URLs, including NPCs",
+            "Every potentially displayable icon is a broad upper bound: all /v2/skills entries with icon URLs, including non-selectable abilities",
             "Distinct URL counts remove duplicate URL artwork; sampled SHA256 additionally detects content duplicates",
             "Binary RCDATA growth is approximately original encoded image bytes plus minor resource metadata",
             "Size estimates extrapolate actual sampled URLs and are not measured complete catalogs",
