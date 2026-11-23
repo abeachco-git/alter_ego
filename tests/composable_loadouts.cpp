@@ -196,10 +196,26 @@ int main() {
     assert(updatedRune->data["rune_name"] == "Updated Rune");
     assert(document.loadouts[0].refs.at("runes") == "runes:one");
 
+    // Assignment must enforce the profession rules even if the UI is bypassed.
+    Document assignSafety = document;
+    const Json assignBefore = ToJson(assignSafety);
+    assert(!Assign(assignSafety, "two", "base_build", "base_build:one", error));
+    assert(!Assign(assignSafety, "two", "skills", "skills:one", error));
+    assert(ToJson(assignSafety) == assignBefore);
+    Json incompatibleBase = Find(document, "base_build", "base_build:one")->data;
+    incompatibleBase["profession"] = "Necromancer";
+    assert(!UpdateSharedNamed(assignSafety, "base_build", "base_build:one",
+                              "Wrong class", incompatibleBase, error));
+    assert(!UpdateShared(assignSafety, "base_build", "base_build:one",
+                         incompatibleBase, error));
+    assert(ToJson(assignSafety) == assignBefore);
+
     // Never overwrite a shared skill component with another profession's
     // captured skills, even when a future UI bypasses the dropdown filter.
     Document professionSafety = document;
-    assert(Assign(professionSafety, "two", "skills", "skills:one", error));
+    // Simulate an already-invalid cross-profession graph created by a
+    // historical editor to test that capture repair cannot overwrite it.
+    FindLoadout(professionSafety, "two")->refs["skills"] = "skills:one";
     assert(!CaptureProfessionCompatible(professionSafety,
         "skills", "skills:one", "Engineer", error));
     assert(CaptureProfessionCompatible(professionSafety,
