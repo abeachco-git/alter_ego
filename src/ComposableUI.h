@@ -303,7 +303,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(ComponentLabel(kind));
             ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(ImMax(150.f, ImGui::GetContentRegionAvail().x - 106.f));
+            ImGui::SetNextItemWidth(ImMax(110.f, ImGui::GetContentRegionAvail().x - 162.f));
             if (ImGui::BeginCombo("##part", shown.c_str())) {
                 const auto group = doc["components"].find(kind);
                 if (group != doc["components"].end() && group->is_array()) {
@@ -335,7 +335,22 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
                     loadoutId, kind, id, shown + " (Copy)", ComponentJson::object()};
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Create a private copy for this Loadout.");
+                ImGui::SetTooltip("Create an independent copy, then edit without affecting other Loadouts.");
+            ImGui::SameLine();
+            if (active && RenderActionButton("Edit##part")) {
+                const int usage = ComponentUIUsage(doc, kind, id);
+                ComponentUIStartEditor("edit", kind, id, active);
+                if (usage > 1)
+                    g_ComponentEditorError = "Shared by " + std::to_string(usage) +
+                        " Loadouts. Edits here will update all of them. "
+                        "Use Copy to edit only this Loadout.";
+            }
+            if (active && ImGui::IsItemHovered()) {
+                const int usage = ComponentUIUsage(doc, kind, id);
+                ImGui::SetTooltip(usage > 1
+                    ? "Edit SHARED component (%d Loadouts). Use Copy for a private edit."
+                    : "Edit this component's stored fields.", usage);
+            }
             ImGui::PopID();
         }
         ImGui::EndTable();
