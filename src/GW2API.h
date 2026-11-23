@@ -494,6 +494,12 @@ namespace AlterEgo {
                                            const std::string& name);
         static bool DeleteUnusedLoadoutComponent(const std::string& kind,
                                                  const std::string& componentId);
+        // Capture an independent component from live or imported SavedBuild
+        // data, without creating a new Loadout or mutating existing ones.
+        static bool SaveCapturedLoadoutComponent(const SavedBuild& capture,
+                                                  const std::string& kind,
+                                                  const std::string& name);
+
 
 
         // --- Build editor support ---
