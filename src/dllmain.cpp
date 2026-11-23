@@ -7361,6 +7361,36 @@ static void RenderSpecPickerDialog() {
     if (!open) g_SpecPickerSlot = -1; // closed via window X
 }
 
+// Shared eligibility policy for both the monolithic Loadout editor and the
+// v3 standalone Skills component editor. Keep the GW2 skill-type, profession
+// and selected elite-spec checks in ONE place.
+static std::vector<uint32_t> SelectableBuildSkillIds(
+    const std::string& profession, const char* type,
+    const std::vector<uint32_t>& specializationIds,
+    bool allowAllSpecializations = false) {
+    if (profession.empty()) return {};
+    const auto allIds = AlterEgo::GW2API::GetProfessionSkillIds(profession);
+    if (allIds.empty()) {
+        AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+        return {};
+    }
+    std::vector<uint32_t> missing;
+    std::vector<uint32_t> matches;
+    for (uint32_t id : allIds) {
+        const auto* skill = AlterEgo::GW2API::GetSkillInfo(id);
+        if (!skill) { missing.push_back(id); continue; }
+        if (skill->type != type) continue;
+        if (!allowAllSpecializations && skill->specialization &&
+            std::find(specializationIds.begin(), specializationIds.end(),
+                      skill->specialization) == specializationIds.end()) continue;
+        const bool owned = std::find(skill->professions.begin(),
+            skill->professions.end(), profession) != skill->professions.end();
+        if (owned) matches.push_back(id);  // never include racial skills
+    }
+    if (!missing.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(missing);
+    return matches;
+}
+
 // Skill picker for the build editor. Lists the profession's slottable skills
 // of the slot's type (Heal / Utility / Elite), gated by slotted elite specs,
 // and prevents duplicate utilities.
@@ -7410,39 +7440,15 @@ static void RenderSkillPickerDialog() {
             g_SkillPickerSlot = -1;
             ImGui::CloseCurrentPopup();
         };
-        auto eliteGateOk = [&](uint32_t specGate) -> bool {
-            if (specGate == 0) return true;
-            for (int i = 0; i < 3; i++)
-                if (g_EditDraft.specializations[i].spec_id == specGate) return true;
-            return false;
-        };
-
-        auto skillIds = AlterEgo::GW2API::GetProfessionSkillIds(g_EditDraft.profession);
+        std::vector<uint32_t> selectedSpecIds;
+        for (const auto& spec : g_EditDraft.specializations)
+            if (spec.spec_id) selectedSpecIds.push_back(spec.spec_id);
+        const auto skillIds = SelectableBuildSkillIds(
+            g_EditDraft.profession, wantType, selectedSpecIds);
         if (skillIds.empty()) {
-            RenderSpinner("Loading skills...");
-            AlterEgo::GW2API::FetchProfessionPaletteAsync(g_EditDraft.profession);
+            RenderSpinner("Loading eligible skills...");
         } else {
-            std::vector<uint32_t> need;
-            for (uint32_t id : skillIds)
-                if (!AlterEgo::GW2API::GetSkillInfo(id)) need.push_back(id);
-            if (!need.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(need);
-
-            // Native-flyout-style grid: every skill of this type (elite-gated), 4 per row.
-            // Skills already slotted elsewhere are shown too — picking one swaps it.
-            std::vector<uint32_t> shownIds;
-            for (uint32_t id : skillIds) {
-                const auto* sk = AlterEgo::GW2API::GetSkillInfo(id);
-                if (!sk) continue;
-                if (sk->type != wantType) continue;
-                if (!eliteGateOk(sk->specialization)) continue;
-                // Exclude racial skills (and any non-profession skills): racial skills
-                // list no profession; profession skills list this profession.
-                bool forProf = false;
-                for (const auto& pr : sk->professions)
-                    if (pr == g_EditDraft.profession) { forProf = true; break; }
-                if (!forProf) continue;
-                shownIds.push_back(id);
-            }
+            const auto& shownIds = skillIds;
             const int COLS = 4;
             const float cell = 42.0f, pad = 4.0f;
             uint32_t equipped = (slot == 0) ? g_EditDraft.terrestrial_skills.heal
