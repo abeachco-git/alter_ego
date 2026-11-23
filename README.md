@@ -11,7 +11,7 @@ A Guild Wars 2 addon for [Raidcore Nexus](https://raidcore.gg/Nexus) that lets y
 
 ## Experimental Composable Loadouts v3 (this branch only)
 
-This **\`experiment/composable-loadouts\`** branch is a separate, ongoing experiment. It has not been merged into \`main\` or tested end-to-end in the game. The features below are specific to this branch, and screenshots elsewhere in this README may show the current \`main\` UI.
+This **`experiment/composable-loadouts`** branch is a separate, ongoing experiment. It has not been merged into `main` or tested end-to-end in the game. The features below are specific to this branch, and screenshots elsewhere in this README may show the current `main` UI.
 
 - **Independent saved components:** Every Loadout can reference a Base Build, Skills, Weapons, Armor, Trinkets, Runes, Sigils, Infusions, and Relic, plus an optional Fashion appearance. The Loadout viewer still shows individual physical equipment slots, exact item IDs, stats, upgrades, and infusions.
 - **Native visual editors:** Components use the shared GW2 specialization/trait artwork, skill-palette rules and icons, stat selectors, and curated rune/sigil/relic catalogs. Numeric IDs remain accessible through advanced controls. Unknown data is preserved; missing optional fields are not created just because the editor was opened.
@@ -19,7 +19,7 @@ This **\`experiment/composable-loadouts\`** branch is a separate, ongoing experi
 - **Save Active:** Choose **Complete Loadout**, **New component**, or **Update existing component**. Updating an existing component explicitly warns when other Loadouts share it and requires confirmation. Cross-profession Build/Skills replacement is blocked.
 - **Compare:** Grouped, expandable results for all nine component kinds. Runes and infusions compare as aggregate requirements; sigils are aggregated within each weapon set. Utility ordering does not change functional equivalence. Missing information is unverified, never a presumed match.
 - **Clipboard interchange:** Copy and paste a single component via Components, or **Copy Portable Loadout** from a saved Loadout and **Paste Portable Loadout** in the Library. Portable Loadouts include their component payloads and optional Fashion reference; imports create new independent component IDs rather than linking to or overwriting existing components.
-- **Persistence/migration:** The v3 canonical data is stored separately from the upstream-compatible \`build_library.json\` mirror. Migration checks exact round-trip reconstruction and preserves a pre-migration backup. Full ZIP Library backups include the v3 component graph; standalone legacy Build JSON is still supported.
+- **Persistence/migration:** The v3 canonical data is stored separately from the upstream-compatible `build_library.json` mirror. Migration checks exact round-trip reconstruction and preserves a pre-migration backup. Full ZIP Library backups include the v3 component graph; standalone legacy Build JSON is still supported.
 
 **Status:** CI exercises the portable data model, migration, backups, import conflicts, functional comparisons, and Windows x64 UCRT compilation. In-game interaction testing is still pending. Do not remove pre-migration backups or use this experimental branch as the only copy of your saved library.
 
