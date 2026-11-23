@@ -213,8 +213,7 @@ static bool ComponentNativeSlotAllowed(const std::string& kind,
     if (kind == "runes") return AlterEgo::Composable::SlotKind(slot) == "armor";
     if (kind == "sigils") return AlterEgo::Composable::SlotKind(slot) == "weapons";
     if (kind == "infusions") return true;
-    return AlterEgo::Composable::SlotKind(slot) == kind &&
-           !(slot == "Relic" && kind == "trinkets");
+    return AlterEgo::Composable::SlotKind(slot) == kind;
 }
 
 static void ComponentNativeInfusionSlots(ComponentJson& part) {
