@@ -76,10 +76,12 @@ inline Summary Infusions(const Json& infusions) {
         for (auto it = infusions.at("gear").begin(); it != infusions.at("gear").end(); ++it) {
             const Json& slot = it.value();
             if (!slot.is_object()) continue;
-            if (slot.contains("infusion_ids") && slot.at("infusion_ids").is_array())
-                for (const auto& id : slot.at("infusion_ids"))
+            if (slot.contains("infusion_ids") && slot.at("infusion_ids").is_array()) {
+                for (const auto& id : slot.at("infusion_ids")) {
                     if (id.is_number_integer() && id.get<int64_t>() > 0)
                         Add(summary, "id:" + id.dump());
+                }
+            }
             // A named infusion without an ID is preserved but cannot establish
             // equivalence to an identified item without further resolution.
             else if (slot.contains("infusion") && slot.at("infusion").is_string())
