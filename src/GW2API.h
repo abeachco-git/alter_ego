@@ -504,6 +504,7 @@ namespace AlterEgo {
                                                   const std::string& name);
     static bool ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
         const std::string& kind, const std::string& componentId);
+    static bool ImportPortableLoadout(const nlohmann::json& packet);
 
 
 
