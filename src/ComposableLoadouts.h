@@ -744,6 +744,31 @@ inline bool CopyForLoadout(Document& doc, const std::string& loadoutId,
         return true;
     }, error);
 }
+// Copy & Edit is a single, cancellable action. The UI prepares the draft
+// without changing the original graph, and only this transaction creates the
+// new component and switches the one Loadout's reference.
+inline bool CopyEditedForLoadout(Document& doc, const std::string& loadoutId,
+                                 const std::string& kind, const std::string& newId,
+                                 const std::string& name, const Json& editedData,
+                                 std::string& error) {
+    return Transaction(doc, [&](Document& next, std::string& err) {
+        auto* loadout = FindLoadout(next, loadoutId);
+        if (!loadout || !IsKind(kind) || !loadout->refs.count(kind) ||
+            newId.empty() || name.empty() || !editedData.is_object() ||
+            Find(next, kind, newId))
+            return Fail(err, "Invalid private component request.");
+        const auto* source = Find(next, kind, loadout->refs.at(kind));
+        if (!source) return Fail(err, "Original component no longer exists.");
+        Component copy = *source;
+        copy.id = newId;
+        copy.name = name;
+        copy.data = editedData;
+        next.components[kind].push_back(std::move(copy));
+        loadout->refs[kind] = newId;
+        return true;
+    }, error);
+}
+
 inline bool LinkFashion(Document& doc, const std::string& loadoutId,
                         const std::string& fashionId, std::string& error) {
     return Transaction(doc, [&](Document& next, std::string& err) {
