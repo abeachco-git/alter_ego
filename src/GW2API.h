@@ -478,6 +478,9 @@ namespace AlterEgo {
         static bool CopyLoadoutComponent(const std::string& loadoutId,
                                          const std::string& kind,
                                          const std::string& newComponentName);
+    static bool CopyEditedLoadoutComponent(const std::string& loadoutId,
+        const std::string& kind, const std::string& name,
+        const nlohmann::json& data);
         static bool EditSharedLoadoutComponent(const std::string& kind,
                                                 const std::string& componentId,
                                                 const nlohmann::json& data);
