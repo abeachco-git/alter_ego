@@ -3,6 +3,7 @@
 #include "HoardAndSeekAPI.h"
 #include "ChatLink.h"
 #include "BuildGroupOrder.h"
+#include "ComposableStore.h"
 
 #include <windows.h>
 #include <wininet.h>
@@ -32,6 +33,12 @@ namespace AlterEgo {
         std::atomic<long long> g_busyRetryAtMs{0};
         std::atomic<uint64_t> g_characterDataRevision{1};
         std::atomic<uint64_t> g_buildLibraryRevision{1};
+        // v3 is authoritative. SavedBuild remains a resolved compatibility
+        // view for the existing UI, GW2 imports and comparison paths.
+        Composable::Document g_loadoutDocument;
+        bool g_loadoutDocumentLoaded = false;
+        std::mutex g_loadoutPersistenceMutex;
+
         // A manual character refresh also refreshes crafting; a debounced
         // automatic equipment/spec refresh reuses persisted crafting details.
         // Access only while s_mutex is held.
@@ -3120,22 +3127,40 @@ namespace AlterEgo {
     }
 
     bool GW2API::SaveBuildLibrary() {
-        g_buildLibraryRevision.fetch_add(1);
-        EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/build_library.json";
-
-        json j;
+        // UI and importer mutations are still performed on SavedBuild views.
+        // Convert those edits transactionally to independent v3 components.
+        std::lock_guard<std::mutex> persist(g_loadoutPersistenceMutex);
+        if (!EnsureDataDirectory()) return false;
+        json legacy;
+        Composable::Document original;
+        bool alreadyLoaded = false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            json arr = json::array();
-            for (const auto& b : s_saved_builds) arr.push_back(SerializeSavedBuild(b));
-            j["builds"] = arr;
+            legacy["builds"] = json::array();
+            for (const auto& saved : s_saved_builds)
+                legacy["builds"].push_back(SerializeSavedBuild(saved));
+            alreadyLoaded = g_loadoutDocumentLoaded;
+            if (alreadyLoaded) original = g_loadoutDocument;
         }
 
-        std::ofstream file(path);
-        if (!file.is_open()) return false;
-        file << j.dump(2);
-        file.flush();
+        std::string error;
+        if (!alreadyLoaded) {
+            bool migrated = false;
+            if (!Composable::Store::Open(GetDataDirectory(), original, migrated, error))
+                return false; // NEVER replace invalid legacy/canonical storage.
+        }
+        Composable::Document reconciled;
+        if (!Composable::Reconcile(original, legacy, reconciled, error))
+            return false;
+        if (!Composable::Store::Save(GetDataDirectory(), reconciled, error))
+            return false;
+
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            g_loadoutDocument = std::move(reconciled);
+            g_loadoutDocumentLoaded = true;
+            g_buildLibraryRevision.fetch_add(1);
+        }
         return true;
     }
 
@@ -3276,25 +3301,32 @@ namespace AlterEgo {
     }
 
     bool GW2API::LoadBuildLibrary() {
-        std::string path = GetDataDirectory() + "/build_library.json";
-        std::ifstream file(path);
-        if (!file.is_open()) return false;
-        try {
-            json j; file >> j;
-            std::lock_guard<std::mutex> lock(s_mutex);
-            g_buildLibraryRevision.fetch_add(1);
-            s_saved_builds.clear();
-            if (j.contains("builds") && j["builds"].is_array()) {
-                for (const auto& bj : j["builds"]) {
-                    SavedBuild b;
-                    if (DeserializeSavedBuild(bj, b))
-                        s_saved_builds.push_back(std::move(b));
-                }
-            }
-            return true;
-        } catch (...) {
+        std::lock_guard<std::mutex> persist(g_loadoutPersistenceMutex);
+        Composable::Document loaded;
+        bool migrated = false;
+        std::string error;
+        if (!Composable::Store::Open(GetDataDirectory(), loaded, migrated, error))
             return false;
+
+        json legacy;
+        if (!Composable::ToLegacy(loaded, legacy, error)) return false;
+        std::vector<SavedBuild> parsed;
+        try {
+            for (const auto& entry : legacy.at("builds")) {
+                SavedBuild saved;
+                if (!DeserializeSavedBuild(entry, saved))
+                    return false; // Do not silently discard incomplete entries.
+                parsed.push_back(std::move(saved));
+            }
+        } catch (...) { return false; }
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_saved_builds = std::move(parsed);
+            g_loadoutDocument = std::move(loaded);
+            g_loadoutDocumentLoaded = true;
+            g_buildLibraryRevision.fetch_add(1);
         }
+        return true;
     }
 
     bool GW2API::ExportBuildLibraryToFile(const std::string& path) {
