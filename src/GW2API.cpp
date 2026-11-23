@@ -3432,6 +3432,23 @@ namespace AlterEgo {
         });
     }
 
+    bool GW2API::CopyEditedLoadoutComponent(const std::string& loadoutId,
+                                            const std::string& kind,
+                                            const std::string& name,
+                                            const nlohmann::json& data) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            static std::atomic<uint64_t> counter{0};
+            std::string id;
+            do {
+                id = kind + ":" + loadoutId + ":private:" +
+                    std::to_string(std::time(nullptr)) + ":" +
+                    std::to_string(counter.fetch_add(1));
+            } while (Composable::Find(doc, kind, id));
+            return Composable::CopyEditedForLoadout(doc, loadoutId, kind,
+                                                      id, name, data, error);
+        });
+    }
+
     bool GW2API::EditSharedLoadoutComponent(const std::string& kind,
                                              const std::string& componentId,
                                              const nlohmann::json& data) {
