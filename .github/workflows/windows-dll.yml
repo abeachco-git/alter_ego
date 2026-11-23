@@ -6,6 +6,7 @@ on:
     branches: [main, feature/save-and-compare-retrieved-sets, experiment/composable-loadouts]
     paths:
       - 'src/**'
+      - 'tools/**'
       - 'tests/**'
       - 'include/**'
       - 'lib/**'
