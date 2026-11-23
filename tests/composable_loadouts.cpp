@@ -196,6 +196,21 @@ int main() {
     assert(updatedRune->data["rune_name"] == "Updated Rune");
     assert(document.loadouts[0].refs.at("runes") == "runes:one");
 
+    // Never overwrite a shared skill component with another profession's
+    // captured skills, even when a future UI bypasses the dropdown filter.
+    Document professionSafety = document;
+    assert(Assign(professionSafety, "two", "skills", "skills:one", error));
+    assert(!CaptureProfessionCompatible(professionSafety,
+        "skills", "skills:one", "Engineer", error));
+    assert(CaptureProfessionCompatible(professionSafety,
+        "skills", "skills:one", "Necromancer", error) == false);
+    assert(!CaptureProfessionCompatible(document,
+        "base_build", "base_build:one", "Necromancer", error));
+    assert(CaptureProfessionCompatible(document,
+        "base_build", "base_build:one", "Engineer", error));
+    assert(CaptureProfessionCompatible(document,
+        "armor", "armor:one", "Necromancer", error));
+
     // Save Active replacement drops stale known gear/upgrade fields while
     // retaining foreign extension metadata and preserving other components.
     Json previousCapture = {
