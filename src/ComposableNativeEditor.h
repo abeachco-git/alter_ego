@@ -250,10 +250,33 @@ static void ComponentNativeSpecializations(ComponentJson& data,
             ImGui::SameLine();
             if (ImGui::BeginCombo("##specialization", ComponentNativeSpecName(priorId).c_str())) {
                 if (ImGui::Selectable("(none)", !priorId)) spec["id"] = 0;
-                for (uint32_t choice : candidates)
-                    if (ImGui::Selectable((ComponentNativeSpecName(choice) +
-                        "##" + std::to_string(choice)).c_str(), choice == priorId))
+                for (uint32_t choice : candidates) {
+                    const auto* definition = AlterEgo::GW2API::GetSpecInfo(choice);
+                    if (!definition) continue;
+                    if (definition->elite && i != 2) continue;
+                    bool alreadyUsed = false;
+                    for (int other = 0; other < count; ++other)
+                        if (other != i && specs[other].is_object() &&
+                            specs[other].value("id", uint32_t(0)) == choice)
+                            alreadyUsed = true;
+                    ImGui::PushID(static_cast<int>(choice));
+                    const uint32_t key = choice + 1500000u;
+                    Texture_t* icon = AlterEgo::IconManager::GetIcon(key);
+                    if (icon && icon->Resource) {
+                        ImGui::Image(icon->Resource, ImVec2(24, 24));
+                    } else {
+                        if (!definition->icon_url.empty())
+                            AlterEgo::IconManager::RequestIcon(key, definition->icon_url);
+                        ImGui::Dummy(ImVec2(24, 24));
+                    }
+                    ImGui::SameLine(0, 8);
+                    if (alreadyUsed) {
+                        ImGui::TextDisabled("%s (already selected)", definition->name.c_str());
+                    } else if (ImGui::Selectable(definition->name.c_str(), choice == priorId)) {
                         spec["id"] = choice;
+                    }
+                    ImGui::PopID();
+                }
                 ImGui::EndCombo();
             }
         }
@@ -266,33 +289,46 @@ static void ComponentNativeSpecializations(ComponentJson& data,
         const char* tiers[] = {"Adept", "Master", "Grandmaster"};
         for (int tier = 0; tier < 3; ++tier) {
             ImGui::PushID(tier);
-            int choice = traits[tier].is_number_integer()
+            const int choice = traits[tier].is_number_integer()
                 ? traits[tier].get<int>() : 0;
-            int entered = choice;
-            ImGui::SetNextItemWidth(150);
-            if (ImGui::InputInt(tiers[tier], &entered)) {
-                traits[tier] = entered; // negative import placeholders are preserved
-                spec["traits"] = traits;
-            }
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(tiers[tier]);
+            ImGui::SameLine(140.0f);
             if (definition && definition->major_traits.size() >= 9) {
-                ImGui::SameLine();
-                if (ImGui::BeginCombo("##trait", "Choose trait...")) {
-                    if (ImGui::Selectable("(none)", choice == 0)) {
-                        traits[tier] = 0;
+                // Same trait icons and selection treatment as the full
+                // Loadout editor, not a separate text-only trait picker.
+                if (definition->minor_traits.size() > static_cast<size_t>(tier)) {
+                    RenderTraitIcon(definition->minor_traits[tier], true, true, 34);
+                    ImGui::SameLine(0, 8);
+                }
+                for (int option = 0; option < 3; ++option) {
+                    if (option) ImGui::SameLine(0, 6);
+                    const uint32_t tid = definition->major_traits[tier * 3 + option];
+                    const bool selected = choice == static_cast<int>(tid) ||
+                        (choice < 0 && -choice == option + 1);
+                    bool clicked = false;
+                    RenderTraitIcon(tid, selected, false, 34, true, &clicked);
+                    if (clicked) {
+                        traits[tier] = tid;
                         spec["traits"] = traits;
                     }
-                    for (int j = 0; j < 3; ++j) {
-                        const uint32_t tid = definition->major_traits[tier * 3 + j];
-                        const auto* trait = AlterEgo::GW2API::GetTraitInfo(tid);
-                        const std::string label = (trait ? trait->name :
-                            "#" + std::to_string(tid)) + "##" + std::to_string(tid);
-                        if (ImGui::Selectable(label.c_str(), choice == static_cast<int>(tid))) {
-                            traits[tier] = tid;
-                            spec["traits"] = traits;
-                        }
-                    }
-                    ImGui::EndCombo();
                 }
+            } else {
+                ImGui::TextDisabled("Trait metadata pending");
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear")) {
+                traits[tier] = 0;
+                spec["traits"] = traits;
+            }
+            if (ImGui::TreeNode("##advanced_trait", "Advanced trait ID")) {
+                int entered = choice;
+                ImGui::SetNextItemWidth(160);
+                if (ImGui::InputInt("Trait ID", &entered)) {
+                    traits[tier] = entered; // retain negative import placeholders
+                    spec["traits"] = traits;
+                }
+                ImGui::TreePop();
             }
             ImGui::PopID();
         }
