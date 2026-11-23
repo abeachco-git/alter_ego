@@ -162,7 +162,6 @@ int main() {
     assert(FromJson(Json::parse(Get(dir / Store::kFile)), reloaded, error));
     assert(Store::Save(dir.u8string(), opened, error));
     assert(fs::exists(dir / Store::kPrevious));
-    assert(!Store::Save(dir.u8string(), untouched /* valid */, error) == false || true);
     // Always load existing canonical data, not re-import a stale mirror.
     migrated = true;
     assert(Store::Open(dir.u8string(),opened,migrated,error));
