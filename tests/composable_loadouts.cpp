@@ -178,6 +178,34 @@ int main() {
            "third-party");
     assert(reconstructed["builds"][0]["gear"]["Helm"]["stat_name"] == "Berserker");
 
+    // Portable component packages have no stable ID. Importing them never
+    // overwrites an existing shared component or changes existing references.
+    const Component* reference = Find(document, "armor", "armor:one");
+    assert(reference);
+    Json exported = ExportComponent("armor", *reference);
+    assert(exported["format"] == kComponentFormat);
+    assert(!exported.contains("id"));
+    std::string importedKind;
+    Component portable;
+    assert(ImportComponent(exported, importedKind, portable, error));
+    assert(importedKind == "armor");
+    assert(portable.id.empty());
+    assert(portable.data == reference->data);
+    assert(portable.data["gear"]["Helm"]["future_stat"]["source"] == "third-party");
+    Json wrong = exported;
+    wrong["kind"] = "weapons";
+    assert(!ImportComponent(wrong, importedKind, portable, error));
+    wrong = exported;
+    wrong["version"] = kComponentVersion + 1;
+    assert(!ImportComponent(wrong, importedKind, portable, error));
+    wrong = exported;
+    wrong["data"]["gear"]["Helm"]["sigil_id"] = 123;
+    assert(!ImportComponent(wrong, importedKind, portable, error));
+    wrong = exported;
+    wrong["data"]["skills"] = Json::object();
+    assert(!ImportComponent(wrong, importedKind, portable, error));
+    assert(Find(document, "armor", "armor:one")->data == reference->data);
+
     // Corruption and broken references fail without damaging caller state.
     Json bad = ToJson(document);
     bad["version"] = 999;
