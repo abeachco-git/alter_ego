@@ -3560,8 +3560,12 @@ namespace AlterEgo {
             return false;
         }
 
+        // Stage in memory for the legacy adapter. If v3 validation or atomic
+        // disk save fails, restore the exact previous in-memory projection.
+        std::vector<SavedBuild> before;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            before = s_saved_builds;
             if (replaceAll) {
                 s_saved_builds.clear();
                 for (auto& b : parsed) s_saved_builds.push_back(std::move(b));
@@ -3576,7 +3580,16 @@ namespace AlterEgo {
                 }
             }
         }
-        SaveBuildLibrary();
+        if (!SaveBuildLibrary()) {
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                s_saved_builds = std::move(before);
+            }
+            addedOut = 0;
+            skippedOut = 0;
+            errOut = "Could not persist imported builds. The previous library was restored.";
+            return false;
+        }
         return true;
     }
 
