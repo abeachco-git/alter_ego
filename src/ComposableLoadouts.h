@@ -7,6 +7,8 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <functional>
 #include <map>
 #include <set>
@@ -320,9 +322,9 @@ inline Json ExportComponent(const std::string& kind, const Component& component)
 // remain intentionally unrestricted/lossless. This prevents malformed pasted
 // JSON from entering native ImGui editors or unsigned GW2 ID conversions.
 inline bool NonNegativeInteger(const Json& value) {
-    if (value.is_number_unsigned()) return value.get<uint64_t>() <= UINT32_MAX;
+    if (value.is_number_unsigned()) return value.get<uint64_t>() <= std::numeric_limits<uint32_t>::max();
     return value.is_number_integer() &&
-           value.get<int64_t>() >= 0 && value.get<int64_t>() <= UINT32_MAX;
+           value.get<int64_t>() >= 0 && value.get<int64_t>() <= std::numeric_limits<uint32_t>::max();
 }
 inline bool ValidPortableGearField(const std::string& field, const Json& value) {
     if (field == "item_id" || field == "stat_id" ||
