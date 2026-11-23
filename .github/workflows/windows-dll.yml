@@ -23,7 +23,7 @@ jobs:
       - name: Install matching UCRT cross-compiler
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 ca-certificates g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 python3-pil ca-certificates g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
           x86_64-w64-mingw32ucrt-g++ --version
       - name: Fetch MetaBattle live pages for parser verification
         continue-on-error: true
@@ -122,6 +122,25 @@ jobs:
             echo "Wrong CRT imported (MSVCRT)" >&2
             exit 1
           fi
+      # Research-only inventory: the selected skill artwork remains on-disk
+      # and is NOT embedded into the binary by this script.
+      - name: Audit skill icon counts and practical file sizes
+        continue-on-error: true
+        run: |
+          python3 tools/audit_skill_icons.py \
+            --json build/skill-icon-audit.json \
+            --markdown build/skill-icon-audit.md \
+            --dll build/AlterEgo.dll \
+            --resource-dir build/embedded_icon_data
+      - name: Upload skill icon analysis
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AlterEgo-Skill-Icon-Audit
+          path: |
+            build/skill-icon-audit.json
+            build/skill-icon-audit.md
+          if-no-files-found: ignore
       - name: Upload DLL
         uses: actions/upload-artifact@v4
         with:
