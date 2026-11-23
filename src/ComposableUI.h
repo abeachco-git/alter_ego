@@ -41,7 +41,6 @@ struct ComponentUICommand {
     ComponentJson data = ComponentJson::object();
 };
 static ComponentUICommand g_ComponentCommand;
-static int g_ComponentFilterKind = 0;
 static std::string g_ComponentSearch;
 static std::string g_ComponentSelectedId;
 static std::string g_ComponentSelectedKind;
@@ -166,7 +165,6 @@ static void ComponentUIStartEditor(const std::string& mode,
         ? component->at("data").dump(2) : std::string("{}");
     g_ComponentEditorError.clear();
     g_ComponentEditorOpen = true;
-    ImGui::OpenPopup("Component editor##ae_components");
 }
 static bool ComponentUIEditorCanCommit() {
     if (g_ComponentEditorName.empty()) {
