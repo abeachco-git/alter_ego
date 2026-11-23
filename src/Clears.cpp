@@ -825,6 +825,23 @@ static void FetchClears() {
         auto bountyEntries = FetchAchievementDetails(bountyIds);
         auto weeklyEntries = FetchAchievementDetails(weeklyIds);
 
+        // Category lookup succeeding does not imply that detail fetches succeeded.
+        // Do not replace valid cached sections with empty vectors on HTTP/API errors.
+        if ((!fractalIds.empty() && fractalEntries.empty()) ||
+            (!bountyIds.empty() && bountyEntries.empty()) ||
+            (!weeklyIds.empty() && weeklyEntries.empty())) {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            g_ClearsStatusMsg = "Failed to fetch achievement details; existing data preserved";
+            if (g_ClearsDailyRolloverPending) {
+                const int attempt = ++g_ClearsDailyRolloverRetries;
+                const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
+                g_ClearsDailyRolloverRetryAtMs = NowMs() + delay * 1000;
+                g_ClearsStatusMsg += "; retrying in " + std::to_string(delay) + "s";
+            }
+            g_ClearsFetching = false;
+            return;
+        }
+
         // Separate weekly entries into wings vs strikes meta
         ClearEntry strikesEntry{};
         std::vector<ClearEntry> wingEntries;
