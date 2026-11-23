@@ -112,6 +112,17 @@ int main() {
     assert(ToLegacy(reconciled,reconstructed,error));
     assert(reconstructed == oldView);
     assert(reconciled.loadouts[0].fashion_id == "look-123");
+    // The legacy SavedBuild serializer may not understand a newer field.
+    // An edit from that UI must not delete unknown imported metadata.
+    Json olderEditorView = oldView;
+    olderEditorView["builds"][0].erase("future_extension");
+    olderEditorView["builds"][0]["notes"] = "UI edit";
+    Document futureSafe;
+    assert(Reconcile(document, olderEditorView, futureSafe, error));
+    assert(ToLegacy(futureSafe, reconstructed, error));
+    assert(reconstructed["builds"][0]["future_extension"]["hello"] == "world");
+    assert(reconstructed["builds"][0]["notes"] == "UI edit");
+
 
     // Utility positions may be swapped without a semantic mismatch.
     assert(Semantics::SameUtilities(
@@ -162,7 +173,21 @@ int main() {
     assert(FromJson(Json::parse(Get(dir / Store::kFile)), reloaded, error));
     assert(Store::Save(dir.u8string(), opened, error));
     assert(fs::exists(dir / Store::kPrevious));
-    // Always load existing canonical data, not re-import a stale mirror.
+    // A newer legacy write from the old main DLL is reconciled into v3,
+    // never allowed to erase the existing component graph or its fashion refs.
+    assert(LinkFashion(opened, "one", "appearance-1", error));
+    assert(Store::Save(dir.u8string(), opened, error));
+    Json external = Json::parse(Get(dir / Store::kLegacy));
+    external["builds"][0]["notes"] = "Edited by old DLL";
+    Put(dir / Store::kLegacy, external.dump(2));
+    fs::last_write_time(dir / Store::kLegacy,
+        fs::last_write_time(dir / Store::kFile) + std::chrono::seconds(3));
+    migrated = false;
+    assert(Store::Open(dir.u8string(),opened,migrated,error));
+    assert(migrated);
+    assert(opened.loadouts[0].fashion_id == "appearance-1");
+    assert(opened.loadouts[0].metadata["notes"] == "Edited by old DLL");
+    // Always load the existing canonical data if the mirror is unchanged.
     migrated = true;
     assert(Store::Open(dir.u8string(),opened,migrated,error));
     assert(!migrated);
