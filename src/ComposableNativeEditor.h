@@ -37,6 +37,9 @@ static std::string ComponentNativeProfession(const std::string& kind,
     for (const auto& loadout : doc["loadouts"]) {
         if (!loadout.is_object() || !loadout.contains("refs") ||
             !loadout["refs"].is_object()) continue;
+        if (g_ComponentEditorMode == "copy_for_loadout" &&
+            loadout.value("id", std::string()) != g_ComponentEditorPrivateLoadoutId)
+            continue;
         const auto& refs = loadout["refs"];
         if (refs.value(kind, std::string()) != id) continue;
         const auto* base = ComponentUIFind(doc, "base_build",
@@ -75,6 +78,9 @@ static std::pair<std::vector<uint32_t>, bool> ComponentNativeSkillSpecs(
     for (const auto& loadout : doc["loadouts"]) {
         if (!loadout.is_object() || !loadout.contains("refs") ||
             !loadout["refs"].is_object()) continue;
+        if (g_ComponentEditorMode == "copy_for_loadout" &&
+            loadout.value("id", std::string()) != g_ComponentEditorPrivateLoadoutId)
+            continue;
         const auto& refs = loadout["refs"];
         if (refs.value("skills", std::string()) != componentId) continue;
         const auto* base = ComponentUIFind(doc, "base_build",
