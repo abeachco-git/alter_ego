@@ -316,6 +316,113 @@ inline Json ExportComponent(const std::string& kind, const Component& component)
     return Json{{"format", kComponentFormat}, {"version", kComponentVersion},
                 {"kind", kind}, {"name", component.name}, {"data", component.data}};
 }
+// Validate only fields understood by upstream SavedBuild. Extension fields
+// remain intentionally unrestricted/lossless. This prevents malformed pasted
+// JSON from entering native ImGui editors or unsigned GW2 ID conversions.
+inline bool NonNegativeInteger(const Json& value) {
+    if (value.is_number_unsigned()) return value.get<uint64_t>() <= UINT32_MAX;
+    return value.is_number_integer() &&
+           value.get<int64_t>() >= 0 && value.get<int64_t>() <= UINT32_MAX;
+}
+inline bool ValidPortableGearField(const std::string& field, const Json& value) {
+    if (field == "item_id" || field == "stat_id" ||
+        field == "rune_id" || field == "sigil_id" || field == "sigil2_id")
+        return NonNegativeInteger(value);
+    if (field == "infusion_snapshot") return value.is_boolean();
+    if (field == "stat_name" || field == "rune" || field == "sigil" ||
+        field == "sigil2" || field == "infusion" || field == "weapon_type")
+        return value.is_string();
+    if (field == "infusion_ids") {
+        if (!value.is_array()) return false;
+        for (const auto& id : value) if (!NonNegativeInteger(id)) return false;
+    }
+    if (field == "infusion_attributes") {
+        if (!value.is_array()) return false;
+        for (const auto& name : value) if (!name.is_string()) return false;
+    }
+    return true;
+}
+inline bool ValidatePortablePayload(const std::string& kind,
+                                    const Json& data, std::string& error) {
+    (void)kind;
+    if (!data.is_object()) return Fail(error, "Component data must be an object.");
+    for (auto it = data.begin(); it != data.end(); ++it) {
+        const auto& field = it.key();
+        const auto& value = it.value();
+        if (field == "gear") {
+            if (!value.is_object()) return Fail(error, "Gear must be a slot object.");
+            for (auto slot = value.begin(); slot != value.end(); ++slot) {
+                if (!slot.value().is_object())
+                    return Fail(error, "Gear slot payload must be an object.");
+                for (auto part = slot.value().begin(); part != slot.value().end(); ++part)
+                    if (!ValidPortableGearField(part.key(), part.value()))
+                        return Fail(error, "Invalid gear field: " + part.key());
+            }
+        } else if (field == "profession" || field == "rune_name" ||
+                   field == "relic_name") {
+            if (!value.is_string()) return Fail(error, "Invalid text field: " + field);
+        } else if (field == "rune_id" || field == "relic_id" ||
+                   field == "infusion_ar_total") {
+            if (!NonNegativeInteger(value))
+                return Fail(error, "Invalid numeric field: " + field);
+        } else if (field == "infusion_summary_present") {
+            if (!value.is_boolean())
+                return Fail(error, "Invalid infusion-summary flag.");
+        } else if (field == "weapons" || field == "pets" ||
+                   field == "legend_codes") {
+            if (!value.is_array())
+                return Fail(error, "Invalid build array: " + field);
+            for (const auto& number : value)
+                if (!NonNegativeInteger(number))
+                    return Fail(error, "Invalid build array entry: " + field);
+        } else if (field == "specializations") {
+            if (!value.is_array())
+                return Fail(error, "Specializations must be an array.");
+            for (const auto& spec : value) {
+                if (!spec.is_object()) return Fail(error, "Invalid specialization.");
+                if (spec.contains("id") && !NonNegativeInteger(spec["id"]))
+                    return Fail(error, "Invalid specialization ID.");
+                if (spec.contains("traits")) {
+                    if (!spec["traits"].is_array())
+                        return Fail(error, "Traits must be an array.");
+                    for (const auto& trait : spec["traits"])
+                        if (!trait.is_number_integer())
+                            return Fail(error, "Invalid trait selection.");
+                }
+            }
+        } else if (field == "skills" || field == "aquatic_skills") {
+            if (!value.is_object()) return Fail(error, "Skill bar must be an object.");
+            for (const auto& skillType : {"heal", "elite"})
+                if (value.contains(skillType) && !NonNegativeInteger(value[skillType]))
+                    return Fail(error, "Invalid skill ID.");
+            if (value.contains("utilities")) {
+                if (!value["utilities"].is_array())
+                    return Fail(error, "Utilities must be an array.");
+                for (const auto& skill : value["utilities"])
+                    if (!NonNegativeInteger(skill))
+                        return Fail(error, "Invalid utility skill ID.");
+            }
+        } else if (field == "infusion_totals") {
+            if (!value.is_array()) return Fail(error, "Infusion totals must be an array.");
+            for (const auto& req : value) {
+                if (!req.is_object()) return Fail(error, "Invalid infusion requirement.");
+                if (req.contains("item_id") && !NonNegativeInteger(req["item_id"]))
+                    return Fail(error, "Invalid infusion requirement ID.");
+                if (req.contains("count") && !NonNegativeInteger(req["count"]))
+                    return Fail(error, "Invalid infusion count.");
+                if (req.contains("attribute") && !req["attribute"].is_string())
+                    return Fail(error, "Invalid infusion attribute.");
+            }
+        } else if (field == "infusion_stat_totals") {
+            if (!value.is_object()) return Fail(error, "Infusion stats must be an object.");
+            for (auto attr = value.begin(); attr != value.end(); ++attr)
+                if (!NonNegativeInteger(attr.value()))
+                    return Fail(error, "Invalid infusion stat total.");
+        }
+    }
+    return true;
+}
+
 inline bool ImportComponent(const Json& input, std::string& kind,
                             Component& component, std::string& error) {
     error.clear();
@@ -360,6 +467,7 @@ inline bool ImportComponent(const Json& input, std::string& kind,
                 return Fail(error, "Field belongs to another component: " + it.key());
         }
     }
+    if (!ValidatePortablePayload(parsedKind, data, error)) return false;
     kind = parsedKind;
     component = {"", input.at("name").get<std::string>(), data};
     return true;
