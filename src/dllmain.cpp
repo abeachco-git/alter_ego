@@ -10341,6 +10341,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     // without changing the character or saved-build revision.
     struct ComparisonCache {
         AlterEgo::BuildComparison result;
+        nlohmann::json componentDoc = nlohmann::json::object();
         std::string savedBuildId;
         std::string characterName;
         uint64_t characterRevision = 0;
@@ -10366,6 +10367,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         now - cache.updated >= std::chrono::milliseconds(500)) {
         cache.result = CalculateSavedVsLiveComparison(
             saved, *character, live, equipmentTab, g_LibCompareExactItems);
+        cache.componentDoc = nlohmann::json::object();
+        AlterEgo::GW2API::GetComposableLoadouts(cache.componentDoc);
         cache.savedBuildId = saved.id;
         cache.characterName = character->name;
         cache.characterRevision = characterRevision;
@@ -10393,57 +10396,114 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::TextDisabled("Saved build has no gear; equipment comparison skipped.");
     else if (character->equipment.empty())
         ImGui::TextDisabled("Retrieved character has no equipment data; gear comparison skipped.");
-    // Components are the unit of comparison. Show an overview first;
-    // exact equipment slots and IDs remain available inside each category.
+    // One independently expandable section per v3 component; fields retain
+    // the same semantic comparison rules as the active-character matcher.
     struct CompareSection {
-        std::string name;
+        std::string kind, label, sourceName;
+        bool recorded = false;
         std::vector<const AlterEgo::ComparisonRow*> rows;
         size_t differences = 0, unverified = 0, matches = 0;
     };
-    auto sectionFor = [](const std::string& group) -> const char* {
-        if (group == "Specializations" || group == "Traits" || group == "Build" ||
-            group == "Ranger pets" || group == "Revenant legends") return "Base Build";
-        if (group == "Terrestrial skills" || group == "Aquatic skills") return "Skills";
-        if (group == "Equipment" || group == "Equipment stats" ||
-            group == "Exact item IDs") return "Armor / Trinkets";
-        if (group == "Weapon types") return "Weapons";
-        if (group == "Upgrades") return "Other Upgrades";
-        if (group == "Runes") return "Runes";
-        if (group == "Sigils") return "Sigils";
-        if (group == "Infusions" || group == "Infusion totals") return "Infusions";
-        if (group == "Relic") return "Relic";
-        return "Other";
+    const struct { const char* kind; const char* label; } categories[] = {
+        {"base_build", "Base Build"}, {"skills", "Skills"},
+        {"weapons", "Weapons"}, {"armor", "Armor"},
+        {"trinkets", "Trinkets"}, {"runes", "Runes"},
+        {"sigils", "Sigils"}, {"infusions", "Infusions"}, {"relic", "Relic"}
     };
     std::vector<CompareSection> sections;
+    for (const auto& kind : categories)
+        sections.push_back({kind.kind, kind.label});
+
+    // Resolve names and whether a component has actual saved fields. An
+    // empty component is NOT evidence of a match, even if no rows differ.
+    if (cache.componentDoc.is_object() &&
+        cache.componentDoc.contains("loadouts") &&
+        cache.componentDoc["loadouts"].is_array() &&
+        cache.componentDoc.contains("components") &&
+        cache.componentDoc["components"].is_object()) {
+        for (const auto& loadout : cache.componentDoc["loadouts"]) {
+            if (!loadout.is_object() ||
+                loadout.value("id", std::string()) != saved.id ||
+                !loadout.contains("refs") || !loadout["refs"].is_object()) continue;
+            for (auto& section : sections) {
+                const std::string id = loadout["refs"].value(section.kind, std::string());
+                if (id.empty()) continue;
+                const auto group = cache.componentDoc["components"].find(section.kind);
+                if (group == cache.componentDoc["components"].end() ||
+                    !group->is_array()) continue;
+                for (const auto& part : *group) {
+                    if (!part.is_object() ||
+                        part.value("id", std::string()) != id) continue;
+                    section.sourceName = part.value("name", std::string());
+                    section.recorded = part.contains("data") &&
+                        part["data"].is_object() && !part["data"].empty();
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
     for (const auto& row : result.Rows()) {
-        const std::string name = sectionFor(row.group);
+        const std::string kind =
+            AlterEgo::Composable::Semantics::ComparisonComponent(row.group, row.field);
         auto found = std::find_if(sections.begin(), sections.end(),
-            [&](const CompareSection& x) { return x.name == name; });
+            [&](const CompareSection& value) { return value.kind == kind; });
         if (found == sections.end()) {
-            sections.push_back({name});
-            found = sections.end() - 1;
+            found = std::find_if(sections.begin(), sections.end(),
+                [](const CompareSection& value) { return value.kind == "other"; });
+            if (found == sections.end()) {
+                sections.push_back({"other", "Other fields"});
+                found = sections.end() - 1;
+            }
         }
         found->rows.push_back(&row);
         if (!row.verified) ++found->unverified;
         else if (!row.matches) ++found->differences;
         else ++found->matches;
     }
+    size_t matchingComponents = 0, differentComponents = 0;
+    size_t unknownComponents = 0;
+    for (const auto& section : sections) {
+        if (section.differences) ++differentComponents;
+        else if (section.unverified || section.rows.empty()) ++unknownComponents;
+        else ++matchingComponents;
+    }
+    ImGui::Text("%zu matching components", matchingComponents);
+    ImGui::SameLine();
+    ImGui::TextDisabled(" | %zu different | %zu unverified / not checked",
+                        differentComponents, unknownComponents);
+    ImGui::Separator();
 
     for (const auto& section : sections) {
-        ImGui::PushID(section.name.c_str());
-        std::string status = section.differences > 0
+        ImGui::PushID(section.kind.c_str());
+        const std::string status = section.differences
             ? std::to_string(section.differences) + " differences"
-            : section.unverified > 0
+            : section.unverified
                 ? std::to_string(section.unverified) + " unverified"
-                : "Matches";
-        if (section.differences && section.unverified)
-            status += ", " + std::to_string(section.unverified) + " unverified";
-        const std::string heading = section.name + "  -  " + status;
-        const ImGuiTreeNodeFlags flags =
-            (section.differences || section.unverified)
-                ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
-        if (ImGui::CollapsingHeader(heading.c_str(), flags)) {
-            if (ImGui::BeginTable("##comparison_section", 3,
+                : section.rows.empty()
+                    ? (section.recorded ? "Not checked" : "Not recorded")
+                    : "Matches";
+        const std::string title = section.label + "  -  " + status +
+            "###component_compare_section";
+        const ImGuiTreeNodeFlags flags = (section.differences || section.unverified)
+            ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+        const bool expanded = ImGui::CollapsingHeader(title.c_str(), flags);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%zu match%s, %zu difference%s, %zu unverified\n%s",
+                section.matches, section.matches == 1 ? "" : "es",
+                section.differences, section.differences == 1 ? "" : "s",
+                section.unverified,
+                section.sourceName.empty() ? "No saved component name" :
+                    section.sourceName.c_str());
+        if (expanded) {
+            if (!section.sourceName.empty())
+                ImGui::TextDisabled("Saved: %s", section.sourceName.c_str());
+            if (section.rows.empty()) {
+                ImGui::TextDisabled(section.recorded
+                    ? "No verifiable fields in retrieved character data."
+                    : "No fields saved for this component.");
+            } else if (ImGui::BeginTable("##comparison_section", 3,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable)) {
                 ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.1f);
@@ -10456,8 +10516,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     ++displayed;
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
-                    const std::string field = row->group + " / " + row->field;
-                    ImGui::TextWrapped("%s", field.c_str());
+                    ImGui::TextWrapped("%s / %s", row->group.c_str(),
+                                       row->field.c_str());
                     ImGui::TableSetColumnIndex(1);
                     ImGui::TextWrapped("%s", row->saved.c_str());
                     ImGui::TableSetColumnIndex(2);
@@ -10470,16 +10530,17 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     ImGui::TextWrapped("%s", row->current.c_str());
                     if (!row->verified || !row->matches) ImGui::PopStyleColor();
                 }
-                if (displayed == 0) {
+                if (!displayed) {
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
-                    ImGui::TextDisabled("No differences; enable Show matches for details.");
+                    ImGui::TextDisabled("All verified fields match. Enable Show matches to inspect.");
                 }
                 ImGui::EndTable();
             }
         }
         ImGui::PopID();
     }
+
 }
 
 // Only the logged-in character is compared against saved builds, and only
