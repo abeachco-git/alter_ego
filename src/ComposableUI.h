@@ -42,6 +42,8 @@ struct ComponentUICommand {
 };
 static ComponentUICommand g_ComponentCommand;
 static std::string g_ComponentSearch;
+static bool g_ComponentUnusedOnly = false;
+static int g_ComponentSort = 0; // 0 name, 1 most used, 2 least used
 static std::string g_ComponentSelectedId;
 static std::string g_ComponentSelectedKind;
 static std::string g_ComponentEditorId;
@@ -552,27 +554,67 @@ static void RenderComponentLibrary() {
                           "Creates a new independent ID; does not replace existing Loadouts.");
     if (!g_ComponentStatus.empty())
         ImGui::TextWrapped("%s", g_ComponentStatus.c_str());
+    ImGui::Checkbox("Unused only##component_filter", &g_ComponentUnusedOnly);
+    ImGui::SameLine();
+    const char* sorts[] = {"Name", "Most used", "Least used"};
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::BeginCombo("Sort##component", sorts[g_ComponentSort])) {
+        for (int i = 0; i < 3; ++i)
+            if (ImGui::Selectable(sorts[i], g_ComponentSort == i))
+                g_ComponentSort = i;
+        ImGui::EndCombo();
+    }
     ImGui::Separator();
 
     const float listWidth = ImMax(200.0f, ImMin(290.0f, ImGui::GetContentRegionAvail().x * 0.37f));
     ImGui::BeginChild("##component_list", ImVec2(listWidth, 0), true);
     const auto group = doc["components"].find(kind);
     if (group != doc["components"].end() && group->is_array()) {
+        std::vector<const ComponentJson*> visible;
         for (const auto& item : *group) {
+            if (!item.is_object() || !item.contains("data") ||
+                !item["data"].is_object()) continue;
             const std::string id = item.value("id", std::string());
             const std::string name = item.value("name", id);
+            if (g_ComponentUnusedOnly && ComponentUIUsage(doc, kind, id) > 0)
+                continue;
             if (!ComponentUISearchMatch(name, g_ComponentSearch) &&
                 !ComponentUISearchMatch(id, g_ComponentSearch) &&
-                !ComponentUISearchMatch(ComponentUIShortDescription(kind, item.at("data")),
+                !ComponentUISearchMatch(ComponentUIShortDescription(kind, item["data"]),
                                          g_ComponentSearch)) continue;
+            visible.push_back(&item);
+        }
+        std::stable_sort(visible.begin(), visible.end(),
+            [&](const ComponentJson* a, const ComponentJson* b) {
+                const int usesA = ComponentUIUsage(doc, kind,
+                    a->value("id", std::string()));
+                const int usesB = ComponentUIUsage(doc, kind,
+                    b->value("id", std::string()));
+                if (g_ComponentSort != 0 && usesA != usesB)
+                    return g_ComponentSort == 1 ? usesA > usesB : usesA < usesB;
+                std::string left = a->value("name", std::string());
+                std::string right = b->value("name", std::string());
+                std::transform(left.begin(), left.end(), left.begin(),
+                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                std::transform(right.begin(), right.end(), right.begin(),
+                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                return left < right;
+            });
+        ImGui::TextDisabled("%zu of %zu %s component%s", visible.size(), group->size(),
+            ComponentLabel(kind), group->size() == 1 ? "" : "s");
+        for (const auto* item : visible) {
+            const std::string id = item->value("id", std::string());
+            const std::string name = item->value("name", id);
+            const int users = ComponentUIUsage(doc, kind, id);
             ImGui::PushID(id.c_str());
-            if (ImGui::Selectable(name.c_str(), g_ComponentSelectedId == id)) {
+            const std::string shown = name + "  [" + std::to_string(users) + "]";
+            if (ImGui::Selectable(shown.c_str(),
+                    g_ComponentSelectedKind == kind && g_ComponentSelectedId == id)) {
                 g_ComponentSelectedId = id;
                 g_ComponentSelectedKind = kind;
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s\nUsed in %d Loadouts", id.c_str(),
-                    ComponentUIUsage(doc, kind, id));
+                ImGui::SetTooltip("%s\nReferenced by %d Loadouts", id.c_str(), users);
             ImGui::PopID();
         }
     }
@@ -668,6 +710,49 @@ static void RenderComponentLibrary() {
             }
         }
         if (!anyUsage) ImGui::TextDisabled("No Loadouts currently reference this component.");
+        ImGui::Separator();
+        if (ImGui::BeginCombo("Assign to Loadout##component_attach",
+                              "Select Loadout...")) {
+            bool offered = false;
+            if (doc.contains("loadouts") && doc["loadouts"].is_array())
+                for (const auto& loadout : doc["loadouts"]) {
+                    if (!loadout.is_object() || !loadout.contains("refs") ||
+                        !loadout["refs"].is_object()) continue;
+                    if (!ComponentUICompatible(doc, loadout, kind, *item)) continue;
+                    const std::string targetId = loadout.value("id", std::string());
+                    if (targetId.empty() ||
+                        loadout["refs"].value(kind, std::string()) == id) continue;
+                    const auto& meta = loadout.value("metadata", ComponentJson::object());
+                    const std::string targetName = meta.is_object()
+                        ? meta.value("name", targetId) : targetId;
+                    offered = true;
+                    if (ImGui::Selectable((targetName + "##attach" + targetId).c_str()))
+                        g_ComponentCommand = {ComponentUICommand::Assign,
+                            targetId, kind, id, "", ComponentJson::object()};
+                }
+            if (!offered) ImGui::TextDisabled("Already assigned or no compatible Loadouts.");
+            ImGui::EndCombo();
+        }
+        if (usage > 0 &&
+            ImGui::BeginCombo("Copy privately for##component_detach", "Select Loadout...")) {
+            for (const auto& loadout : doc["loadouts"]) {
+                if (!loadout.is_object() || !loadout.contains("refs") ||
+                    !loadout["refs"].is_object() ||
+                    loadout["refs"].value(kind, std::string()) != id) continue;
+                const std::string targetId = loadout.value("id", std::string());
+                const auto& meta = loadout.value("metadata", ComponentJson::object());
+                const std::string targetName = meta.is_object()
+                    ? meta.value("name", targetId) : targetId;
+                if (ImGui::Selectable((targetName + "##detach" + targetId).c_str())) {
+                    g_ComponentCommand = {ComponentUICommand::CopyForLoadout,
+                        targetId, kind, id, name + " (Private)", ComponentJson::object()};
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Create a detached copy for one Loadout and edit it immediately.");
+
     }
     ImGui::EndChild();
     RenderComponentUIEditor();
