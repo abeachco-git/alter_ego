@@ -18,6 +18,15 @@ int main() {
     assert(!LooksUnrotated({101, 102}, {101, 103}));
     assert(LooksUnrotated({101, 102}, {}));
     assert(!LooksUnrotated({}, {101, 102}));
+    // Retry URLs must change even on the same day, otherwise an initially
+    // stale max-age=3600 result could be cached for a full hour.
+    assert(FreshCategoryUrl(88, 0) ==
+           "https://api.guildwars2.com/v2/achievements/categories/88");
+    assert(FreshCategoryUrl(88, reset + 61000) ==
+           "https://api.guildwars2.com/v2/achievements/categories/88?ae_refresh=" +
+           std::to_string(reset + 61000));
+    assert(FreshCategoryUrl(475, reset + 61001) !=
+           FreshCategoryUrl(475, reset + 61000));
     assert(RetryDelaySeconds(1) == 30 && RetryDelaySeconds(2) == 60);
     assert(RetryDelaySeconds(3) == 120 && RetryDelaySeconds(6) == 300);
     constexpr int64_t nov21 = 1795219200;

@@ -722,8 +722,10 @@ void OnVaultResponse(void* eventArgs) {
 }
 
 // Helper: fetch a category's achievement IDs from public API
-static std::vector<uint32_t> FetchCategoryIds(uint32_t catId) {
-    std::string url = "https://api.guildwars2.com/v2/achievements/categories/" + std::to_string(catId);
+static std::vector<uint32_t> FetchCategoryIds(uint32_t catId, int64_t requestToken) {
+    // The GW2 API advertises private,max-age=3600 for category responses.
+    // A unique query token bypasses pre-reset cached IDs on each retry.
+    std::string url = ClearsReset::FreshCategoryUrl(catId, requestToken);
     std::string json = Skinventory::HttpClient::Get(url);
     std::vector<uint32_t> ids;
     try {
@@ -794,13 +796,17 @@ static void FetchClears() {
 
     std::thread([]() {
         // Step 1: Fetch all category achievement IDs
-        auto fractalIds = FetchCategoryIds(CAT_DAILY_FRACTALS);
-        auto bountyIds  = FetchCategoryIds(CAT_DAILY_BOUNTIES);
-        auto weeklyIds  = FetchCategoryIds(CAT_WEEKLY_RAIDS);
+        const int64_t requestToken = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        auto fractalIds = FetchCategoryIds(CAT_DAILY_FRACTALS, requestToken);
+        auto bountyIds  = FetchCategoryIds(CAT_DAILY_BOUNTIES, requestToken);
+        auto weeklyIds  = FetchCategoryIds(CAT_WEEKLY_RAIDS, requestToken);
 
-        if (fractalIds.empty() && bountyIds.empty() && weeklyIds.empty()) {
+        // A partial HTTP failure must never replace one of the sections with
+        // an empty definition list just because another category succeeded.
+        if (fractalIds.empty() || bountyIds.empty() || weeklyIds.empty()) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            g_ClearsStatusMsg = "Failed to fetch achievement categories";
+            g_ClearsStatusMsg = "Failed to fetch all achievement categories; cached data preserved";
             if (g_ClearsDailyRolloverPending) {
                 const int attempt = ++g_ClearsDailyRolloverRetries;
                 const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
@@ -876,21 +882,25 @@ static void FetchClears() {
 
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            if (g_ClearsDailyRolloverPending &&
-                (ClearsReset::LooksUnrotated(g_ClearsPriorDailyFractalIds,
-                                            DailyIds(fractalEntries)) ||
-                 ClearsReset::LooksUnrotated(g_ClearsPriorDailyBountyIds,
-                                            DailyIds(bountyEntries)))) {
-                // The GW2 API can return yesterday's daily IDs shortly after
-                // reset. Never replace the daily state or mark it fresh in
-                // that case; try again later without touching weekly clears.
+            const bool fractalsHeld = ClearsReset::LooksUnrotated(
+                g_ClearsPriorDailyFractalIds, DailyIds(fractalEntries));
+            const bool bountiesHeld = ClearsReset::LooksUnrotated(
+                g_ClearsPriorDailyBountyIds, DailyIds(bountyEntries));
+            if (g_ClearsDailyRolloverPending && (fractalsHeld || bountiesHeld)) {
+                // An unchanged daily pool may be a cached pre-reset response.
+                // Do not reuse old-day completions; retry each category with
+                // a new cache-busting URL until the IDs have rotated.
                 ++g_ClearsDailyRolloverRetries;
                 const int64_t waitSeconds = ClearsReset::RetryDelaySeconds(
                     g_ClearsDailyRolloverRetries);
                 g_ClearsDailyRolloverRetryAtMs =
                     NowMs() + waitSeconds * 1000;
-                g_ClearsStatusMsg = "Daily objectives have not rotated on the API; "
-                    "retrying in " + std::to_string(waitSeconds) + "s";
+                const char* section = fractalsHeld && bountiesHeld
+                    ? "Fractals and Raid Bounties" :
+                    fractalsHeld ? "Fractals" : "Raid Bounties";
+                g_ClearsStatusMsg = std::string("Waiting for new daily ") +
+                    section + " API data; retrying in " +
+                    std::to_string(waitSeconds) + "s";
                 g_ClearsFetching = false;
                 return;
             }

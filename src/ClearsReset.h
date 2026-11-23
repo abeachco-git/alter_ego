@@ -3,6 +3,7 @@
 // Reset times and timestamps are UTC epoch seconds. No GW2/Windows deps.
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <vector>
 namespace ClearsReset {
 inline constexpr int64_t kResetBufferSeconds = 60;
@@ -18,6 +19,18 @@ inline int64_t InitialMarker(int64_t currentReset, int64_t now,
                              int64_t periodSeconds) {
     return now < currentReset + kResetBufferSeconds
         ? currentReset - periodSeconds : currentReset;
+}
+
+// A reset/attempt-specific URL avoids a previously cached 1-hour GW2 API
+// category response. The extra parameter is accepted by the public endpoint.
+// Keep retries distinct: a single per-day URL could itself cache a stale
+// response for the next hour if first queried before backend rollover.
+inline std::string FreshCategoryUrl(uint32_t categoryId, int64_t requestToken) {
+    std::string url = "https://api.guildwars2.com/v2/achievements/categories/" +
+                      std::to_string(categoryId);
+    if (requestToken > 0)
+        url += "?ae_refresh=" + std::to_string(requestToken);
+    return url;
 }
 
 inline std::vector<uint32_t> SortedIds(std::vector<uint32_t> ids) {
