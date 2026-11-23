@@ -1115,11 +1115,9 @@ void LoadClearsCache() {
 
         // Copy an old unscoped snapshot into its account-specific file once.
         if (legacy) SaveClearsCache();
-        // Cached data is available offline; background refresh follows
-        // the same plugin-level automatic API refresh option as all tabs.
-        if ((dailyStale || weeklyStale) && AlterEgo::AutoRefreshPolicy::Enabled()) {
-            FetchClears();
-        }
+        // Restore the account's disk cache only. Do not launch the HTTP
+        // refresh from startup or account-cache synchronization; entering
+        // the actual Clears tab (or pressing Refresh) owns that request.
     } catch (...) {}
 }
 
@@ -2652,7 +2650,20 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
 
     if (showFractals) {
     if (g_DailyFractals.empty()) {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
+        if (g_ClearsDailyRolloverPending) {
+            // The GW2 API can lag the 00:00 UTC reset for over an hour.
+            // Show a clearly unverified, offline rotation forecast rather
+            // than yesterday's achievements or a permanently empty section.
+            const auto& forecast = ClearsRotation::Fractals(
+                ClearsRotation::FractalSetIndex(utcNow));
+            ImGui::TextDisabled("Rotation forecast (not API-verified; completion unknown):");
+            for (const char* name : forecast.dailies)
+                ImGui::BulletText("%s", name);
+            ImGui::TextDisabled("Recommended: T1 %d, T2 %d, T3 %d",
+                forecast.recScales[0], forecast.recScales[1], forecast.recScales[2]);
+        } else {
+            ImGui::TextDisabled("  No data");
+        }
     } else {
         ImGui::Indent(4.0f);
         // Build three daily map cards, then a fourth Recommended card.
@@ -2816,7 +2827,14 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
 
     if (showBounties) {
     if (g_DailyBounties.empty()) {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
+        if (g_ClearsDailyRolloverPending) {
+            const int rotation = ClearsRotation::BountySet(utcNow);
+            ImGui::TextDisabled("Rotation forecast (not API-verified; completion unknown):");
+            for (int column = 0; column < 4; ++column)
+                ImGui::BulletText("%s", ClearsRotation::BountyName(rotation, column));
+        } else {
+            ImGui::TextDisabled("  No data");
+        }
     } else {
         ImGui::Indent(4.0f);
         float availW = ImGui::GetContentRegionAvail().x - 4.0f;
@@ -3123,7 +3141,7 @@ static void RenderClearsShared(bool showVault) {
         g_LastWeeklyReset = weeklyReset;
         resetTriggered = true;
     }
-    if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
         resetTriggered && !g_ClearsFetching)
         FetchClears();
 
@@ -3160,8 +3178,8 @@ static void RenderClearsShared(bool showVault) {
         g_VaultLastWeeklyReset = weeklyReset;
         vaultResetTriggered = true;
     }
-    // Keep Vault up to date even when the user is looking at Clears instead.
-    if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+    // Do not refresh Vault while showing Clears or on unrelated tab visits.
+    if (showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
         vaultResetTriggered && !g_VaultFetching.load())
         FetchVaultData();
 
@@ -3169,7 +3187,8 @@ static void RenderClearsShared(bool showVault) {
     // submit Nexus events), and never overlap with an in-flight fetch.
     if (!g_ClearsFetching && !g_ClearsQueryPending.load()) {
         const long long due = g_ClearsDailyRolloverRetryAtMs.load();
-        if (AlterEgo::AutoRefreshPolicy::Enabled() && due != 0 && NowMs() >= due) {
+        if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+            due != 0 && NowMs() >= due) {
             g_ClearsDailyRolloverRetryAtMs = 0;
             FetchClears();
         }
@@ -3177,7 +3196,7 @@ static void RenderClearsShared(bool showVault) {
     bool retryVaultRollover = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+        if (showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
             g_VaultDailyRolloverPending && !g_VaultFetching.load() &&
             g_VaultDailyRolloverRetryAtMs != 0 &&
             NowMs() >= g_VaultDailyRolloverRetryAtMs) {
@@ -3185,7 +3204,7 @@ static void RenderClearsShared(bool showVault) {
             retryVaultRollover = true;
         }
     }
-    if (retryVaultRollover && AlterEgo::AutoRefreshPolicy::Enabled())
+    if (showVault && retryVaultRollover && AlterEgo::AutoRefreshPolicy::Enabled())
         FetchVaultData();
 
     // A missing H&S response must not permanently suppress manual or
@@ -3201,7 +3220,7 @@ static void RenderClearsShared(bool showVault) {
     }
 
     // ---- Clears deferred logic ----
-    if (g_ClearsNeedRequery && !g_ClearsFetching) {
+    if (!showVault && g_ClearsNeedRequery && !g_ClearsFetching) {
         g_ClearsNeedRequery = false;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
@@ -3227,15 +3246,16 @@ static void RenderClearsShared(bool showVault) {
     }
     // Boot synchronization is automatic. Manual FetchClears follow-through
     // uses g_ClearsQueryPending and must run regardless of the policy setting.
-    if (g_ClearsAutoBootPending.exchange(false) &&
-        AlterEgo::AutoRefreshPolicy::Enabled() && !g_ClearsFetching)
-        SendClearsAchQuery(true);
-    if (g_ClearsQueryPending.exchange(false) && !g_ClearsFetching)
+    // Boot-time H&S pong only confirms availability. Never query Clears
+    // before this tab is opened, even when a cached account is selected.
+    if (!showVault) g_ClearsAutoBootPending = false;
+    if (!showVault && g_ClearsQueryPending.exchange(false) && !g_ClearsFetching)
         SendClearsAchQuery();
     // Fire a scheduled BUSY backoff retry once its delay has elapsed.
     {
         long long retryAt = g_ClearsRetryAtMs.load();
-        if (retryAt != 0 && NowMs() >= retryAt && !g_ClearsFetching) {
+        if (!showVault && retryAt != 0 && NowMs() >= retryAt &&
+            !g_ClearsFetching) {
             g_ClearsRetryAtMs = 0;
             SendClearsAchQuery(g_ClearsRetrySelective);
         }
@@ -3343,15 +3363,9 @@ void SyncCompletionAccountCaches() {
     if (!account.empty()) {
         LoadClearsCache();
         LoadVaultCache();
-        // A change of account while already on Vault/Clears does not trigger
-        // a new ImGui tab-entry event. Check staleness here as well.
-        const auto hoard = AlterEgo::GW2API::GetHoardStatus();
-        const bool hoardReady = hoard == AlterEgo::HoardStatus::Available ||
-                                hoard == AlterEgo::HoardStatus::Ready;
-        if (AlterEgo::AutoRefreshPolicy::Enabled() && hoardReady) {
-            RefreshClearsOnEntry();
-            RefreshVaultOnEntry();
-        }
+        // Account switching restores the correct cache immediately; the
+        // active tab's next render or tab-entry refresh performs network work.
+        // Never trigger both Clears and Vault from this global cache sync.
     }
 }
 
@@ -3425,9 +3439,14 @@ void RenderClearsStatusRow() {
     }
     AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
     std::string detail = haveData ? "Ready" : "No Clears data available - click Refresh";
-    if (fetching || waitingForDailyRollover) {
+    if (fetching) {
         state = AlterEgo::RefreshUI::State::Working;
         detail = status.empty() ? "Querying completion..." : status;
+    } else if (waitingForDailyRollover) {
+        // Scheduled API retries are not a hung request. Keep manual Refresh
+        // enabled, show an informative waiting state without a busy indicator.
+        state = AlterEgo::RefreshUI::State::Ready;
+        detail = status.empty() ? "Daily API delayed; will retry automatically" : status;
     } else if (!status.empty()) {
         state = AlterEgo::RefreshUI::State::Error;
         detail = status;

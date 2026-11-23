@@ -582,7 +582,6 @@ static float g_AchTreeScrollY = 0.0f;      // saved scroll position of left tree
 static float g_AchListScrollY = 0.0f;      // saved scroll position of right list panel
 static bool g_AchRestoreScroll = false;     // flag to restore scroll positions on next frame
 static uint32_t g_AchNavigateToId = 0;     // pending navigation: jump to this achievement ID
-static bool g_AchPinnedBootQueried = false; // flag: have we queried pinned progress after H&S became available?
 
 // Active special event detection (from /v2/achievements/daily "special" array)
 static std::vector<uint32_t> g_AchActiveMainCatIds;   // main/Historical categories for top of tree
@@ -1028,19 +1027,9 @@ static void OnHoardPongForAch(void* eventArgs) {
 
     // No automatic H&S API requests when the Nexus option is off.
     if (!AlterEgo::AutoRefreshPolicy::Enabled()) return;
-    // Signal render thread to query pinned achievement progress (once per session)
-    if (!g_AchPinnedBootQueried) {
-        g_AchPinnedBootQueried = true;
-        g_AchRetryAutomatic = true;
-        g_AchRetryAtMs = NowMs();  // fire ASAP: render thread picks up pinned + selected cat
-    }
-
-    // Signal render thread to query clears completion (once per session)
-    static bool s_clearsBootQueried = false;
-    if (!s_clearsBootQueried && g_ClearsFetched && !g_ClearsFetching) {
-        s_clearsBootQueried = true;
-        g_ClearsAutoBootPending = true;
-    }
+    // H&S availability is not permission to perform API work at startup.
+    // Achievements and Clears issue requests only from their active tabs
+    // (or when the user opens the pinned-achievement popout).
 }
 
 static void OnEvAlertAchievementCompleted(void* eventArgs) {
@@ -11778,15 +11767,9 @@ void AddonLoad(AddonAPI_t* aApi) {
     // Ping H&S to check availability
     AlterEgo::GW2API::PingHoard();
 
-    // Fetch pinned + saved category achievement definitions (public API, no H&S needed)
-    // Progress is queried separately when H&S becomes available (OnHoardPongForAch)
-    if (!g_AchPinned.empty() || g_AchSelectedCatId > 0) {
-        uint32_t savedCat = g_AchSelectedCatId;
-        std::thread([savedCat]() {
-            FetchPinnedAchDefs();
-            if (savedCat > 0) FetchAchCategoryDefs(savedCat, true);
-        }).detach();
-    }
+    // Achievement definitions and progress are restored from disk above.
+    // Do not fetch pinned or selected-category definitions during startup;
+    // the Achievements tab and pinned popout load them when actually used.
 
     // Initialize Skinventory subsystems
     {
@@ -15009,6 +14992,7 @@ static void RenderAchPopout() {
 
     if (!s_popoutWasVisible) {
         s_popoutWasVisible = true;
+        FetchPinnedAchDefs(); // only missing pinned definitions, on demand
         std::vector<uint32_t> pinnedCopy;
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -15726,15 +15710,16 @@ void AddonRender() {
     // Persist login timestamps when dirty (crash-safe)
     if (g_LoginTimestampsDirty) SaveLoginTimestamps();
 
-    // Pinned-achievement priority refresh — runs every frame regardless of
-    // tab/popout visibility. Pinned achievements matter to the user most, so
-    // they get a 10-minute refresh cycle independent of UI state.
+    // Refresh pinned achievements on their 10-minute timer only while the
+    // Achievements tab or tracker popout is visible. No startup API burst.
     {
         static auto s_lastPinnedRefresh = std::chrono::steady_clock::time_point{};
         auto hStatus = AlterEgo::GW2API::GetHoardStatus();
         bool hReady = (hStatus == AlterEgo::HoardStatus::Available ||
                        hStatus == AlterEgo::HoardStatus::Ready);
-        if (hReady && !g_AchProgressFetching) {
+        const bool achievementsInUse =
+            g_AchPopoutVisible || (g_WindowVisible && g_MainTab == 4);
+        if (achievementsInUse && hReady && !g_AchProgressFetching) {
             auto now = std::chrono::steady_clock::now();
             bool firstRun = (s_lastPinnedRefresh == std::chrono::steady_clock::time_point{});
             bool expired  = !firstRun &&
