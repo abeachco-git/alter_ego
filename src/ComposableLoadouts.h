@@ -365,6 +365,31 @@ inline bool ImportComponent(const Json& input, std::string& kind,
     return true;
 }
 
+// Single-Loadout portable interchange. Embedded components have no library
+// identity; importing always creates new independent component IDs, preventing
+// accidental edits to an unrelated existing shared component.
+constexpr const char* kPortableLoadoutFormat = "alter_ego_portable_loadout";
+constexpr int kPortableLoadoutVersion = 1;
+inline bool ExportPortableLoadout(const Document& doc, const std::string& id,
+                                  Json& packet, std::string& error) {
+    if (!Validate(doc, error)) return false;
+    const auto it = std::find_if(doc.loadouts.begin(), doc.loadouts.end(),
+        [&](const Loadout& item){ return item.id == id; });
+    if (it == doc.loadouts.end()) return Fail(error, "Loadout not found.");
+    Json components = Json::object();
+    for (const auto& [kind, ref] : it->refs) {
+        const Component* part = Find(doc, kind, ref);
+        if (!part) return Fail(error, "Loadout references an unavailable component.");
+        components[kind] = {{"name", part->name}, {"data", part->data}};
+    }
+    packet = Json{{"format", kPortableLoadoutFormat},
+                  {"version", kPortableLoadoutVersion},
+                  {"metadata", it->metadata},
+                  {"components", components},
+                  {"fashion_id", it->fashion_id}};
+    return true;
+}
+
 // Transactional mutation utilities, shared by the future UI and the
 // compatibility adapter. Existing component updates are intentionally shared.
 inline bool Transaction(Document& doc,
@@ -375,6 +400,66 @@ inline bool Transaction(Document& doc,
     doc = std::move(next);
     return true;
 }
+inline bool ImportPortableLoadout(Document& doc, const Json& packet,
+                                  const std::string& newId, std::string& error) {
+    if (!packet.is_object() || !packet.contains("format") ||
+        !packet["format"].is_string() ||
+        packet["format"].get<std::string>() != kPortableLoadoutFormat ||
+        !packet.contains("version") || !packet["version"].is_number_integer() ||
+        packet["version"].get<int>() != kPortableLoadoutVersion ||
+        !packet.contains("metadata") || !packet["metadata"].is_object() ||
+        !packet.contains("components") || !packet["components"].is_object() ||
+        newId.empty())
+        return Fail(error, "Unsupported or incomplete portable Loadout.");
+    // Parse completely before transaction. A malformed component must leave
+    // both references and source library untouched.
+    std::map<std::string, Component> imported;
+    for (auto it = packet["components"].begin();
+         it != packet["components"].end(); ++it) {
+        if (!IsKind(it.key()) || !it.value().is_object() ||
+            !it.value().contains("name") ||
+            !it.value().contains("data"))
+            return Fail(error, "Invalid embedded component.");
+        std::string kind;
+        Component part;
+        if (!ImportComponent(Json{
+            {"format", kComponentFormat},
+            {"version", kComponentVersion},
+            {"kind", it.key()},
+            {"name", it.value()["name"]},
+            {"data", it.value()["data"]}}, kind, part, error))
+            return false;
+        imported[kind] = std::move(part);
+    }
+    if (!imported.count("base_build") || !imported.count("skills"))
+        return Fail(error, "Portable Loadout requires Base Build and Skills.");
+    const auto fashion = packet.find("fashion_id");
+    if (fashion != packet.end() && !fashion->is_string())
+        return Fail(error, "Invalid optional Fashion reference.");
+    return Transaction(doc, [&](Document& next, std::string& err) {
+        if (FindLoadout(next, newId))
+            return Fail(err, "New Loadout ID is already in use.");
+        Loadout loadout;
+        loadout.id = newId;
+        loadout.metadata = packet["metadata"];
+        loadout.metadata["id"] = newId;
+        loadout.fashion_id = fashion == packet.end()
+            ? std::string() : fashion->get<std::string>();
+        for (auto& [kind, part] : imported) {
+            std::string componentId = kind + ":" + newId;
+            unsigned sequence = 1;
+            while (Find(next, kind, componentId))
+                componentId = kind + ":" + newId + ":" +
+                              std::to_string(sequence++);
+            part.id = componentId;
+            next.components[kind].push_back(std::move(part));
+            loadout.refs[kind] = componentId;
+        }
+        next.loadouts.push_back(std::move(loadout));
+        return true;
+    }, error);
+}
+
 inline std::string ProfessionOf(const Document& doc, const Loadout& loadout) {
     const auto ref = loadout.refs.find("base_build");
     if (ref == loadout.refs.end()) return {};
