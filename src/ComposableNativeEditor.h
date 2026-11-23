@@ -424,7 +424,38 @@ static void RenderComponentNativeEditor(const std::string& kind,
                                         const std::string& id,
                                         ComponentJson& data) {
     if (!data.is_object()) data = ComponentJson::object();
-    const std::string profession = ComponentNativeProfession(kind, id, data);
+    std::string profession = ComponentNativeProfession(kind, id, data);
+    if (kind == "skills") {
+        if (profession.empty()) {
+            // New/unattached Skills have no profession ownership encoded.
+            // This is intentionally a UI-only filter, never a stored root field.
+            static const char* professions[] = {
+                "Elementalist","Engineer","Guardian","Mesmer","Necromancer",
+                "Ranger","Revenant","Thief","Warrior"
+            };
+            ImGui::TextDisabled("Skill picker profession (UI-only; not saved)");
+            ImGui::SetNextItemWidth(210);
+            const char* preview = g_ComponentSkillProfessionHint.empty()
+                ? "Choose profession..." : g_ComponentSkillProfessionHint.c_str();
+            if (ImGui::BeginCombo("##skill_profession_hint", preview)) {
+                for (const char* candidate : professions)
+                    if (ImGui::Selectable(candidate,
+                            g_ComponentSkillProfessionHint == candidate))
+                        g_ComponentSkillProfessionHint = candidate;
+                ImGui::EndCombo();
+            }
+            profession = g_ComponentSkillProfessionHint;
+        } else {
+            ImGui::TextDisabled("Skill profession: %s (inferred from Loadout)",
+                                profession.c_str());
+        }
+        if (!profession.empty() &&
+            AlterEgo::GW2API::GetProfessionSkillIds(profession).empty()) {
+            ImGui::SameLine();
+            if (RenderActionButton("Fetch skill options##component"))
+                AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+        }
+    }
     if (kind == "base_build") {
         ComponentNativeText(data, "profession", "Profession");
         ComponentNativeSpecializations(data, data.value("profession", std::string()));
