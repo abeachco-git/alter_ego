@@ -3541,6 +3541,18 @@ namespace AlterEgo {
         });
     }
 
+    bool GW2API::ImportPortableLoadout(const nlohmann::json& packet) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            static std::atomic<uint64_t> counter{0};
+            std::string id;
+            do {
+                id = "portable:" + std::to_string(std::time(nullptr)) + ":" +
+                    std::to_string(counter.fetch_add(1));
+            } while (Composable::FindLoadout(doc, id));
+            return Composable::ImportPortableLoadout(doc, packet, id, error);
+        });
+    }
+
     bool GW2API::ExportBuildLibraryToFile(const std::string& path) {
         json j;
         {
