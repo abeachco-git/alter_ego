@@ -349,7 +349,6 @@ int main() {
     // Simulate power loss after publishing v3 but before the legacy mirror.
     // Only the exact previous canonical snapshot authorizes mirror repair.
     const Json canonicalBeforeCrash = Json::parse(Get(dir / Store::kFile));
-    const Json mirrorBeforeCrash = Json::parse(Get(dir / Store::kLegacy));
     Document interrupted = opened;
     assert(FindLoadout(interrupted,"one"));
     FindLoadout(interrupted,"one")->metadata["notes"] = "After interrupted save";
