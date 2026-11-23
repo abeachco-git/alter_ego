@@ -435,7 +435,107 @@ static void ComponentNativeInfusionSlots(ComponentJson& part) {
         part["infusion_snapshot"] = snapshot;
 }
 
-static void ComponentNativeGear(ComponentJson& data, const std::string& kind) {
+// Reuse the same curated rune, sigil and relic catalogs as the traditional
+// customization panel. The text/ID pair is updated together; unfamiliar
+// imported items remain editable via the exact-ID fallback fields.
+static std::string g_ComponentCatalogSearch;
+static std::string g_ComponentStatSearch;
+static void ComponentNativeCatalogChoice(ComponentJson& item,
+                                          const char* idField,
+                                          const char* nameField,
+                                          const char* family) {
+    ImGui::PushID(idField);
+    const std::string selected = item.value(nameField, std::string());
+    const std::string shown = selected.empty() ? "(choose item)" : selected;
+    if (ImGui::BeginCombo("##catalog", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
+        ImGui::SetNextItemWidth(-1.0f);
+        InputTextString("Search##catalog", g_ComponentCatalogSearch);
+        if (ImGui::Selectable("(none)")) {
+            item.erase(idField);
+            item.erase(nameField);
+        }
+        auto offer = [&](const char* name, uint32_t id, const char* bonus) {
+            if (!ComponentUISearchMatch(name, g_ComponentCatalogSearch) &&
+                !ComponentUISearchMatch(bonus, g_ComponentCatalogSearch)) return;
+            ImGui::PushID(static_cast<int>(id));
+            if (ImGui::Selectable(name, selected == name)) {
+                item[idField] = id;
+                item[nameField] = name;
+                g_ComponentCatalogSearch.clear();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", bonus);
+            ImGui::PopID();
+        };
+        if (std::strcmp(family, "runes") == 0) {
+            for (const auto& entry : RUNE_LIST)
+                offer(entry.name, entry.item_id, entry.bonus);
+        } else if (std::strcmp(family, "sigils") == 0) {
+            for (const auto& entry : SIGIL_LIST)
+                offer(entry.name, entry.item_id, entry.bonus);
+        } else {
+            for (const auto& entry : RELIC_LIST)
+                offer(entry.name, entry.item_id, entry.bonus);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopID();
+}
+
+static void ComponentNativeStatChoice(ComponentJson& item) {
+    ImGui::PushID("##native_stats");
+    const uint32_t id = item.value("stat_id", uint32_t(0));
+    const auto* info = AlterEgo::GW2API::GetItemStatInfo(id);
+    const std::string storedName = item.value("stat_name", std::string());
+    const std::string shown = !storedName.empty() ? storedName :
+        info ? info->name : id ? "#" + std::to_string(id) : "(choose stats)";
+    if (ImGui::BeginCombo("##stats", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
+        ImGui::SetNextItemWidth(-1.0f);
+        InputTextString("Search##stats", g_ComponentStatSearch);
+        if (ImGui::Selectable("(none)")) {
+            item.erase("stat_id");
+            item.erase("stat_name");
+        }
+        const auto choices = GetSortedStatCombos(g_ComponentStatSearch.c_str());
+        for (const auto* stat : choices) {
+            ImGui::PushID(static_cast<int>(stat->id));
+            if (ImGui::Selectable(stat->name.c_str(), stat->id == id)) {
+                item["stat_id"] = stat->id;
+                item["stat_name"] = stat->name;
+                g_ComponentStatSearch.clear();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                for (const auto& attr : stat->attributes)
+                    ImGui::BulletText("%s", FriendlyAttrName(attr));
+                ImGui::EndTooltip();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopID();
+}
+
+static void ComponentNativeWeaponChoice(ComponentJson& item,
+                                        const std::string& profession) {
+    if (profession.empty()) return;
+    const auto* weapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
+    if (!weapons || weapons->empty()) return;
+    const std::string current = item.value("weapon_type", std::string());
+    if (ImGui::BeginCombo("Weapon type##native_weapon", current.empty()
+                         ? "(choose type)" : WeaponDisplayName(current))) {
+        if (ImGui::Selectable("(none)", current.empty())) item.erase("weapon_type");
+        for (const auto& [name, definition] : *weapons) {
+            (void)definition;
+            if (ImGui::Selectable(WeaponDisplayName(name), name == current))
+                item["weapon_type"] = name;
+        }
+        ImGui::EndCombo();
+    }
+}
+
+static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
+                                const std::string& profession) {
     ImGui::TextUnformatted("Equipment slots");
     ImGui::TextDisabled("Item and stat definitions use the same stored IDs as the Loadout viewer.");
     if (data.contains("gear") && !data["gear"].is_object()) {
@@ -465,22 +565,41 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind) {
             } else {
                 auto& item = it.value();
                 if (kind == "armor" || kind == "weapons" || kind == "trinkets") {
-                    ComponentNativeNumber(item, "item_id", "Item ID");
+                    ComponentNativeNumber(item, "item_id", "Exact item ID");
                     const uint32_t id = item.value("item_id", uint32_t(0));
                     if (const auto* info = AlterEgo::GW2API::GetItemInfo(id))
                         ImGui::TextDisabled("%s", info->name.c_str());
-                    ComponentNativeNumber(item, "stat_id", "Stat ID");
-                    ComponentNativeText(item, "stat_name", "Stat name");
+                    else if (id && RenderActionButton("Fetch item details##native"))
+                        AlterEgo::GW2API::FetchItemDetailsAsync({id});
+                    ComponentNativeStatChoice(item);
                     if (kind == "weapons")
-                        ComponentNativeText(item, "weapon_type", "Weapon type");
+                        ComponentNativeWeaponChoice(item, profession);
+                    if (ImGui::TreeNode("##advanced_gear_ids", "Advanced: exact stats and weapon type")) {
+                        ComponentNativeNumber(item, "stat_id", "Stat ID");
+                        ComponentNativeText(item, "stat_name", "Stat name");
+                        if (kind == "weapons")
+                            ComponentNativeText(item, "weapon_type", "Weapon type");
+                        ImGui::TreePop();
+                    }
                 } else if (kind == "runes") {
-                    ComponentNativeNumber(item, "rune_id", "Rune ID");
-                    ComponentNativeText(item, "rune", "Rune name");
+                    ComponentNativeCatalogChoice(item, "rune_id", "rune", "runes");
+                    if (ImGui::TreeNode("##advanced_rune", "Advanced rune IDs")) {
+                        ComponentNativeNumber(item, "rune_id", "Rune ID");
+                        ComponentNativeText(item, "rune", "Rune name");
+                        ImGui::TreePop();
+                    }
                 } else if (kind == "sigils") {
-                    ComponentNativeNumber(item, "sigil_id", "Sigil 1 ID");
-                    ComponentNativeText(item, "sigil", "Sigil 1 name");
-                    ComponentNativeNumber(item, "sigil2_id", "Sigil 2 ID");
-                    ComponentNativeText(item, "sigil2", "Sigil 2 name");
+                    ImGui::TextDisabled("Sigil 1");
+                    ComponentNativeCatalogChoice(item, "sigil_id", "sigil", "sigils");
+                    ImGui::TextDisabled("Sigil 2");
+                    ComponentNativeCatalogChoice(item, "sigil2_id", "sigil2", "sigils");
+                    if (ImGui::TreeNode("##advanced_sigils", "Advanced sigil IDs")) {
+                        ComponentNativeNumber(item, "sigil_id", "Sigil 1 ID");
+                        ComponentNativeText(item, "sigil", "Sigil 1 name");
+                        ComponentNativeNumber(item, "sigil2_id", "Sigil 2 ID");
+                        ComponentNativeText(item, "sigil2", "Sigil 2 name");
+                        ImGui::TreePop();
+                    }
                 } else if (kind == "infusions") {
                     ComponentNativeInfusionSlots(item);
                     ComponentNativeText(item, "infusion", "Legacy infusion label");
@@ -622,16 +741,25 @@ static void RenderComponentNativeEditor(const std::string& kind,
         ComponentNativeSkillBar(data, "aquatic_skills", "Aquatic skills",
                                 profession, specContext.first, !specContext.second);
     } else if (kind == "relic") {
-        ComponentNativeNumber(data, "relic_id", "Relic item ID");
-        ComponentNativeText(data, "relic_name", "Relic name");
+        ComponentNativeCatalogChoice(data, "relic_id", "relic_name", "relic");
+        if (ImGui::TreeNode("##advanced_relic", "Advanced exact relic item ID")) {
+            ComponentNativeNumber(data, "relic_id", "Relic item ID");
+            ComponentNativeText(data, "relic_name", "Relic name");
+            ImGui::TreePop();
+        }
     } else {
         if (kind == "runes") {
-            ComponentNativeNumber(data, "rune_id", "Shared rune ID");
-            ComponentNativeText(data, "rune_name", "Shared rune name");
+            ImGui::TextUnformatted("Default rune (legacy imports)");
+            ComponentNativeCatalogChoice(data, "rune_id", "rune_name", "runes");
+            if (ImGui::TreeNode("##shared_rune_advanced", "Advanced default rune fields")) {
+                ComponentNativeNumber(data, "rune_id", "Shared rune ID");
+                ComponentNativeText(data, "rune_name", "Shared rune name");
+                ImGui::TreePop();
+            }
             ImGui::TextDisabled("An unspecified shared rune count is unverified in Compare.");
         }
         if (kind == "infusions") ComponentNativeInfusionRequirements(data);
-        ComponentNativeGear(data, kind);
+        ComponentNativeGear(data, kind, profession);
     }
     if (ImGui::CollapsingHeader("Advanced: exact stored fields (read only)")) {
         ImGui::BeginChild("##component_native_json", ImVec2(0, 130), true);
