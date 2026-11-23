@@ -542,6 +542,12 @@ static bool g_AchNeedRequery = false;      // deferred requery on account change
 static bool g_AchProgressDirty = false;    // persistent cache needs flushing
 static std::string g_AchCachedAccount;     // account whose data is currently in g_AchProgress
 static int64_t g_AchProgressCacheSavedAt = 0; // last successful achievement progress retrieval
+// The loaded snapshot timestamp is stable across pinned updates, unlike saved_at.
+static int64_t g_AchProgressLoadedSnapshotAt = 0;
+static bool g_AchNeedsInitialFullLoad = true;
+static bool g_AchManualInitialScan = false;
+// Refresh timestamps are scoped to the active category and reset on account change.
+static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_AchCategoryRefreshAt;
 static std::chrono::steady_clock::time_point g_AchRefreshSuccessUntil{};
 static std::string g_AchRefreshError;
 static std::chrono::steady_clock::time_point g_AchLastSave;
@@ -2447,6 +2453,28 @@ static AchDef ParseAchDef(const nlohmann::json& ach) {
     return d;
 }
 
+static bool IsAchCategoryRefreshDue(uint32_t catId) {
+    if (!catId) return false;
+    auto attempt = g_AchCategoryRefreshAt.find(catId);
+    if (attempt != g_AchCategoryRefreshAt.end())
+        return std::chrono::steady_clock::now() - attempt->second >= std::chrono::minutes(30);
+
+    // An existing account cache is the baseline, not a reason to fetch
+    // every category again. Query a category immediately if it has no data.
+    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+    const auto cat = g_AchCategories.find(catId);
+    if (cat == g_AchCategories.end() || cat->second.achievements.empty()) return false;
+    bool hasProgress = false;
+    for (uint32_t id : cat->second.achievements) {
+        if (g_AchProgress.count(id)) { hasProgress = true; break; }
+    }
+    if (!hasProgress) return true;
+    const int64_t now = (int64_t)std::time(nullptr);
+    return g_AchProgressLoadedSnapshotAt <= 0 ||
+           now < g_AchProgressLoadedSnapshotAt ||
+           now - g_AchProgressLoadedSnapshotAt >= 1800;
+}
+
 static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
     if (g_AchCatFetching) return;
     g_AchCatFetching = true;
@@ -2506,9 +2534,11 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
     }).detach();
 }
 
-static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic) {
+static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic,
+                                 uint32_t categoryId) {
     if (ids.empty() || !APIDefs ||
         (automatic && !AlterEgo::AutoRefreshPolicy::Enabled())) return;
+    if (categoryId) g_AchCategoryRefreshAt[categoryId] = std::chrono::steady_clock::now();
     g_AchQueryAutomatic.store(automatic);
 
     // Send via H&S achievement query (same mechanism as Clears)
@@ -12001,6 +12031,10 @@ static void LoadAchProgress(const std::string& account) {
         g_AchOptimisticTime.clear();
         g_AchCachedAccount = account;
         g_AchProgressCacheSavedAt = valid ? fetchedAt : 0;
+        g_AchProgressLoadedSnapshotAt = valid ? fetchedAt : 0;
+        g_AchNeedsInitialFullLoad = !valid || g_AchProgress.empty();
+        g_AchManualInitialScan = false;
+        g_AchCategoryRefreshAt.clear();
         g_AchProgressDirty = false;
         ++g_AchProgressGen;  // invalidate popout and category count caches
     }
@@ -13786,7 +13820,7 @@ static void NavigateToAchievement(uint32_t achId) {
                     }
                 }
             }
-            FetchAchCategoryDefs(catId);
+            FetchAchCategoryDefs(catId, true);
         }
     }
     // Mark this achievement as expanded and set scroll target
@@ -14198,13 +14232,8 @@ static void RenderAchievements() {
         if (AlterEgo::AutoRefreshPolicy::Enabled() && !pinnedCopy.empty()) {
             SendAchProgressQuery(pinnedCopy, true);
         }
-        if (AlterEgo::AutoRefreshPolicy::Enabled() && g_AchSelectedCatId > 0) {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            auto it = g_AchCategories.find(g_AchSelectedCatId);
-            if (it != g_AchCategories.end()) {
-                SendAchProgressQuery(it->second.achievements, true);
-            }
-        }
+        // The active category is handled by the 30-minute per-category timer
+        // below, after the pinned query finishes. Do not force a global reload.
     }
 
     // Consume category progress continuation only while idle. Manual
@@ -14220,9 +14249,33 @@ static void RenderAchievements() {
                     auto it = g_AchCategories.find(pendingCat);
                     if (it != g_AchCategories.end()) ids = it->second.achievements;
                 }
-                if (!ids.empty()) SendAchProgressQuery(ids, automatic);
+                if (!ids.empty() &&
+                    (!automatic || IsAchCategoryRefreshDue(pendingCat)))
+                    SendAchProgressQuery(ids, automatic, pendingCat);
             }
         }
+    }
+
+    // Refresh only the active category when due, not the entire cached account.
+    // When definitions are missing, fetch just this category and continue later.
+    if (AlterEgo::AutoRefreshPolicy::Enabled() && !g_AchNeedsInitialFullLoad &&
+        g_AchSelectedCatId > 0 && !g_AchProgressFetching && !g_AchCatFetching &&
+        g_AchCatProgressPending.load() == 0 && g_AchRetryAtMs.load() == 0 &&
+        IsAchCategoryRefreshDue(g_AchSelectedCatId)) {
+        std::vector<uint32_t> ids;
+        bool missingDefs = false;
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            const auto it = g_AchCategories.find(g_AchSelectedCatId);
+            if (it != g_AchCategories.end()) {
+                ids = it->second.achievements;
+                for (uint32_t id : ids) {
+                    if (!g_AchDefs.count(id)) { missingDefs = true; break; }
+                }
+            }
+        }
+        if (missingDefs) FetchAchCategoryDefs(g_AchSelectedCatId, true);
+        else if (!ids.empty()) SendAchProgressQuery(ids, true, g_AchSelectedCatId);
     }
 
     // Fire a scheduled ach-progress query (boot query or BUSY backoff retry).
@@ -14252,10 +14305,9 @@ static void RenderAchievements() {
 
     if (!g_AchGroupsFetched) return;
 
-    // Throttled prefetch: rail counts need progress for every achievement, but
-    // firing all ~40 H&S batches at once will trip GW2 API rate limits and put
-    // H&S into a bad state. Build a queue once per account, then drain it one
-    // batch per ~750ms while idle.
+    // Full account prefetch is ONLY for an account without an existing valid
+    // progress cache. A stale snapshot must not trigger 8,000 API requests.
+    // Drain initial batches slowly to avoid H&S / GW2 API rate limiting.
     static std::vector<uint32_t> s_progressQueue;
     static std::string s_prefetchedAccount;
     static uint64_t s_prefetchedGroupsGeneration = 0;
@@ -14266,19 +14318,9 @@ static void RenderAchievements() {
             s_prefetchedAccount = currentAccount;
             s_prefetchedGroupsGeneration = g_AchGroupsGeneration;
             s_progressQueue.clear();
-            // Account progress is already persisted. Re-query known progress
-            // only if the snapshot is stale (30 min or prior daily reset).
-            // On fresh login, fetch only missing achievement IDs instead of
-            // replaying the entire ~8,000-achievement prefetch every time.
-            const int64_t nowEpoch = (int64_t)std::time(nullptr);
-            const int64_t dailyEpoch = std::chrono::duration_cast<std::chrono::seconds>(
-                CalcLastDailyReset(std::chrono::system_clock::now()).time_since_epoch()).count();
-            const bool cacheFresh = g_AchCachedAccount == currentAccount &&
-                g_AchProgressCacheSavedAt > 0 &&
-                nowEpoch >= g_AchProgressCacheSavedAt &&
-                nowEpoch - g_AchProgressCacheSavedAt < 1800 &&
-                g_AchProgressCacheSavedAt >= dailyEpoch;
-            if (!currentAccount.empty()) {
+            // Reuse any existing progress data, regardless of its age.
+            // Per-category and pinned timers manage ordinary refreshes.
+            if (!currentAccount.empty() && g_AchNeedsInitialFullLoad) {
                 std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
                 std::unordered_set<uint32_t> pinnedSet(g_AchPinned.begin(), g_AchPinned.end());
                 std::unordered_set<uint32_t> queued;
@@ -14286,19 +14328,19 @@ static void RenderAchievements() {
                     if (g_AchHiddenCatIds.count(catId)) continue;
                     for (uint32_t aid : cat.achievements) {
                         if (pinnedSet.count(aid)) continue;
-                        if (cacheFresh && g_AchProgress.count(aid)) continue;
+                        if (g_AchProgress.count(aid)) continue;
                         if (queued.insert(aid).second) s_progressQueue.push_back(aid);
                     }
                 }
                 // Put pinned last: drained first; pinned also get periodic refresh.
                 for (uint32_t aid : g_AchPinned) {
-                    if (cacheFresh && g_AchProgress.count(aid)) continue;
+                    if (g_AchProgress.count(aid)) continue;
                     if (queued.insert(aid).second) s_progressQueue.push_back(aid);
                 }
             }
         }
     }
-    if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if ((AlterEgo::AutoRefreshPolicy::Enabled() || g_AchManualInitialScan) &&
         !s_progressQueue.empty() && !g_AchProgressFetching) {
         static auto s_lastBatchTime = std::chrono::steady_clock::time_point{};
         auto now = std::chrono::steady_clock::now();
@@ -14309,8 +14351,13 @@ static void RenderAchievements() {
             size_t take = std::min(BATCH, s_progressQueue.size());
             std::vector<uint32_t> batch(s_progressQueue.end() - take, s_progressQueue.end());
             s_progressQueue.erase(s_progressQueue.end() - take, s_progressQueue.end());
-            SendAchProgressQuery(batch, true);
+            SendAchProgressQuery(batch, !g_AchManualInitialScan);
         }
+    }
+    if (g_AchNeedsInitialFullLoad && s_progressQueue.empty() && !g_AchProgressFetching &&
+        !g_AchCatFetching && !g_AchGroupsFetching) {
+        g_AchNeedsInitialFullLoad = false;
+        g_AchManualInitialScan = false;
     }
 
     // Search mode — cached results to avoid iterating 8000+ names every frame
@@ -14490,7 +14537,7 @@ static void RenderAchievements() {
             if (clicked && g_AchSelectedCatId != cat->id) {
                 g_AchSelectedCatId = cat->id;
                 g_AchSelectedGroupId = groupId;
-                FetchAchCategoryDefs(cat->id);
+                FetchAchCategoryDefs(cat->id, true);
             }
             ImGui::PopID();
             return true;
@@ -15466,16 +15513,20 @@ static void RenderAchievementsStatusRow() {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             g_AchStatusMsg.clear();
         }
-        g_AchGroupsFetched = false;
-        g_AchActiveEventFetched = false;
-        FetchAchGroups();
-        if (g_AchSelectedCatId > 0) FetchAchCategoryDefs(g_AchSelectedCatId);
-        std::vector<uint32_t> pinnedCopy;
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            pinnedCopy = g_AchPinned;
+        // A manual refresh targets the selected category, not every category.
+        // Only rebuild public group definitions if they have never been cached.
+        if (!g_AchGroupsFetched) FetchAchGroups();
+        if (g_AchNeedsInitialFullLoad) g_AchManualInitialScan = true;
+        if (g_AchSelectedCatId > 0) {
+            FetchAchCategoryDefs(g_AchSelectedCatId);
+        } else {
+            std::vector<uint32_t> pinnedCopy;
+            {
+                std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+                pinnedCopy = g_AchPinned;
+            }
+            if (!pinnedCopy.empty()) SendAchProgressQuery(pinnedCopy);
         }
-        if (!pinnedCopy.empty()) SendAchProgressQuery(pinnedCopy);
     }
 }
 
