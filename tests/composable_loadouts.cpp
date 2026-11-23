@@ -346,6 +346,39 @@ int main() {
     assert(migrated);
     assert(opened.loadouts[0].fashion_id == "appearance-1");
     assert(opened.loadouts[0].metadata["notes"] == "Edited by old DLL");
+    // Simulate power loss after publishing v3 but before the legacy mirror.
+    // Only the exact previous canonical snapshot authorizes mirror repair.
+    const Json canonicalBeforeCrash = Json::parse(Get(dir / Store::kFile));
+    const Json mirrorBeforeCrash = Json::parse(Get(dir / Store::kLegacy));
+    Document interrupted = opened;
+    assert(FindLoadout(interrupted,"one"));
+    FindLoadout(interrupted,"one")->metadata["notes"] = "After interrupted save";
+    Put(dir / Store::kPrevious, canonicalBeforeCrash.dump(2));
+    Put(dir / Store::kFile, ToJson(interrupted).dump(2));
+    fs::last_write_time(dir / Store::kFile,
+        fs::last_write_time(dir / Store::kLegacy) + std::chrono::seconds(3));
+    migrated = false;
+    assert(Store::Open(dir.u8string(), opened, migrated, error));
+    assert(migrated);
+    assert(opened.loadouts[0].metadata["notes"] == "After interrupted save");
+    assert(Json::parse(Get(dir / Store::kLegacy))["builds"][0]["notes"]
+           == "After interrupted save");
+    // An unrelated older mirror cannot be overwritten merely because a
+    // canonical file is newer. The verified previous snapshot must match.
+    Document unrelated = opened;
+    FindLoadout(unrelated,"one")->metadata["notes"] = "Another canonical version";
+    Put(dir / Store::kFile, ToJson(unrelated).dump(2));
+    Put(dir / Store::kPrevious, canonicalBeforeCrash.dump(2));
+    fs::last_write_time(dir / Store::kFile,
+        fs::last_write_time(dir / Store::kLegacy) + std::chrono::seconds(3));
+    const std::string divergedMirror = Get(dir / Store::kLegacy);
+    migrated = false;
+    assert(!Store::Open(dir.u8string(), opened, migrated, error));
+    assert(Get(dir / Store::kLegacy) == divergedMirror);
+    // Restore the paired canonical/mirror fixture before continuing.
+    Put(dir / Store::kFile, ToJson(interrupted).dump(2));
+    assert(Json::parse(Get(dir / Store::kLegacy))["builds"][0]["notes"]
+           == "After interrupted save");
     // Always load the existing canonical data if the mirror is unchanged.
     migrated = true;
     assert(Store::Open(dir.u8string(),opened,migrated,error));
