@@ -502,6 +502,11 @@ static void RenderComponentLibrary() {
     ImGui::SetNextItemWidth(ImMax(150.f, ImGui::GetContentRegionAvail().x - 125.f));
     InputTextString("Search##component_search", g_ComponentSearch);
     const std::string kind = kComponentKinds[g_ComponentFilterKind].kind;
+    if (!g_ComponentSelectIdPending.empty()) {
+        g_ComponentSelectedKind = kind;
+        g_ComponentSelectedId = g_ComponentSelectIdPending;
+        g_ComponentSelectIdPending.clear();
+    }
     if (!g_ComponentSelectNamePending.empty()) {
         const auto group = doc["components"].find(kind);
         if (group != doc["components"].end() && group->is_array())
