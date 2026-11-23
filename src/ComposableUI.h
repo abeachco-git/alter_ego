@@ -53,6 +53,7 @@ static bool g_ComponentEditorOpen = false;
 static bool g_ComponentEditorNew = false;
 static std::string g_ComponentEditorMode; // create, duplicate, rename, edit
 static std::string g_ComponentStatus;
+static bool g_ComponentPendingSelectNew = false;
 
 static const ComponentJson& ComponentUISnapshot() {
     static ComponentJson cached = ComponentJson::object();
@@ -501,6 +502,38 @@ static void RenderComponentLibrary() {
     const std::string kind = kComponentKinds[g_ComponentFilterKind].kind;
     if (RenderActionButton("New Component##library_component"))
         ComponentUIStartEditor("create", kind, "", nullptr);
+    ImGui::SameLine();
+    if (RenderActionButton("Import Component##clipboard")) {
+        const char* clipboard = ImGui::GetClipboardText();
+        g_ComponentStatus.clear();
+        if (!clipboard || !*clipboard) {
+            g_ComponentStatus = "Clipboard is empty.";
+        } else {
+            try {
+                const ComponentJson packet = ComponentJson::parse(clipboard);
+                std::string importedKind, error;
+                AlterEgo::Composable::Component imported;
+                if (!AlterEgo::Composable::ImportComponent(
+                        packet, importedKind, imported, error))
+                    g_ComponentStatus = error;
+                else {
+                    g_ComponentCommand = {ComponentUICommand::Create, "",
+                        importedKind, "", imported.name, imported.data};
+                    g_ComponentPendingSelectNew = true;
+                    for (int i = 0; i < 9; ++i)
+                        if (importedKind == kComponentKinds[i].kind)
+                            g_ComponentFilterKind = i;
+                }
+            } catch (const std::exception& e) {
+                g_ComponentStatus = std::string("Invalid component clipboard JSON: ") + e.what();
+            }
+        }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Import a standalone component copied from Alter Ego.\n"
+                          "Creates a new independent ID; does not replace existing Loadouts.");
+    if (!g_ComponentStatus.empty())
+        ImGui::TextWrapped("%s", g_ComponentStatus.c_str());
     ImGui::Separator();
 
     const float listWidth = ImMax(200.0f, ImMin(290.0f, ImGui::GetContentRegionAvail().x * 0.37f));
@@ -540,6 +573,19 @@ static void RenderComponentLibrary() {
                             usage, usage == 1 ? "" : "s");
         ImGui::TextWrapped("%s", ComponentUIShortDescription(kind, item->at("data")).c_str());
         ImGui::Separator();
+        if (RenderActionButton("Copy Component##clipboard")) {
+            AlterEgo::Composable::Component exported;
+            exported.name = name;
+            exported.data = item->at("data");
+            const std::string portable = AlterEgo::Composable::ExportComponent(
+                kind, exported).dump(2);
+            ImGui::SetClipboardText(portable.c_str());
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Copy a portable independent component for importing elsewhere.
+"
+                              "Includes unknown stored fields but not the current library ID.");
+        ImGui::SameLine();
         if (RenderActionButton("Rename##component_library"))
             ComponentUIStartEditor("rename", kind, id, item);
         ImGui::SameLine();
@@ -640,6 +686,21 @@ static void ProcessComponentUICommand() {
         break;
     case ComponentUICommand::Create:
         success = API::CreateLoadoutComponent(command.kind, command.name, command.data);
+        if (success) {
+            const auto& fresh = ComponentUISnapshot();
+            const auto group = fresh["components"].find(command.kind);
+            if (group != fresh["components"].end() && group->is_array()) {
+                for (auto it = group->rbegin(); it != group->rend(); ++it) {
+                    if (!it->is_object() || it->value("name", std::string()) != command.name ||
+                        !it->contains("data") || it->at("data") != command.data) continue;
+                    // An imported/created component is now navigable directly.
+                    ComponentUIOpenLibrary(command.kind,
+                        it->value("id", std::string()));
+                    break;
+                }
+            }
+        }
+        g_ComponentPendingSelectNew = false;
         break;
     case ComponentUICommand::Duplicate:
         success = API::DuplicateLoadoutComponent(
