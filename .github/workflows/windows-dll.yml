@@ -89,6 +89,8 @@ jobs:
           /tmp/composable_loadouts
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/composable_gear_presentation.cpp -o /tmp/composable_gear_presentation
           /tmp/composable_gear_presentation
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/equipment_choice_core.cpp -o /tmp/equipment_choice_core
+          /tmp/equipment_choice_core
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/composable_backup.cpp src/ChatLink.cpp -o /tmp/composable_backup
           /tmp/composable_backup
       - name: Verify all six live MetaBattle equipment imports

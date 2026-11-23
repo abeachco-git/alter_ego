@@ -219,7 +219,7 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
                 const auto& item = data["gear"].at(slotName);
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(slotName.c_str());
+                ImGui::TextUnformatted(GearSlotDisplayName(slotName));
                 ImGui::TableSetColumnIndex(1);
                 ImGui::TextWrapped("%s", AlterEgo::Composable::Presentation::
                     GearSlotSummary(kind, item).c_str());

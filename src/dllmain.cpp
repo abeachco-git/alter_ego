@@ -49,6 +49,7 @@
 #include "Clears.h"
 #include "CompletionTheme.h"
 #include "EquipmentTabCore.h"
+#include "EquipmentChoiceCore.h"
 #include "RefreshUI.h"
 
 // Version constants
@@ -8104,15 +8105,13 @@ static void RenderGearCustomizeDialog() {
                     for (auto& c : filterLower) c = (char)tolower(c);
                 }
 
-                bool isMH = IsMainhandSlot(g_GearDialogSlot);
-                bool isOH = IsOffhandSlot(g_GearDialogSlot);
-
                 ImGui::BeginChild("##weaponTypeList", ImVec2(0, -30), true);
                 int idx = 0;
                 for (const auto& [wname, wd] : *profWeapons) {
                     // Filter by mainhand/offhand/two-hand
-                    if (isMH && !wd.mainhand && !wd.two_handed) continue;
-                    if (isOH && !wd.offhand) continue;
+                    if (!AlterEgo::EquipmentChoice::WeaponEligible(
+                            g_GearDialogSlot, wd.mainhand, wd.offhand,
+                            wd.two_handed)) continue;
 
                     // Search filter
                     if (!filterLower.empty()) {

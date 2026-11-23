@@ -558,10 +558,9 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,
         if (ImGui::Selectable("(none)", current.empty())) item.erase("weapon_type");
         for (const auto& [name, definition] : *weapons) {
             // Match the hand-eligibility policy of the original gear picker.
-            const bool mainhand = slot == "WeaponA1" || slot == "WeaponB1";
-            const bool offhand = slot == "WeaponA2" || slot == "WeaponB2";
-            if (mainhand && !definition.mainhand && !definition.two_handed) continue;
-            if (offhand && !definition.offhand) continue;
+            if (!AlterEgo::EquipmentChoice::WeaponEligible(
+                    slot, definition.mainhand, definition.offhand,
+                    definition.two_handed)) continue;
             if (ImGui::Selectable(WeaponDisplayName(name), name == current))
                 item["weapon_type"] = name;
         }
@@ -615,9 +614,11 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
     for (const auto& slot : slots) {
         ImGui::PushID(slot.c_str());
         const bool selected = g_ComponentGearSelectedSlot == slot;
-        if (ImGui::Selectable(slot.c_str(), selected)) {
+        if (ImGui::Selectable(GearSlotDisplayName(slot), selected)) {
             g_ComponentGearSelectedSlot = slot;
             g_ComponentGearRemovalPending.clear();
+            g_ComponentCatalogSearch.clear();
+            g_ComponentStatSearch.clear();
         }
         if (ImGui::IsItemHovered()) {
             const auto& entry = data["gear"].at(slot);
@@ -631,7 +632,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
     ImGui::BeginChild("##component_slot_editor", ImVec2(0, height), true);
     const std::string slot = g_ComponentGearSelectedSlot;
     ImGui::PushID(slot.c_str());
-    ImGui::Text("%s", slot.c_str());
+    ImGui::Text("%s", GearSlotDisplayName(slot));
     const auto& recorded = data["gear"].at(slot);
     ImGui::TextWrapped("%s", AlterEgo::Composable::Presentation::
         GearSlotSummary(kind, recorded).c_str());
