@@ -6,6 +6,7 @@
 // Nothing is written until all selected entries have passed validation.
 #include "BackupZip.h"
 #include "FashionLibrary.h"
+#include "ComposableLoadouts.h"
 #include <nlohmann/json.hpp>
 #include <ctime>
 #include <filesystem>
@@ -48,10 +49,11 @@ inline bool UserAsset(const std::string& name) {
 }
 inline bool SupportedName(const std::string& name) {
     return name == "manifest.json" || name == "build_library.json" ||
+           name == "loadouts_v3.json" ||
            name == "fashion_library.json" || IsOtherJson(name) || UserAsset(name);
 }
 inline unsigned GroupForName(const std::string& name) {
-    if (name == "build_library.json") return Builds;
+    if (name == "build_library.json" || name == "loadouts_v3.json") return Builds;
     if (name == "fashion_library.json") return Fashion;
     return IsOtherJson(name) || UserAsset(name) ? static_cast<unsigned>(Other) : 0u;
 }
@@ -93,6 +95,12 @@ inline bool ValidateCollection(const std::string& name, const std::string& bytes
         error = name + ": invalid JSON: " + e.what(); return false;
     }
     if (!j.is_object()) { error = name + ": expected a JSON object."; return false; }
+    if (name == "loadouts_v3.json") {
+        AlterEgo::Composable::Document doc;
+        if (!AlterEgo::Composable::FromJson(j, doc, error)) return false;
+        count = doc.loadouts.size();
+        return true;
+    }
     if (name == "build_library.json") {
         if (!j.contains("builds") || !j["builds"].is_array()) {
             error = "Build library requires a builds array."; return false;
@@ -148,6 +156,8 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
         return true;
     };
     if ((selected & Builds) && !append("build_library.json", R"({"builds":[]})")) return false;
+    if ((selected & Builds) && Exists(FilePath(dir, "loadouts_v3.json")) &&
+        !append("loadouts_v3.json", "")) return false;
     if ((selected & Fashion) && !append("fashion_library.json", R"({"version":1,"looks":[]})")) return false;
     if (selected & Other) {
         for (const auto& name : {"settings.json", "session.json", "char_sort.json",
@@ -182,6 +192,10 @@ inline bool Export(const std::string& dir, unsigned selected,
     FileMap files;
     if (!Collect(dir, selected, files, error)) return false;
     if (!asZip) {
+        // Standalone Builds JSON deliberately stays backward compatible with
+        // older Alter Ego versions. ZIP carries the complete v3 graph.
+        if (selected == Builds && files.count("loadouts_v3.json"))
+            files.erase("loadouts_v3.json");
         if (files.size() != 1 || selected == Other) {
             error = "Individual JSON export requires Builds or Fashion only."; return false;
         }
@@ -231,7 +245,10 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
         catch (...) { error = "Not a ZIP archive or valid JSON file."; return false; }
         if (!j.is_object()) { error = "JSON import must contain an object."; return false; }
         std::string name;
-        if (j.contains("builds") && j["builds"].is_array()) name = "build_library.json";
+        if (j.contains("format") && j["format"].is_string() &&
+            j["format"] == AlterEgo::Composable::kFormat)
+            name = "loadouts_v3.json";
+        else if (j.contains("builds") && j["builds"].is_array()) name = "build_library.json";
         else if (j.contains("looks") && j["looks"].is_array()) name = "fashion_library.json";
         else {
             name = DetectOtherJsonType(j);
@@ -268,7 +285,8 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
         size_t count = 0;
         if (!ValidateCollection(name, bytes, count, error)) return false;
         package.available |= GroupForName(name);
-        if (name == "build_library.json") package.buildCount = count;
+        if (name == "build_library.json" || name == "loadouts_v3.json")
+            package.buildCount = count;
         if (name == "fashion_library.json") package.fashionCount = count;
     }
     return package.available != 0;
@@ -289,8 +307,61 @@ inline bool Prepare(const std::string& dir, const Package& package,
     if (!selected || (selected & ~package.available)) {
         error = "Selected collection is not present in this backup."; return false;
     }
+    // Builds are a single logical collection, but v3 and the legacy
+    // compatibility view are restored together. This prevents the old JSON
+    // from shadowing/overwriting an unrelated composable graph.
+    if (selected & Builds) {
+        using namespace AlterEgo::Composable;
+        Document importedDoc, existingDoc, mergedDoc;
+        Json legacyImport;
+        if (package.files.count("loadouts_v3.json")) {
+            Json encoded = Json::parse(package.files.at("loadouts_v3.json"));
+            if (!FromJson(encoded, importedDoc, error)) return false;
+        } else if (package.files.count("build_library.json")) {
+            legacyImport = Json::parse(package.files.at("build_library.json"));
+            if (!SplitLegacy(legacyImport, importedDoc, error)) return false;
+        } else return Fail(error, "No Build collection in selected backup.");
+
+        if (package.files.count("build_library.json") &&
+            package.files.count("loadouts_v3.json")) {
+            Json derived;
+            if (!ToLegacy(importedDoc, derived, error)) return false;
+            const Json legacy = Json::parse(package.files.at("build_library.json"));
+            if (derived.at("builds") != legacy.at("builds"))
+                return Fail(error, "Backup Build and v3 Loadout collections disagree.");
+        }
+
+        if (!replace) {
+            std::string existing;
+            if (!ReadExisting(dir, "loadouts_v3.json", existing, error)) return false;
+            if (!existing.empty()) {
+                Json parsed;
+                try { parsed = Json::parse(existing); }
+                catch (...) { return Fail(error, "Existing v3 Loadout store is corrupt."); }
+                if (!FromJson(parsed, existingDoc, error)) return false;
+            } else {
+                if (!ReadExisting(dir, "build_library.json", existing, error)) return false;
+                if (!existing.empty()) {
+                    Json parsed;
+                    try { parsed = Json::parse(existing); }
+                    catch (...) { return Fail(error, "Existing Build library is corrupt."); }
+                    if (!SplitLegacy(parsed, existingDoc, error)) return false;
+                }
+            }
+        }
+        size_t added = 0, skipped = 0;
+        if (!Merge(existingDoc, importedDoc, replace, mergedDoc,
+                   added, skipped, error)) return false;
+        Json legacyOutput;
+        if (!ToLegacy(mergedDoc, legacyOutput, error)) return false;
+        plan.writeFiles["loadouts_v3.json"] = ToJson(mergedDoc).dump(2);
+        plan.writeFiles["build_library.json"] = legacyOutput.dump(2);
+        plan.buildAdded = added;
+        plan.buildSkipped = skipped;
+    }
     for (const auto& [name, imported] : package.files) {
         if (!(GroupForName(name) & selected)) continue;
+        if (name == "build_library.json" || name == "loadouts_v3.json") continue;
         if (name == "build_library.json" || name == "fashion_library.json") {
             std::string existing;
             if (!ReadExisting(dir, name, existing, error)) return false;
