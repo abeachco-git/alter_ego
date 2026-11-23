@@ -89,41 +89,69 @@ static void ComponentNativeSkill(ComponentJson& parent, const char* key,
 static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
                                     const char* title,
                                     const std::string& profession) {
-    if (ImGui::TreeNodeEx(key, ImGuiTreeNodeFlags_DefaultOpen, "%s", title)) {
-        if (!data.contains(key) || !data[key].is_object())
-            data[key] = ComponentJson::object();
-        auto& bar = data[key];
-        ComponentNativeSkill(bar, "heal", "Heal", profession);
-        if (!bar.contains("utilities") || !bar["utilities"].is_array())
-            bar["utilities"] = ComponentJson::array();
-        while (bar["utilities"].size() < 3) bar["utilities"].push_back(0);
-        for (int i = 0; i < 3; ++i) {
-            ImGui::PushID(i);
-            ComponentJson field = {{"skill", bar["utilities"][i]}};
-            ComponentNativeSkill(field, "skill",
-                (std::string("Utility ") + std::to_string(i + 1)).c_str(), profession);
-            bar["utilities"][i] = field["skill"];
-            ImGui::PopID();
-        }
-        ComponentNativeSkill(bar, "elite", "Elite", profession);
+    if (!ImGui::TreeNodeEx(key, ImGuiTreeNodeFlags_DefaultOpen, "%s", title)) return;
+    // Do not fill an absent skill bar merely because the editor was opened.
+    if (!data.contains(key)) {
+        if (RenderActionButton((std::string("Add ") + title + "##bar").c_str()))
+            data[key] = {{"heal", 0},
+                         {"utilities", ComponentJson::array({0, 0, 0})},
+                         {"elite", 0}};
         ImGui::TreePop();
+        return;
     }
+    if (!data[key].is_object()) {
+        ImGui::TextDisabled("Unsupported skill format; existing value preserved.");
+        ImGui::TreePop();
+        return;
+    }
+    auto& bar = data[key];
+    ComponentNativeSkill(bar, "heal", "Heal", profession);
+    ComponentJson utilities = bar.contains("utilities") &&
+        bar["utilities"].is_array() ? bar["utilities"] : ComponentJson::array();
+    while (utilities.size() < 3) utilities.push_back(0);
+    for (int i = 0; i < 3; ++i) {
+        ImGui::PushID(i);
+        ComponentJson field = {{"skill", utilities[i]}};
+        ComponentNativeSkill(field, "skill",
+            (std::string("Utility ") + std::to_string(i + 1)).c_str(), profession);
+        if (field["skill"] != utilities[i]) {
+            utilities[i] = field["skill"];
+            bar["utilities"] = utilities;
+        }
+        ImGui::PopID();
+    }
+    ComponentNativeSkill(bar, "elite", "Elite", profession);
+    ImGui::TreePop();
 }
 
 static void ComponentNativeSpecializations(ComponentJson& data,
                                              const std::string& profession) {
     if (!ImGui::TreeNodeEx("##component_specs", ImGuiTreeNodeFlags_DefaultOpen,
                             "Specializations and traits")) return;
-    if (!data.contains("specializations") || !data["specializations"].is_array())
-        data["specializations"] = ComponentJson::array();
+    if (!data.contains("specializations")) {
+        if (RenderActionButton("Add specialization lines##component"))
+            data["specializations"] = ComponentJson::array();
+    }
+    if (!data.contains("specializations")) {
+        ImGui::TreePop();
+        return;
+    }
+    if (!data["specializations"].is_array()) {
+        ImGui::TextDisabled("Unrecognized specialization format; preserved.");
+        ImGui::TreePop();
+        return;
+    }
     auto& specs = data["specializations"];
-    while (specs.size() < 3)
-        specs.push_back({{"id", 0}, {"traits", ComponentJson::array({0, 0, 0})}});
     const auto candidates = profession.empty()
         ? std::vector<uint32_t>() : AlterEgo::GW2API::GetProfessionSpecIds(profession);
-    for (int i = 0; i < 3; ++i) {
+    const int count = std::min<int>(3, static_cast<int>(specs.size()));
+    for (int i = 0; i < count; ++i) {
         ImGui::PushID(i);
-        if (!specs[i].is_object()) specs[i] = ComponentJson::object();
+        if (!specs[i].is_object()) {
+            ImGui::TextDisabled("Unrecognized specialization line; preserved.");
+            ImGui::PopID();
+            continue;
+        }
         auto& spec = specs[i];
         const uint32_t priorId = spec.value("id", uint32_t(0));
         ImGui::Separator();
@@ -142,30 +170,37 @@ static void ComponentNativeSpecializations(ComponentJson& data,
         }
         const uint32_t specId = spec.value("id", uint32_t(0));
         if (specId != priorId) spec["traits"] = ComponentJson::array({0, 0, 0});
-        if (!spec.contains("traits") || !spec["traits"].is_array())
-            spec["traits"] = ComponentJson::array();
-        while (spec["traits"].size() < 3) spec["traits"].push_back(0);
+        ComponentJson traits = spec.contains("traits") && spec["traits"].is_array()
+            ? spec["traits"] : ComponentJson::array();
+        while (traits.size() < 3) traits.push_back(0);
         const auto* definition = AlterEgo::GW2API::GetSpecInfo(specId);
         const char* tiers[] = {"Adept", "Master", "Grandmaster"};
         for (int tier = 0; tier < 3; ++tier) {
             ImGui::PushID(tier);
-            int choice = spec["traits"][tier].is_number_integer()
-                ? spec["traits"][tier].get<int>() : 0;
+            int choice = traits[tier].is_number_integer()
+                ? traits[tier].get<int>() : 0;
+            int entered = choice;
             ImGui::SetNextItemWidth(150);
-            if (ImGui::InputInt(tiers[tier], &choice))
-                spec["traits"][tier] = choice; // preserve negative import placeholders
+            if (ImGui::InputInt(tiers[tier], &entered)) {
+                traits[tier] = entered; // negative import placeholders are preserved
+                spec["traits"] = traits;
+            }
             if (definition && definition->major_traits.size() >= 9) {
                 ImGui::SameLine();
                 if (ImGui::BeginCombo("##trait", "Choose trait...")) {
-                    if (ImGui::Selectable("(none)", choice == 0))
-                        spec["traits"][tier] = 0;
+                    if (ImGui::Selectable("(none)", choice == 0)) {
+                        traits[tier] = 0;
+                        spec["traits"] = traits;
+                    }
                     for (int j = 0; j < 3; ++j) {
                         const uint32_t tid = definition->major_traits[tier * 3 + j];
                         const auto* trait = AlterEgo::GW2API::GetTraitInfo(tid);
                         const std::string label = (trait ? trait->name :
                             "#" + std::to_string(tid)) + "##" + std::to_string(tid);
-                        if (ImGui::Selectable(label.c_str(), choice == static_cast<int>(tid)))
-                            spec["traits"][tier] = tid;
+                        if (ImGui::Selectable(label.c_str(), choice == static_cast<int>(tid))) {
+                            traits[tier] = tid;
+                            spec["traits"] = traits;
+                        }
                     }
                     ImGui::EndCombo();
                 }
@@ -174,6 +209,8 @@ static void ComponentNativeSpecializations(ComponentJson& data,
         }
         ImGui::PopID();
     }
+    if (specs.size() < 3 && RenderActionButton("Add specialization line##component"))
+        specs.push_back({{"id", 0}, {"traits", ComponentJson::array({0,0,0})}});
     if (candidates.empty() && !profession.empty()) {
         ImGui::TextDisabled("Specialization metadata has not loaded.");
         if (RenderActionButton("Fetch profession data##component"))
@@ -185,15 +222,28 @@ static void ComponentNativeSpecializations(ComponentJson& data,
 static void ComponentNativeIntegerArray(ComponentJson& data, const char* key,
                                         const char* label, size_t length) {
     if (!ImGui::TreeNode(key, "%s", label)) return;
-    if (!data.contains(key) || !data[key].is_array())
-        data[key] = ComponentJson::array();
+    if (!data.contains(key)) {
+        if (RenderActionButton((std::string("Add ") + label + "##array").c_str()))
+            data[key] = ComponentJson::array();
+        ImGui::TreePop();
+        return;
+    }
+    if (!data[key].is_array()) {
+        ImGui::TextDisabled("Unrecognized array format; preserved.");
+        ImGui::TreePop();
+        return;
+    }
     auto& values = data[key];
-    while (values.size() < length) values.push_back(0);
     for (size_t i = 0; i < length; ++i) {
         ImGui::PushID(static_cast<int>(i));
-        ComponentJson one = {{"value", values[i]}};
+        const ComponentJson original = i < values.size()
+            ? values[i] : ComponentJson(0);
+        ComponentJson one = {{"value", original}};
         ComponentNativeNumber(one, "value", ("Entry " + std::to_string(i+1)).c_str());
-        values[i] = one["value"];
+        if (one["value"] != original) {
+            while (values.size() <= i) values.push_back(0);
+            values[i] = one["value"];
+        }
         ImGui::PopID();
     }
     ImGui::TreePop();
