@@ -701,7 +701,12 @@ static void RenderComponentNativeEditor(const std::string& kind,
         }
     }
     if (kind == "base_build") {
-        ComponentNativeText(data, "profession", "Profession");
+        if (!id.empty() && ComponentUIUsage(ComponentUISnapshot(), "base_build", id)) {
+            ImGui::TextDisabled("Profession: %s (fixed while referenced)",
+                data.value("profession", std::string()).c_str());
+        } else {
+            ComponentNativeText(data, "profession", "Profession");
+        }
         ComponentNativeSpecializations(data, data.value("profession", std::string()));
         ComponentNativeIntegerArray(data, "pets", "Ranger pets (terrestrial, aquatic)", 4);
         ComponentNativeIntegerArray(data, "legend_codes", "Revenant legends", 4);
