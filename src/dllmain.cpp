@@ -8319,21 +8319,61 @@ static void RenderSaveToLibraryDialog() {
         }
     } else ImGui::TextDisabled("Character data unavailable");
 
+    // The same capture dialog can save a complete Loadout or just one reusable
+    // component without inventing an extra monolithic saved-build entry.
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Build name");
+    ImGui::TextUnformatted("Save as");
+    ImGui::SameLine(130);
+    const char* saveTarget = g_SaveLibTarget == 0 ? "Complete Loadout" : "Single component";
+    if (RenderThemedCombo("##save_target", saveTarget,
+                         ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
+        if (ImGui::Selectable("Complete Loadout", g_SaveLibTarget == 0))
+            g_SaveLibTarget = 0;
+        if (ImGui::Selectable("Single component", g_SaveLibTarget == 1))
+            g_SaveLibTarget = 1;
+        ImGui::EndCombo();
+    }
+    static const char* kinds[] = {
+        "Base Build", "Skills", "Weapons", "Armor", "Trinkets",
+        "Runes", "Sigils", "Infusions", "Relic"
+    };
+    static const char* keys[] = {
+        "base_build", "skills", "weapons", "armor", "trinkets",
+        "runes", "sigils", "infusions", "relic"
+    };
+    if (g_SaveLibTarget == 1) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Component");
+        ImGui::SameLine(130);
+        if (RenderThemedCombo("##save_component_type",
+                             kinds[g_SaveLibComponentKind],
+                             ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
+            for (int i = 0; i < 9; ++i)
+                if (ImGui::Selectable(kinds[i], g_SaveLibComponentKind == i))
+                    g_SaveLibComponentKind = i;
+            ImGui::EndCombo();
+        }
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(g_SaveLibTarget == 0 ? "Loadout name" : "Component name");
     ImGui::SameLine(130);
     ImGui::SetNextItemWidth(ImMax(140.0f, ImGui::GetContentRegionAvail().x));
     if (ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName)))
         g_SaveLibNameManuallyEdited = true;
 
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Game modes");
-    RenderGameModeSelector("live-save-modes", g_SaveLibModes);
+    if (g_SaveLibTarget == 0) {
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Game modes");
+        RenderGameModeSelector("live-save-modes", g_SaveLibModes);
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
-    ImGui::Checkbox("Include equipment set", &g_SaveLibIncludeEquip);
-    if (sourceChar && g_SaveLibIncludeEquip) {
+    if (g_SaveLibTarget == 0)
+        ImGui::Checkbox("Include equipment set", &g_SaveLibIncludeEquip);
+    const bool needsEquipment = g_SaveLibTarget == 1
+        ? g_SaveLibComponentKind >= 2 : g_SaveLibIncludeEquip;
+    if (sourceChar && needsEquipment) {
         auto equipName = [&](int tab) {
             auto it = sourceChar->equipment_tab_names.find(tab);
             return it != sourceChar->equipment_tab_names.end() && !it->second.empty()
@@ -8361,7 +8401,7 @@ static void RenderSaveToLibraryDialog() {
 
     if (RenderActionButton("Save##saveToLibrary", ImVec2(80, 0))) {
         std::string name = g_SaveLibName;
-        if (name.empty()) name = "Unnamed Build";
+        if (name.empty()) name = g_SaveLibTarget == 0 ? "Unnamed Loadout" : "Unnamed Component";
 
         const auto* capturedChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
         const AlterEgo::BuildTemplate* capturedTab = nullptr;
@@ -8375,18 +8415,31 @@ static void RenderSaveToLibraryDialog() {
                 (AlterEgo::GW2API::HasPaletteData(capturedTab->profession)
                     ? EncodeBuildTabChatLink(*capturedTab) : std::string());
             AlterEgo::SavedBuild sb = CaptureRetrievedBuildSnapshot(*capturedChar, *capturedTab,
-                g_SaveLibEquipTab, g_SaveLibIncludeEquip, name,
+                g_SaveLibEquipTab, needsEquipment, name,
                 g_SaveLibModes.front(), chatLink);
             sb.game_modes = g_SaveLibModes;
 
-            int idx = AlterEgo::GW2API::AddSavedBuild(std::move(sb));
-            if (idx >= 0) {
-                g_LibSelectedIdx = idx;
-                g_LibDetailsFetched = false;
-                if (APIDefs) APIDefs->GUI_SendAlert("Build saved to library!");
-                g_SaveLibDialogOpen = false;
-            } else if (APIDefs) {
-                APIDefs->GUI_SendAlert("Unable to persist build library - check file permissions.");
+            if (g_SaveLibTarget == 1) {
+                const bool saved = AlterEgo::GW2API::SaveCapturedLoadoutComponent(
+                    sb, keys[g_SaveLibComponentKind], name);
+                if (saved) {
+                    g_ComponentFilterKind = g_SaveLibComponentKind;
+                    NavigateToLibraryCollection(2);
+                    g_SaveLibDialogOpen = false;
+                    if (APIDefs) APIDefs->GUI_SendAlert("Saved independent component.");
+                } else if (APIDefs) {
+                    APIDefs->GUI_SendAlert("Could not save the selected component.");
+                }
+            } else {
+                int idx = AlterEgo::GW2API::AddSavedBuild(std::move(sb));
+                if (idx >= 0) {
+                    g_LibSelectedIdx = idx;
+                    g_LibDetailsFetched = false;
+                    if (APIDefs) APIDefs->GUI_SendAlert("Loadout saved to library!");
+                    g_SaveLibDialogOpen = false;
+                } else if (APIDefs) {
+                    APIDefs->GUI_SendAlert("Unable to persist Loadout - check file permissions.");
+                }
             }
         } else {
             ImGui::OpenPopup("Live build unavailable##save");
