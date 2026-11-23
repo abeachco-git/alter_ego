@@ -16,7 +16,7 @@ int main() {
     // The abbreviated visual label is NOT the source Weekly Strikes API bit.
     // All currently recognized source variants must map to the first slot and
     // to Icebrood Saga, regardless of how the UI displays them.
-    for (const std::string& bears : {
+    for (const char* bears : {
              "Bears", "Voice and Claw", "Voice and Claw of the Fallen",
              "Voice of the Fallen and Claw of the Fallen",
              "Voice of the Fallen Claw of the Fallen"}) {
