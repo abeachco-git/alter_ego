@@ -3331,7 +3331,7 @@ namespace AlterEgo {
 
     // Apply a v3 edit atomically and rebuild the pre-existing SavedBuild UI
     // projection. No UI or external importer needs to understand v3 yet.
-    static bool CommitComposableEdit(
+    bool GW2API::CommitComposableEdit(
         const std::function<bool(Composable::Document&, std::string&)>& edit) {
         std::lock_guard<std::mutex> persist(g_loadoutPersistenceMutex);
         Composable::Document before;
