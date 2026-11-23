@@ -11305,6 +11305,10 @@ static void RenderBuildLibrary() {
     bool pendingGroupAfter = false, pendingItemAfter = false;
     ImGui::BeginChild("LibList", ImVec2(g_LibListWidth, 0), true);
     {
+        // One-click import of a portable nine-component Loadout even when
+        // the Library currently contains no Loadouts.
+        RenderPortableLoadoutPasteButton();
+        ImGui::Separator();
         // Match Characters: both controls live within the left list column,
         // are full-width, and never take horizontal space from build details.
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
