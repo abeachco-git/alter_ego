@@ -1,4 +1,4 @@
-name: Temporary verify weekly raid encounter bit ordering
+name: Temporary check live raid event IDs
 on:
   push:
     branches: [main]
@@ -7,21 +7,22 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect public achievement bit names and numeric indices
+      - name: Inspect public raid encounter list
         run: |
           python3 - <<'PY'
-          import urllib.request, json, datetime, time
-          ids=[9125,9128,9147,477]
-          for aid in ids:
-            path=f"https://api.guildwars2.com/v2/achievements/{aid}" if aid != 477 else "https://api.guildwars2.com/v2/achievements/categories/477"
-            req=urllib.request.Request(path+"?ae_probe="+str(int(time.time()*1000)),headers={"User-Agent":"AlterEgo issue verification"})
-            try:
-              with urllib.request.urlopen(req,timeout=20) as res: 
-                item=json.load(res)
-                print("HTTP",aid,res.status,res.headers.get("Date"))
-              print("ACH",aid,"name",item.get("name"),"total_bits",len(item.get("bits",[])))
-              for idx,bit in enumerate(item.get("bits",[])): print("BIT",aid,idx,repr(bit.get("text")),repr(bit.get("type")))
-              if aid==477: print("category ids",item.get("achievements"))
-            except Exception as e:
-              print("ERROR",aid,str(e))
+          import json,urllib.request,time
+          def api(path):
+            req=urllib.request.Request("https://api.guildwars2.com"+path+"?ae_probe="+str(int(time.time()*1000)),headers={"User-Agent":"AlterEgo probe"})
+            with urllib.request.urlopen(req,timeout=15) as resp:
+              data=json.load(resp)
+              print(path,"HTTP",resp.status,flush=True)
+              return data
+          try:
+            root=api("/v2/raids")
+            print("Raid list",root,flush=True)
+            for rid in root:
+              data=api("/v2/raids/"+rid)
+              print("RAID",rid,[(w.get('id'),[(e.get('id'),e.get('type')) for e in w.get('events',[])]) for w in data.get('wings',[])],flush=True)
+          except Exception as e:
+            print("ERROR",str(e),flush=True)
           PY
