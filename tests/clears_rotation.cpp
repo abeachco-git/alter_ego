@@ -18,6 +18,39 @@ int main() {
     assert(!LooksUnrotated({101, 102}, {101, 103}));
     assert(LooksUnrotated({101, 102}, {}));
     assert(!LooksUnrotated({}, {101, 102}));
+    // A weekly response may contain the identical IDs but must reset its
+    // progress/claim information. A held-over response is not fresh.
+    struct WeeklyObjective {
+        uint32_t id; int32_t progress_current, progress_complete; bool claimed;
+    };
+    struct WeeklyPeriod {
+        int32_t meta_progress_current = 0;
+        int32_t meta_progress_complete = 0;
+        int32_t meta_reward_astral = 0;
+        bool meta_reward_claimed = false;
+        std::vector<WeeklyObjective> objectives;
+    };
+    WeeklyPeriod lastWeek{8, 8, 350, true,
+        {{51, 10, 10, true}, {52, 1, 1, true}}};
+    WeeklyPeriod oldResponse = lastWeek;
+    std::reverse(oldResponse.objectives.begin(), oldResponse.objectives.end());
+    assert(LooksUnrotatedVaultWeek(lastWeek, oldResponse));
+    WeeklyPeriod newWeek = lastWeek;
+    newWeek.meta_progress_current = 0;
+    newWeek.meta_reward_claimed = false;
+    for (auto& o : newWeek.objectives) {
+        o.progress_current = 0;
+        o.claimed = false;
+    }
+    assert(!LooksUnrotatedVaultWeek(lastWeek, newWeek));
+    assert(LooksUnrotatedVaultWeek(lastWeek, WeeklyPeriod{}));
+    assert(!LooksUnrotatedVaultWeek(WeeklyPeriod{}, newWeek));
+    WeeklyPeriod changedIds = lastWeek;
+    changedIds.objectives.front().id = 999;
+    assert(!LooksUnrotatedVaultWeek(lastWeek, changedIds));
+    WeeklyPeriod changedProgress = lastWeek;
+    changedProgress.objectives.front().progress_current = 0;
+    assert(!LooksUnrotatedVaultWeek(lastWeek, changedProgress));
     // Retry URLs must change even on the same day, otherwise an initially
     // stale max-age=3600 result could be cached for a full hour.
     assert(FreshCategoryUrl(88, 0) ==
