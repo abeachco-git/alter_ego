@@ -273,6 +273,27 @@ int main() {
     wrong["data"]["skills"] = Json::object();
     assert(!ImportComponent(wrong, importedKind, portable, error));
     assert(Find(document, "armor", "armor:one")->data == reference->data);
+    // Malformed *known* fields are rejected before they can crash native
+    // editors. Foreign extension fields are still round-tripped unchanged.
+    Json invalidType = exported;
+    invalidType["data"]["gear"]["Helm"]["stat_id"] = "broken";
+    assert(!ImportComponent(invalidType, importedKind, portable, error));
+    invalidType = exported;
+    invalidType["data"]["gear"]["Helm"]["infusion_snapshot"] = "yes";
+    assert(!ImportComponent(invalidType, importedKind, portable, error));
+    invalidType = ExportComponent("base_build",
+        *Find(document,"base_build","base_build:one"));
+    invalidType["data"]["profession"] = 42;
+    assert(!ImportComponent(invalidType, importedKind, portable, error));
+    invalidType = ExportComponent("skills",
+        *Find(document,"skills","skills:one"));
+    invalidType["data"]["skills"]["heal"] = -5;
+    assert(!ImportComponent(invalidType, importedKind, portable, error));
+    Json extension = exported;
+    extension["data"]["future_extension"] = Json{{"strange", Json::array({true,"any",13})}};
+    assert(ImportComponent(extension, importedKind, portable, error));
+    assert(portable.data["future_extension"]["strange"].size() == 3);
+
 
     // Corruption and broken references fail without damaging caller state.
     Json bad = ToJson(document);
