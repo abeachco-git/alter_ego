@@ -1359,7 +1359,12 @@ static char g_SaveLibName[128] = "";
 static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
 static bool g_SaveLibNameManuallyEdited = false;
 static bool g_SaveLibIncludeEquip = false;
-static int g_SaveLibTarget = 0; // 0: complete Loadout, 1: independent component
+static int g_SaveLibTarget = 0; // 0: Loadout, 1: new component, 2: replace existing
+static std::string g_SaveLibUpdateId;
+static std::string g_ComponentSelectIdPending;
+static AlterEgo::SavedBuild g_SaveLibPendingCapture;
+static std::string g_SaveLibPendingKind, g_SaveLibPendingId, g_SaveLibPendingName;
+static bool g_SaveLibUpdateConfirmPending = false;
 static int g_SaveLibComponentKind = 0;
 static int g_ComponentFilterKind = 0; // Library > Components category
 static std::string g_ComponentSelectNamePending; // Newly captured component to highlight
@@ -8332,13 +8337,18 @@ static void RenderSaveToLibraryDialog() {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Save as");
     ImGui::SameLine(130);
-    const char* saveTarget = g_SaveLibTarget == 0 ? "Complete Loadout" : "Single component";
+    const char* saveTarget = g_SaveLibTarget == 0 ? "Complete Loadout"
+        : g_SaveLibTarget == 1 ? "New component" : "Update existing component";
     if (RenderThemedCombo("##save_target", saveTarget,
                          ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
         if (ImGui::Selectable("Complete Loadout", g_SaveLibTarget == 0))
             g_SaveLibTarget = 0;
-        if (ImGui::Selectable("Single component", g_SaveLibTarget == 1))
+        if (ImGui::Selectable("New component", g_SaveLibTarget == 1))
             g_SaveLibTarget = 1;
+        if (ImGui::Selectable("Update existing component", g_SaveLibTarget == 2)) {
+            g_SaveLibTarget = 2;
+            g_SaveLibUpdateId.clear();
+        }
         ImGui::EndCombo();
     }
     static const char* kinds[] = {
@@ -8349,7 +8359,7 @@ static void RenderSaveToLibraryDialog() {
         "base_build", "skills", "weapons", "armor", "trinkets",
         "runes", "sigils", "infusions", "relic"
     };
-    if (g_SaveLibTarget == 1) {
+    if (g_SaveLibTarget != 0) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Component");
         ImGui::SameLine(130);
@@ -8357,17 +8367,102 @@ static void RenderSaveToLibraryDialog() {
                              kinds[g_SaveLibComponentKind],
                              ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
             for (int i = 0; i < 9; ++i)
-                if (ImGui::Selectable(kinds[i], g_SaveLibComponentKind == i))
+                if (ImGui::Selectable(kinds[i], g_SaveLibComponentKind == i)) {
                     g_SaveLibComponentKind = i;
+                    g_SaveLibUpdateId.clear();
+                }
             ImGui::EndCombo();
         }
     }
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(g_SaveLibTarget == 0 ? "Loadout name" : "Component name");
-    ImGui::SameLine(130);
-    ImGui::SetNextItemWidth(ImMax(140.0f, ImGui::GetContentRegionAvail().x));
-    if (ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName)))
-        g_SaveLibNameManuallyEdited = true;
+    // Explicitly distinguish creating an independent object from updating a
+    // shared one. Display reference usage before allowing replacement.
+    std::string existingComponentName;
+    int existingComponentUses = 0;
+    if (g_SaveLibTarget == 2) {
+        nlohmann::json snapshot;
+        if (AlterEgo::GW2API::GetComposableLoadouts(snapshot) &&
+            snapshot.contains("components") && snapshot["components"].is_object()) {
+            const std::string kind = keys[g_SaveLibComponentKind];
+            auto components = snapshot["components"].find(kind);
+            if (components != snapshot["components"].end() && components->is_array()) {
+                for (const auto& comp : *components)
+                    if (comp.is_object() &&
+                        comp.value("id", std::string()) == g_SaveLibUpdateId)
+                        existingComponentName = comp.value("name", std::string());
+                if (snapshot.contains("loadouts") && snapshot["loadouts"].is_array())
+                    for (const auto& loadout : snapshot["loadouts"])
+                        if (loadout.is_object() && loadout.contains("refs") &&
+                            loadout["refs"].is_object() &&
+                            loadout["refs"].value(kind, std::string()) == g_SaveLibUpdateId)
+                            ++existingComponentUses;
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Replace");
+                ImGui::SameLine(130);
+                ImGui::SetNextItemWidth(ImMax(140.f, ImGui::GetContentRegionAvail().x));
+                if (RenderThemedCombo("##replace_saved_component",
+                    existingComponentName.empty() ? "(select component)" :
+                    existingComponentName.c_str(),
+                    ImMax(140.f, ImGui::GetContentRegionAvail().x))) {
+                    for (const auto& component : *components) {
+                        if (!component.is_object()) continue;
+                        const std::string candidateId = component.value("id", std::string());
+                        const std::string candidateName = component.value("name", candidateId);
+                        bool compatible = true;
+                        const std::string profession = sourceChar ? sourceChar->profession : "";
+                        if (kind == "base_build" && component.contains("data") &&
+                            component["data"].is_object()) {
+                            const std::string prior = component["data"].value(
+                                "profession", std::string());
+                            if (!prior.empty() && !profession.empty() &&
+                                prior != profession) compatible = false;
+                        }
+                        if (kind == "skills" && !profession.empty() &&
+                            snapshot.contains("loadouts") && snapshot["loadouts"].is_array()) {
+                            for (const auto& loadout : snapshot["loadouts"]) {
+                                if (!loadout.is_object() ||
+                                    !loadout.contains("refs") ||
+                                    !loadout["refs"].is_object()) continue;
+                                const auto& refs = loadout["refs"];
+                                if (refs.value("skills", std::string()) != candidateId) continue;
+                                const auto base = snapshot["components"].find("base_build");
+                                if (base == snapshot["components"].end() || !base->is_array())
+                                    continue;
+                                for (const auto& item : *base)
+                                    if (item.is_object() &&
+                                        item.value("id", std::string()) ==
+                                            refs.value("base_build", std::string()) &&
+                                        item.contains("data") && item["data"].is_object()) {
+                                        const std::string prior = item["data"].value(
+                                            "profession", std::string());
+                                        if (!prior.empty() && prior != profession)
+                                            compatible = false;
+                                    }
+                            }
+                        }
+                        if (!compatible) continue;
+                        if (ImGui::Selectable((candidateName + "##" + candidateId).c_str(),
+                                               candidateId == g_SaveLibUpdateId)) {
+                            g_SaveLibUpdateId = candidateId;
+                            existingComponentName = candidateName;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+        }
+        ImGui::TextDisabled("Updates the stored fields without changing its existing name or ID.");
+        if (existingComponentUses > 0)
+            ImGui::TextColored(ImVec4(.95f,.78f,.40f,1),
+                "SHARED: affects %d referencing Loadout%s.",
+                existingComponentUses, existingComponentUses == 1 ? "" : "s");
+    } else {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(g_SaveLibTarget == 0 ? "Loadout name" : "Component name");
+        ImGui::SameLine(130);
+        ImGui::SetNextItemWidth(ImMax(140.0f, ImGui::GetContentRegionAvail().x));
+        if (ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName)))
+            g_SaveLibNameManuallyEdited = true;
+    }
 
     if (g_SaveLibTarget == 0) {
         ImGui::Spacing();
@@ -8379,7 +8474,7 @@ static void RenderSaveToLibraryDialog() {
     ImGui::Separator();
     if (g_SaveLibTarget == 0)
         ImGui::Checkbox("Include equipment set", &g_SaveLibIncludeEquip);
-    const bool needsEquipment = g_SaveLibTarget == 1
+    const bool needsEquipment = g_SaveLibTarget != 0
         ? g_SaveLibComponentKind >= 2 : g_SaveLibIncludeEquip;
     if (sourceChar && needsEquipment) {
         auto equipName = [&](int tab) {
@@ -8407,7 +8502,9 @@ static void RenderSaveToLibraryDialog() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (RenderActionButton("Save##saveToLibrary", ImVec2(80, 0))) {
+    if (RenderActionButton(g_SaveLibTarget == 2
+        ? "Review Update##saveToLibrary" : "Save##saveToLibrary",
+        ImVec2(g_SaveLibTarget == 2 ? 115 : 80, 0))) {
         std::string name = g_SaveLibName;
         if (name.empty()) name = g_SaveLibTarget == 0 ? "Unnamed Loadout" : "Unnamed Component";
 
@@ -8427,7 +8524,17 @@ static void RenderSaveToLibraryDialog() {
                 g_SaveLibModes.front(), chatLink);
             sb.game_modes = g_SaveLibModes;
 
-            if (g_SaveLibTarget == 1) {
+            if (g_SaveLibTarget == 2) {
+                if (g_SaveLibUpdateId.empty()) {
+                    if (APIDefs) APIDefs->GUI_SendAlert("Select a component to update.");
+                } else {
+                    g_SaveLibPendingCapture = std::move(sb);
+                    g_SaveLibPendingKind = keys[g_SaveLibComponentKind];
+                    g_SaveLibPendingId = g_SaveLibUpdateId;
+                    g_SaveLibPendingName = existingComponentName;
+                    g_SaveLibUpdateConfirmPending = true;
+                }
+            } else if (g_SaveLibTarget == 1) {
                 const bool saved = AlterEgo::GW2API::SaveCapturedLoadoutComponent(
                     sb, keys[g_SaveLibComponentKind], name);
                 if (saved) {
@@ -8457,6 +8564,34 @@ static void RenderSaveToLibraryDialog() {
     ImGui::SameLine();
     if (RenderActionButton("Cancel##saveToLibrary", ImVec2(80, 0))) {
         g_SaveLibDialogOpen = false;
+    }
+    if (g_SaveLibUpdateConfirmPending) {
+        ImGui::OpenPopup("Replace shared component?##save_component");
+        g_SaveLibUpdateConfirmPending = false;
+    }
+    if (ImGui::BeginPopupModal("Replace shared component?##save_component",
+                              nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Replace saved %s: %s",
+            g_SaveLibPendingKind.c_str(), g_SaveLibPendingName.c_str());
+        ImGui::TextWrapped("This replaces saved fields for ALL Loadouts using "
+                           "the component. It does not create a private copy.");
+        if (RenderActionButton("Confirm Update##component_replace")) {
+            const bool applied = AlterEgo::GW2API::ReplaceCapturedLoadoutComponent(
+                g_SaveLibPendingCapture, g_SaveLibPendingKind, g_SaveLibPendingId);
+            if (applied) {
+                g_ComponentFilterKind = g_SaveLibComponentKind;
+                g_ComponentSelectIdPending = g_SaveLibPendingId;
+                NavigateToLibraryCollection(2);
+                g_SaveLibDialogOpen = false;
+                if (APIDefs) APIDefs->GUI_SendAlert("Saved component replaced.");
+            } else if (APIDefs) {
+                APIDefs->GUI_SendAlert("Component update failed. Original data is preserved.");
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (RenderActionButton("Cancel##component_replace")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
     if (ImGui::BeginPopup("Live build unavailable##save")) {
         ImGui::TextWrapped("The character's retrieved build tab is no longer available. Refresh character data and try again.");
