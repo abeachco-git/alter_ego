@@ -115,6 +115,28 @@ inline Summary Sigils(const Json& sigils) {
     return summary;
 }
 
+// Map existing comparison rows onto the same nine units as a v3 Loadout.
+// Physical slot rows are not all "gear": armor, weapon, trinket and relic
+// have separate source components and separate match states.
+inline std::string ComparisonComponent(const std::string& group,
+                                       const std::string& field) {
+    if (group == "Specializations" || group == "Traits" || group == "Build" ||
+        group == "Ranger pets" || group == "Revenant legends")
+        return "base_build";
+    if (group == "Terrestrial skills" || group == "Aquatic skills") return "skills";
+    if (group == "Runes") return "runes";
+    if (group == "Sigils") return "sigils";
+    if (group == "Infusions" || group == "Infusion totals") return "infusions";
+    if (group == "Relic") return "relic";
+    if (group == "Weapon types") return "weapons";
+    if (group == "Equipment" || group == "Equipment stats" ||
+        group == "Exact item IDs") {
+        if (field == "Relic") return "relic";
+        return SlotKind(field);
+    }
+    return {}; // unmapped rows remain visible in an Other section
+}
+
 // A slot's order of utility skills is ergonomic, not a different build.
 // Heal and elite retain distinct semantics, as do terrestrial and aquatic.
 inline Json SkillBar(const Json& original) {
