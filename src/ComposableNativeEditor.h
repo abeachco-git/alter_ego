@@ -60,37 +60,117 @@ static std::string ComponentNativeSpecName(uint32_t id) {
     return spec ? spec->name : "#" + std::to_string(id);
 }
 
-static void ComponentNativeSkill(ComponentJson& parent, const char* key,
-                                 const char* label,
-                                 const std::string& profession) {
-    ImGui::PushID(key);
-    const uint32_t id = parent.value(key, uint32_t(0));
-    ComponentNativeNumber(parent, key, label);
-    if (id) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", ComponentNativeSkillName(id).c_str());
-    }
-    if (!profession.empty()) {
-        const auto choices = AlterEgo::GW2API::GetProfessionSkillIds(profession);
-        ImGui::SameLine();
-        if (ImGui::BeginCombo("##skill_options", "Choose...")) {
-            if (ImGui::Selectable("(empty)")) parent[key] = 0;
-            for (uint32_t choice : choices) {
-                const std::string shown = ComponentNativeSkillName(choice) +
-                    " (#" + std::to_string(choice) + ")";
-                if (ImGui::Selectable(shown.c_str(), choice == id)) parent[key] = choice;
-            }
-            ImGui::EndCombo();
+// Determine which elite specs *all* referencing Loadouts have equipped.
+// An unassigned Skills component has no known spec context, so its editor
+// explicitly offers all profession skills. Shared components use the
+// intersection to prevent suggesting an elite-only skill that another
+// referencing Loadout cannot legally slot.
+static std::pair<std::vector<uint32_t>, bool> ComponentNativeSkillSpecs(
+    const std::string& componentId) {
+    std::vector<uint32_t> common;
+    bool found = false;
+    const auto& doc = ComponentUISnapshot();
+    if (!doc.contains("loadouts") || !doc["loadouts"].is_array())
+        return {common, found};
+    for (const auto& loadout : doc["loadouts"]) {
+        if (!loadout.is_object() || !loadout.contains("refs") ||
+            !loadout["refs"].is_object()) continue;
+        const auto& refs = loadout["refs"];
+        if (refs.value("skills", std::string()) != componentId) continue;
+        const auto* base = ComponentUIFind(doc, "base_build",
+            refs.value("base_build", std::string()));
+        std::vector<uint32_t> ids;
+        if (base && base->contains("data") &&
+            (*base)["data"].contains("specializations") &&
+            (*base)["data"]["specializations"].is_array()) {
+            for (const auto& spec : (*base)["data"]["specializations"])
+                if (spec.is_object() && spec.value("id", uint32_t(0)))
+                    ids.push_back(spec.value("id", uint32_t(0)));
+        }
+        if (!found) {
+            common = std::move(ids);
+            found = true;
+        } else {
+            common.erase(std::remove_if(common.begin(), common.end(),
+                [&](uint32_t value) {
+                    return std::find(ids.begin(), ids.end(), value) == ids.end();
+                }), common.end());
         }
     }
+    return {common, found};
+}
+
+static bool ComponentNativeSkill(ComponentJson& parent, const char* key,
+                                 const char* label, const char* role,
+                                 const std::string& profession,
+                                 const std::vector<uint32_t>& specs,
+                                 bool allowAnySpec) {
+    ImGui::PushID(key);
+    const uint32_t id = parent.contains(key) && parent[key].is_number_integer()
+        ? parent[key].get<uint32_t>() : 0;
+    bool changed = false;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(140.0f);
+    // Uses the exact same skill icon/tooltip widget as the Loadout editor.
+    if (RenderEditableSkillIcon(id, 38.0f))
+        ImGui::OpenPopup("##component_skill_palette");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", ComponentNativeSkillName(id).c_str());
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("GW2 skill #%u. Click the icon to change.", id);
+    if (ImGui::BeginPopup("##component_skill_palette")) {
+        ImGui::TextDisabled("%s - %s", profession.empty() ? "Choose a profession" :
+            profession.c_str(), role);
+        const auto choices = SelectableBuildSkillIds(
+            profession, role, specs, allowAnySpec);
+        if (choices.empty())
+            ImGui::TextDisabled(profession.empty()
+                ? "Select a profession first." : "Loading eligible skills...");
+        const float cell = 40.0f, gap = 4.0f;
+        if (ImGui::BeginChild("##skill_grid", ImVec2(212, 270), true)) {
+            for (size_t index = 0; index < choices.size(); ++index) {
+                if (index % 4 != 0) ImGui::SameLine(0, gap);
+                ImGui::PushID(static_cast<int>(choices[index]));
+                ImVec2 position = ImGui::GetCursorScreenPos();
+                if (RenderEditableSkillIcon(choices[index], cell)) {
+                    parent[key] = choices[index];
+                    changed = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                if (choices[index] == id)
+                    ImGui::GetWindowDrawList()->AddRect(
+                        position, ImVec2(position.x + cell, position.y + cell),
+                        IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndChild();
+        if (RenderActionButton("Clear slot##component_skill")) {
+            parent[key] = 0;
+            changed = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (ImGui::BeginPopupContextItem("##component_skill_id")) {
+        ImGui::TextDisabled("Advanced: exact skill ID");
+        ComponentNativeNumber(parent, key, "Skill ID");
+        if (parent.contains(key) && parent[key].is_number_integer() &&
+            parent[key].get<uint32_t>() != id) changed = true;
+        ImGui::EndPopup();
+    }
     ImGui::PopID();
+    return changed;
 }
 
 static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
                                     const char* title,
-                                    const std::string& profession) {
+                                    const std::string& profession,
+                                    const std::vector<uint32_t>& specs,
+                                    bool allowAnySpec) {
     if (!ImGui::TreeNodeEx(key, ImGuiTreeNodeFlags_DefaultOpen, "%s", title)) return;
-    // Do not fill an absent skill bar merely because the editor was opened.
+    // Missing bars are optional and must not be created by inspecting the editor.
     if (!data.contains(key)) {
         if (RenderActionButton((std::string("Add ") + title + "##bar").c_str()))
             data[key] = {{"heal", 0},
@@ -105,22 +185,31 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
         return;
     }
     auto& bar = data[key];
-    ComponentNativeSkill(bar, "heal", "Heal", profession);
+    ComponentNativeSkill(bar, "heal", "Heal", "Heal",
+                         profession, specs, allowAnySpec);
     ComponentJson utilities = bar.contains("utilities") &&
         bar["utilities"].is_array() ? bar["utilities"] : ComponentJson::array();
     while (utilities.size() < 3) utilities.push_back(0);
     for (int i = 0; i < 3; ++i) {
         ImGui::PushID(i);
         ComponentJson field = {{"skill", utilities[i]}};
-        ComponentNativeSkill(field, "skill",
-            (std::string("Utility ") + std::to_string(i + 1)).c_str(), profession);
-        if (field["skill"] != utilities[i]) {
-            utilities[i] = field["skill"];
+        if (ComponentNativeSkill(field, "skill",
+                (std::string("Utility ") + std::to_string(i+1)).c_str(),
+                "Utility", profession, specs, allowAnySpec)) {
+            const ComponentJson old = utilities[i], next = field["skill"];
+            // Match the normal editor: choosing a utility already used in a
+            // different slot swaps those two IDs instead of duplicating it.
+            if (next.is_number_integer() && next.get<uint32_t>() != 0)
+                for (int slot = 0; slot < 3; ++slot)
+                    if (slot != i && utilities[slot] == next)
+                        utilities[slot] = old;
+            utilities[i] = next;
             bar["utilities"] = utilities;
         }
         ImGui::PopID();
     }
-    ComponentNativeSkill(bar, "elite", "Elite", profession);
+    ComponentNativeSkill(bar, "elite", "Elite", "Elite",
+                         profession, specs, allowAnySpec);
     ImGui::TreePop();
 }
 
@@ -489,8 +578,13 @@ static void RenderComponentNativeEditor(const std::string& kind,
     } else if (kind == "skills") {
         if (profession.empty())
             ImGui::TextDisabled("Assign to a Loadout to enable profession-filtered skill choices.");
-        ComponentNativeSkillBar(data, "skills", "Terrestrial skills", profession);
-        ComponentNativeSkillBar(data, "aquatic_skills", "Aquatic skills", profession);
+        const auto specContext = ComponentNativeSkillSpecs(id);
+        if (specContext.second && specContext.first.empty())
+            ImGui::TextDisabled("Shared skill choices are limited to specs common to referencing Loadouts.");
+        ComponentNativeSkillBar(data, "skills", "Terrestrial skills",
+                                profession, specContext.first, !specContext.second);
+        ComponentNativeSkillBar(data, "aquatic_skills", "Aquatic skills",
+                                profession, specContext.first, !specContext.second);
     } else if (kind == "relic") {
         ComponentNativeNumber(data, "relic_id", "Relic item ID");
         ComponentNativeText(data, "relic_name", "Relic name");
