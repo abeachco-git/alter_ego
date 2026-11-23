@@ -26,6 +26,7 @@
 #include "imgui_internal.h"
 #include "GW2API.h"
 #include "BuildCompareCore.h"
+#include "ComposableSemantics.h"
 #include "InfusionMatchCore.h"
 #include "InfusionTotalsCore.h"
 #include "SnowCrowsImport.h"
@@ -9936,11 +9937,25 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         }
     }
     auto compareSkills = [&](const char* group, const AlterEgo::SkillBar& a,
-                             const AlterEgo::SkillBar& b) {
+                              const AlterEgo::SkillBar& b) {
         addId(group, "Heal", a.heal, b.heal, skillName);
-        for (int i = 0; i < 3; ++i)
-            addId(group, "Utility " + std::to_string(i + 1),
-                  a.utilities[i], b.utilities[i], skillName);
+        // Utility order is a control-layout preference, not a combat
+        // configuration difference. Keep original order on disk/export.
+        auto sortedUtilities = [&](const AlterEgo::SkillBar& bar) {
+            std::array<uint32_t,3> ids = {
+                bar.utilities[0], bar.utilities[1], bar.utilities[2]
+            };
+            std::sort(ids.begin(), ids.end());
+            std::string key, names;
+            for (uint32_t id : ids) {
+                if (!key.empty()) { key += ","; names += ", "; }
+                key += std::to_string(id);
+                names += skillName(id);
+            }
+            return std::make_pair(key, names);
+        };
+        const auto sa = sortedUtilities(a), sb = sortedUtilities(b);
+        result.Add(group, "Utilities", sa.first, sb.first, sa.second, sb.second);
         addId(group, "Elite", a.elite, b.elite, skillName);
     };
     compareSkills("Terrestrial skills", saved.terrestrial_skills, live.terrestrial_skills);
@@ -10050,29 +10065,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             }
             if (compareExactItems && gs.item_id)
                 addId("Exact item IDs", slot, gs.item_id, eq->id, itemName);
-            auto compareUpgrade = [&](const char* field, uint32_t savedId, const std::string& savedName,
-                                      size_t liveIndex) {
-                uint32_t liveId = eq->upgrades.size() > liveIndex ? eq->upgrades[liveIndex] : 0;
-                if (savedId) addId("Upgrades", slot + " " + field, savedId, liveId, itemName);
-                else if (!savedName.empty()) {
-                    const auto* liveInfo = AlterEgo::GW2API::GetItemInfo(liveId);
-                    if (liveInfo)
-                        result.Add("Upgrades", slot + " " + field,
-                                   savedName, liveInfo->name, savedName, liveInfo->name);
-                } else if (gs.item_id) {
-                    // A newly captured set explicitly had no upgrade here.
-                    addId("Upgrades", slot + " " + field, 0, liveId, itemName);
-                }
-            };
-            if (slot == "Helm" || slot == "Shoulders" || slot == "Coat" ||
-                slot == "Gloves" || slot == "Leggings" || slot == "Boots")
-                compareUpgrade("rune", gs.rune_id ? gs.rune_id : saved.rune_id,
-                               gs.rune.empty() ? saved.rune_name : gs.rune, 0);
+            // Rune and sigil placement is preserved in gear, but their
+            // functional comparison is aggregated by type and weapon set.
             if (slot.rfind("Weapon", 0) == 0) {
-                compareUpgrade("sigil", gs.sigil_id, gs.sigil, 0);
-                if (gs.sigil2_id || !gs.sigil2.empty() ||
-                    (gs.item_id && eq->upgrades.size() > 1))
-                    compareUpgrade("sigil 2", gs.sigil2_id, gs.sigil2, 1);
                 if (!gs.weapon_type.empty()) {
                     const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
                     if (info && info->details.contains("type") &&
@@ -10083,49 +10078,165 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     }
                 }
             }
-            if (saved.infusion_totals.empty() && (gs.infusion_snapshot || !gs.infusion_ids.empty())) {
-                auto ids = [](std::vector<uint32_t> v) {
-                    std::sort(v.begin(), v.end());
-                    std::string out;
-                    for (auto id : v) { if (!out.empty()) out += ", "; out += std::to_string(id); }
-                    return out;
-                };
-                std::string a = ids(gs.infusion_ids), b = ids(eq->infusions);
-                const bool attributeMode = std::any_of(
-                    gs.infusion_attributes.begin(), gs.infusion_attributes.end(),
-                    [](const std::string& attr) { return !attr.empty(); });
-                if (!attributeMode) {
-                    // Unmodified legacy builds retain their original exact-ID
-                    // comparison, including order-independent matching.
-                    result.Add("Infusions", slot, a, b,
-                               a.empty() ? "(none)" : a, b.empty() ? "(none)" : b);
-                } else {
-                    std::vector<AlterEgo::InfusionRequirement> requirements;
-                    std::string savedLabel;
-                    for (size_t i = 0; i < gs.infusion_ids.size(); ++i) {
-                        const std::string attr = i < gs.infusion_attributes.size()
-                            ? gs.infusion_attributes[i] : std::string();
-                        requirements.push_back({gs.infusion_ids[i], attr});
-                        if (!savedLabel.empty()) savedLabel += ", ";
-                        savedLabel += attr.empty() ? ("#" + std::to_string(gs.infusion_ids[i]))
-                                                   : InfusionAttributeLabel(attr);
-                    }
-                    std::vector<AlterEgo::ObservedInfusion> observed;
-                    for (uint32_t id : eq->infusions)
-                        observed.push_back(GetObservedInfusion(id));
-                    const auto verdict = AlterEgo::CompareInfusionRequirements(requirements, observed);
-                    if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified) {
-                        result.AddUnverified("Infusions", slot, savedLabel,
-                            (b.empty() ? "(none)" : b) + " (metadata unavailable)");
-                    } else {
-                        const bool matches = verdict == AlterEgo::InfusionMatchVerdict::Matches;
-                        result.Add("Infusions", slot, "required",
-                            matches ? "required" : "different", savedLabel,
-                            b.empty() ? "(none)" : b);
-                    }
+        }
+        // Aggregate runes across the six armor slots. Per-slot rune placement
+        // is a physical detail; identical effects/counts are equivalent.
+        nlohmann::json savedRunes = {{"gear", nlohmann::json::object()}};
+        nlohmann::json liveRunes = {{"gear", nlohmann::json::object()}};
+        const char* armorSlots[] = {
+            "Helm","Shoulders","Coat","Gloves","Leggings","Boots"
+        };
+        int savedArmorPieces = 0;
+        bool runeRequired = saved.rune_id != 0 || !saved.rune_name.empty();
+        for (const char* slot : armorSlots) {
+            auto savedItem = saved.gear.find(slot);
+            if (savedItem != saved.gear.end()) {
+                ++savedArmorPieces;
+                const auto& gear = savedItem->second;
+                const uint32_t runeId = gear.rune_id ? gear.rune_id : saved.rune_id;
+                const std::string runeName = gear.rune.empty() ? saved.rune_name : gear.rune;
+                if (runeId) savedRunes["gear"][slot]["rune_id"] = runeId;
+                else if (!runeName.empty()) savedRunes["gear"][slot]["rune"] = runeName;
+                if (runeId || !runeName.empty()) runeRequired = true;
+            }
+            const auto* liveItem = getEquipped(slot);
+            if (liveItem && !liveItem->upgrades.empty() && liveItem->upgrades[0])
+                liveRunes["gear"][slot]["rune_id"] = liveItem->upgrades[0];
+        }
+        if (runeRequired) {
+            const auto expected = AlterEgo::Composable::Semantics::Runes(savedRunes);
+            const auto observed = AlterEgo::Composable::Semantics::Runes(liveRunes);
+            const auto verdict = AlterEgo::Composable::Semantics::Compare(expected, observed);
+            auto label = [](const AlterEgo::Composable::Semantics::Summary& summary) {
+                std::string str;
+                for (const auto& [id, count] : summary.counts) {
+                    if (!str.empty()) str += ", ";
+                    str += std::to_string(count) + " x " + id;
+                }
+                return str.empty() ? std::string("(none)") : str;
+            };
+            if (savedArmorPieces < 6 ||
+                verdict == AlterEgo::Composable::Semantics::Verdict::Unverified)
+                result.AddUnverified("Runes", "Types / counts",
+                    label(expected) + " (incomplete requirement)", label(observed));
+            else result.Add("Runes", "Types / counts", label(expected), label(observed),
+                            label(expected), label(observed));
+        }
+
+        // Sigils are interchangeable between hands in a weapon set, but
+        // weapon sets A and B remain distinct. Preserve item positions for
+        // inspection and original game-facing export.
+        nlohmann::json savedSigils = {{"gear", nlohmann::json::object()}};
+        nlohmann::json liveSigils = {{"gear", nlohmann::json::object()}};
+        const char* weaponSlots[] = {"WeaponA1","WeaponA2","WeaponB1","WeaponB2"};
+        std::set<std::string> comparedSets;
+        bool unknownSigilIdentity = false;
+        for (const char* slot : weaponSlots) {
+            auto savedItem = saved.gear.find(slot);
+            if (savedItem == saved.gear.end()) continue;
+            const auto& gear = savedItem->second;
+            if (gear.sigil_id || gear.sigil2_id || !gear.sigil.empty() || !gear.sigil2.empty()) {
+                comparedSets.insert(AlterEgo::Composable::Semantics::WeaponSet(slot));
+                if (!gear.sigil.empty() && !gear.sigil_id) unknownSigilIdentity = true;
+                if (!gear.sigil2.empty() && !gear.sigil2_id) unknownSigilIdentity = true;
+                if (gear.sigil_id) savedSigils["gear"][slot]["sigil_id"] = gear.sigil_id;
+                else if (!gear.sigil.empty()) savedSigils["gear"][slot]["sigil"] = gear.sigil;
+                if (gear.sigil2_id) savedSigils["gear"][slot]["sigil2_id"] = gear.sigil2_id;
+                else if (!gear.sigil2.empty()) savedSigils["gear"][slot]["sigil2"] = gear.sigil2;
+            }
+        }
+        for (const char* slot : weaponSlots) {
+            if (!comparedSets.count(AlterEgo::Composable::Semantics::WeaponSet(slot))) continue;
+            const auto* equipped = getEquipped(slot);
+            if (!equipped) continue;
+            if (!equipped->upgrades.empty() && equipped->upgrades[0])
+                liveSigils["gear"][slot]["sigil_id"] = equipped->upgrades[0];
+            if (equipped->upgrades.size() > 1 && equipped->upgrades[1])
+                liveSigils["gear"][slot]["sigil2_id"] = equipped->upgrades[1];
+        }
+        if (!comparedSets.empty()) {
+            const auto expected = AlterEgo::Composable::Semantics::Sigils(savedSigils);
+            const auto observed = AlterEgo::Composable::Semantics::Sigils(liveSigils);
+            auto label = [](const AlterEgo::Composable::Semantics::Summary& summary) {
+                std::string str;
+                for (const auto& [id, count] : summary.counts) {
+                    if (!str.empty()) str += ", ";
+                    str += std::to_string(count) + " x " + id;
+                }
+                return str.empty() ? std::string("(none)") : str;
+            };
+            const auto verdict = AlterEgo::Composable::Semantics::Compare(expected, observed);
+            if (unknownSigilIdentity ||
+                verdict == AlterEgo::Composable::Semantics::Verdict::Unverified)
+                result.AddUnverified("Sigils", "By weapon set", label(expected), label(observed));
+            else result.Add("Sigils", "By weapon set",
+                            label(expected), label(observed), label(expected), label(observed));
+        }
+
+        // All installed infusions form one pool, regardless of the equipment
+        // slot that physically contains them. Aggregate import requirements
+        // override per-slot snapshots to avoid counting the same ID twice.
+        std::vector<AlterEgo::InfusionRequirement> wanted;
+        bool hasInfusionRequirement = !saved.infusion_totals.empty();
+        if (!saved.infusion_totals.empty()) {
+            for (const auto& item : saved.infusion_totals)
+                for (int n = 0; n < item.count; ++n)
+                    wanted.push_back({item.item_id, item.attribute});
+        } else {
+            for (const auto& [slot, gear] : saved.gear) {
+                (void)slot;
+                if (gear.infusion_snapshot || !gear.infusion_ids.empty())
+                    hasInfusionRequirement = true;
+                for (size_t n = 0; n < gear.infusion_ids.size(); ++n) {
+                    const std::string attribute = n < gear.infusion_attributes.size()
+                        ? gear.infusion_attributes[n] : std::string();
+                    if (gear.infusion_ids[n] || !attribute.empty())
+                        wanted.push_back({gear.infusion_ids[n], attribute});
                 }
             }
         }
+        if (hasInfusionRequirement) {
+            std::vector<AlterEgo::ObservedInfusion> installed;
+            for (const auto& item : liveCharacter.equipment) {
+                if (!AlterEgo::IsEquipmentInCapturedBuild(item.slot, item.tab, equipmentTab))
+                    continue;
+                for (uint32_t id : item.infusions)
+                    if (id) installed.push_back(GetObservedInfusion(id));
+            }
+            const auto verdict = AlterEgo::CompareInfusionRequirements(wanted, installed);
+            auto wantedLabel = [&]() {
+                std::map<std::string, int> counts;
+                for (const auto& item : wanted) {
+                    const std::string key = item.attribute.empty()
+                        ? "#" + std::to_string(item.exactId)
+                        : InfusionAttributeLabel(item.attribute);
+                    ++counts[key];
+                }
+                std::string label;
+                for (const auto& [key, count] : counts) {
+                    if (!label.empty()) label += ", ";
+                    label += std::to_string(count) + " x " + key;
+                }
+                return label.empty() ? std::string("(none)") : label;
+            };
+            auto installedLabel = [&]() {
+                std::map<uint32_t, int> counts;
+                for (const auto& item : installed) ++counts[item.itemId];
+                std::string label;
+                for (const auto& [id, count] : counts) {
+                    if (!label.empty()) label += ", ";
+                    label += std::to_string(count) + " x #" + std::to_string(id);
+                }
+                return label.empty() ? std::string("(none)") : label;
+            };
+            if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified)
+                result.AddUnverified("Infusions", "Types / counts",
+                    wantedLabel(), installedLabel() + " (metadata pending)");
+            else result.Add("Infusions", "Types / counts",
+                "equivalent", verdict == AlterEgo::InfusionMatchVerdict::Matches
+                    ? "equivalent" : "different", wantedLabel(), installedLabel());
+        }
+
         if (saved.relic_id || !saved.relic_name.empty()) {
             const auto* eq = getEquipped("Relic");
             uint32_t id = eq ? eq->id : 0;
