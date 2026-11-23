@@ -1358,6 +1358,10 @@ static char g_SaveLibName[128] = "";
 static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
 static bool g_SaveLibNameManuallyEdited = false;
 static bool g_SaveLibIncludeEquip = false;
+static int g_SaveLibTarget = 0; // 0: complete Loadout, 1: independent component
+static int g_SaveLibComponentKind = 0;
+static int g_ComponentFilterKind = 0; // Library > Components category
+
 static int g_SaveLibEquipTab = 0;          // Selected equipment tab number (1-based)
 static std::string g_SaveLibChatLink;      // Pre-built chat link
 static std::string g_SaveLibCharName;      // Character name (to find equipment)
