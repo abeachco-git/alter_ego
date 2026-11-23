@@ -3447,6 +3447,62 @@ namespace AlterEgo {
         });
     }
 
+
+    bool GW2API::CreateLoadoutComponent(const std::string& kind,
+                                         const std::string& name,
+                                         const nlohmann::json& data) {
+        if (name.empty() || !data.is_object() || !Composable::IsKind(kind))
+            return false;
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            static std::atomic<uint64_t> counter{0};
+            std::string id;
+            do {
+                id = kind + ":created:" + std::to_string(std::time(nullptr)) +
+                     ":" + std::to_string(counter.fetch_add(1));
+            } while (Composable::Find(doc, kind, id));
+            doc.components[kind].push_back({id, name, data});
+            return Composable::Validate(doc, error);
+        });
+    }
+
+    bool GW2API::DuplicateLoadoutComponent(const std::string& kind,
+                                            const std::string& componentId,
+                                            const std::string& name) {
+        if (!Composable::IsKind(kind) || name.empty()) return false;
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            const auto* original = Composable::Find(doc, kind, componentId);
+            if (!original) return Composable::Fail(error, "Component not found.");
+            Composable::Component copy = *original;
+            static std::atomic<uint64_t> counter{0};
+            do {
+                copy.id = kind + ":copy:" + std::to_string(std::time(nullptr)) +
+                          ":" + std::to_string(counter.fetch_add(1));
+            } while (Composable::Find(doc, kind, copy.id));
+            copy.name = name;
+            doc.components[kind].push_back(std::move(copy));
+            return true;
+        });
+    }
+
+    bool GW2API::RenameLoadoutComponent(const std::string& kind,
+                                         const std::string& componentId,
+                                         const std::string& name) {
+        if (!Composable::IsKind(kind) || name.empty()) return false;
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            auto* component = Composable::Find(doc, kind, componentId);
+            if (!component) return Composable::Fail(error, "Component not found.");
+            component->name = name;
+            return true;
+        });
+    }
+
+    bool GW2API::DeleteUnusedLoadoutComponent(const std::string& kind,
+                                               const std::string& componentId) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            return Composable::RemoveUnreferenced(doc, kind, componentId, error);
+        });
+    }
+
     bool GW2API::ExportBuildLibraryToFile(const std::string& path) {
         json j;
         {
