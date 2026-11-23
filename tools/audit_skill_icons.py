@@ -115,6 +115,7 @@ def main():
     args = parser.parse_args()
 
     professions = api("/v2/professions?ids=all&v=latest")
+    races = api("/v2/races?ids=all&v=latest")
     skills = all_skills()
     by_id = {skill_id(s): s for s in skills if skill_id(s)}
     groups = {key: set() for key in (
@@ -145,18 +146,26 @@ def main():
                 if sid is not None:
                     groups[target].add(sid)
         palette = profession.get("skills_by_palette", [])
-        if isinstance(palette, dict):
-            palette = palette.values()
+        # The GW2 API returns [palette_id, skill_id] pairs, NOT bare IDs.
+        # The palette id is used in build chat links; only the second element
+        # is a real /v2/skills identifier. Also accept documented object forms.
         for entry in palette:
-            # v=latest supplies mappings from palette IDs to skill IDs.
-            sid = skill_id(entry)
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                sid = skill_id(entry[1])
+            elif isinstance(entry, dict):
+                sid = skill_id(entry.get("id"))
+            else:
+                sid = None
             if sid is not None:
                 groups["selectable_palette"].add(sid)
 
-    # Only explicitly classified racial entries are treated as racial.
-    for sid, skill in by_id.items():
-        if skill.get("type") == "Racial" or "Racial" in skill.get("flags", []):
-            groups["racial"].add(sid)
+    # Racial skills are explicitly enumerated by /v2/races. Skill metadata
+    # does not consistently label them by type or flag.
+    for race in races:
+        for item in race.get("skills", []):
+            sid = skill_id(item)
+            if sid is not None:
+                groups["racial"].add(sid)
 
     all_player = set().union(*(groups[key] for key in (
         "heal", "utility", "elite", "weapon", "aquatic",
@@ -220,6 +229,7 @@ def main():
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "total_api_skill_definitions": len(by_id),
         "professions": len(professions),
+        "races": len(races),
         "categories_unique_ids": {k: len(v) for k, v in groups.items()},
         "categories_with_icon": {k: len(v & set(skill_urls)) for k, v in groups.items()},
         "strategies": report_strategies,
@@ -240,8 +250,8 @@ def main():
             "fixed_resource_icon_bytes": sum(p.stat().st_size for p in fixed),
         },
         "methodology": [
-            "Player subsets from /v2/professions skills and weapon listings plus palette IDs",
-            "Racial only when API explicitly labels a skill Racial; missing classifications are not guessed",
+            "Player subsets from /v2/professions skill and weapon listings plus [palette,skill] pairs",
+            "Racial skill IDs from /v2/races; categories are not mutually exclusive",
             "Every potentially displayable icon is an upper bound: all /v2/skills entries with icon URLs, including NPCs",
             "Distinct URL counts remove duplicate URL artwork; sampled SHA256 additionally detects content duplicates",
             "Binary RCDATA growth is approximately original encoded image bytes plus minor resource metadata",
@@ -258,7 +268,7 @@ def main():
         "",
         "Read-only measurements; this run **did not embed skill images**.",
         "",
-        f"API skill definitions: {len(by_id)}; professions: {len(professions)}.",
+        f"API skill definitions: {len(by_id)}; professions: {len(professions)}; races: {len(races)}.",
         "",
         "## Classification (unique skill IDs; categories can overlap)",
         "",
