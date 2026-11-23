@@ -12,6 +12,8 @@
 
 namespace AlterEgo {
 
+    namespace Composable { struct Document; }
+
     enum class FetchStatus {
         Idle,
         InProgress,
@@ -519,6 +521,8 @@ namespace AlterEgo {
         static void FetchProfessionPaletteAsync(const std::string& profession);
 
     private:
+        static bool CommitComposableEdit(
+            const std::function<bool(Composable::Document&, std::string&)>& edit);
         static AddonAPI_t* s_api;
         static HoardStatus s_hoard_status;
         static FetchStatus s_fetch_status;
