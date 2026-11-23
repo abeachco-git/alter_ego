@@ -150,6 +150,34 @@ int main() {
     assert(Semantics::Compare(Semantics::Sigils(sigA),
                               Semantics::Sigils(sigB)) == Semantics::Verdict::Mismatch);
 
+    // Every Compare row is routed to the exact owning v3 component, not
+    // the former combined Armor/Trinkets bucket. Relic's *physical* slot is
+    // a trinket while its effect/name is the independent Relic component.
+    using Semantics::ComparisonComponent;
+    assert(ComparisonComponent("Specializations", "Line 1") == "base_build");
+    assert(ComparisonComponent("Aquatic skills", "Utilities") == "skills");
+    assert(ComparisonComponent("Equipment stats", "WeaponA1") == "weapons");
+    assert(ComparisonComponent("Equipment", "Helm") == "armor");
+    assert(ComparisonComponent("Equipment stats", "Ring1") == "trinkets");
+    assert(ComparisonComponent("Exact item IDs", "Relic") == "trinkets");
+    assert(ComparisonComponent("Relic", "Effect / item name") == "relic");
+    assert(ComparisonComponent("Runes", "Types / counts") == "runes");
+    assert(ComparisonComponent("Sigils", "By weapon set") == "sigils");
+    assert(ComparisonComponent("Infusions", "Types / counts") == "infusions");
+    assert(ComparisonComponent("Infusion totals", "Agony Resistance") == "infusions");
+    assert(ComparisonComponent("Future group", "unknown").empty());
+
+    // A native editor changes only selected fields; unknown fields are
+    // preserved by UpdateShared and by the backwards-compatible projection.
+    Json withExtension = Find(document, "armor", "armor:one")->data;
+    withExtension["gear"]["Helm"]["future_stat"] = {{"source","third-party"}};
+    withExtension["gear"]["Helm"]["stat_name"] = "Berserker";
+    assert(UpdateShared(document, "armor", "armor:one", withExtension, error));
+    assert(ToLegacy(document, reconstructed, error));
+    assert(reconstructed["builds"][0]["gear"]["Helm"]["future_stat"]["source"] ==
+           "third-party");
+    assert(reconstructed["builds"][0]["gear"]["Helm"]["stat_name"] == "Berserker");
+
     // Corruption and broken references fail without damaging caller state.
     Json bad = ToJson(document);
     bad["version"] = 999;
