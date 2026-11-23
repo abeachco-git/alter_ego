@@ -91,10 +91,12 @@ int main() {
         GearMatchCandidate{GearMatchStatus::NotVerified, 0, 0, 12, 15}, unknown));
 
 
-    // Infusions remain a detailed Compare-only mismatch, not a reason
-    // to flag equipment incorrect in the Characters summary.
+    // Aggregate infusion identity/counts now contribute to full equipment
+    // matching. Per-slot positions are ignored before reaching this core.
     assert(AlterEgo::IsGearComparisonGroup("Infusions"));
-    assert(!AlterEgo::IsCharacterEquipmentMatchGroup("Infusions"));
+    assert(AlterEgo::IsCharacterEquipmentMatchGroup("Infusions"));
+    assert(AlterEgo::IsCharacterEquipmentMatchGroup("Runes"));
+    assert(AlterEgo::IsCharacterEquipmentMatchGroup("Sigils"));
     assert(AlterEgo::IsCharacterEquipmentMatchGroup("Equipment stats"));
     assert(AlterEgo::IsCharacterEquipmentMatchGroup("Upgrades"));
     assert(AlterEgo::IsCharacterEquipmentMatchGroup("Relic"));
@@ -109,7 +111,13 @@ int main() {
             ++characterMismatches;
     }
     assert(detailedMismatches == 1);
-    assert(characterMismatches == 0);
+    assert(characterMismatches == 1);
+
+    AlterEgo::BuildComparison unorderedUtilityChange;
+    unorderedUtilityChange.Add("Terrestrial skills", "Utilities",
+        "1,2,3", "1,2,4", "Skill A, Skill B, Skill C", "Skill A, Skill B, Skill D");
+    assert(AlterEgo::ClassifyTemplateMatch(unorderedUtilityChange) ==
+           AlterEgo::TemplateMatchStatus::SkillsDiffer);
 
     // Saved Build Library recognition: a confirmed change restricted to
     // heal/utility/elite skills can be a near-match once gear matches.
