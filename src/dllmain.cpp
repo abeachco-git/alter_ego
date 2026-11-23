@@ -803,7 +803,8 @@ static void SaveAchDefCache();
 static void LoadAchDefCache();
 static void FetchAchGroups();
 static void FetchAchCategoryDefs(uint32_t catId, bool automatic = false);
-static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic = false);
+static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic = false,
+                                 uint32_t categoryId = 0);
 static void FetchPinnedAchDefs();
 static void SaveAchWaypoints();
 static void LoadAchWaypoints();
