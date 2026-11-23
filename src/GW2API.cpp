@@ -3503,6 +3503,17 @@ namespace AlterEgo {
         });
     }
 
+
+    bool GW2API::SaveCapturedLoadoutComponent(const SavedBuild& capture,
+                                               const std::string& kind,
+                                               const std::string& name) {
+        if (!Composable::IsKind(kind) || name.empty()) return false;
+        const auto fields = Composable::Split(SerializeSavedBuild(capture));
+        auto selected = fields.find(kind);
+        if (selected == fields.end()) return false;
+        return CreateLoadoutComponent(kind, name, selected->second);
+    }
+
     bool GW2API::ExportBuildLibraryToFile(const std::string& path) {
         json j;
         {
