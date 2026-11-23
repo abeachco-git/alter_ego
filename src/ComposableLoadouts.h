@@ -396,6 +396,20 @@ inline bool UpdateShared(Document& doc, const std::string& kind,
         return true;
     }, error);
 }
+// Rename and edit together, with one validation/commit. A failure cannot
+// leave the component's name and payload at different revisions.
+inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
+                              const std::string& id, const std::string& name,
+                              const Json& data, std::string& error) {
+    return Transaction(doc, [&](Document& next, std::string& err) {
+        auto* item = Find(next, kind, id);
+        if (!item || name.empty() || !data.is_object())
+            return Fail(err, "Invalid shared component name or payload.");
+        item->name = name;
+        item->data = data;
+        return true;
+    }, error);
+}
 inline bool CopyForLoadout(Document& doc, const std::string& loadoutId,
                           const std::string& kind, const std::string& id,
                           const std::string& name, std::string& error) {
