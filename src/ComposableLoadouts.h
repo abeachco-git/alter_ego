@@ -395,6 +395,49 @@ inline bool RemoveUnreferenced(Document& doc, const std::string& kind,
 // Reconcile a legacy UI view into a detached v3 document. Unmodified shared
 // references remain shared. An old monolithic editor changing only one Loadout
 // creates a private component automatically rather than changing its peers.
+// Keep unrecognized fields from newer/foreign legacy formats when an older
+// UI changes an otherwise supported SavedBuild. Known optional keys may be
+// intentionally removed, so only unknown keys are inherited.
+inline const std::set<std::string>& KnownLegacyKeys() {
+    static const std::set<std::string> keys = {
+        "id", "name", "source_character", "source_url", "import_warning",
+        "chat_link", "ae2_code", "profession", "game_mode", "game_modes",
+        "notes", "created", "specializations", "skills", "aquatic_skills",
+        "pets", "legend_codes", "weapons", "gear", "infusion_totals",
+        "infusion_summary_present", "infusion_ar_total", "infusion_stat_totals",
+        "rune_name", "rune_id", "relic_name", "relic_id"
+    };
+    return keys;
+}
+inline Json PreserveUnknown(const Json& prior, const Json& edited) {
+    Json result = edited;
+    for (auto it = prior.begin(); it != prior.end(); ++it) {
+        if (!KnownLegacyKeys().count(it.key()) && !result.contains(it.key()))
+            result[it.key()] = it.value();
+    }
+    if (prior.contains("gear") && prior.at("gear").is_object() &&
+        result.contains("gear") && result.at("gear").is_object()) {
+        for (auto slot = result["gear"].begin(); slot != result["gear"].end(); ++slot) {
+            if (!slot.value().is_object() ||
+                !prior.at("gear").contains(slot.key()) ||
+                !prior.at("gear")[slot.key()].is_object()) continue;
+            for (auto field = prior.at("gear")[slot.key()].begin();
+                 field != prior.at("gear")[slot.key()].end(); ++field) {
+                const std::string& key = field.key();
+                static const std::set<std::string> gearFields = {
+                    "item_id", "infusion_snapshot", "infusion_ids",
+                    "infusion_attributes", "stat_id", "stat_name",
+                    "rune", "rune_id", "sigil", "sigil_id",
+                    "sigil2", "sigil2_id", "infusion", "weapon_type"
+                };
+                if (!gearFields.count(key) && !slot.value().contains(key))
+                    slot.value()[key] = field.value();
+            }
+        }
+    }
+    return result;
+}
+
 inline bool Reconcile(const Document& original, const Json& legacy,
                       Document& output, std::string& error) {
     if (!Validate(original, error)) return false;
@@ -404,7 +447,14 @@ inline bool Reconcile(const Document& original, const Json& legacy,
         return Fail(error, "Reconcile requires a builds array.");
     std::set<std::string> seen;
     std::vector<Loadout> order;
-    for (const auto& item : legacy.at("builds")) {
+    Json expected = Json::array();
+    for (const auto& raw : legacy.at("builds")) {
+        const auto* preceding = (raw.is_object() && raw.contains("id") && raw.at("id").is_string())
+            ? FindLoadout(next, raw.at("id").get<std::string>()) : nullptr;
+        Json previous;
+        if (preceding && !Resolve(next, *preceding, previous, error)) return false;
+        const Json item = preceding ? PreserveUnknown(previous, raw) : raw;
+        expected.push_back(item);
         if (!item.is_object() || !item.contains("id") ||
             !item.at("id").is_string() || item.at("id").get<std::string>().empty())
             return Fail(error, "Legacy view has a missing ID.");
@@ -459,9 +509,59 @@ inline bool Reconcile(const Document& original, const Json& legacy,
     if (!Validate(next, error)) return false;
     Json assembled;
     if (!ToLegacy(next, assembled, error) ||
-        assembled.at("builds") != legacy.at("builds"))
+        assembled.at("builds") != expected)
         return Fail(error, "Compatibility view round-trip mismatch.");
     output = std::move(next);
+    return true;
+}
+
+// Selective backup import. Replace retains the full imported graph; Merge
+// retains existing Loadout IDs, imports new ones, and remaps colliding component
+// IDs so an imported item cannot overwrite a user's existing shared component.
+inline bool Merge(const Document& current, const Document& incoming,
+                  bool replace, Document& output,
+                  size_t& added, size_t& skipped, std::string& error) {
+    added = skipped = 0;
+    if (!Validate(current, error) || !Validate(incoming, error)) return false;
+    if (replace) {
+        added = incoming.loadouts.size();
+        output = incoming;
+        return true;
+    }
+    Document merged = current;
+    std::map<std::string, std::map<std::string,std::string>> remap;
+    for (const auto& [kind, list] : incoming.components) {
+        for (const auto& incomingPart : list) {
+            std::string targetId = incomingPart.id;
+            if (const Component* existing = Find(merged, kind, targetId)) {
+                if (existing->data != incomingPart.data) {
+                    unsigned n = 1;
+                    targetId = incomingPart.id + ":import:" + std::to_string(n++);
+                    while (Find(merged, kind, targetId))
+                        targetId = incomingPart.id + ":import:" + std::to_string(n++);
+                }
+            }
+            remap[kind][incomingPart.id] = targetId;
+            if (!Find(merged, kind, targetId)) {
+                Component copy = incomingPart;
+                copy.id = targetId;
+                merged.components[kind].push_back(std::move(copy));
+            }
+        }
+    }
+    for (const auto& incomingLoadout : incoming.loadouts) {
+        if (FindLoadout(merged, incomingLoadout.id)) {
+            ++skipped;
+            continue;
+        }
+        Loadout copy = incomingLoadout;
+        for (auto& [kind, id] : copy.refs)
+            id = remap.at(kind).at(id);
+        merged.loadouts.push_back(std::move(copy));
+        ++added;
+    }
+    if (!Validate(merged, error)) return false;
+    output = std::move(merged);
     return true;
 }
 
