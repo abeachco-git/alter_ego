@@ -12,6 +12,12 @@ namespace Skinventory {
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return "";
 
+        // Bound network stalls so Clears and other refresh workers cannot remain busy indefinitely.
+        const DWORD timeoutMs = 12000;
+        InternetSetOptionA(hInternet, INTERNET_OPTION_CONNECT_TIMEOUT, (LPVOID)&timeoutMs, sizeof(timeoutMs));
+        InternetSetOptionA(hInternet, INTERNET_OPTION_SEND_TIMEOUT, (LPVOID)&timeoutMs, sizeof(timeoutMs));
+        InternetSetOptionA(hInternet, INTERNET_OPTION_RECEIVE_TIMEOUT, (LPVOID)&timeoutMs, sizeof(timeoutMs));
+
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                       INTERNET_FLAG_SECURE;
 
