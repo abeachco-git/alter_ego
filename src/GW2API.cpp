@@ -3362,8 +3362,10 @@ namespace AlterEgo {
                 }
                 const auto* oldPart = Composable::Find(before, kind, oldRef->second);
                 const auto* newPart = Composable::Find(next, kind, newRef->second);
-                if (oldRef->second != newRef->second ||
-                    (oldPart && newPart && oldPart->data != newPart->data)) {
+                // Reassignment/copy of an identical component does not
+                // invalidate cached codes or require palette re-encoding.
+                // Only a semantic payload change does.
+                if (!oldPart || !newPart || oldPart->data != newPart->data) {
                     changed = true;
                     if (kind == "base_build" || kind == "skills") buildChanged = true;
                 }
