@@ -722,11 +722,8 @@ static void ProcessComponentUICommand() {
             command.kind, command.component_id, command.name);
         break;
     case ComponentUICommand::EditShared:
-        success = API::EditSharedLoadoutComponent(
-            command.kind, command.component_id, command.data);
-        if (success && !command.name.empty())
-            success = API::RenameLoadoutComponent(
-                command.kind, command.component_id, command.name);
+        success = API::EditAndRenameLoadoutComponent(
+            command.kind, command.component_id, command.name, command.data);
         break;
     case ComponentUICommand::RemoveUnused:
         success = API::DeleteUnusedLoadoutComponent(command.kind, command.component_id);
