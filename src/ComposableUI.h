@@ -302,6 +302,23 @@ static void RenderComponentUIEditor() {
         ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.40f, 1.0f),
             "SHARED EDIT: updates %d referencing Loadout%s. Copy first for a private edit.",
             uses, uses == 1 ? "" : "s");
+        if (uses > 0 && ImGui::TreeNode("Affected Loadouts##component_shared_users")) {
+            const auto& snapshot = ComponentUISnapshot();
+            if (snapshot.contains("loadouts") && snapshot["loadouts"].is_array())
+                for (const auto& loadout : snapshot["loadouts"]) {
+                    if (!loadout.is_object() || !loadout.contains("refs") ||
+                        !loadout["refs"].is_object()) continue;
+                    const auto& refs = loadout["refs"];
+                    if (refs.value(g_ComponentEditorKind, std::string()) !=
+                        g_ComponentEditorId) continue;
+                    const auto meta = loadout.value("metadata", ComponentJson::object());
+                    const std::string label = meta.is_object()
+                        ? meta.value("name", loadout.value("id", std::string()))
+                        : loadout.value("id", std::string());
+                    ImGui::BulletText("%s", label.c_str());
+                }
+            ImGui::TreePop();
+        }
     } else if (g_ComponentEditorMode == "copy_for_loadout") {
         ImGui::TextColored(ImVec4(.73f,.92f,.76f,1.0f),
             "PRIVATE COPY: Save creates a detached component for one Loadout.");
@@ -835,7 +852,8 @@ static void ProcessComponentUICommand() {
         break;
     case ComponentUICommand::CopyEditedForLoadout:
         success = API::CopyEditedLoadoutComponent(
-            command.loadout_id, command.kind, command.name, command.data);
+            command.loadout_id, command.kind, command.component_id,
+            command.name, command.data);
         if (success && g_LibraryCollection == 2) {
             const auto& latest = ComponentUISnapshot();
             const auto* target = ComponentUIFindLoadout(latest, command.loadout_id);

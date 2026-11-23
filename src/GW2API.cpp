@@ -3434,6 +3434,7 @@ namespace AlterEgo {
 
     bool GW2API::CopyEditedLoadoutComponent(const std::string& loadoutId,
                                             const std::string& kind,
+                                            const std::string& sourceComponentId,
                                             const std::string& name,
                                             const nlohmann::json& data) {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
@@ -3445,7 +3446,8 @@ namespace AlterEgo {
                     std::to_string(counter.fetch_add(1));
             } while (Composable::Find(doc, kind, id));
             return Composable::CopyEditedForLoadout(doc, loadoutId, kind,
-                                                      id, name, data, error);
+                                                      id, name, data, error,
+                                                      sourceComponentId);
         });
     }
 

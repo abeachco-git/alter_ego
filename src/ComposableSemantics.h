@@ -39,11 +39,25 @@ inline Json Part(const Document& doc, const Loadout& loadout,
 inline Summary Runes(const Json& runes) {
     Summary summary;
     if (runes.contains("gear") && runes.at("gear").is_object()) {
-        for (auto it = runes["gear"].begin(); it != runes["gear"].end(); ++it) {
-            if (!it.value().is_object()) continue;
-            Add(summary, Identity(it.value(), "rune_id", "rune"));
+        const auto& gear = runes.at("gear");
+        // A partial rune record is useful as a preview, but cannot prove a
+        // six-piece functional match. Names alone do not prove an item ID.
+        bool complete = true;
+        for (const char* slot : {"Helm", "Shoulders", "Coat",
+                                 "Gloves", "Leggings", "Boots"}) {
+            const auto it = gear.find(slot);
+            if (it == gear.end() || !it->is_object()) {
+                complete = false;
+                continue;
+            }
+            const std::string identity = Identity(*it, "rune_id", "rune");
+            Add(summary, identity);
+            if (identity.rfind("id:", 0) != 0) complete = false;
         }
-        if (!summary.counts.empty()) { summary.known = true; return summary; }
+        if (!summary.counts.empty()) {
+            summary.known = complete;
+            return summary;
+        }
     }
     // Legacy shared rune: its identity is known but its exact count is NOT
     // stated by the field. Do not manufacture 6 rune placements.
@@ -103,15 +117,20 @@ inline Summary Sigils(const Json& sigils) {
     Summary summary;
     if (!sigils.contains("gear") || !sigils.at("gear").is_object())
         return summary;
+    bool allIdentified = true;
     for (auto it = sigils.at("gear").begin(); it != sigils.at("gear").end(); ++it) {
-        if (!it.value().is_object()) continue;
+        if (!it.value().is_object()) { allIdentified = false; continue; }
         const std::string set = WeaponSet(it.key()) + ":";
         const std::string first = Identity(it.value(), "sigil_id", "sigil");
         const std::string second = Identity(it.value(), "sigil2_id", "sigil2");
         if (!first.empty()) Add(summary, set + first);
         if (!second.empty()) Add(summary, set + second);
+        if ((!first.empty() && first.rfind("id:", 0) != 0) ||
+            (!second.empty() && second.rfind("id:", 0) != 0) ||
+            (first.empty() && second.empty()))
+            allIdentified = false;
     }
-    summary.known = !summary.counts.empty();
+    summary.known = allIdentified && !summary.counts.empty();
     return summary;
 }
 
@@ -129,6 +148,7 @@ inline std::string ComparisonComponent(const std::string& group,
     if (group == "Infusions" || group == "Infusion totals") return "infusions";
     if (group == "Relic") return "relic";
     if (group == "Weapon types") return "weapons";
+    if (group == "Exact item IDs" && field == "Relic") return "relic";
     if (group == "Equipment" || group == "Equipment stats" ||
         group == "Exact item IDs") {
         return SlotKind(field);

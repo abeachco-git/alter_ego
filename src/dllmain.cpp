@@ -10274,6 +10274,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         const char* weaponSlots[] = {"WeaponA1","WeaponA2","WeaponB1","WeaponB2"};
         std::set<std::string> comparedSets;
         bool unknownSigilIdentity = false;
+        bool missingLiveSigilData = false;
         for (const char* slot : weaponSlots) {
             auto savedItem = saved.gear.find(slot);
             if (savedItem == saved.gear.end()) continue;
@@ -10291,7 +10292,13 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         for (const char* slot : weaponSlots) {
             if (!comparedSets.count(AlterEgo::Composable::Semantics::WeaponSet(slot))) continue;
             const auto* equipped = getEquipped(slot);
-            if (!equipped) continue;
+            if (!equipped) {
+                // Missing live equipment is not evidence that a saved sigil
+                // requirement was satisfied (or even definitely differs).
+                if (savedSigils["gear"].contains(slot))
+                    missingLiveSigilData = true;
+                continue;
+            }
             if (!equipped->upgrades.empty() && equipped->upgrades[0])
                 liveSigils["gear"][slot]["sigil_id"] = equipped->upgrades[0];
             if (equipped->upgrades.size() > 1 && equipped->upgrades[1])
@@ -10309,7 +10316,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 return str.empty() ? std::string("(none)") : str;
             };
             const auto verdict = AlterEgo::Composable::Semantics::Compare(expected, observed);
-            if (unknownSigilIdentity ||
+            if (unknownSigilIdentity || missingLiveSigilData ||
                 verdict == AlterEgo::Composable::Semantics::Verdict::Unverified)
                 result.AddUnverified("Sigils", "By weapon set", label(expected), label(observed));
             else result.Add("Sigils", "By weapon set",
@@ -10422,6 +10429,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     }
     return result;
 }
+
+// The component collection renderer is defined later in this translation unit.
+static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id);
 
 // Selection is character-first: empty means follow the active MumbleLink
 // character, even if the previously selected saved build came from another hero.
@@ -10542,7 +10552,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     // One independently expandable section per v3 component; fields retain
     // the same semantic comparison rules as the active-character matcher.
     struct CompareSection {
-        std::string kind, label, sourceName;
+        std::string kind, label, sourceName, sourceId;
         bool recorded = false;
         std::vector<const AlterEgo::ComparisonRow*> rows;
         size_t differences = 0, unverified = 0, matches = 0;
@@ -10578,6 +10588,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     if (!part.is_object() ||
                         part.value("id", std::string()) != id) continue;
                     section.sourceName = part.value("name", std::string());
+                    section.sourceId = id;
                     section.recorded = part.contains("data") &&
                         part["data"].is_object() && !part["data"].empty();
                     break;
@@ -10646,8 +10657,14 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                 section.sourceName.empty() ? "No saved component name" :
                     section.sourceName.c_str());
         if (expanded) {
-            if (!section.sourceName.empty())
+            if (!section.sourceName.empty()) {
                 ImGui::TextDisabled("Saved: %s", section.sourceName.c_str());
+                if (!section.sourceId.empty()) {
+                    ImGui::SameLine();
+                    if (RenderActionButton("Open component##compare_source"))
+                        ComponentUIOpenLibrary(section.kind, section.sourceId);
+                }
+            }
             if (section.kind != "other" && !section.recorded)
                 ImGui::TextDisabled("No component data recorded. Default field values cannot establish a match.");
             if (section.rows.empty()) {

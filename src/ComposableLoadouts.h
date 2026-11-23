@@ -750,13 +750,17 @@ inline bool CopyForLoadout(Document& doc, const std::string& loadoutId,
 inline bool CopyEditedForLoadout(Document& doc, const std::string& loadoutId,
                                  const std::string& kind, const std::string& newId,
                                  const std::string& name, const Json& editedData,
-                                 std::string& error) {
+                                 std::string& error,
+                                 const std::string& expectedSourceId = {}) {
     return Transaction(doc, [&](Document& next, std::string& err) {
         auto* loadout = FindLoadout(next, loadoutId);
         if (!loadout || !IsKind(kind) || !loadout->refs.count(kind) ||
             newId.empty() || name.empty() || !editedData.is_object() ||
             Find(next, kind, newId))
             return Fail(err, "Invalid private component request.");
+        if (!expectedSourceId.empty() &&
+            loadout->refs.at(kind) != expectedSourceId)
+            return Fail(err, "The Loadout component changed while the private editor was open.");
         const auto* source = Find(next, kind, loadout->refs.at(kind));
         if (!source) return Fail(err, "Original component no longer exists.");
         Component copy = *source;

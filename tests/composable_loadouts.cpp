@@ -117,6 +117,15 @@ int main() {
     assert(Find(draftCopy,"relic","new:private")->data["relic_id"] == 401);
     assert(Find(draftCopy,"relic","relic:one")->data["relic_id"] == 400);
     assert(FindLoadout(draftCopy,"one")->refs.at("relic") == "new:private");
+    const Json afterPrivateCopy = ToJson(draftCopy);
+    // A stale modal cannot silently clone a different component after the
+    // Loadout was reassigned. No orphan or reference change on failure.
+    assert(!CopyEditedForLoadout(draftCopy, "one", "relic", "stale:copy",
+                                 "Stale", newPrivateData, error, "relic:one"));
+    assert(ToJson(draftCopy) == afterPrivateCopy);
+    assert(CopyEditedForLoadout(draftCopy, "one", "relic", "valid:copy",
+                                "Current", newPrivateData, error, "new:private"));
+    assert(FindLoadout(draftCopy, "one")->refs.at("relic") == "valid:copy");
     assert(!CopyEditedForLoadout(draftCopy, "one", "relic", "new:private",
                                  "Duplicate ID", newPrivateData, error));
     assert(FindLoadout(draftCopy,"one")->refs.at("relic") == "new:private");
@@ -159,6 +168,25 @@ int main() {
     assert(Semantics::Compare(Semantics::Infusions(infA),
                               Semantics::Infusions(infB)) == Semantics::Verdict::Match);
 
+    // Incomplete armor rune snapshots and name-only IDs remain unverified,
+    // even when both incomplete inputs happen to agree.
+    Json partialRunes = {{"gear", {{"Helm", {{"rune_id", 300}}}}}};
+    assert(Semantics::Compare(Semantics::Runes(partialRunes),
+                              Semantics::Runes(partialRunes)) ==
+           Semantics::Verdict::Unverified);
+    Json fullRunes = {{"gear", Json::object()}};
+    for (const char* slot : {"Helm", "Shoulders", "Coat",
+                             "Gloves", "Leggings", "Boots"})
+        fullRunes["gear"][slot]["rune_id"] = 300;
+    assert(Semantics::Compare(Semantics::Runes(fullRunes),
+                              Semantics::Runes(fullRunes)) ==
+           Semantics::Verdict::Match);
+    fullRunes["gear"]["Boots"].erase("rune_id");
+    fullRunes["gear"]["Boots"]["rune"] = "Superior Rune";
+    assert(Semantics::Compare(Semantics::Runes(fullRunes),
+                              Semantics::Runes(fullRunes)) ==
+           Semantics::Verdict::Unverified);
+
     auto sigA = Find(document,"sigils","sigils:one")->data;
     auto sigB = sigA;
     sigB["gear"]["WeaponA1"]["sigil_id"] = 101;
@@ -169,6 +197,11 @@ int main() {
     assert(Semantics::Compare(Semantics::Sigils(sigA),
                               Semantics::Sigils(sigB)) == Semantics::Verdict::Mismatch);
 
+    Json unknownSigil = {{"gear", {{"WeaponA1", {{"sigil", "Unresolved sigil"}}}}}};
+    assert(Semantics::Compare(Semantics::Sigils(unknownSigil),
+                              Semantics::Sigils(unknownSigil)) ==
+           Semantics::Verdict::Unverified);
+
     // Every Compare row is routed to the exact owning v3 component, not
     // the former combined Armor/Trinkets bucket. Relic's *physical* slot is
     // a trinket while its effect/name is the independent Relic component.
@@ -178,7 +211,7 @@ int main() {
     assert(ComparisonComponent("Equipment stats", "WeaponA1") == "weapons");
     assert(ComparisonComponent("Equipment", "Helm") == "armor");
     assert(ComparisonComponent("Equipment stats", "Ring1") == "trinkets");
-    assert(ComparisonComponent("Exact item IDs", "Relic") == "trinkets");
+    assert(ComparisonComponent("Exact item IDs", "Relic") == "relic");
     assert(ComparisonComponent("Relic", "Effect / item name") == "relic");
     assert(ComparisonComponent("Runes", "Types / counts") == "runes");
     assert(ComparisonComponent("Sigils", "By weapon set") == "sigils");
