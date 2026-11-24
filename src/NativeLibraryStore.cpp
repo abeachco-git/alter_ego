@@ -1,4 +1,5 @@
 #include "NativeLibraryStore.h"
+#include "NativeLibrarySchema.h"
 #include <atomic>
 #include <chrono>
 #include <fstream>
