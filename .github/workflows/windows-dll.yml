@@ -26,34 +26,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 python3-pil ca-certificates g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
           x86_64-w64-mingw32ucrt-g++ --version
-      - name: Fetch MetaBattle live pages for parser verification
-        continue-on-error: true
-        run: |
-          apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
-          mkdir -p /tmp/metabattle-live
-          for spec in \
-            'reaper|Reaper_-_Power_Greatsword_Reaper' \
-            'harbinger|Harbinger_-_Boon_DPS_Condi_Harbinger_Open_World' \
-            'chronomancer|Chronomancer_-_Power_DPS' \
-            'mechanist|Mechanist_-_Condi_DPS' \
-            'scrapper|Scrapper_-_Power_Scrapper' \
-            'holosmith|Holosmith_-_Condi_Holo'; do
-            file="${spec%%|*}"
-            slug="${spec#*|}"
-            curl -fLsS --retry 2 --max-time 35 -A 'Mozilla/5.0' \
-              "https://metabattle.com/wiki/Build:${slug}" \
-              -o "/tmp/metabattle-live/${file}.html" || true
-            wc -c "/tmp/metabattle-live/${file}.html" || true
-          done
-      - name: Upload MetaBattle live HTML snapshots
-        uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with:
-          name: MetaBattle-Live-HTML
-          path: /tmp/metabattle-live/*.html
-          if-no-files-found: ignore
-      - name: Test platform-independent comparator
+      - name: Run required offline regression tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/skin_search.cpp -o /tmp/skin_search
           /tmp/skin_search
@@ -99,15 +72,6 @@ jobs:
           /tmp/equipment_choice_core
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/composable_backup.cpp src/ChatLink.cpp -o /tmp/composable_backup
           /tmp/composable_backup
-      - name: Verify all six live MetaBattle equipment imports
-        run: |
-          for name in reaper harbinger chronomancer mechanist scrapper holosmith; do
-            test -s "/tmp/metabattle-live/${name}.html" || {
-              echo "MetaBattle live page not available: ${name}" >&2
-              exit 1
-            }
-          done
-          /tmp/metabattle_import /tmp/metabattle-live
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
