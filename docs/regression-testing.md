@@ -85,3 +85,9 @@ Startup maintenance regression covers exclusive scheduling, no live deletion, ta
 Background worker coverage additionally verifies throwing failure-handler containment, repeated launches, reopening and complete joining. Windows artwork queue behavior and unload latency require in-game validation.
 
 Equipment set coverage in `persistence.native_library` verifies direct exclusive set links, exact capture matching, shared membership changes, copy/detach isolation, rejection of implicit aggregate gear edits, persistence, portable graph round-trip, duplicate consolidation and merge. Experimental SQLite schemas are not supported migration sources; original v2 migration remains covered by the native migration suite. Signed SQLite infusion IDs must survive conversion to unsigned GW2 IDs in SavedBuild projections.
+
+### Equipment Set category ownership
+
+- Create an armor-only set and a set that excludes relics, sigils and infusions; verify omitted categories remain independently selectable on linked Loadouts.
+- Removing membership preserves the effective selection on all linked Loadouts; including a category prompts before replacing independent selections. Switching sets preserves categories not included in the new set. Copy & Edit Set preserves the current membership by default; detach preserves every effective reference.
+- Verify mixed ownership after a database reopen, portable Loadout round-trip and shared membership changes. Conflicting owners and empty sets are rejected. Compare, share and infusion totals resolve the complete effective equipment.

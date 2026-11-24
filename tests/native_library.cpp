@@ -168,6 +168,30 @@ int case_native_library(int,char**) {
         assert(Native::AssignSetComponent(mixedRead.loadouts,"set1","sigils","different",error));
         assert(!mixedRead.loadouts.loadouts.front().refs.count("sigils"));
         assert(repo.Commit(beforeInclude,mixedRead)==6);
+        // Capture only selected categories, switch sets without dropping the
+        // old inherited categories, then edit a newly independent relic.
+        auto selected=mixedRead.loadouts;
+        assert(Native::PutEquipmentSet(selected,"armor-only","Armor",raw,error,{},{"armor"}));
+        assert(C::FindEquipmentSet(selected,"armor-only")->refs.size()==1);
+        assert(Native::ApplyEquipmentSet(selected,"first","armor-only",error));
+        assert(selected.loadouts.front().refs.count("sigils"));
+        assert(selected.loadouts.front().refs.count("relic"));
+        assert(!selected.loadouts.front().refs.count("armor"));
+        Json draft;assert(C::Resolve(selected,selected.loadouts.front(),draft,error));
+        draft["relic_id"]=999;
+        assert(Native::PutLoadout(selected,draft,error));
+        Json other;assert(C::Resolve(selected,selected.loadouts[1],other,error));
+        assert(other["relic_id"]!=999);
+        assert(Native::SaveSetFromLoadout(selected,"first","armor-copy","Armor copy",error));
+        assert(C::FindEquipmentSet(selected,"armor-copy")->refs.size()==1);
+        assert(Native::SaveSetFromLoadout(selected,"first","custom","Armor and relic",error,{"armor","relic"}));
+        assert(C::FindEquipmentSet(selected,"custom")->refs.size()==2);
+        assert(selected.loadouts.front().refs.count("sigils"));
+        assert(!selected.loadouts.front().refs.count("relic"));
+        assert(C::Validate(selected,error));
+        assert(!Native::AssignSetComponent(selected,"armor-only","armor","",error));
+        const auto matches=Native::ExactEquipmentSets(selected,raw);
+        assert(std::any_of(matches.begin(),matches.end(),[](const auto& m){return m.id=="armor-only";}));
         Json roundTrip;assert(C::Resolve(restored.loadouts,restored.loadouts.loadouts.front(),roundTrip,error));
         const auto& ids=roundTrip.at("gear").at("Helm").at("infusion_ids");
         assert(ids.size()==3);

@@ -806,7 +806,7 @@ inline bool ImportComponent(const Json& input, std::string& kind,
 // identity; importing always creates new independent component IDs, preventing
 // accidental edits to an unrelated existing shared component.
 constexpr const char* kPortableLoadoutFormat = "alter_ego_portable_loadout";
-constexpr int kPortableLoadoutVersion = 2;
+constexpr int kPortableLoadoutVersion = 3;
 inline bool ExportPortableLoadout(const Document& doc, const std::string& id,
                                   Json& packet, std::string& error) {
     if (!Validate(doc, error)) return false;
@@ -1276,7 +1276,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
         if(!updated.equipment_set_id.empty()) {
             const auto oldParts=Split(previous);
             for(const auto& [kind,data]:parts)if(SetOwns(next,updated,kind)&&oldParts.at(kind).dump()!=data.dump())
-                return Fail(error,"Detach the linked equipment set before editing equipment.");
+                return Fail(error,"Edit the included category in the equipment set, or detach it first.");
             for(const auto& [kind,ref]:EffectiveRefs(next,updated))if(IsEquipmentKind(kind)) {
                 const auto* part=Find(next,kind,ref);
                 if(part)for(auto it=part->data.begin();it!=part->data.end();++it)

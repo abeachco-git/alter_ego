@@ -8578,7 +8578,7 @@ static void RenderSaveToLibraryDialog() {
         ImGui::EndCombo();
     }
     static const char* kinds[]={"Base Build","Skills","Weapons","Sigils","Armor","Runes",
-        "Trinkets","Relic","Infusions","Entire Equipment Set"};
+        "Trinkets","Relic","Infusions","Equipment Set"};
     static const char* keys[]={"base_build","skills","weapons","sigils","armor","runes",
         "trinkets","relic","infusions"};
     const bool fashion=g_SaveLibTarget==kSaveFashionTarget;
