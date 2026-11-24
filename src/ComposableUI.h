@@ -21,12 +21,12 @@ static const struct { const char* kind; const char* label; } kComponentKinds[] =
     {"base_build", "Base Build"},
     {"skills", "Skills"},
     {"weapons", "Weapons"},
-    {"armor", "Armor"},
-    {"trinkets", "Trinkets"},
-    {"runes", "Runes"},
     {"sigils", "Sigils"},
-    {"infusions", "Infusions"},
-    {"relic", "Relic"}
+    {"armor", "Armor"},
+    {"runes", "Runes"},
+    {"trinkets", "Trinkets"},
+    {"relic", "Relics"},
+    {"infusions", "Infusions"}
 };
 
 static const char* ComponentLabel(const std::string& kind) {
@@ -424,8 +424,8 @@ static void ComponentUIOpenLibrary(const std::string& kind, const std::string& i
     g_LibraryCollection = 2;
 }
 
-static void RenderPortableLoadoutPasteButton() {
-    if (RenderActionButton("Paste Portable Loadout##library")) {
+static void PastePortableLoadout() {
+    {
         const char* clipboard = ImGui::GetClipboardText();
         if (!clipboard || !*clipboard) {
             if (APIDefs) APIDefs->GUI_SendAlert("Clipboard is empty.");
@@ -446,24 +446,11 @@ static void RenderPortableLoadoutPasteButton() {
             }
         }
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Import a copied Loadout as a new independent entry.\n"
-                          "Its equipment, skills, upgrades and Fashion reference are kept.");
+
 }
 
-static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
-    const ComponentJson& doc = ComponentUISnapshot();
-    const auto* loadout = ComponentUIFindLoadout(doc, loadoutId);
-    if (!loadout || !loadout->contains("refs")) return;
-    if (!ImGui::CollapsingHeader("Loadout components##loadout_selector",
-                                 ImGuiTreeNodeFlags_DefaultOpen)) return;
-    if (g_LibEditMode) {
-        ImGui::TextDisabled("Finish or cancel the current edit before switching components.");
-    } else {
-        ImGui::TextDisabled("Choose reusable components. Equipment details remain below.");
-    }
-    if (g_LibEditMode) return;
-    if (RenderActionButton("Copy Portable Loadout##portable_loadout")) {
+static void CopyPortableLoadout(const std::string& loadoutId) {
+    const auto& doc = ComponentUISnapshot();
         AlterEgo::Composable::Document current;
         std::string error;
         ComponentJson packet;
@@ -476,10 +463,17 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
                 "Portable Loadout copied with all referenced components.");
         } else if (APIDefs) APIDefs->GUI_SendAlert(
             "Could not export portable Loadout.");
+}
+
+static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
+    const ComponentJson& doc = ComponentUISnapshot();
+    const auto* loadout = ComponentUIFindLoadout(doc, loadoutId);
+    if (!loadout || !loadout->contains("refs")) return;
+    if (!ImGui::CollapsingHeader("Loadout components##loadout_selector")) return;
+    if (g_LibEditMode) {
+        ImGui::TextDisabled("Finish or cancel the current edit before switching components.");
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Copy this Loadout and its component payloads to the clipboard.\n"
-                          "Importing creates new independent component IDs.");
+    if (g_LibEditMode) return;
     if (ImGui::BeginTable("##loadout_component_grid", 2,
         ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("Component", ImGuiTableColumnFlags_WidthFixed, 110.0f);

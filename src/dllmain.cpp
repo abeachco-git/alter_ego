@@ -3938,6 +3938,13 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Fashion menu: share the right-clicked tab's look as a wardrobe template chat link.
     if (ImGui::BeginPopup("##fashion_menu")) {
         int fTab = (g_FashionTab > 0) ? g_FashionTab : tab;
+        if (ImGui::MenuItem("Save to Library...", nullptr, false, !ch.build_tabs.empty())) {
+            int idx = 0;
+            for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
+                if (ch.build_tabs[i].is_active) { idx = i; break; }
+            OpenSaveLiveBuildDialog(ch, ch.build_tabs[idx]);
+            g_SaveLibEquipTab = fTab;
+        }
         if (ImGui::Selectable("Copy Wardrobe Template chat link")) {
             std::string link = BuildWardrobeLink(ch, fTab);
             if (!link.empty()) {
@@ -4498,6 +4505,8 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     g_SaveLibModes = {AlterEgo::GameMode::PvE};
     g_SaveLibNameManuallyEdited = false;
     g_SaveLibIncludeEquip = true;
+    g_SaveLibTarget = 0;
+    g_SaveLibUpdateId.clear();
     g_SaveLibEquipTab = ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
     g_SaveLibDialogOpen = true;
 }
@@ -8299,6 +8308,25 @@ static void RenderSaveToLibraryDialog() {
         return;
     }
 
+    // The same capture dialog can save a complete Loadout or just one reusable
+    // component without inventing an extra monolithic saved-build entry.
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Save as");
+    ImGui::SameLine(130);
+    const char* saveTarget = g_SaveLibTarget == 0 ? "Complete Loadout"
+        : g_SaveLibTarget == 1 ? "New component" : "Update existing component";
+    if (RenderThemedCombo("##save_target", saveTarget,
+                         ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
+        if (ImGui::Selectable("Complete Loadout", g_SaveLibTarget == 0))
+            g_SaveLibTarget = 0;
+        if (ImGui::Selectable("New component", g_SaveLibTarget == 1))
+            g_SaveLibTarget = 1;
+        if (ImGui::Selectable("Update existing component", g_SaveLibTarget == 2)) {
+            g_SaveLibTarget = 2;
+            g_SaveLibUpdateId.clear();
+        }
+        ImGui::EndCombo();
+    }
     const auto* sourceChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
     if (sourceChar) {
         ImGui::Text("Character: %s (%s)", sourceChar->name.c_str(), sourceChar->profession.c_str());
@@ -8331,32 +8359,13 @@ static void RenderSaveToLibraryDialog() {
         }
     } else ImGui::TextDisabled("Character data unavailable");
 
-    // The same capture dialog can save a complete Loadout or just one reusable
-    // component without inventing an extra monolithic saved-build entry.
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Save as");
-    ImGui::SameLine(130);
-    const char* saveTarget = g_SaveLibTarget == 0 ? "Complete Loadout"
-        : g_SaveLibTarget == 1 ? "New component" : "Update existing component";
-    if (RenderThemedCombo("##save_target", saveTarget,
-                         ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
-        if (ImGui::Selectable("Complete Loadout", g_SaveLibTarget == 0))
-            g_SaveLibTarget = 0;
-        if (ImGui::Selectable("New component", g_SaveLibTarget == 1))
-            g_SaveLibTarget = 1;
-        if (ImGui::Selectable("Update existing component", g_SaveLibTarget == 2)) {
-            g_SaveLibTarget = 2;
-            g_SaveLibUpdateId.clear();
-        }
-        ImGui::EndCombo();
-    }
     static const char* kinds[] = {
-        "Base Build", "Skills", "Weapons", "Armor", "Trinkets",
-        "Runes", "Sigils", "Infusions", "Relic"
+        "Base Build", "Skills", "Weapons", "Sigils", "Armor",
+        "Runes", "Trinkets", "Relics", "Infusions"
     };
     static const char* keys[] = {
-        "base_build", "skills", "weapons", "armor", "trinkets",
-        "runes", "sigils", "infusions", "relic"
+        "base_build", "skills", "weapons", "sigils", "armor",
+        "runes", "trinkets", "relic", "infusions"
     };
     if (g_SaveLibTarget != 0) {
         ImGui::AlignTextToFramePadding();
@@ -9243,6 +9252,7 @@ static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
     g_SwitchToCompare = true;
 }
 
+namespace { static void CopyPortableLoadout(const std::string& loadoutId); }
 static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showEditButton = true) {
     ImVec4 profColor = GetProfessionColor(build.profession);
     {
@@ -9420,12 +9430,17 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 }
                 ImGui::SetCursorScreenPos(prevCursor);
             } else {
+            const float wCopy = btnWidth("Copy");
             const float wCompare = btnWidth("Compare");
             const float wShare = btnWidth("Share");
             const float wEdit = btnWidth("Edit");
             const float wDel = btnWidth("Delete");
-            const float totalW = wCompare + wShare + wEdit + wDel + 3.0f * gap;
-            const float startX = pos.x + w - totalW - 8.0f;
+            const float totalW = wCopy + wCompare + wShare + wEdit + wDel + 4.0f * gap;
+            const float copyX = pos.x + w - totalW - 8.0f;
+            ImGui::SetCursorScreenPos(ImVec2(copyX, btnY));
+            if (RenderActionButton("Copy##headerBuild")) CopyPortableLoadout(build.id);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy Portable Loadout");
+            const float startX = copyX + wCopy + gap;
 
             ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
             if (RenderActionButton("Compare##headerBuild")) ActivateSavedBuildCompare(build);
@@ -11333,10 +11348,6 @@ static void RenderBuildLibrary() {
     bool pendingGroupAfter = false, pendingItemAfter = false;
     ImGui::BeginChild("LibList", ImVec2(g_LibListWidth, 0), true);
     {
-        // One-click import of a portable nine-component Loadout even when
-        // the Library currently contains no Loadouts.
-        RenderPortableLoadoutPasteButton();
-        ImGui::Separator();
         // Match Characters: both controls live within the left list column,
         // are full-width, and never take horizontal space from build details.
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -11638,6 +11649,7 @@ static void RenderBuildLibrary() {
                 g_LibDetailsFetched = false;
             }
             if (ImGui::BeginPopupContextItem("##build_actions")) {
+                if (ImGui::MenuItem("Copy Portable Loadout")) CopyPortableLoadout(b.id);
                 if (ImGui::MenuItem("Compare")) {
                     g_LibSelectedIdx = i;
                     ActivateSavedBuildCompare(b);
@@ -11694,6 +11706,15 @@ static void RenderBuildLibrary() {
             } // within the profession
             ImGui::PopID();
         } // profession groups
+        if (ImGui::BeginPopupContextWindow("##loadout_empty_actions",
+                ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+            if (ImGui::MenuItem("New")) {
+                g_NewBuildModes = {AlterEgo::GameMode::PvE};
+                g_NewBuildDialogOpen = true;
+            }
+            if (ImGui::MenuItem("Paste Portable Loadout")) PastePortableLoadout();
+            ImGui::EndPopup();
+        }
     }
 
     // Deferred delete confirmation from context menu
@@ -13980,7 +14001,7 @@ static bool RenderChipStrip(const std::vector<std::string>& labels,
         if (isActiveInGame) {
             dl->AddCircleFilled(
                 ImVec2(cMax.x - 6, cMin.y + 6),
-                2.5f, IM_COL32(227, 196, 122, 255));
+                2.5f, IM_COL32(60, 200, 80, 255));
         }
     }
     ImGui::PopID();
