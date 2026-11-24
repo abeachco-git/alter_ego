@@ -1,3 +1,4 @@
+#include "../src/WikiMetadataCache.h"
 #include "../src/Database.h"
 #include "../src/CacheDatabase.h"
 #include "../src/AchievementCatalogCache.h"
@@ -294,7 +295,7 @@ int case_database_core(int, char**) {
         assert(!Cache::WriteReference(root,D::Dyes,badDye,101));
         assert(Cache::ReadReference(root,D::Dyes)==dyes);
         DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
-        assert(db.Scalar("PRAGMA user_version")==8);
+        assert(db.Scalar("PRAGMA user_version")==Cache::kSchemaVersion);
         assert(db.Scalar("SELECT count(*) FROM reference_skills_professions")==2);
     }
     {
@@ -340,7 +341,7 @@ int case_database_core(int, char**) {
         std::filesystem::create_directories(paths.CacheDirectory()/"textures");
         Storage::WriteMigrationBytes(paths.CacheDirectory()/"textures"/"test.dat","1234");
         const auto result=Storage::InspectStorage(root);
-        assert(result.cache.healthy&&result.cache.schema==8&&result.artworkBytes==4);
+        assert(result.cache.healthy&&result.cache.schema==AlterEgo::Cache::kSchemaVersion&&result.artworkBytes==4);
         assert(!result.datasets.empty());
         auto items=std::find_if(result.datasets.begin(),result.datasets.end(),
             [](const auto& d){return d.label=="Items";});
@@ -351,7 +352,7 @@ int case_database_core(int, char**) {
             db.Exec("PRAGMA application_id=1234");
         }
         std::vector<Storage::DatasetDiagnostic> rows;
-        auto rejected=Storage::InspectDatabase(foreign,AlterEgo::Cache::kApplicationId,8,true,rows);
+        auto rejected=Storage::InspectDatabase(foreign,AlterEgo::Cache::kApplicationId,AlterEgo::Cache::kSchemaVersion,true,rows);
         assert(!rejected.healthy&&rows.empty());
         DB::Connection readOnly(paths.Cache().u8string(),DB::Connection::OpenMode::ReadOnly);
         bool failed=false;
@@ -376,6 +377,18 @@ int case_database_core(int, char**) {
         assert(Cache::WriteCharacters(root,J{{"last_updated",100},{"characters",J::array({{{"name","Hero"},{"account_name","A"}}})}}));
         Cache::AchievementSnapshot progress;progress.fetchedAt=100;
         assert(Cache::WriteAchievements(root,"A",progress));
+        using WikiKind=Cache::Wiki::Kind;
+        const auto wikiLegacy=paths.CacheDirectory()/"wiki_images"/"legacy_metadata.json";
+        const J wikiData={{"42",{{"acquisition","Dungeon"},{"vendor","Vendor"}}}};
+        Storage::WriteMigrationBytes(wikiLegacy,wikiData.dump());
+        assert(Cache::Wiki::Read(root,WikiKind::Metadata,wikiLegacy)==wikiData);
+        assert(!std::filesystem::exists(wikiLegacy));
+        Storage::WriteMigrationBytes(wikiLegacy,"{}");
+        assert(Cache::Wiki::Read(root,WikiKind::Metadata,wikiLegacy)==wikiData);
+        const J wikiFailures={{"skins",{{"42",100}}},{"currencies",{{"Karma",200}}}};
+        assert(Cache::Wiki::Write(root,WikiKind::Failures,wikiFailures));
+        assert(!Cache::Wiki::Write(root,WikiKind::Metadata,J{{"bad",{{"vendor","Bad"}}}}));
+        assert(Cache::Wiki::Read(root,WikiKind::Metadata,wikiLegacy)==wikiData);
         Storage::WriteMigrationBytes(paths.base/"characters.json","stale legacy");
         std::string error;
         assert(Storage::ScheduleMaintenance(root,Storage::CacheOperation::Characters,error));
@@ -391,6 +404,9 @@ int case_database_core(int, char**) {
         assert(!std::filesystem::exists(paths.CacheDirectory()/"wiki_images"/"42.jpg"));
         assert(!std::filesystem::exists(paths.CacheDirectory()/"wiki_images"/"wiki_failed.json"));
         assert(Storage::ReadMigrationBytes(paths.CacheDirectory()/"wiki_images"/"wiki_data.json")=="metadata");
+        assert(Cache::Wiki::Read(root,WikiKind::Metadata,wikiLegacy)==wikiData);
+        assert(Cache::Wiki::Read(root,WikiKind::Failures,paths.base/"missing.json")==
+            (J{{"skins",J::object()},{"currencies",J::object()}}));
         // Replace the disposable DB with corrupt bytes: full recovery never
         // opens it or silently discards it.
         std::filesystem::remove(paths.Cache());

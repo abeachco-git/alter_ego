@@ -145,11 +145,16 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     std::lock_guard<std::mutex> lock(Cache::Mutex());
     Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
     // Do not migrate or edit a foreign, damaged or unsupported database.
+    const auto version=db.Scalar("PRAGMA user_version");
     if(db.Scalar("PRAGMA application_id")!=Cache::kApplicationId ||
-       db.Scalar("PRAGMA user_version")!=Cache::kSchemaVersion)
+       (version!=Cache::kSchemaVersion && version!=8))
         throw std::runtime_error("Unsupported cache database; use Rebuild all cache to quarantine it");
+    // Schema 8 has no native wiki failures; upgrade known schema before selective operations.
+    Cache::Initialize(db);
     Database::Transaction tx(db);
     switch(op) {
+    case CacheOperation::Artwork:
+        db.Exec("DELETE FROM wiki_skin_failures; DELETE FROM wiki_currency_failures; INSERT OR IGNORE INTO wiki_cache_state VALUES('failures');");break;
     case CacheOperation::Characters:
         db.Exec("DELETE FROM character_rows; DELETE FROM character_snapshot;");break;
     case CacheOperation::AccountProgress:
@@ -207,6 +212,8 @@ inline MaintenanceResult RunStartupMaintenance(const std::string& root) {
                 MaintenanceDetail::Legacy(archive,*op);
             } else if(*op==CacheOperation::Artwork) {
                 MaintenanceDetail::Artwork(archive);
+                CheckMaintenancePath(base,"cache/cache.db");
+                MaintenanceDetail::InvalidateDatabase(paths.Cache(),*op);
             } else {
                 MaintenanceDetail::Legacy(archive,*op);
                 CheckMaintenancePath(base,"cache/cache.db");

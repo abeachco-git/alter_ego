@@ -11,7 +11,7 @@ Baseline: `42d589366fc2345bbc00a90ee554dfe0e94bc626`. This ledger describes sour
 | 5 Immutable render data | In progress | Audit item/stat, skill, trait, specialization, account and other container getters; ensure selection/order revisions match. |
 | 6 Cache management / recovery | Implemented — validation pending | Storage UI confirms startup maintenance; whole cache quarantine, artwork-only reset and four selective relational groups, known legacy source quarantine, operation result. Tests added in database_core. Remaining: per-dataset size granularity, full integrity UI vs quick check, selective group regression breadth, in-game restart and quarantine cleanup usability. |
 | 7 SQLite benchmarks | Not started | Reproducible fixture, startup/reads/writes/contended workload, DELETE/WAL and durability choices. |
-| 8 Wiki metadata migration | Not started | WikiImage JSON metadata and failures still on disk; inventory all remaining cache paths and migrate deliberately. |
+| 8 Wiki metadata migration | Implemented — validation pending | Schema 9 stores typed acquisition and failure rows; native-first migration, cached runtime projections, artwork reset clears failure rows only. Remaining broader cache inventory (workstream 9) and in-game validation. |
 | 9 Configuration / backup audit | Not started | Full storage ownership inventory, verify backup/restore and upstream migration, obsolete experimental paths. |
 | 10 Component reuse / library | In progress | Audit every creation/modification/import path; exact identity, explicit sharing, compatible professions and revision checks. |
 | 11 UI consistency | In progress | Continue common controls and account-safe selectors; storage UI and in-game narrow-window and clipboard validation. |
@@ -30,3 +30,5 @@ Baseline: `42d589366fc2345bbc00a90ee554dfe0e94bc626`. This ledger describes sour
 - Third implementation commit closes local queue admission before deregistration, prevents shutdown-driven negative-cache publication, contains queue initialization/allocation failures and extends background worker tests. No callback-lifetime guarantee claimed.
 
 - Callback pass: close admission before deregistration and drain admitted bodies before joining workers or releasing state; rejected owned H&S replies are freed. Host must stop invoking callback addresses before DLL unmapping. Added callback_lifetime regression. No CI result yet.
+
+- Wiki schema 9: native metadata and failure snapshots; strict legacy validation, authoritative empty snapshots, transactional replacement, artwork reset integration, diagnostics and regression coverage. No current-commit CI result yet.

@@ -1,4 +1,6 @@
 #include "WikiImage.h"
+#include "WikiMetadataCache.h"
+#include "GW2API.h"
 #include "HttpClient.h"
 
 #include <nlohmann/json.hpp>
@@ -10,7 +12,7 @@
 
 using json = nlohmann::json;
 
-extern bool WriteFileAtomic(const std::string& finalPath, const std::string& content);
+
 
 namespace Skinventory {
 
@@ -95,6 +97,8 @@ namespace Skinventory {
     }
 
     void WikiImage::SaveWikiDataCache() {
+        static std::mutex saveMutex;
+        std::lock_guard<std::mutex> saving(saveMutex);
         try {
             json j = json::object();
             {
@@ -112,16 +116,18 @@ namespace Skinventory {
                     if (!entry.empty()) j[std::to_string(id)] = entry;
                 }
             }
-            WriteFileAtomic(GetWikiDataCachePath(), j.dump());
+            if (!AlterEgo::Cache::Wiki::Write(AlterEgo::GW2API::GetDataDirectory(),
+                    AlterEgo::Cache::Wiki::Kind::Metadata,j) && s_API)
+                s_API->Log(LOGL_WARNING,"AlterEgo","Could not persist wiki metadata cache.");
         } catch (...) {}
     }
 
     void WikiImage::LoadWikiDataCache() {
         try {
-            std::ifstream file(GetWikiDataCachePath());
-            if (!file.is_open()) return;
-            json j;
-            file >> j;
+            auto snapshot=AlterEgo::Cache::Wiki::Read(AlterEgo::GW2API::GetDataDirectory(),
+                AlterEgo::Cache::Wiki::Kind::Metadata,std::filesystem::u8path(GetWikiDataCachePath()));
+            if(!snapshot)return;
+            const auto& j=*snapshot;
             std::lock_guard<std::mutex> lock(s_mutex);
             for (auto& [key, val] : j.items()) {
                 uint32_t id = std::stoul(key);
@@ -144,6 +150,8 @@ namespace Skinventory {
     }
 
     void WikiImage::SaveFailedCache() {
+        static std::mutex saveMutex;
+        std::lock_guard<std::mutex> saving(saveMutex);
         try {
             json j = json::object();
             {
@@ -159,16 +167,18 @@ namespace Skinventory {
                 j["skins"] = skins;
                 j["currencies"] = currs;
             }
-            WriteFileAtomic(GetFailedCachePath(), j.dump());
+            if (!AlterEgo::Cache::Wiki::Write(AlterEgo::GW2API::GetDataDirectory(),
+                    AlterEgo::Cache::Wiki::Kind::Failures,j) && s_API)
+                s_API->Log(LOGL_WARNING,"AlterEgo","Could not persist wiki failures cache.");
         } catch (...) {}
     }
 
     void WikiImage::LoadFailedCache() {
         try {
-            std::ifstream file(GetFailedCachePath());
-            if (!file.is_open()) return;
-            json j;
-            file >> j;
+            auto snapshot=AlterEgo::Cache::Wiki::Read(AlterEgo::GW2API::GetDataDirectory(),
+                AlterEgo::Cache::Wiki::Kind::Failures,std::filesystem::u8path(GetFailedCachePath()));
+            if(!snapshot)return;
+            const auto& j=*snapshot;
             if (!j.is_object()) return;
             std::lock_guard<std::mutex> lock(s_mutex);
             // New format: { "skins": {...}, "currencies": {...} }

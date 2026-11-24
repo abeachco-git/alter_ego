@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 8;
+constexpr int kSchemaVersion = 9;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,20 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 9) {
+        db.Exec(R"SQL(
+CREATE TABLE wiki_cache_state(kind TEXT PRIMARY KEY CHECK(kind IN ('metadata','failures'))) STRICT;
+CREATE TABLE wiki_skin_metadata(skin_id INTEGER PRIMARY KEY CHECK(skin_id BETWEEN 1 AND 4294967295),
+    acquisition TEXT NOT NULL, collection TEXT NOT NULL, set_name TEXT NOT NULL,
+    vendor_name TEXT NOT NULL, vendor_location TEXT NOT NULL, vendor_waypoint TEXT NOT NULL,
+    vendor_cost TEXT NOT NULL, vendor_cost_keys TEXT NOT NULL) STRICT;
+CREATE TABLE wiki_skin_failures(skin_id INTEGER PRIMARY KEY CHECK(skin_id BETWEEN 1 AND 4294967295),
+    failed_at INTEGER NOT NULL CHECK(failed_at>=0)) STRICT;
+CREATE TABLE wiki_currency_failures(currency TEXT PRIMARY KEY CHECK(length(currency)>0),
+    failed_at INTEGER NOT NULL CHECK(failed_at>=0)) STRICT;
+)SQL");
+        return;
+    }
     if (version == 8) {
         db.Exec(R"SQL(
 CREATE TABLE clears_snapshots(account TEXT PRIMARY KEY CHECK(length(account)>0), fetch_time INTEGER NOT NULL CHECK(fetch_time>=0)) STRICT;
