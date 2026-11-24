@@ -77,6 +77,16 @@ Snapshot Repository::ReadUnlocked() {
             " FROM loadouts ORDER BY ordinal,id").c_str());
         while(q.Step()) snapshot.loadouts.loadouts.push_back(ReadLoadout(db_,q));
     }
+    {
+        auto q=db_.Prepare("SELECT id,name FROM equipment_sets ORDER BY ordinal,id");
+        while(q.Step()) {
+            Composable::EquipmentSet set{q.Text(0),q.Text(1),{}};
+            auto refs=db_.Prepare("SELECT kind,component_id FROM equipment_set_components WHERE set_id=?");
+            BindKeys(refs,{set.id});
+            while(refs.Step())set.refs.emplace(refs.Text(0),refs.Text(1));
+            snapshot.loadouts.equipment_sets.push_back(std::move(set));
+        }
+    }
     ValidateSnapshot(snapshot);
     return snapshot;
 }
@@ -128,6 +138,21 @@ std::int64_t Repository::Commit(const Snapshot& before,const Snapshot& after) {
     for(const auto& old:before.loadouts.loadouts) if(!newLoads.count(old.id)) {
         Run(db_,"DELETE FROM loadouts WHERE id=?",{old.id});changed=true;
     }
+    const auto oldSets=MakeIndex(before.loadouts.equipment_sets),newSets=MakeIndex(after.loadouts.equipment_sets);
+    for(size_t i=0;i<after.loadouts.equipment_sets.size();++i) {
+        const auto& set=after.loadouts.equipment_sets[i];auto old=oldSets.find(set.id);
+        if(old!=oldSets.end()&&old->second.first==i&&old->second.second->name==set.name&&
+            old->second.second->refs==set.refs)continue;
+        Run(db_,"INSERT INTO equipment_sets VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,ordinal=excluded.ordinal",
+            {set.id,set.name,Number(i)});
+        Run(db_,"DELETE FROM equipment_set_components WHERE set_id=?",{set.id});
+        for(const auto& [kind,id]:set.refs)
+            Run(db_,"INSERT INTO equipment_set_components VALUES(?,?,?)",{set.id,kind,id});
+        changed=true;
+    }
+    for(const auto& set:before.loadouts.equipment_sets)if(!newSets.count(set.id)) {
+        Run(db_,"DELETE FROM equipment_sets WHERE id=?",{set.id});changed=true;
+    }
     for(const auto& entry:before.loadouts.components) {
         auto a=after.loadouts.components.find(entry.first);
         const auto current=MakeIndex(a==after.loadouts.components.end()?empty:a->second);
@@ -146,6 +171,7 @@ std::vector<Match> Repository::ExactMatches(const std::string& kind,const Json& 
     if(!Composable::IsKind(kind)||!data.is_object())
         throw Database::Error(SQLITE_MISUSE,"Invalid component match request");
     auto q=db_.Prepare("SELECT c.id,c.name,(SELECT count(*) FROM loadout_components r "
+        "WHERE r.kind=c.kind AND r.component_id=c.id)+(SELECT count(*) FROM equipment_set_components r "
         "WHERE r.kind=c.kind AND r.component_id=c.id) FROM components c "
         "WHERE c.kind=? AND c.fingerprint=? ORDER BY c.ordinal,c.id");
     BindKeys(q,{kind,fingerprint_(data)});
@@ -162,6 +188,10 @@ std::vector<std::string> Repository::Users(const std::string& kind,const std::st
         "WHERE r.kind=? AND r.component_id=? ORDER BY l.ordinal,l.id");
     BindKeys(q,{kind,id});std::vector<std::string> users;
     while(q.Step())users.push_back(q.Text(0));
+    auto sets=db_.Prepare("SELECT s.id FROM equipment_set_components r JOIN equipment_sets s ON s.id=r.set_id "
+        "WHERE r.kind=? AND r.component_id=? ORDER BY s.ordinal,s.id");
+    BindKeys(sets,{kind,id});
+    while(sets.Step())users.push_back(sets.Text(0));
     return users;
 }
 

@@ -522,6 +522,10 @@ namespace AlterEgo {
                                                   const std::string& name,
                                                   std::string* savedId = nullptr,
                                                   bool reuseExact = true);
+    static bool SaveCapturedEquipmentSet(const SavedBuild& capture,const std::string& name,std::string* savedId);
+    static bool ApplyEquipmentSet(const std::string& loadoutId,const std::string& setId);
+    static bool RenameEquipmentSet(const std::string& setId,const std::string& name);
+    static bool RemoveEquipmentSet(const std::string& setId);
     static bool ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
         const std::string& kind, const std::string& componentId);
     static bool ImportPortableLoadout(const nlohmann::json& packet);

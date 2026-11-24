@@ -18,6 +18,8 @@ public:
             for(const auto& part:parts) hashes_[kind][ExactFingerprint(part.data)].push_back(part.id);
         for(const auto& l:doc.loadouts)
             for(const auto& [kind,id]:l.refs)users_[{kind,id}].push_back(l.id);
+        for(const auto& set:doc.equipment_sets)
+            for(const auto& [kind,id]:set.refs)users_[{kind,id}].push_back(set.id);
     }
     const std::vector<std::string>& Users(const std::string& kind,const std::string& id)const {
         static const std::vector<std::string> empty;
@@ -106,6 +108,10 @@ inline bool ConsolidateExact(Composable::Document& doc,const std::string& kind,
             auto ref=l.refs.find(kind);
             if(ref!=l.refs.end()&&ref->second==source)ref->second=survivor;
         }
+        for(auto& set:next.equipment_sets) {
+            auto ref=set.refs.find(kind);
+            if(ref!=set.refs.end()&&ref->second==source)ref->second=survivor;
+        }
         return Composable::RemoveUnreferenced(next,kind,source,err);
     },error);
 }
@@ -193,5 +199,39 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
     const auto* saved=Composable::FindLoadout(doc,id);
     if(!Composable::Validate(doc,error)||!saved||!Composable::Resolve(doc,*saved,assembled,error))return false;
     return ExactContent(assembled,raw)||Composable::Fail(error,"Exact edited Loadout round-trip mismatch.");
+}
+// Save a named collection of references, never a second copy of equipment.
+inline bool PutEquipmentSet(Composable::Document& doc,const std::string& id,
+    const std::string& name,const Json& raw,std::string& error,
+    const Composable::ComponentNameLookup& lookup={}) {
+    if(id.empty()||Composable::ComponentNameKey(name).empty()||Composable::FindEquipmentSet(doc,id))
+        return Composable::Fail(error,"Invalid equipment set identity or name.");
+    Composable::EquipmentSet set{id,name,{}};
+    const auto parts=Composable::Split(raw);
+    const EditIndex index(doc);
+    for(const auto& [kind,data]:parts) {
+        if(!Composable::IsEquipmentKind(kind))continue;
+        const auto matches=index.Matches(kind,data);
+        if(!matches.empty()) {set.refs[kind]=matches.front().id;continue;}
+        std::string componentId=kind+":"+id;
+        for(unsigned n=1;Composable::Find(doc,kind,componentId);++n)
+            componentId=kind+":"+id+":"+std::to_string(n);
+        doc.components[kind].push_back({componentId,
+            Composable::UniqueComponentName(doc,kind,Composable::SuggestComponentName(kind,data,lookup)),data});
+        set.refs[kind]=componentId;
+    }
+    doc.equipment_sets.push_back(std::move(set));
+    return Composable::Validate(doc,error);
+}
+inline bool ApplyEquipmentSet(Composable::Document& doc,const std::string& loadoutId,
+    const std::string& setId,std::string& error) {
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err) {
+        auto* loadout=Composable::FindLoadout(next,loadoutId);
+        const auto* set=Composable::FindEquipmentSet(next,setId);
+        if(!loadout||!set)return Composable::Fail(err,"Equipment set or Loadout not found.");
+        for(const auto& [kind,id]:set->refs)loadout->refs[kind]=id;
+        Json resolved;
+        return Composable::Resolve(next,*loadout,resolved,err);
+    },error);
 }
 } // namespace AlterEgo::NativeLibrary

@@ -4,9 +4,27 @@
 namespace AlterEgo::NativeLibrary {
 
 constexpr int kApplicationId = 0x41454c42; // AELB
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;
 
 inline void UpgradeSchema(Database::Connection& db, int version) {
+    if(version==2) {
+        db.Exec(R"SQL(
+CREATE TABLE equipment_sets(
+    id TEXT PRIMARY KEY NOT NULL CHECK(length(id)>0),
+    name TEXT NOT NULL CHECK(length(name)>0),
+    ordinal INTEGER NOT NULL CHECK(ordinal>=0)
+) STRICT;
+CREATE TABLE equipment_set_components(
+    set_id TEXT NOT NULL REFERENCES equipment_sets(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('weapons','armor','trinkets','runes','sigils','infusions','relic')),
+    component_id TEXT NOT NULL,
+    PRIMARY KEY(set_id,kind),
+    FOREIGN KEY(kind,component_id) REFERENCES components(kind,id) ON DELETE RESTRICT
+) STRICT;
+CREATE INDEX equipment_set_component_usage ON equipment_set_components(kind,component_id);
+)SQL");
+        return;
+    }
     if (version != 1)
         throw Database::Error(SQLITE_ERROR, "Unknown library schema migration");
     // Category is part of each component FK. IDs are stable within a kind.

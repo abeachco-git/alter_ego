@@ -3597,6 +3597,40 @@ namespace AlterEgo {
         return CreateLoadoutComponent(kind, name, selected->second, savedId, reuseExact, capture.profession);
     }
 
+    bool GW2API::SaveCapturedEquipmentSet(const SavedBuild& capture,const std::string& name,std::string* savedId) {
+        if(capture.gear.empty()||Composable::ComponentNameKey(name).empty())return false;
+        std::string id;
+        const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error) {
+            const std::string prefix="equipment-set:"+std::to_string(std::time(nullptr))+":";
+            unsigned n=0;
+            do{id=prefix+std::to_string(n++);}while(Composable::FindEquipmentSet(doc,id));
+            return NativeLibrary::PutEquipmentSet(doc,id,name,SerializeSavedBuild(capture),error,LookupComponentDisplayName);
+        });
+        if(ok&&savedId)*savedId=id;
+        return ok;
+    }
+    bool GW2API::ApplyEquipmentSet(const std::string& loadoutId,const std::string& setId) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error) {
+            return NativeLibrary::ApplyEquipmentSet(doc,loadoutId,setId,error);
+        });
+    }
+    bool GW2API::RenameEquipmentSet(const std::string& setId,const std::string& name) {
+        if(Composable::ComponentNameKey(name).empty())return false;
+        return CommitComposableEdit([&](Composable::Document& doc,std::string&) {
+            auto* set=Composable::FindEquipmentSet(doc,setId);
+            if(!set)return false;
+            set->name=name;return true;
+        });
+    }
+    bool GW2API::RemoveEquipmentSet(const std::string& setId) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string&) {
+            auto it=std::find_if(doc.equipment_sets.begin(),doc.equipment_sets.end(),
+                [&](const auto& set){return set.id==setId;});
+            if(it==doc.equipment_sets.end())return false;
+            doc.equipment_sets.erase(it);return true;
+        });
+    }
+
     bool GW2API::ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
                                                   const std::string& kind,
                                                   const std::string& componentId) {

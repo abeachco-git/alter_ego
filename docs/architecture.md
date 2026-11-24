@@ -50,11 +50,11 @@ Nine component categories:
 | infusions | Installed IDs/locations, aggregate requirements, AR/stat totals | Aggregate totals/requirements, not slot |
 | relic | Relic identity and effect | Independent relic comparison |
 
-Equipment remains a logical *view* of its components, never a second monolithic saved object. Build is the combination of base_build and skills.
+Equipment remains a logical *view* of its components, never a second monolithic saved object. Build is the combination of base_build and skills. Named Equipment Sets reference all seven equipment components; applying one assigns those seven references in one transaction while retaining Base Build, Skills, metadata and Fashion. A set is a reusable selection, not a second source of gear payloads. Shared component edits affect both sets and Loadouts; private edits do not. Deleting a set retains its component records and any Loadout assignments.
 
 ## Storage invariants and native repository
 
-- Durable library: `library/library.db`, native SQLite schema version 1. No monolithic disk mirror.
+- Durable library: `library/library.db`, native SQLite schema version 2 (transactional migration adds equipment_sets and equipment_set_components). No monolithic disk mirror.
 - Nine independent categories, stable category-scoped IDs and ordered loadouts with optional Fashion foreign keys.
 - Typed relational rows store known fields. Child tables retain physical equipment slots, utility and infusion ordering, exact IDs, mode associations, skins and dyes. Nullable columns and presence flags distinguish absent and empty; JSON extensions preserve unknown external fields.
 - Nonunique indexed fingerprints shortlist exact candidates. Verify complete normalized content before reuse; functional Compare rules are not storage identity.

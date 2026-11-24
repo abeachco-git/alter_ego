@@ -1,4 +1,4 @@
-#include "../src/NativeLibrary.h"
+#include "../src/NativeLibraryEditing.h"
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -91,6 +91,28 @@ int case_native_library(int,char**) {
         auto state=repo.Read();assert(state.revision==2);
         assert(state.loadouts.loadouts.front().metadata.at("name")=="Renamed");
         assert(state.loadouts.components.at("sigils").size()==3);
+        auto next=state;
+        Json raw;assert(C::Resolve(next.loadouts,next.loadouts.loadouts.front(),raw,error));
+        assert(Native::PutEquipmentSet(next.loadouts,"set1","Equipment",raw,error));
+        assert(next.loadouts.equipment_sets.front().refs.size()==7);
+        const auto& refs=next.loadouts.equipment_sets.front().refs;
+        assert(refs.at("sigils")==next.loadouts.loadouts.front().refs.at("sigils"));
+        auto remove=next.loadouts;
+        assert(!C::RemoveUnreferenced(remove,"sigils",refs.at("sigils"),error));
+        assert(Native::ApplyEquipmentSet(next.loadouts,"first","set1",error));
+        assert(repo.Commit(state,next)==3);
+        const auto restored=repo.Read();
+        assert(C::ToJson(restored.loadouts)==C::ToJson(next.loadouts));
+        assert(repo.Users("sigils",refs.at("sigils")).size()==2);
+        C::Document portable;
+        assert(C::FromJson(C::ToJson(restored.loadouts),portable,error));
+        assert(portable.equipment_sets.front().refs==refs);
+        assert(Native::ConsolidateExact(portable,"sigils",refs.at("sigils"),"identical",error));
+        assert(portable.equipment_sets.front().refs.at("sigils")=="identical");
+        C::Document merged;size_t added=0,skipped=0;
+        assert(C::Merge(state.loadouts,portable,false,merged,added,skipped,error));
+        assert(merged.equipment_sets.size()==1);
+        assert(C::Validate(merged,error));
     }
     assert(Native::ExactFingerprint(sigil.data)!=Native::ExactFingerprint(swapped.data));
     return 0;
