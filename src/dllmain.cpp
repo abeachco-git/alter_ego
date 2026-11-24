@@ -14273,6 +14273,13 @@ static void RenderSkinShoppingList() {
 }
 
 // Helper: draw a gradient-backed section header with colored accent underline
+// Shared indicator for the currently active character or in-game template.
+// Keep geometry and color identical; callers choose the center position.
+static constexpr float kActiveIndicatorRadius = 3.0f;
+static void DrawActiveIndicator(ImDrawList* draw, ImVec2 center) {
+    draw->AddCircleFilled(center, kActiveIndicatorRadius, IM_COL32(60, 200, 80, 255));
+}
+
 // Render a scrollable chip strip (used for equipment & build tab selectors).
 // Returns true if the user clicked a different chip (selectedIdx is updated in place).
 static bool RenderChipStrip(const std::vector<std::string>& labels,
@@ -14437,9 +14444,7 @@ static bool RenderChipStrip(const std::vector<std::string>& labels,
         dl->AddText(textPos, textCol, drawLabel.c_str());
 
         if (isActiveInGame) {
-            dl->AddCircleFilled(
-                ImVec2(cMax.x - 6, cMin.y + 6),
-                2.5f, IM_COL32(60, 200, 80, 255));
+            DrawActiveIndicator(dl, ImVec2(cMax.x - 6, cMin.y + 6));
         }
     }
     ImGui::PopID();
@@ -17123,9 +17128,8 @@ void AddonRender() {
                         ImGui::SameLine();
                         float dotY = ImGui::GetCursorScreenPos().y - 3.0f + ImGui::GetTextLineHeight() * 0.5f;
                         float dotX = ImGui::GetCursorScreenPos().x;
-                        ImGui::GetWindowDrawList()->AddCircleFilled(
-                            ImVec2(dotX + 3.0f, dotY), 3.0f,
-                            IM_COL32(60, 200, 80, 255));
+                        DrawActiveIndicator(ImGui::GetWindowDrawList(),
+                            ImVec2(dotX + kActiveIndicatorRadius, dotY));
                         ImGui::Dummy(ImVec2(8, 0));
                     }
                     // Spinning refresh icon for the character currently being fetched
