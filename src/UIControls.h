@@ -2,6 +2,7 @@
 // Canonical general-purpose Alter Ego UI controls. Read docs/ui-components.md.
 // Keep Nexus/ImGui 1.80 compatibility; no request or domain logic belongs here.
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "SplitPanelCore.h"
 #include <set>
 #include <string>
@@ -37,10 +38,10 @@ inline bool Button(const char* label, ImVec2 size = ImVec2(0,0),
 }
 // Shared explicit edit footer. Callers own validation, draft and commit.
 enum class EditAction { None, Save, Cancel };
-inline EditAction SaveCancel(const char* scope,bool canSave=true) {
+inline EditAction SaveCancel(const char* scope,bool canSave=true,const char* saveLabel="Save") {
     ImGui::PushID(scope);
     if(!canSave){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
-    const bool save=Button("Save",ImVec2(80,0))&&canSave;
+    const bool save=Button(saveLabel,ImVec2(std::max(80.f,ImGui::CalcTextSize(saveLabel).x+2*ImGui::GetStyle().FramePadding.x),0))&&canSave;
     if(!canSave){ImGui::PopStyleVar();ImGui::PopItemFlag();}
     ImGui::SameLine();
     const bool cancel=Button("Cancel",ImVec2(80,0));

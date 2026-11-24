@@ -10,7 +10,7 @@ static int g_FashionFilter = 0;
 static bool g_FashionDialog = false;
 static AddonWindowFocusRequest g_FashionDialogFocus;
 static int g_FashionEditing = -1;
-static AlterEgo::Fashion::Look g_FashionDraft;
+static AlterEgo::Fashion::Look g_FashionDraft,g_FashionEditBaseline;
 static char g_FashionName[256] = "";
 static char g_FashionNotes[1024] = "";
 static char g_FashionCharacterNames[2048] = "";
@@ -45,13 +45,13 @@ static std::string FashionWeightFromSkins(const AlterEgo::DecodedWardrobeLink& w
 
 static void StartFashionEdit(const AlterEgo::Fashion::Look& look, int index = -1) {
     g_FashionDialogFocus.Request();
-    // Same saved appearance, live capture, or imported link: keep edits.
-    if (g_FashionDialog && g_FashionEditing == index &&
-        (index >= 0 ? g_FashionDraft.id == look.id :
-         (g_FashionDraft.origin == look.origin &&
-          g_FashionDraft.source_character == look.source_character &&
-          g_FashionDraft.source_tab == look.source_tab &&
-          g_FashionDraft.wardrobe_link == look.wardrobe_link))) return;
+    // This window is modeless: don't silently replace an existing draft.
+    if(g_FashionDialog){
+        if(g_FashionEditing!=index||g_FashionDraft.id!=look.id)
+            g_FashionError="Save or cancel the current Fashion draft first.";
+        return;
+    }
+    g_FashionEditBaseline=index>=0&&index<(int)g_FashionLibrary.looks.size()?g_FashionLibrary.looks[index]:look;
     g_FashionDraft = look;
     g_FashionEditing = index;
     snprintf(g_FashionName, sizeof(g_FashionName), "%s", look.name.c_str());
@@ -168,7 +168,8 @@ static void RenderFashionDialog() {
     // Shared standard-height action buttons, consistent with the existing
     // Save to Library dialog. Keep the duplicate action explicit.
     const char* saveLabel = duplicate >= 0 ? "Save Separate Copy" : "Save";
-    if (RenderActionButton(saveLabel, ImVec2(duplicate >= 0 ? 0.0f : 90.0f, 0.0f))) {
+    const auto action=AlterEgo::UI::SaveCancel("fashion_edit",g_FashionName[0]!=0,saveLabel);
+    if(action==AlterEgo::UI::EditAction::Save) {
         AlterEgo::Fashion::Look next = g_FashionDraft;
         next.name = g_FashionName;
         next.notes = g_FashionNotes;
@@ -184,8 +185,9 @@ static void RenderFashionDialog() {
         }
         bool ok = false;
         if (g_FashionEditing >= 0) {
-            ok = g_FashionLibrary.Update(g_FashionEditing, next);
-            if (ok) g_FashionSelected = g_FashionEditing;
+            ok = g_FashionLibrary.UpdateDraft(g_FashionEditBaseline,next);
+            if(ok)for(int i=0;i<(int)g_FashionLibrary.looks.size();++i)
+                if(g_FashionLibrary.looks[i].id==g_FashionEditBaseline.id){g_FashionSelected=i;break;}
         } else {
             int added = g_FashionLibrary.Add(std::move(next));
             ok = added >= 0;
@@ -195,11 +197,9 @@ static void RenderFashionDialog() {
             NavigateToLibraryCollection(1);
             g_FashionDialog = false;
             if (APIDefs) APIDefs->GUI_SendAlert("Fashion saved.");
-        } else g_FashionError = "Could not save. Check the name and library file permissions.";
+        } else g_FashionError = g_FashionLibrary.error.empty()?"Could not save. Check the name and library file permissions.":g_FashionLibrary.error;
     }
-    ImGui::SameLine();
-    if (RenderActionButton("Cancel##fashion", ImVec2(90.0f, 0.0f)))
-        g_FashionDialog = false;
+    if(action==AlterEgo::UI::EditAction::Cancel)g_FashionDialog=false;
     if (!g_FashionError.empty())
         ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", g_FashionError.c_str());
     ImGui::End();

@@ -314,7 +314,7 @@ static bool ComponentUIEditorCanCommit() {
     if(g_ComponentEditorMode!="create" && g_ComponentEditorRevision!=AlterEgo::GW2API::GetBuildLibraryRevision()) {
         g_ComponentEditorError="Library changed. Cancel and reopen this editor before saving.";return false;
     }
-    if (g_ComponentEditorName.empty()) {
+    if (AlterEgo::Composable::ComponentNameKey(g_ComponentEditorName).empty()) {
         g_ComponentEditorError = "Give the component a name.";
         return false;
     }
@@ -479,14 +479,16 @@ static void RenderComponentUIEditor() {
     }
     if (g_ComponentEditorMode != "rename") {
         ImGui::Separator();
-        ImGui::BeginChild("##component_native_editor", ImVec2(0, -60.0f), false);
+        ImGui::BeginChild("##component_native_editor", ImVec2(0, -110.0f), false);
         RenderComponentNativeEditor(g_ComponentEditorKind, g_ComponentEditorId,
                                     g_ComponentEditorDraft);
         ImGui::EndChild();
     }
     if (!g_ComponentEditorError.empty())
         ImGui::TextWrapped("%s", g_ComponentEditorError.c_str());
-    const auto editAction=AlterEgo::UI::SaveCancel("component_editor");
+    const bool editorStale=g_ComponentEditorMode!="create"&&g_ComponentEditorRevision!=AlterEgo::GW2API::GetBuildLibraryRevision();
+    if(editorStale)ImGui::TextWrapped("Library changed. Cancel and reopen this editor before saving.");
+    const auto editAction=AlterEgo::UI::SaveCancel("component_editor",!editorStale&&!AlterEgo::Composable::ComponentNameKey(g_ComponentEditorName).empty()&&g_ComponentEditorDraft.is_object());
     if (editAction==AlterEgo::UI::EditAction::Save) {
         if (ComponentUIEditorCanCommit()) {
             ComponentUICommand cmd;
@@ -679,13 +681,14 @@ static void RenderReferenceEditor(){
     using namespace AlterEgo;
     auto& e=g_ReferenceEditor;
     if(!e.open)return;
-    if(!ImGui::IsPopupOpen("Edit references##ae_reference_editor"))ImGui::OpenPopup("Edit references##ae_reference_editor");
-    ImGui::SetNextWindowSize(ImVec2(580,620),ImGuiCond_Appearing);
-    if(!ImGui::BeginPopupModal("Edit references##ae_reference_editor",&e.open))return;
+    const char* popup=e.isSet?"Edit Equipment Set###ae_reference_editor":"Edit Loadout Components###ae_reference_editor";
+    if(!ImGui::IsPopupOpen(popup))ImGui::OpenPopup(popup);
+    const auto display=ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowSize(ImVec2(std::min(580.f,display.x-24.f),std::min(620.f,display.y-24.f)),ImGuiCond_Appearing);
+    if(!ImGui::BeginPopupModal(popup,&e.open))return;
     const auto& doc=ComponentUISnapshot();
     const auto* owner=e.isSet?ComponentUIFindSet(doc,e.id):ComponentUIFindLoadout(doc,e.id);
     const bool stale=e.revision!=GW2API::GetBuildLibraryRevision()||!owner;
-    ImGui::TextUnformatted(e.isSet?"Edit Equipment Set":"Edit Loadout components");
     if(!e.isSet)ImGui::TextWrapped("%s",e.name.c_str());
     if(stale)ImGui::TextWrapped("Library changed. Cancel and reopen to avoid overwriting newer changes.");
     ImGui::BeginChild("##reference_editor_fields",ImVec2(0,-110),false);
@@ -771,11 +774,16 @@ static void RenderReferencePreviewRow(const ComponentJson& doc,const std::string
     if(inherited)ImGui::TextDisabled("From Equipment Set");
     const auto* part=ComponentUIFind(doc,kind,ref);
     if(actions&&part){
+        const auto fit=[&](const char* label){
+            const float right=ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x;
+            if(right-ImGui::GetItemRectMax().x>=AlterEgo::UI::CompactButtonWidth(label)+ImGui::GetStyle().ItemSpacing.x)ImGui::SameLine();
+        };
+        fit("Open");
         if(AlterEgo::UI::Button("Open##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIOpenLibrary(kind,ref);
-        ImGui::SameLine();
+        fit("Edit Shared");
         if(AlterEgo::UI::Button("Edit Shared##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIStartEditor("edit",kind,ref,part);
         if(!loadoutId.empty()&&!inherited){
-            if(ImGui::GetContentRegionAvail().x>AlterEgo::UI::CompactButtonWidth("Copy & Edit")+ImGui::GetStyle().ItemSpacing.x)ImGui::SameLine();
+            fit("Copy & Edit");
             if(AlterEgo::UI::Button("Copy & Edit##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIStartPrivateEditor(loadoutId,kind,ref,part);
         }
     }
@@ -812,6 +820,8 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     if(!g_LibEditMode){
         if(linked){
             if(RenderActionButton("Open Set")){g_EquipmentSetSelectedId=linkedId;g_LibraryCollection=3;MarkNavigation();}
+            ImGui::SameLine();
+            if(RenderActionButton("Edit Shared Set"))BeginReferenceEditor(*linked,true);
             ImGui::SameLine();
             if(RenderActionButton("Detach Set")){
                 BeginReferenceEditor(*l,false);DraftSelectEquipmentSet(doc,"");
@@ -1222,34 +1232,24 @@ static void RenderEquipmentSetLibrary() {
     ImGui::TextDisabled("Used by %d Loadout(s)",users);
     for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==id)
         ImGui::BulletText("%s",l.at("metadata").value("name",l.value("id",std::string())).c_str());
-    static std::string rename;
     static std::string duplicateName;
     static uint64_t duplicateRevision=0;
+    if(RenderActionButton("Edit##equipment_set"))BeginReferenceEditor(*selected,true);
+    ImGui::SameLine();
     if(RenderActionButton("Duplicate##equipment_set")){duplicateName=name+" - Copy";duplicateRevision=GW2API::GetBuildLibraryRevision();ImGui::OpenPopup("Duplicate equipment set");}
     if(ImGui::BeginPopupModal("Duplicate equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
         UI::InputText("Name",duplicateName);
-        if(RenderActionButton("Save")&&!Composable::ComponentNameKey(duplicateName).empty()) {
+        const auto action=UI::SaveCancel("duplicate_set",!Composable::ComponentNameKey(duplicateName).empty()&&duplicateRevision==GW2API::GetBuildLibraryRevision());
+        if(action==UI::EditAction::Save) {
             g_ComponentCommand={ComponentUICommand::DuplicateSet,"","",id,duplicateName,ComponentJson::object(),duplicateRevision};
             ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
+        }else if(action==UI::EditAction::Cancel)ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
-    ImGui::SameLine();
-    if(RenderActionButton("Rename##equipment_set")) {rename=name;ImGui::OpenPopup("Rename equipment set");}
     ImGui::SameLine();
     if(!users) {
         if(UI::Button("Delete##equipment_set",ImVec2(0,0),UI::ButtonRole::Destructive))ImGui::OpenPopup("Delete equipment set?");
     } else ImGui::TextDisabled("Referenced sets cannot be deleted.");
-    if(ImGui::BeginPopupModal("Rename equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
-        UI::InputText("Name",rename);
-        if(RenderActionButton("Save")&&!Composable::ComponentNameKey(rename).empty()) {
-            g_ComponentCommand={ComponentUICommand::RenameSet,"","",id,rename,ComponentJson::object()};
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
     if(ImGui::BeginPopupModal("Delete equipment set?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextWrapped("Delete this unused named set? Its components are retained.");
         if(UI::Button("Delete",ImVec2(0,0),UI::ButtonRole::Destructive)) {
@@ -1260,7 +1260,6 @@ static void RenderEquipmentSetLibrary() {
         ImGui::EndPopup();
     }
     ImGui::Separator();
-    if(RenderActionButton("Edit##equipment_set"))BeginReferenceEditor(*selected,true);
     if(ImGui::BeginTable("##equipment_set_refs",2,ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,110.f);
         ImGui::TableSetupColumn("Selection",ImGuiTableColumnFlags_WidthStretch);
@@ -1346,7 +1345,7 @@ static void ProcessComponentUICommand() {
         else
             success = API::CopyEditedLoadoutComponent(
                 command.loadout_id, command.kind, command.component_id,
-                command.name, command.data);
+                command.name, command.data,command.expected_revision);
         if (success && g_LibraryCollection == 2) {
             const auto& latest = ComponentUISnapshot();
             const auto* target = ComponentUIFindLoadout(latest, command.loadout_id);
@@ -1375,7 +1374,7 @@ static void ProcessComponentUICommand() {
         break;
     case ComponentUICommand::EditShared:
         success = API::EditAndRenameLoadoutComponent(
-            command.kind, command.component_id, command.name, command.data);
+            command.kind, command.component_id, command.name, command.data,command.expected_revision);
         break;
     case ComponentUICommand::ImportPortableLoadout:
         success = API::ImportPortableLoadout(command.data);

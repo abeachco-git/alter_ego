@@ -11873,17 +11873,17 @@ static void RenderBuildLibrary() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Drag to reorder %s and all its builds. Right-click to create a build.",
                     profession.c_str());
-            if (ImGui::BeginPopupContextItem("##profession_actions")) {
+            if (!g_LibEditMode && ImGui::BeginPopupContextItem("##profession_actions")) {
                 if (ImGui::MenuItem("New Build")) g_NewBuildProfessionPending = profession;
                 ImGui::EndPopup();
             }
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+            if (!g_LibEditMode && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
                 ImGui::SetDragDropPayload("AE_BUILD_GROUP",
                     profession.c_str(), profession.size()+1);
                 ImGui::Text("Move %s (%d builds)", profession.c_str(), group.total);
                 ImGui::EndDragDropSource();
             }
-            if (ImGui::BeginDragDropTarget()) {
+            if (!g_LibEditMode && ImGui::BeginDragDropTarget()) {
                 const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
                     "AE_BUILD_GROUP", ImGuiDragDropFlags_AcceptBeforeDelivery |
                                       ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
@@ -12097,12 +12097,12 @@ static void RenderBuildLibrary() {
 
             // Drag an item within its own profession only. A completed drop
             // is applied after the preview pane finishes drawing.
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+            if (!g_LibEditMode && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
                 ImGui::SetDragDropPayload("AE_BUILD_ITEM", b.id.c_str(), b.id.size() + 1);
                 ImGui::Text("%s", b.name.c_str());
                 ImGui::EndDragDropSource();
             }
-            if (ImGui::BeginDragDropTarget()) {
+            if (!g_LibEditMode && ImGui::BeginDragDropTarget()) {
                 const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
                     "AE_BUILD_ITEM", ImGuiDragDropFlags_AcceptBeforeDelivery |
                                      ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
@@ -16220,7 +16220,6 @@ static void HandleTabDropdown(TabDropdownState& state, ImGuiTabBar* tabBar,
     state.requestOpen = false;
     state.requestClose = false;
     state.labelClicked = false;
-    if(g_LibEditMode){state.requestClose=state.popupOpen;return;}
     state.anchor = ImVec2(tabMin.x, tabMax.y);
 
     const ImVec2 arrow(tabMax.x - 13.0f, (tabMin.y + tabMax.y) * 0.5f);
@@ -16231,6 +16230,7 @@ static void HandleTabDropdown(TabDropdownState& state, ImGuiTabBar* tabBar,
     draw->AddLine(ImVec2(arrow.x, arrow.y + 2.0f),
                   ImVec2(arrow.x + 4.0f, arrow.y - 2.0f), color, 1.6f);
 
+    if(g_LibEditMode){state.requestClose=state.popupOpen;return;}
     // IsItemHovered is blocked by active popups, especially for the active tab.
     state.headerHovered = ImGui::IsMouseHoveringRect(tabMin, tabMax, false);
     const bool clicked = state.headerHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);

@@ -486,7 +486,7 @@ namespace AlterEgo {
                                          const std::string& newComponentName);
     static bool CopyEditedLoadoutComponent(const std::string& loadoutId,
         const std::string& kind, const std::string& sourceComponentId,
-        const std::string& name, const nlohmann::json& data);
+        const std::string& name, const nlohmann::json& data,uint64_t expectedRevision=0);
         static bool ReuseEditedLoadoutComponent(const std::string& loadoutId,
             const std::string& kind, const std::string& sourceId,
             const std::string& candidateId, const nlohmann::json& draft,
@@ -496,7 +496,7 @@ namespace AlterEgo {
                                                 const nlohmann::json& data);
     static bool EditAndRenameLoadoutComponent(const std::string& kind,
         const std::string& componentId, const std::string& name,
-        const nlohmann::json& data);
+        const nlohmann::json& data,uint64_t expectedRevision=0);
         static bool SetLoadoutFashion(const std::string& loadoutId,
                                       const std::string& fashionId);
         static bool CreateLoadoutComponent(const std::string& kind,

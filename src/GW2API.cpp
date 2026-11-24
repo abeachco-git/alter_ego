@@ -3452,8 +3452,9 @@ namespace AlterEgo {
                                             const std::string& kind,
                                             const std::string& sourceComponentId,
                                             const std::string& name,
-                                            const nlohmann::json& data) {
+                                            const nlohmann::json& data,uint64_t expectedRevision) {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
             static std::atomic<uint64_t> counter{0};
             std::string id;
             do {
@@ -3490,8 +3491,9 @@ namespace AlterEgo {
     bool GW2API::EditAndRenameLoadoutComponent(const std::string& kind,
                                                const std::string& componentId,
                                                const std::string& name,
-                                               const nlohmann::json& data) {
+                                               const nlohmann::json& data,uint64_t expectedRevision) {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
             return Composable::UpdateSharedNamed(doc, kind, componentId, name, data, error);
         });
     }

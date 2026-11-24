@@ -68,6 +68,24 @@ public:
         return true;
     }
 
+    bool UpdateDraft(const Look& baseline,const Look& edited) {
+        if(directory.empty()||baseline.id.empty())return false;
+        NativeLibrary::Snapshot before;
+        auto& store=NativeLibrary::RuntimeStore();
+        if(!store.Read(before,error))return false;
+        auto next=before;
+        auto it=std::find_if(next.fashion.begin(),next.fashion.end(),[&](const Look& look){return look.id==baseline.id;});
+        if(it==next.fashion.end()||ToJson(*it)!=ToJson(baseline)){error="Saved Fashion changed; reopen editor.";return false;}
+        Look copy=edited;
+        copy.id=it->id;copy.created=it->created;
+        copy.wardrobe_link=CanonicalLink(copy.wardrobe_link);
+        if(copy.wardrobe_link.empty()||copy.name.empty())return false;
+        *it=std::move(copy);
+        auto published=next.fashion;
+        if(!store.Commit(before,std::move(next),error))return false;
+        looks=std::move(published);return true;
+    }
+
     bool Remove(int idx) {
         if (idx < 0 || idx >= static_cast<int>(looks.size())) return false;
         Look old = looks[idx];
