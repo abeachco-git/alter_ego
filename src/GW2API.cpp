@@ -2,6 +2,7 @@
 #include "SkinDataCache.h"
 #include "ReferenceMetadataCache.h"
 #include "ItemMetadataCache.h"
+#include "CharacterCache.h"
 #include "AutoRefreshPolicy.h"
 #include "HoardAndSeekAPI.h"
 #include "ChatLink.h"
@@ -1359,6 +1360,8 @@ namespace AlterEgo {
         eq.skin = SafeUint(item_json, "skin");
         eq.binding = SafeStr(item_json, "binding");
         eq.bound_to = SafeStr(item_json, "bound_to");
+        eq.binding_known = item_json.contains("binding");
+        eq.bound_to_known = item_json.contains("bound_to");
 
         if (item_json.contains("upgrades") && item_json["upgrades"].is_array()) {
             for (const auto& u : item_json["upgrades"])
@@ -1442,7 +1445,8 @@ namespace AlterEgo {
             if (build.contains("aquatic_skills"))
                 bt.aquatic_skills = parseSkillBar(build["aquatic_skills"]);
 
-            if (build.contains("pets")) {
+            if (build.contains("pets") && build["pets"].is_object()) {
+                bt.pets_known = true;
                 const auto& pets = build["pets"];
                 if (pets.contains("terrestrial") && pets["terrestrial"].is_array()) {
                     int i = 0;
@@ -1463,6 +1467,7 @@ namespace AlterEgo {
             }
 
             if (build.contains("legends") && build["legends"].is_array()) {
+                bt.legends_known = true;
                 int i = 0;
                 for (const auto& leg : build["legends"]) {
                     if (i >= 2) break;
@@ -1471,6 +1476,7 @@ namespace AlterEgo {
                 }
             }
             if (build.contains("aquatic_legends") && build["aquatic_legends"].is_array()) {
+                bt.legends_known = true;
                 int i = 0;
                 for (const auto& leg : build["aquatic_legends"]) {
                     if (i >= 2) break;
@@ -1480,6 +1486,15 @@ namespace AlterEgo {
             }
         }
 
+            // The API may omit weapon selections entirely; do not turn that into verified empty data.
+        if (tab_json.contains("build") && tab_json["build"].is_object()) {
+            const auto& build=tab_json["build"];
+            if (build.contains("weapons") && build["weapons"].is_array()) {
+                bt.weapons_known=true;
+                for(const auto& weapon:build["weapons"])
+                    if(weapon.is_number_unsigned()||weapon.is_number_integer())bt.weapons.push_back(weapon.get<uint32_t>());
+            }
+        }
         return bt;
     }
 
@@ -2340,8 +2355,9 @@ namespace AlterEgo {
 
     bool GW2API::SaveCharacterData() {
         EnsureDataDirectory();
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "characters.json");
-
+        // Serialize snapshot capture and persistence in the same order. No Nexus calls under this lock.
+        static std::mutex characterSaveMutex;
+        std::lock_guard<std::mutex> saveLock(characterSaveMutex);
         json j;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -2381,6 +2397,8 @@ namespace AlterEgo {
                     ej["slot"] = eq.slot;
                     ej["skin"] = eq.skin;
                     ej["tab"] = eq.tab;
+                    if(eq.binding_known||!eq.binding.empty())ej["binding"]=eq.binding;
+                    if(eq.bound_to_known||!eq.bound_to.empty())ej["bound_to"]=eq.bound_to;
                     if (!eq.upgrades.empty()) ej["upgrades"] = eq.upgrades;
                     if (!eq.infusions.empty()) ej["infusions"] = eq.infusions;
                     if (!eq.dyes.empty()) ej["dyes"] = eq.dyes;
@@ -2430,6 +2448,9 @@ namespace AlterEgo {
                     };
                     bj["skills"] = skillBarToJson(bt.terrestrial_skills);
                     bj["aquatic_skills"] = skillBarToJson(bt.aquatic_skills);
+                    if(bt.pets_known)bj["pets"]={bt.pets.terrestrial[0],bt.pets.terrestrial[1],bt.pets.aquatic[0],bt.pets.aquatic[1]};
+                    if(bt.legends_known)bj["legends"]={bt.legends.terrestrial[0],bt.legends.terrestrial[1],bt.legends.aquatic[0],bt.legends.aquatic[1]};
+                    if(bt.weapons_known||!bt.weapons.empty())bj["weapons"]=bt.weapons;
 
                     bt_arr.push_back(bj);
                 }
@@ -2447,34 +2468,14 @@ namespace AlterEgo {
             j["characters"] = chars_arr;
         }
 
-        // Character data is a shared multi-account index with account_name
-        // stored on each character. Write atomically because it may be saved
-        // after each character, not just when the full roster completes.
-        const std::string tmp = path + ".tmp";
-        try {
-            {
-                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-                if (!out.is_open()) return false;
-                const std::string payload = j.dump(2);
-                out.write(payload.data(), (std::streamsize)payload.size());
-                out.flush();
-                if (!out.good()) return false;
-            }
-            return MoveFileExA(tmp.c_str(), path.c_str(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-        } catch (...) {
-            return false;
-        }
+        return Cache::WriteCharacters(GetDataDirectory(),j);
     }
 
     bool GW2API::LoadCharacterData() {
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "characters.json");
-        std::ifstream file(path);
-        if (!file.is_open()) return false;
-
         try {
-            json j;
-            file >> j;
+            auto loaded=Cache::ReadCharacters(GetDataDirectory());
+            if(!loaded)return false;
+            const auto& j=*loaded;
 
             std::lock_guard<std::mutex> lock(s_mutex);
             if (!j.contains("characters") || !j["characters"].is_array())
@@ -2520,6 +2521,10 @@ namespace AlterEgo {
                             eq.slot = ej.value("slot", "");
                             eq.skin = ej.value("skin", (uint32_t)0);
                             eq.tab = ej.value("tab", 0);
+                            eq.binding_known=ej.contains("binding");
+                            eq.bound_to_known=ej.contains("bound_to");
+                            eq.binding=ej.value("binding",std::string());
+                            eq.bound_to=ej.value("bound_to",std::string());
                             if (ej.contains("upgrades")) {
                                 for (const auto& u : ej["upgrades"])
                                     eq.upgrades.push_back(u.get<uint32_t>());
@@ -2587,6 +2592,17 @@ namespace AlterEgo {
                             if (bj.contains("aquatic_skills"))
                                 bt.aquatic_skills = parseSkillBarJson(bj["aquatic_skills"]);
 
+                            if(bj.contains("pets")&&bj["pets"].is_array()&&bj["pets"].size()==4) {
+                                bt.pets_known=true;
+                                for(int i=0;i<2;++i){bt.pets.terrestrial[i]=bj["pets"][i].get<uint32_t>();bt.pets.aquatic[i]=bj["pets"][i+2].get<uint32_t>();}
+                            }
+                            if(bj.contains("legends")&&bj["legends"].is_array()&&bj["legends"].size()==4) {
+                                bt.legends_known=true;
+                                for(int i=0;i<2;++i){bt.legends.terrestrial[i]=bj["legends"][i].get<std::string>();bt.legends.aquatic[i]=bj["legends"][i+2].get<std::string>();}
+                            }
+                            if(bj.contains("weapons")&&bj["weapons"].is_array()) {
+                                bt.weapons_known=true;bt.weapons=bj["weapons"].get<std::vector<uint32_t>>();
+                            }
                             ch.build_tabs.push_back(bt);
                         }
                     }

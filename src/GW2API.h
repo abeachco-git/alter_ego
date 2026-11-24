@@ -40,6 +40,8 @@ namespace AlterEgo {
         std::vector<int> dyes;      // Dye color IDs (up to 4)
         std::string binding;        // "Character" or "Account"
         std::string bound_to;       // Character name if character-bound
+        bool binding_known = false;
+        bool bound_to_known = false;
         int tab = 0;                // Equipment tab number
         uint32_t stat_id = 0;       // Selected itemstat ID (for legendary/ascended)
         std::map<std::string, int> attributes; // e.g. {"Power": 251, "Precision": 179}
@@ -121,6 +123,9 @@ namespace AlterEgo {
         RangerPets pets;
         RevenantLegends legends;
         std::vector<uint32_t> weapons; // Weapon type IDs
+        bool pets_known = false;
+        bool legends_known = false;
+        bool weapons_known = false;
     };
 
     // Cached info about an item from /v2/items (public, no auth)

@@ -67,3 +67,5 @@ Storage diagnostics tests cover missing paths without creation, read-only databa
 Portable graph merge tests include same-ID/different-name records, incompatible Skills ownership, reserved collision suffixes, and verified compatible Skills reuse.
 
 Native editing and migration also verify that aggregate edits cannot change an existing Loadout's profession, and that identical legacy Skills with missing or different professions remain independent.
+
+Character cache coverage exercises native-first legacy migration, exact account identity, unknown-account records, ordered equipment and build data, missing newly persisted fields, stale capture rejection and rollback on duplicate identity.

@@ -6,6 +6,7 @@
 #include "../src/ReferenceMetadataCache.h"
 #include "../src/ItemMetadataCache.h"
 #include "../src/CacheDiagnostics.h"
+#include "../src/CharacterCache.h"
 #include "../src/NativeLibraryStore.h"
 #include <cassert>
 #include <chrono>
@@ -291,7 +292,7 @@ int case_database_core(int, char**) {
         assert(!Cache::WriteReference(root,D::Dyes,badDye,101));
         assert(Cache::ReadReference(root,D::Dyes)==dyes);
         DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
-        assert(db.Scalar("PRAGMA user_version")==6);
+        assert(db.Scalar("PRAGMA user_version")==7);
         assert(db.Scalar("SELECT count(*) FROM reference_skills_professions")==2);
     }
     {
@@ -337,7 +338,7 @@ int case_database_core(int, char**) {
         std::filesystem::create_directories(paths.CacheDirectory()/"textures");
         Storage::WriteMigrationBytes(paths.CacheDirectory()/"textures"/"test.dat","1234");
         const auto result=Storage::InspectStorage(root);
-        assert(result.cache.healthy&&result.cache.schema==6&&result.artworkBytes==4);
+        assert(result.cache.healthy&&result.cache.schema==7&&result.artworkBytes==4);
         assert(!result.datasets.empty());
         auto items=std::find_if(result.datasets.begin(),result.datasets.end(),
             [](const auto& d){return d.label=="Items";});
@@ -348,12 +349,47 @@ int case_database_core(int, char**) {
             db.Exec("PRAGMA application_id=1234");
         }
         std::vector<Storage::DatasetDiagnostic> rows;
-        auto rejected=Storage::InspectDatabase(foreign,AlterEgo::Cache::kApplicationId,6,true,rows);
+        auto rejected=Storage::InspectDatabase(foreign,AlterEgo::Cache::kApplicationId,7,true,rows);
         assert(!rejected.healthy&&rows.empty());
         DB::Connection readOnly(paths.Cache().u8string(),DB::Connection::OpenMode::ReadOnly);
         bool failed=false;
         try{readOnly.Exec("DELETE FROM reference_items");}catch(const DB::Error&){failed=true;}
         assert(failed);
+    }
+    {
+        namespace Cache=AlterEgo::Cache;
+        using J=Cache::CharacterRows::Json;
+        const auto root=(temp.dir/"characters").u8string();
+        const AlterEgo::Storage::Paths paths(root);
+        J bt={{"tab",1},{"is_active",true},{"name","Build"},{"profession","Ranger"},
+            {"pets",{1,2,3,4}},{"legends",{"a","b","c","d"}},{"weapons",{5,6}},
+            {"specializations",J::array({{{"id",1},{"traits",{1,2,3}}},{{"id",2},{"traits",{3,2,1}}},{{"id",3},{"traits",{2,1,3}}}})},
+            {"skills",{{"heal",10},{"utilities",{11,12,13}},{"elite",14}}}};
+        J eq={{"id",42},{"slot","Helm"},{"tab",2},{"binding","Character"},{"bound_to","Hero"},
+            {"upgrades",{3,4}},{"infusions",{9,8,7}},{"dyes",{0,22}},{"attributes",{{"Power",123}}}};
+        J ch={{"name","Hero"},{"account_name","A.B"},{"data_refreshed",99},{"crafting_cached",true},
+            {"crafting",J::array({{{"discipline","Chef"},{"rating",400},{"active",false}}})},
+            {"equipment",J::array({eq})},{"build_tabs",J::array({bt})},{"equipment_tab_names",{{"2","Gear"}}},{"heropoints",{"0-29","0-10"}}};
+        J other=ch;other["account_name"]="A_B";
+        J unknown=ch;unknown.erase("account_name");unknown["build_tabs"][0].erase("pets");unknown["build_tabs"][0].erase("legends");unknown["build_tabs"][0].erase("weapons");
+        J data={{"last_updated",100},{"characters",J::array({ch,other,unknown})}};
+        AlterEgo::Storage::WriteMigrationBytes(paths.base/"characters.json",data.dump());
+        auto read=Cache::ReadCharacters(root);assert(read&&read->at("characters").size()==3);
+        assert(read->at("characters")[0]==ch);
+        assert(read->at("characters")[1]==other);
+        assert(read->at("characters")[2].at("account_name")=="");
+        assert(!read->at("characters")[2]["build_tabs"][0].contains("pets"));
+        assert(!read->at("characters")[2]["build_tabs"][0].contains("weapons"));
+        auto bad=data;bad["characters"].push_back(ch);
+        assert(!Cache::WriteCharacters(root,bad));assert(Cache::ReadCharacters(root)==read);
+        auto stale=data;stale["last_updated"]=99;
+        assert(!Cache::WriteCharacters(root,stale));assert(Cache::ReadCharacters(root)==read);
+        auto updated=data;updated["last_updated"]=101;updated["characters"][0]["equipment"][0]["infusions"]={99};
+        assert(Cache::WriteCharacters(root,updated));
+        assert(Cache::ReadCharacters(root)->at("characters")[0]["equipment"][0]["infusions"]==J::array({99}));
+        DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
+        assert(db.Scalar("SELECT count(*) FROM character_rows")==3);
+        db.Verify();
     }
     return 0;
 }

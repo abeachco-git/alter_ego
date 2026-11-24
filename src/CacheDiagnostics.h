@@ -92,7 +92,8 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                 {"Traits","SELECT count(*) FROM reference_traits","trait_cache"},
                 {"Specializations","SELECT count(*) FROM reference_specializations","spec_cache"},
                 {"Item stats","SELECT count(*) FROM reference_itemstats","itemstat_cache"},
-                {"Dyes","SELECT count(*) FROM reference_dyes","dye_cache"}
+                {"Dyes","SELECT count(*) FROM reference_dyes","dye_cache"},
+                {"Characters","SELECT count(*) FROM character_rows",nullptr}
             };
             auto fresh=db.Prepare("SELECT saved_at FROM reference_freshness WHERE dataset=?");
             for(const auto& e:entries) {
@@ -104,6 +105,8 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                     fresh.Reset();
                 } else if(row.label=="Achievement progress") {
                     row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(fetched_at),0) FROM achievement_snapshots");
+                } else if(row.label=="Characters") {
+                    row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(last_updated),0) FROM character_snapshot");
                 } else if(row.label=="Owned skin records") {
                     row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(fetched_at),0) FROM ownership_snapshots");
                 }

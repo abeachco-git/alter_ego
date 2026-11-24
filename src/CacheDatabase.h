@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 6;
+constexpr int kSchemaVersion = 7;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,74 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 7) {
+        db.Exec(R"SQL(
+CREATE TABLE character_snapshot(singleton INTEGER PRIMARY KEY CHECK(singleton=1), last_updated INTEGER NOT NULL CHECK(last_updated>=0)) STRICT;
+CREATE TABLE character_rows(character_id INTEGER PRIMARY KEY, account_name TEXT NOT NULL,
+    name TEXT NOT NULL CHECK(length(name)>0),
+    race TEXT,
+    gender TEXT,
+    profession TEXT,
+    level INTEGER,
+    age INTEGER,
+    created TEXT,
+    last_modified TEXT,
+    data_refreshed INTEGER,
+    deaths INTEGER,
+    crafting_cached INTEGER,
+    active_build_tab INTEGER,
+    active_equipment_tab INTEGER, UNIQUE(account_name,name)) STRICT;
+CREATE TABLE character_crafting(character_id INTEGER NOT NULL REFERENCES character_rows ON DELETE CASCADE, ordinal INTEGER NOT NULL, discipline TEXT, rating INTEGER, active INTEGER, PRIMARY KEY(character_id,ordinal)) STRICT;
+CREATE TABLE character_equipment(character_id INTEGER NOT NULL REFERENCES character_rows ON DELETE CASCADE, ordinal INTEGER NOT NULL, item_id INTEGER,
+    slot TEXT,
+    skin INTEGER,
+    tab INTEGER,
+    stat_id INTEGER,
+    binding TEXT,
+    bound_to TEXT, PRIMARY KEY(character_id,ordinal)) STRICT;
+CREATE TABLE character_equipment_values(character_id INTEGER NOT NULL, equipment_ordinal INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('upgrades','infusions','dyes')), ordinal INTEGER NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(character_id,equipment_ordinal,kind,ordinal), FOREIGN KEY(character_id,equipment_ordinal) REFERENCES character_equipment ON DELETE CASCADE) STRICT;
+CREATE TABLE character_equipment_attributes(character_id INTEGER NOT NULL, equipment_ordinal INTEGER NOT NULL, attribute TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(character_id,equipment_ordinal,attribute), FOREIGN KEY(character_id,equipment_ordinal) REFERENCES character_equipment ON DELETE CASCADE) STRICT;
+CREATE TABLE character_equipment_tab_names(character_id INTEGER NOT NULL REFERENCES character_rows ON DELETE CASCADE, tab INTEGER NOT NULL, name TEXT NOT NULL, PRIMARY KEY(character_id,tab)) STRICT;
+CREATE TABLE character_build_tabs(character_id INTEGER NOT NULL REFERENCES character_rows ON DELETE CASCADE, ordinal INTEGER NOT NULL, tab INTEGER,
+    is_active INTEGER,
+    name TEXT,
+    profession TEXT,
+    spec0_id INTEGER,
+    spec0_trait0 INTEGER,
+    spec0_trait1 INTEGER,
+    spec0_trait2 INTEGER,
+    spec1_id INTEGER,
+    spec1_trait0 INTEGER,
+    spec1_trait1 INTEGER,
+    spec1_trait2 INTEGER,
+    spec2_id INTEGER,
+    spec2_trait0 INTEGER,
+    spec2_trait1 INTEGER,
+    spec2_trait2 INTEGER,
+    bar0_heal INTEGER,
+    bar0_utility0 INTEGER,
+    bar0_utility1 INTEGER,
+    bar0_utility2 INTEGER,
+    bar0_elite INTEGER,
+    bar1_heal INTEGER,
+    bar1_utility0 INTEGER,
+    bar1_utility1 INTEGER,
+    bar1_utility2 INTEGER,
+    bar1_elite INTEGER,
+    pet0 INTEGER,
+    pet1 INTEGER,
+    pet2 INTEGER,
+    pet3 INTEGER,
+    legend0 TEXT,
+    legend1 TEXT,
+    legend2 TEXT,
+    legend3 TEXT,
+    weapons_known INTEGER, PRIMARY KEY(character_id,ordinal)) STRICT;
+CREATE TABLE character_build_weapons(character_id INTEGER NOT NULL, build_ordinal INTEGER NOT NULL, ordinal INTEGER NOT NULL, weapon_id INTEGER NOT NULL, PRIMARY KEY(character_id,build_ordinal,ordinal), FOREIGN KEY(character_id,build_ordinal) REFERENCES character_build_tabs ON DELETE CASCADE) STRICT;
+CREATE TABLE character_hero_points(character_id INTEGER NOT NULL REFERENCES character_rows ON DELETE CASCADE, ordinal INTEGER NOT NULL, hero_point TEXT NOT NULL, PRIMARY KEY(character_id,ordinal)) STRICT;
+)SQL");
+        return;
+    }
     if (version == 6) {
         db.Exec(R"SQL(
 CREATE TABLE reference_items(id INTEGER PRIMARY KEY CHECK(id BETWEEN 1 AND 4294967295),
