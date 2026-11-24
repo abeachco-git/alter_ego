@@ -30,3 +30,8 @@ builds a baseline DLL for accurate size comparisons and uploads the report.
 ## CI maintenance
 
 Keep the six live MetaBattle import checks strict, independently reported, and upload their HTML snapshots for debugging. Live-site outages or changed content must remain visible in that workflow rather than blocking DLL packaging. Do not weaken the required offline cases or binary verification to resolve a failed build. Follow the delivery definition in [AGENTS.md](../AGENTS.md).
+
+The persistence suite additionally exercises the SQLite foundation in
+`persistence.database_core`: versioned schema, bound text, rollback, foreign
+keys, migration interruption, restart, backup verification and rejection of
+an unrelated database. This does not yet exercise the Loadout runtime adapter.

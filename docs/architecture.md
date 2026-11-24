@@ -95,3 +95,21 @@ AE2 interchange is separate from the internal v3 data model: see [shared build s
 ## Release precautions
 
 Keep the experimental branch separate from main until explicitly approved. Before merging, validate real-library migration, restart, component editing and comparison, imports, Fashion, ZIP restore and normal in-game behavior. CI compilation and unit tests do not replace in-game validation.
+
+## SQLite foundation (not yet the runtime library)
+
+`src/Database.h` provides a single-owner connection, prepared statements,
+bound values, rollback-on-scope-exit transactions, explicit application ID
+and version migrations, integrity/foreign-key checks and online backup into
+an unpublished empty destination. Durable connections use DELETE journaling,
+FULL sync and a 1.5-second busy timeout. Connections and their statements
+belong to one thread; all statements and transactions must end before
+connection destruction. Do not call into Nexus or render while holding a
+database transaction. The repository adapter must publish presentation
+snapshots only after commit and keep database I/O outside frame rendering.
+
+The pinned upstream SQLite build and maintenance instructions live under
+`lib/sqlite/`. The current JSON library remains active until the relational
+schema, migration and editor/import/backup adapters are complete. This
+foundation intentionally does not create any user database or change existing
+library files.
