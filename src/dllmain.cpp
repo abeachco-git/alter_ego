@@ -8229,8 +8229,7 @@ static void RenderGearCustomizeDialog() {
         ImGui::TableNextColumn();
 
         // Search bar (shared between tabs)
-        ImGui::SetNextItemWidth(-1);
-        AlterEgo::UI::InputTextWithHint("##search", "Search...", g_GearStatSearch, sizeof(g_GearStatSearch));
+        AlterEgo::UI::SearchField("gear_catalog", "Search...", g_GearStatSearch);
 
         if (g_GearSelectorTab == 0 && isRelic) {
             // --- Relic selector ---
@@ -11728,12 +11727,11 @@ static void RenderBuildLibrary() {
     bool pendingGroupAfter = false, pendingItemAfter = false;
     ImGui::BeginChild("LibList", ImVec2(g_LibListWidth, 0), true);
     {
-        // Match Characters: both controls live within the left list column,
-        // are full-width, and never take horizontal space from build details.
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        AlterEgo::UI::Combo("##lib_filter", &g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames));
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        AlterEgo::UI::InputTextWithHint("##lib_search", "Search...", g_LibSearchBuf, sizeof(g_LibSearchBuf));
+        g_LibFilterMode = std::max(0, std::min(g_LibFilterMode, IM_ARRAYSIZE(GameModeNames)-1));
+        AlterEgo::UI::SearchToolbar("loadouts", "Search loadouts...", g_LibSearchBuf,
+            g_LibFilterMode ? 1 : 0, g_LibFilterMode ? GameModeNames[g_LibFilterMode] : "",
+            [&] { if (AlterEgo::UI::FilterChoice("Game mode", g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames))) SaveSession(); },
+            [&] { g_LibFilterMode = 0; SaveSession(); });
         ImGui::Separator();
 
         if (builds.empty()) {
@@ -13230,65 +13228,24 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
 static void RenderSkinList() {
     ImGui::BeginChild("SkinList", ImVec2(300, 0), true);
 
-    // Search input + view toggle on the same row
-    {
-        const char* opts[] = { "List", "Grid" };
-        float btnW = 44.0f;
-        float gap = 2.0f;
-        float toggleW = btnW * 2 + gap;
-        float spacing = ImGui::GetStyle().ItemSpacing.x;
-        float inputW = ImGui::GetContentRegionAvail().x - toggleW - spacing;
-        if (inputW < 60.0f) inputW = 60.0f;
-
-        ImGui::SetNextItemWidth(inputW);
-        AlterEgo::UI::InputTextWithHint("##skinfilter", "Filter skins...", g_SkinSearchFilter, sizeof(g_SkinSearchFilter));
-
-        ImGui::SameLine();
-        for (int i = 0; i < 2; i++) {
-            bool active = (g_SkinViewMode == i);
-            if (active) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.40f, 0.18f, 0.80f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-            }
-            if (AlterEgo::UI::Button(opts[i], ImVec2(btnW, 0), AlterEgo::UI::ButtonRole::Compact)) {
-                g_SkinViewMode = i;
-                SaveSettings();
-            }
-            if (active) ImGui::PopStyleColor(4);
-            if (i == 0) ImGui::SameLine(0, gap);
-        }
-    }
-
-    {
-        // Chip strip: All / Owned / Unowned (filters only take effect once owned data is loaded)
-        bool hasOwnerForFilter = Skinventory::OwnedSkins::HasData();
-        if (!hasOwnerForFilter) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.55f);
-        struct Chip { const char* lbl; bool sOwned; bool sUnowned; };
-        const Chip chips[] = {
-            { "All",     true,  true  },
-            { "Owned",   true,  false },
-            { "Unowned", false, true  },
-        };
-        for (int i = 0; i < 3; i++) {
-            bool active = (g_SkinShowOwned == chips[i].sOwned) &&
-                          (g_SkinShowUnowned == chips[i].sUnowned);
-            if (active) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.40f, 0.18f, 0.80f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-            }
-            if (RenderActionButton(chips[i].lbl)) {
-                g_SkinShowOwned = chips[i].sOwned;
-                g_SkinShowUnowned = chips[i].sUnowned;
-            }
-            if (active) ImGui::PopStyleColor(4);
-            if (i < 2) ImGui::SameLine(0, 4);
-        }
-        if (!hasOwnerForFilter) ImGui::PopStyleVar();
-    }
+    // Ownership is a filter; list/grid is a display preference, not a filter.
+    const bool hasOwnership = Skinventory::OwnedSkins::HasData();
+    const int ownership = !hasOwnership ? 0 : (g_SkinShowOwned && !g_SkinShowUnowned ? 1 : !g_SkinShowOwned && g_SkinShowUnowned ? 2 : 0);
+    AlterEgo::UI::SearchToolbar("skin_browser", "Search skins...", g_SkinSearchFilter,
+        ownership ? 1 : 0, ownership == 1 ? "Owned" : ownership == 2 ? "Unowned" : "",
+        [&] {
+            int selected = ownership;
+            const char* options[] = {"All", "Owned", "Unowned"};
+            if (hasOwnership) {
+                if (AlterEgo::UI::FilterChoice("Ownership", selected, options, IM_ARRAYSIZE(options))) {
+                    g_SkinShowOwned = selected != 2;
+                    g_SkinShowUnowned = selected != 1;
+                }
+            } else ImGui::TextDisabled("Ownership data not loaded");
+            const char* views[] = {"List", "Grid"};
+            if (AlterEgo::UI::FilterChoice("View", g_SkinViewMode, views, IM_ARRAYSIZE(views))) SaveSettings();
+        },
+        [&] { g_SkinShowOwned = g_SkinShowUnowned = true; });
 
     ImGui::Separator();
 
@@ -13947,52 +13904,34 @@ static void RenderSkinShoppingList() {
     static std::string query, weight, slot, weapon, rarity;
     static int category=0, source=0, maxGold=0;
     static bool filterDirty=true;
-    const auto changed=[&](){filterDirty=true;};
-    const auto combo=[&](const char* id,std::string& value,const std::vector<std::string>& choices) {
-        ImGui::SetNextItemWidth(150.0f);
-        if(AlterEgo::UI::BeginCombo(id,value.empty()?"All":value.c_str())) {
-            if(AlterEgo::UI::SelectableOption("All",value.empty())) {value.clear();changed();}
-            for(const auto& item:choices) if(AlterEgo::UI::SelectableOption(item.c_str(),value==item)) {value=item;changed();}
-            ImGui::EndCombo();
-        }
-    };
-    const int active=(category!=0)+(source!=0)+(!weight.empty())+(!slot.empty())+(!weapon.empty())+(!rarity.empty())+(maxGold>0);
-    const std::string filterLabel=active?"Filters ("+std::to_string(active)+")":"Filters";
-    const std::string filterButton=filterLabel+"###shop_filter_button";
-    const float buttons=ImGui::CalcTextSize(filterLabel.c_str()).x+ImGui::CalcTextSize("Refresh Prices").x+4*ImGui::GetStyle().FramePadding.x+3*ImGui::GetStyle().ItemSpacing.x;
-    const float available=ImGui::GetContentRegionAvail().x;
-    ImGui::SetNextItemWidth(available>buttons+80?available-buttons:std::max(80.0f,available));
-    if(AlterEgo::UI::InputTextWithHint("##shop_search","Search skins or TP items...",query)) changed();
-    if(available>buttons+80) ImGui::SameLine();
-    if(RenderActionButton(filterButton.c_str())) ImGui::OpenPopup("##shop_filters");
-    ImGui::SameLine();
-    if(RenderActionButton("Refresh Prices") && !Skinventory::Commerce::IsFetching()) {
+    const auto changed = [&] { filterDirty = true; };
+    const int active = (category!=0)+(source!=0)+(!weight.empty())+(!slot.empty())+(!weapon.empty())+(!rarity.empty())+(maxGold>0);
+    std::string summary;
+    auto add = [&](const std::string& value) { if(!value.empty()) { if(!summary.empty()) summary+=" | "; summary+=value; } };
+    if(category) add(category==1?"Armor":category==2?"Weapons":"Back");
+    if(source) add(source==1?"Trading Post":"Vendor");
+    add(weight); add(slot); add(weapon); add(rarity); if(maxGold) add("Max "+std::to_string(maxGold)+"g");
+    bool refreshClicked = false;
+    if (AlterEgo::UI::SearchToolbar("shopping", "Search skins or TP items...", query, active, summary,
+        [&] {
+            const char* cats[]={"All","Armor","Weapons","Back"};
+            const char* srcs[]={"All","Trading Post","Vendor"};
+            if(AlterEgo::UI::FilterChoice("Category",category,cats,4)) {weight.clear();slot.clear();weapon.clear();changed();}
+            if(AlterEgo::UI::FilterChoice("Source",source,srcs,3)) changed();
+            if(category==0 || category==1) {
+                if(AlterEgo::UI::FilterChoice("Armor weight",weight,Skinventory::SkinCache::GetArmorWeights())) {if(!weight.empty()) weapon.clear();changed();}
+                if(AlterEgo::UI::FilterChoice("Armor slot",slot,{"Helm","HelmAquatic","Shoulders","Coat","Gloves","Leggings","Boots"})) {if(!slot.empty()) weapon.clear();changed();}
+            }
+            if(category==0 || category==2)
+                if(AlterEgo::UI::FilterChoice("Weapon type",weapon,Skinventory::SkinCache::GetWeaponTypes())) {if(!weapon.empty()) {weight.clear();slot.clear();}changed();}
+            if(AlterEgo::UI::FilterChoice("Skin rarity",rarity,{"Junk","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"})) changed();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize()*11.0f);
+            if(ImGui::InputInt("Max gold (0 = any)",&maxGold)) {maxGold=std::max(0,maxGold);changed();}
+        },
+        [&] {category=source=maxGold=0;weight.clear();slot.clear();weapon.clear();rarity.clear();changed();},
+        "Refresh Prices", &refreshClicked)) changed();
+    if(refreshClicked && !Skinventory::Commerce::IsFetching()) {
         g_SkinShopListDirty=true; s_needsFetch=true;
-    }
-    if(ImGui::BeginPopup("##shop_filters")) {
-        const char* cats[]={"All","Armor","Weapons","Back"};
-        const char* srcs[]={"All","Trading Post","Vendor"};
-        ImGui::SetNextItemWidth(150); if(AlterEgo::UI::Combo("Category",&category,cats,4)) {weight.clear();slot.clear();weapon.clear();changed();}
-        ImGui::SetNextItemWidth(150); if(AlterEgo::UI::Combo("Source",&source,srcs,3)) changed();
-        if(category==0 || category==1) {
-            ImGui::TextUnformatted("Armor weight"); ImGui::SameLine(112); combo("##weight",weight,Skinventory::SkinCache::GetArmorWeights()); if(!weight.empty()) weapon.clear();
-            ImGui::TextUnformatted("Armor slot"); ImGui::SameLine(112); combo("##slot",slot,{"Helm","HelmAquatic","Shoulders","Coat","Gloves","Leggings","Boots"}); if(!slot.empty()) weapon.clear();
-        }
-        if(category==0 || category==2) {ImGui::TextUnformatted("Weapon type"); ImGui::SameLine(112); combo("##weapon",weapon,Skinventory::SkinCache::GetWeaponTypes()); if(!weapon.empty()) {weight.clear();slot.clear();}}
-        ImGui::TextUnformatted("Skin rarity"); ImGui::SameLine(112); combo("##rarity",rarity,{"Junk","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"});
-        ImGui::SetNextItemWidth(150); if(ImGui::InputInt("Max gold (0 = any)",&maxGold)) {maxGold=std::max(0,maxGold);changed();}
-        if(RenderActionButton("Reset filters")) {category=source=maxGold=0;weight.clear();slot.clear();weapon.clear();rarity.clear();changed();}
-        ImGui::EndPopup();
-    }
-    if(active) {
-        std::string summary;
-        auto add=[&](const std::string& value){if(!value.empty()){if(!summary.empty())summary+=" | ";summary+=value;}};
-        if(category) add(category==1?"Armor":category==2?"Weapons":"Back");
-        if(source) add(source==1?"Trading Post":"Vendor");
-        add(weight);add(slot);add(weapon);add(rarity);if(maxGold) add("Max "+std::to_string(maxGold)+"g");
-        ImGui::TextDisabled("%s",summary.c_str());
-        if(ImGui::CalcTextSize(summary.c_str()).x+ImGui::CalcTextSize("Clear filters").x+24.0f < available) ImGui::SameLine();
-        if(AlterEgo::UI::SmallButton("Clear filters")) {category=source=maxGold=0;weight.clear();slot.clear();weapon.clear();rarity.clear();changed();}
     }
 
     // Thin progress bar when fetching (replaces verbose status text)
@@ -15143,9 +15082,7 @@ static void RenderAchievements() {
         }
     }
 
-    ImGui::SetNextItemWidth(-1.0f);
-    AlterEgo::UI::InputTextWithHint("##AchSearch", "Search achievements...",
-                            g_AchSearchBuf, sizeof(g_AchSearchBuf));
+    AlterEgo::UI::SearchField("achievements", "Search achievements...", g_AchSearchBuf);
 
     if (!g_AchGroupsFetched) return;
 
@@ -16838,8 +16775,7 @@ void AddonRender() {
 
                 // Character search bar
                 {
-                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-                    AlterEgo::UI::InputTextWithHint("##charsearch", "Search...", g_CharSearchBuf, sizeof(g_CharSearchBuf));
+                    AlterEgo::UI::SearchField("characters", "Search characters...", g_CharSearchBuf);
                 }
 
                 // Collect item rects for insertion-line drag-and-drop

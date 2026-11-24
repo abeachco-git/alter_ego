@@ -471,8 +471,7 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
         (storedId != item.end() && storedId->is_number_integer() && *storedId != 0)
             ? ("#" + storedId->dump() + " (not in catalog)") : "(choose item)";
     if (AlterEgo::UI::BeginCombo("##catalog", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
-        ImGui::SetNextItemWidth(-1.0f);
-        AlterEgo::UI::InputText("Search##catalog", g_ComponentCatalogSearch);
+        AlterEgo::UI::SearchField("catalog", "Search items...", g_ComponentCatalogSearch);
         if (ImGui::Selectable("(none)")) {
             item.erase(idField);
             item.erase(nameField);
@@ -514,8 +513,7 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
     const std::string shown = !storedName.empty() ? storedName :
         info ? info->name : id ? "#" + std::to_string(id) : "(choose stats)";
     if (AlterEgo::UI::BeginCombo("##stats", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
-        ImGui::SetNextItemWidth(-1.0f);
-        AlterEgo::UI::InputText("Search##stats", g_ComponentStatSearch);
+        AlterEgo::UI::SearchField("stats", "Search stats...", g_ComponentStatSearch);
         if (ImGui::Selectable("(none)")) {
             item.erase("stat_id");
             item.erase("stat_name");

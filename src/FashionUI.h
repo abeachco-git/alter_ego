@@ -268,17 +268,16 @@ static void CopyFashionWardrobeLink(const AlterEgo::Fashion::Look& look) {
 
 static void RenderFashionLibrary() {
     // Collection-wide actions remain in the top-level Library dropdown.
-    // Controls match the Characters and Builds lists: filter, then search,
-    // both full-width and contained entirely inside the left column.
+    // Keep the shared search/filter toolbar inside the collection sidebar.
     const char* filters[] = {"All weights", "Light", "Medium", "Heavy", "Any", "Unknown"};
     float avail = ImGui::GetContentRegionAvail().x;
     float leftWidth = ImMax(130.f, ImMin(g_LibListWidth, ImMax(130.f, avail - 220.f)));
     ImGui::BeginChild("##fashion_list", ImVec2(leftWidth, 0), true);
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    AlterEgo::UI::Combo("##fashion_filter", &g_FashionFilter, filters, IM_ARRAYSIZE(filters));
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    AlterEgo::UI::InputTextWithHint("##fashion_search", "Search looks / characters",
-                             g_FashionSearch, sizeof(g_FashionSearch));
+    g_FashionFilter = std::max(0, std::min(g_FashionFilter, IM_ARRAYSIZE(filters)-1));
+    AlterEgo::UI::SearchToolbar("fashion", "Search looks / characters...", g_FashionSearch,
+        g_FashionFilter ? 1 : 0, g_FashionFilter ? filters[g_FashionFilter] : "",
+        [&] { AlterEgo::UI::FilterChoice("Armor weight", g_FashionFilter, filters, IM_ARRAYSIZE(filters)); },
+        [&] { g_FashionFilter = 0; });
     ImGui::Separator();
     // Defer destructive actions until the details pane owns the confirmation popup.
     int pendingDelete = -1;

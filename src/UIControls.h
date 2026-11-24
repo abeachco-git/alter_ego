@@ -5,6 +5,7 @@
 #include <string>
 #include <algorithm>
 #include <cctype>
+#include <vector>
 
 namespace AlterEgo::UI {
 inline constexpr float ActionHeight = 30.0f;
@@ -103,6 +104,104 @@ inline bool InputTextMultiline(const char* label, std::string& str, const ImVec2
                                ImGuiInputTextFlags flags = 0) {
     return ImGui::InputTextMultiline(label, str.data(), str.capacity() + 1, size,
         flags | ImGuiInputTextFlags_CallbackResize, ResizeString, &str);
+}
+// Compact search and filter presentation. All query state and filtering
+// semantics remain owned by the caller; these helpers never fetch data.
+inline float CompactButtonWidth(const char* label) {
+    return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+}
+template<class Edit, class Clear, class HasText>
+inline bool SearchFieldCore(const char* id, float width, Edit edit, Clear clear, HasText hasText) {
+    ImGui::PushID(id);
+    const float space = ImGui::GetStyle().ItemSpacing.x;
+    const float clearWidth = ImGui::GetFrameHeight();
+    const float available = std::max(1.0f, width > 0.0f ? width : ImGui::GetContentRegionAvail().x);
+    const bool fit = available >= clearWidth + space + ImGui::GetFontSize() * 3.0f;
+    ImGui::SetNextItemWidth(fit ? available - clearWidth - space : available);
+    bool changed = edit();
+    if (fit) ImGui::SameLine();
+    const bool populated = hasText();
+    if (!populated) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.45f);
+    if (Button("x##clear_search", ImVec2(clearWidth, ImGui::GetFrameHeight()), ButtonRole::Compact) && populated) {
+        clear(); changed = true;
+    }
+    if (!populated) ImGui::PopStyleVar();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear search");
+    ImGui::PopID();
+    return changed;
+}
+template<size_t N>
+inline bool SearchField(const char* id, const char* hint, char (&query)[N], float width = -1.0f) {
+    return SearchFieldCore(id, width,
+        [&] { return InputTextWithHint("##query", hint, query, N); },
+        [&] { query[0] = '\0'; }, [&] { return query[0] != '\0'; });
+}
+inline bool SearchField(const char* id, const char* hint, std::string& query, float width = -1.0f) {
+    return SearchFieldCore(id, width,
+        [&] { return InputTextWithHint("##query", hint, query); },
+        [&] { query.clear(); }, [&] { return !query.empty(); });
+}
+inline bool FilterChoice(const char* label, int& selected, const char* const options[], int count) {
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 11.0f);
+    return Combo(label, &selected, options, count);
+}
+inline bool FilterChoice(const char* label, std::string& selected, const std::vector<std::string>& options) {
+    bool changed = false;
+    if (BeginCombo(label, selected.empty() ? "All" : selected.c_str(), 0, ImGui::GetFontSize() * 11.0f)) {
+        if (SelectableOption("All", selected.empty()) && !selected.empty()) { selected.clear(); changed = true; }
+        for (const auto& option : options)
+            if (SelectableOption(option.c_str(), selected == option) && selected != option) {
+                selected = option; changed = true;
+            }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+template<class Query, class DrawFilters, class ResetFilters>
+inline bool SearchToolbar(const char* id, const char* hint, Query& query,
+                          int activeCount, const std::string& summary,
+                          DrawFilters drawFilters, ResetFilters resetFilters,
+                          const char* actionLabel = nullptr, bool* actionClicked = nullptr) {
+    ImGui::PushID(id);
+    const std::string text = activeCount > 0 ? "Filters (" + std::to_string(activeCount) + ")" : "Filters";
+    const std::string filterLabel = text + "###filter_button";
+    const float avail = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
+    const float fw = CompactButtonWidth(filterLabel.c_str());
+    const float aw = actionLabel ? CompactButtonWidth(actionLabel) : 0.0f;
+    const float reserve = fw + gap + (actionLabel ? aw + gap : 0.0f);
+    const bool sameRow = avail >= reserve + ImGui::GetFrameHeight() + gap + ImGui::GetFontSize() * 6.0f;
+    bool changed = SearchField("search", hint, query, sameRow ? avail - reserve : avail);
+    if (sameRow) ImGui::SameLine();
+    if (Button(filterLabel.c_str(), ImVec2(0, 0), ButtonRole::Compact))
+        ImGui::OpenPopup("##filters");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Search and filter options");
+    if (actionLabel) {
+        if (sameRow || avail >= fw + gap + aw) ImGui::SameLine();
+        const bool clicked = Button(actionLabel, ImVec2(0, 0), ButtonRole::Compact);
+        if (actionClicked) *actionClicked = clicked;
+    } else if (actionClicked) *actionClicked = false;
+    if (ImGui::BeginPopup("##filters")) {
+        drawFilters();
+        if (activeCount > 0) {
+            ImGui::Separator();
+            if (Button("Reset filters", ImVec2(0, 0), ButtonRole::Compact)) resetFilters();
+        }
+        ImGui::EndPopup();
+    }
+    if (!summary.empty()) {
+        const float summaryW = ImGui::CalcTextSize(summary.c_str()).x;
+        const bool inlineClear = activeCount > 0 && summaryW + gap + CompactButtonWidth("Clear filters") <= avail;
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", summary.c_str());
+        ImGui::PopStyleColor();
+        if (activeCount > 0) {
+            if (inlineClear) ImGui::SameLine();
+            if (Button("Clear filters", ImVec2(0, 0), ButtonRole::Compact)) resetFilters();
+        }
+    }
+    ImGui::PopID();
+    return changed;
 }
 // A catalog entry can be shown as a card in the full gear editor or a
 // dropdown option in a standalone component. Both use the same search rules.

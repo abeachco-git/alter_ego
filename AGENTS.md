@@ -20,3 +20,5 @@ Before adding or modifying any UI, read [docs/ui-components.md](docs/ui-componen
 - Update the UI component guide when introducing or changing a canonical component. Explain any intentional direct ImGui exception near its call site.
 
 - Skinventory: use RenderSkinContextMenu for every skin surface; generate skin chat links from skin IDs, copy the actual priced item's name for TP search. Use Skinventory::Search for browser/shop filters. Commerce candidate selection must compare available sell listings, never rarity. Keep filter changes local (no price requests).
+
+- Search and filters: use UI::SearchField for query-only lists and picker popups, UI::SearchToolbar for query plus contextual filters, and UI::FilterChoice for popup options. Keep matching, caching, scope and reset behavior at the call site. All use the themed input and clear-search affordance; do not implement separate toolbar layouts or trigger API requests from search/filter changes. See the search section in docs/ui-components.md.

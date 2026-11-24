@@ -622,19 +622,24 @@ static void RenderComponentLibrary() {
         RenderComponentUIEditor();
         return;
     }
-    ImGui::SetNextItemWidth(230);
-    if (AlterEgo::UI::BeginCombo("Component type##library_component_type",
-                         ComponentLabel(kComponentKinds[g_ComponentFilterKind].kind))) {
-        for (int i = 0; i < 9; ++i)
-            if (ImGui::Selectable(kComponentKinds[i].label, i == g_ComponentFilterKind)) {
-                g_ComponentFilterKind = i;
+    const char* sorts[] = {"Name", "Most used", "Least used"};
+    std::string componentSummary = ComponentLabel(kComponentKinds[g_ComponentFilterKind].kind);
+    if (g_ComponentUnusedOnly) componentSummary += " | Unused only";
+    if (g_ComponentSort != 0) componentSummary += std::string(" | ") + sorts[g_ComponentSort];
+    AlterEgo::UI::SearchToolbar("components", "Search components...", g_ComponentSearch,
+        (g_ComponentFilterKind != 0) + (g_ComponentUnusedOnly ? 1 : 0) + (g_ComponentSort != 0), componentSummary,
+        [&] {
+            const char* kinds[9];
+            for (int n=0;n<9;++n) kinds[n]=kComponentKinds[n].label;
+            if (AlterEgo::UI::FilterChoice("Component type", g_ComponentFilterKind, kinds, 9))
                 g_ComponentSelectedId.clear();
-            }
-        ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(ImMax(150.f, ImGui::GetContentRegionAvail().x - 125.f));
-    AlterEgo::UI::InputText("Search##component_search", g_ComponentSearch);
+            ImGui::Checkbox("Unused only", &g_ComponentUnusedOnly);
+            AlterEgo::UI::FilterChoice("Sort", g_ComponentSort, sorts, IM_ARRAYSIZE(sorts));
+        },
+        [&] {
+            if (g_ComponentFilterKind != 0) g_ComponentSelectedId.clear();
+            g_ComponentFilterKind=0; g_ComponentUnusedOnly=false; g_ComponentSort=0;
+        });
     const std::string kind = kComponentKinds[g_ComponentFilterKind].kind;
     if (!g_ComponentSelectIdPending.empty()) {
         g_ComponentSelectedKind = kind;
@@ -686,16 +691,6 @@ static void RenderComponentLibrary() {
                           "Creates a new independent ID; does not replace existing Loadouts.");
     if (!g_ComponentStatus.empty())
         ImGui::TextWrapped("%s", g_ComponentStatus.c_str());
-    ImGui::Checkbox("Unused only##component_filter", &g_ComponentUnusedOnly);
-    ImGui::SameLine();
-    const char* sorts[] = {"Name", "Most used", "Least used"};
-    ImGui::SetNextItemWidth(160.0f);
-    if (AlterEgo::UI::BeginCombo("Sort##component", sorts[g_ComponentSort])) {
-        for (int i = 0; i < 3; ++i)
-            if (ImGui::Selectable(sorts[i], g_ComponentSort == i))
-                g_ComponentSort = i;
-        ImGui::EndCombo();
-    }
     ImGui::Separator();
 
     const float listWidth = ImMax(200.0f, ImMin(290.0f, ImGui::GetContentRegionAvail().x * 0.37f));
