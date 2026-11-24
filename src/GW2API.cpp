@@ -3288,8 +3288,9 @@ namespace AlterEgo {
         return true;
     }
 
-    bool GW2API::SaveEditedLoadout(const SavedBuild& draft) {
+    bool GW2API::SaveEditedLoadout(const SavedBuild& draft, uint64_t expectedRevision) {
         return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(expectedRevision && expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
             auto* l=Composable::FindLoadout(doc,draft.id);json raw;SavedBuild old;
             if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,old))return false;
             return NativeLibrary::PutLoadout(doc,NativeLibrary::PatchDraft(raw,SerializeSavedBuild(old),SerializeSavedBuild(draft)),error,LookupComponentDisplayName);
@@ -3368,16 +3369,23 @@ namespace AlterEgo {
     }
 
 
+    bool GW2API::ConsolidateLoadoutComponent(const std::string& kind,const std::string& source,const std::string& survivor,uint64_t expectedRevision) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed since confirmation.");
+            return NativeLibrary::ConsolidateExact(doc,kind,source,survivor,error);
+        });
+    }
+
     bool GW2API::CreateLoadoutComponent(const std::string& kind,
                                          const std::string& name,
                                          const nlohmann::json& data,
-                                         std::string* savedId, bool reuseExact) {
+                                         std::string* savedId, bool reuseExact, const std::string& profession) {
         if (Composable::ComponentNameKey(name).empty() || !data.is_object() || !Composable::IsKind(kind))
             return false;
         std::string resultId;
         const bool ok = CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
             if (reuseExact)
-                if (const auto matches=NativeLibrary::EditIndex(doc).Matches(kind,data);!matches.empty()) {
+                if (const auto matches=NativeLibrary::EditIndex(doc).Matches(kind,data,profession);!matches.empty()) {
                     resultId = matches.front().id;
                     return true;
                 }
@@ -3467,7 +3475,7 @@ namespace AlterEgo {
         const auto fields = Composable::Split(SerializeSavedBuild(capture));
         auto selected = fields.find(kind);
         if (selected == fields.end()) return false;
-        return CreateLoadoutComponent(kind, name, selected->second, savedId, reuseExact);
+        return CreateLoadoutComponent(kind, name, selected->second, savedId, reuseExact, capture.profession);
     }
 
     bool GW2API::ReplaceCapturedLoadoutComponent(const SavedBuild& capture,

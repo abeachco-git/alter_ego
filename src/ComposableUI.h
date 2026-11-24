@@ -5,6 +5,7 @@
 // All mutations are queued and applied after the visible panes finish
 // rendering: SavedBuild references remain stable for the whole frame.
 #include "ComposableSemantics.h"
+#include "NativeLibraryEditing.h"
 #include "ComposableGearPresentation.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -37,9 +38,10 @@ static const char* ComponentLabel(const std::string& kind) {
 
 struct ComponentUICommand {
     enum Type { None, Assign, CopyEditedForLoadout, SetFashion, Create, Duplicate,
-                Rename, EditShared, RemoveUnused, ImportPortableLoadout } type = None;
+                Rename, EditShared, RemoveUnused, ImportPortableLoadout, Consolidate } type = None;
     std::string loadout_id, kind, component_id, name;
     ComponentJson data = ComponentJson::object();
+    uint64_t expected_revision = 0;
 };
 static ComponentUICommand g_ComponentCommand;
 static std::string g_ComponentSearch;
@@ -60,6 +62,8 @@ static std::string g_ComponentEditorMode; // create, duplicate, rename, edit, co
 static bool g_ComponentEditorSaveQueued = false;
 static std::string g_ComponentEditorPrivateLoadoutId;
 static std::string g_ComponentStatus;
+static uint64_t g_ComponentEditorRevision = 0;
+static std::map<std::pair<std::string,std::string>,int> g_ComponentUsageIndex;
 
 
 static const ComponentJson& ComponentUISnapshot() {
@@ -71,6 +75,11 @@ static const ComponentJson& ComponentUISnapshot() {
         if (AlterEgo::GW2API::GetComposableLoadouts(latest))
             cached = std::move(latest);
         else cached = ComponentJson::object();
+        g_ComponentUsageIndex.clear();
+        if (cached.contains("loadouts")) for (const auto& l : cached.at("loadouts"))
+            if (l.contains("refs") && l.at("refs").is_object())
+                for (auto ref=l.at("refs").begin(); ref!=l.at("refs").end(); ++ref)
+                    if(ref.value().is_string()) ++g_ComponentUsageIndex[{ref.key(),ref.value().get<std::string>()}];
         previousRevision = revision;
     }
     return cached;
@@ -96,16 +105,9 @@ static const ComponentJson* ComponentUIFind(const ComponentJson& doc,
 }
 static int ComponentUIUsage(const ComponentJson& doc, const std::string& kind,
                              const std::string& id) {
-    int count = 0;
-    if (!doc.contains("loadouts") || !doc["loadouts"].is_array()) return 0;
-    for (const auto& loadout : doc["loadouts"]) {
-        if (!loadout.is_object() || !loadout.contains("refs") ||
-            !loadout["refs"].is_object()) continue;
-        auto ref = loadout["refs"].find(kind);
-        if (ref != loadout["refs"].end() && ref->is_string() &&
-            ref->get<std::string>() == id) ++count;
-    }
-    return count;
+    (void)doc;
+    const auto it=g_ComponentUsageIndex.find({kind,id});
+    return it==g_ComponentUsageIndex.end()?0:it->second;
 }
 static std::string ComponentUIShortDescription(const std::string& kind,
                                                 const ComponentJson& data) {
@@ -256,6 +258,7 @@ static void ComponentUIStartEditor(const std::string& mode,
                                    const std::string& id,
                                    const ComponentJson* component) {
     g_ComponentEditorMode = mode;
+    g_ComponentEditorRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
     g_ComponentEditorAutoName = (mode == "create");
     g_ComponentEditorKind = kind;
     g_ComponentEditorId = id;
@@ -286,6 +289,9 @@ static void ComponentUIStartPrivateEditor(const std::string& loadoutId,
 
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id);
 static bool ComponentUIEditorCanCommit() {
+    if(g_ComponentEditorMode!="create" && g_ComponentEditorRevision!=AlterEgo::GW2API::GetBuildLibraryRevision()) {
+        g_ComponentEditorError="Library changed. Cancel and reopen this editor before saving.";return false;
+    }
     if (g_ComponentEditorName.empty()) {
         g_ComponentEditorError = "Give the component a name.";
         return false;
@@ -397,6 +403,7 @@ static void RenderComponentUIEditor() {
         if (ComponentUIEditorCanCommit()) {
             ComponentUICommand cmd;
             cmd.kind = g_ComponentEditorKind;
+            cmd.expected_revision = g_ComponentEditorMode=="create" ? 0 : g_ComponentEditorRevision;
             cmd.component_id = g_ComponentEditorId;
             cmd.name = g_ComponentEditorAutoName
                 ? AlterEgo::GW2API::SuggestLibraryComponentName(g_ComponentEditorKind, g_ComponentEditorDraft)
@@ -806,6 +813,55 @@ static void RenderComponentLibrary() {
         } else {
             ImGui::TextDisabled("Referenced components cannot be deleted.");
         }
+        if (ImGui::CollapsingHeader("Exact duplicates##component_duplicates")) {
+            static uint64_t duplicateRevision=0;
+            static std::string duplicateKind,duplicateId;
+            static std::vector<std::string> duplicates;
+            static std::string pendingSource,pendingSurvivor,pendingKind;
+            static uint64_t pendingRevision=0;
+            const auto revision=AlterEgo::GW2API::GetBuildLibraryRevision();
+            if(duplicateRevision!=revision||duplicateKind!=kind||duplicateId!=id) {
+                duplicates.clear();
+                if(group!=doc["components"].end()&&group->is_array())
+                    for(const auto& candidate:*group) {
+                        const auto other=candidate.value("id",std::string());
+                        if(other!=id&&candidate.contains("data")&&
+                            AlterEgo::NativeLibrary::ExactContent(candidate.at("data"),item->at("data")))
+                            duplicates.push_back(other);
+                    }
+                duplicateRevision=revision;duplicateKind=kind;duplicateId=id;
+            }
+            ImGui::TextWrapped("Keep the selected component; explicitly replace references to an exact duplicate and remove that duplicate.");
+            if(kind=="skills") ImGui::TextDisabled("Skills require matching, verified professions on both components.");
+            if(duplicates.empty()) ImGui::TextDisabled("No exact duplicates.");
+            for(const auto& other:duplicates) {
+                const auto* candidate=ComponentUIFind(doc,kind,other);
+                if(!candidate)continue;
+                ImGui::PushID(other.c_str());
+                ImGui::TextWrapped("%s (%d Loadouts)",candidate->value("name",other).c_str(),ComponentUIUsage(doc,kind,other));
+                if(AlterEgo::UI::Button("Consolidate into selected",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive)) {
+                    pendingSource=other;pendingSurvivor=id;pendingKind=kind;pendingRevision=revision;
+                    ImGui::OpenPopup("Confirm consolidation");
+                }
+                if(ImGui::BeginPopupModal("Confirm consolidation",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::TextWrapped("Remove %s and keep %s?",candidate->value("name",other).c_str(),name.c_str());
+                    ImGui::TextDisabled("Affected Loadouts:");
+                    for(const auto& l:doc.at("loadouts")) {
+                        if(!l.contains("refs")||l.at("refs").value(kind,std::string())!=other)continue;
+                        ImGui::BulletText("%s",l.value("metadata",ComponentJson::object()).value("name",l.value("id",std::string())).c_str());
+                    }
+                    if(pendingRevision!=revision) ImGui::TextDisabled("Library changed; cancel and review again.");
+                    else if(AlterEgo::UI::Button("Confirm",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive)) {
+                        g_ComponentCommand={ComponentUICommand::Consolidate,pendingSurvivor,pendingKind,pendingSource,"",ComponentJson::object(),pendingRevision};
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine();
+                    if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
+            }
+        }
         ImGui::Spacing();
         RenderComponentInventory(kind, item->at("data"));
         if (ImGui::CollapsingHeader("Advanced: raw component data##preview")) {
@@ -898,7 +954,16 @@ static void ProcessComponentUICommand() {
     g_ComponentEditorSaveQueued = false;
     bool success = false;
     using API = AlterEgo::GW2API;
+    if (command.expected_revision && command.expected_revision!=API::GetBuildLibraryRevision()) {
+        g_ComponentStatus="Library changed; reopen the editor or review duplicates again.";
+        if(fromEditor) {g_ComponentEditorError=g_ComponentStatus;g_ComponentEditorOpen=true;}
+        if(APIDefs) APIDefs->GUI_SendAlert(g_ComponentStatus.c_str());
+        return;
+    }
     switch (command.type) {
+    case ComponentUICommand::Consolidate:
+        success=API::ConsolidateLoadoutComponent(command.kind,command.component_id,command.loadout_id,command.expected_revision);
+        break;
     case ComponentUICommand::Assign:
         success = API::AssignLoadoutComponent(
             command.loadout_id, command.kind, command.component_id);

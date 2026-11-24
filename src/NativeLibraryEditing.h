@@ -50,6 +50,37 @@ public:
     }
 };
 
+// Explicit consolidation only: exact saved payload, never semantic similarity.
+inline bool ConsolidateExact(Composable::Document& doc,const std::string& kind,
+    const std::string& source,const std::string& survivor,std::string& error) {
+    const auto* a=Composable::Find(doc,kind,source);
+    const auto* b=Composable::Find(doc,kind,survivor);
+    if(source==survivor||!a||!b||!ExactContent(a->data,b->data))
+        return Composable::Fail(error,"Components are not exact duplicates.");
+    if(kind=="skills") {
+        std::string profession;
+        bool hasSource=false,hasSurvivor=false;
+        for(const auto& l:doc.loadouts) {
+            auto ref=l.refs.find(kind);
+            if(ref==l.refs.end()||(ref->second!=source&&ref->second!=survivor))continue;
+            auto p=Composable::ProfessionOf(doc,l);
+            if(p.empty()||(!profession.empty()&&p!=profession))
+                return Composable::Fail(error,"Skills profession is ambiguous.");
+            profession=p;
+            hasSource|=ref->second==source;hasSurvivor|=ref->second==survivor;
+        }
+        if(!hasSource||!hasSurvivor)
+            return Composable::Fail(error,"Skills profession is unverified.");
+    }
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err) {
+        for(auto& l:next.loadouts) {
+            auto ref=l.refs.find(kind);
+            if(ref!=l.refs.end()&&ref->second==source)ref->second=survivor;
+        }
+        return Composable::RemoveUnreferenced(next,kind,source,err);
+    });
+}
+
 // Overlay only changed fields from a typed aggregate editor. Untouched
 // defaults do not erase missing values or unknown imported extensions.
 inline Json PatchDraft(const Json& stored,const Json& baseline,const Json& edited) {

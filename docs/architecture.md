@@ -90,3 +90,7 @@ AE2 interchange is separate from the internal native data model: see [shared bui
 ## Release precautions
 
 Keep the experimental branch separate from main until explicitly approved. Before merging, validate real-library migration, restart, component editing and comparison, imports, Fashion, ZIP restore and normal in-game behavior. CI compilation and unit tests do not replace in-game validation.
+
+### Explicit component consolidation
+
+The Components detail pane offers exact duplicate consolidation into the selected survivor, with affected Loadout names and confirmation. The native transaction revalidates equality, revision and skill profession compatibility before rewriting references and deleting the redundant record. Independent duplicates remain valid until explicitly consolidated. Usage counts are indexed per library revision; existing editor drafts reject a changed library revision rather than overwriting newly saved data.

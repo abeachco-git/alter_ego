@@ -849,6 +849,7 @@ static std::string g_NewBuildProfessionPending;
 static std::vector<AlterEgo::GameMode> g_NewBuildModes{AlterEgo::GameMode::PvE};
 // Build editor: working draft + spec picker state
 static AlterEgo::SavedBuild g_EditDraft;   // working copy while editing a build's definition
+static uint64_t g_EditDraftRevision = 0;
 static std::string g_EditDraftId;          // id the draft currently mirrors
 static bool g_EditDirty = false;           // true once the draft diverges from the snapshot
 static bool g_EditIsNewBuild = false;      // true while editing a freshly-created build (cancel discards it)
@@ -897,6 +898,7 @@ static std::string g_LibEditNotes;
 static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
     g_EditDraft = build;
     g_EditDraftId = build.id;
+    g_EditDraftRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
     g_LibEditName = build.name;
     g_LibEditNotes = build.notes;
     g_EditDirty = false;
@@ -18000,13 +18002,13 @@ void AddonRender() {
     ImGui::End();
     if (g_EditSavePending) {
         g_EditSavePending = false;
-        if (g_LibEditMode && AlterEgo::GW2API::SaveEditedLoadout(g_EditDraft)) {
+        if (g_LibEditMode && AlterEgo::GW2API::SaveEditedLoadout(g_EditDraft, g_EditDraftRevision)) {
             g_EditDraftId.clear();
             g_LibEditMode = false; g_EditDirty = false;
             g_EditIsNewBuild = false;
             g_GearDialogOpen = false;
         } else if (APIDefs) {
-            APIDefs->GUI_SendAlert("Could not save Loadout. Draft retained.");
+            APIDefs->GUI_SendAlert("Could not save Loadout (library may have changed). Draft retained.");
         }
     }
 }

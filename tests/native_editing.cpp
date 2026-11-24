@@ -41,5 +41,13 @@ int case_native_editing(int,char**) {
     assert(!patched["gear"]["Helm"].contains("item_id"));
     assert(patched["gear"]["Helm"]["extension"]==42);
     assert(patched["gear"]["Helm"]["stat_id"]==2);
+    auto duplicate=*Composable::Find(doc,"armor",armor);
+    duplicate.id="armor:duplicate";duplicate.name="Explicit duplicate";
+    doc.components["armor"].push_back(duplicate);
+    doc.loadouts[1].refs["armor"]=duplicate.id;
+    assert(!ConsolidateExact(doc,"armor",privateId,armor,err));
+    assert(ConsolidateExact(doc,"armor",duplicate.id,armor,err));
+    assert(!Composable::Find(doc,"armor",duplicate.id));
+    assert(doc.loadouts[1].refs.at("armor")==armor);
     return 0;
 }
