@@ -9,6 +9,8 @@ This is the discoverable source of truth for developers and coding agents. Read 
 | Filter or toggle chip | RenderChipButton | AddonShared.h |
 | Compact / destructive action | UI::Button(label, size, ButtonRole::Compact / Destructive), UI::SmallButton | UIControls.h |
 | Destructive context menu | UI::DestructiveMenuItem | UIControls.h |
+| Saved loadout commands | ExecuteSavedLoadoutAction; RenderBuildShareMenuItems | dllmain.cpp (header and right-click menu share domain handlers) |
+| Gear catalog entry | UI::CatalogMatches, CatalogCard, CatalogOption | UIControls.h (full gear editor and standalone component dropdowns share filtering) |
 | Native dropdown | UI::BeginCombo(id, preview, flags, width), UI::Combo | UIControls.h |
 | Gold dropdown | RenderThemedCombo or UI::BeginCombo with ComboRole::Gold | UIControls.h |
 | Dropdown option | UI::SelectableOption (standard selection/focus); custom drawing allowed | UIControls.h |
@@ -54,5 +56,5 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 - Native ImGui context menu is already implemented in lib/imgui/imgui_widgets.cpp InputTextEx. Test clipboard in game; do not add a wrapper popup or change ImGui version.
 - Custom draw-list cards, roster rows, raid encounter chips, drag targets, and selected/active markers can have different geometry. Reuse palette and meaningful primitives; don't replace specialized rendering solely to remove raw calls.
 - Equipment and independent component editing still have different storage and commit paths; shared catalogs and presentation helpers are the starting point. Further consolidation must preserve slot count, unknown vs absent metadata, exact IDs, copy-on-write and shared-component semantics. Do not claim all editor behavior is unified.
-- Header/context menu domain action wiring and specialized responsive layouts are remaining consolidation targets. Use common helpers for new code and extract shared commands when changing these paths.
+- Saved loadout header and context menu share ExecuteSavedLoadoutAction and RenderBuildShareMenuItems. Fashion/component actions and specialized responsive layouts still have separate wiring; extract shared commands when changing them.
 - Validate at different fonts and window widths, ensure popup focus and right-click work, and verify DLL compilation/artifact for the exact commit.

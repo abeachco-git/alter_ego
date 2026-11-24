@@ -8240,38 +8240,18 @@ static void RenderGearCustomizeDialog() {
 
             ImGui::BeginChild("##relicList", ImVec2(0, -30), true);
             for (int i = 0; i < RELIC_COUNT; i++) {
-                if (!filterLower.empty()) {
-                    std::string nLow = RELIC_LIST[i].name;
-                    for (auto& c : nLow) c = (char)tolower(c);
-                    std::string bLow = RELIC_LIST[i].bonus;
-                    for (auto& c : bLow) c = (char)tolower(c);
-                    if (nLow.find(filterLower) == std::string::npos &&
-                        bLow.find(filterLower) == std::string::npos) continue;
-                }
+                if (!AlterEgo::UI::CatalogMatches(RELIC_LIST[i].name, RELIC_LIST[i].bonus, filterLower)) continue;
 
                 ImGui::PushID(i);
                 bool isSel = (editBuild->relic_name == RELIC_LIST[i].name);
 
-                ImVec2 cs = ImGui::GetCursorScreenPos();
-                float cw = ImGui::GetContentRegionAvail().x;
-                float ch = 32.0f;
-                ImU32 bg = isSel ? IM_COL32(60, 80, 100, 200) : IM_COL32(35, 35, 40, 180);
-                ImGui::GetWindowDrawList()->AddRectFilled(cs, ImVec2(cs.x+cw, cs.y+ch), bg, 3.0f);
-                ImGui::GetWindowDrawList()->AddRect(cs, ImVec2(cs.x+cw, cs.y+ch),
-                    isSel ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
-
-                ImGui::SetCursorScreenPos(cs);
-                if (ImGui::InvisibleButton("##relsel", ImVec2(cw, ch))) {
+                if (AlterEgo::UI::CatalogCard("##relsel", RELIC_LIST[i].name, RELIC_LIST[i].bonus, isSel)) {
                     editBuild->relic_name = RELIC_LIST[i].name;
                     editBuild->relic_id = RELIC_LIST[i].item_id;
                     commitGear();
                 }
 
-                ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(cs.x+6, cs.y+2), IM_COL32(200, 180, 255, 255), RELIC_LIST[i].name);
-                ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(cs.x+6, cs.y+16), IM_COL32(150, 150, 150, 220), RELIC_LIST[i].bonus);
-                ImGui::SetCursorScreenPos(ImVec2(cs.x, cs.y + ch + 2));
+                
 
                 ImGui::PopID();
             }
@@ -8330,67 +8310,31 @@ static void RenderGearCustomizeDialog() {
 
             if (isArmor) {
                 for (int i = 0; i < RUNE_COUNT; i++) {
-                    if (!filterLower.empty()) {
-                        std::string nLow = RUNE_LIST[i].name;
-                        for (auto& c : nLow) c = (char)tolower(c);
-                        std::string bLow = RUNE_LIST[i].bonus;
-                        for (auto& c : bLow) c = (char)tolower(c);
-                        if (nLow.find(filterLower) == std::string::npos &&
-                            bLow.find(filterLower) == std::string::npos) continue;
-                    }
+                    if (!AlterEgo::UI::CatalogMatches(RUNE_LIST[i].name, RUNE_LIST[i].bonus, filterLower)) continue;
 
                     ImGui::PushID(i);
                     bool isSel = (gs.rune == RUNE_LIST[i].name);
 
-                    ImVec2 cs = ImGui::GetCursorScreenPos();
-                    float cw = ImGui::GetContentRegionAvail().x;
-                    float ch = 32.0f;
-                    ImU32 bg = isSel ? IM_COL32(60, 80, 100, 200) : IM_COL32(35, 35, 40, 180);
-                    ImGui::GetWindowDrawList()->AddRectFilled(cs, ImVec2(cs.x+cw, cs.y+ch), bg, 3.0f);
-                    ImGui::GetWindowDrawList()->AddRect(cs, ImVec2(cs.x+cw, cs.y+ch),
-                        isSel ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
-
-                    ImGui::SetCursorScreenPos(cs);
-                    if (ImGui::InvisibleButton("##rsel", ImVec2(cw, ch))) {
+                    if (AlterEgo::UI::CatalogCard("##rsel", RUNE_LIST[i].name, RUNE_LIST[i].bonus, isSel)) {
                         ExpandSharedRune(*editBuild);
                         gs.rune = RUNE_LIST[i].name;
                         gs.rune_id = RUNE_LIST[i].item_id;
                         commitGear();
                     }
 
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+2), IM_COL32(200, 180, 255, 255), RUNE_LIST[i].name);
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+16), IM_COL32(150, 150, 150, 220), RUNE_LIST[i].bonus);
-                    ImGui::SetCursorScreenPos(ImVec2(cs.x, cs.y + ch + 2));
+                    
 
                     ImGui::PopID();
                 }
             } else if (isWeapon) {
                 for (int i = 0; i < SIGIL_COUNT; i++) {
-                    if (!filterLower.empty()) {
-                        std::string nLow = SIGIL_LIST[i].name;
-                        for (auto& c : nLow) c = (char)tolower(c);
-                        std::string bLow = SIGIL_LIST[i].bonus;
-                        for (auto& c : bLow) c = (char)tolower(c);
-                        if (nLow.find(filterLower) == std::string::npos &&
-                            bLow.find(filterLower) == std::string::npos) continue;
-                    }
+                    if (!AlterEgo::UI::CatalogMatches(SIGIL_LIST[i].name, SIGIL_LIST[i].bonus, filterLower)) continue;
 
                     ImGui::PushID(i);
                     const std::string& activeSigil = g_GearEditingSigil2 ? gs.sigil2 : gs.sigil;
                     bool isSel = (activeSigil == SIGIL_LIST[i].name);
 
-                    ImVec2 cs = ImGui::GetCursorScreenPos();
-                    float cw = ImGui::GetContentRegionAvail().x;
-                    float ch = 32.0f;
-                    ImU32 bg = isSel ? IM_COL32(60, 80, 100, 200) : IM_COL32(35, 35, 40, 180);
-                    ImGui::GetWindowDrawList()->AddRectFilled(cs, ImVec2(cs.x+cw, cs.y+ch), bg, 3.0f);
-                    ImGui::GetWindowDrawList()->AddRect(cs, ImVec2(cs.x+cw, cs.y+ch),
-                        isSel ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
-
-                    ImGui::SetCursorScreenPos(cs);
-                    if (ImGui::InvisibleButton("##ssel", ImVec2(cw, ch))) {
+                    if (AlterEgo::UI::CatalogCard("##ssel", SIGIL_LIST[i].name, SIGIL_LIST[i].bonus, isSel)) {
                         uint32_t sid = AlterEgo::GW2API::FindItemIdByName(SIGIL_LIST[i].name);
                         if (g_GearEditingSigil2) {
                             gs.sigil2 = SIGIL_LIST[i].name;
@@ -8402,11 +8346,7 @@ static void RenderGearCustomizeDialog() {
                         commitGear();
                     }
 
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+2), IM_COL32(200, 180, 255, 255), SIGIL_LIST[i].name);
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+16), IM_COL32(150, 150, 150, 220), SIGIL_LIST[i].bonus);
-                    ImGui::SetCursorScreenPos(ImVec2(cs.x, cs.y + ch + 2));
+                    
 
                     ImGui::PopID();
                 }

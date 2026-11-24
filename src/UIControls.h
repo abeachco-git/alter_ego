@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include <string>
 #include <algorithm>
+#include <cctype>
 
 namespace AlterEgo::UI {
 inline constexpr float ActionHeight = 30.0f;
@@ -100,6 +101,47 @@ inline bool InputTextMultiline(const char* label, std::string& str, const ImVec2
                                ImGuiInputTextFlags flags = 0) {
     return ImGui::InputTextMultiline(label, str.data(), str.capacity() + 1, size,
         flags | ImGuiInputTextFlags_CallbackResize, ResizeString, &str);
+}
+// A catalog entry can be shown as a card in the full gear editor or a
+// dropdown option in a standalone component. Both use the same search rules.
+inline bool CatalogMatches(const char* name, const char* description, std::string filter) {
+    const auto lower = [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); };
+    std::transform(filter.begin(), filter.end(), filter.begin(), lower);
+    if (filter.empty()) return true;
+    std::string n = name ? name : "", d = description ? description : "";
+    std::transform(n.begin(), n.end(), n.begin(), lower);
+    std::transform(d.begin(), d.end(), d.begin(), lower);
+    return n.find(filter) != std::string::npos || d.find(filter) != std::string::npos;
+}
+inline bool CatalogCard(const char* id, const char* name, const char* description, bool selected) {
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    const float line = std::max(14.0f, ImGui::GetTextLineHeight());
+    const float height = line * 2.0f + 4.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 max(pos.x+width, pos.y+height);
+    dl->AddRectFilled(pos, max, selected ? IM_COL32(60,80,100,200) : IM_COL32(35,35,40,180), 3.0f);
+    dl->AddRect(pos, max, selected ? IM_COL32(100,160,220,255) : IM_COL32(80,80,80,180), 3.0f);
+    const bool clicked = ImGui::InvisibleButton(id, ImVec2(width, height));
+    dl->PushClipRect(pos, max, true);
+    dl->AddText(ImVec2(pos.x+6, pos.y+2), IM_COL32(200,180,255,255), name);
+    dl->AddText(ImVec2(pos.x+6, pos.y+2+line), IM_COL32(150,150,150,220), description);
+    dl->PopClipRect();
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(name);
+        ImGui::PushTextWrapPos(TooltipWidth);
+        ImGui::TextUnformatted(description);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y+height+2));
+    return clicked;
+}
+inline bool CatalogOption(const char* name, const char* description, bool selected) {
+    const bool clicked = SelectableOption(name, selected);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", description);
+    return clicked;
 }
 inline void ActiveIndicator(ImDrawList* draw, ImVec2 center) {
     draw->AddCircleFilled(center, ActiveRadius, IM_COL32(60, 200, 80, 255));

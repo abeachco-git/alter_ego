@@ -548,7 +548,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
                         const std::string candidateId = candidate.value("id", std::string());
                         const std::string candidateName = candidate.value("name", candidateId);
                         const bool current = candidateId == id;
-                        if (ImGui::Selectable((candidateName + "##" + candidateId).c_str(), current)) {
+                        if (AlterEgo::UI::SelectableOption((candidateName + "##" + candidateId).c_str(), current)) {
                             g_ComponentCommand = {ComponentUICommand::Assign,
                                 loadoutId, kind, candidateId, "", ComponentJson::object()};
                         }
@@ -556,7 +556,6 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
                             ImGui::SetTooltip("%s | Used in %d Loadouts",
                                 ComponentUIShortDescription(kind, candidate["data"]).c_str(),
                                 ComponentUIUsage(doc, kind, candidateId));
-                        if (current) ImGui::SetItemDefaultFocus();
                     }
                 }
                 ImGui::EndCombo();

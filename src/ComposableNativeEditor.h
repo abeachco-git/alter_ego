@@ -478,15 +478,13 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
             item.erase(nameField);
         }
         auto offer = [&](const char* name, uint32_t id, const char* bonus) {
-            if (!ComponentUISearchMatch(name, g_ComponentCatalogSearch) &&
-                !ComponentUISearchMatch(bonus, g_ComponentCatalogSearch)) return;
+            if (!AlterEgo::UI::CatalogMatches(name, bonus, g_ComponentCatalogSearch)) return;
             ImGui::PushID(static_cast<int>(id));
-            if (ImGui::Selectable(name, selected == name)) {
+            if (AlterEgo::UI::CatalogOption(name, bonus, selected == name)) {
                 item[idField] = id;
                 item[nameField] = name;
                 g_ComponentCatalogSearch.clear();
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", bonus);
             ImGui::PopID();
         };
         if (std::strcmp(family, "runes") == 0) {
@@ -525,7 +523,7 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
         const auto choices = GetSortedStatCombos(g_ComponentStatSearch.c_str());
         for (const auto* stat : choices) {
             ImGui::PushID(static_cast<int>(stat->id));
-            if (ImGui::Selectable(stat->name.c_str(), stat->id == id)) {
+            if (AlterEgo::UI::SelectableOption(stat->name.c_str(), stat->id == id)) {
                 item["stat_id"] = stat->id;
                 item["stat_name"] = stat->name;
                 g_ComponentStatSearch.clear();
