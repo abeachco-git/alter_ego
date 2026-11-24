@@ -17812,10 +17812,15 @@ static void RenderStorageDiagnostics() {
     static Storage::CacheDiagnostics snapshot;
     static bool inspected=false;
     RenderSectionHeader("Storage & Cache", UI::SectionGold);
-    ImGui::TextWrapped("Inspect local storage without making API requests. Saved Loadouts and preferences are separate from rebuildable cache data.");
     if (RenderActionButton("Inspect Storage##ae_cache_diagnostics")) {
         snapshot=Storage::InspectStorage(GW2API::GetDataDirectory());
         inspected=true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        UI::TooltipText("Inspect Storage",
+            "Inspect local storage without making API requests. Saved Loadouts and preferences are separate from rebuildable cache data.");
+        ImGui::EndTooltip();
     }
     if(g_StorageMaintenanceResult.attempted)
         ImGui::TextWrapped("%s",g_StorageMaintenanceResult.message.c_str());
@@ -17828,13 +17833,25 @@ static void RenderStorageDiagnostics() {
         const char* labels[]={"Rebuild all cache (quarantine)","Clear downloaded artwork",
             "Rebuild characters","Rebuild account progress","Rebuild achievement catalog",
             "Rebuild public catalogs and prices"};
-        if(UI::BeginCombo("##ae_cache_operation",labels[selected])) {
+        const char* rebuildLabel="Rebuild##ae_cache_operation";
+        const float avail=std::max(1.0f,ImGui::GetContentRegionAvail().x);
+        const float reserve=UI::CompactButtonWidth(rebuildLabel)+ImGui::GetStyle().ItemSpacing.x;
+        const bool sameRow=avail>=reserve+ImGui::GetFontSize()*6.0f;
+        ImVec2 pad=ImGui::GetStyle().FramePadding;
+        pad.y=std::max(pad.y,(UI::ActionButtonHeight()-ImGui::GetFontSize())*0.5f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,pad);
+        const bool comboOpen=UI::BeginCombo("##ae_cache_operation",labels[selected],0,
+            sameRow?avail-reserve:avail);
+        ImGui::PopStyleVar();
+        if(comboOpen) {
             for(int i=0;i<6;++i)
                 if(UI::SelectableOption(labels[i],selected==i))selected=i;
             ImGui::EndCombo();
         }
-        if(RenderActionButton("Schedule maintenance##ae_cache_operation"))
+        if(sameRow)ImGui::SameLine();
+        if(RenderActionButton(rebuildLabel))
             ImGui::OpenPopup("Confirm cache maintenance##ae_cache_confirm");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Rebuild the selected cache at next addon startup.");
         if(ImGui::BeginPopupModal("Confirm cache maintenance##ae_cache_confirm",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("%s",labels[selected]);
             ImGui::TextWrapped("Runs at next addon startup, before cache readers and workers. Saved library, settings, pins, login history and backups are untouched.");
@@ -17884,20 +17901,7 @@ void AddonOptions() {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
     if (!callbackLease) return;
     ThemeGuard themeGuard;
-    // Header with links
     ImGui::Text("Alter Ego");
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
-    ImGui::SameLine();
-    if (RenderChipButton("Homepage", false)) {
-        ShellExecuteA(NULL, "open", "https://pie.rocks.cc/projects/alter-ego/", NULL, NULL, SW_SHOWNORMAL);
-    }
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
-    ImGui::SameLine();
-    if (RenderChipButton("Buy me a coffee!", false)) {
-        ShellExecuteA(NULL, "open", "https://ko-fi.com/pieorcake", NULL, NULL, SW_SHOWNORMAL);
-    }
 
     // H&S connection status
     RenderSectionHeader("Data Source: Hoard & Seek", AlterEgo::UI::SectionGold);
