@@ -64,7 +64,7 @@ inline bool Exists(const std::string& path) {
     return std::filesystem::is_regular_file(std::filesystem::u8path(path), ec);
 }
 inline std::string FilePath(const std::string& dir, const std::string& name) {
-    return (std::filesystem::u8path(dir) / std::filesystem::u8path(name)).u8string();
+    return Storage::Resolve(dir, name);
 }
 inline bool ReadExisting(const std::string& dir, const std::string& name,
                          std::string& content, std::string& error) {

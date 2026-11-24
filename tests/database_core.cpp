@@ -125,5 +125,32 @@ int case_database_core(int, char**) {
         assert(!Cache::ReadAchievements(root, "Account.1234"));
         assert(std::filesystem::exists(temp.path("library.db")));
     }
+    {
+        namespace Storage = AlterEgo::Storage;
+        const auto root = temp.dir.u8string();
+        const Storage::Paths paths(root);
+        const auto legacy = paths.base/"settings.json";
+        const std::string original = R"({"show_age":true})";
+        Storage::WriteMigrationBytes(legacy,original);
+        const auto moved = Storage::Resolve(root,"settings.json");
+        assert(moved == (paths.ConfigDirectory()/"settings.json").u8string());
+        assert(Storage::ReadMigrationBytes(std::filesystem::u8path(moved)) == original);
+        assert(!std::filesystem::exists(legacy));
+        Storage::WriteMigrationBytes(std::filesystem::u8path(moved),R"({"show_age":false})");
+        Storage::WriteMigrationBytes(legacy,original);
+        assert(Storage::Resolve(root,"settings.json") == moved);
+        assert(Storage::ReadMigrationBytes(std::filesystem::u8path(moved)) == R"({"show_age":false})");
+        assert(Storage::ReadMigrationBytes(legacy) == original);
+        bool archived=false;
+        for (const auto& entry:std::filesystem::directory_iterator(paths.Migration()))
+            if (std::filesystem::exists(entry.path()/"settings.json"))
+                archived |= Storage::ReadMigrationBytes(entry.path()/"settings.json")==original;
+        assert(archived);
+        const auto pinned=Storage::Resolve(root,"ach_tracked.json");
+        assert(pinned==(paths.LibraryDirectory()/"ach_tracked.json").u8string());
+        Storage::WriteMigrationBytes(std::filesystem::u8path(pinned),R"({"pinned":[7]})");
+        std::filesystem::remove_all(paths.CacheDirectory());
+        assert(Storage::ReadMigrationBytes(std::filesystem::u8path(pinned))==R"({"pinned":[7]})");
+    }
     return 0;
 }

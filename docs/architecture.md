@@ -69,9 +69,13 @@ Startup stages and verifies migration of legacy build and Fashion files, reopens
 
 `NativeLibraryPortable.h` and `LibraryBackup.h` export versioned portable JSON and ZIP archives; complete graphs include unused components and linked Fashion dependencies. Legacy monolithic JSON remains an import boundary only. Restore previews selections, protects references, creates a recovery ZIP and a verified native online backup under `backups/recovery/`, then commits changes. Keep full database backup/recovery distinct from portable interchange; the native copy is for recovery and the ZIP is selective.
 
-### Future cache migrations
+### Storage paths and cache ownership
 
-Keep rebuildable catalog, ownership snapshots, commerce and item/skill/stat metadata in a separate `cache/cache.db` when migrated. No empty cache DB is created. User pins, preferences, manual progress and saved library records must survive cache deletion. Keep textures, fonts and portraits as files and small settings/session JSON as appropriate. Each future migration needs a typed schema, validation, ownership, versioning and tests, not a JSON blob replacement. Vendored SQLite version and update procedure: [lib/sqlite/README.md](../lib/sqlite/README.md).
+`StoragePaths.h` defines the shared directory layout. The four settings/session/UI JSON files live in `config/`; pinned achievement state and login timestamps live in `library/`. Existing destination files win. Valid root-level JSON is byte-verified, archived under `backups/migration/`, staged, then published without replacing a destination. Failed or malformed migrations retain the original path. Portable ZIP entry names remain unchanged for compatibility; backup reads and restore writes resolve the same canonical paths.
+
+`cache/cache.db` uses independent application identity and schema versioning. The achievement progress repository owns typed account snapshots, progress records and completed bit rows. Full account names are keys; legacy slug files are imported only when their embedded identity matches. Transactions replace one account at a time, reject older fetch timestamps and retain the previous committed snapshot on failure. SQL runs at existing persistence boundaries, not on every render frame. Connections are short-lived and serialized; current journal settings remain DELETE/FULL pending concurrency measurements. A corrupt or foreign cache is reported rather than silently overwritten; close the addon before deleting the rebuildable cache DB.
+
+Achievement definitions, other public metadata, Skinventory and existing texture paths still need migration. User pins, preferences, manual progress and saved library records must survive cache deletion. Keep textures, fonts and portraits as ordinary files; do not store large JSON documents as opaque SQLite payloads. Vendored SQLite update procedure: [lib/sqlite/README.md](../lib/sqlite/README.md).
 
 ## Presentation and resources
 

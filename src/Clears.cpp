@@ -35,6 +35,7 @@
 #include "RefreshUI.h"
 #include "WikiImage.h"
 #include "VaultAssistance.h"
+#include "StoragePaths.h"
 
 // =========================================================================
 // Clears - Data types and module-private state
@@ -2626,7 +2627,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
 static bool g_ClearOpen[4] = {true, true, true, true};
 static bool g_ClearUiLoaded = false;
 static std::string ClearUiSettingsPath() {
-    return AlterEgo::GW2API::GetDataDirectory() + "/clears_ui.json";
+    return AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "clears_ui.json");
 }
 static void LoadClearUiSettings() {
     if (g_ClearUiLoaded) return;

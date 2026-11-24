@@ -54,6 +54,7 @@
 #include "GearEditCore.h"
 #include "RefreshUI.h"
 #include "CacheDatabase.h"
+#include "StoragePaths.h"
 
 // Version constants
 #define V_MAJOR 1
@@ -1557,9 +1558,7 @@ void CopyToClipboard(const std::string& text) {
 
 // Settings persistence
 static void SaveSettings() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/settings.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "settings.json");
     nlohmann::json j;
     j["show_qa_icon"] = g_ShowQAIcon;
     j["compact_char_list"] = g_CompactCharList;
@@ -1588,7 +1587,7 @@ static void SaveSettings() {
 }
 
 static void LoadSettings() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/settings.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "settings.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     nlohmann::json j;
@@ -1634,9 +1633,7 @@ static void LoadSettings() {
 
 // Character sort persistence
 static void SaveCharSortConfig() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/char_sort.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "char_sort.json");
     nlohmann::json j;
     j["sort_mode"] = g_CharSortMode;
     j["sort_ascending"] = g_CharSortAscending;
@@ -1646,7 +1643,7 @@ static void SaveCharSortConfig() {
 }
 
 static void LoadCharSortConfig() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/char_sort.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "char_sort.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     try {
@@ -1665,9 +1662,7 @@ static void LoadCharSortConfig() {
 static std::string g_SessionSelectedCharName; // deferred: resolve to index after chars load
 
 static void SaveSession() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/session.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "session.json");
 
     nlohmann::json j;
     j["main_tab"] = g_MainTab;
@@ -1709,7 +1704,7 @@ static void SaveSession() {
 }
 
 static void LoadSession() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/session.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "session.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     try {
@@ -1769,9 +1764,7 @@ static void LoadSession() {
 // =========================================================================
 
 static void SaveAchTrackerState() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_tracked.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "ach_tracked.json");
 
     nlohmann::json j;
     {
@@ -1800,7 +1793,7 @@ static void SaveAchTrackerState() {
 }
 
 static void LoadAchTrackerState() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_tracked.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "ach_tracked.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     try {
@@ -12711,9 +12704,7 @@ void AddonUnload() {
 }
 
 static void SaveLoginTimestamps() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/login_times.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "login_times.json");
     nlohmann::json j;
     for (const auto& [name, ts] : g_LoginTimestamps)
         j[name] = ts;
@@ -12723,7 +12714,7 @@ static void SaveLoginTimestamps() {
 }
 
 static void LoadLoginTimestamps() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/login_times.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "login_times.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     try {

@@ -47,3 +47,5 @@ initialized databases, corrupt native data, invalid legacy and unexpected
 unexpected experimental v3 files, and verified database backups without overwriting destinations.
 
 Native editing and portable interchange are covered by `persistence.native_editing` and `persistence.native_portable`: exact matching rather than functional similarity, reuse after modification, copy-on-edit, unchanged IDs, unknown fields and presence distinctions, intentionally unused records, linked Fashion and collision-safe portable merges. The backup tests exercise selective native ZIP/JSON restore and legacy import; obsolete mirror timestamp/reconciliation recovery tests have been removed in favor of native migration tests.
+
+The database core case also covers 5,000 achievement progress rows and completed bits, exact account-name isolation, older snapshot rejection, transaction rollback, disposable cache deletion, configuration migration and archive independence. These are correctness regressions, not a timing benchmark.

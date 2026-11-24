@@ -1,18 +1,12 @@
 #pragma once
 #include "NativeLibrary.h"
+#include "StoragePaths.h"
 #include <filesystem>
 #include <mutex>
 
 namespace AlterEgo::NativeLibrary {
 
-struct Paths {
-    explicit Paths(const std::string& root) : base(std::filesystem::u8path(root)) {}
-    std::filesystem::path base;
-    std::filesystem::path Library() const {return base/"library"/"library.db";}
-    std::filesystem::path Cache() const {return base/"cache"/"cache.db";}
-    std::filesystem::path Migration() const {return base/"backups"/"migration";}
-    std::filesystem::path Recovery() const {return base/"backups"/"recovery";}
-};
+using Paths = Storage::Paths;
 
 // A single runtime service owns the cached committed snapshot. Connections
 // are short-lived and used only by the calling thread, under this service lock.
