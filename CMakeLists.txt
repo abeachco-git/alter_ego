@@ -62,6 +62,7 @@ set(SOURCES
     "${CMAKE_BINARY_DIR}/AlterEgoResources.rc"
     src/Clears.cpp
     src/GW2API.cpp
+    src/NativeLibrary.cpp
     src/FontManager.cpp
     src/IconManager.cpp
     src/ChatLink.cpp

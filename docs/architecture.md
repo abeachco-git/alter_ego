@@ -113,3 +113,16 @@ The pinned upstream SQLite build and maintenance instructions live under
 schema, migration and editor/import/backup adapters are complete. This
 foundation intentionally does not create any user database or change existing
 library files.
+
+The staged `NativeLibrary` repository defines schema version 1: typed
+loadout metadata and mode rows, category-scoped component identity and
+nonunique indexed content fingerprints, specialization/trait/skill rows,
+physical gear slots with exact upgrades and ordered infusion children,
+native Fashion skins/dyes/characters, and category-compatible references.
+Unknown extensions alone use JSON. Explicit empty lists and objects use
+presence flags. Known scalar values are stored in typed columns. The
+repository applies only changed records inside one transaction and checks
+an optimistic revision; snapshots are temporary projections. Duplicate
+lookup verifies full ordered content after the index lookup, not functional
+Compare equivalence. The runtime migration and UI adapters are not yet
+connected to this repository.

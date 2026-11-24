@@ -163,7 +163,10 @@ public:
             destination.Scalar("SELECT count(*) FROM sqlite_schema") != 0)
             throw Error(SQLITE_MISUSE, "Backup requires a distinct empty destination");
         auto* backup = sqlite3_backup_init(destination.db_, "main", db_, "main");
-        if (!backup) Check(destination.db_, sqlite3_errcode(destination.db_), "backup init");
+        if (!backup) {
+            const int rc = sqlite3_errcode(destination.db_);
+            throw Error(rc == SQLITE_OK ? SQLITE_ERROR : rc, "Cannot initialize backup");
+        }
         const int step = sqlite3_backup_step(backup, -1);
         const int finish = sqlite3_backup_finish(backup);
         if (step != SQLITE_DONE) Check(destination.db_, step, "backup step");

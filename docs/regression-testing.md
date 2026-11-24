@@ -35,3 +35,8 @@ The persistence suite additionally exercises the SQLite foundation in
 `persistence.database_core`: versioned schema, bound text, rollback, foreign
 keys, migration interruption, restart, backup verification and rejection of
 an unrelated database. This does not yet exercise the Loadout runtime adapter.
+
+`persistence.native_library` exercises relational round-trips including
+unknown extensions, physical sigils/infusions, Fashion, component references,
+intentional duplicates, forced hash collision, exact candidates and usage,
+restart, stale edit rejection and transactional writes.
