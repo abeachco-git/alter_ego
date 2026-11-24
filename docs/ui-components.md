@@ -65,3 +65,5 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 - Commerce v2 derived cache retains all known tradeable equipment/skin-unlock candidates and names, selects the cheapest available sell listing, and does not reuse legacy rarity-selected prices. Vendor coverage remains limited to known cultural armor prices.
 
 - Keep cached shopping candidate metadata and sort keys separate from local filters. Never scan or reprice all candidates per keystroke. Price snapshots are returned by value under the Commerce lock. A failed price batch must not publish a partial winner as the cheapest.
+
+- Preview in Game is optional, using existing `PieUI_PreviewChatLink` when Pie UI is present. Its documented native action supports skin links (see https://github.com/PieOrCake/pie_ui/blob/master/INTEGRATION.md).

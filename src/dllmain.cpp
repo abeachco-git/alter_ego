@@ -13200,6 +13200,9 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
     ImGui::Separator();
     if(ImGui::MenuItem("Copy Skin Name")) CopyToClipboard(skin.name);
     if(ImGui::MenuItem("Copy Skin Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeSkin(skin.id));
+    // Pie UI documents native skin-link preview through EV_PIEUI_OPEN_CHATLINK.
+    if(g_PieUIPresent.load() && ImGui::MenuItem("Preview in Game"))
+        PieUI_PreviewChatLink(AlterEgo::ChatLink::EncodeSkin(skin.id));
     const auto price=Skinventory::Commerce::GetPrice(skin.id);
     if(price && price->tradeable && price->item_id) {
         const auto name=Skinventory::Commerce::GetItemName(price->item_id);
@@ -13303,8 +13306,7 @@ static void RenderSkinList() {
     static bool s_cacheHasOwnerData = false;
     static uint64_t s_cacheOwnedGen = 0;
 
-    std::string filterLower(g_SkinSearchFilter);
-    std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
+    const std::string filterLower=Skinventory::Search::Lower(g_SkinSearchFilter);
 
     bool hasOwnerData = Skinventory::OwnedSkins::HasData();
     uint64_t ownedGen = Skinventory::OwnedSkins::GetGeneration();
@@ -13342,6 +13344,7 @@ static void RenderSkinList() {
         }
 
         s_displaySkins.reserve(skins.size());
+        const auto searchWords=Skinventory::Search::Words(filterLower);
         for (uint32_t skinId : skins) {
             auto skinOpt = Skinventory::SkinCache::GetSkin(skinId);
             if (!skinOpt || skinOpt->name.empty()) continue;
@@ -13355,7 +13358,7 @@ static void RenderSkinList() {
                 if (!owned && !g_SkinShowUnowned) continue;
             }
 
-            if (!Skinventory::Search::Matches(skinOpt->name, Skinventory::Search::Words(filterLower))) continue;
+            if (!Skinventory::Search::Matches(skinOpt->name, searchWords)) continue;
 
             s_displaySkins.push_back({skinId, owned});
         }
@@ -13987,7 +13990,8 @@ static void RenderSkinShoppingList() {
         if(category) add(category==1?"Armor":category==2?"Weapons":"Back");
         if(source) add(source==1?"Trading Post":"Vendor");
         add(weight);add(slot);add(weapon);add(rarity);if(maxGold) add("Max "+std::to_string(maxGold)+"g");
-        ImGui::TextDisabled("%s",summary.c_str()); ImGui::SameLine();
+        ImGui::TextDisabled("%s",summary.c_str());
+        if(ImGui::CalcTextSize(summary.c_str()).x+ImGui::CalcTextSize("Clear filters").x+24.0f < available) ImGui::SameLine();
         if(AlterEgo::UI::SmallButton("Clear filters")) {category=source=maxGold=0;weight.clear();slot.clear();weapon.clear();rarity.clear();changed();}
     }
 
@@ -14022,6 +14026,11 @@ static void RenderSkinShoppingList() {
         g_SkinShopListDirty = true;
     }
     s_wasFetching = isFetching;
+    if(!isFetching) {
+        const auto status=Skinventory::Commerce::GetFetchStatus();
+        if(status.find("Some prices could not be retrieved")==0)
+            ImGui::TextColored(AlterEgo::UI::WarningText,"%s",status.c_str());
+    }
 
     // Build the unfiltered acquisition list only on data changes. Local
     // filters never request prices or restart the ownership/refresh lifecycle.
