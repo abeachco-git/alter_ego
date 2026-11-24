@@ -11109,7 +11109,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
             ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
         const bool expanded = ImGui::CollapsingHeader(title.c_str(), flags);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%zu match%s, %zu difference%s, %zu unverified\nSaved component: %s",
+            ImGui::SetTooltip("%zu match%s, %zu difference%s, %zu unverified\nSaved component: %s\nRight-click the header for component actions.",
                 section.matches, section.matches == 1 ? "" : "es",
                 section.differences, section.differences == 1 ? "" : "s",
                 section.unverified,
@@ -11455,110 +11455,81 @@ static void RenderCompareTab() {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
-    // Keep native ImGui popup/keyboard behavior, but draw profession names in
-    // the same colors as the character list, including the closed preview.
-    const char* autoPrefix = "Active: ";
-    const ImVec2 previewMin = ImGui::GetCursorScreenPos();
-    const float previewWidth = ImGui::GetContentRegionAvail().x;
-    const float previewHeight = ImGui::GetFrameHeight();
-    ImDrawList* previewDraw = ImGui::GetWindowDrawList();
-    if (ImGui::BeginCombo("##compareCharacter", "")) {
-        const AlterEgo::Character* autoCharacter = character;
-        for (const auto* ch : compareMatches)
-            if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
-        const ImVec2 rowSize(0.0f, ImMax(24.0f, ImGui::GetTextLineHeightWithSpacing()+3.0f));
-        const bool autoClicked = ImGui::Selectable("##compareAutoCharacter",
-            g_LibCompareChar.empty(), ImGuiSelectableFlags_None, rowSize);
-        DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
-            ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-            autoCharacter->profession, autoCharacter->name, autoPrefix);
-        if (autoClicked) {
-            g_LibCompareChar.clear();
-            g_LibCompareSavedManual = false;
-        }
-        for (const auto* ch : compareMatches) {
-            ImGui::PushID(ch->name.c_str());
-            const bool selected = ch->name == g_LibCompareChar;
-            const bool clicked = ImGui::Selectable("##compareCharacterEntry",
-                selected, ImGuiSelectableFlags_None, rowSize);
+        // Keep native ImGui popup/keyboard behavior, but draw profession names in
+        // the same colors as the character list, including the closed preview.
+        const char* autoPrefix = "Active: ";
+        const ImVec2 previewMin = ImGui::GetCursorScreenPos();
+        const float previewWidth = ImGui::GetContentRegionAvail().x;
+        const float previewHeight = ImGui::GetFrameHeight();
+        ImDrawList* previewDraw = ImGui::GetWindowDrawList();
+        if (ImGui::BeginCombo("##compareCharacter", "")) {
+            const AlterEgo::Character* autoCharacter = character;
+            for (const auto* ch : compareMatches)
+                if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
+            const ImVec2 rowSize(0.0f, ImMax(24.0f, ImGui::GetTextLineHeightWithSpacing()+3.0f));
+            const bool autoClicked = ImGui::Selectable("##compareAutoCharacter",
+                g_LibCompareChar.empty(), ImGuiSelectableFlags_None, rowSize);
             DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
                 ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                ch->profession, ch->name);
-            if (clicked) {
-                g_LibCompareChar = ch->name;
+                autoCharacter->profession, autoCharacter->name, autoPrefix);
+            if (autoClicked) {
+                g_LibCompareChar.clear();
                 g_LibCompareSavedManual = false;
-                g_LibCompareBuildTab = -1;
-                g_LibCompareEquipTab = 0;
             }
-            if (selected) ImGui::SetItemDefaultFocus();
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
-    }
-    DrawCompareProfessionCharacterEntry(previewDraw, previewMin,
-        ImVec2(previewMin.x+previewWidth, previewMin.y+previewHeight),
-        character->profession, character->name,
-        g_LibCompareChar.empty() ? autoPrefix : nullptr, true);
-    ImGui::TableNextColumn();
-    const std::string chosenName = saved ?
-        (g_LibCompareSavedManual ? "" : "Auto: ") +
-            saved->name :
-        "Choose a saved loadout";
-    ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
-        if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
-            g_LibCompareSavedManual = false;
-            g_LibCompareBuildId.clear();
-        }
-        for (const auto& b : builds) {
-            if (b.profession != target->profession) continue;
-            const bool selected = saved && b.id == saved->id;
-            const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
-            if (ImGui::Selectable(label.c_str(), selected)) {
-                g_LibCompareBuildId = b.id;
-                g_LibCompareSavedManual = true;
-                saved = &b;
+            for (const auto* ch : compareMatches) {
+                ImGui::PushID(ch->name.c_str());
+                const bool selected = ch->name == g_LibCompareChar;
+                const bool clicked = ImGui::Selectable("##compareCharacterEntry",
+                    selected, ImGuiSelectableFlags_None, rowSize);
+                DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
+                    ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                    ch->profession, ch->name);
+                if (clicked) {
+                    g_LibCompareChar = ch->name;
+                    g_LibCompareSavedManual = false;
+                    g_LibCompareBuildTab = -1;
+                    g_LibCompareEquipTab = 0;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+                ImGui::PopID();
             }
-            if (selected) ImGui::SetItemDefaultFocus();
+            ImGui::EndCombo();
         }
-        ImGui::EndCombo();
+        DrawCompareProfessionCharacterEntry(previewDraw, previewMin,
+            ImVec2(previewMin.x+previewWidth, previewMin.y+previewHeight),
+            character->profession, character->name,
+            g_LibCompareChar.empty() ? autoPrefix : nullptr, true);
+        ImGui::TableNextColumn();
+        const std::string chosenName = saved ?
+            (g_LibCompareSavedManual ? "" : "Auto: ") +
+                saved->name :
+            "Choose a saved loadout";
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
+            if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
+                g_LibCompareSavedManual = false;
+                g_LibCompareBuildId.clear();
+            }
+            for (const auto& b : builds) {
+                if (b.profession != target->profession) continue;
+                const bool selected = saved && b.id == saved->id;
+                const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    g_LibCompareBuildId = b.id;
+                    g_LibCompareSavedManual = true;
+                    saved = &b;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndTable();
     }
-    ImGui::EndTable();
-    }
-    ImGui::Spacing();
-    const bool customTabs = g_LibCompareBuildTab >= 0 || g_LibCompareEquipTab != 0;
-    const char* optionsLabel = customTabs || g_LibCompareExactItems
-        ? "Comparison options (custom)###compare_options"
-        : "Comparison options###compare_options";
-    if (ImGui::CollapsingHeader(optionsLabel)) {
-        if (ImGui::BeginTable("##compareTabs", 2,
-            ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextColored(compareLabelColor, "Build Tab");
-            ImGui::TableNextColumn();
-            ImGui::TextColored(compareLabelColor, "Equipment Tab");
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1.0f);
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
         return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
     };
     std::string currentTabLabel = g_LibCompareBuildTab < 0
         ? "Active: " + tabLabel(live) : tabLabel(live);
-    if (ImGui::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
-        if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
-            g_LibCompareBuildTab = -1;
-        for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
-            const auto& bt = character->build_tabs[i];
-            std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
-            if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab))
-                g_LibCompareBuildTab = i;
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1.0f);
     // The equipment selector belongs to retrieved character data, not the
     // saved library. It remains available when the character has no matching
     // saved build or when a saved build contains no equipment snapshot.
@@ -11578,18 +11549,52 @@ static void RenderCompareTab() {
     std::string equipmentLabel = equipmentTabName(selectedEquipTab);
     if (g_LibCompareEquipTab == 0)
         equipmentLabel = "Active: " + equipmentLabel;
-    if (ImGui::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
-        if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
-            g_LibCompareEquipTab = 0;
-        for (int tab = 1; tab <= maxTab; ++tab) {
-            std::string name = equipmentTabName(tab);
-            if (tab == character->active_equipment_tab) name += " (active)";
-            if (ImGui::Selectable(name.c_str(), tab == g_LibCompareEquipTab))
-                g_LibCompareEquipTab = tab;
-        }
-        ImGui::EndCombo();
-    }
-        ImGui::EndTable();
+    ImGui::Spacing();
+    const bool customTabs = g_LibCompareBuildTab >= 0 || g_LibCompareEquipTab != 0;
+    const char* optionsLabel = customTabs || g_LibCompareExactItems
+        ? "Comparison options (custom)###compare_options"
+        : "Comparison options###compare_options";
+    const bool optionsOpen = ImGui::CollapsingHeader(optionsLabel);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Build: %s\nEquipment: %s\nItem matching: %s",
+            currentTabLabel.c_str(), equipmentLabel.c_str(),
+            g_LibCompareExactItems ? "Exact IDs" : "Equivalent stats");
+    if (optionsOpen) {
+        if (ImGui::BeginTable("##compareTabs", 2,
+            ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(compareLabelColor, "Build Tab");
+            ImGui::TableNextColumn();
+            ImGui::TextColored(compareLabelColor, "Equipment Tab");
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
+                if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
+                    g_LibCompareBuildTab = -1;
+                for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
+                    const auto& bt = character->build_tabs[i];
+                    std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
+                    if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab))
+                        g_LibCompareBuildTab = i;
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
+                if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
+                    g_LibCompareEquipTab = 0;
+                for (int tab = 1; tab <= maxTab; ++tab) {
+                    std::string name = equipmentTabName(tab);
+                    if (tab == character->active_equipment_tab) name += " (active)";
+                    if (ImGui::Selectable(name.c_str(), tab == g_LibCompareEquipTab))
+                        g_LibCompareEquipTab = tab;
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::EndTable();
         }
         if (saved && !saved->gear.empty()) {
             ImGui::Checkbox("Exact item IDs##compare", &g_LibCompareExactItems);
