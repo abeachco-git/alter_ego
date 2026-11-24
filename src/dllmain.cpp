@@ -13751,6 +13751,10 @@ static void RenderSkinDetailPanel() {
     ImGui::EndChild();
 }
 
+static std::string g_ShopNavigationQuery;
+static Skinventory::SkinFilters g_ShopNavigationFilters;
+static int g_ShopNavigationSource=0,g_ShopNavigationMaxGold=0;
+static bool g_ShopNavigationFilterDirty=true;
 static void RenderSkinShoppingList() {
     if (!Skinventory::OwnedSkins::HasData()) {
         ImGui::TextWrapped("Hoard & Seek data not yet loaded. Ensure Hoard & Seek is installed and has fetched account data.");
@@ -13766,11 +13770,12 @@ static void RenderSkinShoppingList() {
     }
 
     static bool s_needsFetch = true;
-    static std::string query;
-    static Skinventory::SkinFilters filters;
-    static int source=0, maxGold=0;
+    auto& query=g_ShopNavigationQuery;
+    auto& filters=g_ShopNavigationFilters;
+    auto& source=g_ShopNavigationSource;
+    auto& maxGold=g_ShopNavigationMaxGold;
     const auto& data=GetSkinBrowserData();
-    static bool filterDirty=true;
+    auto& filterDirty=g_ShopNavigationFilterDirty;
     const auto changed = [&] { filterDirty = true; };
     bool refreshClicked = false;
     if (AlterEgo::UI::SearchToolbar("shopping", "Search skins or TP items...", query,
@@ -16432,6 +16437,7 @@ void AddonRender() {
     // Account selector (only when multi-account) — rendered on the same row as
     // the tab bar (right-aligned) to save vertical space.
     static bool g_ForceCharactersTab = false;
+    static bool accountFallbackNavigation=false;
     RenderNavigationControls();
     BeginNavigationFrame();
     float tabRowY = ImGui::GetCursorPosY();
@@ -17611,8 +17617,9 @@ void AddonRender() {
                 std::string prevFilter = g_SelectedAccountFilter;
                 if (ImGui::Selectable("All Accounts", g_SelectedAccountFilter.empty())) {
                     g_SelectedAccountFilter.clear();
-                    if ((g_MainTab >= 2 && g_MainTab <= 4) || g_MainTab == 6)
-                        g_ForceCharactersTab = true;
+                    if ((g_MainTab >= 2 && g_MainTab <= 4) || g_MainTab == 6) {
+                        g_ForceCharactersTab = true;accountFallbackNavigation=true;
+                    }
                 }
                 for (const auto& acct : accounts) {
                     bool selected = (g_SelectedAccountFilter == acct.name);
@@ -17638,7 +17645,8 @@ void AddonRender() {
         // Trigger after rendering so reset and account-switch checks run first.
         static int s_previousVisibleMainTab = -1;
         if (g_MainTab != s_previousVisibleMainTab) {
-            if(s_previousVisibleMainTab>=0&&!g_NavRestore&&!g_ForceCharactersTab)MarkNavigation();
+            if(s_previousVisibleMainTab>=0&&!g_NavRestore&&!accountFallbackNavigation)MarkNavigation();
+            if(g_MainTab==0)accountFallbackNavigation=false;
             if (g_MainTab == 3) RefreshVaultOnEntry();
             else if (g_MainTab == 6) RefreshClearsOnEntry();
             s_previousVisibleMainTab = g_MainTab;

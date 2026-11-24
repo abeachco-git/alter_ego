@@ -554,6 +554,7 @@ static void ComponentUIOpenLibrary(const std::string& kind, const std::string& i
         }
     g_ComponentSelectedKind = kind;
     g_ComponentSelectedId = id;
+    g_ComponentSearch.clear();g_ComponentUnusedOnly=false;
     g_LibraryCollection = 2;
 }
 

@@ -53,8 +53,15 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
             }else{s.id=g_EquipmentSetSelectedId;s.search=g_EquipmentSetSearch;}
             break;
         }
-        case 2:s.sub=g_SkinActiveTab;s.record=g_SkinSelectedId;s.search=g_SkinSearchFilter;
-            s.skins=g_SkinBrowserFilters;s.first=g_SkinShowOwned;s.other=g_SkinShowUnowned;s.view=g_SkinViewMode;break;
+        case 2:s.sub=g_SkinActiveTab;s.record=g_SkinSelectedId;
+            if(s.sub==0){
+                s.search=g_SkinSearchFilter;s.skins=g_SkinBrowserFilters;
+                s.first=g_SkinShowOwned;s.other=g_SkinShowUnowned;s.view=g_SkinViewMode;
+            }else{
+                s.search=g_ShopNavigationQuery;s.skins=g_ShopNavigationFilters;
+                s.category=g_ShopNavigationSource;s.sort=g_ShopNavigationMaxGold;
+            }
+            break;
         case 4:s.id=g_AchSelectedGroupId;s.record=g_AchSelectedCatId;s.achievement=g_NavAchievementId;
             s.search=g_AchSearchBuf;s.first=g_AchHideEmptyCats;s.other=g_AchHideCompletedCats;break;
         case 5:s.id=g_LibCompareChar;s.manual=g_LibCompareSavedManual;
@@ -116,9 +123,15 @@ static void RestoreNavigation(const NavigationSnapshot& s){
             }else{g_EquipmentSetSelectedId=s.id;g_EquipmentSetSearch=s.search;}
             break;
         }
-        case 2:g_SkinSelectedId=s.record;g_SkinBrowserFilters=s.skins;
-            g_SkinShowOwned=s.first;g_SkinShowUnowned=s.other;g_SkinViewMode=s.view;
-            snprintf(g_SkinSearchFilter,sizeof(g_SkinSearchFilter),"%s",s.search.c_str());
+        case 2:g_SkinSelectedId=s.record;
+            if(s.sub==0){
+                g_SkinBrowserFilters=s.skins;g_SkinShowOwned=s.first;g_SkinShowUnowned=s.other;g_SkinViewMode=s.view;
+                snprintf(g_SkinSearchFilter,sizeof(g_SkinSearchFilter),"%s",s.search.c_str());
+            }else{
+                g_ShopNavigationQuery=s.search;g_ShopNavigationFilters=s.skins;
+                g_ShopNavigationSource=s.category;g_ShopNavigationMaxGold=s.sort;
+                g_ShopNavigationFilterDirty=true;
+            }
             g_SkinScrollToSkin=false;break;
         case 4:{
             const bool changed=g_AchSelectedCatId!=s.record;
@@ -159,23 +172,23 @@ static void MoveNavigation(int direction){
 }
 static UINT NavigationWndProc(HWND,UINT msg,WPARAM wParam,LPARAM){
     AlterEgo::Callbacks::Gate::Lease lease(AlterEgo::Callbacks::Runtime());
-    if(!lease)return msg;
-    unsigned bit=0;int direction=0;bool down=false,up=false;
+    if(!lease)return 1;
+    unsigned bit=0;int direction=0;bool up=false;
     if(msg==WM_XBUTTONDOWN||msg==WM_XBUTTONUP||msg==WM_XBUTTONDBLCLK){
-        const auto x=HIWORD(wParam);if(x!=XBUTTON1&&x!=XBUTTON2)return msg;
+        const auto x=HIWORD(wParam);if(x!=XBUTTON1&&x!=XBUTTON2)return 1;
         direction=x==XBUTTON1?-1:1;bit=x==XBUTTON1?1:2;
-        down=msg!=WM_XBUTTONUP;up=!down;
+        up=msg==WM_XBUTTONUP;
     }else if(msg==WM_SYSKEYDOWN||msg==WM_SYSKEYUP||msg==WM_KEYDOWN||msg==WM_KEYUP){
-        if(wParam!=VK_LEFT&&wParam!=VK_RIGHT)return msg;
+        if(wParam!=VK_LEFT&&wParam!=VK_RIGHT)return 1;
         direction=wParam==VK_LEFT?-1:1;bit=wParam==VK_LEFT?4:8;
-        down=msg==WM_SYSKEYDOWN||msg==WM_KEYDOWN;up=!down;
-    }else return msg;
-    if(up){if(g_NavConsumedButtons.fetch_and(~bit)&bit)return 0;return msg;}
+        up=msg==WM_SYSKEYUP||msg==WM_KEYUP;
+    }else return 1;
+    if(up){if(g_NavConsumedButtons.fetch_and(~bit)&bit)return 0;return 1;}
     if(g_NavConsumedButtons.load()&bit)return 0;
     const unsigned scope=g_NavInputMask.load();
     const bool mouse=bit<=2;
     if(!(scope&(direction<0?4:8))||!(scope&(mouse?1:2))||
-       (!mouse&&!(GetKeyState(VK_MENU)&0x8000)))return msg;
+       (!mouse&&!(GetKeyState(VK_MENU)&0x8000)))return 1;
     g_NavConsumedButtons.fetch_or(bit);g_NavRequest.store(direction);return 0;
 }
 static void RenderNavigationControls(){
@@ -191,7 +204,7 @@ static void RenderNavigationControls(){
     button("<##nav_back","Back (mouse back / Alt+Left)",-1);ImGui::SameLine();
     button(">##nav_forward","Forward (mouse forward / Alt+Right)",1);
     if(!blocked&&requested)MoveNavigation(requested);
-
+    ImGui::SameLine();
 }
 static void EndNavigationFrame(){
     if(g_NavRestore){
