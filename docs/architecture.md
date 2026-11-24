@@ -10,6 +10,23 @@ Alter Ego is a Windows x64 UCRT DLL loaded by Raidcore Nexus. Nexus supplies the
 
 **Threading:** Nexus `Events_Raise()` dispatches synchronously on the calling thread. Never hold a mutex across a query event that can invoke its response handler; preserve the pending/retry protocol in the Hoard & Seek interface. Font request callbacks can likewise re-enter synchronously: release the font manager mutex before registration calls and accept updated font pointers when the Nexus atlas is rebuilt.
 
+### Native character loading and location
+
+`GameMemory.h` owns bounded, copied game-roster snapshots and the explicitly
+user-initiated character switch. The standalone diagnostic tab was removed
+after a successful live roster and off-main-thread switch test. This is an
+undocumented, version-sensitive integration, not a supported Nexus contract.
+The switch is gated to the inspected executable, exact function bytes, valid
+context/gameplay and fresh roster; a request remains pending until the
+target identity is observed or a 60-second gameplay timeout expires. No
+automatic retry, game patch or thread injection. Memory metadata is validated
+for plausible ranges and unique names, never required to equal stale API
+metadata. The current live roster and any known account conflict govern
+eligibility. Map IDs are resolved from public API data in owned worker batches
+with session caching; only the row tooltip presents location. Neither map
+lookup nor hover performs synchronous HTTP or SQL. On an unsupported game
+build, loading fails closed; roster location availability is independent.
+
 ## Development safety and ownership
 
 These are review rules for changes, not a claim that every existing path has already been audited.

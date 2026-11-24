@@ -26,9 +26,12 @@ Implement the native replacement, inventory UI and cross-feature integration as 
 
 ## Independent near-term feature — character loading and location
 
-Requested before the native inventory migration. Add a canonical Characters-list right-click **Load** action for an inactive character on the current logged-in account, using a documented, supported integration with [Fast Swap](https://raidcore.gg/gw2/addons/fastswap) if available. Its [public repository](https://github.com/qjv/fast-swap-releases) is release-only and no callable public interface has been verified. Do not invent Nexus event names, reverse engineer private entry points, or implement game memory patches; establish the provider contract first. Keep the feature optional and disable or omit it when unsupported, not in gameplay, already active, or another account is selected. No automatic character switching.
-
-Independently record the last observed map ID/time for each verified account/character from valid gameplay MumbleLink/Nexus identity observations; do not overwrite with loading/character-select placeholders. Reuse cached map-name metadata, persist observation history across restarts outside disposable API cache, and show a compact character-row tooltip with current map for active characters or explicitly labeled last-known map for inactive characters. Unknown locations remain unknown. The public authenticated character API does not provide live locations for offline characters. No network or SQL requests on hover; resolve names off render path. Add regression coverage for account isolation, observation validity, stale locations and action gating.
+Implemented on the experimental branch after user-led live verification of the
+standalone test. See [architecture](architecture.md) and [UI components](ui-components.md).
+No dependency on Fast Swap or H&S for the memory reader/switch; do not reintroduce
+the temporary diagnostics tab. The integrated path still needs in-game testing.
+Locations belong only in row tooltips. Do not override API character metadata
+or require it to match live memory plausibility checks.
 
 ## Source audit cautions
 

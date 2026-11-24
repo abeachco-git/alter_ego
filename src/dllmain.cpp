@@ -62,7 +62,7 @@
 #include "CacheDatabase.h"
 #include "AchievementCatalogCache.h"
 #include "StoragePaths.h"
-#include "GameMemoryTest.h" // TEMPORARY game-memory test; remove with its tab hook.
+#include "GameMemory.h"
 
 // Version constants
 #define V_MAJOR 1
@@ -1700,7 +1700,7 @@ static void SaveSession() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "session.json");
 
     nlohmann::json j;
-    j["main_tab"] = g_MainTab == 7 ? 0 : g_MainTab; // TEMPORARY test tab is not persisted.
+    j["main_tab"] = g_MainTab;
 
     // Characters tab state — save by name for stability across sort/order changes
     const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
@@ -16460,6 +16460,10 @@ void AddonRender() {
             ImGui::SetTooltip("Live and cached character data from your GW2 account");
         if (charactersTabVisible) {
             g_MainTab = 0;
+            const std::string memoryAccount=AlterEgo::GW2API::GetCurrentAccountName();
+            const std::string memoryNotice=AlterEgo::GameMemory::Tick(g_CurrentCharName);
+            if (!memoryNotice.empty() && APIDefs) APIDefs->GUI_SendAlert(memoryNotice.c_str());
+            std::string loadTarget, loadAccount;
             ImGui::BeginChild("##characters_page",
                 ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
 
@@ -16725,7 +16729,12 @@ void AddonRender() {
 
                     // Context actions resolve against the right-clicked character, not
                     // the character whose details happen to be selected.
+                    const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
+                        const bool canLoad=AlterEgo::GameMemory::CanLoad(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
+                        if (ImGui::MenuItem("Load",nullptr,false,canLoad)) {
+                            loadTarget=ch.name;loadAccount=ch.account_name;
+                        }
                         const int activeBuild = ActiveBuildIndex(ch);
                         const int activeEquip = ActiveEquipmentTab(ch);
                         if (ImGui::MenuItem("Refresh")) {
@@ -16748,6 +16757,11 @@ void AddonRender() {
                             ImGui::EndMenu();
                         }
                         ImGui::EndPopup();
+                    }
+
+                    if (characterHovered) {
+                        const std::string location=AlterEgo::GameMemory::Location(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
+                        if (!location.empty()) ImGui::SetTooltip("Location: %s",location.c_str());
                     }
 
                     // Draw profession-colored left accent bar (non-compact only)
@@ -17464,6 +17478,13 @@ void AddonRender() {
             }
 
             ImGui::EndTabItem();
+            // Invoke only after the character context popup and page have
+            // unwound, using the exact right-clicked character identity.
+            if (!loadTarget.empty()) {
+                const auto message=AlterEgo::GameMemory::Load(g_CurrentCharName,loadTarget,
+                    AlterEgo::GW2API::GetCurrentAccountName(),loadAccount);
+                if (APIDefs) APIDefs->GUI_SendAlert(message.c_str());
+            }
         }
 
 
@@ -17598,13 +17619,6 @@ void AddonRender() {
             RenderAchievementsStatusRow();
             ImGui::EndTabItem();
             }
-        }
-
-        // TEMPORARY game-memory test: remove this block and GameMemoryTest.h together.
-        if (ImGui::BeginTabItem("Memory Test", nullptr, NavigationTabFlags(7))) {
-            g_MainTab = 7;
-            AlterEgo::GameMemoryTest::Render(g_CurrentCharName);
-            ImGui::EndTabItem();
         }
 
         // Right-aligned account selector on the same row as the tab strip.

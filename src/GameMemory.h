@@ -1,8 +1,7 @@
 #pragma once
-// TEMPORARY: remove this header and the marked tab/include/session hook in
-// dllmain.cpp together. No persistence, networking, or hooks. One explicitly confirmed game call.
-// Observations from supplied Fast Swap DLL and GW2 executable are hypotheses
-// until checked against live data. Do not use this module in production.
+// Undocumented game-memory integration. Fail closed on ambiguous layout or
+// incompatible game builds. All roster/switch state is render-thread owned.
+// Read-only memory and explicit character loads are independent of H&S.
 #include <windows.h>
 #include <algorithm>
 #include <array>
@@ -10,10 +9,16 @@
 #include <cstring>
 #include <string>
 #include <vector>
-#include "imgui.h"
-#include "UIControls.h"
+#include <chrono>
+#include <map>
+#include <mutex>
+#include <set>
+#include <nlohmann/json.hpp>
+#include "GameMemoryCore.h"
+#include "BackgroundWorkers.h"
+#include "HttpClient.h"
 
-namespace AlterEgo::GameMemoryTest {
+namespace AlterEgo::GameMemory {
 using Address = uintptr_t;
 constexpr size_t Stride = 0x258;
 constexpr uint32_t MaxRows = 128;
@@ -40,14 +45,16 @@ struct State {
     size_t imageSize = 0;
     DWORD imageTimestamp = 0;
     Address swapContextSlot = 0;
-    bool allowDifferentThread = false;
+    bool resolved = false;
+    bool gameplay = false;
     unsigned viewState = 0;
     unsigned rosterHits = 0, threadHits = 0, switchHits = 0;
     DWORD gameThread = 0, sampleThread = 0;
     uint32_t count8 = 0, count12 = 0;
     std::vector<Row> rows;
-    std::string status = "Click Scan / Refresh while in gameplay.";
-    std::string selected, preflight, armedTarget;
+    std::string status, preflight;
+    std::string sampledActive, pending;
+    std::chrono::steady_clock::time_point nextSample{}, issuedAt{};
 };
 inline State& Data() { static State state; return state; }
 inline bool InImage(const State& s, Address p, size_t n) {
@@ -179,7 +186,7 @@ inline bool ParseRow(const unsigned char* p, Row& row) {
     row.map=Field<uint16_t>(p,0x41);
     row.level=p[0x44]; row.profession=p[0x45];
     row.raceCandidate=p[0x61]; row.genderCandidate=p[0x63]; row.specCandidate=p[0xD9];
-    return row.level>=1 && row.level<=80 && row.profession>=1 && row.profession<=9;
+    return PlausibleCharacter(row.level,row.profession,row.raceCandidate,row.genderCandidate);
 }
 inline bool Sample(State& s) {
     s.rows.clear(); s.preflight.clear();
@@ -189,7 +196,7 @@ inline bool Sample(State& s) {
     uint32_t a=0,b=0,a2=0,b2=0;
     if (!Header(s,ptr,a,b)) { s.status="Roster header unreadable."; return false; }
     s.count8=a; s.count12=b;
-    if (!ptr || !b || b>MaxRows) {
+    if (!ptr || !b || b>MaxRows || a<b) {
         s.status="Roster unavailable or count outside bounds; no rows read."; return false;
     }
     std::vector<unsigned char> first(size_t(b)*Stride), second(first.size());
@@ -210,7 +217,7 @@ inline bool Sample(State& s) {
         rows.push_back(std::move(row));
     }
     s.rows=std::move(rows);
-    s.status="Read-only snapshot accepted. Verify values against Fast Swap.";
+    s.status="Validated character roster.";
     return true;
 }
 // Do not use a long-lived game pointer or invoke the context getter.
@@ -228,22 +235,12 @@ inline bool Executable(Address p) {
     return protection==PAGE_EXECUTE || protection==PAGE_EXECUTE_READ ||
         protection==PAGE_EXECUTE_READWRITE || protection==PAGE_EXECUTE_WRITECOPY;
 }
-inline bool PrepareSwap(State& s,const std::string& active,const std::string& target,
-                        SwapPlan& plan) {
+inline bool ReadGameplay(State& s, Address& ctx, Address& vt, Address& entry) {
     s.viewState=0;
     if (!s.swapContextSlot) {
-        s.preflight="Blocked: swap resolver does not match the inspected game build.";
-        return false;
+        s.preflight="Character loading unavailable for this game build.";return false;
     }
-    if (!Sample(s)) {s.preflight="Blocked: fresh roster validation failed.";return false;}
-    const auto present=[&](const std::string& name){
-        return std::any_of(s.rows.begin(),s.rows.end(),[&](const Row& row){return row.name==name;});
-    };
-    if (active.empty() || target.empty() || target==active || !present(active) || !present(target)) {
-        s.preflight="Blocked: active or target character is not valid in the fresh roster.";return false;
-    }
-    if (!s.gameThread) {s.preflight="Blocked: game main thread identity is unknown.";return false;}
-    Address ctx=0,vt=0,entry=0,view=0;
+    ctx=vt=entry=0; Address view=0;
     constexpr unsigned char viewCode[]={0x8b,0x41,0x6c,0xc3};
     constexpr unsigned char swapCode[]={0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,
         0xec,0x20,0x41,0x8b,0xd8,0x48,0x8b,0xfa,0x45,0x33,0xc0,0x33,0xd2,
@@ -265,12 +262,30 @@ inline bool PrepareSwap(State& s,const std::string& active,const std::string& ta
     if (s.viewState!=16) {
         s.preflight="Blocked: game view state is not gameplay (16).";return false;
     }
-    if (s.gameThread!=GetCurrentThreadId() && !s.allowDifferentThread) {
-        s.preflight="Context and gameplay verified. Render-thread mismatch: experimental opt-in required.";return false;
+    return true;
+}
+inline const Row* Find(const State& s,const std::string& name) {
+    for(const auto& row:s.rows) if(row.name==name) return &row;
+    return nullptr;
+}
+inline bool PrepareSwap(State& s,const std::string& active,const std::string& target,
+                        const std::string& currentAccount,const std::string& targetAccount,
+                        SwapPlan& plan) {
+    if (!s.pending.empty()) {s.preflight="A character load is already pending.";return false;}
+    if (!Sample(s)) {s.preflight="Character loading blocked: invalid live roster.";return false;}
+    if (!s.gameThread) {s.preflight="Character loading blocked: unknown game thread.";return false;}
+    Address ctx=0,vt=0,entry=0;
+    s.gameplay=ReadGameplay(s,ctx,vt,entry);
+    if (!EligibleTarget(s.gameplay,false,Find(s,active)!=nullptr,Find(s,target)!=nullptr,
+                        active,target,currentAccount,targetAccount)) {
+        if (s.gameplay) s.preflight="Character loading blocked: target not on the current live roster or account.";
+        return false;
     }
+    // The successful in-game experiment used the render thread. This is an
+    // explicitly requested operation; no injected thread, hook, or retry.
     const int n=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,target.c_str(),-1,
                                    plan.name.data(),static_cast<int>(plan.name.size()));
-    if (n<2 || n>20) {
+    if (n<2 || n>static_cast<int>(plan.name.size())) {
         s.preflight="Blocked: invalid UTF-16 character name.";return false;
     }
     // Recheck the live singleton and state immediately before handing it off.
@@ -285,119 +300,118 @@ inline bool PrepareSwap(State& s,const std::string& active,const std::string& ta
         s.preflight="Blocked: game context changed during preflight.";return false;
     }
     plan.context=ctx;plan.entry=entry;
-    s.preflight=s.gameThread==GetCurrentThreadId()
-        ?"Preflight passed on main thread; no game call made."
-        :"Preflight passed with explicit off-main-thread opt-in; thread safety remains unknown.";
+    s.preflight="Character switch validated.";
     return true;
 }
-struct Attempt {
-    bool issued=false;
-    std::string target;
-    unsigned executeClicks=0;
-    bool returned=false;
-    std::string result="No switch requested yet.";
+
+using Clock=std::chrono::steady_clock;
+struct MapNames {
+    std::mutex mutex;
+    std::map<uint32_t,std::string> names;
+    std::map<uint32_t,Clock::time_point> retryAt;
+    bool busy=false;
 };
-inline Attempt& TestAttempt() {static Attempt a;return a;}
-inline void Render(const std::string& active) {
-    auto& s=Data();
-    auto& attempt=TestAttempt();
-    ImGui::TextUnformatted("Temporary game memory diagnostics");
-    ImGui::TextWrapped("Scanning is read-only. The optional test switch invokes an undocumented game function. It may crash the game, reset position, or violate game policies. No data is saved.");
-    ImGui::TextWrapped("Switch result: %s",attempt.result.c_str());
-    ImGui::Text("Execute clicks: %u | Game call issued: %s | Returned: %s",
-        attempt.executeClicks,attempt.issued?"Yes":"No",attempt.returned?"Yes":"No");
-    if (attempt.issued) {
-        ImGui::TextWrapped("Target: %s. %s",attempt.target.c_str(),
-            active==attempt.target?"MumbleLink confirms target active.":"Target not active; no automatic retry.");
+inline MapNames& Maps() {static MapNames names;return names;}
+// Fetch public map names in a bounded batch when a validated roster is
+// sampled, never in a tooltip. The existing owned worker group joins on unload.
+inline void QueueMapNames(const std::vector<Row>& rows,Clock::time_point now) {
+    std::set<uint32_t> ids;
+    auto& m=Maps();
+    {
+        std::lock_guard<std::mutex> lock(m.mutex);
+        if(m.busy) return;
+        for(const auto& r:rows)
+            if(r.map && !m.names.count(r.map) &&
+               (!m.retryAt.count(r.map) || m.retryAt[r.map]<=now)) ids.insert(r.map);
+        if(ids.empty()) return;
+        for(auto id:ids) m.retryAt[id]=now+std::chrono::minutes(5);
+        m.busy=true;
     }
-    if (UI::Button("Scan / Refresh")) {
-        s=State{};
-        try { if (Resolve(s)) Sample(s); }
-        catch (...) { s=State{}; s.status="Scan failed; no data retained."; }
-    }
-    ImGui::SameLine();
-    if (UI::Button("Clear")) s=State{};
-    ImGui::TextWrapped("%s",s.status.c_str());
-    ImGui::Text("Matches: roster %u | thread %u | switch %u",s.rosterHits,s.threadHits,s.switchHits);
-    ImGui::Text("Header +8: %u | game count +12: %u | accepted rows: %u",
-                s.count8,s.count12,static_cast<unsigned>(s.rows.size()));
-    ImGui::Text("Game main thread: %lu | sample thread: %lu | render now: %lu",
-                static_cast<unsigned long>(s.gameThread),static_cast<unsigned long>(s.sampleThread),
-                static_cast<unsigned long>(GetCurrentThreadId()));
-    ImGui::Text("MumbleLink character: %s",active.empty()?"Unknown":active.c_str());
-    ImGui::Text("Swap resolver: %s | gameplay state: %u",s.swapContextSlot?"matched inspected build":"unavailable",s.viewState);
-    ImGui::TextDisabled("Map IDs and raw attribute candidates.");
-    if (ImGui::BeginTable("##temporary_memory_rows",7,
-            ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerV|ImGuiTableFlags_Resizable)) {
-        for (const char* column: {"Name","Map ID","Level","Prof ID","0x61","0x63","0xD9"})
-            ImGui::TableSetupColumn(column);
-        ImGui::TableHeadersRow();
-        for (const auto& row:s.rows) {
-            ImGui::PushID(row.name.c_str()); ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            if (ImGui::Selectable(row.name.c_str(),s.selected==row.name,
-                                  ImGuiSelectableFlags_SpanAllColumns)) {
-                s.selected=row.name; s.preflight.clear(); s.armedTarget.clear();
+    const auto finish=[](){auto& cache=Maps();std::lock_guard<std::mutex> lock(cache.mutex);cache.busy=false;};
+    Background::Workers().Launch([ids,finish](){
+        Background::Checkpoint();
+        std::string url="https://api.guildwars2.com/v2/maps?lang=en&ids=";
+        bool first=true;
+        for(auto id:ids){if(!first)url+=",";first=false;url+=std::to_string(id);}
+        const auto response=Skinventory::HttpClient::GetEx(url);
+        std::map<uint32_t,std::string> found;
+        if((response.status_code==200 || response.status_code==206) && !response.body.empty()){
+            const auto j=nlohmann::json::parse(response.body,nullptr,false);
+            if(j.is_array()) for(const auto& item:j){
+                if(!item.is_object() || !item.contains("id") || !item["id"].is_number_unsigned() ||
+                   !item.contains("name") || !item["name"].is_string()) continue;
+                const auto id=item["id"].get<uint32_t>();
+                const auto name=item["name"].get<std::string>();
+                if(ids.count(id) && !name.empty())found[id]=name;
             }
-            if (row.name==active) { ImGui::SameLine(); ImGui::TextDisabled("(active)"); }
-            unsigned values[]={row.map,row.level,row.profession,row.raceCandidate,row.genderCandidate,row.specCandidate};
-            for (int i=0;i<6;++i) {ImGui::TableSetColumnIndex(i+1); ImGui::Text("%u",values[i]);}
-            ImGui::PopID();
         }
-        ImGui::EndTable();
-    }
-    if (!s.selected.empty()) {
-        ImGui::Text("Selected: %s",s.selected.c_str());
-        ImGui::Checkbox("Allow experimental switch from non-main thread", &s.allowDifferentThread);
-        if (UI::Button("Test swap preflight (no switch)")) {
-            const auto target=s.selected;
-            try {SwapPlan plan;PrepareSwap(s,active,target,plan);}
-            catch (...) {s.rows.clear();s.preflight="Blocked: validation failed.";}
+        Background::Checkpoint();
+        {
+            auto& cache=Maps();std::lock_guard<std::mutex> lock(cache.mutex);
+            cache.names.insert(found.begin(),found.end());
         }
-        // Inline confirmation deliberately avoids popup lifetime/ID scope.
-        // A target change disarms it; execution always runs fresh preflight.
-        if (!attempt.issued && s.swapContextSlot && s.selected!=active) {
-            if (s.armedTarget.empty()) {
-                if (UI::Button("Test switch...")) {
-                    s.armedTarget=s.selected;
-                    attempt.result="Confirmation armed for "+s.armedTarget+".";
-                }
-            } else {
-                ImGui::Separator();
-                ImGui::TextWrapped("Confirm switch to %s. This unsupported one-shot test can crash the game or reset your position.",s.armedTarget.c_str());
-                if (UI::Button("Cancel switch")) {
-                    s.armedTarget.clear();
-                    attempt.result="Cancelled before invoking the game.";
-                }
-                ImGui::SameLine();
-                if (UI::Button("Execute test switch") && !s.armedTarget.empty()) {
-                    const auto target=s.armedTarget;
-                    s.armedTarget.clear();
-                    ++attempt.executeClicks;
-                    attempt.result="Execute received; validating "+target+".";
-                    SwapPlan plan;
-                    bool ready=false;
-                    try {ready=PrepareSwap(s,active,target,plan);}
-                    catch (...) {s.rows.clear();s.preflight="Blocked: validation failed.";}
-                    if (!ready) {
-                        attempt.result=s.preflight;
-                    } else {
-                        attempt.target=target;
-                        attempt.issued=true;
-                        s.preflight="Test invoked. Awaiting MumbleLink identity; no automatic retry.";
-                        attempt.result=s.preflight;
-                        using SwitchFn=void(*)(void*,const wchar_t*,uint32_t);
-                        reinterpret_cast<SwitchFn>(plan.entry)(
-                            reinterpret_cast<void*>(plan.context),plan.name.data(),0);
-                        attempt.returned=true;
-                        attempt.result="Game function returned. Check whether the target becomes active.";
-                    }
-                }
-            }
-        } else {
-            s.armedTarget.clear();
-        }
-        ImGui::TextWrapped("%s",s.preflight.c_str());
-    }
+        finish();
+    },finish);
 }
-} // namespace AlterEgo::GameMemoryTest
+inline std::string Tick(const std::string& active) {
+    auto& s=Data();
+    const auto now=Clock::now();
+    if(active.empty()){s.rows.clear();s.gameplay=false;return {};}
+    if(now<s.nextSample && active==s.sampledActive)return {};
+    s.nextSample=now+std::chrono::seconds(2);
+    s.sampledActive=active;
+    try{
+        if(!s.resolved){s.resolved=true;if(!Resolve(s)){s.ptrSlot=0;return {};}}
+        if(!s.ptrSlot || !Sample(s) || !Find(s,active)){
+            s.rows.clear();s.gameplay=false;return {};
+        }
+        Address ctx=0,vt=0,entry=0;
+        s.gameplay=ReadGameplay(s,ctx,vt,entry);
+        QueueMapNames(s.rows,now);
+        if(!s.pending.empty() && s.gameplay){
+            if(active==s.pending){
+                auto message="Loaded "+s.pending+".";
+                s.pending.clear();return message;
+            }
+            if(now-s.issuedAt>=std::chrono::seconds(60)){
+                s.pending.clear();return "Character load not confirmed; no automatic retry.";
+            }
+        }
+    }catch(...){s.rows.clear();s.gameplay=false;}
+    return {};
+}
+inline std::string Location(const std::string& active,const std::string& target,
+                            const std::string& currentAccount,const std::string& targetAccount) {
+    const auto& s=Data();
+    if(active.empty() || active!=s.sampledActive || !Find(s,active) ||
+       !CompatibleAccount(currentAccount,targetAccount))return {};
+    const auto* row=Find(s,target);
+    if(!row || !row->map)return {};
+    auto& cache=Maps();
+    std::lock_guard<std::mutex> lock(cache.mutex);
+    const auto it=cache.names.find(row->map);
+    return it==cache.names.end()?"Map "+std::to_string(row->map):it->second;
+}
+inline bool CanLoad(const std::string& active,const std::string& target,
+                    const std::string& currentAccount,const std::string& targetAccount) {
+    const auto& s=Data();
+    return active==s.sampledActive &&
+        EligibleTarget(s.gameplay,!s.pending.empty(),Find(s,active)!=nullptr,Find(s,target)!=nullptr,
+                       active,target,currentAccount,targetAccount);
+}
+inline std::string Load(const std::string& active,const std::string& target,
+                        const std::string& currentAccount,const std::string& targetAccount) {
+    auto& s=Data();
+    SwapPlan plan;
+    try{
+        if(!PrepareSwap(s,active,target,currentAccount,targetAccount,plan))return s.preflight;
+        s.pending=target;s.issuedAt=Clock::now();
+        s.rows.clear();s.gameplay=false;s.nextSample={};
+    }catch(...){return "Character load validation failed.";}
+    // The tested game method copies the UTF-16 name into an owned request.
+    // Do not catch a native fault and pretend the operation was safe.
+    using SwitchFn=void(*)(void*,const wchar_t*,uint32_t);
+    reinterpret_cast<SwitchFn>(plan.entry)(reinterpret_cast<void*>(plan.context),plan.name.data(),0);
+    return "Loading "+target+"...";
+}
+} // namespace AlterEgo::GameMemory

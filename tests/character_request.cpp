@@ -1,5 +1,6 @@
 #include "../src/AccountIdentity.h"
 #include "../src/CharacterRequest.h"
+#include "../src/GameMemoryCore.h"
 #include <cassert>
 int case_character_request(int,char**) {
     using namespace AlterEgo::CharacterRequest;
@@ -34,5 +35,22 @@ int case_character_request(int,char**) {
     assert(!ExactIds({1,2,3},{4,5,6}));
     const Character hero{{"A.B"},"Hero"}, other{{"A_B"},"Hero"};
     assert(!(hero==other));
+    using namespace AlterEgo::GameMemory;
+    assert(PlausibleCharacter(1,1,0,0));
+    assert(PlausibleCharacter(80,9,4,1));
+    assert(!PlausibleCharacter(0,1,0,0));
+    assert(!PlausibleCharacter(81,1,0,0));
+    assert(!PlausibleCharacter(80,0,0,0));
+    assert(!PlausibleCharacter(80,10,0,0));
+    assert(!PlausibleCharacter(80,1,5,0));
+    assert(!PlausibleCharacter(80,1,0,2));
+    assert(EligibleTarget(true,false,true,true,"Hero","Other","A.B","A.B"));
+    assert(EligibleTarget(true,false,true,true,"Hero","Other","",""));
+    assert(!EligibleTarget(true,false,true,true,"Hero","Other","A.B","A_B"));
+    assert(!EligibleTarget(false,false,true,true,"Hero","Other","A.B","A.B"));
+    assert(!EligibleTarget(true,true,true,true,"Hero","Other","A.B","A.B"));
+    assert(!EligibleTarget(true,false,false,true,"Hero","Other","A.B","A.B"));
+    assert(!EligibleTarget(true,false,true,false,"Hero","Other","A.B","A.B"));
+    assert(!EligibleTarget(true,false,true,true,"Hero","Hero","A.B","A.B"));
     return 0;
 }

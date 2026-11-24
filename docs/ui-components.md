@@ -117,3 +117,7 @@ Read-only previews never mutate saved records. `UI::SaveCancel` is the common fo
 Fashion's modeless editor retains an existing draft instead of replacing it when another record is opened. Existing-look edits use stable ID and exact persisted baseline checks in the repository. The Save/Cancel footer accepts a distinct Save Separate Copy label when an exact Fashion capture match is offered. Aggregate Loadout list selection and drag/reorder are disabled while its draft is active.
 
 The nested gear customization window uses a private equipment draft. Save applies equipment fields to the parent Loadout draft only; Cancel/close discards the child, including offhand removal, bulk gear changes and infusion totals. The parent Save stays unavailable until the child is closed. Gear edits must not overwrite unrelated Build or metadata fields.
+
+## Character location and loading
+
+The character-row hover tooltip displays the live roster location only; use a map ID fallback if its name is unavailable. Do not add location to the context menu or change API-derived character labels. Right-click Load resolves the actual row identity and invokes the canonical GameMemory::Load after the popup unwinds. Disable for incompatible game state, active/foreign characters, invalid roster or a pending request; use the existing Nexus alert for outcomes.
