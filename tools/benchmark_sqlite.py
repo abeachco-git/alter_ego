@@ -23,6 +23,11 @@ def schema(path):
     source = (ROOT / path).read_text(encoding="utf-8")
     version = int(re.search(r"kSchemaVersion\s*=\s*(\d+)", source)[1])
     blocks = re.findall(r'R"SQL\((.*?)\)SQL"', source, re.S)
+    # Durable library schema v3 is fresh-only: intermediate experimental
+    # schemas are deliberately not migration sources. Cache migrations remain
+    # ordered one block per version, and unexpected layouts still fail closed.
+    if path == "src/NativeLibrarySchema.h" and version == 3 and len(blocks) == 1:
+        return version, blocks
     if len(blocks) != version:
         raise RuntimeError("Schema migration layout changed; update benchmark")
     return version, list(reversed(blocks))
@@ -67,15 +72,28 @@ def seed(cache, library, mode, sync, scale):
         db.execute("COMMIT")
     with closing(connect(library, sync)) as db:
         db.execute("BEGIN IMMEDIATE")
+        # Shared membership fixtures model linked and independent Loadouts.
+        gear_kinds = ("weapons", "armor", "trinkets", "runes", "sigils", "infusions", "relic")
+        db.execute("INSERT INTO components VALUES('skills','skills-0','Skills',0,'skills-0')")
+        db.execute("INSERT INTO component_payloads(kind,component_id,flags,extension_json) VALUES('skills','skills-0',0,'{}')")
+        for kind in gear_kinds:
+            db.execute("INSERT INTO components VALUES(?,?,?,0,?)", (kind,kind+"-0",kind,kind+"-0"))
+            db.execute("INSERT INTO component_payloads(kind,component_id,flags,extension_json) VALUES(?,?,0,'{}')", (kind,kind+"-0"))
+        db.execute("INSERT INTO equipment_sets VALUES('set-0','Fixture set',0)")
+        db.executemany("INSERT INTO equipment_set_components VALUES('set-0',?,?)", ((kind,kind+"-0") for kind in gear_kinds))
         for n in range(250*scale):
             ident = f"component-{n}"
             loadout = f"loadout-{n}"
             db.execute("INSERT INTO components VALUES('base_build',?,?,?,?)", (ident, ident, n, ident))
             db.execute("INSERT INTO component_payloads(kind,component_id,flags,profession,extension_json) "
                        "VALUES('base_build',?,0,'Necromancer','{}')", (ident,))
-            db.execute("INSERT INTO loadouts(id,ordinal,modes_present,name,extension_json) VALUES(?,?,0,?,'{}')",
-                       (loadout,n,loadout))
+            linked = n % 2 == 0
+            db.execute("INSERT INTO loadouts(id,ordinal,modes_present,name,extension_json,equipment_set_id) VALUES(?,?,0,?,'{}',?)",
+                       (loadout,n,loadout,"set-0" if linked else None))
             db.execute("INSERT INTO loadout_components VALUES(?,'base_build',?)", (loadout,ident))
+            db.execute("INSERT INTO loadout_components VALUES(?,'skills','skills-0')", (loadout,))
+            if not linked:
+                db.executemany("INSERT INTO loadout_components VALUES(?,?,?)", ((loadout,kind,kind+"-0") for kind in gear_kinds))
         db.execute("COMMIT")
 
 
@@ -113,6 +131,8 @@ def exercise(directory, mode, sync, scale, repeats):
             l.execute("SELECT * FROM component_payloads").fetchall()
             l.execute("SELECT * FROM loadouts ORDER BY ordinal").fetchall()
             l.execute("SELECT * FROM loadout_components").fetchall()
+            l.execute("SELECT * FROM equipment_sets ORDER BY ordinal").fetchall()
+            l.execute("SELECT * FROM equipment_set_components").fetchall()
 
     def account_read(db):
         db.execute("BEGIN")
@@ -204,7 +224,8 @@ def main():
     report = {"platform": platform.platform(), "python": platform.python_version(),
               "sqlite": sqlite3.sqlite_version, "scale": args.scale, "repeats": args.repeats,
               "fixture": {"accounts": 2, "characters": 40*args.scale, "equipment_rows": 1600*args.scale,
-                          "achievement_rows": 16000*args.scale, "loadouts": 250*args.scale},
+                          "achievement_rows": 16000*args.scale, "loadouts": 250*args.scale,
+                          "linked_loadouts": 125*args.scale, "equipment_sets": 1},
               "scope": "Synthetic SQL/codec timings, warm OS cache; not a DLL startup or in-game measurement.",
               "results": results}
     output = json.dumps(report, indent=2)
