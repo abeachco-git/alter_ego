@@ -2699,13 +2699,13 @@ static void FetchAchNameIndex() {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
+        AlterEgo::Background::Checkpoint();
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             g_AchNameIndex = std::move(nameIndex);
             g_AchNameIndexReady = !g_AchNameIndex.empty();
             g_AchStatusMsg = "";
         }
-        AlterEgo::Background::Checkpoint();
         g_AchNameIndexFetching = false;
 
         if (g_AchNameIndexReady) {
@@ -12289,13 +12289,16 @@ static void RenderBuildLibrary() {
 // main tab, because Share is now also available from Characters.
 static void RenderShareRelayPopups() {
     // Relay code result popup (triggered by SendBuildToRelay)
-    if (g_RelaySending && g_RelayResultCode.empty() && g_RelayResultError.empty()) {
+    // The worker publishes strings before clearing the atomic busy flag.
+    // Do not read or mutate them while a worker owns the result.
+    const bool sending = g_RelaySending.load();
+    if (sending) {
         ImGui::OpenPopup("Sending to Mobile...##relay");
     }
-    if (!g_RelayResultCode.empty()) {
+    if (!sending && !g_RelayResultCode.empty()) {
         ImGui::OpenPopup("Build Sent##relay_ok");
     }
-    if (!g_RelayResultError.empty()) {
+    if (!sending && !g_RelayResultError.empty()) {
         ImGui::OpenPopup("Send Failed##relay_err");
     }
 
@@ -12303,10 +12306,11 @@ static void RenderShareRelayPopups() {
     if (ImGui::BeginPopupModal("Sending to Mobile...##relay", nullptr,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::Text("Uploading build to relay...");
-        if (!g_RelaySending) ImGui::CloseCurrentPopup(); // closes when done
+        if (!sending) ImGui::CloseCurrentPopup(); // closes when done
         ImGui::EndPopup();
     }
 
+    if (sending) return;
     // Success popup — show the code
     if (ImGui::BeginPopupModal("Build Sent##relay_ok", nullptr,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {

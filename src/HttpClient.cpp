@@ -9,6 +9,7 @@
 namespace Skinventory {
 
     std::string HttpClient::Get(const std::string& url) {
+        if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return "";
@@ -33,6 +34,7 @@ namespace Skinventory {
 
     HttpResponse HttpClient::GetEx(const std::string& url) {
         HttpResponse result;
+        if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return result;
@@ -62,6 +64,7 @@ namespace Skinventory {
 
     HttpResponse HttpClient::GetEx(const std::string& url, const std::string& headers) {
         HttpResponse result;
+        if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return result;
@@ -92,6 +95,7 @@ namespace Skinventory {
 
     HttpResponse HttpClient::PostJson(const std::string& url, const std::string& jsonBody, const std::string& headers) {
         HttpResponse result;
+        if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return result;
@@ -153,6 +157,7 @@ namespace Skinventory {
     }
 
     bool HttpClient::DownloadToFile(const std::string& url, const std::string& filePath) {
+        if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return false;

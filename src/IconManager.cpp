@@ -97,6 +97,7 @@ std::string IconManager::GetIconFilePath(uint32_t id) {
 }
 
 bool IconManager::DownloadToFile(const std::string& url, const std::string& filePath) {
+    if (AlterEgo::Background::Workers().Stopping()) return {};
     HINTERNET hInternet = InternetOpenA("AlterEgo/1.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hInternet) return false;
         AlterEgo::HttpSafety::Configure(hInternet);

@@ -1887,6 +1887,7 @@ namespace AlterEgo {
     // =========================================================================
 
     std::string GW2API::HttpGet(const std::string& url) {
+        if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("AlterEgo/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return "";
@@ -1930,6 +1931,7 @@ namespace AlterEgo {
 
         const size_t BATCH_SIZE = 200;
         for (size_t i = 0; i < to_fetch.size(); i += BATCH_SIZE) {
+            if (AlterEgo::Background::Workers().Stopping()) return;
             std::string ids_param;
             size_t end = std::min(i + BATCH_SIZE, to_fetch.size());
             for (size_t j = i; j < end; j++) {
@@ -1998,6 +2000,7 @@ namespace AlterEgo {
 
         const size_t BATCH_SIZE = 200;
         for (size_t i = 0; i < to_fetch.size(); i += BATCH_SIZE) {
+            if (AlterEgo::Background::Workers().Stopping()) return;
             std::string ids_param;
             size_t end = std::min(i + BATCH_SIZE, to_fetch.size());
             for (size_t j = i; j < end; j++) {
@@ -2153,6 +2156,7 @@ namespace AlterEgo {
 
         const size_t BATCH_SIZE = 200;
         for (size_t i = 0; i < to_fetch.size(); i += BATCH_SIZE) {
+            if (AlterEgo::Background::Workers().Stopping()) return;
             std::string ids_param;
             size_t end = std::min(i + BATCH_SIZE, to_fetch.size());
             for (size_t j = i; j < end; j++) {
@@ -2214,6 +2218,7 @@ namespace AlterEgo {
 
             const size_t BATCH_SIZE = 200;
             for (size_t i = 0; i < to_fetch.size(); i += BATCH_SIZE) {
+            if (AlterEgo::Background::Workers().Stopping()) return;
                 std::string ids_param;
                 size_t end = std::min(i + BATCH_SIZE, to_fetch.size());
                 for (size_t j = i; j < end; j++) {
@@ -2273,6 +2278,7 @@ namespace AlterEgo {
 
             const size_t BATCH_SIZE = 200;
             for (size_t i = 0; i < to_fetch.size(); i += BATCH_SIZE) {
+            if (AlterEgo::Background::Workers().Stopping()) return;
                 std::string ids_param;
                 size_t end = std::min(i + BATCH_SIZE, to_fetch.size());
                 for (size_t j = i; j < end; j++) {

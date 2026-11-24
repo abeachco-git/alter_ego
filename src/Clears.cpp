@@ -358,15 +358,14 @@ void OnClearsAchResponse(void* eventArgs) {
     if (!eventArgs) return;
     auto* resp = (HoardQueryAchievementResponse*)eventArgs;
     std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
-    if (resp->api_version < 2 || g_ClearsCacheAccount.empty()) return;
-    if (resp->api_version >= 3) {
-        const std::string echoed(resp->account_name,
-            strnlen(resp->account_name, sizeof(resp->account_name)));
-        if (echoed != g_ClearsCacheAccount) return;
-    }
-
+    if (resp->api_version < 2) return;
+    const std::string echoed = resp->api_version >= 3
+        ? std::string(resp->account_name, strnlen(resp->account_name, sizeof(resp->account_name)))
+        : std::string{};
     if (resp->status != HOARD_STATUS_OK) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if (!g_ClearsCompletionInFlight || g_ClearsCacheAccount.empty() ||
+            (resp->api_version >= 3 && echoed != g_ClearsCacheAccount)) return;
         g_ClearsCompletionInFlight = false;
         g_ClearsQueryStartedAtMs = 0;
         if (resp->status == HOARD_STATUS_BUSY) {
@@ -405,11 +404,8 @@ void OnClearsAchResponse(void* eventArgs) {
 
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (g_ClearsCacheAccount.empty() ||
-            (resp->api_version >= 3 &&
-             std::string(resp->account_name,
-                strnlen(resp->account_name, sizeof(resp->account_name))) != g_ClearsCacheAccount))
-            return;
+        if (!g_ClearsCompletionInFlight || g_ClearsCacheAccount.empty() ||
+            (resp->api_version >= 3 && echoed != g_ClearsCacheAccount)) return;
 
         // Apply to all tracked entries
         auto applyTo = [&](ClearEntry& ce) {
@@ -539,10 +535,7 @@ void OnVaultSeasonResponse(void* eventArgs) {
     if (!eventArgs) return;
     auto* resp = static_cast<HoardQueryApiResponse*>(eventArgs);
     std::unique_ptr<HoardQueryApiResponse> respGuard(resp); // caller owns the response
-    if (g_VaultCacheAccount.empty() || resp->api_version < 3 ||
-        std::string(resp->account_name,
-            strnlen(resp->account_name, sizeof(resp->account_name))) != g_VaultCacheAccount)
-        return;
+    if (resp->api_version < 3) return;
     if (resp->status == HOARD_STATUS_BUSY) {
         // Optional season metadata: don't restart otherwise successful objectives.
         return;
@@ -558,7 +551,7 @@ void OnVaultSeasonResponse(void* eventArgs) {
                     std::lock_guard<std::mutex> lock(g_ClearsMutex);
                     const std::string responseAccount(resp->account_name,
                         strnlen(resp->account_name, sizeof(resp->account_name)));
-                    if (responseAccount != g_VaultCacheAccount) return;
+                    if (g_VaultCacheAccount.empty() || responseAccount != g_VaultCacheAccount) return;
                     g_VaultSeasonEnd = tp;
                 }
                 // Save the asynchronously delivered timestamp so a restart
@@ -573,11 +566,7 @@ void OnVaultResponse(void* eventArgs) {
     if (!eventArgs) return;
     auto* resp = (HoardQueryWizardsVaultResponse*)eventArgs;
     std::unique_ptr<HoardQueryWizardsVaultResponse> respGuard(resp);
-    if (resp->api_version < 2 || resp->type > 2 || g_VaultCacheAccount.empty()) return;
-    if (resp->api_version >= 3 &&
-        std::string(resp->account_name,
-            strnlen(resp->account_name, sizeof(resp->account_name))) != g_VaultCacheAccount)
-        return;
+    if (resp->api_version < 2 || resp->type > 2) return;
 
     // Parse into local memory first; publish only under the shared mutex.
     VaultPeriod period;
@@ -794,6 +783,7 @@ static void FetchClears() {
         // Step 1: Fetch all category achievement IDs
         const int64_t requestToken = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+        AlterEgo::Background::Checkpoint();
         auto fractalIds = FetchCategoryIds(CAT_DAILY_FRACTALS, requestToken);
         auto bountyIds  = FetchCategoryIds(CAT_DAILY_BOUNTIES, requestToken);
         auto weeklyIds  = FetchCategoryIds(CAT_WEEKLY_RAIDS, requestToken);
@@ -826,6 +816,7 @@ static void FetchClears() {
 
         auto bountyEntries = FetchAchievementDetails(bountyIds);
         auto weeklyEntries = FetchAchievementDetails(weeklyIds);
+        AlterEgo::Background::Checkpoint();
 
         // Category lookup succeeding does not imply that detail fetches succeeded.
         // Do not replace valid cached sections with empty vectors on HTTP/API errors.

@@ -443,6 +443,7 @@ namespace Skinventory {
             }
 
             // Step 3: Store
+            AlterEgo::Background::Checkpoint();
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 s_skin_to_item = std::move(skin_map);

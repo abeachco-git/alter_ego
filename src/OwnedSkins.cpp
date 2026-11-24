@@ -1,3 +1,4 @@
+#include "BackgroundWorkers.h"
 #include "OwnedSkins.h"
 #include "SkinDataCache.h"
 #include "SkinCache.h"

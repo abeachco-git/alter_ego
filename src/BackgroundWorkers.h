@@ -52,10 +52,10 @@ public:
             if (!stopping_) {
                 ReapLocked();
                 jobs_.emplace_back();
-                auto& entry = jobs_.back();
+                auto* entry = &jobs_.back();
                 ++active_;
                 try {
-                    entry.thread = std::thread([this, &entry, job, failure]() mutable {
+                    entry->thread = std::thread([this, entry, job = std::move(job), failure]() mutable {
                         try { job(); }
                         catch (const Cancelled&) {
                             try { failure(); } catch (...) { ++failures_; }
@@ -65,7 +65,7 @@ public:
                             try { failure(); } catch (...) { ++failures_; }
                         }
                         --active_;
-                        entry.done = true;
+                        entry->done = true;
                     });
                     return true;
                 } catch (...) {
