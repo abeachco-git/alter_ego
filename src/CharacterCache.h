@@ -121,15 +121,22 @@ inline int64_t Int(const Json& j) {
     if(!j.is_number_integer())throw std::runtime_error("Invalid character integer");
     return j.get<int64_t>();
 }
-inline void Store(Database::Connection& db,const Json& data) {
+inline void Store(Database::Connection& db,const Json& data,bool incremental=false) {
     if(!data.is_object()||!data.contains("characters"))throw std::runtime_error("Invalid character snapshot");
     const auto stamp=Int(data.at("last_updated"));
     if(stamp<0)throw std::runtime_error("Invalid character snapshot timestamp");
     auto old=db.Prepare("SELECT last_updated FROM character_snapshot WHERE singleton=1");
-    if(old.Step()&&old.Integer(0)>stamp)throw std::runtime_error("Older character snapshot");
+    const bool present=old.Step();
+    const auto oldStamp=present?old.Integer(0):int64_t(0);
+    old.Reset();
+    if(!incremental && oldStamp>stamp)throw std::runtime_error("Older character snapshot");
+    if(incremental && (!present || Array(data,"characters").size()!=1))throw std::runtime_error("Incremental snapshot requires one character and a native baseline");
     // Preserve roster semantics of the existing aggregate projection. The save
     // caller serializes capture and publication; rollback retains the old roster.
-    db.Exec("DELETE FROM character_rows");
+    if(!incremental)db.Exec("DELETE FROM character_rows");
+    auto lookup=db.Prepare("SELECT character_id,data_refreshed FROM character_rows WHERE account_name=? AND name=?");
+    auto remove=db.Prepare("DELETE FROM character_rows WHERE character_id=?");
+    int64_t nextId=incremental?db.Scalar("SELECT coalesce(max(character_id),0) FROM character_rows"):0;
     auto character=db.Prepare("INSERT INTO character_rows(character_id,account_name,name,race,gender,profession,level,age,created,last_modified,data_refreshed,deaths,crafting_cached,active_build_tab,active_equipment_tab) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     auto crafting=db.Prepare("INSERT INTO character_crafting VALUES(?,?,?,?,?)");
     auto eq=db.Prepare("INSERT INTO character_equipment(character_id,ordinal,item_id,slot,skin,tab,stat_id,binding,bound_to) VALUES(?,?,?,?,?,?,?,?,?)");
@@ -143,7 +150,18 @@ inline void Store(Database::Connection& db,const Json& data) {
     for(auto ch:Array(data,"characters")) {
         if(!ch.is_object())throw std::runtime_error("Invalid character");
         if(!ch.contains("account_name"))ch["account_name"]="";
-        character.Bind(1,++id);BindFields(character,2,ch,kCharacter);character.Execute();character.Reset();
+        if(incremental) {
+            lookup.Bind(1,ch.at("account_name").get<std::string>());
+            lookup.Bind(2,ch.at("name").get<std::string>());
+            if(lookup.Step()) {
+                id=lookup.Integer(0);
+                if(!lookup.IsNull(1) && lookup.Integer(1)>ch.value("data_refreshed",int64_t(0)))
+                    throw std::runtime_error("Older character record");
+                lookup.Reset();
+                remove.Bind(1,id);remove.Execute();remove.Reset();
+            } else { lookup.Reset();id=++nextId; }
+        } else ++id;
+        character.Bind(1,id);BindFields(character,2,ch,kCharacter);character.Execute();character.Reset();
         int64_t n=0;
         for(const auto& row:Array(ch,"crafting")) {
             crafting.Bind(1,id);crafting.Bind(2,n++);BindFields(crafting,3,row,kCrafting);crafting.Execute();crafting.Reset();
@@ -185,7 +203,7 @@ inline void Store(Database::Connection& db,const Json& data) {
         }
     }
     auto mark=db.Prepare("INSERT INTO character_snapshot VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET last_updated=excluded.last_updated");
-    mark.Bind(1,stamp);mark.Execute();
+    mark.Bind(1,incremental?std::max(stamp,oldStamp):stamp);mark.Execute();
 }
 inline std::optional<Json> Read(Database::Connection& db) {
     auto mark=db.Prepare("SELECT last_updated FROM character_snapshot WHERE singleton=1");
@@ -242,7 +260,7 @@ inline std::optional<Json> Read(Database::Connection& db) {
     return out;
 }
 } // namespace CharacterRows
-inline bool WriteCharacters(const std::string& root,const CharacterRows::Json& data) {
+inline bool WriteCharacters(const std::string& root,const CharacterRows::Json& data,bool incremental=false) {
     if(root.empty())return false;
     try {
         std::lock_guard<std::mutex> lock(Mutex());
@@ -250,8 +268,21 @@ inline bool WriteCharacters(const std::string& root,const CharacterRows::Json& d
         std::filesystem::create_directories(path.parent_path());
         Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
         Initialize(db);Database::Transaction tx(db);
-        CharacterRows::Store(db,data);tx.Commit();return true;
+        CharacterRows::Store(db,data,incremental);tx.Commit();return true;
     }catch(...){return false;}
+}
+// False means no native baseline; nullopt means inspection failed. Never
+// interpret a corrupt or unreadable native cache as an empty one.
+inline std::optional<bool> HasCharacterSnapshot(const std::string& root) {
+    if(root.empty())return std::nullopt;
+    try {
+        std::lock_guard<std::mutex> lock(Mutex());
+        const auto path=Storage::Paths(root).Cache();
+        if(!std::filesystem::exists(path))return false;
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
+        Initialize(db);
+        return db.Scalar("SELECT count(*) FROM character_snapshot")!=0;
+    }catch(...){return std::nullopt;}
 }
 inline std::optional<CharacterRows::Json> ReadCharacters(const std::string& root) {
     if(root.empty())return std::nullopt;

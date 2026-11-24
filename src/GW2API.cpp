@@ -55,8 +55,14 @@ namespace AlterEgo {
         CharacterRequest::Roster g_roster;
         std::vector<AccountInfo> g_listAccounts;
         bool g_rosterReady=false;
+        std::map<std::string,std::string> g_fetchOwners;
         std::shared_ptr<const std::vector<Character>> g_charProjection;
         uint64_t g_projectionRevision=0;
+        void RecordOwner(std::map<std::string,std::string>& owners,const std::string& name,const std::string& account) {
+            if(name.empty() || account.empty())return;
+            auto inserted=owners.emplace(name,account);
+            if(!inserted.second && inserted.first->second!=account)inserted.first->second.clear();
+        }
         template<size_t N> std::string Bounded(const char (&v)[N]) {return std::string(v,strnlen(v,N));}
 
         long long NowMs() {
@@ -533,7 +539,7 @@ namespace AlterEgo {
                 return;
             }
             s_fetch_status = FetchStatus::InProgress;
-            g_charReply.Clear(); g_roster.clear(); g_rosterReady=false;
+            g_charReply.Clear(); g_roster.clear(); g_rosterReady=false; g_fetchOwners.clear();
             g_listAccounts=s_accounts;
             s_pending_char_names.clear();
             s_multi_acct_list_idx=-1;
@@ -553,6 +559,10 @@ namespace AlterEgo {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             acctName = s_current_account_name;
+            if(acctName.empty() && !s_accounts.empty())acctName=s_accounts.front().name;
+            if(acctName.empty() && s_account_count>1) {
+                s_fetch_message="Cannot identify the requested account";s_fetch_status=FetchStatus::Error;return;
+            }
         }
         HoardQueryApiRequest req{};
         req.api_version = HOARD_API_VERSION;
@@ -601,7 +611,7 @@ namespace AlterEgo {
             }
 
             s_list_only_mode = true;
-            g_charReply.Clear(); g_roster.clear(); g_rosterReady=false;
+            g_charReply.Clear(); g_roster.clear(); g_rosterReady=false; g_fetchOwners.clear();
             g_listAccounts=s_accounts;
             s_multi_acct_list_idx = -1;
 
@@ -647,6 +657,9 @@ namespace AlterEgo {
                 // No accounts data — single-account fallback
                 s_fetch_status = FetchStatus::InProgress;
                 acctName = s_current_account_name;
+                if(acctName.empty() && s_account_count>1) {
+                    s_fetch_message="Cannot identify the requested account";s_fetch_status=FetchStatus::Error;return;
+                }
                 needsFetch = true;
                 s_fetch_message = "Fetching character list...";
                 s_api->Log(LOGL_INFO, "AlterEgo", "RequestCharacterList: single-account mode");
@@ -677,9 +690,19 @@ namespace AlterEgo {
             // This also protects against an auto-refresh race at dispatch time.
             if (s_fetch_status == FetchStatus::InProgress) return;
             s_fetch_status = FetchStatus::InProgress;
-            g_charReply.Clear(); g_roster.clear(); g_rosterReady=false;
+            g_charReply.Clear(); g_roster.clear(); g_rosterReady=false; g_fetchOwners.clear();
             g_listAccounts=s_accounts;
             s_pending_char_names = names;
+            for(const auto& name:names) {
+                for(const auto& acct:s_accounts)
+                    if(std::find(acct.characters.begin(),acct.characters.end(),name)!=acct.characters.end())
+                        RecordOwner(g_fetchOwners,name,acct.name);
+                if(!g_fetchOwners.count(name)) {
+                    auto owner=s_char_to_account.find(name);
+                    if(owner!=s_char_to_account.end())RecordOwner(g_fetchOwners,name,owner->second);
+                    else if(s_account_count==1 && s_accounts.size()==1)RecordOwner(g_fetchOwners,name,s_accounts.front().name);
+                }
+            }
             g_refreshCraftingForRequest = refreshCrafting;
             s_pending_char_idx = 0;
             s_chars_total = (int)names.size();
@@ -690,7 +713,7 @@ namespace AlterEgo {
             // Start fetching the first character
             s_current_char = Character{};
             s_current_char.name = s_pending_char_names[0];
-            { auto ait = s_char_to_account.find(s_current_char.name); if (ait != s_char_to_account.end()) s_current_char.account_name = ait->second; }
+            { auto ait = g_fetchOwners.find(s_current_char.name); if (ait != g_fetchOwners.end()) s_current_char.account_name = ait->second; }
             s_fetch_phase = 0;
             s_equip_tab_ids.clear();
             s_equip_tab_idx = 0;
@@ -744,7 +767,7 @@ namespace AlterEgo {
             s_fetch_status = FetchStatus::Error;
             return;
         }
-        if (resp->status != HOARD_STATUS_OK || resp->truncated) {
+        if (resp->status != HOARD_STATUS_OK || resp->truncated || resp->json_length>sizeof(resp->json)) {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_fetch_message = resp->truncated ? "Character list truncated" : "H&S returned error";
             s_fetch_status = FetchStatus::Error;
@@ -846,7 +869,10 @@ namespace AlterEgo {
                 for (const auto& name : j) {
                     const auto charName=name.get<std::string>();
                     s_pending_char_names.push_back(charName);
-                    if(!responseAccount.empty())s_char_to_account[charName]=responseAccount;
+                    if(!responseAccount.empty()) {
+                        s_char_to_account[charName]=responseAccount;
+                        RecordOwner(g_fetchOwners,charName,responseAccount);
+                    }
                 }
 
                 // List-only mode: just store names and return
@@ -876,7 +902,7 @@ namespace AlterEgo {
                 // Initialize sub-endpoint fetch for the first character
                 s_current_char = Character{};
                 s_current_char.name = s_pending_char_names[0];
-                { auto ait = s_char_to_account.find(s_current_char.name); if (ait != s_char_to_account.end()) s_current_char.account_name = ait->second; }
+                { auto ait = g_fetchOwners.find(s_current_char.name); if (ait != g_fetchOwners.end()) s_current_char.account_name = ait->second; }
                 s_fetch_phase = 0;
                 s_equip_tab_ids.clear();
                 s_equip_tab_idx = 0;
@@ -1262,6 +1288,7 @@ namespace AlterEgo {
 
         // Determine next action
         bool done = false;
+        std::string completedAccount,completedName;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             switch (phase) {
@@ -1328,6 +1355,8 @@ namespace AlterEgo {
                             }
                     }
                     s_current_char.data_refreshed = std::time(nullptr);
+                    completedAccount=s_current_char.account_name;
+                    completedName=s_current_char.name;
                     // Add or update this character in the list
                     bool found = false;
                     for (auto& existing : s_characters) {
@@ -1350,7 +1379,7 @@ namespace AlterEgo {
                         // More characters to fetch — start the next one
                         s_current_char = Character{};
                         s_current_char.name = s_pending_char_names[s_pending_char_idx];
-                        { auto ait = s_char_to_account.find(s_current_char.name); if (ait != s_char_to_account.end()) s_current_char.account_name = ait->second; }
+                        { auto ait = g_fetchOwners.find(s_current_char.name); if (ait != g_fetchOwners.end()) s_current_char.account_name = ait->second; }
                         s_fetch_phase = 0;
                         s_equip_tab_ids.clear();
                         s_equip_tab_idx = 0;
@@ -1370,11 +1399,11 @@ namespace AlterEgo {
 
         if (done) {
             if (s_api) s_api->Log(LOGL_INFO, "AlterEgo", s_fetch_message.c_str());
-            SaveCharacterData();
+            SaveCharacterData(completedAccount,completedName);
             SaveItemNameCache();
         } else {
             // Save after each character completes (for incremental persistence)
-            if (phase == 6) SaveCharacterData();
+            if (phase == 6) SaveCharacterData(completedAccount,completedName);
             FetchCharacterPhase();
         }
     }
@@ -2397,17 +2426,21 @@ namespace AlterEgo {
     // Persistence
     // =========================================================================
 
-    bool GW2API::SaveCharacterData() {
+    bool GW2API::SaveCharacterData(const std::string& account,const std::string& name) {
         EnsureDataDirectory();
         // Serialize snapshot capture and persistence in the same order. No Nexus calls under this lock.
         static std::mutex characterSaveMutex;
         std::lock_guard<std::mutex> saveLock(characterSaveMutex);
+        const auto native=Cache::HasCharacterSnapshot(GetDataDirectory());
+        if(!native)return false;
+        const bool incremental=!name.empty() && *native;
         json j;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             j["last_updated"] = (int64_t)s_last_updated;
             json chars_arr = json::array();
             for (const auto& ch : s_characters) {
+                if(incremental && (ch.name!=name || ch.account_name!=account))continue;
                 json cj;
                 cj["name"] = ch.name;
                 cj["race"] = ch.race;
@@ -2512,7 +2545,8 @@ namespace AlterEgo {
             j["characters"] = chars_arr;
         }
 
-        return Cache::WriteCharacters(GetDataDirectory(),j);
+        if(incremental && j["characters"].size()!=1)return false;
+        return Cache::WriteCharacters(GetDataDirectory(),j,incremental);
     }
 
     bool GW2API::LoadCharacterData() {

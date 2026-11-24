@@ -75,3 +75,5 @@ Completion cache coverage includes same-slug account isolation, native snapshot 
 The refresh suite includes `refresh.background_workers`: closed admission, normal completion, exception cleanup, active job tracking, cooperative cancellation, rejected nested launch during shutdown, joining and reopening. This host test does not establish Nexus callback quiescence or in-game unload latency.
 
 The refresh suite includes `character_request` for account/endpoint matching, consumed duplicates, legacy single-account handling and exact roster scope. Live callback ordering remains unverified.
+
+Character persistence regression now covers incremental replacement, untouched same-name accounts and unknown rows, stale record rejection, rollback after malformed child data, and append ordering.

@@ -435,7 +435,7 @@ namespace AlterEgo {
 
         // Persistence
         static bool LoadCharacterData();
-        static bool SaveCharacterData();
+        static bool SaveCharacterData(const std::string& account = {}, const std::string& name = {});
 
         // Reference-data caches (items, skins, specs, traits, skills,
         // itemstats, dye colors). Persisted to disk so a refreshed character's

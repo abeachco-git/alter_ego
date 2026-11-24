@@ -391,6 +391,23 @@ int case_database_core(int, char**) {
         assert(Cache::ReadCharacters(root)->at("characters")[0]["equipment"][0]["infusions"]==J::array({99}));
         DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
         assert(db.Scalar("SELECT count(*) FROM character_rows")==3);
+        const auto beforeIncrement=Cache::ReadCharacters(root);
+        auto one=ch;one["data_refreshed"]=102;one["equipment"][0]["infusions"]={77};
+        J change={{"last_updated",102},{"characters",J::array({one})}};
+        assert(Cache::HasCharacterSnapshot(root)==std::optional<bool>(true));
+        assert(Cache::WriteCharacters(root,change,true));
+        auto afterIncrement=Cache::ReadCharacters(root);
+        assert(afterIncrement->at("characters")[0]==one);
+        assert(afterIncrement->at("characters")[1]==beforeIncrement->at("characters")[1]);
+        assert(afterIncrement->at("characters")[2]==beforeIncrement->at("characters")[2]);
+        assert(!Cache::WriteCharacters(root,J{{"last_updated",103},{"characters",J::array({ch})}},true));
+        assert(Cache::ReadCharacters(root)==afterIncrement);
+        auto malformed=one;malformed["data_refreshed"]=103;malformed["equipment"][0]["infusions"]="invalid";
+        assert(!Cache::WriteCharacters(root,J{{"last_updated",103},{"characters",J::array({malformed})}},true));
+        assert(Cache::ReadCharacters(root)==afterIncrement);
+        auto newChar=one;newChar["name"]="New Hero";
+        assert(Cache::WriteCharacters(root,J{{"last_updated",103},{"characters",J::array({newChar})}},true));
+        assert(Cache::ReadCharacters(root)->at("characters").size()==4);
         db.Verify();
     }
     {

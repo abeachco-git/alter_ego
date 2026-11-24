@@ -14,7 +14,7 @@ struct ReplyGate {
     bool Claim(const std::string& a,const std::string& e,bool accountEcho,bool singleAccount) {
         if(!pending || endpoint!=e) return false;
         if(accountEcho) {
-            if(a.empty() || (!account.empty() && a!=account) || (account.empty() && !singleAccount))return false;
+            if((!account.empty() && a!=account) || (account.empty() && !singleAccount))return false;
         } else if(!singleAccount)return false;
         pending=false;return true;
     }
