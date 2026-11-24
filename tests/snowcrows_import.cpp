@@ -19,7 +19,7 @@ static std::string row(unsigned id, const std::string& label,
         label + "<span class=\"text-neutral-400 text-sm ml-2\">" +
         hint + "</span></p></td></tr>";
 }
-int main() {
+int case_snowcrows_import(int, char**) {
     const std::string url = "https://snowcrows.com/builds/raids/mesmer/"
         "condition-boon-chronomancer-dueling-staff-scepter-pistol";
     assert(NormalizeUrl("http://www.snowcrows.com/builds/raids/mesmer/build") ==
@@ -81,4 +81,5 @@ int main() {
     const std::string previousName = out.name;
     assert(!Parse(url, "<html>error</html>", out, error));
     assert(out.name == previousName); // invalid refresh cannot destroy existing data
+    return 0;
 }

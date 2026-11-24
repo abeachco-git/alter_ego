@@ -63,7 +63,7 @@ static fs::path FreshDir(const std::string& suffix) {
     assert(fs::create_directories(path));
     return path;
 }
-int main() {
+int case_composable_loadouts(int, char**) {
     std::string error;
     // Content-derived names are independent of the originating loadout.
     const Json sampleArmor = {{"gear", {{"Helm", {{"stat_name","Berserker"}}},

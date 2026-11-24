@@ -7,7 +7,7 @@ using AlterEgo::InfusionMatchVerdict;
 using AlterEgo::InfusionRequirement;
 using AlterEgo::ObservedInfusion;
 
-int main() {
+int case_infusion_match_core(int, char**) {
     // Item IDs are preserved for exact matches, independent of slot ordering.
     const std::vector<InfusionRequirement> exact = {{111, ""}, {222, ""}};
     assert(CompareInfusionRequirements(exact,

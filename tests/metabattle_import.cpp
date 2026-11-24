@@ -10,7 +10,7 @@ static std::string Tile(int id, const std::string& label) {
            "data-armory-ids=\"" + std::to_string(id) +
            "\" data-armory-size=\"46\"></div><small>" + label + "</small></div>";
 }
-int main(int argc, char** argv) {
+int case_metabattle_import(int argc, char** argv) {
     using namespace AlterEgo;
     const std::string url =
         "https://metabattle.com/wiki/Build:Chronomancer_-_Power_DPS";

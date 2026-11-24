@@ -1,6 +1,6 @@
 #include "../src/AutoRefreshPolicy.h"
 #include <cassert>
-int main() {
+int case_auto_refresh_policy(int, char**) {
     using namespace AlterEgo::AutoRefreshPolicy;
     assert(!Enabled());
     assert(!AllowRequest(false));

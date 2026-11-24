@@ -17,7 +17,7 @@ static std::string Get(const std::string& path) {
     assert(BackupZip::ReadBytes(path, text, error));
     return text;
 }
-int main() {
+int case_library_backup(int, char**) {
     fs::path base = fs::temp_directory_path() / "alter_ego_backup_regression";
     fs::remove_all(base);
     fs::create_directories(base / "source");
@@ -124,4 +124,5 @@ int main() {
     assert(individual.available == Other);
     assert(individual.files.count("settings.json") == 1);
     fs::remove_all(base);
+    return 0;
 }

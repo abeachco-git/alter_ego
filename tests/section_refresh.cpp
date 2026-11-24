@@ -11,7 +11,7 @@ struct Vault {
 };
 struct Clear { bool done = false; };
 
-int main() {
+int case_section_refresh(int, char**) {
     using namespace AlterEgo::SectionRefresh;
     const std::time_t now = 2000000;
     assert(Stale(0, now));
@@ -35,4 +35,5 @@ int main() {
     assert(!ClearsDone(entries));
     entries[1].done = true;
     assert(ClearsDone(entries));
+    return 0;
 }

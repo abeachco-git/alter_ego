@@ -28,50 +28,9 @@ jobs:
           x86_64-w64-mingw32ucrt-g++ --version
       - name: Run required offline regression tests
         run: |
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/skin_search.cpp -o /tmp/skin_search
-          /tmp/skin_search
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_compare_core.cpp -o /tmp/build_compare_core
-          /tmp/build_compare_core
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_match_core.cpp -o /tmp/infusion_match_core
-          /tmp/infusion_match_core
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/auto_refresh_policy.cpp -o /tmp/auto_refresh_policy
-          /tmp/auto_refresh_policy
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_totals.cpp -o /tmp/infusion_totals
-          /tmp/infusion_totals
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/strike_display_name.cpp -o /tmp/strike_display_name
-          /tmp/strike_display_name
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/clears_rotation.cpp -o /tmp/clears_rotation
-          /tmp/clears_rotation
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_group_order.cpp -o /tmp/build_group_order
-          /tmp/build_group_order
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/equipment_tab_core.cpp -o /tmp/equipment_tab_core
-          /tmp/equipment_tab_core
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/section_refresh.cpp -o /tmp/section_refresh
-          /tmp/section_refresh
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/raid_chip_widths.cpp -o /tmp/raid_chip_widths
-          /tmp/raid_chip_widths
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/snowcrows_import.cpp -o /tmp/snowcrows_import
-          /tmp/snowcrows_import
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/ascended_stat_names.cpp -o /tmp/ascended_stat_names
-          /tmp/ascended_stat_names
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/metabattle_import.cpp -o /tmp/metabattle_import
-          /tmp/metabattle_import
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/fashion_library.cpp src/ChatLink.cpp -o /tmp/fashion_library
-          /tmp/fashion_library
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/library_backup.cpp src/ChatLink.cpp -o /tmp/library_backup
-          /tmp/library_backup
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/composable_loadouts.cpp -o /tmp/composable_loadouts
-          /tmp/composable_loadouts
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/gear_edit_core.cpp -o /tmp/gear_edit_core
-          /tmp/gear_edit_core
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/vault_assistance.cpp -o /tmp/vault_assistance
-          /tmp/vault_assistance
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/composable_gear_presentation.cpp -o /tmp/composable_gear_presentation
-          /tmp/composable_gear_presentation
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/equipment_choice_core.cpp -o /tmp/equipment_choice_core
-          /tmp/equipment_choice_core
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/composable_backup.cpp src/ChatLink.cpp -o /tmp/composable_backup
-          /tmp/composable_backup
+          cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-tests --parallel 2
+          ctest --test-dir build-tests --output-on-failure
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
@@ -97,25 +56,6 @@ jobs:
             echo "Wrong CRT imported (MSVCRT)" >&2
             exit 1
           fi
-      # Research-only inventory: the selected skill artwork remains on-disk
-      # and is NOT embedded into the binary by this script.
-      - name: Audit skill icon counts and practical file sizes
-        continue-on-error: true
-        run: |
-          python3 tools/audit_skill_icons.py \
-            --json build/skill-icon-audit.json \
-            --markdown build/skill-icon-audit.md \
-            --dll build/AlterEgo.dll \
-            --resource-dir build/embedded_icon_data
-      - name: Upload skill icon analysis
-        uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with:
-          name: AlterEgo-Skill-Icon-Audit
-          path: |
-            build/skill-icon-audit.json
-            build/skill-icon-audit.md
-          if-no-files-found: ignore
       - name: Upload DLL
         uses: actions/upload-artifact@v7.0.2
         with:

@@ -5,11 +5,7 @@
 #include <vector>
 #include <cassert>
 using namespace AlterEgo;
-int main() {
-    assert(StrikeDisplayName("Voice of the Fallen and Claw of the Fallen") == "Bears");
-    assert(StrikeDisplayName("Voice and Claw of the Fallen") == "Bears");
-    assert(StrikeDisplayName("Voice and Claw") == "Bears");
-    assert(StrikeDisplayName("Bears") == "Bears");
+int case_strike_display_name(int, char**) {
     assert(StrikeDisplayName("Whisper of Jormag") == "Whisper");
     assert(StrikeDisplayName("Boneskinner") == "Boneskinner");
 

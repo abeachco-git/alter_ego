@@ -6,7 +6,7 @@ using namespace AlterEgo::Font;
 static int g_fail = 0;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_fail; } } while (0)
 
-int main() {
+int case_font_resolve_test(int, char**) {
     // Default face -> empty id, IsDefault true.
     Config d; // {NexusDefault, "", 16}
     CHECK(Identifier(d).empty());

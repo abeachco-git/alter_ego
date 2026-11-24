@@ -1,0 +1,28 @@
+# Regression testing
+
+Run the platform-independent suites using the native compiler:
+
+```sh
+cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-tests --parallel 2
+ctest --test-dir build-tests --output-on-failure
+```
+
+Run a single domain with `ctest --test-dir build-tests -L comparison --output-on-failure`.
+Run a single case with `ctest --test-dir build-tests -R 'comparison.infusion_totals' --output-on-failure`.
+
+Nine domain executables contain 24 independently runnable regression cases.
+Each CTest case is a separate process. Keep assertions enabled even in Release.
+Add related coverage to existing cases; add a new case only for distinct behavior,
+and register it in the existing domain in tests/CMakeLists.txt. No new standalone
+test executable per bug. Use invariant checks for presentation rather than fixed
+pixel values or exact cosmetic wording. Preserve semantic, data integrity,
+upstream compatibility and import checks. Obsolete experimental fixtures may be
+removed after demonstrating that the behavior is no longer supported; Git history
+is the archive. Do not remove tests solely because they fail.
+
+The Windows workflow gates DLL packaging on all offline cases and binary checks.
+The independent live MetaBattle workflow uses the same import executable with
+a snapshot directory and verifies all six live imports strictly. Live site
+availability never gates DLL packaging. Skill icon research is manual-only; it
+builds a baseline DLL for accurate size comparisons and uploads the report.

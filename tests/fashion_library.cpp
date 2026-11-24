@@ -2,7 +2,7 @@
 #include <cassert>
 #include <cstdio>
 #include <string>
-int main() {
+int case_fashion_library(int, char**) {
     using namespace AlterEgo;
     using namespace AlterEgo::Fashion;
     DecodedWardrobeLink original{};
@@ -62,4 +62,5 @@ int main() {
     assert(reloaded.looks[0].wardrobe_link == link);
     assert(reloaded.Remove(0));
     std::remove(file.c_str());
+    return 0;
 }

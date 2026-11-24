@@ -3,7 +3,7 @@
 #include "../src/FractalScales.h"
 #include <cassert>
 #include <string>
-int main() {
+int case_clears_rotation(int, char**) {
     using namespace ClearsRotation;
     using namespace ClearsReset;
     // At 00:00 UTC we must NOT consume the reset marker before the API grace
@@ -154,4 +154,5 @@ int main() {
     assert(FractalScales::DailyTooltip("Sunqua Peak").find("T4 (98)") != std::string::npos);
     for (int scale = 1; scale <= 100; ++scale)
         assert(FractalScales::NameForScale(scale) != nullptr);
+    return 0;
 }

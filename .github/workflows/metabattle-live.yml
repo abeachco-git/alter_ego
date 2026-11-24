@@ -25,7 +25,7 @@ jobs:
       - name: Install test dependencies
         run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends g++ curl ca-certificates
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake make g++ curl ca-certificates
       - name: Fetch MetaBattle live pages for parser verification
         run: |
           mkdir -p /tmp/metabattle-live
@@ -51,7 +51,9 @@ jobs:
           path: /tmp/metabattle-live/*.html
           if-no-files-found: ignore
       - name: Compile MetaBattle regression test
-        run: g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/metabattle_import.cpp -o /tmp/metabattle_import
+        run: |
+          cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-tests --target ae_imports --parallel 2
       - name: Verify all six live MetaBattle equipment imports
         run: |
           for name in reaper harbinger chronomancer mechanist scrapper holosmith; do
@@ -60,4 +62,4 @@ jobs:
               exit 1
             }
           done
-          /tmp/metabattle_import /tmp/metabattle-live
+          build-tests/ae_imports metabattle_import /tmp/metabattle-live

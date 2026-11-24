@@ -1,6 +1,6 @@
 #include "../src/SkinSearchCore.h"
 #include <cassert>
-int main() {
+int case_skin_search(int, char**) {
  using namespace Skinventory;
  assert(Search::Matches("Volcanic Stormcaller Sword",Search::Words("storm sword")));
  assert(Search::Matches("Volcanic Stormcaller Sword",Search::Words("stromcaller")));
@@ -11,4 +11,5 @@ int main() {
  assert(BetterPrice(a,b));assert(!BetterPrice(b,a));
  b.sell_quantity=1;assert(BetterPrice(b,a));assert(!BetterPrice(a,b));
  a.sell_price=50;assert(BetterPrice(b,a));
+    return 0;
 }

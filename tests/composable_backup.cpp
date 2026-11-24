@@ -25,7 +25,7 @@ static std::string Get(const fs::path& path) {
                        std::istreambuf_iterator<char>());
 }
 
-int main() {
+int case_composable_backup(int, char**) {
     const fs::path base = fs::temp_directory_path() / "ae_composable_backup_test";
     fs::remove_all(base);
     const fs::path source = base / "source", destination = base / "dest";

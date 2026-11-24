@@ -8,7 +8,7 @@ struct Slot {
     std::string infusion, sigil, sigil2;
     uint32_t sigil_id = 0, sigil2_id = 0;
 };
-int main() {
+int case_gear_edit_core(int, char**) {
     using namespace AlterEgo::GearEdit;
     Slot src, dst;
     src.infusion_ids = {42}; src.infusion_attributes = {"Power"};
@@ -26,4 +26,5 @@ int main() {
     CopySigils(dst,src,2); assert(dst.sigil2_id == 2);
     CopySigils(dst,src,1); assert(dst.sigil2_id == 0);
     assert(InfusionCapacity("WeaponB2",false,true) == 0);
+    return 0;
 }

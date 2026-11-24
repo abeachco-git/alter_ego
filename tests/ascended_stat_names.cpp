@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-int main() {
+int case_ascended_stat_names(int, char**) {
     using AlterEgo::NamedStats::CanonicalStatName;
     using AlterEgo::NamedStats::SameCanonicalStat;
     const struct { const char* stat; const char* weapon; const char* armor; } names[] = {
