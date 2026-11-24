@@ -16,8 +16,11 @@ Alter Ego is a Windows x64 UCRT DLL loaded by Raidcore Nexus. Nexus supplies the
 user-initiated character switch. The standalone diagnostic tab was removed
 after a successful live roster and off-main-thread switch test. This is an
 undocumented, version-sensitive integration, not a supported Nexus contract.
-The switch is gated to the inspected executable, exact function bytes, valid
-context/gameplay and fresh roster; a request remains pending until the
+The switch is gated to the inspected structural layout, matching signatures,
+complete switch and request function fingerprints, valid context/gameplay and
+fresh roster. The November 17 and November 24, 2026 executables match these
+checks despite different PE timestamps; timestamps alone are not a gate.
+Unrecognized layouts or changed function bodies fail closed. A request remains pending until the
 target identity is observed or a 60-second gameplay timeout expires. No
 automatic retry, game patch or thread injection. Memory metadata is validated
 for plausible ranges and unique names, never required to equal stale API

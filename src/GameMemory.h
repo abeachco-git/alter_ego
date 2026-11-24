@@ -43,7 +43,6 @@ struct Row {
 struct State {
     Address base = 0, ptrSlot = 0, countSlot = 0, threadSlot = 0;
     size_t imageSize = 0;
-    DWORD imageTimestamp = 0;
     Address swapContextSlot = 0;
     bool resolved = false;
     bool gameplay = false;
@@ -72,7 +71,6 @@ inline bool ImageText(State& s, Address& code, std::vector<unsigned char>& bytes
         nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
         nt.FileHeader.NumberOfSections > 96) return false;
     s.imageSize = nt.OptionalHeader.SizeOfImage;
-    s.imageTimestamp = nt.FileHeader.TimeDateStamp;
     if (!s.imageSize || s.imageSize > 512u * 1024u * 1024u) return false;
     Address sections = ntAddr + offsetof(IMAGE_NT_HEADERS64, OptionalHeader)
                        + nt.FileHeader.SizeOfOptionalHeader;
@@ -133,9 +131,11 @@ inline bool Resolve(State& s) {
         for (auto hit:t) agree=agree && Rip(code,bytes,hit,7,11)==candidate;
         if (agree) s.threadSlot=candidate;
     }
-    // Only enable the call on the exact inspected PE build, with both
-    // independently resolved call sites agreeing and the getter verified.
-    if (s.imageTimestamp==0x6afcb045u && s.imageSize==0x2c52000u && w.size()==2) {
+    // November 17 and November 24 executables have identical relevant
+    // layout and function bodies. Do not gate on the PE timestamp.
+    // Require the inspected layout, exact call-site agreement and getter.
+    // ReadGameplay additionally verifies complete switch/request bodies.
+    if (s.imageSize==0x2c52000u && w.size()==2) {
         Address getter=Rip(code,bytes,w[0],1,5);
         bool agree=getter==s.base+0x94aec0 && InImage(s,getter,8);
         for (auto hit:w)
@@ -235,6 +235,12 @@ inline bool Executable(Address p) {
     return protection==PAGE_EXECUTE || protection==PAGE_EXECUTE_READ ||
         protection==PAGE_EXECUTE_READWRITE || protection==PAGE_EXECUTE_WRITECOPY;
 }
+template<std::size_t N> inline bool CheckFunction(const State& s, Address p, uint64_t expected) {
+    std::array<unsigned char,N> bytes{};
+    return InImage(s,p,N) && Executable(p) &&
+           ReadBytes(p,bytes.data(),bytes.size()) &&
+           CodeFingerprint(bytes.data(),bytes.size())==expected;
+}
 inline bool ReadGameplay(State& s, Address& ctx, Address& vt, Address& entry) {
     s.viewState=0;
     if (!s.swapContextSlot) {
@@ -242,18 +248,15 @@ inline bool ReadGameplay(State& s, Address& ctx, Address& vt, Address& entry) {
     }
     ctx=vt=entry=0; Address view=0;
     constexpr unsigned char viewCode[]={0x8b,0x41,0x6c,0xc3};
-    constexpr unsigned char swapCode[]={0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,
-        0xec,0x20,0x41,0x8b,0xd8,0x48,0x8b,0xfa,0x45,0x33,0xc0,0x33,0xd2,
-        0xb9,0x07,0x00,0x00,0x10,0xe8,0xc1,0x87,0x72,0x00,0x85};
     std::array<unsigned char,sizeof(viewCode)> vBytes{};
-    std::array<unsigned char,sizeof(swapCode)> eBytes{};
     if (!Read(s.swapContextSlot,ctx) || !ctx || ctx>UINTPTR_MAX-0x70 ||
         !Read(ctx,vt) || vt!=s.base+0x1b7fb18 ||
         !InImage(s,vt,0x118) || !Read(vt+0x60,entry) ||
         entry!=s.base+0x94b840 || !Read(vt+0x110,view) ||
-        view!=s.base+0x4e6470 || !Executable(entry) ||
-        !ReadBytes(entry,eBytes.data(),eBytes.size()) ||
-        std::memcmp(eBytes.data(),swapCode,sizeof(swapCode))!=0 ||
+        view!=s.base+0x4e6470 ||
+        !CheckFunction<83>(s,entry,0xfb40a39a2ae09c8aull) ||
+        !CheckFunction<262>(s,s.base+0x23c610,0x4ce0a0db41fead16ull) ||
+        !CheckFunction<230>(s,s.base+0x23d800,0x76f23b7dcc88f95dull) ||
         !ReadBytes(view,vBytes.data(),vBytes.size()) ||
         std::memcmp(vBytes.data(),viewCode,sizeof(viewCode))!=0 ||
         !Read(ctx+0x6c,s.viewState)) {

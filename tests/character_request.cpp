@@ -36,6 +36,11 @@ int case_character_request(int,char**) {
     const Character hero{{"A.B"},"Hero"}, other{{"A_B"},"Hero"};
     assert(!(hero==other));
     using namespace AlterEgo::GameMemory;
+    const unsigned char code[]={0x68,0x65,0x6c,0x6c,0x6f};
+    const unsigned char changed[]={0x68,0x65,0x6c,0x6c,0x6e};
+    assert(CodeFingerprint(code,sizeof(code))==0xa430d84680aabd0bull);
+    assert(CodeFingerprint(code,sizeof(code))!=CodeFingerprint(changed,sizeof(changed)));
+    assert(CodeFingerprint(code,sizeof(code))!=CodeFingerprint(code,sizeof(code)-1));
     assert(PlausibleCharacter(1,1,0,0));
     assert(PlausibleCharacter(80,9,4,1));
     assert(!PlausibleCharacter(0,1,0,0));
