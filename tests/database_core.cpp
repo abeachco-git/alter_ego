@@ -1,4 +1,5 @@
 #include "../src/Database.h"
+#include "../src/CacheDatabase.h"
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -88,6 +89,41 @@ int case_database_core(int, char**) {
         catch (const DB::Error&) { rejected = true; }
         assert(rejected);
         assert(db.Scalar("SELECT count(*) FROM sqlite_schema WHERE name='unrelated'") == 1);
+    }
+    {
+        namespace Cache = AlterEgo::Cache;
+        const auto root = temp.dir.u8string();
+        assert(!Cache::ReadAchievements(root, "Account.1234"));
+        assert(!std::filesystem::exists(AlterEgo::NativeLibrary::Paths(root).Cache()));
+        Cache::AchievementSnapshot first;
+        first.fetchedAt = 100;
+        for (uint32_t id = 1; id <= 5000; ++id) {
+            Cache::AchievementProgress p;
+            p.id = id; p.current = 2; p.max = 3; p.completed_bits = {0, 2};
+            first.entries.emplace(id, p);
+        }
+        assert(Cache::WriteAchievements(root, "Account.1234", first));
+        auto other = first;
+        other.entries.clear();
+        assert(Cache::WriteAchievements(root, "Account_1234", other));
+        auto read = Cache::ReadAchievements(root, "Account.1234");
+        assert(read && read->entries.size() == 5000 && read->fetchedAt == 100);
+        assert(read->entries.at(1).completed_bits == std::set<uint32_t>({0,2}));
+        assert(Cache::ReadAchievements(root, "Account_1234")->entries.empty());
+        assert(!Cache::ReadAchievements(root, "Unknown.0000"));
+        first.fetchedAt = 99;
+        assert(!Cache::WriteAchievements(root, "Account.1234", first));
+        first.fetchedAt = 101;
+        first.entries.at(1).id = 2;
+        bool rejected = false;
+        try { Cache::WriteAchievements(root, "Account.1234", first); }
+        catch (const std::runtime_error&) { rejected = true; }
+        assert(rejected);
+        read = Cache::ReadAchievements(root, "Account.1234");
+        assert(read && read->fetchedAt == 100 && read->entries.size() == 5000);
+        std::filesystem::remove_all(AlterEgo::NativeLibrary::Paths(root).Cache().parent_path());
+        assert(!Cache::ReadAchievements(root, "Account.1234"));
+        assert(std::filesystem::exists(temp.path("library.db")));
     }
     return 0;
 }
