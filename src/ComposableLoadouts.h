@@ -1057,6 +1057,12 @@ inline bool Reconcile(const Document& original, const Json& legacy,
             unsigned users = 0;
             for (const auto& use : original.loadouts)
                 if (use.refs.count(kind) && use.refs.at(kind) == ref) ++users;
+            // A newly created Loadout earlier in this reconciliation may
+            // already reference this component. Never mutate its snapshot.
+            for (const auto& use : order)
+                if (std::none_of(original.loadouts.begin(), original.loadouts.end(),
+                        [&](const Loadout& old) { return old.id == use.id; }) &&
+                    use.refs.count(kind) && use.refs.at(kind) == ref) ++users;
             if (users > 1) {
                 std::string privateId = kind + ":" + id;
                 unsigned sequence = 1;

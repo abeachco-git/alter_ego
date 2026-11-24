@@ -91,6 +91,13 @@ int main() {
         "Chilled to the Bone!");
     assert(ExactReusableComponent(named, "armor", sampleArmor)->id == "armor:one");
     assert(!ExactReusableComponent(named, "armor", Json::object()));
+    const Json sigilsA = {{"gear",{{"WeaponA1",{{"sigil_id",100},{"sigil2_id",101}}}}}};
+    const Json sigilsB = {{"gear",{{"WeaponA1",{{"sigil_id",101}}},
+                                  {"WeaponA2",{{"sigil_id",100}}}}}};
+    const Json sigilsOtherSet = {{"gear",{{"WeaponB1",{{"sigil_id",100},{"sigil2_id",101}}}}}};
+    assert(Semantics::SimilarRequirements("sigils", sigilsA, sigilsB));
+    assert(!Semantics::SimilarRequirements("sigils", sigilsA, sigilsOtherSet));
+    assert(!Semantics::SimilarRequirements("sigils", sigilsA, sigilsA));
     Document document;
     assert(SplitLegacy(kExample, document, error));
     assert(document.loadouts.size() == 2);

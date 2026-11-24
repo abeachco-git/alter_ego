@@ -372,6 +372,15 @@ static void RenderComponentUIEditor() {
                     }
                     break;
                 }
+                if (g_ComponentEditorMode == "create" &&
+                    AlterEgo::Composable::Semantics::SimilarRequirements(
+                        g_ComponentEditorKind, item["data"], g_ComponentEditorDraft)) {
+                    ImGui::TextDisabled("Similar functional totals: %s",
+                        item.value("name", std::string()).c_str());
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Exact item placement or other saved fields differ. Both records remain independent.");
+                    break;
+                }
             }
         }
     }

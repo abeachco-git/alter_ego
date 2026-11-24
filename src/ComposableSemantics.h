@@ -180,4 +180,20 @@ inline Verdict Compare(const Summary& a, const Summary& b) {
     return a.counts == b.counts ? Verdict::Match : Verdict::Mismatch;
 }
 
+// Comparison hints: never discard physical slots or unknown fields.
+inline bool SimilarRequirements(const std::string& kind, const Json& a, const Json& b) {
+    if (!a.is_object() || !b.is_object() || a.empty() || b.empty() || a == b) return false;
+    if (kind == "runes") return Compare(Runes(a), Runes(b)) == Verdict::Match;
+    if (kind == "sigils") return Compare(Sigils(a), Sigils(b)) == Verdict::Match;
+    if (kind == "infusions") {
+        if (Compare(Infusions(a), Infusions(b)) != Verdict::Match) return false;
+        for (const char* key : {"infusion_summary_present", "infusion_ar_total", "infusion_stat_totals"}) {
+            if (a.contains(key) != b.contains(key)) return false;
+            if (a.contains(key) && a.at(key) != b.at(key)) return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 } } } // namespace AlterEgo::Composable::Semantics

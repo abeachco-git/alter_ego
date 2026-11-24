@@ -8594,11 +8594,14 @@ static void RenderSaveToLibraryDialog() {
                 if (!g_SaveLibNameManuallyEdited)
                     name = AlterEgo::GW2API::SuggestCapturedComponentName(
                         sb, keys[g_SaveLibComponentKind]);
+                std::string savedId;
                 const bool saved = AlterEgo::GW2API::SaveCapturedLoadoutComponent(
-                    sb, keys[g_SaveLibComponentKind], name);
+                    sb, keys[g_SaveLibComponentKind], name, &savedId,
+                    !g_SaveLibNameManuallyEdited);
                 if (saved) {
                     g_ComponentFilterKind = g_SaveLibComponentKind;
-                    g_ComponentSelectNamePending = name;
+                    g_ComponentSelectIdPending = savedId;
+                    g_ComponentSelectNamePending.clear();
                     NavigateToLibraryCollection(2);
                     g_SaveLibDialogOpen = false;
                     if (APIDefs) APIDefs->GUI_SendAlert("Component saved or existing identical component reused.");
