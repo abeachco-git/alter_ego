@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace AlterEgo { namespace VaultAssist {
 struct Destination {
@@ -69,6 +70,7 @@ inline Options Gather(bool plants, bool wood, bool ore, bool fish) {
     Options out;
     if (plants) out.emplace_back("Beetletun farm","Queensdale","[&BPoAAAA=]","Lettuce nodes south of Beetletun Waypoint; gather nearby plants as well.");
     if (wood) out.emplace_back("Cypress cluster","Malchor's Leap","[&BKYCAAA=]","Five cypress saplings by the Melandru statue southwest of Pagga's Waypoint.");
+    if (ore) out.emplace_back("Rata Pten platinum","Mount Maelstrom","[&BMkCAAA=]","Criterion Waypoint; look for platinum and rich platinum veins around Rata Pten.");
     if (ore) out.emplace_back("Silverwastes ore","The Silverwastes","[&BH8HAAA=]","Follow the southern path west; look for ore near the Vinewrath area. Node spawns vary.");
     if (fish) out.emplace_back("Arborstone fishing","Arborstone","[&BGMNAAA=]","EoD fishing: Deep Fishing Hole at Danika's Respite.");
     out.emplace_back("Home / guild gathering","","","Use unlocked home instance or homestead nodes and upgraded guild hall synthesizers. Node availability depends on upgrades.");
@@ -83,22 +85,22 @@ inline Options Meta(const std::string& t) {
         {"Destroy the Ravenous Wanderer","Gyala Delve","","Map-dependent chain; no fixed start assumed."}};
     if (Has(t,"heart of maguuma")) return {
         {"Battle in Tarir","Auric Basin","[&BAIIAAA=]","Octovine phase; arrive earlier for preparations.",60,120},
-        {"King of the Jungle","Tangled Depths","","Ley-Line Confluence Waypoint; Gerent phase.",30,120},
+        {"King of the Jungle","Tangled Depths","[&BPUHAAA=]","Ley-Line Confluence Waypoint; Gerent phase.",30,120},
         {"Dragon's Stand","Dragon's Stand","[&BBAIAAA=]","Scheduled map push; arrive early.",90,120}};
     if (Has(t,"crystal desert")) return {
-        {"Path to Ascension","Elon Riverlands","[&BFMKAAA=]","Follow the map meta chain."},
-        {"Maws of Torment","The Desolation","","The Darklands Waypoint; check map event status."},
+        {"Path to Ascension","Elon Riverlands","[&BFMKAAA=]","Scheduled map meta phase.",90,120},
+        {"Maws of Torment","The Desolation","[&BKMKAAA=]","The Darklands Waypoint; scheduled meta phase.",60,120},
         {"Forged with Fire","Domain of Vabbi","","Check the map event chain."}};
     if (Has(t,"horn of maguuma")) return {
-        {"Wizard's Tower","Skywatch Archipelago","","Unlocking the Wizard's Tower meta."},
-        {"Defense of Amnytas","Amnytas","","Check the event timer."},
+        {"Wizard's Tower","Skywatch Archipelago","[&BOANAAA=]","Unlocking the Wizard's Tower meta; Rata Novus Promenade is a travel starting point.",60,120},
+        {"Defense of Amnytas","Amnytas","","Scheduled meta phase.",0,120},
         {"The Spider's Lair","Inner Nayos","","Map-dependent chain."}};
     if (Has(t,"janthir")) return {
-        {"Of Mists and Monsters","Janthir Syntri","","Check the event timer."},
+        {"Of Mists and Monsters","Janthir Syntri","[&BCoPAAA=]","Stricken Plains Waypoint; travel starting point.",30,120},
         {"A Titanic Voyage","Bava Nisos","[&BGEPAAA=]","Scheduled event chain.",80,120}};
     if (Has(t,"castora")) return {
-        {"Hammerhart Rumble!","Shipwreck Strand","","Check the event timer."},
-        {"Secrets of the Weald","Starlit Weald","","Check the event timer."},
+        {"Hammerhart Rumble!","Shipwreck Strand","","Scheduled map meta phase.",40,120},
+        {"Secrets of the Weald","Starlit Weald","","Scheduled map meta phase.",100,120},
         {"Shackles of the Ancients","Eternity's Garden","","Scheduled event chain.",70,120},
         {"Depths of Cruelty","Leyspring Hollows","","Check the map event chain."}};
     return {};
@@ -129,8 +131,16 @@ inline Options Match(const std::string& title,const std::string& track) {
                 if (Has(t,Normalize(event.label))) return {event};
     }
     if (t == "complete 3 events" || t == "complete 10 events") return Training();
-    if (Has(t,"complete") && Has(t,"events in cantha") && !Has(t,"meta event")) return Training();
-    if (Has(t,"complete") && Has(t,"event in cantha")) return Training();
+    if (Has(t,"complete") && (Has(t,"events in cantha") || Has(t,"event in cantha")) && !Has(t,"meta event")) {
+        auto options = Training(); options.pop_back();
+        options.emplace_back("Jade guard mechs","New Kaineng City","[&BBYNAAA=]",
+            "EoD: Garden Heights Waypoint; start sparring at a Training Mech Console. Requires a jade bot.");
+        return options;
+    }
+    if (Has(t,"complete") && (Has(t,"event in the horn of maguuma") || Has(t,"events in the horn of maguuma")))
+        return {{"Skywatch rifts","Skywatch Archipelago","[&BOANAAA=]","SotO: use Heart of the Obscure to locate a Tier 1 rift."}};
+    if (Has(t,"complete") && (Has(t,"event in the crystal desert") || Has(t,"events in the crystal desert")))
+        return {{"Elon Riverlands events","Elon Riverlands","[&BFMKAAA=]","PoF: look for events near the local meta chain."}};
     if (Has(t,"complete") && Has(t,"group events")) return {{"Silverwastes forts","The Silverwastes","[&BH8HAAA=]","Capture or defend RIBA forts. Only group events qualify."}};
     if (Has(t,"defiance bar")) return {{"Training Mech","Seitung Province","[&BL8MAAA=]","EoD: break the combat hero challenge's defiance bar."},
         {"Painter's Platform (POI)","Seitung Province","[&BP8MAAA=]","Hero challenge just north of this POI."}};
@@ -152,7 +162,11 @@ inline Options Match(const std::string& title,const std::string& track) {
     if (Has(t,"vasburg armory")) return {{"Jade Gate Waypoint","Echovald Wilds","[&BPkMAAA=]","Complete the Vasburg Armory mini-dungeon."}};
     if (Has(t,"valdhertz crypts")) return {{"Valdhertz Crypts (POI)","Echovald Wilds","[&BFkNAAA=]","Mini-dungeon entrance marker."}};
     if (Has(t,"rift hunt")) return {{"Weekly Rift Hunting","","","Use the current Weekly Rift Hunting achievement to choose an active map and use the Heart of the Obscure."}};
-    if (Has(t,"renown heart")) return {{"Training Grounds","Seitung Province","[&BL8MAAA=]","EoD: Monastery Training heart; complete training tasks."}};
+    if (Has(t,"defeat") && Has(t,"enemies in cantha"))
+        return {{"Spirit Vestibule (POI)","Seitung Province","[&BI4MAAA=]","Nonaggressive wildlife to the east; EoD required."}};
+    if (Has(t,"defeat") && Has(t,"enemies in the crystal desert"))
+        return {{"Cragged Vale Waypoint","Domain of Vabbi","[&BKUKAAA=]","Check for Forged packs in the Vehjin Mines during local events."}};
+    if (t == "complete a renown heart") return {{"Training Grounds","Seitung Province","[&BL8MAAA=]","EoD: Monastery Training heart; complete training tasks."}};
     return {};
 }
 } }

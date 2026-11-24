@@ -8,7 +8,11 @@ int main() {
     assert(Match("Complete 3 Events","WvW").empty());
     assert(Match("Salvage 10 Items","PvE").empty());
     assert(Match("Complete 10 Events in Queensdale","PvE").empty());
-    assert(Match("Gather 25 Crafting Resources","PvE").size() == 4);
+    assert(Match("Gather 25 Crafting Resources","PvE").size() == 5);
+    a = Match("Complete 1 Event in Cantha","PvE");
+    assert(a.size() == 4);
+    for (const auto& option : a) assert(option.map != "The Silverwastes");
+    assert(Match("Complete a Renown Heart in Janthir","PvE").empty());
     a = Match("Defeat the Inquest Golem Mark II World Boss or Complete 10 Events in Mount Maelstrom","PvE");
     assert(a.size() == 1);
     assert(NextSeconds(a[0], 119 * 60 + 30) == 30);

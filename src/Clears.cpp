@@ -2301,7 +2301,7 @@ static void RenderVaultAssistance(AlterEgo::VaultAssist::Options options, float 
             } else ImGui::TextUnformatted(option.label.c_str());
             if (!option.map.empty()) ImGui::TextDisabled("%s",option.map.c_str());
             if (time >= 0) ImGui::TextColored(ImVec4(0.86f,0.74f,0.46f,1.0f),
-                "Scheduled %s",Countdown(time).c_str());
+                "%s%s",time == 0 ? "" : "Scheduled ",Countdown(time).c_str());
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+320.0f);
             ImGui::TextWrapped("%s",option.note.c_str());
             ImGui::PopTextWrapPos();
