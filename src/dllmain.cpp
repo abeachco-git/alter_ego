@@ -53,6 +53,7 @@
 #include "EquipmentChoiceCore.h"
 #include "GearEditCore.h"
 #include "RefreshUI.h"
+#include "CacheDatabase.h"
 
 // Version constants
 #define V_MAJOR 1
@@ -490,15 +491,7 @@ struct AchDef {
     std::vector<uint32_t> prerequisites;
 };
 
-struct AchProgress {
-    uint32_t id = 0;
-    int current = 0;
-    int max = 0;
-    bool done = false;
-    int repeated = 0;
-    bool unlocked = true;                // absent in API = unlocked
-    std::set<uint32_t> completed_bits;   // indices of completed bits
-};
+using AchProgress = AlterEgo::Cache::AchievementProgress;
 
 // Achievement tracker state
 static std::vector<AchGroupDef> g_AchGroups;
@@ -12757,50 +12750,23 @@ static std::string SanitizeForFilename(const std::string& s) {
 // switching accounts doesn't clobber the previous account's cache.
 static void SaveAchProgress(const std::string& account) {
     if (account.empty()) return;
-    const std::string dir = AlterEgo::GW2API::GetDataDirectory() + "/cache";
-    const std::string path = dir + "/ach_progress_" + SanitizeForFilename(account) + ".json";
-
-    // Capture one consistent account snapshot; newer H&S updates must not be
-    // marked saved if they arrive while the disk write is in progress.
-    std::vector<std::pair<uint32_t, AchProgress>> snapshot;
-    int64_t fetchedAt = 0;
+    // Serialize capture and write so two saves of the same fetch timestamp
+    // cannot publish their generations in reverse order.
+    static std::mutex saveMutex;
+    std::lock_guard<std::mutex> saving(saveMutex);
+    AlterEgo::Cache::AchievementSnapshot snapshot;
     uint64_t generation = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         if (g_AchCachedAccount != account) return;
-        snapshot.reserve(g_AchProgress.size());
-        for (const auto& [id, p] : g_AchProgress) snapshot.emplace_back(id, p);
-        fetchedAt = g_AchProgressCacheSavedAt;
+        for (const auto& [id, p] : g_AchProgress) snapshot.entries.emplace(id, p);
+        snapshot.fetchedAt = g_AchProgressCacheSavedAt;
         generation = g_AchProgressGen;
     }
-
-    nlohmann::json j = nlohmann::json::object();
-    j["account"] = account;
-    j["saved_at"] = fetchedAt;
-    nlohmann::json entries = nlohmann::json::object();
-    for (const auto& [id, p] : snapshot) {
-        nlohmann::json e;
-        e["c"] = p.current;
-        e["m"] = p.max;
-        e["d"] = p.done;
-        e["r"] = p.repeated;
-        e["u"] = p.unlocked;
-        if (!p.completed_bits.empty()) {
-            nlohmann::json bits = nlohmann::json::array();
-            for (uint32_t b : p.completed_bits) bits.push_back(b);
-            e["b"] = std::move(bits);
-        }
-        entries[std::to_string(id)] = std::move(e);
-    }
-    j["entries"] = std::move(entries);
-
-    // Existing saved files use the same entries format and remain readable.
-    // Replace the file atomically so a partial write cannot destroy the cache.
     bool saved = false;
     try {
-        std::error_code ec;
-        std::filesystem::create_directories(dir, ec);
-        if (!ec) saved = WriteFileAtomic(path, j.dump());
+        saved = AlterEgo::Cache::WriteAchievements(
+            AlterEgo::GW2API::GetDataDirectory(), account, snapshot);
     } catch (...) {
         saved = false;
     }
@@ -12820,43 +12786,64 @@ static void SaveAchProgress(const std::string& account) {
 // so dependent UI caches (rail counts, popout) refresh.
 static void LoadAchProgress(const std::string& account) {
     if (account.empty()) return;
-    const std::string path = AlterEgo::GW2API::GetDataDirectory() +
-        "/cache/ach_progress_" + SanitizeForFilename(account) + ".json";
-
-    // Parse into a temporary map first: malformed/incomplete files never
-    // partially populate the live progress map.
+    const auto root = AlterEgo::GW2API::GetDataDirectory();
+    const auto path = root + "/cache/ach_progress_" + SanitizeForFilename(account) + ".json";
     std::unordered_map<uint32_t, AchProgress> restored;
     int64_t fetchedAt = 0;
     bool valid = false;
-    std::ifstream file(path, std::ios::binary);
-    if (file.is_open()) {
-        try {
-            const auto j = nlohmann::json::parse(file);
-            if (!j.is_object() || !j.contains("entries") || !j["entries"].is_object() ||
-                (j.contains("account") && j["account"].get<std::string>() != account))
-                throw std::runtime_error("Invalid achievement cache");
-            fetchedAt = j.value("saved_at", (int64_t)0);
-            for (auto it = j["entries"].begin(); it != j["entries"].end(); ++it) {
-                AchProgress p;
-                p.id = (uint32_t)std::stoul(it.key());
-                const auto& e = it.value();
-                p.current = e.value("c", 0);
-                p.max = e.value("m", 0);
-                p.done = e.value("d", false);
-                p.repeated = e.value("r", 0);
-                p.unlocked = e.value("u", true);
-                if (e.contains("b") && e["b"].is_array()) {
-                    for (const auto& b : e["b"])
-                        p.completed_bits.insert(b.get<uint32_t>());
+    try {
+        auto snapshot = AlterEgo::Cache::ReadAchievements(root, account);
+        if (!snapshot) {
+            // Legacy cache is disposable. Import only when the embedded
+            // identity proves this slug belongs to the requested account.
+            std::ifstream file(path, std::ios::binary);
+            if (file.is_open()) {
+                const auto j = nlohmann::json::parse(file);
+                file.close();
+                if (!j.is_object() || !j.contains("entries") || !j["entries"].is_object() ||
+                    !j.contains("account") || j["account"].get<std::string>() != account)
+                    throw std::runtime_error("Unverified legacy achievement cache identity");
+                AlterEgo::Cache::AchievementSnapshot legacy;
+                legacy.fetchedAt = j.value("saved_at", (int64_t)0);
+                for (auto it = j["entries"].begin(); it != j["entries"].end(); ++it) {
+                    AchProgress p;
+                    size_t consumed = 0;
+                    const auto id = std::stoull(it.key(), &consumed);
+                    if (consumed != it.key().size() || id > UINT32_MAX)
+                        throw std::runtime_error("Invalid achievement id");
+                    p.id = static_cast<uint32_t>(id);
+                    const auto& e = it.value();
+                    p.current = e.value("c", 0);
+                    p.max = e.value("m", 0);
+                    p.done = e.value("d", false);
+                    p.repeated = e.value("r", 0);
+                    p.unlocked = e.value("u", true);
+                    if (e.contains("b") && e["b"].is_array())
+                        for (const auto& bit : e["b"])
+                            p.completed_bits.insert(bit.get<uint32_t>());
+                    if (!legacy.entries.emplace(p.id, std::move(p)).second)
+                        throw std::runtime_error("Duplicate achievement id");
                 }
-                restored.emplace(p.id, std::move(p));
+                // Re-read the authoritative transaction before removing the
+                // old cache, including when a newer snapshot won the race.
+                AlterEgo::Cache::WriteAchievements(root, account, legacy);
+                snapshot = AlterEgo::Cache::ReadAchievements(root, account);
+                if (snapshot) {
+                    std::error_code ec;
+                    std::filesystem::remove(std::filesystem::u8path(path), ec);
+                }
             }
-            valid = true;
-        } catch (...) {
-            if (APIDefs)
-                APIDefs->Log(LOGL_WARNING, "AlterEgo",
-                             "Achievement progress cache is unreadable; retaining file");
         }
+        if (snapshot) {
+            fetchedAt = snapshot->fetchedAt;
+            restored.reserve(snapshot->entries.size());
+            for (auto& [id,p] : snapshot->entries) restored.emplace(id,std::move(p));
+            valid = true;
+        }
+    } catch (...) {
+        if (APIDefs)
+            APIDefs->Log(LOGL_WARNING, "AlterEgo",
+                         "Achievement progress cache is unreadable; retaining data for recovery");
     }
 
     {
