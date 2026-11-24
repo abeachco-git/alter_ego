@@ -31,6 +31,8 @@ jobs:
           cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug
           cmake --build build-tests --parallel 2
           ctest --test-dir build-tests --output-on-failure
+      - name: Run reproducible SQLite benchmark
+        run: python3 tools/benchmark_sqlite.py --output sqlite-benchmark.json
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
@@ -63,4 +65,5 @@ jobs:
           path: |
             build/AlterEgo.dll
             build/AlterEgo.map
+            sqlite-benchmark.json
           if-no-files-found: error
