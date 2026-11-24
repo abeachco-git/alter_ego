@@ -7,6 +7,8 @@
 #include <unordered_set>
 #include <mutex>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <nlohmann/json.hpp>
 #include "nexus/Nexus.h"
 
@@ -365,8 +367,8 @@ namespace AlterEgo {
         // --- Multi-account ---
         static void QueryAccounts();                     // Fetch account list from H&S
         static uint32_t GetAccountCount();               // Number of configured accounts (0 = unknown)
-        static const std::vector<AccountInfo>& GetAccounts();
-        static const std::string& GetCurrentAccountName(); // Account for the logged-in character
+        static std::vector<AccountInfo> GetAccounts();
+        static std::string GetCurrentAccountName(); // Account for the logged-in character
         static void SetCurrentAccountFromCharacter(const std::string& charName); // Map character to account
         static bool IsMultiAccount();                    // account_count > 1
         static bool HasAccountsData();                   // true if accounts have been queried
@@ -385,9 +387,9 @@ namespace AlterEgo {
         static uint64_t GetBuildLibraryRevision();
 
         // Character access
-        static const std::vector<Character>& GetCharacters();
-        static const Character* GetCharacter(const std::string& name);
-        static const std::vector<std::string>& GetPendingCharNames();
+        static std::shared_ptr<const std::vector<Character>> GetCharacters();
+        static std::optional<Character> GetCharacter(const std::string& name);
+        static std::vector<std::string> GetPendingCharNames();
         // Remove cached characters that are no longer in the current roster
         // (s_pending_char_names). Call after a full character-list fetch succeeds
         // so characters deleted in-game stop appearing in the list.

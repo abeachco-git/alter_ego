@@ -1143,7 +1143,8 @@ static void LoadCharSortConfig();
 static int DaysUntilBirthday(const std::string& created);
 
 static void RebuildCharDisplayOrder() {
-    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& chars = *charsSnapshot;
     int n = (int)chars.size();
     g_CharDisplayOrder.resize(n);
     for (int i = 0; i < n; i++) g_CharDisplayOrder[i] = i;
@@ -1672,7 +1673,8 @@ static void SaveSession() {
     j["main_tab"] = g_MainTab;
 
     // Characters tab state — save by name for stability across sort/order changes
-    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& chars = *charsSnapshot;
     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
         int ri = g_CharDisplayOrder[g_SelectedCharIdx];
         if (ri >= 0 && ri < (int)chars.size())
@@ -8558,7 +8560,7 @@ static void RenderSaveToLibraryDialog() {
         }
         ImGui::EndCombo();
     }
-    const auto* sourceChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
+    const auto sourceChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
     if (sourceChar) {
         ImGui::Text("Character: %s (%s)", sourceChar->name.c_str(), sourceChar->profession.c_str());
         auto nameForBuild = [](const AlterEgo::BuildTemplate& bt) {
@@ -8764,7 +8766,7 @@ static void RenderSaveToLibraryDialog() {
         std::string name = g_SaveLibName;
         if (name.empty()) name = g_SaveLibTarget == 0 ? "Unnamed Loadout" : "Unnamed Component";
 
-        const auto* capturedChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
+        const auto capturedChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
         const AlterEgo::BuildTemplate* capturedTab = nullptr;
         if (capturedChar) {
             for (const auto& bt : capturedChar->build_tabs) {
@@ -10785,7 +10787,8 @@ static const AlterEgo::Character* ResolveComparisonCharacter(
 }
 
 static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
-    const auto& characters = AlterEgo::GW2API::GetCharacters();
+    const auto charactersSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& characters = *charactersSnapshot;
     std::vector<const AlterEgo::Character*> matches;
     for (const auto& ch : characters)
         if (!ch.build_tabs.empty())
@@ -11085,7 +11088,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
     cachedLibraryRevision = libRevision;
     cached = {};
     if (g_CurrentCharName.empty()) return cached;
-    const auto* character = AlterEgo::GW2API::GetCharacter(g_CurrentCharName);
+    const auto character = AlterEgo::GW2API::GetCharacter(g_CurrentCharName);
     if (!character || character->build_tabs.empty()) return cached;
     const int activeIndex = GetActiveBuildIndex(*character);
     if (activeIndex < 0) return cached;
@@ -11213,7 +11216,8 @@ static void RenderCompareTab() {
     // Custom, Name, Class, Level, Age, Birthday and Last Login, including the
     // ascending/descending toggle and multi-account grouping.
     // Active (auto) remains the first popup option regardless of sort mode.
-    const auto& compareRoster = AlterEgo::GW2API::GetCharacters();
+    const auto compareRosterSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& compareRoster = *compareRosterSnapshot;
     static std::string s_compareAccount;
     const std::string compareAccount = AlterEgo::GW2API::GetCurrentAccountName();
     if (g_CharDisplayOrder.size() != compareRoster.size() ||
@@ -16088,7 +16092,8 @@ static void RenderSkinventory() {
 
 
 static void RenderCharactersStatusRow() {
-    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& chars = *charsSnapshot;
     const AlterEgo::Character* selected = nullptr;
     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
         const int ri = g_CharDisplayOrder[g_SelectedCharIdx];
@@ -16135,7 +16140,8 @@ static void RenderCharactersStatusRow() {
 }
 
 static void RenderCompareStatusRow() {
-    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& chars = *charsSnapshot;
     const AlterEgo::Character* target = nullptr;
     for (const auto& ch : chars) {
         if (ch.name == g_LibComparePreviousTarget) { target = &ch; break; }
@@ -16624,7 +16630,8 @@ void AddonRender() {
                 lastFetchStatus = fetchStatus;
             }
 
-            const auto& characters = AlterEgo::GW2API::GetCharacters();
+            const auto charactersSnapshot = AlterEgo::GW2API::GetCharacters();
+            const auto& characters = *charactersSnapshot;
             // Also check pending names from a list-only fetch (new user, no full data yet)
             const auto& pendingNames = AlterEgo::GW2API::GetPendingCharNames();
 
@@ -17525,7 +17532,8 @@ void AddonRender() {
                         g_RefreshNames = names;
                     }
                     g_RefreshSelection.assign(g_RefreshNames.size(), false);
-                    const auto& chars = AlterEgo::GW2API::GetCharacters();
+                    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+                    const auto& chars = *charsSnapshot;
                     std::string currentName;
                     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
                         int ri = g_CharDisplayOrder[g_SelectedCharIdx];
@@ -17560,7 +17568,8 @@ void AddonRender() {
                 }
                 ImGui::SameLine();
                 if (RenderActionButton("Lv80")) {
-                    const auto& cachedChars = AlterEgo::GW2API::GetCharacters();
+                    const auto cachedCharsSnapshot = AlterEgo::GW2API::GetCharacters();
+                    const auto& cachedChars = *cachedCharsSnapshot;
                     for (size_t i = 0; i < g_RefreshNames.size(); i++) {
                         g_RefreshSelection[i] = false;
                         for (const auto& cc : cachedChars) {
@@ -17575,7 +17584,8 @@ void AddonRender() {
                 ImGui::Separator();
 
                 ImGui::BeginChild("##charCheckList", ImVec2(280, 300), true);
-                const auto& cachedChars = AlterEgo::GW2API::GetCharacters();
+                const auto cachedCharsSnapshot = AlterEgo::GW2API::GetCharacters();
+                const auto& cachedChars = *cachedCharsSnapshot;
                 for (size_t i = 0; i < g_RefreshNames.size(); i++) {
                     ImGui::PushID((int)i);
                     bool checked = g_RefreshSelection[i];
@@ -17609,7 +17619,8 @@ void AddonRender() {
                 if (!canRefresh) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
                 if (RenderActionButton(btnLabel) && canRefresh) {
                     std::vector<std::string> selected;
-                    const auto& chars = AlterEgo::GW2API::GetCharacters();
+                    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+                    const auto& chars = *charsSnapshot;
                     std::string currentName;
                     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
                         int ri = g_CharDisplayOrder[g_SelectedCharIdx];
