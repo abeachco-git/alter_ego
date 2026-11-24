@@ -26,3 +26,7 @@ The independent live MetaBattle workflow uses the same import executable with
 a snapshot directory and verifies all six live imports strictly. Live site
 availability never gates DLL packaging. Skill icon research is manual-only; it
 builds a baseline DLL for accurate size comparisons and uploads the report.
+
+## CI maintenance
+
+Keep the six live MetaBattle import checks strict, independently reported, and upload their HTML snapshots for debugging. Live-site outages or changed content must remain visible in that workflow rather than blocking DLL packaging. Do not weaken the required offline cases or binary verification to resolve a failed build. Follow the delivery definition in [AGENTS.md](../AGENTS.md).

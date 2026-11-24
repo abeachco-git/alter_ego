@@ -10,6 +10,16 @@ Alter Ego is a Windows x64 UCRT DLL loaded by Raidcore Nexus. Nexus supplies the
 
 **Threading:** Nexus `Events_Raise()` dispatches synchronously on the calling thread. Never hold a mutex across a query event that can invoke its response handler; preserve the pending/retry protocol in the Hoard & Seek interface. Font request callbacks can likewise re-enter synchronously: release the font manager mutex before registration calls and accept updated font pointers when the Nexus atlas is rebuilt.
 
+## Development safety and ownership
+
+These are review rules for changes, not a claim that every existing path has already been audited.
+
+- Keep Nexus/ImGui calls on their documented owning thread. Inspect callback and worker ownership before changing asynchronous code; callbacks must not access destroyed state or publish stale results to a different character/account. Preserve the established shutdown ordering, unsubscribe/release registrations and stop or join owned workers before unloading their code or state. Avoid holding locks while calling re-entrant external APIs.
+- Treat refresh policy, cache ownership, invalidation and in-flight deduplication as domain responsibilities. Reuse existing requests and cached snapshots; ordinary drawing, sorting, searching and filtering must not initiate new requests. Preserve approved explicit, scheduled and lazy fetch paths rather than accidentally disabling legitimate lazy loads. Do not alter refresh lifecycles without specific approval.
+- Distinguish absent, incomplete, stale and verified data. Failed or partial requests must not silently replace good snapshots or be presented as complete. Use stable identifiers rather than display labels for stored identity and completion matching.
+- Keep domain operations independent from presentation when practical. Reuse existing owners for persistence, refresh, catalog matching and comparison. For new substantial functionality, prefer a cohesive module with pure testable helpers where appropriate; avoid mechanical file splitting or a broad rewrite of dllmain.cpp. Do not change unrelated architecture merely to follow this preference.
+- Prefer scoped diagnostics with enough context to investigate failures without exposing API keys or private account data. Remove temporary debugging scaffolding after diagnosis, while retaining actionable error handling.
+
 ## Major modules
 
 | Module | Responsibility |

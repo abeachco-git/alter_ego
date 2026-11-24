@@ -77,3 +77,12 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 - Optional toolbar actions use standard action-button height; the adjacent search and filter controls align to that height without changing popup styling. Never make a refresh button an exception to shared button styling.
 
 - Individual filter removal must preserve other compatible filters, search text, sorting and view settings. Skinventory Shopping marks only its local filter results dirty; no price refresh. The Browser ownership chip resets to All without changing list/grid. A removable component kind resets to its required default Base Build and clears incompatible selection. Keep both Skinventory views and all other filter toolbars in sync through `RenderFilterChips`.
+
+## Canonical-control guardrails
+
+- Preserve dropdown active/auto semantics and keyboard navigation; always pair a successful BeginCombo with EndCombo.
+- Use existing profession/rarity helpers and named palette/indicator primitives instead of new per-tab colors or size constants. Use RenderGoldButton, RenderChipButton and the shared button roles according to their established meanings.
+- Share typed gear pickers and presentation when their semantics agree; never conflate missing, unknown, empty or imported values. Keep commit paths appropriate to the underlying data.
+- All skin surfaces use RenderSkinContextMenu. The selected Commerce candidate is based on available sell listings, never rarity; copy the actual priced item's name for Trading Post search.
+- Every active contextual filter must have a stable removable UI::FilterChip with its own reset callback, except required default context. Clear all preserves search text; search x preserves filters. Both Skinventory views use the shared toolbar and chips. Preserve sorting and compatible selections; changing filters does not refresh prices or make API requests.
+- When a shared control changes, update this guide and migrate affected callers where the scope allows. Preserve established appearance unless a redesign is requested.
