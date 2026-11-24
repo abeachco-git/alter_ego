@@ -193,6 +193,7 @@ static std::ifstream OpenAccountCache(const char* stem, const std::string& accou
 
 static bool g_VaultHideComplete = false;   // hide claimed vault objectives
 static bool g_ClearsHideComplete = false;  // hide completed clear encounters
+static bool g_ShowFractalNextResets = true; // show upcoming daily fractal forecast
 static bool g_VaultOpen[3] = {true, true, true}; // Daily, Weekly, Special
 static void LoadClearUiSettings();
 static void SaveClearUiSettings();
@@ -2530,6 +2531,8 @@ static std::string ClearUiSettingsPath() {
 static void LoadClearUiSettings() {
     if (g_ClearUiLoaded) return;
     g_ClearUiLoaded = true;
+    // Older backups and missing settings keep the original visible default.
+    g_ShowFractalNextResets = true;
     try {
         std::ifstream f(ClearUiSettingsPath());
         if (!f.good()) return;
@@ -2545,6 +2548,8 @@ static void LoadClearUiSettings() {
         }
         g_VaultHideComplete = j.value("hide_vault_complete", false);
         g_ClearsHideComplete = j.value("hide_clears_complete", false);
+        if (j.contains("show_fractal_next_resets") && j["show_fractal_next_resets"].is_boolean())
+            g_ShowFractalNextResets = j["show_fractal_next_resets"].get<bool>();
     } catch (...) {}
 }
 void ReloadClearUiSettings() {
@@ -2561,6 +2566,7 @@ static void SaveClearUiSettings() {
         j["vault_expanded"] = {g_VaultOpen[0], g_VaultOpen[1], g_VaultOpen[2]};
         j["hide_vault_complete"] = g_VaultHideComplete;
         j["hide_clears_complete"] = g_ClearsHideComplete;
+        j["show_fractal_next_resets"] = g_ShowFractalNextResets;
         std::ofstream f(path, std::ios::trunc);
         if (f.good()) f << j.dump(2);
     } catch (...) {}
@@ -2754,7 +2760,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         }
         ImGui::Unindent(4.0f);
     }
-    if (g_ClearsFetched) {
+    if (g_ClearsFetched && g_ShowFractalNextResets) {
         std::vector<std::string> todaysT4;
         for (const auto& e : g_DailyFractals)
             if (e.tier == "T4")
@@ -3409,6 +3415,12 @@ void SyncCompletionAccountCaches() {
 
 bool VaultHideComplete() { LoadClearUiSettings(); return g_VaultHideComplete; }
 bool ClearsHideComplete() { LoadClearUiSettings(); return g_ClearsHideComplete; }
+bool ShowFractalNextResets() { LoadClearUiSettings(); return g_ShowFractalNextResets; }
+void ToggleFractalNextResets() {
+    LoadClearUiSettings();
+    g_ShowFractalNextResets = !g_ShowFractalNextResets;
+    SaveClearUiSettings();
+}
 void ToggleVaultHideComplete() {
     LoadClearUiSettings();
     g_VaultHideComplete = !g_VaultHideComplete;

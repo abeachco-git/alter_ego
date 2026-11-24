@@ -17753,6 +17753,10 @@ void AddonRender() {
                     ToggleClearsHideComplete();
                     chosen = true;
                 }
+                if (ImGui::MenuItem("Show Fractal Next Resets", nullptr, ShowFractalNextResets())) {
+                    ToggleFractalNextResets();
+                    chosen = true;
+                }
                 FinishTabDropdown(clearsMenu, chosen, hovered);
                 ImGui::EndPopup();
             }

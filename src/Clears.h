@@ -30,6 +30,8 @@ bool VaultHideComplete();
 bool ClearsHideComplete();
 void ToggleVaultHideComplete();
 void ToggleClearsHideComplete();
+bool ShowFractalNextResets();
+void ToggleFractalNextResets();
 // Called once when navigating into a tab. Refreshes stale, unfinished
 // sections only; the tab's manual Refresh continues to fetch everything.
 void RefreshVaultOnEntry();
