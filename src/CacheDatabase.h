@@ -1,7 +1,7 @@
 #pragma once
 // Rebuildable account achievement snapshots. No network or UI dependencies.
 #include "Database.h"
-#include "NativeLibraryStore.h"
+#include "StoragePaths.h"
 #include <filesystem>
 #include <map>
 #include <mutex>
@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,36 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 2) {
+        db.Exec(R"SQL(
+CREATE TABLE reference_freshness(dataset TEXT PRIMARY KEY, saved_at INTEGER NOT NULL) STRICT;
+CREATE TABLE achievement_names(id INTEGER PRIMARY KEY, name TEXT NOT NULL) STRICT;
+CREATE INDEX achievement_name_search ON achievement_names(name COLLATE NOCASE);
+CREATE TABLE achievement_waypoints(achievement_id INTEGER NOT NULL, bit INTEGER NOT NULL,
+    code TEXT NOT NULL, PRIMARY KEY(achievement_id,bit)) STRICT;
+CREATE TABLE hero_challenges(id TEXT PRIMARY KEY, map_name TEXT NOT NULL, expansion TEXT NOT NULL) STRICT;
+CREATE TABLE achievement_definitions(id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+    description TEXT NOT NULL, requirement TEXT NOT NULL, icon_url TEXT NOT NULL,
+    type TEXT NOT NULL, max_count INTEGER NOT NULL, total_ap INTEGER NOT NULL) STRICT;
+CREATE TABLE achievement_definition_flags(id INTEGER NOT NULL REFERENCES achievement_definitions(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, flag TEXT NOT NULL, PRIMARY KEY(id,ordinal)) STRICT;
+CREATE TABLE achievement_prerequisites(id INTEGER NOT NULL REFERENCES achievement_definitions(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, prerequisite INTEGER NOT NULL, PRIMARY KEY(id,ordinal)) STRICT;
+CREATE TABLE achievement_bits(id INTEGER NOT NULL REFERENCES achievement_definitions(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, type TEXT NOT NULL, item_id INTEGER NOT NULL,
+    text TEXT NOT NULL, PRIMARY KEY(id,ordinal)) STRICT;
+CREATE TABLE achievement_groups(id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL,
+    name TEXT NOT NULL, description TEXT NOT NULL, display_order INTEGER NOT NULL) STRICT;
+CREATE TABLE achievement_categories(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+    display_order INTEGER NOT NULL, icon_url TEXT NOT NULL) STRICT;
+CREATE TABLE achievement_group_categories(group_id TEXT NOT NULL REFERENCES achievement_groups(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, category_id INTEGER NOT NULL, PRIMARY KEY(group_id,ordinal)) STRICT;
+CREATE TABLE achievement_category_members(category_id INTEGER NOT NULL REFERENCES achievement_categories(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, achievement_id INTEGER NOT NULL, PRIMARY KEY(category_id,ordinal)) STRICT;
+CREATE INDEX achievement_member_lookup ON achievement_category_members(achievement_id);
+)SQL");
+        return;
+    }
     if (version != 1) throw Database::Error(SQLITE_ERROR, "Unknown cache schema");
     db.Exec(R"SQL(
 CREATE TABLE achievement_snapshots(
@@ -60,7 +90,7 @@ inline std::optional<AchievementSnapshot> ReadAchievements(
     const std::string& root, const std::string& account) {
     if (account.empty()) return std::nullopt;
     std::lock_guard<std::mutex> lock(Mutex());
-    const auto path = NativeLibrary::Paths(root).Cache();
+    const auto path = Storage::Paths(root).Cache();
     if (!std::filesystem::exists(path)) return std::nullopt;
     Database::Connection db(path.u8string(), Database::Connection::OpenMode::Existing);
     Initialize(db);
@@ -101,7 +131,7 @@ inline bool WriteAchievements(const std::string& root, const std::string& accoun
                               const AchievementSnapshot& snapshot) {
     if (account.empty() || snapshot.fetchedAt < 0) return false;
     std::lock_guard<std::mutex> lock(Mutex());
-    const auto path = NativeLibrary::Paths(root).Cache();
+    const auto path = Storage::Paths(root).Cache();
     std::filesystem::create_directories(path.parent_path());
     Database::Connection db(path.u8string(), Database::Connection::OpenMode::Create);
     Initialize(db);

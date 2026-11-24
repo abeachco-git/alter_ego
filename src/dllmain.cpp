@@ -54,6 +54,7 @@
 #include "GearEditCore.h"
 #include "RefreshUI.h"
 #include "CacheDatabase.h"
+#include "AchievementCatalogCache.h"
 #include "StoragePaths.h"
 
 // Version constants
@@ -1824,9 +1825,6 @@ static void LoadAchTrackerState() {
 }
 
 static void SaveAchGroupCache() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_groups.json";
 
     nlohmann::json j;
     auto epochSecs = std::chrono::duration_cast<std::chrono::seconds>(
@@ -1862,7 +1860,7 @@ static void SaveAchGroupCache() {
         j["categories"] = cats;
     }
 
-    if (WriteFileAtomic(path, j.dump(2))) {
+    if (AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Groups, j)) {
         g_AchGroupsCacheFetchedAt = epochSecs;
     } else if (APIDefs) {
         APIDefs->Log(LOGL_WARNING, "AlterEgo",
@@ -1871,11 +1869,10 @@ static void SaveAchGroupCache() {
 }
 
 static void LoadAchGroupCache() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_groups.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
     try {
-        auto j = nlohmann::json::parse(file);
+        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Groups);
+        if (!snapshot) return;
+        auto& j = *snapshot;
 
         // Restore the last-known categories immediately, even across the daily
         // reset. A stale snapshot is usable offline and is refreshed in the
@@ -1941,9 +1938,6 @@ static void LoadAchGroupCache() {
 }
 
 static void SaveAchDefCache() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_defs.json";
 
     nlohmann::json j;
     {
@@ -1973,16 +1967,15 @@ static void SaveAchDefCache() {
         }
     }
 
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
+    if (!AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Definitions, j) && APIDefs)
+        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save ach_defs cache");
 }
 
 static void LoadAchDefCache() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_defs.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
     try {
-        auto j = nlohmann::json::parse(file);
+        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Definitions);
+        if (!snapshot) return;
+        auto& j = *snapshot;
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         for (auto& [key, dj] : j.items()) {
             AchDef d;
@@ -2015,9 +2008,6 @@ static void LoadAchDefCache() {
 }
 
 static void SaveAchNameIndex() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_name_index.json";
 
     nlohmann::json j;
     {
@@ -2027,16 +2017,15 @@ static void SaveAchNameIndex() {
         }
     }
 
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
+    if (!AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Names, j) && APIDefs)
+        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save ach_name_index cache");
 }
 
 static void LoadAchNameIndex() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_name_index.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
     try {
-        auto j = nlohmann::json::parse(file);
+        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Names);
+        if (!snapshot) return;
+        auto& j = *snapshot;
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         g_AchNameIndex.clear();
         for (auto& [key, val] : j.items()) {
@@ -2052,9 +2041,6 @@ static void LoadAchNameIndex() {
 // =========================================================================
 
 static void SaveAchWaypoints() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_waypoints.json";
 
     nlohmann::json j;
     {
@@ -2068,16 +2054,15 @@ static void SaveAchWaypoints() {
         }
     }
 
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
+    if (!AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Waypoints, j) && APIDefs)
+        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save ach_waypoints cache");
 }
 
 static void LoadAchWaypoints() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_waypoints.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
     try {
-        auto j = nlohmann::json::parse(file);
+        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Waypoints);
+        if (!snapshot) return;
+        auto& j = *snapshot;
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         g_AchWaypoints.clear();
         for (auto& [achKey, val] : j.items()) {
@@ -2133,7 +2118,6 @@ static void FetchAchWaypoints() {
 // =========================================================================
 
 static void SaveHeroChallenges() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/hero_challenges.json";
     nlohmann::json j;
     for (const auto& [id, info] : g_HeroChallenges) {
         nlohmann::json entry;
@@ -2141,16 +2125,15 @@ static void SaveHeroChallenges() {
         entry["expansion"] = info.expansion;
         j[id] = entry;
     }
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
+    if (!AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::HeroChallenges, j) && APIDefs)
+        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save hero_challenges cache");
 }
 
 static void LoadHeroChallenges() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/hero_challenges.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
     try {
-        auto j = nlohmann::json::parse(file);
+        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::HeroChallenges);
+        if (!snapshot) return;
+        auto& j = *snapshot;
         if (j.is_object()) {
             g_HeroChallenges.clear();
             for (auto& [id, val] : j.items()) {

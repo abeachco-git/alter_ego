@@ -1,5 +1,7 @@
 #include "../src/Database.h"
 #include "../src/CacheDatabase.h"
+#include "../src/AchievementCatalogCache.h"
+#include "../src/NativeLibraryStore.h"
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -151,6 +153,38 @@ int case_database_core(int, char**) {
         Storage::WriteMigrationBytes(std::filesystem::u8path(pinned),R"({"pinned":[7]})");
         std::filesystem::remove_all(paths.CacheDirectory());
         assert(Storage::ReadMigrationBytes(std::filesystem::u8path(pinned))==R"({"pinned":[7]})");
+    }
+    {
+        namespace Cache = AlterEgo::Cache;
+        using D=Cache::AchievementDataset;
+        using J=Cache::Json;
+        const auto root=temp.dir.u8string();
+        J defs={{"1",{{"id",1},{"name","Collection"},{"description","d"},{"requirement","r"},
+            {"icon_url","url"},{"type","Default"},{"max_count",2},{"total_ap",3},
+            {"flags",J::array({"Permanent","Hidden"})},{"prerequisites",J::array({4,5})},
+            {"bits",J::array({{{"type","Item"},{"item_id",42},{"text","first"}},{{"type","Text"},{"item_id",0},{"text","second"}}})}}}};
+        assert(Cache::WriteCatalog(root,D::Definitions,defs));
+        assert(Cache::ReadCatalog(root,D::Definitions)==defs);
+        J malformed=defs;malformed["1"]["id"]=2;
+        assert(!Cache::WriteCatalog(root,D::Definitions,malformed));
+        assert(Cache::ReadCatalog(root,D::Definitions)==defs);
+        J groups={{"fetch_time",100},{"groups",J::array({{{"id","g"},{"name","Group"},
+            {"description","d"},{"order",0},{"categories",J::array({2,1})}}})},
+            {"categories",{{"1",{{"id",1},{"name","Category"},{"description","d"},
+                {"order",1},{"icon_url","url"},{"achievements",J::array({9,8,7})}}}}}};
+        assert(Cache::WriteCatalog(root,D::Groups,groups));
+        assert(Cache::ReadCatalog(root,D::Groups)==groups);
+        groups["fetch_time"]=99;assert(!Cache::WriteCatalog(root,D::Groups,groups));
+        J names={{"1","Name"},{"2","Other"}};
+        AlterEgo::Storage::WriteMigrationBytes(AlterEgo::Storage::Paths(root).base/"ach_name_index.json",names.dump());
+        assert(Cache::ReadCatalog(root,D::Names)==names);
+        assert(!std::filesystem::exists(AlterEgo::Storage::Paths(root).base/"ach_name_index.json"));
+        J waypoints={{"1",{{"-1","[&ABC=]"},{"2","[&DEF=]"}}}};
+        assert(Cache::WriteCatalog(root,D::Waypoints,waypoints));
+        assert(Cache::ReadCatalog(root,D::Waypoints)==waypoints);
+        J heroes={{"123",{{"map_name","Map"},{"expansion","HoT"}}}};
+        assert(Cache::WriteCatalog(root,D::HeroChallenges,heroes));
+        assert(Cache::ReadCatalog(root,D::HeroChallenges)==heroes);
     }
     return 0;
 }
