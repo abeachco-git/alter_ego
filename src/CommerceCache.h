@@ -1,5 +1,6 @@
 #pragma once
 #include "AchievementCatalogCache.h"
+#include "ItemMetadataCache.h"
 
 namespace AlterEgo::Cache {
 enum class CommerceDataset { Mapping, Prices };
@@ -18,9 +19,10 @@ inline bool WriteCommerce(const std::string& root,CommerceDataset d,const Json& 
         if(d==CommerceDataset::Mapping) {
             if(data.value("version",0)!=2||!data.at("skins").is_object()||data.at("skins").empty()||
                !data.at("names").is_object()||!data.at("vendors").is_object())return false;
-            db.Exec("DELETE FROM commerce_skin_items; DELETE FROM commerce_item_names; DELETE FROM commerce_vendor_prices;");
+            db.Exec("DELETE FROM commerce_skin_items; DELETE FROM commerce_item_name_ids; DELETE FROM commerce_vendor_prices;");
             auto skin=db.Prepare("INSERT INTO commerce_skin_items VALUES(?,?,?)");
-            auto name=db.Prepare("INSERT INTO commerce_item_names VALUES(?,?)");
+            auto name=db.Prepare("INSERT INTO commerce_item_name_ids VALUES(?)");
+            auto canonical=db.Prepare(kUpsertItemName);
             auto vendor=db.Prepare("INSERT INTO commerce_vendor_prices VALUES(?,?)");
             for(const auto& [key,ids]:data.at("skins").items()) {
                 if(!ids.is_array())throw std::runtime_error("Invalid skin item mapping");
@@ -31,7 +33,9 @@ inline bool WriteCommerce(const std::string& root,CommerceDataset d,const Json& 
                 }
             }
             for(const auto& [key,v]:data.at("names").items()) {
-                name.Bind(1,CatalogId(key));name.Bind(2,v.get<std::string>());name.Execute();name.Reset();
+                const auto id=CatalogId(key);
+                PutCanonicalItemName(canonical,id,v.get<std::string>());
+                name.Bind(1,id);name.Execute();name.Reset();
             }
             for(const auto& [key,v]:data.at("vendors").items()) {
                 vendor.Bind(1,CatalogId(key));vendor.Bind(2,v.get<int>());vendor.Execute();vendor.Reset();
@@ -84,7 +88,7 @@ inline std::optional<Json> ReadCommerce(const std::string& root,CommerceDataset 
                     out={{"version",2},{"skins",Json::object()},{"names",Json::object()},{"vendors",Json::object()}};
                     auto skin=db.Prepare("SELECT skin_id,item_id FROM commerce_skin_items ORDER BY skin_id,ordinal");
                     while(skin.Step())out["skins"][std::to_string(skin.Integer(0))].push_back(skin.Integer(1));
-                    auto name=db.Prepare("SELECT item_id,name FROM commerce_item_names");
+                    auto name=db.Prepare("SELECT i.id,i.name FROM commerce_item_name_ids m JOIN reference_items i ON i.id=m.item_id");
                     while(name.Step())out["names"][std::to_string(name.Integer(0))]=name.Text(1);
                     auto vendor=db.Prepare("SELECT skin_id,copper FROM commerce_vendor_prices");
                     while(vendor.Step())out["vendors"][std::to_string(vendor.Integer(0))]=vendor.Integer(1);

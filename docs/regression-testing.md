@@ -59,3 +59,5 @@ Commerce and cache-path tests exercise one-to-many and many-to-many item relatio
 Native editing tests also exercise explicit private-editor reuse, stale source and mismatched candidate rejection, preserved unrelated references and private Base Build profession protection.
 
 Reference metadata coverage verifies typed skill, trait, specialization, item-stat and dye round trips, ordered child records, malformed/duplicate-row rollback, older snapshot rejection, legacy import and native precedence.
+
+Item metadata regression coverage includes v6 canonical name sharing with Commerce, detail completeness, alias migration and precedence, stale-write rejection and duplicate-row rollback.

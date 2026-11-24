@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 5;
+constexpr int kSchemaVersion = 6;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,23 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 6) {
+        db.Exec(R"SQL(
+CREATE TABLE reference_items(id INTEGER PRIMARY KEY CHECK(id BETWEEN 1 AND 4294967295),
+    name TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT '', rarity TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', chat_link TEXT NOT NULL DEFAULT '',
+    default_skin INTEGER NOT NULL DEFAULT 0, details TEXT,
+    complete INTEGER NOT NULL DEFAULT 0 CHECK(complete IN (0,1))) STRICT;
+CREATE INDEX reference_items_name ON reference_items(name);
+CREATE TABLE item_name_aliases(name TEXT PRIMARY KEY CHECK(length(name)>0),
+    item_id INTEGER NOT NULL REFERENCES reference_items(id)) STRICT;
+CREATE TABLE commerce_item_name_ids(item_id INTEGER PRIMARY KEY REFERENCES reference_items(id)) STRICT;
+INSERT INTO reference_items(id,name) SELECT item_id,name FROM commerce_item_names WHERE item_id>0;
+INSERT INTO commerce_item_name_ids SELECT item_id FROM commerce_item_names WHERE item_id>0;
+DROP TABLE commerce_item_names;
+)SQL");
+        return;
+    }
     if (version == 5) {
         db.Exec(R"SQL(
 CREATE TABLE reference_metadata_snapshots(dataset TEXT PRIMARY KEY, captured_at INTEGER NOT NULL CHECK(captured_at>=0)) STRICT;

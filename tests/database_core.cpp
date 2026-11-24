@@ -4,6 +4,7 @@
 #include "../src/SkinDataCache.h"
 #include "../src/CommerceCache.h"
 #include "../src/ReferenceMetadataCache.h"
+#include "../src/ItemMetadataCache.h"
 #include "../src/NativeLibraryStore.h"
 #include <cassert>
 #include <chrono>
@@ -289,8 +290,40 @@ int case_database_core(int, char**) {
         assert(!Cache::WriteReference(root,D::Dyes,badDye,101));
         assert(Cache::ReadReference(root,D::Dyes)==dyes);
         DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
-        assert(db.Scalar("PRAGMA user_version")==5);
+        assert(db.Scalar("PRAGMA user_version")==6);
         assert(db.Scalar("SELECT count(*) FROM reference_skills_professions")==2);
+    }
+    {
+        namespace Cache=AlterEgo::Cache;
+        using J=Cache::ReferenceJson;
+        using D=Cache::ItemDataset;
+        const auto root=temp.dir.u8string();
+        const auto paths=AlterEgo::Storage::Paths(root);
+        J details=J::array({{{"id",11},{"name","Verified item"},{"icon","i"},{"rarity","Rare"},
+            {"type","Armor"},{"default_skin",42},{"details",{{"type","Helm"},{"infix_upgrade",{{"id",1}}}}}}});
+        assert(Cache::WriteItems(root,D::Details,details,100));
+        assert(Cache::ReadItems(root,D::Details)==details);
+        J aliases={{"Old item spelling",11},{"Other item",12}};
+        AlterEgo::Storage::WriteMigrationBytes(paths.base/"item_name_cache.json",aliases.dump());
+        auto names=Cache::ReadItems(root,D::Aliases);
+        assert(names&&names->at("Old item spelling")==11&&names->at("Verified item")==11);
+        assert(!std::filesystem::exists(paths.CacheDirectory()/"item_name_cache.json"));
+        J map={{"version",2},{"skins",{{"42",J::array({11,12})}}},
+            {"names",{{"11","Narrow stale name"},{"12","Commerce item"}}},{"vendors",J::object()}};
+        assert(Cache::WriteCommerce(root,Cache::CommerceDataset::Mapping,map));
+        auto commerce=Cache::ReadCommerce(root,Cache::CommerceDataset::Mapping,paths.base/"absent.json");
+        assert(commerce&&commerce->at("names").at("11")=="Verified item");
+        assert(commerce->at("names").at("12")=="Commerce item");
+        assert(Cache::ReadItems(root,D::Details)==details);
+        auto bad=details;bad.push_back(details.at(0));
+        assert(!Cache::WriteItems(root,D::Details,bad,101));
+        assert(!Cache::WriteItems(root,D::Details,details,99));
+        assert(Cache::ReadItems(root,D::Details)==details);
+        assert(Cache::WriteItems(root,D::Aliases,J{{"Old item spelling",12}},101));
+        assert(!Cache::WriteItems(root,D::Aliases,aliases,100));
+        assert(Cache::ReadItems(root,D::Aliases)->at("Old item spelling")==12);
+        // Name-only Commerce records must never look like fetched details.
+        assert(Cache::ReadItems(root,D::Details)->size()==1);
     }
     return 0;
 }

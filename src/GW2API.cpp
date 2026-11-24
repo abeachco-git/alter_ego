@@ -1,6 +1,7 @@
 #include "GW2API.h"
 #include "SkinDataCache.h"
 #include "ReferenceMetadataCache.h"
+#include "ItemMetadataCache.h"
 #include "AutoRefreshPolicy.h"
 #include "HoardAndSeekAPI.h"
 #include "ChatLink.h"
@@ -1680,49 +1681,35 @@ namespace AlterEgo {
     }
 
     bool GW2API::LoadItemNameCache() {
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "item_name_cache.json");
-        std::ifstream file(path);
-        if (!file.is_open()) return false;
-        try {
-            json j;
-            file >> j;
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_item_name_id_cache.clear();
-            if (j.is_object()) {
-                for (auto it = j.begin(); it != j.end(); ++it) {
-                    s_item_name_id_cache[it.key()] = it.value().get<uint32_t>();
-                }
-            }
-            s_item_name_cache_dirty = false;
-            if (s_api) {
-                s_api->Log(LOGL_INFO, "AlterEgo",
-                    ("Loaded item name cache: " + std::to_string(s_item_name_id_cache.size()) + " entries").c_str());
-            }
-            return true;
-        } catch (...) {
-            return false;
-        }
+        auto snapshot=Cache::ReadItems(GetDataDirectory(),Cache::ItemDataset::Aliases);
+        if(!snapshot)return false;
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for(const auto& [name,id]:snapshot->items())
+            s_item_name_id_cache.emplace(name,id.get<uint32_t>());
+        return true;
     }
 
     bool GW2API::SaveItemNameCache() {
+        // Serialize saves without holding the API mutex during SQL. A failed
+        // write or a concurrent change must leave the dirty flag set.
+        static std::mutex saveMutex;
+        std::lock_guard<std::mutex> persist(saveMutex);
+        std::unordered_map<std::string,uint32_t> snapshot;
+        int64_t captured=0;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            if (!s_item_name_cache_dirty) return true;
+            if(!s_item_name_cache_dirty)return true;
+            snapshot=s_item_name_id_cache;
+            captured=Cache::ReferenceSnapshotTime();
         }
-        EnsureDataDirectory();
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "item_name_cache.json");
-        json j;
+        json data=json::object();
+        for(const auto& [name,id]:snapshot)data[name]=id;
+        if(!Cache::WriteItems(GetDataDirectory(),Cache::ItemDataset::Aliases,data,captured))
+            return false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            for (const auto& [name, id] : s_item_name_id_cache) {
-                j[name] = id;
-            }
-            s_item_name_cache_dirty = false;
+            if(s_item_name_id_cache==snapshot)s_item_name_cache_dirty=false;
         }
-        std::ofstream file(path);
-        if (!file.is_open()) return false;
-        file << j.dump(2);
-        file.flush();
         return true;
     }
 
@@ -3549,11 +3536,11 @@ namespace AlterEgo {
 
     bool GW2API::SaveItemCache() {
         EnsureDataDirectory();
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "item_cache.json");
+        int64_t captured=0;
         json arr = json::array();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            arr = json::array();
+            captured=Cache::ReferenceSnapshotTime();
             for (const auto& [id, info] : s_item_cache) {
                 json j;
                 j["id"] = info.id;
@@ -3568,10 +3555,7 @@ namespace AlterEgo {
                 arr.push_back(std::move(j));
             }
         }
-        std::ofstream f(path);
-        if (!f.is_open()) return false;
-        f << arr.dump();
-        return true;
+        return Cache::WriteItems(GetDataDirectory(),Cache::ItemDataset::Details,arr,captured);
     }
 
     bool GW2API::SaveSkinCache() {
@@ -3712,19 +3696,14 @@ namespace AlterEgo {
     }
 
     bool GW2API::LoadReferenceCaches() {
-        auto readJson = [](const std::string& filename, json& out) -> bool {
-            std::ifstream f(Storage::ResolveCache(GetDataDirectory(), filename));
-            if (!f.is_open()) return false;
-            try { f >> out; return true; } catch (...) { return false; }
-        };
-
         auto readReference = [](Cache::ReferenceDataset dataset, json& out) {
             auto snapshot=Cache::ReadReference(GetDataDirectory(),dataset);
             if(!snapshot)return false;
             out=std::move(*snapshot);return out.is_array();
         };
         json j;
-        if (readJson("item_cache.json", j) && j.is_array()) {
+        if (auto items=Cache::ReadItems(GetDataDirectory(),Cache::ItemDataset::Details);items&&items->is_array()) {
+            j=std::move(*items);
             std::lock_guard<std::mutex> lock(s_mutex);
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
@@ -3738,6 +3717,7 @@ namespace AlterEgo {
                 info.chat_link = it.value("chat_link", "");
                 info.default_skin = it.value("default_skin", 0u);
                 if (it.contains("details")) info.details = it["details"];
+                if(!info.name.empty())s_item_name_id_cache.emplace(info.name,info.id);
                 s_item_cache[info.id] = std::move(info);
             }
         }
