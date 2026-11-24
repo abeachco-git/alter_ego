@@ -133,7 +133,7 @@ inline bool Resolve(State& s) {
         bool agree=getter==s.base+0x94aec0 && InImage(s,getter,8);
         for (auto hit:w)
             agree=agree && Rip(code,bytes,hit,1,5)==getter &&
-                hit+22<=bytes.size() && bytes[hit+21]==0x60;
+                hit+24<=bytes.size() && bytes[hit+23]==0x60;
         std::array<unsigned char,8> g{};
         if (agree && ReadBytes(getter,g.data(),g.size()) &&
             g[0]==0x48 && g[1]==0x8b && g[2]==0x05 && g[7]==0xc3) {
