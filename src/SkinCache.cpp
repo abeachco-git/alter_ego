@@ -1,5 +1,6 @@
 #include "BackgroundWorkers.h"
 #include "SkinCache.h"
+#include "SkinSearchCore.h"
 #include "SkinDataCache.h"
 #include "HttpClient.h"
 
@@ -56,7 +57,7 @@ namespace Skinventory {
                                                          const std::string& subtype,
                                                          const std::string& weight_class) {
         std::lock_guard<std::mutex> lock(s_mutex);
-        CategoryKey key{type, subtype, weight_class};
+        CategoryKey key{type, SkinCategorySubtype(type, subtype), weight_class};
         auto it = s_category_index.find(key);
         if (it != s_category_index.end()) return it->second;
         return {};
@@ -89,7 +90,7 @@ namespace Skinventory {
                                            const std::string& subtype,
                                            const std::string& weight_class) {
         std::lock_guard<std::mutex> lock(s_mutex);
-        CategoryKey key{type, subtype, weight_class};
+        CategoryKey key{type, SkinCategorySubtype(type, subtype), weight_class};
         auto it = s_category_index.find(key);
         if (it != s_category_index.end()) return it->second.size();
         return 0;
@@ -103,7 +104,7 @@ namespace Skinventory {
                 CategoryKey key{skin.type, skin.subtype, skin.weight_class};
                 s_category_index[key].push_back(id);
             } else if (skin.type == "Weapon") {
-                CategoryKey key{skin.type, skin.subtype, ""};
+                CategoryKey key{skin.type, SkinCategorySubtype(skin.type, skin.subtype), ""};
                 s_category_index[key].push_back(id);
             } else if (skin.type == "Back") {
                 CategoryKey key{"Back", "", ""};

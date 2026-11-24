@@ -5,6 +5,17 @@
 #include <string>
 #include <sstream>
 #include <vector>
+namespace Skinventory {
+// Normalize category identities for the UI only. Preserve raw API metadata on disk.
+inline std::string SkinCategorySubtype(const std::string& type, const std::string& subtype) {
+    if (type != "Weapon") return subtype;
+    if (subtype == "ShortBow" || subtype == "Shortbow" || subtype == "Short Bow") return "Short Bow";
+    if (subtype == "Speargun" || subtype == "Harpoon Gun") return "Harpoon Gun";
+    if (subtype == "LongBow" || subtype == "Longbow" || subtype == "Long Bow") return "Longbow";
+    if (subtype == "Harpoon" || subtype == "Spear") return "Spear";
+    return subtype;
+}
+}
 namespace Skinventory::Search {
 inline std::string Lower(std::string s) {
     for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));

@@ -1765,6 +1765,7 @@ static void LoadSession() {
         if (j.contains("skin_type")) g_SkinSelectedType = j["skin_type"].get<std::string>();
         if (j.contains("skin_weight")) g_SkinSelectedWeightClass = j["skin_weight"].get<std::string>();
         if (j.contains("skin_subtype")) g_SkinSelectedSubtype = j["skin_subtype"].get<std::string>();
+        g_SkinSelectedSubtype = Skinventory::SkinCategorySubtype(g_SkinSelectedType, g_SkinSelectedSubtype);
         if (j.contains("skin_selected_id")) g_SkinSelectedId = j["skin_selected_id"].get<uint32_t>();
         if (j.contains("skin_show_owned")) g_SkinShowOwned = j["skin_show_owned"].get<bool>();
         if (j.contains("skin_show_unowned")) g_SkinShowUnowned = j["skin_show_unowned"].get<bool>();
@@ -13688,7 +13689,7 @@ static void RenderSkinDetailPanel() {
 
         std::string subtitle = skin.rarity;
         if (!skin.type.empty())        { subtitle += "  ·  "; subtitle += skin.type; }
-        if (!skin.subtype.empty())     { subtitle += "  "; subtitle += skin.subtype; }
+        if (!skin.subtype.empty())     { subtitle += "  "; subtitle += Skinventory::SkinCategorySubtype(skin.type, skin.subtype); }
         if (!skin.weight_class.empty()){ subtitle += "  ·  "; subtitle += skin.weight_class; }
         ImGui::TextColored(ImVec4(rc.x * 0.85f, rc.y * 0.85f, rc.z * 0.85f, 0.95f),
             "%s", subtitle.c_str());
@@ -14051,13 +14052,13 @@ static void RenderSkinShoppingList() {
             if(category && skin.type!=(category==1?"Armor":category==2?"Weapon":"Back")) continue;
             if(!weight.empty() && (skin.type!="Armor" || skin.weight_class!=weight)) continue;
             if(!slot.empty() && (skin.type!="Armor" || skin.subtype!=slot)) continue;
-            if(!weapon.empty() && (skin.type!="Weapon" || skin.subtype!=weapon)) continue;
+            if(!weapon.empty() && (skin.type!="Weapon" || Skinventory::SkinCategorySubtype(skin.type,skin.subtype)!=weapon)) continue;
             if(!rarity.empty() && skin.rarity!=rarity) continue;
             if(!tokens.empty() && !Skinventory::Search::Matches(skin.name+" "+entry.itemName,tokens)) continue;
             const bool useVendor=source==2 || (source==0 && entry.vendor>0 && (entry.tp<=0 || entry.vendor<=entry.tp));
             const int cost=useVendor?entry.vendor:entry.tp;
             if(cost<=0 || (maxGold>0 && int64_t(cost)>int64_t(maxGold)*10000)) continue;
-            g_SkinShopList.push_back({skin.id,cost,useVendor?1:0,skin.name,skin.subtype});
+            g_SkinShopList.push_back({skin.id,cost,useVendor?1:0,skin.name,Skinventory::SkinCategorySubtype(skin.type,skin.subtype)});
         }
         sortRows();
     }
@@ -14131,7 +14132,7 @@ static void RenderSkinShoppingList() {
                     if (skin.type == "Armor") {
                         g_SkinSelectedWeightClass = skin.weight_class;
                     }
-                    g_SkinSelectedSubtype = skin.subtype;
+                    g_SkinSelectedSubtype = Skinventory::SkinCategorySubtype(skin.type, skin.subtype);
                     g_SkinSwitchToBrowser = true;
                     g_SkinScrollToSkin = true;
                 }
@@ -14141,7 +14142,7 @@ static void RenderSkinShoppingList() {
                 ImGui::PopID();
 
                 ImGui::TableNextColumn();
-                ImGui::Text("%s", skin.type=="Back" ? "Back" : skin.subtype.c_str());
+                ImGui::Text("%s", skin.type=="Back" ? "Back" : Skinventory::SkinCategorySubtype(skin.type,skin.subtype).c_str());
                 if (ImGui::IsItemHovered() && skin.type=="Armor") ImGui::SetTooltip("%s",skin.weight_class.c_str());
 
                 ImGui::TableNextColumn();
@@ -14951,7 +14952,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                     if (skinInfo->type == "Armor") {
                         g_SkinSelectedWeightClass = skinInfo->weight_class;
                     }
-                    g_SkinSelectedSubtype = skinInfo->subtype;
+                    g_SkinSelectedSubtype = Skinventory::SkinCategorySubtype(skinInfo->type, skinInfo->subtype);
                     g_SkinSwitchToBrowser = true;
                     g_SkinScrollToSkin = true;
                     g_SwitchToSkinventory = true;
@@ -16019,7 +16020,7 @@ static void RenderAchPopout() {
                                 if (bd.skinType == "Armor") {
                                     g_SkinSelectedWeightClass = bd.skinWeightClass;
                                 }
-                                g_SkinSelectedSubtype = bd.skinSubtype;
+                                g_SkinSelectedSubtype = Skinventory::SkinCategorySubtype(bd.skinType, bd.skinSubtype);
                                 g_SkinSwitchToBrowser = true;
                                 g_SkinScrollToSkin = true;
                                 g_SwitchToSkinventory = true;

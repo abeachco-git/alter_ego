@@ -2,6 +2,17 @@
 #include <cassert>
 int case_skin_search(int, char**) {
  using namespace Skinventory;
+ assert(SkinCategorySubtype("Weapon","ShortBow")=="Short Bow");
+ assert(SkinCategorySubtype("Weapon","Shortbow")=="Short Bow");
+ assert(SkinCategorySubtype("Weapon","Short Bow")=="Short Bow");
+ assert(SkinCategorySubtype("Weapon","Speargun")=="Harpoon Gun");
+ assert(SkinCategorySubtype("Weapon","Harpoon Gun")=="Harpoon Gun");
+ assert(SkinCategorySubtype("Weapon","LongBow")=="Longbow");
+ assert(SkinCategorySubtype("Weapon","Longbow")=="Longbow");
+ assert(SkinCategorySubtype("Weapon","Harpoon")=="Spear");
+ assert(SkinCategorySubtype("Weapon","Spear")=="Spear");
+ assert(SkinCategorySubtype("Armor","Helm")=="Helm");
+ assert(SkinCategorySubtype("Weapon","Axe")=="Axe");
  assert(Search::Matches("Volcanic Stormcaller Sword",Search::Words("storm sword")));
  assert(Search::Matches("Volcanic Stormcaller Sword",Search::Words("stromcaller")));
  assert(!Search::Matches("Volcanic Stormcaller Sword",Search::Words("axe")));
