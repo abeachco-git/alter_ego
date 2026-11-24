@@ -538,6 +538,7 @@ namespace AlterEgo {
         static SavedBuild CreateBlankBuild(const std::string& profession, GameMode mode);
         // Overwrite a saved build's definition fields (specs/skills/pets/legends/weapons/
         // profession) and regenerate its chat_link, leaving name/notes/gear intact, then save.
+        static bool SaveEditedLoadout(const SavedBuild& draft);
         static bool ReplaceSavedBuildDefinition(const std::string& id, const SavedBuild& def);
         // Write the whole library to an arbitrary path as JSON.
         static bool ExportBuildLibraryToFile(const std::string& path);

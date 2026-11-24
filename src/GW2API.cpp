@@ -3420,6 +3420,25 @@ namespace AlterEgo {
         return true;
     }
 
+    bool GW2API::SaveEditedLoadout(const SavedBuild& draft) {
+        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            json view;
+            if (!Composable::ToLegacy(doc, view, error)) return false;
+            bool found = false;
+            for (auto& entry : view["builds"]) {
+                if (entry.value("id", std::string()) != draft.id) continue;
+                entry = SerializeSavedBuild(draft);
+                found = true;
+                break;
+            }
+            if (!found) return Composable::Fail(error,"Loadout no longer exists.");
+            Composable::Document next;
+            if (!Composable::Reconcile(doc,view,next,error,LookupComponentDisplayName)) return false;
+            doc = std::move(next);
+            return true;
+        });
+    }
+
     bool GW2API::GetComposableLoadouts(nlohmann::json& snapshot) {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (!g_loadoutDocumentLoaded) return false;

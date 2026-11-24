@@ -347,19 +347,11 @@ inline const Component* ReusableForLoadout(const Document& doc, const std::strin
     }
     return nullptr;
 }
-inline Json ReuseComparableBuild(Json raw) {
+inline Json ReuseComparableBuild(const Json& raw) {
     auto parts = Split(raw);
-    // Keep metadata and all fields; normalize only approved semantic differences.
-    for (const auto& kind : {std::string("skills"), std::string("runes")}) {
-        auto normalized = ReuseKey(kind, parts.at(kind));
-        for (auto it = normalized.begin(); it != normalized.end(); ++it) {
-            if (it.key() != "gear") raw[it.key()] = it.value();
-            else for (auto slot = it.value().begin(); slot != it.value().end(); ++slot)
-                for (auto field = slot.value().begin(); field != slot.value().end(); ++field)
-                    raw["gear"][slot.key()][field.key()] = field.value();
-        }
-    }
-    return raw;
+    for (const auto& kind : {std::string("skills"), std::string("runes")})
+        parts[kind] = ReuseKey(kind, parts.at(kind));
+    return Json{{"metadata", Metadata(raw)}, {"components", parts}};
 }
 inline std::string ComponentNameKey(std::string name) {
     auto space = [](unsigned char c) { return std::isspace(c) != 0; };
@@ -1129,7 +1121,23 @@ inline bool Reconcile(const Document& original, const Json& legacy,
         updated.metadata = Metadata(item);
         const auto parts = Split(item);
         for (const auto& [kind, data] : parts) {
-            const std::string ref = updated.refs.at(kind);
+            const auto oldRef = updated.refs.find(kind);
+            if (oldRef == updated.refs.end()) {
+                if (const auto* match = ReusableForLoadout(next, kind, data,
+                        item.value("profession", std::string()))) {
+                    updated.refs[kind] = match->id;
+                } else {
+                    std::string newId = kind + ":" + id;
+                    unsigned sequence = 1;
+                    while (Find(next,kind,newId))
+                        newId = kind + ":" + id + ":" + std::to_string(sequence++);
+                    next.components[kind].push_back({newId,
+                        UniqueComponentName(next,kind,SuggestComponentName(kind,data,lookup)),data});
+                    updated.refs[kind] = newId;
+                }
+                continue;
+            }
+            const std::string ref = oldRef->second;
             Component* previous = Find(next, kind, ref);
             if (!previous) return Fail(error, "Missing component during reconciliation.");
             if (previous->data == data) continue;

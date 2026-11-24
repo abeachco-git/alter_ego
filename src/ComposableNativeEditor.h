@@ -605,6 +605,8 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         return;
     }
     const auto slots = AlterEgo::Composable::Presentation::SortedGearSlots(data["gear"]);
+    static ComponentJson copiedSlot;
+    static std::string copiedKind, copiedFrom;
     if (g_ComponentGearSelectedSlot.empty() ||
         !data["gear"].contains(g_ComponentGearSelectedSlot)) {
         g_ComponentGearSelectedSlot = slots.front();
@@ -626,6 +628,14 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             g_ComponentStatSearch.clear();
         }
         if (ImGui::BeginPopupContextItem("##native_slot_context")) {
+            if (ImGui::MenuItem("Copy")) {
+                copiedSlot = data["gear"].at(slot);
+                copiedKind = kind;
+                copiedFrom = slot;
+            }
+            if (ImGui::MenuItem("Paste",nullptr,false,copiedKind == kind &&
+                    copiedSlot.is_object() && copiedFrom == slot))
+                data["gear"][slot] = copiedSlot;
             if (ImGui::MenuItem("Clear Slot")) {
                 g_ComponentGearSelectedSlot = slot;
                 g_ComponentGearRemovalPending = slot;
@@ -883,7 +893,17 @@ static void RenderComponentNativeEditor(const std::string& kind,
             ImGui::TextDisabled("An unspecified shared rune count is unverified in Compare.");
         }
         if (kind == "infusions") ComponentNativeInfusionRequirements(data);
+        const auto oldGear = kind == "infusions" ? data.value("gear", ComponentJson::object()) :
+            ComponentJson::object();
         ComponentNativeGear(data, kind, profession);
+        if (kind == "infusions" && oldGear != data.value("gear",ComponentJson::object())) {
+            // A slot edit supersedes cached aggregate requirements. Resolve
+            // the calculated totals from the assembled loadout's gear.
+            data.erase("infusion_totals");
+            data.erase("infusion_summary_present");
+            data.erase("infusion_ar_total");
+            data.erase("infusion_stat_totals");
+        }
     }
     if (ImGui::CollapsingHeader("Advanced: exact stored fields (read only)")) {
         ImGui::BeginChild("##component_native_json", ImVec2(0, 130), true);

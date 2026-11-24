@@ -8,14 +8,27 @@ static const char* const kInfusionStatNames[] = {
     "Healing", "Toughness", "Vitality", "CritDamage"
 };
 
+static bool IsWeaponTwoHanded(const std::string& profession, const std::string& weaponType);
+static bool CountSavedInfusionSlot(const AlterEgo::SavedBuild& b,const std::string& slot) {
+    if (slot.find("Aquatic") != std::string::npos || slot == "Amulet" || slot == "Relic" ||
+        slot == "Breather") return false;
+    auto a = b.gear.find("WeaponA1"), a2 = b.gear.find("WeaponA2");
+    const bool hasA = (a != b.gear.end() && !a->second.weapon_type.empty()) ||
+                      (a2 != b.gear.end() && !a2->second.weapon_type.empty());
+    if (hasA && slot.rfind("WeaponB",0) == 0) return false;
+    if (slot == "WeaponA2" || slot == "WeaponB2") {
+        auto main = b.gear.find(slot == "WeaponA2" ? "WeaponA1" : "WeaponB1");
+        if (main != b.gear.end() && IsWeaponTwoHanded(b.profession, main->second.weapon_type)) return false;
+    }
+    return true;
+}
 static std::vector<uint32_t> GetSavedGearInfusions(const AlterEgo::SavedBuild& b) {
     std::vector<uint32_t> ids;
-    bool hasA = b.gear.count("WeaponA1") || b.gear.count("WeaponA2");
     for (const auto& [slot, gear] : b.gear) {
-        if (slot.find("Aquatic") != std::string::npos) continue;
-        if (slot.rfind("WeaponB", 0) == 0 && hasA) continue;
-        if (slot.rfind("WeaponA", 0) == 0 && !hasA) continue;
-        for (uint32_t id : gear.infusion_ids) if (id) ids.push_back(id);
+        if (!CountSavedInfusionSlot(b,slot)) continue;
+        for (size_t i = 0; i < gear.infusion_ids.size(); ++i)
+            if (gear.infusion_ids[i] && (i >= gear.infusion_attributes.size() ||
+                gear.infusion_attributes[i].empty())) ids.push_back(gear.infusion_ids[i]);
     }
     return ids;
 }
@@ -98,25 +111,41 @@ static void InvalidateGearInfusionTotals(AlterEgo::SavedBuild& b) {
     b.infusion_totals.clear();
 }
 static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::SavedBuild& b) {
-    auto total = ComputeInfusionsFromIds(GetSavedGearInfusions(b));
-    bool hasA = b.gear.count("WeaponA1") || b.gear.count("WeaponA2");
+    auto ids = GetSavedGearInfusions(b);
+    std::map<std::string,int> flexible;
+    bool recorded = false;
     for (const auto& entry : b.gear) {
-        const auto& slot = entry.first;
+        if (!CountSavedInfusionSlot(b,entry.first)) continue;
         const auto& gear = entry.second;
-        if (slot.find("Aquatic") != std::string::npos ||
-            (hasA && slot.rfind("WeaponB",0) == 0)) continue;
-        if (gear.infusion_snapshot) total.present = true;
-        for (size_t i = 0; i < gear.infusion_attributes.size(); ++i) {
-            const auto& attr = gear.infusion_attributes[i];
-            if (attr.empty()) continue;
-            if (i < gear.infusion_ids.size() && gear.infusion_ids[i]) continue;
-            total.present = true;
-            // Flexible stat requirement has no specified AR or strength.
-            total.complete = false;
-            total.stats[attr] += 5;
-        }
+        recorded = recorded || gear.infusion_snapshot;
+        for (const auto& attr : gear.infusion_attributes)
+            if (!attr.empty()) ++flexible[attr];
     }
-    return total;
+    // Cache by actual inputs; only retry when a missing item has arrived.
+    static std::vector<uint32_t> lastIds;
+    static std::map<std::string,int> lastFlexible;
+    static bool lastRecorded = false, initialized = false;
+    static AlterEgo::InfusionSummary cached;
+    static std::vector<uint32_t> pending;
+    const bool arrived = std::any_of(pending.begin(),pending.end(),[](uint32_t id) {
+        const auto* item = AlterEgo::GW2API::GetItemInfo(id);
+        return item && item->details.is_object();
+    });
+    if (!initialized || ids != lastIds || flexible != lastFlexible || recorded != lastRecorded || arrived) {
+        initialized = true; lastIds = ids; lastFlexible = flexible; lastRecorded = recorded;
+        cached = ComputeInfusionsFromIds(ids);
+        cached.present = cached.present || recorded || !flexible.empty();
+        // Flexible requirements match any positive stat value; do not invent
+        // +5 or AR for a requirement whose amount is not specified.
+        if (!flexible.empty()) cached.complete = false;
+        pending.clear();
+        for (uint32_t id : ids) {
+            const auto* item = AlterEgo::GW2API::GetItemInfo(id);
+            if (!item || !item->details.is_object()) pending.push_back(id);
+        }
+        if (!pending.empty()) AlterEgo::GW2API::FetchItemDetailsAsync(pending);
+    }
+    return cached;
 }
 static AlterEgo::InfusionSummary GetSavedInfusionSummary(const AlterEgo::SavedBuild& b) {
     if (b.infusion_summary_present)

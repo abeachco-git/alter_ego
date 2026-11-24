@@ -906,6 +906,7 @@ static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
     g_LibEditMode = true;
 }
 static inline void MarkEditDirty() { g_EditDirty = true; }
+static bool g_EditSavePending = false;
 
 static int ImGuiInputStringResizeCallback(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
@@ -7660,8 +7661,13 @@ static void RenderPetPickerDialog() {
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
 
+static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot);
 static void RenderGearCustomizeDialog() {
     if (!g_GearDialogOpen) return;
+    if (!g_LibEditMode || g_GearDialogBuildId != g_EditDraft.id) {
+        g_GearDialogOpen = false;
+        return;
+    }
 
     ImGui::SetNextWindowSize(ImVec2(540, 440), ImGuiCond_FirstUseEver);
     g_GearDialogFocus.ApplyBeforeBegin();
@@ -7909,8 +7915,7 @@ static void RenderGearCustomizeDialog() {
                 }
                 ImGui::PopID();
             }
-            const int maxSlots = AlterEgo::GearEdit::InfusionCapacity(g_GearDialogSlot,
-                isWeapon && IsWeaponTwoHanded(editBuild->profession, gs.weapon_type));
+            const int maxSlots = GearInfusionCapacity(*editBuild,g_GearDialogSlot);
             if (gs.infusion_ids.size() < static_cast<size_t>(maxSlots) &&
                 RenderActionButton("+ Add infusion")) {
                 gs.infusion_ids.push_back(0);
@@ -8725,7 +8730,14 @@ static bool GearSlotBlocked(const AlterEgo::SavedBuild& b, const std::string& sl
 static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
     auto it = b.gear.find(slot);
     const bool two = it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
-    return AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
+    int capacity = AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
+    if (capacity && it != b.gear.end() && it->second.item_id) {
+        const auto* info = AlterEgo::GW2API::GetItemInfo(it->second.item_id);
+        if (info && info->details.is_object() && info->details.contains("infusion_slots") &&
+            info->details["infusion_slots"].is_array())
+            capacity = std::min(capacity, static_cast<int>(info->details["infusion_slots"].size()));
+    }
+    return capacity;
 }
 static int GearSigilCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
     if (!IsWeaponSlot(slot) || GearSlotBlocked(b,slot)) return 0;
@@ -8742,7 +8754,7 @@ static bool GearCanPaste(const AlterEgo::SavedBuild& b,const std::string& slot,c
     if (!c.valid || GearSlotBlocked(b,slot)) return false;
     if (c.field == GearCopyField::Relic) return slot == "Relic";
     if (slot == "Relic") return false;
-    if (c.field == GearCopyField::Stats) return true;
+    if (c.field == GearCopyField::Stats) return !IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0;
     if (c.field == GearCopyField::Infusions) return GearInfusionCapacity(b,slot) > 0 &&
         (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0);
     if (c.field == GearCopyField::Upgrade)
@@ -8780,7 +8792,9 @@ static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,c
         if (IsWeaponSlot(slot)) AlterEgo::GearEdit::CopySigils(dest,c.data,GearSigilCapacity(b,slot));
     }
     if (c.field == GearCopyField::All || c.field == GearCopyField::Infusions) {
-        if (GearInfusionCapacity(b,slot) > 0) {
+        if (GearInfusionCapacity(b,slot) > 0 &&
+            (c.field == GearCopyField::Infusions || !c.data.infusion_ids.empty() ||
+             !c.data.infusion_attributes.empty() || c.data.infusion_snapshot)) {
             AlterEgo::GearEdit::CopyInfusions(dest,c.data,GearInfusionCapacity(b,slot));
             InvalidateGearInfusionTotals(b);
         }
@@ -8793,8 +8807,10 @@ static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCo
     auto it = b.gear.find(slot);
     if (it == b.gear.end()) return;
     if (field == GearCopyField::All) {
+        const bool hadInfusions = !it->second.infusion_ids.empty() ||
+            !it->second.infusion_attributes.empty() || it->second.infusion_snapshot;
         b.gear.erase(it);
-        InvalidateGearInfusionTotals(b);
+        if (hadInfusions) InvalidateGearInfusionTotals(b);
     } else {
         auto& item = it->second;
         if (field == GearCopyField::Stats) { item.stat_id = 0; item.stat_name.clear(); }
@@ -8826,7 +8842,8 @@ static void CopyGearToGroup(AlterEgo::SavedBuild& b,const GearClipboard& c,const
     std::vector<std::string> slots;
     for (const auto& entry : b.gear) {
         const auto& s = entry.first;
-        if (s != c.slot && (group == "All" || (group == "Armor" && IsArmorSlot(s)) ||
+        if ((s != c.slot || c.field == GearCopyField::Infusions) &&
+            (group == "All" || (group == "Armor" && IsArmorSlot(s)) ||
             (group == "Weapons" && IsWeaponSlot(s)) || (group == "Trinkets" && IsTrinketSlot(s))))
             slots.push_back(s);
     }
@@ -9725,13 +9742,14 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                                                   ImGui::GetStyle().Alpha * 0.5f);
                 ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
                 if (RenderActionButton("Save##hdr") && canSave) {
-                    AlterEgo::GW2API::UpdateSavedBuild(build.id, g_LibEditName.c_str(), g_LibEditNotes.c_str());
-                    AlterEgo::GW2API::SetSavedBuildGameModes(build.id,
-                        g_EditDraft.game_modes.empty() ? std::vector<AlterEgo::GameMode>{g_EditDraft.game_mode} : g_EditDraft.game_modes);
-                    AlterEgo::GW2API::ReplaceSavedBuildDefinition(build.id, g_EditDraft);
-                    g_EditDraftId.clear();   // force re-sync from the persisted build
-                    g_LibEditMode = false; g_EditDirty = false;
-                    g_EditIsNewBuild = false; // now a real, saved build
+                    g_EditDraft.name = g_LibEditName;
+                    g_EditDraft.notes = g_LibEditNotes;
+                    if (g_EditDraft.game_modes.empty())
+                        g_EditDraft.game_modes = {g_EditDraft.game_mode};
+                    g_EditDraft.game_mode = g_EditDraft.game_modes.front();
+                    // Defer commit until after the render pass: the transactional
+                    // component projection can invalidate saved-build references.
+                    g_EditSavePending = true;
                 }
                 if (!canSave) ImGui::PopStyleVar();
 
@@ -18057,6 +18075,17 @@ void AddonRender() {
     RenderShareRelayPopups();
 
     ImGui::End();
+    if (g_EditSavePending) {
+        g_EditSavePending = false;
+        if (g_LibEditMode && AlterEgo::GW2API::SaveEditedLoadout(g_EditDraft)) {
+            g_EditDraftId.clear();
+            g_LibEditMode = false; g_EditDirty = false;
+            g_EditIsNewBuild = false;
+            g_GearDialogOpen = false;
+        } else if (APIDefs) {
+            APIDefs->GUI_SendAlert("Could not save Loadout. Draft retained.");
+        }
+    }
 }
 
 // --- Options/Settings Render ---
