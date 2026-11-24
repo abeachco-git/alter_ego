@@ -20,8 +20,8 @@
 namespace AlterEgo { namespace Composable {
 
 using Json = nlohmann::json;
-constexpr int kVersion = 3;
-constexpr const char* kFormat = "alter_ego_composable_loadouts";
+constexpr int kVersion = 1;
+constexpr const char* kFormat = "alter_ego_component_graph";
 
 inline const std::array<std::string, 9>& Kinds() {
     static const std::array<std::string, 9> values = {{

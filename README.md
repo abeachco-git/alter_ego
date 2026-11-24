@@ -9,7 +9,7 @@
 
 A Guild Wars 2 addon for [Raidcore Nexus](https://raidcore.gg/Nexus) that lets you view and manage all your characters, equipment, builds, and saved build templates — all without logging in to each character.
 
-## Experimental Composable Loadouts v3 (this branch only)
+## Experimental Native Loadout Library (this branch only)
 
 This **`experiment/composable-loadouts`** branch is a separate, ongoing experiment. It has not been merged into `main` or tested end-to-end in the game. The features below are specific to this branch, and screenshots elsewhere in this README may show the current `main` UI.
 
@@ -19,7 +19,7 @@ This **`experiment/composable-loadouts`** branch is a separate, ongoing experime
 - **Save Active:** Choose **Complete Loadout**, **New component**, or **Update existing component**. Updating an existing component explicitly warns when other Loadouts share it and requires confirmation. Cross-profession Build/Skills replacement is blocked.
 - **Compare:** Grouped, expandable results for all nine component kinds. Runes and infusions compare as aggregate requirements; sigils are aggregated within each weapon set. Utility ordering does not change functional equivalence. Missing information is unverified, never a presumed match.
 - **Clipboard interchange:** Copy and paste a single component via Components, or **Copy Portable Loadout** from a saved Loadout and **Paste Portable Loadout** in the Library. Portable Loadouts include their component payloads and optional Fashion reference; imports create new independent component IDs rather than linking to or overwriting existing components.
-- **Persistence/migration:** The v3 canonical data is stored separately from the upstream-compatible `build_library.json` mirror. Migration checks exact round-trip reconstruction and preserves a pre-migration backup. Full ZIP Library backups include the v3 component graph; standalone legacy Build JSON is still supported.
+- **Persistence/migration:** Loadouts, Components and Fashion use a bundled SQLite database at `library/library.db`. One-time migration of original build and Fashion JSON verifies exact contents and archives originals. Experimental v3 files must be archived or removed first. Portable JSON/ZIP exports preserve the graph, unused components and linked Fashion. Legacy Build JSON can still be imported; no legacy mirror is written.
 
 **Status:** CI exercises the portable data model, migration, backups, import conflicts, functional comparisons, and Windows x64 UCRT compilation. In-game interaction testing is still pending. Do not remove pre-migration backups or use this experimental branch as the only copy of your saved library.
 
@@ -44,7 +44,7 @@ The following are **additions or changes relative to the original [PieOrCake Alt
 
 **What hasn't changed:** This is still Alter Ego, using [Raidcore Nexus](https://raidcore.gg/Nexus) and [Hoard & Seek](https://github.com/PieOrCake/hoard_and_seek). The fork does not introduce a separate GW2 API credential store or live memory-based gear reads. It keeps the original build-library data and upstream attribution.
 
-**Fashion capture limitation:** The GW2 character-equipment API exposes equipped skin/dye data but not all saved in-game Fashion Template slots or outfit/visibility states. Equipment-derived captures are flagged partial. Import a complete in-game Wardrobe Template chat link for full fidelity. Travel Templates and an in-addon dye editor are intentionally not included. Fashion snapshots are saved separately in `fashion_library.json` under the addon data directory; existing saved builds are unchanged.
+**Fashion capture limitation:** The GW2 character-equipment API exposes equipped skin/dye data but not all saved in-game Fashion Template slots or outfit/visibility states. Equipment-derived captures are flagged partial. Import a complete in-game Wardrobe Template chat link for full fidelity. Travel Templates and an in-addon dye editor are intentionally not included. Fashion snapshots are stored in the native library alongside optional Loadout associations.
 
 **Backup and restore:** Use **Library → LIBRARIES → Import** or **Library → LIBRARIES → Export**. Export defaults to all three collections (Builds, Fashion, and Other data) in one ZIP archive. You can deselect collections, or export just Builds or just Fashion as a standalone JSON file. ZIP backups preserve separate JSON files and include local settings, saved preferences, achievement pins, login timestamps, and local custom portraits/fonts; regenerable GW2 API and Skinventory caches are excluded. Alter Ego writes standard uncompressed ZIP entries.
 

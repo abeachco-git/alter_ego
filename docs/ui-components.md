@@ -86,3 +86,7 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 - All skin surfaces use RenderSkinContextMenu. The selected Commerce candidate is based on available sell listings, never rarity; copy the actual priced item's name for Trading Post search.
 - Every active contextual filter must have a stable removable UI::FilterChip with its own reset callback, except required default context. Clear all preserves search text; search x preserves filters. Both Skinventory views use the shared toolbar and chips. Preserve sorting and compatible selections; changing filters does not refresh prices or make API requests.
 - When a shared control changes, update this guide and migrate affected callers where the scope allows. Preserve established appearance unless a redesign is requested.
+
+### Library persistence terminology
+
+Use Loadout Library, Components, Fashion, Import Library and Export Library. JSON is a portable interchange format, not the runtime storage model. Keep the existing combined equipment editor and independent component editors; save a draft through native commands and never mutate persistent state from presentation enrichment. Selective restore includes required Fashion dependencies and creates recovery snapshots before replacing data.

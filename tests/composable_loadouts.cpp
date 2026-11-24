@@ -1,6 +1,5 @@
 #include "../src/ComposableLoadouts.h"
 #include "../src/ComposableSemantics.h"
-#include "../src/ComposableStore.h"
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -43,26 +42,6 @@ static const Json kExample = Json::parse(R"({
   }]
 })");
 
-static void Put(const fs::path& path, const std::string& raw) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    assert(out);
-    out << raw;
-    out.close();
-    assert(out.good());
-}
-static std::string Get(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    assert(in);
-    return std::string(std::istreambuf_iterator<char>(in),
-                       std::istreambuf_iterator<char>());
-}
-static fs::path FreshDir(const std::string& suffix) {
-    const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto path = fs::temp_directory_path() /
-        ("ae-loadout-test-" + suffix + "-" + std::to_string(ticks));
-    assert(fs::create_directories(path));
-    return path;
-}
 int case_composable_loadouts(int, char**) {
     std::string error;
     // Content-derived names are independent of the originating loadout.
@@ -440,82 +419,6 @@ int case_composable_loadouts(int, char**) {
     // two-Loadout upstream library.
     document = untouched;
 
-    // Byte-identical source backup, verified migration and atomic persistence.
-    const fs::path dir = FreshDir("migration");
-    const std::string original = kExample.dump(1);
-    Put(dir / Store::kLegacy, original);
-    bool migrated = false;
-    Document opened;
-    assert(Store::Open(dir.u8string(),opened,migrated,error));
-    assert(migrated);
-    assert(Get(dir / Store::kBefore) == original);
-    assert(FromJson(Json::parse(Get(dir / Store::kFile)), reloaded, error));
-    assert(Store::Save(dir.u8string(), opened, error));
-    assert(fs::exists(dir / Store::kPrevious));
-    // A newer legacy write from the old main DLL is reconciled into v3,
-    // never allowed to erase the existing component graph or its fashion refs.
-    assert(LinkFashion(opened, "one", "appearance-1", error));
-    assert(Store::Save(dir.u8string(), opened, error));
-    Json external = Json::parse(Get(dir / Store::kLegacy));
-    external["builds"][0]["notes"] = "Edited by old DLL";
-    Put(dir / Store::kLegacy, external.dump(2));
-    fs::last_write_time(dir / Store::kLegacy,
-        fs::last_write_time(dir / Store::kFile) + std::chrono::seconds(3));
-    migrated = false;
-    assert(Store::Open(dir.u8string(),opened,migrated,error));
-    assert(migrated);
-    assert(opened.loadouts[0].fashion_id == "appearance-1");
-    assert(opened.loadouts[0].metadata["notes"] == "Edited by old DLL");
-    // Simulate power loss after publishing v3 but before the legacy mirror.
-    // Only the exact previous canonical snapshot authorizes mirror repair.
-    const Json canonicalBeforeCrash = Json::parse(Get(dir / Store::kFile));
-    Document interrupted = opened;
-    assert(FindLoadout(interrupted,"one"));
-    FindLoadout(interrupted,"one")->metadata["notes"] = "After interrupted save";
-    Put(dir / Store::kPrevious, canonicalBeforeCrash.dump(2));
-    Put(dir / Store::kFile, ToJson(interrupted).dump(2));
-    fs::last_write_time(dir / Store::kFile,
-        fs::last_write_time(dir / Store::kLegacy) + std::chrono::seconds(3));
-    migrated = false;
-    assert(Store::Open(dir.u8string(), opened, migrated, error));
-    assert(migrated);
-    assert(opened.loadouts[0].metadata["notes"] == "After interrupted save");
-    assert(Json::parse(Get(dir / Store::kLegacy))["builds"][0]["notes"]
-           == "After interrupted save");
-    // An unrelated older mirror cannot be overwritten merely because a
-    // canonical file is newer. The verified previous snapshot must match.
-    Document unrelated = opened;
-    FindLoadout(unrelated,"one")->metadata["notes"] = "Another canonical version";
-    Put(dir / Store::kFile, ToJson(unrelated).dump(2));
-    Put(dir / Store::kPrevious, canonicalBeforeCrash.dump(2));
-    fs::last_write_time(dir / Store::kFile,
-        fs::last_write_time(dir / Store::kLegacy) + std::chrono::seconds(3));
-    const std::string divergedMirror = Get(dir / Store::kLegacy);
-    migrated = false;
-    assert(!Store::Open(dir.u8string(), opened, migrated, error));
-    assert(Get(dir / Store::kLegacy) == divergedMirror);
-    // Restore the paired canonical/mirror fixture before continuing.
-    Put(dir / Store::kFile, ToJson(interrupted).dump(2));
-    assert(Json::parse(Get(dir / Store::kLegacy))["builds"][0]["notes"]
-           == "After interrupted save");
-    // Always load the existing canonical data if the mirror is unchanged.
-    migrated = true;
-    assert(Store::Open(dir.u8string(),opened,migrated,error));
-    assert(!migrated);
-    // Refuse to replace a corrupt canonical file, preserving the bytes.
-    Put(dir / Store::kFile, "{ invalid }");
-    const auto corrupted = Get(dir / Store::kFile);
-    assert(!Store::Save(dir.u8string(),reloaded,error));
-    assert(Get(dir / Store::kFile) == corrupted);
-    assert(!Store::Open(dir.u8string(),opened,migrated,error));
-    fs::remove_all(dir);
-
-    // Invalid legacy data must never be replaced by an empty v3 document.
-    const fs::path badDir = FreshDir("broken");
-    Put(badDir / Store::kLegacy, "{invalid}");
-    assert(!Store::Open(badDir.u8string(),opened,migrated,error));
-    assert(!fs::exists(badDir / Store::kFile));
-    assert(!fs::exists(badDir / Store::kBefore));
-    fs::remove_all(badDir);
+    // Native migration/backup/restart tests live in persistence.native_migration.
     return 0;
 }

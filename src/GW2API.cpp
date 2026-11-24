@@ -3204,8 +3204,7 @@ namespace AlterEgo {
         return true;
     }
 
-    // Apply a v3 edit atomically and rebuild the pre-existing SavedBuild UI
-    // projection. No UI or external importer needs to understand v3 yet.
+    // Apply native commands atomically; publish only after the durable commit.
     bool GW2API::CommitComposableEdit(
         const std::function<bool(Composable::Document&, std::string&)>& edit) {
         std::lock_guard<std::mutex> persist(g_loadoutPersistenceMutex);
@@ -3221,9 +3220,10 @@ namespace AlterEgo {
         // The game chat link is derived from specialization/skill selection.
         // AE2 embeds both skills and gear; invalidate it whenever a component
         // changes, instead of leaving an authoritative-looking stale code.
+        std::set<std::string> affected;
         for (auto& loadout : next.loadouts) {
             auto* previous = Composable::FindLoadout(before, loadout.id);
-            if (!previous) continue;
+            if (!previous) { affected.insert(loadout.id); continue; }
             bool changed = false, buildChanged = false;
             for (const auto& kind : Composable::Kinds()) {
                 auto oldRef = previous->refs.find(kind);
@@ -3243,6 +3243,7 @@ namespace AlterEgo {
                 }
             }
             if (changed) loadout.metadata.erase("ae2_code");
+            if (changed || !NativeLibrary::ExactContent(previous->metadata,loadout.metadata)) affected.insert(loadout.id);
             if (buildChanged) {
                 json recomposed;
                 if (!Composable::Resolve(next, loadout, recomposed, error)) return false;
@@ -3253,16 +3254,23 @@ namespace AlterEgo {
                 else loadout.metadata["chat_link"] = link;
             }
         }
-        json view;
-        if (!Composable::ToLegacy(next, view, error)) return false;
-        std::vector<SavedBuild> projected;
+        std::map<std::string,SavedBuild> cached;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            for(const auto& b:s_saved_builds)cached.emplace(b.id,b);
+        }
+        std::vector<SavedBuild> projected;projected.reserve(next.loadouts.size());
         try {
-            for (const auto& entry : view.at("builds")) {
-                SavedBuild record;
-                if (!DeserializeSavedBuild(entry, record)) return false;
+            for(const auto& l:next.loadouts) {
+                auto existing=cached.find(l.id);
+                if(!affected.count(l.id)&&existing!=cached.end()) {
+                    projected.push_back(std::move(existing->second));continue;
+                }
+                json entry;SavedBuild record;
+                if(!Composable::Resolve(next,l,entry,error)||!DeserializeSavedBuild(entry,record))return false;
                 projected.push_back(std::move(record));
             }
-        } catch (...) { return false; }
+        } catch(...) {return false;}
         auto proposed=snapshot;proposed.loadouts=next;
         if (!store.Commit(snapshot,std::move(proposed),error)) {
             if(s_api)s_api->Log(LOGL_WARNING,"AlterEgo",error.c_str());
@@ -3445,8 +3453,8 @@ namespace AlterEgo {
         std::string error;
         if (!GetComposableLoadouts(snapshot) || !Composable::FromJson(snapshot, doc, error))
             return proposed;
-        if (const auto* match = Composable::ExactReusableComponent(doc, kind, selected->second))
-            return match->name;
+        if (const auto matches=NativeLibrary::EditIndex(doc).Matches(kind,selected->second,capture.profession);!matches.empty())
+            return matches.front().name;
         return Composable::UniqueComponentName(doc, kind, proposed);
     }
 

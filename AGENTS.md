@@ -4,7 +4,7 @@
 
 - Requests to discuss or suggest are discussion only. Implement when approved; do not ask again for routine in-scope decisions.
 - Work on the requested branch. Never modify or merge into main or another branch without approval.
-- Preserve upstream PieOrCake import compatibility, saved data, composable semantics and the Nexus ImGui 1.80 ABI. Do not upgrade ImGui or change its allocator/context contract independently.
+- Preserve upstream PieOrCake import compatibility, saved data, exact native component identity and independent functional Compare semantics and the Nexus ImGui 1.80 ABI. Do not upgrade ImGui or change its allocator/context contract independently.
 - Prefer existing modules and canonical helpers over parallel implementations. Keep changes cohesive; extract a focused helper when useful rather than growing `dllmain.cpp` unnecessarily. Avoid unrelated refactors.
 
 ## Read only the relevant references
@@ -25,6 +25,7 @@ This is the authoritative agent instruction file; `CLAUDE.md` delegates here. Do
 - Reuse existing cache and refresh mechanisms. Local filtering, sorting and presentation must not issue new network requests. **Do not refactor refresh request lifecycles, scheduling, retries, caching or per-page state without specific approval.**
 - For UI changes, reuse canonical controls and shared domain actions, preserve the established appearance and stable IDs, and update the UI reference when changing a canonical component. Explain deliberate direct ImGui exceptions near the call site.
 - Preserve unknown/imported fields, distinguish missing data from verified matches, and retain transactional edits, backup and migration safeguards.
+- SQLite is authoritative for Loadouts and Fashion. Use repository transactions, preserve exact content and referenced identities, and keep SQL off render paths. Never recreate legacy mirrors or silently replace damaged databases.
 - Extend existing regression cases and suites. Keep assertions enabled; do not weaken tests or skip binary checks to obtain a green build. Live MetaBattle integration is separate from the required offline build gates; skill icon research is manual-only.
 
 ## Definition of done — implementation and DLL delivery
