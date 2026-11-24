@@ -25,7 +25,7 @@ namespace Skinventory {
         // Batch fetch prices for multiple skins (for shopping list)
         static void FetchPricesForSkins(const std::vector<uint32_t>& skin_ids);
 
-        // Get cached price for a skin. Returns nullptr if not fetched yet.
+        // Thread-safe cached price snapshot. Empty if not fetched yet.
         static std::optional<PriceInfo> GetPrice(uint32_t skin_id);
 
         // Get vendor price for a skin (0 if not a vendor skin). In copper.
@@ -35,7 +35,7 @@ namespace Skinventory {
         static bool IsFetching();
         static std::string GetFetchStatus();
 
-        // Item map: skin_id -> item_id (for TP lookups)
+        // Item map: skin_id -> candidate item IDs and actual TP item names
         // Must be built once from /v2/items
         static void BuildItemMapAsync();
         static bool IsItemMapReady();

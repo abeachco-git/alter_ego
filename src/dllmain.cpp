@@ -442,6 +442,7 @@ struct SkinShopEntry {
     uint32_t skinId;
     int price;      // in copper
     int source;     // 0 = TP, 1 = Vendor
+    std::string name, subtype; // cached sort keys
 };
 static std::vector<SkinShopEntry> g_SkinShopList;
 static bool g_SkinShopListDirty = true;
@@ -12956,20 +12957,20 @@ static void DrawCoinIcon(ImVec4 color, float radius) {
     ImGui::Dummy(ImVec2(radius * 2.0f + 1.0f, ImGui::GetTextLineHeight()));
 }
 
-static void RenderCoins(int copper) {
+static void RenderCoins(int64_t copper) {
     if (copper <= 0) {
         ImGui::TextColored(COIN_COPPER, "0");
         ImGui::SameLine(0, 2);
         DrawCoinIcon(COIN_COPPER, 5.0f);
         return;
     }
-    int gold = copper / 10000;
-    int silver = (copper % 10000) / 100;
-    int cop = copper % 100;
+    const auto gold = copper / 10000;
+    const int silver = static_cast<int>((copper % 10000) / 100);
+    const int cop = static_cast<int>(copper % 100);
 
     bool needSame = false;
     if (gold > 0) {
-        ImGui::TextColored(COIN_GOLD, "%d", gold);
+        ImGui::TextColored(COIN_GOLD, "%lld", static_cast<long long>(gold));
         ImGui::SameLine(0, 1);
         DrawCoinIcon(COIN_GOLD, 5.0f);
         needSame = true;
@@ -13202,11 +13203,14 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
     const auto price=Skinventory::Commerce::GetPrice(skin.id);
     if(price && price->tradeable && price->item_id) {
         const auto name=Skinventory::Commerce::GetItemName(price->item_id);
-        if(!name.empty() && ImGui::MenuItem("Copy Trading Post Item Name")) CopyToClipboard(name);
+        if(!name.empty()) {
+            if(ImGui::MenuItem("Copy Trading Post Item Name")) CopyToClipboard(name);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",name.c_str());
+        }
         if(ImGui::MenuItem("Copy Item Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeItem(price->item_id));
     }
     ImGui::Separator();
-    if(APIDefs && APIDefs->Events_Raise && ImGui::MenuItem("Find in Hoard & Seek")) {
+    if(APIDefs && APIDefs->Events_Raise && Skinventory::OwnedSkins::IsHoardAndSeekAvailable() && ImGui::MenuItem("Find in Hoard & Seek")) {
         const auto name=price && price->item_id ? Skinventory::Commerce::GetItemName(price->item_id) : std::string();
         APIDefs->Events_Raise(EV_HOARD_SEARCH,(void*)(name.empty()?skin.name.c_str():name.c_str()));
     }
@@ -13762,7 +13766,12 @@ static void RenderSkinDetailPanel() {
 
             if (price) {
                 if (price->tradeable) {
-                    if (price->sell_price > 0) {
+                    const auto itemName = Skinventory::Commerce::GetItemName(price->item_id);
+                    if (!itemName.empty() && itemName != skin.name) {
+                        ImGui::TextDisabled("TP item:"); ImGui::SameLine();
+                        ImGui::TextWrapped("%s", itemName.c_str());
+                    }
+                    if (price->sell_price > 0 && price->sell_quantity > 0) {
                         ImGui::Text("TP Buy:");
                         ImGui::SameLine();
                         RenderCoins(price->sell_price);
@@ -13927,6 +13936,7 @@ static void RenderSkinShoppingList() {
         std::string fetchMsg = Skinventory::Commerce::GetFetchStatus();
         ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "%s", fetchMsg.c_str());
         ImGui::TextWrapped("Building the skin-to-item map from the GW2 API. This is a one-time operation and will be cached for future sessions.");
+        if(fetchMsg.find("failed")!=std::string::npos && RenderActionButton("Retry item map")) Skinventory::Commerce::BuildItemMapAsync();
         return;
     }
 
@@ -13945,12 +13955,13 @@ static void RenderSkinShoppingList() {
     };
     const int active=(category!=0)+(source!=0)+(!weight.empty())+(!slot.empty())+(!weapon.empty())+(!rarity.empty())+(maxGold>0);
     const std::string filterLabel=active?"Filters ("+std::to_string(active)+")":"Filters";
+    const std::string filterButton=filterLabel+"###shop_filter_button";
     const float buttons=ImGui::CalcTextSize(filterLabel.c_str()).x+ImGui::CalcTextSize("Refresh Prices").x+4*ImGui::GetStyle().FramePadding.x+3*ImGui::GetStyle().ItemSpacing.x;
     const float available=ImGui::GetContentRegionAvail().x;
     ImGui::SetNextItemWidth(available>buttons+80?available-buttons:std::max(80.0f,available));
     if(AlterEgo::UI::InputTextWithHint("##shop_search","Search skins or TP items...",query)) changed();
     if(available>buttons+80) ImGui::SameLine();
-    if(RenderActionButton(filterLabel.c_str())) ImGui::OpenPopup("##shop_filters");
+    if(RenderActionButton(filterButton.c_str())) ImGui::OpenPopup("##shop_filters");
     ImGui::SameLine();
     if(RenderActionButton("Refresh Prices") && !Skinventory::Commerce::IsFetching()) {
         g_SkinShopListDirty=true; s_needsFetch=true;
@@ -14009,14 +14020,14 @@ static void RenderSkinShoppingList() {
     bool isFetching = Skinventory::Commerce::IsFetching();
     if (s_wasFetching && !isFetching) {
         g_SkinShopListDirty = true;
-        s_needsFetch = false;
     }
     s_wasFetching = isFetching;
 
     // Build the unfiltered acquisition list only on data changes. Local
     // filters never request prices or restart the ownership/refresh lifecycle.
     static uint64_t lastOwned=0,lastPrice=0;
-    static std::vector<uint32_t> candidates;
+    struct ShopCandidate { Skinventory::SkinInfo skin; std::string itemName; int tp, vendor; };
+    static std::vector<ShopCandidate> candidates;
     static bool needsInitial=true;
     const auto owned=Skinventory::OwnedSkins::GetGeneration();
     const auto priceGen=Skinventory::Commerce::GetPriceGeneration();
@@ -14027,14 +14038,21 @@ static void RenderSkinShoppingList() {
     if(g_SkinShopListDirty && !isFetching) {
         g_SkinShopListDirty=false;
         candidates.clear();
+        std::vector<uint32_t> priceIds;
         for(auto id:Skinventory::SkinCache::GetAllSkinIds()) {
             if(Skinventory::OwnedSkins::IsOwned(id)) continue;
             const auto skin=Skinventory::SkinCache::GetSkin(id);
-            if(skin && (skin->type=="Armor" || skin->type=="Weapon" || skin->type=="Back")) candidates.push_back(id);
+            if(!skin || (skin->type!="Armor" && skin->type!="Weapon" && skin->type!="Back")) continue;
+            if(s_needsFetch) priceIds.push_back(id);
+            const auto p=Skinventory::Commerce::GetPrice(id);
+            const int tp=p && p->tradeable && p->sell_quantity>0 ? p->sell_price : 0;
+            const int vendor=Skinventory::Commerce::GetVendorPrice(id);
+            if(tp>0 || vendor>0)
+                candidates.push_back({*skin,p?Skinventory::Commerce::GetItemName(p->item_id):std::string(),tp,vendor});
         }
         if(s_needsFetch) {
             s_needsFetch=false;
-            Skinventory::Commerce::FetchPricesForSkins(candidates);
+            Skinventory::Commerce::FetchPricesForSkins(priceIds);
         }
         filterDirty=true;
     }
@@ -14046,10 +14064,7 @@ static void RenderSkinShoppingList() {
             if(sortCol==4) cmp=a.price<b.price?-1:a.price>b.price?1:0;
             else if(sortCol==2) cmp=a.source-b.source;
             else {
-                const auto sa=Skinventory::SkinCache::GetSkin(a.skinId), sb=Skinventory::SkinCache::GetSkin(b.skinId);
-                const auto av=sa?(sortCol==0?sa->name:sa->subtype):std::string();
-                const auto bv=sb?(sortCol==0?sb->name:sb->subtype):std::string();
-                cmp=av.compare(bv);
+                cmp=sortCol==0?a.name.compare(b.name):a.subtype.compare(b.subtype);
             }
             return cmp==0?a.skinId<b.skinId:(ascending?cmp<0:cmp>0);
         });
@@ -14058,23 +14073,18 @@ static void RenderSkinShoppingList() {
         filterDirty=false;
         g_SkinShopList.clear();
         const auto tokens=Skinventory::Search::Words(query);
-        for(auto id:candidates) {
-            if(Skinventory::OwnedSkins::IsOwned(id)) continue;
-            const auto skin=Skinventory::SkinCache::GetSkin(id);
-            if(!skin) continue;
-            if(category && skin->type!=(category==1?"Armor":category==2?"Weapon":"Back")) continue;
-            if(!weight.empty() && (skin->type!="Armor" || skin->weight_class!=weight)) continue;
-            if(!slot.empty() && (skin->type!="Armor" || skin->subtype!=slot)) continue;
-            if(!weapon.empty() && (skin->type!="Weapon" || skin->subtype!=weapon)) continue;
-            if(!rarity.empty() && skin->rarity!=rarity) continue;
-            const auto p=Skinventory::Commerce::GetPrice(id);
-            const int tp=p && p->tradeable && p->sell_quantity>0 ? p->sell_price : 0;
-            const int vendor=Skinventory::Commerce::GetVendorPrice(id);
-            if(!tokens.empty() && !Skinventory::Search::Matches(skin->name+" "+(p?Skinventory::Commerce::GetItemName(p->item_id):std::string()),tokens)) continue;
-            const bool useVendor=source==2 || (source==0 && vendor>0 && (tp<=0 || vendor<=tp));
-            const int cost=useVendor?vendor:tp;
+        for(const auto& entry:candidates) {
+            const auto& skin=entry.skin;
+            if(category && skin.type!=(category==1?"Armor":category==2?"Weapon":"Back")) continue;
+            if(!weight.empty() && (skin.type!="Armor" || skin.weight_class!=weight)) continue;
+            if(!slot.empty() && (skin.type!="Armor" || skin.subtype!=slot)) continue;
+            if(!weapon.empty() && (skin.type!="Weapon" || skin.subtype!=weapon)) continue;
+            if(!rarity.empty() && skin.rarity!=rarity) continue;
+            if(!tokens.empty() && !Skinventory::Search::Matches(skin.name+" "+entry.itemName,tokens)) continue;
+            const bool useVendor=source==2 || (source==0 && entry.vendor>0 && (entry.tp<=0 || entry.vendor<=entry.tp));
+            const int cost=useVendor?entry.vendor:entry.tp;
             if(cost<=0 || (maxGold>0 && int64_t(cost)>int64_t(maxGold)*10000)) continue;
-            g_SkinShopList.push_back({id,cost,useVendor?1:0});
+            g_SkinShopList.push_back({skin.id,cost,useVendor?1:0,skin.name,skin.subtype});
         }
         sortRows();
     }
@@ -14158,7 +14168,8 @@ static void RenderSkinShoppingList() {
                 ImGui::PopID();
 
                 ImGui::TableNextColumn();
-                ImGui::Text("%s", skin.subtype.c_str());
+                ImGui::Text("%s", skin.type=="Back" ? "Back" : skin.subtype.c_str());
+                if (ImGui::IsItemHovered() && skin.type=="Armor") ImGui::SetTooltip("%s",skin.weight_class.c_str());
 
                 ImGui::TableNextColumn();
                 if (entry.source == 1) {
@@ -14169,14 +14180,19 @@ static void RenderSkinShoppingList() {
 
                 ImGui::TableNextColumn();
                 RenderCoins(entry.price);
+                if(entry.source==0 && ImGui::IsItemHovered()) {
+                    const auto p=Skinventory::Commerce::GetPrice(entry.skinId);
+                    if(p) { const auto name=Skinventory::Commerce::GetItemName(p->item_id); if(!name.empty()) ImGui::SetTooltip("%s",name.c_str()); }
+                }
             }
         }
 
         ImGui::EndTable();
     }
 
+    if (g_SkinShopList.empty() && !Skinventory::Commerce::IsFetching()) ImGui::TextDisabled("No matching purchasable skins in cached results.");
     if (!g_SkinShopList.empty()) {
-        int tpTotal = 0, vendorTotal = 0;
+        int64_t tpTotal = 0, vendorTotal = 0;
         for (const auto& e : g_SkinShopList) {
             if (e.source == 0) tpTotal += e.price;
             else vendorTotal += e.price;

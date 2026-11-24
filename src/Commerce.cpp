@@ -339,10 +339,7 @@ namespace Skinventory {
                 return;
             }
 
-            if (!all_ids.is_array()) {
-                s_item_map_building = false;
-                return;
-            }
+            if (!all_ids.is_array() || all_ids.empty()) throw std::runtime_error("Invalid item index");
 
             std::vector<uint32_t> ids;
             ids.reserve(all_ids.size());
@@ -452,15 +449,14 @@ namespace Skinventory {
                 s_fetch_status = "Item map ready (" + std::to_string(s_skin_to_item.size()) + " skin-to-item mappings, "
                                + std::to_string(s_vendor_prices.size()) + " vendor skins)";
             }
+            // Save the completed derived map before exposing it to price requests.
+            SaveItemMap();
             s_item_map_ready = true;
             s_item_map_building = false;
 
-            // Save to disk for future loads
-            SaveItemMap();
-
         } catch (...) {
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_fetch_status = "Item map failed: incomplete API data; retry next session.";
+            s_fetch_status = "Item map failed: incomplete API data.";
             s_item_map_building = false;
         }
     }

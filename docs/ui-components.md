@@ -63,3 +63,5 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 - `RenderSkinContextMenu` in dllmain.cpp is the single skin menu; scope each popup to the stable skin ID. Skin links use `ChatLink::EncodeSkin`; actual TP item names and links come from the winning price candidate, not the skin name. Use `CopyToClipboard`.
 - `SkinSearchCore.h` provides shared token/substring/typo search and price selection. Shopping filters operate on cached results and preserve the table sort; do not trigger price queries on typing or filtering.
 - Commerce v2 derived cache retains all known tradeable equipment/skin-unlock candidates and names, selects the cheapest available sell listing, and does not reuse legacy rarity-selected prices. Vendor coverage remains limited to known cultural armor prices.
+
+- Keep cached shopping candidate metadata and sort keys separate from local filters. Never scan or reprice all candidates per keystroke. Price snapshots are returned by value under the Commerce lock. A failed price batch must not publish a partial winner as the cheapest.
