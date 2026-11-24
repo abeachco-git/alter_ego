@@ -1,3 +1,4 @@
+#include "AccountIdentity.h"
 #include "CallbackLifetime.h"
 #include "HttpSafety.h"
 #include "BackgroundWorkers.h"
@@ -273,8 +274,11 @@ namespace AlterEgo {
 
         // Filter out already-queried skins
         std::vector<uint32_t> to_query;
+        std::string acctName;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            acctName=s_current_account_name;
+            if(acctName.empty())return;
             for (uint32_t id : skin_ids) {
                 if (id != 0 && s_skin_unlocks.find(id) == s_skin_unlocks.end())
                     to_query.push_back(id);
@@ -288,11 +292,6 @@ namespace AlterEgo {
         // Batch in groups of 200 (H&S limit)
         // NOTE: EV_HOARD_QUERY_SKINS is synchronous — response handler runs
         // inline before Events_Raise returns. Do NOT hold s_mutex here.
-        std::string acctName;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            acctName = s_current_account_name;
-        }
         const size_t BATCH = 200;
         for (size_t i = 0; i < to_query.size(); i += BATCH) {
             HoardQuerySkinsRequest req{};
@@ -323,6 +322,9 @@ namespace AlterEgo {
         }
 
         std::lock_guard<std::mutex> lock(s_mutex);
+        if(resp->entry_count>200 || !Identity::MatchesReply({s_current_account_name},
+            {resp->api_version>=3?Bounded(resp->account_name):std::string{}},
+            resp->api_version>=3,s_accounts_queried&&s_account_count==1))return;
         for (uint32_t i = 0; i < resp->entry_count; i++) {
             s_skin_unlocks[resp->entries[i].id] = (resp->entries[i].unlocked != 0);
         }
@@ -385,7 +387,7 @@ namespace AlterEgo {
 
     void GW2API::MarkSkinUnlocked(uint32_t skin_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
-        s_skin_unlocks[skin_id] = true;
+        if(!s_current_account_name.empty())s_skin_unlocks[skin_id] = true;
     }
 
     const ItemLocationResult* GW2API::GetItemLocation(uint32_t item_id) {
@@ -487,8 +489,10 @@ namespace AlterEgo {
     void GW2API::SetCurrentAccountFromCharacter(const std::string& charName) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_char_to_account.find(charName);
-        if (it != s_char_to_account.end()) {
-            s_current_account_name = it->second;
+        const std::string account=it!=s_char_to_account.end()?it->second:std::string{};
+        if(s_current_account_name!=account) {
+            s_current_account_name=account;
+            s_skin_unlocks.clear();
         }
     }
 

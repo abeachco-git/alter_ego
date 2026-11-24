@@ -1,3 +1,4 @@
+#include "AccountIdentity.h"
 #include "CallbackLifetime.h"
 #include "BackgroundWorkers.h"
 #include <windows.h>
@@ -2543,18 +2544,14 @@ static void OnAchProgressResponse(void* eventArgs) {
     std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
     if (resp->api_version < 2) { return; }
 
-    // Reject late responses from a previously selected account. H&S echoes the
-    // requested account (v3+); a response must never mix two accounts' progress.
-    const std::string cacheAccount = GetAchievementCacheAccount();
-    if (cacheAccount.empty() || g_AchCachedAccount != cacheAccount) return;
-    if (resp->api_version >= 3) {
-        const std::string responseAccount(resp->account_name,
-            std::find(resp->account_name, resp->account_name + sizeof(resp->account_name),
-                      '\0'));
-        if ((!responseAccount.empty() && responseAccount != cacheAccount) ||
-            (AlterEgo::GW2API::IsMultiAccount() && responseAccount.empty()))
-            return;
-    }
+    const bool single=AlterEgo::GW2API::HasAccountsData() && AlterEgo::GW2API::GetAccountCount()==1;
+    const std::string echoed=resp->api_version>=3 ?
+        std::string(resp->account_name,strnlen(resp->account_name,sizeof(resp->account_name))) : std::string{};
+    // Use the represented account under the same mutex as publication.
+    // Do not read the mutable UI account selection on an H&S worker thread.
+    std::lock_guard<std::recursive_mutex> responseLock(g_AchMutex);
+    if(resp->entry_count>200 ||
+       !AlterEgo::Identity::MatchesReply({g_AchCachedAccount},{echoed},resp->api_version>=3,single))return;
 
     if (resp->status != HOARD_STATUS_OK) {
         if (resp->status == HOARD_STATUS_BUSY) {

@@ -1,3 +1,4 @@
+#include "AccountIdentity.h"
 #include "CallbackLifetime.h"
 #include "BackgroundWorkers.h"
 #include <windows.h>
@@ -313,9 +314,11 @@ static long long NowMs() {
 // Manual Refresh and reset fetching continue querying every achievement.
 static void SendClearsAchQuery(bool skipCompletedSections) {
     if (!APIDefs || g_ClearsCompletionInFlight.load()) return;
+    const std::string acctName=GetEffectiveAccountName();
     std::vector<uint32_t> allIds;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if(acctName.empty() || acctName!=g_ClearsCacheAccount)return;
         const bool needFractals = !skipCompletedSections ||
             !AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals);
         const bool needBounties = !skipCompletedSections ||
@@ -340,7 +343,6 @@ static void SendClearsAchQuery(bool skipCompletedSections) {
             ? "Refreshing incomplete sections..." : "Querying completion...";
     }
 
-    std::string acctName = GetEffectiveAccountName();
     HoardQueryAchievementRequest req{};
     req.api_version = HOARD_API_VERSION;
     strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
@@ -361,14 +363,15 @@ void OnClearsAchResponse(void* eventArgs) {
     if (!eventArgs) return;
     auto* resp = (HoardQueryAchievementResponse*)eventArgs;
     std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
-    if (resp->api_version < 2) return;
+    if (resp->api_version < 2 || resp->entry_count>200) return;
+    const bool single=AlterEgo::GW2API::HasAccountsData() && AlterEgo::GW2API::GetAccountCount()==1;
     const std::string echoed = resp->api_version >= 3
         ? std::string(resp->account_name, strnlen(resp->account_name, sizeof(resp->account_name)))
         : std::string{};
     if (resp->status != HOARD_STATUS_OK) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         if (!g_ClearsCompletionInFlight || g_ClearsCacheAccount.empty() ||
-            (resp->api_version >= 3 && echoed != g_ClearsCacheAccount)) return;
+            !AlterEgo::Identity::MatchesReply({g_ClearsCacheAccount},{echoed},resp->api_version>=3,single)) return;
         g_ClearsCompletionInFlight = false;
         g_ClearsQueryStartedAtMs = 0;
         if (resp->status == HOARD_STATUS_BUSY) {
@@ -408,7 +411,7 @@ void OnClearsAchResponse(void* eventArgs) {
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         if (!g_ClearsCompletionInFlight || g_ClearsCacheAccount.empty() ||
-            (resp->api_version >= 3 && echoed != g_ClearsCacheAccount)) return;
+            !AlterEgo::Identity::MatchesReply({g_ClearsCacheAccount},{echoed},resp->api_version>=3,single)) return;
 
         // Apply to all tracked entries
         auto applyTo = [&](ClearEntry& ce) {
@@ -481,7 +484,7 @@ static void FetchVaultData(bool skipClaimedSections) {
     std::array<bool, 3> request = {true, true, true};
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (g_VaultFetching.load()) return;
+        if (g_VaultFetching.load() || account.empty() || account!=g_VaultCacheAccount) return;
         // A section is skippable only when all awards are CLAIMED, and the
         // current period hasn't been invalidated by a reset. Never use an
         // unknown/expired season end to suppress a new Special season.
@@ -545,7 +548,9 @@ void OnVaultSeasonResponse(void* eventArgs) {
         // Optional season metadata: don't restart otherwise successful objectives.
         return;
     }
-    if (resp->status != HOARD_STATUS_OK || resp->json_length == 0) return;
+    if (resp->status != HOARD_STATUS_OK || resp->json_length == 0 || resp->truncated ||
+        resp->json_length>=sizeof(resp->json) ||
+        std::string(resp->endpoint,strnlen(resp->endpoint,sizeof(resp->endpoint)))!="/v2/wizardsvault") return;
     try {
         auto j = nlohmann::json::parse(resp->json);
         std::string endStr = j.value("end", "");
@@ -573,7 +578,8 @@ void OnVaultResponse(void* eventArgs) {
     if (!eventArgs) return;
     auto* resp = (HoardQueryWizardsVaultResponse*)eventArgs;
     std::unique_ptr<HoardQueryWizardsVaultResponse> respGuard(resp);
-    if (resp->api_version < 2 || resp->type > 2) return;
+    if (resp->api_version < 2 || resp->type > 2 || resp->objective_count>16) return;
+    const bool single=AlterEgo::GW2API::HasAccountsData() && AlterEgo::GW2API::GetAccountCount()==1;
 
     // Parse into local memory first; publish only under the shared mutex.
     VaultPeriod period;
@@ -599,17 +605,10 @@ void OnVaultResponse(void* eventArgs) {
     bool save = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (!g_VaultFetching.load() || g_VaultCacheAccount.empty()) return;
-        if (resp->api_version >= 3 &&
-            std::string(resp->account_name,
-                strnlen(resp->account_name, sizeof(resp->account_name))) != g_VaultCacheAccount)
-            return;
-
-        // Reject delayed responses for an account that is no longer being queried.
-        const std::string echoedAccount(resp->account_name,
-            strnlen(resp->account_name, sizeof(resp->account_name)));
-        if (!g_VaultRequestAccount.empty() && !echoedAccount.empty() &&
-            echoedAccount != g_VaultRequestAccount) return;
+        if (!g_VaultFetching.load() || g_VaultRequestAccount!=g_VaultCacheAccount) return;
+        const std::string echoedAccount=resp->api_version>=3 ?
+            std::string(resp->account_name,strnlen(resp->account_name,sizeof(resp->account_name))) : std::string{};
+        if(!AlterEgo::Identity::MatchesReply({g_VaultCacheAccount},{echoedAccount},resp->api_version>=3,single))return;
 
         const int type = resp->type;
         if (g_VaultResponsesOK[type]) return; // duplicate response

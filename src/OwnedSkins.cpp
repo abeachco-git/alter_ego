@@ -1,3 +1,4 @@
+#include "AccountIdentity.h"
 #include "CallbackLifetime.h"
 #include "BackgroundWorkers.h"
 #include "OwnedSkins.h"
@@ -46,6 +47,12 @@ namespace Skinventory {
     // (proxy queue full / per-addon rate limit). We schedule ONE retry at a
     // future time rather than spinning every frame. Driven from Tick().
     namespace {
+        // All request state below is protected by OwnedSkins::s_mutex.
+        enum class RequestKind { None, Api, Batch };
+        RequestKind g_requestKind=RequestKind::None;
+        uint64_t g_accountEpoch=0;
+        bool g_batchAwaiting=false;
+        std::unordered_set<uint32_t> g_batchOwned, g_batchQueried;
         std::atomic<int>       g_retryKind{0};   // 0 = none, 1 = API query, 2 = batch query
         std::atomic<long long> g_retryAtMs{0};   // steady_clock ms at which to retry
 
@@ -66,7 +73,6 @@ namespace Skinventory {
             g_retryKind = 0;
             g_retryAtMs = 0;
             if (kind == 1) {
-                s_querying = false;        // allow RequestOwnedSkinsViaApi to re-enter
                 RequestOwnedSkinsViaApi();
             } else if (kind == 2) {
                 SendNextBatch();           // resend current batch (s_batch_index unchanged)
@@ -117,13 +123,16 @@ namespace Skinventory {
                                  AlterEgo::GW2API::GetAccountCount() == 1;
         static std::string legacyAttemptAccount;
         bool load = false;
-        bool changed = false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             if (s_account_name != name) {
-                changed = true;
                 load = !name.empty();
                 s_account_name = name;
+                ++g_accountEpoch;
+                g_requestKind=RequestKind::None;
+                g_batchAwaiting=false;
+                g_batchOwned.clear();g_batchQueried.clear();
+                g_retryKind=0;g_retryAtMs=0;
                 s_owned_skins.clear();
                 s_queried_skins.clear();
                 s_locally_marked.clear();
@@ -140,10 +149,6 @@ namespace Skinventory {
                 legacyAttemptAccount = name;
                 load = true;
             }
-        }
-        if (changed) {
-            g_retryKind = 0;
-            g_retryAtMs = 0;
         }
         if (load && LoadFromCache()) {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -190,219 +195,194 @@ namespace Skinventory {
 
     void OwnedSkins::RequestOwnedSkinsViaApi() {
         if (!s_API || !s_hs_available) return;
-        if (s_querying) return;
-
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_querying = true;
-            s_status_message = "Querying /v2/account/skins...";
-        }
-
-        std::string acctName;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            acctName = s_account_name;
-        }
         HoardQueryApiRequest req{};
-        req.api_version = HOARD_API_VERSION;
-        strncpy(req.requester, SKINVENTORY_REQUESTER, sizeof(req.requester));
-        strncpy(req.endpoint, "/v2/account/skins", sizeof(req.endpoint));
-        strncpy(req.response_event, EV_SKINVENTORY_API_RESPONSE, sizeof(req.response_event));
-        if (!acctName.empty())
-            strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
-
-        s_API->Events_Raise(EV_HOARD_QUERY_API, &req);
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if(s_querying || s_account_name.empty())return;
+            s_querying=true;
+            g_requestKind=RequestKind::Api;
+            g_retryKind=0;g_retryAtMs=0;
+            s_status_message="Querying /v2/account/skins...";
+            req.api_version=HOARD_API_VERSION;
+            strncpy(req.requester,SKINVENTORY_REQUESTER,sizeof(req.requester)-1);
+            strncpy(req.endpoint,"/v2/account/skins",sizeof(req.endpoint)-1);
+            strncpy(req.response_event,EV_SKINVENTORY_API_RESPONSE,sizeof(req.response_event)-1);
+            strncpy(req.account_name,s_account_name.c_str(),sizeof(req.account_name)-1);
+        }
+        s_API->Events_Raise(EV_HOARD_QUERY_API,&req);
     }
 
     void OwnedSkins::OnApiResponse(void* eventArgs) {
-    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
-    if (!callbackLease) { delete static_cast<HoardQueryApiResponse*>(eventArgs); return; }
-        if (!eventArgs) return;
-        auto* resp = (HoardQueryApiResponse*)eventArgs;
-        std::unique_ptr<HoardQueryApiResponse> respGuard(resp); // caller owns the response
-
-        // Ignore delayed replies after an account switch.
-        if (resp->api_version >= 3) {
-            const std::string echoed(resp->account_name,
-                strnlen(resp->account_name, sizeof(resp->account_name)));
+        AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+        std::unique_ptr<HoardQueryApiResponse> guard(static_cast<HoardQueryApiResponse*>(eventArgs));
+        if(!callbackLease || !guard || guard->api_version<2)return;
+        const auto& resp=*guard;
+        const bool single=AlterEgo::GW2API::HasAccountsData() && AlterEgo::GW2API::GetAccountCount()==1;
+        const std::string echoed=resp.api_version>=3 ?
+            std::string(resp.account_name,strnlen(resp.account_name,sizeof(resp.account_name))) : std::string{};
+        if(std::string(resp.endpoint,strnlen(resp.endpoint,sizeof(resp.endpoint)))!="/v2/account/skins")return;
+        uint64_t epoch;
+        {
             std::lock_guard<std::mutex> lock(s_mutex);
-            if (s_account_name.empty() || echoed != s_account_name) return;
-        }
-
-        if (resp->status == HOARD_STATUS_DENIED) {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_status_message = "Permission denied by Hoard & Seek";
-            s_querying = false;
-            return;
-        }
-
-        if (resp->status == HOARD_STATUS_BUSY) {
-            ScheduleRetry(1, resp->retry_after_ms);
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_status_message = "Hoard & Seek busy, retrying shortly...";
-            s_querying = false;
-            return;
-        }
-
-        if (resp->status == HOARD_STATUS_OK) {
-            // Check if truncated — if so, data is incomplete
-            // Also check json_length vs buffer: /v2/account/skins can exceed 64KB
-            if (resp->truncated || resp->json_length >= sizeof(resp->json)) {
-                {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    s_status_message = "API response truncated, querying skins in batches...";
-                    s_querying = false;
-                }
-                // Previously only displayed "falling back" but never started
-                // the fallback, leaving ownership stuck at the old snapshot.
-                const auto allIds = SkinCache::GetAllSkinIds();
-                if (!allIds.empty()) {
-                    RequestOwnedSkins(allIds);
-                } else {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    s_status_message = "Ownership response truncated; load skin catalog to retry";
-                }
+            if(!s_querying || g_requestKind!=RequestKind::Api ||
+               !AlterEgo::Identity::MatchesReply({s_account_name},{echoed},resp.api_version>=3,single))return;
+            epoch=g_accountEpoch;
+            if(resp.status!=HOARD_STATUS_OK) {
+                s_querying=false;g_requestKind=RequestKind::None;
+                if(resp.status==HOARD_STATUS_BUSY) {
+                    ScheduleRetry(1,resp.api_version>=4?resp.retry_after_ms:0);
+                    s_status_message="Hoard & Seek busy, retrying shortly...";
+                } else s_status_message=resp.status==HOARD_STATUS_DENIED ?
+                    "Permission denied by Hoard & Seek" : "Ownership request failed";
                 return;
             }
-
-            // Parse the JSON array of owned skin IDs
-            try {
-                json j = json::parse(resp->json);
-                if (j.is_array()) {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    s_owned_skins.clear();
-                    for (const auto& id : j) {
-                        s_owned_skins.insert(id.get<uint32_t>());
-                    }
-                    // Re-insert locally marked skins (from alerts) that stale API data may not include
-                    for (uint32_t id : s_locally_marked) {
-                        s_owned_skins.insert(id);
-                    }
-                    s_has_data = true;
-                    s_querying = false;
-                    s_last_success_time = std::time(nullptr);
-                    s_generation++;
-                    s_status_message = "Owned: " + std::to_string(s_owned_skins.size());
-                }
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_status_message = "Failed to parse /v2/account/skins response";
-                s_querying = false;
-            }
-
-            // Save to disk cache
-            SaveToCache();
         }
+        if(resp.truncated || resp.json_length>=sizeof(resp.json)) {
+            auto allIds=SkinCache::GetAllSkinIds();
+            std::sort(allIds.begin(),allIds.end());
+            allIds.erase(std::unique(allIds.begin(),allIds.end()),allIds.end());
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                if(epoch!=g_accountEpoch || g_requestKind!=RequestKind::Api || !s_querying)return;
+                if(allIds.empty()) {
+                    g_requestKind=RequestKind::None;s_querying=false;
+                    s_status_message="Ownership response truncated; load skin catalog to retry";
+                    return;
+                }
+                g_requestKind=RequestKind::Batch;
+                g_batchAwaiting=false;g_batchOwned.clear();g_batchQueried.clear();
+                s_pending_ids=std::move(allIds);s_batch_index=0;
+                s_status_message="API response truncated, querying skins in batches...";
+                // Keep dispatch on the existing Tick path, outside the mutex.
+                s_batch_pending=true;
+            }
+            return;
+        }
+        std::unordered_set<uint32_t> parsed;
+        bool valid=false;
+        try {
+            const auto len=strnlen(resp.json,sizeof(resp.json));
+            if(len>=sizeof(resp.json) || (resp.json_length!=len && resp.json_length!=len+1))
+                throw std::runtime_error("Invalid ownership response length");
+            auto j=json::parse(resp.json,resp.json+len);
+            if(!j.is_array())throw std::runtime_error("Expected skin array");
+            for(const auto& value:j) {
+                if(!value.is_number_integer())throw std::runtime_error("Invalid skin ID");
+                const auto id=value.get<int64_t>();
+                if(id<=0 || id>UINT32_MAX)throw std::runtime_error("Invalid skin ID");
+                parsed.insert(static_cast<uint32_t>(id));
+            }
+            valid=true;
+        } catch(...) {}
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if(epoch!=g_accountEpoch || g_requestKind!=RequestKind::Api || !s_querying)return;
+            s_querying=false;g_requestKind=RequestKind::None;
+            if(!valid) {s_status_message="Failed to parse /v2/account/skins response";return;}
+            parsed.insert(s_locally_marked.begin(),s_locally_marked.end());
+            s_owned_skins=std::move(parsed);
+            s_has_data=true;s_last_success_time=std::time(nullptr);++s_generation;
+            s_status_message="Owned: "+std::to_string(s_owned_skins.size());
+        }
+        SaveToCache();
     }
 
     void OwnedSkins::RequestOwnedSkins(const std::vector<uint32_t>& skin_ids) {
-        if (!s_API || !s_hs_available || skin_ids.empty()) return;
-        if (s_querying) return;
-
+        if(!s_API || !s_hs_available || skin_ids.empty())return;
+        auto ids=skin_ids;
+        std::sort(ids.begin(),ids.end());
+        ids.erase(std::remove(ids.begin(),ids.end(),0),ids.end());
+        ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
+        if(ids.empty())return;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_pending_ids = skin_ids;
-            s_batch_index = 0;
-            s_querying = true;
-            s_status_message = "Querying owned skins (batch)...";
+            if(s_querying || s_account_name.empty())return;
+            g_requestKind=RequestKind::Batch;g_batchAwaiting=false;
+            g_batchOwned.clear();g_batchQueried.clear();
+            g_retryKind=0;g_retryAtMs=0;
+            s_pending_ids=std::move(ids);s_batch_index=0;s_querying=true;
+            s_status_message="Querying owned skins (batch)...";
         }
-
         SendNextBatch();
     }
 
     void OwnedSkins::SendNextBatch() {
-        if (!s_API) return;
-
-        // Prepare request under lock, then release lock BEFORE calling Events_Raise.
-        // Nexus may dispatch events synchronously (inline), which would call our
-        // OnSkinsResponse handler. If we held s_mutex here, that would deadlock.
-        HoardQuerySkinsRequest req{};  // Stack-allocated (matches FlipOut pattern)
-        bool allDone = false;
+        if(!s_API)return;
+        HoardQuerySkinsRequest req{};
+        bool allDone=false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            if (s_batch_index >= s_pending_ids.size()) {
-                s_querying = false;
-                s_has_data = true;
-                s_last_success_time = std::time(nullptr);
-                s_status_message = "Owned: " + std::to_string(s_owned_skins.size()) +
-                                   " / " + std::to_string(s_queried_skins.size());
-                allDone = true;
+            if(!s_querying || g_requestKind!=RequestKind::Batch || g_batchAwaiting || s_account_name.empty())return;
+            if(s_batch_index>=s_pending_ids.size()) {
+                // Only a complete verified batch sequence updates ownership.
+                // Preserve previously known skins outside this query's scope.
+                for(auto id:g_batchQueried)s_owned_skins.erase(id);
+                s_owned_skins.insert(g_batchOwned.begin(),g_batchOwned.end());
+                s_owned_skins.insert(s_locally_marked.begin(),s_locally_marked.end());
+                s_queried_skins.insert(g_batchQueried.begin(),g_batchQueried.end());
+                g_batchOwned.clear();g_batchQueried.clear();
+                s_querying=false;g_requestKind=RequestKind::None;s_has_data=true;
+                s_last_success_time=std::time(nullptr);++s_generation;
+                s_status_message="Owned: "+std::to_string(s_owned_skins.size())+" / "+std::to_string(s_queried_skins.size());
+                allDone=true;
+            } else {
+                size_t end=std::min(s_batch_index+200,s_pending_ids.size());
+                req.api_version=HOARD_API_VERSION;
+                strncpy(req.requester,SKINVENTORY_REQUESTER,sizeof(req.requester)-1);
+                strncpy(req.response_event,EV_SKINVENTORY_SKINS_RESPONSE,sizeof(req.response_event)-1);
+                strncpy(req.account_name,s_account_name.c_str(),sizeof(req.account_name)-1);
+                for(size_t i=s_batch_index;i<end;++i)req.ids[req.id_count++]=s_pending_ids[i];
+                g_batchAwaiting=true;
+                s_status_message="Querying skins "+std::to_string(s_batch_index)+"-"+std::to_string(end)+"/"+std::to_string(s_pending_ids.size());
             }
         }
-        if (allDone) {
-            SaveToCache();
-            return;
-        }
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            size_t end = std::min(s_batch_index + 200, s_pending_ids.size());
-
-            req.api_version = HOARD_API_VERSION;
-            strncpy(req.requester, SKINVENTORY_REQUESTER, sizeof(req.requester));
-            strncpy(req.response_event, EV_SKINVENTORY_SKINS_RESPONSE, sizeof(req.response_event));
-            if (!s_account_name.empty())
-                strncpy(req.account_name, s_account_name.c_str(), sizeof(req.account_name) - 1);
-
-            req.id_count = 0;
-            for (size_t i = s_batch_index; i < end; i++) {
-                req.ids[req.id_count++] = s_pending_ids[i];
-            }
-
-            s_status_message = "Querying skins " + std::to_string(s_batch_index) +
-                               "-" + std::to_string(end) + "/" + std::to_string(s_pending_ids.size());
-        }
-        // Lock released — safe to raise event now
-        s_API->Events_Raise(EV_HOARD_QUERY_SKINS, &req);
+        if(allDone){SaveToCache();return;}
+        s_API->Events_Raise(EV_HOARD_QUERY_SKINS,&req);
     }
 
     void OwnedSkins::OnSkinsResponse(void* eventArgs) {
-    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
-    if (!callbackLease) { delete static_cast<HoardQuerySkinsResponse*>(eventArgs); return; }
-        if (!eventArgs) return;
-        auto* resp = (HoardQuerySkinsResponse*)eventArgs;
-        std::unique_ptr<HoardQuerySkinsResponse> respGuard(resp); // caller owns the response
-
-        // Ignore delayed replies after an account switch.
-        if (resp->api_version >= 3) {
-            const std::string echoed(resp->account_name,
-                strnlen(resp->account_name, sizeof(resp->account_name)));
-            std::lock_guard<std::mutex> lock(s_mutex);
-            if (s_account_name.empty() || echoed != s_account_name) return;
+        AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+        std::unique_ptr<HoardQuerySkinsResponse> guard(static_cast<HoardQuerySkinsResponse*>(eventArgs));
+        if(!callbackLease || !guard || guard->api_version<2)return;
+        const auto& resp=*guard;
+        const bool single=AlterEgo::GW2API::HasAccountsData() && AlterEgo::GW2API::GetAccountCount()==1;
+        const std::string echoed=resp.api_version>=3 ?
+            std::string(resp.account_name,strnlen(resp.account_name,sizeof(resp.account_name))) : std::string{};
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if(!s_querying || g_requestKind!=RequestKind::Batch || !g_batchAwaiting ||
+           !AlterEgo::Identity::MatchesReply({s_account_name},{echoed},resp.api_version>=3,single))return;
+        if(resp.status==HOARD_STATUS_BUSY) {
+            g_batchAwaiting=false;ScheduleRetry(2,resp.api_version>=4?resp.retry_after_ms:0);
+            s_status_message="Hoard & Seek busy, retrying shortly...";return;
         }
-
-        if (resp->status == HOARD_STATUS_DENIED) {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_status_message = "Permission denied by Hoard & Seek";
-            s_querying = false;
+        if(resp.status!=HOARD_STATUS_OK) {
+            g_batchAwaiting=false;g_requestKind=RequestKind::None;s_querying=false;
+            s_status_message=resp.status==HOARD_STATUS_DENIED ? "Permission denied by Hoard & Seek" : "Ownership batch failed";
             return;
         }
-
-        if (resp->status == HOARD_STATUS_BUSY) {
-            // Keep s_querying / s_batch_index unchanged — resend this same batch
-            // after the backoff delay (handled in Tick).
-            ScheduleRetry(2, resp->retry_after_ms);
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_status_message = "Hoard & Seek busy, retrying shortly...";
-            return;
-        }
-
-        if (resp->status == HOARD_STATUS_OK) {
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                for (uint32_t i = 0; i < resp->entry_count; i++) {
-                    uint32_t id = resp->entries[i].id;
-                    s_queried_skins.insert(id);
-                    if (resp->entries[i].unlocked) {
-                        s_owned_skins.insert(id);
-                    }
-                }
-                s_batch_index += resp->entry_count;
+        const size_t end=std::min(s_batch_index+200,s_pending_ids.size());
+        if(resp.entry_count>200)return;
+        std::vector<uint32_t> expected(s_pending_ids.begin()+s_batch_index,s_pending_ids.begin()+end), returned;
+        for(uint32_t i=0;i<resp.entry_count;++i)returned.push_back(resp.entries[i].id);
+        if(!AlterEgo::Identity::ExactIds(expected,returned)) {
+            // A late response for a different batch must not advance this
+            // request. If all IDs are a subset, fail the incomplete response
+            // rather than leaving the UI permanently busy.
+            const bool subset=std::all_of(returned.begin(),returned.end(),[&](uint32_t id) {
+                return std::find(expected.begin(),expected.end(),id)!=expected.end();
+            });
+            if(subset) {
+                g_batchAwaiting=false;g_requestKind=RequestKind::None;s_querying=false;
+                s_status_message="Incomplete ownership batch; refresh to retry";
             }
-
-            // Defer next batch to Tick() to avoid deep recursion
-            // (H&S delivers events synchronously inside Events_Raise)
-            s_batch_pending = true;
+            return;
         }
+        for(uint32_t i=0;i<resp.entry_count;++i) {
+            auto id=resp.entries[i].id;
+            g_batchQueried.insert(id);
+            if(resp.entries[i].unlocked)g_batchOwned.insert(id);
+        }
+        s_batch_index=end;g_batchAwaiting=false;s_batch_pending=true;
     }
 
     bool OwnedSkins::IsOwned(uint32_t skin_id) {
