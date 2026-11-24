@@ -13917,7 +13917,7 @@ static void RenderSkinShoppingList() {
     static int shopSourceFilter = 0;
 
     // ===== Compact toolbar: Refresh + Category chips + Source chips =====
-    if (ImGui::Button("Refresh Prices") && !Skinventory::Commerce::IsFetching()) {
+    if (RenderActionButton("Refresh Prices") && !Skinventory::Commerce::IsFetching()) {
         g_SkinShopListDirty = true;
         s_needsFetch = true;
     }
@@ -17668,7 +17668,7 @@ void AddonRender() {
                 snprintf(btnLabel, sizeof(btnLabel), "Refresh Selected (%d)", selCount);
                 bool canRefresh = (selCount > 0);
                 if (!canRefresh) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-                if (ImGui::Button(btnLabel) && canRefresh) {
+                if (RenderActionButton(btnLabel) && canRefresh) {
                     std::vector<std::string> selected;
                     const auto& chars = AlterEgo::GW2API::GetCharacters();
                     std::string currentName;
@@ -17695,7 +17695,7 @@ void AddonRender() {
                 }
                 if (!canRefresh) ImGui::PopStyleVar();
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel")) {
+                if (RenderActionButton("Cancel")) {
                     g_RefreshPopupOpen = false;
                     ImGui::CloseCurrentPopup();
                 }

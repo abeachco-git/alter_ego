@@ -26,7 +26,7 @@ This is the discoverable source of truth for developers and coding agents. Read 
 | Skill icons | RenderSkillIcon / RenderEditableSkillIcon → RenderSkillIconCore | dllmain.cpp |
 | Trait icons | RenderTraitIcon (read-only/editable) | dllmain.cpp |
 | Infusion totals | RenderInfusionTotals | InfusionTotalsView.h |
-| Refresh footer | RefreshUI::Row | RefreshUI.h (do not change lifecycle) |
+| Refresh footer | RefreshUI::Row; UI::Button / UI::ActionButtonHeight | RefreshUI.h (standard button styling; do not change lifecycle) |
 | Gear summaries / ordering | Composable::Presentation::GearSlotSummary / SortedGearSlots | ComposableGearPresentation.h |
 | Equipment catalogs | RUNE_LIST / SIGIL_LIST / RELIC_LIST, GetSortedStatCombos | dllmain.cpp; reused in ComposableNativeEditor.h |
 
@@ -52,8 +52,8 @@ if (AlterEgo::UI::Button("Delete##item", ImVec2(0,0),
 Use stable IDs (not a display name or mutable row index when a persistent ID exists). Keep actions separate from display, and invoke the same domain action from header and context menu. Defer destructive changes until safe to mutate the collection.
 
 ## Intentional exceptions and remaining work
-- RefreshUI and page-specific refresh state are deliberately unchanged. Do not standardize request execution unless requested.
-- Native ImGui context menu is already implemented in lib/imgui/imgui_widgets.cpp InputTextEx. Test clipboard in game; do not add a wrapper popup or change ImGui version.
+- Standardize refresh button appearance and layout using UI::Button / RenderActionButton and UI::ActionButtonHeight. Preserve the existing disabled state, click handlers, request execution, scheduling, timeouts, retries, caching and page-specific state. Do not consolidate request logic without explicit approval.
+- The existing custom Cut/Copy/Paste/Select All menu lives in lib/imgui/imgui_widgets.cpp InputTextEx and inherits the active GW2 theme (popup background, hover/active colors, padding and typography). Preserve the theme and existing native text selection, UTF-8 filtering and callbacks. Test clipboard in game; do not add a wrapper popup or change ImGui version.
 - Custom draw-list cards, roster rows, raid encounter chips, drag targets, and selected/active markers can have different geometry. Reuse palette and meaningful primitives; don't replace specialized rendering solely to remove raw calls.
 - Equipment and independent component editing still have different storage and commit paths; shared catalogs and presentation helpers are the starting point. Further consolidation must preserve slot count, unknown vs absent metadata, exact IDs, copy-on-write and shared-component semantics. Do not claim all editor behavior is unified.
 - Saved loadout header and context menu share ExecuteSavedLoadoutAction and RenderBuildShareMenuItems. Fashion/component actions and specialized responsive layouts still have separate wiring; extract shared commands when changing them.

@@ -17,13 +17,15 @@ inline const ImVec4 TooltipTitle(1.0f, 0.9f, 0.5f, 1.0f);
 inline const ImVec4 TooltipBody(0.8f, 0.8f, 0.8f, 1.0f);
 inline const ImVec4 SectionGold(0.70f, 0.58f, 0.20f, 1.0f);
 
+inline float ActionButtonHeight() { return std::max(ActionHeight, ImGui::GetFrameHeight()); }
+
 enum class ButtonRole { Standard, Compact, Destructive, CompactDestructive };
 inline bool Button(const char* label, ImVec2 size = ImVec2(0,0),
                    ButtonRole role = ButtonRole::Standard) {
     const bool compact = role == ButtonRole::Compact || role == ButtonRole::CompactDestructive;
     const bool destructive = role == ButtonRole::Destructive || role == ButtonRole::CompactDestructive;
     if (!compact && size.y <= 0.0f)
-        size.y = std::max(ActionHeight, ImGui::GetFrameHeight());
+        size.y = ActionButtonHeight();
     if (destructive) ImGui::PushStyleColor(ImGuiCol_Text, DestructiveText);
     const bool clicked = ImGui::Button(label, size);
     if (destructive) ImGui::PopStyleColor();

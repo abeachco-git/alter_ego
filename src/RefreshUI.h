@@ -4,6 +4,7 @@
 #include <ctime>
 #include <string>
 #include "imgui.h"
+#include "UIControls.h"
 
 // Compact, consistent refresh/status presentation for Alter Ego tabs.
 namespace AlterEgo::RefreshUI {
@@ -63,7 +64,7 @@ inline void Status(State state, const std::string& message) {
 }
 
 inline float RowHeight() {
-    return std::max(30.0f, ImGui::GetFrameHeight()) + ImGui::GetStyle().ItemSpacing.y + 3.0f;
+    return UI::ActionButtonHeight() + ImGui::GetStyle().ItemSpacing.y + 3.0f;
 }
 
 // One shared bottom status row for Characters, Compare, Skinventory, Vault,
@@ -76,16 +77,16 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     ImGui::PushID(id);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    const float buttonH = std::max(30.0f, ImGui::GetFrameHeight());
+    const float buttonH = UI::ActionButtonHeight();
     if (disabled) {
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
-    const bool clicked = ImGui::Button("Refresh", ImVec2(0, buttonH));
+    const bool clicked = UI::Button("Refresh", ImVec2(0, buttonH));
     if (disabled) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     if (moreClicked) {
         ImGui::SameLine(0.0f, 5.0f);
-        *moreClicked = ImGui::Button("...", ImVec2(29.0f, buttonH));
+        *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH));
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Choose one or more characters to refresh");
     }
