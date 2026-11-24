@@ -49,5 +49,18 @@ int case_native_editing(int,char**) {
     assert(ConsolidateExact(doc,"armor",duplicate.id,armor,err));
     assert(!Composable::Find(doc,"armor",duplicate.id));
     assert(doc.loadouts[1].refs.at("armor")==armor);
+    auto changedArmor=Composable::Find(doc,"armor",privateId)->data;
+    assert(ReuseEditedForLoadout(doc,"a","armor",armor,privateId,changedArmor,err));
+    assert(doc.loadouts[0].refs.at("armor")==privateId);
+    assert(doc.loadouts[1].refs.at("armor")==armor);
+    assert(!ReuseEditedForLoadout(doc,"a","armor",armor,privateId,changedArmor,err));
+    assert(!ReuseEditedForLoadout(doc,"a","armor",privateId,armor,changedArmor,err));
+    const auto baseId=doc.loadouts[0].refs.at("base_build");
+    auto wrongBase=Composable::Find(doc,"base_build",baseId)->data;
+    wrongBase["profession"]="Necromancer";
+    assert(!Composable::CopyEditedForLoadout(doc,"a","base_build","new-base","New Base",wrongBase,err,baseId));
+    assert(doc.loadouts[0].refs.at("base_build")==baseId);
+    assert(VerifiedSkillsProfession(doc,skills)=="Engineer");
+    assert(VerifiedSkillsProfession(doc,"missing").empty());
     return 0;
 }

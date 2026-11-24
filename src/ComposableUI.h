@@ -38,10 +38,11 @@ static const char* ComponentLabel(const std::string& kind) {
 
 struct ComponentUICommand {
     enum Type { None, Assign, CopyEditedForLoadout, SetFashion, Create, Duplicate,
-                Rename, EditShared, RemoveUnused, ImportPortableLoadout, Consolidate } type = None;
+                Rename, EditShared, RemoveUnused, ImportPortableLoadout, Consolidate, ReuseEdited } type = None;
     std::string loadout_id, kind, component_id, name;
     ComponentJson data = ComponentJson::object();
     uint64_t expected_revision = 0;
+    std::string candidate_id;
 };
 static ComponentUICommand g_ComponentCommand;
 static std::string g_ComponentSearch;
@@ -357,37 +358,96 @@ static void RenderComponentUIEditor() {
         g_ComponentEditorName = AlterEgo::GW2API::SuggestLibraryComponentName(
             g_ComponentEditorKind, g_ComponentEditorDraft);
     }
-    // A matching payload can be opened instead of creating another entry.
-    const auto& nameSnapshot = ComponentUISnapshot();
-    if (nameSnapshot.contains("components") && nameSnapshot["components"].is_object()) {
-        auto group = nameSnapshot["components"].find(g_ComponentEditorKind);
-        if (group != nameSnapshot["components"].end() && group->is_array()) {
-            for (const auto& item : *group) {
-                if (!item.is_object() || !item.contains("data") ||
-                    item.value("id", std::string()) == g_ComponentEditorId ||
-                    g_ComponentEditorDraft.empty()) continue;
-                if (item["data"] == g_ComponentEditorDraft && g_ComponentEditorMode == "create" &&
-                    g_ComponentEditorKind != "skills") {
-                    ImGui::TextDisabled("Identical component: %s", item.value("name", std::string()).c_str());
-                    if (RenderActionButton("Use Existing##component_editor")) {
-                        ComponentUIOpenLibrary(g_ComponentEditorKind, item.value("id", std::string()));
-                        g_ComponentEditorOpen = false;
-                        ImGui::CloseCurrentPopup();
-                        ImGui::EndPopup();
-                        return;
-                    }
-                    break;
+    // Cache candidate results by draft and committed revision. All match
+    // checks use native exact equality and verified profession context.
+    if (g_ComponentEditorMode != "rename") {
+        using namespace AlterEgo;
+        static ComponentJson matchedDraft;
+        static std::string matchedKind, matchedId, matchedMode, matchedLoadout, similarName;
+        static uint64_t matchedRevision = 0;
+        static std::vector<NativeLibrary::Match> matches;
+        const auto revision = GW2API::GetBuildLibraryRevision();
+        if (revision != matchedRevision || matchedKind != g_ComponentEditorKind ||
+            matchedId != g_ComponentEditorId || matchedMode != g_ComponentEditorMode ||
+            matchedLoadout != g_ComponentEditorPrivateLoadoutId ||
+            !NativeLibrary::ExactContent(matchedDraft, g_ComponentEditorDraft)) {
+            matchedRevision = revision;
+            matchedKind = g_ComponentEditorKind;
+            matchedId = g_ComponentEditorId;
+            matchedMode = g_ComponentEditorMode;
+            matchedLoadout = g_ComponentEditorPrivateLoadoutId;
+            matchedDraft = g_ComponentEditorDraft;
+            matches.clear();
+            similarName.clear();
+            Composable::Document document;
+            std::string error;
+            if (!matchedDraft.empty() &&
+                Composable::FromJson(ComponentUISnapshot(), document, error)) {
+                std::string profession;
+                if (matchedMode == "copy_for_loadout") {
+                    if (const auto* l = Composable::FindLoadout(document, matchedLoadout))
+                        profession = Composable::ProfessionOf(document, *l);
+                } else if (matchedKind == "skills") {
+                    profession = NativeLibrary::VerifiedSkillsProfession(document, matchedId);
                 }
-                if (g_ComponentEditorMode == "create" &&
-                    AlterEgo::Composable::Semantics::SimilarRequirements(
-                        g_ComponentEditorKind, item["data"], g_ComponentEditorDraft)) {
-                    ImGui::TextDisabled("Similar functional totals: %s",
-                        item.value("name", std::string()).c_str());
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Exact item placement or other saved fields differ. Both records remain independent.");
-                    break;
+                matches = NativeLibrary::EditIndex(document).Matches(matchedKind, matchedDraft, profession);
+                matches.erase(std::remove_if(matches.begin(), matches.end(),
+                    [&](const auto& m){ return m.id == matchedId; }), matches.end());
+                if (matches.empty() && matchedMode == "create") {
+                    auto group = document.components.find(matchedKind);
+                    if (group != document.components.end())
+                        for (const auto& item : group->second)
+                            if (!NativeLibrary::ExactContent(item.data, matchedDraft) &&
+                                Composable::Semantics::SimilarRequirements(matchedKind, item.data, matchedDraft)) {
+                                similarName = item.name; break;
+                            }
                 }
             }
+        }
+        if (!matches.empty()) {
+            ImGui::TextDisabled("Exact existing component%s", matches.size() == 1 ? "" : "s");
+            if (ImGui::BeginChild("##component_matches", ImVec2(0, std::min(96.0f,
+                    ImGui::GetFrameHeightWithSpacing() * static_cast<float>(matches.size()) + 4.0f)), false)) {
+                for (const auto& match : matches) {
+                    ImGui::PushID(match.id.c_str());
+                    ImGui::Text("%s (%lld uses)", match.name.c_str(), static_cast<long long>(match.users));
+                    if (g_ComponentEditorMode == "create" || g_ComponentEditorMode == "copy_for_loadout") {
+                        ImGui::SameLine();
+                        if (RenderActionButton("Use Existing##component_editor") && ComponentUIEditorCanCommit()) {
+                            if (g_ComponentEditorMode == "create") {
+                                ComponentUIOpenLibrary(g_ComponentEditorKind, match.id);
+                            } else {
+                                ComponentUICommand cmd;
+                                cmd.type = ComponentUICommand::ReuseEdited;
+                                cmd.kind = g_ComponentEditorKind;
+                                cmd.component_id = g_ComponentEditorId;
+                                cmd.loadout_id = g_ComponentEditorPrivateLoadoutId;
+                                cmd.candidate_id = match.id;
+                                cmd.data = g_ComponentEditorDraft;
+                                cmd.expected_revision = g_ComponentEditorRevision;
+                                g_ComponentCommand = std::move(cmd);
+                                g_ComponentEditorSaveQueued = true;
+                            }
+                            g_ComponentEditorOpen = false;
+                            ImGui::PopID();
+                            ImGui::EndChild();
+                            ImGui::CloseCurrentPopup();
+                            ImGui::EndPopup();
+                            return;
+                        }
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+            if (g_ComponentEditorMode == "edit")
+                ImGui::TextDisabled("Save keeps this component independent. Consolidate explicitly after saving.");
+            else if (g_ComponentEditorMode == "duplicate" || g_ComponentEditorMode == "copy_for_loadout")
+                ImGui::TextDisabled("Save creates a separate component instead of reusing a match.");
+        } else if (!similarName.empty()) {
+            ImGui::TextDisabled("Similar functional totals: %s", similarName.c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Exact saved fields differ. Both records remain independent.");
         }
     }
     if (g_ComponentEditorMode != "rename") {
@@ -968,10 +1028,15 @@ static void ProcessComponentUICommand() {
         success = API::AssignLoadoutComponent(
             command.loadout_id, command.kind, command.component_id);
         break;
+    case ComponentUICommand::ReuseEdited:
     case ComponentUICommand::CopyEditedForLoadout:
-        success = API::CopyEditedLoadoutComponent(
-            command.loadout_id, command.kind, command.component_id,
-            command.name, command.data);
+        if (command.type == ComponentUICommand::ReuseEdited)
+            success = API::ReuseEditedLoadoutComponent(command.loadout_id, command.kind,
+                command.component_id, command.candidate_id, command.data, command.expected_revision);
+        else
+            success = API::CopyEditedLoadoutComponent(
+                command.loadout_id, command.kind, command.component_id,
+                command.name, command.data);
         if (success && g_LibraryCollection == 2) {
             const auto& latest = ComponentUISnapshot();
             const auto* target = ComponentUIFindLoadout(latest, command.loadout_id);

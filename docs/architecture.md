@@ -94,3 +94,5 @@ Keep the experimental branch separate from main until explicitly approved. Befor
 ### Explicit component consolidation
 
 The Components detail pane offers exact duplicate consolidation into the selected survivor, with affected Loadout names and confirmation. The native transaction revalidates equality, revision and skill profession compatibility before rewriting references and deleting the redundant record. Independent duplicates remain valid until explicitly consolidated. Usage counts are indexed per library revision; existing editor drafts reject a changed library revision rather than overwriting newly saved data.
+
+Private Copy & Edit offers explicit reuse of an exact compatible component, verified again in the native transaction against the current revision and original reference. Shared edits and intentional duplicates preserve their identity; exact matches are disclosed rather than silently consolidated. Private Base Build editing cannot change the profession of an already referenced Loadout.

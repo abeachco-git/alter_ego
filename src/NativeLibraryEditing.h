@@ -50,6 +50,35 @@ public:
     }
 };
 
+// Derive Skills context from verified owners, not a picker hint.
+inline std::string VerifiedSkillsProfession(const Composable::Document& doc,
+                                              const std::string& id) {
+    std::string profession;
+    for (const auto& l : doc.loadouts) {
+        const auto ref=l.refs.find("skills");
+        if(ref==l.refs.end()||ref->second!=id)continue;
+        const auto p=Composable::ProfessionOf(doc,l);
+        if(p.empty()||(!profession.empty()&&p!=profession))return {};
+        profession=p;
+    }
+    return profession;
+}
+
+// An explicit choice in Copy & Edit changes only one reference. Check
+// source identity, exact payload and profession again inside the transaction.
+inline bool ReuseEditedForLoadout(Composable::Document& doc,
+    const std::string& loadoutId,const std::string& kind,
+    const std::string& source,const std::string& candidate,const Json& draft,
+    std::string& error) {
+    const auto* l=Composable::FindLoadout(doc,loadoutId);
+    if(!l||!l->refs.count(kind)||l->refs.at(kind)!=source||source==candidate)
+        return Composable::Fail(error,"The source component changed.");
+    const auto matches=EditIndex(doc).Matches(kind,draft,Composable::ProfessionOf(doc,*l));
+    if(std::none_of(matches.begin(),matches.end(),[&](const Match& m){return m.id==candidate;}))
+        return Composable::Fail(error,"The selected component is no longer an exact compatible match.");
+    return Composable::Assign(doc,loadoutId,kind,candidate,error);
+}
+
 // Explicit consolidation only: exact saved payload, never semantic similarity.
 inline bool ConsolidateExact(Composable::Document& doc,const std::string& kind,
     const std::string& source,const std::string& survivor,std::string& error) {

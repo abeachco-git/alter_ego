@@ -3344,6 +3344,18 @@ namespace AlterEgo {
         });
     }
 
+    bool GW2API::ReuseEditedLoadoutComponent(const std::string& loadoutId,
+        const std::string& kind,const std::string& sourceId,
+        const std::string& candidateId,const nlohmann::json& draft,
+        uint64_t expectedRevision) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error) {
+            if(expectedRevision!=g_buildLibraryRevision.load())
+                return Composable::Fail(error,"Library changed since reuse was selected.");
+            return NativeLibrary::ReuseEditedForLoadout(doc,loadoutId,kind,sourceId,
+                candidateId,draft,error);
+        });
+    }
+
     bool GW2API::EditSharedLoadoutComponent(const std::string& kind,
                                              const std::string& componentId,
                                              const nlohmann::json& data) {

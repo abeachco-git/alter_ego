@@ -1027,6 +1027,12 @@ inline bool CopyEditedForLoadout(Document& doc, const std::string& loadoutId,
             return Fail(err, "The Loadout component changed while the private editor was open.");
         const auto* source = Find(next, kind, loadout->refs.at(kind));
         if (!source) return Fail(err, "Original component no longer exists.");
+        // Do not change the owning Loadout's profession behind the
+        // existing Skills reference, even in a private component copy.
+        if (kind == "base_build" &&
+            source->data.value("profession", std::string()) !=
+            editedData.value("profession", std::string()))
+            return Fail(err, "Cannot change profession of a referenced Base Build.");
         Component copy = *source;
         copy.id = newId;
         copy.name = UniqueComponentName(next, kind, name);
