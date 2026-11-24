@@ -144,13 +144,29 @@ inline bool SearchField(const char* id, const char* hint, std::string& query, fl
         [&] { return InputTextWithHint("##query", hint, query); },
         [&] { query.clear(); }, [&] { return !query.empty(); });
 }
+// Canonical popup field layout. Label comes first, then an aligned input.
+// Hidden widget labels retain stable IDs within each field's own ID scope.
+inline void FilterFieldLabel(const char* label) {
+    const float x=ImGui::GetCursorPosX();
+    const float labelWidth=ImGui::GetFontSize()*10.f;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(x+std::max(labelWidth,ImGui::CalcTextSize(label).x+ImGui::GetStyle().ItemSpacing.x));
+}
+inline float FilterFieldWidth() {return ImGui::GetFontSize()*13.f;}
 inline bool FilterChoice(const char* label, int& selected, const char* const options[], int count) {
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 11.0f);
-    return Combo(label, &selected, options, count);
+    ImGui::PushID(label);
+    FilterFieldLabel(label);
+    ImGui::SetNextItemWidth(FilterFieldWidth());
+    const bool changed=Combo("##value", &selected, options, count);
+    ImGui::PopID();
+    return changed;
 }
 inline bool FilterChoice(const char* label, std::string& selected, const std::vector<std::string>& options) {
+    ImGui::PushID(label);
+    FilterFieldLabel(label);
     bool changed = false;
-    if (BeginCombo(label, selected.empty() ? "All" : selected.c_str(), 0, ImGui::GetFontSize() * 11.0f)) {
+    if (BeginCombo("##value", selected.empty() ? "All" : selected.c_str(), 0, FilterFieldWidth())) {
         if (SelectableOption("All", selected.empty()) && !selected.empty()) { selected.clear(); changed = true; }
         for (const auto& option : options)
             if (SelectableOption(option.c_str(), selected == option) && selected != option) {
@@ -158,17 +174,28 @@ inline bool FilterChoice(const char* label, std::string& selected, const std::ve
             }
         ImGui::EndCombo();
     }
+    ImGui::PopID();
+    return changed;
+}
+inline bool FilterInt(const char* label,int& value) {
+    ImGui::PushID(label);
+    FilterFieldLabel(label);
+    ImGui::SetNextItemWidth(FilterFieldWidth());
+    const bool changed=ImGui::InputInt("##value",&value);
+    ImGui::PopID();
     return changed;
 }
 // Checkbox multi-select: empty means unrestricted; keep popup open.
 inline bool MultiFilterChoice(const char* label,std::set<std::string>& selected,
     const std::vector<std::pair<std::string,std::string>>& options) {
+    ImGui::PushID(label);
+    FilterFieldLabel(label);
     bool changed=false;
     const auto preview=selected.empty()?std::string("All"):
         selected.size()==1?*selected.begin():std::to_string(selected.size())+" selected";
-    if(BeginCombo(label,preview.c_str(),0,ImGui::GetFontSize()*13.0f)) {
+    if(BeginCombo("##value",preview.c_str(),0,FilterFieldWidth())) {
         if(ImGui::Selectable("All",selected.empty(),ImGuiSelectableFlags_DontClosePopups)) {
-            selected.clear();changed=true;
+            if(!selected.empty()){selected.clear();changed=true;}
         }
         for(const auto& option:options) {
             ImGui::PushID(option.first.c_str());
@@ -181,6 +208,7 @@ inline bool MultiFilterChoice(const char* label,std::set<std::string>& selected,
         }
         ImGui::EndCombo();
     }
+    ImGui::PopID();
     return changed;
 }
 // Splitter owns both SameLine calls. Capture before drawing the left child.
@@ -309,10 +337,13 @@ inline bool SearchToolbar(const char* id, const char* hint, Query& query,
     } else if (actionClicked) *actionClicked = false;
     if (ImGui::BeginPopup("##filters")) {
         drawFilters();
-        if (ActiveFilterCount(collectFilters()) > 0) {
-            ImGui::Separator();
-            if (Button("Reset filters", ImVec2(0, 0), ButtonRole::Compact)) resetFilters();
-        }
+        const bool canReset=ActiveFilterCount(collectFilters())>0;
+        ImGui::Separator();
+        if(!canReset)ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);
+        const bool resetClicked=Button("Reset filters",ImVec2(0,0),ButtonRole::Compact);
+        if(!canReset)ImGui::PopStyleVar();
+        if(resetClicked&&canReset)resetFilters();
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",canReset?"Reset filters (keep search text)":"No active filters");
         ImGui::EndPopup();
     }
     RenderFilterChips(collectFilters(), resetFilters);

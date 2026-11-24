@@ -47,6 +47,7 @@
 #include "Commerce.h"
 #include "SkinSearchCore.h"
 #include "SkinFilters.h"
+#include "LibraryModeFilter.h"
 #include "WikiImage.h"
 #include "HttpClient.h"
 #include <nlohmann/json.hpp>
@@ -862,7 +863,7 @@ static int g_SkillPickerSlot = -1;         // 0=heal,1-3=util,4=elite while open
 static ImVec2 g_SkillPickerAnchor;         // screen pos of the clicked skill icon (flyout anchor)
 static int g_LegendPickerSlot = -1;        // 0..1 (Revenant) while open, else -1
 static int g_PetPickerSlot = -1;           // 0..1 (Ranger) while open, else -1
-static int g_LibFilterMode = 0;        // 0=All, 1=PvE, 2=WvW, 3=PvP, 4=Raid, 5=Fractal
+static std::set<std::string> g_LibFilterModes; // empty = All; selected modes are ORed
 static char g_LibSearchBuf[128] = "";
 static char g_LibImportBuf[4096] = "";
 static char g_LibImportName[128] = "";
@@ -1702,7 +1703,7 @@ static void SaveSession() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
     if (g_LibSelectedIdx >= 0 && g_LibSelectedIdx < (int)builds.size())
         j["lib_selected_id"] = builds[g_LibSelectedIdx].id;
-    j["lib_filter"] = g_LibFilterMode;
+    j["lib_filter_modes"] = g_LibFilterModes;
     j["lib_collapsed_professions"] = g_LibCollapsedProfessions;
     if (!g_LibCompareBuildId.empty()) j["compare_saved_id"] = g_LibCompareBuildId;
 
@@ -1750,7 +1751,12 @@ static void LoadSession() {
                 if (builds[i].id == savedId) { g_LibSelectedIdx = i; break; }
             }
         }
-        if (j.contains("lib_filter")) g_LibFilterMode = j["lib_filter"].get<int>();
+        if(j.contains("lib_filter_modes")&&j["lib_filter_modes"].is_array()) {
+            g_LibFilterModes.clear();
+            for(const auto& value:j["lib_filter_modes"])if(value.is_string())g_LibFilterModes.insert(value.get<std::string>());
+            AlterEgo::LibraryFilter::Validate(g_LibFilterModes);
+        } else if(j.contains("lib_filter")&&j["lib_filter"].is_number_integer())
+            g_LibFilterModes=AlterEgo::LibraryFilter::Legacy(j["lib_filter"].get<int>());
         if (j.contains("lib_collapsed_professions") &&
             j["lib_collapsed_professions"].is_array()) {
             g_LibCollapsedProfessions.clear();
@@ -5217,7 +5223,6 @@ static const char* ProfessionFromCode(uint8_t code) {
     }
 }
 
-static const char* GameModeNames[] = { "All", "PvE", "WvW", "PvP", "Raid", "Fractal", "Other" };
 static const char* GameModeImportNames[] = { "PvE", "WvW", "PvP", "Raid", "Fractal", "Other" };
 
 static AlterEgo::GameMode GameModeFromIndex(int idx) {
@@ -5263,25 +5268,8 @@ static bool RenderGameModeSelector(const char* id, std::vector<AlterEgo::GameMod
     return changed;
 }
 
-static bool GameModeMatchesFilter(const AlterEgo::SavedBuild& build, int filter) {
-    if (!build.game_modes.empty()) {
-        if (filter == 0) return true;
-        for (auto mode : build.game_modes) {
-            if ((filter >= 1 && filter <= 5 && (int)mode == filter - 1) ||
-                (filter == 6 && mode == AlterEgo::GameMode::Other)) return true;
-        }
-        return false;
-    }
-    const auto mode = build.game_mode;
-    if (filter == 0) return true; // All
-    switch (filter) {
-        case 1: return mode == AlterEgo::GameMode::PvE;
-        case 2: return mode == AlterEgo::GameMode::WvW;
-        case 3: return mode == AlterEgo::GameMode::PvP;
-        case 4: return mode == AlterEgo::GameMode::Raid;
-        case 5: return mode == AlterEgo::GameMode::Fractal;
-        default: return true;
-    }
+static bool GameModeMatchesFilter(const AlterEgo::SavedBuild& build,const std::set<std::string>& filters) {
+    return AlterEgo::LibraryFilter::Matches(filters,build.game_modes,build.game_mode,GameModeLabel);
 }
 
 static const char* GameModeLabel(AlterEgo::GameMode m) {
@@ -11727,15 +11715,19 @@ static void RenderBuildLibrary() {
     bool pendingGroupAfter = false, pendingItemAfter = false;
     ImGui::BeginChild("LibList", ImVec2(split.left, 0), true);
     {
-        g_LibFilterMode = std::max(0, std::min(g_LibFilterMode, IM_ARRAYSIZE(GameModeNames)-1));
         AlterEgo::UI::SearchToolbar("loadouts", "Search loadouts...", g_LibSearchBuf,
             [&] {
                 AlterEgo::UI::FilterChips chips;
-                if (g_LibFilterMode) chips.push_back({"mode", GameModeNames[g_LibFilterMode], [&] { g_LibFilterMode=0; SaveSession(); }});
+                for(const auto& mode:g_LibFilterModes)
+                    chips.push_back({"mode:"+mode,mode,[mode]{g_LibFilterModes.erase(mode);SaveSession();}});
                 return chips;
             },
-            [&] { if (AlterEgo::UI::FilterChoice("Game mode", g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames))) SaveSession(); },
-            [&] { g_LibFilterMode = 0; SaveSession(); });
+            [&] {
+                std::vector<std::pair<std::string,std::string>> options;
+                for(const auto& mode:AlterEgo::LibraryFilter::Modes())options.emplace_back(mode,mode);
+                if(AlterEgo::UI::MultiFilterChoice("Game mode",g_LibFilterModes,options))SaveSession();
+            },
+            [&] {g_LibFilterModes.clear();SaveSession();});
         ImGui::Separator();
 
         if (builds.empty()) {
@@ -11768,7 +11760,7 @@ static void RenderBuildLibrary() {
             }
             LibraryGroup& group = groups[found->second];
             ++group.total;
-            if (!GameModeMatchesFilter(b, g_LibFilterMode)) continue;
+            if (!GameModeMatchesFilter(b, g_LibFilterModes)) continue;
             if (searching) {
                 std::string lowerName = b.name;
                 std::transform(lowerName.begin(), lowerName.end(),
@@ -13048,7 +13040,6 @@ static void DrawSkinFilters(Skinventory::SkinFilters& filters,const SkinBrowserD
     if(Skinventory::Allows(filters.category,"Weapon"))
         draw("Weapon type",filters.weapon,data.facets.weapon,Skinventory::SkinCache::GetWeaponTypes());
     draw("Rarity",filters.rarity,data.facets.rarity,{"Junk","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"});
-    ImGui::TextDisabled("Counts are for each catalog facet");
 }
 static void RevealSkinInBrowser(uint32_t id) {
     const auto skin=Skinventory::SkinCache::GetSkin(id);
@@ -13729,8 +13720,7 @@ static void RenderSkinShoppingList() {
             const char* srcs[]={"All","Trading Post","Vendor"};
             DrawSkinFilters(filters,data,changed);
             if(AlterEgo::UI::FilterChoice("Source",source,srcs,3)) changed();
-            ImGui::SetNextItemWidth(ImGui::GetFontSize()*11.0f);
-            if(ImGui::InputInt("Max gold (0 = any)",&maxGold)) {maxGold=std::max(0,maxGold);changed();}
+            if(AlterEgo::UI::FilterInt("Max gold (0 = any)",maxGold)) {maxGold=std::max(0,maxGold);changed();}
         },
         [&] {source=maxGold=0;filters={};changed();},
         "Refresh Prices", &refreshClicked)) changed();

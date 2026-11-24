@@ -1,9 +1,20 @@
 #include "../src/SkinSearchCore.h"
 #include "../src/SkinFilters.h"
 #include "../src/SplitPanelCore.h"
+#include "../src/LibraryModeFilter.h"
 #include <cassert>
 int case_skin_search(int, char**) {
  using namespace Skinventory;
+ using namespace AlterEgo::LibraryFilter;
+ const auto label=[](const std::string& s){return s;};
+ const std::vector<std::string> both{"Raid","Fractal"};
+ assert(Matches(std::set<std::string>{"Raid","PvP"},both,std::string("PvE"),label));
+ assert(!Matches(std::set<std::string>{"PvP"},both,std::string("PvP"),label));
+ assert(Matches(std::set<std::string>{"Other"},{},std::string("Other"),label));
+ assert(!Matches(std::set<std::string>{"Other"},{},std::string("PvE"),label));
+ assert(Matches(std::set<std::string>{},both,std::string("PvE"),label));
+ assert(Legacy(4)==std::set<std::string>{"Raid"});
+ assert(Legacy(0).empty()&&Legacy(99).empty());
  SkinInfo heavy;heavy.id=1;heavy.name="Heavy Helm";heavy.type="Armor";heavy.weight_class="Heavy";heavy.subtype="Helm";
  SkinInfo medium=heavy;medium.id=2;medium.name="Medium Helm";medium.weight_class="Medium";
  SkinInfo light=heavy;light.id=3;light.name="Light Helm";light.weight_class="Light";
