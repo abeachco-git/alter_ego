@@ -175,7 +175,16 @@ static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
     ImGui::TextColored(ImVec4(0.70f, 0.58f, 0.20f, 1.0f), "Infusion Totals");
     if (headerAction) headerAction();
     if (!total.complete)
-        ImGui::TextDisabled("Some infusion metadata is unavailable; totals are unverified.");
+        ImGui::TextDisabled("Totals are partial: missing item metadata or flexible stat requirements.");
+    if (edit && !edit->infusion_summary_present && edit->infusion_totals.empty()) {
+        std::map<std::string,int> flexible;
+        for (const auto& entry : edit->gear) if (CountSavedInfusionSlot(*edit,entry.first))
+            for (const auto& attribute : entry.second.infusion_attributes)
+                if (!attribute.empty()) ++flexible[attribute];
+        for (const auto& entry : flexible)
+            ImGui::TextDisabled("%s: %d flexible infusion slot%s",
+                InfusionAttributeLabel(entry.first), entry.second,entry.second == 1 ? "" : "s");
+    }
     if (!total.present && !edit)
         ImGui::TextDisabled("No infusion totals specified");
     if (ImGui::BeginTable("##infusion_totals", 2, ImGuiTableFlags_SizingStretchSame)) {

@@ -98,6 +98,13 @@ int main() {
     assert(Semantics::SimilarRequirements("sigils", sigilsA, sigilsB));
     assert(!Semantics::SimilarRequirements("sigils", sigilsA, sigilsOtherSet));
     assert(!Semantics::SimilarRequirements("sigils", sigilsA, sigilsA));
+    const Json sigilsReversed = {{"gear",{{"WeaponA1",{{"sigil_id",101},{"sigil2_id",100}}}}}};
+    assert(ReuseKey("sigils", sigilsA) == ReuseKey("sigils", sigilsReversed));
+    assert(ReuseKey("sigils", sigilsA) != ReuseKey("sigils", sigilsB));
+    const Json infusionOrderA = {{"gear",{{"Ring1",{{"infusion_ids",Json::array({44,45})}}}}}};
+    const Json infusionOrderB = {{"gear",{{"Ring1",{{"infusion_ids",Json::array({45,44})},
+                                              {"infusion_attributes",Json::array({"",""})}}}}}};
+    assert(ReuseKey("infusions", infusionOrderA) == ReuseKey("infusions", infusionOrderB));
     Document document;
     assert(SplitLegacy(kExample, document, error));
     assert(document.loadouts.size() == 2);

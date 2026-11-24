@@ -633,9 +633,41 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                 copiedKind = kind;
                 copiedFrom = slot;
             }
-            if (ImGui::MenuItem("Paste",nullptr,false,copiedKind == kind &&
-                    copiedSlot.is_object() && copiedFrom == slot))
-                data["gear"][slot] = copiedSlot;
+            const bool compatible = copiedKind == kind && copiedSlot.is_object() &&
+                (copiedFrom == slot || kind == "armor" || kind == "trinkets" || kind == "runes");
+            if (ImGui::MenuItem("Paste",nullptr,false,compatible)) {
+                if (copiedFrom == slot) data["gear"][slot] = copiedSlot;
+                else {
+                    auto& dest = data["gear"][slot];
+                    if (dest.is_object()) {
+                        if (kind == "runes") {
+                            for (const char* field : {"rune","rune_id"}) {
+                                if (copiedSlot.contains(field)) dest[field] = copiedSlot[field];
+                                else dest.erase(field);
+                            }
+                        } else {
+                            for (const char* field : {"stat_id","stat_name"}) {
+                                if (copiedSlot.contains(field)) dest[field] = copiedSlot[field];
+                                else dest.erase(field);
+                            }
+                        }
+                    }
+                }
+            }
+            if ((kind == "armor" || kind == "trinkets" || kind == "runes") &&
+                ImGui::MenuItem("Copy to All Recorded Slots")) {
+                const auto source = data["gear"].at(slot);
+                if (source.is_object()) for (auto& dest : data["gear"]) {
+                    if (!dest.is_object()) continue;
+                    const std::vector<const char*> fields = kind == "runes"
+                        ? std::vector<const char*>{"rune","rune_id"}
+                        : std::vector<const char*>{"stat_id","stat_name"};
+                    for (const char* field : fields) {
+                        if (source.contains(field)) dest[field] = source[field];
+                        else dest.erase(field);
+                    }
+                }
+            }
             if (ImGui::MenuItem("Clear Slot")) {
                 g_ComponentGearSelectedSlot = slot;
                 g_ComponentGearRemovalPending = slot;

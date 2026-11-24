@@ -317,6 +317,55 @@ inline Json ReuseKey(const std::string& kind, Json data) {
         std::sort(entries.begin(), entries.end());
         for (size_t i = 0; i < slots.size(); ++i) data["gear"][slots[i]] = entries[i];
     }
+    if (kind == "sigils" && data.contains("gear") && data["gear"].is_object()) {
+        // Swapping two sigils on the same two-slot weapon changes no effect
+        // or capacity. Different physical weapon layouts remain separate.
+        for (auto& entry : data["gear"]) {
+            if (!entry.is_object() || !entry.contains("sigil_id") || !entry.contains("sigil2_id") ||
+                !entry["sigil_id"].is_number_integer() || !entry["sigil2_id"].is_number_integer() ||
+                entry["sigil_id"] <= 0 || entry["sigil2_id"] <= 0) continue;
+            bool unknown = false;
+            for (auto it = entry.begin(); it != entry.end(); ++it)
+                if (it.key() != "sigil_id" && it.key() != "sigil" &&
+                    it.key() != "sigil2_id" && it.key() != "sigil2") unknown = true;
+            if (unknown) continue;
+            Json a = {{"id",entry["sigil_id"]}}, b = {{"id",entry["sigil2_id"]}};
+            if (entry.contains("sigil")) a["name"] = entry["sigil"];
+            if (entry.contains("sigil2")) b["name"] = entry["sigil2"];
+            if (b < a) std::swap(a,b);
+            entry = {{"sigil_id",a["id"]},{"sigil2_id",b["id"]}};
+            if (a.contains("name")) entry["sigil"] = a["name"];
+            if (b.contains("name")) entry["sigil2"] = b["name"];
+        }
+    }
+    if (kind == "infusions" && data.contains("gear") && data["gear"].is_object()) {
+        for (auto& entry : data["gear"]) {
+            if (!entry.is_object() || !entry.contains("infusion_ids") ||
+                !entry["infusion_ids"].is_array()) continue;
+            const auto& ids = entry["infusion_ids"];
+            const auto attrs = entry.value("infusion_attributes", Json::array());
+            if (!attrs.is_array() || attrs.size() > ids.size()) continue;
+            std::vector<std::pair<Json,Json>> pairs;
+            bool valid = true;
+            for (size_t i = 0; i < ids.size(); ++i) {
+                if (!ids[i].is_number_integer() ||
+                    (i < attrs.size() && !attrs[i].is_string())) { valid = false; break; }
+                pairs.push_back({ids[i],i < attrs.size() ? attrs[i] : Json("")});
+            }
+            if (!valid) continue;
+            std::sort(pairs.begin(),pairs.end());
+            entry["infusion_ids"] = Json::array();
+            entry.erase("infusion_attributes");
+            Json normalized = Json::array();
+            bool any = false;
+            for (const auto& pair : pairs) {
+                entry["infusion_ids"].push_back(pair.first);
+                normalized.push_back(pair.second);
+                any = any || pair.second != "";
+            }
+            if (any) entry["infusion_attributes"] = std::move(normalized);
+        }
+    }
     return data;
 }
 inline const Component* ReusableForLoadout(const Document& doc, const std::string& kind,
@@ -349,7 +398,7 @@ inline const Component* ReusableForLoadout(const Document& doc, const std::strin
 }
 inline Json ReuseComparableBuild(const Json& raw) {
     auto parts = Split(raw);
-    for (const auto& kind : {std::string("skills"), std::string("runes")})
+    for (const auto& kind : {std::string("skills"), std::string("runes"), std::string("sigils"), std::string("infusions")})
         parts[kind] = ReuseKey(kind, parts.at(kind));
     return Json{{"metadata", Metadata(raw)}, {"components", parts}};
 }

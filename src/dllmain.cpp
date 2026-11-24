@@ -7661,7 +7661,245 @@ static void RenderPetPickerDialog() {
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
 
-static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot);
+// Clipboard is typed and local to Alter Ego. Copying across slot types never
+// transfers an incompatible exact item ID or overwrites a weapon type.
+enum class GearCopyField { All, Stats, Upgrade, Infusions, Relic };
+struct GearClipboard {
+    bool valid = false;
+    GearCopyField field = GearCopyField::All;
+    std::string slot;
+    AlterEgo::BuildGearSlot data;
+    uint32_t relicId = 0;
+    std::string relicName;
+};
+static GearClipboard g_GearClipboard;
+static bool GearSlotBlocked(const AlterEgo::SavedBuild& b, const std::string& slot) {
+    if (!IsOffhandSlot(slot)) return false;
+    auto it = b.gear.find(slot == "WeaponA2" ? "WeaponA1" : "WeaponB1");
+    return it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
+}
+static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
+    auto it = b.gear.find(slot);
+    const bool two = it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
+    int capacity = AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
+    if (capacity && it != b.gear.end() && it->second.item_id) {
+        const auto* info = AlterEgo::GW2API::GetItemInfo(it->second.item_id);
+        if (info && info->details.is_object() && info->details.contains("infusion_slots") &&
+            info->details["infusion_slots"].is_array())
+            capacity = std::min(capacity, static_cast<int>(info->details["infusion_slots"].size()));
+    }
+    return capacity;
+}
+static int GearSigilCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
+    if (!IsWeaponSlot(slot) || GearSlotBlocked(b,slot)) return 0;
+    auto it = b.gear.find(slot);
+    if (it == b.gear.end() || it->second.weapon_type.empty()) return 0;
+    return IsWeaponTwoHanded(b.profession,it->second.weapon_type) ? 2 : 1;
+}
+static bool GearSameGroup(const std::string& a,const std::string& b) {
+    return (IsArmorSlot(a) && IsArmorSlot(b)) ||
+           (IsWeaponSlot(a) && IsWeaponSlot(b)) ||
+           (IsTrinketSlot(a) && IsTrinketSlot(b));
+}
+static bool GearCanPaste(const AlterEgo::SavedBuild& b,const std::string& slot,const GearClipboard& c) {
+    if (!c.valid || GearSlotBlocked(b,slot)) return false;
+    if (c.field == GearCopyField::Relic) return slot == "Relic";
+    if (!IsArmorSlot(slot) && !IsTrinketSlot(slot) && !IsWeaponSlot(slot)) return false;
+    if (c.field == GearCopyField::Stats) return !IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0;
+    if (c.field == GearCopyField::Infusions) return GearInfusionCapacity(b,slot) > 0 &&
+        (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0);
+    if (c.field == GearCopyField::Upgrade)
+        return (IsArmorSlot(c.slot) && IsArmorSlot(slot)) ||
+            (IsWeaponSlot(c.slot) && GearSigilCapacity(b,slot) > 0);
+    if (!GearSameGroup(slot,c.slot)) return false;
+    if (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0) return true;
+    if (c.data.weapon_type.empty()) return false;
+    const auto* weapons = AlterEgo::GW2API::GetProfessionWeapons(b.profession);
+    if (!weapons) return false;
+    const auto it = weapons->find(c.data.weapon_type);
+    return it != weapons->end() && AlterEgo::EquipmentChoice::WeaponEligible(
+        slot,it->second.mainhand,it->second.offhand,it->second.two_handed);
+}
+static void ExpandSharedRune(AlterEgo::SavedBuild& b) {
+    if (!b.rune_id && b.rune_name.empty()) return;
+    bool explicitRunes = false;
+    for (const auto& entry : b.gear)
+        if (IsArmorSlot(entry.first) && (entry.second.rune_id || !entry.second.rune.empty()))
+            explicitRunes = true;
+    if (!explicitRunes) for (auto& entry : b.gear) if (IsArmorSlot(entry.first)) {
+        entry.second.rune = b.rune_name; entry.second.rune_id = b.rune_id;
+    }
+    b.rune_id = 0; b.rune_name.clear();
+}
+static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,const GearClipboard& c) {
+    if (!GearCanPaste(b,slot,c)) return;
+    if (c.field == GearCopyField::Relic) {
+        b.relic_id = c.relicId; b.relic_name = c.relicName;
+        auto it = b.gear.find("Relic");
+        if (it != b.gear.end()) it->second.item_id = c.relicId;
+        MarkEditDirty(); return;
+    }
+    if ((c.field == GearCopyField::All || c.field == GearCopyField::Upgrade) && IsArmorSlot(slot))
+        ExpandSharedRune(b);
+    auto& dest = b.gear[slot]; dest.slot = slot;
+    if (c.field == GearCopyField::All && IsWeaponSlot(slot) && dest.weapon_type.empty()) {
+        dest.weapon_type = c.data.weapon_type;
+        dest.item_id = 0;
+        if (IsMainhandSlot(slot) && IsWeaponTwoHanded(b.profession,dest.weapon_type)) {
+            b.gear.erase(slot == "WeaponA1" ? "WeaponA2" : "WeaponB2");
+            InvalidateGearInfusionTotals(b);
+        }
+    }
+    if (c.field == GearCopyField::All || c.field == GearCopyField::Stats) {
+        dest.stat_id = c.data.stat_id; dest.stat_name = c.data.stat_name;
+    }
+    if (c.field == GearCopyField::All || c.field == GearCopyField::Upgrade) {
+        if (IsArmorSlot(slot)) { dest.rune = c.data.rune; dest.rune_id = c.data.rune_id; }
+        if (IsWeaponSlot(slot)) AlterEgo::GearEdit::CopySigils(dest,c.data,GearSigilCapacity(b,slot));
+    }
+    if (c.field == GearCopyField::All || c.field == GearCopyField::Infusions) {
+        if (GearInfusionCapacity(b,slot) > 0 &&
+            (c.field == GearCopyField::Infusions || !c.data.infusion_ids.empty() ||
+             !c.data.infusion_attributes.empty() || c.data.infusion_snapshot)) {
+            AlterEgo::GearEdit::CopyInfusions(dest,c.data,GearInfusionCapacity(b,slot));
+            InvalidateGearInfusionTotals(b);
+        }
+    }
+    MarkEditDirty();
+}
+static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCopyField field) {
+    if (slot == "Relic") { b.relic_id = 0; b.relic_name.clear(); b.gear.erase(slot); MarkEditDirty(); return; }
+    if (IsArmorSlot(slot) && (field == GearCopyField::All || field == GearCopyField::Upgrade)) ExpandSharedRune(b);
+    auto it = b.gear.find(slot);
+    if (it == b.gear.end()) return;
+    if (field == GearCopyField::All) {
+        if (g_GearDialogOpen && g_GearDialogBuildId == b.id && g_GearDialogSlot == slot)
+            g_GearDialogOpen = false;
+        const bool hadInfusions = !it->second.infusion_ids.empty() ||
+            !it->second.infusion_attributes.empty() || it->second.infusion_snapshot;
+        b.gear.erase(it);
+        if (hadInfusions) InvalidateGearInfusionTotals(b);
+    } else {
+        auto& item = it->second;
+        if (field == GearCopyField::Stats) { item.stat_id = 0; item.stat_name.clear(); }
+        if (field == GearCopyField::Upgrade) {
+            item.rune_id = item.sigil_id = item.sigil2_id = 0;
+            item.rune.clear(); item.sigil.clear(); item.sigil2.clear();
+        }
+        if (field == GearCopyField::Infusions) {
+            item.infusion_ids.clear(); item.infusion_attributes.clear(); item.infusion.clear();
+            item.infusion_snapshot = true; InvalidateGearInfusionTotals(b);
+        }
+    }
+    MarkEditDirty();
+}
+static GearClipboard CaptureGearClipboard(const AlterEgo::SavedBuild& b,const std::string& slot,GearCopyField field) {
+    GearClipboard c; c.valid = true; c.slot = slot; c.field = field;
+    auto it = b.gear.find(slot); if (it != b.gear.end()) c.data = it->second;
+    if (IsArmorSlot(slot) && c.data.rune.empty() && !c.data.rune_id) {
+        bool any = false;
+        for (const auto& entry : b.gear) if (IsArmorSlot(entry.first) &&
+            (entry.second.rune_id || !entry.second.rune.empty())) any = true;
+        if (!any) { c.data.rune = b.rune_name; c.data.rune_id = b.rune_id; }
+    }
+    c.relicId = b.relic_id; c.relicName = b.relic_name;
+    return c;
+}
+static void CopyGearToGroup(AlterEgo::SavedBuild& b,const GearClipboard& c,const std::string& group) {
+    // Work against the canonical editable land slots. Stats/runes can
+    // populate planned armor; upgrades never invent equipment capacities.
+    std::vector<std::string> slots;
+    for (const char* raw : {"Helm","Shoulders","Coat","Gloves","Leggings","Boots",
+            "WeaponA1","WeaponA2","WeaponB1","WeaponB2","Backpack","Accessory1",
+            "Accessory2","Amulet","Ring1","Ring2"}) {
+        const std::string s(raw);
+        if ((c.field == GearCopyField::Infusions || IsWeaponSlot(s)) &&
+            !b.gear.count(s)) continue;
+        if (IsWeaponSlot(s) && GearSigilCapacity(b,s) == 0) continue;
+        if ((s != c.slot || c.field == GearCopyField::Infusions) &&
+            (group == "All" || (group == "Armor" && IsArmorSlot(s)) ||
+            (group == "Weapons" && IsWeaponSlot(s)) || (group == "Trinkets" && IsTrinketSlot(s))))
+            slots.push_back(s);
+    }
+    for (const auto& slot : slots) ApplyGearClipboard(b,slot,c);
+}
+static void CopyWeaponSetSigils(AlterEgo::SavedBuild& b,const std::string& source) {
+    if (!IsWeaponSlot(source)) return;
+    const std::string from = source.substr(0,7), to = from == "WeaponA" ? "WeaponB" : "WeaponA";
+    std::vector<std::pair<uint32_t,std::string>> pattern;
+    for (const auto& suffix : {"1","2"}) {
+        const auto slot = from + suffix;
+        auto it = b.gear.find(slot);
+        if (it == b.gear.end() || !GearSigilCapacity(b,slot)) continue;
+        const auto& s = it->second;
+        pattern.push_back({s.sigil_id,s.sigil});
+        if (GearSigilCapacity(b,slot) == 2) pattern.push_back({s.sigil2_id,s.sigil2});
+    }
+    if (pattern.empty()) return;
+    size_t index = 0;
+    for (const auto& suffix : {"1","2"}) {
+        const auto slot = to + suffix;
+        const int capacity = GearSigilCapacity(b,slot);
+        if (!capacity) continue;
+        auto& s = b.gear.at(slot);
+        auto first = pattern[index++ % pattern.size()];
+        s.sigil_id = first.first; s.sigil = first.second;
+        s.sigil2_id = 0; s.sigil2.clear();
+        if (capacity == 2) {
+            auto second = pattern[index++ % pattern.size()];
+            s.sigil2_id = second.first; s.sigil2 = second.second;
+        }
+    }
+    MarkEditDirty();
+}
+static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slot,bool& clearAfter) {
+    if (!ImGui::BeginPopupContextItem("##gear_edit_context")) return;
+    const bool relic = slot == "Relic";
+    auto capture = [&](GearCopyField field) { return CaptureGearClipboard(b,slot,field); };
+    if (ImGui::MenuItem("Edit")) {
+        auto c = capture(GearCopyField::All); c.data.slot = slot;
+        OpenGearDialog(b.id,slot,c.data);
+    }
+    if (ImGui::BeginMenu("Copy")) {
+        if (ImGui::MenuItem(relic ? "Relic" : "Configuration")) g_GearClipboard = capture(relic ? GearCopyField::Relic : GearCopyField::All);
+        if (!relic) {
+            if (ImGui::MenuItem("Stats")) g_GearClipboard = capture(GearCopyField::Stats);
+            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) g_GearClipboard = capture(GearCopyField::Upgrade);
+            if (GearInfusionCapacity(b,slot) && ImGui::MenuItem("Infusions")) g_GearClipboard = capture(GearCopyField::Infusions);
+        }
+        ImGui::EndMenu();
+    }
+    if (ImGui::MenuItem("Paste",nullptr,false,GearCanPaste(b,slot,g_GearClipboard)))
+        ApplyGearClipboard(b,slot,g_GearClipboard);
+    if (!relic) {
+        if (ImGui::BeginMenu("Copy to all slots")) {
+            const std::string group = IsArmorSlot(slot) ? "Armor" : IsWeaponSlot(slot) ? "Weapons" : "Trinkets";
+            if (ImGui::MenuItem("Configuration")) CopyGearToGroup(b,capture(GearCopyField::All),group);
+            if (ImGui::MenuItem("Stats")) CopyGearToGroup(b,capture(GearCopyField::Stats),group);
+            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) CopyGearToGroup(b,capture(GearCopyField::Upgrade),group);
+            if (GearInfusionCapacity(b,slot) && ImGui::BeginMenu("Infusions")) {
+                if (ImGui::MenuItem("This item (fill slots)")) ApplyGearClipboard(b,slot,capture(GearCopyField::Infusions));
+                for (const auto& target : {"Armor","Weapons","Trinkets","All"})
+                    if (ImGui::MenuItem(target)) CopyGearToGroup(b,capture(GearCopyField::Infusions),target);
+                ImGui::EndMenu();
+            }
+            if (IsWeaponSlot(slot) && ImGui::MenuItem("Sigils to other weapon set")) CopyWeaponSetSigils(b,slot);
+            ImGui::EndMenu();
+        }
+    }
+    if (ImGui::BeginMenu("Clear")) {
+        if (ImGui::MenuItem(relic ? "Relic" : "Entire slot")) clearAfter = true;
+        if (!relic) {
+            if (ImGui::MenuItem("Stats")) ClearGearSlot(b,slot,GearCopyField::Stats);
+            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) ClearGearSlot(b,slot,GearCopyField::Upgrade);
+            if (GearInfusionCapacity(b,slot) && ImGui::MenuItem("Infusions")) ClearGearSlot(b,slot,GearCopyField::Infusions);
+        }
+        ImGui::EndMenu();
+    }
+    ImGui::EndPopup();
+}
+
+
 static void RenderGearCustomizeDialog() {
     if (!g_GearDialogOpen) return;
     if (!g_LibEditMode || g_GearDialogBuildId != g_EditDraft.id) {
@@ -7857,6 +8095,39 @@ static void RenderGearCustomizeDialog() {
                     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
                 }
 
+                if (ImGui::BeginPopupContextItem("##single_upgrade_edit")) {
+                    auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Upgrade);
+                    if (isWeapon) {
+                        if (sigilIdx == 1) {
+                            snapshot.data.sigil = gs.sigil2; snapshot.data.sigil_id = gs.sigil2_id;
+                        }
+                        snapshot.data.sigil2.clear(); snapshot.data.sigil2_id = 0;
+                    }
+                    if (ImGui::MenuItem("Copy")) g_GearClipboard = snapshot;
+                    const bool compatible = g_GearClipboard.valid &&
+                        g_GearClipboard.field == GearCopyField::Upgrade &&
+                        GearSameGroup(g_GearClipboard.slot,g_GearDialogSlot);
+                    if (ImGui::MenuItem("Paste",nullptr,false,compatible)) {
+                        if (isArmor) {
+                            ExpandSharedRune(*editBuild);
+                            gs.rune = g_GearClipboard.data.rune; gs.rune_id = g_GearClipboard.data.rune_id;
+                        } else if (sigilIdx == 1) {
+                            gs.sigil2 = g_GearClipboard.data.sigil; gs.sigil2_id = g_GearClipboard.data.sigil_id;
+                        } else {
+                            gs.sigil = g_GearClipboard.data.sigil; gs.sigil_id = g_GearClipboard.data.sigil_id;
+                        }
+                        commitGear();
+                    }
+                    if (ImGui::MenuItem("Copy to All Compatible Slots"))
+                        CopyGearToGroup(*editBuild,snapshot,isArmor ? "Armor" : "Weapons");
+                    if (ImGui::MenuItem("Clear")) {
+                        if (isArmor) { ExpandSharedRune(*editBuild); gs.rune.clear(); gs.rune_id = 0; }
+                        else if (sigilIdx == 1) { gs.sigil2.clear(); gs.sigil2_id = 0; }
+                        else { gs.sigil.clear(); gs.sigil_id = 0; }
+                        commitGear();
+                    }
+                    ImGui::EndPopup();
+                }
                 ImVec2 tp(p.x + 6, p.y + 3);
                 if (!upgradeName->empty()) {
                     char buf[256];
@@ -7900,8 +8171,34 @@ static void RenderGearCustomizeDialog() {
                     g_GearExactInfusionId = static_cast<int>(id);
                     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
                 }
+                bool removeInfusion = false;
+                if (ImGui::BeginPopupContextItem("##single_infusion_edit")) {
+                    auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Infusions);
+                    snapshot.data.infusion_ids = {id};
+                    snapshot.data.infusion_attributes = {attr};
+                    if (ImGui::MenuItem("Copy")) g_GearClipboard = snapshot;
+                    const bool compatible = g_GearClipboard.valid &&
+                        g_GearClipboard.field == GearCopyField::Infusions &&
+                        !g_GearClipboard.data.infusion_ids.empty();
+                    if (ImGui::MenuItem("Paste",nullptr,false,compatible)) {
+                        gs.infusion_ids[i] = g_GearClipboard.data.infusion_ids.front();
+                        gs.infusion_attributes.resize(gs.infusion_ids.size());
+                        gs.infusion_attributes[i] = g_GearClipboard.data.infusion_attributes.empty()
+                            ? "" : g_GearClipboard.data.infusion_attributes.front();
+                        gs.infusion_snapshot = true; commitGear(true);
+                    }
+                    if (ImGui::MenuItem("Fill This Item")) ApplyGearClipboard(*editBuild,g_GearDialogSlot,snapshot);
+                    if (ImGui::BeginMenu("Copy to All Slots")) {
+                        for (const auto& group : {"Armor","Weapons","Trinkets","All"})
+                            if (ImGui::MenuItem(group)) CopyGearToGroup(*editBuild,snapshot,group);
+                        ImGui::EndMenu();
+                    }
+                    if (ImGui::MenuItem("Clear")) removeInfusion = true;
+                    ImGui::EndPopup();
+                }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("X##removeInfusion")) {
+                if (ImGui::SmallButton("X##removeInfusion") || removeInfusion) {
+                    if (i >= gs.infusion_ids.size()) { ImGui::PopID(); break; }
                     gs.infusion_ids.erase(gs.infusion_ids.begin() + i);
                     if (i < gs.infusion_attributes.size())
                         gs.infusion_attributes.erase(gs.infusion_attributes.begin() + i);
@@ -8103,11 +8400,9 @@ static void RenderGearCustomizeDialog() {
 
                     ImGui::SetCursorScreenPos(cs);
                     if (ImGui::InvisibleButton("##rsel", ImVec2(cw, ch))) {
+                        ExpandSharedRune(*editBuild);
                         gs.rune = RUNE_LIST[i].name;
-                        gs.rune_id = AlterEgo::GW2API::FindItemIdByName(RUNE_LIST[i].name);
-                        if (editBuild) {
-                            editBuild->rune_id = gs.rune_id;
-                        }
+                        gs.rune_id = RUNE_LIST[i].item_id;
                         commitGear();
                     }
 
@@ -8709,221 +9004,6 @@ static void RenderSaveToLibraryDialog() {
     ImGui::End();
 }
 
-
-// Clipboard is typed and local to Alter Ego. Copying across slot types never
-// transfers an incompatible exact item ID or overwrites a weapon type.
-enum class GearCopyField { All, Stats, Upgrade, Infusions, Relic };
-struct GearClipboard {
-    bool valid = false;
-    GearCopyField field = GearCopyField::All;
-    std::string slot;
-    AlterEgo::BuildGearSlot data;
-    uint32_t relicId = 0;
-    std::string relicName;
-};
-static GearClipboard g_GearClipboard;
-static bool GearSlotBlocked(const AlterEgo::SavedBuild& b, const std::string& slot) {
-    if (!IsOffhandSlot(slot)) return false;
-    auto it = b.gear.find(slot == "WeaponA2" ? "WeaponA1" : "WeaponB1");
-    return it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
-}
-static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
-    auto it = b.gear.find(slot);
-    const bool two = it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
-    int capacity = AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
-    if (capacity && it != b.gear.end() && it->second.item_id) {
-        const auto* info = AlterEgo::GW2API::GetItemInfo(it->second.item_id);
-        if (info && info->details.is_object() && info->details.contains("infusion_slots") &&
-            info->details["infusion_slots"].is_array())
-            capacity = std::min(capacity, static_cast<int>(info->details["infusion_slots"].size()));
-    }
-    return capacity;
-}
-static int GearSigilCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
-    if (!IsWeaponSlot(slot) || GearSlotBlocked(b,slot)) return 0;
-    auto it = b.gear.find(slot);
-    if (it == b.gear.end() || it->second.weapon_type.empty()) return 0;
-    return IsWeaponTwoHanded(b.profession,it->second.weapon_type) ? 2 : 1;
-}
-static bool GearSameGroup(const std::string& a,const std::string& b) {
-    return (IsArmorSlot(a) && IsArmorSlot(b)) ||
-           (IsWeaponSlot(a) && IsWeaponSlot(b)) ||
-           (IsTrinketSlot(a) && IsTrinketSlot(b));
-}
-static bool GearCanPaste(const AlterEgo::SavedBuild& b,const std::string& slot,const GearClipboard& c) {
-    if (!c.valid || GearSlotBlocked(b,slot)) return false;
-    if (c.field == GearCopyField::Relic) return slot == "Relic";
-    if (slot == "Relic") return false;
-    if (c.field == GearCopyField::Stats) return !IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0;
-    if (c.field == GearCopyField::Infusions) return GearInfusionCapacity(b,slot) > 0 &&
-        (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0);
-    if (c.field == GearCopyField::Upgrade)
-        return (IsArmorSlot(c.slot) && IsArmorSlot(slot)) ||
-            (IsWeaponSlot(c.slot) && GearSigilCapacity(b,slot) > 0);
-    return GearSameGroup(slot,c.slot) && (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0);
-}
-static void ExpandSharedRune(AlterEgo::SavedBuild& b) {
-    if (!b.rune_id && b.rune_name.empty()) return;
-    bool explicitRunes = false;
-    for (const auto& entry : b.gear)
-        if (IsArmorSlot(entry.first) && (entry.second.rune_id || !entry.second.rune.empty()))
-            explicitRunes = true;
-    if (!explicitRunes) for (auto& entry : b.gear) if (IsArmorSlot(entry.first)) {
-        entry.second.rune = b.rune_name; entry.second.rune_id = b.rune_id;
-    }
-    b.rune_id = 0; b.rune_name.clear();
-}
-static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,const GearClipboard& c) {
-    if (!GearCanPaste(b,slot,c)) return;
-    if (c.field == GearCopyField::Relic) {
-        b.relic_id = c.relicId; b.relic_name = c.relicName;
-        auto it = b.gear.find("Relic");
-        if (it != b.gear.end()) it->second.item_id = c.relicId;
-        MarkEditDirty(); return;
-    }
-    if ((c.field == GearCopyField::All || c.field == GearCopyField::Upgrade) && IsArmorSlot(slot))
-        ExpandSharedRune(b);
-    auto& dest = b.gear[slot]; dest.slot = slot;
-    if (c.field == GearCopyField::All || c.field == GearCopyField::Stats) {
-        dest.stat_id = c.data.stat_id; dest.stat_name = c.data.stat_name;
-    }
-    if (c.field == GearCopyField::All || c.field == GearCopyField::Upgrade) {
-        if (IsArmorSlot(slot)) { dest.rune = c.data.rune; dest.rune_id = c.data.rune_id; }
-        if (IsWeaponSlot(slot)) AlterEgo::GearEdit::CopySigils(dest,c.data,GearSigilCapacity(b,slot));
-    }
-    if (c.field == GearCopyField::All || c.field == GearCopyField::Infusions) {
-        if (GearInfusionCapacity(b,slot) > 0 &&
-            (c.field == GearCopyField::Infusions || !c.data.infusion_ids.empty() ||
-             !c.data.infusion_attributes.empty() || c.data.infusion_snapshot)) {
-            AlterEgo::GearEdit::CopyInfusions(dest,c.data,GearInfusionCapacity(b,slot));
-            InvalidateGearInfusionTotals(b);
-        }
-    }
-    MarkEditDirty();
-}
-static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCopyField field) {
-    if (slot == "Relic") { b.relic_id = 0; b.relic_name.clear(); b.gear.erase(slot); MarkEditDirty(); return; }
-    if (IsArmorSlot(slot) && (field == GearCopyField::All || field == GearCopyField::Upgrade)) ExpandSharedRune(b);
-    auto it = b.gear.find(slot);
-    if (it == b.gear.end()) return;
-    if (field == GearCopyField::All) {
-        const bool hadInfusions = !it->second.infusion_ids.empty() ||
-            !it->second.infusion_attributes.empty() || it->second.infusion_snapshot;
-        b.gear.erase(it);
-        if (hadInfusions) InvalidateGearInfusionTotals(b);
-    } else {
-        auto& item = it->second;
-        if (field == GearCopyField::Stats) { item.stat_id = 0; item.stat_name.clear(); }
-        if (field == GearCopyField::Upgrade) {
-            item.rune_id = item.sigil_id = item.sigil2_id = 0;
-            item.rune.clear(); item.sigil.clear(); item.sigil2.clear();
-        }
-        if (field == GearCopyField::Infusions) {
-            item.infusion_ids.clear(); item.infusion_attributes.clear(); item.infusion.clear();
-            item.infusion_snapshot = true; InvalidateGearInfusionTotals(b);
-        }
-    }
-    MarkEditDirty();
-}
-static GearClipboard CaptureGearClipboard(const AlterEgo::SavedBuild& b,const std::string& slot,GearCopyField field) {
-    GearClipboard c; c.valid = true; c.slot = slot; c.field = field;
-    auto it = b.gear.find(slot); if (it != b.gear.end()) c.data = it->second;
-    if (IsArmorSlot(slot) && c.data.rune.empty() && !c.data.rune_id) {
-        bool any = false;
-        for (const auto& entry : b.gear) if (IsArmorSlot(entry.first) &&
-            (entry.second.rune_id || !entry.second.rune.empty())) any = true;
-        if (!any) { c.data.rune = b.rune_name; c.data.rune_id = b.rune_id; }
-    }
-    c.relicId = b.relic_id; c.relicName = b.relic_name;
-    return c;
-}
-static void CopyGearToGroup(AlterEgo::SavedBuild& b,const GearClipboard& c,const std::string& group) {
-    // Snapshot keys before editing. Bulk operations affect existing gear only.
-    std::vector<std::string> slots;
-    for (const auto& entry : b.gear) {
-        const auto& s = entry.first;
-        if ((s != c.slot || c.field == GearCopyField::Infusions) &&
-            (group == "All" || (group == "Armor" && IsArmorSlot(s)) ||
-            (group == "Weapons" && IsWeaponSlot(s)) || (group == "Trinkets" && IsTrinketSlot(s))))
-            slots.push_back(s);
-    }
-    for (const auto& slot : slots) ApplyGearClipboard(b,slot,c);
-}
-static void CopyWeaponSetSigils(AlterEgo::SavedBuild& b,const std::string& source) {
-    if (!IsWeaponSlot(source)) return;
-    const std::string from = source.substr(0,7), to = from == "WeaponA" ? "WeaponB" : "WeaponA";
-    std::vector<std::pair<uint32_t,std::string>> pattern;
-    for (const auto& suffix : {"1","2"}) {
-        const auto slot = from + suffix;
-        auto it = b.gear.find(slot);
-        if (it == b.gear.end() || !GearSigilCapacity(b,slot)) continue;
-        const auto& s = it->second;
-        pattern.push_back({s.sigil_id,s.sigil});
-        if (GearSigilCapacity(b,slot) == 2) pattern.push_back({s.sigil2_id,s.sigil2});
-    }
-    if (pattern.empty()) return;
-    size_t index = 0;
-    for (const auto& suffix : {"1","2"}) {
-        const auto slot = to + suffix;
-        const int capacity = GearSigilCapacity(b,slot);
-        if (!capacity) continue;
-        auto& s = b.gear.at(slot);
-        auto first = pattern[index++ % pattern.size()];
-        s.sigil_id = first.first; s.sigil = first.second;
-        s.sigil2_id = 0; s.sigil2.clear();
-        if (capacity == 2) {
-            auto second = pattern[index++ % pattern.size()];
-            s.sigil2_id = second.first; s.sigil2 = second.second;
-        }
-    }
-    MarkEditDirty();
-}
-static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slot,bool& clearAfter) {
-    if (!ImGui::BeginPopupContextItem("##gear_edit_context")) return;
-    const bool relic = slot == "Relic";
-    auto capture = [&](GearCopyField field) { return CaptureGearClipboard(b,slot,field); };
-    if (ImGui::MenuItem("Edit")) {
-        auto c = capture(GearCopyField::All); c.data.slot = slot;
-        OpenGearDialog(b.id,slot,c.data);
-    }
-    if (ImGui::BeginMenu("Copy")) {
-        if (ImGui::MenuItem(relic ? "Relic" : "Configuration")) g_GearClipboard = capture(relic ? GearCopyField::Relic : GearCopyField::All);
-        if (!relic) {
-            if (ImGui::MenuItem("Stats")) g_GearClipboard = capture(GearCopyField::Stats);
-            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) g_GearClipboard = capture(GearCopyField::Upgrade);
-            if (GearInfusionCapacity(b,slot) && ImGui::MenuItem("Infusions")) g_GearClipboard = capture(GearCopyField::Infusions);
-        }
-        ImGui::EndMenu();
-    }
-    if (ImGui::MenuItem("Paste",nullptr,false,GearCanPaste(b,slot,g_GearClipboard)))
-        ApplyGearClipboard(b,slot,g_GearClipboard);
-    if (!relic) {
-        if (ImGui::BeginMenu("Copy to all slots")) {
-            const std::string group = IsArmorSlot(slot) ? "Armor" : IsWeaponSlot(slot) ? "Weapons" : "Trinkets";
-            if (ImGui::MenuItem("Configuration")) CopyGearToGroup(b,capture(GearCopyField::All),group);
-            if (ImGui::MenuItem("Stats")) CopyGearToGroup(b,capture(GearCopyField::Stats),group);
-            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) CopyGearToGroup(b,capture(GearCopyField::Upgrade),group);
-            if (GearInfusionCapacity(b,slot) && ImGui::BeginMenu("Infusions")) {
-                if (ImGui::MenuItem("This item (fill slots)")) ApplyGearClipboard(b,slot,capture(GearCopyField::Infusions));
-                for (const auto& target : {"Armor","Weapons","Trinkets","All"})
-                    if (ImGui::MenuItem(target)) CopyGearToGroup(b,capture(GearCopyField::Infusions),target);
-                ImGui::EndMenu();
-            }
-            if (IsWeaponSlot(slot) && ImGui::MenuItem("Sigils to other weapon set")) CopyWeaponSetSigils(b,slot);
-            ImGui::EndMenu();
-        }
-    }
-    if (ImGui::BeginMenu("Clear")) {
-        if (ImGui::MenuItem(relic ? "Relic" : "Entire slot")) clearAfter = true;
-        if (!relic) {
-            if (ImGui::MenuItem("Stats")) ClearGearSlot(b,slot,GearCopyField::Stats);
-            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) ClearGearSlot(b,slot,GearCopyField::Upgrade);
-            if (GearInfusionCapacity(b,slot) && ImGui::MenuItem("Infusions")) ClearGearSlot(b,slot,GearCopyField::Infusions);
-        }
-        ImGui::EndMenu();
-    }
-    ImGui::EndPopup();
-}
 
 // Render a single gear slot with icon for the build gear panel
 static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
