@@ -12,11 +12,24 @@ Before adding or modifying any UI, read [docs/ui-components.md](docs/ui-componen
 - Refresh buttons (including the footer and picker) MUST use the same standard button renderer and sizing as other actions. Visual styling and layout may be standardized; **do not refactor refresh request lifecycles, scheduling, retries, caching, or per-page refresh state without specific approval.** Preserve existing enablement conditions and click handlers. The shared footer lives in RefreshUI.h.
 - Gear catalog controls: UI::CatalogMatches, CatalogCard, CatalogOption. Gear views/editors remain distinct in some areas; share typed pickers and presentation where semantics agree, never collapse missing, unknown, empty or imported fields into the same value.
 
+## Definition of done — implementation and DLL delivery
+
+An approved implementation request is not complete until the verified DLL has been delivered, or a genuine blocker requiring the user's involvement has been explained.
+
+1. Implement and commit the requested changes on the designated branch.
+2. Trigger or locate the Windows DLL workflow for the exact implementation commit. Follow the build through required offline regression tests, compilation, binary verification and artifact packaging.
+3. If a required step fails, inspect the logs, diagnose the cause, apply safe in-scope fixes or retry transient failures, and rebuild. Do not stop merely to report a failure that can be resolved without the user. Never weaken tests or bypass verification just to obtain a successful build.
+4. Confirm GitHub Actions succeeded for the exact final implementation commit. Retrieve its matching artifact, extract AlterEgo.dll, and verify that the binary is Windows x64 UCRT. Verify that the delivered file actually exists and that its download link points to that file.
+5. Deliver a working link to the actual DLL (not merely a workflow or artifact page), identify the commit, and report verification results and any remaining limitations such as unperformed in-game testing.
+
+A queued or running workflow, a successful source commit, or a successful build without a delivered DLL is not completion. Continue checking while the available execution environment permits. If the environment cannot continue, explicitly report the incomplete state and use a supported follow-up mechanism when available; never promise unsupported background work or fabricate a link. Ask the user only when a material decision, missing permission, or failure cannot reasonably be resolved within the approved scope.
+
+Discussion-only and documentation-only requests do not require a new DLL unless explicitly requested. Never modify main or another branch without approval.
+
 ## Guardrails
 - Nexus supplies an ImGui 1.80 context and allocator. Do not upgrade vendored ImGui or change its ABI independently.
 - Preserve upstream PieOrCake library import compatibility, composable semantics and saved data.
 - Keep work on the requested branch; do not merge into main without explicit approval.
-- For DLL delivery, verify GitHub Actions succeeded for the exact commit, retrieve the matching artifact and verify the Windows x64 UCRT DLL. Link the actual binary, not just a workflow page. Never describe a pending build as complete.
 - Update the UI component guide when introducing or changing a canonical component. Explain any intentional direct ImGui exception near its call site.
 
 - Skinventory: use RenderSkinContextMenu for every skin surface; generate skin chat links from skin IDs, copy the actual priced item's name for TP search. Use Skinventory::Search for browser/shop filters. Commerce candidate selection must compare available sell listings, never rarity. Keep filter changes local (no price requests).
