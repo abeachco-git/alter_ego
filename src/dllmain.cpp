@@ -11729,7 +11729,11 @@ static void RenderBuildLibrary() {
     {
         g_LibFilterMode = std::max(0, std::min(g_LibFilterMode, IM_ARRAYSIZE(GameModeNames)-1));
         AlterEgo::UI::SearchToolbar("loadouts", "Search loadouts...", g_LibSearchBuf,
-            g_LibFilterMode ? 1 : 0, g_LibFilterMode ? GameModeNames[g_LibFilterMode] : "",
+            [&] {
+                AlterEgo::UI::FilterChips chips;
+                if (g_LibFilterMode) chips.push_back({"mode", GameModeNames[g_LibFilterMode], [&] { g_LibFilterMode=0; SaveSession(); }});
+                return chips;
+            },
             [&] { if (AlterEgo::UI::FilterChoice("Game mode", g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames))) SaveSession(); },
             [&] { g_LibFilterMode = 0; SaveSession(); });
         ImGui::Separator();
@@ -13232,7 +13236,13 @@ static void RenderSkinList() {
     const bool hasOwnership = Skinventory::OwnedSkins::HasData();
     const int ownership = !hasOwnership ? 0 : (g_SkinShowOwned && !g_SkinShowUnowned ? 1 : !g_SkinShowOwned && g_SkinShowUnowned ? 2 : 0);
     AlterEgo::UI::SearchToolbar("skin_browser", "Search skins...", g_SkinSearchFilter,
-        ownership ? 1 : 0, ownership == 1 ? "Owned" : ownership == 2 ? "Unowned" : "",
+        [&] {
+            AlterEgo::UI::FilterChips chips;
+            if (hasOwnership && g_SkinShowOwned != g_SkinShowUnowned)
+                chips.push_back({"ownership", g_SkinShowOwned ? "Owned" : "Unowned",
+                    [&] { g_SkinShowOwned = g_SkinShowUnowned = true; }});
+            return chips;
+        },
         [&] {
             int selected = ownership;
             const char* options[] = {"All", "Owned", "Unowned"};
@@ -13905,14 +13915,20 @@ static void RenderSkinShoppingList() {
     static int category=0, source=0, maxGold=0;
     static bool filterDirty=true;
     const auto changed = [&] { filterDirty = true; };
-    const int active = (category!=0)+(source!=0)+(!weight.empty())+(!slot.empty())+(!weapon.empty())+(!rarity.empty())+(maxGold>0);
-    std::string summary;
-    auto add = [&](const std::string& value) { if(!value.empty()) { if(!summary.empty()) summary+=" | "; summary+=value; } };
-    if(category) add(category==1?"Armor":category==2?"Weapons":"Back");
-    if(source) add(source==1?"Trading Post":"Vendor");
-    add(weight); add(slot); add(weapon); add(rarity); if(maxGold) add("Max "+std::to_string(maxGold)+"g");
     bool refreshClicked = false;
-    if (AlterEgo::UI::SearchToolbar("shopping", "Search skins or TP items...", query, active, summary,
+    if (AlterEgo::UI::SearchToolbar("shopping", "Search skins or TP items...", query,
+        [&] {
+            AlterEgo::UI::FilterChips chips;
+            // Removing Category restores All without dropping compatible slot/weight/type filters.
+            if(category) chips.push_back({"category", category==1?"Armor":category==2?"Weapons":"Back", [&] {category=0;changed();}});
+            if(source) chips.push_back({"source", source==1?"Trading Post":"Vendor", [&] {source=0;changed();}});
+            if(!weight.empty()) chips.push_back({"weight",weight,[&] {weight.clear();changed();}});
+            if(!slot.empty()) chips.push_back({"slot",slot,[&] {slot.clear();changed();}});
+            if(!weapon.empty()) chips.push_back({"weapon",weapon,[&] {weapon.clear();changed();}});
+            if(!rarity.empty()) chips.push_back({"rarity",rarity,[&] {rarity.clear();changed();}});
+            if(maxGold) chips.push_back({"price","Max "+std::to_string(maxGold)+"g",[&] {maxGold=0;changed();}});
+            return chips;
+        },
         [&] {
             const char* cats[]={"All","Armor","Weapons","Back"};
             const char* srcs[]={"All","Trading Post","Vendor"};

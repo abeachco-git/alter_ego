@@ -275,7 +275,11 @@ static void RenderFashionLibrary() {
     ImGui::BeginChild("##fashion_list", ImVec2(leftWidth, 0), true);
     g_FashionFilter = std::max(0, std::min(g_FashionFilter, IM_ARRAYSIZE(filters)-1));
     AlterEgo::UI::SearchToolbar("fashion", "Search looks / characters...", g_FashionSearch,
-        g_FashionFilter ? 1 : 0, g_FashionFilter ? filters[g_FashionFilter] : "",
+        [&] {
+            AlterEgo::UI::FilterChips chips;
+            if(g_FashionFilter) chips.push_back({"weight",filters[g_FashionFilter],[&] {g_FashionFilter=0;}});
+            return chips;
+        },
         [&] { AlterEgo::UI::FilterChoice("Armor weight", g_FashionFilter, filters, IM_ARRAYSIZE(filters)); },
         [&] { g_FashionFilter = 0; });
     ImGui::Separator();

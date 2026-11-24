@@ -623,11 +623,17 @@ static void RenderComponentLibrary() {
         return;
     }
     const char* sorts[] = {"Name", "Most used", "Least used"};
-    std::string componentSummary = ComponentLabel(kComponentKinds[g_ComponentFilterKind].kind);
-    if (g_ComponentUnusedOnly) componentSummary += " | Unused only";
-    if (g_ComponentSort != 0) componentSummary += std::string(" | ") + sorts[g_ComponentSort];
     AlterEgo::UI::SearchToolbar("components", "Search components...", g_ComponentSearch,
-        (g_ComponentFilterKind != 0) + (g_ComponentUnusedOnly ? 1 : 0) + (g_ComponentSort != 0), componentSummary,
+        [&] {
+            AlterEgo::UI::FilterChips chips;
+            const char* kindLabel = ComponentLabel(kComponentKinds[g_ComponentFilterKind].kind);
+            if (g_ComponentFilterKind != 0)
+                chips.push_back({"kind",kindLabel,[&] {g_ComponentFilterKind=0;g_ComponentSelectedId.clear();}});
+            else chips.push_back({"kind",kindLabel,{}}); // required default scope
+            if(g_ComponentUnusedOnly) chips.push_back({"usage","Unused only",[&] {g_ComponentUnusedOnly=false;}});
+            if(g_ComponentSort != 0) chips.push_back({"sort",sorts[g_ComponentSort],[&] {g_ComponentSort=0;}});
+            return chips;
+        },
         [&] {
             const char* kinds[9];
             for (int n=0;n<9;++n) kinds[n]=kComponentKinds[n].label;

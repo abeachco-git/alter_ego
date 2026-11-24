@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <vector>
+#include <functional>
 
 namespace AlterEgo::UI {
 inline constexpr float ActionHeight = 30.0f;
@@ -157,12 +158,76 @@ inline bool FilterChoice(const char* label, std::string& selected, const std::ve
     }
     return changed;
 }
-template<class Query, class DrawFilters, class ResetFilters>
+// An empty remove action denotes required context, not an active filter.
+struct FilterChip {
+    std::string id;
+    std::string label;
+    std::function<void()> remove;
+};
+using FilterChips = std::vector<FilterChip>;
+inline int ActiveFilterCount(const FilterChips& chips) {
+    return static_cast<int>(std::count_if(chips.begin(), chips.end(),
+        [](const FilterChip& chip) { return static_cast<bool>(chip.remove); }));
+}
+// A chip is one compact click target with its removal x on the right.
+// Use the real filter key for identity, not the changing display value.
+inline void RenderFilterChips(const FilterChips& chips, const std::function<void()>& reset) {
+    const float avail = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
+    const float startX = ImGui::GetCursorPosX();
+    float used = 0.0f;
+    bool any = false;
+    auto place = [&](float width) {
+        if (any && used + gap + width <= avail) { ImGui::SameLine(); used += gap + width; }
+        else { ImGui::SetCursorPosX(startX); used = width; }
+        any = true;
+    };
+    for (const auto& chip : chips) {
+        if (chip.label.empty()) continue;
+        ImGui::PushID(chip.id.c_str());
+        if (!chip.remove) {
+            const float width = std::min(avail, ImGui::CalcTextSize(chip.label.c_str()).x);
+            place(width);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", chip.label.c_str());
+        } else {
+            std::string shown = chip.label;
+            // Preserve the close affordance even when a narrow sidebar truncates a label.
+            while (!shown.empty() && CompactButtonWidth((shown + "...  x").c_str()) > avail) {
+                size_t end = shown.size() - 1;
+                while (end > 0 && (static_cast<unsigned char>(shown[end]) & 0xC0) == 0x80) --end;
+                shown.resize(end);
+            }
+            if (CompactButtonWidth((chip.label + "  x").c_str()) <= avail) shown = chip.label;
+            else if (!shown.empty()) shown += "...";
+            const std::string label = (shown.empty() ? std::string("x") : shown + "  x") + "###remove_filter";
+            const float width = std::min(avail, CompactButtonWidth(label.c_str()));
+            place(width);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.40f, 0.18f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
+            const bool clicked = Button(label.c_str(), ImVec2(width, 0), ButtonRole::Compact);
+            ImGui::PopStyleColor(4);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove filter: %s", chip.label.c_str());
+            if (clicked) chip.remove();
+        }
+        ImGui::PopID();
+    }
+    if (ActiveFilterCount(chips) > 0) {
+        const float width = std::min(avail, CompactButtonWidth("Clear all"));
+        place(width);
+        if (Button("Clear all##filters", ImVec2(width, 0), ButtonRole::Compact)) reset();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear all filters (keep search text)");
+    }
+}
+template<class Query, class CollectFilters, class DrawFilters, class ResetFilters>
 inline bool SearchToolbar(const char* id, const char* hint, Query& query,
-                          int activeCount, const std::string& summary,
+                          CollectFilters collectFilters,
                           DrawFilters drawFilters, ResetFilters resetFilters,
                           const char* actionLabel = nullptr, bool* actionClicked = nullptr) {
     ImGui::PushID(id);
+    const int activeCount = ActiveFilterCount(collectFilters());
     const std::string text = activeCount > 0 ? "Filters (" + std::to_string(activeCount) + ")" : "Filters";
     const std::string filterLabel = text + "###filter_button";
     const float avail = std::max(1.0f, ImGui::GetContentRegionAvail().x);
@@ -191,23 +256,13 @@ inline bool SearchToolbar(const char* id, const char* hint, Query& query,
     } else if (actionClicked) *actionClicked = false;
     if (ImGui::BeginPopup("##filters")) {
         drawFilters();
-        if (activeCount > 0) {
+        if (ActiveFilterCount(collectFilters()) > 0) {
             ImGui::Separator();
             if (Button("Reset filters", ImVec2(0, 0), ButtonRole::Compact)) resetFilters();
         }
         ImGui::EndPopup();
     }
-    if (!summary.empty()) {
-        const float summaryW = ImGui::CalcTextSize(summary.c_str()).x;
-        const bool inlineClear = activeCount > 0 && summaryW + gap + CompactButtonWidth("Clear filters") <= avail;
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s", summary.c_str());
-        ImGui::PopStyleColor();
-        if (activeCount > 0) {
-            if (inlineClear) ImGui::SameLine();
-            if (Button("Clear filters", ImVec2(0, 0), ButtonRole::Compact)) resetFilters();
-        }
-    }
+    RenderFilterChips(collectFilters(), resetFilters);
     ImGui::PopID();
     return changed;
 }
