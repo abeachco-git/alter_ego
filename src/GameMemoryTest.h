@@ -1,6 +1,6 @@
 #pragma once
 // TEMPORARY: remove this header and the marked tab/include/session hook in
-// dllmain.cpp together. No persistence, networking, hooks, or game calls.
+// dllmain.cpp together. No persistence, networking, or hooks. One explicitly confirmed game call.
 // Observations from supplied Fast Swap DLL and GW2 executable are hypotheses
 // until checked against live data. Do not use this module in production.
 #include <windows.h>
@@ -38,6 +38,10 @@ struct Row {
 struct State {
     Address base = 0, ptrSlot = 0, countSlot = 0, threadSlot = 0;
     size_t imageSize = 0;
+    DWORD imageTimestamp = 0;
+    Address swapContextSlot = 0;
+    bool allowDifferentThread = false;
+    unsigned viewState = 0;
     unsigned rosterHits = 0, threadHits = 0, switchHits = 0;
     DWORD gameThread = 0, sampleThread = 0;
     uint32_t count8 = 0, count12 = 0;
@@ -61,6 +65,7 @@ inline bool ImageText(State& s, Address& code, std::vector<unsigned char>& bytes
         nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
         nt.FileHeader.NumberOfSections > 96) return false;
     s.imageSize = nt.OptionalHeader.SizeOfImage;
+    s.imageTimestamp = nt.FileHeader.TimeDateStamp;
     if (!s.imageSize || s.imageSize > 512u * 1024u * 1024u) return false;
     Address sections = ntAddr + offsetof(IMAGE_NT_HEADERS64, OptionalHeader)
                        + nt.FileHeader.SizeOfOptionalHeader;
@@ -120,6 +125,22 @@ inline bool Resolve(State& s) {
         bool agree=InImage(s,candidate,sizeof(DWORD));
         for (auto hit:t) agree=agree && Rip(code,bytes,hit,7,11)==candidate;
         if (agree) s.threadSlot=candidate;
+    }
+    // Only enable the call on the exact inspected PE build, with both
+    // independently resolved call sites agreeing and the getter verified.
+    if (s.imageTimestamp==0x6afcb045u && s.imageSize==0x2c52000u && w.size()==2) {
+        Address getter=Rip(code,bytes,w[0],1,5);
+        bool agree=getter==s.base+0x94aec0 && InImage(s,getter,8);
+        for (auto hit:w)
+            agree=agree && Rip(code,bytes,hit,1,5)==getter &&
+                hit+22<=bytes.size() && bytes[hit+21]==0x60;
+        std::array<unsigned char,8> g{};
+        if (agree && ReadBytes(getter,g.data(),g.size()) &&
+            g[0]==0x48 && g[1]==0x8b && g[2]==0x05 && g[7]==0xc3) {
+            Address slot=getter+7+static_cast<int64_t>(Field<int32_t>(g.data(),3));
+            if (slot==s.base+0x26888b8 && InImage(s,slot,sizeof(Address)))
+                s.swapContextSlot=slot;
+        }
     }
     if (r.size()!=1) {
         s.status="Roster pattern missing or ambiguous; no roster read."; return false;
@@ -192,10 +213,97 @@ inline bool Sample(State& s) {
     s.status="Read-only snapshot accepted. Verify values against Fast Swap.";
     return true;
 }
+// Do not use a long-lived game pointer or invoke the context getter.
+// The inspected getter is a single RIP-relative load; the view-state
+// vtable method is a single integer load. Revalidate both before the call.
+struct SwapPlan {
+    Address context=0, entry=0;
+    std::array<wchar_t,21> name{};
+};
+inline bool Executable(Address p) {
+    MEMORY_BASIC_INFORMATION m{};
+    if (!p || !VirtualQuery(reinterpret_cast<LPCVOID>(p),&m,sizeof(m)) ||
+        m.State!=MEM_COMMIT || (m.Protect&(PAGE_GUARD|PAGE_NOACCESS))) return false;
+    const DWORD protection=m.Protect&0xff;
+    return protection==PAGE_EXECUTE || protection==PAGE_EXECUTE_READ ||
+        protection==PAGE_EXECUTE_READWRITE || protection==PAGE_EXECUTE_WRITECOPY;
+}
+inline bool PrepareSwap(State& s,const std::string& active,const std::string& target,
+                        SwapPlan& plan) {
+    s.viewState=0;
+    if (!s.swapContextSlot) {
+        s.preflight="Blocked: swap resolver does not match the inspected game build.";
+        return false;
+    }
+    if (!Sample(s)) {s.preflight="Blocked: fresh roster validation failed.";return false;}
+    const auto present=[&](const std::string& name){
+        return std::any_of(s.rows.begin(),s.rows.end(),[&](const Row& row){return row.name==name;});
+    };
+    if (active.empty() || target.empty() || target==active || !present(active) || !present(target)) {
+        s.preflight="Blocked: active or target character is not valid in the fresh roster.";return false;
+    }
+    if (!s.gameThread) {s.preflight="Blocked: game main thread identity is unknown.";return false;}
+    Address ctx=0,vt=0,entry=0,view=0;
+    constexpr unsigned char viewCode[]={0x8b,0x41,0x6c,0xc3};
+    constexpr unsigned char swapCode[]={0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,
+        0xec,0x20,0x41,0x8b,0xd8,0x48,0x8b,0xfa,0x45,0x33,0xc0,0x33,0xd2,
+        0xb9,0x07,0x00,0x00,0x10,0xe8,0xc1,0x87,0x72,0x00,0x85};
+    std::array<unsigned char,sizeof(viewCode)> vBytes{};
+    std::array<unsigned char,sizeof(swapCode)> eBytes{};
+    if (!Read(s.swapContextSlot,ctx) || !ctx || ctx>UINTPTR_MAX-0x70 ||
+        !Read(ctx,vt) || vt!=s.base+0x1b7fb18 ||
+        !InImage(s,vt,0x118) || !Read(vt+0x60,entry) ||
+        entry!=s.base+0x94b840 || !Read(vt+0x110,view) ||
+        view!=s.base+0x4e6470 || !Executable(entry) ||
+        !ReadBytes(entry,eBytes.data(),eBytes.size()) ||
+        std::memcmp(eBytes.data(),swapCode,sizeof(swapCode))!=0 ||
+        !ReadBytes(view,vBytes.data(),vBytes.size()) ||
+        std::memcmp(vBytes.data(),viewCode,sizeof(viewCode))!=0 ||
+        !Read(ctx+0x6c,s.viewState)) {
+        s.preflight="Blocked: live context, vtable or function bytes do not match the inspected build.";return false;
+    }
+    if (s.viewState!=16) {
+        s.preflight="Blocked: game view state is not gameplay (16).";return false;
+    }
+    if (s.gameThread!=GetCurrentThreadId() && !s.allowDifferentThread) {
+        s.preflight="Context and gameplay verified. Render-thread mismatch: experimental opt-in required.";return false;
+    }
+    const int n=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,target.c_str(),-1,
+                                   plan.name.data(),static_cast<int>(plan.name.size()));
+    if (n<2 || n>20) {
+        s.preflight="Blocked: invalid UTF-16 character name.";return false;
+    }
+    // Recheck the live singleton and state immediately before handing it off.
+    Address latest=0,latestVt=0,latestEntry=0;
+    unsigned latestView=0;
+    DWORD latestThread=0;
+    if (!Read(s.swapContextSlot,latest) || latest!=ctx ||
+        !Read(ctx,latestVt) || latestVt!=vt ||
+        !Read(vt+0x60,latestEntry) || latestEntry!=entry ||
+        !Read(ctx+0x6c,latestView) || latestView!=16 ||
+        !Read(s.threadSlot,latestThread) || latestThread!=s.gameThread) {
+        s.preflight="Blocked: game context changed during preflight.";return false;
+    }
+    plan.context=ctx;plan.entry=entry;
+    s.preflight=s.gameThread==GetCurrentThreadId()
+        ?"Preflight passed on main thread; no game call made."
+        :"Preflight passed with explicit off-main-thread opt-in; thread safety remains unknown.";
+    return true;
+}
+struct Attempt {
+    bool issued=false;
+    std::string target;
+};
+inline Attempt& TestAttempt() {static Attempt a;return a;}
 inline void Render(const std::string& active) {
     auto& s=Data();
-    ImGui::TextUnformatted("Temporary game memory diagnostics (read-only)");
-    ImGui::TextWrapped("No game functions are called. No data is saved. Close this page before normal play.");
+    auto& attempt=TestAttempt();
+    ImGui::TextUnformatted("Temporary game memory diagnostics");
+    ImGui::TextWrapped("Scanning is read-only. The optional test switch invokes an undocumented game function. It may crash the game, reset position, or violate game policies. No data is saved.");
+    if (attempt.issued) {
+        ImGui::TextWrapped("One test issued this addon load for %s. %s",attempt.target.c_str(),
+            active==attempt.target?"MumbleLink confirms target active.":"Waiting for target identity; no retry.");
+    }
     if (UI::Button("Scan / Refresh")) {
         s=State{};
         try { if (Resolve(s)) Sample(s); }
@@ -211,7 +319,8 @@ inline void Render(const std::string& active) {
                 static_cast<unsigned long>(s.gameThread),static_cast<unsigned long>(s.sampleThread),
                 static_cast<unsigned long>(GetCurrentThreadId()));
     ImGui::Text("MumbleLink character: %s",active.empty()?"Unknown":active.c_str());
-    ImGui::TextDisabled("Map IDs and raw attribute candidates; meanings are not yet runtime-verified.");
+    ImGui::Text("Swap resolver: %s | gameplay state: %u",s.swapContextSlot?"matched inspected build":"unavailable",s.viewState);
+    ImGui::TextDisabled("Map IDs and raw attribute candidates.");
     if (ImGui::BeginTable("##temporary_memory_rows",7,
             ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerV|ImGuiTableFlags_Resizable)) {
         for (const char* column: {"Name","Map ID","Level","Prof ID","0x61","0x63","0xD9"})
@@ -233,19 +342,42 @@ inline void Render(const std::string& active) {
     }
     if (!s.selected.empty()) {
         ImGui::Text("Selected: %s",s.selected.c_str());
+        ImGui::Checkbox("Allow experimental switch from non-main thread", &s.allowDifferentThread);
         if (UI::Button("Test swap preflight (no switch)")) {
-            auto target=s.selected;
-            try {
-                if (!Sample(s)) s.preflight="Blocked: fresh roster validation failed.";
-                else if (active.empty() || active==target)
-                    s.preflight="Blocked: unknown active character or target is already active.";
-                else if (!std::any_of(s.rows.begin(),s.rows.end(),[&](const Row& r){return r.name==target;}) ||
-                         !std::any_of(s.rows.begin(),s.rows.end(),[&](const Row& r){return r.name==active;}))
-                    s.preflight="Blocked: target or active character not in fresh roster.";
-                else if (!s.gameThread || s.gameThread!=GetCurrentThreadId())
-                    s.preflight="Blocked: render thread is not verified as game main thread.";
-                else s.preflight="Roster/thread checks passed. Actual switching remains disabled (context unverified).";
-            } catch (...) { s.rows.clear(); s.preflight="Blocked: validation failed."; }
+            const auto target=s.selected;
+            try {SwapPlan plan;PrepareSwap(s,active,target,plan);}
+            catch (...) {s.rows.clear();s.preflight="Blocked: validation failed.";}
+        }
+        if (!attempt.issued && s.swapContextSlot && s.selected!=active &&
+            UI::Button("Test switch...")) {
+            ImGui::OpenPopup("Confirm experimental character switch");
+        }
+        if (ImGui::BeginPopupModal("Confirm experimental character switch",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped("Switch to %s? This is an unsupported, one-shot test. It can crash the game or reset your position.",s.selected.c_str());
+            if (s.gameThread!=GetCurrentThreadId())
+                ImGui::TextWrapped("Render thread is not the main thread. Explicit opt-in is required.");
+            if (UI::Button("Cancel")) ImGui::CloseCurrentPopup();
+            ImGui::SameLine();
+            if (UI::Button("Execute test switch") && !attempt.issued) {
+                ImGui::CloseCurrentPopup();
+                const auto target=s.selected;
+                SwapPlan plan;
+                bool ready=false;
+                try {ready=PrepareSwap(s,active,target,plan);}
+                catch (...) {s.rows.clear();s.preflight="Blocked: validation failed.";}
+                if (ready) {
+                    // The inspected game method synchronously copies a UTF-16
+                    // character name into an owned request. No memory patch,
+                    // injected thread, hook, or automated retry.
+                    attempt.target=target;
+                    attempt.issued=true;
+                    s.preflight="Test invoked. Awaiting MumbleLink identity; no automatic retry.";
+                    using SwitchFn=void(*)(void*,const wchar_t*,uint32_t);
+                    reinterpret_cast<SwitchFn>(plan.entry)(
+                        reinterpret_cast<void*>(plan.context),plan.name.data(),0);
+                }
+            }
+            ImGui::EndPopup();
         }
         ImGui::TextWrapped("%s",s.preflight.c_str());
     }
