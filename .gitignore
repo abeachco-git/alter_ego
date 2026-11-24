@@ -1,5 +1,6 @@
 # Build
 build/
+build-tests/
 *.dll
 *.lib
 *.o
@@ -23,7 +24,6 @@ Thumbs.db
 # LLM session artifacts
 handover.md
 *-prompt.md
-tools/.banner_cache/
 
 # Dev-only UI mockups (not shipped)
 screenshots/*_mockup.html

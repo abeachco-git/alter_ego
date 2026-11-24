@@ -189,4 +189,4 @@ The separately configurable **Warn when live specialization differs from retriev
 
 ### Developer UI conventions
 
-Before changing UI, see [AGENTS.md](AGENTS.md) and the [shared UI component reference](docs/ui-components.md). Reuse canonical controls and keep refresh lifecycle changes separate.
+Before changing UI, see [AGENTS.md](AGENTS.md) and the [shared UI component reference](docs/ui-components.md). Reuse canonical controls and keep refresh lifecycle changes separate. For the living architecture and test workflow, see [Architecture](docs/architecture.md) and [Regression testing](docs/regression-testing.md).

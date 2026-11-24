@@ -1,5 +1,13 @@
 # Agent instructions — Alter Ego
 
+## Collaboration and repository hygiene
+
+- Treat requests to discuss or suggest as discussion only; do not edit until implementation is approved.
+- This file is the single authoritative agent instruction file. `CLAUDE.md` delegates to it. Keep durable architecture in [docs/architecture.md](docs/architecture.md), not dated plans.
+- Preserve useful vendored libraries, licenses, upstream compatibility and reference tools. Remove confirmed obsolete assets, generators, stale screenshots and contradictory documentation when their replacements are established. Do not delete working code merely to reduce repository size. Git history is the archive.
+- Keep README screenshot links synchronized with the files in `screenshots/`; remove superseded unreferenced screenshots.
+- Never hold a mutex across synchronous Nexus query events or callback-capable font registration. See [architecture](docs/architecture.md).
+
 ## UI changes: reuse first
 Before adding or modifying any UI, read [docs/ui-components.md](docs/ui-components.md) and inspect the existing canonical component. Do not create a parallel renderer simply because a feature lives on a different tab. Fix shared behavior at its source and migrate affected callers. Preserve the established appearance unless the task explicitly requests a redesign.
 
