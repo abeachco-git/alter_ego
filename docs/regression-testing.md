@@ -83,3 +83,5 @@ Verified roster deletion coverage checks account scope, preservation of unknown 
 Startup maintenance regression covers exclusive scheduling, no live deletion, targeted character invalidation, preserved account progress, artwork-only clearing, preserved wiki metadata, corrupt database/sidecar quarantine, durable file preservation and consumed requests.
 
 Background worker coverage additionally verifies throwing failure-handler containment, repeated launches, reopening and complete joining. Windows artwork queue behavior and unload latency require in-game validation.
+
+Equipment set coverage in `persistence.native_library` verifies additive schema-1 to schema-2 migration preserving old rows, exact component reuse, foreign-key reference protection, private Loadout edits, complete set assignment, persistence, portable graph round-trip, duplicate consolidation and merge.

@@ -112,10 +112,10 @@ static bool LibraryBackupApplyImport() {
     LibraryBackupRestoreCurrentState(selected);
     char summary[280] = {};
     snprintf(summary, sizeof(summary),
-        "%s: %zu builds, %zu fashion, %zu other files (%zu skipped).",
+        "%s: %zu loadouts, %zu equipment sets, %zu fashion, %zu other files (%zu skipped).",
         ui.replace ? "Restore complete" : "Merge complete",
-        plan.buildAdded, plan.fashionAdded, plan.otherWritten,
-        plan.buildSkipped + plan.fashionSkipped + plan.otherSkipped);
+        plan.buildAdded, plan.equipmentSetAdded, plan.fashionAdded, plan.otherWritten,
+        plan.buildSkipped + plan.equipmentSetSkipped + plan.fashionSkipped + plan.otherSkipped);
     LibraryBackupNotify(summary);
     if (selected & AlterEgo::Backup::Other)
         LibraryBackupNotify("Preferences restored. Restart Alter Ego to reload custom fonts.");
@@ -166,7 +166,7 @@ static void RenderLibraryBackupUI() {
         ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Include in export");
         ImGui::Separator();
-        ImGui::Checkbox("Loadout Library (loadouts, components and notes)", &ui.exportBuilds);
+        ImGui::Checkbox("Loadout Library (loadouts, equipment sets and components)", &ui.exportBuilds);
         ImGui::Checkbox("Fashion Library (skins, dyes and characters)", &ui.exportFashion);
         ImGui::Checkbox("Other data (preferences, pins and custom assets)", &ui.exportOther);
         const unsigned mask = LibraryBackupExportMask();
@@ -237,7 +237,7 @@ static void RenderLibraryBackupUI() {
                 ui.previewDirty = true; ui.replaceAcknowledged = false;
             }
             ImGui::SameLine();
-            ImGui::TextDisabled("(%zu builds)", ui.package.buildCount);
+            ImGui::TextDisabled("(%zu loadouts, %zu equipment sets)",ui.package.buildCount,ui.package.equipmentSetCount);
         }
         if (ui.package.available & AlterEgo::Backup::Fashion) {
             if (ImGui::Checkbox("Fashion Library##backup_restore", &ui.importFashion)) {
@@ -271,7 +271,8 @@ static void RenderLibraryBackupUI() {
         }
         if (selected && ui.error.empty()) {
             ImGui::Separator();
-            ImGui::Text("Builds: %zu import, %zu skip", ui.preview.buildAdded, ui.preview.buildSkipped);
+            ImGui::Text("Loadouts: %zu import, %zu skip", ui.preview.buildAdded, ui.preview.buildSkipped);
+            ImGui::Text("Equipment sets: %zu import, %zu skip",ui.preview.equipmentSetAdded,ui.preview.equipmentSetSkipped);
             ImGui::Text("Fashion: %zu import, %zu skip", ui.preview.fashionAdded, ui.preview.fashionSkipped);
             ImGui::Text("Other files: %zu import, %zu skip", ui.preview.otherWritten, ui.preview.otherSkipped);
             if (ui.preview.fashionSimilar)

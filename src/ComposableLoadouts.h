@@ -1284,11 +1284,15 @@ inline bool Reconcile(const Document& original, const Json& legacy,
 // IDs so an imported item cannot overwrite a user's existing shared component.
 inline bool Merge(const Document& current, const Document& incoming,
                   bool replace, Document& output,
-                  size_t& added, size_t& skipped, std::string& error) {
+                  size_t& added, size_t& skipped, std::string& error,
+                  size_t* setsAdded=nullptr,size_t* setsSkipped=nullptr) {
     added = skipped = 0;
+    if(setsAdded)*setsAdded=0;
+    if(setsSkipped)*setsSkipped=0;
     if (!Validate(current, error) || !Validate(incoming, error)) return false;
     if (replace) {
         added = incoming.loadouts.size();
+        if(setsAdded)*setsAdded=incoming.equipment_sets.size();
         output = incoming;
         return true;
     }
@@ -1350,11 +1354,15 @@ inline bool Merge(const Document& current, const Document& incoming,
     for(auto set:incoming.equipment_sets) {
         for(auto& [kind,id]:set.refs)id=remap.at(kind).at(id);
         const auto* existing=FindEquipmentSet(merged,set.id);
-        if(existing&&existing->name==set.name&&existing->refs==set.refs)continue;
+        if(existing&&existing->name==set.name&&existing->refs==set.refs) {
+            if(setsSkipped)++*setsSkipped;
+            continue;
+        }
         const auto original=set.id;
         for(unsigned i=1;FindEquipmentSet(merged,set.id)|| (set.id!=original&&FindEquipmentSet(incoming,set.id));++i)
             set.id=original+":import:"+std::to_string(i);
         merged.equipment_sets.push_back(std::move(set));
+        if(setsAdded)++*setsAdded;
     }
     if (!Validate(merged, error)) return false;
     output = std::move(merged);

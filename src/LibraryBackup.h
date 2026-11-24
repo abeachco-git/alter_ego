@@ -214,7 +214,7 @@ inline bool Export(const std::string& dir, unsigned selected,
 struct Package {
     FileMap files;
     unsigned available = 0;
-    size_t buildCount = 0;
+    size_t buildCount = 0, equipmentSetCount = 0;
     size_t fashionCount = 0;
     bool zip = false;
 };
@@ -287,7 +287,10 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
         if(name=="library.json") {
             NativeLibrary::PortableLibrary data;
             if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(bytes),data,error))return false;
-            if(data.loadouts){package.available|=Builds;package.buildCount=data.data.loadouts.loadouts.size();}
+            if(data.loadouts){
+                package.available|=Builds;package.buildCount=data.data.loadouts.loadouts.size();
+                package.equipmentSetCount=data.data.loadouts.equipment_sets.size();
+            }
             if(data.fashion){package.available|=Fashion;package.fashionCount=data.data.fashion.size();}
         } else {
             package.available |= GroupForName(name);
@@ -306,7 +309,7 @@ struct Plan {
     bool libraryChanged=false;
     unsigned selected = 0;
     bool replace = false;
-    size_t buildAdded = 0, buildSkipped = 0;
+    size_t buildAdded = 0, buildSkipped = 0, equipmentSetAdded = 0, equipmentSetSkipped = 0;
     size_t fashionAdded = 0, fashionSkipped = 0, fashionSimilar = 0;
     size_t otherWritten = 0, otherSkipped = 0;
 };
@@ -337,6 +340,7 @@ inline bool Prepare(const std::string& dir, const Package& package,
         if(!NativeLibrary::MergePortableLibrary(plan.before,input,selected&Builds,selected&Fashion,replace,plan.after,counts,error))return false;
         plan.libraryChanged=true;
         plan.buildAdded=counts.loadoutsAdded;plan.buildSkipped=counts.loadoutsSkipped;
+        plan.equipmentSetAdded=counts.equipmentSetsAdded;plan.equipmentSetSkipped=counts.equipmentSetsSkipped;
         plan.fashionAdded=counts.fashionAdded;plan.fashionSkipped=counts.fashionSkipped;plan.fashionSimilar=counts.fashionSimilar;
     }
     for(const auto& [name,bytes]:package.files) {

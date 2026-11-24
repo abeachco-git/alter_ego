@@ -86,6 +86,13 @@ int case_native_library(int,char**) {
         assert(rejected&&repo.Read().revision==2);
     }
     {
+        // Reproduce an existing schema-1 library with its original data.
+        DB::Connection db(tmp.db(),DB::Connection::OpenMode::Existing);
+        DB::Transaction tx(db);
+        db.Exec("DROP TABLE equipment_set_components; DROP TABLE equipment_sets; PRAGMA user_version=1;");
+        tx.Commit();
+    }
+    {
         Native::Repository repo(tmp.db(),DB::Connection::OpenMode::Existing,
             [](const Json&){return std::string("collision");});
         auto state=repo.Read();assert(state.revision==2);
@@ -100,6 +107,14 @@ int case_native_library(int,char**) {
         auto remove=next.loadouts;
         assert(!C::RemoveUnreferenced(remove,"sigils",refs.at("sigils"),error));
         assert(Native::ApplyEquipmentSet(next.loadouts,"first","set1",error));
+        auto privateEdit=next.loadouts;
+        Json edited;assert(C::Resolve(privateEdit,privateEdit.loadouts.front(),edited,error));
+        edited["gear"]["WeaponA1"]["sigil_id"]=999;
+        assert(Native::PutLoadout(privateEdit,edited,error));
+        assert(privateEdit.equipment_sets.front().refs.at("sigils")==refs.at("sigils"));
+        assert(privateEdit.loadouts.front().refs.at("sigils")!=refs.at("sigils"));
+        assert(Native::ApplyEquipmentSet(privateEdit,"first","set1",error));
+        assert(privateEdit.loadouts.front().refs.at("sigils")==refs.at("sigils"));
         assert(repo.Commit(state,next)==3);
         const auto restored=repo.Read();
         assert(C::ToJson(restored.loadouts)==C::ToJson(next.loadouts));
@@ -110,7 +125,9 @@ int case_native_library(int,char**) {
         assert(Native::ConsolidateExact(portable,"sigils",refs.at("sigils"),"identical",error));
         assert(portable.equipment_sets.front().refs.at("sigils")=="identical");
         C::Document merged;size_t added=0,skipped=0;
-        assert(C::Merge(state.loadouts,portable,false,merged,added,skipped,error));
+        size_t setsAdded=0,setsSkipped=0;
+        assert(C::Merge(state.loadouts,portable,false,merged,added,skipped,error,&setsAdded,&setsSkipped));
+        assert(setsAdded==1&&setsSkipped==0);
         assert(merged.equipment_sets.size()==1);
         assert(C::Validate(merged,error));
     }

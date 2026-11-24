@@ -61,7 +61,10 @@ inline bool ParsePortableLibrary(const Json& value,PortableLibrary& out,std::str
     }catch(const std::exception& e){error=e.what();return false;}
 }
 
-struct ImportCounts { size_t loadoutsAdded=0,loadoutsSkipped=0,fashionAdded=0,fashionSkipped=0,fashionSimilar=0; };
+struct ImportCounts {
+    size_t loadoutsAdded=0,loadoutsSkipped=0,fashionAdded=0,fashionSkipped=0,fashionSimilar=0;
+    size_t equipmentSetsAdded=0,equipmentSetsSkipped=0;
+};
 inline bool MergePortableLibrary(const Snapshot& current,const PortableLibrary& input,
         bool builds,bool fashion,bool replace,Snapshot& output,ImportCounts& counts,std::string& error) {
     if((builds&&!input.loadouts)||(fashion&&!input.fashion))
@@ -114,7 +117,8 @@ inline bool MergePortableLibrary(const Snapshot& current,const PortableLibrary& 
             }
         } else {
             Composable::Document merged;
-            if(!Composable::Merge(next.loadouts,imported,replace,merged,counts.loadoutsAdded,counts.loadoutsSkipped,error))return false;
+            if(!Composable::Merge(next.loadouts,imported,replace,merged,counts.loadoutsAdded,counts.loadoutsSkipped,error,
+                &counts.equipmentSetsAdded,&counts.equipmentSetsSkipped))return false;
             next.loadouts=std::move(merged);
         }
     }

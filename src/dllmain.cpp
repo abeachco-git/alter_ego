@@ -4746,7 +4746,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
     }
 
     if (RenderActionButton("Save##live_save", ImVec2(buttonWidth, 0))) {
-        OpenSaveLiveBuildDialog(ch, ch.build_tabs[buildIdx], preferredEquipTab);
+        OpenSaveLiveBuildDialog(ch, ch.build_tabs[ActiveBuildIndex(ch)], preferredEquipTab);
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Save Current Build + Gear to Library...\n"
@@ -8638,7 +8638,7 @@ static void RenderSaveToLibraryDialog() {
                             ++existingComponentUses;
                 if(snapshot.contains("equipment_sets"))
                     for(const auto& set:snapshot.at("equipment_sets"))
-                        if(set.at("refs").value(kind,std::string())==g_SaveLibUpdateId)++existingComponentUses;
+                        if(!g_SaveLibUpdateId.empty()&&set.at("refs").value(kind,std::string())==g_SaveLibUpdateId)++existingComponentUses;
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted("Replace");
                 ImGui::SameLine(130);
@@ -8697,7 +8697,7 @@ static void RenderSaveToLibraryDialog() {
         ImGui::TextDisabled("Updates the stored fields without changing its existing name or ID.");
         if (existingComponentUses > 0)
             ImGui::TextColored(ImVec4(.95f,.78f,.40f,1),
-                "SHARED: affects %d referencing Loadout%s / equipment sets.",
+                "SHARED: affects %d referencing record%s.",
                 existingComponentUses, existingComponentUses == 1 ? "" : "s");
     } else {
         if(sourceChar&&!g_SaveLibNameManuallyEdited) {
