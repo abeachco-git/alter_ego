@@ -65,6 +65,22 @@ static fs::path FreshDir(const std::string& suffix) {
 }
 int main() {
     std::string error;
+    // Content-derived names are independent of the originating loadout.
+    const Json sampleArmor = {{"gear", {{"Helm", {{"stat_name","Berserker"}}},
+                                        {"Coat", {{"stat_name","Berserker"}}}}}};
+    const Json sampleSigils = {{"gear", {{"WeaponA1", {{"sigil","Superior Sigil of Force"},
+                                                       {"sigil2","Superior Sigil of Accuracy"}}}}}};
+    const Json sampleRunes = {{"gear", {{"Helm", {{"rune","Superior Rune of the Scholar"}}},
+                                        {"Coat", {{"rune","Superior Rune of the Scholar"}}}}}};
+    assert(SuggestComponentName("armor", sampleArmor) == "Berserker");
+    assert(SuggestComponentName("sigils", sampleSigils) == "Accuracy / Force");
+    assert(SuggestComponentName("runes", sampleRunes) == "the Scholar x2");
+    Document named;
+    named.components["armor"].push_back({"armor:one", "Berserker", sampleArmor});
+    assert(UniqueComponentName(named, "armor", "Berserker") == "Berserker (2)");
+    assert(UniqueComponentName(named, "trinkets", "Berserker") == "Berserker");
+    assert(ExactReusableComponent(named, "armor", sampleArmor)->id == "armor:one");
+    assert(!ExactReusableComponent(named, "armor", Json::object()));
     Document document;
     assert(SplitLegacy(kExample, document, error));
     assert(document.loadouts.size() == 2);

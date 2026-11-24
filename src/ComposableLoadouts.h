@@ -177,7 +177,7 @@ inline Json Metadata(const Json& old) {
 inline std::string SuggestComponentName(const std::string& kind, const Json& data) {
     std::map<std::string, int> names;
     auto add = [&](std::string value) {
-        for (const std::string& prefix : {"Superior Sigil of ", "Superior Rune of ", "Sigil of ", "Rune of "}) {
+        for (const std::string prefix : {"Superior Sigil of ", "Superior Rune of ", "Sigil of ", "Rune of "}) {
             if (value.rfind(prefix, 0) == 0) { value.erase(0, prefix.size()); break; }
         }
         if (!value.empty()) ++names[value];
@@ -291,7 +291,6 @@ inline bool SplitLegacy(const Json& legacy, Document& output, std::string& error
         Loadout loadout;
         loadout.id = old.at("id").get<std::string>();
         loadout.metadata = Metadata(old);
-        const std::string displayName = old.value("name", std::string("Unnamed"));
         const auto parts = Split(old);
         for (const auto& [kind, data] : parts) {
             Component part;
