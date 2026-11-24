@@ -766,8 +766,8 @@ static void RenderComponentLibrary() {
         ImGui::TextWrapped("%s", g_ComponentStatus.c_str());
     ImGui::Separator();
 
-    const float listWidth = ImMax(200.0f, ImMin(290.0f, ImGui::GetContentRegionAvail().x * 0.37f));
-    ImGui::BeginChild("##component_list", ImVec2(listWidth, 0), true);
+    const AlterEgo::UI::SplitPanel split(g_ComponentListWidth,270.f,160.f,220.f);
+    ImGui::BeginChild("##component_list", ImVec2(split.left, 0), true);
     const auto group = doc["components"].find(kind);
     if (group != doc["components"].end() && group->is_array()) {
         std::vector<const ComponentJson*> visible;
@@ -819,7 +819,7 @@ static void RenderComponentLibrary() {
         }
     }
     ImGui::EndChild();
-    ImGui::SameLine();
+    if(split.Divider("##component_split",g_ComponentListWidth))SaveSettings();
     ImGui::BeginChild("##component_detail", ImVec2(0, 0), true);
     const auto* item = (g_ComponentSelectedKind == kind)
         ? ComponentUIFind(doc, kind, g_ComponentSelectedId) : nullptr;

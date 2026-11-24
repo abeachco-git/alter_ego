@@ -46,6 +46,7 @@
 #include "OwnedSkins.h"
 #include "Commerce.h"
 #include "SkinSearchCore.h"
+#include "SkinFilters.h"
 #include "WikiImage.h"
 #include "HttpClient.h"
 #include <nlohmann/json.hpp>
@@ -415,9 +416,8 @@ static std::chrono::steady_clock::time_point g_FetchDoneTime{}; // For status me
 static int g_SkinActiveTab = 0; // 0 = Browser, 1 = Shopping List
 static bool g_SkinSwitchToBrowser = false;
 static bool g_SkinScrollToSkin = false;
-static std::string g_SkinSelectedType = "Armor";
-static std::string g_SkinSelectedWeightClass = "Heavy";
-static std::string g_SkinSelectedSubtype = "Helm";
+static Skinventory::SkinFilters g_SkinBrowserFilters;
+static float g_SkinListWidth=420.f, g_FashionListWidth=220.f, g_ComponentListWidth=270.f;
 static uint32_t g_SkinSelectedId = 0;
 static char g_SkinSearchFilter[256] = "";
 static bool g_SkinShowOwned = true;
@@ -1586,6 +1586,9 @@ static void SaveSettings() {
     j["birthday_mode"] = g_BirthdayMode;
     j["char_list_width"] = g_CharListWidth;
     j["lib_list_width"] = g_LibListWidth;
+    j["skin_list_width"]=g_SkinListWidth;
+    j["fashion_list_width"]=g_FashionListWidth;
+    j["component_list_width"]=g_ComponentListWidth;
     j["library_collection"] = g_LibraryCollection;
     j["chat_build_detection"] = g_ChatBuildDetection;
     j["toast_pos_x"] = g_ToastPosX;
@@ -1628,6 +1631,9 @@ static void LoadSettings() {
     getInt("birthday_mode", g_BirthdayMode);
     getFloat("char_list_width", g_CharListWidth);
     getFloat("lib_list_width", g_LibListWidth);
+    getFloat("skin_list_width",g_SkinListWidth);
+    getFloat("fashion_list_width",g_FashionListWidth);
+    getFloat("component_list_width",g_ComponentListWidth);
     getInt("library_collection", g_LibraryCollection);
     if (g_LibraryCollection < 0 || g_LibraryCollection > 2) g_LibraryCollection = 0;
     getBool("chat_build_detection", g_ChatBuildDetection);
@@ -1705,9 +1711,8 @@ static void SaveSession() {
 
     // Skinventory state
     j["skin_active_tab"] = g_SkinActiveTab;
-    j["skin_type"] = g_SkinSelectedType;
-    j["skin_weight"] = g_SkinSelectedWeightClass;
-    j["skin_subtype"] = g_SkinSelectedSubtype;
+    j["skin_filters"]={{"category",g_SkinBrowserFilters.category},{"weight",g_SkinBrowserFilters.weight},
+        {"slot",g_SkinBrowserFilters.slot},{"weapon",g_SkinBrowserFilters.weapon},{"rarity",g_SkinBrowserFilters.rarity}};
     j["skin_selected_id"] = g_SkinSelectedId;
     j["skin_show_owned"] = g_SkinShowOwned;
     j["skin_show_unowned"] = g_SkinShowUnowned;
@@ -1762,10 +1767,15 @@ static void LoadSession() {
 
         // Skinventory
         if (j.contains("skin_active_tab")) g_SkinActiveTab = j["skin_active_tab"].get<int>();
-        if (j.contains("skin_type")) g_SkinSelectedType = j["skin_type"].get<std::string>();
-        if (j.contains("skin_weight")) g_SkinSelectedWeightClass = j["skin_weight"].get<std::string>();
-        if (j.contains("skin_subtype")) g_SkinSelectedSubtype = j["skin_subtype"].get<std::string>();
-        g_SkinSelectedSubtype = Skinventory::SkinCategorySubtype(g_SkinSelectedType, g_SkinSelectedSubtype);
+        if(j.contains("skin_filters")&&j["skin_filters"].is_object()) {
+            const auto& sf=j["skin_filters"];
+            g_SkinBrowserFilters.category=sf.value("category",Skinventory::Choices{});
+            g_SkinBrowserFilters.weight=sf.value("weight",Skinventory::Choices{});
+            g_SkinBrowserFilters.slot=sf.value("slot",Skinventory::Choices{});
+            g_SkinBrowserFilters.weapon=sf.value("weapon",Skinventory::Choices{});
+            g_SkinBrowserFilters.rarity=sf.value("rarity",Skinventory::Choices{});
+            g_SkinBrowserFilters.Prune();
+        } // Old mandatory category navigation is intentionally not a new filter.
         if (j.contains("skin_selected_id")) g_SkinSelectedId = j["skin_selected_id"].get<uint32_t>();
         if (j.contains("skin_show_owned")) g_SkinShowOwned = j["skin_show_owned"].get<bool>();
         if (j.contains("skin_show_unowned")) g_SkinShowUnowned = j["skin_show_unowned"].get<bool>();
@@ -11709,14 +11719,13 @@ static void RenderBuildLibrary() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
     // Left panel: build list, Right panel: preview
-    float libAvailW = ImGui::GetContentRegionAvail().x;
-    g_LibListWidth = (g_LibListWidth < 120.0f) ? 120.0f : (g_LibListWidth > libAvailW - 200.0f) ? libAvailW - 200.0f : g_LibListWidth;
+    const AlterEgo::UI::SplitPanel split(g_LibListWidth,220.f);
 
     // Defer drag operations until neither pane holds a reference to a build.
     std::string pendingGroup, pendingGroupTarget;
     std::string pendingItemId, pendingItemTarget;
     bool pendingGroupAfter = false, pendingItemAfter = false;
-    ImGui::BeginChild("LibList", ImVec2(g_LibListWidth, 0), true);
+    ImGui::BeginChild("LibList", ImVec2(split.left, 0), true);
     {
         g_LibFilterMode = std::max(0, std::min(g_LibFilterMode, IM_ARRAYSIZE(GameModeNames)-1));
         AlterEgo::UI::SearchToolbar("loadouts", "Search loadouts...", g_LibSearchBuf,
@@ -12110,36 +12119,7 @@ static void RenderBuildLibrary() {
 
     ImGui::EndChild();
 
-    // Draggable vertical splitter
-    ImGui::SameLine();
-    {
-        float splitterW = 6.0f;
-        float h = ImGui::GetContentRegionAvail().y;
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##liblist_splitter", ImVec2(splitterW, h));
-        bool hovered = ImGui::IsItemHovered();
-        bool active = ImGui::IsItemActive();
-        if (hovered || active)
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        if (active) {
-            float delta = ImGui::GetIO().MouseDelta.x;
-            if (delta != 0.0f) {
-                g_LibListWidth += delta;
-                g_LibListWidth = (g_LibListWidth < 120.0f) ? 120.0f : (g_LibListWidth > libAvailW - 200.0f) ? libAvailW - 200.0f : g_LibListWidth;
-            }
-        }
-        if (ImGui::IsItemDeactivated()) {
-            SaveSettings();
-        }
-        ImU32 lineCol = (hovered || active)
-            ? IM_COL32(180, 160, 80, 180)
-            : IM_COL32(80, 75, 60, 100);
-        float cx = pos.x + splitterW * 0.5f;
-        ImGui::GetWindowDrawList()->AddLine(
-            ImVec2(cx, pos.y + 4), ImVec2(cx, pos.y + h - 4),
-            lineCol, 2.0f);
-    }
-    ImGui::SameLine();
+    if(split.Divider("##liblist_splitter",g_LibListWidth))SaveSettings();
 
     // Right panel: preview
     ImGui::BeginChild("LibDetail", ImVec2(0, 0), true);
@@ -13000,211 +12980,85 @@ static void RenderCoins(int64_t copper) {
     DrawCoinIcon(COIN_COPPER, 5.0f);
 }
 
-// Cached owned/total counts per skin category — recomputed when the
-// OwnedSkins generation changes (i.e. after a Refresh).
-static std::pair<int,int> SkinCategoryCounts(const std::string& type,
-                                             const std::string& sub,
-                                             const std::string& wc) {
-    static std::unordered_map<std::string, std::pair<int,int>> s_cache;
-    static uint64_t s_gen = (uint64_t)-1;
-    uint64_t gen = Skinventory::OwnedSkins::GetGeneration();
-    if (gen != s_gen) { s_cache.clear(); s_gen = gen; }
-
-    std::string key = type + "|" + sub + "|" + wc;
-    auto it = s_cache.find(key);
-    if (it != s_cache.end()) return it->second;
-
-    auto skins = Skinventory::SkinCache::GetSkinsByCategory(type, sub, wc);
-    int owned = 0;
-    for (uint32_t id : skins) {
-        if (Skinventory::OwnedSkins::IsOwned(id)) owned++;
+// One cached catalog/ownership projection serves Browser and Shopping facets.
+struct SkinBrowserData {
+    uint64_t catalog=uint64_t(-1), ownership=uint64_t(-1);
+    bool hasOwnership=false;
+    std::vector<Skinventory::SkinInfo> rows;
+    std::unordered_set<uint32_t> owned;
+    Skinventory::SkinFacets facets;
+};
+static const SkinBrowserData& GetSkinBrowserData() {
+    static SkinBrowserData data;
+    const auto catalog=Skinventory::SkinCache::GetGeneration();
+    const auto owner=Skinventory::OwnedSkins::GetGeneration();
+    const bool has=Skinventory::OwnedSkins::HasData();
+    if(data.catalog!=catalog) {
+        data.rows=Skinventory::SkinCache::GetCatalogSnapshot();
+        std::sort(data.rows.begin(),data.rows.end(),[](const auto& a,const auto& b){
+            return a.name==b.name?a.id<b.id:a.name<b.name;
+        });
     }
-    auto result = std::make_pair(owned, (int)skins.size());
-    s_cache[key] = result;
-    return result;
+    if(data.ownership!=owner||data.hasOwnership!=has)
+        data.owned=Skinventory::OwnedSkins::GetOwnedSnapshot();
+    if(data.catalog!=catalog||data.ownership!=owner||data.hasOwnership!=has) {
+        data.facets=Skinventory::CountFacets(data.rows,data.owned,has);
+        data.catalog=catalog;data.ownership=owner;data.hasOwnership=has;
+    }
+    return data;
 }
-
-// Single nav row with optional owned/total count and active gold accent.
-static bool RenderSkinNavRow(const char* label, bool active,
-                             int owned, int total,
-                             ImVec4 dotColor, bool indent) {
-    ImGui::PushID(label);
-    ImVec2 startPos = ImGui::GetCursorScreenPos();
-    float availW = ImGui::GetContentRegionAvail().x;
-    float rowH = ImGui::GetTextLineHeight() + 4.0f;
-
-    if (indent) ImGui::Indent(8.0f);
-
-    // Active gold-bar background fill behind text
-    if (active) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 bgMin(startPos.x, startPos.y);
-        ImVec2 bgMax(startPos.x + availW, startPos.y + rowH);
-        dl->AddRectFilled(bgMin, bgMax, IM_COL32(80, 64, 28, 60), 2.0f);
-        dl->AddRectFilled(ImVec2(bgMin.x, bgMin.y + 2),
-                          ImVec2(bgMin.x + 2, bgMax.y - 2),
-                          IM_COL32(232, 196, 122, 230));
-    }
-
-    // Small coloured dot as a category accent
-    {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 p = ImGui::GetCursorScreenPos();
-        float cx = p.x + 4.0f;
-        float cy = p.y + ImGui::GetTextLineHeight() * 0.5f;
-        dl->AddCircleFilled(ImVec2(cx, cy), 3.5f, ImGui::GetColorU32(dotColor));
-        ImGui::Dummy(ImVec2(12.0f, ImGui::GetTextLineHeight()));
-        ImGui::SameLine(0, 2);
-    }
-
-    // Tag the count to the label so Selectable owns the full row width
-    char countBuf[32] = {0};
-    if (total > 0) {
-        if (owned >= 0) snprintf(countBuf, sizeof(countBuf), "  %d/%d", owned, total);
-        else            snprintf(countBuf, sizeof(countBuf), "  (%d)", total);
-    }
-
-    // Compute right-aligned count and use Selectable for hit-testing
-    ImVec4 textCol = active ? ImVec4(0.95f, 0.85f, 0.55f, 1.0f)
-                            : ImVec4(0.85f, 0.83f, 0.75f, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, textCol);
-    bool clicked = ImGui::Selectable(label, false, 0, ImVec2(0, 0));
-    ImGui::PopStyleColor();
-
-    // Right-align count (drawn on top of selectable)
-    if (countBuf[0]) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 cSize = ImGui::CalcTextSize(countBuf);
-        float cx = startPos.x + availW - cSize.x - 6.0f;
-        float cy = startPos.y + (rowH - cSize.y) * 0.5f - 2.0f;
-        ImU32 countCol = (owned >= 0 && total > 0 && owned == total)
-            ? IM_COL32(120, 200, 120, 220)
-            : active ? IM_COL32(232, 196, 122, 220) : IM_COL32(140, 132, 110, 220);
-        dl->AddText(ImVec2(cx, cy), countCol, countBuf);
-    }
-
-    if (indent) ImGui::Unindent(8.0f);
-    ImGui::PopID();
-    return clicked;
-}
-
-static void RenderSkinCategoryNav() {
-    ImGui::BeginChild("CategoryNav", ImVec2(180, 0), true);
-
-    bool hasOwner = Skinventory::OwnedSkins::HasData();
-
-    // Compute aggregate count for a top-level type by summing its sub-categories
-    auto typeTotals = [&](const std::string& type) -> std::pair<int,int> {
-        int owned = 0, total = 0;
-        if (type == "Armor") {
-            for (const auto& wc : Skinventory::SkinCache::GetArmorWeights()) {
-                if (wc == "Clothing") continue;
-                for (const auto& slot : Skinventory::SkinCache::GetArmorSlots(wc)) {
-                    auto p = SkinCategoryCounts("Armor", slot, wc);
-                    owned += p.first; total += p.second;
-                }
-            }
-        } else if (type == "Weapon") {
-            for (const auto& wt : Skinventory::SkinCache::GetWeaponTypes()) {
-                auto p = SkinCategoryCounts("Weapon", wt, "");
-                owned += p.first; total += p.second;
-            }
-        } else if (type == "Back") {
-            auto p = SkinCategoryCounts("Back", "", "");
-            owned += p.first; total += p.second;
+static AlterEgo::UI::FilterChips SkinFilterChips(Skinventory::SkinFilters& filters,
+    std::function<void()> changed) {
+    AlterEgo::UI::FilterChips chips;
+    auto add=[&](const char* group,Skinventory::Choices& values) {
+        for(const auto& value:values) {
+            auto* set=&values;
+            std::string label=value=="Weapon"?"Weapons":value;
+            chips.push_back({std::string(group)+":"+value,label,[set,value,&filters,changed] {
+                set->erase(value);filters.Prune();changed();
+            }});
         }
-        return {owned, total};
     };
-
-    ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "CATEGORY");
-    ImGui::Separator();
-
-    {
-        auto p = typeTotals("Armor");
-        if (RenderSkinNavRow("Armor", g_SkinSelectedType == "Armor",
-                             hasOwner ? p.first : -1, p.second,
-                             ImVec4(0.45f, 0.65f, 0.85f, 1.0f), false)) {
-            g_SkinSelectedType = "Armor";
-            g_SkinSelectedWeightClass = "Heavy";
-            g_SkinSelectedSubtype = "Helm";
-            g_SkinSelectedId = 0;
-        }
-    }
-    {
-        auto p = typeTotals("Weapon");
-        if (RenderSkinNavRow("Weapons", g_SkinSelectedType == "Weapon",
-                             hasOwner ? p.first : -1, p.second,
-                             ImVec4(0.85f, 0.45f, 0.35f, 1.0f), false)) {
-            g_SkinSelectedType = "Weapon";
-            g_SkinSelectedWeightClass = "";
-            g_SkinSelectedSubtype = "Axe";
-            g_SkinSelectedId = 0;
-        }
-    }
-    {
-        auto p = typeTotals("Back");
-        if (RenderSkinNavRow("Back", g_SkinSelectedType == "Back",
-                             hasOwner ? p.first : -1, p.second,
-                             ImVec4(0.65f, 0.50f, 0.80f, 1.0f), false)) {
-            g_SkinSelectedType = "Back";
-            g_SkinSelectedWeightClass = "";
-            g_SkinSelectedSubtype = "";
-            g_SkinSelectedId = 0;
-        }
-    }
-
-    ImGui::Separator();
-
-    if (g_SkinSelectedType == "Armor") {
-        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "WEIGHT CLASS");
-        auto wcColor = [](const std::string& wc) -> ImVec4 {
-            if (wc == "Heavy")  return ImVec4(0.65f, 0.65f, 0.70f, 1.0f);
-            if (wc == "Medium") return ImVec4(0.65f, 0.50f, 0.30f, 1.0f);
-            if (wc == "Light")  return ImVec4(0.55f, 0.45f, 0.70f, 1.0f);
-            return ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
-        };
-        for (const auto& wc : Skinventory::SkinCache::GetArmorWeights()) {
-            if (wc == "Clothing") continue;
-            int owned = 0, total = 0;
-            for (const auto& slot : Skinventory::SkinCache::GetArmorSlots(wc)) {
-                auto p = SkinCategoryCounts("Armor", slot, wc);
-                owned += p.first; total += p.second;
-            }
-            if (RenderSkinNavRow(wc.c_str(), g_SkinSelectedWeightClass == wc,
-                                 hasOwner ? owned : -1, total,
-                                 wcColor(wc), false)) {
-                g_SkinSelectedWeightClass = wc;
-                g_SkinSelectedId = 0;
-            }
-        }
-
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "SLOT");
-        for (const auto& slot : Skinventory::SkinCache::GetArmorSlots(g_SkinSelectedWeightClass)) {
-            auto p = SkinCategoryCounts("Armor", slot, g_SkinSelectedWeightClass);
-            if (RenderSkinNavRow(slot.c_str(), g_SkinSelectedSubtype == slot,
-                                 hasOwner ? p.first : -1, p.second,
-                                 ImVec4(0.45f, 0.65f, 0.85f, 1.0f), true)) {
-                g_SkinSelectedSubtype = slot;
-                g_SkinSelectedId = 0;
-            }
-        }
-    } else if (g_SkinSelectedType == "Weapon") {
-        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "WEAPON TYPE");
-        for (const auto& wt : Skinventory::SkinCache::GetWeaponTypes()) {
-            auto p = SkinCategoryCounts("Weapon", wt, "");
-            if (RenderSkinNavRow(wt.c_str(), g_SkinSelectedSubtype == wt,
-                                 hasOwner ? p.first : -1, p.second,
-                                 ImVec4(0.85f, 0.45f, 0.35f, 1.0f), false)) {
-                g_SkinSelectedSubtype = wt;
-                g_SkinSelectedId = 0;
-            }
-        }
-    }
-
-    ImGui::EndChild();
+    add("category",filters.category);add("weight",filters.weight);add("slot",filters.slot);
+    add("weapon",filters.weapon);add("rarity",filters.rarity);
+    return chips;
 }
-
+static void DrawSkinFilters(Skinventory::SkinFilters& filters,const SkinBrowserData& data,
+                            const std::function<void()>& changed) {
+    const auto draw=[&](const char* label,Skinventory::Choices& selected,
+                        const std::map<std::string,Skinventory::SkinCounts>& counts,
+                        const std::vector<std::string>& order) {
+        std::vector<std::pair<std::string,std::string>> options;
+        auto append=[&](const std::string& value) {
+            if(value.empty())return;
+            std::string text=value=="Weapon"?"Weapons":value;
+            const auto it=counts.find(value);
+            if(it!=counts.end())text+=" ("+(data.hasOwnership?std::to_string(it->second.owned)+"/":"")+std::to_string(it->second.total)+")";
+            options.emplace_back(value,text);
+        };
+        for(const auto& v:order)append(v);
+        for(const auto& kv:counts)if(std::find(order.begin(),order.end(),kv.first)==order.end())append(kv.first);
+        if(AlterEgo::UI::MultiFilterChoice(label,selected,options)) {filters.Prune();changed();}
+    };
+    draw("Category",filters.category,data.facets.category,{"Armor","Weapon","Back","Gathering"});
+    if(Skinventory::Allows(filters.category,"Armor")) {
+        draw("Armor weight",filters.weight,data.facets.weight,{"Heavy","Medium","Light"});
+        draw("Armor slot",filters.slot,data.facets.slot,{"Helm","HelmAquatic","Shoulders","Coat","Gloves","Leggings","Boots"});
+    }
+    if(Skinventory::Allows(filters.category,"Weapon"))
+        draw("Weapon type",filters.weapon,data.facets.weapon,Skinventory::SkinCache::GetWeaponTypes());
+    draw("Rarity",filters.rarity,data.facets.rarity,{"Junk","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"});
+    ImGui::TextDisabled("Counts are for each catalog facet");
+}
+static void RevealSkinInBrowser(uint32_t id) {
+    const auto skin=Skinventory::SkinCache::GetSkin(id);
+    if(skin && !g_SkinBrowserFilters.Matches(*skin)) g_SkinBrowserFilters={};
+    if(skin&&!Skinventory::Search::Matches(skin->name,Skinventory::Search::Words(g_SkinSearchFilter)))g_SkinSearchFilter[0]='\0';
+    if(Skinventory::OwnedSkins::HasData()) {
+        const bool owned=Skinventory::OwnedSkins::IsOwned(id);
+        if((owned&&!g_SkinShowOwned)||(!owned&&!g_SkinShowUnowned))g_SkinShowOwned=g_SkinShowUnowned=true;
+    }
+}
 // All Skinventory surfaces use this same menu, scoped to the actual row/skin.
 static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
     if (!ImGui::BeginPopupContextItem("##skin_actions")) return;
@@ -13239,118 +13093,54 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
     ImGui::EndPopup();
 }
 
-static void RenderSkinList() {
-    ImGui::BeginChild("SkinList", ImVec2(300, 0), true);
-
-    // Ownership is a filter; list/grid is a display preference, not a filter.
-    const bool hasOwnership = Skinventory::OwnedSkins::HasData();
-    const int ownership = !hasOwnership ? 0 : (g_SkinShowOwned && !g_SkinShowUnowned ? 1 : !g_SkinShowOwned && g_SkinShowUnowned ? 2 : 0);
-    AlterEgo::UI::SearchToolbar("skin_browser", "Search skins...", g_SkinSearchFilter,
+static void RenderSkinList(float width) {
+    ImGui::BeginChild("SkinList", ImVec2(width, 0), true);
+    const auto& data=GetSkinBrowserData();
+    const bool hasOwnerData=data.hasOwnership;
+    const auto changed=[] {SaveSession();};
+    AlterEgo::UI::SearchToolbar("skin_browser","Search all skins...",g_SkinSearchFilter,
         [&] {
-            AlterEgo::UI::FilterChips chips;
-            if (hasOwnership && g_SkinShowOwned != g_SkinShowUnowned)
-                chips.push_back({"ownership", g_SkinShowOwned ? "Owned" : "Unowned",
-                    [&] { g_SkinShowOwned = g_SkinShowUnowned = true; }});
+            auto chips=SkinFilterChips(g_SkinBrowserFilters,changed);
+            if(hasOwnerData&&g_SkinShowOwned!=g_SkinShowUnowned)
+                chips.push_back({"ownership",g_SkinShowOwned?"Owned":"Unowned",[]{g_SkinShowOwned=g_SkinShowUnowned=true;SaveSession();}});
             return chips;
         },
         [&] {
-            int selected = ownership;
-            const char* options[] = {"All", "Owned", "Unowned"};
-            if (hasOwnership) {
-                if (AlterEgo::UI::FilterChoice("Ownership", selected, options, IM_ARRAYSIZE(options))) {
-                    g_SkinShowOwned = selected != 2;
-                    g_SkinShowUnowned = selected != 1;
+            DrawSkinFilters(g_SkinBrowserFilters,data,changed);
+            int ownership=g_SkinShowOwned&&!g_SkinShowUnowned?1:!g_SkinShowOwned&&g_SkinShowUnowned?2:0;
+            const char* options[]={"All","Owned","Unowned"};
+            if(hasOwnerData) {
+                if(AlterEgo::UI::FilterChoice("Ownership",ownership,options,3)) {
+                    g_SkinShowOwned=ownership!=2;g_SkinShowUnowned=ownership!=1;changed();
                 }
             } else ImGui::TextDisabled("Ownership data not loaded");
-            const char* views[] = {"List", "Grid"};
-            if (AlterEgo::UI::FilterChoice("View", g_SkinViewMode, views, IM_ARRAYSIZE(views))) SaveSettings();
-        },
-        [&] { g_SkinShowOwned = g_SkinShowUnowned = true; });
-
-    ImGui::Separator();
-
-    // Cached display list — only rebuild when inputs change
-    struct SkinDisplayEntry { uint32_t id; bool owned; };
-    static std::vector<SkinDisplayEntry> s_displaySkins;
-    static int s_ownedCount = 0;
-    static int s_totalCount = 0;
-    static std::string s_cacheType;
-    static std::string s_cacheSubtype;
-    static std::string s_cacheWeight;
-    static std::string s_cacheFilter;
-    static bool s_cacheShowOwned = true;
-    static bool s_cacheShowUnowned = true;
-    static bool s_cacheHasOwnerData = false;
-    static uint64_t s_cacheOwnedGen = 0;
-
-    const std::string filterLower=Skinventory::Search::Lower(g_SkinSearchFilter);
-
-    bool hasOwnerData = Skinventory::OwnedSkins::HasData();
-    uint64_t ownedGen = Skinventory::OwnedSkins::GetGeneration();
-
-    bool needRebuild = (s_cacheType != g_SkinSelectedType) ||
-                       (s_cacheSubtype != g_SkinSelectedSubtype) ||
-                       (s_cacheWeight != g_SkinSelectedWeightClass) ||
-                       (s_cacheFilter != filterLower) ||
-                       (s_cacheShowOwned != g_SkinShowOwned) ||
-                       (s_cacheShowUnowned != g_SkinShowUnowned) ||
-                       (s_cacheHasOwnerData != hasOwnerData) ||
-                       (s_cacheOwnedGen != ownedGen);
-
-    if (needRebuild) {
-        s_cacheType = g_SkinSelectedType;
-        s_cacheSubtype = g_SkinSelectedSubtype;
-        s_cacheWeight = g_SkinSelectedWeightClass;
-        s_cacheFilter = filterLower;
-        s_cacheShowOwned = g_SkinShowOwned;
-        s_cacheShowUnowned = g_SkinShowUnowned;
-        s_cacheHasOwnerData = hasOwnerData;
-        s_cacheOwnedGen = ownedGen;
-
-        s_displaySkins.clear();
-        s_ownedCount = 0;
-        s_totalCount = 0;
-
-        std::vector<uint32_t> skins;
-        if (g_SkinSelectedType == "Armor") {
-            skins = Skinventory::SkinCache::GetSkinsByCategory("Armor", g_SkinSelectedSubtype, g_SkinSelectedWeightClass);
-        } else if (g_SkinSelectedType == "Weapon") {
-            skins = Skinventory::SkinCache::GetSkinsByCategory("Weapon", g_SkinSelectedSubtype, "");
-        } else if (g_SkinSelectedType == "Back") {
-            skins = Skinventory::SkinCache::GetSkinsByCategory("Back", "", "");
-        }
-
-        s_displaySkins.reserve(skins.size());
-        const auto searchWords=Skinventory::Search::Words(filterLower);
-        for (uint32_t skinId : skins) {
-            auto skinOpt = Skinventory::SkinCache::GetSkin(skinId);
-            if (!skinOpt || skinOpt->name.empty()) continue;
-
-            s_totalCount++;
-            bool owned = Skinventory::OwnedSkins::IsOwned(skinId);
-            if (owned) s_ownedCount++;
-
-            if (hasOwnerData) {
-                if (owned && !g_SkinShowOwned) continue;
-                if (!owned && !g_SkinShowUnowned) continue;
-            }
-
-            if (!Skinventory::Search::Matches(skinOpt->name, searchWords)) continue;
-
-            s_displaySkins.push_back({skinId, owned});
-        }
+        },[&]{g_SkinBrowserFilters={};g_SkinShowOwned=g_SkinShowUnowned=true;changed();});
+    struct SkinDisplayEntry {uint32_t id;bool owned;};
+    static std::vector<SkinDisplayEntry> displaySkins;
+    static Skinventory::FilterResult result;
+    static Skinventory::SkinFilters previous;
+    static uint64_t catalog=uint64_t(-1),owner=uint64_t(-1);
+    static bool has=false,showOwned=true,showUnowned=true;
+    static std::string query;
+    const std::string current=Skinventory::Search::Lower(g_SkinSearchFilter);
+    if(catalog!=data.catalog||owner!=data.ownership||has!=hasOwnerData||previous!=g_SkinBrowserFilters||
+       query!=current||showOwned!=g_SkinShowOwned||showUnowned!=g_SkinShowUnowned) {
+        catalog=data.catalog;owner=data.ownership;has=hasOwnerData;previous=g_SkinBrowserFilters;query=current;
+        showOwned=g_SkinShowOwned;showUnowned=g_SkinShowUnowned;
+        result=Skinventory::FilterSkins(data.rows,data.owned,previous,Skinventory::Search::Words(query),has,showOwned,showUnowned);
+        displaySkins.clear();displaySkins.reserve(result.displayed.size());
+        for(const auto& e:result.displayed)displaySkins.push_back({e.first,e.second});
     }
-
-    int ownedCount = s_ownedCount;
-    int totalCount = s_totalCount;
-    const auto& displaySkins = s_displaySkins;
+    const int ownedCount=result.scope.owned,totalCount=result.scope.total;
+    ImGui::TextDisabled("%d matches / %d shown",result.searchMatches,(int)displaySkins.size());
+    ImGui::Separator();
 
     bool showStatus = hasOwnerData;
     float statusHeight = showStatus ? (ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y) : 0;
     float scrollHeight = ImGui::GetContentRegionAvail().y - statusHeight;
 
     ImGui::BeginChild("SkinListScroll", ImVec2(0, scrollHeight));
-    if (g_SkinScrollToSkin) {
+    if (g_SkinScrollToSkin && g_SkinViewMode != 1) {
         for (int i = 0; i < (int)displaySkins.size(); i++) {
             if (displaySkins[i].id == g_SkinSelectedId) {
                 float itemHeight = ImGui::GetTextLineHeightWithSpacing();
@@ -13921,40 +13711,28 @@ static void RenderSkinShoppingList() {
     }
 
     static bool s_needsFetch = true;
-    static std::string query, weight, slot, weapon, rarity;
-    static int category=0, source=0, maxGold=0;
+    static std::string query;
+    static Skinventory::SkinFilters filters;
+    static int source=0, maxGold=0;
+    const auto& data=GetSkinBrowserData();
     static bool filterDirty=true;
     const auto changed = [&] { filterDirty = true; };
     bool refreshClicked = false;
     if (AlterEgo::UI::SearchToolbar("shopping", "Search skins or TP items...", query,
         [&] {
-            AlterEgo::UI::FilterChips chips;
-            // Removing Category restores All without dropping compatible slot/weight/type filters.
-            if(category) chips.push_back({"category", category==1?"Armor":category==2?"Weapons":"Back", [&] {category=0;changed();}});
-            if(source) chips.push_back({"source", source==1?"Trading Post":"Vendor", [&] {source=0;changed();}});
-            if(!weight.empty()) chips.push_back({"weight",weight,[&] {weight.clear();changed();}});
-            if(!slot.empty()) chips.push_back({"slot",slot,[&] {slot.clear();changed();}});
-            if(!weapon.empty()) chips.push_back({"weapon",weapon,[&] {weapon.clear();changed();}});
-            if(!rarity.empty()) chips.push_back({"rarity",rarity,[&] {rarity.clear();changed();}});
+            auto chips=SkinFilterChips(filters,changed);
+            if(source) chips.push_back({"source",source==1?"Trading Post":"Vendor",[&]{source=0;changed();}});
             if(maxGold) chips.push_back({"price","Max "+std::to_string(maxGold)+"g",[&] {maxGold=0;changed();}});
             return chips;
         },
         [&] {
-            const char* cats[]={"All","Armor","Weapons","Back"};
             const char* srcs[]={"All","Trading Post","Vendor"};
-            if(AlterEgo::UI::FilterChoice("Category",category,cats,4)) {weight.clear();slot.clear();weapon.clear();changed();}
+            DrawSkinFilters(filters,data,changed);
             if(AlterEgo::UI::FilterChoice("Source",source,srcs,3)) changed();
-            if(category==0 || category==1) {
-                if(AlterEgo::UI::FilterChoice("Armor weight",weight,Skinventory::SkinCache::GetArmorWeights())) {if(!weight.empty()) weapon.clear();changed();}
-                if(AlterEgo::UI::FilterChoice("Armor slot",slot,{"Helm","HelmAquatic","Shoulders","Coat","Gloves","Leggings","Boots"})) {if(!slot.empty()) weapon.clear();changed();}
-            }
-            if(category==0 || category==2)
-                if(AlterEgo::UI::FilterChoice("Weapon type",weapon,Skinventory::SkinCache::GetWeaponTypes())) {if(!weapon.empty()) {weight.clear();slot.clear();}changed();}
-            if(AlterEgo::UI::FilterChoice("Skin rarity",rarity,{"Junk","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"})) changed();
             ImGui::SetNextItemWidth(ImGui::GetFontSize()*11.0f);
             if(ImGui::InputInt("Max gold (0 = any)",&maxGold)) {maxGold=std::max(0,maxGold);changed();}
         },
-        [&] {category=source=maxGold=0;weight.clear();slot.clear();weapon.clear();rarity.clear();changed();},
+        [&] {source=maxGold=0;filters={};changed();},
         "Refresh Prices", &refreshClicked)) changed();
     if(refreshClicked && !Skinventory::Commerce::IsFetching()) {
         g_SkinShopListDirty=true; s_needsFetch=true;
@@ -13999,24 +13777,24 @@ static void RenderSkinShoppingList() {
 
     // Build the unfiltered acquisition list only on data changes. Local
     // filters never request prices or restart the ownership/refresh lifecycle.
-    static uint64_t lastOwned=0,lastPrice=0;
+    static uint64_t lastOwned=0,lastPrice=0,lastCatalog=0;
     struct ShopCandidate { Skinventory::SkinInfo skin; std::string itemName; int tp, vendor; };
     static std::vector<ShopCandidate> candidates;
     static bool needsInitial=true;
     const auto owned=Skinventory::OwnedSkins::GetGeneration();
     const auto priceGen=Skinventory::Commerce::GetPriceGeneration();
-    if(lastOwned!=owned || lastPrice!=priceGen || needsInitial) {
-        lastOwned=owned; lastPrice=priceGen; needsInitial=false;
+    if(lastOwned!=owned || lastPrice!=priceGen || lastCatalog!=data.catalog || needsInitial) {
+        lastOwned=owned; lastPrice=priceGen; lastCatalog=data.catalog; needsInitial=false;
         g_SkinShopListDirty=true;
     }
     if(g_SkinShopListDirty && !isFetching) {
         g_SkinShopListDirty=false;
         candidates.clear();
         std::vector<uint32_t> priceIds;
-        for(auto id:Skinventory::SkinCache::GetAllSkinIds()) {
-            if(Skinventory::OwnedSkins::IsOwned(id)) continue;
-            const auto skin=Skinventory::SkinCache::GetSkin(id);
-            if(!skin || (skin->type!="Armor" && skin->type!="Weapon" && skin->type!="Back")) continue;
+        for(const auto& row:data.rows) {
+            const auto id=row.id;
+            if(data.owned.count(id)||!Skinventory::EligibleSkin(row))continue;
+            const auto* skin=&row;
             if(s_needsFetch) priceIds.push_back(id);
             const auto p=Skinventory::Commerce::GetPrice(id);
             const int tp=p && p->tradeable && p->sell_quantity>0 ? p->sell_price : 0;
@@ -14049,11 +13827,7 @@ static void RenderSkinShoppingList() {
         const auto tokens=Skinventory::Search::Words(query);
         for(const auto& entry:candidates) {
             const auto& skin=entry.skin;
-            if(category && skin.type!=(category==1?"Armor":category==2?"Weapon":"Back")) continue;
-            if(!weight.empty() && (skin.type!="Armor" || skin.weight_class!=weight)) continue;
-            if(!slot.empty() && (skin.type!="Armor" || skin.subtype!=slot)) continue;
-            if(!weapon.empty() && (skin.type!="Weapon" || Skinventory::SkinCategorySubtype(skin.type,skin.subtype)!=weapon)) continue;
-            if(!rarity.empty() && skin.rarity!=rarity) continue;
+            if(!filters.Matches(skin))continue;
             if(!tokens.empty() && !Skinventory::Search::Matches(skin.name+" "+entry.itemName,tokens)) continue;
             const bool useVendor=source==2 || (source==0 && entry.vendor>0 && (entry.tp<=0 || entry.vendor<=entry.tp));
             const int cost=useVendor?entry.vendor:entry.tp;
@@ -14128,11 +13902,7 @@ static void RenderSkinShoppingList() {
                     g_SkinSelectedId = entry.skinId;
                     Skinventory::WikiImage::RequestImage(entry.skinId, skin.name, skin.weight_class);
                     Skinventory::Commerce::FetchPriceForSkin(entry.skinId);
-                    g_SkinSelectedType = skin.type;
-                    if (skin.type == "Armor") {
-                        g_SkinSelectedWeightClass = skin.weight_class;
-                    }
-                    g_SkinSelectedSubtype = Skinventory::SkinCategorySubtype(skin.type, skin.subtype);
+                    RevealSkinInBrowser(entry.skinId);
                     g_SkinSwitchToBrowser = true;
                     g_SkinScrollToSkin = true;
                 }
@@ -14948,11 +14718,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                 std::string selLabel = label + "###skinbit";
                 if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
                     g_SkinSelectedId = skinId;
-                    g_SkinSelectedType = skinInfo->type;
-                    if (skinInfo->type == "Armor") {
-                        g_SkinSelectedWeightClass = skinInfo->weight_class;
-                    }
-                    g_SkinSelectedSubtype = Skinventory::SkinCategorySubtype(skinInfo->type, skinInfo->subtype);
+                    RevealSkinInBrowser(skinId);
                     g_SkinSwitchToBrowser = true;
                     g_SkinScrollToSkin = true;
                     g_SwitchToSkinventory = true;
@@ -15247,12 +15013,11 @@ static void RenderAchievements() {
     }
 
     // Main layout: left tree + splitter + right list
-    float availWidth = ImGui::GetContentRegionAvail().x;
-    float availHeight = ImGui::GetContentRegionAvail().y;
-    g_AchTreeWidth = (g_AchTreeWidth < 120.0f) ? 120.0f : (g_AchTreeWidth > availWidth - 200.0f) ? availWidth - 200.0f : g_AchTreeWidth;
+    const AlterEgo::UI::SplitPanel split(g_AchTreeWidth,220.f);
+    float availHeight=split.height;
 
     // Left panel: Group/Category tree
-    ImGui::BeginChild("AchTree", ImVec2(g_AchTreeWidth, availHeight), true);
+    ImGui::BeginChild("AchTree", ImVec2(split.left, availHeight), true);
 
     if (g_AchRestoreScroll) {
         ImGui::SetScrollY(g_AchTreeScrollY);
@@ -15462,36 +15227,7 @@ static void RenderAchievements() {
     g_AchTreeScrollY = ImGui::GetScrollY();
     ImGui::EndChild();
 
-    // Draggable vertical splitter
-    ImGui::SameLine();
-    {
-        float splitterW = 6.0f;
-        float h = availHeight;
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##achtree_splitter", ImVec2(splitterW, h));
-        bool hovered = ImGui::IsItemHovered();
-        bool active = ImGui::IsItemActive();
-        if (hovered || active)
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        if (active) {
-            float delta = ImGui::GetIO().MouseDelta.x;
-            if (delta != 0.0f) {
-                g_AchTreeWidth += delta;
-                g_AchTreeWidth = (g_AchTreeWidth < 120.0f) ? 120.0f : (g_AchTreeWidth > availWidth - 200.0f) ? availWidth - 200.0f : g_AchTreeWidth;
-            }
-        }
-        if (ImGui::IsItemDeactivated()) {
-            SaveAchTrackerState();
-        }
-        ImU32 lineCol = (hovered || active)
-            ? IM_COL32(180, 160, 80, 180)
-            : IM_COL32(80, 75, 60, 100);
-        float cx = pos.x + splitterW * 0.5f;
-        ImGui::GetWindowDrawList()->AddLine(
-            ImVec2(cx, pos.y), ImVec2(cx, pos.y + h), lineCol, 2.0f);
-    }
-
-    ImGui::SameLine();
+    if(split.Divider("##achtree_splitter",g_AchTreeWidth))SaveAchTrackerState();
 
     // Right panel: split into category list (top) + pinned section (bottom)
     ImGui::BeginChild("##AchRight", ImVec2(0, availHeight), false);
@@ -16016,11 +15752,7 @@ static void RenderAchPopout() {
                             std::string selLabel = "    [ ] " + bd.label + "###popskinbit";
                             if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
                                 g_SkinSelectedId = bd.skinId;
-                                g_SkinSelectedType = bd.skinType;
-                                if (bd.skinType == "Armor") {
-                                    g_SkinSelectedWeightClass = bd.skinWeightClass;
-                                }
-                                g_SkinSelectedSubtype = Skinventory::SkinCategorySubtype(bd.skinType, bd.skinSubtype);
+                                RevealSkinInBrowser(bd.skinId);
                                 g_SkinSwitchToBrowser = true;
                                 g_SkinScrollToSkin = true;
                                 g_SwitchToSkinventory = true;
@@ -16105,13 +15837,10 @@ static void RenderSkinventory() {
         }
         if (ImGui::BeginTabItem("Browser", nullptr, browserFlags)) {
             g_SkinActiveTab = 0;
-            // Give the three bordered panes breathing room below the sub-tab
-            // underline; otherwise their top borders crowd the tab header.
             ImGui::Spacing();
-            RenderSkinCategoryNav();
-            ImGui::SameLine();
-            RenderSkinList();
-            ImGui::SameLine();
+            const AlterEgo::UI::SplitPanel split(g_SkinListWidth,420.f,200.f,240.f);
+            RenderSkinList(split.left);
+            if(split.Divider("##skin_split",g_SkinListWidth))SaveSettings();
             RenderSkinDetailPanel();
             ImGui::EndTabItem();
         }
@@ -16643,7 +16372,7 @@ void AddonRender() {
     // Top-level tab bar: Characters | Build Library
     PollBuildSource();
     if (ImGui::BeginTabBar("##main_tabs")) {
-        static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu;
+        static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu, skinMenu;
 
         ImGuiTabItemFlags charTabFlags = 0;
         if (g_ForceCharactersTab) {
@@ -16735,10 +16464,9 @@ void AddonRender() {
 
                 // Character list (left) + Detail panel (right)
                 // Clamp width to reasonable bounds
-                float availW = ImGui::GetContentRegionAvail().x;
-                g_CharListWidth = (g_CharListWidth < 120.0f) ? 120.0f : (g_CharListWidth > availW - 200.0f) ? availW - 200.0f : g_CharListWidth;
+                const AlterEgo::UI::SplitPanel split(g_CharListWidth,200.f);
 
-                ImGui::BeginChild("CharList", ImVec2(g_CharListWidth, 0), true);
+                ImGui::BeginChild("CharList", ImVec2(split.left, 0), true);
 
                 // Sort mode selector + direction toggle (inside the list child)
                 {
@@ -17350,37 +17078,7 @@ void AddonRender() {
 
                 ImGui::EndChild();
 
-                // Draggable vertical splitter
-                ImGui::SameLine();
-                {
-                    float splitterW = 6.0f;
-                    float h = ImGui::GetContentRegionAvail().y;
-                    ImVec2 pos = ImGui::GetCursorScreenPos();
-                    ImGui::InvisibleButton("##charlist_splitter", ImVec2(splitterW, h));
-                    bool hovered = ImGui::IsItemHovered();
-                    bool active = ImGui::IsItemActive();
-                    if (hovered || active)
-                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-                    if (active) {
-                        float delta = ImGui::GetIO().MouseDelta.x;
-                        if (delta != 0.0f) {
-                            g_CharListWidth += delta;
-                            g_CharListWidth = (g_CharListWidth < 120.0f) ? 120.0f : (g_CharListWidth > availW - 200.0f) ? availW - 200.0f : g_CharListWidth;
-                        }
-                    }
-                    if (ImGui::IsItemDeactivated()) {
-                        SaveSettings();
-                    }
-                    // Visual: draw a subtle line
-                    ImU32 lineCol = (hovered || active)
-                        ? IM_COL32(180, 160, 80, 180)
-                        : IM_COL32(80, 75, 60, 100);
-                    float cx = pos.x + splitterW * 0.5f;
-                    ImGui::GetWindowDrawList()->AddLine(
-                        ImVec2(cx, pos.y + 4), ImVec2(cx, pos.y + h - 4),
-                        lineCol, 2.0f);
-                }
-                ImGui::SameLine();
+                if(split.Divider("##charlist_splitter",g_CharListWidth))SaveSettings();
 
                 // Detail panel — resolve through display order
                 int selRealIdx = -1;
@@ -17488,10 +17186,9 @@ void AddonRender() {
             } else {
                 // Empty state: no cached character data yet (new user)
                 // Use same width as normal character list panel
-                float availW = ImGui::GetContentRegionAvail().x;
-                g_CharListWidth = (g_CharListWidth < 120.0f) ? 120.0f : (g_CharListWidth > availW - 200.0f) ? availW - 200.0f : g_CharListWidth;
+                const AlterEgo::UI::SplitPanel split(g_CharListWidth,200.f);
 
-                ImGui::BeginChild("CharListEmpty", ImVec2(g_CharListWidth, 0), true);
+                ImGui::BeginChild("CharListEmpty", ImVec2(split.left, 0), true);
 
                 // Show pending character names grouped by account
                 if (!pendingNames.empty() && AlterEgo::GW2API::IsMultiAccount()) {
@@ -17533,7 +17230,7 @@ void AddonRender() {
                 ImGui::EndChild();
 
                 // Detail panel placeholder (right side)
-                ImGui::SameLine();
+                if(split.Divider("##charlist_empty_splitter",g_CharListWidth))SaveSettings();
                 ImGui::BeginChild("CharDetailEmpty", ImVec2(0, 0), true);
                 if (!pendingNames.empty()) {
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
@@ -17746,13 +17443,20 @@ void AddonRender() {
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", acctTabTooltip);
-        } else if (g_SkinInitialized && ImGui::BeginTabItem("Skinventory", nullptr, skinTabFlags)) {
+        } else if (g_SkinInitialized) {
+            ImGuiTabBar* skinBar=GImGui->CurrentTabBar;
+            ImGuiID beforeSkin=skinBar?skinBar->SelectedTabId:0;
+            const bool skinVisible=ImGui::BeginTabItem("Skinventory    ##ae_skin_dropdown",nullptr,skinTabFlags);
+            const ImGuiID skinId=skinBar&&skinBar->LastTabItemIdx>=0?skinBar->Tabs[skinBar->LastTabItemIdx].ID:0;
+            HandleTabDropdown(skinMenu,skinBar,beforeSkin,skinId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+            if(skinVisible) {
             g_MainTab = 2;
             ImGui::BeginChild("##skinventory_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderSkinventory();
             ImGui::EndChild();
             RenderSkinventoryStatusRow();
             ImGui::EndTabItem();
+            }
         }
 
         if (acctTabsDisabled) {
@@ -18001,6 +17705,20 @@ void AddonRender() {
         SyncTabDropdownOpen(libraryMenu, "Library menu##ae_main");
 
         if (!acctTabsDisabled) {
+            if(g_SkinInitialized) {
+                if(skinMenu.requestOpen)ImGui::OpenPopup("Skinventory menu##ae_main");
+                ImGui::SetNextWindowPos(skinMenu.anchor,ImGuiCond_Appearing);
+                if(ImGui::BeginPopup("Skinventory menu##ae_main")) {
+                    bool chosen=false;
+                    const bool hovered=TabDropdownMenuHovered();
+                    if(ImGui::MenuItem("View as Grid",nullptr,g_SkinViewMode==1)) {
+                        g_SkinViewMode=g_SkinViewMode==1?0:1;SaveSession();chosen=true;
+                    }
+                    FinishTabDropdown(skinMenu,chosen,hovered);
+                    ImGui::EndPopup();
+                }
+                SyncTabDropdownOpen(skinMenu,"Skinventory menu##ae_main");
+            }
             if (vaultMenu.requestOpen) ImGui::OpenPopup("Vault menu##ae_main");
             ImGui::SetNextWindowPos(vaultMenu.anchor, ImGuiCond_Appearing);
             if (ImGui::BeginPopup("Vault menu##ae_main")) {

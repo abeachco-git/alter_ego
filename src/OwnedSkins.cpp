@@ -440,6 +440,9 @@ namespace Skinventory {
         return s_queried_skins.size();
     }
 
+    std::unordered_set<uint32_t> OwnedSkins::GetOwnedSnapshot() {
+        std::lock_guard<std::mutex> lock(s_mutex);return s_owned_skins;
+    }
     uint64_t OwnedSkins::GetGeneration() {
         return s_generation;
     }

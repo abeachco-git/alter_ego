@@ -271,8 +271,8 @@ static void RenderFashionLibrary() {
     // Keep the shared search/filter toolbar inside the collection sidebar.
     const char* filters[] = {"All weights", "Light", "Medium", "Heavy", "Any", "Unknown"};
     float avail = ImGui::GetContentRegionAvail().x;
-    float leftWidth = ImMax(130.f, ImMin(g_LibListWidth, ImMax(130.f, avail - 220.f)));
-    ImGui::BeginChild("##fashion_list", ImVec2(leftWidth, 0), true);
+    const AlterEgo::UI::SplitPanel split(g_FashionListWidth,220.f,130.f,220.f);
+    ImGui::BeginChild("##fashion_list", ImVec2(split.left, 0), true);
     g_FashionFilter = std::max(0, std::min(g_FashionFilter, IM_ARRAYSIZE(filters)-1));
     AlterEgo::UI::SearchToolbar("fashion", "Search looks / characters...", g_FashionSearch,
         [&] {
@@ -310,7 +310,7 @@ static void RenderFashionLibrary() {
         ImGui::PopID();
     }
     ImGui::EndChild();
-    ImGui::SameLine();
+    if(split.Divider("##fashion_split",g_FashionListWidth))SaveSettings();
     ImGui::BeginChild("##fashion_detail", ImVec2(0, 0), true);
     int toDelete = -1;
     if (g_FashionSelected < 0 || g_FashionSelected >= (int)g_FashionLibrary.looks.size()) {

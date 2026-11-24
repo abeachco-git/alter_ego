@@ -1,7 +1,30 @@
 #include "../src/SkinSearchCore.h"
+#include "../src/SkinFilters.h"
+#include "../src/SplitPanelCore.h"
 #include <cassert>
 int case_skin_search(int, char**) {
  using namespace Skinventory;
+ SkinInfo heavy;heavy.id=1;heavy.name="Heavy Helm";heavy.type="Armor";heavy.weight_class="Heavy";heavy.subtype="Helm";
+ SkinInfo medium=heavy;medium.id=2;medium.name="Medium Helm";medium.weight_class="Medium";
+ SkinInfo light=heavy;light.id=3;light.name="Light Helm";light.weight_class="Light";
+ SkinInfo bow=heavy;bow.id=4;bow.name="Bow";bow.type="Weapon";bow.subtype="ShortBow";
+ SkinInfo unnamed=heavy;unnamed.id=5;unnamed.name.clear();
+ std::vector<SkinInfo> rows{heavy,medium,light,bow,unnamed,heavy};
+ std::unordered_set<uint32_t> owned{1,5};
+ SkinFilters filters;filters.category={"Armor"};filters.weight={"Heavy","Medium"};
+ auto result=FilterSkins(rows,owned,filters,{},true,true,true);
+ assert(result.scope.total==2&&result.scope.owned==1&&result.displayed.size()==2);
+ result=FilterSkins(rows,owned,filters,Search::Words("medium"),true,false,true);
+ assert(result.scope.total==2&&result.scope.owned==1&&result.searchMatches==1&&result.displayed.size()==1);
+ filters={};result=FilterSkins(rows,owned,filters,{},true,true,true);
+ assert(result.scope.total==4&&result.scope.owned==1);
+ auto facets=CountFacets(rows,owned,true);assert(facets.category.at("Armor").total==3&&facets.weight.at("Heavy").total==1);
+ filters.weapon={"Short Bow"};assert(filters.Matches(bow)&&!filters.Matches(heavy));
+ filters.weight={"Heavy"};assert(filters.Matches(bow)&&filters.Matches(heavy)&&!filters.Matches(light));
+ filters.category={"Armor"};filters.Prune();assert(filters.weapon.empty());
+ assert(AlterEgo::UI::FitSplitWidth(420,1000,24,200,240)==420);
+ assert(AlterEgo::UI::FitSplitWidth(420,300,24,200,240)==138);
+ assert(AlterEgo::UI::FitSplitWidth(420,1000,24,200,240)==420);
  assert(SkinCategorySubtype("Weapon","ShortBow")=="Short Bow");
  assert(SkinCategorySubtype("Weapon","Shortbow")=="Short Bow");
  assert(SkinCategorySubtype("Weapon","Short Bow")=="Short Bow");

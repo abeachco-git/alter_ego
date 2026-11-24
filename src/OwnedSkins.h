@@ -66,6 +66,7 @@ namespace Skinventory {
 
         // Generation counter — increments on every ownership change (for cache invalidation)
         static uint64_t GetGeneration();
+        static std::unordered_set<uint32_t> GetOwnedSnapshot();
 
     private:
         static void OnPong(void* eventArgs);

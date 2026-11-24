@@ -20,6 +20,7 @@ namespace Skinventory {
     std::atomic<CacheStatus> SkinCache::s_status{CacheStatus::Empty};
     std::string SkinCache::s_status_message;
     std::mutex SkinCache::s_mutex;
+    std::atomic<uint64_t> SkinCache::s_generation{0};
     std::unordered_map<uint32_t, SkinInfo> SkinCache::s_skins;
     std::unordered_map<SkinCache::CategoryKey, std::vector<uint32_t>, SkinCache::CategoryKeyHash> SkinCache::s_category_index;
 
@@ -96,7 +97,15 @@ namespace Skinventory {
         return 0;
     }
 
+    uint64_t SkinCache::GetGeneration() { return s_generation.load(); }
+    std::vector<SkinInfo> SkinCache::GetCatalogSnapshot() {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        std::vector<SkinInfo> out;out.reserve(s_skins.size());
+        for(const auto& kv:s_skins)out.push_back(kv.second);
+        return out;
+    }
     void SkinCache::RebuildIndex() {
+        ++s_generation;
         // Called with lock held
         s_category_index.clear();
         for (const auto& [id, skin] : s_skins) {

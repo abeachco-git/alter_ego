@@ -2,6 +2,8 @@
 // Canonical general-purpose Alter Ego UI controls. Read docs/ui-components.md.
 // Keep Nexus/ImGui 1.80 compatibility; no request or domain logic belongs here.
 #include "imgui.h"
+#include "SplitPanelCore.h"
+#include <set>
 #include <string>
 #include <algorithm>
 #include <cctype>
@@ -158,6 +160,57 @@ inline bool FilterChoice(const char* label, std::string& selected, const std::ve
     }
     return changed;
 }
+// Checkbox multi-select: empty means unrestricted; keep popup open.
+inline bool MultiFilterChoice(const char* label,std::set<std::string>& selected,
+    const std::vector<std::pair<std::string,std::string>>& options) {
+    bool changed=false;
+    const auto preview=selected.empty()?std::string("All"):
+        selected.size()==1?*selected.begin():std::to_string(selected.size())+" selected";
+    if(BeginCombo(label,preview.c_str(),0,ImGui::GetFontSize()*13.0f)) {
+        if(ImGui::Selectable("All",selected.empty(),ImGuiSelectableFlags_DontClosePopups)) {
+            selected.clear();changed=true;
+        }
+        for(const auto& option:options) {
+            ImGui::PushID(option.first.c_str());
+            bool on=selected.count(option.first)!=0;
+            if(ImGui::Checkbox(option.second.c_str(),&on)) {
+                if(on)selected.insert(option.first);else selected.erase(option.first);
+                changed=true;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+// Splitter owns both SameLine calls. Capture before drawing the left child.
+// Persist only explicit drag/reset, not temporary clamping on window resize.
+struct SplitPanel {
+    float width,height,overhead,left,def,minLeft,minRight,grip;
+    SplitPanel(float preferred,float defaultWidth,float minimumLeft=120.f,float minimumRight=200.f)
+        :width(ImGui::GetContentRegionAvail().x),height(std::max(1.f,ImGui::GetContentRegionAvail().y)),
+         overhead(8.f+2.f*ImGui::GetStyle().ItemSpacing.x),def(defaultWidth),
+         minLeft(minimumLeft),minRight(minimumRight),grip(8.f) {
+        left=FitSplitWidth(preferred,width,overhead,minLeft,minRight);
+    }
+    bool Divider(const char* id,float& preferred) const {
+        ImGui::SameLine();
+        const auto pos=ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton(id,ImVec2(grip,height));
+        const bool hover=ImGui::IsItemHovered(), active=ImGui::IsItemActive();
+        if(hover||active)ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        bool save=false;
+        if(hover&&ImGui::IsMouseDoubleClicked(0)) {preferred=def;save=true;}
+        else if(active&&ImGui::GetIO().MouseDelta.x!=0.f)
+            preferred=FitSplitWidth(left+ImGui::GetIO().MouseDelta.x,width,overhead,minLeft,minRight);
+        if(ImGui::IsItemDeactivated())save=true;
+        const float x=pos.x+grip*.5f;
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(x,pos.y),ImVec2(x,pos.y+height),
+            hover||active?IM_COL32(180,160,80,220):IM_COL32(120,110,90,150),2.f);
+        ImGui::SameLine();
+        return save;
+    }
+};
 // An empty remove action denotes required context, not an active filter.
 struct FilterChip {
     std::string id;
