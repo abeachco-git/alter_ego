@@ -7,6 +7,7 @@
 #include "../src/ItemMetadataCache.h"
 #include "../src/CacheDiagnostics.h"
 #include "../src/CharacterCache.h"
+#include "../src/CompletionCache.h"
 #include "../src/NativeLibraryStore.h"
 #include <cassert>
 #include <chrono>
@@ -292,7 +293,7 @@ int case_database_core(int, char**) {
         assert(!Cache::WriteReference(root,D::Dyes,badDye,101));
         assert(Cache::ReadReference(root,D::Dyes)==dyes);
         DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
-        assert(db.Scalar("PRAGMA user_version")==7);
+        assert(db.Scalar("PRAGMA user_version")==8);
         assert(db.Scalar("SELECT count(*) FROM reference_skills_professions")==2);
     }
     {
@@ -338,7 +339,7 @@ int case_database_core(int, char**) {
         std::filesystem::create_directories(paths.CacheDirectory()/"textures");
         Storage::WriteMigrationBytes(paths.CacheDirectory()/"textures"/"test.dat","1234");
         const auto result=Storage::InspectStorage(root);
-        assert(result.cache.healthy&&result.cache.schema==7&&result.artworkBytes==4);
+        assert(result.cache.healthy&&result.cache.schema==8&&result.artworkBytes==4);
         assert(!result.datasets.empty());
         auto items=std::find_if(result.datasets.begin(),result.datasets.end(),
             [](const auto& d){return d.label=="Items";});
@@ -349,7 +350,7 @@ int case_database_core(int, char**) {
             db.Exec("PRAGMA application_id=1234");
         }
         std::vector<Storage::DatasetDiagnostic> rows;
-        auto rejected=Storage::InspectDatabase(foreign,AlterEgo::Cache::kApplicationId,7,true,rows);
+        auto rejected=Storage::InspectDatabase(foreign,AlterEgo::Cache::kApplicationId,8,true,rows);
         assert(!rejected.healthy&&rows.empty());
         DB::Connection readOnly(paths.Cache().u8string(),DB::Connection::OpenMode::ReadOnly);
         bool failed=false;
@@ -391,6 +392,50 @@ int case_database_core(int, char**) {
         DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
         assert(db.Scalar("SELECT count(*) FROM character_rows")==3);
         db.Verify();
+    }
+    {
+        namespace Cache=AlterEgo::Cache;
+        using D=Cache::CompletionDataset;
+        using J=Cache::CompletionRows::Json;
+        const auto root=(temp.dir/"completion").u8string();
+        const AlterEgo::Storage::Paths paths(root);
+        std::filesystem::create_directories(paths.base);
+        J clear={{"id",9125},{"name","Strikes"},{"tier","Weekly"},{"done",false},{"current",1},{"max",3},
+            {"bitNames",{"Bears","Old Lion's Court","Other"}},{"bitDone",{1,0,0}}};
+        J clears={{"account","A.B"},{"fetch_time",100},{"dailyFractals",J::array()},
+            {"dailyBounties",J::array()},{"weeklyWings",J::array()},{"weeklyStrikes",clear}};
+        AlterEgo::Storage::WriteMigrationBytes(paths.base/"clears_cache_A_B.json",clears.dump());
+        assert(!Cache::ReadCompletion(root,D::Clears,"A_B"));
+        assert(!Cache::HasCompletion(root,D::Clears,"A_B"));
+        assert(Cache::ReadCompletion(root,D::Clears,"A.B")==clears);
+        auto other=clears;other["account"]="A_B";other["weeklyStrikes"]["bitDone"]={0,1,0};
+        assert(Cache::WriteCompletion(root,D::Clears,"A_B",other));
+        assert(Cache::ReadCompletion(root,D::Clears,"A.B")==clears);
+        assert(Cache::ReadCompletion(root,D::Clears,"A_B")==other);
+        auto stale=clears;stale["fetch_time"]=99;
+        assert(!Cache::WriteCompletion(root,D::Clears,"A.B",stale));
+        auto bad=clears;bad["fetch_time"]=101;bad["weeklyStrikes"]["bitDone"]={2};
+        assert(!Cache::WriteCompletion(root,D::Clears,"A.B",bad));
+        assert(Cache::ReadCompletion(root,D::Clears,"A.B")==clears);
+        J period={{"meta_progress_current",1},{"meta_progress_complete",6},{"meta_reward_astral",450},
+            {"meta_reward_claimed",false},{"objectives",J::array({{{"id",42},{"title","Weekly boss"},{"track","PvE"},
+                {"acclaim",50},{"progress_current",1},{"progress_complete",1},{"claimed",true}}})}};
+        J vault={{"fetch_time",200},{"season_end",300},{"daily",period},{"weekly",period},{"special",period}};
+        AlterEgo::Storage::WriteMigrationBytes(paths.base/"vault_cache.json",vault.dump());
+        assert(!Cache::ReadCompletion(root,D::Vault,"A.B",false));
+        vault["account"]="A.B";
+        assert(Cache::ReadCompletion(root,D::Vault,"A.B",true)==vault);
+        assert(Cache::HasCompletion(root,D::Vault,"A.B"));
+        assert(!Cache::HasCompletion(root,D::Vault,"A_B"));
+        auto reset=vault;reset["fetch_time"]=201;reset["weekly"]["objectives"][0]["claimed"]=false;
+        reset["weekly"]["objectives"][0]["progress_current"]=0;
+        assert(Cache::WriteCompletion(root,D::Vault,"A.B",reset));
+        assert(Cache::ReadCompletion(root,D::Vault,"A.B")==reset);
+        assert(!Cache::WriteCompletion(root,D::Vault,"A.B",vault));
+        assert(!Cache::WriteCompletion(root,D::Vault,"A_B",vault));
+        DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);db.Verify();
+        assert(db.Scalar("SELECT count(*) FROM clears_snapshots")==2);
+        assert(db.Scalar("SELECT count(*) FROM vault_snapshots")==1);
     }
     return 0;
 }

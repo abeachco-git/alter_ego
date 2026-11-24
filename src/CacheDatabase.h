@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 7;
+constexpr int kSchemaVersion = 8;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,19 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 8) {
+        db.Exec(R"SQL(
+CREATE TABLE clears_snapshots(account TEXT PRIMARY KEY CHECK(length(account)>0), fetch_time INTEGER NOT NULL CHECK(fetch_time>=0)) STRICT;
+CREATE TABLE clears_sections(account TEXT NOT NULL REFERENCES clears_snapshots ON DELETE CASCADE, section TEXT NOT NULL CHECK(section IN ('dailyFractals','dailyBounties','weeklyWings','weeklyStrikes')), PRIMARY KEY(account,section)) STRICT;
+CREATE TABLE clears_entries(account TEXT NOT NULL, section TEXT NOT NULL, ordinal INTEGER NOT NULL, id INTEGER NOT NULL, name TEXT NOT NULL, tier TEXT NOT NULL, done INTEGER NOT NULL, current_count INTEGER NOT NULL, max_count INTEGER NOT NULL, PRIMARY KEY(account,section,ordinal), FOREIGN KEY(account,section) REFERENCES clears_sections ON DELETE CASCADE) STRICT;
+CREATE TABLE clears_bit_names(account TEXT NOT NULL, section TEXT NOT NULL, entry_ordinal INTEGER NOT NULL, ordinal INTEGER NOT NULL, name TEXT NOT NULL, PRIMARY KEY(account,section,entry_ordinal,ordinal), FOREIGN KEY(account,section,entry_ordinal) REFERENCES clears_entries ON DELETE CASCADE) STRICT;
+CREATE TABLE clears_bit_done(account TEXT NOT NULL, section TEXT NOT NULL, entry_ordinal INTEGER NOT NULL, ordinal INTEGER NOT NULL, done INTEGER NOT NULL CHECK(done IN (0,1)), PRIMARY KEY(account,section,entry_ordinal,ordinal), FOREIGN KEY(account,section,entry_ordinal) REFERENCES clears_entries ON DELETE CASCADE) STRICT;
+CREATE TABLE vault_snapshots(account TEXT PRIMARY KEY CHECK(length(account)>0), fetch_time INTEGER NOT NULL CHECK(fetch_time>=0), season_end INTEGER) STRICT;
+CREATE TABLE vault_periods(account TEXT NOT NULL REFERENCES vault_snapshots ON DELETE CASCADE, section TEXT NOT NULL CHECK(section IN ('daily','weekly','special')), meta_current INTEGER NOT NULL, meta_complete INTEGER NOT NULL, meta_astral INTEGER NOT NULL, meta_claimed INTEGER NOT NULL, PRIMARY KEY(account,section)) STRICT;
+CREATE TABLE vault_objectives(account TEXT NOT NULL, section TEXT NOT NULL, ordinal INTEGER NOT NULL, id INTEGER NOT NULL, title TEXT NOT NULL, track TEXT NOT NULL, acclaim INTEGER NOT NULL, progress_current INTEGER NOT NULL, progress_complete INTEGER NOT NULL, claimed INTEGER NOT NULL, PRIMARY KEY(account,section,ordinal), FOREIGN KEY(account,section) REFERENCES vault_periods ON DELETE CASCADE) STRICT;
+)SQL");
+        return;
+    }
     if (version == 7) {
         db.Exec(R"SQL(
 CREATE TABLE character_snapshot(singleton INTEGER PRIMARY KEY CHECK(singleton=1), last_updated INTEGER NOT NULL CHECK(last_updated>=0)) STRICT;

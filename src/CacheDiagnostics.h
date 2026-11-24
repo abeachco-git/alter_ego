@@ -93,7 +93,9 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                 {"Specializations","SELECT count(*) FROM reference_specializations","spec_cache"},
                 {"Item stats","SELECT count(*) FROM reference_itemstats","itemstat_cache"},
                 {"Dyes","SELECT count(*) FROM reference_dyes","dye_cache"},
-                {"Characters","SELECT count(*) FROM character_rows",nullptr}
+                {"Characters","SELECT count(*) FROM character_rows",nullptr},
+                {"Clears entries","SELECT count(*) FROM clears_entries",nullptr},
+                {"Vault objectives","SELECT count(*) FROM vault_objectives",nullptr}
             };
             auto fresh=db.Prepare("SELECT saved_at FROM reference_freshness WHERE dataset=?");
             for(const auto& e:entries) {
@@ -105,6 +107,10 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                     fresh.Reset();
                 } else if(row.label=="Achievement progress") {
                     row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(fetched_at),0) FROM achievement_snapshots");
+                } else if(row.label=="Clears entries") {
+                    row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(fetch_time),0) FROM clears_snapshots");
+                } else if(row.label=="Vault objectives") {
+                    row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(fetch_time),0) FROM vault_snapshots");
                 } else if(row.label=="Characters") {
                     row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(last_updated),0) FROM character_snapshot");
                 } else if(row.label=="Owned skin records") {

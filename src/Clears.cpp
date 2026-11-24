@@ -36,6 +36,7 @@
 #include "WikiImage.h"
 #include "VaultAssistance.h"
 #include "StoragePaths.h"
+#include "CompletionCache.h"
 
 // =========================================================================
 // Clears - Data types and module-private state
@@ -152,46 +153,10 @@ bool g_VaultNeedRequery = false;
 static std::string g_ClearsCacheAccount; // the account represented by current Clears data
 static std::string g_VaultCacheAccount;  // the account represented by current Vault data
 
-static std::string AccountCacheFile(const char* stem, const std::string& account) {
-    std::string slug;
-    slug.reserve(account.size());
-    for (unsigned char c : account)
-        slug.push_back(std::isalnum(c) || c == '-' || c == '_' ? (char)c : '_');
-    return AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(), std::string(stem) + "_" + slug + ".json");
-}
-
-static bool SaveCacheAtomic(const std::string& path, const nlohmann::json& j) {
-    const std::string tmp = path + ".tmp";
-    try {
-        std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-        {
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            if (!out.is_open()) return false;
-            const std::string payload = j.dump(2);
-            out.write(payload.data(), (std::streamsize)payload.size());
-            out.flush();
-            if (!out.good()) return false;
-        }
-        return MoveFileExA(tmp.c_str(), path.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-    } catch (...) {
-        return false;
-    }
-}
-static std::ifstream OpenAccountCache(const char* stem, const std::string& account,
-                                      bool& fromLegacy) {
-    fromLegacy = false;
-    if (account.empty()) return std::ifstream{};
-    std::ifstream file(AccountCacheFile(stem, account), std::ios::binary);
-    if (!file.is_open() && AlterEgo::GW2API::HasAccountsData() &&
-        AlterEgo::GW2API::GetAccountCount() == 1) {
-        // Unscoped legacy files cannot safely be assigned to a multi-account
-        // user. Import them only when H&S confirms exactly one configured account.
-        file.open(AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(), std::string(stem) + ".json"));
-        fromLegacy = file.is_open();
-    }
-    return file;
-}
+// Serialize capture and disk publication per completion dataset. Keep all
+// cache SQL outside g_ClearsMutex and all Nexus calls outside both locks.
+static std::mutex g_ClearsSaveMutex;
+static std::mutex g_VaultSaveMutex;
 
 static bool g_ShowVaultAssistance = true;
 static bool g_VaultHideComplete = false;   // hide claimed vault objectives
@@ -958,14 +923,11 @@ static void FetchClears() {
 // =========================================================================
 
 static void SaveClearsCache() {
-    if (g_ClearsCacheAccount.empty()) return;
-    const std::string account = g_ClearsCacheAccount;
-    const std::string path = AccountCacheFile("clears_cache", account);
+    std::lock_guard<std::mutex> saveLock(g_ClearsSaveMutex);
+    std::string account;
 
     nlohmann::json j;
     // Store fetch timestamp as seconds since epoch
-    j["account"] = account;
-
     auto serializeEntry = [](const ClearEntry& e) -> nlohmann::json {
         nlohmann::json ej;
         ej["id"] = e.id;
@@ -984,7 +946,9 @@ static void SaveClearsCache() {
     // Snapshot data under lock to prevent concurrent modification
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (!g_ClearsFetched || g_ClearsCacheAccount != account) return;
+        account=g_ClearsCacheAccount;
+        if (!g_ClearsFetched || account.empty()) return;
+        j["account"]=account;
         j["fetch_time"] = (int64_t)g_ClearsLastSuccessTime;
 
         nlohmann::json fractals = nlohmann::json::array();
@@ -1002,17 +966,22 @@ static void SaveClearsCache() {
         j["weeklyStrikes"] = serializeEntry(g_WeeklyStrikes);
     }
 
-    if (!SaveCacheAtomic(path, j) && APIDefs)
+    if (!AlterEgo::Cache::WriteCompletion(AlterEgo::GW2API::GetDataDirectory(),
+            AlterEgo::Cache::CompletionDataset::Clears,account,j) && APIDefs)
         APIDefs->Log(LOGL_WARNING, "AlterEgo", "Unable to persist Clears account cache");
 }
 
 void LoadClearsCache() {
     const std::string account = GetEffectiveAccountName();
     if (account.empty()) return;
-    g_ClearsCacheAccount = account;
-    bool legacy = false;
-    std::ifstream file = OpenAccountCache("clears_cache", account, legacy);
-    if (!file.is_open()) return;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        g_ClearsCacheAccount=account;
+    }
+    const auto snapshot=AlterEgo::Cache::ReadCompletion(AlterEgo::GW2API::GetDataDirectory(),
+        AlterEgo::Cache::CompletionDataset::Clears,account,
+        AlterEgo::GW2API::HasAccountsData()&&AlterEgo::GW2API::GetAccountCount()==1);
+    if(!snapshot)return;
 
     auto deserializeEntry = [](const nlohmann::json& ej) -> ClearEntry {
         ClearEntry e;
@@ -1032,14 +1001,10 @@ void LoadClearsCache() {
     };
 
     try {
-        auto j = nlohmann::json::parse(file);
-        if (j.contains("account") && j["account"].get<std::string>() != account)
-            return; // Never load another account's snapshot.
+        const auto& j=*snapshot;
 
         int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
         auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
-        g_ClearsLastSuccessTime = (std::time_t)fetchEpoch;
-
         // Check if a reset has occurred since the cached data was fetched
         // Add 60s buffer so we don't treat cache as stale before the API has updated
         auto now = std::chrono::system_clock::now();
@@ -1051,6 +1016,8 @@ void LoadClearsCache() {
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
 
+            if(g_ClearsCacheAccount!=account)return;
+            g_ClearsLastSuccessTime=static_cast<std::time_t>(fetchEpoch);
             // Clear vectors before loading to prevent accumulation
             g_DailyFractals.clear();
             g_DailyBounties.clear();
@@ -1157,8 +1124,7 @@ void LoadClearsCache() {
                     - std::chrono::seconds(60);
         }
 
-        // Copy an old unscoped snapshot into its account-specific file once.
-        if (legacy) SaveClearsCache();
+        // Legacy input has already been persisted before reset filtering.
         // Restore the account's disk cache only. Do not launch the HTTP
         // refresh from startup or account-cache synchronization; entering
         // the actual Clears tab (or pressing Refresh) owns that request.
@@ -1170,9 +1136,8 @@ void LoadClearsCache() {
 // =========================================================================
 
 static void SaveVaultCache() {
-    if (g_VaultCacheAccount.empty()) return;
-    const std::string account = g_VaultCacheAccount;
-    const std::string path = AccountCacheFile("vault_cache", account);
+    std::lock_guard<std::mutex> saveLock(g_VaultSaveMutex);
+    std::string account;
 
     auto serializePeriod = [](const VaultPeriod& p) -> nlohmann::json {
         nlohmann::json j;
@@ -1196,14 +1161,12 @@ static void SaveVaultCache() {
         return j;
     };
 
-    auto epochSecs = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-
     nlohmann::json j;
-    j["account"] = account;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (!g_VaultFetched.load() || g_VaultCacheAccount != account) return;
+        account=g_VaultCacheAccount;
+        if (!g_VaultFetched.load() || account.empty()) return;
+        j["account"]=account;
         j["fetch_time"] = (int64_t)g_VaultLastSuccessTime;
         j["daily"]      = serializePeriod(g_VaultDaily);
         j["weekly"]     = serializePeriod(g_VaultWeekly);
@@ -1212,17 +1175,22 @@ static void SaveVaultCache() {
             g_VaultSeasonEnd.time_since_epoch()).count();
     }
 
-    if (!SaveCacheAtomic(path, j) && APIDefs)
+    if (!AlterEgo::Cache::WriteCompletion(AlterEgo::GW2API::GetDataDirectory(),
+            AlterEgo::Cache::CompletionDataset::Vault,account,j) && APIDefs)
         APIDefs->Log(LOGL_WARNING, "AlterEgo", "Unable to persist Vault account cache");
 }
 
 void LoadVaultCache() {
     const std::string account = GetEffectiveAccountName();
     if (account.empty()) return;
-    g_VaultCacheAccount = account;
-    bool legacy = false;
-    std::ifstream file = OpenAccountCache("vault_cache", account, legacy);
-    if (!file.is_open()) return;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        g_VaultCacheAccount=account;
+    }
+    const auto snapshot=AlterEgo::Cache::ReadCompletion(AlterEgo::GW2API::GetDataDirectory(),
+        AlterEgo::Cache::CompletionDataset::Vault,account,
+        AlterEgo::GW2API::HasAccountsData()&&AlterEgo::GW2API::GetAccountCount()==1);
+    if(!snapshot)return;
 
     auto deserializePeriod = [](const nlohmann::json& j) -> VaultPeriod {
         VaultPeriod p;
@@ -1247,13 +1215,9 @@ void LoadVaultCache() {
     };
 
     try {
-        auto j = nlohmann::json::parse(file);
-        if (j.contains("account") && j["account"].get<std::string>() != account)
-            return;
+        const auto& j=*snapshot;
         int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
         auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
-        g_VaultLastSuccessTime = (std::time_t)fetchEpoch;
-
         auto now         = std::chrono::system_clock::now();
         auto dailyReset  = CalcLastDailyReset(now)  + std::chrono::seconds(60);
         auto weeklyReset = CalcLastWeeklyReset(now) + std::chrono::seconds(60);
@@ -1262,6 +1226,8 @@ void LoadVaultCache() {
 
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(g_VaultCacheAccount!=account)return;
+            g_VaultLastSuccessTime=static_cast<std::time_t>(fetchEpoch);
             // Keep a fingerprint of the previous day's objectives for the
             // post-reset API freshness check. Never display stale daily rows.
             if (dailyStale && j.contains("daily")) {
@@ -1296,12 +1262,9 @@ void LoadVaultCache() {
 
             if (!g_VaultDaily.objectives.empty() || !g_VaultWeekly.objectives.empty())
                 g_VaultFetched = true;
+            // Stale data will be re-fetched on first render of the Vault tab.
+            if (dailyStale || weeklyStale)g_VaultFetched=false;
         }
-
-        // Stale data will be re-fetched on first render of the vault tab
-        if (dailyStale || weeklyStale)
-            g_VaultFetched = false;
-        if (legacy) SaveVaultCache();
 
     } catch (...) {}
 }
@@ -3448,9 +3411,10 @@ void SyncCompletionAccountCaches() {
             AlterEgo::GW2API::GetAccountCount() == 1 &&
             legacyCheckedAccount != account) {
             legacyCheckedAccount = account;
-            if (!std::filesystem::exists(AccountCacheFile("clears_cache", account)))
+            const auto root=AlterEgo::GW2API::GetDataDirectory();
+            if (!AlterEgo::Cache::HasCompletion(root,AlterEgo::Cache::CompletionDataset::Clears,account))
                 LoadClearsCache();
-            if (!std::filesystem::exists(AccountCacheFile("vault_cache", account)))
+            if (!AlterEgo::Cache::HasCompletion(root,AlterEgo::Cache::CompletionDataset::Vault,account))
                 LoadVaultCache();
         }
         return;
