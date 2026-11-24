@@ -91,3 +91,8 @@ Equipment set coverage in `persistence.native_library` verifies direct exclusive
 - Create an armor-only set and a set that excludes relics, sigils and infusions; verify omitted categories remain independently selectable on linked Loadouts.
 - Removing membership preserves the effective selection on all linked Loadouts; including a category prompts before replacing independent selections. Switching sets preserves categories not included in the new set. Copy & Edit Set preserves the current membership by default; detach preserves every effective reference.
 - Verify mixed ownership after a database reopen, portable Loadout round-trip and shared membership changes. Conflicting owners and empty sets are rejected. Compare, share and infusion totals resolve the complete effective equipment.
+
+### Navigation smoke tests
+
+- Open a Loadout's Relic, press mouse Back, verify original Loadout and scroll; Forward returns to the Relic. Repeat across Characters, Equipment Sets, Fashion, Compare, Skinventory and Achievements. Change filters and refresh data without creating entries. Verify new navigation after Back discards Forward history.
+- Check disabled arrows, Alt+Left/Right, no interception outside Alter Ego, no navigation during modal/unsaved editor, stable selection after sorting/deletion, and clean addon unload.

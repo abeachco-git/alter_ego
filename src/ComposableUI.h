@@ -546,13 +546,14 @@ static bool ComponentUICompatible(const ComponentJson& doc,
 }
 
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id) {
+    MarkNavigation();
     for (int i = 0; i < 9; ++i)
         if (kind == kComponentKinds[i].kind) {
             g_ComponentFilterKind = i;
             break;
         }
     g_ComponentSelectedKind = kind;
-    g_ComponentSelectedId = id;
+    MarkNavigation();g_ComponentSelectedId = id;
     g_LibraryCollection = 2;
 }
 
@@ -626,7 +627,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             ImGui::EndCombo();
         }
         if(linked) {
-            if(RenderActionButton("Edit Shared Set")){g_EquipmentSetSelectedId=linkedId;g_LibraryCollection=3;}
+            if(RenderActionButton("Edit Shared Set")){g_EquipmentSetSelectedId=linkedId;g_LibraryCollection=3;MarkNavigation();}
             ImGui::SameLine();
             if(RenderActionButton("Detach Set"))g_ComponentCommand={ComponentUICommand::DetachSet,loadoutId,"","","",ComponentJson::object()};
             ImGui::SameLine();
@@ -886,7 +887,7 @@ static void RenderComponentLibrary() {
             const std::string shown = name + "  [" + std::to_string(users) + "]";
             if (ImGui::Selectable(shown.c_str(),
                     g_ComponentSelectedKind == kind && g_ComponentSelectedId == id)) {
-                g_ComponentSelectedId = id;
+                MarkNavigation();g_ComponentSelectedId = id;
                 g_ComponentSelectedKind = kind;
             }
             if (ImGui::IsItemHovered())
@@ -1029,7 +1030,7 @@ static void RenderComponentLibrary() {
                     for (int index = 0; index < static_cast<int>(builds.size()); ++index)
                         if (builds[index].id == loadout.value("id", std::string())) {
                             g_LibSelectedIdx = index;
-                            g_LibraryCollection = 0;
+                            g_LibraryCollection = 0;MarkNavigation();
                             g_LibDetailsFetched = false;
                             break;
                         }
@@ -1042,7 +1043,7 @@ static void RenderComponentLibrary() {
             anyUsage=true;
             const auto setId=set.value("id",std::string());
             if(AlterEgo::UI::SelectableOption((set.value("name",setId)+" (Equipment Set)##"+setId).c_str())) {
-                g_EquipmentSetSelectedId=setId;g_LibraryCollection=3;
+                g_EquipmentSetSelectedId=setId;g_LibraryCollection=3;MarkNavigation();
             }
             for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==setId)
                 ImGui::TextDisabled("  %s (via set)",l.at("metadata").value("name",l.value("id",std::string())).c_str());
@@ -1099,10 +1100,11 @@ static void RenderComponentLibrary() {
     RenderComponentUIEditor();
 }
 
+static std::string g_EquipmentSetSearch;
 static void RenderEquipmentSetLibrary() {
     using namespace AlterEgo;
     const auto& doc=ComponentUISnapshot();
-    static std::string search;
+    auto& search=g_EquipmentSetSearch;
     UI::SearchField("equipment_sets_search","Search equipment sets...",search);
     if(!doc.contains("equipment_sets")||doc.at("equipment_sets").empty()) {
         ImGui::TextDisabled("No equipment sets saved. Use Save to Library on a character.");
@@ -1119,7 +1121,7 @@ static void RenderEquipmentSetLibrary() {
             if(lower(name).find(lower(search))==std::string::npos)continue;
         }
         if(UI::SelectableOption((name+"##"+id).c_str(),id==g_EquipmentSetSelectedId)) {
-            g_EquipmentSetSelectedId=id;selected=&set;
+            MarkNavigation();g_EquipmentSetSelectedId=id;selected=&set;
         }
     }
     ImGui::EndChild();
@@ -1243,7 +1245,7 @@ static void ProcessComponentUICommand() {
         break;
     case ComponentUICommand::SaveSet:
         success=API::SaveLoadoutAsEquipmentSet(command.loadout_id,command.name,&g_EquipmentSetSelectedId,command.data.get<std::set<std::string>>());
-        if(success)g_LibraryCollection=3;
+        if(success)g_LibraryCollection=3;MarkNavigation();
         break;
     case ComponentUICommand::DuplicateSet:
         success=API::DuplicateEquipmentSet(command.component_id,command.name,&g_EquipmentSetSelectedId);
@@ -1307,7 +1309,7 @@ static void ProcessComponentUICommand() {
     case ComponentUICommand::ImportPortableLoadout:
         success = API::ImportPortableLoadout(command.data);
         if (success) {
-            g_LibraryCollection = 0;
+            g_LibraryCollection = 0;MarkNavigation();
             const auto& builds = API::GetSavedBuilds();
             if (!builds.empty()) g_LibSelectedIdx = static_cast<int>(builds.size()) - 1;
             g_LibDetailsFetched = false;

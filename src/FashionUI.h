@@ -289,7 +289,7 @@ static void RenderFashionLibrary() {
         if (!AlterEgo::Fashion::MatchesSearch(look, g_FashionSearch)) continue;
         if (g_FashionFilter && look.weight != filters[g_FashionFilter]) continue;
         ImGui::PushID(i);
-        if (ImGui::Selectable(look.name.c_str(), i == g_FashionSelected)) g_FashionSelected = i;
+        if (ImGui::Selectable(look.name.c_str(), i == g_FashionSelected)) {MarkNavigation();g_FashionSelected = i;}
         if (ImGui::BeginPopupContextItem("##fashion_actions")) {
             if (ImGui::MenuItem("Copy Wardrobe Link"))
                 CopyFashionWardrobeLink(look);

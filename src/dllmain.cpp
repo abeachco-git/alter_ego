@@ -411,12 +411,16 @@ static bool g_WarnStaleSpecialization = true;
 static int g_BirthdayMode = 1;         // 0 = Always, 1 = A week out, 2 = Never
 static float g_CharListWidth = 200.0f; // Resizable character list column width
 static bool g_DetailsFetched = false;  // Track if we've requested details for current character
+// Render-thread navigation intent. Ordinary filter/refresh changes do not branch history.
+static int g_NavIntentFrames=0;
+static void MarkNavigation(){g_NavIntentFrames=3;}
 static int g_MainTab = 0;             // Stable session IDs: 0=Characters, 1=Build Library, 2=Skinventory, 3=Vault, 4=Achievements, 5=Compare
 static std::chrono::steady_clock::time_point g_FetchDoneTime{}; // For status message fade-out
 
 // Skinventory UI state
 static int g_SkinActiveTab = 0; // 0 = Browser, 1 = Shopping List
 static bool g_SkinSwitchToBrowser = false;
+static bool g_SkinSwitchToShopping = false;
 static bool g_SkinScrollToSkin = false;
 static Skinventory::SkinFilters g_SkinBrowserFilters;
 static float g_SkinListWidth=420.f, g_FashionListWidth=220.f, g_ComponentListWidth=270.f;
@@ -2804,6 +2808,7 @@ void AddonLoad(AddonAPI_t* aApi);
 void AddonUnload();
 void ProcessKeybind(const char* aIdentifier, bool aIsRelease);
 void AddonRender();
+static UINT NavigationWndProc(HWND,UINT,WPARAM,LPARAM);
 void AddonOptions();
 void OnMumbleIdentityUpdated(void* eventArgs);
 
@@ -3871,6 +3876,7 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
 // build-selection logic.
 // One navigation path for the Library menu, saved Fashion and imported builds.
 static void NavigateToLibraryCollection(int collection) {
+    MarkNavigation();
     g_LibraryCollection = (collection >= 0 && collection <= 3) ? collection : 0;
     g_SwitchToLibrary = true;
     g_WindowVisible = true;
@@ -3937,7 +3943,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         int fashionChip = -1;
         if (RenderChipStrip(labels, activeMarkers, selIdx, g_EquipTabScroll, "##equip_chips",
                             "Right-click for fashion options", &fashionChip)) {
-            g_SelectedEquipTab = selIdx + 1;
+            MarkNavigation();g_SelectedEquipTab = selIdx + 1;
             g_DetailsFetched = false;
         }
         if (fashionChip >= 0) {
@@ -4745,7 +4751,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         for (int i = 0; i < static_cast<int>(ch.build_tabs.size()); ++i) {
             if (ch.build_tabs[i].is_active) { buildIdx = i; break; }
         }
-        g_SelectedBuildTab = buildIdx;
+        MarkNavigation();g_SelectedBuildTab = buildIdx;
     }
 
     if (!hasBuilds) {
@@ -9593,6 +9599,7 @@ static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
     g_LibCompareSavedManual = true;
     g_LibCompareChar = build.source_character;
     g_LibComparePreviousTarget = build.source_character;
+    MarkNavigation();
     g_SwitchToCompare = true;
 }
 
@@ -11426,7 +11433,7 @@ static void RenderCompareTab() {
                 ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
                 autoCharacter->profession, autoCharacter->name, autoPrefix);
             if (autoClicked) {
-                g_LibCompareChar.clear();
+                MarkNavigation();g_LibCompareChar.clear();
                 g_LibCompareSavedManual = false;
             }
             for (const auto* ch : compareMatches) {
@@ -11438,7 +11445,7 @@ static void RenderCompareTab() {
                     ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
                     ch->profession, ch->name);
                 if (clicked) {
-                    g_LibCompareChar = ch->name;
+                    MarkNavigation();g_LibCompareChar = ch->name;
                     g_LibCompareSavedManual = false;
                     g_LibCompareBuildTab = -1;
                     g_LibCompareEquipTab = 0;
@@ -11460,6 +11467,7 @@ static void RenderCompareTab() {
         ImGui::SetNextItemWidth(-1.0f);
         if (AlterEgo::UI::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
             if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
+                MarkNavigation();
                 g_LibCompareSavedManual = false;
                 g_LibCompareBuildId.clear();
             }
@@ -11468,7 +11476,7 @@ static void RenderCompareTab() {
                 const bool selected = saved && b.id == saved->id;
                 const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
                 if (AlterEgo::UI::SelectableOption((label + "##" + b.id).c_str(), selected)) {
-                    g_LibCompareBuildId = b.id;
+                    MarkNavigation();g_LibCompareBuildId = b.id;
                     g_LibCompareSavedManual = true;
                     saved = &b;
                 }
@@ -12075,7 +12083,7 @@ static void RenderBuildLibrary() {
             }
 
             if (clicked) {
-                g_LibSelectedIdx = i;
+                MarkNavigation();g_LibSelectedIdx = i;
                 g_LibDetailsFetched = false;
             }
             if (ImGui::BeginPopupContextItem("##build_actions")) {
@@ -12614,6 +12622,7 @@ void AddonLoad(AddonAPI_t* aApi) {
 
     // Register render functions
     APIDefs->GUI_Register(RT_Render, AddonRender);
+    APIDefs->WndProc_Register(NavigationWndProc);
     APIDefs->GUI_Register(RT_OptionsRender, AddonOptions);
 
     // Register keybind
@@ -12709,6 +12718,7 @@ void AddonUnload() {
     APIDefs->QuickAccess_Remove(QA_ID);
     APIDefs->GUI_Deregister(AddonOptions);
     APIDefs->GUI_Deregister(AddonRender);
+    APIDefs->WndProc_Deregister(NavigationWndProc);
     APIDefs->InputBinds_Deregister("KB_ALTER_EGO_TOGGLE");
     APIDefs->InputBinds_Deregister("KB_ALTER_EGO_TRACKER");
     // Unsubscribe MumbleLink identity
@@ -13305,7 +13315,7 @@ static void RenderSkinList(float width) {
                         ImGui::EndTooltip();
                     }
                     if (ImGui::IsItemClicked()) {
-                        g_SkinSelectedId = entry.id;
+                        MarkNavigation();g_SkinSelectedId = entry.id;
                         Skinventory::WikiImage::RequestImage(entry.id, skin.name, skin.weight_class);
                         Skinventory::Commerce::FetchPriceForSkin(entry.id);
                     }
@@ -13434,7 +13444,7 @@ static void RenderSkinList(float width) {
                 }
 
                 if (clicked) {
-                    g_SkinSelectedId = entry.id;
+                    MarkNavigation();g_SkinSelectedId = entry.id;
                     Skinventory::WikiImage::RequestImage(entry.id, skin.name, skin.weight_class);
                     Skinventory::Commerce::FetchPriceForSkin(entry.id);
                 }
@@ -13947,7 +13957,7 @@ static void RenderSkinShoppingList() {
                 ImGui::PushStyleColor(ImGuiCol_Text, GetSkinRarityColor(skin.rarity));
                 if (ImGui::Selectable(selectLabel.c_str(), g_SkinSelectedId == entry.skinId,
                     ImGuiSelectableFlags_SpanAllColumns)) {
-                    g_SkinSelectedId = entry.skinId;
+                    MarkNavigation();g_SkinSelectedId = entry.skinId;
                     Skinventory::WikiImage::RequestImage(entry.skinId, skin.name, skin.weight_class);
                     Skinventory::Commerce::FetchPriceForSkin(entry.skinId);
                     RevealSkinInBrowser(entry.skinId);
@@ -14431,7 +14441,9 @@ static uint32_t FindAchIdByName(const std::string& name, const std::string& pare
 }
 
 // Navigate to a specific achievement: find its category, select it, fetch defs, expand it
+static uint32_t g_NavAchievementId=0;
 static void NavigateToAchievement(uint32_t achId) {
+    MarkNavigation();g_NavAchievementId=achId;
     // Find which category contains this achievement
     auto catIt = g_AchIdToCategory.find(achId);
     if (catIt != g_AchIdToCategory.end()) {
@@ -14769,7 +14781,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                     RevealSkinInBrowser(skinId);
                     g_SkinSwitchToBrowser = true;
                     g_SkinScrollToSkin = true;
-                    g_SwitchToSkinventory = true;
+                    MarkNavigation(); g_SwitchToSkinventory = true;
                     Skinventory::WikiImage::RequestImage(skinId, skinInfo->name, skinInfo->weight_class);
                     Skinventory::Commerce::FetchPriceForSkin(skinId);
                 }
@@ -15155,6 +15167,7 @@ static void RenderAchievements() {
             }
 
             if (clicked && g_AchSelectedCatId != cat->id) {
+                MarkNavigation();g_NavAchievementId=0;
                 g_AchSelectedCatId = cat->id;
                 g_AchSelectedGroupId = groupId;
                 FetchAchCategoryDefs(cat->id, true);
@@ -15803,7 +15816,7 @@ static void RenderAchPopout() {
                                 RevealSkinInBrowser(bd.skinId);
                                 g_SkinSwitchToBrowser = true;
                                 g_SkinScrollToSkin = true;
-                                g_SwitchToSkinventory = true;
+                                MarkNavigation(); g_SwitchToSkinventory = true;
                                 Skinventory::WikiImage::RequestImage(bd.skinId, bd.skinName, bd.skinWeightClass);
                                 Skinventory::Commerce::FetchPriceForSkin(bd.skinId);
                             }
@@ -15884,6 +15897,7 @@ static void RenderSkinventory() {
             g_SkinSwitchToBrowser = false;
         }
         if (ImGui::BeginTabItem("Browser", nullptr, browserFlags)) {
+            if(g_SkinActiveTab!=0)MarkNavigation();
             g_SkinActiveTab = 0;
             ImGui::Spacing();
             const AlterEgo::UI::SplitPanel split(g_SkinListWidth,420.f,200.f,240.f);
@@ -15892,7 +15906,10 @@ static void RenderSkinventory() {
             RenderSkinDetailPanel();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Shopping List")) {
+        const auto shoppingFlags=g_SkinSwitchToShopping?ImGuiTabItemFlags_SetSelected:0;
+        g_SkinSwitchToShopping=false;
+        if (ImGui::BeginTabItem("Shopping List",nullptr,shoppingFlags)) {
+            if(g_SkinActiveTab!=1)MarkNavigation();
             g_SkinActiveTab = 1;
             ImGui::Spacing();
             RenderSkinShoppingList();
@@ -16285,6 +16302,8 @@ static void SyncTabDropdownOpen(TabDropdownState& state, const char* popup) {
     }
 }
 
+#include "NavigationUI.h"
+
 void AddonRender() {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
     if (!callbackLease) return;
@@ -16361,7 +16380,8 @@ void AddonRender() {
     // Achievement tracker popout (independent of main window)
     RenderAchPopout();
 
-    if (!g_WindowVisible) { return; }
+    g_NavInputMask.store(0);
+    if (!g_WindowVisible) { g_NavRequest.store(0); return; }
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Alter Ego", &g_WindowVisible,
@@ -16398,6 +16418,7 @@ void AddonRender() {
                 if (APIDefs) APIDefs->GUI_SendAlert("Nexus library URL copied!");
             }
         );
+        ImGui::End();
         return;
     } else if (hoardStatus == AlterEgo::HoardStatus::PermDenied) {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "H&S permission denied. Enable in H&S settings.");
@@ -16415,6 +16436,8 @@ void AddonRender() {
     // Account selector (only when multi-account) — rendered on the same row as
     // the tab bar (right-aligned) to save vertical space.
     static bool g_ForceCharactersTab = false;
+    RenderNavigationControls();
+    BeginNavigationFrame();
     float tabRowY = ImGui::GetCursorPosY();
 
     // Top-level tab bar: Characters | Build Library
@@ -16422,7 +16445,7 @@ void AddonRender() {
     if (ImGui::BeginTabBar("##main_tabs")) {
         static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu, skinMenu;
 
-        ImGuiTabItemFlags charTabFlags = 0;
+        ImGuiTabItemFlags charTabFlags = NavigationTabFlags(0);
         if (g_ForceCharactersTab) {
             charTabFlags = ImGuiTabItemFlags_SetSelected;
             g_ForceCharactersTab = false;
@@ -16685,6 +16708,7 @@ void AddonRender() {
 
                     // Character entry
                     if (ImGui::Selectable("##char", selected, 0, ImVec2(0, rowHeight))) {
+                        MarkNavigation();
                         g_SelectedCharIdx = di;
                         g_DetailsFetched = false;
                         g_SelectedEquipTab = 0;
@@ -17203,14 +17227,14 @@ void AddonRender() {
                     // Tab bar: Equipment | Build
                     if (ImGui::BeginTabBar("##detail_tabs")) {
                         if (ImGui::BeginTabItem("Equipment")) {
-                            g_SelectedTab = 0;
+                            MarkNavigation();g_SelectedTab = 0;
                             ImGui::BeginChild("EquipScroll", ImVec2(0, 0), false);
                             RenderEquipmentPanel(ch);
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
                         if (ImGui::BeginTabItem("Build")) {
-                            g_SelectedTab = 1;
+                            MarkNavigation();g_SelectedTab = 1;
                             ImGui::BeginChild("BuildScroll", ImVec2(0, 0), false);
                             RenderBuildPanel(ch);
                             ImGui::EndChild();
@@ -17441,7 +17465,7 @@ void AddonRender() {
         // Library, Vault, Clears and Achievements share the same tab dropdown.
         ImGuiTabBar* libraryTabBar = GImGui->CurrentTabBar;
         const ImGuiID previousSelectedTab = libraryTabBar ? libraryTabBar->SelectedTabId : 0;
-        ImGuiTabItemFlags libraryFlags = 0;
+        ImGuiTabItemFlags libraryFlags = NavigationTabFlags(1);
         if (g_SwitchToLibrary) {
             libraryFlags |= ImGuiTabItemFlags_SetSelected;
             g_SwitchToLibrary = false;
@@ -17462,7 +17486,7 @@ void AddonRender() {
             else { RenderEquipmentSetLibrary(); ProcessComponentUICommand(); }
             ImGui::EndTabItem();
         }
-        ImGuiTabItemFlags compareTabFlags = 0;
+        ImGuiTabItemFlags compareTabFlags = NavigationTabFlags(5);
         if (g_SwitchToCompare) {
             compareTabFlags = ImGuiTabItemFlags_SetSelected;
             g_SwitchToCompare = false;
@@ -17480,7 +17504,7 @@ void AddonRender() {
         bool acctTabsDisabled = AlterEgo::GW2API::IsMultiAccount() && g_SelectedAccountFilter.empty();
         const char* acctTabTooltip = "Select a specific account to use this tab.";
 
-        ImGuiTabItemFlags skinTabFlags = 0;
+        ImGuiTabItemFlags skinTabFlags = NavigationTabFlags(2);
         if (g_SwitchToSkinventory && !acctTabsDisabled) {
             skinTabFlags = ImGuiTabItemFlags_SetSelected;
             g_SwitchToSkinventory = false;
@@ -17517,7 +17541,7 @@ void AddonRender() {
         } else {
             ImGuiTabBar* accountTabBar = GImGui->CurrentTabBar;
             ImGuiID beforeVault = accountTabBar ? accountTabBar->SelectedTabId : 0;
-            const bool vaultVisible = ImGui::BeginTabItem("Vault    ##ae_vault_dropdown");
+            const bool vaultVisible = ImGui::BeginTabItem("Vault    ##ae_vault_dropdown",nullptr,NavigationTabFlags(3));
             const ImGuiID vaultId = accountTabBar && accountTabBar->LastTabItemIdx >= 0
                 ? accountTabBar->Tabs[accountTabBar->LastTabItemIdx].ID : 0;
             HandleTabDropdown(vaultMenu, accountTabBar, beforeVault, vaultId,
@@ -17531,7 +17555,7 @@ void AddonRender() {
                 ImGui::EndTabItem();
             }
             ImGuiID beforeClears = accountTabBar ? accountTabBar->SelectedTabId : 0;
-            const bool clearsVisible = ImGui::BeginTabItem("Clears    ##ae_clears_dropdown");
+            const bool clearsVisible = ImGui::BeginTabItem("Clears    ##ae_clears_dropdown",nullptr,NavigationTabFlags(6));
             const ImGuiID clearsId = accountTabBar && accountTabBar->LastTabItemIdx >= 0
                 ? accountTabBar->Tabs[accountTabBar->LastTabItemIdx].ID : 0;
             HandleTabDropdown(clearsMenu, accountTabBar, beforeClears, clearsId,
@@ -17555,7 +17579,7 @@ void AddonRender() {
         } else {
             ImGuiTabBar* achTabBar = GImGui->CurrentTabBar;
             const ImGuiID beforeAchievements = achTabBar ? achTabBar->SelectedTabId : 0;
-            const bool achievementsVisible = ImGui::BeginTabItem("Achievements    ##ae_achievements_dropdown");
+            const bool achievementsVisible = ImGui::BeginTabItem("Achievements    ##ae_achievements_dropdown",nullptr,NavigationTabFlags(4));
             const ImGuiID achievementsId = achTabBar && achTabBar->LastTabItemIdx >= 0
                 ? achTabBar->Tabs[achTabBar->LastTabItemIdx].ID : 0;
             HandleTabDropdown(achievementsMenu, achTabBar, beforeAchievements,
@@ -17618,6 +17642,7 @@ void AddonRender() {
         // Trigger after rendering so reset and account-switch checks run first.
         static int s_previousVisibleMainTab = -1;
         if (g_MainTab != s_previousVisibleMainTab) {
+            if(s_previousVisibleMainTab>=0&&!g_NavRestore&&!g_ForceCharactersTab)MarkNavigation();
             if (g_MainTab == 3) RefreshVaultOnEntry();
             else if (g_MainTab == 6) RefreshClearsOnEntry();
             s_previousVisibleMainTab = g_MainTab;
@@ -17834,6 +17859,7 @@ void AddonRender() {
     RenderLibraryImportDialog();
     RenderLibraryBackupUI();
     RenderShareRelayPopups();
+    EndNavigationFrame();
 
     ImGui::End();
     if (g_EditSavePending) {
