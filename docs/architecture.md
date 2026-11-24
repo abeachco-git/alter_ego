@@ -126,3 +126,15 @@ an optimistic revision; snapshots are temporary projections. Duplicate
 lookup verifies full ordered content after the index lookup, not functional
 Compare equivalence. The runtime migration and UI adapters are not yet
 connected to this repository.
+
+`NativeLibraryStore` centralizes durable and cache paths and owns a
+revisioned committed snapshot. Startup stages migration in the library
+directory, verifies exact rebuilt loadouts and Fashion after reopening,
+writes byte-verified archives of originals under backups/migration, then
+publishes the initialized DB without replacing an existing target. A native
+database, including an initialized empty one, always wins on restart; a
+corrupt/foreign/uninitialized existing database fails closed. Unmigrated v3
+files block migration with an actionable error. Existing runtime remains
+on the prior store until all command and backup adapters are connected.
+`Store::Backup` uses the online backup API into a fresh staged destination
+and verifies before publishing under a caller-selected path.

@@ -63,6 +63,7 @@ set(SOURCES
     src/Clears.cpp
     src/GW2API.cpp
     src/NativeLibrary.cpp
+    src/NativeLibraryStore.cpp
     src/FontManager.cpp
     src/IconManager.cpp
     src/ChatLink.cpp

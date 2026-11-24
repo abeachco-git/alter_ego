@@ -28,7 +28,7 @@ void ValidateSnapshot(const Snapshot& snapshot) {
     for(const auto& look:snapshot.fashion) {
         DecodedWardrobeLink w{};
         if(look.id.empty()||look.name.empty()||!fashion.insert(look.id).second||
-           !Fashion::DecodeValid(look.wardrobe_link,w))
+           !Fashion::DecodeValid(look.wardrobe_link,w)||!look.extension.is_object())
             throw Database::Error(SQLITE_CONSTRAINT,"Invalid or duplicate Fashion record");
     }
     for(const auto& loadout:snapshot.loadouts.loadouts)
@@ -46,9 +46,15 @@ bool SameLoadout(const Loadout& a,const Loadout& b) {
 }
 }
 
-Repository::Repository(const std::string& path,Database::Connection::OpenMode mode,Fingerprint fingerprint)
+Repository::Repository(const std::string& path,Database::Connection::OpenMode mode,Fingerprint fingerprint,bool verify)
     :db_(path,mode),fingerprint_(std::move(fingerprint)) {
-    Database::Migrate(db_,kApplicationId,kSchemaVersion,UpgradeSchema);
+    const auto id=db_.Scalar("PRAGMA application_id");
+    const auto version=db_.Scalar("PRAGMA user_version");
+    if(mode==Database::Connection::OpenMode::Existing && (id!=kApplicationId||version<=0))
+        throw Database::Error(SQLITE_NOTADB,"Existing library is not an initialized Alter Ego database");
+    if(id==kApplicationId&&version==kSchemaVersion) {
+        if(verify) db_.Verify();
+    } else Database::Migrate(db_,kApplicationId,kSchemaVersion,UpgradeSchema);
 }
 Snapshot Repository::ReadUnlocked() {
     Snapshot snapshot;
@@ -63,7 +69,7 @@ Snapshot Repository::ReadUnlocked() {
         }
     }
     {
-        auto q=db_.Prepare("SELECT id,name,notes,weight,origin,source_character,source_tab,complete,created,visibility_flags FROM fashion ORDER BY ordinal,id");
+        auto q=db_.Prepare("SELECT id,name,notes,weight,origin,source_character,source_tab,complete,created,visibility_flags,extension_json FROM fashion ORDER BY ordinal,id");
         while(q.Step()) snapshot.fashion.push_back(ReadFashion(db_,q));
     }
     {

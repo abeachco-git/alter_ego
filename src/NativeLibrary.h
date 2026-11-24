@@ -1,7 +1,7 @@
 #pragma once
 #include "ComposableLoadouts.h"
 #include "Database.h"
-#include "FashionLibrary.h"
+#include "FashionModel.h"
 #include <functional>
 
 namespace AlterEgo::NativeLibrary {
@@ -29,7 +29,7 @@ class Repository {
 public:
     using Fingerprint = std::function<std::string(const Composable::Json&)>;
     explicit Repository(const std::string& utf8Path, Database::Connection::OpenMode mode,
-                        Fingerprint fingerprint = ExactFingerprint);
+                        Fingerprint fingerprint = ExactFingerprint, bool verify = true);
     Repository(const Repository&) = delete;
     Repository& operator=(const Repository&) = delete;
 

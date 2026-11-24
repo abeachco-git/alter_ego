@@ -358,12 +358,12 @@ inline void WriteFashion(Connection& db,const Fashion::Look& l,size_t ordinal) {
     DecodedWardrobeLink w{};
     if(!Fashion::DecodeValid(l.wardrobe_link,w))
         throw Database::Error(SQLITE_CONSTRAINT,"Invalid Fashion wardrobe link");
-    Run(db,"INSERT INTO fashion VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+    Run(db,"INSERT INTO fashion VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
         "ordinal=excluded.ordinal,name=excluded.name,notes=excluded.notes,weight=excluded.weight,"
         "origin=excluded.origin,source_character=excluded.source_character,source_tab=excluded.source_tab,"
-        "complete=excluded.complete,created=excluded.created,visibility_flags=excluded.visibility_flags",
+        "complete=excluded.complete,created=excluded.created,visibility_flags=excluded.visibility_flags,extension_json=excluded.extension_json",
         {l.id,Number(ordinal),l.name,l.notes,l.weight,l.origin,l.source_character,
-         std::int64_t(l.source_tab),std::int64_t(l.complete),std::int64_t(l.created),std::int64_t(w.visibility_flags)});
+         std::int64_t(l.source_tab),std::int64_t(l.complete),std::int64_t(l.created),std::int64_t(w.visibility_flags),l.extension.dump()});
     Run(db,"DELETE FROM fashion_skins WHERE fashion_id=?",{l.id});
     Run(db,"DELETE FROM fashion_characters WHERE fashion_id=?",{l.id});
     for(const auto& slot:wardrobeSlots) {
@@ -381,6 +381,8 @@ inline Fashion::Look ReadFashion(Connection& db,Statement& q) {
     l.source_tab=static_cast<int>(q.Integer(6));l.complete=q.Integer(7)!=0;
     l.created=static_cast<std::time_t>(q.Integer(8));
     DecodedWardrobeLink w{};w.visibility_flags=static_cast<std::uint16_t>(q.Integer(9));
+    l.extension=Json::parse(q.Text(10));
+    if(!l.extension.is_object()) throw Database::Error(SQLITE_CORRUPT,"Invalid Fashion extension");
     auto s=db.Prepare("SELECT slot,skin_id FROM fashion_skins WHERE fashion_id=?");BindKeys(s,{l.id});
     size_t count=0;
     while(s.Step()) {

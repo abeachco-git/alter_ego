@@ -121,7 +121,8 @@ CREATE TABLE fashion(
     name TEXT NOT NULL, notes TEXT NOT NULL, weight TEXT NOT NULL, origin TEXT NOT NULL,
     source_character TEXT NOT NULL, source_tab INTEGER NOT NULL,
     complete INTEGER NOT NULL CHECK(complete IN (0,1)), created INTEGER NOT NULL,
-    visibility_flags INTEGER NOT NULL CHECK(visibility_flags BETWEEN 0 AND 65535)
+    visibility_flags INTEGER NOT NULL CHECK(visibility_flags BETWEEN 0 AND 65535),
+    extension_json TEXT NOT NULL
 ) STRICT;
 CREATE INDEX fashion_order ON fashion(ordinal);
 CREATE TABLE fashion_skins(

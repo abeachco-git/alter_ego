@@ -40,3 +40,8 @@ an unrelated database. This does not yet exercise the Loadout runtime adapter.
 unknown extensions, physical sigils/infusions, Fashion, component references,
 intentional duplicates, forced hash collision, exact candidates and usage,
 restart, stale edit rejection and transactional writes.
+
+`persistence.native_migration` covers original build and Fashion archives,
+exact safe migration deduplication, abandoned staging directories, empty
+initialized databases, corrupt native data, invalid legacy and unexpected
+v3 files, and verified database backups without overwriting destinations.
