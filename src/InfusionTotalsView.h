@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 // Included by dllmain.cpp after FindEquipment and the edit-mode helpers.
 // One summary calculator and one UI renderer for Live, Saved and Edit.
 static const char* InfusionAttributeLabel(const std::string& attribute);
@@ -109,10 +110,12 @@ static void UpdateInfusionEditDraft(AlterEgo::SavedBuild& edit,
     MarkEditDirty();
 }
 static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
-                                 AlterEgo::SavedBuild* edit = nullptr) {
+                                 AlterEgo::SavedBuild* edit = nullptr,
+                                 const std::function<void()>& headerAction = {}) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextColored(ImVec4(0.70f, 0.58f, 0.20f, 1.0f), "Infusion Totals");
+    if (headerAction) headerAction();
     if (!total.complete)
         ImGui::TextDisabled("Some infusion metadata is unavailable; totals are unverified.");
     if (!total.present && !edit)

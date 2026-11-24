@@ -24,8 +24,8 @@ constexpr const char* kFormat = "alter_ego_composable_loadouts";
 
 inline const std::array<std::string, 9>& Kinds() {
     static const std::array<std::string, 9> values = {{
-        "base_build", "skills", "weapons", "armor", "trinkets",
-        "runes", "sigils", "infusions", "relic"
+        "base_build", "skills", "weapons", "sigils", "armor",
+        "runes", "trinkets", "relic", "infusions"
     }};
     return values;
 }
@@ -173,6 +173,111 @@ inline Json Metadata(const Json& old) {
     meta.erase("gear");
     return meta;
 }
+// Names describe reusable contents, not the source Loadout.
+inline std::string SuggestComponentName(const std::string& kind, const Json& data) {
+    std::map<std::string, int> names;
+    auto add = [&](std::string value) {
+        for (const std::string& prefix : {"Superior Sigil of ", "Superior Rune of ", "Sigil of ", "Rune of "}) {
+            if (value.rfind(prefix, 0) == 0) { value.erase(0, prefix.size()); break; }
+        }
+        if (!value.empty()) ++names[value];
+    };
+    auto field = [](const Json& obj, const char* key, const char* id = nullptr) -> std::string {
+        if (!obj.is_object()) return {};
+        auto it = obj.find(key);
+        if (it != obj.end() && it->is_string() && !it->get<std::string>().empty())
+            return it->get<std::string>();
+        if (id) {
+            it = obj.find(id);
+            if (it != obj.end() && it->is_number_integer() && *it != 0)
+                return "#" + it->dump();
+        }
+        return {};
+    };
+    if (kind == "relic") add(field(data, "relic_name", "relic_id"));
+    if (data.contains("gear") && data["gear"].is_object()) {
+        for (const auto& slot : data["gear"]) {
+            if (kind == "armor" || kind == "trinkets" || kind == "weapons") {
+                std::string stat = field(slot, "stat_name", "stat_id");
+                std::string weapon = kind == "weapons" ? field(slot, "weapon_type") : "";
+                add(stat.empty() ? weapon : weapon.empty() ? stat : stat + " " + weapon);
+            } else if (kind == "runes") add(field(slot, "rune", "rune_id"));
+            else if (kind == "sigils") {
+                add(field(slot, "sigil", "sigil_id"));
+                add(field(slot, "sigil2", "sigil2_id"));
+            }
+        }
+    }
+    if (kind == "runes" && names.empty()) add(field(data, "rune_name", "rune_id"));
+    if (kind == "infusions") {
+        if (data.contains("infusion_stat_totals") && data["infusion_stat_totals"].is_object())
+            for (auto it = data["infusion_stat_totals"].begin(); it != data["infusion_stat_totals"].end(); ++it)
+                if (it.value().is_number_integer() && it.value().get<int>() > 0)
+                    add(it.key() + " +" + it.value().dump());
+        if (data.contains("infusion_ar_total") && data["infusion_ar_total"].is_number_integer() &&
+            data["infusion_ar_total"].get<int>() > 0)
+            add(data["infusion_ar_total"].dump() + " AR");
+        if (names.empty() && data.contains("infusion_totals") && data["infusion_totals"].is_array())
+            for (const auto& item : data["infusion_totals"])
+                add(field(item, "attribute", "item_id"));
+    }
+    if (kind == "base_build") {
+        std::string profession = field(data, "profession");
+        if (data.contains("specializations") && data["specializations"].is_array())
+            for (const auto& spec : data["specializations"]) {
+                const auto id = field(spec, "name", "id");
+                if (!id.empty()) profession += " / " + id;
+            }
+        return profession.empty() ? "Base Build" : profession;
+    }
+    if (kind == "skills") {
+        std::string name = "Skills";
+        if (data.contains("skills") && data["skills"].is_object()) {
+            auto elite = field(data["skills"], "elite_name", "elite");
+            if (!elite.empty()) name += " / " + elite;
+        }
+        return name;
+    }
+    std::string name;
+    for (const auto& entry : names) {
+        if (!name.empty()) name += " / ";
+        name += entry.first;
+        if (entry.second > 1 && (names.size() > 1 || kind == "runes") && kind != "sigils")
+            name += " x" + std::to_string(entry.second);
+    }
+    if (!name.empty()) return name;
+    if (kind == "armor") return "Armor (unspecified)";
+    if (kind == "trinkets") return "Trinkets (unspecified)";
+    if (kind == "weapons") return "Weapons (unspecified)";
+    if (kind == "sigils") return "Sigils (none specified)";
+    if (kind == "runes") return "Runes (none specified)";
+    if (kind == "relic") return "Relic (none specified)";
+    return "Infusions (none specified)";
+}
+
+inline const Component* ExactReusableComponent(const Document& doc, const std::string& kind,
+                                               const Json& data) {
+    // Skills are profession-sensitive; empty placeholders should remain private.
+    if (kind == "skills" || data.empty()) return nullptr;
+    auto group = doc.components.find(kind);
+    if (group != doc.components.end())
+        for (const auto& candidate : group->second)
+            if (candidate.data == data) return &candidate;
+    return nullptr;
+}
+inline std::string UniqueComponentName(const Document& doc, const std::string& kind,
+                                       const std::string& proposed) {
+    auto group = doc.components.find(kind);
+    if (group == doc.components.end()) return proposed;
+    std::string name = proposed;
+    for (unsigned suffix = 2; ; ++suffix) {
+        const bool taken = std::any_of(group->second.begin(), group->second.end(),
+            [&](const Component& part) { return part.name == name; });
+        if (!taken) return name;
+        name = proposed + " (" + std::to_string(suffix) + ")";
+    }
+}
+
 inline bool SplitLegacy(const Json& legacy, Document& output, std::string& error) {
     error.clear();
     if (!legacy.is_object() || !legacy.contains("builds") ||
@@ -191,7 +296,7 @@ inline bool SplitLegacy(const Json& legacy, Document& output, std::string& error
         for (const auto& [kind, data] : parts) {
             Component part;
             part.id = kind + ":" + loadout.id;
-            part.name = displayName + " / " + kind;
+            part.name = UniqueComponentName(next, kind, SuggestComponentName(kind, data));
             part.data = data;
             next.components[kind].push_back(std::move(part));
             loadout.refs[kind] = kind + ":" + loadout.id;
@@ -888,9 +993,12 @@ inline bool Reconcile(const Document& original, const Json& legacy,
                 unsigned sequence = 1;
                 while (Find(next, kind, componentId))
                     componentId = kind + ":" + id + ":" + std::to_string(sequence++);
+                if (const auto* match = ExactReusableComponent(next, kind, data)) {
+                    created.refs[kind] = match->id;
+                    continue;
+                }
                 next.components[kind].push_back({
-                    componentId, item.value("name", std::string("Unnamed")) + " / " + kind,
-                    data
+                    componentId, UniqueComponentName(next, kind, SuggestComponentName(kind, data)), data
                 });
                 created.refs[kind] = componentId;
             }

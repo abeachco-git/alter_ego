@@ -3893,6 +3893,24 @@ static int GetRetrievedEquipmentTabCount(const AlterEgo::Character& ch) {
 
 #include "InfusionTotalsView.h"
 
+static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
+                                    const AlterEgo::BuildTemplate& bt);
+static void RenderLiveComponentSaveMenu(const AlterEgo::Character& ch, int tab,
+                                        int kind, const char* label) {
+    if (ImGui::BeginPopupContextItem(label)) {
+        if (ImGui::MenuItem("Save to Library...", nullptr, false, !ch.build_tabs.empty())) {
+            int idx = 0;
+            for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
+                if (ch.build_tabs[i].is_active) { idx = i; break; }
+            OpenSaveLiveBuildDialog(ch, ch.build_tabs[idx]);
+            g_SaveLibEquipTab = tab;
+            g_SaveLibTarget = 1;
+            g_SaveLibComponentKind = kind;
+        }
+        ImGui::EndPopup();
+    }
+}
+
 static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Both detail views start at the same origin below the Equipment / Build tabs.
     // Equipment items supply their own padding further down the pane.
@@ -3935,6 +3953,10 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         }
     }
 
+    // Refresh the displayed tab immediately after a chip selection.
+    if (g_SelectedEquipTab > 0 && g_SelectedEquipTab <= maxTab)
+        tab = g_SelectedEquipTab;
+
     // Fashion menu: share the right-clicked tab's look as a wardrobe template chat link.
     if (ImGui::BeginPopup("##fashion_menu")) {
         int fTab = (g_FashionTab > 0) ? g_FashionTab : tab;
@@ -3976,6 +3998,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         ImGui::Indent(pad);
 
         RenderSectionHeader("Armor", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+        RenderLiveComponentSaveMenu(ch, tab, 4, "##save_live_armor");
         RenderEquipRow(ch, "Helm", tab);
         RenderEquipRow(ch, "Shoulders", tab);
         RenderEquipRow(ch, "Coat", tab);
@@ -3986,6 +4009,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         ImGui::Spacing();
 
         RenderSectionHeader("Weapons", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+        RenderLiveComponentSaveMenu(ch, tab, 2, "##save_live_weapons");
         {
             auto DrawSetLabel = [](const char* roman, float rowH) {
                 ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -4056,6 +4080,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
             float headerW = ImGui::CalcTextSize("Trinkets").x;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + colW - headerW - pad);
             ImGui::TextColored(ImVec4(0.70f, 0.58f, 0.20f, 1.0f), "Trinkets");
+            RenderLiveComponentSaveMenu(ch, tab, 6, "##save_live_trinkets");
             // Accent underline (right-aligned)
             ImVec2 pos = ImGui::GetCursorScreenPos();
             ImGui::GetWindowDrawList()->AddLine(
@@ -4103,7 +4128,9 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         ImGui::PopStyleVar(2);
     }
     ImGui::Unindent(6.0f);
-    RenderInfusionTotals(GetLiveInfusionSummary(ch, tab));
+    RenderInfusionTotals(GetLiveInfusionSummary(ch, tab), nullptr, [&]() {
+        RenderLiveComponentSaveMenu(ch, tab, 8, "##save_live_infusions");
+    });
 }
 
 // Keep every specialization name readable inside the left trait-art gutter.
@@ -8317,10 +8344,14 @@ static void RenderSaveToLibraryDialog() {
         : g_SaveLibTarget == 1 ? "New component" : "Update existing component";
     if (RenderThemedCombo("##save_target", saveTarget,
                          ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
-        if (ImGui::Selectable("Complete Loadout", g_SaveLibTarget == 0))
+        if (ImGui::Selectable("Complete Loadout", g_SaveLibTarget == 0)) {
+            if (g_SaveLibTarget != 0) g_SaveLibNameManuallyEdited = false;
             g_SaveLibTarget = 0;
-        if (ImGui::Selectable("New component", g_SaveLibTarget == 1))
+        }
+        if (ImGui::Selectable("New component", g_SaveLibTarget == 1)) {
+            if (g_SaveLibTarget != 1) g_SaveLibNameManuallyEdited = false;
             g_SaveLibTarget = 1;
+        }
         if (ImGui::Selectable("Update existing component", g_SaveLibTarget == 2)) {
             g_SaveLibTarget = 2;
             g_SaveLibUpdateId.clear();
@@ -8378,6 +8409,7 @@ static void RenderSaveToLibraryDialog() {
                 if (ImGui::Selectable(kinds[i], g_SaveLibComponentKind == i)) {
                     g_SaveLibComponentKind = i;
                     g_SaveLibUpdateId.clear();
+                    g_SaveLibNameManuallyEdited = false;
                 }
             ImGui::EndCombo();
         }
@@ -8464,6 +8496,22 @@ static void RenderSaveToLibraryDialog() {
                 "SHARED: affects %d referencing Loadout%s.",
                 existingComponentUses, existingComponentUses == 1 ? "" : "s");
     } else {
+        if (sourceChar && !g_SaveLibNameManuallyEdited) {
+            for (const auto& bt : sourceChar->build_tabs) {
+                if (bt.tab != g_SaveLibBuildTab) continue;
+                std::string suggested = sourceChar->name + " - " +
+                    (bt.name.empty() ? "Tab " + std::to_string(bt.tab) : bt.name);
+                if (g_SaveLibTarget == 1) {
+                    const auto capture = CaptureRetrievedBuildSnapshot(*sourceChar, bt,
+                        g_SaveLibEquipTab, g_SaveLibComponentKind >= 2, suggested,
+                        g_SaveLibModes.front(), g_SaveLibChatLink);
+                    suggested = AlterEgo::GW2API::SuggestCapturedComponentName(
+                        capture, keys[g_SaveLibComponentKind]);
+                }
+                snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", suggested.c_str());
+                break;
+            }
+        }
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(g_SaveLibTarget == 0 ? "Loadout name" : "Component name");
         ImGui::SameLine(130);
@@ -8543,6 +8591,9 @@ static void RenderSaveToLibraryDialog() {
                     g_SaveLibUpdateConfirmPending = true;
                 }
             } else if (g_SaveLibTarget == 1) {
+                if (!g_SaveLibNameManuallyEdited)
+                    name = AlterEgo::GW2API::SuggestCapturedComponentName(
+                        sb, keys[g_SaveLibComponentKind]);
                 const bool saved = AlterEgo::GW2API::SaveCapturedLoadoutComponent(
                     sb, keys[g_SaveLibComponentKind], name);
                 if (saved) {
@@ -8550,7 +8601,7 @@ static void RenderSaveToLibraryDialog() {
                     g_ComponentSelectNamePending = name;
                     NavigateToLibraryCollection(2);
                     g_SaveLibDialogOpen = false;
-                    if (APIDefs) APIDefs->GUI_SendAlert("Saved independent component.");
+                    if (APIDefs) APIDefs->GUI_SendAlert("Component saved or existing identical component reused.");
                 } else if (APIDefs) {
                     APIDefs->GUI_SendAlert("Could not save the selected component.");
                 }

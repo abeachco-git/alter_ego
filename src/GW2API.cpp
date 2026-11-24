@@ -3532,6 +3532,22 @@ namespace AlterEgo {
     }
 
 
+    std::string GW2API::SuggestCapturedComponentName(const SavedBuild& capture,
+                                                      const std::string& kind) {
+        const auto fields = Composable::Split(SerializeSavedBuild(capture));
+        auto selected = fields.find(kind);
+        if (selected == fields.end()) return "Component";
+        const auto proposed = Composable::SuggestComponentName(kind, selected->second);
+        nlohmann::json snapshot;
+        Composable::Document doc;
+        std::string error;
+        if (!GetComposableLoadouts(snapshot) || !Composable::FromJson(snapshot, doc, error))
+            return proposed;
+        if (const auto* match = Composable::ExactReusableComponent(doc, kind, selected->second))
+            return match->name;
+        return Composable::UniqueComponentName(doc, kind, proposed);
+    }
+
     bool GW2API::SaveCapturedLoadoutComponent(const SavedBuild& capture,
                                                const std::string& kind,
                                                const std::string& name) {
@@ -3539,6 +3555,13 @@ namespace AlterEgo {
         const auto fields = Composable::Split(SerializeSavedBuild(capture));
         auto selected = fields.find(kind);
         if (selected == fields.end()) return false;
+        nlohmann::json snapshot;
+        Composable::Document doc;
+        std::string error;
+        if (GetComposableLoadouts(snapshot) && Composable::FromJson(snapshot, doc, error)) {
+            if (const auto* match = Composable::ExactReusableComponent(doc, kind, selected->second))
+                if (match->name == name) return true;
+        }
         return CreateLoadoutComponent(kind, name, selected->second);
     }
 
