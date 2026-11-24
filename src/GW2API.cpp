@@ -2769,7 +2769,7 @@ namespace AlterEgo {
     static bool DeserializeSavedBuild(const json& j,SavedBuild& b);
     static std::string LookupComponentDisplayName(const std::string&,uint32_t);
 
-    int GW2API::AddSavedBuild(SavedBuild build,const std::string& setId,const std::string& newSetName) {
+    int GW2API::AddSavedBuild(SavedBuild build,const std::string& setId,const std::string& newSetName,const std::set<std::string>& kinds) {
         int position=-1;
         const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
             if(build.id.empty()) {
@@ -2790,7 +2790,7 @@ namespace AlterEgo {
             } else if(!newSetName.empty()) {
                 std::string id="equipment-set:"+build.id;
                 for(unsigned n=1;Composable::FindEquipmentSet(doc,id);++n)id="equipment-set:"+build.id+":"+std::to_string(n);
-                if(!NativeLibrary::SaveSetFromLoadout(doc,build.id,id,newSetName,error))return false;
+                if(!NativeLibrary::SaveSetFromLoadout(doc,build.id,id,newSetName,error,kinds))return false;
             }
             auto item=std::move(doc.loadouts.back());doc.loadouts.pop_back();
             doc.loadouts.insert(doc.loadouts.begin()+position,std::move(item));
@@ -3613,14 +3613,14 @@ namespace AlterEgo {
         return CreateLoadoutComponent(kind, name, selected->second, savedId, reuseExact, capture.profession);
     }
 
-    bool GW2API::SaveCapturedEquipmentSet(const SavedBuild& capture,const std::string& name,std::string* savedId) {
+    bool GW2API::SaveCapturedEquipmentSet(const SavedBuild& capture,const std::string& name,std::string* savedId,const std::set<std::string>& kinds) {
         if(capture.gear.empty()||Composable::ComponentNameKey(name).empty())return false;
         std::string id;
         const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error) {
             const std::string prefix="equipment-set:"+std::to_string(std::time(nullptr))+":";
             unsigned n=0;
             do{id=prefix+std::to_string(n++);}while(Composable::FindEquipmentSet(doc,id));
-            return NativeLibrary::PutEquipmentSet(doc,id,name,SerializeSavedBuild(capture),error,LookupComponentDisplayName);
+            return NativeLibrary::PutEquipmentSet(doc,id,name,SerializeSavedBuild(capture),error,LookupComponentDisplayName,kinds);
         });
         if(ok&&savedId)*savedId=id;
         return ok;
@@ -3635,12 +3635,12 @@ namespace AlterEgo {
             return NativeLibrary::DetachEquipmentSet(doc,loadoutId,error);
         });
     }
-    bool GW2API::SaveLoadoutAsEquipmentSet(const std::string& loadoutId,const std::string& name,std::string* savedId) {
+    bool GW2API::SaveLoadoutAsEquipmentSet(const std::string& loadoutId,const std::string& name,std::string* savedId,const std::set<std::string>& kinds) {
         std::string id;
         const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
             const std::string prefix="equipment-set:"+loadoutId+":";
             unsigned n=0;do{id=prefix+std::to_string(n++);}while(Composable::FindEquipmentSet(doc,id));
-            return NativeLibrary::SaveSetFromLoadout(doc,loadoutId,id,name,error);
+            return NativeLibrary::SaveSetFromLoadout(doc,loadoutId,id,name,error,kinds);
         });
         if(ok&&savedId)*savedId=id;
         return ok;

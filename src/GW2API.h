@@ -1,3 +1,4 @@
+#include <set>
 #pragma once
 
 #include <string>
@@ -456,7 +457,7 @@ namespace AlterEgo {
         // imported builds appear under their profession's existing section
         // instead of being appended as a new one. Returns the insertion index,
         // or -1 if persistence failed.
-        static int AddSavedBuild(SavedBuild build,const std::string& setId={},const std::string& newSetName={});
+        static int AddSavedBuild(SavedBuild build,const std::string& setId={},const std::string& newSetName={},const std::set<std::string>& kinds={});
         // Atomically replace the source-derived fields without changing the
         // saved build identity, custom name, notes, or creation timestamp.
         static bool RefreshSavedBuildFromSource(const std::string& id, const SavedBuild& updated);
@@ -522,10 +523,10 @@ namespace AlterEgo {
                                                   const std::string& name,
                                                   std::string* savedId = nullptr,
                                                   bool reuseExact = true);
-    static bool SaveCapturedEquipmentSet(const SavedBuild& capture,const std::string& name,std::string* savedId);
+    static bool SaveCapturedEquipmentSet(const SavedBuild& capture,const std::string& name,std::string* savedId,const std::set<std::string>& kinds={});
     static bool ApplyEquipmentSet(const std::string& loadoutId,const std::string& setId);
     static bool DetachEquipmentSet(const std::string& loadoutId);
-    static bool SaveLoadoutAsEquipmentSet(const std::string& loadoutId,const std::string& name,std::string* savedId);
+    static bool SaveLoadoutAsEquipmentSet(const std::string& loadoutId,const std::string& name,std::string* savedId,const std::set<std::string>& kinds={});
     static bool DuplicateEquipmentSet(const std::string& setId,const std::string& name,std::string* savedId);
     static bool AssignEquipmentSetComponent(const std::string& setId,const std::string& kind,const std::string& componentId,uint64_t revision);
     static std::vector<std::pair<std::string,std::string>> FindCapturedEquipmentSets(const SavedBuild& capture);

@@ -23,10 +23,10 @@ def schema(path):
     source = (ROOT / path).read_text(encoding="utf-8")
     version = int(re.search(r"kSchemaVersion\s*=\s*(\d+)", source)[1])
     blocks = re.findall(r'R"SQL\((.*?)\)SQL"', source, re.S)
-    # Durable library schema v3 is fresh-only: intermediate experimental
+    # Durable library schema v4 is fresh-only: intermediate experimental
     # schemas are deliberately not migration sources. Cache migrations remain
     # ordered one block per version, and unexpected layouts still fail closed.
-    if path == "src/NativeLibrarySchema.h" and version == 3 and len(blocks) == 1:
+    if path == "src/NativeLibrarySchema.h" and version == 4 and len(blocks) == 1:
         return version, blocks
     if len(blocks) != version:
         raise RuntimeError("Schema migration layout changed; update benchmark")
@@ -80,7 +80,7 @@ def seed(cache, library, mode, sync, scale):
             db.execute("INSERT INTO components VALUES(?,?,?,0,?)", (kind,kind+"-0",kind,kind+"-0"))
             db.execute("INSERT INTO component_payloads(kind,component_id,flags,extension_json) VALUES(?,?,0,'{}')", (kind,kind+"-0"))
         db.execute("INSERT INTO equipment_sets VALUES('set-0','Fixture set',0)")
-        db.executemany("INSERT INTO equipment_set_components VALUES('set-0',?,?)", ((kind,kind+"-0") for kind in gear_kinds))
+        db.executemany("INSERT INTO equipment_set_components VALUES('set-0',?,?)", ((kind,kind+"-0") for kind in gear_kinds if kind != "relic"))
         for n in range(250*scale):
             ident = f"component-{n}"
             loadout = f"loadout-{n}"
@@ -92,8 +92,7 @@ def seed(cache, library, mode, sync, scale):
                        (loadout,n,loadout,"set-0" if linked else None))
             db.execute("INSERT INTO loadout_components VALUES(?,'base_build',?)", (loadout,ident))
             db.execute("INSERT INTO loadout_components VALUES(?,'skills','skills-0')", (loadout,))
-            if not linked:
-                db.executemany("INSERT INTO loadout_components VALUES(?,?,?)", ((loadout,kind,kind+"-0") for kind in gear_kinds))
+            db.executemany("INSERT INTO loadout_components VALUES(?,?,?)", ((loadout,kind,kind+"-0") for kind in gear_kinds if not linked or kind == "relic"))
         db.execute("COMMIT")
 
 

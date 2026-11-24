@@ -47,7 +47,7 @@ struct Loadout {
     Json metadata = Json::object(); // Existing name, notes, modes, provenance, etc.
     std::map<std::string, std::string> refs; // Stable component IDs by category.
     std::string fashion_id;          // Optional reference to FashionLibrary::Look::id.
-    std::string equipment_set_id;    // Linked mode owns only Base Build and Skills directly.
+    std::string equipment_set_id;    // Linked set owns only its included categories.
 };
 struct EquipmentSet {
     std::string id, name;
@@ -70,6 +70,10 @@ inline const EquipmentSet* FindEquipmentSet(const Document& doc,const std::strin
     return nullptr;
 }
 
+inline bool SetOwns(const Document& doc,const Loadout& loadout,const std::string& kind) {
+    const auto* set=FindEquipmentSet(doc,loadout.equipment_set_id);
+    return set&&set->refs.count(kind);
+}
 // Expand only at projection/edit boundaries; never persist this map.
 inline std::map<std::string,std::string> EffectiveRefs(const Document& doc,const Loadout& loadout) {
     auto refs=loadout.refs;
@@ -132,8 +136,8 @@ inline bool Validate(const Document& doc, std::string& error) {
         if(!item.equipment_set_id.empty()&&!FindEquipmentSet(doc,item.equipment_set_id))
             return Fail(error,"Unknown linked equipment set.");
         for (const auto& [kind, id] : item.refs) {
-            if(!item.equipment_set_id.empty()&&IsEquipmentKind(kind))
-                return Fail(error,"Linked Loadout cannot own equipment components.");
+            if(SetOwns(doc,item,kind))
+                return Fail(error,"Loadout and equipment set cannot both own a category.");
             if (!IsKind(kind) || id.empty() || !Find(doc, kind, id))
                 return Fail(error, "Unresolved Loadout component: " + kind);
         }
@@ -142,7 +146,7 @@ inline bool Validate(const Document& doc, std::string& error) {
     }
     std::set<std::string> setIds;
     for(const auto& set:doc.equipment_sets) {
-        if(set.id.empty()||set.name.empty()||!setIds.insert(set.id).second||set.refs.size()!=7)
+        if(set.id.empty()||set.name.empty()||!setIds.insert(set.id).second||set.refs.empty())
             return Fail(error,"Invalid equipment set.");
         for(const auto& [kind,id]:set.refs)
             if(!IsEquipmentKind(kind)||!Find(doc,kind,id))
@@ -820,7 +824,11 @@ inline bool ExportPortableLoadout(const Document& doc, const std::string& id,
                   {"metadata", it->metadata},
                   {"components", components},
                   {"fashion_id", it->fashion_id}};
-    if(const auto* set=FindEquipmentSet(doc,it->equipment_set_id))packet["equipment_set_name"]=set->name;
+    if(const auto* set=FindEquipmentSet(doc,it->equipment_set_id)) {
+        packet["equipment_set_name"]=set->name;
+        packet["equipment_set_kinds"]=Json::array();
+        for(const auto& [kind,id]:set->refs)packet["equipment_set_kinds"].push_back(kind);
+    }
     return true;
 }
 
@@ -900,9 +908,14 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
                 return Fail(err,"Invalid portable equipment set name.");
             EquipmentSet set{"equipment-set:"+newId,packet.at("equipment_set_name").get<std::string>(),{}};
             for(unsigned n=1;FindEquipmentSet(next,set.id);++n)set.id="equipment-set:"+newId+":"+std::to_string(n);
-            for(auto ref=loadout.refs.begin();ref!=loadout.refs.end();) {
-                if(IsEquipmentKind(ref->first)){set.refs.insert(*ref);ref=loadout.refs.erase(ref);}
-                else ++ref;
+            if(!packet.contains("equipment_set_kinds")||!packet.at("equipment_set_kinds").is_array())
+                return Fail(err,"Missing portable equipment set membership.");
+            for(const auto& value:packet.at("equipment_set_kinds")) {
+                if(!value.is_string())return Fail(err,"Invalid portable set category.");
+                const auto kind=value.get<std::string>();
+                auto ref=loadout.refs.find(kind);
+                if(!IsEquipmentKind(kind)||ref==loadout.refs.end())return Fail(err,"Invalid or duplicate portable set category.");
+                set.refs.insert(*ref);loadout.refs.erase(ref);
             }
             loadout.equipment_set_id=set.id;
             next.equipment_sets.push_back(std::move(set));
@@ -951,7 +964,7 @@ inline bool Assign(Document& doc, const std::string& loadoutId,
         auto* item = FindLoadout(next, loadoutId);
         if (!item || !IsKind(kind) || !Find(next, kind, id))
             return Fail(err, "Loadout or component not found.");
-        if(IsEquipmentKind(kind)&&!item->equipment_set_id.empty())return Fail(err,"Detach the linked equipment set before assigning equipment.");
+        if(SetOwns(next,*item,kind))return Fail(err,"Edit the linked equipment set to assign this category.");
         if (!AssignCompatible(next, *item, kind, id, err)) return false;
         item->refs[kind] = id;
         return true;
@@ -1262,7 +1275,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
         const auto parts = Split(item);
         if(!updated.equipment_set_id.empty()) {
             const auto oldParts=Split(previous);
-            for(const auto& [kind,data]:parts)if(IsEquipmentKind(kind)&&oldParts.at(kind).dump()!=data.dump())
+            for(const auto& [kind,data]:parts)if(SetOwns(next,updated,kind)&&oldParts.at(kind).dump()!=data.dump())
                 return Fail(error,"Detach the linked equipment set before editing equipment.");
             for(const auto& [kind,ref]:EffectiveRefs(next,updated))if(IsEquipmentKind(kind)) {
                 const auto* part=Find(next,kind,ref);
@@ -1271,7 +1284,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
             }
         }
         for (const auto& [kind, data] : parts) {
-            if(IsEquipmentKind(kind)&&!updated.equipment_set_id.empty())continue;
+            if(SetOwns(next,updated,kind))continue;
             const auto oldRef = updated.refs.find(kind);
             if (oldRef == updated.refs.end()) {
                 if (const auto* match = ReusableForLoadout(next, kind, data,

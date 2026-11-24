@@ -4,13 +4,13 @@
 namespace AlterEgo::NativeLibrary {
 
 constexpr int kApplicationId = 0x41454c42; // AELB
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 
 inline void UpgradeSchema(Database::Connection& db, int version) {
     // Only a fresh database reaches this callback. Old experimental
     // SQLite schemas are not migration sources.
-    if(version==1||version==2)return;
-    if(version!=3)throw Database::Error(SQLITE_ERROR,"Unknown library schema");
+    if(version>=1&&version<4)return;
+    if(version!=4)throw Database::Error(SQLITE_ERROR,"Unknown library schema");
     // Category is part of each component FK. IDs are stable within a kind.
     // Fingerprints are deliberately nonunique; independent identical records
     // are valid. Ordinals preserve user ordering, not record identity.
@@ -182,17 +182,25 @@ CREATE TABLE loadout_components(
 ) STRICT;
 CREATE INDEX component_usage ON loadout_components(kind,component_id);
 CREATE TRIGGER loadout_equipment_exclusive_insert BEFORE INSERT ON loadout_components
-WHEN NEW.kind NOT IN ('base_build','skills') AND
-     (SELECT equipment_set_id FROM loadouts WHERE id=NEW.loadout_id) IS NOT NULL
-BEGIN SELECT RAISE(ABORT,'Linked Loadout cannot own equipment'); END;
+WHEN EXISTS(SELECT 1 FROM loadouts l JOIN equipment_set_components s ON s.set_id=l.equipment_set_id
+    WHERE l.id=NEW.loadout_id AND s.kind=NEW.kind)
+BEGIN SELECT RAISE(ABORT,'Equipment category already owned by set'); END;
 CREATE TRIGGER loadout_equipment_exclusive_update BEFORE UPDATE ON loadout_components
-WHEN NEW.kind NOT IN ('base_build','skills') AND
-     (SELECT equipment_set_id FROM loadouts WHERE id=NEW.loadout_id) IS NOT NULL
-BEGIN SELECT RAISE(ABORT,'Linked Loadout cannot own equipment'); END;
+WHEN EXISTS(SELECT 1 FROM loadouts l JOIN equipment_set_components s ON s.set_id=l.equipment_set_id
+    WHERE l.id=NEW.loadout_id AND s.kind=NEW.kind)
+BEGIN SELECT RAISE(ABORT,'Equipment category already owned by set'); END;
 CREATE TRIGGER loadout_equipment_exclusive_link BEFORE UPDATE OF equipment_set_id ON loadouts
-WHEN NEW.equipment_set_id IS NOT NULL AND EXISTS(
-    SELECT 1 FROM loadout_components WHERE loadout_id=NEW.id AND kind NOT IN ('base_build','skills'))
-BEGIN SELECT RAISE(ABORT,'Linked Loadout cannot own equipment'); END;
+WHEN EXISTS(SELECT 1 FROM loadout_components r JOIN equipment_set_components s ON s.kind=r.kind
+    WHERE r.loadout_id=NEW.id AND s.set_id=NEW.equipment_set_id)
+BEGIN SELECT RAISE(ABORT,'Equipment category already owned by Loadout'); END;
+CREATE TRIGGER set_equipment_exclusive_insert BEFORE INSERT ON equipment_set_components
+WHEN EXISTS(SELECT 1 FROM loadouts l JOIN loadout_components r ON r.loadout_id=l.id
+    WHERE l.equipment_set_id=NEW.set_id AND r.kind=NEW.kind)
+BEGIN SELECT RAISE(ABORT,'Equipment category already owned by Loadout'); END;
+CREATE TRIGGER set_equipment_exclusive_update BEFORE UPDATE ON equipment_set_components
+WHEN EXISTS(SELECT 1 FROM loadouts l JOIN loadout_components r ON r.loadout_id=l.id
+    WHERE l.equipment_set_id=NEW.set_id AND r.kind=NEW.kind)
+BEGIN SELECT RAISE(ABORT,'Equipment category already owned by Loadout'); END;
 )SQL");
 }
 

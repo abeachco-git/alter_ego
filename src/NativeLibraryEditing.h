@@ -172,7 +172,7 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
     const auto parts=Composable::Split(raw);
     const EditIndex index(doc);
     if(!next.equipment_set_id.empty()) {
-        for(const auto& [kind,data]:parts)if(Composable::IsEquipmentKind(kind)&&
+        for(const auto& [kind,data]:parts)if(Composable::SetOwns(doc,next,kind)&&
             (!oldParts.count(kind)||!ExactContent(oldParts.at(kind),data)))
             return Composable::Fail(error,"Detach the linked equipment set before editing gear.");
         const auto refs=Composable::EffectiveRefs(doc,next);
@@ -183,7 +183,7 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
         }
     }
     for(const auto& [kind,data]:parts) {
-        if(Composable::IsEquipmentKind(kind)&&!next.equipment_set_id.empty())continue;
+        if(Composable::SetOwns(doc,next,kind))continue;
         const auto ref=next.refs.find(kind);
         auto* previous=ref==next.refs.end()?nullptr:Composable::Find(doc,kind,ref->second);
         if(existing&&oldParts.count(kind)&&ExactContent(oldParts.at(kind),data)) {
@@ -215,14 +215,14 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
 // Save a named collection of references, never a second copy of equipment.
 inline bool PutEquipmentSet(Composable::Document& doc,const std::string& id,
     const std::string& name,const Json& raw,std::string& error,
-    const Composable::ComponentNameLookup& lookup={}) {
+    const Composable::ComponentNameLookup& lookup={},const std::set<std::string>& kinds={}) {
     if(id.empty()||Composable::ComponentNameKey(name).empty()||Composable::FindEquipmentSet(doc,id))
         return Composable::Fail(error,"Invalid equipment set identity or name.");
     Composable::EquipmentSet set{id,name,{}};
     const auto parts=Composable::Split(raw);
     const EditIndex index(doc);
     for(const auto& [kind,data]:parts) {
-        if(!Composable::IsEquipmentKind(kind))continue;
+        if(!Composable::IsEquipmentKind(kind)||(!kinds.empty()&&!kinds.count(kind)))continue;
         const auto matches=index.Matches(kind,data);
         if(!matches.empty()) {set.refs[kind]=matches.front().id;continue;}
         std::string componentId=kind+":"+id;
@@ -241,10 +241,8 @@ inline bool ApplyEquipmentSet(Composable::Document& doc,const std::string& loado
         auto* loadout=Composable::FindLoadout(next,loadoutId);
         const auto* set=Composable::FindEquipmentSet(next,setId);
         if(!loadout||!set)return Composable::Fail(err,"Equipment set or Loadout not found.");
-        for(auto it=loadout->refs.begin();it!=loadout->refs.end();) {
-            if(Composable::IsEquipmentKind(it->first))it=loadout->refs.erase(it);
-            else ++it;
-        }
+        loadout->refs=Composable::EffectiveRefs(next,*loadout);
+        for(const auto& [kind,id]:set->refs)loadout->refs.erase(kind);
         loadout->equipment_set_id=setId;
         Json resolved;
         return Composable::Resolve(next,*loadout,resolved,err);
@@ -260,18 +258,19 @@ inline bool DetachEquipmentSet(Composable::Document& doc,const std::string& load
     },error);
 }
 inline bool SaveSetFromLoadout(Composable::Document& doc,const std::string& loadoutId,
-    const std::string& newId,const std::string& name,std::string& error) {
+    const std::string& newId,const std::string& name,std::string& error,
+    const std::set<std::string>& kinds={}) {
     return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err) {
         auto* l=Composable::FindLoadout(next,loadoutId);
         if(!l||newId.empty()||Composable::FindEquipmentSet(next,newId)||Composable::ComponentNameKey(name).empty())
             return Composable::Fail(err,"Invalid new equipment set.");
         Composable::EquipmentSet set{newId,name,{}};
-        for(const auto& [kind,id]:Composable::EffectiveRefs(next,*l))
-            if(Composable::IsEquipmentKind(kind))set.refs[kind]=id;
+        const auto* old=Composable::FindEquipmentSet(next,l->equipment_set_id);
+        l->refs=Composable::EffectiveRefs(next,*l);
+        for(const auto& [kind,id]:l->refs)
+            if(Composable::IsEquipmentKind(kind)&&(kinds.empty()?(!old||old->refs.count(kind)):kinds.count(kind)))set.refs[kind]=id;
+        for(const auto& [kind,id]:set.refs)l->refs.erase(kind);
         next.equipment_sets.push_back(std::move(set));
-        for(auto it=l->refs.begin();it!=l->refs.end();) {
-            if(Composable::IsEquipmentKind(it->first))it=l->refs.erase(it);else ++it;
-        }
         l->equipment_set_id=newId;
         return true;
     },error);
@@ -280,9 +279,18 @@ inline bool AssignSetComponent(Composable::Document& doc,const std::string& setI
     const std::string& kind,const std::string& id,std::string& error) {
     return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err) {
         auto* set=Composable::FindEquipmentSet(next,setId);
-        if(!set||!Composable::IsEquipmentKind(kind)||!Composable::Find(next,kind,id))
+        if(!set||!Composable::IsEquipmentKind(kind)||(!id.empty()&&!Composable::Find(next,kind,id)))
             return Composable::Fail(err,"Equipment set or component not found.");
-        set->refs[kind]=id;
+        if(id.empty()) {
+            const auto prior=set->refs.find(kind);
+            if(prior==set->refs.end())return true;
+            if(set->refs.size()==1)return Composable::Fail(err,"Equipment set must include at least one category.");
+            for(auto& l:next.loadouts)if(l.equipment_set_id==setId)l.refs[kind]=prior->second;
+            set->refs.erase(prior);
+        } else {
+            set->refs[kind]=id;
+            for(auto& l:next.loadouts)if(l.equipment_set_id==setId)l.refs.erase(kind);
+        }
         for(const auto& l:next.loadouts)if(l.equipment_set_id==setId) {
             Json raw;if(!Composable::Resolve(next,l,raw,err))return false;
         }
@@ -293,7 +301,7 @@ inline std::vector<Match> ExactEquipmentSets(const Composable::Document& doc,con
     std::vector<Match> result;
     const auto parts=Composable::Split(raw);
     for(const auto& set:doc.equipment_sets) {
-        bool match=set.refs.size()==7;
+        bool match=!set.refs.empty();
         for(const auto& [kind,id]:set.refs) {
             const auto* part=Composable::Find(doc,kind,id);
             auto expected=parts.find(kind);

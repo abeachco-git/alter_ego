@@ -131,6 +131,14 @@ std::int64_t Repository::Commit(const Snapshot& before,const Snapshot& after) {
             changed=true;
         }
     }
+    // Remove changed/deleted Loadout references before set membership moves.
+    // Both directions are protected by SQL triggers; the transaction is atomic.
+    const auto oldLoads=MakeIndex(before.loadouts.loadouts),newLoads=MakeIndex(after.loadouts.loadouts);
+    for(const auto& old:before.loadouts.loadouts) {
+        auto it=newLoads.find(old.id);
+        if(it==newLoads.end()||!SameLoadout(old,*it->second.second))
+            Run(db_,"DELETE FROM loadout_components WHERE loadout_id=?",{old.id});
+    }
     const auto oldSets=MakeIndex(before.loadouts.equipment_sets),newSets=MakeIndex(after.loadouts.equipment_sets);
     for(size_t i=0;i<after.loadouts.equipment_sets.size();++i) {
         const auto& set=after.loadouts.equipment_sets[i];auto old=oldSets.find(set.id);
@@ -143,7 +151,6 @@ std::int64_t Repository::Commit(const Snapshot& before,const Snapshot& after) {
             Run(db_,"INSERT INTO equipment_set_components VALUES(?,?,?)",{set.id,kind,id});
         changed=true;
     }
-    const auto oldLoads=MakeIndex(before.loadouts.loadouts),newLoads=MakeIndex(after.loadouts.loadouts);
     for(size_t i=0;i<after.loadouts.loadouts.size();++i) {
         const auto& l=after.loadouts.loadouts[i];auto old=oldLoads.find(l.id);
         if(old!=oldLoads.end()&&old->second.first==i&&SameLoadout(*old->second.second,l))continue;

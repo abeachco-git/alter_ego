@@ -632,23 +632,31 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             ImGui::SameLine();
         }
         static std::string setName;
+        static std::set<std::string> setKinds;
         static uint64_t setDraftRevision=0;
         if(RenderActionButton(linked?"Copy & Edit Set":"Save as Equipment Set")) {
             setName=linked?shown+" - Copy":loadout->at("metadata").value("name",loadoutId)+" - Equipment";
+            setKinds.clear();
+            for(const auto& entry:kComponentKinds)if(AlterEgo::Composable::IsEquipmentKind(entry.kind)&&
+                (linked?linked->at("refs").contains(entry.kind):loadout->at("refs").contains(entry.kind)))setKinds.insert(entry.kind);
             setDraftRevision=AlterEgo::GW2API::GetBuildLibraryRevision();
             ImGui::OpenPopup("Name equipment set##loadout");
         }
         if(ImGui::BeginPopupModal("Name equipment set##loadout",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
             AlterEgo::UI::InputText("Name",setName);
-            if(RenderActionButton("Save")&&!AlterEgo::Composable::ComponentNameKey(setName).empty()) {
-                g_ComponentCommand={ComponentUICommand::SaveSet,loadoutId,"","",setName,ComponentJson::object(),setDraftRevision};
+            for(const auto& entry:kComponentKinds)if(AlterEgo::Composable::IsEquipmentKind(entry.kind)) {
+                bool included=setKinds.count(entry.kind)!=0;
+                if(ImGui::Checkbox(entry.label,&included)){if(included)setKinds.insert(entry.kind);else setKinds.erase(entry.kind);}
+            }
+            if(RenderActionButton("Save")&&!setKinds.empty()&&!AlterEgo::Composable::ComponentNameKey(setName).empty()) {
+                g_ComponentCommand={ComponentUICommand::SaveSet,loadoutId,"","",setName,ComponentJson(setKinds),setDraftRevision};
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
         if(linked) {
-            ImGui::TextDisabled("Equipment belongs to the linked set.");
+            ImGui::TextDisabled("Included in set (other categories are independent):");
             for(auto ref=linked->at("refs").begin();ref!=linked->at("refs").end();++ref) {
                 const auto* part=ComponentUIFind(doc,ref.key(),ref.value().get<std::string>());
                 ImGui::Text("%s: %s",ComponentLabel(ref.key()),part?part->value("name",std::string()).c_str():"(missing)");
@@ -661,7 +669,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
         ImGui::TableSetupColumn("Saved selection", ImGuiTableColumnFlags_WidthStretch);
         for (int i = 0; i < 9; ++i) {
             const std::string kind = kComponentKinds[i].kind;
-            if(linked&&AlterEgo::Composable::IsEquipmentKind(kind))continue;
+            if(linked&&linked->at("refs").contains(kind))continue;
             const auto ref = (*loadout)["refs"].find(kind);
             const std::string id = ref != (*loadout)["refs"].end() && ref->is_string()
                 ? ref->get<std::string>() : std::string();
@@ -1048,7 +1056,10 @@ static void RenderComponentLibrary() {
                 for (const auto& loadout : doc["loadouts"]) {
                     if (!loadout.is_object() || !loadout.contains("refs") ||
                         !loadout["refs"].is_object()) continue;
-                    if(AlterEgo::Composable::IsEquipmentKind(kind)&&!loadout.value("equipment_set_id",std::string()).empty())continue;
+                    bool inherited=false;
+                    if(doc.contains("equipment_sets"))for(const auto& set:doc.at("equipment_sets"))
+                        if(set.value("id",std::string())==loadout.value("equipment_set_id",std::string())&&set.at("refs").contains(kind))inherited=true;
+                    if(inherited)continue;
                     if (!ComponentUICompatible(doc, loadout, kind, *item)) continue;
                     const std::string targetId = loadout.value("id", std::string());
                     if (targetId.empty() ||
@@ -1158,6 +1169,8 @@ static void RenderEquipmentSetLibrary() {
         ImGui::EndPopup();
     }
     ImGui::Separator();
+    static ComponentUICommand pendingMembership;
+    bool confirmMembership=false;
     if(ImGui::BeginTable("##equipment_set_refs",2,ImGuiTableFlags_SizingStretchProp)) {
         for(int i:{2,4,6,5,3,8,7}) {
             const std::string kind=kComponentKinds[i].kind;
@@ -1167,13 +1180,19 @@ static void RenderEquipmentSetLibrary() {
             ImGui::TextUnformatted(ComponentLabel(kind));
             ImGui::TableSetColumnIndex(1);
             ImGui::PushID(kind.c_str());
-            const std::string label=part?part->value("name",ref):"(missing)";
+            const std::string label=part?part->value("name",ref):"Not included";
             if(UI::BeginCombo("##set_component",label.c_str())) {
+                if(UI::SelectableOption("Not included",ref.empty())&&!ref.empty()&&selected->at("refs").size()>1)
+                    g_ComponentCommand={ComponentUICommand::AssignSetPart,id,kind,"","",ComponentJson::object(),GW2API::GetBuildLibraryRevision()};
+                if(selected->at("refs").size()==1&&!ref.empty())ImGui::TextDisabled("Keep at least one category.");
                 const auto group=doc.at("components").find(kind);
                 if(group!=doc.at("components").end())for(const auto& candidate:*group) {
                     const auto candidateId=candidate.value("id",std::string());
-                    if(UI::SelectableOption((candidate.value("name",candidateId)+"##"+candidateId).c_str(),candidateId==ref))
-                        g_ComponentCommand={ComponentUICommand::AssignSetPart,id,kind,candidateId,"",ComponentJson::object(),GW2API::GetBuildLibraryRevision()};
+                    if(UI::SelectableOption((candidate.value("name",candidateId)+"##"+candidateId).c_str(),candidateId==ref)&&candidateId!=ref) {
+                        ComponentUICommand command={ComponentUICommand::AssignSetPart,id,kind,candidateId,"",ComponentJson::object(),GW2API::GetBuildLibraryRevision()};
+                        if(ref.empty()&&users){pendingMembership=command;confirmMembership=true;}
+                        else g_ComponentCommand=command;
+                    }
                 }
                 ImGui::EndCombo();
             }
@@ -1183,7 +1202,14 @@ static void RenderEquipmentSetLibrary() {
         }
         ImGui::EndTable();
     }
-    ImGui::TextWrapped("Changing set membership affects every linked Loadout. Shared component edits also affect this set.");
+    if(confirmMembership)ImGui::OpenPopup("Include category in shared set?");
+    if(ImGui::BeginPopupModal("Include category in shared set?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Including %s replaces independent selections in all linked Loadouts.",ComponentLabel(pendingMembership.kind));
+        if(RenderActionButton("Confirm")){g_ComponentCommand=pendingMembership;ImGui::CloseCurrentPopup();}
+        ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::TextWrapped("Not included: linked Loadouts keep their own selections. Removing a category preserves its current component on each Loadout.");
     if(UI::BeginCombo("##equipment_set_apply","Apply to Loadout...")) {
         for(const auto& loadout:doc.at("loadouts")) {
             const auto target=loadout.value("id",std::string());
@@ -1216,7 +1242,7 @@ static void ProcessComponentUICommand() {
         success=API::DetachEquipmentSet(command.loadout_id);
         break;
     case ComponentUICommand::SaveSet:
-        success=API::SaveLoadoutAsEquipmentSet(command.loadout_id,command.name,&g_EquipmentSetSelectedId);
+        success=API::SaveLoadoutAsEquipmentSet(command.loadout_id,command.name,&g_EquipmentSetSelectedId,command.data.get<std::set<std::string>>());
         if(success)g_LibraryCollection=3;
         break;
     case ComponentUICommand::DuplicateSet:

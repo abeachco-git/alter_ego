@@ -1358,6 +1358,7 @@ static std::string g_EquipmentSetSelectedId, g_SaveLibAccount;
 static constexpr int kSaveFashionTarget=3;
 static int g_SaveLibEquipmentMode=0; // offer exact match, independent, new named set
 static std::string g_SaveLibSetName;
+static std::set<std::string> g_SaveLibSetKinds;
 static std::vector<std::pair<std::string,std::string>> g_SaveLibExactSets;
 static std::string g_SaveLibSelectedSet;
 static int g_SaveLibTarget = 0; // 0 Loadout, 1 new component, 2 replace existing, 3 Fashion
@@ -4547,7 +4548,7 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", defaultName.c_str());
     g_SaveLibModes = {AlterEgo::GameMode::PvE};
     g_SaveLibNameManuallyEdited = false;
-    g_SaveLibEquipmentMode=0;g_SaveLibSetName.clear();g_SaveLibExactSets.clear();g_SaveLibSelectedSet.clear();
+    g_SaveLibEquipmentMode=0;g_SaveLibSetName.clear();g_SaveLibSetKinds={"weapons","armor","trinkets","runes","sigils","infusions","relic"};g_SaveLibExactSets.clear();g_SaveLibSelectedSet.clear();
     g_SaveLibTarget = componentKind >= 0 ? 1 : 0;
     g_SaveLibComponentKind = componentKind >= 0 ? componentKind : 0;
     g_SaveLibUpdateId.clear();
@@ -8759,15 +8760,23 @@ static void RenderSaveToLibraryDialog() {
             field("Set name");ImGui::SetNextItemWidth(width());UI::InputText("##new_set_name",g_SaveLibSetName);
         }
     }
+    if(entireSet||(g_SaveLibTarget==0&&g_SaveLibEquipmentMode==2)) {
+        ImGui::TextUnformatted("Included categories");
+        for(int i=2;i<9;++i) {
+            bool included=g_SaveLibSetKinds.count(keys[i])!=0;
+            if(ImGui::Checkbox(kinds[i],&included)){if(included)g_SaveLibSetKinds.insert(keys[i]);else g_SaveLibSetKinds.erase(keys[i]);}
+        }
+    }
     auto finishLoadout=[&](SavedBuild capture,const std::string& setId,const std::string& newName) {
-        const int idx=GW2API::AddSavedBuild(std::move(capture),setId,newName);
+        const int idx=GW2API::AddSavedBuild(std::move(capture),setId,newName,g_SaveLibSetKinds);
         if(idx>=0){g_LibSelectedIdx=idx;g_LibDetailsFetched=false;NavigateToLibraryCollection(0);g_SaveLibDialogOpen=false;}
         if(APIDefs)APIDefs->GUI_SendAlert(idx>=0?"Loadout saved to library!":"Could not save Loadout; review equipment selection.");
         return idx>=0;
     };
     const bool ready=sourceChar&&(!needsBuild||currentBuild())&&(!needsEquipment||hasEquipment(g_SaveLibEquipTab))&&
         (g_SaveLibTarget==2?!existingComponentName.empty():!Composable::ComponentNameKey(g_SaveLibName).empty())&&
-        (g_SaveLibTarget!=0||g_SaveLibEquipmentMode!=2||!Composable::ComponentNameKey(g_SaveLibSetName).empty());
+        (g_SaveLibTarget!=0||g_SaveLibEquipmentMode!=2||!Composable::ComponentNameKey(g_SaveLibSetName).empty())&&
+        (!(entireSet||(g_SaveLibTarget==0&&g_SaveLibEquipmentMode==2))||!g_SaveLibSetKinds.empty());
     if(!sourceChar)ImGui::TextDisabled("Character snapshot unavailable.");
     else if(needsBuild&&!currentBuild())ImGui::TextDisabled("Select a retrieved build tab.");
     else if(needsEquipment&&!hasEquipment(g_SaveLibEquipTab))ImGui::TextDisabled("No retrieved equipment in this tab.");
@@ -8817,7 +8826,7 @@ static void RenderSaveToLibraryDialog() {
                 }
             } else if(entireSet) {
                 std::string savedId;
-                if(GW2API::SaveCapturedEquipmentSet(sb,name,&savedId)) {
+                if(GW2API::SaveCapturedEquipmentSet(sb,name,&savedId,g_SaveLibSetKinds)) {
                     g_EquipmentSetSelectedId=savedId;
                     NavigateToLibraryCollection(3);
                     g_SaveLibDialogOpen=false;
@@ -10330,7 +10339,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
     ImGui::Spacing();
 
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
-    if(g_LibEditMode&&linkedEquipment)ImGui::TextDisabled("Linked equipment is read-only here. Cancel/finish, then Edit Shared Set, Copy & Edit Set or Detach Set.");
+    if(g_LibEditMode&&linkedEquipment)ImGui::TextDisabled("Use the Loadout component selectors for independent equipment and the set editor for included categories.");
     RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&!linkedEquipment);
 
     // One shared footer for Saved and Edit; notes always follow infusion totals.
