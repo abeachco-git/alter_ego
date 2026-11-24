@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,59 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 5) {
+        db.Exec(R"SQL(
+CREATE TABLE reference_metadata_snapshots(dataset TEXT PRIMARY KEY, captured_at INTEGER NOT NULL CHECK(captured_at>=0)) STRICT;
+CREATE TABLE reference_specializations(id INTEGER PRIMARY KEY CHECK(id BETWEEN 0 AND 4294967295),
+    "name" TEXT NOT NULL,
+    "icon" TEXT NOT NULL,
+    "background" TEXT NOT NULL,
+    "profession" TEXT NOT NULL,
+    "profession_icon" TEXT NOT NULL,
+    "profession_icon_big" TEXT NOT NULL,
+    "elite" INTEGER NOT NULL CHECK("elite" IN (0,1))) STRICT;
+CREATE TABLE reference_specializations_minor_traits(id INTEGER NOT NULL REFERENCES reference_specializations(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(id,ordinal)) STRICT;
+CREATE TABLE reference_specializations_major_traits(id INTEGER NOT NULL REFERENCES reference_specializations(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(id,ordinal)) STRICT;
+CREATE TABLE reference_traits(id INTEGER PRIMARY KEY CHECK(id BETWEEN 0 AND 4294967295),
+    "name" TEXT NOT NULL,
+    "icon" TEXT NOT NULL,
+    "description" TEXT NOT NULL,
+    "tier" INTEGER NOT NULL,
+    "order" INTEGER NOT NULL,
+    "slot" TEXT NOT NULL,
+    "facts" TEXT) STRICT;
+CREATE TABLE reference_skills(id INTEGER PRIMARY KEY CHECK(id BETWEEN 0 AND 4294967295),
+    "name" TEXT NOT NULL,
+    "icon" TEXT NOT NULL,
+    "description" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "specialization" INTEGER NOT NULL,
+    "facts" TEXT) STRICT;
+CREATE TABLE reference_skills_professions(id INTEGER NOT NULL REFERENCES reference_skills(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(id,ordinal)) STRICT;
+CREATE TABLE reference_itemstats(id INTEGER PRIMARY KEY CHECK(id BETWEEN 0 AND 4294967295),
+    "name" TEXT NOT NULL) STRICT;
+CREATE TABLE reference_itemstats_attributes(id INTEGER NOT NULL REFERENCES reference_itemstats(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(id,ordinal)) STRICT;
+CREATE TABLE reference_dyes(id INTEGER PRIMARY KEY CHECK(id BETWEEN 0 AND 4294967295),
+    "name" TEXT NOT NULL,
+    base_r INTEGER NOT NULL,
+    base_g INTEGER NOT NULL,
+    base_b INTEGER NOT NULL,
+    cloth_r INTEGER NOT NULL,
+    cloth_g INTEGER NOT NULL,
+    cloth_b INTEGER NOT NULL,
+    leather_r INTEGER NOT NULL,
+    leather_g INTEGER NOT NULL,
+    leather_b INTEGER NOT NULL,
+    metal_r INTEGER NOT NULL,
+    metal_g INTEGER NOT NULL,
+    metal_b INTEGER NOT NULL) STRICT;
+)SQL");
+        return;
+    }
     if (version == 4) {
         db.Exec(R"SQL(
 CREATE TABLE commerce_item_names(item_id INTEGER PRIMARY KEY, name TEXT NOT NULL) STRICT;

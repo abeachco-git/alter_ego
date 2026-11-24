@@ -57,3 +57,5 @@ Skin metadata tests cover preservation of catalog fields and Fashion dye data ac
 Commerce and cache-path tests exercise one-to-many and many-to-many item relationships, shared item price observations, stale price rejection, vendor prices and migration of rebuildable JSON to the cache directory.
 
 Native editing tests also exercise explicit private-editor reuse, stale source and mismatched candidate rejection, preserved unrelated references and private Base Build profession protection.
+
+Reference metadata coverage verifies typed skill, trait, specialization, item-stat and dye round trips, ordered child records, malformed/duplicate-row rollback, older snapshot rejection, legacy import and native precedence.

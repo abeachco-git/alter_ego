@@ -3,6 +3,7 @@
 #include "../src/AchievementCatalogCache.h"
 #include "../src/SkinDataCache.h"
 #include "../src/CommerceCache.h"
+#include "../src/ReferenceMetadataCache.h"
 #include "../src/NativeLibraryStore.h"
 #include <cassert>
 #include <chrono>
@@ -246,6 +247,50 @@ int case_database_core(int, char**) {
         assert(moved==(paths.CacheDirectory()/"item_cache.json").u8string());
         assert(AlterEgo::Storage::ReadMigrationBytes(std::filesystem::u8path(moved))=="[]");
         assert(!std::filesystem::exists(paths.base/"item_cache.json"));
+    }
+    {
+        namespace Cache=AlterEgo::Cache;
+        using J=Cache::ReferenceJson;
+        using D=Cache::ReferenceDataset;
+        const auto root=temp.dir.u8string();
+        J skills=J::array({{{"id",10},{"name","Skill"},{"icon","icon"},{"description","d"},
+            {"type","Utility"},{"specialization",12},{"professions",J::array({"Engineer","Guardian"})},
+            {"facts",J::array({{{"type","Damage"},{"hit_count",2}},{{"type","Buff"},{"status","Might"}}})}}});
+        assert(Cache::WriteReference(root,D::Skills,skills,100));
+        assert(Cache::ReadReference(root,D::Skills)==skills);
+        auto stale=skills;stale[0]["name"]="Stale";
+        assert(!Cache::WriteReference(root,D::Skills,stale,99));
+        assert(Cache::ReadReference(root,D::Skills)==skills);
+        auto malformed=skills;malformed.push_back(skills.at(0));
+        assert(!Cache::WriteReference(root,D::Skills,malformed,101));
+        assert(Cache::ReadReference(root,D::Skills)==skills);
+        J specs=J::array({{{"id",2},{"name","Spec"},{"icon","i"},{"background","b"},{"profession","Engineer"},
+            {"profession_icon","p"},{"profession_icon_big","P"},{"elite",true},
+            {"minor_traits",J::array({9,8,7})},{"major_traits",J::array({6,5,4})}}});
+        assert(Cache::WriteReference(root,D::Specializations,specs,100));
+        assert(Cache::ReadReference(root,D::Specializations)==specs);
+        J traits=J::array({{{"id",9},{"name","Trait"},{"icon","i"},{"description","d"},
+            {"tier",1},{"order",2},{"slot","Major"}}});
+        assert(Cache::WriteReference(root,D::Traits,traits,100));
+        assert(Cache::ReadReference(root,D::Traits)==traits);
+        J stats=J::array({{{"id",1},{"name","Stat"},{"attributes",J::array({"Power","Precision"})}}});
+        auto paths=AlterEgo::Storage::Paths(root);
+        const auto legacy=paths.base/"itemstat_cache.json";
+        AlterEgo::Storage::WriteMigrationBytes(legacy,stats.dump());
+        assert(Cache::ReadReference(root,D::ItemStats)==stats);
+        assert(!std::filesystem::exists(paths.CacheDirectory()/"itemstat_cache.json"));
+        AlterEgo::Storage::WriteMigrationBytes(legacy,"[]");
+        assert(Cache::ReadReference(root,D::ItemStats)==stats);
+        J dyes=J::array({{{"id",0},{"name","Dye"},{"base",J::array({1,2,3})},
+            {"cloth",J::array({4,5,6})},{"leather",J::array({7,8,9})},{"metal",J::array({10,11,12})}}});
+        assert(Cache::WriteReference(root,D::Dyes,dyes,100));
+        assert(Cache::ReadReference(root,D::Dyes)==dyes);
+        auto badDye=dyes;badDye[0]["cloth"][1]=256;
+        assert(!Cache::WriteReference(root,D::Dyes,badDye,101));
+        assert(Cache::ReadReference(root,D::Dyes)==dyes);
+        DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
+        assert(db.Scalar("PRAGMA user_version")==5);
+        assert(db.Scalar("SELECT count(*) FROM reference_skills_professions")==2);
     }
     return 0;
 }

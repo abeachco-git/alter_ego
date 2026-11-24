@@ -1,5 +1,6 @@
 #include "GW2API.h"
 #include "SkinDataCache.h"
+#include "ReferenceMetadataCache.h"
 #include "AutoRefreshPolicy.h"
 #include "HoardAndSeekAPI.h"
 #include "ChatLink.h"
@@ -3597,10 +3598,11 @@ namespace AlterEgo {
 
     bool GW2API::SaveSpecCache() {
         EnsureDataDirectory();
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "spec_cache.json");
+        int64_t capturedAt = 0;
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
             for (const auto& [id, info] : s_spec_cache) {
                 json j;
@@ -3617,18 +3619,16 @@ namespace AlterEgo {
                 arr.push_back(std::move(j));
             }
         }
-        std::ofstream f(path);
-        if (!f.is_open()) return false;
-        f << arr.dump();
-        return true;
+        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::Specializations,arr,capturedAt);
     }
 
     bool GW2API::SaveTraitCache() {
         EnsureDataDirectory();
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "trait_cache.json");
+        int64_t capturedAt = 0;
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
             for (const auto& [id, info] : s_trait_cache) {
                 json j;
@@ -3643,18 +3643,16 @@ namespace AlterEgo {
                 arr.push_back(std::move(j));
             }
         }
-        std::ofstream f(path);
-        if (!f.is_open()) return false;
-        f << arr.dump();
-        return true;
+        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::Traits,arr,capturedAt);
     }
 
     bool GW2API::SaveSkillCache() {
         EnsureDataDirectory();
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "skill_cache.json");
+        int64_t capturedAt = 0;
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
             for (const auto& [id, info] : s_skill_cache) {
                 json j;
@@ -3669,18 +3667,16 @@ namespace AlterEgo {
                 arr.push_back(std::move(j));
             }
         }
-        std::ofstream f(path);
-        if (!f.is_open()) return false;
-        f << arr.dump();
-        return true;
+        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::Skills,arr,capturedAt);
     }
 
     bool GW2API::SaveItemStatCache() {
         EnsureDataDirectory();
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "itemstat_cache.json");
+        int64_t capturedAt = 0;
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
             for (const auto& [id, info] : s_itemstat_cache) {
                 json j;
@@ -3690,18 +3686,16 @@ namespace AlterEgo {
                 arr.push_back(std::move(j));
             }
         }
-        std::ofstream f(path);
-        if (!f.is_open()) return false;
-        f << arr.dump();
-        return true;
+        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::ItemStats,arr,capturedAt);
     }
 
     bool GW2API::SaveDyeColorsCache() {
         EnsureDataDirectory();
-        std::string path = Storage::ResolveCache(GetDataDirectory(), "dye_cache.json");
+        int64_t capturedAt = 0;
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
             for (const auto& [id, dc] : s_dye_cache) {
                 json j;
@@ -3714,10 +3708,7 @@ namespace AlterEgo {
                 arr.push_back(std::move(j));
             }
         }
-        std::ofstream f(path);
-        if (!f.is_open()) return false;
-        f << arr.dump();
-        return true;
+        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::Dyes,arr,capturedAt);
     }
 
     bool GW2API::LoadReferenceCaches() {
@@ -3727,6 +3718,11 @@ namespace AlterEgo {
             try { f >> out; return true; } catch (...) { return false; }
         };
 
+        auto readReference = [](Cache::ReferenceDataset dataset, json& out) {
+            auto snapshot=Cache::ReadReference(GetDataDirectory(),dataset);
+            if(!snapshot)return false;
+            out=std::move(*snapshot);return out.is_array();
+        };
         json j;
         if (readJson("item_cache.json", j) && j.is_array()) {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -3771,7 +3767,7 @@ namespace AlterEgo {
                 s_skin_cache[info.id] = std::move(info);
             }
         }
-        if (readJson("spec_cache.json", j) && j.is_array()) {
+        if (readReference(Cache::ReferenceDataset::Specializations, j)) {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
@@ -3791,7 +3787,7 @@ namespace AlterEgo {
                 s_spec_cache[info.id] = std::move(info);
             }
         }
-        if (readJson("trait_cache.json", j) && j.is_array()) {
+        if (readReference(Cache::ReferenceDataset::Traits, j)) {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
@@ -3807,7 +3803,7 @@ namespace AlterEgo {
                 s_trait_cache[info.id] = std::move(info);
             }
         }
-        if (readJson("skill_cache.json", j) && j.is_array()) {
+        if (readReference(Cache::ReferenceDataset::Skills, j)) {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
@@ -3829,7 +3825,7 @@ namespace AlterEgo {
                 s_skill_cache[info.id] = std::move(info);
             }
         }
-        if (readJson("itemstat_cache.json", j) && j.is_array()) {
+        if (readReference(Cache::ReferenceDataset::ItemStats, j)) {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
@@ -3841,7 +3837,7 @@ namespace AlterEgo {
                 s_itemstat_cache[info.id] = std::move(info);
             }
         }
-        if (readJson("dye_cache.json", j) && j.is_array()) {
+        if (readReference(Cache::ReferenceDataset::Dyes, j)) {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
