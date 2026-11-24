@@ -32,7 +32,7 @@ jobs:
           x86_64-w64-mingw32ucrt-g++ --version
       # Cache compiler outputs, never final executables or test results.
       - name: Restore compiler cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: /tmp/alter-ego-ccache
           key: ae-ccache-v1-${{ runner.os }}-${{ runner.arch }}-trixie-${{ github.run_id }}-${{ github.run_attempt }}
@@ -87,7 +87,7 @@ jobs:
             sqlite-benchmark.json
           if-no-files-found: error
       - name: Save compiler cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         continue-on-error: true
         with:
           path: /tmp/alter-ego-ccache
