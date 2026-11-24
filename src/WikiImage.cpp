@@ -27,7 +27,7 @@ namespace Skinventory {
     std::mutex WikiImage::s_mutex;
     std::thread WikiImage::s_workerThread;
     std::condition_variable WikiImage::s_queueCV;
-    std::atomic<bool> WikiImage::s_stopWorker{false};
+    std::atomic<bool> WikiImage::s_stopWorker{true};
     std::unordered_map<std::string, Texture_t*> WikiImage::s_currencyIcons;
     std::vector<std::string> WikiImage::s_currencyReadyQueue;
 
@@ -42,16 +42,25 @@ namespace Skinventory {
         LoadWikiDataCache();
         LoadFailedCache();
 
-        s_stopWorker = false;
-        s_workerThread = std::thread(DownloadWorker);
+        try {
+            s_stopWorker = false;
+            s_workerThread = std::thread(DownloadWorker);
+        } catch (...) {
+            RequestStop();
+            if(api)api->Log(LOGL_WARNING,"AlterEgo","Could not start wiki download worker.");
+        }
     }
 
-    void WikiImage::Shutdown() {
+    void WikiImage::RequestStop() {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_stopWorker = true;
         }
         s_queueCV.notify_all();
+    }
+
+    void WikiImage::Shutdown() {
+        RequestStop();
         if (s_workerThread.joinable()) {
             s_workerThread.join();
         }
@@ -63,6 +72,11 @@ namespace Skinventory {
         s_readyQueue.clear();
         s_currencyReadyQueue.clear();
         s_currencyIcons.clear();
+        s_wikiDataCache.clear();
+        s_failed.clear();
+        s_failedPersistent.clear();
+        s_currencyFailedPersistent.clear();
+        s_API=nullptr;
     }
 
     std::string WikiImage::GetCacheFilePath(uint32_t skinId) {
@@ -190,6 +204,7 @@ namespace Skinventory {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_loading.erase(skinId);
+            if(s_stopWorker)return; // cancellation is not a negative lookup
             s_failed[skinId] = std::chrono::steady_clock::now();
             s_failedPersistent[skinId] = nowTs;
         }
@@ -616,7 +631,7 @@ namespace Skinventory {
             std::lock_guard<std::mutex> lock(s_mutex);
 
             // Already cached or loading
-            if (s_imageCache.find(skinId) != s_imageCache.end()) return;
+            if (s_stopWorker || s_imageCache.find(skinId) != s_imageCache.end()) return;
             if (s_loading.find(skinId) != s_loading.end()) return;
 
             // Check in-session failure cooldown
@@ -648,7 +663,8 @@ namespace Skinventory {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             if(s_stopWorker) { s_loading.erase(skinId); return; }
-            s_requestQueue.push_back({skinId, skinName, weightClass});
+            try {s_requestQueue.push_back({skinId, skinName, weightClass});}
+            catch (...) {s_loading.erase(skinId);return;}
         }
         s_queueCV.notify_one();
     }
@@ -983,6 +999,7 @@ namespace Skinventory {
     }
 
     void WikiImage::DownloadCurrencyIcons(const std::string& keys) {
+        if(s_stopWorker)return;
         // Split comma-separated keys
         std::vector<std::string> keyList;
         std::istringstream iss(keys);
@@ -1023,6 +1040,7 @@ namespace Skinventory {
         std::unordered_map<std::string, std::string> resolved; // key -> imageUrl ("" if missing)
         const size_t BATCH = 50;
         for (size_t i = 0; i < toFetch.size(); i += BATCH) {
+            if(s_stopWorker)return;
             size_t end = std::min(i + BATCH, toFetch.size());
             std::string titles;
             for (size_t j = i; j < end; j++) {
@@ -1069,6 +1087,7 @@ namespace Skinventory {
         // Phase 3: per-key download / negative-cache update.
         bool failedDirty = false;
         for (const auto& key : toFetch) {
+            if(s_stopWorker)return;
             auto rit = resolved.find(key);
             if (rit == resolved.end()) {
                 // Wiki response didn't surface this key (could be title-normalisation
@@ -1080,6 +1099,7 @@ namespace Skinventory {
             if (imageUrl.empty()) {
                 {
                     std::lock_guard<std::mutex> lock(s_mutex);
+                    if(s_stopWorker)return;
                     s_currencyFailedPersistent[key] = nowTs;
                 }
                 failedDirty = true;
@@ -1088,10 +1108,12 @@ namespace Skinventory {
             std::string path = CurrencyIconCachePath(key);
             if (HttpClient::DownloadToFile(imageUrl, path)) {
                 std::lock_guard<std::mutex> lock(s_mutex);
+                if(s_stopWorker)return;
                 s_currencyReadyQueue.push_back(key);
             } else {
                 {
                     std::lock_guard<std::mutex> lock(s_mutex);
+                    if(s_stopWorker)return;
                     s_currencyFailedPersistent[key] = nowTs;
                 }
                 failedDirty = true;
@@ -1120,6 +1142,7 @@ namespace Skinventory {
             // Scrape wiki for image URL and acquisition data
             std::string matchedPage;
             std::string imageUrl = ScrapeWikiImageUrl(req.skinName, req.weightClass, matchedPage);
+            if(s_stopWorker)return;
 
             // Scrape acquisition data from the matched page (or skin-specific page)
             if (!matchedPage.empty()) {
@@ -1165,6 +1188,7 @@ namespace Skinventory {
                     !wikiData.set_name.empty() || !wikiData.vendor_name.empty()) {
                     {
                         std::lock_guard<std::mutex> lock(s_mutex);
+                        if(s_stopWorker)return;
                         s_wikiDataCache[req.skinId] = wikiData;
                     }
                     SaveWikiDataCache();
@@ -1180,6 +1204,7 @@ namespace Skinventory {
             std::string filePath = GetCacheFilePath(req.skinId);
             if (HttpClient::DownloadToFile(imageUrl, filePath)) {
                 std::lock_guard<std::mutex> lock(s_mutex);
+                if(s_stopWorker)return;
                 s_readyQueue.push_back(req.skinId);
             } else {
                 RecordFailure(req.skinId);
@@ -1190,7 +1215,7 @@ namespace Skinventory {
                 // leave this skin permanently marked as loading.
                 std::lock_guard<std::mutex> lock(s_mutex);
                 s_loading.erase(req.skinId);
-                try { s_failed[req.skinId]=std::chrono::steady_clock::now(); } catch (...) {}
+                if(!s_stopWorker)try { s_failed[req.skinId]=std::chrono::steady_clock::now(); } catch (...) {}
             }
             // Rate limit
             std::this_thread::sleep_for(std::chrono::milliseconds(500));

@@ -12656,6 +12656,8 @@ void AddonLoad(AddonAPI_t* aApi) {
 
 void AddonUnload() {
     AlterEgo::Background::Workers().RequestStop();
+    AlterEgo::IconManager::RequestStop();
+    Skinventory::WikiImage::RequestStop();
     APIDefs->GUI_DeregisterCloseOnEscape("Alter Ego");
     APIDefs->QuickAccess_Remove(QA_ID);
     APIDefs->GUI_Deregister(AddonOptions);

@@ -4,7 +4,7 @@ Baseline: `42d589366fc2345bbc00a90ee554dfe0e94bc626`. This ledger describes sour
 
 | Workstream | Status | Outstanding completion criteria / validation |
 | --- | --- | --- |
-| 1 Background worker ownership | In progress | Queue workers are explicitly joined; this pass fixes lost loading markers, wiki worker exceptions and stop notification. Audit remaining translation units, queue admission during shutdown, cancellation/failure regression and in-game unload. |
+| 1 Background worker ownership | Implemented — validation pending | Audited runtime translation units: all one-shot jobs use registry; IconManager/WikiImage are the two owned queues, with early stop admission, joined shutdown, thread-start failure and request/worker cleanup. Extended worker regression. Remaining in-game unload/artwork failure latency and external callback quiescence (workstream 2). |
 | 2 External callback lifetime | In progress | Admission/in-flight tracking and deregistration ordering across Nexus, fonts, textures and H&S; external quiescence contract remains unverified. |
 | 3 Account isolation / correlation | In progress | Character gate and exact account persistence exist; typed selection/capture, completion and skin responses, delayed identical request correlation remain. H&S v4 request/response lifetime limits require verification. |
 | 4 Incremental character persistence | Implemented — validation pending | Targeted single character writes and verified account roster deletions; previous disk and memory roster retained on deletion failure; warning on character write failure. New rollback/scope/cascade tests in database_core. Remaining: failed initial migration recovery, partial field freshness, retry of failed character writes, concurrency validation and connection overhead. |
@@ -26,3 +26,5 @@ Baseline: `42d589366fc2345bbc00a90ee554dfe0e94bc626`. This ledger describes sour
 
 - Second implementation commit adds `CacheMaintenance.h`, classified startup maintenance paths, Storage & Cache UI and startup-only recovery tests. No in-game test or final CI pass claimed yet.
 - First implementation commit `9612028c91411fcf354c8eb0e1d2111e6a109887`: live MetaBattle workflow `45463715043` succeeded; final commit requires its own workflows.
+
+- Third implementation commit closes local queue admission before deregistration, prevents shutdown-driven negative-cache publication, contains queue initialization/allocation failures and extends background worker tests. No callback-lifetime guarantee claimed.

@@ -81,3 +81,5 @@ Character persistence regression now covers incremental replacement, untouched s
 Verified roster deletion coverage checks account scope, preservation of unknown owners and row IDs, cascading child removal, idempotence, and rollback on a forced mid-transaction failure.
 
 Startup maintenance regression covers exclusive scheduling, no live deletion, targeted character invalidation, preserved account progress, artwork-only clearing, preserved wiki metadata, corrupt database/sidecar quarantine, durable file preservation and consumed requests.
+
+Background worker coverage additionally verifies throwing failure-handler containment, repeated launches, reopening and complete joining. Windows artwork queue behavior and unload latency require in-game validation.

@@ -22,7 +22,7 @@ std::chrono::steady_clock::time_point IconManager::s_LastRequestTime = std::chro
 std::string IconManager::s_IconsDir;
 std::thread IconManager::s_DownloadThread;
 std::condition_variable IconManager::s_QueueCV;
-std::atomic<bool> IconManager::s_StopWorker{false};
+std::atomic<bool> IconManager::s_StopWorker{true};
 std::vector<uint32_t> IconManager::s_ReadyQueue;
 
 
@@ -59,16 +59,27 @@ static Texture_t* LoadEmbeddedIcon(AddonAPI_t* api, uint32_t id,
 
 void IconManager::Initialize(AddonAPI_t* api) {
     s_API = api;
-    s_StopWorker = false;
-    s_DownloadThread = std::thread(DownloadWorker);
+    try {
+        // Resolve the directory before either render or download can use it.
+        GetIconsDir();
+        s_StopWorker = false;
+        s_DownloadThread = std::thread(DownloadWorker);
+    } catch (...) {
+        RequestStop();
+        if(api)api->Log(LOGL_WARNING,"AlterEgo","Could not start icon download worker.");
+    }
 }
 
-void IconManager::Shutdown() {
+void IconManager::RequestStop() {
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
         s_StopWorker = true;
     }
     s_QueueCV.notify_all();
+}
+
+void IconManager::Shutdown() {
+    RequestStop();
     if (s_DownloadThread.joinable()) {
         s_DownloadThread.join();
     }
@@ -79,6 +90,8 @@ void IconManager::Shutdown() {
     s_LoadingIcons.clear();
     s_ReadyQueue.clear();
     s_RequestQueue.clear();
+    s_FailedIcons.clear();
+    s_API=nullptr;
 }
 
 std::string IconManager::GetIconsDir() {
@@ -264,16 +277,14 @@ void IconManager::RequestIcon(uint32_t id, const std::string& iconUrl, bool prio
 
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
-        if (s_IconCache.find(id) != s_IconCache.end()) return;
+        if (s_StopWorker || s_IconCache.find(id) != s_IconCache.end()) return;
         if (s_LoadingIcons.find(id) != s_LoadingIcons.end()) {
             // Already queued — but if we're now asking for it with priority,
             // pull it forward in the queue.
             if (priority) {
                 for (auto it = s_RequestQueue.begin(); it != s_RequestQueue.end(); ++it) {
                     if (it->id == id) {
-                        QueuedRequest req = *it;
-                        s_RequestQueue.erase(it);
-                        s_RequestQueue.insert(s_RequestQueue.begin(), req);
+                        std::rotate(s_RequestQueue.begin(),it,it+1);
                         break;
                     }
                 }
@@ -311,13 +322,17 @@ void IconManager::RequestIcon(uint32_t id, const std::string& iconUrl, bool prio
 
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
-        QueuedRequest req;
-        req.id = id;
-        req.iconUrl = iconUrl;
-        if (priority)
-            s_RequestQueue.insert(s_RequestQueue.begin(), req);
-        else
-            s_RequestQueue.push_back(req);
+        if(s_StopWorker) {s_LoadingIcons.erase(id);return;}
+        try {
+            QueuedRequest req{id,iconUrl};
+            if (priority)
+                s_RequestQueue.insert(s_RequestQueue.begin(),std::move(req));
+            else
+                s_RequestQueue.push_back(std::move(req));
+        } catch (...) {
+            s_LoadingIcons.erase(id);
+            return;
+        }
     }
     s_QueueCV.notify_one();
 }
@@ -343,16 +358,18 @@ void IconManager::ProcessRequestQueue() {
 
     try {
         std::string filePath = GetIconFilePath(id);
-        if (DownloadToFile(iconUrl, filePath) && !s_StopWorker) {
+        if (DownloadToFile(iconUrl, filePath)) {
             std::lock_guard<std::mutex> lock(s_Mutex);
-            s_ReadyQueue.push_back(id);
-            return;
+            if(!s_StopWorker) {
+                s_ReadyQueue.push_back(id);
+                return;
+            }
         }
     } catch (...) {}
 
     std::lock_guard<std::mutex> lock(s_Mutex);
     s_LoadingIcons.erase(id);
-    s_FailedIcons[id] = std::chrono::steady_clock::now();
+    if(!s_StopWorker)s_FailedIcons[id] = std::chrono::steady_clock::now();
 }
 
 void IconManager::DownloadWorker() {

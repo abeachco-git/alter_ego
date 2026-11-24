@@ -41,5 +41,15 @@ int case_background_workers(int, char**) {
     assert(group.Launch([&] { ++completed; }));
     group.JoinAll();
     assert(completed == 2);
+    // A throwing cleanup is contained and counted; the next launch still works.
+    assert(group.Open());
+    assert(group.Launch([] { throw std::runtime_error("job"); },
+                        [] { throw std::runtime_error("cleanup"); }));
+    group.JoinAll();
+    assert(group.ActiveCount()==0 && group.FailureCount()==3);
+    assert(group.Open());
+    for(int i=0;i<32;++i)assert(group.Launch([&] { ++completed; }));
+    group.JoinAll();
+    assert(group.ActiveCount()==0 && completed==34);
     return 0;
 }

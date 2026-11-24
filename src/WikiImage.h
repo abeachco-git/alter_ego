@@ -27,6 +27,7 @@ namespace Skinventory {
     class WikiImage {
     public:
         static void Initialize(AddonAPI_t* api, const std::string& cacheDir);
+        static void RequestStop();
         static void Shutdown();
 
         // Request a wiki image for a skin by name (async, on-click)

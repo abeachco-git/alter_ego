@@ -17,6 +17,7 @@ namespace AlterEgo {
 class IconManager {
 public:
     static void Initialize(AddonAPI_t* api);
+    static void RequestStop();
     static void Shutdown();
 
     // Get icon texture for a given identifier (returns nullptr if not loaded yet)
