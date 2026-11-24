@@ -83,40 +83,45 @@ static bool StartFashionImport(const std::string& input, const std::string& titl
     return true;
 }
 
-static void StartLiveFashionSave(const AlterEgo::Character& ch, int tab) {
-    AlterEgo::DecodedWardrobeLink w{};
-    const std::string link = BuildWardrobeLink(ch, tab);
-    if (!AlterEgo::Fashion::DecodeValid(link, w)) {
-        if (APIDefs) APIDefs->GUI_SendAlert("Could not capture wardrobe appearance.");
-        return;
+// Capture only on explicit Save, using the chosen equipment tab. The saved
+// Fashion editor remains available for notes, associations and armor weight.
+static bool CaptureLiveFashion(const AlterEgo::Character& ch,int tab,
+    const std::string& name,AlterEgo::Fashion::Look& look) {
+    using namespace AlterEgo;
+    const std::string link=BuildWardrobeLink(ch,tab);
+    if(!Fashion::MakeLiveLook(link,name,ch.name,tab,look))return false;
+    DecodedWardrobeLink w{};
+    if(!Fashion::DecodeValid(look.wardrobe_link,w))return false;
+    look.weight=FashionWeightFromSkins(w);
+    if(look.weight=="Unknown") {
+        const auto& p=ch.profession;
+        if(p=="Elementalist"||p=="Mesmer"||p=="Necromancer")look.weight="Light";
+        else if(p=="Engineer"||p=="Ranger"||p=="Thief")look.weight="Medium";
+        else if(p=="Guardian"||p=="Warrior"||p=="Revenant")look.weight="Heavy";
     }
-    bool hasSkin = false;
-    for (uint32_t id : FashionSkinIds(w)) if (id) { hasSkin = true; break; }
-    if (!hasSkin) {
-        if (APIDefs) APIDefs->GUI_SendAlert("No loaded equipment skins for that tab. Refresh character first.");
-        return;
+    GW2API::FetchSkinDetailsAsync(FashionSkinIds(w));
+    return true;
+}
+
+static bool SelectExistingFashion(int index,const std::string& character) {
+    if(index<0||index>=static_cast<int>(g_FashionLibrary.looks.size()))return false;
+    auto existing=g_FashionLibrary.looks[index];
+    if(!character.empty()) {
+        AlterEgo::Fashion::Associate(existing,character);
+        if(!g_FashionLibrary.Update(index,existing))return false;
     }
-    AlterEgo::Fashion::Look look;
-    auto it = ch.equipment_tab_names.find(tab);
-    look.name = it != ch.equipment_tab_names.end() && !it->second.empty()
-        ? it->second : "Equipment " + std::to_string(tab);
-    look.wardrobe_link = link;
-    look.complete = false; // equipment API does not expose Fashion Template outfit/visibility
-    look.origin = "live_equipment";
-    look.source_character = ch.name;
-    look.source_tab = tab;
-    AlterEgo::Fashion::Associate(look, ch.name);
-    look.weight = FashionWeightFromSkins(w);
-    // A live equipment set determines worn armor weight even if skin metadata
-    // hasn't loaded. This is not a profession restriction on the saved look.
-    if (look.weight == "Unknown") {
-        const auto& p = ch.profession;
-        if (p == "Elementalist" || p == "Mesmer" || p == "Necromancer") look.weight = "Light";
-        else if (p == "Engineer" || p == "Ranger" || p == "Thief") look.weight = "Medium";
-        else if (p == "Guardian" || p == "Warrior" || p == "Revenant") look.weight = "Heavy";
-    }
-    AlterEgo::GW2API::FetchSkinDetailsAsync(FashionSkinIds(w));
-    StartFashionEdit(look);
+    g_FashionSelected=index;
+    NavigateToLibraryCollection(1);
+    return true;
+}
+
+static bool SaveNewFashion(const AlterEgo::Fashion::Look& look) {
+    const int index=g_FashionLibrary.Add(look);
+    if(index<0)return false;
+    g_FashionSelected=index;
+    NavigateToLibraryCollection(1);
+    if(APIDefs)APIDefs->GUI_SendAlert("Fashion saved.");
+    return true;
 }
 
 static void RenderFashionDialog() {
@@ -154,17 +159,9 @@ static void RenderFashionDialog() {
     if (duplicate >= 0) {
         ImGui::TextWrapped("Same appearance saved as '%s'.", g_FashionLibrary.looks[duplicate].name.c_str());
         if (RenderActionButton("Select Existing")) {
-            if (!g_FashionDraft.source_character.empty()) {
-                auto existing = g_FashionLibrary.looks[duplicate];
-                AlterEgo::Fashion::Associate(existing, g_FashionDraft.source_character);
-                if (!g_FashionLibrary.Update(duplicate, existing))
-                    g_FashionError = "Could not save character association.";
-            }
-            if (g_FashionError.empty()) {
-                g_FashionSelected = duplicate;
-                NavigateToLibraryCollection(1);
-                g_FashionDialog = false;
-            }
+            if(SelectExistingFashion(duplicate,g_FashionDraft.source_character))
+                g_FashionDialog=false;
+            else g_FashionError="Could not save character association.";
         }
         ImGui::SameLine();
     }

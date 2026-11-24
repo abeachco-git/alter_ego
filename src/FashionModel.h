@@ -78,6 +78,25 @@ inline void Associate(Look& look, const std::string& character) {
         look.characters.push_back(character);
 }
 
+inline bool HasCapturedSkin(const DecodedWardrobeLink& w) {
+    for(auto id:{w.helm_skin,w.shoulders_skin,w.chest_skin,w.gloves_skin,
+        w.leggings_skin,w.boots_skin,w.backpack_skin,w.aquabreather_skin,
+        w.aquatic_weapon_a,w.aquatic_weapon_b,w.weapon_a_main,w.weapon_a_off,
+        w.weapon_b_main,w.weapon_b_off})if(id)return true;
+    return false;
+}
+inline bool MakeLiveLook(const std::string& link,const std::string& name,
+    const std::string& character,int tab,Look& out) {
+    DecodedWardrobeLink w{};
+    if(name.empty()||character.empty()||tab<1||!DecodeValid(link,w)||!HasCapturedSkin(w))return false;
+    Look next;
+    next.name=name;next.wardrobe_link=ChatLink::EncodeWardrobe(w);
+    next.complete=false;next.origin="live_equipment";
+    next.source_character=character;next.source_tab=tab;
+    Associate(next,character);
+    out=std::move(next);return true;
+}
+
 inline nlohmann::json ToJson(const Look& look) {
     nlohmann::json out = look.extension;
     if (!out.is_object()) out = nlohmann::json::object();

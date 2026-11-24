@@ -28,6 +28,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "GW2API.h"
+#include "FashionModel.h"
 #include "BuildCompareCore.h"
 #include "ComposableSemantics.h"
 #include "InfusionMatchCore.h"
@@ -1354,7 +1355,10 @@ static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
 static bool g_SaveLibNameManuallyEdited = false;
 static constexpr int kSaveEntireEquipmentSet = 9;
 static std::string g_EquipmentSetSelectedId, g_SaveLibAccount;
-static int g_SaveLibTarget = 0; // 0: Loadout, 1: new component, 2: replace existing
+static constexpr int kSaveFashionTarget=3;
+static int g_SaveLibTarget = 0; // 0 Loadout, 1 new component, 2 replace existing, 3 Fashion
+static AlterEgo::Fashion::Look g_SaveLibPendingFashion;
+static std::string g_SaveLibFashionError;
 static std::string g_SaveLibUpdateId;
 static std::string g_ComponentSelectIdPending;
 static AlterEgo::SavedBuild g_SaveLibPendingCapture;
@@ -3944,11 +3948,12 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Fashion menu: share the right-clicked tab's look as a wardrobe template chat link.
     if (ImGui::BeginPopup("##fashion_menu")) {
         int fTab = (g_FashionTab > 0) ? g_FashionTab : tab;
-        if (ImGui::MenuItem("Save to Library...", nullptr, false, !ch.build_tabs.empty())) {
+        if (ImGui::MenuItem("Save to Library...", nullptr, false, !ch.build_tabs.empty()||!ch.equipment.empty())) {
             int idx = 0;
             for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
                 if (ch.build_tabs[i].is_active) { idx = i; break; }
-            OpenSaveLiveBuildDialog(ch, ch.build_tabs[idx], fTab);
+            OpenSaveLiveBuildDialog(ch,ch.build_tabs.empty()?AlterEgo::BuildTemplate{}:ch.build_tabs[idx],
+                fTab,ch.build_tabs.empty()?kSaveEntireEquipmentSet:-1);
         }
         if(ImGui::MenuItem("Save Equipment Set...",nullptr,false,!ch.equipment.empty()))
             OpenSaveLiveBuildDialog(ch,AlterEgo::BuildTemplate{},fTab,kSaveEntireEquipmentSet);
@@ -4541,6 +4546,7 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     g_SaveLibTarget = componentKind >= 0 ? 1 : 0;
     g_SaveLibComponentKind = componentKind >= 0 ? componentKind : 0;
     g_SaveLibUpdateId.clear();
+    g_SaveLibFashionError.clear();
     g_SaveLibEquipTab = requestedEquipment;
     g_SaveLibDialogOpen = true;
 }
@@ -4750,7 +4756,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Save Current Build + Gear to Library...\n"
-            "Save a complete Loadout, equipment set, or individual component.");
+            "Save a complete Loadout, equipment set, individual component, or Fashion.");
 
     if (!stacked) ImGui::SameLine();
     if (RenderActionButton("Share##live_share", ImVec2(buttonWidth, 0))) {
@@ -4876,15 +4882,9 @@ static void RenderCharacterHeaderActions(const AlterEgo::Character& ch, float bu
     ImGui::PushID("##character_header_actions");
     // GroupOffset preserves the manually positioned header X across multiple
     // ImGui::Button calls. Without this, only Save stays right-aligned and the
-    // following Share / Save Active Fashion buttons jump to the left margin.
+    // following Share button jumps to the left margin.
     ImGui::BeginGroup();
     RenderSaveLiveBuildAction(ch, 0, true, buttonWidth);
-    if (RenderActionButton("Save Active Fashion##live_fashion",
-                           ImVec2(buttonWidth, 0))) {
-        StartLiveFashionSave(ch, ActiveEquipmentTab(ch));
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Save the character's active in-game equipment tab appearance to Library > Fashion.");
     ImGui::EndGroup();
     ImGui::PopID();
 }
@@ -8562,10 +8562,10 @@ static void RenderSaveToLibraryDialog() {
     };
     auto width=[](){return ImMax(1.0f,ImGui::GetContentRegionAvail().x);};
     field("Save as");
-    const char* targets[]={"Complete Loadout","New component","Update existing component"};
+    const char* targets[]={"Complete Loadout","New component","Update existing component","Fashion"};
     if(RenderThemedCombo("##save_target",targets[g_SaveLibTarget],width())) {
-        for(int i=0;i<3;++i)if(UI::SelectableOption(targets[i],g_SaveLibTarget==i)) {
-            if(g_SaveLibTarget!=i)g_SaveLibUpdateId.clear();
+        for(int i=0;i<IM_ARRAYSIZE(targets);++i)if(UI::SelectableOption(targets[i],g_SaveLibTarget==i)) {
+            if(g_SaveLibTarget!=i){g_SaveLibUpdateId.clear();g_SaveLibFashionError.clear();}
             g_SaveLibTarget=i;
             if(i==2&&g_SaveLibComponentKind==kSaveEntireEquipmentSet)g_SaveLibComponentKind=0;
         }
@@ -8575,7 +8575,8 @@ static void RenderSaveToLibraryDialog() {
         "Trinkets","Relic","Infusions","Entire Equipment Set"};
     static const char* keys[]={"base_build","skills","weapons","sigils","armor","runes",
         "trinkets","relic","infusions"};
-    if(g_SaveLibTarget!=0) {
+    const bool fashion=g_SaveLibTarget==kSaveFashionTarget;
+    if(g_SaveLibTarget!=0&&!fashion) {
         field("Component");
         if(RenderThemedCombo("##save_component_type",kinds[g_SaveLibComponentKind],width())) {
             auto option=[&](int i) {
@@ -8592,8 +8593,8 @@ static void RenderSaveToLibraryDialog() {
         }
     }
     const bool entireSet=g_SaveLibTarget==1&&g_SaveLibComponentKind==kSaveEntireEquipmentSet;
-    const bool needsBuild=g_SaveLibTarget==0||g_SaveLibComponentKind<2;
-    const bool needsEquipment=g_SaveLibTarget==0||g_SaveLibComponentKind>=2;
+    const bool needsBuild=!fashion&&(g_SaveLibTarget==0||g_SaveLibComponentKind<2);
+    const bool needsEquipment=fashion||g_SaveLibTarget==0||g_SaveLibComponentKind>=2;
     auto nameForBuild=[](const BuildTemplate& bt) {
         return bt.name.empty()?"Tab "+std::to_string(bt.tab):bt.name;
     };
@@ -8705,6 +8706,7 @@ static void RenderSaveToLibraryDialog() {
             const std::string source=needsBuild?(bt?nameForBuild(*bt):"Build"):equipName(g_SaveLibEquipTab);
             std::string suggested=sourceChar->name+" - "+source;
             if(g_SaveLibTarget==1)suggested+=" - "+std::string(entireSet?"Equipment Set":kinds[g_SaveLibComponentKind]);
+            else if(fashion)suggested+=" - Fashion";
             snprintf(g_SaveLibName,sizeof(g_SaveLibName),"%s",suggested.c_str());
         }
         field("Name");
@@ -8756,7 +8758,16 @@ static void RenderSaveToLibraryDialog() {
     const bool saveClicked=RenderActionButton(g_SaveLibTarget==2?
         "Review Update##saveToLibrary":"Save##saveToLibrary",ImVec2(g_SaveLibTarget==2?115:80,0));
     if(!ready){ImGui::PopStyleVar();ImGui::PopItemFlag();}
-    if(saveClicked&&ready) {
+    if(saveClicked&&ready&&fashion) {
+        g_SaveLibFashionError.clear();
+        if(!CaptureLiveFashion(*sourceChar,g_SaveLibEquipTab,g_SaveLibName,g_SaveLibPendingFashion))
+            g_SaveLibFashionError="No loaded equipment skins for that tab. Refresh character data and try again.";
+        else if(g_FashionLibrary.FindExact(g_SaveLibPendingFashion.wardrobe_link)>=0)
+            ImGui::OpenPopup("Existing Fashion##save_library");
+        else if(SaveNewFashion(g_SaveLibPendingFashion))g_SaveLibDialogOpen=false;
+        else g_SaveLibFashionError="Could not save Fashion. Original library data is preserved.";
+    }
+    if(saveClicked&&ready&&!fashion) {
         std::string name = g_SaveLibName;
         if (name.empty()) name = g_SaveLibTarget == 0 ? "Unnamed Loadout" : "Unnamed Component";
 
@@ -8823,6 +8834,27 @@ static void RenderSaveToLibraryDialog() {
     if (RenderActionButton("Cancel##saveToLibrary", ImVec2(80, 0))) {
         g_SaveLibDialogOpen = false;
     }
+    if(ImGui::BeginPopupModal("Existing Fashion##save_library",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+        const int duplicate=g_FashionLibrary.FindExact(g_SaveLibPendingFashion.wardrobe_link);
+        if(duplicate>=0) {
+            ImGui::TextWrapped("Same appearance saved as '%s'.",g_FashionLibrary.looks[duplicate].name.c_str());
+            if(RenderActionButton("Select Existing")) {
+                if(SelectExistingFashion(duplicate,g_SaveLibPendingFashion.source_character))g_SaveLibDialogOpen=false;
+                else g_SaveLibFashionError="Could not save character association.";
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+        }
+        if(RenderActionButton("Save Separate Copy")) {
+            if(SaveNewFashion(g_SaveLibPendingFashion))g_SaveLibDialogOpen=false;
+            else g_SaveLibFashionError="Could not save Fashion.";
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();if(RenderActionButton("Cancel##fashion_duplicate"))ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if(fashion&&!g_SaveLibFashionError.empty())
+        ImGui::TextWrapped("%s",g_SaveLibFashionError.c_str());
     if (g_SaveLibUpdateConfirmPending) {
         ImGui::OpenPopup("Replace shared component?##save_component");
         g_SaveLibUpdateConfirmPending = false;
@@ -16626,8 +16658,9 @@ void AddonRender() {
                             AlterEgo::GW2API::RequestCharacterRefreshSelected({ch.name});
                             if (g_SelectedCharIdx == di) g_DetailsFetched = false;
                         }
-                        if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild >= 0))
-                            OpenSaveLiveBuildDialog(ch, ch.build_tabs[activeBuild]);
+                        if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild>=0||!ch.equipment.empty()))
+                            OpenSaveLiveBuildDialog(ch,activeBuild>=0?ch.build_tabs[activeBuild]:AlterEgo::BuildTemplate{},
+                                activeEquip,activeBuild>=0?-1:kSaveEntireEquipmentSet);
                         if (ImGui::BeginMenu("Share", activeBuild >= 0)) {
                             static AlterEgo::SavedBuild contextSnapshot;
                             static std::string contextKey;
@@ -16640,8 +16673,6 @@ void AddonRender() {
                             RenderBuildShareMenuItems(contextSnapshot, &ch);
                             ImGui::EndMenu();
                         }
-                        if (ImGui::MenuItem("Save Active Fashion..."))
-                            StartLiveFashionSave(ch, activeEquip);
                         ImGui::EndPopup();
                     }
 
@@ -17073,7 +17104,7 @@ void AddonRender() {
                         const ImVec2 headerStart = ImGui::GetCursorScreenPos();
                         const float startY = ImGui::GetCursorPosY();
                         const float availW = ImGui::GetContentRegionAvail().x;
-                        const float actionWidth = ImGui::CalcTextSize("Save Active Fashion").x +
+                        const float actionWidth = ImMax(ImGui::CalcTextSize("Save").x,ImGui::CalcTextSize("Share").x) +
                             2.0f * ImGui::GetStyle().FramePadding.x + 12.0f;
                         const bool actionsOnRight = availW >= avatarSize + actionWidth + 205.0f;
 

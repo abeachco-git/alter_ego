@@ -32,6 +32,15 @@ int case_fashion_library(int, char**) {
     assert(!DecodeValid("[&Dw==]", decoded));
     assert(!DecodeValid("[&D1gD***]", decoded));
     assert(CanonicalLink(std::string("Link: ") + link) == link);
+    Look captured;
+    assert(MakeLiveLook(link,"Alt outfit","Character One",3,captured));
+    assert(captured.name=="Alt outfit"&&captured.source_tab==3&&captured.source_character=="Character One");
+    assert(captured.origin=="live_equipment"&&!captured.complete&&captured.characters.size()==1);
+    assert(captured.wardrobe_link==link);
+    assert(!MakeLiveLook(link,"Alt outfit","Character One",0,captured));
+    DecodedWardrobeLink empty{};
+    assert(!MakeLiveLook(ChatLink::EncodeWardrobe(empty),"Empty","Character One",2,captured));
+    assert(captured.source_tab==3);
     Look look;
     look.name = "Test Wardrobe";
     look.weight = "Heavy";
