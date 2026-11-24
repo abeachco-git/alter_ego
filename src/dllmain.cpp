@@ -10936,13 +10936,6 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                 GetSpecNameForWarning(currentId), currentId,
                 GetSpecNameForWarning(cachedId), cachedId);
     }
-    ImGui::Checkbox("Show matches##compare", &g_LibCompareShowMatches);
-    if (!saved.gear.empty()) {
-        ImGui::SameLine();
-        ImGui::Checkbox("Exact item IDs##compare", &g_LibCompareExactItems);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Require identical item IDs instead of matching equivalent equipment stats.");
-    }
 
     // A detailed comparison can perform many metadata lookups. Reuse its result
     // while the inputs are unchanged, rather than recomputing every render frame.
@@ -10989,22 +10982,6 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     }
     const auto& result = cache.result;
 
-    const auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
-    const bool busy = fetchStatus == AlterEgo::FetchStatus::InProgress;
-    ImGui::Text("%zu differences", result.DifferenceCount());
-    ImGui::SameLine();
-    ImGui::TextDisabled("· %zu unverified · %zu fields",
-        result.UnverifiedCount(), result.Rows().size());
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Saved vs. retrieved Hoard & Seek character data.\n"
-                          "Unknown legacy fields are skipped rather than counted as matches.\n"
-                          "Unverified fields lack enough API data to determine a match.");
-    if (saved.gear.empty())
-        ImGui::TextDisabled("Saved build has no gear; equipment comparison skipped.");
-    else if (character->equipment.empty())
-        ImGui::TextDisabled("Retrieved character has no equipment data; gear comparison skipped.");
     // One independently expandable section per v3 component; fields retain
     // the same semantic comparison rules as the active-character matcher.
     struct CompareSection {
@@ -11073,47 +11050,79 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         else ++found->matches;
     }
     size_t matchingComponents = 0, differentComponents = 0;
-    size_t unknownComponents = 0;
+    size_t unknownComponents = 0, actionableComponents = 0;
     for (const auto& section : sections) {
-        if (section.kind != "other" && !section.recorded) ++unknownComponents;
-        else if (section.differences) ++differentComponents;
-        else if (section.unverified || section.rows.empty()) ++unknownComponents;
+        if (section.differences) ++differentComponents;
+        else if ((section.kind != "other" && !section.recorded) ||
+                 section.unverified || section.rows.empty()) ++unknownComponents;
         else ++matchingComponents;
+        if (section.differences || section.unverified) ++actionableComponents;
     }
-    ImGui::Text("%zu matching components", matchingComponents);
-    ImGui::SameLine();
-    ImGui::TextDisabled(" | %zu different | %zu unverified / not checked",
-                        differentComponents, unknownComponents);
+    const size_t differences = result.DifferenceCount();
+    const size_t unverified = result.UnverifiedCount();
+    const ImVec4 warningColor(1.0f, 0.80f, 0.34f, 1.0f);
+    const ImVec4 differenceColor(1.0f, 0.58f, 0.50f, 1.0f);
+    if (differences)
+        ImGui::TextColored(differenceColor, "%zu difference%s",
+            differences, differences == 1 ? "" : "s");
+    else if (unknownComponents)
+        ImGui::TextColored(warningColor, "No verified differences");
+    else
+        ImGui::TextUnformatted("All compared components match");
+    if (unverified) {
+        ImGui::SameLine();
+        ImGui::TextColored(warningColor, "| %zu unverified", unverified);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Compared against retrieved character data. Unverified fields lack sufficient API data.");
+    ImGui::TextDisabled("%zu matching / %zu different / %zu not fully checked",
+        matchingComponents, differentComponents, unknownComponents);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Components with no saved data, no comparison rows, or unverified fields are not counted as matches.");
+    if (saved.gear.empty())
+        ImGui::TextDisabled("No saved equipment snapshot.");
+    else if (character->equipment.empty())
+        ImGui::TextDisabled("No retrieved equipment data.");
+    ImGui::Checkbox("Show all components##compare", &g_LibCompareShowMatches);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Include matching fields and components with no recorded data.");
     ImGui::Separator();
+    if (!actionableComponents && !g_LibCompareShowMatches)
+        ImGui::TextDisabled("Nothing to change in the verified fields.");
 
     for (const auto& section : sections) {
+        if (!g_LibCompareShowMatches && !section.differences && !section.unverified)
+            continue;
         ImGui::PushID(section.kind.c_str());
         const std::string status =
-            (section.kind != "other" && !section.recorded) ? "Not recorded"
-            : section.differences
-                ? std::to_string(section.differences) + " differences"
+            section.differences
+                ? std::to_string(section.differences) + (section.differences == 1 ? " difference" : " differences")
             : section.unverified
                 ? std::to_string(section.unverified) + " unverified"
-                : section.rows.empty()
-                    ? (section.recorded ? "Not checked" : "Not recorded")
-                    : "Matches";
+            : (section.kind != "other" && !section.recorded) ? "Not recorded"
+            : section.rows.empty()
+                ? "Not checked"
+                : "Matches";
         const std::string title = section.label + "  -  " + status +
             "###component_compare_section";
-        const ImGuiTreeNodeFlags flags =
-            (section.kind != "other" && !section.recorded)
-                ? ImGuiTreeNodeFlags_None
-                : (section.differences || section.unverified)
-                    ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+        const ImGuiTreeNodeFlags flags = section.differences
+            ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
         const bool expanded = ImGui::CollapsingHeader(title.c_str(), flags);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%zu match%s, %zu difference%s, %zu unverified\n%s",
+            ImGui::SetTooltip("%zu match%s, %zu difference%s, %zu unverified\nSaved component: %s",
                 section.matches, section.matches == 1 ? "" : "es",
                 section.differences, section.differences == 1 ? "" : "s",
                 section.unverified,
                 section.sourceName.empty() ? "No saved component name" :
                     section.sourceName.c_str());
+        if (!section.sourceId.empty() &&
+            ImGui::BeginPopupContextItem("##component_actions")) {
+            if (ImGui::MenuItem("Open saved component"))
+                ComponentUIOpenLibrary(section.kind, section.sourceId);
+            ImGui::EndPopup();
+        }
         if (expanded) {
-            if (!section.sourceName.empty()) {
+            if (g_LibCompareShowMatches && !section.sourceName.empty()) {
                 ImGui::TextDisabled("Saved: %s", section.sourceName.c_str());
                 if (!section.sourceId.empty()) {
                     ImGui::SameLine();
@@ -11128,8 +11137,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     ? "No verifiable fields in retrieved character data."
                     : "No fields saved for this component.");
             } else if (ImGui::BeginTable("##comparison_section", 3,
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_Resizable)) {
+                ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Resizable)) {
                 ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.1f);
                 ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
                 ImGui::TableSetupColumn("Live", ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -11140,8 +11148,11 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     ++displayed;
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
-                    ImGui::TextWrapped("%s / %s", row->group.c_str(),
-                                       row->field.c_str());
+                    if (row->group == section.label)
+                        ImGui::TextWrapped("%s", row->field.c_str());
+                    else
+                        ImGui::TextWrapped("%s / %s", row->group.c_str(),
+                                           row->field.c_str());
                     ImGui::TableSetColumnIndex(1);
                     ImGui::TextWrapped("%s", row->saved.c_str());
                     ImGui::TableSetColumnIndex(2);
@@ -11157,7 +11168,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                 if (!displayed) {
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
-                    ImGui::TextDisabled("All verified fields match. Enable Show matches to inspect.");
+                    ImGui::TextDisabled("No differences in displayed fields.");
                 }
                 ImGui::EndTable();
             }
@@ -11425,31 +11436,28 @@ static void RenderCompareTab() {
                 saved = &b; break;
             }
     }
-    // Character stays first in the original three-column selector row.
     const AlterEgo::Character* character = target;
     if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
         g_LibCompareBuildTab = -1;
+    const int activeBuild = GetActiveBuildIndex(*character);
+    if (activeBuild < 0) return;
     const auto& live = character->build_tabs[g_LibCompareBuildTab < 0
-        ? GetActiveBuildIndex(*character) : g_LibCompareBuildTab];
-    if (ImGui::BeginTable("##compareSelectors", 3,
+        ? activeBuild : g_LibCompareBuildTab];
+    const ImVec4 compareLabelColor = ImGui::ColorConvertU32ToFloat4(
+        AlterEgo::CompletionTheme::kAvailableText);
+    if (ImGui::BeginTable("##compareSelectors", 2,
         ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
-        // Separate label and combo rows guarantee identical vertical baselines
-        // for Character, Build tab and Equipment regardless of font scaling.
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        const ImVec4 compareLabelColor = ImGui::ColorConvertU32ToFloat4(
-            AlterEgo::CompletionTheme::kAvailableText);
         ImGui::TextColored(compareLabelColor, "Character");
         ImGui::TableNextColumn();
-        ImGui::TextColored(compareLabelColor, "Build Tab");
-        ImGui::TableNextColumn();
-        ImGui::TextColored(compareLabelColor, "Equipment Tab");
+        ImGui::TextColored(compareLabelColor, "Saved Loadout");
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
     // Keep native ImGui popup/keyboard behavior, but draw profession names in
     // the same colors as the character list, including the closed preview.
-    const char* autoPrefix = "Active (auto) - ";
+    const char* autoPrefix = "Active: ";
     const ImVec2 previewMin = ImGui::GetCursorScreenPos();
     const float previewWidth = ImGui::GetContentRegionAvail().x;
     const float previewHeight = ImGui::GetFrameHeight();
@@ -11492,12 +11500,52 @@ static void RenderCompareTab() {
         character->profession, character->name,
         g_LibCompareChar.empty() ? autoPrefix : nullptr, true);
     ImGui::TableNextColumn();
+    const std::string chosenName = saved ?
+        (g_LibCompareSavedManual ? "" : "Auto: ") +
+            saved->name :
+        "Choose a saved loadout";
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
+        if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
+            g_LibCompareSavedManual = false;
+            g_LibCompareBuildId.clear();
+        }
+        for (const auto& b : builds) {
+            if (b.profession != target->profession) continue;
+            const bool selected = saved && b.id == saved->id;
+            const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
+            if (ImGui::Selectable(label.c_str(), selected)) {
+                g_LibCompareBuildId = b.id;
+                g_LibCompareSavedManual = true;
+                saved = &b;
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndTable();
+    }
+    ImGui::Spacing();
+    const bool customTabs = g_LibCompareBuildTab >= 0 || g_LibCompareEquipTab != 0;
+    const char* optionsLabel = customTabs || g_LibCompareExactItems
+        ? "Comparison options (custom)###compare_options"
+        : "Comparison options###compare_options";
+    if (ImGui::CollapsingHeader(optionsLabel)) {
+        if (ImGui::BeginTable("##compareTabs", 2,
+            ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(compareLabelColor, "Build Tab");
+            ImGui::TableNextColumn();
+            ImGui::TextColored(compareLabelColor, "Equipment Tab");
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1.0f);
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
         return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
     };
     std::string currentTabLabel = g_LibCompareBuildTab < 0
-        ? "Active (auto) - " + tabLabel(live) : tabLabel(live);
+        ? "Active: " + tabLabel(live) : tabLabel(live);
     if (ImGui::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
         if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
             g_LibCompareBuildTab = -1;
@@ -11529,7 +11577,7 @@ static void RenderCompareTab() {
     };
     std::string equipmentLabel = equipmentTabName(selectedEquipTab);
     if (g_LibCompareEquipTab == 0)
-        equipmentLabel = "Active (auto) - " + equipmentLabel;
+        equipmentLabel = "Active: " + equipmentLabel;
     if (ImGui::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
         if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
             g_LibCompareEquipTab = 0;
@@ -11541,34 +11589,13 @@ static void RenderCompareTab() {
         }
         ImGui::EndCombo();
     }
-    ImGui::EndTable();
-    }
-
-    ImGui::Spacing();
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(
-        AlterEgo::CompletionTheme::kAvailableText), "Saved Build");
-    const std::string chosenName = saved ?
-        (g_LibCompareSavedManual ? "" : "Auto-match - ") +
-            saved->name + " (" + saved->profession + ")" :
-        "No matching saved build - select manually";
-    ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
-        if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
-            g_LibCompareSavedManual = false;
-            g_LibCompareBuildId.clear();
+        ImGui::EndTable();
         }
-        for (const auto& b : builds) {
-            if (b.profession != target->profession) continue;
-            const bool selected = saved && b.id == saved->id;
-            const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
-            if (ImGui::Selectable(label.c_str(), selected)) {
-                g_LibCompareBuildId = b.id;
-                g_LibCompareSavedManual = true;
-                saved = &b;
-            }
-            if (selected) ImGui::SetItemDefaultFocus();
+        if (saved && !saved->gear.empty()) {
+            ImGui::Checkbox("Exact item IDs##compare", &g_LibCompareExactItems);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Require identical item IDs instead of equivalent equipment stats.");
         }
-        ImGui::EndCombo();
     }
     if (!saved) {
         if (builds.empty())
@@ -11577,9 +11604,6 @@ static void RenderCompareTab() {
             ImGui::TextDisabled("No saved build matches %s. Choose one above or save a build for this character.",
                 target->name.c_str());
         return;
-    }
-    if (saved->gear.empty()) {
-        ImGui::TextDisabled("This saved build has no equipment snapshot; only the saved skills/traits can be compared.");
     }
     ImGui::Spacing();
     ImGui::BeginChild("##CompareResultScroll", ImVec2(0, 0), false);
