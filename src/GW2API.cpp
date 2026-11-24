@@ -3,7 +3,9 @@
 #include "HoardAndSeekAPI.h"
 #include "ChatLink.h"
 #include "BuildGroupOrder.h"
-#include "ComposableStore.h"
+#include "NativeLibraryStore.h"
+#include "NativeLibraryEditing.h"
+#include "LibraryBackup.h"
 
 #include <windows.h>
 #include <wininet.h>
@@ -33,8 +35,7 @@ namespace AlterEgo {
         std::atomic<long long> g_busyRetryAtMs{0};
         std::atomic<uint64_t> g_characterDataRevision{1};
         std::atomic<uint64_t> g_buildLibraryRevision{1};
-        // v3 is authoritative. SavedBuild remains a resolved compatibility
-        // view for the existing UI, GW2 imports and comparison paths.
+        // Read-only presentation projection of the committed native library.
         Composable::Document g_loadoutDocument;
         bool g_loadoutDocumentLoaded = false;
         std::mutex g_loadoutPersistenceMutex;
@@ -2656,82 +2657,49 @@ namespace AlterEgo {
         return s_saved_builds;
     }
 
+    static json SerializeSavedBuild(const SavedBuild& b);
+    static bool DeserializeSavedBuild(const json& j,SavedBuild& b);
+    static std::string LookupComponentDisplayName(const std::string&,uint32_t);
+
     int GW2API::AddSavedBuild(SavedBuild build) {
-        if (build.id.empty()) {
-            build.id = std::to_string(std::time(nullptr)) + "_" +
-                       std::to_string(s_saved_builds.size());
-        }
-        if (build.created == 0) build.created = std::time(nullptr);
-
-        int insertIdx;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            // Find the last existing build with the same profession and insert
-            // right after it; otherwise append.
-            insertIdx = (int)s_saved_builds.size();
-            for (int i = (int)s_saved_builds.size() - 1; i >= 0; i--) {
-                if (s_saved_builds[i].profession == build.profession) {
-                    insertIdx = i + 1;
-                    break;
-                }
+        int position=-1;
+        const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(build.id.empty()) {
+                const auto prefix=std::to_string(std::time(nullptr))+"_";
+                unsigned n=static_cast<unsigned>(doc.loadouts.size());
+                do {build.id=prefix+std::to_string(n++);}while(Composable::FindLoadout(doc,build.id));
             }
-            s_saved_builds.insert(s_saved_builds.begin() + insertIdx, std::move(build));
-        }
-        return SaveBuildLibrary() ? insertIdx : -1;
+            if(Composable::FindLoadout(doc,build.id))return false;
+            if(!build.created)build.created=std::time(nullptr);
+            position=static_cast<int>(doc.loadouts.size());
+            for(int i=position-1;i>=0;--i)if(Composable::ProfessionOf(doc,doc.loadouts[i])==build.profession){position=i+1;break;}
+            if(!NativeLibrary::PutLoadout(doc,SerializeSavedBuild(build),error,LookupComponentDisplayName))return false;
+            auto item=std::move(doc.loadouts.back());doc.loadouts.pop_back();
+            doc.loadouts.insert(doc.loadouts.begin()+position,std::move(item));
+            return true;
+        });
+        return ok?position:-1;
     }
-
-    bool GW2API::RefreshSavedBuildFromSource(const std::string& id, const SavedBuild& updated) {
-        bool found = false;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (auto& build : s_saved_builds) {
-                if (build.id != id || build.source_url.empty() ||
-                    build.source_url != updated.source_url) continue;
-                SavedBuild merged = updated;
-                merged.id = build.id;
-                merged.name = build.name;
-                merged.notes = build.notes;
-                merged.game_mode = build.game_mode;
-                merged.game_modes = build.game_modes;
-                // A source refresh must not discard user-entered infusion targets.
-                if (build.infusion_summary_present) {
-                    merged.infusion_summary_present = true;
-                    merged.infusion_ar_total = build.infusion_ar_total;
-                    merged.infusion_stat_totals = build.infusion_stat_totals;
-                }
-                merged.created = build.created;
-                merged.source_character = build.source_character;
-                build = std::move(merged);
-                found = true;
-                break;
-            }
-        }
-        return found && SaveBuildLibrary();
+    bool GW2API::RefreshSavedBuildFromSource(const std::string& id,const SavedBuild& updated) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            auto* l=Composable::FindLoadout(doc,id);json raw;SavedBuild old;
+            if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,old)||
+               old.source_url.empty()||old.source_url!=updated.source_url)return false;
+            auto merged=updated;merged.id=old.id;merged.name=old.name;merged.notes=old.notes;
+            merged.game_mode=old.game_mode;merged.game_modes=old.game_modes;
+            merged.created=old.created;merged.source_character=old.source_character;
+            if(old.infusion_summary_present){merged.infusion_summary_present=true;merged.infusion_ar_total=old.infusion_ar_total;merged.infusion_stat_totals=old.infusion_stat_totals;}
+            return NativeLibrary::PutLoadout(doc,NativeLibrary::PatchDraft(raw,SerializeSavedBuild(old),SerializeSavedBuild(merged)),error,LookupComponentDisplayName);
+        });
     }
-
     bool GW2API::RemoveSavedBuild(const std::string& id) {
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            auto it = std::remove_if(s_saved_builds.begin(), s_saved_builds.end(),
-                [&](const SavedBuild& b) { return b.id == id; });
-            if (it == s_saved_builds.end()) return false;
-            s_saved_builds.erase(it, s_saved_builds.end());
-        }
-        return SaveBuildLibrary();
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){return Composable::RemoveLoadout(doc,id,error);});
     }
-
-    bool GW2API::UpdateSavedBuild(const std::string& id, const std::string& name, const std::string& notes) {
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (auto& b : s_saved_builds) {
-                if (b.id == id) {
-                    b.name = name;
-                    b.notes = notes;
-                    break;
-                }
-            }
-        }
-        return SaveBuildLibrary();
+    bool GW2API::UpdateSavedBuild(const std::string& id,const std::string& name,const std::string& notes) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string&){
+            auto* l=Composable::FindLoadout(doc,id);if(!l)return false;
+            l->metadata["name"]=name;l->metadata["notes"]=notes;return true;
+        });
     }
 
     std::string GW2API::EncodeSavedBuildToChatLink(const SavedBuild& b) {
@@ -2925,117 +2893,43 @@ namespace AlterEgo {
         return b;
     }
 
-    bool GW2API::ReplaceSavedBuildDefinition(const std::string& id, const SavedBuild& def) {
-        // Copy the definition fields into the stored build under the lock, then
-        // snapshot it so the chat-link encode (which itself locks s_mutex via
-        // GetSpecInfo/GetPaletteIdFromSkill) runs OUTSIDE the lock — avoids deadlock.
-        SavedBuild snapshot;
-        bool found = false;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (auto& b : s_saved_builds) {
-                if (b.id != id) continue;
-                b.profession = def.profession;
-                for (int i = 0; i < 3; i++) b.specializations[i] = def.specializations[i];
-                b.terrestrial_skills = def.terrestrial_skills;
-                b.aquatic_skills = def.aquatic_skills;
-                b.pets = def.pets;
-                for (int i = 0; i < 4; i++) b.legend_codes[i] = def.legend_codes[i];
-                b.weapons = def.weapons;
-                // Gear (so in-editor gear changes persist on Save).
-                b.gear = def.gear;
-                b.infusion_totals = def.infusion_totals;
-                b.infusion_summary_present = def.infusion_summary_present;
-                b.infusion_ar_total = def.infusion_ar_total;
-                b.infusion_stat_totals = def.infusion_stat_totals;
-                b.rune_name = def.rune_name;
-                b.rune_id = def.rune_id;
-                b.relic_name = def.relic_name;
-                b.relic_id = def.relic_id;
-                b.game_modes = def.game_modes.empty() ? std::vector<GameMode>{def.game_mode} : def.game_modes;
-                b.game_mode = b.game_modes.front();
-                snapshot = b;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return false;
-        std::string link = EncodeSavedBuildToChatLink(snapshot);
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (auto& b : s_saved_builds)
-                if (b.id == id) { b.chat_link = link; break; }
-        }
-        return SaveBuildLibrary();
+    bool GW2API::ReplaceSavedBuildDefinition(const std::string& id,const SavedBuild& def) {
+        SavedBuild draft=def;draft.id=id;return SaveEditedLoadout(draft);
     }
-
-    bool GW2API::SetSavedBuildGameMode(const std::string& id, GameMode mode) {
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (auto& b : s_saved_builds) {
-                if (b.id == id) { b.game_mode = mode; b.game_modes = {mode}; break; }
-            }
-        }
-        return SaveBuildLibrary();
+    bool GW2API::SetSavedBuildGameMode(const std::string& id,GameMode mode) {
+        return SetSavedBuildGameModes(id,{mode});
     }
-
-    bool GW2API::SetSavedBuildGameModes(const std::string& id, const std::vector<GameMode>& modes) {
-        if (modes.empty()) return false;
-        std::vector<GameMode> unique;
-        for (auto mode : modes)
-            if (std::find(unique.begin(), unique.end(), mode) == unique.end())
-                unique.push_back(mode);
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            bool found = false;
-            for (auto& b : s_saved_builds) {
-                if (b.id != id) continue;
-                b.game_modes = unique;
-                b.game_mode = unique.front();
-                found = true;
-                break;
-            }
-            if (!found) return false;
-        }
-        return SaveBuildLibrary();
+    bool GW2API::SetSavedBuildGameModes(const std::string& id,const std::vector<GameMode>& modes) {
+        if(modes.empty())return false;
+        return CommitComposableEdit([&](Composable::Document& doc,std::string&){
+            auto* l=Composable::FindLoadout(doc,id);if(!l)return false;
+            json values=json::array();
+            for(auto mode:modes)if(std::find(values.begin(),values.end(),json(GameModeToStr(mode)))==values.end())values.push_back(GameModeToStr(mode));
+            l->metadata["game_modes"]=values;l->metadata["game_mode"]=values.front();return true;
+        });
     }
-
-    bool GW2API::ReorderSavedBuild(int fromIdx, int toIdx) {
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            int n = (int)s_saved_builds.size();
-            if (fromIdx < 0 || fromIdx >= n || toIdx < 0 || toIdx > n) return false;
-            SavedBuild moved = std::move(s_saved_builds[fromIdx]);
-            s_saved_builds.erase(s_saved_builds.begin() + fromIdx);
-            int insertAt = (fromIdx < toIdx) ? toIdx - 1 : toIdx;
-            if (insertAt > (int)s_saved_builds.size()) insertAt = (int)s_saved_builds.size();
-            s_saved_builds.insert(s_saved_builds.begin() + insertAt, std::move(moved));
-        }
-        return SaveBuildLibrary();
+    bool GW2API::ReorderSavedBuild(int fromIdx,int toIdx) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string&){
+            int n=static_cast<int>(doc.loadouts.size());
+            if(fromIdx<0||fromIdx>=n||toIdx<0||toIdx>n)return false;
+            auto item=std::move(doc.loadouts[fromIdx]);doc.loadouts.erase(doc.loadouts.begin()+fromIdx);
+            doc.loadouts.insert(doc.loadouts.begin()+(fromIdx<toIdx?toIdx-1:toIdx),std::move(item));return true;
+        });
     }
-
-    bool GW2API::ReorderSavedBuildGroup(const std::string& movedProfession,
-                                         const std::string& targetProfession,
-                                         bool after) {
-        bool changed = false;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            changed = BuildGroupOrder::MoveGroup(
-                s_saved_builds, movedProfession, targetProfession, after);
-        }
-        return changed && SaveBuildLibrary();
+    struct OrderedLoadout {std::string id,profession;};
+    static bool ReorderGraph(Composable::Document& doc,const std::function<bool(std::vector<OrderedLoadout>&)>& operation) {
+        std::vector<OrderedLoadout> order;
+        for(const auto& l:doc.loadouts)order.push_back({l.id,Composable::ProfessionOf(doc,l)});
+        if(!operation(order))return false;
+        std::vector<Composable::Loadout> next;
+        for(const auto& l:order)next.push_back(*Composable::FindLoadout(doc,l.id));
+        doc.loadouts=std::move(next);return true;
     }
-
-    bool GW2API::ReorderSavedBuildInGroup(const std::string& movedId,
-                                           const std::string& targetId,
-                                           bool after) {
-        bool changed = false;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            changed = BuildGroupOrder::MoveWithinGroup(
-                s_saved_builds, movedId, targetId, after);
-        }
-        return changed && SaveBuildLibrary();
+    bool GW2API::ReorderSavedBuildGroup(const std::string& from,const std::string& to,bool after) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string&){return ReorderGraph(doc,[&](auto& order){return BuildGroupOrder::MoveGroup(order,from,to,after);});});
+    }
+    bool GW2API::ReorderSavedBuildInGroup(const std::string& from,const std::string& to,bool after) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string&){return ReorderGraph(doc,[&](auto& order){return BuildGroupOrder::MoveWithinGroup(order,from,to,after);});});
     }
 
     // Serialize a single SavedBuild to JSON. Used by SaveBuildLibrary and
@@ -3140,44 +3034,6 @@ namespace AlterEgo {
             GW2API::FetchItemDetailsAsync({id});
         }
         return {};
-    }
-
-    bool GW2API::SaveBuildLibrary() {
-        // UI and importer mutations are still performed on SavedBuild views.
-        // Convert those edits transactionally to independent v3 components.
-        std::lock_guard<std::mutex> persist(g_loadoutPersistenceMutex);
-        if (!EnsureDataDirectory()) return false;
-        json legacy;
-        Composable::Document original;
-        bool alreadyLoaded = false;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            legacy["builds"] = json::array();
-            for (const auto& saved : s_saved_builds)
-                legacy["builds"].push_back(SerializeSavedBuild(saved));
-            alreadyLoaded = g_loadoutDocumentLoaded;
-            if (alreadyLoaded) original = g_loadoutDocument;
-        }
-
-        std::string error;
-        if (!alreadyLoaded) {
-            bool migrated = false;
-            if (!Composable::Store::Open(GetDataDirectory(), original, migrated, error))
-                return false; // NEVER replace invalid legacy/canonical storage.
-        }
-        Composable::Document reconciled;
-        if (!Composable::Reconcile(original, legacy, reconciled, error, LookupComponentDisplayName))
-            return false;
-        if (!Composable::Store::Save(GetDataDirectory(), reconciled, error))
-            return false;
-
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            g_loadoutDocument = std::move(reconciled);
-            g_loadoutDocumentLoaded = true;
-            g_buildLibraryRevision.fetch_add(1);
-        }
-        return true;
     }
 
     // Parse one build entry. Returns false if the entry is missing required fields.
@@ -3318,11 +3174,14 @@ namespace AlterEgo {
 
     bool GW2API::LoadBuildLibrary() {
         std::lock_guard<std::mutex> persist(g_loadoutPersistenceMutex);
-        Composable::Document loaded;
-        bool migrated = false;
+        NativeLibrary::Snapshot state;
         std::string error;
-        if (!Composable::Store::Open(GetDataDirectory(), loaded, migrated, error))
+        auto& store=NativeLibrary::RuntimeStore();
+        if(!store.Open(GetDataDirectory(),error)||!store.Read(state,error)) {
+            if(s_api){s_api->Log(LOGL_WARNING,"AlterEgo",error.c_str());s_api->GUI_SendAlert(error.c_str());}
             return false;
+        }
+        auto loaded=std::move(state.loadouts);
 
         json legacy;
         if (!Composable::ToLegacy(loaded, legacy, error)) return false;
@@ -3350,15 +3209,12 @@ namespace AlterEgo {
     bool GW2API::CommitComposableEdit(
         const std::function<bool(Composable::Document&, std::string&)>& edit) {
         std::lock_guard<std::mutex> persist(g_loadoutPersistenceMutex);
-        Composable::Document before;
-        {
-            std::lock_guard<std::mutex> lock(GW2API::s_mutex);
-            if (!g_loadoutDocumentLoaded) return false;
-            before = g_loadoutDocument;
-        }
-
-        Composable::Document next = before;
+        NativeLibrary::Snapshot snapshot;
         std::string error;
+        auto& store=NativeLibrary::RuntimeStore();
+        if(!store.Read(snapshot,error))return false;
+        auto& before=snapshot.loadouts;
+        Composable::Document next=before;
         if (!edit(next, error) || !Composable::Validate(next, error))
             return false;
 
@@ -3407,8 +3263,11 @@ namespace AlterEgo {
                 projected.push_back(std::move(record));
             }
         } catch (...) { return false; }
-        if (!Composable::Store::Save(GW2API::GetDataDirectory(), next, error))
+        auto proposed=snapshot;proposed.loadouts=next;
+        if (!store.Commit(snapshot,std::move(proposed),error)) {
+            if(s_api)s_api->Log(LOGL_WARNING,"AlterEgo",error.c_str());
             return false;
+        }
 
         {
             std::lock_guard<std::mutex> lock(GW2API::s_mutex);
@@ -3421,21 +3280,10 @@ namespace AlterEgo {
     }
 
     bool GW2API::SaveEditedLoadout(const SavedBuild& draft) {
-        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
-            json view;
-            if (!Composable::ToLegacy(doc, view, error)) return false;
-            bool found = false;
-            for (auto& entry : view["builds"]) {
-                if (entry.value("id", std::string()) != draft.id) continue;
-                entry = SerializeSavedBuild(draft);
-                found = true;
-                break;
-            }
-            if (!found) return Composable::Fail(error,"Loadout no longer exists.");
-            Composable::Document next;
-            if (!Composable::Reconcile(doc,view,next,error,LookupComponentDisplayName)) return false;
-            doc = std::move(next);
-            return true;
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            auto* l=Composable::FindLoadout(doc,draft.id);json raw;SavedBuild old;
+            if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,old))return false;
+            return NativeLibrary::PutLoadout(doc,NativeLibrary::PatchDraft(raw,SerializeSavedBuild(old),SerializeSavedBuild(draft)),error,LookupComponentDisplayName);
         });
     }
 
@@ -3520,8 +3368,8 @@ namespace AlterEgo {
         std::string resultId;
         const bool ok = CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
             if (reuseExact)
-                if (const auto* match = Composable::ExactReusableComponent(doc, kind, data)) {
-                    resultId = match->id;
+                if (const auto matches=NativeLibrary::EditIndex(doc).Matches(kind,data);!matches.empty()) {
+                    resultId = matches.front().id;
                     return true;
                 }
             static std::atomic<uint64_t> counter{0};
@@ -3639,87 +3487,24 @@ namespace AlterEgo {
                 id = "portable:" + std::to_string(std::time(nullptr)) + ":" +
                     std::to_string(counter.fetch_add(1));
             } while (Composable::FindLoadout(doc, id));
-            return Composable::ImportPortableLoadout(doc, packet, id, error);
+            if(!Composable::ImportPortableLoadout(doc,packet,id,error))return false;
+            auto* imported=Composable::FindLoadout(doc,id);
+            if(imported)imported->fashion_id.clear(); // Portable single-loadout links do not carry Fashion data.
+            return true;
         });
     }
 
     bool GW2API::ExportBuildLibraryToFile(const std::string& path) {
-        json j;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            json arr = json::array();
-            for (const auto& b : s_saved_builds) arr.push_back(SerializeSavedBuild(b));
-            j["builds"] = arr;
-            j["format"] = "alter_ego_build_library";
-            j["version"] = 1;
-            j["exported_at"] = (int64_t)std::time(nullptr);
-            j["count"] = (int)s_saved_builds.size();
-        }
-        std::ofstream file(path);
-        if (!file.is_open()) return false;
-        file << j.dump(2);
-        file.flush();
-        return true;
+        std::string error;return Backup::Export(GetDataDirectory(),Backup::Builds,path,false,error);
     }
-
-    bool GW2API::ImportBuildLibraryFromFile(const std::string& path, bool replaceAll,
-                                            int& addedOut, int& skippedOut, std::string& errOut) {
-        addedOut = 0; skippedOut = 0; errOut.clear();
-        std::ifstream file(path);
-        if (!file.is_open()) { errOut = "Could not open file."; return false; }
-
-        std::vector<SavedBuild> parsed;
-        try {
-            json j; file >> j;
-            if (!j.contains("builds") || !j["builds"].is_array()) {
-                errOut = "File does not contain a builds array.";
-                return false;
-            }
-            for (const auto& bj : j["builds"]) {
-                SavedBuild b;
-                if (DeserializeSavedBuild(bj, b)) parsed.push_back(std::move(b));
-            }
-        } catch (const std::exception& e) {
-            errOut = std::string("JSON parse error: ") + e.what();
-            return false;
-        }
-
-        if (parsed.empty()) {
-            errOut = "No valid builds found in file.";
-            return false;
-        }
-
-        // Stage in memory for the legacy adapter. If v3 validation or atomic
-        // disk save fails, restore the exact previous in-memory projection.
-        std::vector<SavedBuild> before;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            before = s_saved_builds;
-            if (replaceAll) {
-                s_saved_builds.clear();
-                for (auto& b : parsed) s_saved_builds.push_back(std::move(b));
-                addedOut = (int)s_saved_builds.size();
-            } else {
-                std::unordered_set<std::string> existingIds;
-                for (const auto& b : s_saved_builds) existingIds.insert(b.id);
-                for (auto& b : parsed) {
-                    if (existingIds.count(b.id)) { skippedOut++; continue; }
-                    s_saved_builds.push_back(std::move(b));
-                    addedOut++;
-                }
-            }
-        }
-        if (!SaveBuildLibrary()) {
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_saved_builds = std::move(before);
-            }
-            addedOut = 0;
-            skippedOut = 0;
-            errOut = "Could not persist imported builds. The previous library was restored.";
-            return false;
-        }
-        return true;
+    bool GW2API::ImportBuildLibraryFromFile(const std::string& path,bool replaceAll,
+                                            int& addedOut,int& skippedOut,std::string& errOut) {
+        addedOut=skippedOut=0;
+        Backup::Package p;Backup::Plan plan;std::string recovery;
+        if(!Backup::ReadPackage(path,p,errOut)||!Backup::Prepare(GetDataDirectory(),p,Backup::Builds,replaceAll,plan,errOut)||
+           !Backup::Apply(GetDataDirectory(),plan,recovery,errOut))return false;
+        addedOut=static_cast<int>(plan.buildAdded);skippedOut=static_cast<int>(plan.buildSkipped);
+        return LoadBuildLibrary();
     }
 
     // =========================================================================

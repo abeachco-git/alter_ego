@@ -316,7 +316,7 @@ static void RenderFashionLibrary() {
     if (g_FashionSelected < 0 || g_FashionSelected >= (int)g_FashionLibrary.looks.size()) {
         ImGui::TextDisabled("Select a saved appearance.");
     } else {
-        auto& look = g_FashionLibrary.looks[g_FashionSelected];
+        auto look = g_FashionLibrary.looks[g_FashionSelected];
         AlterEgo::DecodedWardrobeLink w{};
         const bool decoded = AlterEgo::Fashion::DecodeValid(look.wardrobe_link, w);
         if (decoded) {
@@ -327,7 +327,7 @@ static void RenderFashionLibrary() {
             }
             if (look.weight == "Unknown") {
                 const auto resolved = FashionWeightFromSkins(w);
-                if (resolved != "Unknown") { look.weight = resolved; g_FashionLibrary.Save(); }
+                if (resolved != "Unknown") look.weight = resolved;
             }
         }
         ImGui::TextUnformatted(look.name.c_str());
@@ -411,7 +411,9 @@ static void RenderFashionLibrary() {
         }
     }
     ImGui::EndChild();
-    if (toDelete >= 0 && g_FashionLibrary.Remove(toDelete))
+    if (toDelete >= 0 && g_FashionLibrary.Remove(toDelete)) {
+        AlterEgo::GW2API::LoadBuildLibrary();
         g_FashionSelected = g_FashionLibrary.looks.empty() ? -1 :
             ImMin(toDelete, (int)g_FashionLibrary.looks.size()-1);
+    }
 }

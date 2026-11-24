@@ -208,6 +208,7 @@ bool SplitLegacyExact(const Json& legacy,Composable::Document& output,std::strin
 bool Store::Open(const std::string& directory,std::string& error) {
     std::lock_guard<std::mutex> lock(mutex_);error.clear();
     if(loaded_&&directory_==directory) return true;
+    loaded_=false;directory_.clear();snapshot_=Snapshot{};
     try {
         auto verified=OpenOrMigrate(Paths(directory));
         directory_=directory;snapshot_=std::move(verified);loaded_=true;return true;

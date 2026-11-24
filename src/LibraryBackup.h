@@ -5,7 +5,8 @@
 // only files actually present in selected import collections.
 // Nothing is written until all selected entries have passed validation.
 #include "BackupZip.h"
-#include "FashionLibrary.h"
+#include "FashionModel.h"
+#include "NativeLibraryPortable.h"
 #include "ComposableLoadouts.h"
 #include <nlohmann/json.hpp>
 #include <ctime>
@@ -49,11 +50,12 @@ inline bool UserAsset(const std::string& name) {
 }
 inline bool SupportedName(const std::string& name) {
     return name == "manifest.json" || name == "build_library.json" ||
-           name == "loadouts_v3.json" ||
+           name == "library.json" ||
            name == "fashion_library.json" || IsOtherJson(name) || UserAsset(name);
 }
 inline unsigned GroupForName(const std::string& name) {
-    if (name == "build_library.json" || name == "loadouts_v3.json") return Builds;
+    if (name == "library.json") return Builds | Fashion;
+    if (name == "build_library.json") return Builds;
     if (name == "fashion_library.json") return Fashion;
     return IsOtherJson(name) || UserAsset(name) ? static_cast<unsigned>(Other) : 0u;
 }
@@ -95,11 +97,10 @@ inline bool ValidateCollection(const std::string& name, const std::string& bytes
         error = name + ": invalid JSON: " + e.what(); return false;
     }
     if (!j.is_object()) { error = name + ": expected a JSON object."; return false; }
-    if (name == "loadouts_v3.json") {
-        AlterEgo::Composable::Document doc;
-        if (!AlterEgo::Composable::FromJson(j, doc, error)) return false;
-        count = doc.loadouts.size();
-        return true;
+    if (name == "library.json") {
+        NativeLibrary::PortableLibrary data;
+        if (!NativeLibrary::ParsePortableLibrary(j,data,error)) return false;
+        count=data.data.loadouts.loadouts.size();return true;
     }
     if (name == "build_library.json") {
         if (!j.contains("builds") || !j["builds"].is_array()) {
@@ -155,10 +156,12 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
         }
         return true;
     };
-    if ((selected & Builds) && !append("build_library.json", R"({"builds":[]})")) return false;
-    if ((selected & Builds) && Exists(FilePath(dir, "loadouts_v3.json")) &&
-        !append("loadouts_v3.json", "")) return false;
-    if ((selected & Fashion) && !append("fashion_library.json", R"({"version":1,"looks":[]})")) return false;
+    if (selected & (Builds|Fashion)) {
+        NativeLibrary::Snapshot state;
+        auto& store=NativeLibrary::RuntimeStore();
+        if(!store.Open(dir,error)||!store.Read(state,error))return false;
+        files["library.json"]=NativeLibrary::ExportPortableLibrary(state,selected&Builds,selected&Fashion).dump(2);
+    }
     if (selected & Other) {
         for (const auto& name : {"settings.json", "session.json", "char_sort.json",
                                  "ach_tracked.json", "login_times.json", "clears_ui.json"}) {
@@ -192,10 +195,7 @@ inline bool Export(const std::string& dir, unsigned selected,
     FileMap files;
     if (!Collect(dir, selected, files, error)) return false;
     if (!asZip) {
-        // Standalone Builds JSON deliberately stays backward compatible with
-        // older Alter Ego versions. ZIP carries the complete v3 graph.
-        if (selected == Builds && files.count("loadouts_v3.json"))
-            files.erase("loadouts_v3.json");
+        // Portable JSON contains the selected collections and dependencies.
         if (files.size() != 1 || selected == Other) {
             error = "Individual JSON export requires Builds or Fashion only."; return false;
         }
@@ -246,8 +246,8 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
         if (!j.is_object()) { error = "JSON import must contain an object."; return false; }
         std::string name;
         if (j.contains("format") && j["format"].is_string() &&
-            j["format"] == AlterEgo::Composable::kFormat)
-            name = "loadouts_v3.json";
+            j["format"] == NativeLibrary::kLibraryFormat)
+            name = "library.json";
         else if (j.contains("builds") && j["builds"].is_array()) name = "build_library.json";
         else if (j.contains("looks") && j["looks"].is_array()) name = "fashion_library.json";
         else {
@@ -284,15 +284,26 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
         }
         size_t count = 0;
         if (!ValidateCollection(name, bytes, count, error)) return false;
-        package.available |= GroupForName(name);
-        if (name == "build_library.json" || name == "loadouts_v3.json")
-            package.buildCount = count;
-        if (name == "fashion_library.json") package.fashionCount = count;
+        if(name=="library.json") {
+            NativeLibrary::PortableLibrary data;
+            if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(bytes),data,error))return false;
+            if(data.loadouts){package.available|=Builds;package.buildCount=data.data.loadouts.loadouts.size();}
+            if(data.fashion){package.available|=Fashion;package.fashionCount=data.data.fashion.size();}
+        } else {
+            package.available |= GroupForName(name);
+            if (name == "build_library.json") package.buildCount = count;
+            if (name == "fashion_library.json") package.fashionCount = count;
+        }
+    }
+    if(package.files.count("library.json")&&(package.files.count("build_library.json")||package.files.count("fashion_library.json"))) {
+        error="Backup mixes incompatible library representations.";return false;
     }
     return package.available != 0;
 }
 struct Plan {
     FileMap writeFiles;
+    NativeLibrary::Snapshot before, after;
+    bool libraryChanged=false;
     unsigned selected = 0;
     bool replace = false;
     size_t buildAdded = 0, buildSkipped = 0;
@@ -307,106 +318,31 @@ inline bool Prepare(const std::string& dir, const Package& package,
     if (!selected || (selected & ~package.available)) {
         error = "Selected collection is not present in this backup."; return false;
     }
-    // Builds are a single logical collection, but v3 and the legacy
-    // compatibility view are restored together. This prevents the old JSON
-    // from shadowing/overwriting an unrelated composable graph.
-    if (selected & Builds) {
-        using namespace AlterEgo::Composable;
-        Document importedDoc, existingDoc, mergedDoc;
-        Json legacyImport;
-        if (package.files.count("loadouts_v3.json")) {
-            Json encoded = Json::parse(package.files.at("loadouts_v3.json"));
-            if (!FromJson(encoded, importedDoc, error)) return false;
-        } else if (package.files.count("build_library.json")) {
-            legacyImport = Json::parse(package.files.at("build_library.json"));
-            if (!SplitLegacy(legacyImport, importedDoc, error)) return false;
-        } else return Fail(error, "No Build collection in selected backup.");
-
-        if (package.files.count("build_library.json") &&
-            package.files.count("loadouts_v3.json")) {
-            Json derived;
-            if (!ToLegacy(importedDoc, derived, error)) return false;
-            const Json legacy = Json::parse(package.files.at("build_library.json"));
-            if (derived.at("builds") != legacy.at("builds"))
-                return Fail(error, "Backup Build and v3 Loadout collections disagree.");
-        }
-
-        if (!replace) {
-            std::string existing;
-            if (!ReadExisting(dir, "loadouts_v3.json", existing, error)) return false;
-            if (!existing.empty()) {
-                Json parsed;
-                try { parsed = Json::parse(existing); }
-                catch (...) { return Fail(error, "Existing v3 Loadout store is corrupt."); }
-                if (!FromJson(parsed, existingDoc, error)) return false;
-            } else {
-                if (!ReadExisting(dir, "build_library.json", existing, error)) return false;
-                if (!existing.empty()) {
-                    Json parsed;
-                    try { parsed = Json::parse(existing); }
-                    catch (...) { return Fail(error, "Existing Build library is corrupt."); }
-                    if (!SplitLegacy(parsed, existingDoc, error)) return false;
-                }
+    if(selected&(Builds|Fashion)) {
+        auto& store=NativeLibrary::RuntimeStore();
+        if(!store.Open(dir,error)||!store.Read(plan.before,error))return false;
+        NativeLibrary::PortableLibrary input;
+        if(package.files.count("library.json")) {
+            if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(package.files.at("library.json")),input,error))return false;
+        } else {
+            if(selected&Builds)
+                if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(package.files.at("build_library.json")),input,error))return false;
+            if(selected&Fashion) {
+                NativeLibrary::PortableLibrary f;
+                if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(package.files.at("fashion_library.json")),f,error))return false;
+                input.fashion=true;input.data.fashion=std::move(f.data.fashion);
             }
         }
-        size_t added = 0, skipped = 0;
-        if (!Merge(existingDoc, importedDoc, replace, mergedDoc,
-                   added, skipped, error)) return false;
-        Json legacyOutput;
-        if (!ToLegacy(mergedDoc, legacyOutput, error)) return false;
-        plan.writeFiles["loadouts_v3.json"] = ToJson(mergedDoc).dump(2);
-        plan.writeFiles["build_library.json"] = legacyOutput.dump(2);
-        plan.buildAdded = added;
-        plan.buildSkipped = skipped;
+        NativeLibrary::ImportCounts counts;
+        if(!NativeLibrary::MergePortableLibrary(plan.before,input,selected&Builds,selected&Fashion,replace,plan.after,counts,error))return false;
+        plan.libraryChanged=true;
+        plan.buildAdded=counts.loadoutsAdded;plan.buildSkipped=counts.loadoutsSkipped;
+        plan.fashionAdded=counts.fashionAdded;plan.fashionSkipped=counts.fashionSkipped;plan.fashionSimilar=counts.fashionSimilar;
     }
-    for (const auto& [name, imported] : package.files) {
-        if (!(GroupForName(name) & selected)) continue;
-        if (name == "build_library.json" || name == "loadouts_v3.json") continue;
-        if (name == "build_library.json" || name == "fashion_library.json") {
-            std::string existing;
-            if (!ReadExisting(dir, name, existing, error)) return false;
-            const bool isBuild = name == "build_library.json";
-            const char* key = isBuild ? "builds" : "looks";
-            nlohmann::json input = nlohmann::json::parse(imported);
-            nlohmann::json current;
-            if (!existing.empty() && !replace) {
-                try { current = nlohmann::json::parse(existing); }
-                catch (...) { error = "Existing " + name + " is corrupt; merge stopped."; return false; }
-                size_t unused;
-                if (!ValidateCollection(name, existing, unused, error)) {
-                    error = "Existing " + name + " is invalid; merge stopped. " + error;
-                    return false;
-                }
-            } else current = {{key, nlohmann::json::array()}};
-            nlohmann::json output = replace ? std::move(input) : std::move(current);
-            size_t added = 0, skipped = 0, similar = 0;
-            std::set<std::string> ids;
-            std::set<std::string> links;
-            if (!replace) {
-                for (const auto& item : output[key]) {
-                    ids.insert(item.at("id").get<std::string>());
-                    if (!isBuild) links.insert(item.at("wardrobe_link").get<std::string>());
-                }
-                for (const auto& item : input[key]) {
-                    const std::string id = item.at("id").get<std::string>();
-                    if (ids.count(id)) { ++skipped; continue; }
-                    if (!isBuild && links.count(item.at("wardrobe_link").get<std::string>()))
-                        ++similar;
-                    output[key].push_back(item);
-                    ids.insert(id);
-                    if (!isBuild) links.insert(item.at("wardrobe_link").get<std::string>());
-                    ++added;
-                }
-            } else added = output[key].size();
-            if (isBuild) { plan.buildAdded = added; plan.buildSkipped = skipped; }
-            else { plan.fashionAdded = added; plan.fashionSkipped = skipped; plan.fashionSimilar = similar; }
-            plan.writeFiles[name] = output.dump(2);
-        } else {
-            const bool present = Exists(FilePath(dir, name));
-            if (!replace && present) { ++plan.otherSkipped; continue; }
-            plan.writeFiles[name] = imported;
-            ++plan.otherWritten;
-        }
+    for(const auto& [name,bytes]:package.files) {
+        if(!(selected&Other)||GroupForName(name)!=Other)continue;
+        if(!replace&&Exists(FilePath(dir,name))){++plan.otherSkipped;continue;}
+        plan.writeFiles[name]=bytes;++plan.otherWritten;
     }
     return true;
 }
@@ -447,7 +383,7 @@ inline bool WriteAtomic(const std::string& path, const std::string& bytes, std::
 inline bool Apply(const std::string& dir, const Plan& plan,
                   std::string& recoveryFile, std::string& error) {
     recoveryFile.clear();
-    if (plan.writeFiles.empty()) return true;
+    if (plan.writeFiles.empty() && !plan.libraryChanged) return true;
     FileMap before;
     std::set<std::string> absent;
     for (const auto& [name, data] : plan.writeFiles) {
@@ -458,15 +394,16 @@ inline bool Apply(const std::string& dir, const Plan& plan,
         else absent.insert(name);
     }
     FileMap snapshot = before;
+    if(plan.libraryChanged) snapshot["library.json"]=NativeLibrary::ExportPortableLibrary(plan.before,true,true).dump(2);
     nlohmann::json oldFiles = {{"format", "alter_ego_backup"}, {"version", 1},
         {"created", (int64_t)std::time(nullptr)}, {"files", nlohmann::json::array()},
         {"previously_absent", absent}};
-    for (const auto& [name, bytes] : before) {
+    for (const auto& [name, bytes] : snapshot) {
         (void)bytes;
         oldFiles["files"].push_back(name);
     }
     snapshot["manifest.json"] = oldFiles.dump(2);
-    const auto backupDir = std::filesystem::u8path(dir) / "backups";
+    const auto backupDir = NativeLibrary::Paths(dir).Recovery();
     std::error_code ec;
     std::filesystem::create_directories(backupDir, ec);
     if (ec) { error = "Could not create recovery backup directory."; return false; }
@@ -478,6 +415,7 @@ inline bool Apply(const std::string& dir, const Plan& plan,
     if (!BackupZip::WriteStored(snapshot, recoveryFile, error)) {
         recoveryFile.clear(); return false; // never modify data without a snapshot
     }
+    if(plan.libraryChanged && !NativeLibrary::RuntimeStore().Backup((dest.u8string()+".db"),error))return false;
     std::vector<std::string> committed;
     for (const auto& [name, bytes] : plan.writeFiles) {
         if (!WriteAtomic(FilePath(dir, name), bytes, error)) {
@@ -496,6 +434,14 @@ inline bool Apply(const std::string& dir, const Plan& plan,
             return false;
         }
         committed.push_back(name);
+    }
+    if(plan.libraryChanged && !NativeLibrary::RuntimeStore().Commit(plan.before,plan.after,error)) {
+        for(auto it=committed.rbegin();it!=committed.rend();++it) {
+            std::string ignored;
+            if(absent.count(*it)){std::filesystem::remove(std::filesystem::u8path(FilePath(dir,*it)),ec);if(ec)error+="; restore original files from recovery ZIP";}
+            else if(!WriteAtomic(FilePath(dir,*it),before.at(*it),ignored))error+="; restore original file from recovery ZIP";
+        }
+        return false;
     }
     return true;
 }

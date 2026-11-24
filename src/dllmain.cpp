@@ -7871,17 +7871,7 @@ static void RenderGearCustomizeDialog() {
     // Find the build being edited. While editing in the library, gear changes go to
     // the in-memory draft and persist only on Save (so Cancel reverts them); otherwise
     // they edit the saved build directly and persist immediately.
-    AlterEgo::SavedBuild* editBuild = nullptr;
-    bool editingDraft = (g_LibEditMode && g_GearDialogBuildId == g_EditDraft.id);
-    if (editingDraft) {
-        editBuild = &g_EditDraft;
-    } else {
-        auto& builds = const_cast<std::vector<AlterEgo::SavedBuild>&>(
-            AlterEgo::GW2API::GetSavedBuilds());
-        for (auto& b : builds) {
-            if (b.id == g_GearDialogBuildId) { editBuild = &b; break; }
-        }
-    }
+    AlterEgo::SavedBuild* editBuild=&g_EditDraft;
     if (!editBuild) {
         ImGui::Text("Build not found.");
         ImGui::End();
@@ -7890,8 +7880,7 @@ static void RenderGearCustomizeDialog() {
     // Commit gear changes: dirty the draft when editing, else persist to disk now.
     auto commitGear = [&](bool infusionChanged = false) {
         if (infusionChanged) InvalidateGearInfusionTotals(*editBuild);
-        if (editingDraft) MarkEditDirty();
-        else AlterEgo::GW2API::SaveBuildLibrary();
+        MarkEditDirty();
     };
 
     auto& gs = editBuild->gear[g_GearDialogSlot];
@@ -9271,7 +9260,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
     if (!missingStats.empty())
         AlterEgo::GW2API::FetchItemStatDetailsAsync(missingStats);
 
-    if (changed) AlterEgo::GW2API::SaveBuildLibrary();
+    (void)changed; // display-only enrichment
 }
 
 // Resolve negative trait placeholders in a saved build once spec data is available
@@ -9318,7 +9307,7 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
         build.chat_link = AlterEgo::GW2API::EncodeSavedBuildToChatLink(build);
         changed = true;
     }
-    if (changed) AlterEgo::GW2API::SaveBuildLibrary();
+    (void)changed; // display-only enrichment
 }
 
 // Heal/Utility/Elite icon row for a build. When `editable`, each icon opens the skill
@@ -9816,13 +9805,14 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
 
 }
 
-static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
+static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
+    auto build=source;
     // Try to resolve any placeholder traits (negative values from import without spec cache)
     // Safe to cast: we only mutate trait values from negative to positive
-    ResolveBuildTraitPlaceholders(const_cast<AlterEgo::SavedBuild&>(build));
+    ResolveBuildTraitPlaceholders(build);
     // Re-resolve any item/stat names that weren't available at import time
     // (e.g. API rate-limited or offline). Queues async fetches for missing IDs.
-    ResolveBuildItemNames(const_cast<AlterEgo::SavedBuild&>(build));
+    ResolveBuildItemNames(build);
 
     // Specializations with trait grid (same logic as RenderBuildPanel)
     const float iconSz = TRAIT_ICON_SIZE;
@@ -10302,7 +10292,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
 
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
     RenderBuildGearPanel(g_LibEditMode ? g_EditDraft
-                                       : const_cast<AlterEgo::SavedBuild&>(build));
+                                       : build);
 
     // One shared footer for Saved and Edit; notes always follow infusion totals.
     const auto& snapshot = g_LibEditMode ? g_EditDraft : build;
@@ -12536,7 +12526,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     // Load cached character data and build library from disk
     AlterEgo::GW2API::LoadCharacterData();
     AlterEgo::GW2API::LoadBuildLibrary();
-    g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory() + "/fashion_library.json");
+    g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::GW2API::LoadItemNameCache();
     AlterEgo::GW2API::LoadReferenceCaches();
     SeedItemNameCache();
@@ -12723,6 +12713,7 @@ void AddonUnload() {
     if (g_LoginTimestampsDirty) SaveLoginTimestamps();
     AlterEgo::GW2API::SaveItemNameCache();
     AlterEgo::FontManager::Shutdown();
+    AlterEgo::NativeLibrary::RuntimeStore().Close();
     APIDefs = nullptr;
 }
 

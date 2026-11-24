@@ -76,18 +76,20 @@ int case_library_backup(int, char**) {
     std::string recovery;
     assert(Apply(dst, plan, recovery, err));
     assert(Exists(recovery));
-    const auto merged = nlohmann::json::parse(Get(FilePath(dst,"build_library.json")));
+    NativeLibrary::Snapshot native;
+    assert(NativeLibrary::RuntimeStore().Read(native,err));
+    nlohmann::json merged;assert(Composable::ToLegacy(native.loadouts,merged,err));
     assert(merged["builds"].size() == 2);
     assert(merged["builds"][0]["name"] == "Local version");
-    assert(nlohmann::json::parse(Get(FilePath(dst,"fashion_library.json")))["looks"].size() == 1);
+    assert(native.fashion.size()==1);
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":false})");
     assert(Get(FilePath(dst,"portraits/a.png")) == portrait);
 
     // Replace a selected collection, never touch unchecked collections.
     assert(Prepare(dst, full, AlterEgo::Backup::Fashion, true, plan, err));
-    assert(plan.writeFiles.size() == 1);
+    assert(plan.libraryChanged&&plan.writeFiles.empty());
     assert(Apply(dst, plan, recovery, err));
-    assert(nlohmann::json::parse(Get(FilePath(dst,"build_library.json")))["builds"].size() == 2);
+    assert(NativeLibrary::RuntimeStore().Read(native,err)&&native.loadouts.loadouts.size()==2);
 
     // Restore "Other" only, preserving builds and fashion.
     assert(Prepare(dst, full, Other, true, plan, err));
@@ -100,7 +102,8 @@ int case_library_backup(int, char**) {
     assert(ReadPackage((base/"empty.json").u8string(), empty, err));
     assert(Prepare(dst, empty, Builds, true, plan, err));
     assert(Apply(dst, plan, recovery, err));
-    assert(nlohmann::json::parse(Get(FilePath(dst,"build_library.json")))["builds"].empty());
+    assert(NativeLibrary::RuntimeStore().Read(native,err)&&native.loadouts.loadouts.empty());
+    assert(!Exists(FilePath(dst,"build_library.json")));
     assert(!Prepare(dst, empty, AlterEgo::Backup::Fashion, true, plan, err));
 
     // Corrupt CRC and archive traversal must fail before touching any files.
@@ -123,6 +126,7 @@ int case_library_backup(int, char**) {
     assert(ReadPackage(renamed, individual, err));
     assert(individual.available == Other);
     assert(individual.files.count("settings.json") == 1);
+    NativeLibrary::RuntimeStore().Close();
     fs::remove_all(base);
     return 0;
 }

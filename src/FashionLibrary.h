@@ -1,59 +1,33 @@
 #pragma once
 #include "FashionModel.h"
+#include "NativeLibraryStore.h"
 
 namespace AlterEgo { namespace Fashion {
 
 class Library {
 public:
     std::vector<Look> looks;
-    std::string file_path;
-
+    std::string directory;
+    std::string error;
     bool Load(const std::string& path) {
-        file_path = path;
-        looks.clear();
-        std::ifstream input(path, std::ios::binary);
-        if (!input) return true; // a fresh installation has no library
-        try {
-            nlohmann::json j;
-            input >> j;
-            if (!j.is_object() || !j.contains("looks") || !j["looks"].is_array()) return false;
-            for (const auto& item : j["looks"]) {
-                Look look;
-                if (FromJson(item, look)) looks.push_back(std::move(look));
-            }
-            return true;
-        } catch (...) { looks.clear(); return false; }
+        directory=path;NativeLibrary::Snapshot state;
+        auto& store=NativeLibrary::RuntimeStore();
+        if(!store.Open(path,error)||!store.Read(state,error)){looks.clear();return false;}
+        looks=std::move(state.fashion);return true;
     }
-
-    bool Save() const {
-        if (file_path.empty()) return false;
-        nlohmann::json j;
-        j["version"] = 1;
-        j["looks"] = nlohmann::json::array();
-        for (const auto& look : looks) j["looks"].push_back(ToJson(look));
-        const std::string tmp = file_path + ".tmp";
-        {
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            if (!out) return false;
-            out << j.dump(2);
-            out.flush();
-            if (!out.good()) return false;
-        }
-#ifdef _WIN32
-        if (!MoveFileExA(tmp.c_str(), file_path.c_str(),
-                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            std::remove(tmp.c_str());
-            return false;
-        }
-#else
-        if (std::rename(tmp.c_str(), file_path.c_str()) != 0) {
-            std::remove(tmp.c_str());
-            return false;
-        }
-#endif
-        return true;
+private:
+    bool Save() {
+        NativeLibrary::Snapshot before;
+        auto& store=NativeLibrary::RuntimeStore();
+        if(directory.empty()||!store.Read(before,error))return false;
+        auto next=before;next.fashion=looks;
+        std::set<std::string> ids;
+        for(const auto& look:looks)ids.insert(look.id);
+        for(auto& l:next.loadouts.loadouts)
+            if(!l.fashion_id.empty()&&!ids.count(l.fashion_id))l.fashion_id.clear();
+        return store.Commit(before,std::move(next),error);
     }
-
+public:
     int FindExact(const std::string& link) const {
         const std::string canonical = CanonicalLink(link);
         if (canonical.empty()) return -1;

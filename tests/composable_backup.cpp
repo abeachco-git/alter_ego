@@ -1,5 +1,5 @@
 #include "../src/LibraryBackup.h"
-#include "../src/ComposableStore.h"
+
 #include <cassert>
 #include <filesystem>
 #include <fstream>
@@ -18,13 +18,6 @@ static void Put(const fs::path& path, const std::string& bytes) {
     out.close();
     assert(out.good());
 }
-static std::string Get(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    assert(in);
-    return std::string(std::istreambuf_iterator<char>(in),
-                       std::istreambuf_iterator<char>());
-}
-
 int case_composable_backup(int, char**) {
     const fs::path base = fs::temp_directory_path() / "ae_composable_backup_test";
     fs::remove_all(base);
@@ -43,15 +36,21 @@ int case_composable_backup(int, char**) {
     Composable::Document imported;
     assert(Composable::SplitLegacy(original, imported, error));
     assert(Composable::LinkFashion(imported,"one","fashion-reference",error));
-    Put(source / "loadouts_v3.json", Composable::ToJson(imported).dump(2));
-    Put(source / "build_library.json", original.dump(2));
+    auto& store=NativeLibrary::RuntimeStore();
+    assert(store.Open(source.u8string(),error));
+    NativeLibrary::Snapshot before;
+    assert(store.Read(before,error));auto next=before;next.loadouts=imported;
+    AlterEgo::Fashion::Look look;look.id="fashion-reference";look.name="Linked";
+    DecodedWardrobeLink w{};w.helm_skin=123;look.wardrobe_link=ChatLink::EncodeWardrobe(w);
+    next.fashion.push_back(look);
+    assert(store.Commit(before,next,error));
 
     const std::string bundle = (base / "full.zip").u8string();
     assert(Export(source.u8string(), Builds, bundle, true, error));
     Package package;
     assert(ReadPackage(bundle, package, error));
-    assert(package.files.count("loadouts_v3.json"));
-    assert(package.files.count("build_library.json"));
+    assert(package.files.count("library.json"));
+    assert(!package.files.count("build_library.json"));
     assert(package.buildCount == 2);
 
     // A standalone JSON export still preserves the old build-library format.
@@ -59,8 +58,8 @@ int case_composable_backup(int, char**) {
                   (base / "standalone.json").u8string(), false, error));
     Package standalone;
     assert(ReadPackage((base / "standalone.json").u8string(), standalone, error));
-    assert(standalone.files.count("build_library.json"));
-    assert(!standalone.files.count("loadouts_v3.json"));
+    assert(standalone.files.count("library.json"));
+    assert(!standalone.files.count("build_library.json"));
 
     // Merge a new graph with a conflicting component ID. Existing objects are
     // not overwritten or linked to an imported component with different data.
@@ -70,21 +69,18 @@ int case_composable_backup(int, char**) {
     ]})");
     Composable::Document local;
     assert(Composable::SplitLegacy(localLegacy, local, error));
-    Put(destination / "loadouts_v3.json", Composable::ToJson(local).dump(2));
     Put(destination / "build_library.json", localLegacy.dump(2));
 
     Plan plan;
     assert(Prepare(destination.u8string(), package, Builds, false, plan, error));
     assert(plan.buildAdded == 1 && plan.buildSkipped == 1);
-    assert(plan.writeFiles.count("loadouts_v3.json"));
-    assert(plan.writeFiles.count("build_library.json"));
+    assert(plan.libraryChanged&&plan.writeFiles.empty());
     std::string recovery;
     assert(Apply(destination.u8string(), plan, recovery, error));
     assert(fs::exists(fs::u8path(recovery)));
 
     Composable::Document combined;
-    assert(Composable::FromJson(
-        Json::parse(Get(destination / "loadouts_v3.json")), combined, error));
+    assert(store.Read(next,error));combined=next.loadouts;
     assert(combined.loadouts.size() == 3);
     assert(Composable::FindLoadout(combined,"one")->metadata["name"] == "Local version");
     assert(Composable::FindLoadout(combined,"two")->metadata["name"] == "Second");
@@ -94,8 +90,7 @@ int case_composable_backup(int, char**) {
     // the actual Fashion library to be present.
     assert(Prepare(destination.u8string(), package, Builds, true, plan, error));
     assert(Apply(destination.u8string(), plan, recovery, error));
-    assert(Composable::FromJson(
-        Json::parse(Get(destination / "loadouts_v3.json")), combined, error));
+    assert(store.Read(next,error));combined=next.loadouts;
     assert(combined.loadouts.size() == 2);
     assert(Composable::FindLoadout(combined,"one")->fashion_id == "fashion-reference");
 
@@ -108,26 +103,22 @@ int case_composable_backup(int, char**) {
     assert(Prepare(destination.u8string(), standalone, Builds, false, plan, error));
     assert(plan.buildAdded == 1);
     assert(Apply(destination.u8string(), plan, recovery, error));
-    assert(Composable::FromJson(
-        Json::parse(Get(destination / "loadouts_v3.json")), combined, error));
+    assert(store.Read(next,error));combined=next.loadouts;
     assert(combined.loadouts.size() == 3);
     assert(Composable::FindLoadout(combined,"old") != nullptr);
-    Json legacyMirror;
-    assert(Composable::ToLegacy(combined, legacyMirror, error));
-    assert(legacyMirror["builds"] ==
-           Json::parse(Get(destination / "build_library.json"))["builds"]);
+    assert(!fs::exists(destination/"build_library.json"));
 
     // Reject a package whose monolithic and component payloads disagree.
     BackupZip::Entries invalidFiles = package.files;
-    Json altered = Json::parse(invalidFiles["build_library.json"]);
-    altered["builds"][0]["name"] = "Conflicts with v3";
+    Json altered = original;
+    altered["builds"][0]["name"] = "Conflicts with native";
     invalidFiles["build_library.json"] = altered.dump(2);
     const auto badZip = (base / "bad.zip").u8string();
     assert(BackupZip::WriteStored(invalidFiles,badZip,error));
     Package invalidPackage;
-    assert(ReadPackage(badZip,invalidPackage,error));
-    assert(!Prepare(destination.u8string(),invalidPackage,Builds,true,plan,error));
+    assert(!ReadPackage(badZip,invalidPackage,error));
 
+    store.Close();
     fs::remove_all(base);
     return 0;
 }

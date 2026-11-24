@@ -103,7 +103,11 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
     for(const auto& [kind,data]:parts) {
         const auto ref=next.refs.find(kind);
         auto* previous=ref==next.refs.end()?nullptr:Composable::Find(doc,kind,ref->second);
-        if(existing&&oldParts.count(kind)&&ExactContent(oldParts.at(kind),data))continue;
+        if(existing&&oldParts.count(kind)&&ExactContent(oldParts.at(kind),data)) {
+            if(previous)for(auto it=previous->data.begin();it!=previous->data.end();++it)
+                if(it.key()!="gear")next.metadata.erase(it.key());
+            continue;
+        }
         if(previous&&ExactContent(previous->data,data))continue;
         const auto candidates=index.Matches(kind,data,profession);
         if(!candidates.empty()) {next.refs[kind]=candidates.front().id;continue;}

@@ -373,9 +373,9 @@ inline const Component* ReusableForLoadout(const Document& doc, const std::strin
     if (data.empty()) return nullptr;
     auto group = doc.components.find(kind);
     if (group == doc.components.end()) return nullptr;
-    const auto key = ReuseKey(kind, data);
+    const auto key = data.dump();
     for (const auto& candidate : group->second) {
-        if (ReuseKey(kind, candidate.data) != key) continue;
+        if (candidate.data.dump() != key) continue;
         if (kind == "skills") {
             // Unattached legacy skills lack ownership; only reuse when a
             // same-profession owner proves their context and none conflicts.
@@ -1227,7 +1227,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
     if (!ToLegacy(next, assembled, error) || assembled.at("builds").size() != expected.size())
         return Fail(error, "Compatibility view round-trip mismatch.");
     for (size_t i = 0; i < expected.size(); ++i)
-        if (ReuseComparableBuild(assembled.at("builds")[i]) != ReuseComparableBuild(expected[i]))
+        if (assembled.at("builds")[i].dump() != expected[i].dump())
             return Fail(error, "Compatibility view round-trip mismatch.");
     output = std::move(next);
     return true;

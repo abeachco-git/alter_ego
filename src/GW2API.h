@@ -466,9 +466,7 @@ namespace AlterEgo {
                                              const std::string& targetId,
                                              bool after);
         static bool LoadBuildLibrary();
-        static bool SaveBuildLibrary();
-        // Experimental v3 component API. Existing Builds/Compare UI continues
-        // to consume SavedBuild compatibility views until the UI redesign.
+        // Native component commands. SavedBuild is a resolved presentation/edit value.
         // Kinds: base_build, skills, weapons, armor, trinkets, runes,
         // sigils, infusions, relic. IDs are stable and names are independent.
         static bool GetComposableLoadouts(nlohmann::json& snapshot);

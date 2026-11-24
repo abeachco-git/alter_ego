@@ -49,7 +49,8 @@ int case_fashion_library(int, char**) {
     assert(FromJson(nlohmann::json::object({{"id","abc"}, {"name","Test Wardrobe"},
         {"wardrobe_link",link}, {"characters",look.characters}}), restored));
     assert(restored.characters.size() == 2);
-    const std::string file = "/tmp/alter_ego_fashion_regression.json";
+    const std::string file=(std::filesystem::temp_directory_path()/"alter_ego_fashion_regression_db").u8string();
+    std::filesystem::remove_all(file);
     Library lib;
     assert(lib.Load(file));
     int first = lib.Add(look);
@@ -61,6 +62,7 @@ int case_fashion_library(int, char**) {
     assert(reloaded.looks[0].characters.size() == 2);
     assert(reloaded.looks[0].wardrobe_link == link);
     assert(reloaded.Remove(0));
-    std::remove(file.c_str());
+    NativeLibrary::RuntimeStore().Close();
+    std::filesystem::remove_all(file);
     return 0;
 }
