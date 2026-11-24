@@ -180,7 +180,16 @@ bool SplitLegacyExact(const Json& legacy,Composable::Document& output,std::strin
             std::vector<Composable::Component> kept;
             for(auto& component:group.second) {
                 std::string key=ExactFingerprint(component.data);
-                if(group.first=="skills") key+=":"+skillProfessions[component.id];
+                if(group.first=="skills") {
+                    const auto& profession=skillProfessions.at(component.id);
+                    // Missing profession is not evidence of compatibility.
+                    // Preserve each ambiguous legacy skill component independently.
+                    if(profession.empty()) {
+                        kept.push_back(std::move(component));
+                        continue;
+                    }
+                    key+=":"+profession;
+                }
                 auto& candidates=indexed[key];
                 const Composable::Component* match=nullptr;
                 for(const auto n:candidates)

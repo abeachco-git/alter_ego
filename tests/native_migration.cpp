@@ -32,6 +32,16 @@ int case_native_migration(int,char**) {
         {"skills",{{"heal",10},{"utilities",{1,2,3}},{"elite",4}}},
         {"gear",{{"Helm",{{"stat_id",1},{"rune_id",9}}}}}};
     auto second=first;second["id"]="b";second["name"]="B";
+    // Identical payload alone is insufficient for legacy Skills consolidation.
+    auto unknownA=first;unknownA["id"]="unknown-a";unknownA.erase("profession");
+    auto unknownB=unknownA;unknownB["id"]="unknown-b";
+    auto other=first;other["id"]="other";other["profession"]="Engineer";
+    C::Document isolated;
+    assert(Native::SplitLegacyExact(Json{{"builds",Json::array({first,second,unknownA,unknownB,other})}},isolated,error));
+    assert(isolated.components.at("skills").size()==4);
+    assert(isolated.loadouts[0].refs.at("skills")==isolated.loadouts[1].refs.at("skills"));
+    assert(isolated.loadouts[2].refs.at("skills")!=isolated.loadouts[3].refs.at("skills"));
+    assert(isolated.loadouts[4].refs.at("skills")!=isolated.loadouts[0].refs.at("skills"));
     Json legacy={{"builds",Json::array({first,second})}};
     AlterEgo::DecodedWardrobeLink w{};w.helm_skin=42;
     Json look={{"id","f"},{"name","Fashion"},{"wardrobe_link",AlterEgo::ChatLink::EncodeWardrobe(w)},

@@ -156,8 +156,13 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
         if(!Composable::Resolve(doc,*existing,prior,error))return false;
         oldParts=Composable::Split(prior);
     } else next.id=id;
-    next.metadata=Composable::Metadata(raw);
     const auto profession=raw.value("profession",std::string());
+    // A complete editor must obey the same profession guard as a private
+    // Base Build editor. Otherwise unchanged Skills can remain shared with
+    // another profession, even when their exact payload is empty.
+    if(existing&&Composable::ProfessionOf(doc,*existing)!=profession)
+        return Composable::Fail(error,"Cannot change profession of an existing Loadout; create a new Loadout instead.");
+    next.metadata=Composable::Metadata(raw);
     const auto parts=Composable::Split(raw);
     const EditIndex index(doc);
     for(const auto& [kind,data]:parts) {

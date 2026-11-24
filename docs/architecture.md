@@ -104,3 +104,5 @@ Cache schema v6 consolidates item details and Commerce item names in reference_i
 Storage & Cache diagnostics are available in Nexus addon options on explicit inspection. A read-only SQLite connection checks identity, schema, quick integrity and foreign keys, and reports database sizes, reference counts and freshness plus downloaded artwork size. Diagnostics do not create, migrate, repair, delete, or fetch anything. All-cache rebuilding remains a game-closed operation; selective live invalidation requires coordination with in-memory projections and workers.
 
 Native graph merges reuse a colliding ID only when both name and exact payload match; Skills additionally require independently verified matching professions. Conflicts are remapped without consuming another incoming component's original ID. Unused independent components remain intact.
+
+Aggregate Loadout edits enforce the same profession guard as private and shared Base Build edits: create a new Loadout to change profession. Legacy migration never deduplicates Skills with missing profession context, even if their payload is identical.

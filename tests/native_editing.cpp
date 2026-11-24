@@ -61,6 +61,16 @@ int case_native_editing(int,char**) {
     assert(!Composable::CopyEditedForLoadout(doc,"a","base_build","new-base","New Base",wrongBase,err,baseId));
     assert(doc.loadouts[0].refs.at("base_build")==baseId);
     assert(VerifiedSkillsProfession(doc,skills)=="Engineer");
+    // Aggregate modification must not bypass private/shared Base Build guards.
+    auto wrongLoadout=a;wrongLoadout["profession"]="Necromancer";
+    const auto before=doc.loadouts[0].refs;
+    assert(!PutLoadout(doc,wrongLoadout,err));
+    assert(doc.loadouts[0].refs==before);
+    assert(Composable::ProfessionOf(doc,doc.loadouts[0])=="Engineer");
+    assert(VerifiedSkillsProfession(doc,skills)=="Engineer");
+    wrongLoadout["id"]="new-profession";
+    assert(PutLoadout(doc,wrongLoadout,err));
+    assert(doc.loadouts.back().refs.at("skills")!=skills);
     assert(VerifiedSkillsProfession(doc,"missing").empty());
     return 0;
 }

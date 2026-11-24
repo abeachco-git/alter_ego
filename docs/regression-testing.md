@@ -65,3 +65,5 @@ Item metadata regression coverage includes v6 canonical name sharing with Commer
 Storage diagnostics tests cover missing paths without creation, read-only database access, identity rejection, record counts, schema and artwork size.
 
 Portable graph merge tests include same-ID/different-name records, incompatible Skills ownership, reserved collision suffixes, and verified compatible Skills reuse.
+
+Native editing and migration also verify that aggregate edits cannot change an existing Loadout's profession, and that identical legacy Skills with missing or different professions remain independent.
