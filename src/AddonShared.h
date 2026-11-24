@@ -6,6 +6,7 @@
 #include <functional>
 #include "nexus/Nexus.h"
 #include "imgui.h"
+#include "UIControls.h"
 
 // A non-modal window can remain open behind its launcher. Request focus at
 // the launch site and consume it immediately before that window's Begin(),
@@ -31,7 +32,7 @@ void CopyToClipboard(const std::string& text);
 void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix = nullptr);
 
 // Shared height for ordinary actions. Dense completion chips/icon hit targets stay compact.
-inline constexpr float kAlterEgoActionButtonHeight = 30.0f;
+inline constexpr float kAlterEgoActionButtonHeight = AlterEgo::UI::ActionHeight;
 // Neutral full-height button with a font-responsive minimum. Optional fixed width.
 bool RenderActionButton(const char* label, ImVec2 size = ImVec2(0, 0));
 

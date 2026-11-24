@@ -344,7 +344,7 @@ static void RenderComponentUIEditor() {
         g_ComponentEditorName = AlterEgo::GW2API::SuggestLibraryComponentName(
             g_ComponentEditorKind, g_ComponentEditorDraft);
     ImGui::SetNextItemWidth(-1);
-    if (InputTextString("Name##component_name", g_ComponentEditorName))
+    if (AlterEgo::UI::InputText("Name##component_name", g_ComponentEditorName))
         g_ComponentEditorAutoName = false;
     if (RenderActionButton("Auto Name##component_editor")) {
         g_ComponentEditorAutoName = true;
@@ -540,7 +540,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             ImGui::TextUnformatted(ComponentLabel(kind));
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(ImMax(110.f, ImGui::GetContentRegionAvail().x - 265.f));
-            if (ImGui::BeginCombo("##part", shown.c_str())) {
+            if (AlterEgo::UI::BeginCombo("##part", shown.c_str())) {
                 const auto group = doc["components"].find(kind);
                 if (group != doc["components"].end() && group->is_array()) {
                     for (const auto& candidate : *group) {
@@ -603,7 +603,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
         if (look.id == fashionId) { fashionName = look.name; break; }
     if (!fashionId.empty() && fashionName == "(none)") fashionName = "(missing saved appearance)";
     ImGui::SetNextItemWidth(ImMax(150.f, ImGui::GetContentRegionAvail().x - 8.f));
-    if (ImGui::BeginCombo("##loadoutFashion", fashionName.c_str())) {
+    if (AlterEgo::UI::BeginCombo("##loadoutFashion", fashionName.c_str())) {
         if (ImGui::Selectable("None", fashionId.empty()))
             g_ComponentCommand = {ComponentUICommand::SetFashion,
                 loadoutId, "", "", "", ComponentJson::object()};
@@ -624,7 +624,7 @@ static void RenderComponentLibrary() {
         return;
     }
     ImGui::SetNextItemWidth(230);
-    if (ImGui::BeginCombo("Component type##library_component_type",
+    if (AlterEgo::UI::BeginCombo("Component type##library_component_type",
                          ComponentLabel(kComponentKinds[g_ComponentFilterKind].kind))) {
         for (int i = 0; i < 9; ++i)
             if (ImGui::Selectable(kComponentKinds[i].label, i == g_ComponentFilterKind)) {
@@ -635,7 +635,7 @@ static void RenderComponentLibrary() {
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ImMax(150.f, ImGui::GetContentRegionAvail().x - 125.f));
-    InputTextString("Search##component_search", g_ComponentSearch);
+    AlterEgo::UI::InputText("Search##component_search", g_ComponentSearch);
     const std::string kind = kComponentKinds[g_ComponentFilterKind].kind;
     if (!g_ComponentSelectIdPending.empty()) {
         g_ComponentSelectedKind = kind;
@@ -691,7 +691,7 @@ static void RenderComponentLibrary() {
     ImGui::SameLine();
     const char* sorts[] = {"Name", "Most used", "Least used"};
     ImGui::SetNextItemWidth(160.0f);
-    if (ImGui::BeginCombo("Sort##component", sorts[g_ComponentSort])) {
+    if (AlterEgo::UI::BeginCombo("Sort##component", sorts[g_ComponentSort])) {
         for (int i = 0; i < 3; ++i)
             if (ImGui::Selectable(sorts[i], g_ComponentSort == i))
                 g_ComponentSort = i;
@@ -787,13 +787,13 @@ static void RenderComponentLibrary() {
         if (RenderActionButton("Edit Fields##component_library"))
             ComponentUIStartEditor("edit", kind, id, item);
         if (usage == 0) {
-            if (RenderActionButton("Delete Unused##component_library"))
+            if (AlterEgo::UI::Button("Delete Unused##component_library", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive))
                 ImGui::OpenPopup("Delete unused component##ae");
             if (ImGui::BeginPopupModal("Delete unused component##ae", nullptr,
                                       ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::TextWrapped("Delete %s? This component is not referenced by a Loadout.",
                                    name.c_str());
-                if (RenderActionButton("Delete##component_confirm")) {
+                if (AlterEgo::UI::Button("Delete##component_confirm", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) {
                     g_ComponentCommand = {ComponentUICommand::RemoveUnused,
                         "", kind, id, "", ComponentJson::object()};
                     ImGui::CloseCurrentPopup();
@@ -844,7 +844,7 @@ static void RenderComponentLibrary() {
         }
         if (!anyUsage) ImGui::TextDisabled("No Loadouts currently reference this component.");
         ImGui::Separator();
-        if (ImGui::BeginCombo("Assign to Loadout##component_attach",
+        if (AlterEgo::UI::BeginCombo("Assign to Loadout##component_attach",
                               "Select Loadout...")) {
             bool offered = false;
             if (doc.contains("loadouts") && doc["loadouts"].is_array())
@@ -867,7 +867,7 @@ static void RenderComponentLibrary() {
             ImGui::EndCombo();
         }
         if (usage > 0 &&
-            ImGui::BeginCombo("Copy privately for##component_detach", "Select Loadout...")) {
+            AlterEgo::UI::BeginCombo("Copy privately for##component_detach", "Select Loadout...")) {
             for (const auto& loadout : doc["loadouts"]) {
                 if (!loadout.is_object() || !loadout.contains("refs") ||
                     !loadout["refs"].is_object() ||

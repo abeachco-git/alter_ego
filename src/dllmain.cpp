@@ -908,27 +908,6 @@ static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
 static inline void MarkEditDirty() { g_EditDirty = true; }
 static bool g_EditSavePending = false;
 
-static int ImGuiInputStringResizeCallback(ImGuiInputTextCallbackData* data) {
-    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
-        auto* str = static_cast<std::string*>(data->UserData);
-        str->resize(data->BufTextLen);
-        data->Buf = str->data();
-    }
-    return 0;
-}
-
-static bool InputTextString(const char* label, std::string& str, ImGuiInputTextFlags flags = 0) {
-    flags |= ImGuiInputTextFlags_CallbackResize;
-    return ImGui::InputText(label, str.data(), str.capacity() + 1,
-        flags, ImGuiInputStringResizeCallback, &str);
-}
-
-static bool InputTextMultilineString(const char* label, std::string& str, const ImVec2& size,
-                                     ImGuiInputTextFlags flags = 0) {
-    flags |= ImGuiInputTextFlags_CallbackResize;
-    return ImGui::InputTextMultiline(label, str.data(), str.capacity() + 1,
-        size, flags, ImGuiInputStringResizeCallback, &str);
-}
 static std::string g_LibEditBuildId;   // which build is being edited
 static int g_LibCtxDeleteIdx = -1;     // deferred delete from context menu
 static bool g_RelaySending = false;    // relay POST in progress
@@ -3998,7 +3977,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         ImGui::BeginGroup();
         ImGui::Indent(pad);
 
-        RenderSectionHeader("Armor", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+        RenderSectionHeader("Armor", AlterEgo::UI::SectionGold);
         RenderLiveComponentSaveMenu(ch, tab, 4, "##save_live_armor");
         RenderEquipRow(ch, "Helm", tab);
         RenderEquipRow(ch, "Shoulders", tab);
@@ -4009,7 +3988,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
 
         ImGui::Spacing();
 
-        RenderSectionHeader("Weapons", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+        RenderSectionHeader("Weapons", AlterEgo::UI::SectionGold);
         RenderLiveComponentSaveMenu(ch, tab, 2, "##save_live_weapons");
         {
             auto DrawSetLabel = [](const char* roman, float rowH) {
@@ -4080,7 +4059,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
             float colW = totalW - leftW - gap;
             float headerW = ImGui::CalcTextSize("Trinkets").x;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + colW - headerW - pad);
-            ImGui::TextColored(ImVec4(0.70f, 0.58f, 0.20f, 1.0f), "Trinkets");
+            ImGui::TextColored(AlterEgo::UI::SectionGold, "Trinkets");
             RenderLiveComponentSaveMenu(ch, tab, 6, "##save_live_trinkets");
             // Accent underline (right-aligned)
             ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -4105,7 +4084,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
 
     // ===== AQUATIC: Aquabreather + Aquatic Weapons =====
     ImGui::Indent(6.0f);
-    RenderSectionHeader("Aquatic", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("Aquatic", AlterEgo::UI::SectionGold);
     RenderEquipRow(ch, "HelmAquatic", tab);
     {
         float rowH = ICON_SIZE + 6.0f + 4.0f;
@@ -4256,36 +4235,44 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
 
 // Clickable skill icon for the build editor (icon cache = skill_id + 5000000).
 // Returns true when clicked. skill_id 0 draws an empty slot.
-static bool RenderEditableSkillIcon(uint32_t skill_id, float size) {
-    // Callers PushID per slot/entry to disambiguate (empty slots share skill_id 0).
+static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable) {
     const auto* sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton("##es", ImVec2(size, size));
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 max(pos.x + size, pos.y + size);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     Texture_t* tex = skill_id ? AlterEgo::IconManager::GetIcon(skill_id + 5000000) : nullptr;
-    if (tex && tex->Resource) {
-        dl->AddImage(tex->Resource, pos, ImVec2(pos.x + size, pos.y + size));
+    ImGui::PushID((int)(skill_id + 5000000));
+    bool clicked = false;
+    if (editable) {
+        clicked = ImGui::InvisibleButton("##es", ImVec2(size, size));
+        if (tex && tex->Resource) dl->AddImage(tex->Resource, pos, max);
+    } else if (tex && tex->Resource) {
+        ImGui::Image(tex->Resource, ImVec2(size, size));
     } else {
-        dl->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size), IM_COL32(35, 35, 35, 180));
-        dl->AddRect(pos, ImVec2(pos.x + size, pos.y + size), IM_COL32(90, 80, 50, 200));
+        ImGui::Dummy(ImVec2(size, size));
+    }
+    if (!tex || !tex->Resource) {
+        dl->AddRectFilled(pos, max, editable ? IM_COL32(35,35,35,180) :
+            skill_id ? IM_COL32(40,40,60,200) : IM_COL32(30,30,30,200));
+        if (editable) dl->AddRect(pos, max, IM_COL32(90,80,50,200));
         if (sinfo && !sinfo->icon_url.empty())
             AlterEgo::IconManager::RequestIcon(skill_id + 5000000, sinfo->icon_url);
     }
-    if (ImGui::IsItemHovered()) {
+    if (ImGui::IsItemHovered() && (sinfo || editable)) {
         ImGui::BeginTooltip();
         if (sinfo) {
-            ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.5f, 1.0f), "%s", sinfo->name.c_str());
-            if (!sinfo->description.empty()) {
-                ImGui::PushTextWrapPos(300.0f);
-                ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", sinfo->description.c_str());
-                ImGui::PopTextWrapPos();
-            }
+            const std::string desc = StripGW2Markup(sinfo->description);
+            AlterEgo::UI::TooltipText(sinfo->name.c_str(), desc.c_str());
         } else {
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Click to choose a skill");
+            ImGui::TextDisabled("Click to choose a skill");
         }
         ImGui::EndTooltip();
     }
+    ImGui::PopID();
     return clicked;
+}
+static bool RenderEditableSkillIcon(uint32_t skill_id, float size) {
+    return RenderSkillIconCore(skill_id, size, true);
 }
 
 // =========================================================================
@@ -6457,7 +6444,7 @@ static void RenderBuildToast() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.18f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.60f, 0.25f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.30f, 0.70f, 0.30f, 1.00f));
-        if (ImGui::Button("Import to Library", ImVec2(buttonWidth, 32))) {
+        if (RenderActionButton("Import to Library", ImVec2(buttonWidth, 32))) {
             std::string buildName = g_BuildToast.spec_name.empty()
                 ? g_BuildToast.profession
                 : g_BuildToast.spec_name;
@@ -6508,7 +6495,7 @@ static void RenderBuildToast() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.20f, 0.12f, 0.80f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.30f, 0.14f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.38f, 0.16f, 1.00f));
-        if (ImGui::Button("Dismiss", ImVec2(buttonWidth, 32))) {
+        if (RenderActionButton("Dismiss", ImVec2(buttonWidth, 32))) {
             g_BuildToast.active = false;
         }
         ImGui::PopStyleColor(3);
@@ -6607,42 +6594,7 @@ static void OnPieImportBuild(void* eventArgs) {
 
 // Render a skill icon with tooltip
 static void RenderSkillIcon(uint32_t skill_id, float size) {
-    if (skill_id == 0) {
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            ImGui::GetCursorScreenPos(),
-            ImVec2(ImGui::GetCursorScreenPos().x + size, ImGui::GetCursorScreenPos().y + size),
-            IM_COL32(30, 30, 30, 200));
-        ImGui::Dummy(ImVec2(size, size));
-        return;
-    }
-
-    ImGui::PushID((int)(skill_id + 5000000));
-    const auto* sinfo = AlterEgo::GW2API::GetSkillInfo(skill_id);
-    Texture_t* tex = AlterEgo::IconManager::GetIcon(skill_id + 5000000);
-
-    if (tex && tex->Resource) {
-        ImGui::Image(tex->Resource, ImVec2(size, size));
-    } else {
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::GetWindowDrawList()->AddRectFilled(pos,
-            ImVec2(pos.x + size, pos.y + size), IM_COL32(40, 40, 60, 200));
-        ImGui::Dummy(ImVec2(size, size));
-        if (sinfo && !sinfo->icon_url.empty())
-            AlterEgo::IconManager::RequestIcon(skill_id + 5000000, sinfo->icon_url);
-    }
-
-    if (ImGui::IsItemHovered() && sinfo) {
-        ImGui::BeginTooltip();
-        ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.5f, 1.0f), "%s", sinfo->name.c_str());
-        if (!sinfo->description.empty()) {
-            ImGui::PushTextWrapPos(300.0f);
-            std::string sdesc = StripGW2Markup(sinfo->description);
-            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", sdesc.c_str());
-            ImGui::PopTextWrapPos();
-        }
-        ImGui::EndTooltip();
-    }
-    ImGui::PopID();
+    RenderSkillIconCore(skill_id, size, false);
 }
 
 // =========================================================================
@@ -7545,7 +7497,7 @@ static void RenderSkillPickerDialog() {
             }
             if (shownIds.empty()) RenderSpinner("Loading skills...");
             ImGui::EndChild();
-            if (ImGui::Button("(None)")) applySkill(0);
+            if (AlterEgo::UI::Button("(None)", ImVec2(0,0), AlterEgo::UI::ButtonRole::Compact)) applySkill(0);
         }
         ImGui::EndPopup();
     } else {
@@ -7646,7 +7598,7 @@ static void RenderPetPickerDialog() {
                 }
             }
             ImGui::EndChild();
-            if (ImGui::Button("(None)")) {
+            if (AlterEgo::UI::Button("(None)", ImVec2(0,0), AlterEgo::UI::ButtonRole::Compact)) {
                 g_EditDraft.pets.terrestrial[slot] = 0;
                 g_EditDraft.pets.aquatic[slot] = 0;
                 MarkEditDirty();
@@ -8197,7 +8149,7 @@ static void RenderGearCustomizeDialog() {
                     ImGui::EndPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("X##removeInfusion") || removeInfusion) {
+                if (AlterEgo::UI::SmallButton("X##removeInfusion") || removeInfusion) {
                     if (i >= gs.infusion_ids.size()) { ImGui::PopID(); break; }
                     gs.infusion_ids.erase(gs.infusion_ids.begin() + i);
                     if (i < gs.infusion_attributes.size())
@@ -8233,7 +8185,7 @@ static void RenderGearCustomizeDialog() {
 
         // Apply-to-all buttons
         if (IsArmorSlot(g_GearDialogSlot) && gs.stat_id != 0) {
-            if (ImGui::Button("Apply Stat to All Armor")) {
+            if (RenderActionButton("Apply Stat to All Armor")) {
                 const char* armorSlots[] = {"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
                 for (const char* s : armorSlots) {
                     auto& target = editBuild->gear[s];
@@ -8245,7 +8197,7 @@ static void RenderGearCustomizeDialog() {
             }
         }
         if (IsArmorSlot(g_GearDialogSlot) && !gs.rune.empty()) {
-            if (ImGui::Button("Apply Rune to All Armor")) {
+            if (RenderActionButton("Apply Rune to All Armor")) {
                 const char* armorSlots[] = {"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
                 for (const char* s : armorSlots) {
                     auto& target = editBuild->gear[s];
@@ -8259,7 +8211,7 @@ static void RenderGearCustomizeDialog() {
             }
         }
         if (IsTrinketSlot(g_GearDialogSlot) && gs.stat_id != 0) {
-            if (ImGui::Button("Apply Stat to All Trinkets")) {
+            if (RenderActionButton("Apply Stat to All Trinkets")) {
                 const char* trinketSlots[] = {"Backpack","Accessory1","Accessory2","Amulet","Ring1","Ring2"};
                 for (const char* s : trinketSlots) {
                     auto& target = editBuild->gear[s];
@@ -8276,7 +8228,7 @@ static void RenderGearCustomizeDialog() {
 
         // Search bar (shared between tabs)
         ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##search", "Search...", g_GearStatSearch, sizeof(g_GearStatSearch));
+        AlterEgo::UI::InputTextWithHint("##search", "Search...", g_GearStatSearch, sizeof(g_GearStatSearch));
 
         if (g_GearSelectorTab == 0 && isRelic) {
             // --- Relic selector ---
@@ -8616,7 +8568,7 @@ static void RenderGearCustomizeDialog() {
                     exactInfo ? exactInfo->name.c_str() : "name not cached");
                 ImGui::SetNextItemWidth(130.0f);
                 ImGui::InputInt("Item ID", &g_GearExactInfusionId, 0, 0);
-                if (g_GearExactInfusionId > 0 && ImGui::Button("Set exact ID")) {
+                if (g_GearExactInfusionId > 0 && RenderActionButton("Set exact ID")) {
                     gs.infusion_ids[index] = static_cast<uint32_t>(g_GearExactInfusionId);
                     gs.infusion_snapshot = true;
                     AlterEgo::GW2API::FetchItemDetailsAsync({gs.infusion_ids[index]});
@@ -8649,12 +8601,12 @@ static void RenderGearCustomizeDialog() {
         }
 
         // Accept / Cancel buttons
-        if (ImGui::Button("Accept", ImVec2(80, 0))) {
+        if (RenderActionButton("Accept", ImVec2(80, 0))) {
             commitGear();
             g_GearDialogOpen = false;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+        if (RenderActionButton("Cancel", ImVec2(80, 0))) {
             g_GearDialogOpen = false;
         }
 
@@ -8857,7 +8809,7 @@ static void RenderSaveToLibraryDialog() {
         ImGui::TextUnformatted(g_SaveLibTarget == 0 ? "Loadout name" : "Component name");
         ImGui::SameLine(130);
         ImGui::SetNextItemWidth(ImMax(140.0f, ImGui::GetContentRegionAvail().x));
-        if (ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName)))
+        if (AlterEgo::UI::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName)))
             g_SaveLibNameManuallyEdited = true;
     }
 
@@ -9259,7 +9211,7 @@ static void RenderBuildGearPanel(AlterEgo::SavedBuild& build) {
         // Left column: Armor
         ImGui::TableNextColumn();
         ImGui::Indent(2.0f);
-        RenderSectionHeader("Armor", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+        RenderSectionHeader("Armor", AlterEgo::UI::SectionGold);
         RenderBuildGearSlot(build, "Helm");
         RenderBuildGearSlot(build, "Shoulders");
         RenderBuildGearSlot(build, "Coat");
@@ -9268,7 +9220,7 @@ static void RenderBuildGearPanel(AlterEgo::SavedBuild& build) {
         RenderBuildGearSlot(build, "Boots");
 
         ImGui::Spacing();
-        RenderSectionHeader("Weapons", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+        RenderSectionHeader("Weapons", AlterEgo::UI::SectionGold);
         RenderBuildGearSlot(build, "WeaponA1");
         RenderBuildGearSlot(build, "WeaponA2");
         RenderBuildGearSlot(build, "WeaponB1");
@@ -9278,7 +9230,7 @@ static void RenderBuildGearPanel(AlterEgo::SavedBuild& build) {
         // Right column: Trinkets + Relic + Rune
         ImGui::TableNextColumn();
         ImGui::Indent(2.0f);
-        RenderSectionHeader("Trinkets", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+        RenderSectionHeader("Trinkets", AlterEgo::UI::SectionGold);
         RenderBuildGearSlot(build, "Backpack");
         RenderBuildGearSlot(build, "Accessory1");
         RenderBuildGearSlot(build, "Accessory2");
@@ -9755,7 +9707,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         if (g_LibEditMode) {
             ImGui::SetNextItemWidth(220.0f);
             ImGui::PushStyleColor(ImGuiCol_Text, profColor);
-            if (InputTextString("##edit_name", g_LibEditName)) MarkEditDirty();
+            if (AlterEgo::UI::InputText("##edit_name", g_LibEditName)) MarkEditDirty();
             ImGui::PopStyleColor();
 
             // "EDITING" badge with a drawn dot (Nexus's font atlas has no ● glyph).
@@ -9867,9 +9819,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             if (RenderActionButton("Edit##headerBuild")) EnterBuildEditMode(build);
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap + wEdit + gap, btnY));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-            if (RenderActionButton("Delete##headerBuild")) g_LibCtxDeleteIdx = g_LibSelectedIdx;
-            ImGui::PopStyleColor();
+            if (AlterEgo::UI::Button("Delete##headerBuild", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) g_LibCtxDeleteIdx = g_LibSelectedIdx;
 
             // Share menu: the three share actions that used to live in the
             // (now-removed) right-click context menu.
@@ -9886,14 +9836,14 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                                        ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::TextColored(ImVec4(0.85f, 0.8f, 0.7f, 1.0f), "Discard your unsaved changes?");
                 ImGui::Spacing();
-                if (ImGui::Button("Discard", ImVec2(110, 0))) {
+                if (AlterEgo::UI::Button("Discard", ImVec2(110, 0), AlterEgo::UI::ButtonRole::Destructive)) {
                     if (g_EditIsNewBuild) g_DiscardNewBuildId = build.id; // discard the blank build
                     g_LibEditMode = false; g_EditDirty = false; g_EditDraftId.clear();
                     g_EditIsNewBuild = false;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Keep editing", ImVec2(110, 0))) ImGui::CloseCurrentPopup();
+                if (RenderActionButton("Keep editing", ImVec2(110, 0))) ImGui::CloseCurrentPopup();
                 ImGui::EndPopup();
             }
         }
@@ -10323,7 +10273,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
         const uint8_t* legends = g_LibEditMode ? g_EditDraft.legend_codes : build.legend_codes;
         if (g_LibEditMode || legends[0] || legends[1]) {
             ImGui::Spacing();
-            RenderSectionHeader("Legends", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+            RenderSectionHeader("Legends", AlterEgo::UI::SectionGold);
             AlterEgo::GW2API::FetchLegendsAsync();
             for (int slot = 0; slot < 2; slot++) {
                 if (slot) ImGui::SameLine(0, 18);
@@ -10358,7 +10308,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
     }
     if (g_LibEditMode && build.profession == "Ranger") {
         ImGui::Spacing();
-        RenderSectionHeader("Pets", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+        RenderSectionHeader("Pets", AlterEgo::UI::SectionGold);
         if (AlterEgo::GW2API::GetPets().empty()) AlterEgo::GW2API::FetchPetsAsync();
         auto pets = AlterEgo::GW2API::GetPets();
         auto petName = [&](uint32_t id) -> const char* {
@@ -10403,7 +10353,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
         ImGui::TextUnformatted("Notes");
         if (g_LibEditMode) {
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-            if (InputTextMultilineString("##edit_notes", g_LibEditNotes, ImVec2(0, 50)))
+            if (AlterEgo::UI::InputTextMultiline("##edit_notes", g_LibEditNotes, ImVec2(0, 50)))
                 MarkEditDirty();
             if (ImGui::IsItemDeactivatedAfterEdit()) MarkEditDirty();
         } else {
@@ -11060,8 +11010,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     }
     const size_t differences = result.DifferenceCount();
     const size_t unverified = result.UnverifiedCount();
-    const ImVec4 warningColor(1.0f, 0.80f, 0.34f, 1.0f);
-    const ImVec4 differenceColor(1.0f, 0.58f, 0.50f, 1.0f);
+    const ImVec4 warningColor = AlterEgo::UI::WarningText;
+    const ImVec4 differenceColor = AlterEgo::UI::DifferenceText;
     if (differences)
         ImGui::TextColored(differenceColor, "%zu difference%s",
             differences, differences == 1 ? "" : "s");
@@ -11462,7 +11412,7 @@ static void RenderCompareTab() {
         const float previewWidth = ImGui::GetContentRegionAvail().x;
         const float previewHeight = ImGui::GetFrameHeight();
         ImDrawList* previewDraw = ImGui::GetWindowDrawList();
-        if (ImGui::BeginCombo("##compareCharacter", "")) {
+        if (AlterEgo::UI::BeginCombo("##compareCharacter", "")) {
             const AlterEgo::Character* autoCharacter = character;
             for (const auto* ch : compareMatches)
                 if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
@@ -11505,7 +11455,7 @@ static void RenderCompareTab() {
                 saved->name :
             "Choose a saved loadout";
         ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
+        if (AlterEgo::UI::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
             if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
                 g_LibCompareSavedManual = false;
                 g_LibCompareBuildId.clear();
@@ -11570,7 +11520,7 @@ static void RenderCompareTab() {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
+            if (AlterEgo::UI::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
                 if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
                     g_LibCompareBuildTab = -1;
                 for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
@@ -11583,7 +11533,7 @@ static void RenderCompareTab() {
             }
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
+            if (AlterEgo::UI::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
                 if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
                     g_LibCompareEquipTab = 0;
                 for (int tab = 1; tab <= maxTab; ++tab) {
@@ -11633,7 +11583,7 @@ static void RenderLibraryImportDialog() {
                               ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Build, wardrobe chat link, or URL");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputTextMultiline("##import_link", g_LibImportBuf,
+        AlterEgo::UI::InputTextMultiline("##import_link", g_LibImportBuf,
             sizeof(g_LibImportBuf), ImVec2(-1.0f, 75.0f));
         if (g_LibImportBuf[0] == '\0') {
             // ImGui 1.80 has no InputTextMultilineWithHint. Draw the hint on
@@ -11652,7 +11602,7 @@ static void RenderLibraryImportDialog() {
 
         ImGui::TextUnformatted("Name (optional for wardrobe / source URLs / AE2)");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
+        AlterEgo::UI::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
         const std::string importInput(g_LibImportBuf);
         const bool sourceUrl = importInput.find("://") != std::string::npos;
         const bool wardrobe = AlterEgo::ChatLink::DetectType(importInput) == AlterEgo::LINK_WARDROBE_TMPL;
@@ -11818,9 +11768,9 @@ static void RenderBuildLibrary() {
         // Match Characters: both controls live within the left list column,
         // are full-width, and never take horizontal space from build details.
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::Combo("##lib_filter", &g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames));
+        AlterEgo::UI::Combo("##lib_filter", &g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames));
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputTextWithHint("##lib_search", "Search...", g_LibSearchBuf, sizeof(g_LibSearchBuf));
+        AlterEgo::UI::InputTextWithHint("##lib_search", "Search...", g_LibSearchBuf, sizeof(g_LibSearchBuf));
         ImGui::Separator();
 
         if (builds.empty()) {
@@ -12131,9 +12081,7 @@ static void RenderBuildLibrary() {
                     EnterBuildEditMode(b);
                 }
                 ImGui::Separator();
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-                if (ImGui::MenuItem("Delete")) g_LibCtxDeleteIdx = i;
-                ImGui::PopStyleColor();
+                if (AlterEgo::UI::DestructiveMenuItem("Delete")) g_LibCtxDeleteIdx = i;
                 ImGui::EndPopup();
             }
 
@@ -12194,7 +12142,7 @@ static void RenderBuildLibrary() {
             ImGui::Text("Delete \"%s\"?", builds[g_LibCtxDeleteIdx].name.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button("Delete", ImVec2(80, 0))) {
+        if (AlterEgo::UI::Button("Delete", ImVec2(80, 0), AlterEgo::UI::ButtonRole::Destructive)) {
             if (g_LibCtxDeleteIdx >= 0 && g_LibCtxDeleteIdx < (int)builds.size()) {
                 AlterEgo::GW2API::RemoveSavedBuild(builds[g_LibCtxDeleteIdx].id);
                 if (g_LibSelectedIdx == g_LibCtxDeleteIdx) g_LibSelectedIdx = -1;
@@ -12204,7 +12152,7 @@ static void RenderBuildLibrary() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+        if (RenderActionButton("Cancel", ImVec2(80, 0))) {
             g_LibCtxDeleteIdx = -1;
             ImGui::CloseCurrentPopup();
         }
@@ -13303,7 +13251,7 @@ static void RenderSkinList() {
         if (inputW < 60.0f) inputW = 60.0f;
 
         ImGui::SetNextItemWidth(inputW);
-        ImGui::InputTextWithHint("##skinfilter", "Filter skins...", g_SkinSearchFilter, sizeof(g_SkinSearchFilter));
+        AlterEgo::UI::InputTextWithHint("##skinfilter", "Filter skins...", g_SkinSearchFilter, sizeof(g_SkinSearchFilter));
 
         ImGui::SameLine();
         for (int i = 0; i < 2; i++) {
@@ -13988,7 +13936,7 @@ static void RenderSkinDetailPanel() {
 
     // Action buttons
     ImGui::Separator();
-    if (ImGui::Button("Open Wiki Page")) {
+    if (RenderActionButton("Open Wiki Page")) {
         std::string wikiUrl = "https://wiki.guildwars2.com/wiki/" + skin.name;
         std::replace(wikiUrl.begin(), wikiUrl.end(), ' ', '_');
         ShellExecuteA(NULL, "open", wikiUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
@@ -14304,10 +14252,7 @@ static void RenderSkinShoppingList() {
 // Helper: draw a gradient-backed section header with colored accent underline
 // Shared indicator for the currently active character or in-game template.
 // Keep geometry and color identical; callers choose the center position.
-static constexpr float kActiveIndicatorRadius = 3.0f;
-static void DrawActiveIndicator(ImDrawList* draw, ImVec2 center) {
-    draw->AddCircleFilled(center, kActiveIndicatorRadius, IM_COL32(60, 200, 80, 255));
-}
+
 
 // Render a scrollable chip strip (used for equipment & build tab selectors).
 // Returns true if the user clicked a different chip (selectedIdx is updated in place).
@@ -14473,7 +14418,7 @@ static bool RenderChipStrip(const std::vector<std::string>& labels,
         dl->AddText(textPos, textCol, drawLabel.c_str());
 
         if (isActiveInGame) {
-            DrawActiveIndicator(dl, ImVec2(cMax.x - 6, cMin.y + 6));
+            AlterEgo::UI::ActiveIndicator(dl, ImVec2(cMax.x - 6, cMin.y + 6));
         }
     }
     ImGui::PopID();
@@ -14528,9 +14473,7 @@ void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix) {
 
 // Standard action button: font-responsive height and centered label.
 bool RenderActionButton(const char* label, ImVec2 size) {
-    if (size.y <= 0.0f)
-        size.y = ImMax(kAlterEgoActionButtonHeight, ImGui::GetFrameHeight());
-    return ImGui::Button(label, size);
+    return AlterEgo::UI::Button(label, size);
 }
 
 // Gold-trimmed button — primary-action vocabulary matching RenderSectionHeader.
@@ -14602,18 +14545,7 @@ bool RenderChipButton(const char* label, bool active, ImVec4 accentColor, bool c
 // Returns true when the combo is open (same contract as ImGui::BeginCombo).
 // Caller is responsible for ImGui::EndCombo() when the function returns true.
 bool RenderThemedCombo(const char* id, const char* current, float width) {
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0.10f, 0.09f, 0.06f, 0.85f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.16f, 0.13f, 0.08f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  ImVec4(0.20f, 0.16f, 0.09f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_Border,         ImVec4(0.70f, 0.58f, 0.20f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_Text,           ImVec4(0.95f, 0.85f, 0.55f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_PopupBg,        ImVec4(0.08f, 0.07f, 0.05f, 0.98f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
-    if (width > 0.0f) ImGui::SetNextItemWidth(width);
-    bool open = ImGui::BeginCombo(id, current);
-    ImGui::PopStyleVar(1);
-    ImGui::PopStyleColor(6);
-    return open;
+    return AlterEgo::UI::BeginCombo(id, current, 0, width, AlterEgo::UI::ComboRole::Gold);
 }
 
 // Centered themed empty-state / first-run card.
@@ -15111,7 +15043,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
             // Waypoint copy button for this bit
             if (!bitWaypoint.empty()) {
                 ImGui::SameLine();
-                if (ImGui::SmallButton("WP")) {
+                if (AlterEgo::UI::SmallButton("WP")) {
                     ImGui::SetClipboardText(bitWaypoint.c_str());
                 }
                 if (ImGui::IsItemHovered()) {
@@ -15242,7 +15174,7 @@ static void RenderAchievements() {
     }
 
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##AchSearch", "Search achievements...",
+    AlterEgo::UI::InputTextWithHint("##AchSearch", "Search achievements...",
                             g_AchSearchBuf, sizeof(g_AchSearchBuf));
 
     if (!g_AchGroupsFetched) return;
@@ -16877,7 +16809,7 @@ void AddonRender() {
                     float comboWidth = avail - arrowBtnWidth - (arrowBtnWidth > 0 ? 4.0f : 0.0f);
                     ImGui::SetNextItemWidth(comboWidth);
                     const char* sortLabels[] = { "Custom", "Name", "Class", "Level", "Age", "Birthday", "Last Login" };
-                    if (ImGui::Combo("##sort", &g_CharSortMode, sortLabels, IM_ARRAYSIZE(sortLabels))) {
+                    if (AlterEgo::UI::Combo("##sort", &g_CharSortMode, sortLabels, IM_ARRAYSIZE(sortLabels))) {
                         g_CharSortAscending = true; // reset direction on mode change
                         std::string selName;
                         if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
@@ -16937,7 +16869,7 @@ void AddonRender() {
                 // Character search bar
                 {
                     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-                    ImGui::InputTextWithHint("##charsearch", "Search...", g_CharSearchBuf, sizeof(g_CharSearchBuf));
+                    AlterEgo::UI::InputTextWithHint("##charsearch", "Search...", g_CharSearchBuf, sizeof(g_CharSearchBuf));
                 }
 
                 // Collect item rects for insertion-line drag-and-drop
@@ -17157,7 +17089,7 @@ void AddonRender() {
                         ImGui::SameLine();
                         float dotY = ImGui::GetCursorScreenPos().y - 3.0f + ImGui::GetTextLineHeight() * 0.5f;
                         float dotX = ImGui::GetCursorScreenPos().x;
-                        DrawActiveIndicator(ImGui::GetWindowDrawList(),
+                        AlterEgo::UI::ActiveIndicator(ImGui::GetWindowDrawList(),
                             ImVec2(dotX + kActiveIndicatorRadius, dotY));
                         ImGui::Dummy(ImVec2(8, 0));
                     }
@@ -18244,7 +18176,7 @@ void AddonOptions() {
     }
 
     // H&S connection status
-    RenderSectionHeader("Data Source: Hoard & Seek", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("Data Source: Hoard & Seek", AlterEgo::UI::SectionGold);
     auto hoardStatus = AlterEgo::GW2API::GetHoardStatus();
     switch (hoardStatus) {
         case AlterEgo::HoardStatus::Unknown:
@@ -18272,7 +18204,7 @@ void AddonOptions() {
     }
 
     ImGui::Spacing();
-    RenderSectionHeader("Automatic API Refresh", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("Automatic API Refresh", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Automatically refresh API data##ae_auto", &g_AutoRefreshEnabled)) {
         AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
         if (!g_AutoRefreshEnabled) {
@@ -18318,7 +18250,7 @@ void AddonOptions() {
     ImGui::TextDisabled("Manual Refresh still works; login/spec changes use MumbleLink (8s/90s).");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     ImGui::Spacing();
-    RenderSectionHeader("UI Settings", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("UI Settings", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Show Quick Access icon", &g_ShowQAIcon)) {
         if (g_ShowQAIcon) {
             APIDefs->QuickAccess_Add(QA_ID, TEX_ICON, TEX_ICON_HOVER, "KB_ALTER_EGO_TOGGLE", "Alter Ego");
@@ -18328,7 +18260,7 @@ void AddonOptions() {
         SaveSettings();
     }
     ImGui::Spacing();
-    RenderSectionHeader("Chat Build Detection", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("Chat Build Detection", AlterEgo::UI::SectionGold);
     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Requires 'Events: Chat' addon from the Nexus library.");
     if (ImGui::Checkbox("Detect build links in chat", &g_ChatBuildDetection)) {
         SaveSettings();
@@ -18346,7 +18278,7 @@ void AddonOptions() {
         ImGui::Unindent(16.0f);
     }
     ImGui::Spacing();
-    RenderSectionHeader("Character List", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("Character List", AlterEgo::UI::SectionGold);
     bool expanded = !g_CompactCharList;
     if (ImGui::Checkbox("Expanded mode", &expanded)) {
         g_CompactCharList = !expanded;
@@ -18410,7 +18342,7 @@ void AddonOptions() {
     }
 
     ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::BeginCombo("##fontface", current.c_str())) {
+    if (AlterEgo::UI::BeginCombo("##fontface", current.c_str())) {
         if (ImGui::Selectable("Nexus default", g_FontConfig.face == AlterEgo::Font::Face::NexusDefault)) {
             g_FontConfig.face = AlterEgo::Font::Face::NexusDefault;
             g_FontConfig.customPath.clear();

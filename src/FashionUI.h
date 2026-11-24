@@ -135,17 +135,17 @@ static void RenderFashionDialog() {
     // Identical form vocabulary for creating and editing a saved appearance.
     ImGui::TextUnformatted("Name");
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##fashion_name", "Fashion Template Name",
+    AlterEgo::UI::InputTextWithHint("##fashion_name", "Fashion Template Name",
                              g_FashionName, sizeof(g_FashionName));
     ImGui::TextUnformatted("Armor weight");
     ImGui::SetNextItemWidth(150);
-    ImGui::Combo("##fashion_weight", &g_FashionWeightIndex, kFashionWeights, IM_ARRAYSIZE(kFashionWeights));
+    AlterEgo::UI::Combo("##fashion_weight", &g_FashionWeightIndex, kFashionWeights, IM_ARRAYSIZE(kFashionWeights));
     ImGui::TextUnformatted("Notes");
-    ImGui::InputTextMultiline("##fashion_notes", g_FashionNotes, sizeof(g_FashionNotes), ImVec2(-1, 60));
+    AlterEgo::UI::InputTextMultiline("##fashion_notes", g_FashionNotes, sizeof(g_FashionNotes), ImVec2(-1, 60));
     if (ImGui::CollapsingHeader("Associated characters")) {
         ImGui::TextDisabled("Optional comma-separated list (also searchable).");
         ImGui::SetNextItemWidth(-1);
-        ImGui::InputText("##fashion_chars", g_FashionCharacterNames, sizeof(g_FashionCharacterNames));
+        AlterEgo::UI::InputText("##fashion_chars", g_FashionCharacterNames, sizeof(g_FashionCharacterNames));
     }
     if (!g_FashionDraft.complete)
         ImGui::TextDisabled("Equipment capture may omit outfit and visibility settings.");
@@ -275,9 +275,9 @@ static void RenderFashionLibrary() {
     float leftWidth = ImMax(130.f, ImMin(g_LibListWidth, ImMax(130.f, avail - 220.f)));
     ImGui::BeginChild("##fashion_list", ImVec2(leftWidth, 0), true);
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    ImGui::Combo("##fashion_filter", &g_FashionFilter, filters, IM_ARRAYSIZE(filters));
+    AlterEgo::UI::Combo("##fashion_filter", &g_FashionFilter, filters, IM_ARRAYSIZE(filters));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    ImGui::InputTextWithHint("##fashion_search", "Search looks / characters",
+    AlterEgo::UI::InputTextWithHint("##fashion_search", "Search looks / characters",
                              g_FashionSearch, sizeof(g_FashionSearch));
     ImGui::Separator();
     // Defer destructive actions until the details pane owns the confirmation popup.
@@ -298,12 +298,10 @@ static void RenderFashionLibrary() {
                 StartFashionEdit(look, i);
             }
             ImGui::Separator();
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-            if (ImGui::MenuItem("Delete")) {
+            if (AlterEgo::UI::DestructiveMenuItem("Delete")) {
                 g_FashionSelected = i;
                 pendingDelete = i;
             }
-            ImGui::PopStyleColor();
             ImGui::EndPopup();
         }
         ImGui::PopID();
@@ -341,18 +339,14 @@ static void RenderFashionLibrary() {
         ImGui::SameLine();
         if (RenderActionButton("Edit##fashion")) StartFashionEdit(look, g_FashionSelected);
         ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-        if (RenderActionButton("Delete##fashion") || pendingDelete == g_FashionSelected)
+        if (AlterEgo::UI::Button("Delete##fashion", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive) || pendingDelete == g_FashionSelected)
             ImGui::OpenPopup("Delete appearance##fashion");
-        ImGui::PopStyleColor();
         if (ImGui::BeginPopupModal("Delete appearance##fashion", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextWrapped("Delete '%s' from the Fashion Library?", look.name.c_str());
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-            if (RenderActionButton("Delete##confirm_fashion")) {
+            if (AlterEgo::UI::Button("Delete##confirm_fashion", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) {
                 toDelete = g_FashionSelected;
                 ImGui::CloseCurrentPopup();
             }
-            ImGui::PopStyleColor();
             ImGui::SameLine();
             if (RenderActionButton("Cancel##delete_fashion")) ImGui::CloseCurrentPopup();
             ImGui::EndPopup();

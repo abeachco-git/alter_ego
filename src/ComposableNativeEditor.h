@@ -29,7 +29,7 @@ static void ComponentNativeText(ComponentJson& data, const char* key,
     std::string current = it != data.end() && it->is_string()
         ? it->get<std::string>() : std::string();
     ImGui::SetNextItemWidth(ImMax(160.0f, ImGui::GetContentRegionAvail().x * 0.75f));
-    if (InputTextString(label, current)) data[key] = current;
+    if (AlterEgo::UI::InputText(label, current)) data[key] = current;
 }
 
 static std::string ComponentNativeProfession(const std::string& kind,
@@ -260,7 +260,7 @@ static void ComponentNativeSpecializations(ComponentJson& data,
         ComponentNativeNumber(spec, "id", "Specialization ID");
         if (!candidates.empty()) {
             ImGui::SameLine();
-            if (ImGui::BeginCombo("##specialization", ComponentNativeSpecName(priorId).c_str())) {
+            if (AlterEgo::UI::BeginCombo("##specialization", ComponentNativeSpecName(priorId).c_str())) {
                 if (ImGui::Selectable("(none)", !priorId)) spec["id"] = 0;
                 for (uint32_t choice : candidates) {
                     const auto* definition = AlterEgo::GW2API::GetSpecInfo(choice);
@@ -329,7 +329,7 @@ static void ComponentNativeSpecializations(ComponentJson& data,
                 ImGui::TextDisabled("Trait metadata pending");
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton("Clear")) {
+            if (AlterEgo::UI::SmallButton("Clear")) {
                 traits[tier] = 0;
                 spec["traits"] = traits;
             }
@@ -470,9 +470,9 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
     const std::string shown = !selected.empty() ? selected :
         (storedId != item.end() && storedId->is_number_integer() && *storedId != 0)
             ? ("#" + storedId->dump() + " (not in catalog)") : "(choose item)";
-    if (ImGui::BeginCombo("##catalog", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
+    if (AlterEgo::UI::BeginCombo("##catalog", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
         ImGui::SetNextItemWidth(-1.0f);
-        InputTextString("Search##catalog", g_ComponentCatalogSearch);
+        AlterEgo::UI::InputText("Search##catalog", g_ComponentCatalogSearch);
         if (ImGui::Selectable("(none)")) {
             item.erase(idField);
             item.erase(nameField);
@@ -515,9 +515,9 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
     const std::string storedName = item.value("stat_name", std::string());
     const std::string shown = !storedName.empty() ? storedName :
         info ? info->name : id ? "#" + std::to_string(id) : "(choose stats)";
-    if (ImGui::BeginCombo("##stats", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
+    if (AlterEgo::UI::BeginCombo("##stats", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
         ImGui::SetNextItemWidth(-1.0f);
-        InputTextString("Search##stats", g_ComponentStatSearch);
+        AlterEgo::UI::InputText("Search##stats", g_ComponentStatSearch);
         if (ImGui::Selectable("(none)")) {
             item.erase("stat_id");
             item.erase("stat_name");
@@ -558,7 +558,7 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,
         return;
     }
     const std::string current = item.value("weapon_type", std::string());
-    if (ImGui::BeginCombo("Weapon type##native_weapon", current.empty()
+    if (AlterEgo::UI::BeginCombo("Weapon type##native_weapon", current.empty()
                          ? "(choose type)" : WeaponDisplayName(current))) {
         if (ImGui::Selectable("(none)", current.empty())) item.erase("weapon_type");
         for (const auto& [name, definition] : *weapons) {
@@ -587,7 +587,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
     }
     ComponentJson empty = ComponentJson::object();
     const ComponentJson& savedGear = data.contains("gear") ? data["gear"] : empty;
-    if (ImGui::BeginCombo("Add equipment slot##component_gear", "Choose slot...")) {
+    if (AlterEgo::UI::BeginCombo("Add equipment slot##component_gear", "Choose slot...")) {
         for (const char* slot : kNativeGearSlots) {
             if (!ComponentNativeSlotAllowed(kind, slot) || savedGear.contains(slot))
                 continue;
@@ -842,7 +842,7 @@ static void RenderComponentNativeEditor(const std::string& kind,
             ImGui::SetNextItemWidth(210);
             const char* preview = g_ComponentSkillProfessionHint.empty()
                 ? "Choose profession..." : g_ComponentSkillProfessionHint.c_str();
-            if (ImGui::BeginCombo("##skill_profession_hint", preview)) {
+            if (AlterEgo::UI::BeginCombo("##skill_profession_hint", preview)) {
                 for (const char* candidate : professions)
                     if (ImGui::Selectable(candidate,
                             g_ComponentSkillProfessionHint == candidate))
