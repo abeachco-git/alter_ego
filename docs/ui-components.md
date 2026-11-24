@@ -93,4 +93,4 @@ Use Loadout Library, Components, Fashion, Import Library and Export Library. JSO
 
 The standalone component editor checks exact candidates on draft or revision changes, not on every frame. Create may open an existing match; private Copy & Edit may explicitly reassign to one. Save in shared or duplicate mode preserves the independent identity. Unverified Skills profession context cannot authorize automatic reuse.
 
-Nexus options include Storage & Cache with an explicit Inspect Storage action and cached diagnostic snapshot. Use shared section and action controls. No filesystem/SQL scan on each ImGui frame and no live destructive rebuild control until safe invalidation exists.
+Nexus options include Storage & Cache with an explicit Inspect Storage action and cached diagnostic snapshot. Use shared section and action controls. No filesystem/SQL scan on each ImGui frame. Schedule maintenance offers confirmed startup-only rebuild of the entire cache, downloaded artwork, characters, account progress, achievement catalog, or shared public catalogs/prices. Show operation results and quarantine location; never invalidate live snapshots.

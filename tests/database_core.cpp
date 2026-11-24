@@ -6,6 +6,7 @@
 #include "../src/ReferenceMetadataCache.h"
 #include "../src/ItemMetadataCache.h"
 #include "../src/CacheDiagnostics.h"
+#include "../src/CacheMaintenance.h"
 #include "../src/CharacterCache.h"
 #include "../src/CompletionCache.h"
 #include "../src/NativeLibraryStore.h"
@@ -356,6 +357,62 @@ int case_database_core(int, char**) {
         bool failed=false;
         try{readOnly.Exec("DELETE FROM reference_items");}catch(const DB::Error&){failed=true;}
         assert(failed);
+    }
+    {
+        namespace Storage=AlterEgo::Storage;
+        namespace Cache=AlterEgo::Cache;
+        using J=Cache::CharacterRows::Json;
+        const auto root=(temp.dir/"maintenance").u8string();
+        const Storage::Paths paths(root);
+        std::filesystem::create_directories(paths.LibraryDirectory());
+        std::filesystem::create_directories(paths.ConfigDirectory());
+        std::filesystem::create_directories(paths.CacheDirectory()/"wiki_images");
+        Storage::WriteMigrationBytes(paths.Library() ,"durable");
+        Storage::WriteMigrationBytes(paths.LibraryDirectory()/"ach_tracked.json","pins");
+        Storage::WriteMigrationBytes(paths.ConfigDirectory()/"settings.json","settings");
+        Storage::WriteMigrationBytes(paths.CacheDirectory()/"wiki_images"/"wiki_data.json","metadata");
+        Storage::WriteMigrationBytes(paths.CacheDirectory()/"wiki_images"/"42.jpg","image");
+        Storage::WriteMigrationBytes(paths.CacheDirectory()/"wiki_images"/"wiki_failed.json","failures");
+        assert(Cache::WriteCharacters(root,J{{"last_updated",100},{"characters",J::array({{{"name","Hero"},{"account_name","A"}}})}}));
+        Cache::AchievementSnapshot progress;progress.fetchedAt=100;
+        assert(Cache::WriteAchievements(root,"A",progress));
+        Storage::WriteMigrationBytes(paths.base/"characters.json","stale legacy");
+        std::string error;
+        assert(Storage::ScheduleMaintenance(root,Storage::CacheOperation::Characters,error));
+        assert(!Storage::ScheduleMaintenance(root,Storage::CacheOperation::All,error));
+        assert(Cache::ReadCharacters(root).has_value()); // not a live deletion
+        auto result=Storage::RunStartupMaintenance(root);
+        assert(result.attempted&&result.success&&!Storage::MaintenancePending(root));
+        assert(!Cache::ReadCharacters(root).has_value());
+        assert(Cache::ReadAchievements(root,"A").has_value());
+        assert(!std::filesystem::exists(paths.base/"characters.json"));
+        assert(Storage::ScheduleMaintenance(root,Storage::CacheOperation::Artwork,error));
+        assert(Storage::RunStartupMaintenance(root).success);
+        assert(!std::filesystem::exists(paths.CacheDirectory()/"wiki_images"/"42.jpg"));
+        assert(!std::filesystem::exists(paths.CacheDirectory()/"wiki_images"/"wiki_failed.json"));
+        assert(Storage::ReadMigrationBytes(paths.CacheDirectory()/"wiki_images"/"wiki_data.json")=="metadata");
+        // Replace the disposable DB with corrupt bytes: full recovery never
+        // opens it or silently discards it.
+        std::filesystem::remove(paths.Cache());
+        Storage::WriteMigrationBytes(paths.Cache(),"damaged database");
+        Storage::WriteMigrationBytes(paths.CacheDirectory()/"cache.db-wal","sidecar");
+        assert(Storage::ScheduleMaintenance(root,Storage::CacheOperation::All,error));
+        assert(Storage::RunStartupMaintenance(root).success);
+        assert(!std::filesystem::exists(paths.CacheDirectory()));
+        bool quarantined=false;
+        for(const auto& entry:std::filesystem::directory_iterator(paths.CacheQuarantine())) {
+            const auto candidate=entry.path()/"cache"/"cache.db";
+            if(std::filesystem::exists(candidate)) {
+                assert(Storage::ReadMigrationBytes(candidate)=="damaged database");
+                assert(Storage::ReadMigrationBytes(candidate.parent_path()/"cache.db-wal")=="sidecar");
+                quarantined=true;
+            }
+        }
+        assert(quarantined);
+        assert(Storage::ReadMigrationBytes(paths.Library())=="durable");
+        assert(Storage::ReadMigrationBytes(paths.LibraryDirectory()/"ach_tracked.json")=="pins");
+        assert(Storage::ReadMigrationBytes(paths.ConfigDirectory()/"settings.json")=="settings");
+        assert(!Storage::RunStartupMaintenance(root).attempted);
     }
     {
         namespace Cache=AlterEgo::Cache;

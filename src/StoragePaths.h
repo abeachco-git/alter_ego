@@ -17,6 +17,8 @@ struct Paths {
     std::filesystem::path Cache() const { return CacheDirectory()/"cache.db"; }
     std::filesystem::path Migration() const { return base/"backups"/"migration"; }
     std::filesystem::path Recovery() const { return base/"backups"/"recovery"; }
+    std::filesystem::path CacheQuarantine() const { return base/"backups"/"cache-quarantine"; }
+    std::filesystem::path CacheMaintenanceRequest() const { return ConfigDirectory()/"cache-maintenance-request"; }
     std::filesystem::path Portraits() const { return base/"portraits"; }
     std::filesystem::path Fonts() const { return base/"fonts"; }
 };

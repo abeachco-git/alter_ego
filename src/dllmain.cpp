@@ -11501,6 +11501,10 @@ static void RenderCompareTab() {
 
 #include "LibraryBackupUI.h"
 #include "CacheDiagnostics.h"
+#include "CacheMaintenance.h"
+static AlterEgo::Storage::MaintenanceResult g_StorageMaintenanceResult;
+static bool g_StorageMaintenancePending=false;
+static std::string g_StorageMaintenanceMessage;
 #include "ComposableUI.h"
 
 static void RenderLibraryImportDialog() {
@@ -12497,6 +12501,10 @@ static void BuildGW2Theme() {
 // --- Addon Lifecycle ---
 
 void AddonLoad(AddonAPI_t* aApi) {
+    const auto maintenanceRoot=AlterEgo::GW2API::GetDataDirectory();
+    g_StorageMaintenanceResult=AlterEgo::Storage::RunStartupMaintenance(maintenanceRoot);
+    g_StorageMaintenancePending=AlterEgo::Storage::MaintenancePending(maintenanceRoot);
+    g_StorageMaintenanceMessage.clear();
     AlterEgo::Background::Workers().Open();
     APIDefs = aApi;
     ImGui::SetCurrentContext((ImGuiContext*)APIDefs->ImguiContext);
@@ -18072,6 +18080,41 @@ static void RenderStorageDiagnostics() {
         snapshot=Storage::InspectStorage(GW2API::GetDataDirectory());
         inspected=true;
     }
+    if(g_StorageMaintenanceResult.attempted)
+        ImGui::TextWrapped("%s",g_StorageMaintenanceResult.message.c_str());
+    if(!g_StorageMaintenanceMessage.empty())
+        ImGui::TextWrapped("%s",g_StorageMaintenanceMessage.c_str());
+    if(g_StorageMaintenancePending) {
+        ImGui::TextDisabled("Cache maintenance scheduled for next addon startup.");
+    } else {
+        static int selected=0;
+        const char* labels[]={"Rebuild all cache (quarantine)","Clear downloaded artwork",
+            "Rebuild characters","Rebuild account progress","Rebuild achievement catalog",
+            "Rebuild public catalogs and prices"};
+        if(UI::BeginCombo("##ae_cache_operation",labels[selected])) {
+            for(int i=0;i<6;++i)
+                if(UI::SelectableOption(labels[i],selected==i))selected=i;
+            ImGui::EndCombo();
+        }
+        if(RenderActionButton("Schedule maintenance##ae_cache_operation"))
+            ImGui::OpenPopup("Confirm cache maintenance##ae_cache_confirm");
+        if(ImGui::BeginPopupModal("Confirm cache maintenance##ae_cache_confirm",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s",labels[selected]);
+            ImGui::TextWrapped("Runs at next addon startup, before cache readers and workers. Saved library, settings, pins, login history and backups are untouched.");
+            ImGui::TextWrapped("Moved files are quarantined, not deleted. Missing data is rebuilt by normal refreshes.");
+            if(UI::Button("Schedule",ImVec2(0,0),UI::ButtonRole::Destructive)) {
+                std::string error;
+                g_StorageMaintenancePending=Storage::ScheduleMaintenance(GW2API::GetDataDirectory(),
+                    Storage::kCacheOperations[static_cast<size_t>(selected)],error);
+                g_StorageMaintenanceMessage=g_StorageMaintenancePending?
+                    "Scheduled. Restart the game to apply.":error;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if(RenderActionButton("Cancel##ae_cache_confirm"))ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+    }
     if(!inspected)return;
     auto database=[](const char* label,const Storage::DatabaseDiagnostic& info) {
         ImGui::Text("%s: %.2f MiB | schema %lld",label,
@@ -18097,7 +18140,7 @@ static void RenderStorageDiagnostics() {
         ImGui::TreePop();
     }
     ImGui::TextDisabled("Snapshot as of last inspection; counts cover all cached accounts.");
-    ImGui::TextWrapped("To rebuild all disposable data, close the game before removing the Alter Ego cache directory. Never remove library or config.");
+    ImGui::TextDisabled("Quarantined files remain under backups/cache-quarantine until removed manually.");
 }
 
 void AddonOptions() {

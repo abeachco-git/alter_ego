@@ -9,7 +9,7 @@ Baseline: `42d589366fc2345bbc00a90ee554dfe0e94bc626`. This ledger describes sour
 | 3 Account isolation / correlation | In progress | Character gate and exact account persistence exist; typed selection/capture, completion and skin responses, delayed identical request correlation remain. H&S v4 request/response lifetime limits require verification. |
 | 4 Incremental character persistence | Implemented — validation pending | Targeted single character writes and verified account roster deletions; previous disk and memory roster retained on deletion failure; warning on character write failure. New rollback/scope/cascade tests in database_core. Remaining: failed initial migration recovery, partial field freshness, retry of failed character writes, concurrency validation and connection overhead. |
 | 5 Immutable render data | In progress | Audit item/stat, skill, trait, specialization, account and other container getters; ensure selection/order revisions match. |
-| 6 Cache management / recovery | Not started | Existing diagnostic UI only. Implement safe startup maintenance, selective invalidation/rebuild, integrity, quarantine, artwork and confirmed results; never touch durable storage. |
+| 6 Cache management / recovery | Implemented — validation pending | Storage UI confirms startup maintenance; whole cache quarantine, artwork-only reset and four selective relational groups, known legacy source quarantine, operation result. Tests added in database_core. Remaining: per-dataset size granularity, full integrity UI vs quick check, selective group regression breadth, in-game restart and quarantine cleanup usability. |
 | 7 SQLite benchmarks | Not started | Reproducible fixture, startup/reads/writes/contended workload, DELETE/WAL and durability choices. |
 | 8 Wiki metadata migration | Not started | WikiImage JSON metadata and failures still on disk; inventory all remaining cache paths and migrate deliberately. |
 | 9 Configuration / backup audit | Not started | Full storage ownership inventory, verify backup/restore and upstream migration, obsolete experimental paths. |
@@ -23,3 +23,6 @@ Baseline: `42d589366fc2345bbc00a90ee554dfe0e94bc626`. This ledger describes sour
 - `tests/database_core.cpp`: new targeted deletion regression assertions.
 - Required gates: offline suite, six strict live MetaBattle imports, Windows x64 UCRT DLL, assets and binary checks. No current-pass results claimed until CI is inspected.
 - In-game: multi-account roster deletion and refresh, icon/wiki rendering under failed downloads, addon unload while queues active; then migration/library/backup smoke tests.
+
+- Second implementation commit adds `CacheMaintenance.h`, classified startup maintenance paths, Storage & Cache UI and startup-only recovery tests. No in-game test or final CI pass claimed yet.
+- First implementation commit `9612028c91411fcf354c8eb0e1d2111e6a109887`: live MetaBattle workflow `45463715043` succeeded; final commit requires its own workflows.
