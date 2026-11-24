@@ -3365,7 +3365,7 @@ namespace AlterEgo {
                     if (kind == "base_build" || kind == "skills") buildChanged = true;
                 }
             }
-            if(previous->equipment_set_id!=loadout.equipment_set_id||oldRefs!=newRefs)affected.insert(loadout.id);
+            if(previous->equipment_set_id!=loadout.equipment_set_id||previous->fashion_id!=loadout.fashion_id||oldRefs!=newRefs)affected.insert(loadout.id);
             if (changed) loadout.metadata.erase("ae2_code");
             if (changed || !NativeLibrary::ExactContent(previous->metadata,loadout.metadata)) affected.insert(loadout.id);
             if (buildChanged) {
@@ -3656,6 +3656,18 @@ namespace AlterEgo {
         });
         if(ok&&savedId)*savedId=id;
         return ok;
+    }
+    bool GW2API::SaveEquipmentSetDraft(const std::string& id,const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(revision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
+            return NativeLibrary::SaveEquipmentSetDraft(doc,id,name,refs,error);
+        });
+    }
+    bool GW2API::SaveLoadoutReferenceDraft(const std::string& id,const std::string& setId,const std::string& fashionId,const std::map<std::string,std::string>& refs,uint64_t revision) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(revision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
+            return NativeLibrary::SaveLoadoutReferenceDraft(doc,id,setId,fashionId,refs,error);
+        });
     }
     bool GW2API::AssignEquipmentSetComponent(const std::string& setId,const std::string& kind,const std::string& componentId,uint64_t revision) {
         return CommitComposableEdit([&](Composable::Document& doc,std::string& error){

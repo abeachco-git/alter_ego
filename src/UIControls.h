@@ -35,6 +35,18 @@ inline bool Button(const char* label, ImVec2 size = ImVec2(0,0),
     if (destructive) ImGui::PopStyleColor();
     return clicked;
 }
+// Shared explicit edit footer. Callers own validation, draft and commit.
+enum class EditAction { None, Save, Cancel };
+inline EditAction SaveCancel(const char* scope,bool canSave=true) {
+    ImGui::PushID(scope);
+    if(!canSave){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
+    const bool save=Button("Save",ImVec2(80,0))&&canSave;
+    if(!canSave){ImGui::PopStyleVar();ImGui::PopItemFlag();}
+    ImGui::SameLine();
+    const bool cancel=Button("Cancel",ImVec2(80,0));
+    ImGui::PopID();
+    return save?EditAction::Save:cancel?EditAction::Cancel:EditAction::None;
+}
 inline bool SmallButton(const char* label) { return ImGui::SmallButton(label); }
 inline bool DestructiveMenuItem(const char* label, bool enabled = true) {
     ImGui::PushStyleColor(ImGuiCol_Text, DestructiveText);

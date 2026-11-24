@@ -78,7 +78,7 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
     return s;
 }
 static bool NavigationBlocked(){
-    return g_LibEditMode||g_FashionDialog||g_ComponentEditorOpen||g_GearDialogOpen||
+    return g_LibEditMode||g_FashionDialog||g_ComponentEditorOpen||g_ReferenceEditor.open||g_GearDialogOpen||
         g_SaveLibDialogOpen||g_NewBuildDialogOpen||g_LibShowImport||
         ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId|ImGuiPopupFlags_AnyPopupLevel)||
         ImGui::GetIO().WantTextInput;

@@ -12078,11 +12078,11 @@ static void RenderBuildLibrary() {
                 }
             }
 
-            if (clicked) {
+            if (clicked && !g_LibEditMode) {
                 MarkNavigation();g_LibSelectedIdx = i;
                 g_LibDetailsFetched = false;
             }
-            if (ImGui::BeginPopupContextItem("##build_actions")) {
+            if (!g_LibEditMode && ImGui::BeginPopupContextItem("##build_actions")) {
                 if (ImGui::MenuItem("Copy Portable Loadout")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, b, i);
                 if (ImGui::MenuItem("Compare")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, b, i);
                 if (ImGui::BeginMenu("Share")) {
@@ -16220,6 +16220,7 @@ static void HandleTabDropdown(TabDropdownState& state, ImGuiTabBar* tabBar,
     state.requestOpen = false;
     state.requestClose = false;
     state.labelClicked = false;
+    if(g_LibEditMode){state.requestClose=state.popupOpen;return;}
     state.anchor = ImVec2(tabMin.x, tabMax.y);
 
     const ImVec2 arrow(tabMax.x - 13.0f, (tabMin.y + tabMax.y) * 0.5f);
@@ -17468,6 +17469,7 @@ void AddonRender() {
         ImGuiTabBar* libraryTabBar = GImGui->CurrentTabBar;
         const ImGuiID previousSelectedTab = libraryTabBar ? libraryTabBar->SelectedTabId : 0;
         ImGuiTabItemFlags libraryFlags = NavigationTabFlags(1);
+        if(g_LibEditMode)libraryFlags|=ImGuiTabItemFlags_SetSelected;
         if (g_SwitchToLibrary) {
             libraryFlags |= ImGuiTabItemFlags_SetSelected;
             g_SwitchToLibrary = false;
@@ -17863,6 +17865,8 @@ void AddonRender() {
     RenderLibraryImportDialog();
     RenderLibraryBackupUI();
     RenderShareRelayPopups();
+    RenderReferenceEditor();
+    ProcessComponentUICommand();
     EndNavigationFrame();
 
     ImGui::End();

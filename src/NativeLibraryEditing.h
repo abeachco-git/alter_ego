@@ -297,6 +297,47 @@ inline bool AssignSetComponent(Composable::Document& doc,const std::string& setI
         return true;
     },error);
 }
+// Complete membership changes are atomic: transfer removed categories from
+// the ORIGINAL set, then remove direct references for newly included categories.
+inline bool SaveEquipmentSetDraft(Composable::Document& doc,const std::string& setId,
+    const std::string& name,const std::map<std::string,std::string>& refs,std::string& error) {
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err){
+        auto* set=Composable::FindEquipmentSet(next,setId);
+        if(!set||Composable::ComponentNameKey(name).empty()||refs.empty())
+            return Composable::Fail(err,"Equipment set needs a name and at least one category.");
+        for(const auto& [kind,id]:refs)
+            if(!Composable::IsEquipmentKind(kind)||!Composable::Find(next,kind,id))
+                return Composable::Fail(err,"Invalid equipment set component.");
+        for(auto& l:next.loadouts)if(l.equipment_set_id==setId){
+            for(const auto& [kind,id]:set->refs)if(!refs.count(kind))l.refs[kind]=id;
+            for(const auto& [kind,id]:refs)l.refs.erase(kind);
+        }
+        set->name=name;set->refs=refs;
+        for(const auto& l:next.loadouts)if(l.equipment_set_id==setId){
+            Json raw;if(!Composable::Resolve(next,l,raw,err))return false;
+        }
+        return true;
+    },error);
+}
+// A Loadout reference draft is independent of typed component payload edits.
+inline bool SaveLoadoutReferenceDraft(Composable::Document& doc,const std::string& loadoutId,
+    const std::string& setId,const std::string& fashionId,
+    const std::map<std::string,std::string>& refs,std::string& error) {
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err){
+        auto* l=Composable::FindLoadout(next,loadoutId);
+        if(!l||(!setId.empty()&&!Composable::FindEquipmentSet(next,setId)))
+            return Composable::Fail(err,"Loadout or equipment set not found.");
+        for(const auto& [kind,id]:refs) {
+            if(!Composable::IsKind(kind)||!Composable::Find(next,kind,id))
+                return Composable::Fail(err,"Invalid Loadout component.");
+            const auto old=l->refs.find(kind);
+            if((old==l->refs.end()||old->second!=id)&&!Composable::AssignCompatible(next,*l,kind,id,err))return false;
+        }
+        l->equipment_set_id=setId;l->fashion_id=fashionId;l->refs=refs;
+        if(!Composable::Validate(next,err))return false;
+        Json raw;return Composable::Resolve(next,*l,raw,err);
+    },error);
+}
 inline std::vector<Match> ExactEquipmentSets(const Composable::Document& doc,const Json& raw) {
     std::vector<Match> result;
     const auto parts=Composable::Split(raw);

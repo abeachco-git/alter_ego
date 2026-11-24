@@ -96,3 +96,7 @@ Equipment set coverage in `persistence.native_library` verifies direct exclusive
 
 - Open a Loadout's Relic, press mouse Back, verify original Loadout and scroll; Forward returns to the Relic. Repeat across Characters, Equipment Sets, Fashion, Compare, Skinventory and Achievements. Change filters and refresh data without creating entries. Verify new navigation after Back discards Forward history.
 - Check disabled arrows, Alt+Left/Right, no interception outside Alter Ego, no navigation during modal/unsaved editor, stable selection after sorting/deletion, and clean addon unload.
+
+### Reference edit transactions
+
+- Verify Base Build/Skills, Equipment Set/equipment and Fashion display groups in both read-only and aggregate edit mode. Open Edit Components or Edit Equipment Set, change multiple categories and name/Fashion, Cancel, and verify identical graph and revision. Save applies all changes together; invalid refs, empty sets, overlapping owners and stale revisions fail closed. Replace a linked category only after explicit confirmation. Check Assign to Loadout and Apply to Loadout from other collections use the same draft. Open component payload editor, edit nested fields, Cancel, and verify no shared change. Verify mouse Back and row switching cannot silently discard an open draft.

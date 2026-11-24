@@ -192,6 +192,35 @@ int case_native_library(int,char**) {
         assert(!Native::AssignSetComponent(selected,"armor-only","armor","",error));
         const auto matches=Native::ExactEquipmentSets(selected,raw);
         assert(std::any_of(matches.begin(),matches.end(),[](const auto& m){return m.id=="armor-only";}));
+        auto staged=mixedRead.loadouts;
+        const auto unchanged=C::ToJson(staged);
+        auto proposedRefs=C::FindEquipmentSet(staged,"set1")->refs;
+        proposedRefs.erase("armor");proposedRefs["relic"]=refs.at("relic");
+        auto invalidRefs=proposedRefs;invalidRefs["armor"]="does-not-exist";
+        assert(!Native::SaveEquipmentSetDraft(staged,"set1","Rejected",invalidRefs,error));
+        assert(C::ToJson(staged)==unchanged);
+        assert(!Native::SaveEquipmentSetDraft(staged,"set1","Empty",{},error));
+        assert(C::ToJson(staged)==unchanged);
+        assert(Native::SaveEquipmentSetDraft(staged,"set1","Updated",proposedRefs,error));
+        for(const auto& l:staged.loadouts){
+            assert(l.refs.at("armor")==refs.at("armor"));
+            assert(!l.refs.count("relic"));
+        }
+        auto newDirect=staged.loadouts.front().refs;
+        newDirect["sigils"]="identical"; // inherited conflict must fail.
+        const auto beforeInvalid=C::ToJson(staged);
+        assert(!Native::SaveLoadoutReferenceDraft(staged,"first","set1",look.id,newDirect,error));
+        assert(C::ToJson(staged)==beforeInvalid);
+        auto effective=C::EffectiveRefs(staged,staged.loadouts.front());
+        effective["sigils"]="identical";
+        assert(Native::SaveLoadoutReferenceDraft(staged,"first","",look.id,effective,error));
+        assert(staged.loadouts.front().equipment_set_id.empty());
+        assert(staged.loadouts.front().refs.at("sigils")=="identical");
+        assert(staged.loadouts[1].equipment_set_id=="set1");
+        auto beforeDraftCommit=repo.Read();
+        auto afterDraftCommit=beforeDraftCommit;afterDraftCommit.loadouts=staged;
+        assert(repo.Commit(beforeDraftCommit,afterDraftCommit)==7);
+        assert(C::ToJson(repo.Read().loadouts)==C::ToJson(staged));
         Json roundTrip;assert(C::Resolve(restored.loadouts,restored.loadouts.loadouts.front(),roundTrip,error));
         const auto& ids=roundTrip.at("gear").at("Helm").at("infusion_ids");
         assert(ids.size()==3);
