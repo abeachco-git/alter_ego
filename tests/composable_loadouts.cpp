@@ -173,6 +173,13 @@ int main() {
     assert(ToLegacy(reconciled,reconstructed,error));
     assert(reconstructed == oldView);
     assert(reconciled.loadouts[0].fashion_id == "look-123");
+    Json returnToOriginal = oldView;
+    returnToOriginal["builds"][1]["relic_id"] = 400;
+    returnToOriginal["builds"][1]["relic_name"] = "Relic A";
+    Document relinked;
+    assert(Reconcile(reconciled, returnToOriginal, relinked, error));
+    assert(FindLoadout(relinked, "two")->refs.at("relic") ==
+           FindLoadout(relinked, "one")->refs.at("relic"));
     // The legacy SavedBuild serializer may not understand a newer field.
     // An edit from that UI must not delete unknown imported metadata.
     Json olderEditorView = oldView;
@@ -404,9 +411,9 @@ int main() {
     assert(document.loadouts.size() == 3);
     auto* importedLoadout = FindLoadout(document, "imported-one");
     assert(importedLoadout);
-    assert(importedLoadout->refs.at("weapons") !=
+    assert(importedLoadout->refs.at("weapons") ==
            FindLoadout(document,"one")->refs.at("weapons"));
-    assert(importedLoadout->refs.at("runes") !=
+    assert(importedLoadout->refs.at("runes") ==
            FindLoadout(document,"one")->refs.at("runes"));
     assert(Find(document, "armor", importedLoadout->refs.at("armor"))->data ==
            Find(document, "armor", FindLoadout(document,"one")->refs.at("armor"))->data);

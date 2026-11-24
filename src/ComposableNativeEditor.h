@@ -165,6 +165,7 @@ static bool ComponentNativeSkill(ComponentJson& parent, const char* key,
         ImGui::EndPopup();
     }
     if (ImGui::BeginPopupContextItem("##component_skill_id")) {
+        if (ImGui::MenuItem("Clear Skill")) { parent[key] = 0; changed = true; }
         ImGui::TextDisabled("Advanced: exact skill ID");
         ComponentNativeNumber(parent, key, "Skill ID");
         if (parent.contains(key) && parent[key].is_number_integer() &&
@@ -500,6 +501,10 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
         }
         ImGui::EndCombo();
     }
+    if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
+        if (ImGui::MenuItem("Clear")) { item.erase(idField); item.erase(nameField); }
+        ImGui::EndPopup();
+    }
     ImGui::PopID();
 }
 
@@ -619,6 +624,13 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             g_ComponentGearRemovalPending.clear();
             g_ComponentCatalogSearch.clear();
             g_ComponentStatSearch.clear();
+        }
+        if (ImGui::BeginPopupContextItem("##native_slot_context")) {
+            if (ImGui::MenuItem("Clear Slot")) {
+                g_ComponentGearSelectedSlot = slot;
+                g_ComponentGearRemovalPending = slot;
+            }
+            ImGui::EndPopup();
         }
         if (ImGui::IsItemHovered()) {
             const auto& entry = data["gear"].at(slot);

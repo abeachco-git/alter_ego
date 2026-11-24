@@ -89,6 +89,35 @@ static AlterEgo::InfusionSummary ComputeInfusionsFromIds(const std::vector<uint3
     for (uint32_t id : ids) if (id) counted.push_back({id, 1});
     return ComputeInfusionSummary(counted);
 }
+// Slot edits switch to calculated totals. Imported/manual aggregate-only
+// requirements remain intact until the user explicitly changes infusions.
+static void InvalidateGearInfusionTotals(AlterEgo::SavedBuild& b) {
+    b.infusion_summary_present = false;
+    b.infusion_ar_total = 0;
+    b.infusion_stat_totals.clear();
+    b.infusion_totals.clear();
+}
+static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::SavedBuild& b) {
+    auto total = ComputeInfusionsFromIds(GetSavedGearInfusions(b));
+    bool hasA = b.gear.count("WeaponA1") || b.gear.count("WeaponA2");
+    for (const auto& entry : b.gear) {
+        const auto& slot = entry.first;
+        const auto& gear = entry.second;
+        if (slot.find("Aquatic") != std::string::npos ||
+            (hasA && slot.rfind("WeaponB",0) == 0)) continue;
+        if (gear.infusion_snapshot) total.present = true;
+        for (size_t i = 0; i < gear.infusion_attributes.size(); ++i) {
+            const auto& attr = gear.infusion_attributes[i];
+            if (attr.empty()) continue;
+            if (i < gear.infusion_ids.size() && gear.infusion_ids[i]) continue;
+            total.present = true;
+            // Flexible stat requirement has no specified AR or strength.
+            total.complete = false;
+            total.stats[attr] += 5;
+        }
+    }
+    return total;
+}
 static AlterEgo::InfusionSummary GetSavedInfusionSummary(const AlterEgo::SavedBuild& b) {
     if (b.infusion_summary_present)
         return {true, true, b.infusion_ar_total, b.infusion_stat_totals};
@@ -97,7 +126,7 @@ static AlterEgo::InfusionSummary GetSavedInfusionSummary(const AlterEgo::SavedBu
         for (const auto& i : b.infusion_totals) items.push_back({i.item_id, i.count});
         return ComputeInfusionSummary(items);
     }
-    return ComputeInfusionsFromIds(GetSavedGearInfusions(b));
+    return ComputeSavedSlotInfusions(b);
 }
 static AlterEgo::InfusionSummary GetLiveInfusionSummary(const AlterEgo::Character& ch, int tab) {
     return ComputeInfusionsFromIds(GetLiveGearInfusions(ch, tab));
@@ -159,7 +188,7 @@ static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
     if (edit && !GetSavedGearInfusions(*edit).empty()) {
         if (RenderActionButton("Calculate##infusion_totals")) {
             const auto ids = GetSavedGearInfusions(*edit);
-            const auto computed = ComputeInfusionsFromIds(ids);
+            const auto computed = ComputeSavedSlotInfusions(*edit);
             if (computed.complete)
                 UpdateInfusionEditDraft(*edit, computed);
             else {

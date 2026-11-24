@@ -287,6 +287,80 @@ inline const Component* ExactReusableComponent(const Document& doc, const std::s
             if (candidate.data == data) return &candidate;
     return nullptr;
 }
+// Compare only transformations that cannot change equipment compatibility.
+// Utility order and complete rune permutations are functionally interchangeable.
+// Preserve unknown fields, exact IDs, and physical weapon/infusion capacity.
+inline Json ReuseKey(const std::string& kind, Json data) {
+    if (kind == "skills") {
+        for (const char* key : {"skills", "aquatic_skills"}) {
+            if (!data.contains(key) || !data[key].is_object()) continue;
+            auto& bar = data[key];
+            if (bar.contains("utilities") && bar["utilities"].is_array())
+                std::sort(bar["utilities"].begin(), bar["utilities"].end());
+        }
+    }
+    if (kind == "runes" && data.contains("gear") && data["gear"].is_object() &&
+        data["gear"].size() == 6) {
+        static const std::array<std::string,6> slots = {
+            "Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
+        std::vector<Json> entries;
+        for (const auto& slot : slots) {
+            if (!data["gear"].contains(slot)) return data;
+            const auto& part = data["gear"][slot];
+            if (!part.is_object() || !part.contains("rune_id") ||
+                !part["rune_id"].is_number_integer() || part["rune_id"] <= 0)
+                return data;
+            for (auto it = part.begin(); it != part.end(); ++it)
+                if (it.key() != "rune_id" && it.key() != "rune") return data;
+            entries.push_back(part);
+        }
+        std::sort(entries.begin(), entries.end());
+        for (size_t i = 0; i < slots.size(); ++i) data["gear"][slots[i]] = entries[i];
+    }
+    return data;
+}
+inline const Component* ReusableForLoadout(const Document& doc, const std::string& kind,
+                                          const Json& data, const std::string& profession) {
+    if (data.empty()) return nullptr;
+    auto group = doc.components.find(kind);
+    if (group == doc.components.end()) return nullptr;
+    const auto key = ReuseKey(kind, data);
+    for (const auto& candidate : group->second) {
+        if (ReuseKey(kind, candidate.data) != key) continue;
+        if (kind == "skills") {
+            // Unattached legacy skills lack ownership; only reuse when a
+            // same-profession owner proves their context and none conflicts.
+            bool known = false, conflict = false;
+            for (const auto& loadout : doc.loadouts) {
+                auto ref = loadout.refs.find(kind);
+                if (ref == loadout.refs.end() || ref->second != candidate.id) continue;
+                auto base = loadout.refs.find("base_build");
+                const auto* part = base == loadout.refs.end() ? nullptr :
+                    Find(doc, "base_build", base->second);
+                const std::string owner = part ? part->data.value("profession", std::string()) : "";
+                if (!profession.empty() && owner == profession) known = true;
+                else conflict = true;
+            }
+            if (!known || conflict) continue;
+        }
+        return &candidate;
+    }
+    return nullptr;
+}
+inline Json ReuseComparableBuild(Json raw) {
+    auto parts = Split(raw);
+    // Keep metadata and all fields; normalize only approved semantic differences.
+    for (const auto& kind : {std::string("skills"), std::string("runes")}) {
+        auto normalized = ReuseKey(kind, parts.at(kind));
+        for (auto it = normalized.begin(); it != normalized.end(); ++it) {
+            if (it.key() != "gear") raw[it.key()] = it.value();
+            else for (auto slot = it.value().begin(); slot != it.value().end(); ++slot)
+                for (auto field = slot.value().begin(); field != slot.value().end(); ++field)
+                    raw["gear"][slot.key()][field.key()] = field.value();
+        }
+    }
+    return raw;
+}
 inline std::string ComponentNameKey(std::string name) {
     auto space = [](unsigned char c) { return std::isspace(c) != 0; };
     while (!name.empty() && space(name.front())) name.erase(name.begin());
@@ -695,7 +769,12 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
         loadout.metadata["id"] = newId;
         loadout.fashion_id = fashion == packet.end()
             ? std::string() : fashion->get<std::string>();
+        const auto profession = imported.at("base_build").data.value("profession", std::string());
         for (auto& [kind, part] : imported) {
+            if (const auto* match = ReusableForLoadout(next, kind, part.data, profession)) {
+                loadout.refs[kind] = match->id;
+                continue;
+            }
             std::string componentId = kind + ":" + newId;
             unsigned sequence = 1;
             while (Find(next, kind, componentId))
@@ -1033,7 +1112,8 @@ inline bool Reconcile(const Document& original, const Json& legacy,
                 unsigned sequence = 1;
                 while (Find(next, kind, componentId))
                     componentId = kind + ":" + id + ":" + std::to_string(sequence++);
-                if (const auto* match = ExactReusableComponent(next, kind, data)) {
+                if (const auto* match = ReusableForLoadout(next, kind, data,
+                        item.value("profession", std::string()))) {
                     created.refs[kind] = match->id;
                     continue;
                 }
@@ -1053,6 +1133,11 @@ inline bool Reconcile(const Document& original, const Json& legacy,
             Component* previous = Find(next, kind, ref);
             if (!previous) return Fail(error, "Missing component during reconciliation.");
             if (previous->data == data) continue;
+            if (const auto* match = ReusableForLoadout(next, kind, data,
+                    item.value("profession", std::string()))) {
+                updated.refs[kind] = match->id;
+                continue;
+            }
 
             unsigned users = 0;
             for (const auto& use : original.loadouts)
@@ -1060,9 +1145,12 @@ inline bool Reconcile(const Document& original, const Json& legacy,
             // A newly created Loadout earlier in this reconciliation may
             // already reference this component. Never mutate its snapshot.
             for (const auto& use : order)
-                if (std::none_of(original.loadouts.begin(), original.loadouts.end(),
-                        [&](const Loadout& old) { return old.id == use.id; }) &&
-                    use.refs.count(kind) && use.refs.at(kind) == ref) ++users;
+                if (use.refs.count(kind) && use.refs.at(kind) == ref &&
+                    std::none_of(original.loadouts.begin(), original.loadouts.end(),
+                        [&](const Loadout& old) {
+                            return old.id == use.id && old.refs.count(kind) &&
+                                   old.refs.at(kind) == ref;
+                        })) ++users;
             if (users > 1) {
                 std::string privateId = kind + ":" + id;
                 unsigned sequence = 1;
@@ -1079,9 +1167,11 @@ inline bool Reconcile(const Document& original, const Json& legacy,
     next.loadouts = std::move(order); // User's existing order; leave orphan components.
     if (!Validate(next, error)) return false;
     Json assembled;
-    if (!ToLegacy(next, assembled, error) ||
-        assembled.at("builds") != expected)
+    if (!ToLegacy(next, assembled, error) || assembled.at("builds").size() != expected.size())
         return Fail(error, "Compatibility view round-trip mismatch.");
+    for (size_t i = 0; i < expected.size(); ++i)
+        if (ReuseComparableBuild(assembled.at("builds")[i]) != ReuseComparableBuild(expected[i]))
+            return Fail(error, "Compatibility view round-trip mismatch.");
     output = std::move(next);
     return true;
 }
