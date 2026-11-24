@@ -1253,15 +1253,38 @@ inline bool Merge(const Document& current, const Document& incoming,
         return true;
     }
     Document merged = current;
+    // Skill payloads do not carry a profession. A collision can be shared
+    // only if both original graphs independently prove the same context.
+    auto verifiedProfession=[](const Document& doc,const std::string& id) {
+        std::string profession;
+        for(const auto& l:doc.loadouts) {
+            const auto ref=l.refs.find("skills");
+            if(ref==l.refs.end()||ref->second!=id)continue;
+            const auto p=ProfessionOf(doc,l);
+            if(p.empty()||(!profession.empty()&&profession!=p))return std::string();
+            profession=p;
+        }
+        return profession;
+    };
     std::map<std::string, std::map<std::string,std::string>> remap;
     for (const auto& [kind, list] : incoming.components) {
         for (const auto& incomingPart : list) {
             std::string targetId = incomingPart.id;
             if (const Component* existing = Find(merged, kind, targetId)) {
-                if (existing->data != incomingPart.data) {
+                bool same=existing->name==incomingPart.name &&
+                    existing->data.dump()==incomingPart.data.dump();
+                if(same&&kind=="skills") {
+                    const auto local=verifiedProfession(current,targetId);
+                    const auto remote=verifiedProfession(incoming,incomingPart.id);
+                    same=!local.empty()&&local==remote;
+                }
+                if (!same) {
                     unsigned n = 1;
                     targetId = incomingPart.id + ":import:" + std::to_string(n++);
-                    while (Find(merged, kind, targetId))
+                    // Reserve every original incoming ID, including those
+                    // not processed yet. Distinct imported records must
+                    // never collapse into an allocated collision suffix.
+                    while (Find(merged, kind, targetId)||Find(incoming,kind,targetId))
                         targetId = incomingPart.id + ":import:" + std::to_string(n++);
                 }
             }

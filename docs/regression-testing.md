@@ -63,3 +63,5 @@ Reference metadata coverage verifies typed skill, trait, specialization, item-st
 Item metadata regression coverage includes v6 canonical name sharing with Commerce, detail completeness, alias migration and precedence, stale-write rejection and duplicate-row rollback.
 
 Storage diagnostics tests cover missing paths without creation, read-only database access, identity rejection, record counts, schema and artwork size.
+
+Portable graph merge tests include same-ID/different-name records, incompatible Skills ownership, reserved collision suffixes, and verified compatible Skills reuse.
