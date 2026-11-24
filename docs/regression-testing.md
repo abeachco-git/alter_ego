@@ -30,6 +30,19 @@ comparisons and uploads the report.
 
 ## CI maintenance
 
+The Windows workflow uses ccache for both native regression compilation and
+UCRT C/C++ compilation. GitHub Actions restores the previous compiler cache
+and saves an updated cache after successful artifact packaging. Compiler
+content, flags, source and header dependencies remain part of ccache validation;
+do not enable unsafe sloppiness options. The 500 MB cache holds compiler
+outputs only, never final test executables, test results or packaged DLLs.
+Every build still configures, links, runs all offline tests, verifies embedded
+assets and UCRT imports, and packages a newly linked DLL. Cold builds may be
+slightly slower; use the reported ccache hit/miss statistics and workflow step
+timings to evaluate warm builds. If the cache is absent or evicted, compile
+normally.
+
+
 Do not reintroduce automated MetaBattle checks without explicit approval. Do not weaken the remaining required offline cases or binary verification to resolve a failed build. Follow the delivery definition in [AGENTS.md](../AGENTS.md).
 
 The persistence suite additionally exercises the SQLite foundation in

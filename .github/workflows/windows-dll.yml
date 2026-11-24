@@ -18,24 +18,40 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container: debian:trixie
+    env:
+      CCACHE_DIR: /tmp/alter-ego-ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_COMPILERCHECK: content
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1
       - name: Install matching UCRT cross-compiler
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 python3-pil ca-certificates g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 python3-pil ca-certificates ccache g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
           x86_64-w64-mingw32ucrt-g++ --version
+      # Cache compiler outputs, never final executables or test results.
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/alter-ego-ccache
+          key: ae-ccache-v1-${{ runner.os }}-${{ runner.arch }}-trixie-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ae-ccache-v1-${{ runner.os }}-${{ runner.arch }}-trixie-
+      - name: Initialize compiler cache statistics
+        run: |
+          ccache --version
+          ccache --zero-stats
       - name: Run required offline regression tests
         run: |
-          cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build-tests --parallel 2
           ctest --test-dir build-tests --output-on-failure
       - name: Run reproducible SQLite benchmark
         run: python3 tools/benchmark_sqlite.py --output sqlite-benchmark.json
       - name: Configure Windows release build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
       - name: Compile Windows DLL
         run: cmake --build build --parallel 2
       - name: Verify embedded fixed UI assets
@@ -58,6 +74,9 @@ jobs:
             echo "Wrong CRT imported (MSVCRT)" >&2
             exit 1
           fi
+      - name: Report compiler cache statistics
+        if: always()
+        run: ccache --show-stats
       - name: Upload DLL
         uses: actions/upload-artifact@v7.0.2
         with:
@@ -67,3 +86,9 @@ jobs:
             build/AlterEgo.map
             sqlite-benchmark.json
           if-no-files-found: error
+      - name: Save compiler cache
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: /tmp/alter-ego-ccache
+          key: ae-ccache-v1-${{ runner.os }}-${{ runner.arch }}-trixie-${{ github.run_id }}-${{ github.run_attempt }}
