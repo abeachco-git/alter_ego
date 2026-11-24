@@ -373,6 +373,7 @@ int case_database_core(int, char**) {
         J other=ch;other["account_name"]="A_B";
         J unknown=ch;unknown.erase("account_name");unknown["build_tabs"][0].erase("pets");unknown["build_tabs"][0].erase("legends");unknown["build_tabs"][0].erase("weapons");
         J data={{"last_updated",100},{"characters",J::array({ch,other,unknown})}};
+        std::filesystem::create_directories(paths.base);
         AlterEgo::Storage::WriteMigrationBytes(paths.base/"characters.json",data.dump());
         auto read=Cache::ReadCharacters(root);assert(read&&read->at("characters").size()==3);
         assert(read->at("characters")[0]==ch);

@@ -1486,13 +1486,16 @@ namespace AlterEgo {
             }
         }
 
-            // The API may omit weapon selections entirely; do not turn that into verified empty data.
+        // The API may omit weapon selections entirely; do not turn that into verified empty data.
         if (tab_json.contains("build") && tab_json["build"].is_object()) {
             const auto& build=tab_json["build"];
             if (build.contains("weapons") && build["weapons"].is_array()) {
-                bt.weapons_known=true;
-                for(const auto& weapon:build["weapons"])
-                    if(weapon.is_number_unsigned()||weapon.is_number_integer())bt.weapons.push_back(weapon.get<uint32_t>());
+                const auto& weapons=build["weapons"];
+                bt.weapons_known=std::all_of(weapons.begin(),weapons.end(),[](const auto& weapon){
+                    return weapon.is_number_integer()&&weapon.template get<int64_t>()>=0&&
+                           weapon.template get<int64_t>()<=UINT32_MAX;
+                });
+                if(bt.weapons_known)bt.weapons=weapons.get<std::vector<uint32_t>>();
             }
         }
         return bt;
