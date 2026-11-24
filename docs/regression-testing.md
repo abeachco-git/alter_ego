@@ -71,3 +71,5 @@ Native editing and migration also verify that aggregate edits cannot change an e
 Character cache coverage exercises native-first legacy migration, exact account identity, unknown-account records, ordered equipment and build data, missing newly persisted fields, stale capture rejection and rollback on duplicate identity.
 
 Completion cache coverage includes same-slug account isolation, native snapshot presence, verified legacy migration, ordered encounter bits and objectives, season metadata, stale timestamp rejection and transactional rollback. Existing Clears reset and Vault rollover tests remain required; live account switching/reset behavior still requires game validation.
+
+The refresh suite includes `refresh.background_workers`: closed admission, normal completion, exception cleanup, active job tracking, cooperative cancellation, rejected nested launch during shutdown, joining and reopening. This host test does not establish Nexus callback quiescence or in-game unload latency.

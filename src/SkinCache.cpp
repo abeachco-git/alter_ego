@@ -1,3 +1,4 @@
+#include "BackgroundWorkers.h"
 #include "SkinCache.h"
 #include "SkinDataCache.h"
 #include "HttpClient.h"
@@ -202,7 +203,7 @@ namespace Skinventory {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_status_message = "Starting skin fetch...";
         }
-        std::thread(FetchWorker).detach();
+        AlterEgo::Background::Workers().Launch([] { FetchWorker(); }, [] { std::lock_guard<std::mutex> lock(s_mutex); s_status_message = "Skin fetch interrupted"; s_status = CacheStatus::Error; });
     }
 
     void SkinCache::UpdateCacheAsync() {
@@ -213,7 +214,7 @@ namespace Skinventory {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_status_message = "Checking for new skins...";
         }
-        std::thread(UpdateWorker).detach();
+        AlterEgo::Background::Workers().Launch([] { UpdateWorker(); }, [] { std::lock_guard<std::mutex> lock(s_mutex); s_status_message = "Skin update interrupted"; s_status = CacheStatus::Ready; });
     }
 
     // Helper: fetch skin IDs from the API. Returns empty vector on failure.
@@ -288,6 +289,7 @@ namespace Skinventory {
             std::unordered_map<uint32_t, SkinInfo> fetched;
 
             for (size_t i = 0; i < total; i += BATCH_SIZE) {
+            AlterEgo::Background::Checkpoint();
                 size_t end = std::min(i + BATCH_SIZE, total);
                 {
                     std::lock_guard<std::mutex> lock(s_mutex);
@@ -297,6 +299,7 @@ namespace Skinventory {
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
 
+        AlterEgo::Background::Checkpoint();
             if (fetched.empty()) {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 s_status = CacheStatus::Error;
@@ -362,11 +365,13 @@ namespace Skinventory {
             const size_t BATCH_SIZE = 200;
             std::unordered_map<uint32_t, SkinInfo> fetched;
             for (size_t i = 0; i < new_ids.size(); i += BATCH_SIZE) {
+            AlterEgo::Background::Checkpoint();
                 size_t end = std::min(i + BATCH_SIZE, new_ids.size());
                 FetchSkinBatch(new_ids, i, end, fetched);
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
 
+        AlterEgo::Background::Checkpoint();
             // Step 4: Merge into existing cache
             if (!fetched.empty()) {
                 std::lock_guard<std::mutex> lock(s_mutex);

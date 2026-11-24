@@ -1,3 +1,4 @@
+#include "BackgroundWorkers.h"
 #include "Commerce.h"
 #include "HttpClient.h"
 #include "SkinCache.h"
@@ -160,7 +161,7 @@ namespace Skinventory {
             }
         }
         if(item_ids.empty()) { s_fetching=false; return; }
-        std::thread(FetchPriceWorker, std::move(item_ids), std::move(item_to_skin)).detach();
+        AlterEgo::Background::Workers().Launch([ids = std::move(item_ids), mapping = std::move(item_to_skin)]() mutable { FetchPriceWorker(std::move(ids), std::move(mapping)); }, [] { s_fetching = false; });
     }
 
     void Commerce::FetchPriceWorker(std::vector<uint32_t> item_ids,
@@ -170,6 +171,7 @@ namespace Skinventory {
         for(const auto& kv:item_to_skin) for(auto skin:kv.second) best.try_emplace(skin);
         constexpr size_t BATCH_SIZE=200;
         for(size_t i=0;i<item_ids.size();i+=BATCH_SIZE) {
+            AlterEgo::Background::Checkpoint();
             const size_t end=std::min(i+BATCH_SIZE,item_ids.size());
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
@@ -202,6 +204,7 @@ namespace Skinventory {
             if(!ok) for(size_t j=i;j<end;++j) for(auto skin:item_to_skin[item_ids[j]]) failed.insert(skin);
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
+        AlterEgo::Background::Checkpoint();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             for(auto& kv:best) {
@@ -309,7 +312,7 @@ namespace Skinventory {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_fetch_status = "Building item map...";
         }
-        std::thread(ItemMapWorker).detach();
+        AlterEgo::Background::Workers().Launch([] { ItemMapWorker(); }, [] { s_item_map_building = false; });
     }
 
     void Commerce::ItemMapWorker() {
@@ -358,6 +361,7 @@ namespace Skinventory {
             std::unordered_map<uint32_t, int> vendor_map;
 
             for (size_t i = 0; i < total; i += BATCH_SIZE) {
+            AlterEgo::Background::Checkpoint();
                 size_t end = std::min(i + BATCH_SIZE, total);
                 int pct = (int)((i * 100) / total);
                 {

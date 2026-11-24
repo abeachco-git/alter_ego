@@ -22,7 +22,7 @@ static std::unordered_set<std::string> s_requested;
 
 static void ReceiveFont(const char* id, void* font) {
     std::lock_guard<std::mutex> lock(s_mtx);
-    s_fonts[id] = static_cast<ImFont*>(font);
+    if (s_api && id) s_fonts[id] = static_cast<ImFont*>(font);
 }
 
 static HMODULE OwnModule() {
@@ -80,13 +80,18 @@ ImFont* ResolveDefault(const Font::Config& cfg) {
 }
 
 void Shutdown() {
-    std::lock_guard<std::mutex> lock(s_mtx);
-    if (s_api && s_api->Fonts_Release)
-        for (auto& entry : s_fonts)
-            s_api->Fonts_Release(entry.first.c_str(), &ReceiveFont);
-    s_fonts.clear();
-    s_requested.clear();
-    s_api = nullptr;
+    decltype(s_fonts) releasing;
+    AddonAPI_t* api;
+    {
+        std::lock_guard<std::mutex> lock(s_mtx);
+        api = s_api;
+        s_api = nullptr;
+        releasing.swap(s_fonts);
+        s_requested.clear();
+    }
+    if (api && api->Fonts_Release)
+        for (const auto& entry : releasing)
+            api->Fonts_Release(entry.first.c_str(), &ReceiveFont);
 }
 
 }} // namespace AlterEgo::FontManager

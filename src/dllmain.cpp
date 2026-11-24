@@ -1,3 +1,4 @@
+#include "BackgroundWorkers.h"
 #include <windows.h>
 #include <commdlg.h>
 #include <shellapi.h>
@@ -909,7 +910,7 @@ static bool g_EditSavePending = false;
 
 static std::string g_LibEditBuildId;   // which build is being edited
 static int g_LibCtxDeleteIdx = -1;     // deferred delete from context menu
-static bool g_RelaySending = false;    // relay POST in progress
+static std::atomic<bool> g_RelaySending{false};    // relay POST in progress
 static std::string g_RelayResultCode;  // 4-char code on success
 static std::string g_RelayResultError; // error message on failure
 
@@ -2087,7 +2088,7 @@ static void FetchAchWaypoints() {
     if (g_AchWaypointsFetching) return;
     g_AchWaypointsFetching = true;
 
-    std::thread([]() {
+    AlterEgo::Background::Workers().Launch([]() {
         std::string json = Skinventory::HttpClient::Get(ACH_WAYPOINTS_URL);
         if (!json.empty()) {
             try {
@@ -2112,7 +2113,7 @@ static void FetchAchWaypoints() {
             } catch (...) {}
         }
         g_AchWaypointsFetching = false;
-    }).detach();
+    }, [] { g_AchWaypointsFetching = false; });
 }
 
 // =========================================================================
@@ -2152,7 +2153,7 @@ static void LoadHeroChallenges() {
 static void FetchHeroChallenges() {
     if (g_HeroChallengesFetching) return;
     g_HeroChallengesFetching = true;
-    std::thread([]() {
+    AlterEgo::Background::Workers().Launch([]() {
         std::string json = Skinventory::HttpClient::Get(HERO_CHALLENGES_URL);
         if (!json.empty()) {
             try {
@@ -2171,7 +2172,7 @@ static void FetchHeroChallenges() {
             } catch (...) {}
         }
         g_HeroChallengesFetching = false;
-    }).detach();
+    }, [] { g_HeroChallengesFetching = false; });
 }
 
 // =========================================================================
@@ -2186,7 +2187,7 @@ static void FetchAchGroups() {
         g_AchStatusMsg = "Fetching achievement groups...";
     }
 
-    std::thread([]() {
+    AlterEgo::Background::Workers().Launch([]() {
         // Fetch all groups
         std::string groupsJson = Skinventory::HttpClient::Get(
             "https://api.guildwars2.com/v2/achievements/groups?ids=all");
@@ -2287,13 +2288,13 @@ static void FetchAchGroups() {
 
         SaveAchGroupCache();
         FetchActiveSpecialEvent();
-    }).detach();
+    }, [] { g_AchGroupsFetching = false; });
 }
 
 static void FetchActiveSpecialEvent() {
     if (g_AchActiveEventFetching) return;
     g_AchActiveEventFetching = true;
-    std::thread([]() {
+    AlterEgo::Background::Workers().Launch([]() {
         // 6-hour disk cache: {ts, body} wrapper. Events change weekly, so 6h is safe.
         std::string wikitext;
         std::string cachePath = AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(), "wiki_special_event.json");
@@ -2373,7 +2374,7 @@ static void FetchActiveSpecialEvent() {
             g_AchActiveEventFetched = true;
             g_AchActiveEventFetching = false;
         }
-    }).detach();
+    }, [] { g_AchActiveEventFetching = false; });
 }
 
 static AchDef ParseAchDef(const nlohmann::json& ach) {
@@ -2456,9 +2457,10 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
         return;
     }
 
-    std::thread([toFetch, catId, automatic]() {
+    AlterEgo::Background::Workers().Launch([toFetch, catId, automatic]() {
         // Fetch in batches of 200
         for (size_t start = 0; start < toFetch.size(); start += 200) {
+            AlterEgo::Background::Checkpoint();
             size_t end = std::min(start + 200, toFetch.size());
             std::string idStr;
             for (size_t i = start; i < end; i++) {
@@ -2483,13 +2485,14 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
+        AlterEgo::Background::Checkpoint();
         g_AchCatFetching = false;
         SaveAchDefCache();
 
         // Signal render thread; preserve the originating request's policy.
         g_AchCatProgressAutomatic = automatic;
         g_AchCatProgressPending = catId;
-    }).detach();
+    }, [] { g_AchCatFetching = false; });
 }
 
 static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic,
@@ -2618,7 +2621,7 @@ static void FetchAchNameIndex() {
     if (g_AchNameIndexFetching) return;
     g_AchNameIndexFetching = true;
 
-    std::thread([]() {
+    AlterEgo::Background::Workers().Launch([]() {
         // Try GitHub hosted index first
         std::string json = Skinventory::HttpClient::Get(ACH_NAME_INDEX_URL);
         if (!json.empty()) {
@@ -2662,6 +2665,7 @@ static void FetchAchNameIndex() {
 
         std::unordered_map<uint32_t, std::string> nameIndex;
         for (size_t start = 0; start < allIds.size(); start += 200) {
+            AlterEgo::Background::Checkpoint();
             size_t end = std::min(start + 200, allIds.size());
             std::string idStr;
             for (size_t i = start; i < end; i++) {
@@ -2701,13 +2705,14 @@ static void FetchAchNameIndex() {
             g_AchNameIndexReady = !g_AchNameIndex.empty();
             g_AchStatusMsg = "";
         }
+        AlterEgo::Background::Checkpoint();
         g_AchNameIndexFetching = false;
 
         if (g_AchNameIndexReady) {
             SaveAchNameIndex();
             SaveAchDefCache();
         }
-    }).detach();
+    }, [] { g_AchNameIndexFetching = false; });
 }
 
 static void FetchPinnedAchDefs() {
@@ -2720,8 +2725,9 @@ static void FetchPinnedAchDefs() {
     }
     if (missing.empty()) return; // All defs cached; progress queried via OnHoardPongForAch
 
-    std::thread([missing]() {
+    AlterEgo::Background::Workers().Launch([missing]() {
         for (size_t start = 0; start < missing.size(); start += 200) {
+            AlterEgo::Background::Checkpoint();
             size_t end = std::min(start + 200, missing.size());
             std::string idStr;
             for (size_t i = start; i < end; i++) {
@@ -2746,7 +2752,7 @@ static void FetchPinnedAchDefs() {
         }
         SaveAchDefCache();
         // Progress queried via OnHoardPongForAch when H&S is ready
-    }).detach();
+    });
 }
 
 // DLL entry point
@@ -5869,7 +5875,7 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
     g_RelayResultCode.clear();
     g_RelayResultError.clear();
 
-    std::thread([build]() {
+    AlterEgo::Background::Workers().Launch([build]() {
         // Build the buildJson string (matches mobile app schema)
         nlohmann::json bj;
         {
@@ -5956,7 +5962,7 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
             g_RelayResultError = "Relay error (HTTP " + std::to_string(resp.status_code) + ")";
         }
         g_RelaySending = false;
-    }).detach();
+    }, [] { g_RelayResultError = "Relay request interrupted."; g_RelaySending = false; });
 }
 
 // Both saved-library builds and retrieved character snapshots share the same
@@ -9404,7 +9410,7 @@ static void FetchBuildSource(const std::string& url, const std::string& refreshI
     g_BuildSourceRefreshError.clear();
     std::string normalized = AlterEgo::SnowCrows::NormalizeUrl(url);
     if (normalized.empty()) normalized = AlterEgo::MetaBattle::NormalizeUrl(url);
-    std::thread([normalized, refreshId]() {
+    AlterEgo::Background::Workers().Launch([normalized, refreshId]() {
         BuildSourceFetchResult result;
         result.refresh = !refreshId.empty();
         result.targetId = refreshId;
@@ -9431,7 +9437,7 @@ static void FetchBuildSource(const std::string& url, const std::string& refreshI
         result.ready = true;
         std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex);
         g_BuildSourceResult = std::move(result);
-    }).detach();
+    }, [refreshId] { BuildSourceFetchResult result; result.refresh = !refreshId.empty(); result.targetId = refreshId; result.error = "Build download interrupted."; result.ready = true; std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex); g_BuildSourceResult = std::move(result); });
 }
 
 static void PollBuildSource() {
@@ -12483,6 +12489,7 @@ static void BuildGW2Theme() {
 // --- Addon Lifecycle ---
 
 void AddonLoad(AddonAPI_t* aApi) {
+    AlterEgo::Background::Workers().Open();
     APIDefs = aApi;
     ImGui::SetCurrentContext((ImGuiContext*)APIDefs->ImguiContext);
     ImGui::SetAllocatorFunctions((void* (*)(size_t, void*))APIDefs->ImguiMalloc,
@@ -12632,6 +12639,13 @@ void AddonLoad(AddonAPI_t* aApi) {
 }
 
 void AddonUnload() {
+    AlterEgo::Background::Workers().RequestStop();
+    APIDefs->GUI_DeregisterCloseOnEscape("Alter Ego");
+    APIDefs->QuickAccess_Remove(QA_ID);
+    APIDefs->GUI_Deregister(AddonOptions);
+    APIDefs->GUI_Deregister(AddonRender);
+    APIDefs->InputBinds_Deregister("KB_ALTER_EGO_TOGGLE");
+    APIDefs->InputBinds_Deregister("KB_ALTER_EGO_TRACKER");
     // Unsubscribe MumbleLink identity
     APIDefs->Events_Unsubscribe("EV_MUMBLE_IDENTITY_UPDATED", OnMumbleIdentityUpdated);
 
@@ -12662,6 +12676,9 @@ void AddonUnload() {
     APIDefs->Events_Unsubscribe(EV_AE_ACCOUNTS_RESP, AlterEgo::GW2API::OnAccountsResponse);
     APIDefs->Events_Unsubscribe(EV_HOARD_ACCOUNTS_CHANGED, AlterEgo::GW2API::OnAccountsChanged);
 
+    // All one-shot jobs must finish before their state/API is destroyed.
+    AlterEgo::Background::Workers().JoinAll();
+
     // Persist achievement progress before shutting down the data subsystem,
     // including updates received while the Achievements tab was not visible.
     if (g_AchProgressDirty && !g_AchCachedAccount.empty())
@@ -12673,11 +12690,6 @@ void AddonUnload() {
 
     AlterEgo::IconManager::Shutdown();
     AlterEgo::GW2API::Shutdown();
-
-    APIDefs->GUI_DeregisterCloseOnEscape("Alter Ego");
-    APIDefs->QuickAccess_Remove(QA_ID);
-    APIDefs->GUI_Deregister(AddonOptions);
-    APIDefs->GUI_Deregister(AddonRender);
 
     SaveSession();
     SaveSettings();

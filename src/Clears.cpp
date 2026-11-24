@@ -1,3 +1,4 @@
+#include "BackgroundWorkers.h"
 #include <windows.h>
 #include <string>
 #include <vector>
@@ -789,7 +790,7 @@ static void FetchClears() {
         // Keep successfully cached data displayed during a refresh.
     }
 
-    std::thread([]() {
+    AlterEgo::Background::Workers().Launch([]() {
         // Step 1: Fetch all category achievement IDs
         const int64_t requestToken = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -915,7 +916,7 @@ static void FetchClears() {
         // Background fetch done — allow render thread to send H&S completion query
         g_ClearsFetching = false;
         g_ClearsQueryPending = true;
-    }).detach();
+    }, [] { g_ClearsFetching = false; });
 }
 
 // =========================================================================

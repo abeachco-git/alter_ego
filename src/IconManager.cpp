@@ -1,3 +1,4 @@
+#include "HttpSafety.h"
 #include "IconManager.h"
 #include "StoragePaths.h"
 #include "GW2API.h"
@@ -98,6 +99,7 @@ std::string IconManager::GetIconFilePath(uint32_t id) {
 bool IconManager::DownloadToFile(const std::string& url, const std::string& filePath) {
     HINTERNET hInternet = InternetOpenA("AlterEgo/1.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hInternet) return false;
+        AlterEgo::HttpSafety::Configure(hInternet);
 
     HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0,
         INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
@@ -107,16 +109,12 @@ bool IconManager::DownloadToFile(const std::string& url, const std::string& file
     }
 
     std::vector<char> buffer;
-    char chunk[4096];
-    DWORD bytesRead = 0;
-    while (InternetReadFile(hUrl, chunk, sizeof(chunk), &bytesRead) && bytesRead > 0) {
-        buffer.insert(buffer.end(), chunk, chunk + bytesRead);
-    }
+    const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { buffer.insert(buffer.end(), data, data + count); });
 
     InternetCloseHandle(hUrl);
     InternetCloseHandle(hInternet);
 
-    if (buffer.empty()) return false;
+    if (!complete || buffer.empty()) return false;
 
     // Verify image magic bytes (PNG or JPEG)
     bool isPng = (buffer.size() >= 8 && buffer[0] == (char)0x89 && buffer[1] == 'P' && buffer[2] == 'N' && buffer[3] == 'G');

@@ -1,3 +1,5 @@
+#include "HttpSafety.h"
+#include "BackgroundWorkers.h"
 #include "GW2API.h"
 #include "SkinDataCache.h"
 #include "ReferenceMetadataCache.h"
@@ -1776,7 +1778,7 @@ namespace AlterEgo {
             std::lock_guard<std::mutex> lock(s_mutex);
             if (s_itemstat_cache.size() > 50) return; // Already loaded
         }
-        std::thread([]() {
+        AlterEgo::Background::Workers().Launch([]() {
             std::string response = HttpGet("https://api.guildwars2.com/v2/itemstats?ids=all");
             if (response.empty()) return;
             try {
@@ -1805,7 +1807,7 @@ namespace AlterEgo {
                 }
             } catch (...) {}
             SaveItemStatCache();
-        }).detach();
+        });
     }
 
     const ProfessionInfo* GW2API::GetProfessionInfo(const std::string& profession) {
@@ -1839,7 +1841,7 @@ namespace AlterEgo {
         }
 
         try {
-            std::thread([prof]() {
+            AlterEgo::Background::Workers().Launch([prof]() {
                 try {
                     const std::string url = "https://api.guildwars2.com/v2/professions/" + prof;
                     const std::string response = HttpGet(url);
@@ -1873,7 +1875,7 @@ namespace AlterEgo {
                 // after a successful response. Always clear on worker exit.
                 std::lock_guard<std::mutex> lock(s_mutex);
                 inFlight.erase(prof);
-            }).detach();
+            }, [prof]() { std::lock_guard<std::mutex> lock(s_mutex); inFlight.erase(prof); });
         } catch (...) {
             std::lock_guard<std::mutex> lock(s_mutex);
             inFlight.erase(prof);
@@ -1888,6 +1890,7 @@ namespace AlterEgo {
         HINTERNET hInternet = InternetOpenA("AlterEgo/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return "";
+        AlterEgo::HttpSafety::Configure(hInternet);
 
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                       INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID;
@@ -1899,15 +1902,11 @@ namespace AlterEgo {
         }
 
         std::string result;
-        char buffer[8192];
-        DWORD bytesRead;
-        while (InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-            result.append(buffer, bytesRead);
-        }
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.append(data, count); });
 
         InternetCloseHandle(hUrl);
         InternetCloseHandle(hInternet);
-        return result;
+        return complete ? result : std::string{};
     }
 
     // --- Batch fetch: items ---
@@ -2055,17 +2054,17 @@ namespace AlterEgo {
 
     void GW2API::FetchItemDetailsAsync(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
         auto ids = item_ids;
-        std::thread([ids, forceRefetch]() { FetchItemDetails(ids, forceRefetch); }).detach();
+        AlterEgo::Background::Workers().Launch([ids, forceRefetch]() { FetchItemDetails(ids, forceRefetch); });
     }
 
     void GW2API::FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids) {
         auto ids = skin_ids;
-        std::thread([ids]() { FetchSkinDetails(ids); }).detach();
+        AlterEgo::Background::Workers().Launch([ids]() { FetchSkinDetails(ids); });
     }
 
     void GW2API::FetchSpecDetailsAsync(const std::vector<uint32_t>& spec_ids) {
         auto ids = spec_ids;
-        std::thread([ids]() {
+        AlterEgo::Background::Workers().Launch([ids]() {
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
@@ -2134,7 +2133,7 @@ namespace AlterEgo {
             if (!all_trait_ids.empty()) {
                 FetchTraitDetails(all_trait_ids);
             }
-        }).detach();
+        });
     }
 
     void GW2API::FetchTraitDetails(const std::vector<uint32_t>& trait_ids) {
@@ -2193,12 +2192,12 @@ namespace AlterEgo {
 
     void GW2API::FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids) {
         auto ids = trait_ids;
-        std::thread([ids]() { FetchTraitDetails(ids); }).detach();
+        AlterEgo::Background::Workers().Launch([ids]() { FetchTraitDetails(ids); });
     }
 
     void GW2API::FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids) {
         auto ids = skill_ids;
-        std::thread([ids]() {
+        AlterEgo::Background::Workers().Launch([ids]() {
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
@@ -2252,12 +2251,12 @@ namespace AlterEgo {
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
             SaveSkillCache();
-        }).detach();
+        });
     }
 
     void GW2API::FetchItemStatDetailsAsync(const std::vector<uint32_t>& stat_ids) {
         auto ids = stat_ids;
-        std::thread([ids]() {
+        AlterEgo::Background::Workers().Launch([ids]() {
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
@@ -2306,11 +2305,11 @@ namespace AlterEgo {
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
             SaveItemStatCache();
-        }).detach();
+        });
     }
 
     void GW2API::FetchDyeColorsAsync() {
-        std::thread([]() {
+        AlterEgo::Background::Workers().Launch([]() {
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 if (!s_dye_cache.empty()) return;
@@ -2349,7 +2348,7 @@ namespace AlterEgo {
                 }
             } catch (...) {}
             SaveDyeColorsCache();
-        }).detach();
+        });
     }
 
     // =========================================================================
@@ -2796,7 +2795,7 @@ namespace AlterEgo {
             if (!s_pets.empty()) return;
         }
         if (s_petsFetching.exchange(true)) return;
-        std::thread([]() {
+        AlterEgo::Background::Workers().Launch([]() {
             std::string response = HttpGet("https://api.guildwars2.com/v2/pets?ids=all");
             std::vector<PetInfo> pets;
             if (!response.empty()) {
@@ -2820,7 +2819,7 @@ namespace AlterEgo {
                 s_pets = std::move(pets);
             }
             s_petsFetching = false;
-        }).detach();
+        }, [] { s_petsFetching = false; });
     }
 
     uint32_t GW2API::GetLegendSwapSkill(uint8_t code) {
@@ -2835,7 +2834,7 @@ namespace AlterEgo {
             if (!s_legend_swap.empty()) return;
         }
         if (s_legendsFetching.exchange(true)) return;
-        std::thread([]() {
+        AlterEgo::Background::Workers().Launch([]() {
             // 1) /v2/legends -> each legend's swap-skill id.
             std::vector<uint32_t> swaps;
             std::string resp = HttpGet("https://api.guildwars2.com/v2/legends?ids=all");
@@ -2888,7 +2887,7 @@ namespace AlterEgo {
                 SaveSkillCache();
             }
             s_legendsFetching = false;
-        }).detach();
+        }, [] { s_legendsFetching = false; });
     }
 
     SavedBuild GW2API::CreateBlankBuild(const std::string& profession, GameMode mode) {
@@ -3911,7 +3910,7 @@ namespace AlterEgo {
         }
 
         auto prof = profession;
-        std::thread([prof]() {
+        AlterEgo::Background::Workers().Launch([prof]() {
             // Fetch with v=latest to get skills_by_palette
             std::string url = "https://api.guildwars2.com/v2/professions/" + prof + "?v=latest";
             std::string response = HttpGet(url);
@@ -3996,7 +3995,7 @@ namespace AlterEgo {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 s_palette_fetching.erase(prof);
             }
-        }).detach();
+        }, [prof] { std::lock_guard<std::mutex> lock(s_mutex); s_palette_fetching.erase(prof); });
     }
 
 } // namespace AlterEgo
