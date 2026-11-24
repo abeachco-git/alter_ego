@@ -27,6 +27,8 @@ void SyncCompletionAccountCaches();
 void RenderVaultStatusRow();
 void RenderClearsStatusRow();
 bool VaultHideComplete();
+bool ShowVaultAssistance();
+void ToggleVaultAssistance();
 bool ClearsHideComplete();
 void ToggleVaultHideComplete();
 void ToggleClearsHideComplete();

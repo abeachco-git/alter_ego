@@ -34,6 +34,7 @@
 #include "RaidChipWidths.h"
 #include "RefreshUI.h"
 #include "WikiImage.h"
+#include "VaultAssistance.h"
 
 // =========================================================================
 // Clears - Data types and module-private state
@@ -191,6 +192,7 @@ static std::ifstream OpenAccountCache(const char* stem, const std::string& accou
     return file;
 }
 
+static bool g_ShowVaultAssistance = true;
 static bool g_VaultHideComplete = false;   // hide claimed vault objectives
 static bool g_ClearsHideComplete = false;  // hide completed clear encounters
 static bool g_ShowFractalNextResets = true; // show upcoming daily fractal forecast
@@ -2225,6 +2227,94 @@ static ImU32 VaultTrackColor(const std::string& track) {
     return IM_COL32(84, 186, 84, 255);                       // PvE green
 }
 
+// Assistance is contextual and never changes completion state or starts a query.
+static AlterEgo::VaultAssist::Options VaultOptions(const VaultObjective& obj) {
+    if (!g_ShowVaultAssistance || obj.claimed || obj.isDone()) return {};
+    return AlterEgo::VaultAssist::Match(obj.title,obj.track);
+}
+static void RenderVaultAssistance(AlterEgo::VaultAssist::Options options, float width, int64_t utc) {
+    using namespace AlterEgo::VaultAssist;
+    if (options.empty()) return;
+    Sort(options,utc);
+    const auto& first = options.front();
+    const int next = NextSeconds(first,utc);
+    const ImU32 color = next >= 0 && next <= 300 ? IM_COL32(125,210,150,255) :
+        next >= 0 && next <= 1800 ? IM_COL32(224,190,119,255) : IM_COL32(157,175,194,255);
+    const std::string hint = next >= 0 ? first.label + " - " + Countdown(next) : first.label;
+    const float lineH = ImGui::GetTextLineHeight() + 8.0f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    auto* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p,ImVec2(p.x+width,p.y+lineH),IM_COL32(35,38,44,175),2.0f);
+    const float actionW = 23.0f;
+    const bool hasLink = !first.link.empty() && width >= 90.0f;
+    const float hintW = ImMax(1.0f,width - actionW * (hasLink ? 2 : 1));
+    ImGui::SetCursorScreenPos(p);
+    const bool open = ImGui::InvisibleButton("##assist_hint",ImVec2(hintW,lineH));
+    const bool hintHovered = ImGui::IsItemHovered();
+    dl->PushClipRect(ImVec2(p.x+6,p.y),ImVec2(p.x+hintW-2,p.y+lineH),true);
+    dl->AddText(ImVec2(p.x+8,p.y+4),color,hint.c_str());
+    dl->PopClipRect();
+    if (hintHovered) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(first.label.c_str());
+        if (!first.map.empty()) ImGui::TextDisabled("%s",first.map.c_str());
+        ImGui::PushTextWrapPos(340.0f);
+        ImGui::TextUnformatted(first.note.c_str());
+        ImGui::PopTextWrapPos();
+        if (next >= 0) ImGui::TextDisabled("Scheduled start; actual map progress can vary.");
+        ImGui::TextDisabled("Click for all suggested locations.");
+        ImGui::EndTooltip();
+    }
+    if (hasLink) {
+        ImGui::SetCursorScreenPos(ImVec2(p.x+width-actionW*2,p.y));
+        if (ImGui::InvisibleButton("##assist_copy",ImVec2(actionW,lineH))) {
+            ImGui::SetClipboardText(first.link.c_str());
+            if (APIDefs) APIDefs->GUI_SendAlert("Location chat link copied.");
+        }
+        const ImVec2 q(p.x+width-actionW*1.5f,p.y+lineH*0.5f);
+        const ImU32 icon = IM_COL32(161,184,208,255);
+        dl->AddRect(ImVec2(q.x-5,q.y-3),ImVec2(q.x+1,q.y+5),icon,1.0f);
+        dl->AddRect(ImVec2(q.x-2,q.y-6),ImVec2(q.x+4,q.y+2),icon,1.0f);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy location chat link: %s",first.link.c_str());
+    }
+    ImGui::SetCursorScreenPos(ImVec2(p.x+width-actionW,p.y));
+    const bool arrow = ImGui::InvisibleButton("##assist_more",ImVec2(actionW,lineH));
+    const ImVec2 center(p.x+width-actionW*0.5f,p.y+lineH*0.5f);
+    dl->AddTriangleFilled(ImVec2(center.x-4,center.y-2),ImVec2(center.x+4,center.y-2),
+        ImVec2(center.x,center.y+3),IM_COL32(175,175,185,255));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Objective assistance");
+    if (open || arrow) ImGui::OpenPopup("##vault_assist_options");
+    if (ImGui::BeginPopup("##vault_assist_options")) {
+        ImGui::TextColored(ImVec4(0.91f,0.77f,0.48f,1.0f),"Objective Assistance");
+        ImGui::TextDisabled("Suggested locations / scheduled starts");
+        ImGui::Separator();
+        for (size_t i = 0; i < options.size(); ++i) {
+            const auto& option = options[i];
+            ImGui::PushID(static_cast<int>(i));
+            const int time = NextSeconds(option,utc);
+            if (!option.link.empty()) {
+                if (ImGui::Selectable(option.label.c_str())) {
+                    ImGui::SetClipboardText(option.link.c_str());
+                    if (APIDefs) APIDefs->GUI_SendAlert("Location chat link copied.");
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy %s",option.link.c_str());
+            } else ImGui::TextUnformatted(option.label.c_str());
+            if (!option.map.empty()) ImGui::TextDisabled("%s",option.map.c_str());
+            if (time >= 0) ImGui::TextColored(ImVec4(0.86f,0.74f,0.46f,1.0f),
+                "Scheduled %s",Countdown(time).c_str());
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+320.0f);
+            ImGui::TextWrapped("%s",option.note.c_str());
+            ImGui::PopTextWrapPos();
+            if (i+1 < options.size()) ImGui::Separator();
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Copy a location, paste into in-game chat.");
+        ImGui::EndPopup();
+    }
+    ImGui::SetCursorScreenPos(ImVec2(p.x,p.y+lineH));
+}
+
 // Slim two-column row for a single vault objective.
 static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -2376,26 +2466,36 @@ static void RenderVaultPeriodSection(int sectionIndex, const char* title,
         return;
     }
 
-    // Two-column grid of objective rows
-    float availW = ImGui::GetContentRegionAvail().x - 4.0f;
-    float gap = 6.0f;
-    float halfW = (availW - gap) * 0.5f;
-
-    size_t shown = 0;
-    for (size_t i = 0; i < period.objectives.size(); i++) {
-        const auto& obj = period.objectives[i];
-        if (g_VaultHideComplete && obj.claimed) continue;
-        ImGui::PushID((int)i);
-        ImVec2 startPos = ImGui::GetCursorScreenPos();
-        RenderVaultObjectiveRow(obj, halfW);
-        ImGui::PopID();
-
-        ++shown;
-        if (shown % 2 == 1 && shown < visibleCount) {
-            ImGui::SetCursorScreenPos(ImVec2(startPos.x + halfW + gap, startPos.y));
-        } else {
-            ImGui::Dummy(ImVec2(0, 2));
+    // Keep the two-column grid aligned even when only one objective in
+    // a pair has a second line. Narrow windows use one column.
+    const float availW = ImGui::GetContentRegionAvail().x - 4.0f;
+    const float gap = 6.0f;
+    const int columns = availW >= 340.0f ? 2 : 1;
+    const float cellW = ImMax(1.0f,(availW - gap * (columns-1)) / columns);
+    const int64_t utc = static_cast<int64_t>(std::time(nullptr));
+    std::vector<size_t> visible;
+    for (size_t i = 0; i < period.objectives.size(); ++i)
+        if (!g_VaultHideComplete || !period.objectives[i].claimed) visible.push_back(i);
+    for (size_t i = 0; i < visible.size(); i += columns) {
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        float bottom = origin.y;
+        for (int column = 0; column < columns && i + column < visible.size(); ++column) {
+            const size_t index = visible[i+column];
+            const auto& obj = period.objectives[index];
+            ImGui::SetCursorScreenPos(ImVec2(origin.x+column*(cellW+gap),origin.y));
+            ImGui::PushID(static_cast<int>(index));
+            RenderVaultObjectiveRow(obj,cellW);
+            auto options = VaultOptions(obj);
+            if (!options.empty()) {
+                ImGui::SetCursorScreenPos(ImVec2(origin.x+column*(cellW+gap),
+                    ImGui::GetCursorScreenPos().y));
+                RenderVaultAssistance(std::move(options),cellW,utc);
+            }
+            bottom = ImMax(bottom,ImGui::GetCursorScreenPos().y);
+            ImGui::PopID();
         }
+        ImGui::SetCursorScreenPos(ImVec2(origin.x,bottom));
+        ImGui::Dummy(ImVec2(0,2));
     }
 
     ImGui::Unindent(4.0f);
@@ -2533,6 +2633,7 @@ static void LoadClearUiSettings() {
     g_ClearUiLoaded = true;
     // Older backups and missing settings keep the original visible default.
     g_ShowFractalNextResets = true;
+    g_ShowVaultAssistance = true;
     try {
         std::ifstream f(ClearUiSettingsPath());
         if (!f.good()) return;
@@ -2547,6 +2648,8 @@ static void LoadClearUiSettings() {
                 if (v[i].is_boolean()) g_VaultOpen[i] = v[i].get<bool>();
         }
         g_VaultHideComplete = j.value("hide_vault_complete", false);
+        if (j.contains("show_vault_assistance") && j["show_vault_assistance"].is_boolean())
+            g_ShowVaultAssistance = j["show_vault_assistance"].get<bool>();
         g_ClearsHideComplete = j.value("hide_clears_complete", false);
         if (j.contains("show_fractal_next_resets") && j["show_fractal_next_resets"].is_boolean())
             g_ShowFractalNextResets = j["show_fractal_next_resets"].get<bool>();
@@ -2565,6 +2668,7 @@ static void SaveClearUiSettings() {
         j["expanded"] = {g_ClearOpen[0], g_ClearOpen[1], g_ClearOpen[2], g_ClearOpen[3]};
         j["vault_expanded"] = {g_VaultOpen[0], g_VaultOpen[1], g_VaultOpen[2]};
         j["hide_vault_complete"] = g_VaultHideComplete;
+        j["show_vault_assistance"] = g_ShowVaultAssistance;
         j["hide_clears_complete"] = g_ClearsHideComplete;
         j["show_fractal_next_resets"] = g_ShowFractalNextResets;
         std::ofstream f(path, std::ios::trunc);
@@ -3413,6 +3517,12 @@ void SyncCompletionAccountCaches() {
 }
 
 
+bool ShowVaultAssistance() { LoadClearUiSettings(); return g_ShowVaultAssistance; }
+void ToggleVaultAssistance() {
+    LoadClearUiSettings();
+    g_ShowVaultAssistance = !g_ShowVaultAssistance;
+    SaveClearUiSettings();
+}
 bool VaultHideComplete() { LoadClearUiSettings(); return g_VaultHideComplete; }
 bool ClearsHideComplete() { LoadClearUiSettings(); return g_ClearsHideComplete; }
 bool ShowFractalNextResets() { LoadClearUiSettings(); return g_ShowFractalNextResets; }

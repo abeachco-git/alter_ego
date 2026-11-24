@@ -18108,6 +18108,10 @@ void AddonRender() {
                     ToggleVaultHideComplete();
                     chosen = true;
                 }
+                if (ImGui::MenuItem("Show Objective Assistance", nullptr, ShowVaultAssistance())) {
+                    ToggleVaultAssistance();
+                    chosen = true;
+                }
                 FinishTabDropdown(vaultMenu, chosen, hovered);
                 ImGui::EndPopup();
             }

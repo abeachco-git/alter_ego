@@ -1,0 +1,27 @@
+#include "../src/VaultAssistance.h"
+#include <cassert>
+int main() {
+    using namespace AlterEgo::VaultAssist;
+    auto a = Match("Complete 3 Events","PvE");
+    assert(a.size() == 4 && a[0].link == "[&BL8MAAA=]");
+    assert(a[1].link == "[&BP8MAAA=]");
+    assert(Match("Complete 3 Events","WvW").empty());
+    assert(Match("Salvage 10 Items","PvE").empty());
+    assert(Match("Complete 10 Events in Queensdale","PvE").empty());
+    assert(Match("Gather 25 Crafting Resources","PvE").size() == 4);
+    a = Match("Defeat the Inquest Golem Mark II World Boss or Complete 10 Events in Mount Maelstrom","PvE");
+    assert(a.size() == 1);
+    assert(NextSeconds(a[0], 119 * 60 + 30) == 30);
+    assert(NextSeconds(a[0], 120 * 60) == 0);
+    assert(NextSeconds(a[0], 120 * 60 + 1) == 179 * 60 + 59);
+    a = Match("Complete a Meta-Event or Events in Cantha or 15 Events in Maguuma Jungle","PvE");
+    assert(a.size() == 5);
+    Sort(a, 119 * 60);
+    assert(a[0].label == "Kaineng Blackout");
+    assert(NextSeconds(a.back(),0) == -1);
+    a = Match("Defeat Tequatl the Sunless or Complete Events in Sparkfly Fen","PvE");
+    assert(NextSeconds(a[0], 23 * 3600) == 3600);
+    assert(Countdown(61) == "in 2m");
+    assert(Countdown(0) == "Scheduled now");
+    assert(Countdown(-1) == "Variable start");
+}

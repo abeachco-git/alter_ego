@@ -89,6 +89,8 @@ jobs:
           /tmp/composable_loadouts
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/gear_edit_core.cpp -o /tmp/gear_edit_core
           /tmp/gear_edit_core
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/vault_assistance.cpp -o /tmp/vault_assistance
+          /tmp/vault_assistance
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Ilib tests/composable_gear_presentation.cpp -o /tmp/composable_gear_presentation
           /tmp/composable_gear_presentation
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/equipment_choice_core.cpp -o /tmp/equipment_choice_core
