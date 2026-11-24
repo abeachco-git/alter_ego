@@ -170,6 +170,13 @@ inline bool SearchToolbar(const char* id, const char* hint, Query& query,
     const float fw = CompactButtonWidth(filterLabel.c_str());
     const float aw = actionLabel ? CompactButtonWidth(actionLabel) : 0.0f;
     const float reserve = fw + gap + (actionLabel ? aw + gap : 0.0f);
+    // A toolbar containing a normal action (e.g. Refresh Prices) keeps
+    // standard action height; align its search/filter controls to that height.
+    if (actionLabel) {
+        ImVec2 pad = ImGui::GetStyle().FramePadding;
+        pad.y = std::max(pad.y, (ActionButtonHeight() - ImGui::GetFontSize()) * 0.5f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, pad);
+    }
     const bool sameRow = avail >= reserve + ImGui::GetFrameHeight() + gap + ImGui::GetFontSize() * 6.0f;
     bool changed = SearchField("search", hint, query, sameRow ? avail - reserve : avail);
     if (sameRow) ImGui::SameLine();
@@ -178,8 +185,9 @@ inline bool SearchToolbar(const char* id, const char* hint, Query& query,
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Search and filter options");
     if (actionLabel) {
         if (sameRow || avail >= fw + gap + aw) ImGui::SameLine();
-        const bool clicked = Button(actionLabel, ImVec2(0, 0), ButtonRole::Compact);
+        const bool clicked = Button(actionLabel);
         if (actionClicked) *actionClicked = clicked;
+        ImGui::PopStyleVar();
     } else if (actionClicked) *actionClicked = false;
     if (ImGui::BeginPopup("##filters")) {
         drawFilters();
