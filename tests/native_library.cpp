@@ -95,7 +95,7 @@ int case_native_library(int,char**) {
         Json raw;assert(C::Resolve(next.loadouts,next.loadouts.loadouts.front(),raw,error));
         assert(Native::PutEquipmentSet(next.loadouts,"set1","Equipment",raw,error));
         assert(next.loadouts.equipment_sets.front().refs.size()==7);
-        const auto& refs=next.loadouts.equipment_sets.front().refs;
+        const auto refs=next.loadouts.equipment_sets.front().refs;
         assert(refs.at("sigils")==next.loadouts.loadouts.front().refs.at("sigils"));
         auto remove=next.loadouts;
         assert(!C::RemoveUnreferenced(remove,"sigils",refs.at("sigils"),error));
