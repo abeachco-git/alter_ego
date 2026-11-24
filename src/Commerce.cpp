@@ -1,6 +1,8 @@
 #include "Commerce.h"
 #include "HttpClient.h"
 #include "SkinCache.h"
+#include "CommerceCache.h"
+#include "SkinDataCache.h"
 
 #include <nlohmann/json.hpp>
 #include <thread>
@@ -13,9 +15,6 @@
 #include <stdexcept>
 
 using json = nlohmann::json;
-
-// Defined in dllmain.cpp; atomic write-temp-then-rename.
-extern bool WriteFileAtomic(const std::string& finalPath, const std::string& content);
 
 namespace Skinventory {
 
@@ -222,7 +221,6 @@ namespace Skinventory {
         if (s_data_dir.empty()) return false;
         try { std::filesystem::create_directories(s_data_dir); } catch (...) { return false; }
 
-        std::string path = s_data_dir + "/price_cache_v2.json";
         json j = json::object();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -238,24 +236,22 @@ namespace Skinventory {
                 j[std::to_string(skin_id)] = e;
             }
         }
-        return WriteFileAtomic(path, j.dump());
+        return AlterEgo::Cache::WriteCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),AlterEgo::Cache::CommerceDataset::Prices,j);
     }
 
     bool Commerce::LoadPriceCache() {
         if (s_data_dir.empty()) return false;
         std::string path = s_data_dir + "/price_cache_v2.json";
         try {
-            std::ifstream f(path);
-            if (!f.is_open()) return false;
-            json j;
-            f >> j;
-            if (!j.is_object()) return false;
-            int64_t now = NowUnix();
+            auto snapshot=AlterEgo::Cache::ReadCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+                AlterEgo::Cache::CommerceDataset::Prices,std::filesystem::u8path(path));
+            if(!snapshot || !snapshot->is_object())return false;
+            auto& j=*snapshot;
             std::lock_guard<std::mutex> lock(s_mutex);
             for (auto& [key, e] : j.items()) {
                 if (!e.is_object()) continue;
                 int64_t ts = e.value("ts", (int64_t)0);
-                if (now - ts >= PRICE_TTL_SEC) continue; // stale, skip
+                // Retain the last successful observation; the existing TTL controls refresh.
                 uint32_t skin_id = (uint32_t)std::stoul(key);
                 PriceInfo info;
                 info.item_id = e.value("item_id", (uint32_t)0);
@@ -282,14 +278,16 @@ namespace Skinventory {
             for(const auto& kv:s_item_names) names[std::to_string(kv.first)]=kv.second;
             for(const auto& kv:s_vendor_prices) vendors[std::to_string(kv.first)]=kv.second;
         }
-        return WriteFileAtomic(s_data_dir+"/item_map_v2.json",json{{"version",2},{"skins",skins},{"names",names},{"vendors",vendors}}.dump());
+        return AlterEgo::Cache::WriteCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+            AlterEgo::Cache::CommerceDataset::Mapping,json{{"version",2},{"skins",skins},{"names",names},{"vendors",vendors}});
     }
 
     bool Commerce::LoadItemMap() {
         try {
-            std::ifstream file(s_data_dir+"/item_map_v2.json");
-            if(!file) return false;
-            json j; file>>j;
+            auto snapshot=AlterEgo::Cache::ReadCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+                AlterEgo::Cache::CommerceDataset::Mapping,std::filesystem::u8path(s_data_dir)/"item_map_v2.json");
+            if(!snapshot)return false;
+            auto& j=*snapshot;
             if(j.value("version",0)!=2 || !j.at("skins").is_object() || j.at("skins").empty()) return false;
             std::unordered_map<uint32_t,std::vector<uint32_t>> skins;
             std::unordered_map<uint32_t,std::string> names;

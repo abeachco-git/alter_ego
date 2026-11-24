@@ -2294,7 +2294,7 @@ static void FetchActiveSpecialEvent() {
     std::thread([]() {
         // 6-hour disk cache: {ts, body} wrapper. Events change weekly, so 6h is safe.
         std::string wikitext;
-        std::string cachePath = AlterEgo::GW2API::GetDataDirectory() + "/wiki_special_event.json";
+        std::string cachePath = AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(), "wiki_special_event.json");
         try {
             std::ifstream cf(cachePath);
             if (cf.is_open()) {
@@ -12594,7 +12594,7 @@ void AddonLoad(AddonAPI_t* aApi) {
         std::string dataDir = AlterEgo::GW2API::GetDataDirectory();
         std::string skinDataDir = dataDir + "\\Skinventory";
         try { std::filesystem::create_directories(skinDataDir); } catch (...) {}
-        std::string wikiCacheDir = skinDataDir + "\\wiki_cache";
+        std::string wikiCacheDir = AlterEgo::Storage::ResolveCache(dataDir, "Skinventory/wiki_cache", "wiki_images");
 
         Skinventory::SkinCache::SetDataDirectory(skinDataDir);
         Skinventory::Commerce::SetDataDirectory(skinDataDir);

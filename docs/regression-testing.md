@@ -53,3 +53,5 @@ The database core case also covers 5,000 achievement progress rows and completed
 Achievement catalog regression coverage includes ordered group/category membership, definition bits/flags/prerequisites, rollback on invalid identity, group freshness rejection, legacy name migration, waypoint and hero-challenge round trips.
 
 Skin metadata tests cover preservation of catalog fields and Fashion dye data across both projections, ownership account isolation and stale snapshot rejection.
+
+Commerce and cache-path tests exercise one-to-many and many-to-many item relationships, shared item price observations, stale price rejection, vendor prices and migration of rebuildable JSON to the cache directory.

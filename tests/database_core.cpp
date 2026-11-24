@@ -2,6 +2,7 @@
 #include "../src/CacheDatabase.h"
 #include "../src/AchievementCatalogCache.h"
 #include "../src/SkinDataCache.h"
+#include "../src/CommerceCache.h"
 #include "../src/NativeLibraryStore.h"
 #include <cassert>
 #include <chrono>
@@ -217,6 +218,34 @@ int case_database_core(int, char**) {
         owned.fetchedAt=99;owned.ids.clear();
         assert(!Cache::WriteOwnership(root,"Account.1234",owned));
         assert(Cache::ReadOwnership(root,"Account.1234")->ids.size()==2);
+    }
+    {
+        namespace Cache=AlterEgo::Cache;
+        using J=Cache::Json;
+        using D=Cache::CommerceDataset;
+        const auto root=temp.dir.u8string();
+        const auto absent=temp.dir/"absent.json";
+        J mapping={{"version",2},{"skins",{{"1",J::array({11,12})},{"2",J::array({11})}}},
+            {"names",{{"11","Item"},{"12","Alternate"}}},{"vendors",{{"3",4200}}}};
+        assert(Cache::WriteCommerce(root,D::Mapping,mapping));
+        assert(Cache::ReadCommerce(root,D::Mapping,absent)==mapping);
+        J observation={{"item_id",11},{"ts",100},{"buy",25},{"sell",50},{"buy_q",2},{"sell_q",3},{"tradeable",true}};
+        J prices={{"1",observation},{"2",observation}};
+        assert(Cache::WriteCommerce(root,D::Prices,prices));
+        assert(Cache::ReadCommerce(root,D::Prices,absent)==prices);
+        {
+            DB::Connection db(AlterEgo::Storage::Paths(root).Cache().u8string(),DB::Connection::OpenMode::Existing);
+            assert(db.Scalar("SELECT count(*) FROM commerce_item_prices")==1);
+        }
+        J stale=observation;stale["ts"]=99;stale["sell"]=1;
+        assert(Cache::WriteCommerce(root,D::Prices,J{{"1",stale}}));
+        assert(Cache::ReadCommerce(root,D::Prices,absent)==prices);
+        auto paths=AlterEgo::Storage::Paths(root);
+        AlterEgo::Storage::WriteMigrationBytes(paths.base/"item_cache.json","[]");
+        auto moved=AlterEgo::Storage::ResolveCache(root,"item_cache.json");
+        assert(moved==(paths.CacheDirectory()/"item_cache.json").u8string());
+        assert(AlterEgo::Storage::ReadMigrationBytes(std::filesystem::u8path(moved))=="[]");
+        assert(!std::filesystem::exists(paths.base/"item_cache.json"));
     }
     return 0;
 }

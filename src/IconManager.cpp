@@ -1,4 +1,5 @@
 #include "IconManager.h"
+#include "StoragePaths.h"
 #include "GW2API.h"
 
 #include <windows.h>
@@ -83,7 +84,7 @@ std::string IconManager::GetIconsDir() {
     // This is also where character data and other AlterEgo caches are stored.
     std::string addonDir = GW2API::GetDataDirectory();
     CreateDirectoryA(addonDir.c_str(), NULL);
-    s_IconsDir = addonDir + "\\icons";
+    s_IconsDir = AlterEgo::Storage::ResolveCache(addonDir, "icons", "textures");
     CreateDirectoryA(s_IconsDir.c_str(), NULL);
     return s_IconsDir;
 }

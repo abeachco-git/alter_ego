@@ -11,6 +11,8 @@ A Guild Wars 2 addon for [Raidcore Nexus](https://raidcore.gg/Nexus) that lets y
 
 ## Experimental Native Loadout Library (this branch only)
 
+The experimental branch now separates durable `library/library.db`, settings in `config/`, and rebuildable `cache/cache.db` (achievements and Skinventory). Legacy settings are archived before migration; portable library ZIP entry names remain compatible. Other reconstructable reference JSON and downloaded artwork live under `cache/`.
+
 This **`experiment/composable-loadouts`** branch is a separate, ongoing experiment. It has not been merged into `main` or tested end-to-end in the game. The features below are specific to this branch, and screenshots elsewhere in this README may show the current `main` UI.
 
 - **Independent saved components:** Every Loadout can reference a Base Build, Skills, Weapons, Armor, Trinkets, Runes, Sigils, Infusions, and Relic, plus an optional Fashion appearance. The Loadout viewer still shows individual physical equipment slots, exact item IDs, stats, upgrades, and infusions.

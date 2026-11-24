@@ -108,4 +108,28 @@ inline std::string Resolve(const std::string& root, const std::string& name) {
         return old.u8string();
     }
 }
+// Rebuildable data needs no recovery archive. Move an old cache only when
+// its destination is absent; retain the old path on a migration failure.
+inline std::string ResolveCache(const std::string& root,const std::string& legacyName,
+                                const std::string& cacheName) {
+    const Paths paths(root);
+    const auto old=paths.base/std::filesystem::u8path(legacyName);
+    const auto dest=paths.CacheDirectory()/std::filesystem::u8path(cacheName);
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    std::error_code ec;
+    if(std::filesystem::exists(dest,ec))return dest.u8string();
+    if(ec)return old.u8string();
+    const bool legacy=std::filesystem::exists(old,ec);
+    if(ec)return old.u8string();
+    std::filesystem::create_directories(dest.parent_path(),ec);
+    if(ec)return old.u8string();
+    if(!legacy)return dest.u8string();
+    std::filesystem::rename(old,dest,ec);
+    if(!ec || std::filesystem::exists(dest))return dest.u8string();
+    return old.u8string();
+}
+inline std::string ResolveCache(const std::string& root,const std::string& name) {
+    return ResolveCache(root,name,name);
+}
 } // namespace AlterEgo::Storage

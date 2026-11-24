@@ -1679,7 +1679,7 @@ namespace AlterEgo {
     }
 
     bool GW2API::LoadItemNameCache() {
-        std::string path = GetDataDirectory() + "/item_name_cache.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "item_name_cache.json");
         std::ifstream file(path);
         if (!file.is_open()) return false;
         try {
@@ -1709,7 +1709,7 @@ namespace AlterEgo {
             if (!s_item_name_cache_dirty) return true;
         }
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/item_name_cache.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "item_name_cache.json");
         json j;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -2352,7 +2352,7 @@ namespace AlterEgo {
 
     bool GW2API::SaveCharacterData() {
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/characters.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "characters.json");
 
         json j;
         {
@@ -2480,7 +2480,7 @@ namespace AlterEgo {
     }
 
     bool GW2API::LoadCharacterData() {
-        std::string path = GetDataDirectory() + "/characters.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "characters.json");
         std::ifstream file(path);
         if (!file.is_open()) return false;
 
@@ -3528,7 +3528,7 @@ namespace AlterEgo {
 
     bool GW2API::SaveItemCache() {
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/item_cache.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "item_cache.json");
         json arr = json::array();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -3577,7 +3577,7 @@ namespace AlterEgo {
 
     bool GW2API::SaveSpecCache() {
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/spec_cache.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "spec_cache.json");
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -3605,7 +3605,7 @@ namespace AlterEgo {
 
     bool GW2API::SaveTraitCache() {
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/trait_cache.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "trait_cache.json");
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -3631,7 +3631,7 @@ namespace AlterEgo {
 
     bool GW2API::SaveSkillCache() {
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/skill_cache.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "skill_cache.json");
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -3657,7 +3657,7 @@ namespace AlterEgo {
 
     bool GW2API::SaveItemStatCache() {
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/itemstat_cache.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "itemstat_cache.json");
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -3678,7 +3678,7 @@ namespace AlterEgo {
 
     bool GW2API::SaveDyeColorsCache() {
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/dye_cache.json";
+        std::string path = Storage::ResolveCache(GetDataDirectory(), "dye_cache.json");
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -3702,7 +3702,7 @@ namespace AlterEgo {
 
     bool GW2API::LoadReferenceCaches() {
         auto readJson = [](const std::string& filename, json& out) -> bool {
-            std::ifstream f(GetDataDirectory() + "/" + filename);
+            std::ifstream f(Storage::ResolveCache(GetDataDirectory(), filename));
             if (!f.is_open()) return false;
             try { f >> out; return true; } catch (...) { return false; }
         };

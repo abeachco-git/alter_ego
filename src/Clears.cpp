@@ -157,7 +157,7 @@ static std::string AccountCacheFile(const char* stem, const std::string& account
     slug.reserve(account.size());
     for (unsigned char c : account)
         slug.push_back(std::isalnum(c) || c == '-' || c == '_' ? (char)c : '_');
-    return AlterEgo::GW2API::GetDataDirectory() + "/" + stem + "_" + slug + ".json";
+    return AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(), std::string(stem) + "_" + slug + ".json");
 }
 
 static bool SaveCacheAtomic(const std::string& path, const nlohmann::json& j) {
@@ -187,7 +187,7 @@ static std::ifstream OpenAccountCache(const char* stem, const std::string& accou
         AlterEgo::GW2API::GetAccountCount() == 1) {
         // Unscoped legacy files cannot safely be assigned to a multi-account
         // user. Import them only when H&S confirms exactly one configured account.
-        file.open(AlterEgo::GW2API::GetDataDirectory() + "/" + stem + ".json");
+        file.open(AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(), std::string(stem) + ".json"));
         fromLegacy = file.is_open();
     }
     return file;

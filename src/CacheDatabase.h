@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,23 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 4) {
+        db.Exec(R"SQL(
+CREATE TABLE commerce_item_names(item_id INTEGER PRIMARY KEY, name TEXT NOT NULL) STRICT;
+CREATE TABLE commerce_skin_items(skin_id INTEGER NOT NULL, item_id INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL, PRIMARY KEY(skin_id,item_id), UNIQUE(skin_id,ordinal)) STRICT;
+CREATE INDEX commerce_item_skins ON commerce_skin_items(item_id);
+CREATE TABLE commerce_vendor_prices(skin_id INTEGER PRIMARY KEY, copper INTEGER NOT NULL) STRICT;
+CREATE TABLE commerce_item_prices(item_id INTEGER NOT NULL, fetched_at INTEGER NOT NULL,
+    buy INTEGER NOT NULL, sell INTEGER NOT NULL, buy_quantity INTEGER NOT NULL,
+    sell_quantity INTEGER NOT NULL, tradeable INTEGER NOT NULL CHECK(tradeable IN (0,1)),
+    PRIMARY KEY(item_id,fetched_at)) STRICT;
+CREATE TABLE commerce_skin_price_choices(skin_id INTEGER PRIMARY KEY, item_id INTEGER,
+    fetched_at INTEGER NOT NULL, FOREIGN KEY(item_id,fetched_at)
+    REFERENCES commerce_item_prices(item_id,fetched_at)) STRICT;
+)SQL");
+        return;
+    }
     if (version == 3) {
         db.Exec(R"SQL(
 CREATE TABLE skins(id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
