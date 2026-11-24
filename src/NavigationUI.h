@@ -21,7 +21,6 @@ struct NavigationSnapshot {
 static AlterEgo::Navigation::History<NavigationSnapshot> g_Navigation;
 static std::optional<NavigationSnapshot> g_NavRestore;
 static int g_NavRestoreFrames=0;
-static bool g_NavForcedTab=false;
 static std::atomic<unsigned> g_NavInputMask{0}; // hover=1, focus=2, back=4, forward=8
 static std::atomic<int> g_NavRequest{0};
 static std::atomic<unsigned> g_NavConsumedButtons{0};
@@ -75,7 +74,7 @@ static bool NavigationBlocked(){
     return g_LibEditMode||g_FashionDialog||g_ComponentEditorOpen||g_GearDialogOpen||
         g_SaveLibDialogOpen||g_NewBuildDialogOpen||g_LibShowImport||
         ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId|ImGuiPopupFlags_AnyPopupLevel)||
-        ImGui::IsAnyItemActive()||ImGui::GetIO().WantTextInput;
+        ImGui::GetIO().WantTextInput;
 }
 static void RestoreNavigation(const NavigationSnapshot& s){
     if(g_SelectedAccountFilter!=s.account){
@@ -96,7 +95,7 @@ static void RestoreNavigation(const NavigationSnapshot& s){
                 if(idx>=0&&idx<(int)chars->size()&&(*chars)[idx].name==s.id){g_SelectedCharIdx=i;break;}
             }
             g_SessionSelectedCharName.clear();g_DetailsFetched=false;
-            g_SelectedTab=s.sub;g_SelectedBuildTab=s.buildTab;g_SelectedEquipTab=s.equipTab;
+            g_SelectedBuildTab=s.buildTab;g_SelectedEquipTab=s.equipTab;
             snprintf(g_CharSearchBuf,sizeof(g_CharSearchBuf),"%s",s.search.c_str());break;
         }
         case 1:{
@@ -113,7 +112,7 @@ static void RestoreNavigation(const NavigationSnapshot& s){
             }else if(s.collection==2){
                 g_ComponentSelectedId=s.id;g_ComponentSelectedKind=s.kind;g_ComponentFilterKind=s.category;
                 g_ComponentSearch=s.search;g_ComponentSort=s.sort;g_ComponentUnusedOnly=s.first;
-                g_ComponentSelectIdPending.clear();
+                g_ComponentSelectIdPending.clear();g_ComponentSelectNamePending.clear();
             }else{g_EquipmentSetSelectedId=s.id;g_EquipmentSetSearch=s.search;}
             break;
         }
@@ -136,6 +135,9 @@ static void RestoreNavigation(const NavigationSnapshot& s){
             g_LibCompareBuildTab=s.buildTab;g_LibCompareEquipTab=s.equipTab;
             g_LibCompareShowMatches=s.first;g_LibCompareExactItems=s.other;break;
     }
+}
+static ImGuiTabItemFlags NavigationDetailFlags(int sub){
+    return g_NavRestore&&g_NavRestore->page==0&&g_NavRestore->sub==sub?ImGuiTabItemFlags_SetSelected:0;
 }
 static ImGuiTabItemFlags NavigationTabFlags(int page){
     return g_NavRestore&&g_NavRestore->page==page?ImGuiTabItemFlags_SetSelected:0;
@@ -189,13 +191,12 @@ static void RenderNavigationControls(){
     button("<##nav_back","Back (mouse back / Alt+Left)",-1);ImGui::SameLine();
     button(">##nav_forward","Forward (mouse forward / Alt+Right)",1);
     if(!blocked&&requested)MoveNavigation(requested);
-    ImGui::SameLine();
-    ImGui::TextDisabled("Navigation");
+
 }
 static void EndNavigationFrame(){
     if(g_NavRestore){
         const auto& s=*g_NavRestore;
-        if(g_MainTab==s.page&&(s.page!=2||g_SkinActiveTab==s.sub)){
+        if(g_MainTab==s.page&&(s.page!=2||g_SkinActiveTab==s.sub)&&(s.page!=0||g_SelectedTab==s.sub)){
             auto* root=ImGui::GetCurrentWindow();
             for(auto* w:GImGui->Windows)
                 if(w->RootWindow==root&&w->LastFrameActive==ImGui::GetFrameCount()){
@@ -214,7 +215,7 @@ static void EndNavigationFrame(){
         else if(g_NavIntentFrames>0)--g_NavIntentFrames;
     }
     unsigned scope=0;
-    if(!NavigationBlocked()&&!g_NavRestore){
+    if(!NavigationBlocked()&&!g_NavRestore&&!ImGui::IsAnyItemActive()){
         if(ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))scope|=1;
         if(ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))scope|=2;
         if(g_Navigation.CanMove(-1))scope|=4;

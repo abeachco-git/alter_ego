@@ -11531,26 +11531,22 @@ static void RenderCompareTab() {
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1.0f);
             if (AlterEgo::UI::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
-                if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
-                    g_LibCompareBuildTab = -1;
+                if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0)) {MarkNavigation();g_LibCompareBuildTab = -1;}
                 for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
                     const auto& bt = character->build_tabs[i];
                     std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
-                    if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab))
-                        g_LibCompareBuildTab = i;
+                    if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab)) {MarkNavigation();g_LibCompareBuildTab = i;}
                 }
                 ImGui::EndCombo();
             }
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1.0f);
             if (AlterEgo::UI::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
-                if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
-                    g_LibCompareEquipTab = 0;
+                if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0)) {MarkNavigation();g_LibCompareEquipTab = 0;}
                 for (int tab = 1; tab <= maxTab; ++tab) {
                     std::string name = equipmentTabName(tab);
                     if (tab == character->active_equipment_tab) name += " (active)";
-                    if (ImGui::Selectable(name.c_str(), tab == g_LibCompareEquipTab))
-                        g_LibCompareEquipTab = tab;
+                    if (ImGui::Selectable(name.c_str(), tab == g_LibCompareEquipTab)) {MarkNavigation();g_LibCompareEquipTab = tab;}
                 }
                 ImGui::EndCombo();
             }
@@ -17226,15 +17222,15 @@ void AddonRender() {
 
                     // Tab bar: Equipment | Build
                     if (ImGui::BeginTabBar("##detail_tabs")) {
-                        if (ImGui::BeginTabItem("Equipment")) {
-                            MarkNavigation();g_SelectedTab = 0;
+                        if (ImGui::BeginTabItem("Equipment",nullptr,NavigationDetailFlags(0))) {
+                            if(g_SelectedTab!=0)MarkNavigation();g_SelectedTab = 0;
                             ImGui::BeginChild("EquipScroll", ImVec2(0, 0), false);
                             RenderEquipmentPanel(ch);
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
-                        if (ImGui::BeginTabItem("Build")) {
-                            MarkNavigation();g_SelectedTab = 1;
+                        if (ImGui::BeginTabItem("Build",nullptr,NavigationDetailFlags(1))) {
+                            if(g_SelectedTab!=1)MarkNavigation();g_SelectedTab = 1;
                             ImGui::BeginChild("BuildScroll", ImVec2(0, 0), false);
                             RenderBuildPanel(ch);
                             ImGui::EndChild();

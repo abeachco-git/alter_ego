@@ -553,7 +553,7 @@ static void ComponentUIOpenLibrary(const std::string& kind, const std::string& i
             break;
         }
     g_ComponentSelectedKind = kind;
-    MarkNavigation();g_ComponentSelectedId = id;
+    g_ComponentSelectedId = id;
     g_LibraryCollection = 2;
 }
 
@@ -1245,7 +1245,7 @@ static void ProcessComponentUICommand() {
         break;
     case ComponentUICommand::SaveSet:
         success=API::SaveLoadoutAsEquipmentSet(command.loadout_id,command.name,&g_EquipmentSetSelectedId,command.data.get<std::set<std::string>>());
-        if(success)g_LibraryCollection=3;MarkNavigation();
+        if(success){g_LibraryCollection=3;MarkNavigation();}
         break;
     case ComponentUICommand::DuplicateSet:
         success=API::DuplicateEquipmentSet(command.component_id,command.name,&g_EquipmentSetSelectedId);
