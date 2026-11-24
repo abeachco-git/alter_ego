@@ -50,6 +50,7 @@ static std::string g_ComponentSelectedKind;
 static std::string g_ComponentEditorId;
 static std::string g_ComponentEditorKind;
 static std::string g_ComponentEditorName;
+static bool g_ComponentEditorAutoName = false;
 static std::string g_ComponentSkillProfessionHint; // UI-only skill picker filter
 static ComponentJson g_ComponentEditorDraft = ComponentJson::object();
 static std::string g_ComponentEditorError;
@@ -255,6 +256,7 @@ static void ComponentUIStartEditor(const std::string& mode,
                                    const std::string& id,
                                    const ComponentJson* component) {
     g_ComponentEditorMode = mode;
+    g_ComponentEditorAutoName = (mode == "create");
     g_ComponentEditorKind = kind;
     g_ComponentEditorId = id;
     g_ComponentEditorPrivateLoadoutId.clear();
@@ -282,6 +284,7 @@ static void ComponentUIStartPrivateEditor(const std::string& loadoutId,
     g_ComponentEditorPrivateLoadoutId = loadoutId;
 }
 
+static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id);
 static bool ComponentUIEditorCanCommit() {
     if (g_ComponentEditorName.empty()) {
         g_ComponentEditorError = "Give the component a name.";
@@ -337,8 +340,41 @@ static void RenderComponentUIEditor() {
     } else {
         ImGui::TextDisabled("Components may be reused by multiple Loadouts.");
     }
+    if (g_ComponentEditorAutoName)
+        g_ComponentEditorName = AlterEgo::GW2API::SuggestLibraryComponentName(
+            g_ComponentEditorKind, g_ComponentEditorDraft);
     ImGui::SetNextItemWidth(-1);
-    InputTextString("Name##component_name", g_ComponentEditorName);
+    if (InputTextString("Name##component_name", g_ComponentEditorName))
+        g_ComponentEditorAutoName = false;
+    if (RenderActionButton("Auto Name##component_editor")) {
+        g_ComponentEditorAutoName = true;
+        g_ComponentEditorName = AlterEgo::GW2API::SuggestLibraryComponentName(
+            g_ComponentEditorKind, g_ComponentEditorDraft);
+    }
+    // A matching payload can be opened instead of creating another entry.
+    const auto& nameSnapshot = ComponentUISnapshot();
+    if (nameSnapshot.contains("components") && nameSnapshot["components"].is_object()) {
+        auto group = nameSnapshot["components"].find(g_ComponentEditorKind);
+        if (group != nameSnapshot["components"].end() && group->is_array()) {
+            for (const auto& item : *group) {
+                if (!item.is_object() || !item.contains("data") ||
+                    item.value("id", std::string()) == g_ComponentEditorId ||
+                    g_ComponentEditorDraft.empty()) continue;
+                if (item["data"] == g_ComponentEditorDraft && g_ComponentEditorMode == "create" &&
+                    g_ComponentEditorKind != "skills") {
+                    ImGui::TextDisabled("Identical component: %s", item.value("name", std::string()).c_str());
+                    if (RenderActionButton("Use Existing##component_editor")) {
+                        ComponentUIOpenLibrary(g_ComponentEditorKind, item.value("id", std::string()));
+                        g_ComponentEditorOpen = false;
+                        ImGui::CloseCurrentPopup();
+                        ImGui::EndPopup();
+                        return;
+                    }
+                    break;
+                }
+            }
+        }
+    }
     if (g_ComponentEditorMode != "rename") {
         ImGui::Separator();
         ImGui::BeginChild("##component_native_editor", ImVec2(0, -60.0f), false);
@@ -353,7 +389,9 @@ static void RenderComponentUIEditor() {
             ComponentUICommand cmd;
             cmd.kind = g_ComponentEditorKind;
             cmd.component_id = g_ComponentEditorId;
-            cmd.name = g_ComponentEditorName;
+            cmd.name = g_ComponentEditorAutoName
+                ? AlterEgo::GW2API::SuggestLibraryComponentName(g_ComponentEditorKind, g_ComponentEditorDraft)
+                : g_ComponentEditorName;
             if (g_ComponentEditorMode == "copy_for_loadout") {
                 cmd.type = ComponentUICommand::CopyEditedForLoadout;
                 cmd.loadout_id = g_ComponentEditorPrivateLoadoutId;
@@ -871,23 +909,13 @@ static void ProcessComponentUICommand() {
     case ComponentUICommand::SetFashion:
         success = API::SetLoadoutFashion(command.loadout_id, command.component_id);
         break;
-    case ComponentUICommand::Create:
-        success = API::CreateLoadoutComponent(command.kind, command.name, command.data);
-        if (success) {
-            const auto& fresh = ComponentUISnapshot();
-            const auto group = fresh["components"].find(command.kind);
-            if (group != fresh["components"].end() && group->is_array()) {
-                for (auto it = group->rbegin(); it != group->rend(); ++it) {
-                    if (!it->is_object() || it->value("name", std::string()) != command.name ||
-                        !it->contains("data") || it->at("data") != command.data) continue;
-                    // An imported/created component is now navigable directly.
-                    ComponentUIOpenLibrary(command.kind,
-                        it->value("id", std::string()));
-                    break;
-                }
-            }
-        }
+    case ComponentUICommand::Create: {
+        std::string savedId;
+        success = API::CreateLoadoutComponent(command.kind, command.name, command.data,
+                                              &savedId);
+        if (success && !savedId.empty()) ComponentUIOpenLibrary(command.kind, savedId);
         break;
+    }
     case ComponentUICommand::Duplicate:
         success = API::DuplicateLoadoutComponent(
             command.kind, command.component_id, command.name);

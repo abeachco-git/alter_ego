@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cctype>
 #include <limits>
 #include <functional>
 #include <map>
@@ -174,23 +175,31 @@ inline Json Metadata(const Json& old) {
     return meta;
 }
 // Names describe reusable contents, not the source Loadout.
-inline std::string SuggestComponentName(const std::string& kind, const Json& data) {
+using ComponentNameLookup = std::function<std::string(const std::string&, uint32_t)>;
+inline std::string SuggestComponentName(const std::string& kind, const Json& data,
+                                        const ComponentNameLookup& lookup = {}) {
     std::map<std::string, int> names;
     auto add = [&](std::string value) {
-        for (const std::string prefix : {"Superior Sigil of ", "Superior Rune of ", "Sigil of ", "Rune of "}) {
+        for (const std::string prefix : {"Superior Sigil of the ", "Superior Rune of the ", "Superior Sigil of ", "Superior Rune of ", "Sigil of the ", "Rune of the ", "Sigil of ", "Rune of "}) {
             if (value.rfind(prefix, 0) == 0) { value.erase(0, prefix.size()); break; }
         }
         if (!value.empty()) ++names[value];
     };
-    auto field = [](const Json& obj, const char* key, const char* id = nullptr) -> std::string {
+    auto field = [&](const Json& obj, const char* key, const char* id = nullptr,
+                     const std::string& category = "item") -> std::string {
         if (!obj.is_object()) return {};
         auto it = obj.find(key);
         if (it != obj.end() && it->is_string() && !it->get<std::string>().empty())
             return it->get<std::string>();
         if (id) {
             it = obj.find(id);
-            if (it != obj.end() && it->is_number_integer() && *it != 0)
+            if (it != obj.end() && it->is_number_integer() && *it != 0) {
+                if (lookup) {
+                    auto resolved = lookup(category, it->get<uint32_t>());
+                    if (!resolved.empty()) return resolved;
+                }
                 return "#" + it->dump();
+            }
         }
         return {};
     };
@@ -198,7 +207,7 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
     if (data.contains("gear") && data["gear"].is_object()) {
         for (const auto& slot : data["gear"]) {
             if (kind == "armor" || kind == "trinkets" || kind == "weapons") {
-                std::string stat = field(slot, "stat_name", "stat_id");
+                std::string stat = field(slot, "stat_name", "stat_id", "stat");
                 std::string weapon = kind == "weapons" ? field(slot, "weapon_type") : "";
                 add(stat.empty() ? weapon : weapon.empty() ? stat : stat + " " + weapon);
             } else if (kind == "runes") add(field(slot, "rune", "rune_id"));
@@ -225,7 +234,7 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
         std::string profession = field(data, "profession");
         if (data.contains("specializations") && data["specializations"].is_array())
             for (const auto& spec : data["specializations"]) {
-                const auto id = field(spec, "name", "id");
+                const auto id = field(spec, "name", "id", "spec");
                 if (!id.empty()) profession += " / " + id;
             }
         return profession.empty() ? "Base Build" : profession;
@@ -233,8 +242,21 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
     if (kind == "skills") {
         std::string name = "Skills";
         if (data.contains("skills") && data["skills"].is_object()) {
-            auto elite = field(data["skills"], "elite_name", "elite");
-            if (!elite.empty()) name += " / " + elite;
+            const auto& bar = data["skills"];
+            auto elite = field(bar, "elite_name", "elite", "skill");
+            auto heal = field(bar, "heal_name", "heal", "skill");
+            if (!elite.empty()) name = elite;
+            if (!heal.empty()) name += " / " + heal;
+            if (bar.contains("utilities") && bar["utilities"].is_array()) {
+                std::vector<std::string> utilities;
+                for (const auto& id : bar["utilities"]) {
+                    if (!id.is_number_integer() || id == 0) continue;
+                    const auto skill = field(Json{{"id", id}}, "name", "id", "skill");
+                    if (!skill.empty()) utilities.push_back(skill);
+                }
+                std::sort(utilities.begin(), utilities.end());
+                for (const auto& skill : utilities) name += " / " + skill;
+            }
         }
         return name;
     }
@@ -265,15 +287,29 @@ inline const Component* ExactReusableComponent(const Document& doc, const std::s
             if (candidate.data == data) return &candidate;
     return nullptr;
 }
+inline std::string ComponentNameKey(std::string name) {
+    auto space = [](unsigned char c) { return std::isspace(c) != 0; };
+    while (!name.empty() && space(name.front())) name.erase(name.begin());
+    while (!name.empty() && space(name.back())) name.pop_back();
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return name;
+}
+inline bool ComponentNameAvailable(const Document& doc, const std::string& kind,
+                                   const std::string& name, const std::string& exceptId = {}) {
+    auto group = doc.components.find(kind);
+    if (group == doc.components.end()) return true;
+    const auto key = ComponentNameKey(name);
+    for (const auto& part : group->second)
+        if (part.id != exceptId && ComponentNameKey(part.name) == key) return false;
+    return true;
+}
 inline std::string UniqueComponentName(const Document& doc, const std::string& kind,
                                        const std::string& proposed) {
     auto group = doc.components.find(kind);
     if (group == doc.components.end()) return proposed;
     std::string name = proposed;
     for (unsigned suffix = 2; ; ++suffix) {
-        const bool taken = std::any_of(group->second.begin(), group->second.end(),
-            [&](const Component& part) { return part.name == name; });
-        if (!taken) return name;
+        if (ComponentNameAvailable(doc, kind, name)) return name;
         name = proposed + " (" + std::to_string(suffix) + ")";
     }
 }
@@ -666,6 +702,7 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
                 componentId = kind + ":" + newId + ":" +
                               std::to_string(sequence++);
             part.id = componentId;
+            part.name = UniqueComponentName(next, kind, part.name);
             next.components[kind].push_back(std::move(part));
             loadout.refs[kind] = componentId;
         }
@@ -825,6 +862,9 @@ inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
                     return Fail(err, "Cannot change profession of a referenced Base Build.");
             }
         }
+        if (ComponentNameKey(name) != ComponentNameKey(item->name) &&
+            !ComponentNameAvailable(next, kind, name, id))
+            return Fail(err, "A component with this name already exists.");
         item->name = name;
         item->data = data;
         return true;
@@ -842,7 +882,7 @@ inline bool CopyForLoadout(Document& doc, const std::string& loadoutId,
         if (!source) return Fail(err, "Original component missing.");
         Component copied = *source;
         copied.id = id;
-        copied.name = name;
+        copied.name = UniqueComponentName(next, kind, name);
         next.components[kind].push_back(std::move(copied));
         item->refs[kind] = id;
         return true;
@@ -869,7 +909,7 @@ inline bool CopyEditedForLoadout(Document& doc, const std::string& loadoutId,
         if (!source) return Fail(err, "Original component no longer exists.");
         Component copy = *source;
         copy.id = newId;
-        copy.name = name;
+        copy.name = UniqueComponentName(next, kind, name);
         copy.data = editedData;
         next.components[kind].push_back(std::move(copy));
         loadout->refs[kind] = newId;
@@ -960,7 +1000,8 @@ inline Json PreserveUnknown(const Json& prior, const Json& edited) {
 }
 
 inline bool Reconcile(const Document& original, const Json& legacy,
-                      Document& output, std::string& error) {
+                      Document& output, std::string& error,
+                      const ComponentNameLookup& lookup = {}) {
     if (!Validate(original, error)) return false;
     Document next = original;
     if (!legacy.is_object() || !legacy.contains("builds") ||
@@ -997,7 +1038,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
                     continue;
                 }
                 next.components[kind].push_back({
-                    componentId, UniqueComponentName(next, kind, SuggestComponentName(kind, data)), data
+                    componentId, UniqueComponentName(next, kind, SuggestComponentName(kind, data, lookup)), data
                 });
                 created.refs[kind] = componentId;
             }
@@ -1022,7 +1063,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
                 while (Find(next, kind, privateId))
                     privateId = kind + ":" + id + ":" + std::to_string(sequence++);
                 next.components[kind].push_back({
-                    privateId, previous->name + " (private)", data
+                    privateId, UniqueComponentName(next, kind, SuggestComponentName(kind, data, lookup)), data
                 });
                 updated.refs[kind] = privateId;
             } else previous->data = data;

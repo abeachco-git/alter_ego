@@ -74,11 +74,21 @@ int main() {
                                         {"Coat", {{"rune","Superior Rune of the Scholar"}}}}}};
     assert(SuggestComponentName("armor", sampleArmor) == "Berserker");
     assert(SuggestComponentName("sigils", sampleSigils) == "Accuracy / Force");
-    assert(SuggestComponentName("runes", sampleRunes) == "the Scholar x2");
+    assert(SuggestComponentName("runes", sampleRunes) == "Scholar x2");
     Document named;
     named.components["armor"].push_back({"armor:one", "Berserker", sampleArmor});
     assert(UniqueComponentName(named, "armor", "Berserker") == "Berserker (2)");
     assert(UniqueComponentName(named, "trinkets", "Berserker") == "Berserker");
+    assert(!ComponentNameAvailable(named, "armor", " berserker "));
+    assert(ComponentNameAvailable(named, "armor", "BERSERKER", "armor:one"));
+    const auto lookup = [](const std::string& category, uint32_t id) -> std::string {
+        return category == "spec" && id == 1 ? "Spite" :
+               category == "skill" && id == 2 ? "Chilled to the Bone!" : "";
+    };
+    assert(SuggestComponentName("base_build", Json{{"profession","Necromancer"},
+        {"specializations",Json::array({Json{{"id",1}}})}}, lookup) == "Necromancer / Spite");
+    assert(SuggestComponentName("skills", Json{{"skills",{{"elite",2}}}}, lookup) ==
+        "Chilled to the Bone!");
     assert(ExactReusableComponent(named, "armor", sampleArmor)->id == "armor:one");
     assert(!ExactReusableComponent(named, "armor", Json::object()));
     Document document;

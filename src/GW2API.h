@@ -491,7 +491,9 @@ namespace AlterEgo {
                                       const std::string& fashionId);
         static bool CreateLoadoutComponent(const std::string& kind,
                                            const std::string& name,
-                                           const nlohmann::json& data);
+                                           const nlohmann::json& data,
+                                           std::string* savedId = nullptr,
+                                           bool reuseExact = false);
         static bool DuplicateLoadoutComponent(const std::string& kind,
                                               const std::string& componentId,
                                               const std::string& name);
@@ -502,11 +504,15 @@ namespace AlterEgo {
                                                  const std::string& componentId);
         // Capture an independent component from live or imported SavedBuild
         // data, without creating a new Loadout or mutating existing ones.
+        static std::string SuggestLibraryComponentName(const std::string& kind,
+                                                         const nlohmann::json& data);
         static std::string SuggestCapturedComponentName(const SavedBuild& capture,
                                                         const std::string& kind);
         static bool SaveCapturedLoadoutComponent(const SavedBuild& capture,
                                                   const std::string& kind,
-                                                  const std::string& name);
+                                                  const std::string& name,
+                                                  std::string* savedId = nullptr,
+                                                  bool reuseExact = true);
     static bool ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
         const std::string& kind, const std::string& componentId);
     static bool ImportPortableLoadout(const nlohmann::json& packet);

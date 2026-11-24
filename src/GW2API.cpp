@@ -3126,6 +3126,22 @@ namespace AlterEgo {
         return bj;
     }
 
+    static std::string LookupComponentDisplayName(const std::string& category, uint32_t id) {
+        if (category == "spec") {
+            if (const auto* info = GW2API::GetSpecInfo(id)) return info->name;
+            GW2API::FetchSpecDetailsAsync({id});
+        } else if (category == "skill") {
+            if (const auto* info = GW2API::GetSkillInfo(id)) return info->name;
+            GW2API::FetchSkillDetailsAsync({id});
+        } else if (category == "stat") {
+            if (const auto* info = GW2API::GetItemStatInfo(id)) return info->name;
+        } else {
+            if (const auto* info = GW2API::GetItemInfo(id)) return info->name;
+            GW2API::FetchItemDetailsAsync({id});
+        }
+        return {};
+    }
+
     bool GW2API::SaveBuildLibrary() {
         // UI and importer mutations are still performed on SavedBuild views.
         // Convert those edits transactionally to independent v3 components.
@@ -3150,7 +3166,7 @@ namespace AlterEgo {
                 return false; // NEVER replace invalid legacy/canonical storage.
         }
         Composable::Document reconciled;
-        if (!Composable::Reconcile(original, legacy, reconciled, error))
+        if (!Composable::Reconcile(original, legacy, reconciled, error, LookupComponentDisplayName))
             return false;
         if (!Composable::Store::Save(GetDataDirectory(), reconciled, error))
             return false;
@@ -3478,19 +3494,29 @@ namespace AlterEgo {
 
     bool GW2API::CreateLoadoutComponent(const std::string& kind,
                                          const std::string& name,
-                                         const nlohmann::json& data) {
-        if (name.empty() || !data.is_object() || !Composable::IsKind(kind))
+                                         const nlohmann::json& data,
+                                         std::string* savedId, bool reuseExact) {
+        if (Composable::ComponentNameKey(name).empty() || !data.is_object() || !Composable::IsKind(kind))
             return false;
-        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+        std::string resultId;
+        const bool ok = CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            if (reuseExact)
+                if (const auto* match = Composable::ExactReusableComponent(doc, kind, data)) {
+                    resultId = match->id;
+                    return true;
+                }
             static std::atomic<uint64_t> counter{0};
             std::string id;
             do {
                 id = kind + ":created:" + std::to_string(std::time(nullptr)) +
                      ":" + std::to_string(counter.fetch_add(1));
             } while (Composable::Find(doc, kind, id));
-            doc.components[kind].push_back({id, name, data});
+            doc.components[kind].push_back({id, Composable::UniqueComponentName(doc, kind, name), data});
+            resultId = id;
             return Composable::Validate(doc, error);
         });
+        if (ok && savedId) *savedId = resultId;
+        return ok;
     }
 
     bool GW2API::DuplicateLoadoutComponent(const std::string& kind,
@@ -3506,7 +3532,7 @@ namespace AlterEgo {
                 copy.id = kind + ":copy:" + std::to_string(std::time(nullptr)) +
                           ":" + std::to_string(counter.fetch_add(1));
             } while (Composable::Find(doc, kind, copy.id));
-            copy.name = name;
+            copy.name = Composable::UniqueComponentName(doc, kind, name);
             doc.components[kind].push_back(std::move(copy));
             return true;
         });
@@ -3519,6 +3545,10 @@ namespace AlterEgo {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
             auto* component = Composable::Find(doc, kind, componentId);
             if (!component) return Composable::Fail(error, "Component not found.");
+            if (Composable::ComponentNameKey(name).empty() ||
+                (Composable::ComponentNameKey(name) != Composable::ComponentNameKey(component->name) &&
+                 !Composable::ComponentNameAvailable(doc, kind, name, componentId)))
+                return Composable::Fail(error, "A component with this name already exists.");
             component->name = name;
             return true;
         });
@@ -3532,12 +3562,17 @@ namespace AlterEgo {
     }
 
 
+    std::string GW2API::SuggestLibraryComponentName(const std::string& kind,
+                                                      const nlohmann::json& data) {
+        return Composable::SuggestComponentName(kind, data, LookupComponentDisplayName);
+    }
+
     std::string GW2API::SuggestCapturedComponentName(const SavedBuild& capture,
                                                       const std::string& kind) {
         const auto fields = Composable::Split(SerializeSavedBuild(capture));
         auto selected = fields.find(kind);
         if (selected == fields.end()) return "Component";
-        const auto proposed = Composable::SuggestComponentName(kind, selected->second);
+        const auto proposed = SuggestLibraryComponentName(kind, selected->second);
         nlohmann::json snapshot;
         Composable::Document doc;
         std::string error;
@@ -3550,19 +3585,13 @@ namespace AlterEgo {
 
     bool GW2API::SaveCapturedLoadoutComponent(const SavedBuild& capture,
                                                const std::string& kind,
-                                               const std::string& name) {
+                                               const std::string& name,
+                                               std::string* savedId, bool reuseExact) {
         if (!Composable::IsKind(kind) || name.empty()) return false;
         const auto fields = Composable::Split(SerializeSavedBuild(capture));
         auto selected = fields.find(kind);
         if (selected == fields.end()) return false;
-        nlohmann::json snapshot;
-        Composable::Document doc;
-        std::string error;
-        if (GetComposableLoadouts(snapshot) && Composable::FromJson(snapshot, doc, error)) {
-            if (const auto* match = Composable::ExactReusableComponent(doc, kind, selected->second))
-                if (match->name == name) return true;
-        }
-        return CreateLoadoutComponent(kind, name, selected->second);
+        return CreateLoadoutComponent(kind, name, selected->second, savedId, reuseExact);
     }
 
     bool GW2API::ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
