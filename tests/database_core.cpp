@@ -1,6 +1,7 @@
 #include "../src/Database.h"
 #include "../src/CacheDatabase.h"
 #include "../src/AchievementCatalogCache.h"
+#include "../src/SkinDataCache.h"
 #include "../src/NativeLibraryStore.h"
 #include <cassert>
 #include <chrono>
@@ -185,6 +186,37 @@ int case_database_core(int, char**) {
         J heroes={{"123",{{"map_name","Map"},{"expansion","HoT"}}}};
         assert(Cache::WriteCatalog(root,D::HeroChallenges,heroes));
         assert(Cache::ReadCatalog(root,D::HeroChallenges)==heroes);
+    }
+    {
+        namespace Cache=AlterEgo::Cache;
+        using J=Cache::SkinJson;
+        using P=Cache::SkinProjection;
+        const auto root=temp.dir.u8string();
+        const auto absent=temp.dir/"missing.json";
+        J catalog=J::array({{{"id",42},{"name","Skin"},{"type","Armor"},{"subtype","Helm"},
+            {"weight_class","Heavy"},{"rarity","Rare"},{"icon","icon"},
+            {"flags",J::array({"HideIfLocked"})},{"restrictions",J::array({"Human"})}}});
+        J fashion=J::array({{{"id",42},{"name","Skin"},{"type","Armor"},{"rarity","Rare"},
+            {"dye_slot_count",2},{"dye_slot_materials",J::array({"metal","cloth"})}}});
+        assert(Cache::WriteSkins(root,P::Catalog,catalog));
+        assert(Cache::WriteSkins(root,P::Fashion,fashion));
+        assert(Cache::WriteSkins(root,P::Catalog,catalog));
+        auto read=Cache::ReadSkins(root,P::Catalog,absent);
+        assert(read && read->at(0).at("subtype")=="Helm");
+        assert(read->at(0).at("flags")==catalog.at(0).at("flags"));
+        read=Cache::ReadSkins(root,P::Fashion,absent);
+        assert(read && read->at(0).at("dye_slot_count")==2);
+        assert(read->at(0).at("dye_slot_materials")==fashion.at(0).at("dye_slot_materials"));
+        assert(read->at(0).at("weight_class")=="Heavy");
+        Cache::OwnershipSnapshot owned;owned.fetchedAt=100;owned.ids={42,43};
+        assert(Cache::WriteOwnership(root,"Account.1234",owned));
+        Cache::OwnershipSnapshot empty;empty.fetchedAt=101;
+        assert(Cache::WriteOwnership(root,"Account_1234",empty));
+        assert(Cache::ReadOwnership(root,"Account.1234")->ids==owned.ids);
+        assert(Cache::ReadOwnership(root,"Account_1234")->ids.empty());
+        owned.fetchedAt=99;owned.ids.clear();
+        assert(!Cache::WriteOwnership(root,"Account.1234",owned));
+        assert(Cache::ReadOwnership(root,"Account.1234")->ids.size()==2);
     }
     return 0;
 }

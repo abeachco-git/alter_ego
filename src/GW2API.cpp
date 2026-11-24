@@ -1,4 +1,5 @@
 #include "GW2API.h"
+#include "SkinDataCache.h"
 #include "AutoRefreshPolicy.h"
 #include "HoardAndSeekAPI.h"
 #include "ChatLink.h"
@@ -3554,7 +3555,6 @@ namespace AlterEgo {
 
     bool GW2API::SaveSkinCache() {
         EnsureDataDirectory();
-        std::string path = GetDataDirectory() + "/skin_cache.json";
         json arr;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -3572,10 +3572,7 @@ namespace AlterEgo {
                 arr.push_back(std::move(j));
             }
         }
-        std::ofstream f(path);
-        if (!f.is_open()) return false;
-        f << arr.dump();
-        return true;
+        return Cache::WriteSkins(GetDataDirectory(),Cache::SkinProjection::Fashion,arr);
     }
 
     bool GW2API::SaveSpecCache() {
@@ -3728,7 +3725,14 @@ namespace AlterEgo {
                 s_item_cache[info.id] = std::move(info);
             }
         }
-        if (readJson("skin_cache.json", j) && j.is_array()) {
+        if ([&]() {
+            try {
+                auto snapshot=Cache::ReadSkins(GetDataDirectory(),Cache::SkinProjection::Fashion,
+                    std::filesystem::u8path(GetDataDirectory())/"skin_cache.json");
+                if(!snapshot)return false;
+                j=std::move(*snapshot);return j.is_array();
+            } catch(...) { return false; }
+        }()) {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;

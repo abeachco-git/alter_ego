@@ -1,4 +1,5 @@
 #include "OwnedSkins.h"
+#include "SkinDataCache.h"
 #include "SkinCache.h"
 #include "HoardAndSeekAPI.h"
 
@@ -464,87 +465,74 @@ namespace Skinventory {
     }
 
     bool OwnedSkins::SaveToCache() {
+        static std::mutex saveMutex;
+        std::lock_guard<std::mutex> saving(saveMutex);
         std::string account;
-        std::time_t success = 0;
-        json ids = json::array();
+        AlterEgo::Cache::OwnershipSnapshot snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            account = s_account_name;
-            if (!s_has_data.load()) return false;
-            success = s_last_success_time;
-            for (uint32_t id : s_owned_skins) ids.push_back(id);
+            account=s_account_name;
+            if(!s_has_data.load())return false;
+            snapshot.fetchedAt=static_cast<int64_t>(s_last_success_time);
+            snapshot.ids.insert(s_owned_skins.begin(),s_owned_skins.end());
         }
-        if (s_data_dir.empty() || account.empty()) return false;
-        try { std::filesystem::create_directories(s_data_dir); }
-        catch (...) { return false; }
-
-        json cache;
-        cache["account"] = account;
-        cache["skins"] = std::move(ids);
-        cache["last_success"] = (int64_t)success;
-        const std::string path = AccountCachePath(s_data_dir, account);
-        const std::string tmp = path + ".tmp";
+        if(s_data_dir.empty()||account.empty())return false;
         try {
-            {
-                std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
-                if (!file.is_open()) return false;
-                const std::string data = cache.dump();
-                file.write(data.data(), (std::streamsize)data.size());
-                file.flush();
-                if (!file.good()) return false;
-            }
-            // A response after changing accounts cannot overwrite the new
-            // account's file: the snapshot always carries its original name.
-            if (!MoveFileExA(tmp.c_str(), path.c_str(),
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-                return false;
-            return true;
-        } catch (...) { return false; }
+            return AlterEgo::Cache::WriteOwnership(
+                AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),account,snapshot);
+        } catch(...) { return false; }
     }
 
     bool OwnedSkins::LoadFromCache() {
         std::string account;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            account = s_account_name;
+            account=s_account_name;
         }
-        if (s_data_dir.empty() || account.empty()) return false;
-        const std::string path = AccountCachePath(s_data_dir, account);
-        std::ifstream file(path);
-        bool legacy = false;
-        if (!file.is_open() && AlterEgo::GW2API::HasAccountsData() &&
-            AlterEgo::GW2API::GetAccountCount() == 1) {
-            // Only migrate an old unscoped cache when the configured account
-            // count proves it cannot belong to a different account.
-            file.open(s_data_dir + "/owned_skins.json");
-            legacy = file.is_open();
-        }
-        if (!file.is_open()) return false;
+        if(s_data_dir.empty()||account.empty())return false;
+        const auto root=AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir);
         try {
-            json j = json::parse(file);
-            const json* skins = &j;
-            std::time_t lastSuccess = 0;
-            if (j.is_object()) {
-                if (!j.contains("skins") || !j["skins"].is_array()) return false;
-                if (j.contains("account") && j["account"].get<std::string>() != account)
-                    return false;
-                skins = &j["skins"];
-                lastSuccess = (std::time_t)j.value("last_success", (int64_t)0);
+            auto snapshot=AlterEgo::Cache::ReadOwnership(root,account);
+            if(!snapshot) {
+                auto path=AccountCachePath(s_data_dir,account);
+                std::ifstream file(path);
+                bool unscoped=false;
+                if(!file.is_open()&&AlterEgo::GW2API::HasAccountsData()&&
+                    AlterEgo::GW2API::GetAccountCount()==1) {
+                    path=s_data_dir+"/owned_skins.json";file.clear();file.open(path);
+                    unscoped=file.is_open();
+                }
+                if(!file)return false;
+                auto j=json::parse(file);file.close();
+                const json* ids=&j;
+                AlterEgo::Cache::OwnershipSnapshot legacy;
+                if(j.is_object()) {
+                    if(!j.contains("skins")||!j["skins"].is_array())return false;
+                    if(j.contains("account")) {
+                        if(j["account"].get<std::string>()!=account)return false;
+                    } else if(!unscoped)return false;
+                    ids=&j["skins"];legacy.fetchedAt=j.value("last_success",int64_t(0));
+                } else if(!unscoped)return false;
+                if(!ids->is_array())return false;
+                for(const auto& id:*ids)legacy.ids.insert(id.get<uint32_t>());
+                AlterEgo::Cache::WriteOwnership(root,account,legacy);
+                snapshot=AlterEgo::Cache::ReadOwnership(root,account);
+                if(snapshot) {
+                    std::error_code ec;std::filesystem::remove(std::filesystem::u8path(path),ec);
+                }
             }
-            if (!skins->is_array()) return false;
-            std::unordered_set<uint32_t> restored;
-            for (const auto& id : *skins) restored.insert(id.get<uint32_t>());
+            if(!snapshot)return false;
+            std::unordered_set<uint32_t> restored(snapshot->ids.begin(),snapshot->ids.end());
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                if (s_account_name != account) return false;
-                s_owned_skins = std::move(restored);
-                s_last_success_time = lastSuccess;
+                if(s_account_name!=account)return false;
+                s_owned_skins=std::move(restored);
+                s_last_success_time=static_cast<std::time_t>(snapshot->fetchedAt);
                 s_generation++;
-                s_has_data = true;
+                s_has_data=true;
             }
-            if (legacy) SaveToCache();
             return true;
-        } catch (...) { return false; }
+        } catch(...) { return false; }
     }
 
 }

@@ -1,4 +1,5 @@
 #include "SkinCache.h"
+#include "SkinDataCache.h"
 #include "HttpClient.h"
 
 #include <nlohmann/json.hpp>
@@ -129,8 +130,6 @@ namespace Skinventory {
 
     bool SkinCache::SaveToDisk() {
         if (!EnsureDataDirectory()) return false;
-        std::string path = s_data_dir + "/skin_cache.json";
-
         json j = json::array();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -149,31 +148,19 @@ namespace Skinventory {
             }
         }
 
-        // Keep the last good global skin-definition catalog if the game
-        // closes or a fetch fails partway through a disk update.
-        const std::string tmp = path + ".tmp";
-        try {
-            {
-                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-                if (!out.is_open()) return false;
-                const std::string payload = j.dump();
-                out.write(payload.data(), (std::streamsize)payload.size());
-                out.flush();
-                if (!out.good()) return false;
-            }
-            return MoveFileExA(tmp.c_str(), path.c_str(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-        } catch (...) { return false; }
+        return AlterEgo::Cache::WriteSkins(
+            AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+            AlterEgo::Cache::SkinProjection::Catalog,j);
     }
 
     bool SkinCache::LoadFromDisk() {
-        std::string path = s_data_dir + "/skin_cache.json";
-        std::ifstream file(path);
-        if (!file.is_open()) return false;
-
         try {
-            json j;
-            file >> j;
+            auto snapshot=AlterEgo::Cache::ReadSkins(
+                AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+                AlterEgo::Cache::SkinProjection::Catalog,
+                std::filesystem::u8path(s_data_dir)/"skin_cache.json");
+            if(!snapshot)return false;
+            auto& j=*snapshot;
             if (!j.is_array() || j.empty()) return false;
 
             std::unordered_map<uint32_t, SkinInfo> parsed;

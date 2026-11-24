@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,28 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 3) {
+        db.Exec(R"SQL(
+CREATE TABLE skins(id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
+    subtype TEXT NOT NULL DEFAULT '', weight_class TEXT NOT NULL, rarity TEXT NOT NULL,
+    icon TEXT NOT NULL, dye_slot_count INTEGER,
+    catalog INTEGER NOT NULL DEFAULT 0 CHECK(catalog IN (0,1)),
+    fashion INTEGER NOT NULL DEFAULT 0 CHECK(fashion IN (0,1))) STRICT;
+CREATE INDEX skin_categories ON skins(type,subtype,weight_class);
+CREATE TABLE skin_flags(skin_id INTEGER NOT NULL REFERENCES skins(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(skin_id,ordinal)) STRICT;
+CREATE TABLE skin_restrictions(skin_id INTEGER NOT NULL REFERENCES skins(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(skin_id,ordinal)) STRICT;
+CREATE TABLE skin_dye_materials(skin_id INTEGER NOT NULL REFERENCES skins(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(skin_id,ordinal)) STRICT;
+CREATE TABLE ownership_snapshots(account TEXT PRIMARY KEY CHECK(length(account)>0),
+    fetched_at INTEGER NOT NULL CHECK(fetched_at>=0)) STRICT;
+CREATE TABLE owned_skins(account TEXT NOT NULL REFERENCES ownership_snapshots(account) ON DELETE CASCADE,
+    skin_id INTEGER NOT NULL CHECK(skin_id BETWEEN 0 AND 4294967295),
+    PRIMARY KEY(account,skin_id)) STRICT;
+)SQL");
+        return;
+    }
     if (version == 2) {
         db.Exec(R"SQL(
 CREATE TABLE reference_freshness(dataset TEXT PRIMARY KEY, saved_at INTEGER NOT NULL) STRICT;
