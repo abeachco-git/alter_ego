@@ -16731,10 +16731,12 @@ void AddonRender() {
                     // the character whose details happen to be selected.
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
-                        const bool canLoad=AlterEgo::GameMemory::CanLoad(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
-                        if (ImGui::MenuItem("Load",nullptr,false,canLoad)) {
+                        const auto loadUnavailable=AlterEgo::GameMemory::LoadUnavailableReason(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
+                        if (ImGui::MenuItem("Load",nullptr,false,loadUnavailable.empty())) {
                             loadTarget=ch.name;loadAccount=ch.account_name;
                         }
+                        if (!loadUnavailable.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                            ImGui::SetTooltip("%s",loadUnavailable.c_str());
                         const int activeBuild = ActiveBuildIndex(ch);
                         const int activeEquip = ActiveEquipmentTab(ch);
                         if (ImGui::MenuItem("Refresh")) {

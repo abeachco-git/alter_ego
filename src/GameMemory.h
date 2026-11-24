@@ -260,7 +260,7 @@ inline bool ReadGameplay(State& s, Address& ctx, Address& vt, Address& entry) {
         s.preflight="Blocked: live context, vtable or function bytes do not match the inspected build.";return false;
     }
     if (s.viewState!=16) {
-        s.preflight="Blocked: game view state is not gameplay (16).";return false;
+        s.preflight="Character load blocked: game view state "+std::to_string(s.viewState)+" (expected 16).";return false;
     }
     return true;
 }
@@ -392,12 +392,21 @@ inline std::string Location(const std::string& active,const std::string& target,
     const auto it=cache.names.find(row->map);
     return it==cache.names.end()?"Map "+std::to_string(row->map):it->second;
 }
-inline bool CanLoad(const std::string& active,const std::string& target,
+// Menu availability is based on roster identity and resolver availability.
+// Gameplay is revalidated synchronously at the explicit Load action; a
+// periodically sampled state is not authoritative for that later click.
+inline std::string LoadUnavailableReason(const std::string& active,const std::string& target,
                     const std::string& currentAccount,const std::string& targetAccount) {
     const auto& s=Data();
-    return active==s.sampledActive &&
-        EligibleTarget(s.gameplay,!s.pending.empty(),Find(s,active)!=nullptr,Find(s,target)!=nullptr,
-                       active,target,currentAccount,targetAccount);
+    if(active.empty()) return "No active character.";
+    if(active==target) return "Character already active.";
+    if(!CompatibleAccount(currentAccount,targetAccount)) return "Character belongs to another account.";
+    if(!s.pending.empty()) return "Character load already pending.";
+    if(!s.resolved || !s.ptrSlot) return "Live roster unavailable.";
+    if(!s.swapContextSlot) return "Character loading unavailable for this game build.";
+    if(active!=s.sampledActive || !Find(s,active) || !Find(s,target))
+        return "Character not in the validated live roster.";
+    return {};
 }
 inline std::string Load(const std::string& active,const std::string& target,
                         const std::string& currentAccount,const std::string& targetAccount) {
