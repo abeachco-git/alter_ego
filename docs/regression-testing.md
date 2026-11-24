@@ -11,7 +11,7 @@ ctest --test-dir build-tests --output-on-failure
 Run a single domain with `ctest --test-dir build-tests -L comparison --output-on-failure`.
 Run a single case with `ctest --test-dir build-tests -R 'comparison.infusion_totals' --output-on-failure`.
 
-Nine domain executables contain 24 independently runnable regression cases.
+Nine domain executables contain 32 independently runnable regression cases.
 Each CTest case is a separate process. Keep assertions enabled even in Release.
 Add related coverage to existing cases; add a new case only for distinct behavior,
 and register it in the existing domain in tests/CMakeLists.txt. No new standalone
@@ -22,14 +22,15 @@ removed after demonstrating that the behavior is no longer supported; Git histor
 is the archive. Do not remove tests solely because they fail.
 
 The Windows workflow gates DLL packaging on all offline cases and binary checks.
-The independent live MetaBattle workflow uses the same import executable with
-a snapshot directory and verifies all six live imports strictly. Live site
-availability never gates DLL packaging. Skill icon research is manual-only; it
-builds a baseline DLL for accurate size comparisons and uploads the report.
+MetaBattle is excluded from automated regression testing by explicit user request:
+neither the offline parser case nor the live website workflow runs. The runtime
+importer is retained. Snow Crows and all other offline cases remain enabled.
+Skill icon research is manual-only; it builds a baseline DLL for accurate size
+comparisons and uploads the report.
 
 ## CI maintenance
 
-Keep the six live MetaBattle import checks strict, independently reported, and upload their HTML snapshots for debugging. Live-site outages or changed content must remain visible in that workflow rather than blocking DLL packaging. Do not weaken the required offline cases or binary verification to resolve a failed build. Follow the delivery definition in [AGENTS.md](../AGENTS.md).
+Do not reintroduce automated MetaBattle checks without explicit approval. Do not weaken the remaining required offline cases or binary verification to resolve a failed build. Follow the delivery definition in [AGENTS.md](../AGENTS.md).
 
 The persistence suite additionally exercises the SQLite foundation in
 `persistence.database_core`: versioned schema, bound text, rollback, foreign

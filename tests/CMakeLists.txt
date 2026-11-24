@@ -47,5 +47,5 @@ ae_suite(refresh CASES auto_refresh_policy section_refresh auto_refresh_tracker 
 target_link_libraries(ae_refresh PRIVATE Threads::Threads)
 ae_suite(vault_clears CASES clears_rotation strike_display_name vault_assistance)
 ae_suite(skinventory CASES skin_search)
-ae_suite(imports CASES snowcrows_import metabattle_import)
+ae_suite(imports CASES snowcrows_import)
 ae_suite(presentation CASES composable_gear_presentation raid_chip_widths font_resolve_test navigation_history)

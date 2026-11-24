@@ -21,7 +21,7 @@ Baseline: `42d589366fc2345bbc00a90ee554dfe0e94bc626`. This ledger describes sour
 - `src/GW2API.cpp`: serialize roster reconciliation with character persistence, retain memory state when deletion fails, log persistence errors. Existing refresh cadence unchanged.
 - `src/IconManager.cpp`, `src/WikiImage.cpp`: queue failure/loading cleanup and stop notification; no external callback guarantee claimed.
 - `tests/database_core.cpp`: new targeted deletion regression assertions.
-- Required gates: offline suite, six strict live MetaBattle imports, Windows x64 UCRT DLL, assets and binary checks. No current-pass results claimed until CI is inspected.
+- Required gates: offline suite (excluding MetaBattle by user request), Windows x64 UCRT DLL, assets and binary checks. No current-pass results claimed until CI is inspected.
 - In-game: multi-account roster deletion and refresh, icon/wiki rendering under failed downloads, addon unload while queues active; then migration/library/backup smoke tests.
 
 - Second implementation commit adds `CacheMaintenance.h`, classified startup maintenance paths, Storage & Cache UI and startup-only recovery tests. No in-game test or final CI pass claimed yet.
