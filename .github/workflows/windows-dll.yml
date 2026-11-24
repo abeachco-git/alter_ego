@@ -20,7 +20,7 @@ jobs:
     container: debian:trixie
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
       - name: Install matching UCRT cross-compiler
         run: |
           apt-get update
@@ -47,7 +47,7 @@ jobs:
             wc -c "/tmp/metabattle-live/${file}.html" || true
           done
       - name: Upload MetaBattle live HTML snapshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: MetaBattle-Live-HTML
@@ -138,7 +138,7 @@ jobs:
             --dll build/AlterEgo.dll \
             --resource-dir build/embedded_icon_data
       - name: Upload skill icon analysis
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: AlterEgo-Skill-Icon-Audit
@@ -147,7 +147,7 @@ jobs:
             build/skill-icon-audit.md
           if-no-files-found: ignore
       - name: Upload DLL
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: AlterEgo-UCRT-Windows-x64
           path: |
