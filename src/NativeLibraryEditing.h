@@ -78,7 +78,7 @@ inline bool ConsolidateExact(Composable::Document& doc,const std::string& kind,
             if(ref!=l.refs.end()&&ref->second==source)ref->second=survivor;
         }
         return Composable::RemoveUnreferenced(next,kind,source,err);
-    });
+    },error);
 }
 
 // Overlay only changed fields from a typed aggregate editor. Untouched
