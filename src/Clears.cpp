@@ -33,6 +33,7 @@
 #include "SectionRefresh.h"
 #include "AutoRefreshPolicy.h"
 #include "FractalScales.h"
+#include "FractalCardLayout.h"
 #include "CompletionTheme.h"
 #include "RaidChipWidths.h"
 #include "RefreshUI.h"
@@ -1642,9 +1643,8 @@ static void DrawEncounterChip(ImDrawList* dl, const WingEncChip& chip,
 }
 
 
-// All four cells are one-line entries, arranged as two columns by two rows
-// at normal addon widths. A single-column fallback prevents overlap in small
-// windows. The last cell shows the T1/T2/T3 Recommended SCALE numbers.
+// Pack visible daily cards by measured content width; Rec has fixed width.
+// Preserve the exact recommended scales and original card IDs.
 struct DailyFractalCard {
     std::string title;
     std::array<const ClearEntry*, 4> entries{};
@@ -1680,59 +1680,70 @@ static bool FractalCardComplete(const DailyFractalCard& card, bool fetched) {
 static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
                                     bool fetched, bool hideComplete) {
     if (cards.empty()) return;
-    bool anythingVisible = false;
-    for (const auto& card : cards)
-        if (!hideComplete || !FractalCardComplete(card, fetched))
-            anythingVisible = true;
-    if (!anythingVisible) {
-        ImGui::TextDisabled("  All daily fractals and recommendations completed.");
-        return;
-    }
-
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    const float pad = 7.0f, xgap = 6.0f, ygap = 5.0f, cardHeight = 27.0f;
-    const float chipWidth = 39.0f, chipGap = 3.0f, chipHeight = 20.0f;
-    const float chipsWidth = 4.0f * chipWidth + 3.0f * chipGap;
-    // Two columns need enough room for the longest daily name plus chips.
-    const int columns = width >= 680.0f ? 2 : 1;
-    const int rows = (static_cast<int>(cards.size()) + columns - 1) / columns;
-    const float cardWidth = (width - 2.0f * pad - (columns - 1) * xgap) / columns;
-    const float height = 2.0f * pad + rows * cardHeight + (rows - 1) * ygap;
+    const float scale = ImGui::GetFontSize() / 13.0f;
+    const float pad = 7.0f * scale, xgap = 6.0f * scale, ygap = 5.0f * scale;
+    const float cardHeight = 27.0f * scale, chipGap = 3.0f * scale;
+    const float chipHeight = 20.0f * scale;
+    const float chipWidth = std::max(ImGui::CalcTextSize("T4").x,
+                                     ImGui::CalcTextSize("100").x) + 19.0f * scale;
+    std::vector<FractalCardLayout::Card> measures;
+    for (size_t i = 0; i < cards.size(); ++i) {
+        const auto& card = cards[i];
+        const int slots = card.recommended ? 3 : 4;
+        const char* label = card.recommended ? "Rec" : card.title.c_str();
+        const float minimum = ImGui::CalcTextSize(label).x + 23.0f * scale
+            + slots * chipWidth + (slots - 1) * chipGap;
+        measures.push_back({i, minimum, card.recommended,
+            !hideComplete || !FractalCardComplete(card, fetched)});
+    }
+    const auto layout = FractalCardLayout::Pack(measures, width - 2.0f * pad, xgap);
+    if (layout.cards.empty()) {
+        if (std::none_of(measures.begin(), measures.end(), [](const auto& c) { return c.visible; }))
+            ImGui::TextDisabled("  All daily fractals and recommendations completed.");
+        return;
+    }
+    const float height = 2.0f * pad + layout.rows * cardHeight + (layout.rows - 1) * ygap;
     AlterEgo::CompletionTheme::DrawGroup(
         draw, origin, ImVec2(origin.x + width, origin.y + height));
 
-    for (size_t i = 0; i < cards.size(); ++i) {
+    for (const auto& placement : layout.cards) {
+        const size_t i = placement.index;
         const auto& card = cards[i];
         const bool complete = FractalCardComplete(card, fetched);
-        // Hide Complete does not reorder other cards. An empty slot remains
-        // where a completed card was, so the two-column grid never jumps.
-        if (hideComplete && complete) continue;
-        const int col = static_cast<int>(i) % columns;
-        const int row = static_cast<int>(i) / columns;
-        const ImVec2 cmin(origin.x + pad + col * (cardWidth + xgap),
-                          origin.y + pad + row * (cardHeight + ygap));
-        const ImVec2 cmax(cmin.x + cardWidth, cmin.y + cardHeight);
+        const ImVec2 cmin(origin.x + pad + placement.x,
+                          origin.y + pad + placement.row * (cardHeight + ygap));
+        const ImVec2 cmax(cmin.x + placement.width, cmin.y + cardHeight);
         AlterEgo::CompletionTheme::DrawRow(draw, cmin, cmax, complete);
 
-        const float chipStart = cmax.x - 6.0f - chipsWidth;
+        const int slots = card.recommended ? 3 : 4;
+        // Exceptionally narrow windows may require clipping the name;
+        // keep status hitboxes inside their card and retain full tooltips.
+        const float edge = std::min(6.0f * scale, placement.width * 0.1f);
+        const float actualGap = std::min(chipGap, placement.width / (slots * 4.0f));
+        const float actualWidth = std::max(0.0f, std::min(chipWidth,
+            (placement.width - 2.0f * edge - (slots - 1) * actualGap) / slots));
+        const float chipsWidth = slots * actualWidth + (slots - 1) * actualGap;
+        const float chipStart = cmax.x - edge - chipsWidth;
         const float centerY = (cmin.y + cmax.y) * 0.5f;
         const float lineH = ImGui::GetTextLineHeight();
         // Entire card title dims when all constituent tiers are complete.
-        draw->PushClipRect(ImVec2(cmin.x + 7.0f, cmin.y),
-                           ImVec2(chipStart - 6.0f, cmax.y), true);
-        draw->AddText(ImVec2(cmin.x + 7.0f, centerY - lineH * 0.5f),
-                      AlterEgo::CompletionTheme::Text(complete),
-                      card.title.c_str());
-        draw->PopClipRect();
+        if (chipStart - 6.0f * scale > cmin.x + 7.0f * scale) {
+            draw->PushClipRect(ImVec2(cmin.x + 7.0f * scale, cmin.y),
+                               ImVec2(chipStart - 6.0f * scale, cmax.y), true);
+            draw->AddText(ImVec2(cmin.x + 7.0f * scale, centerY - lineH * 0.5f),
+                          AlterEgo::CompletionTheme::Text(complete),
+                          card.recommended ? "Rec" : card.title.c_str());
+            draw->PopClipRect();
+        }
 
-        const int slots = card.recommended ? 3 : 4;
         ImGui::PushID(static_cast<int>(i));
         // The card title is a hover target as well as its individual chips.
         // Keep this hit box entirely to the left of the first tier chip.
-        ImGui::SetCursorScreenPos(ImVec2(cmin.x + 5.0f, cmin.y));
-        const float titleWidth = chipStart - cmin.x - 12.0f;
+        ImGui::SetCursorScreenPos(ImVec2(cmin.x + 5.0f * scale, cmin.y));
+        const float titleWidth = chipStart - cmin.x - 12.0f * scale;
         if (titleWidth > 1.0f) {
             ImGui::InvisibleButton("##fractalCardTitle",
                 ImVec2(titleWidth, cardHeight));
@@ -1760,28 +1771,30 @@ static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
         for (int tier = 0; tier < slots; ++tier) {
             const ClearEntry* entry = card.entries[tier];
             const bool done = fetched && entry && entry->done;
-            const float x = chipStart + tier * (chipWidth + chipGap);
+            const float x = chipStart + tier * (actualWidth + actualGap);
             const ImVec2 slotMin(x, centerY - chipHeight * 0.5f);
-            const ImVec2 slotMax(x + chipWidth, centerY + chipHeight * 0.5f);
+            const ImVec2 slotMax(x + actualWidth, centerY + chipHeight * 0.5f);
+            if (actualWidth <= 0.0f) continue;
             draw->AddRectFilled(slotMin, slotMax,
                 done ? AlterEgo::CompletionTheme::kCompletedIndicator
                      : AlterEgo::CompletionTheme::kAvailableIndicator, 2.0f);
             // Each slot reserves exactly the same space for its check,
             // whether it is completed or not. Labels never shift.
             AlterEgo::CompletionTheme::DrawCompleteMark(
-                draw, ImVec2(x + 7.0f, centerY), done, 3.0f);
+                draw, ImVec2(x + std::min(7.0f * scale, actualWidth * 0.5f), centerY), done,
+                std::min(3.0f * scale, actualWidth * 0.4f));
             const std::string& text = card.labels[tier];
             const ImU32 ink = !entry ? AlterEgo::CompletionTheme::kUnknownText
                 : !fetched ? AlterEgo::CompletionTheme::kUnknownText
                 : AlterEgo::CompletionTheme::Text(done);
             draw->PushClipRect(slotMin, slotMax, true);
-            draw->AddText(ImVec2(x + 15.0f, centerY - lineH * 0.5f),
+            draw->AddText(ImVec2(x + 15.0f * scale, centerY - lineH * 0.5f),
                           ink, text.empty() ? "?" : text.c_str());
             draw->PopClipRect();
 
             ImGui::SetCursorScreenPos(slotMin);
             ImGui::PushID(tier);
-            ImGui::InvisibleButton("##fractalStatus", ImVec2(chipWidth, chipHeight));
+            ImGui::InvisibleButton("##fractalStatus", ImVec2(actualWidth, chipHeight));
             if (ImGui::IsItemHovered()) {
                 // Daily: the map name and every qualifying tier scale.
                 // Recommended: only the exact numbered scale grants credit.

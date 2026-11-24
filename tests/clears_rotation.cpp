@@ -1,11 +1,30 @@
 #include "../src/ClearsRotation.h"
 #include "../src/ClearsReset.h"
 #include "../src/FractalScales.h"
+#include "../src/FractalCardLayout.h"
 #include <cassert>
 #include <string>
 int case_clears_rotation(int, char**) {
     using namespace ClearsRotation;
     using namespace ClearsReset;
+    // Actual visible cards determine wrapping and section height.
+    std::vector<FractalCardLayout::Card> cards{
+        {0,240,false,true},{1,260,false,true},{2,250,false,true},{3,150,true,true}};
+    auto wide=FractalCardLayout::Pack(cards,1050,6);
+    assert(wide.rows==1 && wide.cards.size()==4);
+    assert(wide.cards.back().width==150 && wide.cards.back().x+150<=1050.01f);
+    auto narrow=FractalCardLayout::Pack(cards,650,6);
+    assert(narrow.rows==2 && narrow.cards[2].row==1 && narrow.cards[3].row==1);
+    assert(narrow.cards.back().width==150);
+    cards[0].visible=cards[1].visible=cards[2].visible=false;
+    auto rec=FractalCardLayout::Pack(cards,1050,6);
+    assert(rec.rows==1 && rec.cards.size()==1 && rec.cards[0].index==3);
+    assert(rec.cards[0].x==0 && rec.cards[0].width==150);
+    cards[3].visible=false;
+    assert(FractalCardLayout::Pack(cards,1050,6).rows==0);
+    cards[1].visible=true; cards[3].visible=true;
+    auto tiny=FractalCardLayout::Pack(cards,100,6);
+    assert(tiny.rows==2 && tiny.cards[0].width==100 && tiny.cards[1].width==100);
     // At 00:00 UTC we must NOT consume the reset marker before the API grace
     // period. This was the cause of Vault + daily Fractals missing rollover.
     constexpr int64_t day = 86400, reset = 1795305600;
