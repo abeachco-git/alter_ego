@@ -6,18 +6,10 @@
 #include <mutex>
 #include <atomic>
 #include <chrono>
+#include <optional>
+#include "SkinSearchCore.h"
 
 namespace Skinventory {
-
-    struct PriceInfo {
-        uint32_t item_id = 0;
-        int buy_price = 0;   // Highest buy order in copper
-        int sell_price = 0;  // Lowest sell listing in copper
-        int buy_quantity = 0;
-        int sell_quantity = 0;
-        bool tradeable = false;
-        int64_t fetched_at_unix = 0; // seconds since epoch; persisted across sessions
-    };
 
     // Format copper value as gold/silver/copper string
     std::string FormatCoins(int copper);
@@ -34,7 +26,7 @@ namespace Skinventory {
         static void FetchPricesForSkins(const std::vector<uint32_t>& skin_ids);
 
         // Get cached price for a skin. Returns nullptr if not fetched yet.
-        static const PriceInfo* GetPrice(uint32_t skin_id);
+        static std::optional<PriceInfo> GetPrice(uint32_t skin_id);
 
         // Get vendor price for a skin (0 if not a vendor skin). In copper.
         static int GetVendorPrice(uint32_t skin_id);
@@ -48,6 +40,8 @@ namespace Skinventory {
         static void BuildItemMapAsync();
         static bool IsItemMapReady();
         static uint32_t GetItemIdForSkin(uint32_t skin_id);
+        static std::string GetItemName(uint32_t item_id);
+        static uint64_t GetPriceGeneration();
 
         // Persistence for item map
         static bool LoadItemMap();
@@ -59,7 +53,7 @@ namespace Skinventory {
 
     private:
         static void FetchPriceWorker(std::vector<uint32_t> item_ids,
-                                      std::unordered_map<uint32_t, uint32_t> item_to_skin);
+                                      std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin);
         static void ItemMapWorker();
 
         static std::string s_data_dir;
@@ -68,8 +62,10 @@ namespace Skinventory {
         // skin_id -> PriceInfo
         static std::unordered_map<uint32_t, PriceInfo> s_prices;
 
-        // skin_id -> item_id (cheapest tradeable item for each skin)
-        static std::unordered_map<uint32_t, uint32_t> s_skin_to_item;
+        // skin_id -> all known Trading Post item candidates
+        static std::unordered_map<uint32_t, std::vector<uint32_t>> s_skin_to_item;
+        static std::unordered_map<uint32_t, std::string> s_item_names;
+        static std::atomic<uint64_t> s_price_generation;
 
         // skin_id -> vendor price in copper (cultural armor)
         static std::unordered_map<uint32_t, int> s_vendor_prices;

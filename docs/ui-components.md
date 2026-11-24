@@ -58,3 +58,8 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 - Equipment and independent component editing still have different storage and commit paths; shared catalogs and presentation helpers are the starting point. Further consolidation must preserve slot count, unknown vs absent metadata, exact IDs, copy-on-write and shared-component semantics. Do not claim all editor behavior is unified.
 - Saved loadout header and context menu share ExecuteSavedLoadoutAction and RenderBuildShareMenuItems. Fashion/component actions and specialized responsive layouts still have separate wiring; extract shared commands when changing them.
 - Validate at different fonts and window widths, ensure popup focus and right-click work, and verify DLL compilation/artifact for the exact commit.
+
+## Skinventory
+- `RenderSkinContextMenu` in dllmain.cpp is the single skin menu; scope each popup to the stable skin ID. Skin links use `ChatLink::EncodeSkin`; actual TP item names and links come from the winning price candidate, not the skin name. Use `CopyToClipboard`.
+- `SkinSearchCore.h` provides shared token/substring/typo search and price selection. Shopping filters operate on cached results and preserve the table sort; do not trigger price queries on typing or filtering.
+- Commerce v2 derived cache retains all known tradeable equipment/skin-unlock candidates and names, selects the cheapest available sell listing, and does not reuse legacy rarity-selected prices. Vendor coverage remains limited to known cultural armor prices.

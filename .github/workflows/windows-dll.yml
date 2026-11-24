@@ -55,6 +55,8 @@ jobs:
           if-no-files-found: ignore
       - name: Test platform-independent comparator
         run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/skin_search.cpp -o /tmp/skin_search
+          /tmp/skin_search
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/build_compare_core.cpp -o /tmp/build_compare_core
           /tmp/build_compare_core
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/infusion_match_core.cpp -o /tmp/infusion_match_core

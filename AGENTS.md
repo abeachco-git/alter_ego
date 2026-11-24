@@ -18,3 +18,5 @@ Before adding or modifying any UI, read [docs/ui-components.md](docs/ui-componen
 - Keep work on the requested branch; do not merge into main without explicit approval.
 - For DLL delivery, verify GitHub Actions succeeded for the exact commit, retrieve the matching artifact and verify the Windows x64 UCRT DLL. Link the actual binary, not just a workflow page. Never describe a pending build as complete.
 - Update the UI component guide when introducing or changing a canonical component. Explain any intentional direct ImGui exception near its call site.
+
+- Skinventory: use RenderSkinContextMenu for every skin surface; generate skin chat links from skin IDs, copy the actual priced item's name for TP search. Use Skinventory::Search for browser/shop filters. Commerce candidate selection must compare available sell listings, never rarity. Keep filter changes local (no price requests).
