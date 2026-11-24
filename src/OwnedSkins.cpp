@@ -1,3 +1,4 @@
+#include "CallbackLifetime.h"
 #include "BackgroundWorkers.h"
 #include "OwnedSkins.h"
 #include "SkinDataCache.h"
@@ -154,6 +155,8 @@ namespace Skinventory {
     }
 
     void OwnedSkins::OnPong(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
         if (!eventArgs) return;
         auto* pong = (HoardPongPayload*)eventArgs;
         if (pong->api_version < 2) return;
@@ -170,6 +173,8 @@ namespace Skinventory {
     }
 
     void OwnedSkins::OnDataUpdated(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
         // H&S finished a data refresh — signal that we should re-query skins
         s_hs_available = true;
         s_data_updated = true;
@@ -210,6 +215,8 @@ namespace Skinventory {
     }
 
     void OwnedSkins::OnApiResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryApiResponse*>(eventArgs); return; }
         if (!eventArgs) return;
         auto* resp = (HoardQueryApiResponse*)eventArgs;
         std::unique_ptr<HoardQueryApiResponse> respGuard(resp); // caller owns the response
@@ -349,6 +356,8 @@ namespace Skinventory {
     }
 
     void OwnedSkins::OnSkinsResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQuerySkinsResponse*>(eventArgs); return; }
         if (!eventArgs) return;
         auto* resp = (HoardQuerySkinsResponse*)eventArgs;
         std::unique_ptr<HoardQuerySkinsResponse> respGuard(resp); // caller owns the response

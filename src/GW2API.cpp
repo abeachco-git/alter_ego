@@ -1,3 +1,4 @@
+#include "CallbackLifetime.h"
 #include "HttpSafety.h"
 #include "BackgroundWorkers.h"
 #include "GW2API.h"
@@ -220,6 +221,8 @@ namespace AlterEgo {
     }
 
     void GW2API::OnHoardPong(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
         if (!eventArgs) return;
         auto* pong = (HoardPongPayload*)eventArgs;
         if (pong->api_version < 2) return; // accept v2+ pongs
@@ -240,6 +243,8 @@ namespace AlterEgo {
     }
 
     void GW2API::OnHoardDataUpdated(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
         if (!eventArgs) return;
         auto* payload = (HoardDataReadyPayload*)eventArgs;
         if (payload->api_version < 2) return; // accept v2+ payloads
@@ -304,6 +309,8 @@ namespace AlterEgo {
     }
 
     void GW2API::OnSkinUnlocksResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQuerySkinsResponse*>(eventArgs); return; }
         if (!eventArgs) return;
         auto* resp = (HoardQuerySkinsResponse*)eventArgs;
         std::unique_ptr<HoardQuerySkinsResponse> respGuard(resp); // caller owns the response
@@ -334,6 +341,8 @@ namespace AlterEgo {
     }
 
     void GW2API::OnItemLocationResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryItemResponse*>(eventArgs); return; }
         if (!eventArgs) return;
         auto* resp = (HoardQueryItemResponse*)eventArgs;
         std::unique_ptr<HoardQueryItemResponse> respGuard(resp); // caller owns the response
@@ -400,6 +409,8 @@ namespace AlterEgo {
     }
 
     void GW2API::OnAccountsResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryAccountsResponse*>(eventArgs); return; }
         if (!eventArgs) { if (s_api) s_api->Log(LOGL_WARNING, "AlterEgo", "OnAccountsResponse: null eventArgs"); return; }
         auto* resp = (HoardQueryAccountsResponse*)eventArgs;
         std::unique_ptr<HoardQueryAccountsResponse> respGuard(resp); // caller owns the response
@@ -451,6 +462,8 @@ namespace AlterEgo {
     }
 
     void GW2API::OnAccountsChanged(void* /*eventArgs*/) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
         // Notification-driven account API queries are automatic, and must
         // obey the same Nexus setting as the render-driven refresh scheduler.
         if (AutoRefreshPolicy::Enabled()) QueryAccounts();
@@ -731,6 +744,8 @@ namespace AlterEgo {
     }
 
     void GW2API::OnCharListResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryApiResponse*>(eventArgs); return; }
         if (!eventArgs) {
             if (s_api) s_api->Log(LOGL_WARNING, "AlterEgo", "OnCharListResponse: eventArgs is null");
             return;
@@ -1030,6 +1045,8 @@ namespace AlterEgo {
     }
 
     void GW2API::OnCharDataResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryApiResponse*>(eventArgs); return; }
         if (!eventArgs) {
             if (s_api) s_api->Log(LOGL_WARNING, "AlterEgo", "OnCharDataResponse: eventArgs is null");
             return;

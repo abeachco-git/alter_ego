@@ -1,3 +1,4 @@
+#include "CallbackLifetime.h"
 #include "BackgroundWorkers.h"
 #include <windows.h>
 #include <commdlg.h>
@@ -990,6 +991,8 @@ struct AlertUnlockPayload {
 };
 
 static void OnEvAlertSkinUnlocked(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     auto* payload = (AlertUnlockPayload*)eventArgs;
     if (payload->ID != 0) {
@@ -1004,6 +1007,8 @@ static void OnEvAlertSkinUnlocked(void* eventArgs) {
 // When H&S becomes available, signal render thread to query progress + clears.
 // This handler may run on H&S's thread — never call Events_Raise here.
 static void OnHoardPongForAch(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     auto* pong = (HoardPongPayload*)eventArgs;
     if (pong->api_version < 2) return;
@@ -1016,6 +1021,8 @@ static void OnHoardPongForAch(void* eventArgs) {
 }
 
 static void OnEvAlertAchievementCompleted(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     // This alert describes the logged-in character, not necessarily the
     // account selected in the Achievements view. Never apply it to another
@@ -2529,6 +2536,8 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automati
 }
 
 static void OnAchProgressResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryAchievementResponse*>(eventArgs); return; }
     if (!eventArgs) return;
     auto* resp = (HoardQueryAchievementResponse*)eventArgs;
     std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
@@ -6169,6 +6178,8 @@ static const char* ChatChannelName(ChatMessageType type) {
 }
 
 static void OnEvChatMessage(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     g_ChatAddonConnected = true;
     if (!g_ChatBuildDetection) return;
@@ -6500,11 +6511,15 @@ static void RenderBuildToast() {
 
 // Pie UI announced itself (on its load, or replying to our ping).
 static void OnPieUIReady(void* /*eventArgs*/) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     g_PieUIPresent.store(true);
 }
 
 // Pie UI (or any addon) is probing for Alter Ego — reply with our presence.
 static void OnAlterEgoPing(void* /*eventArgs*/) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (APIDefs && APIDefs->Events_Raise)
         APIDefs->Events_Raise(EV_ALTER_EGO_READY, nullptr);
 }
@@ -6514,6 +6529,8 @@ static void OnAlterEgoPing(void* /*eventArgs*/) {
 // the toast's Import button does the actual import. Runs on Pie UI's thread (Nexus
 // dispatches synchronously), so copy the payload immediately.
 static void OnPieImportBuild(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     std::string payload((const char*)eventArgs);
     if (payload.empty()) return;
@@ -12506,6 +12523,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     g_StorageMaintenancePending=AlterEgo::Storage::MaintenancePending(maintenanceRoot);
     g_StorageMaintenanceMessage.clear();
     AlterEgo::Background::Workers().Open();
+    AlterEgo::Callbacks::Runtime().Open();
     APIDefs = aApi;
     ImGui::SetCurrentContext((ImGuiContext*)APIDefs->ImguiContext);
     ImGui::SetAllocatorFunctions((void* (*)(size_t, void*))APIDefs->ImguiMalloc,
@@ -12655,6 +12673,7 @@ void AddonLoad(AddonAPI_t* aApi) {
 }
 
 void AddonUnload() {
+    AlterEgo::Callbacks::Runtime().Close();
     AlterEgo::Background::Workers().RequestStop();
     AlterEgo::IconManager::RequestStop();
     Skinventory::WikiImage::RequestStop();
@@ -12693,6 +12712,10 @@ void AddonUnload() {
     APIDefs->Events_Unsubscribe(EV_AE_ACH_PROGRESS_RESPONSE, OnAchProgressResponse);
     APIDefs->Events_Unsubscribe(EV_AE_ACCOUNTS_RESP, AlterEgo::GW2API::OnAccountsResponse);
     APIDefs->Events_Unsubscribe(EV_HOARD_ACCOUNTS_CHANGED, AlterEgo::GW2API::OnAccountsChanged);
+
+    // No new callback body can enter; drain admitted work before teardown.
+    // Do not hold a subsystem lock while waiting (events may reenter synchronously).
+    AlterEgo::Callbacks::Runtime().Drain();
 
     // All one-shot jobs must finish before their state/API is destroyed.
     AlterEgo::Background::Workers().JoinAll();
@@ -12869,6 +12892,8 @@ static void LoadAchProgress(const std::string& account) {
 }
 
 void OnMumbleIdentityUpdated(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     const MumbleIdentity* id = (const MumbleIdentity*)eventArgs;
     char buf[20] = {};
@@ -12896,6 +12921,8 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
 }
 
 void ProcessKeybind(const char* aIdentifier, bool aIsRelease) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (aIsRelease) return;
 
     if (strcmp(aIdentifier, "KB_ALTER_EGO_TOGGLE") == 0) {
@@ -16484,6 +16511,8 @@ static void SyncTabDropdownOpen(TabDropdownState& state, const char* popup) {
 }
 
 void AddonRender() {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     DefaultFontScope _fontScope(g_FontConfig);
     // Process icon download queue every frame
     AlterEgo::IconManager::Tick();
@@ -18146,6 +18175,8 @@ static void RenderStorageDiagnostics() {
 }
 
 void AddonOptions() {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     ThemeGuard themeGuard;
     // Header with links
     ImGui::Text("Alter Ego");

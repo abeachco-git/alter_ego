@@ -1,3 +1,4 @@
+#include "CallbackLifetime.h"
 #include "FontManager.h"
 #include "GW2API.h"
 #include "imgui.h"
@@ -21,6 +22,8 @@ static std::unordered_map<std::string, ImFont*> s_fonts;
 static std::unordered_set<std::string> s_requested;
 
 static void ReceiveFont(const char* id, void* font) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     std::lock_guard<std::mutex> lock(s_mtx);
     if (s_api && id) s_fonts[id] = static_cast<ImFont*>(font);
 }

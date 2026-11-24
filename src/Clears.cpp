@@ -1,3 +1,4 @@
+#include "CallbackLifetime.h"
 #include "BackgroundWorkers.h"
 #include <windows.h>
 #include <string>
@@ -355,6 +356,8 @@ static void SendClearsAchQuery(bool skipCompletedSections) {
 
 // H&S achievement response handler for all clears
 void OnClearsAchResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryAchievementResponse*>(eventArgs); return; }
     if (!eventArgs) return;
     auto* resp = (HoardQueryAchievementResponse*)eventArgs;
     std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
@@ -532,6 +535,8 @@ static void FetchVaultData(bool skipClaimedSections) {
 }
 
 void OnVaultSeasonResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryApiResponse*>(eventArgs); return; }
     if (!eventArgs) return;
     auto* resp = static_cast<HoardQueryApiResponse*>(eventArgs);
     std::unique_ptr<HoardQueryApiResponse> respGuard(resp); // caller owns the response
@@ -563,6 +568,8 @@ void OnVaultSeasonResponse(void* eventArgs) {
 }
 
 void OnVaultResponse(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) { delete static_cast<HoardQueryWizardsVaultResponse*>(eventArgs); return; }
     if (!eventArgs) return;
     auto* resp = (HoardQueryWizardsVaultResponse*)eventArgs;
     std::unique_ptr<HoardQueryWizardsVaultResponse> respGuard(resp);
