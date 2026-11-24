@@ -2769,7 +2769,7 @@ namespace AlterEgo {
     static bool DeserializeSavedBuild(const json& j,SavedBuild& b);
     static std::string LookupComponentDisplayName(const std::string&,uint32_t);
 
-    int GW2API::AddSavedBuild(SavedBuild build) {
+    int GW2API::AddSavedBuild(SavedBuild build,const std::string& setId,const std::string& newSetName) {
         int position=-1;
         const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
             if(build.id.empty()) {
@@ -2782,6 +2782,16 @@ namespace AlterEgo {
             position=static_cast<int>(doc.loadouts.size());
             for(int i=position-1;i>=0;--i)if(Composable::ProfessionOf(doc,doc.loadouts[i])==build.profession){position=i+1;break;}
             if(!NativeLibrary::PutLoadout(doc,SerializeSavedBuild(build),error,LookupComponentDisplayName))return false;
+            if(!setId.empty()) {
+                const auto matches=NativeLibrary::ExactEquipmentSets(doc,SerializeSavedBuild(build));
+                if(std::none_of(matches.begin(),matches.end(),[&](const auto& m){return m.id==setId;}))
+                    return Composable::Fail(error,"Selected equipment set no longer matches the capture.");
+                if(!NativeLibrary::ApplyEquipmentSet(doc,build.id,setId,error))return false;
+            } else if(!newSetName.empty()) {
+                std::string id="equipment-set:"+build.id;
+                for(unsigned n=1;Composable::FindEquipmentSet(doc,id);++n)id="equipment-set:"+build.id+":"+std::to_string(n);
+                if(!NativeLibrary::SaveSetFromLoadout(doc,build.id,id,newSetName,error))return false;
+            }
             auto item=std::move(doc.loadouts.back());doc.loadouts.pop_back();
             doc.loadouts.insert(doc.loadouts.begin()+position,std::move(item));
             return true;
@@ -3229,7 +3239,9 @@ namespace AlterEgo {
                 gs.infusion_snapshot = it.value().value("infusion_snapshot", false);
                 if (it.value().contains("infusion_ids") && it.value()["infusion_ids"].is_array()) {
                     for (const auto& infusion : it.value()["infusion_ids"]) {
-                        if (infusion.is_number_unsigned()) gs.infusion_ids.push_back(infusion.get<uint32_t>());
+                        uint32_t id=0;
+                        if(Composable::ReadItemId(infusion,id))gs.infusion_ids.push_back(id);
+                        else return false; // Never silently drop a slot or shift its attributes.
                     }
                 }
                 if (it.value().contains("infusion_attributes") &&
@@ -3333,10 +3345,13 @@ namespace AlterEgo {
             auto* previous = Composable::FindLoadout(before, loadout.id);
             if (!previous) { affected.insert(loadout.id); continue; }
             bool changed = false, buildChanged = false;
+            const auto oldRefs=Composable::EffectiveRefs(before,*previous);
+            const auto newRefs=Composable::EffectiveRefs(next,loadout);
             for (const auto& kind : Composable::Kinds()) {
-                auto oldRef = previous->refs.find(kind);
-                auto newRef = loadout.refs.find(kind);
-                if (oldRef == previous->refs.end() || newRef == loadout.refs.end()) {
+                auto oldRef = oldRefs.find(kind);
+                auto newRef = newRefs.find(kind);
+                if(oldRef==oldRefs.end()&&newRef==newRefs.end())continue;
+                if (oldRef == oldRefs.end() || newRef == newRefs.end()) {
                     changed = true;
                     continue;
                 }
@@ -3345,11 +3360,12 @@ namespace AlterEgo {
                 // Reassignment/copy of an identical component does not
                 // invalidate cached codes or require palette re-encoding.
                 // Only a semantic payload change does.
-                if (!oldPart || !newPart || oldPart->data != newPart->data) {
+                if (!oldPart || !newPart || !NativeLibrary::ExactContent(oldPart->data,newPart->data)) {
                     changed = true;
                     if (kind == "base_build" || kind == "skills") buildChanged = true;
                 }
             }
+            if(previous->equipment_set_id!=loadout.equipment_set_id||oldRefs!=newRefs)affected.insert(loadout.id);
             if (changed) loadout.metadata.erase("ae2_code");
             if (changed || !NativeLibrary::ExactContent(previous->metadata,loadout.metadata)) affected.insert(loadout.id);
             if (buildChanged) {
@@ -3614,6 +3630,47 @@ namespace AlterEgo {
             return NativeLibrary::ApplyEquipmentSet(doc,loadoutId,setId,error);
         });
     }
+    bool GW2API::DetachEquipmentSet(const std::string& loadoutId) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            return NativeLibrary::DetachEquipmentSet(doc,loadoutId,error);
+        });
+    }
+    bool GW2API::SaveLoadoutAsEquipmentSet(const std::string& loadoutId,const std::string& name,std::string* savedId) {
+        std::string id;
+        const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            const std::string prefix="equipment-set:"+loadoutId+":";
+            unsigned n=0;do{id=prefix+std::to_string(n++);}while(Composable::FindEquipmentSet(doc,id));
+            return NativeLibrary::SaveSetFromLoadout(doc,loadoutId,id,name,error);
+        });
+        if(ok&&savedId)*savedId=id;
+        return ok;
+    }
+    bool GW2API::DuplicateEquipmentSet(const std::string& setId,const std::string& name,std::string* savedId) {
+        std::string id;
+        const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            const auto* source=Composable::FindEquipmentSet(doc,setId);
+            if(!source||Composable::ComponentNameKey(name).empty())return Composable::Fail(error,"Invalid equipment set.");
+            auto copy=*source;
+            unsigned n=0;do{id=setId+":copy:"+std::to_string(n++);}while(Composable::FindEquipmentSet(doc,id));
+            copy.id=id;copy.name=name;doc.equipment_sets.push_back(std::move(copy));return true;
+        });
+        if(ok&&savedId)*savedId=id;
+        return ok;
+    }
+    bool GW2API::AssignEquipmentSetComponent(const std::string& setId,const std::string& kind,const std::string& componentId,uint64_t revision) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(revision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; reopen set editor.");
+            return NativeLibrary::AssignSetComponent(doc,setId,kind,componentId,error);
+        });
+    }
+    std::vector<std::pair<std::string,std::string>> GW2API::FindCapturedEquipmentSets(const SavedBuild& capture) {
+        json raw;Composable::Document doc;std::string error;
+        std::vector<std::pair<std::string,std::string>> result;
+        if(GetComposableLoadouts(raw)&&Composable::FromJson(raw,doc,error))
+            for(const auto& match:NativeLibrary::ExactEquipmentSets(doc,SerializeSavedBuild(capture)))
+                result.emplace_back(match.id,match.name);
+        return result;
+    }
     bool GW2API::RenameEquipmentSet(const std::string& setId,const std::string& name) {
         if(Composable::ComponentNameKey(name).empty())return false;
         return CommitComposableEdit([&](Composable::Document& doc,std::string&) {
@@ -3626,7 +3683,7 @@ namespace AlterEgo {
         return CommitComposableEdit([&](Composable::Document& doc,std::string&) {
             auto it=std::find_if(doc.equipment_sets.begin(),doc.equipment_sets.end(),
                 [&](const auto& set){return set.id==setId;});
-            if(it==doc.equipment_sets.end())return false;
+            if(it==doc.equipment_sets.end()||!Composable::EquipmentSetUsers(doc,setId).empty())return false;
             doc.equipment_sets.erase(it);return true;
         });
     }

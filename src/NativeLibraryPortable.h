@@ -4,7 +4,7 @@
 
 namespace AlterEgo::NativeLibrary {
 constexpr const char* kLibraryFormat="alter_ego_native_library";
-constexpr int kLibraryVersion=1;
+constexpr int kLibraryVersion=2;
 struct PortableLibrary {
     Snapshot data;
     bool loadouts=false, fashion=false;

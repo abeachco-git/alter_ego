@@ -84,4 +84,4 @@ Startup maintenance regression covers exclusive scheduling, no live deletion, ta
 
 Background worker coverage additionally verifies throwing failure-handler containment, repeated launches, reopening and complete joining. Windows artwork queue behavior and unload latency require in-game validation.
 
-Equipment set coverage in `persistence.native_library` verifies additive schema-1 to schema-2 migration preserving old rows, exact component reuse, foreign-key reference protection, private Loadout edits, complete set assignment, persistence, portable graph round-trip, duplicate consolidation and merge.
+Equipment set coverage in `persistence.native_library` verifies direct exclusive set links, exact capture matching, shared membership changes, copy/detach isolation, rejection of implicit aggregate gear edits, persistence, portable graph round-trip, duplicate consolidation and merge. Experimental SQLite schemas are not supported migration sources; original v2 migration remains covered by the native migration suite. Signed SQLite infusion IDs must survive conversion to unsigned GW2 IDs in SavedBuild projections.

@@ -171,7 +171,19 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
     next.metadata=Composable::Metadata(raw);
     const auto parts=Composable::Split(raw);
     const EditIndex index(doc);
+    if(!next.equipment_set_id.empty()) {
+        for(const auto& [kind,data]:parts)if(Composable::IsEquipmentKind(kind)&&
+            (!oldParts.count(kind)||!ExactContent(oldParts.at(kind),data)))
+            return Composable::Fail(error,"Detach the linked equipment set before editing gear.");
+        const auto refs=Composable::EffectiveRefs(doc,next);
+        for(const auto& [kind,id]:refs)if(Composable::IsEquipmentKind(kind)) {
+            const auto* part=Composable::Find(doc,kind,id);
+            if(part)for(auto it=part->data.begin();it!=part->data.end();++it)
+                if(it.key()!="gear")next.metadata.erase(it.key());
+        }
+    }
     for(const auto& [kind,data]:parts) {
+        if(Composable::IsEquipmentKind(kind)&&!next.equipment_set_id.empty())continue;
         const auto ref=next.refs.find(kind);
         auto* previous=ref==next.refs.end()?nullptr:Composable::Find(doc,kind,ref->second);
         if(existing&&oldParts.count(kind)&&ExactContent(oldParts.at(kind),data)) {
@@ -229,9 +241,66 @@ inline bool ApplyEquipmentSet(Composable::Document& doc,const std::string& loado
         auto* loadout=Composable::FindLoadout(next,loadoutId);
         const auto* set=Composable::FindEquipmentSet(next,setId);
         if(!loadout||!set)return Composable::Fail(err,"Equipment set or Loadout not found.");
-        for(const auto& [kind,id]:set->refs)loadout->refs[kind]=id;
+        for(auto it=loadout->refs.begin();it!=loadout->refs.end();) {
+            if(Composable::IsEquipmentKind(it->first))it=loadout->refs.erase(it);
+            else ++it;
+        }
+        loadout->equipment_set_id=setId;
         Json resolved;
         return Composable::Resolve(next,*loadout,resolved,err);
     },error);
+}
+inline bool DetachEquipmentSet(Composable::Document& doc,const std::string& loadoutId,std::string& error) {
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err) {
+        auto* l=Composable::FindLoadout(next,loadoutId);
+        if(!l||l->equipment_set_id.empty())return Composable::Fail(err,"Loadout is not linked.");
+        l->refs=Composable::EffectiveRefs(next,*l);
+        l->equipment_set_id.clear();
+        return true;
+    },error);
+}
+inline bool SaveSetFromLoadout(Composable::Document& doc,const std::string& loadoutId,
+    const std::string& newId,const std::string& name,std::string& error) {
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err) {
+        auto* l=Composable::FindLoadout(next,loadoutId);
+        if(!l||newId.empty()||Composable::FindEquipmentSet(next,newId)||Composable::ComponentNameKey(name).empty())
+            return Composable::Fail(err,"Invalid new equipment set.");
+        Composable::EquipmentSet set{newId,name,{}};
+        for(const auto& [kind,id]:Composable::EffectiveRefs(next,*l))
+            if(Composable::IsEquipmentKind(kind))set.refs[kind]=id;
+        next.equipment_sets.push_back(std::move(set));
+        for(auto it=l->refs.begin();it!=l->refs.end();) {
+            if(Composable::IsEquipmentKind(it->first))it=l->refs.erase(it);else ++it;
+        }
+        l->equipment_set_id=newId;
+        return true;
+    },error);
+}
+inline bool AssignSetComponent(Composable::Document& doc,const std::string& setId,
+    const std::string& kind,const std::string& id,std::string& error) {
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err) {
+        auto* set=Composable::FindEquipmentSet(next,setId);
+        if(!set||!Composable::IsEquipmentKind(kind)||!Composable::Find(next,kind,id))
+            return Composable::Fail(err,"Equipment set or component not found.");
+        set->refs[kind]=id;
+        for(const auto& l:next.loadouts)if(l.equipment_set_id==setId) {
+            Json raw;if(!Composable::Resolve(next,l,raw,err))return false;
+        }
+        return true;
+    },error);
+}
+inline std::vector<Match> ExactEquipmentSets(const Composable::Document& doc,const Json& raw) {
+    std::vector<Match> result;
+    const auto parts=Composable::Split(raw);
+    for(const auto& set:doc.equipment_sets) {
+        bool match=set.refs.size()==7;
+        for(const auto& [kind,id]:set.refs) {
+            const auto* part=Composable::Find(doc,kind,id);
+            auto expected=parts.find(kind);
+            if(!part||expected==parts.end()||!ExactContent(part->data,expected->second)){match=false;break;}
+        }
+        if(match)result.push_back({set.id,set.name,static_cast<std::int64_t>(Composable::EquipmentSetUsers(doc,set.id).size())});
+    }
+    return result;
 }
 } // namespace AlterEgo::NativeLibrary

@@ -86,13 +86,6 @@ int case_native_library(int,char**) {
         assert(rejected&&repo.Read().revision==2);
     }
     {
-        // Reproduce an existing schema-1 library with its original data.
-        DB::Connection db(tmp.db(),DB::Connection::OpenMode::Existing);
-        DB::Transaction tx(db);
-        db.Exec("DROP TABLE equipment_set_components; DROP TABLE equipment_sets; PRAGMA user_version=1;");
-        tx.Commit();
-    }
-    {
         Native::Repository repo(tmp.db(),DB::Connection::OpenMode::Existing,
             [](const Json&){return std::string("collision");});
         auto state=repo.Read();assert(state.revision==2);
@@ -107,21 +100,71 @@ int case_native_library(int,char**) {
         auto remove=next.loadouts;
         assert(!C::RemoveUnreferenced(remove,"sigils",refs.at("sigils"),error));
         assert(Native::ApplyEquipmentSet(next.loadouts,"first","set1",error));
+        assert(next.loadouts.loadouts.front().equipment_set_id=="set1");
+        assert(next.loadouts.loadouts.front().refs.size()==2);
+        assert(Native::ExactEquipmentSets(next.loadouts,raw).size()==1);
+        auto second=next.loadouts.loadouts.front();second.id="second";second.metadata["id"]="second";
+        next.loadouts.loadouts.push_back(second);
+        assert(C::EquipmentSetUsers(next.loadouts,"set1").size()==2);
+        assert(C::EffectiveComponentUsers(next.loadouts,"sigils",refs.at("sigils")).size()==2);
+        auto nameOnly=next.loadouts;Json nameDraft;
+        assert(C::Resolve(nameOnly,nameOnly.loadouts.front(),nameDraft,error));
+        nameDraft["name"]="Linked rename";assert(Native::PutLoadout(nameOnly,nameDraft,error));
+        assert(nameOnly.loadouts.front().equipment_set_id=="set1");
+        auto invalid=next.loadouts;invalid.loadouts.front().refs["sigils"]=refs.at("sigils");
+        assert(!C::Validate(invalid,error));
+        invalid=next.loadouts;invalid.equipment_sets.clear();assert(!C::Validate(invalid,error));
         auto privateEdit=next.loadouts;
         Json edited;assert(C::Resolve(privateEdit,privateEdit.loadouts.front(),edited,error));
         edited["gear"]["WeaponA1"]["sigil_id"]=999;
+        assert(!Native::PutLoadout(privateEdit,edited,error));
+        assert(Native::DetachEquipmentSet(privateEdit,"first",error));
         assert(Native::PutLoadout(privateEdit,edited,error));
         assert(privateEdit.equipment_sets.front().refs.at("sigils")==refs.at("sigils"));
         assert(privateEdit.loadouts.front().refs.at("sigils")!=refs.at("sigils"));
         assert(Native::ApplyEquipmentSet(privateEdit,"first","set1",error));
-        assert(privateEdit.loadouts.front().refs.at("sigils")==refs.at("sigils"));
+        assert(privateEdit.loadouts.front().equipment_set_id=="set1");
+        assert(Native::SaveSetFromLoadout(privateEdit,"first","copy","Copy",error));
+        assert(Native::AssignSetComponent(privateEdit,"set1","sigils","different",error));
+        Json one,two;
+        assert(C::Resolve(privateEdit,privateEdit.loadouts[0],one,error));
+        assert(C::Resolve(privateEdit,privateEdit.loadouts[1],two,error));
+        assert(one["gear"]["WeaponA1"]["sigil_id"]!=two["gear"]["WeaponA1"]["sigil_id"]);
+        auto shared=next.loadouts;
+        assert(Native::AssignSetComponent(shared,"set1","sigils","different",error));
+        assert(C::Resolve(shared,shared.loadouts[0],one,error)&&C::Resolve(shared,shared.loadouts[1],two,error));
+        assert(one["gear"]==two["gear"]);
         assert(repo.Commit(state,next)==3);
         const auto restored=repo.Read();
         assert(C::ToJson(restored.loadouts)==C::ToJson(next.loadouts));
-        assert(repo.Users("sigils",refs.at("sigils")).size()==2);
+        assert(repo.Users("sigils",refs.at("sigils")).size()==1);
+        auto rejected=restored;rejected.loadouts.equipment_sets.clear();bool blocked=false;
+        try{repo.Commit(restored,rejected);}catch(const DB::Error&){blocked=true;}
+        assert(blocked&&repo.Read().revision==restored.revision);
+        auto changed=restored;assert(Native::AssignSetComponent(changed.loadouts,"set1","sigils","different",error));
+        assert(repo.Commit(restored,changed)==4);
+        bool stale=false;try{repo.Commit(restored,changed);}catch(const DB::Error&){stale=true;}
+        assert(stale&&repo.Read().revision==4);
+        Json roundTrip;assert(C::Resolve(restored.loadouts,restored.loadouts.loadouts.front(),roundTrip,error));
+        const auto& ids=roundTrip.at("gear").at("Helm").at("infusion_ids");
+        assert(ids.size()==3);
+        uint32_t infusionId=0;
+        assert(C::ReadItemId(ids[0],infusionId)&&infusionId==11);
+        assert(C::ReadItemId(ids[1],infusionId)&&infusionId==22);
+        assert(C::ReadItemId(ids[2],infusionId)&&infusionId==33);
+        assert(C::ReadItemId(Json(uint32_t(0)),infusionId)&&infusionId==0);
+        assert(!C::ReadItemId(Json(-1),infusionId));
+        assert(!C::ReadItemId(Json(uint64_t(4294967296ULL)),infusionId));
+        assert(!C::ReadItemId(Json(1.5),infusionId));
         C::Document portable;
         assert(C::FromJson(C::ToJson(restored.loadouts),portable,error));
         assert(portable.equipment_sets.front().refs==refs);
+        assert(portable.loadouts.front().equipment_set_id=="set1");
+        Json packet;assert(C::ExportPortableLoadout(portable,"first",packet,error));
+        assert(packet.at("equipment_set_name")=="Equipment");
+        auto imported=portable;assert(C::ImportPortableLoadout(imported,packet,"imported",error));
+        assert(!imported.loadouts.back().equipment_set_id.empty());
+        assert(imported.loadouts.back().refs.size()==2);
         assert(Native::ConsolidateExact(portable,"sigils",refs.at("sigils"),"identical",error));
         assert(portable.equipment_sets.front().refs.at("sigils")=="identical");
         C::Document merged;size_t added=0,skipped=0;

@@ -315,8 +315,9 @@ inline void WriteLoadout(Connection& db,const Composable::Loadout& l,size_t ordi
     Json metadata=l.metadata; metadata.erase("id");
     auto modes=Strings(metadata,"game_modes");
     Value fashion=l.fashion_id.empty()?Value(nullptr):Value(l.fashion_id);
-    InsertRecord(db,"loadouts","id,ordinal,fashion_id,modes_present",
-                 {l.id,Number(ordinal),fashion,Present(modes,1)},metadataFields,std::move(metadata));
+    Value set=l.equipment_set_id.empty()?Value(nullptr):Value(l.equipment_set_id);
+    InsertRecord(db,"loadouts","id,ordinal,fashion_id,modes_present,equipment_set_id",
+                 {l.id,Number(ordinal),fashion,Present(modes,1),set},metadataFields,std::move(metadata));
     WriteStrings(db,"INSERT INTO loadout_game_modes VALUES(?,?,?)",{l.id},modes);
     for(const auto& ref:l.refs)
         Run(db,"INSERT INTO loadout_components VALUES(?,?,?)",{l.id,ref.first,ref.second});
@@ -324,7 +325,8 @@ inline void WriteLoadout(Connection& db,const Composable::Loadout& l,size_t ordi
 
 inline Composable::Loadout ReadLoadout(Connection& db,Statement& q) {
     Composable::Loadout l; l.id=q.Text(0); l.fashion_id=q.Text(1);
-    l.metadata=DecodeFields(q,3,metadataFields); l.metadata["id"]=l.id;
+    l.equipment_set_id=q.Text(3);
+    l.metadata=DecodeFields(q,4,metadataFields); l.metadata["id"]=l.id;
     if(q.Integer(2)) l.metadata["game_modes"]=ReadList(db,
         "SELECT ordinal,mode FROM loadout_game_modes WHERE loadout_id=? ORDER BY ordinal",{l.id},Type::Text);
     auto r=db.Prepare("SELECT kind,component_id FROM loadout_components WHERE loadout_id=?");

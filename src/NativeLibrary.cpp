@@ -42,7 +42,7 @@ template<class T> Index<T> MakeIndex(const std::vector<T>& rows) {
     return result;
 }
 bool SameLoadout(const Loadout& a,const Loadout& b) {
-    return ExactContent(a.metadata,b.metadata)&&a.refs==b.refs&&a.fashion_id==b.fashion_id;
+    return ExactContent(a.metadata,b.metadata)&&a.refs==b.refs&&a.fashion_id==b.fashion_id&&a.equipment_set_id==b.equipment_set_id;
 }
 }
 
@@ -52,6 +52,8 @@ Repository::Repository(const std::string& path,Database::Connection::OpenMode mo
     const auto version=db_.Scalar("PRAGMA user_version");
     if(mode==Database::Connection::OpenMode::Existing && (id!=kApplicationId||version<=0))
         throw Database::Error(SQLITE_NOTADB,"Existing library is not an initialized Alter Ego database");
+    if(id==kApplicationId&&version>0&&version!=kSchemaVersion)
+        throw Database::Error(SQLITE_NOTADB,"Archive experimental library.db and migrate the original v2 library; schema is not supported.");
     if(id==kApplicationId&&version==kSchemaVersion) {
         if(verify) db_.Verify();
     } else Database::Migrate(db_,kApplicationId,kSchemaVersion,UpgradeSchema);
@@ -73,7 +75,7 @@ Snapshot Repository::ReadUnlocked() {
         while(q.Step()) snapshot.fashion.push_back(ReadFashion(db_,q));
     }
     {
-        auto q=db_.Prepare(("SELECT id,fashion_id,modes_present,"+Select(metadataFields)+
+        auto q=db_.Prepare(("SELECT id,fashion_id,modes_present,equipment_set_id,"+Select(metadataFields)+
             " FROM loadouts ORDER BY ordinal,id").c_str());
         while(q.Step()) snapshot.loadouts.loadouts.push_back(ReadLoadout(db_,q));
     }
@@ -129,15 +131,6 @@ std::int64_t Repository::Commit(const Snapshot& before,const Snapshot& after) {
             changed=true;
         }
     }
-    const auto oldLoads=MakeIndex(before.loadouts.loadouts),newLoads=MakeIndex(after.loadouts.loadouts);
-    for(size_t i=0;i<after.loadouts.loadouts.size();++i) {
-        const auto& l=after.loadouts.loadouts[i];auto old=oldLoads.find(l.id);
-        if(old!=oldLoads.end()&&old->second.first==i&&SameLoadout(*old->second.second,l))continue;
-        WriteLoadout(db_,l,i);changed=true;
-    }
-    for(const auto& old:before.loadouts.loadouts) if(!newLoads.count(old.id)) {
-        Run(db_,"DELETE FROM loadouts WHERE id=?",{old.id});changed=true;
-    }
     const auto oldSets=MakeIndex(before.loadouts.equipment_sets),newSets=MakeIndex(after.loadouts.equipment_sets);
     for(size_t i=0;i<after.loadouts.equipment_sets.size();++i) {
         const auto& set=after.loadouts.equipment_sets[i];auto old=oldSets.find(set.id);
@@ -149,6 +142,15 @@ std::int64_t Repository::Commit(const Snapshot& before,const Snapshot& after) {
         for(const auto& [kind,id]:set.refs)
             Run(db_,"INSERT INTO equipment_set_components VALUES(?,?,?)",{set.id,kind,id});
         changed=true;
+    }
+    const auto oldLoads=MakeIndex(before.loadouts.loadouts),newLoads=MakeIndex(after.loadouts.loadouts);
+    for(size_t i=0;i<after.loadouts.loadouts.size();++i) {
+        const auto& l=after.loadouts.loadouts[i];auto old=oldLoads.find(l.id);
+        if(old!=oldLoads.end()&&old->second.first==i&&SameLoadout(*old->second.second,l))continue;
+        WriteLoadout(db_,l,i);changed=true;
+    }
+    for(const auto& old:before.loadouts.loadouts) if(!newLoads.count(old.id)) {
+        Run(db_,"DELETE FROM loadouts WHERE id=?",{old.id});changed=true;
     }
     for(const auto& set:before.loadouts.equipment_sets)if(!newSets.count(set.id)) {
         Run(db_,"DELETE FROM equipment_sets WHERE id=?",{set.id});changed=true;

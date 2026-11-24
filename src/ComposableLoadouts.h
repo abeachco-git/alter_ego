@@ -20,7 +20,7 @@
 namespace AlterEgo { namespace Composable {
 
 using Json = nlohmann::json;
-constexpr int kVersion = 1;
+constexpr int kVersion = 2;
 constexpr const char* kFormat = "alter_ego_component_graph";
 
 inline const std::array<std::string, 9>& Kinds() {
@@ -47,6 +47,7 @@ struct Loadout {
     Json metadata = Json::object(); // Existing name, notes, modes, provenance, etc.
     std::map<std::string, std::string> refs; // Stable component IDs by category.
     std::string fashion_id;          // Optional reference to FashionLibrary::Look::id.
+    std::string equipment_set_id;    // Linked mode owns only Base Build and Skills directly.
 };
 struct EquipmentSet {
     std::string id, name;
@@ -69,6 +70,26 @@ inline const EquipmentSet* FindEquipmentSet(const Document& doc,const std::strin
     return nullptr;
 }
 
+// Expand only at projection/edit boundaries; never persist this map.
+inline std::map<std::string,std::string> EffectiveRefs(const Document& doc,const Loadout& loadout) {
+    auto refs=loadout.refs;
+    if(const auto* set=FindEquipmentSet(doc,loadout.equipment_set_id))
+        refs.insert(set->refs.begin(),set->refs.end());
+    return refs;
+}
+inline std::vector<std::string> EffectiveComponentUsers(const Document& doc,const std::string& kind,const std::string& id) {
+    std::vector<std::string> users;
+    for(const auto& l:doc.loadouts) {
+        const auto refs=EffectiveRefs(doc,l);auto ref=refs.find(kind);
+        if(ref!=refs.end()&&ref->second==id)users.push_back(l.id);
+    }
+    return users;
+}
+inline std::vector<std::string> EquipmentSetUsers(const Document& doc,const std::string& id) {
+    std::vector<std::string> users;
+    for(const auto& l:doc.loadouts)if(l.equipment_set_id==id)users.push_back(l.id);
+    return users;
+}
 inline const Component* Find(const Document& doc, const std::string& kind,
                               const std::string& id) {
     auto it = doc.components.find(kind);
@@ -108,7 +129,11 @@ inline bool Validate(const Document& doc, std::string& error) {
             !item.metadata.at("id").is_string() ||
             item.metadata.at("id").get<std::string>() != item.id)
             return Fail(error, "Loadout metadata ID mismatch.");
+        if(!item.equipment_set_id.empty()&&!FindEquipmentSet(doc,item.equipment_set_id))
+            return Fail(error,"Unknown linked equipment set.");
         for (const auto& [kind, id] : item.refs) {
+            if(!item.equipment_set_id.empty()&&IsEquipmentKind(kind))
+                return Fail(error,"Linked Loadout cannot own equipment components.");
             if (!IsKind(kind) || id.empty() || !Find(doc, kind, id))
                 return Fail(error, "Unresolved Loadout component: " + kind);
         }
@@ -489,7 +514,9 @@ inline bool Resolve(const Document& doc, const Loadout& loadout,
     Json result = loadout.metadata;
     Json gear = Json::object();
     bool hadGear = false;
-    for (const auto& [kind, id] : loadout.refs) {
+    if(!loadout.equipment_set_id.empty()&&!FindEquipmentSet(doc,loadout.equipment_set_id))
+        return Fail(error,"Missing linked equipment set.");
+    for (const auto& [kind, id] : EffectiveRefs(doc,loadout)) {
         const auto* part = Find(doc, kind, id);
         if (!part) return Fail(error, "Missing component during Resolve: " + kind);
         for (auto it = part->data.begin(); it != part->data.end(); ++it) {
@@ -547,7 +574,7 @@ inline Json ToJson(const Document& doc) {
     for (const auto& item : doc.loadouts)
         output["loadouts"].push_back({
             {"id", item.id}, {"metadata", item.metadata}, {"refs", item.refs},
-            {"fashion_id", item.fashion_id}
+            {"fashion_id", item.fashion_id}, {"equipment_set_id", item.equipment_set_id}
         });
     if(!doc.equipment_sets.empty()) {
         output["equipment_sets"]=Json::array();
@@ -583,6 +610,7 @@ inline bool FromJson(const Json& input, Document& output, std::string& error) {
             item.metadata = raw.at("metadata");
             item.refs = raw.at("refs").get<std::map<std::string,std::string>>();
             item.fashion_id = raw.value("fashion_id", std::string());
+            item.equipment_set_id = raw.value("equipment_set_id", std::string());
             next.loadouts.push_back(std::move(item));
         }
         if(input.contains("equipment_sets")) {
@@ -615,6 +643,11 @@ inline bool NonNegativeInteger(const Json& value) {
     if (value.is_number_unsigned()) return value.get<uint64_t>() <= std::numeric_limits<uint32_t>::max();
     return value.is_number_integer() &&
            value.get<int64_t>() >= 0 && value.get<int64_t>() <= std::numeric_limits<uint32_t>::max();
+}
+// SQLite returns signed integers even for valid unsigned GW2 item IDs.
+inline bool ReadItemId(const Json& value,uint32_t& id) {
+    if(!NonNegativeInteger(value))return false;
+    id=value.get<uint32_t>();return true;
 }
 inline bool ValidPortableGearField(const std::string& field, const Json& value) {
     if (field == "item_id" || field == "stat_id" ||
@@ -769,7 +802,7 @@ inline bool ImportComponent(const Json& input, std::string& kind,
 // identity; importing always creates new independent component IDs, preventing
 // accidental edits to an unrelated existing shared component.
 constexpr const char* kPortableLoadoutFormat = "alter_ego_portable_loadout";
-constexpr int kPortableLoadoutVersion = 1;
+constexpr int kPortableLoadoutVersion = 2;
 inline bool ExportPortableLoadout(const Document& doc, const std::string& id,
                                   Json& packet, std::string& error) {
     if (!Validate(doc, error)) return false;
@@ -777,7 +810,7 @@ inline bool ExportPortableLoadout(const Document& doc, const std::string& id,
         [&](const Loadout& item){ return item.id == id; });
     if (it == doc.loadouts.end()) return Fail(error, "Loadout not found.");
     Json components = Json::object();
-    for (const auto& [kind, ref] : it->refs) {
+    for (const auto& [kind, ref] : EffectiveRefs(doc,*it)) {
         const Component* part = Find(doc, kind, ref);
         if (!part) return Fail(error, "Loadout references an unavailable component.");
         components[kind] = {{"name", part->name}, {"data", part->data}};
@@ -787,6 +820,7 @@ inline bool ExportPortableLoadout(const Document& doc, const std::string& id,
                   {"metadata", it->metadata},
                   {"components", components},
                   {"fashion_id", it->fashion_id}};
+    if(const auto* set=FindEquipmentSet(doc,it->equipment_set_id))packet["equipment_set_name"]=set->name;
     return true;
 }
 
@@ -861,6 +895,18 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
             next.components[kind].push_back(std::move(part));
             loadout.refs[kind] = componentId;
         }
+        if(packet.contains("equipment_set_name")) {
+            if(!packet.at("equipment_set_name").is_string()||packet.at("equipment_set_name").get<std::string>().empty())
+                return Fail(err,"Invalid portable equipment set name.");
+            EquipmentSet set{"equipment-set:"+newId,packet.at("equipment_set_name").get<std::string>(),{}};
+            for(unsigned n=1;FindEquipmentSet(next,set.id);++n)set.id="equipment-set:"+newId+":"+std::to_string(n);
+            for(auto ref=loadout.refs.begin();ref!=loadout.refs.end();) {
+                if(IsEquipmentKind(ref->first)){set.refs.insert(*ref);ref=loadout.refs.erase(ref);}
+                else ++ref;
+            }
+            loadout.equipment_set_id=set.id;
+            next.equipment_sets.push_back(std::move(set));
+        }
         next.loadouts.push_back(std::move(loadout));
         return true;
     }, error);
@@ -905,6 +951,7 @@ inline bool Assign(Document& doc, const std::string& loadoutId,
         auto* item = FindLoadout(next, loadoutId);
         if (!item || !IsKind(kind) || !Find(next, kind, id))
             return Fail(err, "Loadout or component not found.");
+        if(IsEquipmentKind(kind)&&!item->equipment_set_id.empty())return Fail(err,"Detach the linked equipment set before assigning equipment.");
         if (!AssignCompatible(next, *item, kind, id, err)) return false;
         item->refs[kind] = id;
         return true;
@@ -1213,7 +1260,18 @@ inline bool Reconcile(const Document& original, const Json& legacy,
         Loadout updated = *existing;
         updated.metadata = Metadata(item);
         const auto parts = Split(item);
+        if(!updated.equipment_set_id.empty()) {
+            const auto oldParts=Split(previous);
+            for(const auto& [kind,data]:parts)if(IsEquipmentKind(kind)&&oldParts.at(kind).dump()!=data.dump())
+                return Fail(error,"Detach the linked equipment set before editing equipment.");
+            for(const auto& [kind,ref]:EffectiveRefs(next,updated))if(IsEquipmentKind(kind)) {
+                const auto* part=Find(next,kind,ref);
+                if(part)for(auto it=part->data.begin();it!=part->data.end();++it)
+                    if(it.key()!="gear")updated.metadata.erase(it.key());
+            }
+        }
         for (const auto& [kind, data] : parts) {
+            if(IsEquipmentKind(kind)&&!updated.equipment_set_id.empty())continue;
             const auto oldRef = updated.refs.find(kind);
             if (oldRef == updated.refs.end()) {
                 if (const auto* match = ReusableForLoadout(next, kind, data,
@@ -1340,29 +1398,29 @@ inline bool Merge(const Document& current, const Document& incoming,
             }
         }
     }
-    for (const auto& incomingLoadout : incoming.loadouts) {
-        if (FindLoadout(merged, incomingLoadout.id)) {
-            ++skipped;
-            continue;
-        }
-        Loadout copy = incomingLoadout;
-        for (auto& [kind, id] : copy.refs)
-            id = remap.at(kind).at(id);
-        merged.loadouts.push_back(std::move(copy));
-        ++added;
-    }
+    std::map<std::string,std::string> setRemap;
     for(auto set:incoming.equipment_sets) {
         for(auto& [kind,id]:set.refs)id=remap.at(kind).at(id);
+        const auto original=set.id;
         const auto* existing=FindEquipmentSet(merged,set.id);
         if(existing&&existing->name==set.name&&existing->refs==set.refs) {
+            setRemap[original]=set.id;
             if(setsSkipped)++*setsSkipped;
             continue;
         }
-        const auto original=set.id;
         for(unsigned i=1;FindEquipmentSet(merged,set.id)|| (set.id!=original&&FindEquipmentSet(incoming,set.id));++i)
             set.id=original+":import:"+std::to_string(i);
+        setRemap[original]=set.id;
         merged.equipment_sets.push_back(std::move(set));
         if(setsAdded)++*setsAdded;
+    }
+    for (const auto& incomingLoadout : incoming.loadouts) {
+        if (FindLoadout(merged, incomingLoadout.id)) {++skipped;continue;}
+        Loadout copy = incomingLoadout;
+        for (auto& [kind, id] : copy.refs)id = remap.at(kind).at(id);
+        if(!copy.equipment_set_id.empty())copy.equipment_set_id=setRemap.at(copy.equipment_set_id);
+        merged.loadouts.push_back(std::move(copy));
+        ++added;
     }
     if (!Validate(merged, error)) return false;
     output = std::move(merged);

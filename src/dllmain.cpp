@@ -1356,6 +1356,10 @@ static bool g_SaveLibNameManuallyEdited = false;
 static constexpr int kSaveEntireEquipmentSet = 9;
 static std::string g_EquipmentSetSelectedId, g_SaveLibAccount;
 static constexpr int kSaveFashionTarget=3;
+static int g_SaveLibEquipmentMode=0; // offer exact match, independent, new named set
+static std::string g_SaveLibSetName;
+static std::vector<std::pair<std::string,std::string>> g_SaveLibExactSets;
+static std::string g_SaveLibSelectedSet;
 static int g_SaveLibTarget = 0; // 0 Loadout, 1 new component, 2 replace existing, 3 Fashion
 static AlterEgo::Fashion::Look g_SaveLibPendingFashion;
 static std::string g_SaveLibFashionError;
@@ -4543,6 +4547,7 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", defaultName.c_str());
     g_SaveLibModes = {AlterEgo::GameMode::PvE};
     g_SaveLibNameManuallyEdited = false;
+    g_SaveLibEquipmentMode=0;g_SaveLibSetName.clear();g_SaveLibExactSets.clear();g_SaveLibSelectedSet.clear();
     g_SaveLibTarget = componentKind >= 0 ? 1 : 0;
     g_SaveLibComponentKind = componentKind >= 0 ? componentKind : 0;
     g_SaveLibUpdateId.clear();
@@ -8742,8 +8747,27 @@ static void RenderSaveToLibraryDialog() {
             ImGui::EndCombo();
         }
     }
+    if(g_SaveLibTarget==0) {
+        field("Equipment storage");
+        const char* storageModes[]={"Offer matching set","Independent components","Create named set"};
+        if(RenderThemedCombo("##equipment_storage",storageModes[g_SaveLibEquipmentMode],width())) {
+            for(int i=0;i<3;++i)if(UI::SelectableOption(storageModes[i],g_SaveLibEquipmentMode==i))g_SaveLibEquipmentMode=i;
+            ImGui::EndCombo();
+        }
+        if(g_SaveLibEquipmentMode==2) {
+            if(g_SaveLibSetName.empty())g_SaveLibSetName=std::string(g_SaveLibName)+" - Equipment";
+            field("Set name");ImGui::SetNextItemWidth(width());UI::InputText("##new_set_name",g_SaveLibSetName);
+        }
+    }
+    auto finishLoadout=[&](SavedBuild capture,const std::string& setId,const std::string& newName) {
+        const int idx=GW2API::AddSavedBuild(std::move(capture),setId,newName);
+        if(idx>=0){g_LibSelectedIdx=idx;g_LibDetailsFetched=false;NavigateToLibraryCollection(0);g_SaveLibDialogOpen=false;}
+        if(APIDefs)APIDefs->GUI_SendAlert(idx>=0?"Loadout saved to library!":"Could not save Loadout; review equipment selection.");
+        return idx>=0;
+    };
     const bool ready=sourceChar&&(!needsBuild||currentBuild())&&(!needsEquipment||hasEquipment(g_SaveLibEquipTab))&&
-        (g_SaveLibTarget==2?!existingComponentName.empty():!Composable::ComponentNameKey(g_SaveLibName).empty());
+        (g_SaveLibTarget==2?!existingComponentName.empty():!Composable::ComponentNameKey(g_SaveLibName).empty())&&
+        (g_SaveLibTarget!=0||g_SaveLibEquipmentMode!=2||!Composable::ComponentNameKey(g_SaveLibSetName).empty());
     if(!sourceChar)ImGui::TextDisabled("Character snapshot unavailable.");
     else if(needsBuild&&!currentBuild())ImGui::TextDisabled("Select a retrieved build tab.");
     else if(needsEquipment&&!hasEquipment(g_SaveLibEquipTab))ImGui::TextDisabled("No retrieved equipment in this tab.");
@@ -8815,16 +8839,17 @@ static void RenderSaveToLibraryDialog() {
                     APIDefs->GUI_SendAlert("Could not save the selected component.");
                 }
             } else {
-                int idx = AlterEgo::GW2API::AddSavedBuild(std::move(sb));
-                if (idx >= 0) {
-                    g_LibSelectedIdx = idx;
-                    g_LibDetailsFetched = false;
-                    NavigateToLibraryCollection(0);
-                    if (APIDefs) APIDefs->GUI_SendAlert("Loadout saved to library!");
-                    g_SaveLibDialogOpen = false;
-                } else if (APIDefs) {
-                    APIDefs->GUI_SendAlert("Unable to persist Loadout - check file permissions.");
-                }
+                if(g_SaveLibEquipmentMode==0) {
+                    g_SaveLibExactSets=GW2API::FindCapturedEquipmentSets(sb);
+                    if(g_SaveLibExactSets.empty()) {
+                        finishLoadout(std::move(sb),"","");
+                    } else {
+                        g_SaveLibPendingCapture=std::move(sb);
+                        g_SaveLibSelectedSet=g_SaveLibExactSets.front().first;
+                        ImGui::OpenPopup("Link matching equipment set");
+                    }
+                } else finishLoadout(std::move(sb),"",g_SaveLibEquipmentMode==2?g_SaveLibSetName:std::string());
+
             }
         } else {
             ImGui::OpenPopup("Live build unavailable##save");
@@ -8833,6 +8858,15 @@ static void RenderSaveToLibraryDialog() {
     ImGui::SameLine();
     if (RenderActionButton("Cancel##saveToLibrary", ImVec2(80, 0))) {
         g_SaveLibDialogOpen = false;
+    }
+    if(ImGui::BeginPopupModal("Link matching equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+        for(const auto& set:g_SaveLibExactSets)
+            if(UI::SelectableOption((set.second+"##"+set.first).c_str(),set.first==g_SaveLibSelectedSet))g_SaveLibSelectedSet=set.first;
+        if(RenderActionButton("Link & Save")&&finishLoadout(g_SaveLibPendingCapture,g_SaveLibSelectedSet,""))ImGui::CloseCurrentPopup();
+        ImGui::SameLine();
+        if(RenderActionButton("Use independent components")&&finishLoadout(g_SaveLibPendingCapture,"",""))ImGui::CloseCurrentPopup();
+        ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
     if(ImGui::BeginPopupModal("Existing Fashion##save_library",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
         const int duplicate=g_FashionLibrary.FindExact(g_SaveLibPendingFashion.wardrobe_link);
@@ -8893,7 +8927,7 @@ static void RenderSaveToLibraryDialog() {
 
 
 // Render a single gear slot with icon for the build gear panel
-static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
+static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bool editable) {
     // Check if off-hand is blocked by a two-handed main hand
     bool disabled = false;
     if (strcmp(slot, "WeaponA2") == 0 || strcmp(slot, "WeaponB2") == 0) {
@@ -9004,7 +9038,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
 
     // Only editable in edit mode; read-only gear can still show tooltips.
     ImGui::SetCursorScreenPos(pos);
-    if (disabled || !g_LibEditMode) {
+    if (disabled || !editable) {
         ImGui::Dummy(ImVec2(iconSz, iconSz));
     } else if (ImGui::InvisibleButton("##icon", ImVec2(iconSz, iconSz))) {
         AlterEgo::BuildGearSlot current;
@@ -9014,7 +9048,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
     }
     bool hovered = !disabled && ImGui::IsItemHovered();
     bool clearAfter = false;
-    if (g_LibEditMode && !disabled) RenderGearEditContext(build,slot,clearAfter);
+    if (editable && !disabled) RenderGearEditContext(build,slot,clearAfter);
     // Apply only after the menu returns; iterators below must not refer to erased slots.
     if (clearAfter) ClearGearSlot(build,slot,GearCopyField::All);
     it = build.gear.find(slot);
@@ -9129,7 +9163,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
         ImGui::BeginTooltip();
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
             "%s%s", GearSlotDisplayName(slot),
-            g_LibEditMode ? " (click to customize)" : "");
+            editable ? " (click to customize)" : "");
         ImGui::EndTooltip();
     }
 
@@ -9137,7 +9171,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
 }
 
 // Render the full gear section for a saved build
-static void RenderBuildGearPanel(AlterEgo::SavedBuild& build) {
+static void RenderBuildGearPanel(AlterEgo::SavedBuild& build,bool editable) {
     if (ImGui::BeginTable("##buildGear", 2, ImGuiTableFlags_None)) {
         ImGui::TableSetupColumn("##gearLeft", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("##gearRight", ImGuiTableColumnFlags_WidthStretch);
@@ -9147,32 +9181,32 @@ static void RenderBuildGearPanel(AlterEgo::SavedBuild& build) {
         ImGui::TableNextColumn();
         ImGui::Indent(2.0f);
         RenderSectionHeader("Armor", AlterEgo::UI::SectionGold);
-        RenderBuildGearSlot(build, "Helm");
-        RenderBuildGearSlot(build, "Shoulders");
-        RenderBuildGearSlot(build, "Coat");
-        RenderBuildGearSlot(build, "Gloves");
-        RenderBuildGearSlot(build, "Leggings");
-        RenderBuildGearSlot(build, "Boots");
+        RenderBuildGearSlot(build, "Helm",editable);
+        RenderBuildGearSlot(build, "Shoulders",editable);
+        RenderBuildGearSlot(build, "Coat",editable);
+        RenderBuildGearSlot(build, "Gloves",editable);
+        RenderBuildGearSlot(build, "Leggings",editable);
+        RenderBuildGearSlot(build, "Boots",editable);
 
         ImGui::Spacing();
         RenderSectionHeader("Weapons", AlterEgo::UI::SectionGold);
-        RenderBuildGearSlot(build, "WeaponA1");
-        RenderBuildGearSlot(build, "WeaponA2");
-        RenderBuildGearSlot(build, "WeaponB1");
-        RenderBuildGearSlot(build, "WeaponB2");
+        RenderBuildGearSlot(build, "WeaponA1",editable);
+        RenderBuildGearSlot(build, "WeaponA2",editable);
+        RenderBuildGearSlot(build, "WeaponB1",editable);
+        RenderBuildGearSlot(build, "WeaponB2",editable);
         ImGui::Unindent(2.0f);
 
         // Right column: Trinkets + Relic + Rune
         ImGui::TableNextColumn();
         ImGui::Indent(2.0f);
         RenderSectionHeader("Trinkets", AlterEgo::UI::SectionGold);
-        RenderBuildGearSlot(build, "Backpack");
-        RenderBuildGearSlot(build, "Accessory1");
-        RenderBuildGearSlot(build, "Accessory2");
-        RenderBuildGearSlot(build, "Amulet");
-        RenderBuildGearSlot(build, "Ring1");
-        RenderBuildGearSlot(build, "Ring2");
-        RenderBuildGearSlot(build, "Relic");
+        RenderBuildGearSlot(build, "Backpack",editable);
+        RenderBuildGearSlot(build, "Accessory1",editable);
+        RenderBuildGearSlot(build, "Accessory2",editable);
+        RenderBuildGearSlot(build, "Amulet",editable);
+        RenderBuildGearSlot(build, "Ring1",editable);
+        RenderBuildGearSlot(build, "Ring2",editable);
+        RenderBuildGearSlot(build, "Relic",editable);
         ImGui::Unindent(2.0f);
 
         ImGui::EndTable();
@@ -9810,7 +9844,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
 
 }
 
-static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
+static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool linkedEquipment) {
     auto build=source;
     // Try to resolve any placeholder traits (negative values from import without spec cache)
     // Safe to cast: we only mutate trait values from negative to positive
@@ -10296,13 +10330,13 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     ImGui::Spacing();
 
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
-    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft
-                                       : build);
+    if(g_LibEditMode&&linkedEquipment)ImGui::TextDisabled("Linked equipment is read-only here. Cancel/finish, then Edit Shared Set, Copy & Edit Set or Detach Set.");
+    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&!linkedEquipment);
 
     // One shared footer for Saved and Edit; notes always follow infusion totals.
     const auto& snapshot = g_LibEditMode ? g_EditDraft : build;
     RenderInfusionTotals(GetSavedInfusionSummary(snapshot),
-        g_LibEditMode ? &g_EditDraft : nullptr);
+        g_LibEditMode&&!linkedEquipment ? &g_EditDraft : nullptr);
     ImGui::Spacing();
     // Use the standard white, regular-size section label in both modes.
     // Editing previously used muted brown and the read-only view compressed
@@ -12220,7 +12254,9 @@ static void RenderBuildLibrary() {
 
         ImGui::Separator();
         RenderLoadoutComponentSelectors(build.id);
-        RenderSavedBuildPreview(build);
+        const auto* loadoutGraph=ComponentUIFindLoadout(ComponentUISnapshot(),build.id);
+        const bool linkedEquipment=loadoutGraph&&!loadoutGraph->value("equipment_set_id",std::string()).empty();
+        RenderSavedBuildPreview(build,linkedEquipment);
         ImGui::EndChild(); // ##LibDetailScroll
         // Paint the edit-state outline around the fixed viewport instead of
         // inside its scrolling contents. The 12px inner padding above reserves
@@ -17799,7 +17835,7 @@ void AddonRender() {
             g_EditIsNewBuild = false;
             g_GearDialogOpen = false;
         } else if (APIDefs) {
-            APIDefs->GUI_SendAlert("Could not save Loadout (library may have changed). Draft retained.");
+            APIDefs->GUI_SendAlert("Could not save Loadout. If linked, detach the set before editing gear. Otherwise check the library revision. Draft retained.");
         }
     }
 }

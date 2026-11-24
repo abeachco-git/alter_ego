@@ -4,29 +4,13 @@
 namespace AlterEgo::NativeLibrary {
 
 constexpr int kApplicationId = 0x41454c42; // AELB
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 
 inline void UpgradeSchema(Database::Connection& db, int version) {
-    if(version==2) {
-        db.Exec(R"SQL(
-CREATE TABLE equipment_sets(
-    id TEXT PRIMARY KEY NOT NULL CHECK(length(id)>0),
-    name TEXT NOT NULL CHECK(length(name)>0),
-    ordinal INTEGER NOT NULL CHECK(ordinal>=0)
-) STRICT;
-CREATE TABLE equipment_set_components(
-    set_id TEXT NOT NULL REFERENCES equipment_sets(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK(kind IN ('weapons','armor','trinkets','runes','sigils','infusions','relic')),
-    component_id TEXT NOT NULL,
-    PRIMARY KEY(set_id,kind),
-    FOREIGN KEY(kind,component_id) REFERENCES components(kind,id) ON DELETE RESTRICT
-) STRICT;
-CREATE INDEX equipment_set_component_usage ON equipment_set_components(kind,component_id);
-)SQL");
-        return;
-    }
-    if (version != 1)
-        throw Database::Error(SQLITE_ERROR, "Unknown library schema migration");
+    // Only a fresh database reaches this callback. Old experimental
+    // SQLite schemas are not migration sources.
+    if(version==1||version==2)return;
+    if(version!=3)throw Database::Error(SQLITE_ERROR,"Unknown library schema");
     // Category is part of each component FK. IDs are stable within a kind.
     // Fingerprints are deliberately nonunique; independent identical records
     // are valid. Ordinals preserve user ordering, not record identity.
@@ -160,9 +144,23 @@ CREATE TABLE fashion_characters(
     ordinal INTEGER NOT NULL CHECK(ordinal>=0), character TEXT NOT NULL,
     PRIMARY KEY(fashion_id,ordinal), UNIQUE(fashion_id,character)
 ) STRICT;
+CREATE TABLE equipment_sets(
+    id TEXT PRIMARY KEY NOT NULL CHECK(length(id)>0),
+    name TEXT NOT NULL CHECK(length(name)>0),
+    ordinal INTEGER NOT NULL CHECK(ordinal>=0)
+) STRICT;
+CREATE TABLE equipment_set_components(
+    set_id TEXT NOT NULL REFERENCES equipment_sets(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('weapons','armor','trinkets','runes','sigils','infusions','relic')),
+    component_id TEXT NOT NULL,
+    PRIMARY KEY(set_id,kind),
+    FOREIGN KEY(kind,component_id) REFERENCES components(kind,id) ON DELETE RESTRICT
+) STRICT;
+CREATE INDEX equipment_set_component_usage ON equipment_set_components(kind,component_id);
 CREATE TABLE loadouts(
     id TEXT PRIMARY KEY CHECK(length(id)>0), ordinal INTEGER NOT NULL CHECK(ordinal>=0),
     fashion_id TEXT REFERENCES fashion(id) ON DELETE SET NULL,
+    equipment_set_id TEXT REFERENCES equipment_sets(id) ON DELETE RESTRICT,
     modes_present INTEGER NOT NULL,
     name TEXT, notes TEXT, source_character TEXT, source_url TEXT,
     chat_link TEXT, ae2_code TEXT, game_mode TEXT, import_warning TEXT, created INTEGER,
@@ -170,6 +168,7 @@ CREATE TABLE loadouts(
 ) STRICT;
 CREATE INDEX loadout_order ON loadouts(ordinal);
 CREATE INDEX loadout_fashion ON loadouts(fashion_id);
+CREATE INDEX loadout_equipment_set ON loadouts(equipment_set_id);
 CREATE TABLE loadout_game_modes(
     loadout_id TEXT NOT NULL REFERENCES loadouts(id) ON DELETE CASCADE,
     ordinal INTEGER NOT NULL CHECK(ordinal>=0), mode TEXT NOT NULL,
@@ -182,6 +181,18 @@ CREATE TABLE loadout_components(
     FOREIGN KEY(kind,component_id) REFERENCES components(kind,id) ON DELETE RESTRICT
 ) STRICT;
 CREATE INDEX component_usage ON loadout_components(kind,component_id);
+CREATE TRIGGER loadout_equipment_exclusive_insert BEFORE INSERT ON loadout_components
+WHEN NEW.kind NOT IN ('base_build','skills') AND
+     (SELECT equipment_set_id FROM loadouts WHERE id=NEW.loadout_id) IS NOT NULL
+BEGIN SELECT RAISE(ABORT,'Linked Loadout cannot own equipment'); END;
+CREATE TRIGGER loadout_equipment_exclusive_update BEFORE UPDATE ON loadout_components
+WHEN NEW.kind NOT IN ('base_build','skills') AND
+     (SELECT equipment_set_id FROM loadouts WHERE id=NEW.loadout_id) IS NOT NULL
+BEGIN SELECT RAISE(ABORT,'Linked Loadout cannot own equipment'); END;
+CREATE TRIGGER loadout_equipment_exclusive_link BEFORE UPDATE OF equipment_set_id ON loadouts
+WHEN NEW.equipment_set_id IS NOT NULL AND EXISTS(
+    SELECT 1 FROM loadout_components WHERE loadout_id=NEW.id AND kind NOT IN ('base_build','skills'))
+BEGIN SELECT RAISE(ABORT,'Linked Loadout cannot own equipment'); END;
 )SQL");
 }
 
