@@ -7,6 +7,19 @@
 #include "nexus/Nexus.h"
 #include "imgui.h"
 
+// A non-modal window can remain open behind its launcher. Request focus at
+// the launch site and consume it immediately before that window's Begin(),
+// which may occur on the next frame. Never steal focus every render frame.
+struct AddonWindowFocusRequest {
+    bool pending = false;
+    void Request() { pending = true; }
+    void ApplyBeforeBegin() {
+        if (!pending) return;
+        pending = false;
+        ImGui::SetNextWindowFocus();
+    }
+};
+
 // The Nexus API handle — defined as a non-static global in dllmain.cpp
 extern AddonAPI_t* APIDefs;
 

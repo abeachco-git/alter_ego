@@ -1345,6 +1345,7 @@ bool WriteFileAtomic(const std::string& finalPath, const std::string& content) {
 
 // Gear customization dialog state
 static bool g_GearDialogOpen = false;
+static AddonWindowFocusRequest g_GearDialogFocus;
 static std::string g_GearDialogSlot;          // Which slot is being edited
 static std::string g_GearDialogBuildId;       // Which saved build
 static char g_GearStatSearch[128] = "";       // Search filter for stat combos
@@ -1356,6 +1357,7 @@ static int g_GearExactInfusionId = 0;
 
 // Save to Library dialog state
 static bool g_SaveLibDialogOpen = false;
+static AddonWindowFocusRequest g_SaveLibDialogFocus;
 static char g_SaveLibName[128] = "";
 static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
 static bool g_SaveLibNameManuallyEdited = false;
@@ -3894,7 +3896,8 @@ static int GetRetrievedEquipmentTabCount(const AlterEgo::Character& ch) {
 #include "InfusionTotalsView.h"
 
 static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
-                                    const AlterEgo::BuildTemplate& bt);
+                                    const AlterEgo::BuildTemplate& bt,
+                                    int equipmentTab = 0, int componentKind = -1);
 static void RenderLiveComponentSaveMenu(const AlterEgo::Character& ch, int tab,
                                         int kind, const char* label) {
     if (ImGui::BeginPopupContextItem(label)) {
@@ -3902,10 +3905,7 @@ static void RenderLiveComponentSaveMenu(const AlterEgo::Character& ch, int tab,
             int idx = 0;
             for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
                 if (ch.build_tabs[i].is_active) { idx = i; break; }
-            OpenSaveLiveBuildDialog(ch, ch.build_tabs[idx]);
-            g_SaveLibEquipTab = tab;
-            g_SaveLibTarget = 1;
-            g_SaveLibComponentKind = kind;
+            OpenSaveLiveBuildDialog(ch, ch.build_tabs[idx], tab, kind);
         }
         ImGui::EndPopup();
     }
@@ -3964,8 +3964,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
             int idx = 0;
             for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
                 if (ch.build_tabs[i].is_active) { idx = i; break; }
-            OpenSaveLiveBuildDialog(ch, ch.build_tabs[idx]);
-            g_SaveLibEquipTab = fTab;
+            OpenSaveLiveBuildDialog(ch, ch.build_tabs[idx], fTab);
         }
         if (ImGui::Selectable("Copy Wardrobe Template chat link")) {
             std::string link = BuildWardrobeLink(ch, fTab);
@@ -4517,7 +4516,22 @@ static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
 // A link is still recorded when the profession palette is available, but missing
 // palette data cannot prevent saving the real skill/trait IDs already in memory.
 static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
-                                    const AlterEgo::BuildTemplate& bt) {
+                                    const AlterEgo::BuildTemplate& bt,
+                                    int equipmentTab, int componentKind) {
+    const int requestedEquipment = equipmentTab > 0 ? equipmentTab :
+        (ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1);
+    // Compare the original launch context, not the user's edited form fields.
+    // Reopening the same dialog should reveal it without discarding its draft.
+    static std::string launchCharacter;
+    static int launchBuildTab = 0, launchEquipmentTab = 0, launchKind = -1;
+    g_SaveLibDialogFocus.Request();
+    if (g_SaveLibDialogOpen && launchCharacter == ch.name &&
+        launchBuildTab == bt.tab && launchEquipmentTab == requestedEquipment &&
+        launchKind == componentKind) return;
+    launchCharacter = ch.name;
+    launchBuildTab = bt.tab;
+    launchEquipmentTab = requestedEquipment;
+    launchKind = componentKind;
     g_SaveLibCharName = ch.name;
     g_SaveLibBuildTab = bt.tab;
     g_SaveLibProfession = bt.profession.empty() ? ch.profession : bt.profession;
@@ -4532,9 +4546,10 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     g_SaveLibModes = {AlterEgo::GameMode::PvE};
     g_SaveLibNameManuallyEdited = false;
     g_SaveLibIncludeEquip = true;
-    g_SaveLibTarget = 0;
+    g_SaveLibTarget = componentKind >= 0 ? 1 : 0;
+    if (componentKind >= 0) g_SaveLibComponentKind = componentKind;
     g_SaveLibUpdateId.clear();
-    g_SaveLibEquipTab = ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
+    g_SaveLibEquipTab = requestedEquipment;
     g_SaveLibDialogOpen = true;
 }
 
@@ -4736,8 +4751,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
     }
 
     if (RenderActionButton("Save##live_save", ImVec2(buttonWidth, 0))) {
-        OpenSaveLiveBuildDialog(ch, ch.build_tabs[buildIdx]);
-        if (preferredEquipTab > 0) g_SaveLibEquipTab = preferredEquipTab;
+        OpenSaveLiveBuildDialog(ch, ch.build_tabs[buildIdx], preferredEquipTab);
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Save Current Build + Gear to Library...\n"
@@ -7077,6 +7091,9 @@ static uint32_t GetGearSlotIconItemId(const AlterEgo::SavedBuild& build, const s
 // Open the gear customize dialog for a specific slot
 static void OpenGearDialog(const std::string& buildId, const std::string& slot,
                            const AlterEgo::BuildGearSlot& current) {
+    g_GearDialogFocus.Request();
+    if (g_GearDialogOpen && g_GearDialogBuildId == buildId &&
+        g_GearDialogSlot == slot) return;
     g_GearDialogOpen = true;
     g_GearDialogSlot = slot;
     g_GearDialogBuildId = buildId;
@@ -7631,6 +7648,7 @@ static void RenderGearCustomizeDialog() {
     if (!g_GearDialogOpen) return;
 
     ImGui::SetNextWindowSize(ImVec2(540, 440), ImGuiCond_FirstUseEver);
+    g_GearDialogFocus.ApplyBeforeBegin();
     if (!ImGui::Begin("Customize##GearDialog", &g_GearDialogOpen, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
@@ -8329,6 +8347,7 @@ static void RenderSaveToLibraryDialog() {
     if (!g_SaveLibDialogOpen) return;
 
     ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
+    g_SaveLibDialogFocus.ApplyBeforeBegin();
     if (!ImGui::Begin("Save to Library##SaveLibDialog", &g_SaveLibDialogOpen,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();

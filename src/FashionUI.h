@@ -8,6 +8,7 @@ static int g_FashionSelected = -1;
 static char g_FashionSearch[160] = "";
 static int g_FashionFilter = 0;
 static bool g_FashionDialog = false;
+static AddonWindowFocusRequest g_FashionDialogFocus;
 static int g_FashionEditing = -1;
 static AlterEgo::Fashion::Look g_FashionDraft;
 static char g_FashionName[256] = "";
@@ -43,6 +44,14 @@ static std::string FashionWeightFromSkins(const AlterEgo::DecodedWardrobeLink& w
 }
 
 static void StartFashionEdit(const AlterEgo::Fashion::Look& look, int index = -1) {
+    g_FashionDialogFocus.Request();
+    // Same saved appearance, live capture, or imported link: keep edits.
+    if (g_FashionDialog && g_FashionEditing == index &&
+        (index >= 0 ? g_FashionDraft.id == look.id :
+         (g_FashionDraft.origin == look.origin &&
+          g_FashionDraft.source_character == look.source_character &&
+          g_FashionDraft.source_tab == look.source_tab &&
+          g_FashionDraft.wardrobe_link == look.wardrobe_link))) return;
     g_FashionDraft = look;
     g_FashionEditing = index;
     snprintf(g_FashionName, sizeof(g_FashionName), "%s", look.name.c_str());
@@ -117,6 +126,7 @@ static void RenderFashionDialog() {
     // shrink and jump as optional character/duplicate fields changed.
     ImGui::SetNextWindowSize(ImVec2(495, 350), ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(475, 310), ImVec2(FLT_MAX, FLT_MAX));
+    g_FashionDialogFocus.ApplyBeforeBegin();
     if (!ImGui::Begin("Save Fashion##ae_fashion", &g_FashionDialog,
         ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
