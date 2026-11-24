@@ -92,3 +92,5 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 Use Loadout Library, Components, Fashion, Import Library and Export Library. JSON is a portable interchange format, not the runtime storage model. Keep the existing combined equipment editor and independent component editors; save a draft through native commands and never mutate persistent state from presentation enrichment. Selective restore includes required Fashion dependencies and creates recovery snapshots before replacing data.
 
 The standalone component editor checks exact candidates on draft or revision changes, not on every frame. Create may open an existing match; private Copy & Edit may explicitly reassign to one. Save in shared or duplicate mode preserves the independent identity. Unverified Skills profession context cannot authorize automatic reuse.
+
+Nexus options include Storage & Cache with an explicit Inspect Storage action and cached diagnostic snapshot. Use shared section and action controls. No filesystem/SQL scan on each ImGui frame and no live destructive rebuild control until safe invalidation exists.

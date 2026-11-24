@@ -61,3 +61,5 @@ Native editing tests also exercise explicit private-editor reuse, stale source a
 Reference metadata coverage verifies typed skill, trait, specialization, item-stat and dye round trips, ordered child records, malformed/duplicate-row rollback, older snapshot rejection, legacy import and native precedence.
 
 Item metadata regression coverage includes v6 canonical name sharing with Commerce, detail completeness, alias migration and precedence, stale-write rejection and duplicate-row rollback.
+
+Storage diagnostics tests cover missing paths without creation, read-only database access, identity rejection, record counts, schema and artwork size.

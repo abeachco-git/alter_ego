@@ -11490,6 +11490,7 @@ static void RenderCompareTab() {
 }
 
 #include "LibraryBackupUI.h"
+#include "CacheDiagnostics.h"
 #include "ComposableUI.h"
 
 static void RenderLibraryImportDialog() {
@@ -18034,6 +18035,44 @@ static std::vector<std::string> ScanFontFolder(std::string& outDir) {
     return out;
 }
 
+static void RenderStorageDiagnostics() {
+    using namespace AlterEgo;
+    static Storage::CacheDiagnostics snapshot;
+    static bool inspected=false;
+    RenderSectionHeader("Storage & Cache", UI::SectionGold);
+    ImGui::TextWrapped("Inspect local storage without making API requests. Saved Loadouts and preferences are separate from rebuildable cache data.");
+    if (RenderActionButton("Inspect Storage##ae_cache_diagnostics")) {
+        snapshot=Storage::InspectStorage(GW2API::GetDataDirectory());
+        inspected=true;
+    }
+    if(!inspected)return;
+    auto database=[](const char* label,const Storage::DatabaseDiagnostic& info) {
+        ImGui::Text("%s: %.2f MiB | schema %lld",label,
+            static_cast<double>(info.bytes)/(1024.0*1024.0),static_cast<long long>(info.schema));
+        ImGui::TextWrapped("%s",info.status.c_str());
+    };
+    database("Saved library",snapshot.library);
+    database("Cache database",snapshot.cache);
+    ImGui::Text("Downloaded artwork: %.2f MiB%s",
+        static_cast<double>(snapshot.artworkBytes)/(1024.0*1024.0),
+        snapshot.artworkComplete?"":" (partial)");
+    if(ImGui::TreeNode("Dataset details##ae_cache_datasets")) {
+        for(const auto& data:snapshot.datasets) {
+            ImGui::Text("%s: %lld",data.label.c_str(),static_cast<long long>(data.records));
+            if(data.refreshedAt>0) {
+                const auto age=std::max<int64_t>(0,snapshot.inspectedAt-data.refreshedAt);
+                ImGui::SameLine();
+                if(age<3600)ImGui::TextDisabled("%lldm ago",static_cast<long long>(age/60));
+                else if(age<86400)ImGui::TextDisabled("%lldh ago",static_cast<long long>(age/3600));
+                else ImGui::TextDisabled("%lldd ago",static_cast<long long>(age/86400));
+            }
+        }
+        ImGui::TreePop();
+    }
+    ImGui::TextDisabled("Snapshot as of last inspection; counts cover all cached accounts.");
+    ImGui::TextWrapped("To rebuild all disposable data, close the game before removing the Alter Ego cache directory. Never remove library or config.");
+}
+
 void AddonOptions() {
     ThemeGuard themeGuard;
     // Header with links
@@ -18250,6 +18289,8 @@ void AddonOptions() {
 
     ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f),
                        "Drop your own .ttf files in: %s", fontsDir.c_str());
+    ImGui::Spacing();
+    RenderStorageDiagnostics();
 }
 
 // --- Export: GetAddonDef ---

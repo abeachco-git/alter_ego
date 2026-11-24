@@ -89,9 +89,10 @@ public:
 class Connection {
     sqlite3* db_ = nullptr;
 public:
-    enum class OpenMode { Existing, Create };
+    enum class OpenMode { Existing, Create, ReadOnly };
     explicit Connection(const std::string& utf8Path, OpenMode mode) {
-        const int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX |
+        const int flags = SQLITE_OPEN_NOMUTEX |
+            (mode == OpenMode::ReadOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) |
             (mode == OpenMode::Create ? SQLITE_OPEN_CREATE : 0);
         const int rc = sqlite3_open_v2(utf8Path.c_str(), &db_, flags, nullptr);
         try {
@@ -103,6 +104,10 @@ public:
             Exec("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;");
             if (Scalar("PRAGMA foreign_keys") != 1)
                 throw Error(SQLITE_ERROR, "Foreign key enforcement unavailable");
+            if (mode == OpenMode::ReadOnly) {
+                Exec("PRAGMA query_only=ON");
+                return;
+            }
             // Durable user data: rollback journal avoids a persistent WAL
             // sidecar; FULL synchronization favors recovery over throughput.
             {

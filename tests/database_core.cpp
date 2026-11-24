@@ -5,6 +5,7 @@
 #include "../src/CommerceCache.h"
 #include "../src/ReferenceMetadataCache.h"
 #include "../src/ItemMetadataCache.h"
+#include "../src/CacheDiagnostics.h"
 #include "../src/NativeLibraryStore.h"
 #include <cassert>
 #include <chrono>
@@ -324,6 +325,35 @@ int case_database_core(int, char**) {
         assert(Cache::ReadItems(root,D::Aliases)->at("Old item spelling")==12);
         // Name-only Commerce records must never look like fetched details.
         assert(Cache::ReadItems(root,D::Details)->size()==1);
+    }
+    {
+        namespace Storage=AlterEgo::Storage;
+        const auto root=temp.dir.u8string();
+        const Storage::Paths paths(root);
+        const auto missingRoot=(temp.dir/"missing-root").u8string();
+        auto missing=Storage::InspectStorage(missingRoot);
+        assert(missing.cache.status=="Not created");
+        assert(!std::filesystem::exists(missingRoot));
+        std::filesystem::create_directories(paths.CacheDirectory()/"textures");
+        Storage::WriteMigrationBytes(paths.CacheDirectory()/"textures"/"test.dat","1234");
+        const auto result=Storage::InspectStorage(root);
+        assert(result.cache.healthy&&result.cache.schema==6&&result.artworkBytes==4);
+        assert(!result.datasets.empty());
+        auto items=std::find_if(result.datasets.begin(),result.datasets.end(),
+            [](const auto& d){return d.label=="Items";});
+        assert(items!=result.datasets.end()&&items->records==1);
+        const auto foreign=temp.dir/"foreign.db";
+        {
+            DB::Connection db(foreign.u8string(),DB::Connection::OpenMode::Create);
+            db.Exec("PRAGMA application_id=1234");
+        }
+        std::vector<Storage::DatasetDiagnostic> rows;
+        auto rejected=Storage::InspectDatabase(foreign,AlterEgo::Cache::kApplicationId,6,true,rows);
+        assert(!rejected.healthy&&rows.empty());
+        DB::Connection readOnly(paths.Cache().u8string(),DB::Connection::OpenMode::ReadOnly);
+        bool failed=false;
+        try{readOnly.Exec("DELETE FROM reference_items");}catch(const DB::Error&){failed=true;}
+        assert(failed);
     }
     return 0;
 }
