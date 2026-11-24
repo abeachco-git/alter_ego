@@ -36,3 +36,9 @@ Baseline: `42d589366fc2345bbc00a90ee554dfe0e94bc626`. This ledger describes sour
 - SQLite benchmark tool and Windows workflow report added. Current DELETE/FULL policy remains unchanged. Results are synthetic Python/SQLite host measurements, not DLL performance.
 
 - Account response pass: typed Account/Character identity, exact skin batch IDs, atomic complete ownership publication, epoch check around API parsing, account-switch invalidation of transient fashion unlocks, completion account checks and response bounds. No refresh cadence change; H&S v4 lacks an explicit request nonce.
+
+## Debugging handoff and deferred roadmap
+
+- Last verified runtime code: `818fa528e6bf3a8c97a0efd728d2ac0130713a1a`. Windows build `45466226163` and live MetaBattle `45466226218` succeeded (32/32 offline, 6/6 strict live); DLL SHA-256 `9cb5efab59a631a4979671277cf669e9eead8f2a4e747eb6746874d79dc5ae77`. No in-game validation yet. Subsequent documentation-only commits do not constitute a new verified binary.
+- Next phase is user-led in-game debugging and stabilization. Keep bug fixes focused, preserve cache/library data, diagnose against the exact tested DLL, and record confirmed fixes and remaining validation. Do not modify main. Maintain all eleven workstreams above; do not mark partial work complete merely because a helper exists.
+- Future work approved for roadmap inclusion (not implementation): [native account inventory and Hoard & Seek integration](roadmap.md). Carry this link and a concise summary into every future handoff: native authenticated provider with optional external/compatibility modes, secure credential management, shared SQLite inventory/wallet/guild/armory, unified filterable Inventory UI, safe migration, and cross-feature inventory awareness. Stabilize the current experimental branch first; separate feature branch only after explicit approval.
