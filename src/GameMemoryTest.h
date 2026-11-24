@@ -47,7 +47,7 @@ struct State {
     uint32_t count8 = 0, count12 = 0;
     std::vector<Row> rows;
     std::string status = "Click Scan / Refresh while in gameplay.";
-    std::string selected, preflight;
+    std::string selected, preflight, armedTarget;
 };
 inline State& Data() { static State state; return state; }
 inline bool InImage(const State& s, Address p, size_t n) {
@@ -293,6 +293,9 @@ inline bool PrepareSwap(State& s,const std::string& active,const std::string& ta
 struct Attempt {
     bool issued=false;
     std::string target;
+    unsigned executeClicks=0;
+    bool returned=false;
+    std::string result="No switch requested yet.";
 };
 inline Attempt& TestAttempt() {static Attempt a;return a;}
 inline void Render(const std::string& active) {
@@ -300,9 +303,12 @@ inline void Render(const std::string& active) {
     auto& attempt=TestAttempt();
     ImGui::TextUnformatted("Temporary game memory diagnostics");
     ImGui::TextWrapped("Scanning is read-only. The optional test switch invokes an undocumented game function. It may crash the game, reset position, or violate game policies. No data is saved.");
+    ImGui::TextWrapped("Switch result: %s",attempt.result.c_str());
+    ImGui::Text("Execute clicks: %u | Game call issued: %s | Returned: %s",
+        attempt.executeClicks,attempt.issued?"Yes":"No",attempt.returned?"Yes":"No");
     if (attempt.issued) {
-        ImGui::TextWrapped("One test issued this addon load for %s. %s",attempt.target.c_str(),
-            active==attempt.target?"MumbleLink confirms target active.":"Waiting for target identity; no retry.");
+        ImGui::TextWrapped("Target: %s. %s",attempt.target.c_str(),
+            active==attempt.target?"MumbleLink confirms target active.":"Target not active; no automatic retry.");
     }
     if (UI::Button("Scan / Refresh")) {
         s=State{};
@@ -331,7 +337,7 @@ inline void Render(const std::string& active) {
             ImGui::TableSetColumnIndex(0);
             if (ImGui::Selectable(row.name.c_str(),s.selected==row.name,
                                   ImGuiSelectableFlags_SpanAllColumns)) {
-                s.selected=row.name; s.preflight.clear();
+                s.selected=row.name; s.preflight.clear(); s.armedTarget.clear();
             }
             if (row.name==active) { ImGui::SameLine(); ImGui::TextDisabled("(active)"); }
             unsigned values[]={row.map,row.level,row.profession,row.raceCandidate,row.genderCandidate,row.specCandidate};
@@ -348,36 +354,48 @@ inline void Render(const std::string& active) {
             try {SwapPlan plan;PrepareSwap(s,active,target,plan);}
             catch (...) {s.rows.clear();s.preflight="Blocked: validation failed.";}
         }
-        if (!attempt.issued && s.swapContextSlot && s.selected!=active &&
-            UI::Button("Test switch...")) {
-            ImGui::OpenPopup("Confirm experimental character switch");
-        }
-        if (ImGui::BeginPopupModal("Confirm experimental character switch",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextWrapped("Switch to %s? This is an unsupported, one-shot test. It can crash the game or reset your position.",s.selected.c_str());
-            if (s.gameThread!=GetCurrentThreadId())
-                ImGui::TextWrapped("Render thread is not the main thread. Explicit opt-in is required.");
-            if (UI::Button("Cancel")) ImGui::CloseCurrentPopup();
-            ImGui::SameLine();
-            if (UI::Button("Execute test switch") && !attempt.issued) {
-                ImGui::CloseCurrentPopup();
-                const auto target=s.selected;
-                SwapPlan plan;
-                bool ready=false;
-                try {ready=PrepareSwap(s,active,target,plan);}
-                catch (...) {s.rows.clear();s.preflight="Blocked: validation failed.";}
-                if (ready) {
-                    // The inspected game method synchronously copies a UTF-16
-                    // character name into an owned request. No memory patch,
-                    // injected thread, hook, or automated retry.
-                    attempt.target=target;
-                    attempt.issued=true;
-                    s.preflight="Test invoked. Awaiting MumbleLink identity; no automatic retry.";
-                    using SwitchFn=void(*)(void*,const wchar_t*,uint32_t);
-                    reinterpret_cast<SwitchFn>(plan.entry)(
-                        reinterpret_cast<void*>(plan.context),plan.name.data(),0);
+        // Inline confirmation deliberately avoids popup lifetime/ID scope.
+        // A target change disarms it; execution always runs fresh preflight.
+        if (!attempt.issued && s.swapContextSlot && s.selected!=active) {
+            if (s.armedTarget.empty()) {
+                if (UI::Button("Test switch...")) {
+                    s.armedTarget=s.selected;
+                    attempt.result="Confirmation armed for "+s.armedTarget+".";
+                }
+            } else {
+                ImGui::Separator();
+                ImGui::TextWrapped("Confirm switch to %s. This unsupported one-shot test can crash the game or reset your position.",s.armedTarget.c_str());
+                if (UI::Button("Cancel switch")) {
+                    s.armedTarget.clear();
+                    attempt.result="Cancelled before invoking the game.";
+                }
+                ImGui::SameLine();
+                if (UI::Button("Execute test switch") && !s.armedTarget.empty()) {
+                    const auto target=s.armedTarget;
+                    s.armedTarget.clear();
+                    ++attempt.executeClicks;
+                    attempt.result="Execute received; validating "+target+".";
+                    SwapPlan plan;
+                    bool ready=false;
+                    try {ready=PrepareSwap(s,active,target,plan);}
+                    catch (...) {s.rows.clear();s.preflight="Blocked: validation failed.";}
+                    if (!ready) {
+                        attempt.result=s.preflight;
+                    } else {
+                        attempt.target=target;
+                        attempt.issued=true;
+                        s.preflight="Test invoked. Awaiting MumbleLink identity; no automatic retry.";
+                        attempt.result=s.preflight;
+                        using SwitchFn=void(*)(void*,const wchar_t*,uint32_t);
+                        reinterpret_cast<SwitchFn>(plan.entry)(
+                            reinterpret_cast<void*>(plan.context),plan.name.data(),0);
+                        attempt.returned=true;
+                        attempt.result="Game function returned. Check whether the target becomes active.";
+                    }
                 }
             }
-            ImGui::EndPopup();
+        } else {
+            s.armedTarget.clear();
         }
         ImGui::TextWrapped("%s",s.preflight.c_str());
     }
