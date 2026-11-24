@@ -9619,6 +9619,28 @@ static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
 }
 
 namespace { static void CopyPortableLoadout(const std::string& loadoutId); }
+// Shared domain action wiring for header and context menu.
+enum class SavedLoadoutAction { Copy, Compare, Edit, Delete };
+static void ExecuteSavedLoadoutAction(SavedLoadoutAction action,
+                                      const AlterEgo::SavedBuild& build, int index) {
+    switch (action) {
+    case SavedLoadoutAction::Copy:
+        CopyPortableLoadout(build.id);
+        break;
+    case SavedLoadoutAction::Compare:
+        g_LibSelectedIdx = index;
+        ActivateSavedBuildCompare(build);
+        break;
+    case SavedLoadoutAction::Edit:
+        g_LibSelectedIdx = index;
+        g_LibEditBuildId = build.id;
+        EnterBuildEditMode(build);
+        break;
+    case SavedLoadoutAction::Delete:
+        g_LibCtxDeleteIdx = index;
+        break;
+    }
+}
 static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showEditButton = true) {
     ImVec4 profColor = GetProfessionColor(build.profession);
     {
@@ -9805,21 +9827,21 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             const float totalW = wCopy + wCompare + wShare + wEdit + wDel + 4.0f * gap;
             const float copyX = pos.x + w - totalW - 8.0f;
             ImGui::SetCursorScreenPos(ImVec2(copyX, btnY));
-            if (RenderActionButton("Copy##headerBuild")) CopyPortableLoadout(build.id);
+            if (RenderActionButton("Copy##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, build, g_LibSelectedIdx);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy Portable Loadout");
             const float startX = copyX + wCopy + gap;
 
             ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
-            if (RenderActionButton("Compare##headerBuild")) ActivateSavedBuildCompare(build);
+            if (RenderActionButton("Compare##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, build, g_LibSelectedIdx);
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap, btnY));
             if (RenderActionButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap, btnY));
-            if (RenderActionButton("Edit##headerBuild")) EnterBuildEditMode(build);
+            if (RenderActionButton("Edit##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit, build, g_LibSelectedIdx);
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap + wEdit + gap, btnY));
-            if (AlterEgo::UI::Button("Delete##headerBuild", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) g_LibCtxDeleteIdx = g_LibSelectedIdx;
+            if (AlterEgo::UI::Button("Delete##headerBuild", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) ExecuteSavedLoadoutAction(SavedLoadoutAction::Delete, build, g_LibSelectedIdx);
 
             // Share menu: the three share actions that used to live in the
             // (now-removed) right-click context menu.
@@ -11464,12 +11486,11 @@ static void RenderCompareTab() {
                 if (b.profession != target->profession) continue;
                 const bool selected = saved && b.id == saved->id;
                 const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
-                if (ImGui::Selectable(label.c_str(), selected)) {
+                if (AlterEgo::UI::SelectableOption((label + "##" + b.id).c_str(), selected)) {
                     g_LibCompareBuildId = b.id;
                     g_LibCompareSavedManual = true;
                     saved = &b;
                 }
-                if (selected) ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
         }
@@ -12066,22 +12087,15 @@ static void RenderBuildLibrary() {
                 g_LibDetailsFetched = false;
             }
             if (ImGui::BeginPopupContextItem("##build_actions")) {
-                if (ImGui::MenuItem("Copy Portable Loadout")) CopyPortableLoadout(b.id);
-                if (ImGui::MenuItem("Compare")) {
-                    g_LibSelectedIdx = i;
-                    ActivateSavedBuildCompare(b);
-                }
+                if (ImGui::MenuItem("Copy Portable Loadout")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, b, i);
+                if (ImGui::MenuItem("Compare")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, b, i);
                 if (ImGui::BeginMenu("Share")) {
                     RenderBuildShareMenuItems(b);
                     ImGui::EndMenu();
                 }
-                if (ImGui::MenuItem("Edit")) {
-                    g_LibSelectedIdx = i;
-                    g_LibEditBuildId = b.id;
-                    EnterBuildEditMode(b);
-                }
+                if (ImGui::MenuItem("Edit")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit, b, i);
                 ImGui::Separator();
-                if (AlterEgo::UI::DestructiveMenuItem("Delete")) g_LibCtxDeleteIdx = i;
+                if (AlterEgo::UI::DestructiveMenuItem("Delete")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Delete, b, i);
                 ImGui::EndPopup();
             }
 
@@ -13262,7 +13276,7 @@ static void RenderSkinList() {
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
             }
-            if (ImGui::Button(opts[i], ImVec2(btnW, 0))) {
+            if (AlterEgo::UI::Button(opts[i], ImVec2(btnW, 0), AlterEgo::UI::ButtonRole::Compact)) {
                 g_SkinViewMode = i;
                 SaveSettings();
             }
@@ -14520,7 +14534,7 @@ bool RenderChipButton(const char* label, bool active, ImVec4 accentColor, bool c
         // This single renderer serves New, Import, Save and Edit game modes.
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 2.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-        clicked = ImGui::Button(label, ImVec2(0.0f, CompactGameModeChipHeight()));
+        clicked = AlterEgo::UI::Button(label, ImVec2(0.0f, CompactGameModeChipHeight()), AlterEgo::UI::ButtonRole::Compact);
         ImGui::PopStyleVar(2);
     } else {
         clicked = RenderActionButton(label);
@@ -16828,7 +16842,7 @@ void AddonRender() {
                     }
                     if (g_CharSortMode != Sort_Custom) {
                         ImGui::SameLine();
-                        if (ImGui::Button("##sortdir", ImVec2(arrowBtnWidth, 0))) {
+                        if (AlterEgo::UI::Button("##sortdir", ImVec2(arrowBtnWidth, 0), AlterEgo::UI::ButtonRole::Compact)) {
                             g_CharSortAscending = !g_CharSortAscending;
                             std::string selName;
                             if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
@@ -17090,7 +17104,7 @@ void AddonRender() {
                         float dotY = ImGui::GetCursorScreenPos().y - 3.0f + ImGui::GetTextLineHeight() * 0.5f;
                         float dotX = ImGui::GetCursorScreenPos().x;
                         AlterEgo::UI::ActiveIndicator(ImGui::GetWindowDrawList(),
-                            ImVec2(dotX + kActiveIndicatorRadius, dotY));
+                            ImVec2(dotX + AlterEgo::UI::ActiveRadius, dotY));
                         ImGui::Dummy(ImVec2(8, 0));
                     }
                     // Spinning refresh icon for the character currently being fetched
