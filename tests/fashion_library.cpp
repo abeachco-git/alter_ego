@@ -70,7 +70,17 @@ int case_fashion_library(int, char**) {
     assert(reloaded.looks.size() == 1);
     assert(reloaded.looks[0].characters.size() == 2);
     assert(reloaded.looks[0].wardrobe_link == link);
-    assert(reloaded.Remove(0));
+    const auto baseline=reloaded.looks[0];
+    auto edited=baseline;edited.notes="Saved draft";
+    auto abandoned=baseline;abandoned.notes="Cancelled";
+    assert(reloaded.looks[0].notes!=abandoned.notes);
+    assert(reloaded.UpdateDraft(baseline,edited));
+    assert(reloaded.looks[0].id==baseline.id&&reloaded.looks[0].notes=="Saved draft");
+    // Stale Fashion drafts cannot overwrite the already committed edit.
+    assert(!lib.UpdateDraft(baseline,abandoned));
+    Library verified;assert(verified.Load(file));
+    assert(verified.looks[0].notes=="Saved draft");
+    assert(verified.Remove(0));
     NativeLibrary::RuntimeStore().Close();
     std::filesystem::remove_all(file);
     return 0;

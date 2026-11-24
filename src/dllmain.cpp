@@ -1341,6 +1341,8 @@ bool WriteFileAtomic(const std::string& finalPath, const std::string& content) {
 
 // Gear customization dialog state
 static bool g_GearDialogOpen = false;
+static AlterEgo::SavedBuild g_GearDialogDraft;
+static bool g_GearDialogDirty=false;
 static AddonWindowFocusRequest g_GearDialogFocus;
 static std::string g_GearDialogSlot;          // Which slot is being edited
 static std::string g_GearDialogBuildId;       // Which saved build
@@ -7069,8 +7071,10 @@ static uint32_t GetGearSlotIconItemId(const AlterEgo::SavedBuild& build, const s
 static void OpenGearDialog(const std::string& buildId, const std::string& slot,
                            const AlterEgo::BuildGearSlot& current) {
     g_GearDialogFocus.Request();
-    if (g_GearDialogOpen && g_GearDialogBuildId == buildId &&
-        g_GearDialogSlot == slot) return;
+    if(g_GearDialogOpen)return; // Focus the existing draft; never silently replace it.
+    if(!g_LibEditMode||g_EditDraft.id!=buildId)return;
+    g_GearDialogDraft=g_EditDraft;
+    g_GearDialogDirty=false;
     g_GearDialogOpen = true;
     g_GearDialogSlot = slot;
     g_GearDialogBuildId = buildId;
@@ -7691,13 +7695,17 @@ static void ExpandSharedRune(AlterEgo::SavedBuild& b) {
     }
     b.rune_id = 0; b.rune_name.clear();
 }
+static void MarkGearEditDirty(const AlterEgo::SavedBuild& b) {
+    if(&b==&g_GearDialogDraft)g_GearDialogDirty=true;
+    else MarkEditDirty();
+}
 static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,const GearClipboard& c) {
     if (!GearCanPaste(b,slot,c)) return;
     if (c.field == GearCopyField::Relic) {
         b.relic_id = c.relicId; b.relic_name = c.relicName;
         auto it = b.gear.find("Relic");
         if (it != b.gear.end()) it->second.item_id = c.relicId;
-        MarkEditDirty(); return;
+        MarkGearEditDirty(b); return;
     }
     if ((c.field == GearCopyField::All || c.field == GearCopyField::Upgrade) && IsArmorSlot(slot))
         ExpandSharedRune(b);
@@ -7725,15 +7733,15 @@ static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,c
             InvalidateGearInfusionTotals(b);
         }
     }
-    MarkEditDirty();
+    MarkGearEditDirty(b);
 }
 static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCopyField field) {
-    if (slot == "Relic") { b.relic_id = 0; b.relic_name.clear(); b.gear.erase(slot); MarkEditDirty(); return; }
+    if (slot == "Relic") { b.relic_id = 0; b.relic_name.clear(); b.gear.erase(slot); MarkGearEditDirty(b); return; }
     if (IsArmorSlot(slot) && (field == GearCopyField::All || field == GearCopyField::Upgrade)) ExpandSharedRune(b);
     auto it = b.gear.find(slot);
     if (it == b.gear.end()) return;
     if (field == GearCopyField::All) {
-        if (g_GearDialogOpen && g_GearDialogBuildId == b.id && g_GearDialogSlot == slot)
+        if (&b!=&g_GearDialogDraft && g_GearDialogOpen && g_GearDialogBuildId == b.id && g_GearDialogSlot == slot)
             g_GearDialogOpen = false;
         const bool hadInfusions = !it->second.infusion_ids.empty() ||
             !it->second.infusion_attributes.empty() || it->second.infusion_snapshot;
@@ -7751,7 +7759,7 @@ static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCo
             item.infusion_snapshot = true; InvalidateGearInfusionTotals(b);
         }
     }
-    MarkEditDirty();
+    MarkGearEditDirty(b);
 }
 static GearClipboard CaptureGearClipboard(const AlterEgo::SavedBuild& b,const std::string& slot,GearCopyField field) {
     GearClipboard c; c.valid = true; c.slot = slot; c.field = field;
@@ -7810,7 +7818,7 @@ static void CopyWeaponSetSigils(AlterEgo::SavedBuild& b,const std::string& sourc
             s.sigil2_id = second.first; s.sigil2 = second.second;
         }
     }
-    MarkEditDirty();
+    MarkGearEditDirty(b);
 }
 static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slot,bool& clearAfter) {
     if (!ImGui::BeginPopupContextItem("##gear_edit_context")) return;
@@ -7874,19 +7882,12 @@ static void RenderGearCustomizeDialog() {
         return;
     }
 
-    // Find the build being edited. While editing in the library, gear changes go to
-    // the in-memory draft and persist only on Save (so Cancel reverts them); otherwise
-    // they edit the saved build directly and persist immediately.
-    AlterEgo::SavedBuild* editBuild=&g_EditDraft;
-    if (!editBuild) {
-        ImGui::Text("Build not found.");
-        ImGui::End();
-        return;
-    }
-    // Commit gear changes: dirty the draft when editing, else persist to disk now.
+    // The child owns a separate equipment draft; Cancel or the window close
+    // button cannot modify the parent Loadout draft.
+    AlterEgo::SavedBuild* editBuild=&g_GearDialogDraft;
     auto commitGear = [&](bool infusionChanged = false) {
         if (infusionChanged) InvalidateGearInfusionTotals(*editBuild);
-        MarkEditDirty();
+        MarkGearEditDirty(*editBuild);
     };
 
     auto& gs = editBuild->gear[g_GearDialogSlot];
@@ -7895,6 +7896,8 @@ static void RenderGearCustomizeDialog() {
     bool isWeapon = IsWeaponSlot(g_GearDialogSlot);
     bool isRelic = (g_GearDialogSlot == "Relic");
 
+    ImGui::TextDisabled("Save applies to the Loadout draft; save the Loadout to persist.");
+    ImGui::BeginChild("##gear_customize_body",ImVec2(0,-AlterEgo::UI::ActionButtonHeight()-ImGui::GetStyle().ItemSpacing.y*2),false);
     // Two-column layout: left = current item, right = selector
     if (ImGui::BeginTable("##custLayout", 2, ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("##custLeft", ImGuiTableColumnFlags_WidthFixed, 220.0f);
@@ -8536,19 +8539,15 @@ static void RenderGearCustomizeDialog() {
             }
         }
 
-        // Accept / Cancel buttons
-        if (RenderActionButton("Accept", ImVec2(80, 0))) {
-            commitGear();
-            g_GearDialogOpen = false;
-        }
-        ImGui::SameLine();
-        if (RenderActionButton("Cancel", ImVec2(80, 0))) {
-            g_GearDialogOpen = false;
-        }
-
         ImGui::EndTable();
     }
-
+    ImGui::EndChild();
+    const auto action=AlterEgo::UI::SaveCancel("gear_customize",g_GearDialogDirty);
+    if(action==AlterEgo::UI::EditAction::Save){
+        AlterEgo::GearEdit::ApplyEquipmentDraft(g_EditDraft,g_GearDialogDraft);
+        MarkEditDirty();
+        g_GearDialogOpen=false;
+    }else if(action==AlterEgo::UI::EditAction::Cancel)g_GearDialogOpen=false;
     ImGui::End();
 }
 
@@ -9776,7 +9775,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 float startX = pos.x + w - (wSave + gap + wCancel) - 8.0f;
 
                 // ImGui 1.80 has no BeginDisabled — dim when clean and guard the click.
-                bool canSave = g_EditDirty;
+                bool canSave = g_EditDirty && !g_GearDialogOpen;
                 if (!canSave) ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
                                                   ImGui::GetStyle().Alpha * 0.5f);
                 ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
@@ -9794,6 +9793,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
 
                 ImGui::SetCursorScreenPos(ImVec2(startX + wSave + gap, btnY));
                 if (RenderActionButton("Cancel##hdr")) {
+                    g_GearDialogOpen=false; // Discard the unaccepted child draft too.
                     if (g_EditDirty) ImGui::OpenPopup("Discard changes?##editcancel");
                     else {
                         // Clean cancel: a brand-new build is discarded (deferred to
@@ -10346,13 +10346,14 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
     ImGui::Spacing();
 
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
-    if(g_LibEditMode&&linkedEquipment)ImGui::TextDisabled("Use the Loadout component selectors for independent equipment and the set editor for included categories.");
-    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&!linkedEquipment);
+    if(g_LibEditMode&&linkedEquipment)ImGui::TextDisabled("Use Edit Components for independent references and the set editor for included categories.");
+    if(g_GearDialogOpen)ImGui::TextDisabled("Save or cancel the gear customization draft first.");
+    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&!linkedEquipment&&!g_GearDialogOpen);
 
     // One shared footer for Saved and Edit; notes always follow infusion totals.
     const auto& snapshot = g_LibEditMode ? g_EditDraft : build;
     RenderInfusionTotals(GetSavedInfusionSummary(snapshot),
-        g_LibEditMode&&!linkedEquipment ? &g_EditDraft : nullptr);
+        g_LibEditMode&&!linkedEquipment&&!g_GearDialogOpen ? &g_EditDraft : nullptr);
     ImGui::Spacing();
     // Use the standard white, regular-size section label in both modes.
     // Editing previously used muted brown and the read-only view compressed

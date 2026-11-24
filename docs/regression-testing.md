@@ -100,3 +100,5 @@ Equipment set coverage in `persistence.native_library` verifies direct exclusive
 ### Reference edit transactions
 
 - Verify Base Build/Skills, Equipment Set/equipment and Fashion display groups in both read-only and aggregate edit mode. Open Edit Components or Edit Equipment Set, change multiple categories and name/Fashion, Cancel, and verify identical graph and revision. Save applies all changes together; invalid refs, empty sets, overlapping owners and stale revisions fail closed. Replace a linked category only after explicit confirmation. Check Assign to Loadout and Apply to Loadout from other collections use the same draft. Open component payload editor, edit nested fields, Cancel, and verify no shared change. Verify mouse Back and row switching cannot silently discard an open draft.
+
+- Test gear customization Cancel/close after changing a two-handed weapon, infusions, relic or copying to several slots. No parent draft fields should change. Save applies the child to the parent only; parent Cancel still discards everything. Verify Fashion stale draft rejection and unchanged stable ID after edit.
