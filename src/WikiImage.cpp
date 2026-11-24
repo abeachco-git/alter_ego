@@ -47,7 +47,10 @@ namespace Skinventory {
     }
 
     void WikiImage::Shutdown() {
-        s_stopWorker = true;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_stopWorker = true;
+        }
         s_queueCV.notify_all();
         if (s_workerThread.joinable()) {
             s_workerThread.join();
@@ -58,6 +61,8 @@ namespace Skinventory {
         s_loading.clear();
         s_requestQueue.clear();
         s_readyQueue.clear();
+        s_currencyReadyQueue.clear();
+        s_currencyIcons.clear();
     }
 
     std::string WikiImage::GetCacheFilePath(uint32_t skinId) {
@@ -605,7 +610,7 @@ namespace Skinventory {
 
     void WikiImage::RequestImage(uint32_t skinId, const std::string& skinName,
                                      const std::string& weightClass) {
-        if (!s_API || skinName.empty()) return;
+        if (!s_API || s_stopWorker || skinName.empty()) return;
 
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -642,6 +647,7 @@ namespace Skinventory {
         // Queue for download
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            if(s_stopWorker) { s_loading.erase(skinId); return; }
             s_requestQueue.push_back({skinId, skinName, weightClass});
         }
         s_queueCV.notify_one();
@@ -693,10 +699,12 @@ namespace Skinventory {
         }
         for (uint32_t skinId : ready) {
             try {
-                LoadFromDisk(skinId);
-            } catch (...) {
-                RecordFailure(skinId);
-            }
+                if(LoadFromDisk(skinId))continue;
+            } catch (...) {}
+            // Texture publication can be deferred by Nexus. Release the HTTP
+            // loading marker without recording a persistent network failure.
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_loading.erase(skinId);
         }
 
         // Load currency icons that have been downloaded
@@ -1104,10 +1112,11 @@ namespace Skinventory {
                 if (s_stopWorker) return;
                 if (s_requestQueue.empty()) continue;
 
-                req = s_requestQueue.front();
+                req = std::move(s_requestQueue.front());
                 s_requestQueue.erase(s_requestQueue.begin());
             }
 
+            try {
             // Scrape wiki for image URL and acquisition data
             std::string matchedPage;
             std::string imageUrl = ScrapeWikiImageUrl(req.skinName, req.weightClass, matchedPage);
@@ -1176,6 +1185,13 @@ namespace Skinventory {
                 RecordFailure(req.skinId);
             }
 
+            } catch (...) {
+                // Exceptions must not terminate the owned queue thread or
+                // leave this skin permanently marked as loading.
+                std::lock_guard<std::mutex> lock(s_mutex);
+                s_loading.erase(req.skinId);
+                try { s_failed[req.skinId]=std::chrono::steady_clock::now(); } catch (...) {}
+            }
             // Rate limit
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }

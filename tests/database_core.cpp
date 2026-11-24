@@ -407,7 +407,24 @@ int case_database_core(int, char**) {
         assert(Cache::ReadCharacters(root)==afterIncrement);
         auto newChar=one;newChar["name"]="New Hero";
         assert(Cache::WriteCharacters(root,J{{"last_updated",103},{"characters",J::array({newChar})}},true));
-        assert(Cache::ReadCharacters(root)->at("characters").size()==4);
+        const auto beforeDelete=Cache::ReadCharacters(root);
+        assert(beforeDelete->at("characters").size()==4);
+        // Abort mid-transaction: neither account may be partially removed.
+        db.Exec("CREATE TRIGGER reject_roster_delete BEFORE DELETE ON character_rows WHEN OLD.account_name='A_B' BEGIN SELECT RAISE(ABORT,'test rollback'); END");
+        assert(!Cache::DeleteAbsentCharacters(root,{{"A.B",{"New Hero"}},{"A_B",{}}}));
+        assert(Cache::ReadCharacters(root)==beforeDelete);
+        db.Exec("DROP TRIGGER reject_roster_delete");
+        assert(Cache::DeleteAbsentCharacters(root,{{"A.B",{"New Hero"}},{"",{}}}));
+        const auto afterDelete=Cache::ReadCharacters(root);
+        assert(afterDelete->at("characters").size()==3);
+        assert(afterDelete->at("characters")[0]==beforeDelete->at("characters")[1]);
+        assert(afterDelete->at("characters")[1]==beforeDelete->at("characters")[2]);
+        assert(afterDelete->at("characters")[2]==beforeDelete->at("characters")[3]);
+        assert(db.Scalar("SELECT count(*) FROM character_rows WHERE character_id=1")==0);
+        assert(db.Scalar("SELECT count(*) FROM character_equipment WHERE character_id=1")==0);
+        assert(db.Scalar("SELECT count(*) FROM character_rows WHERE character_id=4")==1);
+        assert(Cache::DeleteAbsentCharacters(root,{{"A.B",{"New Hero"}}}));
+        assert(Cache::ReadCharacters(root)==afterDelete);
         db.Verify();
     }
     {

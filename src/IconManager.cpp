@@ -64,7 +64,10 @@ void IconManager::Initialize(AddonAPI_t* api) {
 }
 
 void IconManager::Shutdown() {
-    s_StopWorker = true;
+    {
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        s_StopWorker = true;
+    }
     s_QueueCV.notify_all();
     if (s_DownloadThread.joinable()) {
         s_DownloadThread.join();
@@ -179,8 +182,9 @@ void IconManager::Tick() {
     }
     for (uint32_t id : ready) {
         try {
-            LoadIconFromDisk(id);
-        } catch (...) {
+            if(LoadIconFromDisk(id))continue;
+        } catch (...) {}
+        {
             std::lock_guard<std::mutex> lock(s_Mutex);
             s_LoadingIcons.erase(id);
             s_FailedIcons[id] = std::chrono::steady_clock::now();
@@ -221,13 +225,9 @@ Texture_t* IconManager::GetIcon(uint32_t id) {
             s_FailedIcons.erase(id);
             return tex;
         }
-    } else {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        if (s_LoadingIcons.find(id) != s_LoadingIcons.end()) {
-            s_LoadingIcons.erase(id);
-            s_FailedIcons[id] = std::chrono::steady_clock::now();
-        }
     }
+    // A missing Nexus texture does not mean a queued HTTP download failed.
+    // Only the queue owner or disk publication may release its loading marker.
 
     // Built-in static icons win over network and disk lookup. The first frame
     // can render these even before the GW2 profession API has responded.
@@ -257,7 +257,7 @@ Texture_t* IconManager::GetIcon(uint32_t id) {
 }
 
 void IconManager::RequestIcon(uint32_t id, const std::string& iconUrl, bool priority) {
-    if (!s_API) return;
+    if (!s_API || s_StopWorker) return;
     // Embedded assets can be resolved without a URL; this also avoids queuing
     // needless downloads for the nine professions, elite specs, and UI glyphs.
     if (GetIcon(id)) return;
@@ -329,10 +329,9 @@ void IconManager::ProcessRequestQueue() {
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
         if (s_RequestQueue.empty()) return;
-        QueuedRequest req = s_RequestQueue.front();
+        id = s_RequestQueue.front().id;
+        iconUrl = std::move(s_RequestQueue.front().iconUrl);
         s_RequestQueue.erase(s_RequestQueue.begin());
-        id = req.id;
-        iconUrl = req.iconUrl;
     }
 
     if (iconUrl.empty()) {
@@ -342,12 +341,14 @@ void IconManager::ProcessRequestQueue() {
         return;
     }
 
-    std::string filePath = GetIconFilePath(id);
-    if (DownloadToFile(iconUrl, filePath)) {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        s_ReadyQueue.push_back(id);
-        return;
-    }
+    try {
+        std::string filePath = GetIconFilePath(id);
+        if (DownloadToFile(iconUrl, filePath) && !s_StopWorker) {
+            std::lock_guard<std::mutex> lock(s_Mutex);
+            s_ReadyQueue.push_back(id);
+            return;
+        }
+    } catch (...) {}
 
     std::lock_guard<std::mutex> lock(s_Mutex);
     s_LoadingIcons.erase(id);

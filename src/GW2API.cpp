@@ -46,6 +46,7 @@ namespace AlterEgo {
         Composable::Document g_loadoutDocument;
         bool g_loadoutDocumentLoaded = false;
         std::mutex g_loadoutPersistenceMutex;
+        std::mutex g_characterSaveMutex;
 
         // A manual character refresh also refreshes crafting; a debounced
         // automatic equipment/spec refresh reuses persisted crafting details.
@@ -1399,11 +1400,13 @@ namespace AlterEgo {
 
         if (done) {
             if (s_api) s_api->Log(LOGL_INFO, "AlterEgo", s_fetch_message.c_str());
-            SaveCharacterData(completedAccount,completedName);
+            if(!SaveCharacterData(completedAccount,completedName) && s_api)
+                s_api->Log(LOGL_WARNING,"AlterEgo","Character cache write failed; previous disk snapshot retained.");
             SaveItemNameCache();
         } else {
             // Save after each character completes (for incremental persistence)
-            if (phase == 6) SaveCharacterData(completedAccount,completedName);
+            if (phase == 6 && !SaveCharacterData(completedAccount,completedName) && s_api)
+                s_api->Log(LOGL_WARNING,"AlterEgo","Character cache write failed; previous disk snapshot retained.");
             FetchCharacterPhase();
         }
     }
@@ -1675,31 +1678,33 @@ namespace AlterEgo {
     }
 
     void GW2API::ReconcileCharactersWithRoster() {
-        bool changed = false;
+        bool changed = false, failed = false;
         {
+            // Same lock order as snapshot persistence. Keep publication and
+            // deletion serialized; do not call Nexus while either lock is held.
+            std::lock_guard<std::mutex> saveLock(g_characterSaveMutex);
             std::lock_guard<std::mutex> lock(s_mutex);
-            // Only reconcile against a non-empty roster — an empty list usually
-            // means the fetch failed, and we must not wipe the cache in that case.
             if(!g_rosterReady || s_fetch_status!=FetchStatus::Success)return;
             g_rosterReady=false;
-            size_t before = s_characters.size();
-            s_characters.erase(
-                std::remove_if(s_characters.begin(), s_characters.end(),
-                    [&](const Character& c) {
-                        return CharacterRequest::VerifiedAbsent(g_roster,c.account_name,c.name);
-                    }),
-                s_characters.end());
-            changed = (s_characters.size() != before);
-            if (changed) {
+            const auto absent=[](const Character& c) {
+                return CharacterRequest::VerifiedAbsent(g_roster,c.account_name,c.name);
+            };
+            if(std::none_of(s_characters.begin(),s_characters.end(),absent))return;
+            // Commit first. Failure retains the previous in-memory and disk
+            // snapshots. A future successful roster fetch can retry.
+            if(!Cache::DeleteAbsentCharacters(GetDataDirectory(),g_roster))failed=true;
+            else {
+                s_characters.erase(std::remove_if(s_characters.begin(),s_characters.end(),absent),
+                    s_characters.end());
                 s_has_character_data = !s_characters.empty();
                 g_characterDataRevision.fetch_add(1);
+                changed=true;
             }
         }
-        if (changed) {
-            if (s_api) s_api->Log(LOGL_INFO, "AlterEgo",
-                "Reconciled character cache with roster (removed deleted characters).");
-            SaveCharacterData();
-        }
+        if (s_api && failed) s_api->Log(LOGL_WARNING,"AlterEgo",
+            "Character roster reconciliation could not be persisted; retaining the previous cache.");
+        if (s_api && changed) s_api->Log(LOGL_INFO,"AlterEgo",
+            "Reconciled character cache with verified roster (removed deleted characters).");
     }
 
     // =========================================================================
@@ -2429,8 +2434,7 @@ namespace AlterEgo {
     bool GW2API::SaveCharacterData(const std::string& account,const std::string& name) {
         EnsureDataDirectory();
         // Serialize snapshot capture and persistence in the same order. No Nexus calls under this lock.
-        static std::mutex characterSaveMutex;
-        std::lock_guard<std::mutex> saveLock(characterSaveMutex);
+        std::lock_guard<std::mutex> saveLock(g_characterSaveMutex);
         const auto native=Cache::HasCharacterSnapshot(GetDataDirectory());
         if(!native)return false;
         const bool incremental=!name.empty() && *native;

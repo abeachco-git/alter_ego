@@ -1,6 +1,7 @@
 #pragma once
 // Typed character cache. JSON is the legacy/runtime codec, never a database payload.
 #include "CacheDatabase.h"
+#include "CharacterRequest.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -269,6 +270,33 @@ inline bool WriteCharacters(const std::string& root,const CharacterRows::Json& d
         Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
         Initialize(db);Database::Transaction tx(db);
         CharacterRows::Store(db,data,incremental);tx.Commit();return true;
+    }catch(...){return false;}
+}
+// Reconcile only accounts for which the request owner received a verified roster.
+ // Keep row IDs, ordering, unknown legacy owners and unrelated accounts intact.
+inline bool DeleteAbsentCharacters(const std::string& root,const CharacterRequest::Roster& roster) {
+    if(root.empty())return false;
+    if(roster.empty())return true;
+    try {
+        std::lock_guard<std::mutex> lock(Mutex());
+        const auto path=Storage::Paths(root).Cache();
+        if(!std::filesystem::exists(path))return false;
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
+        Initialize(db);Database::Transaction tx(db);
+        if(db.Scalar("SELECT count(*) FROM character_snapshot")==0)return false;
+        auto read=db.Prepare("SELECT character_id,name FROM character_rows WHERE account_name=?");
+        auto remove=db.Prepare("DELETE FROM character_rows WHERE character_id=? AND account_name=?");
+        for(const auto& [account,names]:roster) {
+            if(account.empty())continue;
+            std::vector<int64_t> absent;
+            read.Bind(1,account);
+            while(read.Step())if(!names.count(read.Text(1)))absent.push_back(read.Integer(0));
+            read.Reset();
+            for(const auto id:absent) {
+                remove.Bind(1,id);remove.Bind(2,account);remove.Execute();remove.Reset();
+            }
+        }
+        tx.Commit();return true;
     }catch(...){return false;}
 }
 // False means no native baseline; nullopt means inspection failed. Never

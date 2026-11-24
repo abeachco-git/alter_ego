@@ -77,3 +77,5 @@ The refresh suite includes `refresh.background_workers`: closed admission, norma
 The refresh suite includes `character_request` for account/endpoint matching, consumed duplicates, legacy single-account handling and exact roster scope. Live callback ordering remains unverified.
 
 Character persistence regression now covers incremental replacement, untouched same-name accounts and unknown rows, stale record rejection, rollback after malformed child data, and append ordering.
+
+Verified roster deletion coverage checks account scope, preservation of unknown owners and row IDs, cascading child removal, idempotence, and rollback on a forced mid-transaction failure.
