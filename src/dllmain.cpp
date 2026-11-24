@@ -62,6 +62,7 @@
 #include "CacheDatabase.h"
 #include "AchievementCatalogCache.h"
 #include "StoragePaths.h"
+#include "GameMemoryTest.h" // TEMPORARY game-memory test; remove with its tab hook.
 
 // Version constants
 #define V_MAJOR 1
@@ -1699,7 +1700,7 @@ static void SaveSession() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "session.json");
 
     nlohmann::json j;
-    j["main_tab"] = g_MainTab;
+    j["main_tab"] = g_MainTab == 7 ? 0 : g_MainTab; // TEMPORARY test tab is not persisted.
 
     // Characters tab state — save by name for stability across sort/order changes
     const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
@@ -17597,6 +17598,13 @@ void AddonRender() {
             RenderAchievementsStatusRow();
             ImGui::EndTabItem();
             }
+        }
+
+        // TEMPORARY game-memory test: remove this block and GameMemoryTest.h together.
+        if (ImGui::BeginTabItem("Memory Test", nullptr, NavigationTabFlags(7))) {
+            g_MainTab = 7;
+            AlterEgo::GameMemoryTest::Render(g_CurrentCharName);
+            ImGui::EndTabItem();
         }
 
         // Right-aligned account selector on the same row as the tab strip.
