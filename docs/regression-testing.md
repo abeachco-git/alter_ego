@@ -11,7 +11,7 @@ ctest --test-dir build-tests --output-on-failure
 Run a single domain with `ctest --test-dir build-tests -L comparison --output-on-failure`.
 Run a single case with `ctest --test-dir build-tests -R 'comparison.infusion_totals' --output-on-failure`.
 
-Nine domain executables contain 32 independently runnable regression cases.
+Nine domain executables contain 33 independently runnable regression cases.
 Each CTest case is a separate process. Keep assertions enabled even in Release.
 Add related coverage to existing cases; add a new case only for distinct behavior,
 and register it in the existing domain in tests/CMakeLists.txt. No new standalone
@@ -132,3 +132,5 @@ Tools smoke test: select characters with different gathering/fishing/Jade Bot it
 Wallet visual smoke: empty favorite box and gold asterisk use identical size, toggling persists and pins/unpins currency, alternating row shading remains after filtering/sorting, coin display and descriptions remain intact. No duplicate Ready/stale label in the list; footer reports missing, failed and stale per account.
 
 Main tab grouping visual smoke: verify the muted dividers before Inventory and Vault with either adjacent tab selected, All Accounts disabled tabs, and a narrow/scrolling tab bar. Dividers must not be clickable, selectable or affect dropdown hit targets.
+
+`imports.build_relay_policy` checks both enabled and disabled code recognition and import guidance. In-game smoke test: with the default disabled flag, inspect all share/context menus and import modal, paste a four-character code (generic rejection, no request), and verify AE2, game links and URL imports remain available. If re-enabling, test both directions against the relay and update privacy disclosures.

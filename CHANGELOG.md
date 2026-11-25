@@ -16,6 +16,8 @@ This is a draft for the experimental branch, not a published or fully validated 
 
 ### Changed
 
+- Disabled external one-time-code relay sharing and imports by default; local sharing remains available.
+
 - Native SQLite storage for durable library data and rebuildable caches.
 - More consistent searches, filters, resizable panels, navigation and refresh feedback.
 - Account-aware data retrieval, per-dataset refresh preferences and independent Vault period storage.

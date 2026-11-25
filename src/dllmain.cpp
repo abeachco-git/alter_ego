@@ -35,6 +35,7 @@
 #include "InfusionTotalsCore.h"
 #include "SnowCrowsImport.h"
 #include "MetaBattleImport.h"
+#include "BuildRelayPolicy.h"
 #include "AutoRefreshCore.h"
 #include "AutoRefreshPolicy.h"
 #include "FontResolve.h"
@@ -5712,11 +5713,7 @@ static AlterEgo::GameMode GameModeFromLabel(const std::string& label) {
 // ---- Mobile relay import ----
 
 static bool IsRelayCode(const std::string& s) {
-    if (s.size() != 4) return false;
-    for (char c : s) {
-        if (!isalnum((unsigned char)c)) return false;
-    }
-    return true;
+    return AlterEgo::BuildRelay::AcceptsCode(s);
 }
 
 // Cache the last relay response so a retry (e.g. waiting for palette data) doesn't
@@ -5725,6 +5722,10 @@ static std::string g_RelayCache_Code;
 static std::string g_RelayCache_Body;
 
 static bool ImportBuildFromRelay(const std::string& code, AlterEgo::SavedBuild& out, std::string& error) {
+    if constexpr (!AlterEgo::BuildRelay::Enabled) {
+        error = "Not a recognized build or wardrobe format.";
+        return false;
+    }
     // Defense in depth: callers validate via IsRelayCode, but reject anything
     // unexpected here too before splicing it into the URL.
     if (!IsRelayCode(code)) {
@@ -5879,6 +5880,7 @@ static bool ImportBuildFromRelay(const std::string& code, AlterEgo::SavedBuild& 
 
 // Send a saved build to the relay server, returning the 4-char code or an error.
 static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
+    if constexpr (!AlterEgo::BuildRelay::Enabled) return;
     g_RelaySending = true;
     g_RelayResultCode.clear();
     g_RelayResultError.clear();
@@ -6009,15 +6011,17 @@ static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
                         } else if (APIDefs) APIDefs->GUI_SendAlert("Fashion link unavailable; refresh character data.");
                     }
                 }
-                if (!g_RelaySending && ImGui::Selectable("Share complete build via one-time code")) {
-                    if (build.chat_link.empty()) {
-                        if (APIDefs) APIDefs->GUI_SendAlert("Cannot send: build has no chat link.");
-                    } else {
-                        SendBuildToRelay(build);
+                if constexpr (AlterEgo::BuildRelay::Enabled) {
+                    if (!g_RelaySending && ImGui::Selectable("Share complete build via one-time code")) {
+                        if (build.chat_link.empty()) {
+                            if (APIDefs) APIDefs->GUI_SendAlert("Cannot send: build has no chat link.");
+                        } else {
+                            SendBuildToRelay(build);
+                        }
                     }
-                }
-                if (g_RelaySending) {
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Sending...");
+                    if (g_RelaySending) {
+                        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Sending...");
+                    }
                 }
  }
 
@@ -6029,8 +6033,10 @@ static bool ImportSharedBuild(const std::string& input, AlterEgo::SavedBuild& ou
         return ImportBuildFromAE2(input, out, error);
     }
     // 4-character alphanumeric code — mobile relay import
-    if (IsRelayCode(input)) {
-        return ImportBuildFromRelay(input, out, error);
+    if (AlterEgo::BuildRelay::HasCodeShape(input)) {
+        if (IsRelayCode(input)) return ImportBuildFromRelay(input, out, error);
+        error = "Not a recognized build or wardrobe format.";
+        return false;
     }
     // Chat link
     if (input.size() > 4 && input[0] == '[' && input[1] == '&') {
@@ -11693,11 +11699,11 @@ static void RenderLibraryImportDialog() {
             const ImVec2 pad = ImGui::GetStyle().FramePadding;
             dl->AddText(ImVec2(from.x + pad.x + 2.0f, from.y + pad.y + 1.0f),
                 ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                "GW2 build or wardrobe chat link, AE2 code\nSnow Crows or MetaBattle build URL");
+                AlterEgo::BuildRelay::ImportHint());
             dl->PopClipRect();
         }
 
-        ImGui::TextUnformatted("Name (optional for wardrobe / source URLs / AE2)");
+        ImGui::TextUnformatted(AlterEgo::BuildRelay::ImportNameLabel());
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         AlterEgo::UI::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
         const std::string importInput(g_LibImportBuf);
@@ -11727,7 +11733,7 @@ static void RenderLibraryImportDialog() {
             std::string input(g_LibImportBuf);
             std::string name(g_LibImportName);
             if (input.empty()) {
-                g_LibImportError = "Paste a GW2 build, wardrobe link, AE2 code, or source URL.";
+                g_LibImportError = AlterEgo::BuildRelay::EmptyImportError();
             } else if (input.find("://") != std::string::npos) {
                 std::string url = AlterEgo::SnowCrows::NormalizeUrl(input);
                 if (url.empty()) url = AlterEgo::MetaBattle::NormalizeUrl(input);
@@ -12431,6 +12437,7 @@ static void RenderBuildLibrary() {
 // Share relay progress/result popups must render regardless of the selected
 // main tab, because Share is now also available from Characters.
 static void RenderShareRelayPopups() {
+    if constexpr (!AlterEgo::BuildRelay::Enabled) return;
     // Relay code result popup (triggered by SendBuildToRelay)
     // The worker publishes strings before clearing the atomic busy flag.
     // Do not read or mutate them while a worker owns the result.
@@ -17689,7 +17696,7 @@ void AddonRender() {
                 g_LibImportPendingProfession.clear();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("GW2 build or wardrobe chat link, AE2 code, Snow Crows or MetaBattle URL");
+                ImGui::SetTooltip("%s", AlterEgo::BuildRelay::ImportTooltip());
 
             ImGui::Separator();
             ImGui::TextDisabled("LIBRARIES");
@@ -17783,7 +17790,7 @@ void AddonRender() {
     // Import/export dialogs are available from every top-level tab.
     RenderLibraryImportDialog();
     RenderLibraryBackupUI();
-    RenderShareRelayPopups();
+    if constexpr (AlterEgo::BuildRelay::Enabled) RenderShareRelayPopups();
     RenderReferenceEditor();
     ProcessComponentUICommand();
     EndNavigationFrame();

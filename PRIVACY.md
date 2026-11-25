@@ -17,9 +17,8 @@ Alter Ego runs locally inside Guild Wars 2 through Raidcore Nexus. Its account f
 | Guild Wars 2 Wiki and image hosts | Public reference information, search and artwork |
 | GitHub raw content | Achievement names, waypoints and hero challenge datasets; currently hosted in the original project's repository |
 | Snow Crows and MetaBattle | Explicit build URL imports and source refreshes |
-| `pie.rocks.cc` | Existing optional one-time build-sharing relay |
 
-The relay is an external service operated separately from this fork. Selecting **Share complete build via one-time code** sends the saved build name, profession, mode, chat link, trait/skill data and supported gear configuration to that service. Entering a relay code retrieves its associated build. API keys are not included in that payload. The relay's retention and access policies have not been independently verified. Use local clipboard codes or portable library exports if you do not want to use the relay.
+The legacy one-time build-sharing relay is disabled in this build. Its import and upload actions are unavailable; the addon does not contact that service for sharing. Clipboard build codes and portable library exports work locally. If a future build restores the relay, its privacy implications must be reviewed and disclosed.
 
 Remote services may receive normal request metadata such as IP addresses and requested URLs or identifiers. Opening wiki or source links in your browser is subject to that site's policies.
 

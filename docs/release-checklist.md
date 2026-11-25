@@ -7,7 +7,7 @@ This is a release gate, not an implementation plan. Track feature work in the [r
 - [ ] Confirm Wayfinder name, Nexus registration and independent addon signature with Raidcore.
 - [ ] Choose final DLL/display names, versioning, repository and update URLs; replace original branding and audit remaining source identifiers.
 - [ ] Define and test migration from the original Alter Ego library and this experimental branch, including paths, credential targets, backups and rollback; prevent simultaneous conflicting addon instances.
-- [ ] Review existing external dependencies: replace original-project dataset URLs with maintained independent sources; decide whether to retire or replace the external build-sharing relay. Keep clipboard/portable sharing available.
+- [ ] Review existing external dependencies: replace original-project dataset URLs with maintained independent sources; keep the legacy relay disabled via `BuildRelay::Enabled` unless explicitly approved and its privacy implications reviewed. Keep clipboard/portable sharing available.
 - [ ] Audit obsolete integration headers and unused resources without removing required compatibility or license notices.
 
 ## Policy, privacy and documentation
