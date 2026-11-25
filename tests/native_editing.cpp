@@ -1,4 +1,5 @@
 #include "../src/NativeLibraryEditing.h"
+#include "../src/ComponentBrowseCore.h"
 #include <cassert>
 using namespace AlterEgo;
 using namespace AlterEgo::NativeLibrary;
@@ -102,6 +103,20 @@ int case_native_editing(int,char**) {
         const auto saved=Composable::ToJson(graph);
         edit["profession"]="Necromancer";
         assert(!PutUnifiedLoadout(graph,edit,{},error));assert(Composable::ToJson(graph)==saved);
+    }
+    // The grouped browser uses empty facets as All and stable sort keys
+    // independent of category ordering or component content.
+    {
+        namespace B=AlterEgo::ComponentBrowse;
+        assert(B::MatchesKind({},"base_build")&&B::MatchesKind({},"relic"));
+        assert(B::MatchesKind({"armor","runes"},"runes"));
+        assert(!B::MatchesKind({"armor","runes"},"skills"));
+        const auto alpha=B::Key("alpha","a",5),beta=B::Key("Beta","b",1),
+            same=B::Key("ALPHA","z",5);
+        assert(B::Less(alpha,beta,false,true)&&B::Less(beta,alpha,false,false));
+        assert(B::Less(beta,alpha,true,true)&&B::Less(alpha,beta,true,false));
+        assert(B::Less(alpha,same,true,true)&&B::Less(alpha,same,true,false));
+        assert(!B::Less(alpha,alpha,false,true)&&!B::Less(alpha,alpha,true,false));
     }
     return 0;
 }

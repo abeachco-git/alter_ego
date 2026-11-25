@@ -7,6 +7,7 @@
 #include "ComposableSemantics.h"
 #include "NativeLibraryEditing.h"
 #include "ComposableGearPresentation.h"
+#include "ComponentBrowseCore.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <map>
@@ -1071,34 +1072,28 @@ static void RenderComponentLibrary() {
     ImGui::Checkbox("Unused only",&g_ComponentUnusedOnly);
     if(!g_ComponentStatus.empty())ImGui::TextWrapped("%s",g_ComponentStatus.c_str());
     ImGui::Separator();
-    struct Group {std::string kind;std::vector<const ComponentJson*> items;};
+    struct Entry {const ComponentJson* item;ComponentBrowse::SortKey key;};
+    struct Group {std::string kind;std::vector<Entry> items;};
     std::vector<Group> groups;size_t count=0;
     const bool searching=!g_ComponentSearch.empty();
     const bool filtered=searching||g_ComponentUnusedOnly||!g_ComponentKindFilters.empty();
     for(int n:kComponentGroupOrder){
         const std::string kind=kComponentKinds[n].kind;
-        if(!g_ComponentKindFilters.empty()&&!g_ComponentKindFilters.count(kind))continue;
+        if(!ComponentBrowse::MatchesKind(g_ComponentKindFilters,kind))continue;
         Group g{kind,{}};
         const auto group=doc["components"].find(kind);
         if(group!=doc["components"].end()&&group->is_array())for(const auto& item:*group){
             if(!item.is_object()||!item.contains("data")||!item["data"].is_object())continue;
             const auto id=item.value("id",std::string()),name=item.value("name",id);
-            if(g_ComponentUnusedOnly&&ComponentUIUsage(doc,kind,id)>0)continue;
+            const int references=ComponentUIUsage(doc,kind,id);
+            if(g_ComponentUnusedOnly&&references>0)continue;
             if(!ComponentUISearchMatch(name,g_ComponentSearch)&&!ComponentUISearchMatch(id,g_ComponentSearch)&&
                !ComponentUISearchMatch(ComponentUIShortDescription(kind,item["data"]),g_ComponentSearch))continue;
-            g.items.push_back(&item);
+            g.items.push_back({&item,ComponentBrowse::Key(name,id,references)});
         }
         if(filtered&&g.items.empty())continue;
-        std::stable_sort(g.items.begin(),g.items.end(),[&](const ComponentJson* a,const ComponentJson* b){
-            if(g_ComponentSort==1){
-                const auto x=ComponentUIUsage(doc,kind,a->value("id",std::string())),y=ComponentUIUsage(doc,kind,b->value("id",std::string()));
-                if(x!=y)return g_ComponentSortAscending?x<y:x>y;
-            }
-            auto x=a->value("name",std::string()),y=b->value("name",std::string());
-            for(char& ch:x)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-            for(char& ch:y)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-            if(x!=y)return g_ComponentSort==0&&!g_ComponentSortAscending?x>y:x<y;
-            return a->value("id",std::string())<b->value("id",std::string());
+        std::stable_sort(g.items.begin(),g.items.end(),[&](const Entry& a,const Entry& b){
+            return ComponentBrowse::Less(a.key,b.key,g_ComponentSort==1,g_ComponentSortAscending);
         });
         count+=g.items.size();groups.push_back(std::move(g));
     }
@@ -1106,7 +1101,8 @@ static void RenderComponentLibrary() {
     bool first=true;
     for(const auto& g:groups){
         const auto& kind=g.kind;ImGui::PushID(kind.c_str());
-        if(!first)ImGui::Spacing();first=false;
+        if(!first)ImGui::Spacing();
+        first=false;
         const bool expanded=searching||!g_ComponentCollapsedKinds.count(kind);
         const auto summary=std::to_string(g.items.size());
         if(CompletionTheme::CenteredSectionToggle(expanded,ComponentLabel(kind))&&!searching){
@@ -1119,12 +1115,15 @@ static void RenderComponentLibrary() {
         ImGui::SetCursorScreenPos(lo);ImGui::InvisibleButton("##category_actions",ImVec2(hi.x-lo.x,hi.y-lo.y));
         if(ImGui::BeginPopupContextItem("##category_menu")){ComponentCreationMenu(kind);ImGui::EndPopup();}
         ImGui::SetCursorScreenPos(after);
-        if(expanded)for(const auto* item:g.items){
+        if(expanded)for(const auto& entry:g.items){
+            const auto* item=entry.item;
             const auto id=item->value("id",std::string()),name=item->value("name",id);
-            const int users=ComponentUIUsage(doc,kind,id);
+            const int users=entry.key.references;
             ImGui::PushID(id.c_str());
             const std::string shown=name+"  ["+std::to_string(users)+"]###row";
-            if(ImGui::Selectable(shown.c_str(),g_ComponentSelectedKind==kind&&g_ComponentSelectedId==id)){
+            const bool selected=g_ComponentSelectedKind==kind&&g_ComponentSelectedId==id;
+            const bool clicked=ImGui::Selectable(shown.c_str(),selected);
+            if((clicked||ImGui::IsItemClicked(ImGuiMouseButton_Right))&&!selected){
                 MarkNavigation();g_ComponentSelectedKind=kind;g_ComponentSelectedId=id;
             }
             if(ImGui::IsItemHovered())ImGui::SetTooltip("%d direct reference%s; %d affected Loadout(s)",users,users==1?"":"s",ComponentUIEffectiveLoadoutCount(kind,id));
