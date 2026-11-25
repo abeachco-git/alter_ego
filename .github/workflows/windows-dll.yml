@@ -33,6 +33,47 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 python3-pil ca-certificates ccache g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
           x86_64-w64-mingw32ucrt-g++ --version
+      - name: Diagnose GW2 Wiki connectivity
+        if: github.ref == 'refs/heads/experiment/composable-loadouts'
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import json
+          import time
+          import urllib.request
+          import urllib.error
+          tests = [
+              ("Wiki HTML", "https://wiki.guildwars2.com/wiki/Wizard%27s_Vault", None),
+              ("Wiki API", "https://wiki.guildwars2.com/api.php?action=query&meta=siteinfo&format=json", "query"),
+              ("Wiki API Parse", "https://wiki.guildwars2.com/api.php?action=parse&page=Wizard%27s_Vault&prop=text&format=json", "parse"),
+              ("Wiki Semantic API", "https://wiki.guildwars2.com/api.php?action=ask&query=%5B%5BCategory%3AItems%5D%5D%7Climit%3D1&format=json", "query"),
+              ("ArenaNet API (Control)", "https://api.guildwars2.com/v2/build", "id"),
+          ]
+          for label, url, expected in tests:
+              start = time.monotonic()
+              print(f"===== {label} =====", flush=True)
+              try:
+                  request = urllib.request.Request(url, headers={"User-Agent": "AlterEgo-Diagnostic/1.0"})
+                  with urllib.request.urlopen(request, timeout=15) as response:
+                      body = response.read(4 * 1024 * 1024)
+                      print(f"HTTP {response.status}; bytes={len(body)}; seconds={time.monotonic()-start:.3f}")
+                      if expected is None:
+                          valid = b"mw-parser-output" in body and b"Wizard" in body
+                      else:
+                          obj = json.loads(body)
+                          valid = expected in obj and "error" not in obj
+                          if label == "Wiki Semantic API":
+                              valid = valid and bool(obj["query"].get("results"))
+                          if label == "Wiki API Parse":
+                              valid = valid and bool(obj["parse"].get("text", {}).get("*"))
+                      print(f"Payload: {'VALID' if valid else 'UNEXPECTED'}")
+                      if not valid:
+                          print(repr(body[:250]))
+              except urllib.error.HTTPError as exc:
+                  print(f"HTTP {exc.code}: {exc.reason}; seconds={time.monotonic()-start:.3f}")
+              except Exception as exc:
+                  print(f"FAILED: {type(exc).__name__}: {exc}")
+          PY
       # Cache compiler outputs, never final executables or test results.
       - name: Restore compiler cache
         uses: actions/cache/restore@v5
