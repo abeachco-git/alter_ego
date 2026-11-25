@@ -212,7 +212,7 @@ bool AutoScope(const std::string& scope){
 }
 bool ActivityScope(const std::string& scope){return scope=="Bags"||scope=="Equipment"||scope=="Bank"||scope=="Shared inventory"||scope=="Materials"||scope=="Legendary Armory";}
 bool ScopeFresh(const std::string& account,const std::string& scope,const std::string& character,int64_t success){
-    if(ActivityScope(scope))return CharacterActivity::Fresh({account,character},scope,success,scope=="Equipment");
+    if(ActivityScope(scope))return CharacterActivity::Fresh({account,character},scope,success,scope=="Equipment"&&CharacterActivity::SpecSignal().load());
     return success>0&&Now()>=success&&Now()-success<FreshSeconds(scope);
 }
 bool ScopeDue(const View& v,const std::string& account,const std::string& scope,const std::string& character={}){
@@ -230,7 +230,7 @@ bool ScopeDue(const View& v,const std::string& account,const std::string& scope,
     }
     const auto success=it==v.scopes.end()?0:it->second.success;
     const auto attempt=it==v.scopes.end()||it->second.status=="Ready"?0:it->second.attempted;
-    if(ActivityScope(scope))return CharacterActivity::Due({account,character},scope,success,attempt,scope=="Equipment");
+    if(ActivityScope(scope))return CharacterActivity::Due({account,character},scope,success,attempt,scope=="Equipment"&&CharacterActivity::SpecSignal().load());
     return Due(scope,attempt,success,Now());
 }
 bool Fresh(const View& v,const Row& row){
@@ -274,6 +274,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                         if(linked==links.end())throw std::runtime_error("Account changed");
                         auto physical=RequestPhysicalEquipment(*linked,character,!automatic);
                         if(!physical.response)throw std::runtime_error(physical.response.error);
+                        if(!physical.inventoryCommitted)throw std::runtime_error("Invalid physical equipment projection");
                         auto slots=ParseEquipment(physical.response.data,a.id,character);
                         state.attempted=physical.started;state.success=physical.success;
                         // RequestPhysicalEquipment already committed the exact physical projection.
@@ -439,7 +440,7 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
     if(!Current(a))return {{0,{},"Account changed"},0,0};
     const CharacterActivity::Key k{a.id,character};
     auto& e=physicalCache[k];
-    if(e.epoch==a.generation&&e.value.response&&
+    if(e.epoch==a.generation&&e.value.response&&e.value.inventoryCommitted&&
        (e.finished>=queued||(!manual&&Clock::now()-e.finished<std::chrono::seconds(15))))return e.value;
     const auto ticket=CharacterActivity::Begin(k,"Equipment");
     auto r=Request(a,"/v2/characters/"+Encode(character)+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"});
@@ -449,10 +450,14 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
     // Only a complete physical projection can advance Inventory freshness.
     try{
         auto slots=ParseEquipment(result.response.data,a.id,character);
-        if(!Current(a))return {{0,{},"Account changed"},0,0};
-        ScopeState state{a.id,"Equipment",character,"Ready",ticket.started,result.success};
-        Record(root,state,&slots);
-        CharacterActivity::Success(k,"Equipment",ticket,result.success);
+        {
+            std::lock_guard<std::mutex> credentialLock(credentialMutex);
+            if(!Current(a))return {{0,{},"Account changed"},0,0};
+            ScopeState state{a.id,"Equipment",character,"Ready",ticket.started,result.success};
+            Record(root,state,&slots);
+            CharacterActivity::Success(k,"Equipment",ticket,result.success);
+            result.inventoryCommitted=true;
+        }
         Publish("",false);
     }catch(...){
         // Preserve character consumer's raw response; Inventory validates it separately.
@@ -686,7 +691,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     if(accounts.empty()){ImGui::TextDisabled("Select a linked account to browse.");return;}
     const char* names[]={"Items","Wallet","Guild Bank"};
     RenderSectionHeader(names[subview],UI::SectionGold);
-    PollDemand(selectedAccount,subview==1?"Wallet":subview==2?"Guild bank":scope.empty()?"Items":scope);
+    PollDemand(selectedAccount,subview==1?"Wallet":subview==2?"Guild bank":"Items");
     if(subview!=0){
         auto& q=subview==1?nav.walletQuery:nav.guildQuery;
         auto& favoriteFilter=nav.favoriteFilter;auto& balanceFilter=nav.balanceFilter;auto& walletSort=nav.walletSort;
@@ -963,7 +968,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
         auto name=(accounts.size()>1?Display(a)+" / ":"")+dataset+(ch.empty()?"":" / "+ch);
         const auto status=s?s->status:"Not retrieved";const auto success=s?s->success:0;
         note(name,success,status,dataset,group==nullptr,a.id,ch);
-        if(group)group->Add(status,success>0);
+        if(group)group->Add(status=="Ready"&&success>0&&!ScopeFresh(a.id,dataset,ch,success)?"Stale":status,success>0);
     };
     std::set<std::string> guilds;
     for(const auto& a:accounts){

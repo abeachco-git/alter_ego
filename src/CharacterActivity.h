@@ -141,6 +141,7 @@ public:
         *this=std::move(next); // no active identity survives restart
     }
 };
+inline std::atomic<bool>& SpecSignal(){static std::atomic<bool> enabled{true};return enabled;}
 inline Tracker& State(){static Tracker state;return state;}
 inline std::mutex& Mutex(){static std::mutex mutex;return mutex;}
 inline int64_t Now(){return static_cast<int64_t>(std::time(nullptr));}

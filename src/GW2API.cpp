@@ -260,7 +260,7 @@ namespace AlterEgo {
             s_fetch_status=FetchStatus::InProgress;s_fetch_message="Checking character roster...";
             s_current_char={};g_rosterReady=false;s_chars_fetched=0;s_chars_total=0;
         }
-        Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority]{
+        Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly]{
             auto fail=[](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;s_current_char={};};
             std::map<std::string,std::set<std::string>> roster;
             std::vector<std::pair<NativeAccounts::LinkedAccount,std::string>> targets;

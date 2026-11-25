@@ -1638,6 +1638,7 @@ static void LoadSettings() {
         try{AlterEgo::NativeAccounts::SetWalletFavorites(j["wallet_favorites"].get<std::set<uint32_t>>());}catch(...){}
     }
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
+    AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;
     getBool("warn_stale_specialization", g_WarnStaleSpecialization);
     getInt("birthday_mode", g_BirthdayMode);
     getFloat("char_list_width", g_CharListWidth);
@@ -15558,8 +15559,8 @@ static void RenderCompareStatusRow() {
     for (const auto& ch : chars) {
         if (ch.name == g_LibComparePreviousTarget) { target = &ch; break; }
     }
-    if(target)PollDemandCharacter(target->account_name,target->name,target->data_refreshed);
-    AlterEgo::NativeAccounts::PollItemDemand(GetEffectiveAccountName());
+    if(target){PollDemandCharacter(target->account_name,target->name,target->data_refreshed);
+        AlterEgo::NativeAccounts::PollItemDemand(target->account_name);}
     const auto fetch = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
     if (g_LibCompareRefreshPending && !busy) {
@@ -17654,8 +17655,9 @@ void AddonOptions() {
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
     ImGui::TextDisabled("Characters: 10 minutes while relevant views are open; login alone does not fetch.");
-    if (ImGui::Checkbox("When specialization changes##ae_auto_spec", &g_AutoRefreshOnSpecialization))
-        SaveSettings();
+    if (ImGui::Checkbox("When specialization changes##ae_auto_spec", &g_AutoRefreshOnSpecialization)){
+        AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;SaveSettings();
+    }
     int objectiveMinutes=AlterEgo::RefreshEngine::ObjectiveMinutes();
     ImGui::SetNextItemWidth(100.0f);
     if(ImGui::InputInt("Objective tracking (minutes)##ae_objective_interval",&objectiveMinutes,1,5)){
