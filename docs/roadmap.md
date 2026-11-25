@@ -161,3 +161,5 @@ Character propagation evidence: the [GW2 API client endpoint documentation](http
 - [x] Unified Inventory search: positive cached wallet balances, distinct typed IDs and navigation, Wallet storage and Currency type facets, inapplicable item-only filters exclude currencies, shared sorting and quantity/freshness, currency detail locations and safe context actions. Preserve search-first behavior with explicit Wallet/Currency browsing, independent Wallet freshness and dedicated Wallet view. Offline regression assertions added; Windows CI and in-game verification pending.
 
 - [x] Correct explicit clipboard writes to use a validated same-process window owner, preserving Unicode conversion and cleanup on failure. Keep Nexus ImGui callbacks unchanged. Windows runtime clipboard smoke tests and independent investigation of the reported Defender detection remain pending; no claim of malware clearance.
+
+- [x] Restore aquatic section on Loadout Edit and conditionally show on View; align component creation/paste and inline details; add standalone Equipment Set creation through shared reference editor. Offline regression/build and in-game UI verification pending.

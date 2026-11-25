@@ -297,6 +297,18 @@ inline bool AssignSetComponent(Composable::Document& doc,const std::string& setI
         return true;
     },error);
 }
+inline bool CreateEquipmentSet(Composable::Document& doc,const std::string& id,const std::string& name,
+    const std::map<std::string,std::string>& refs,std::string& error) {
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err){
+        if(id.empty()||Composable::FindEquipmentSet(next,id)||Composable::ComponentNameKey(name).empty()||refs.empty())
+            return Composable::Fail(err,"Equipment set needs a unique ID, name and at least one category.");
+        for(const auto& [kind,ref]:refs)
+            if(!Composable::IsEquipmentKind(kind)||!Composable::Find(next,kind,ref))
+                return Composable::Fail(err,"Invalid equipment set component.");
+        next.equipment_sets.push_back({id,name,refs});
+        return true;
+    },error);
+}
 // Complete membership changes are atomic: transfer removed categories from
 // the ORIGINAL set, then remove direct references for newly included categories.
 inline bool SaveEquipmentSetDraft(Composable::Document& doc,const std::string& setId,

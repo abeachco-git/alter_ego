@@ -509,7 +509,8 @@ namespace AlterEgo {
     static bool DetachEquipmentSet(const std::string& loadoutId);
     static bool SaveLoadoutAsEquipmentSet(const std::string& loadoutId,const std::string& name,std::string* savedId,const std::set<std::string>& kinds={});
     static bool DuplicateEquipmentSet(const std::string& setId,const std::string& name,std::string* savedId);
-    static bool SaveEquipmentSetDraft(const std::string& id,const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision);
+    static bool CreateEquipmentSet(const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision,std::string* savedId);
+        static bool SaveEquipmentSetDraft(const std::string& id,const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision);
     static bool SaveLoadoutReferenceDraft(const std::string& id,const std::string& setId,const std::string& fashionId,const std::map<std::string,std::string>& refs,uint64_t revision);
     static bool AssignEquipmentSetComponent(const std::string& setId,const std::string& kind,const std::string& componentId,uint64_t revision);
     static std::vector<std::pair<std::string,std::string>> FindCapturedEquipmentSets(const SavedBuild& capture);

@@ -2818,6 +2818,16 @@ namespace AlterEgo {
         if(ok&&savedId)*savedId=id;
         return ok;
     }
+    bool GW2API::CreateEquipmentSet(const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision,std::string* savedId) {
+        std::string id;
+        const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(revision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
+            unsigned n=0;do{id="equipment-set:manual:"+std::to_string(n++);}while(Composable::FindEquipmentSet(doc,id));
+            return NativeLibrary::CreateEquipmentSet(doc,id,name,refs,error);
+        });
+        if(ok&&savedId)*savedId=id;
+        return ok;
+    }
     bool GW2API::SaveEquipmentSetDraft(const std::string& id,const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision) {
         return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
             if(revision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");

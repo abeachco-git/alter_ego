@@ -6515,6 +6515,9 @@ static const char* GearSlotDisplayName(const std::string& slot) {
     if (slot == "WeaponA2") return "Off Hand A";
     if (slot == "WeaponB1") return "Main Hand B";
     if (slot == "WeaponB2") return "Off Hand B";
+    if (slot == "WeaponAquaticA") return "Aquatic A";
+    if (slot == "WeaponAquaticB") return "Aquatic B";
+    if (slot == "HelmAquatic") return "Aquatic Headgear";
     if (slot == "Accessory1") return "Accessory 1";
     if (slot == "Accessory2") return "Accessory 2";
     if (slot == "Ring1") return "Ring 1";
@@ -6524,10 +6527,10 @@ static const char* GearSlotDisplayName(const std::string& slot) {
 
 static bool IsArmorSlot(const std::string& s) {
     return s == "Helm" || s == "Shoulders" || s == "Coat" ||
-           s == "Gloves" || s == "Leggings" || s == "Boots";
+           s == "Gloves" || s == "Leggings" || s == "Boots" || s == "HelmAquatic";
 }
 static bool IsWeaponSlot(const std::string& s) {
-    return s == "WeaponA1" || s == "WeaponA2" || s == "WeaponB1" || s == "WeaponB2";
+    return s == "WeaponA1" || s == "WeaponA2" || s == "WeaponB1" || s == "WeaponB2" || AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(s);
 }
 static bool IsMainhandSlot(const std::string& s) {
     return s == "WeaponA1" || s == "WeaponB1";
@@ -6541,6 +6544,7 @@ static bool IsTrinketSlot(const std::string& s) {
 }
 static bool IsWeaponTwoHanded(const std::string& profession, const std::string& weaponType) {
     if (weaponType.empty()) return false;
+    if(weaponType=="Harpoon"||weaponType=="Speargun"||weaponType=="Trident")return true;
     const auto profWeapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
     if (profWeapons) {
         auto it = profWeapons->find(weaponType);
@@ -6610,6 +6614,11 @@ static uint32_t GetTrinketIconId(const std::string& slot) {
 
 // Get the representative item ID for a build gear slot icon
 static uint32_t GetGearSlotIconItemId(const AlterEgo::SavedBuild& build, const std::string& slot) {
+    if (slot=="HelmAquatic"||AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(slot)) {
+        const auto it=build.gear.find(slot);
+        if(it!=build.gear.end()&&it->second.item_id)return it->second.item_id;
+        return 0;
+    }
     if (IsArmorSlot(slot)) {
         int weight = GetArmorWeight(build.profession);
         int idx = -1;
@@ -7319,8 +7328,8 @@ static bool GearCanPaste(const AlterEgo::SavedBuild& b,const std::string& slot,c
     const auto weapons = AlterEgo::GW2API::GetProfessionWeapons(b.profession);
     if (!weapons) return false;
     const auto it = weapons->find(c.data.weapon_type);
-    return it != weapons->end() && AlterEgo::EquipmentChoice::WeaponEligible(
-        slot,it->second.mainhand,it->second.offhand,it->second.two_handed);
+    return it != weapons->end() && AlterEgo::EquipmentChoice::WeaponTypeEligible(
+        slot,it->first,it->second.mainhand,it->second.offhand,it->second.two_handed);
 }
 static void ExpandSharedRune(AlterEgo::SavedBuild& b) {
     if (!b.rune_id && b.rune_name.empty()) return;
@@ -7430,7 +7439,7 @@ static void CopyGearToGroup(AlterEgo::SavedBuild& b,const GearClipboard& c,const
     for (const auto& slot : slots) ApplyGearClipboard(b,slot,c);
 }
 static void CopyWeaponSetSigils(AlterEgo::SavedBuild& b,const std::string& source) {
-    if (!IsWeaponSlot(source)) return;
+    if (!IsWeaponSlot(source)||AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(source)) return;
     const std::string from = source.substr(0,7), to = from == "WeaponA" ? "WeaponB" : "WeaponA";
     std::vector<std::pair<uint32_t,std::string>> pattern;
     for (const auto& suffix : {"1","2"}) {
@@ -7501,7 +7510,7 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
                     if (ImGui::MenuItem(target)) CopyGearToGroup(b,capture(GearCopyField::Infusions),target);
                 ImGui::EndMenu();
             }
-            if (IsWeaponSlot(slot) && ImGui::MenuItem("Sigils to other weapon set")) CopyWeaponSetSigils(b,slot);
+            if (IsWeaponSlot(slot) && !AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(slot) && ImGui::MenuItem("Sigils to other weapon set")) CopyWeaponSetSigils(b,slot);
             ImGui::EndMenu();
         }
     }
@@ -8024,8 +8033,8 @@ static void RenderGearCustomizeDialog() {
                 int idx = 0;
                 for (const auto& [wname, wd] : *profWeapons) {
                     // Filter by mainhand/offhand/two-hand
-                    if (!AlterEgo::EquipmentChoice::WeaponEligible(
-                            g_GearDialogSlot, wd.mainhand, wd.offhand,
+                    if (!AlterEgo::EquipmentChoice::WeaponTypeEligible(
+                            g_GearDialogSlot, wname, wd.mainhand, wd.offhand,
                             wd.two_handed)) continue;
 
                     // Search filter
@@ -8061,7 +8070,7 @@ static void RenderGearCustomizeDialog() {
                     if (ImGui::InvisibleButton("##wsel", ImVec2(cw, ch))) {
                         gs.weapon_type = wname;
                         gs.item_id = 0;
-                        if (!wd.two_handed) {
+                        if (!wd.two_handed && !AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(g_GearDialogSlot)) {
                             gs.sigil2_id = 0; gs.sigil2.clear();
                             if (gs.infusion_ids.size() > 1) gs.infusion_ids.resize(1);
                             if (gs.infusion_attributes.size() > 1) gs.infusion_attributes.resize(1);
@@ -8684,6 +8693,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         else if (strcmp(slot, "Amulet") == 0) initial = "Am";
         else if (strcmp(slot, "Ring1") == 0 || strcmp(slot, "Ring2") == 0) initial = "R";
         else if (strcmp(slot, "Relic") == 0) initial = "Re";
+        else if (strcmp(slot, "HelmAquatic") == 0) initial = "AH";
+        else if (strcmp(slot, "WeaponAquaticA") == 0) initial = "A";
+        else if (strcmp(slot, "WeaponAquaticB") == 0) initial = "B";
 
         ImVec2 textSz = ImGui::CalcTextSize(initial);
         ImU32 textCol = disabled ? IM_COL32(60, 60, 60, 120) : (hasData ? IM_COL32(255, 210, 80, 200) : IM_COL32(100, 100, 100, 180));
@@ -8836,7 +8848,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
 
 // Render the full gear section for a saved build
 static void RenderBuildGearPanel(AlterEgo::SavedBuild& build,bool editable) {
-    AlterEgo::UI::EquipmentLayout("##saved_gear",false,
+    AlterEgo::UI::EquipmentLayout("##saved_gear",g_LibEditMode||AlterEgo::GearEdit::HasRecordedAquaticGear(build.gear),
         [&](const char* slot){RenderBuildGearSlot(build,slot,editable);},
         [](const char* label,int){RenderSectionHeader(label,AlterEgo::UI::SectionGold);});
 }

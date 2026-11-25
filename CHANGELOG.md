@@ -46,3 +46,5 @@ This is a draft for the experimental branch, not a published or fully validated 
 See the [roadmap](docs/roadmap.md) for internal work and the [release checklist](docs/release-checklist.md) for release gates.
 
 - Correct shared Windows Unicode clipboard writes to use a valid game-process window owner rather than a null owner.
+
+- Restore aquatic equipment in saved Loadouts, simplify Components context menus and slot disclosures, and allow standalone Equipment Set creation.

@@ -7,7 +7,8 @@ struct Slot {
     std::vector<std::string> infusion_attributes;
     bool infusion_snapshot = false;
     std::string infusion, sigil, sigil2;
-    uint32_t sigil_id = 0, sigil2_id = 0;
+    uint32_t sigil_id = 0, sigil2_id = 0, item_id=0, stat_id=0, rune_id=0;
+    std::string stat_name,rune,weapon_type;
 };
 struct Build {
     std::string name,notes,rune_name,relic_name;
@@ -37,6 +38,13 @@ int case_gear_edit_core(int, char**) {
     CopySigils(dst,src,1); assert(dst.sigil2_id == 0);
     assert(InfusionCapacity("WeaponB2",false,true) == 0);
     Build parent;
+    assert(!HasRecordedAquaticGear(parent.gear));
+    parent.gear["HelmAquatic"].infusion_snapshot=true;
+    assert(!HasRecordedAquaticGear(parent.gear));
+    parent.gear["WeaponAquaticA"].weapon_type="Harpoon";
+    assert(HasRecordedAquaticGear(parent.gear));
+    parent.gear.erase("WeaponAquaticA");parent.gear["WeaponAquaticB"].infusion_ids={42};
+    assert(HasRecordedAquaticGear(parent.gear));
     parent.name="Loadout";parent.notes="Original";parent.gear["Helm"].infusion_ids={42};
     parent.gear["WeaponA2"].sigil_id=1;
     auto child=parent;child.gear["Helm"].infusion_ids={99};child.gear.erase("WeaponA2");

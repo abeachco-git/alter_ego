@@ -16,6 +16,19 @@ template<class Build> void ApplyEquipmentDraft(Build& parent,const Build& draft)
     parent.rune_name=draft.rune_name;parent.rune_id=draft.rune_id;
     parent.relic_name=draft.relic_name;parent.relic_id=draft.relic_id;
 }
+// Empty placeholders do not count as recorded aquatic gear.
+template<class Gear> bool HasRecordedAquaticGear(const Gear& gear) {
+    for (const char* slot : {"HelmAquatic","WeaponAquaticA","WeaponAquaticB"}) {
+        const auto it=gear.find(slot);if(it==gear.end())continue;
+        const auto& s=it->second;
+        if(s.item_id||s.stat_id||s.rune_id||s.sigil_id||s.sigil2_id||
+           !s.stat_name.empty()||!s.rune.empty()||!s.sigil.empty()||!s.sigil2.empty()||
+           !s.weapon_type.empty()||!s.infusion.empty()||
+           std::any_of(s.infusion_ids.begin(),s.infusion_ids.end(),[](auto id){return id!=0;})||
+           std::any_of(s.infusion_attributes.begin(),s.infusion_attributes.end(),[](const auto& a){return !a.empty();}))return true;
+    }
+    return false;
+}
 inline int InfusionCapacity(const std::string& slot, bool twoHanded, bool blocked = false) {
     if (blocked || slot == "Amulet" || slot == "Relic") return 0;
     if (slot == "Ring1" || slot == "Ring2") return 3;

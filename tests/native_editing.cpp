@@ -104,6 +104,19 @@ int case_native_editing(int,char**) {
         edit["profession"]="Necromancer";
         assert(!PutUnifiedLoadout(graph,edit,{},error));assert(Composable::ToJson(graph)==saved);
     }
+    // Standalone creation reuses exact components and never modifies a Loadout.
+    {
+        const auto before=Composable::ToJson(doc);
+        assert(!CreateEquipmentSet(doc,"manual","",{{"armor",armor}},err));
+        assert(!CreateEquipmentSet(doc,"manual","Set",{},err));
+        assert(!CreateEquipmentSet(doc,"manual","Set",{{"skills",skills}},err));
+        assert(!CreateEquipmentSet(doc,"manual","Set",{{"armor","missing"}},err));
+        assert(Composable::ToJson(doc)==before);
+        assert(CreateEquipmentSet(doc,"manual","Set",{{"armor",armor}},err));
+        assert(Composable::FindEquipmentSet(doc,"manual")->refs.at("armor")==armor);
+        assert(Composable::ToJson(doc)["loadouts"]==before["loadouts"]);
+        assert(!CreateEquipmentSet(doc,"manual","Duplicate",{{"armor",armor}},err));
+    }
     // The grouped browser uses empty facets as All and stable sort keys
     // independent of category ordering or component content.
     {
