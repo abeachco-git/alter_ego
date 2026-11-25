@@ -22,6 +22,8 @@ int case_native_inventory(int,char**){
     assert(Accessibility(rows[2],"account-a","A",true)==Access::Available);
     assert(Match("Superior Sigil of Force",10,"sigil force")&&Match("",10,"10"));
     Record(root,{"account-a","Bank","","Ready",100,100},&rows);
+    StoreNames(root,Json::array({Json{{"id",10},{"name","Item"},{"icon","https://example.test/icon.png"},{"description","Test description"},{"details",{{"type","Focus"}}},{"flags",Json::array()}}}));
+    auto presentation=Read(root).metadata.at(10);assert(presentation.complete&&presentation.icon=="https://example.test/icon.png"&&presentation.description=="Test description"&&presentation.details.at("type")=="Focus");
     auto other=ParseArray(Json::parse(R"([{"id":10,"count":3}])"),"account-b","Bank");
     Record(root,{"account-b","Bank","","Ready",100,100},&other);
     Record(root,{"account-a","Bank","","HTTP 503",101,0});

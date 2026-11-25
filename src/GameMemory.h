@@ -274,6 +274,7 @@ inline const Row* Find(const State& s,const std::string& name) {
 inline bool PrepareSwap(State& s,const std::string& active,const std::string& target,
                         const std::string& currentAccount,const std::string& targetAccount,
                         SwapPlan& plan) {
+    if (!active.empty()&&active==target) {s.preflight="Character already active.";return false;}
     if (!s.pending.empty()) {s.preflight="A character load is already pending.";return false;}
     if (!Sample(s)) {s.preflight="Character loading blocked: invalid live roster.";return false;}
     if (!s.gameThread) {s.preflight="Character loading blocked: unknown game thread.";return false;}
@@ -413,6 +414,7 @@ inline std::string LoadUnavailableReason(const std::string& active,const std::st
 }
 inline std::string Load(const std::string& active,const std::string& target,
                         const std::string& currentAccount,const std::string& targetAccount) {
+    if(!active.empty()&&active==target)return "Character already active.";
     auto& s=Data();
     SwapPlan plan;
     try{

@@ -53,6 +53,7 @@
 #include "HttpClient.h"
 #include <nlohmann/json.hpp>
 #include "AddonShared.h"
+#include "CatalogPresentation.h"
 #include "CharacterToolsCore.h"
 #include "Clears.h"
 #include "CompletionTheme.h"
@@ -417,6 +418,7 @@ static bool g_DetailsFetched = false;  // Track if we've requested details for c
 // Render-thread navigation intent. Ordinary filter/refresh changes do not branch history.
 static int g_NavIntentFrames=0;
 static void MarkNavigation(){g_NavIntentFrames=3;}
+void MarkInventoryNavigation(){MarkNavigation();}
 static int g_MainTab = 0;             // Stable session IDs: 0=Characters, 1=Build Library, 2=Skinventory, 3=Vault, 4=Achievements, 5=Compare
 static std::chrono::steady_clock::time_point g_FetchDoneTime{}; // For status message fade-out
 
@@ -426,6 +428,7 @@ static bool g_SkinSwitchToBrowser = false;
 static bool g_SkinSwitchToShopping = false;
 static bool g_SkinScrollToSkin = false;
 static Skinventory::SkinFilters g_SkinBrowserFilters;
+static float g_InventoryListWidth=420.f;
 static float g_SkinListWidth=420.f, g_FashionListWidth=220.f, g_ComponentListWidth=270.f;
 static uint32_t g_SkinSelectedId = 0;
 static char g_SkinSearchFilter[256] = "";
@@ -1597,6 +1600,7 @@ static void SaveSettings() {
     j["char_list_width"] = g_CharListWidth;
     j["lib_list_width"] = g_LibListWidth;
     j["skin_list_width"]=g_SkinListWidth;
+    j["inventory_list_width"]=g_InventoryListWidth;
     j["fashion_list_width"]=g_FashionListWidth;
     j["component_list_width"]=g_ComponentListWidth;
     j["library_collection"] = g_LibraryCollection;
@@ -1648,6 +1652,7 @@ static void LoadSettings() {
     getFloat("char_list_width", g_CharListWidth);
     getFloat("lib_list_width", g_LibListWidth);
     getFloat("skin_list_width",g_SkinListWidth);
+    getFloat("inventory_list_width",g_InventoryListWidth);
     getFloat("fashion_list_width",g_FashionListWidth);
     getFloat("component_list_width",g_ComponentListWidth);
     getInt("library_collection", g_LibraryCollection);
@@ -13200,6 +13205,38 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t sto
     ImGui::EndPopup();
 }
 
+// Shared Fast Load entry points. All UI actions enqueue exact account/name;
+// only execute after the active page and its popup have unwound.
+static std::pair<std::string,std::string> g_QueuedCharacterLoad;
+std::string CharacterLoadUnavailable(const std::string& character,const std::string& account){
+    using namespace AlterEgo;
+    if(!g_CurrentCharName.empty()&&character==g_CurrentCharName)return "Character already active.";
+    const auto active=NativeAccounts::VerifiedAccountForCharacter(g_CurrentCharName);
+    const auto target=NativeAccounts::VerifiedAccountForCharacter(character);
+    if(active.empty()||target.empty()||active!=target||(!account.empty()&&account!=target))
+        return "Character ownership is unknown or belongs to another linked account.";
+    return GameMemory::LoadUnavailableReason(g_CurrentCharName,character,GW2API::GetCurrentAccountName(),target);
+}
+bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account){
+    const auto reason=CharacterLoadUnavailable(character,account);
+    const bool clicked=ImGui::MenuItem(label,nullptr,false,reason.empty());
+    if(!reason.empty()&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",reason.c_str());
+    if(clicked)g_QueuedCharacterLoad={character,AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character)};
+    return clicked;
+}
+static void TickCharacterLoad(){
+    const auto notice=AlterEgo::GameMemory::Tick(g_CurrentCharName);
+    if(!notice.empty()&&APIDefs)APIDefs->GUI_SendAlert(notice.c_str());
+}
+void ProcessCharacterLoad(){
+    auto request=std::move(g_QueuedCharacterLoad);g_QueuedCharacterLoad={};
+    if(request.first.empty())return;
+    auto reason=CharacterLoadUnavailable(request.first,request.second);
+    if(reason.empty())reason=AlterEgo::GameMemory::Load(g_CurrentCharName,request.first,AlterEgo::GW2API::GetCurrentAccountName(),request.second);
+    if(APIDefs)APIDefs->GUI_SendAlert(reason.c_str());
+}
+std::string PlainItemDescription(const std::string& text){return StripGW2Markup(text);}
+
 static void RenderSkinList(float width) {
     ImGui::BeginChild("SkinList", ImVec2(width, 0), true);
     const auto& data=GetSkinBrowserData();
@@ -13375,129 +13412,26 @@ static void RenderSkinList(float width) {
         }
     } else {
         // ===== Compact list view =====
-        const float rowH   = 22.0f;
-        const float iconSz = 16.0f;
-
-        // Scroll-to-selected for list mode
-        if (g_SkinScrollToSkin) {
-            for (int i = 0; i < (int)displaySkins.size(); i++) {
-                if (displaySkins[i].id == g_SkinSelectedId) {
-                    float winH = ImGui::GetWindowHeight();
-                    ImGui::SetScrollY(i * rowH - winH * 0.5f + rowH * 0.5f);
-                    g_SkinScrollToSkin = false;
-                    break;
-                }
+        const float rowH=AlterEgo::UI::CatalogRowHeight();
+        if(g_SkinScrollToSkin){
+            for(int i=0;i<(int)displaySkins.size();++i)if(displaySkins[i].id==g_SkinSelectedId){
+                ImGui::SetScrollY(i*rowH-ImGui::GetWindowHeight()*.5f+rowH*.5f);g_SkinScrollToSkin=false;break;
             }
         }
-
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImGuiListClipper clipper;
-        clipper.Begin((int)displaySkins.size(), rowH);
-        while (clipper.Step()) {
-            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++) {
-                const auto& entry = displaySkins[row];
-                auto skinOpt = Skinventory::SkinCache::GetSkin(entry.id);
-                if (!skinOpt) { ImGui::Dummy(ImVec2(0, rowH)); continue; }
-                const auto& skin = *skinOpt;
-
-                ImVec2 cmin = ImGui::GetCursorScreenPos();
-                float availW = ImGui::GetContentRegionAvail().x;
-                ImVec2 cmax(cmin.x + availW, cmin.y + rowH);
-
-                bool selected = (g_SkinSelectedId == entry.id);
-                bool dim = hasOwnerData && !entry.owned;
-                ImVec4 rc = GetSkinRarityColor(skin.rarity);
-
-                // Hit-test full row
-                ImGui::PushID((int)entry.id);
-                ImGui::InvisibleButton("##lrow", ImVec2(availW, rowH));
-                bool hovered = ImGui::IsItemHovered();
-                bool clicked = ImGui::IsItemClicked();
-                RenderSkinContextMenu(skin);
-                ImGui::PopID();
-
-                // Background
-                ImU32 bgCol;
-                if (selected)      bgCol = IM_COL32(80, 64, 28, 90);
-                else if (hovered)  bgCol = IM_COL32(60, 56, 40, 60);
-                else if (row & 1)  bgCol = IM_COL32(255, 255, 255, 10);
-                else               bgCol = IM_COL32(0, 0, 0, 0);
-                if ((bgCol & 0xFF000000) != 0)
-                    dl->AddRectFilled(cmin, cmax, bgCol, 2.0f);
-
-                // Selection / hover border
-                if (selected)
-                    dl->AddRect(cmin, cmax, IM_COL32(232, 196, 122, 220), 2.0f, 0, 1.0f);
-                else if (hovered)
-                    dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 110), 2.0f, 0, 1.0f);
-
-                // Rarity left accent
-                ImU32 accent = ImGui::ColorConvertFloat4ToU32(
-                    dim ? ImVec4(rc.x * 0.55f, rc.y * 0.55f, rc.z * 0.55f, 0.85f) : rc);
-                dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 2),
-                                  ImVec2(cmin.x + 3, cmax.y - 2), accent);
-
-                // Icon (lazy, priority-loaded)
-                float iconX = cmin.x + 8.0f;
-                float iconY = cmin.y + (rowH - iconSz) * 0.5f;
-                uint32_t displayId = entry.id + 5000000;
-                Texture_t* tex = AlterEgo::IconManager::GetIcon(displayId);
-                if (!tex || !tex->Resource) {
-                    if (!skin.icon_url.empty())
-                        AlterEgo::IconManager::RequestIcon(displayId, skin.icon_url, /*priority=*/true);
-                }
-                ImVec2 imin(iconX, iconY);
-                ImVec2 imax(iconX + iconSz, iconY + iconSz);
-                ImU32 iconBg = ImGui::ColorConvertFloat4ToU32(
-                    ImVec4(rc.x * 0.18f, rc.y * 0.18f, rc.z * 0.18f, 1.0f));
-                dl->AddRectFilled(imin, imax, iconBg, 1.5f);
-                if (tex && tex->Resource) {
-                    ImU32 tint = dim ? IM_COL32(170, 170, 170, 130) : IM_COL32(255, 255, 255, 255);
-                    dl->AddImage(tex->Resource, imin, imax, ImVec2(0,0), ImVec2(1,1), tint);
-                }
-
-                // Name (clipped between icon + status)
-                float textX = imax.x + 6.0f;
-                float textEndX = cmax.x - (hasOwnerData ? 22.0f : 6.0f);
-                ImU32 nameCol = dim
-                    ? ImGui::ColorConvertFloat4ToU32(ImVec4(rc.x * 0.65f, rc.y * 0.65f, rc.z * 0.65f, 0.85f))
-                    : ImGui::ColorConvertFloat4ToU32(rc);
-                ImVec2 nameSz = ImGui::CalcTextSize(skin.name.c_str());
-                float nameY = cmin.y + (rowH - nameSz.y) * 0.5f;
-                dl->PushClipRect(ImVec2(textX, cmin.y), ImVec2(textEndX, cmax.y), true);
-                dl->AddText(ImVec2(textX, nameY), nameCol, skin.name.c_str());
-                dl->PopClipRect();
-
-                // Status dot
-                if (hasOwnerData) {
-                    float dotX = cmax.x - 12.0f;
-                    float dotY = cmin.y + rowH * 0.5f;
-                    if (entry.owned) {
-                        dl->AddCircleFilled(ImVec2(dotX, dotY), 4.0f, IM_COL32(50, 110, 60, 220));
-                        dl->AddCircle(ImVec2(dotX, dotY), 4.0f, IM_COL32(111, 204, 122, 255), 14, 1.2f);
-                        dl->AddLine(ImVec2(dotX - 2, dotY + 0), ImVec2(dotX - 0.5f, dotY + 1.5f),
-                            IM_COL32(180, 240, 190, 255), 1.5f);
-                        dl->AddLine(ImVec2(dotX - 0.5f, dotY + 1.5f), ImVec2(dotX + 2.5f, dotY - 2),
-                            IM_COL32(180, 240, 190, 255), 1.5f);
-                    } else {
-                        dl->AddCircle(ImVec2(dotX, dotY), 3.5f, IM_COL32(120, 110, 90, 200), 14, 1.2f);
-                    }
-                }
-
-                // Hover tooltip (full name when clipped)
-                if (hovered && nameSz.x > (textEndX - textX)) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextColored(rc, "%s", skin.name.c_str());
-                    ImGui::EndTooltip();
-                }
-
-                if (clicked) {
-                    MarkNavigation();g_SkinSelectedId = entry.id;
-                    Skinventory::WikiImage::RequestImage(entry.id, skin.name, skin.weight_class);
-                    Skinventory::Commerce::FetchPriceForSkin(entry.id);
-                }
-            }
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(ImGui::GetStyle().ItemSpacing.x,0));
+        ImGuiListClipper clipper;clipper.Begin((int)displaySkins.size(),rowH);
+        while(clipper.Step())for(int row=clipper.DisplayStart;row<clipper.DisplayEnd;++row){
+            const auto& entry=displaySkins[row];auto skinOpt=Skinventory::SkinCache::GetSkin(entry.id);
+            if(!skinOpt){ImGui::Dummy(ImVec2(0,rowH));continue;}
+            const auto& skin=*skinOpt;
+            ImGui::PushID((int)entry.id);
+            const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,entry.id+5000000,skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1);
+            RenderSkinContextMenu(skin);ImGui::PopID();
+            if(hit.clicked){MarkNavigation();g_SkinSelectedId=entry.id;
+                Skinventory::WikiImage::RequestImage(entry.id,skin.name,skin.weight_class);
+                Skinventory::Commerce::FetchPriceForSkin(entry.id);}
         }
+        ImGui::PopStyleVar();
     }
     ImGui::EndChild();
 
@@ -13537,89 +13471,13 @@ static void RenderSkinDetailPanel() {
         ImGui::Separator();
     };
 
-    // ===== Rarity-coloured banner card =====
-    {
-        ImVec4 rc = GetSkinRarityColor(skin.rarity);
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        float pad = 10.0f;
-        ImVec2 cmin = ImGui::GetCursorScreenPos();
-        float w = ImGui::GetContentRegionAvail().x;
-
-        // Pre-measure so we can fit the wrapped name
-        ImGui::PushTextWrapPos(cmin.x + w - pad * 2);
-        ImVec2 nameSz = ImGui::CalcTextSize(skin.name.c_str(), nullptr, false, w - pad * 2 - 8.0f);
-        ImGui::PopTextWrapPos();
-        float nameH = nameSz.y;
-        float subH = ImGui::GetTextLineHeight();
-        float h = pad + nameH + 4.0f + subH + pad;
-
-        ImVec2 cmax(cmin.x + w, cmin.y + h);
-
-        // Background gradient tinted by rarity
-        ImU32 bgL = ImGui::ColorConvertFloat4ToU32(ImVec4(rc.x * 0.22f, rc.y * 0.22f, rc.z * 0.22f, 0.95f));
-        ImU32 bgR = IM_COL32(20, 20, 24, 250);
-        dl->AddRectFilledMultiColor(cmin, cmax, bgL, bgR, bgR, bgL);
-        dl->AddRect(cmin, cmax, IM_COL32(0, 0, 0, 200), 4.0f, 0, 1.0f);
-
-        // Left rarity bar
-        dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 3),
-                          ImVec2(cmin.x + 3, cmax.y - 3),
-                          ImGui::ColorConvertFloat4ToU32(rc));
-
-        // Reserve the card area in ImGui layout and render the name + subtitle on top
-        ImGui::Dummy(ImVec2(w, h));
-        ImGui::PushID((int)skin.id);
-        RenderSkinContextMenu(skin);
-        ImGui::PopID();
-        ImVec2 textStart(cmin.x + pad + 4.0f, cmin.y + pad);
-
-        // Name (rarity-coloured, wrapped, larger via no font change but bold-ish via colour)
-        ImGui::SetCursorScreenPos(textStart);
-        ImGui::PushStyleColor(ImGuiCol_Text, rc);
-        ImGui::PushTextWrapPos(textStart.x + w - pad * 2);
-        ImGui::TextUnformatted(skin.name.c_str());
-        ImGui::PopTextWrapPos();
-        ImGui::PopStyleColor();
-
-        // Subtitle: rarity · type · weight   [owned chip]
-        ImGui::SetCursorScreenPos(ImVec2(textStart.x, textStart.y + nameH + 4.0f));
-
-        std::string subtitle = skin.rarity;
-        if (!skin.type.empty())        { subtitle += "  ·  "; subtitle += skin.type; }
-        if (!skin.subtype.empty())     { subtitle += "  "; subtitle += Skinventory::SkinCategorySubtype(skin.type, skin.subtype); }
-        if (!skin.weight_class.empty()){ subtitle += "  ·  "; subtitle += skin.weight_class; }
-        ImGui::TextColored(ImVec4(rc.x * 0.85f, rc.y * 0.85f, rc.z * 0.85f, 0.95f),
-            "%s", subtitle.c_str());
-
-        // Owned/not-owned chip, right-aligned inside the banner
-        if (Skinventory::OwnedSkins::HasData()) {
-            bool owned = Skinventory::OwnedSkins::IsOwned(g_SkinSelectedId);
-            const char* chipText = owned ? "OWNED" : "NOT OWNED";
-            ImVec2 chipSz = ImGui::CalcTextSize(chipText);
-            float chipPadX = 8.0f, chipPadY = 3.0f;
-            ImVec2 chipMin(cmax.x - pad - chipSz.x - chipPadX * 2,
-                           cmin.y + pad - 2.0f);
-            ImVec2 chipMax(chipMin.x + chipSz.x + chipPadX * 2,
-                           chipMin.y + chipSz.y + chipPadY * 2);
-            ImU32 chipBg, chipBorder, chipFg;
-            if (owned) {
-                chipBg = IM_COL32(40, 78, 44, 220);
-                chipBorder = IM_COL32(120, 200, 130, 230);
-                chipFg = IM_COL32(180, 240, 190, 255);
-            } else {
-                chipBg = IM_COL32(60, 30, 30, 200);
-                chipBorder = IM_COL32(180, 90, 90, 200);
-                chipFg = IM_COL32(220, 150, 150, 255);
-            }
-            dl->AddRectFilled(chipMin, chipMax, chipBg, 3.0f);
-            dl->AddRect(chipMin, chipMax, chipBorder, 3.0f, 0, 1.2f);
-            dl->AddText(ImVec2(chipMin.x + chipPadX, chipMin.y + chipPadY), chipFg, chipText);
-        }
-        // The banner's text was drawn with SetCursorScreenPos, so its final
-        // layout cursor is inside the card. Restore it below the card before
-        // drawing the independent ID line (with deliberate vertical padding).
-        ImGui::SetCursorScreenPos(ImVec2(cmin.x, cmax.y + 6.0f));
-    }
+    std::string subtitle=skin.rarity;
+    if(!skin.type.empty())subtitle+="  /  "+skin.type;
+    if(!skin.subtype.empty())subtitle+=" "+Skinventory::SkinCategorySubtype(skin.type,skin.subtype);
+    if(!skin.weight_class.empty())subtitle+="  /  "+skin.weight_class;
+    AlterEgo::UI::CatalogBanner(skin.name,subtitle,skin.rarity,
+        Skinventory::OwnedSkins::HasData()?(Skinventory::OwnedSkins::IsOwned(g_SkinSelectedId)?"OWNED":"NOT OWNED"):"");
+    ImGui::PushID((int)skin.id);RenderSkinContextMenu(skin);ImGui::PopID();
     ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.45f, 1.0f), "ID: %u", skin.id);
 
     // Pricing (unowned only)
@@ -16513,9 +16371,7 @@ void AddonRender() {
         if (charactersTabVisible) {
             g_MainTab = 0;
             const std::string memoryAccount=AlterEgo::GW2API::GetCurrentAccountName();
-            const std::string memoryNotice=AlterEgo::GameMemory::Tick(g_CurrentCharName);
-            if (!memoryNotice.empty() && APIDefs) APIDefs->GUI_SendAlert(memoryNotice.c_str());
-            std::string loadTarget, loadAccount;
+            TickCharacterLoad();
             ImGui::BeginChild("##characters_page",
                 ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
 
@@ -16783,19 +16639,7 @@ void AddonRender() {
                     // the character whose details happen to be selected.
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
-                        const auto verifiedTarget=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name);
-                        auto loadUnavailable=AlterEgo::GameMemory::LoadUnavailableReason(g_CurrentCharName,ch.name,memoryAccount,verifiedTarget);
-                        {
-                            const auto active=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(g_CurrentCharName);
-                            const auto target=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name);
-                            if(active.empty()||target.empty()||active!=target)
-                                loadUnavailable="Character ownership is unknown or belongs to another linked account.";
-                        }
-                        if (ImGui::MenuItem("Load",nullptr,false,loadUnavailable.empty())) {
-                            loadTarget=ch.name;loadAccount=verifiedTarget;
-                        }
-                        if (!loadUnavailable.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                            ImGui::SetTooltip("%s",loadUnavailable.c_str());
+                        RenderCharacterLoadMenu("Load",ch.name,ch.account_name);
                         const int activeBuild = ActiveBuildIndex(ch);
                         const int activeEquip = ActiveEquipmentTab(ch);
                         if (ImGui::MenuItem("Refresh")) {
@@ -17544,20 +17388,7 @@ void AddonRender() {
             }
 
             ImGui::EndTabItem();
-            // Invoke only after the character context popup and page have
-            // unwound, using the exact right-clicked character identity.
-            if (!loadTarget.empty()) {
-                std::string message;
-                {
-                    const auto active=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(g_CurrentCharName);
-                    const auto target=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(loadTarget);
-                    if(active.empty()||target.empty()||active!=target)
-                        message="Character ownership is unknown or belongs to another linked account.";
-                }
-                if(message.empty())message=AlterEgo::GameMemory::Load(g_CurrentCharName,loadTarget,
-                    AlterEgo::GW2API::GetCurrentAccountName(),loadAccount);
-                if (APIDefs) APIDefs->GUI_SendAlert(message.c_str());
-            }
+            ProcessCharacterLoad();
         }
 
 
@@ -17704,10 +17535,12 @@ void AddonRender() {
         if(inventoryVisible){
             g_MainTab=7;
             ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
-            AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings);
+            TickCharacterLoad();
+            AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings,g_InventoryListWidth);
             ImGui::EndChild();
             AlterEgo::NativeAccounts::RenderInventoryStatusRow(g_SelectedAccountFilter);
             ImGui::EndTabItem();
+            ProcessCharacterLoad();
         }
 
         // ImGui restores the last selected main tab across sessions. Track

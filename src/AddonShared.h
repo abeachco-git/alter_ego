@@ -71,6 +71,11 @@ bool RenderCharacterMultiFilter(const char* label, std::set<std::string>& select
 // Common item presentation and actions, shared by Skinventory and native Inventory.
 ImVec4 GetSkinRarityColor(const std::string& rarity);
 void RenderCoins(int64_t copper);
+void MarkInventoryNavigation();
+std::string CharacterLoadUnavailable(const std::string& character,const std::string& account);
+bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account);
+void ProcessCharacterLoad();
+std::string PlainItemDescription(const std::string& text);
 
 // Returns the account GUID to use for per-account API queries.
 // Returns an empty string when "All Accounts" is selected.

@@ -6,6 +6,7 @@
 namespace AlterEgo::NativeInventory {
 struct ScopeState {std::string account,scope,character,status;int64_t attempted=0,success=0;};
 struct Row {Slot slot;std::string name,rarity,type,chat;int64_t captured=0;};
+struct ItemPresentation {std::string icon,description;Json details=Json::object();bool complete=false;};
 struct WalletRow {std::string account,name,description;uint32_t id=0;int64_t value=0;int order=0;};
 struct GuildRow {std::string id,name,tag,status;int64_t attempted=0,success=0,coins=0;std::vector<Row> rows;};
 struct Projection {
@@ -14,6 +15,7 @@ struct Projection {
     std::map<std::string,std::set<std::string>> guildAccess;
     std::map<uint32_t,ItemFlags> flags;
     std::vector<Row> rows;
+    std::map<uint32_t,ItemPresentation> metadata;
     std::vector<ScopeState> states;
     std::map<std::string,std::set<std::string>> rosters;
 };
@@ -74,10 +76,10 @@ inline void StoreNames(const std::string& root,const Json& rows){
     Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
     Cache::Initialize(db);Database::Transaction tx(db);
     auto flags=db.Prepare("INSERT INTO native_item_flags VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET account_bound=excluded.account_bound,soulbound=excluded.soulbound,bind_on_use=excluded.bind_on_use");
-    auto q=db.Prepare("INSERT INTO reference_items(id,name,rarity,type,chat_link) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,rarity=excluded.rarity,type=excluded.type,chat_link=excluded.chat_link WHERE reference_items.complete=0");
+    auto q=db.Prepare("INSERT INTO reference_items(id,name,rarity,type,chat_link,icon,description,default_skin,details,complete) VALUES(?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET name=excluded.name,rarity=excluded.rarity,type=excluded.type,chat_link=excluded.chat_link,icon=excluded.icon,description=excluded.description,default_skin=excluded.default_skin,details=excluded.details,complete=1 WHERE reference_items.complete=0");
     for(const auto& row:rows){
         q.Bind(1,ItemId(row.at("id")));q.Bind(2,row.at("name").get<std::string>());q.Bind(3,row.value("rarity",std::string{}));
-        q.Bind(4,row.value("type",std::string{}));q.Bind(5,row.value("chat_link",std::string{}));q.Execute();q.Reset();
+        q.Bind(4,row.value("type",std::string{}));q.Bind(5,row.value("chat_link",std::string{}));q.Bind(6,row.value("icon",std::string{}));q.Bind(7,row.value("description",std::string{}));q.Bind(8,static_cast<int64_t>(row.value("default_skin",0u)));q.Bind(9,row.value("details",Json::object()).dump());q.Execute();q.Reset();
         if(row.contains("flags")){auto f=ParseFlags(row.at("flags"));flags.Bind(1,ItemId(row.at("id")));flags.Bind(2,int(f.accountBound));flags.Bind(3,int(f.soulbound));flags.Bind(4,int(f.bindOnUse));flags.Execute();flags.Reset();}
     }
     tx.Commit();
@@ -146,6 +148,8 @@ inline Projection Read(const std::string& root){
         row.name=r.Text(10);row.rarity=r.Text(11);row.type=r.Text(12);row.chat=r.Text(13);row.captured=r.Integer(14);
         out.rows.push_back(std::move(row));
     }
+    auto metadata=db.Prepare("SELECT id,icon,description,details,complete FROM reference_items WHERE id IN (SELECT item_id FROM native_inventory_slots UNION SELECT item_id FROM native_guild_slots UNION SELECT item_id FROM native_inventory_sockets)");
+    while(metadata.Step()){ItemPresentation p;p.icon=metadata.Text(1);p.description=metadata.Text(2);p.complete=metadata.Integer(4)!=0;if(!metadata.IsNull(3)){p.details=Json::parse(metadata.Text(3),nullptr,false);if(!p.details.is_object())p.details=Json::object();}out.metadata.emplace(static_cast<uint32_t>(metadata.Integer(0)),std::move(p));}
     auto sockets=db.Prepare("SELECT account,scope,character,position,kind,item_id FROM native_inventory_sockets ORDER BY account,scope,character,position,kind,ordinal");
     std::map<std::tuple<std::string,std::string,std::string,std::string>,size_t> slotIndex;
     for(size_t i=0;i<out.rows.size();++i){const auto& s=out.rows[i].slot;slotIndex.emplace(std::make_tuple(s.account,s.scope,s.character,s.position),i);}

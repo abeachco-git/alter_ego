@@ -50,6 +50,6 @@ void RestoreInventoryNavigation(const InventoryNavigation& state);
 int InventorySubview();
 void SetInventorySubview(int value);
 std::string RevealAccount(uint32_t id,const std::string& selectedAccount);
-void RenderInventory(const std::string& selectedAccount,const std::function<void()>& saveSettings);
+void RenderInventory(const std::string& selectedAccount,const std::function<void()>& saveSettings,float& listWidth);
 void RenderInventoryStatusRow(const std::string& selectedAccount);
 }

@@ -3,6 +3,8 @@
 #include "ArenaNetTransport.h"
 #include "BackgroundWorkers.h"
 #include "AddonShared.h"
+#include "CatalogPresentation.h"
+#include "GW2API.h"
 #include "AutoRefreshPolicy.h"
 #include "RefreshUI.h"
 #include "RefreshProgress.h"
@@ -265,7 +267,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     else if(name=="Delivery box")slots=ParseArray(j.at("items"),a.id,name,{},{},false);
                     else slots=ParseArray(j,a.id,name,character,{},name!="Materials");
                     state.success=Now();Record(root,state,&slots);
-                    for(const auto& s:slots)ids.insert(s.id);
+                    for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
                 }catch(const std::exception& e){
                     const std::string what=e.what();
                     state.status=what.rfind("HTTP ",0)==0||what=="Invalid key or missing permission"||what=="Transport failed or cancelled"||what=="Rate limited; retry later"?what:"Invalid or incomplete response";
@@ -343,8 +345,8 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
         SetActiveScope("Resolving item and currency metadata");
         publishProgress(true);
         auto cached=Read(root);
-        for(const auto& row:cached.rows)if(!row.name.empty()&&cached.flags.count(row.slot.id))ids.erase(row.slot.id);
-        for(const auto& [id,g]:cached.guilds)for(const auto& row:g.rows)if(!row.name.empty()&&cached.flags.count(row.slot.id))ids.erase(row.slot.id);
+        for(const auto& [id,meta]:cached.metadata)if(meta.complete&&cached.flags.count(id))ids.erase(id);
+        
         if(currencyMetadataNeeded&&std::any_of(cached.wallet.begin(),cached.wallet.end(),[](const WalletRow& w){return w.name.empty();}))
             try{StoreCurrencies(root,Fetch("/v2/currencies?ids=all",{}));}catch(...){} 
         std::string batch;unsigned count=0;
@@ -475,7 +477,7 @@ std::vector<Account> SelectedAccounts(const View& v,const std::string& account){
     for(const auto& a:v.accounts)if(account.empty()||v.accounts.size()==1||a.id==account)out.push_back(a);
     return out;
 }
-void ItemMenu(uint32_t id,const std::string& name,const std::string& chat){
+void ItemMenu(uint32_t id,const std::string& name,const std::string& chat,const std::map<std::pair<std::string,std::string>,int64_t>& targets={}){
     if(!ImGui::BeginPopupContextItem("##inventory_item_actions"))return;
     ImGui::TextDisabled("%s",name.c_str());ImGui::Separator();
     if(ImGui::MenuItem("Copy Item Name"))CopyToClipboard(name);
@@ -483,6 +485,20 @@ void ItemMenu(uint32_t id,const std::string& name,const std::string& chat){
     if(ImGui::MenuItem("Open Wiki Page")){
         auto url="https://wiki.guildwars2.com/wiki/Special:Search/"+Encode(name);
         ShellExecuteA(nullptr,"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+    }
+    if(!targets.empty()){
+        ImGui::Separator();
+        if(targets.size()==1){
+            const auto& [key,count]=*targets.begin();(void)count;
+            RenderCharacterLoadMenu(("Load Character - "+key.second).c_str(),key.second,key.first);
+        }else if(ImGui::BeginMenu("Load Character")){
+            for(const auto& [key,count]:targets){
+                ImGui::PushID(key.first.c_str());ImGui::PushID(key.second.c_str());
+                RenderCharacterLoadMenu((key.second+" x"+std::to_string(count)).c_str(),key.second,key.first);
+                ImGui::PopID();ImGui::PopID();
+            }
+            ImGui::EndMenu();
+        }
     }
     ImGui::EndPopup();
 }
@@ -554,7 +570,7 @@ std::string RevealAccount(uint32_t id,const std::string& selectedAccount){
     }
     return !selectedHas&&otherHas?std::string{}:selectedAccount;
 }
-void RenderInventory(const std::string& selectedAccount,const std::function<void()>& saveSettings){
+void RenderInventory(const std::string& selectedAccount,const std::function<void()>& saveSettings,float& listWidth){
     auto v=Snapshot();
     if(!Ready()){RenderSpinner("Loading linked accounts...");return;}
     if(v->accounts.empty()){ImGui::TextDisabled("Link an account in Nexus > Alter Ego options to browse Inventory.");return;}
@@ -685,6 +701,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         }
         return;
     }
+    const UI::SplitPanel split(listWidth,420.f,200.f,240.f);
+    ImGui::BeginChild("InventoryList",ImVec2(split.left,0),true);
     const auto previousQuery=query;
     UI::SearchToolbar("native_inventory","Search items or ID",query,
         [&]{
@@ -726,21 +744,19 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         (nav.item!=0&&query==std::to_string(nav.item));
     const bool canBrowse=CanBrowseItems(!characterFilter.empty(),!scope.empty(),
         !binding.empty(),!rarity.empty(),!type.empty(),freshness!=0,minQuantity>0,transfer!=0);
-    if(!canSearch&&!canBrowse){
-        ImGui::TextDisabled("Enter at least 3 characters, or select a character and another filter.");
-        return;
-    }
+    const bool showResults=canSearch||canBrowse;
+    if(!showResults)ImGui::TextWrapped("Enter at least 3 characters, or select a character and another filter.");
     if(!canSearch){
-        if(!tokens.empty())ImGui::TextDisabled("Enter 3 characters to narrow these filtered results.");
+        if(showResults&&!tokens.empty())ImGui::TextDisabled("Enter 3 characters to narrow these filtered results.");
         tokens.clear();
     }
     // Cache the filtered aggregate: rebuild only on a new projection or changed controls.
     struct Group{uint32_t id;int64_t count=0;std::string name;std::vector<const Row*> locations;};
     static std::shared_ptr<const View> previous;static std::string prevKey;static std::vector<Group> groups;
-    const auto filterKey=Json::array({selectedAccount,tokens,scope,binding,rarity,type,sort,characterFilter,freshness,minQuantity,transfer,(freshness||transfer)?Now()/10:0}).dump();
+    const auto filterKey=Json::array({showResults,selectedAccount,tokens,scope,binding,rarity,type,sort,characterFilter,freshness,minQuantity,transfer,(freshness||transfer)?Now()/10:0}).dump();
     if(previous!=v||prevKey!=filterKey){
         previous=v;prevKey=filterKey;groups.clear();std::map<uint32_t,size_t> index;
-        for(const auto& row:v->inventory.rows){
+        if(showResults)for(const auto& row:v->inventory.rows){
             const auto& s=row.slot;
             if(!allowed(s.account)||(!scope.empty()&&scope!=s.scope)||!MatchesFacet(binding,BindingName(s.binding))||!MatchesFacet(rarity,row.rarity)||!MatchesFacet(type,row.type)||!Match(row.name,s.id,tokens))continue;
             if(!MatchesFacet(characterFilter,s.character))continue;
@@ -753,32 +769,94 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         groups.erase(std::remove_if(groups.begin(),groups.end(),[&](const Group& g){return g.count<minQuantity;}),groups.end());
         std::sort(groups.begin(),groups.end(),[&](const Group& a,const Group& b){if(sort==1&&a.count!=b.count)return a.count>b.count;return a.name==b.name?a.id<b.id:a.name<b.name;});
     }
-    ImGui::Text("%zu matching items",groups.size());ImGui::Separator();
-    if(groups.empty())ImGui::TextDisabled("%s",busy.load()?"Refreshing inventory; verified items will appear as available.":"No matching cached items. Hover the refresh status for retrieval details.");
-    for(const auto& group:groups){
-        ImGui::PushID(static_cast<int>(group.id));
-        const std::string name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
-        const std::string header=name+" x"+std::to_string(group.count)+"###item";
-        ImGui::PushStyleColor(ImGuiCol_Text,GetSkinRarityColor(group.locations.front()->rarity));
-        const bool opened=ImGui::TreeNode(header.c_str());
-        ImGui::PopStyleColor();
-        ItemMenu(group.id,name,group.locations.front()->chat);
-        if(opened){
-            for(const auto* row:group.locations){
-                const auto& s=row->slot;std::string location=LocationLabel(s);
-                if(multi&&all)for(const auto& a:v->accounts)if(a.id==s.account){location=Display(a)+" / "+location;break;}
-                ImGui::Text("%s x%lld | %s%s",location.c_str(),static_cast<long long>(s.count),BindingName(s.binding),!Fresh(*v,*row)?" | Stale or failed":"");
-                if(!s.boundTo.empty())ImGui::TextDisabled("Bound to %s",s.boundTo.c_str());
-                if(s.charges>=0)ImGui::TextDisabled("Charges: %lld",static_cast<long long>(s.charges));
-                if(s.scope=="Equipment"&&(s.position.find("/Pick")!=std::string::npos||s.position.find("/Axe")!=std::string::npos||s.position.find("/Sickle")!=std::string::npos)&&s.upgrades.empty())
-                    ImGui::TextDisabled("Installed glyph: unknown (not reported)");
-                for(auto id:s.upgrades)ImGui::TextDisabled("Upgrade #%u",id);
-                for(auto id:s.infusions)ImGui::TextDisabled("Infusion #%u",id);
-            }
-            ImGui::TreePop();
+    const auto metaFor=[&](uint32_t id)->const ItemPresentation*{
+        const auto it=v->inventory.metadata.find(id);return it==v->inventory.metadata.end()?nullptr:&it->second;
+    };
+    const auto loadTargets=[&](uint32_t id){
+        std::map<std::pair<std::string,std::string>,int64_t> out;
+        const auto it=v->index.find(id);if(it!=v->index.end())for(auto idx:it->second){
+            const auto& slot=v->inventory.rows[idx].slot;
+            if(allowed(slot.account)&&!slot.character.empty())out[{slot.account,slot.character}]+=slot.count;
         }
+        return out;
+    };
+    if(showResults){
+        ImGui::Text("%zu matching items",groups.size());ImGui::Separator();
+        if(groups.empty())ImGui::TextDisabled("%s",busy.load()?"Refreshing inventory...":"No matching cached items.");
+    }
+    if(std::none_of(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item;}))nav.item=0;
+    ImGui::BeginChild("InventoryListScroll",ImVec2(0,0),false);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(ImGui::GetStyle().ItemSpacing.x,0));
+    ImGuiListClipper clipper;clipper.Begin(static_cast<int>(groups.size()),UI::CatalogRowHeight());
+    while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i){
+        const auto& group=groups[i];const auto& row=*group.locations.front();
+        const auto name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
+        const auto* meta=metaFor(group.id);
+        ImGui::PushID(static_cast<int>(group.id));
+        auto hit=UI::CatalogRow(i,nav.item==group.id,group.id,meta?meta->icon:"",name,row.rarity,std::to_string(group.count));
+        if(hit.clicked&&nav.item!=group.id){MarkInventoryNavigation();nav.item=group.id;}
+        // Build targets only while this row's popup is open, not for every visible item.
+        const bool popup=ImGui::IsPopupOpen("##inventory_item_actions")||ImGui::IsItemClicked(ImGuiMouseButton_Right);
+        ItemMenu(group.id,name,row.chat,popup?loadTargets(group.id):std::map<std::pair<std::string,std::string>,int64_t>{});
         ImGui::PopID();
     }
+    ImGui::PopStyleVar();ImGui::EndChild();ImGui::EndChild();
+    if(split.Divider("##inventory_split",listWidth))saveSettings();
+    ImGui::BeginChild("InventoryDetailPanel",ImVec2(0,0),true);
+    auto selected=std::find_if(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item;});
+    if(selected==groups.end()){ImGui::TextWrapped("Select an item to view details.");ImGui::EndChild();return;}
+    const auto& group=*selected;const auto& representative=*group.locations.front();
+    const auto name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
+    const auto* meta=metaFor(group.id);
+    UI::CatalogBanner(name,representative.rarity+"  /  "+representative.type,representative.rarity);
+    ImGui::PushID(static_cast<int>(group.id));ItemMenu(group.id,name,representative.chat,loadTargets(group.id));ImGui::PopID();
+    ImGui::TextDisabled("ID: %u",group.id);
+    int64_t total=0;const auto locations=v->index.find(group.id);
+    if(locations!=v->index.end())for(auto idx:locations->second)if(allowed(v->inventory.rows[idx].slot.account))total+=v->inventory.rows[idx].slot.count;
+    ImGui::Text("Total in account scope: %lld",static_cast<long long>(total));
+    if(total!=group.count)ImGui::TextDisabled("Matching filters: %lld",static_cast<long long>(group.count));
+    RenderSectionHeader("Locations",UI::SectionGold);
+    if(locations!=v->index.end())for(auto idx:locations->second){
+        const auto& row=v->inventory.rows[idx];const auto& slot=row.slot;if(!allowed(slot.account))continue;
+        ImGui::PushID(static_cast<int>(idx));
+        auto label=LocationLabel(slot);if(multi)for(const auto& a:v->accounts)if(a.id==slot.account){label=Display(a)+" / "+label;break;}
+        label+=" x"+std::to_string(slot.count);
+        ImGui::Selectable((label+"###location").c_str(),false);
+        if(ImGui::BeginPopupContextItem("##location_actions")){
+            if(!slot.character.empty())RenderCharacterLoadMenu("Load Character",slot.character,slot.account);
+            if(ImGui::MenuItem("Copy Item Name"))CopyToClipboard(name);
+            ImGui::EndPopup();
+        }
+        ImGui::TextDisabled("%s%s",BindingName(slot.binding),Fresh(*v,row)?"":" | Stale or failed");
+        if(!slot.boundTo.empty())ImGui::TextWrapped("Bound to %s",slot.boundTo.c_str());
+        if(slot.charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(slot.charges));
+        if(slot.stat>0)ImGui::TextDisabled("Selected stat ID: %lld",static_cast<long long>(slot.stat));
+        const bool glyph=slot.scope=="Equipment"&&(slot.position.find("/Pick")!=std::string::npos||slot.position.find("/Axe")!=std::string::npos||slot.position.find("/Sickle")!=std::string::npos);
+        if(glyph&&slot.upgrades.empty())ImGui::TextDisabled("Glyph: Unknown (not reported)");
+        for(auto id:slot.upgrades){const auto* item=GW2API::GetItemInfo(id);ImGui::TextWrapped("%s: %s",glyph?"Glyph":"Upgrade",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
+        for(auto id:slot.infusions){const auto* item=GW2API::GetItemInfo(id);ImGui::TextWrapped("Infusion: %s",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
+        ImGui::Separator();ImGui::PopID();
+    }
+    RenderSectionHeader("Item Information",UI::SectionGold);
+    auto flags=v->inventory.flags.find(group.id);
+    if(flags!=v->inventory.flags.end()){
+        if(flags->second.accountBound)ImGui::TextUnformatted("Account bound on acquire");
+        if(flags->second.soulbound)ImGui::TextUnformatted("Character bound on acquire");
+        if(flags->second.bindOnUse)ImGui::TextUnformatted("Binds on use");
+    }
+    if(meta&&meta->complete){
+        const auto& details=meta->details;
+        if(details.contains("type")&&details["type"].is_string())ImGui::TextWrapped("Subtype: %s",details["type"].get<std::string>().c_str());
+        if(details.contains("weight_class")&&details["weight_class"].is_string())ImGui::TextWrapped("Weight: %s",details["weight_class"].get<std::string>().c_str());
+        if(details.contains("infix_upgrade")&&details["infix_upgrade"].is_object()){
+            const auto& infix=details["infix_upgrade"];
+            if(infix.contains("attributes")&&infix["attributes"].is_array())for(const auto& attr:infix["attributes"])
+                if(attr.is_object()&&attr.contains("attribute")&&attr["attribute"].is_string()&&attr.contains("modifier")&&attr["modifier"].is_number_integer())
+                    ImGui::Text("+%lld %s",static_cast<long long>(attr["modifier"].get<int64_t>()),attr["attribute"].get<std::string>().c_str());
+        }
+        if(!meta->description.empty())ImGui::TextWrapped("%s",PlainItemDescription(meta->description).c_str());
+    }else ImGui::TextDisabled("Detailed metadata not retrieved. Refresh inventory to populate it.");
+    ImGui::EndChild();
 }
 void RenderInventoryStatusRow(const std::string& selectedAccount){
     auto v=Snapshot();const auto accounts=SelectedAccounts(*v,selectedAccount);
