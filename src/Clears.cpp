@@ -87,6 +87,7 @@ static bool g_ClearsDailyRolloverPending = false;
 static int g_ClearsDailyRolloverRetries = 0;
 static std::atomic<long long> g_ClearsDailyRolloverRetryAtMs{0};
 static std::time_t g_ClearsLastSuccessTime = 0;
+static std::map<std::string,int64_t> g_ClearsDefinitionAttempt;
 static std::chrono::steady_clock::time_point g_ClearsSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 static std::atomic<long long> g_ClearsRetryAtMs{0};
@@ -401,7 +402,41 @@ static void RequestVaultSection(uint8_t type,const std::string& account){
 
 // Start one asynchronous batch; each response is delivered separately later.
 // Previous successful data and its timestamp remain valid while refreshing.
+static void RefreshVaultSeason(bool manual){
+    // Public season metadata is independent from account objective progress.
+    bool fetchSeason=false;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        const auto now=static_cast<int64_t>(std::time(nullptr));
+        const auto end=std::chrono::system_clock::to_time_t(g_PublicVaultSeasonEnd);
+        if(g_PublicVaultSeasonEnd!=std::chrono::system_clock::time_point{})g_VaultSeasonEnd=g_PublicVaultSeasonEnd;
+        fetchSeason=!g_PublicVaultSeasonPending&&AlterEgo::RefreshEngine::Due(
+            g_PublicVaultSeasonSuccess,g_PublicVaultSeasonAttempt,now,AlterEgo::RefreshEngine::SeasonSeconds,
+            manual,end>0&&now>=end?end:0);
+        if(fetchSeason){g_PublicVaultSeasonPending=true;g_PublicVaultSeasonAttempt=now;}
+    }
+    if(fetchSeason)AlterEgo::Background::Workers().Launch([]{
+        auto r=AlterEgo::ArenaNet::Get("/v2/wizardsvault");
+        std::chrono::system_clock::time_point tp{};
+        if(r.status_code==200)try{tp=ParseISO8601(nlohmann::json::parse(r.body).at("end").get<std::string>());}catch(...){}
+        {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            g_PublicVaultSeasonPending=false;
+            if(tp<=std::chrono::system_clock::now())return;
+            const auto previous=g_VaultSeasonEnd;
+            if(previous!=std::chrono::system_clock::time_point{}&&previous<=std::chrono::system_clock::now()&&previous!=tp){
+                g_VaultSpecial={};g_VaultSectionSuccess[2]=0;
+                g_VaultSectionAttempt[g_VaultCacheAccount][2]=0;UpdateVaultFreshness();
+            }
+            g_PublicVaultSeasonEnd=tp;g_PublicVaultSeasonSuccess=std::time(nullptr);g_PublicVaultSeasonAttempt=0;
+            g_VaultSeasonEnd=tp;
+        }
+        SaveVaultCache();
+    },[]{std::lock_guard<std::mutex> lock(g_ClearsMutex);g_PublicVaultSeasonPending=false;});
+}
+
 static void FetchVaultData(bool skipClaimedSections) {
+    RefreshVaultSeason(!skipClaimedSections);
     if (!APIDefs || g_VaultFetching.load()) return;
     const std::string account = GetEffectiveAccountName();
     std::array<bool, 3> request = {true, true, true};
@@ -429,7 +464,8 @@ static void FetchVaultData(bool skipClaimedSections) {
             const bool unknownSeason=g_VaultSeasonEnd==std::chrono::system_clock::time_point{};
             const auto seasonEnd=std::chrono::system_clock::to_time_t(g_VaultSeasonEnd);
             const bool expired=!unknownSeason&&now>=seasonEnd;
-            request[2] = (unknownSeason||expired||!AlterEgo::SectionRefresh::VaultClaimed(g_VaultSpecial))&&
+            request[2] = (!expired||!g_PublicVaultSeasonPending)&&
+                (unknownSeason||expired||!AlterEgo::SectionRefresh::VaultClaimed(g_VaultSpecial))&&
                 due(2,AlterEgo::RefreshEngine::BrowseSeconds,expired?seasonEnd:0);
         }
         if (!request[0] && !request[1] && !request[2]) return;
@@ -458,31 +494,7 @@ static void FetchVaultData(bool skipClaimedSections) {
         if (request[type]) RequestVaultSection(type, account);
     }
 
-    // Public season metadata is independent from account objective progress.
-    bool fetchSeason=false;
-    {
-        std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        const auto now=static_cast<int64_t>(std::time(nullptr));
-        const auto end=std::chrono::system_clock::to_time_t(g_PublicVaultSeasonEnd);
-        if(g_PublicVaultSeasonEnd!=std::chrono::system_clock::time_point{})g_VaultSeasonEnd=g_PublicVaultSeasonEnd;
-        fetchSeason=!g_PublicVaultSeasonPending&&AlterEgo::RefreshEngine::Due(
-            g_PublicVaultSeasonSuccess,g_PublicVaultSeasonAttempt,now,AlterEgo::RefreshEngine::SeasonSeconds,
-            !skipClaimedSections,end>0&&now>=end?end:0);
-        if(fetchSeason){g_PublicVaultSeasonPending=true;g_PublicVaultSeasonAttempt=now;}
-    }
-    if(fetchSeason)AlterEgo::Background::Workers().Launch([]{
-        auto r=AlterEgo::ArenaNet::Get("/v2/wizardsvault");
-        std::chrono::system_clock::time_point tp{};
-        if(r.status_code==200)try{tp=ParseISO8601(nlohmann::json::parse(r.body).at("end").get<std::string>());}catch(...){}
-        {
-            std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            g_PublicVaultSeasonPending=false;
-            if(tp<=std::chrono::system_clock::now())return;
-            g_PublicVaultSeasonEnd=tp;g_PublicVaultSeasonSuccess=std::time(nullptr);g_PublicVaultSeasonAttempt=0;
-            g_VaultSeasonEnd=tp;
-        }
-        SaveVaultCache();
-    },[]{std::lock_guard<std::mutex> lock(g_ClearsMutex);g_PublicVaultSeasonPending=false;});
+
 }
 
 static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t generation,int status,VaultPeriod period){
@@ -613,30 +625,42 @@ static std::vector<ClearEntry> FetchAchievementDetails(const std::vector<uint32_
 
 // Fetch all clears data (runs on background thread)
 static void FetchClears(bool manual) {
-    if (g_ClearsFetching) return;
-    g_ClearsFetching = true;
+    if (g_ClearsFetching||g_ClearsCompletionInFlight.load()||g_ClearsQueryPending.load()) return;
+    const auto account=GetEffectiveAccountName();
+    if(account.empty())return;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        const auto now=static_cast<int64_t>(std::time(nullptr));
+        auto& attempt=g_ClearsDefinitionAttempt[account];
+        if(!manual&&!g_ClearsDailyRolloverPending&&!AlterEgo::RefreshEngine::Due(0,attempt,now,0))return;
+        attempt=now;g_ClearsFetching=true;
         g_ClearsStatusMsg = "Fetching achievement data...";
         // Keep successfully cached data displayed during a refresh.
     }
 
-    AlterEgo::Background::Workers().Launch([manual]() {
-        // Step 1: Fetch all category achievement IDs
+    AlterEgo::Background::Workers().Launch([manual,account]() {
+        // Reuse still-current weekly/daily definitions unless explicitly refreshing.
         const int64_t requestToken = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         std::vector<uint32_t> priorFractals,priorBounties;
+        std::vector<ClearEntry> cachedFractals,cachedBounties,cachedWeekly;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
             if(g_ClearsDailyRolloverPending){
                 priorFractals=g_ClearsPriorDailyFractalIds;
                 priorBounties=g_ClearsPriorDailyBountyIds;
             }
+            if(!manual&&!g_ClearsDailyRolloverPending){
+                cachedFractals=g_DailyFractals;cachedBounties=g_DailyBounties;
+            }
+            if(!manual&&!g_WeeklyWings.empty()&&g_WeeklyStrikes.id){
+                cachedWeekly=g_WeeklyWings;cachedWeekly.push_back(g_WeeklyStrikes);
+            }
         }
         AlterEgo::Background::Checkpoint();
-        auto fractalIds = FetchCategoryIds(CAT_DAILY_FRACTALS, requestToken,priorFractals);
-        auto bountyIds  = FetchCategoryIds(CAT_DAILY_BOUNTIES, requestToken,priorBounties);
-        auto weeklyIds  = FetchCategoryIds(CAT_WEEKLY_RAIDS, requestToken,{});
+        auto fractalIds = cachedFractals.empty()?FetchCategoryIds(CAT_DAILY_FRACTALS,requestToken,priorFractals):DailyIds(cachedFractals);
+        auto bountyIds = cachedBounties.empty()?FetchCategoryIds(CAT_DAILY_BOUNTIES,requestToken,priorBounties):DailyIds(cachedBounties);
+        auto weeklyIds = cachedWeekly.empty()?FetchCategoryIds(CAT_WEEKLY_RAIDS,requestToken,{}):DailyIds(cachedWeekly);
 
         // A partial HTTP failure must never replace one of the sections with
         // an empty definition list just because another category succeeded.
@@ -675,13 +699,13 @@ static void FetchClears(bool manual) {
             g_ClearsStatusMsg = "Fetching achievement details...";
         }
 
-        auto fractalEntries = FetchAchievementDetails(fractalIds);
+        auto fractalEntries = cachedFractals.empty()?FetchAchievementDetails(fractalIds):std::move(cachedFractals);
         for (auto& e : fractalEntries) {
             e.tier = ParseFractalTier(e.name);
         }
 
-        auto bountyEntries = FetchAchievementDetails(bountyIds);
-        auto weeklyEntries = FetchAchievementDetails(weeklyIds);
+        auto bountyEntries = cachedBounties.empty()?FetchAchievementDetails(bountyIds):std::move(cachedBounties);
+        auto weeklyEntries = cachedWeekly.empty()?FetchAchievementDetails(weeklyIds):std::move(cachedWeekly);
         AlterEgo::Background::Checkpoint();
 
         // Category lookup succeeding does not imply that detail fetches succeeded.
@@ -756,6 +780,8 @@ static void FetchClears(bool manual) {
                 g_ClearsFetching = false;
                 return;
             }
+            if(account!=g_ClearsCacheAccount){g_ClearsFetching=false;return;}
+            g_ClearsDefinitionAttempt[account]=std::time(nullptr);
             g_DailyFractals = std::move(fractalEntries);
             g_DailyBounties = std::move(bountyEntries);
             g_WeeklyWings = std::move(wingEntries);
@@ -3123,6 +3149,7 @@ static void RenderClearsShared(bool showVault) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_WeeklyWings.clear();
         g_WeeklyStrikes = ClearEntry{};
+        g_ClearsDefinitionAttempt[g_ClearsCacheAccount]=0;
         g_ClearsFetched = !g_DailyFractals.empty() || !g_DailyBounties.empty();
         g_ClearsQueryPending = false;
         g_ClearsCompletionInFlight = false;
@@ -3260,16 +3287,24 @@ static void RenderClearsShared(bool showVault) {
     }
 
     auto steadyNow = std::chrono::steady_clock::now();
+    if(!showVault&&AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)&&
+        !g_ClearsFetching&&!g_ClearsQueryPending.load()&&!g_ClearsCompletionInFlight.load()){
+        bool missing=false;
+        {std::lock_guard<std::mutex> lock(g_ClearsMutex);missing=!g_ClearsDailyRolloverPending&&
+            (g_DailyFractals.empty()||g_DailyBounties.empty()||g_WeeklyWings.empty()||!g_WeeklyStrikes.id);}
+        if(missing)FetchClears(); // recover a missed/failed weekly reset without requiring navigation
+    }
     if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
         !showVault && g_ClearsFetched && !g_ClearsFetching &&
         !g_ClearsDailyRolloverPending &&
         !g_ClearsCompletionInFlight.load() && !g_ClearsQueryPending.load() &&
         g_ClearsRetryAtMs.load() == 0 &&
-        g_LastClearsCompletionQuery != std::chrono::steady_clock::time_point{} &&
-        (steadyNow - g_LastClearsCompletionQuery) >= std::chrono::seconds(AlterEgo::RefreshEngine::ObjectiveSeconds()) &&
+        (g_LastClearsCompletionQuery == std::chrono::steady_clock::time_point{} ||
+         (steadyNow - g_LastClearsCompletionQuery) >= std::chrono::seconds(2)) &&
         ([&]() {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            return AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,g_ClearsLastSuccessTime,AlterEgo::RefreshEngine::ObjectiveSeconds());
+            const auto minimum=std::chrono::system_clock::to_time_t(std::max(dailyReset,weeklyReset));
+            return AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,g_ClearsLastSuccessTime,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimum);
         })()) {
         g_LastClearsCompletionQuery = steadyNow;
         SendClearsAchQuery(true);
@@ -3508,7 +3543,9 @@ void RefreshClearsOnEntry() {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         stale = AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,g_ClearsLastSuccessTime,AlterEgo::RefreshEngine::ObjectiveSeconds()) ||
             g_ClearsDailyRolloverPending;
-        haveData = g_ClearsFetched && !g_ClearsDailyRolloverPending;
+        haveData = g_ClearsFetched && !g_ClearsDailyRolloverPending&&
+            !g_DailyFractals.empty()&&!g_DailyBounties.empty()&&!g_WeeklyWings.empty()&&g_WeeklyStrikes.id;
+        stale=stale||!haveData;
     }
     if (!stale) return;
     if (!haveData) {

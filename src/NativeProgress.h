@@ -28,9 +28,14 @@ inline bool AchievementDue(const std::string& account,int64_t localSuccess,int64
     auto it=AchievementEntries().find(account);
     const auto now=static_cast<int64_t>(std::time(nullptr));
     if(it!=AchievementEntries().end()){
-        // Allow a consumer to adopt a newer shared snapshot without another HTTP call.
+        bool current=false;
+        for(const auto& a:NativeAccounts::Linked())if(a.id==account&&a.generation==it->second.epoch){current=true;break;}
+        if(!current)return true;
+        // Adopt a sufficiently current shared snapshot; a failed refresh must
+        // not cause repeated workers trying to adopt an expired one.
         if(it->second.snapshot&&it->second.snapshot->fetchedAt>localSuccess&&
-           it->second.snapshot->fetchedAt>=minimumEpoch)return true;
+           !RefreshEngine::Due(it->second.snapshot->fetchedAt,0,now,interval,false,minimumEpoch,
+               RefreshEngine::Offset(account+"/achievements")))return true;
         return RefreshEngine::Due(localSuccess,it->second.failedAt,now,interval,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements"));
     }
     return RefreshEngine::Due(localSuccess,0,now,interval,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements"));
