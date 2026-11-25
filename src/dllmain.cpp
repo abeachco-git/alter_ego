@@ -1587,6 +1587,16 @@ static const char* GetCraftingIconUrl(const std::string& disc) {
 
 // Names are UTF-8 in the API; Unicode clipboard preserves non-ASCII names.
 void CopyToClipboard(const std::string& text) {
+    // EmptyClipboard assigns ownership to the window passed to OpenClipboard.
+    // Only use a window belonging to the host process; never clear the
+    // clipboard without a valid owner or borrow another application's window.
+    const auto ownedWindow=[](HWND window){
+        DWORD process=0;
+        return window&&GetWindowThreadProcessId(window,&process)!=0&&process==GetCurrentProcessId();
+    };
+    HWND owner=GetActiveWindow();
+    if(!ownedWindow(owner))owner=GetForegroundWindow();
+    if(!ownedWindow(owner))return;
     const int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.c_str(),-1,nullptr,0);
     if(length<=0)return;
     HGLOBAL memory=GlobalAlloc(GMEM_MOVEABLE,static_cast<size_t>(length)*sizeof(wchar_t));
@@ -1595,7 +1605,7 @@ void CopyToClipboard(const std::string& text) {
     if(!dest){GlobalFree(memory);return;}
     const bool converted=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.c_str(),-1,dest,length)==length;
     GlobalUnlock(memory);
-    if(!converted||!OpenClipboard(nullptr)){GlobalFree(memory);return;}
+    if(!converted||!OpenClipboard(owner)){GlobalFree(memory);return;}
     if(!EmptyClipboard()||!SetClipboardData(CF_UNICODETEXT,memory))GlobalFree(memory);
     CloseClipboard();
 }
