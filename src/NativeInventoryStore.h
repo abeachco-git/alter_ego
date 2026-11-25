@@ -2,6 +2,7 @@
 #include "CacheDatabase.h"
 #include "NativeInventoryCore.h"
 #include <map>
+#include <tuple>
 namespace AlterEgo::NativeInventory {
 struct ScopeState {std::string account,scope,character,status;int64_t attempted=0,success=0;};
 struct Row {Slot slot;std::string name,rarity,type,chat;int64_t captured=0;};
@@ -88,6 +89,15 @@ inline Projection Read(const std::string& root){
         s.boundTo=r.Text(7);s.stat=r.Integer(8);s.charges=r.Integer(9);
         row.name=r.Text(10);row.rarity=r.Text(11);row.type=r.Text(12);row.chat=r.Text(13);row.captured=r.Integer(14);
         out.rows.push_back(std::move(row));
+    }
+    auto sockets=db.Prepare("SELECT account,scope,character,position,kind,item_id FROM native_inventory_sockets ORDER BY account,scope,character,position,kind,ordinal");
+    std::map<std::tuple<std::string,std::string,std::string,std::string>,size_t> slotIndex;
+    for(size_t i=0;i<out.rows.size();++i){const auto& s=out.rows[i].slot;slotIndex.emplace(std::make_tuple(s.account,s.scope,s.character,s.position),i);}
+    while(sockets.Step()){
+        auto it=slotIndex.find(std::make_tuple(sockets.Text(0),sockets.Text(1),sockets.Text(2),sockets.Text(3)));
+        if(it==slotIndex.end())throw std::runtime_error("Orphan inventory socket");
+        auto& s=out.rows[it->second].slot;
+        (sockets.Integer(4)?s.infusions:s.upgrades).push_back(static_cast<uint32_t>(sockets.Integer(5)));
     }
     auto roster=db.Prepare("SELECT account,character FROM native_rosters");
     while(roster.Step())out.rosters[roster.Text(0)].insert(roster.Text(1));

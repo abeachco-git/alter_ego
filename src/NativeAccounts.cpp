@@ -41,6 +41,7 @@ std::string Key(const std::string& id){
     PCREDENTIALA cred=nullptr;
     if(!CredReadA(Target(id).c_str(),CRED_TYPE_GENERIC,0,&cred))return {};
     std::string result(reinterpret_cast<const char*>(cred->CredentialBlob),cred->CredentialBlobSize);
+    if(cred->CredentialBlob&&cred->CredentialBlobSize)SecureZeroMemory(cred->CredentialBlob,cred->CredentialBlobSize);
     CredFree(cred);return result;
 }
 bool SaveKey(const std::string& id,const std::string& key){
@@ -149,7 +150,11 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope){
                 if(!onlyScope.empty()&&onlyScope!=name)return;
                 Background::Checkpoint();
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
-                if(!a.permissions.count("inventories")||(bags&&!a.permissions.count("characters"))){
+                const bool characterScope=bags||name=="Equipment";
+                const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
+                    a.permissions.count("inventories")&&(!characterScope||a.permissions.count("characters"))&&
+                    (name!="Legendary Armory"||a.permissions.count("unlocks"));
+                if(!permitted){
                     state.status="Missing permissions";Record(root,state);return;
                 }
                 try{
@@ -159,7 +164,10 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope){
                         size_t i=0;for(const auto& bag:b){auto prefix=std::to_string(i++)+"/";if(bag.is_null())continue;
                             auto rows=ParseArray(bag.at("inventory"),a.id,name,character,prefix);
                             slots.insert(slots.end(),rows.begin(),rows.end());}
-                    }else slots=ParseArray(j,a.id,name,character,{},name!="Materials");
+                    }else if(name=="Equipment")slots=ParseEquipment(j,a.id,character);
+                    else if(name=="Legendary Armory")slots=ParseArmory(j,a.id);
+                    else if(name=="Delivery box")slots=ParseArray(j.at("items"),a.id,name,{},{},false);
+                    else slots=ParseArray(j,a.id,name,character,{},name!="Materials");
                     state.success=Now();Record(root,state,&slots);
                     for(const auto& s:slots)ids.insert(s.id);
                 }catch(const std::exception& e){
@@ -171,9 +179,18 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope){
             scope("Bank",{},"/v2/account/bank",false);
             scope("Shared inventory",{},"/v2/account/inventory",false);
             scope("Materials",{},"/v2/account/materials",false);
-            if((onlyScope.empty()||onlyScope=="Bags")&&a.permissions.count("characters")){
-                try{for(const auto& ch:Roster(a,key.value))scope("Bags",ch,"/v2/characters/"+Encode(ch)+"/inventory",true);}
-                catch(...){ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};Record(root,failed);}
+            scope("Legendary Armory",{},"/v2/account/legendaryarmory",false);
+            scope("Delivery box",{},"/v2/commerce/delivery",false);
+            if(onlyScope.empty()||onlyScope=="Bags"||onlyScope=="Equipment"){
+                if(!a.permissions.count("characters")){
+                    ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};Record(root,failed);
+                }else try{
+                    for(const auto& ch:Roster(a,key.value)){
+                        const auto path="/v2/characters/"+Encode(ch);
+                        scope("Bags",ch,path+"/inventory",true);
+                        scope("Equipment",ch,path+"/equipment?v=latest",false);
+                    }
+                }catch(...){ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};Record(root,failed);}
             }
         }
         // Resolve names in bounded batches. Missing metadata cannot discard verified slots.
@@ -197,6 +214,8 @@ void Initialize(const std::string& directory){
     root=directory;Launch([]{Publish("");});
 }
 void Shutdown(){std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();}
+bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
+std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}
 void RenderOptions(){
     auto v=Snapshot();
     RenderSectionHeader("Native Account Management",UI::SectionGold);
@@ -255,7 +274,7 @@ void RenderInventory(const std::string& activeCharacter){
         [&]{UI::FilterChips c;if(!scope.empty())c.push_back({"scope",scope,[&]{scope.clear();}});
             if(!binding.empty())c.push_back({"binding",binding,[&]{binding.clear();}});return c;},
         [&]{if(ImGui::BeginCombo("Storage",scope.empty()?"All":scope.c_str())){
-                for(const auto* s:{"","Bank","Shared inventory","Materials","Bags"})
+                for(const auto* s:{"","Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"})
                     if(ImGui::Selectable(*s?s:"All",scope==s))scope=s;
                 ImGui::EndCombo();}
             if(ImGui::BeginCombo("Binding",binding.empty()?"All":binding.c_str())){
@@ -268,7 +287,7 @@ void RenderInventory(const std::string& activeCharacter){
     if(accounts.empty()){ImGui::TextUnformatted("Select an account to browse.");return;}
     if(ImGui::TreeNode("Storage status")){
         for(const auto& a:accounts){
-            for(const auto* storage:{"Bank","Shared inventory","Materials","Bags"}){
+            for(const auto* storage:{"Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"}){
                 bool found=false;
                 for(const auto& state:v->inventory.states)if(state.account==a.id&&state.scope==storage){
                     found=true;std::string name=(multi&&all?Display(a)+" / ":"")+state.scope;
@@ -310,9 +329,17 @@ void RenderInventory(const std::string& activeCharacter){
             for(const auto* row:group.locations){
                 const auto& s=row->slot;std::string location=s.scope;
                 if(!s.character.empty())location+=" / "+s.character;
+                if(s.scope=="Equipment"){const auto slash=s.position.find('/');if(slash!=std::string::npos)location+=" / "+s.position.substr(slash+1);}
+                if(s.scope=="Legendary Armory")location+=" (unlocked count)";
+                if(s.scope=="Delivery box")location+=" (not collected)";
                 if(multi&&all)for(const auto& a:v->accounts)if(a.id==s.account){location=Display(a)+" / "+location;break;}
                 ImGui::Text("%s x%lld | %s%s",location.c_str(),static_cast<long long>(s.count),BindingName(s.binding),Now()-row->captured>900?" | Stale":"");
                 if(!s.boundTo.empty())ImGui::TextDisabled("Bound to %s",s.boundTo.c_str());
+                if(s.charges>=0)ImGui::TextDisabled("Charges: %lld",static_cast<long long>(s.charges));
+                if(s.scope=="Equipment"&&(s.position.find("/Pick")!=std::string::npos||s.position.find("/Axe")!=std::string::npos||s.position.find("/Sickle")!=std::string::npos)&&s.upgrades.empty())
+                    ImGui::TextDisabled("Installed glyph: unknown (not reported)");
+                for(auto id:s.upgrades)ImGui::TextDisabled("Upgrade #%u",id);
+                for(auto id:s.infusions)ImGui::TextDisabled("Infusion #%u",id);
             }
             ImGui::TreePop();
         }

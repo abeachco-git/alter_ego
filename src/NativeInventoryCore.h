@@ -44,6 +44,7 @@ inline Access Accessibility(const Slot& s,const std::string& account,const std::
         if(s.boundTo.empty()||character.empty())return Access::Unknown;
         return s.boundTo==character?Access::Available:Access::Restricted;
     }
+    if(s.scope=="Delivery box"||s.scope=="Equipment")return Access::Unknown;
     if(s.account==account)return Access::Available;
     if(s.binding==Binding::Account)return Access::Restricted;
     return transferVerified?Access::Transferable:Access::Unknown;
@@ -83,6 +84,35 @@ inline std::vector<Slot> ParseArray(const Json& j,const std::string& account,con
         if(s.count)out.push_back(std::move(s));
     }
     return out;
+}
+// The character equipment endpoint provides one physical item per record,
+// with a list of template references. Legendary references are not stock.
+inline std::vector<Slot> ParseEquipment(const Json& j,const std::string& account,const std::string& character){
+    const auto& equipment=j.at("equipment");
+    if(!equipment.is_array())throw std::runtime_error("Invalid equipment response");
+    std::vector<Slot> out;size_t i=0;
+    for(const auto& raw:equipment){
+        if(!raw.is_object())throw std::runtime_error("Invalid equipment row");
+        const auto location=raw.value("location",std::string{});
+        if(location=="LegendaryArmory"||location=="EquippedFromLegendaryArmory"){++i;continue;}
+        const auto slot=raw.value("slot",std::string{});
+        const bool tool=slot=="Sickle"||slot=="Axe"||slot=="Pick"||slot=="FishingRod"||slot=="FishingLure"||slot=="FishingBait";
+        // Some character-wide tools omit the location field. For ordinary
+        // gear an unknown location cannot establish physical ownership.
+        if(location!="Equipped"&&location!="Armory"&&!(tool&&location.empty()))
+            throw std::runtime_error("Unknown physical equipment location");
+        auto row=raw;row["count"]=1;
+        const auto pos=std::to_string(i++)+"/"+(slot.empty()?location:slot);
+        auto parsed=ParseSlot(row,account,"Equipment",character,pos,true);
+        out.push_back(std::move(parsed));
+    }
+    return out;
+}
+inline std::vector<Slot> ParseArmory(const Json& j,const std::string& account){
+    auto rows=ParseArray(j,account,"Legendary Armory",{},{},false);
+    std::set<uint32_t> seen;
+    for(auto& row:rows){if(!seen.insert(row.id).second)throw std::runtime_error("Duplicate armory ID");row.binding=Binding::Account;}
+    return rows;
 }
 inline std::string Lower(std::string s){for(auto& c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;}
 inline bool Match(const std::string& name,uint32_t id,const std::string& query){

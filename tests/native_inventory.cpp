@@ -35,5 +35,12 @@ int case_native_inventory(int,char**){
     Record(root,{"account-a","Bags","A","Ready",101,101},&bags);
     StoreRoster(root,"account-a",{"B"},102);
     v=Read(root);assert(v.rows.size()==1&&v.rosters.at("account-a").count("B")&&v.rosters.at("account-b").count("C"));
+    auto equipped=ParseEquipment(Json::parse(R"({"equipment":[{"id":20,"location":"Equipped","slot":"WeaponA1","tabs":[1,2,3],"upgrades":[30],"infusions":[31]},{"id":20,"location":"Armory","tabs":[4]},{"id":21,"location":"EquippedFromLegendaryArmory","tabs":[1]},{"id":22,"slot":"Pick","charges":50}]})"),"account-a","B");
+    assert(equipped.size()==3&&equipped[0].count==1&&equipped[1].count==1&&equipped[2].charges==50);
+    Record(root,{"account-a","Equipment","B","Ready",103,103},&equipped);
+    v=Read(root);bool socket=false;for(const auto& row:v.rows)if(row.slot.id==20&&!row.slot.upgrades.empty())socket=row.slot.upgrades[0]==30&&row.slot.infusions[0]==31;
+    assert(socket);
+    auto armory=ParseArmory(Json::parse(R"([{"id":21,"count":2}])"),"account-a");
+    assert(armory.size()==1&&armory[0].binding==Binding::Account&&armory[0].count==2);
     std::filesystem::remove_all(root);return 0;
 }

@@ -16415,18 +16415,7 @@ void AddonRender() {
             AlterEgo::GW2API::PingHoard();
         }
     } else if (hoardStatus == AlterEgo::HoardStatus::Unavailable) {
-        RenderEmptyCard(
-            APIDefs ? APIDefs->Textures_Get(TEX_ICON) : nullptr,
-            "Hoard & Seek is required",
-            "Alter Ego reads your characters, equipment, and inventory through the Hoard & Seek companion addon. Install it from the Nexus addon library to get started.",
-            "Retry Detection", []() { AlterEgo::GW2API::PingHoard(); },
-            "Copy Library URL", []() {
-                CopyToClipboard(std::string("https://raidcore.gg/Nexus"));
-                if (APIDefs) APIDefs->GUI_SendAlert("Nexus library URL copied!");
-            }
-        );
-        ImGui::End();
-        return;
+        ImGui::TextWrapped("Character and progress migration is incomplete; these features still require Hoard & Seek. Native Inventory and the Library remain available.");
     } else if (hoardStatus == AlterEgo::HoardStatus::PermDenied) {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "H&S permission denied. Enable in H&S settings.");
     }
@@ -16734,7 +16723,13 @@ void AddonRender() {
                     // the character whose details happen to be selected.
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
-                        const auto loadUnavailable=AlterEgo::GameMemory::LoadUnavailableReason(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
+                        auto loadUnavailable=AlterEgo::GameMemory::LoadUnavailableReason(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
+                        if(AlterEgo::NativeAccounts::HasLinkedAccounts()){
+                            const auto active=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(g_CurrentCharName);
+                            const auto target=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name);
+                            if(active.empty()||target.empty()||active!=target)
+                                loadUnavailable="Character ownership is unknown or belongs to another linked account.";
+                        }
                         if (ImGui::MenuItem("Load",nullptr,false,loadUnavailable.empty())) {
                             loadTarget=ch.name;loadAccount=ch.account_name;
                         }
@@ -17486,7 +17481,14 @@ void AddonRender() {
             // Invoke only after the character context popup and page have
             // unwound, using the exact right-clicked character identity.
             if (!loadTarget.empty()) {
-                const auto message=AlterEgo::GameMemory::Load(g_CurrentCharName,loadTarget,
+                std::string message;
+                if(AlterEgo::NativeAccounts::HasLinkedAccounts()){
+                    const auto active=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(g_CurrentCharName);
+                    const auto target=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(loadTarget);
+                    if(active.empty()||target.empty()||active!=target)
+                        message="Character ownership is unknown or belongs to another linked account.";
+                }
+                if(message.empty())message=AlterEgo::GameMemory::Load(g_CurrentCharName,loadTarget,
                     AlterEgo::GW2API::GetCurrentAccountName(),loadAccount);
                 if (APIDefs) APIDefs->GUI_SendAlert(message.c_str());
             }

@@ -5,6 +5,7 @@
 #include <thread>
 #include <cstring>
 #include <algorithm>
+#include <cstdlib>
 
 namespace AlterEgo::ArenaNet {
 using Clock=std::chrono::steady_clock;
