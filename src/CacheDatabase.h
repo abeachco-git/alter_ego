@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 19;
+constexpr int kSchemaVersion = 20;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -24,7 +24,45 @@ struct AchievementSnapshot {
     int64_t fetchedAt = 0;
     std::map<uint32_t, AchievementProgress> entries;
 };
+enum class AchievementSnapshotKind { Projection, Verified };
+struct AchievementTables { const char* snapshots; const char* progress; const char* bits; };
+inline AchievementTables Tables(AchievementSnapshotKind kind) {
+    if(kind==AchievementSnapshotKind::Verified)
+        return {"verified_achievement_snapshots","verified_achievement_progress","verified_achievement_bits"};
+    return {"achievement_snapshots","achievement_progress","achievement_completed_bits"};
+}
+struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 20) {
+        db.Exec(R"SQL(
+CREATE TABLE verified_achievement_snapshots(
+    account TEXT PRIMARY KEY CHECK(length(account)>0),
+    fetched_at INTEGER NOT NULL CHECK(fetched_at>0)
+) STRICT;
+CREATE TABLE verified_achievement_progress(
+    account TEXT NOT NULL REFERENCES verified_achievement_snapshots(account) ON DELETE CASCADE,
+    id INTEGER NOT NULL CHECK(id BETWEEN 1 AND 4294967295),
+    current_count INTEGER NOT NULL, max_count INTEGER NOT NULL,
+    done INTEGER NOT NULL CHECK(done IN (0,1)), repeated INTEGER NOT NULL,
+    unlocked INTEGER NOT NULL CHECK(unlocked IN (0,1)),
+    PRIMARY KEY(account,id)
+) STRICT;
+CREATE TABLE verified_achievement_bits(
+    account TEXT NOT NULL, achievement_id INTEGER NOT NULL,
+    bit INTEGER NOT NULL CHECK(bit BETWEEN 0 AND 4294967295),
+    PRIMARY KEY(account,achievement_id,bit),
+    FOREIGN KEY(account,achievement_id) REFERENCES verified_achievement_progress(account,id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE public_vault_season(
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    verified_at INTEGER NOT NULL CHECK(verified_at>0),
+    season_end INTEGER NOT NULL CHECK(season_end>verified_at)
+) STRICT;
+)SQL");
+        // Older achievement projections may include synthetic or optimistic
+        // progress; do not promote them to a verified raw response.
+        return;
+    }
     if (version == 19) {
         db.Exec(R"SQL(
 CREATE TABLE wiki_skin_freshness(skin_id INTEGER PRIMARY KEY CHECK(skin_id BETWEEN 1 AND 4294967295),
@@ -381,8 +419,10 @@ inline void Initialize(Database::Connection& db) {
 // threads. SQL stays at the existing disk persistence boundaries.
 inline std::mutex& Mutex() { static std::mutex mutex; return mutex; }
 inline std::optional<AchievementSnapshot> ReadAchievements(
-    const std::string& root, const std::string& account) {
+    const std::string& root, const std::string& account,
+    AchievementSnapshotKind kind=AchievementSnapshotKind::Projection) {
     if (account.empty()) return std::nullopt;
+    const auto tables=Tables(kind);
     std::lock_guard<std::mutex> lock(Mutex());
     const auto path = Storage::Paths(root).Cache();
     if (!std::filesystem::exists(path)) return std::nullopt;
@@ -391,13 +431,13 @@ inline std::optional<AchievementSnapshot> ReadAchievements(
     Database::Transaction tx(db);
     AchievementSnapshot result;
     {
-        auto q = db.Prepare("SELECT fetched_at FROM achievement_snapshots WHERE account=?");
+        auto q = db.Prepare((std::string("SELECT fetched_at FROM ")+tables.snapshots+" WHERE account=?").c_str());
         q.Bind(1, account);
         if (!q.Step()) return std::nullopt;
         result.fetchedAt = q.Integer(0);
     }
     {
-        auto q = db.Prepare("SELECT id,current_count,max_count,done,repeated,unlocked FROM achievement_progress WHERE account=? ORDER BY id");
+        auto q = db.Prepare((std::string("SELECT id,current_count,max_count,done,repeated,unlocked FROM ")+tables.progress+" WHERE account=? ORDER BY id").c_str());
         q.Bind(1, account);
         while (q.Step()) {
             AchievementProgress row;
@@ -411,7 +451,7 @@ inline std::optional<AchievementSnapshot> ReadAchievements(
         }
     }
     {
-        auto q = db.Prepare("SELECT achievement_id,bit FROM achievement_completed_bits WHERE account=? ORDER BY achievement_id,bit");
+        auto q = db.Prepare((std::string("SELECT achievement_id,bit FROM ")+tables.bits+" WHERE account=? ORDER BY achievement_id,bit").c_str());
         q.Bind(1, account);
         while (q.Step())
             result.entries.at(static_cast<uint32_t>(q.Integer(0))).completed_bits.insert(static_cast<uint32_t>(q.Integer(1)));
@@ -422,8 +462,11 @@ inline std::optional<AchievementSnapshot> ReadAchievements(
 // An older fetch must not replace a newer persisted account snapshot.
 // Equal timestamps are allowed for incremental progress/optimistic updates.
 inline bool WriteAchievements(const std::string& root, const std::string& account,
-                              const AchievementSnapshot& snapshot) {
-    if (account.empty() || snapshot.fetchedAt < 0) return false;
+                              const AchievementSnapshot& snapshot,
+                              AchievementSnapshotKind kind=AchievementSnapshotKind::Projection) {
+    if (account.empty() || snapshot.fetchedAt < 0 ||
+        (kind==AchievementSnapshotKind::Verified && snapshot.fetchedAt==0)) return false;
+    const auto tables=Tables(kind);
     std::lock_guard<std::mutex> lock(Mutex());
     const auto path = Storage::Paths(root).Cache();
     std::filesystem::create_directories(path.parent_path());
@@ -431,18 +474,18 @@ inline bool WriteAchievements(const std::string& root, const std::string& accoun
     Initialize(db);
     Database::Transaction tx(db);
     {
-        auto q = db.Prepare("SELECT fetched_at FROM achievement_snapshots WHERE account=?");
+        auto q = db.Prepare((std::string("SELECT fetched_at FROM ")+tables.snapshots+" WHERE account=?").c_str());
         q.Bind(1, account);
         if (q.Step() && q.Integer(0) > snapshot.fetchedAt) return false;
     }
     {
-        auto q = db.Prepare("DELETE FROM achievement_snapshots WHERE account=?");
+        auto q = db.Prepare((std::string("DELETE FROM ")+tables.snapshots+" WHERE account=?").c_str());
         q.Bind(1, account); q.Execute();
-        auto put = db.Prepare("INSERT INTO achievement_snapshots VALUES(?,?)");
+        auto put = db.Prepare((std::string("INSERT INTO ")+tables.snapshots+" VALUES(?,?)").c_str());
         put.Bind(1, account); put.Bind(2, snapshot.fetchedAt); put.Execute();
     }
-    auto row = db.Prepare("INSERT INTO achievement_progress VALUES(?,?,?,?,?,?,?)");
-    auto bit = db.Prepare("INSERT INTO achievement_completed_bits VALUES(?,?,?)");
+    auto row = db.Prepare((std::string("INSERT INTO ")+tables.progress+" VALUES(?,?,?,?,?,?,?)").c_str());
+    auto bit = db.Prepare((std::string("INSERT INTO ")+tables.bits+" VALUES(?,?,?)").c_str());
     for (const auto& [id,p] : snapshot.entries) {
         if (id != p.id) throw std::runtime_error("Achievement identity mismatch");
         row.Bind(1, account); row.Bind(2, id); row.Bind(3, p.current);
@@ -454,6 +497,33 @@ inline bool WriteAchievements(const std::string& root, const std::string& accoun
         }
     }
     tx.Commit();
+    return true;
+}
+
+inline std::optional<VaultSeasonSnapshot> ReadVaultSeason(const std::string& root) {
+    std::lock_guard<std::mutex> lock(Mutex());
+    const auto path=Storage::Paths(root).Cache();
+    if(!std::filesystem::exists(path))return std::nullopt;
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
+    Initialize(db);
+    auto q=db.Prepare("SELECT verified_at,season_end FROM public_vault_season WHERE singleton=1");
+    if(!q.Step())return std::nullopt;
+    return VaultSeasonSnapshot{q.Integer(0),q.Integer(1)};
+}
+inline bool WriteVaultSeason(const std::string& root,const VaultSeasonSnapshot& season) {
+    if(season.verifiedAt<=0||season.end<=season.verifiedAt)return false;
+    std::lock_guard<std::mutex> lock(Mutex());
+    const auto path=Storage::Paths(root).Cache();
+    std::filesystem::create_directories(path.parent_path());
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+    Initialize(db);
+    Database::Transaction tx(db);
+    {
+        auto q=db.Prepare("SELECT verified_at FROM public_vault_season WHERE singleton=1");
+        if(q.Step()&&q.Integer(0)>season.verifiedAt)return false;
+    }
+    auto q=db.Prepare("INSERT INTO public_vault_season VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET verified_at=excluded.verified_at,season_end=excluded.season_end");
+    q.Bind(1,season.verifiedAt);q.Bind(2,season.end);q.Execute();tx.Commit();
     return true;
 }
 } // namespace AlterEgo::Cache

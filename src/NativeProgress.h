@@ -15,6 +15,7 @@ struct AchievementResult {
 };
 struct AchievementEntry {
     uint64_t epoch=0;
+    bool loaded=false;
     std::chrono::steady_clock::time_point finished{};
     int64_t failedAt=0;
     int errorStatus=0;
@@ -41,7 +42,7 @@ inline bool AchievementDue(const std::string& account,int64_t localSuccess,int64
     }
     return RefreshEngine::Due(localSuccess,0,now,interval,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements"));
 }
-inline AchievementResult FetchAchievements(const std::string& account,bool force=false,
+inline AchievementResult FetchAchievements(const std::string& root,const std::string& account,bool force=false,
         int64_t maxAge=RefreshEngine::BrowseSeconds,int64_t minimumEpoch=0){
     using Clock=std::chrono::steady_clock;
     const auto started=Clock::now();
@@ -53,8 +54,17 @@ inline AchievementResult FetchAchievements(const std::string& account,bool force
     NativeAccounts::LinkedAccount a;
     for(const auto& linked:NativeAccounts::Linked())if(linked.id==account){a=linked;break;}
     if(!NativeAccounts::Current(a))return {401,"No linked account",{}};
+    if(!a.permissions.count("progression"))return {403,"Missing progression permission",{}};
     auto& e=AchievementEntries()[account];
     if(e.epoch!=a.generation){e={};e.epoch=a.generation;}
+    if(!e.loaded){
+        e.loaded=true;
+        try{
+            auto saved=Cache::ReadAchievements(root,account,Cache::AchievementSnapshotKind::Verified);
+            if(saved)e.snapshot=std::make_shared<const Cache::AchievementSnapshot>(std::move(*saved));
+        }catch(...){/* A damaged cache is not evidence of current progress. */}
+    }
+    if(!NativeAccounts::Current(a))return {0,"Account changed",{}};
     const auto now=static_cast<int64_t>(std::time(nullptr));
     if(e.snapshot&&e.snapshot->fetchedAt>=minimumEpoch&&
        (e.finished>=started||(!force&&!RefreshEngine::Due(e.snapshot->fetchedAt,0,now,maxAge,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements")))))
@@ -70,8 +80,11 @@ inline AchievementResult FetchAchievements(const std::string& account,bool force
     try{
         auto snapshot=std::make_shared<const Cache::AchievementSnapshot>(ParseAchievements(r.data,std::time(nullptr)));
         if(!NativeAccounts::Current(a))return {0,"Account changed",{}};
+        if(!Cache::WriteAchievements(root,account,*snapshot,Cache::AchievementSnapshotKind::Verified))
+            return fail(0,"Could not commit verified achievement snapshot");
+        if(!NativeAccounts::Current(a))return {0,"Account changed",{}};
         e.snapshot=snapshot;e.finished=Clock::now();e.failedAt=0;e.error.clear();e.errorStatus=0;
         return {200,{},snapshot};
-    }catch(...){return fail(0,"Invalid account achievement response");}
+    }catch(...){return fail(0,"Invalid account achievement response or cache write failed");}
 }
 }

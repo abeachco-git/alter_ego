@@ -2447,7 +2447,7 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
     }
     const auto interval=AchievementRefreshInterval();
     AlterEgo::Background::Workers().Launch([account,generation,automatic,ids,interval]{
-        auto result=AlterEgo::NativeProgress::FetchAchievements(account,!automatic,interval);
+        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),account,!automatic,interval);
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account)return;
         g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;

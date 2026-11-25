@@ -273,6 +273,26 @@ int case_database_core(int, char**) {
         assert(read->entries.at(1).completed_bits == std::set<uint32_t>({0,2}));
         assert(Cache::ReadAchievements(root, "Account_1234")->entries.empty());
         assert(!Cache::ReadAchievements(root, "Unknown.0000"));
+        const auto verified=Cache::AchievementSnapshotKind::Verified;
+        assert(!Cache::ReadAchievements(root,"Account.1234",verified)); // no projection promotion
+        auto raw=first;raw.fetchedAt=102;raw.entries.at(1).current=1;
+        assert(Cache::WriteAchievements(root,"Account.1234",raw,verified));
+        assert(Cache::ReadAchievements(root,"Account.1234",verified)->entries.at(1).current==1);
+        assert(Cache::ReadAchievements(root,"Account.1234")->entries.at(1).current==2);
+        assert(!Cache::ReadAchievements(root,"Account_1234",verified));
+        assert(!Cache::WriteAchievements(root,"Account.1234",first,verified));
+        raw.fetchedAt=103;raw.entries.at(1).id=2;
+        bool badRaw=false;
+        try{Cache::WriteAchievements(root,"Account.1234",raw,verified);}catch(...){badRaw=true;}
+        assert(badRaw&&Cache::ReadAchievements(root,"Account.1234",verified)->fetchedAt==102);
+        assert(!Cache::ReadVaultSeason(root));
+        assert(Cache::WriteVaultSeason(root,{100,1000}));
+        assert(!Cache::WriteVaultSeason(root,{101,101}));
+        assert(!Cache::WriteVaultSeason(root,{99,2000}));
+        auto season=Cache::ReadVaultSeason(root);
+        assert(season&&season->verifiedAt==100&&season->end==1000);
+        assert(Cache::WriteVaultSeason(root,{1001,2000}));
+        assert(Cache::ReadVaultSeason(root)->end==2000);
         first.fetchedAt = 99;
         assert(!Cache::WriteAchievements(root, "Account.1234", first));
         first.fetchedAt = 101;
@@ -285,6 +305,8 @@ int case_database_core(int, char**) {
         assert(read && read->fetchedAt == 100 && read->entries.size() == 5000);
         std::filesystem::remove_all(AlterEgo::NativeLibrary::Paths(root).Cache().parent_path());
         assert(!Cache::ReadAchievements(root, "Account.1234"));
+        assert(!Cache::ReadAchievements(root,"Account.1234",verified));
+        assert(!Cache::ReadVaultSeason(root));
         assert(std::filesystem::exists(temp.path("library.db")));
     }
     {

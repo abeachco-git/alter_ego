@@ -351,7 +351,7 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
     const auto weekly=CalcLastWeeklyReset(now);
     const auto minimumEpoch=std::chrono::system_clock::to_time_t(std::max(daily,weekly));
     AlterEgo::Background::Workers().Launch([acctName,allIds,generation,manual,minimumEpoch]{
-        auto result=AlterEgo::NativeProgress::FetchAchievements(acctName,manual,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimumEpoch);
+        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),acctName,manual,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimumEpoch);
         bool save=false;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
@@ -415,23 +415,47 @@ static void RefreshVaultSeason(bool manual){
             manual,end>0&&now>=end?end:0);
         if(fetchSeason){g_PublicVaultSeasonPending=true;g_PublicVaultSeasonAttempt=now;}
     }
-    if(fetchSeason)AlterEgo::Background::Workers().Launch([]{
-        auto r=AlterEgo::ArenaNet::Get("/v2/wizardsvault");
-        std::chrono::system_clock::time_point tp{};
-        if(r.status_code==200)try{tp=ParseISO8601(nlohmann::json::parse(r.body).at("end").get<std::string>());}catch(...){}
-        {
+    if(fetchSeason)AlterEgo::Background::Workers().Launch([manual]{
+        const auto root=AlterEgo::GW2API::GetDataDirectory();
+        const auto apply=[](const AlterEgo::Cache::VaultSeasonSnapshot& season){
+            const auto tp=std::chrono::system_clock::from_time_t(static_cast<std::time_t>(season.end));
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            g_PublicVaultSeasonPending=false;
-            if(tp<=std::chrono::system_clock::now())return;
+            if(season.verifiedAt<g_PublicVaultSeasonSuccess)return;
             const auto previous=g_VaultSeasonEnd;
             if(previous!=std::chrono::system_clock::time_point{}&&previous<=std::chrono::system_clock::now()&&previous!=tp){
                 g_VaultSpecial={};g_VaultSectionSuccess[2]=0;
                 g_VaultSectionAttempt[g_VaultCacheAccount][2]=0;UpdateVaultFreshness();
             }
-            g_PublicVaultSeasonEnd=tp;g_PublicVaultSeasonSuccess=std::time(nullptr);g_PublicVaultSeasonAttempt=0;
+            g_PublicVaultSeasonEnd=tp;g_PublicVaultSeasonSuccess=season.verifiedAt;
             g_VaultSeasonEnd=tp;
-        }
-        SaveVaultCache();
+        };
+        const auto finish=[](bool success){
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            g_PublicVaultSeasonPending=false;
+            if(success)g_PublicVaultSeasonAttempt=0;
+        };
+        // Disk work stays on the owned worker. The account Vault projection
+        // is not proof of the public season's verification time.
+        try{
+            const auto cached=AlterEgo::Cache::ReadVaultSeason(root);
+            const auto now=static_cast<int64_t>(std::time(nullptr));
+            if(cached&&cached->verifiedAt<=now&&cached->end>now){
+                apply(*cached);
+                if(!manual&&!AlterEgo::RefreshEngine::Due(cached->verifiedAt,0,now,AlterEgo::RefreshEngine::SeasonSeconds)){
+                    finish(true);SaveVaultCache();return;
+                }
+            }
+        }catch(...){/* Preserve in-memory metadata; attempt a verified refresh. */}
+        auto r=AlterEgo::ArenaNet::Get("/v2/wizardsvault");
+        std::chrono::system_clock::time_point tp{};
+        if(r.status_code==200)try{tp=ParseISO8601(nlohmann::json::parse(r.body).at("end").get<std::string>());}catch(...){}
+        const AlterEgo::Cache::VaultSeasonSnapshot next{
+            static_cast<int64_t>(std::time(nullptr)),
+            static_cast<int64_t>(std::chrono::system_clock::to_time_t(tp))};
+        bool saved=false;
+        try{saved=AlterEgo::Cache::WriteVaultSeason(root,next);}catch(...){}
+        if(!saved){finish(false);return;}
+        apply(next);finish(true);SaveVaultCache();
     },[]{std::lock_guard<std::mutex> lock(g_ClearsMutex);g_PublicVaultSeasonPending=false;});
 }
 

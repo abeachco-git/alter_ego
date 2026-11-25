@@ -76,6 +76,8 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
             struct Entry { const char* label; const char* count; const char* freshness; };
             const Entry entries[]={
                 {"Achievement progress","SELECT count(*) FROM achievement_progress",nullptr},
+                {"Verified achievement progress","SELECT count(*) FROM verified_achievement_progress",nullptr},
+                {"Public Vault season","SELECT count(*) FROM public_vault_season",nullptr},
                 {"Achievement definitions","SELECT count(*) FROM achievement_definitions","ach_defs"},
                 {"Achievement names","SELECT count(*) FROM achievement_names","ach_name_index_verified"},
                 {"Achievement categories","SELECT count(*) FROM achievement_categories","ach_groups"},
@@ -115,6 +117,10 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                     fresh.Reset();
                 } else if(row.label=="Achievement progress") {
                     row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(fetched_at),0) FROM achievement_snapshots");
+                } else if(row.label=="Verified achievement progress") {
+                    row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(fetched_at),0) FROM verified_achievement_snapshots");
+                } else if(row.label=="Public Vault season") {
+                    row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(verified_at),0) FROM public_vault_season");
                 } else if(row.label=="Clears entries") {
                     row.refreshedAt=db.Scalar("SELECT COALESCE(MAX(fetch_time),0) FROM clears_snapshots");
                 } else if(row.label=="Vault objectives") {
