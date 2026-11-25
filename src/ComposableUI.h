@@ -56,7 +56,9 @@ struct ReferenceEditorDraft {
 static ReferenceEditorDraft g_ReferenceEditor;
 static std::string g_ComponentSearch;
 static bool g_ComponentUnusedOnly = false;
-static int g_ComponentSort = 0; // 0 name, 1 most used, 2 least used
+static int g_ComponentSort = 0; // Name, Usage
+static bool g_ComponentSortAscending=true;
+static std::set<std::string> g_ComponentCollapsedKinds;
 static std::string g_ComponentSelectedId;
 static std::string g_ComponentSelectedKind;
 static std::string g_ComponentEditorId;
@@ -567,11 +569,8 @@ static bool ComponentUICompatible(const ComponentJson& doc,
 
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id) {
     MarkNavigation();
-    for (int i = 0; i < 9; ++i)
-        if (kind == kComponentKinds[i].kind) {
-            g_ComponentFilterKind = i;
-            break;
-        }
+    g_ComponentKindFilters.clear();g_ComponentCollapsedKinds.erase(kind);
+    g_ComponentPendingKind=-1;
     g_ComponentSelectedKind = kind;
     g_ComponentSelectedId = id;
     g_ComponentSearch.clear();g_ComponentUnusedOnly=false;
@@ -950,200 +949,220 @@ static void RenderLoadoutSaveReview(){
     ImGui::EndPopup();
 }
 
-static void RenderComponentLibrary() {
-    const auto& doc = ComponentUISnapshot();
-    if (!doc.contains("components") || !doc["components"].is_object()) {
-        ImGui::TextDisabled("Component library is not available.");
-        RenderComponentUIEditor();
-        return;
+// Both surfaces invoke one action dispatcher; destructive confirmation is
+// owned by the page rather than a row popup or a transient item pointer.
+enum class ComponentAction { Edit, Rename, Duplicate, Copy, Delete };
+struct ComponentDeleteDraft {std::string kind,id,name;uint64_t revision=0;bool pending=false;};
+static ComponentDeleteDraft g_ComponentDelete;
+static void RunComponentAction(ComponentAction action,const std::string& kind,const ComponentJson& item){
+    const auto id=item.value("id",std::string()),name=item.value("name",id);
+    switch(action){
+    case ComponentAction::Edit:ComponentUIStartEditor("edit",kind,id,&item);break;
+    case ComponentAction::Rename:ComponentUIStartEditor("rename",kind,id,&item);break;
+    case ComponentAction::Duplicate:ComponentUIStartEditor("duplicate",kind,id,&item);break;
+    case ComponentAction::Copy:{
+        AlterEgo::Composable::Component exported;
+        exported.name=name;exported.data=item.at("data");
+        const auto portable=AlterEgo::Composable::ExportComponent(kind,exported).dump(2);
+        CopyToClipboard(portable);break;
     }
-    const char* sorts[] = {"Name", "Most used", "Least used"};
-    AlterEgo::UI::SearchToolbar("components", "Search components...", g_ComponentSearch,
-        [&] {
-            AlterEgo::UI::FilterChips chips;
-            const char* kindLabel = ComponentLabel(kComponentKinds[g_ComponentFilterKind].kind);
-            if (g_ComponentFilterKind != 0)
-                chips.push_back({"kind",kindLabel,[&] {g_ComponentFilterKind=0;g_ComponentSelectedId.clear();}});
-            else chips.push_back({"kind",kindLabel,{}}); // required default scope
-            if(g_ComponentUnusedOnly) chips.push_back({"usage","Unused only",[&] {g_ComponentUnusedOnly=false;}});
-            if(g_ComponentSort != 0) chips.push_back({"sort",sorts[g_ComponentSort],[&] {g_ComponentSort=0;}});
+    case ComponentAction::Delete:
+        if(!ComponentUIUsage(ComponentUISnapshot(),kind,id))
+            g_ComponentDelete={kind,id,name,AlterEgo::GW2API::GetBuildLibraryRevision(),true};
+        break;
+    }
+}
+static void ImportComponentClipboard(){
+    const char* clipboard=ImGui::GetClipboardText();
+    g_ComponentStatus.clear();
+    if(!clipboard||!*clipboard){g_ComponentStatus="Clipboard is empty.";return;}
+    try{
+        const auto packet=ComponentJson::parse(clipboard);
+        std::string kind,error;AlterEgo::Composable::Component imported;
+        if(!AlterEgo::Composable::ImportComponent(packet,kind,imported,error))g_ComponentStatus=error;
+        else g_ComponentCommand={ComponentUICommand::Create,"",kind,"",imported.name,imported.data};
+    }catch(const std::exception& e){g_ComponentStatus=std::string("Invalid component clipboard: ")+e.what();}
+}
+static constexpr int kComponentGroupOrder[]={0,1,4,2,6,5,3,8,7};
+static void ComponentCreationMenu(const std::string& category={}){
+    if(category.empty()){
+        if(ImGui::BeginMenu("New Component")){
+            for(int i:kComponentGroupOrder)if(ImGui::MenuItem(kComponentKinds[i].label))
+                ComponentUIStartEditor("create",kComponentKinds[i].kind,"",nullptr);
+            ImGui::EndMenu();
+        }
+    }else if(ImGui::MenuItem("New Component"))ComponentUIStartEditor("create",category,"",nullptr);
+    if(ImGui::MenuItem("Import Component"))ImportComponentClipboard();
+}
+static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,const ComponentJson& item){
+    const auto id=item.value("id",std::string()),name=item.value("name",id);
+    if(ImGui::MenuItem("Edit"))RunComponentAction(ComponentAction::Edit,kind,item);
+    if(ImGui::MenuItem("Rename"))RunComponentAction(ComponentAction::Rename,kind,item);
+    if(ImGui::MenuItem("Duplicate"))RunComponentAction(ComponentAction::Duplicate,kind,item);
+    ImGui::Separator();CopyNameMenuItem(name);
+    if(ImGui::MenuItem("Copy Component"))RunComponentAction(ComponentAction::Copy,kind,item);
+    ImGui::Separator();ComponentCreationMenu(kind);
+    ImGui::Separator();
+    if(AlterEgo::UI::DestructiveMenuItem("Delete",ComponentUIUsage(doc,kind,id)==0))
+        RunComponentAction(ComponentAction::Delete,kind,item);
+}
+static void RenderComponentDeleteConfirm(const ComponentJson& doc){
+    auto& d=g_ComponentDelete;
+    if(d.pending){d.pending=false;ImGui::OpenPopup("Delete unused component##ae");}
+    if(!ImGui::BeginPopupModal("Delete unused component##ae",nullptr,ImGuiWindowFlags_AlwaysAutoResize))return;
+    const bool valid=d.revision==AlterEgo::GW2API::GetBuildLibraryRevision()&&
+        ComponentUIFind(doc,d.kind,d.id)&&ComponentUIUsage(doc,d.kind,d.id)==0;
+    ImGui::TextWrapped("Delete %s?",d.name.c_str());
+    if(!valid)ImGui::TextWrapped("Library changed or the component is referenced. Cancel and review again.");
+    else if(AlterEgo::UI::Button("Delete##component_confirm",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive)){
+        g_ComponentCommand={ComponentUICommand::RemoveUnused,"",d.kind,d.id,"",ComponentJson::object(),d.revision};
+        ImGui::CloseCurrentPopup();
+    }
+    if(valid)ImGui::SameLine();
+    if(RenderActionButton("Cancel##component_confirm"))ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+static void RenderComponentLibrary() {
+    using namespace AlterEgo;
+    const auto& doc=ComponentUISnapshot();
+    if(!doc.contains("components")||!doc["components"].is_object()){
+        ImGui::TextDisabled("Component library is not available.");RenderComponentUIEditor();return;
+    }
+    if(g_ComponentPendingKind>=0&&g_ComponentPendingKind<IM_ARRAYSIZE(kComponentKinds)){
+        const std::string kind=kComponentKinds[g_ComponentPendingKind].kind;
+        g_ComponentPendingKind=-1;
+        auto id=g_ComponentSelectIdPending;
+        if(id.empty()&&!g_ComponentSelectNamePending.empty()){
+            const auto group=doc["components"].find(kind);
+            if(group!=doc["components"].end())for(auto it=group->rbegin();it!=group->rend();++it)
+                if(it->value("name",std::string())==g_ComponentSelectNamePending){id=it->value("id",std::string());break;}
+        }
+        if(!id.empty())ComponentUIOpenLibrary(kind,id);
+        g_ComponentSelectIdPending.clear();g_ComponentSelectNamePending.clear();
+    }
+    const UI::SplitPanel split(g_ComponentListWidth,270.f,160.f,220.f);
+    ImGui::BeginChild("##component_list",ImVec2(split.left,0),true);
+    bool createClicked=false;
+    UI::SearchToolbar("components","Search components...",g_ComponentSearch,
+        [&]{
+            UI::FilterChips chips;
+            for(const auto& kind:g_ComponentKindFilters)
+                chips.push_back({"kind/"+kind,ComponentLabel(kind),[kind]{g_ComponentKindFilters.erase(kind);}});
+            if(g_ComponentUnusedOnly)chips.push_back({"usage","Unused only",[]{g_ComponentUnusedOnly=false;}});
             return chips;
         },
-        [&] {
-            const char* kinds[9];
-            for (int n=0;n<9;++n) kinds[n]=kComponentKinds[n].label;
-            if (AlterEgo::UI::FilterChoice("Component type", g_ComponentFilterKind, kinds, 9))
-                g_ComponentSelectedId.clear();
-            ImGui::Checkbox("Unused only", &g_ComponentUnusedOnly);
-            AlterEgo::UI::FilterChoice("Sort", g_ComponentSort, sorts, IM_ARRAYSIZE(sorts));
+        [&]{
+            std::vector<std::pair<std::string,std::string>> kinds;
+            for(int n:kComponentGroupOrder)kinds.emplace_back(kComponentKinds[n].kind,kComponentKinds[n].label);
+            UI::MultiFilterChoice("Component type",g_ComponentKindFilters,kinds);
         },
-        [&] {
-            if (g_ComponentFilterKind != 0) g_ComponentSelectedId.clear();
-            g_ComponentFilterKind=0; g_ComponentUnusedOnly=false; g_ComponentSort=0;
-        });
-    const std::string kind = kComponentKinds[g_ComponentFilterKind].kind;
-    if (!g_ComponentSelectIdPending.empty()) {
-        g_ComponentSelectedKind = kind;
-        g_ComponentSelectedId = g_ComponentSelectIdPending;
-        g_ComponentSelectIdPending.clear();
-    }
-    if (!g_ComponentSelectNamePending.empty()) {
-        const auto group = doc["components"].find(kind);
-        if (group != doc["components"].end() && group->is_array())
-            for (auto it = group->rbegin(); it != group->rend(); ++it)
-                if (it->is_object() &&
-                    it->value("name", std::string()) == g_ComponentSelectNamePending) {
-                    g_ComponentSelectedId = it->value("id", std::string());
-                    g_ComponentSelectedKind = kind;
-                    break;
-                }
-        g_ComponentSelectNamePending.clear();
-    }
-    if (RenderActionButton("New Component##library_component"))
-        ComponentUIStartEditor("create", kind, "", nullptr);
-    ImGui::SameLine();
-    if (RenderActionButton("Import Component##clipboard")) {
-        const char* clipboard = ImGui::GetClipboardText();
-        g_ComponentStatus.clear();
-        if (!clipboard || !*clipboard) {
-            g_ComponentStatus = "Clipboard is empty.";
-        } else {
-            try {
-                const ComponentJson packet = ComponentJson::parse(clipboard);
-                std::string importedKind, error;
-                AlterEgo::Composable::Component imported;
-                if (!AlterEgo::Composable::ImportComponent(
-                        packet, importedKind, imported, error))
-                    g_ComponentStatus = error;
-                else {
-                    g_ComponentCommand = {ComponentUICommand::Create, "",
-                        importedKind, "", imported.name, imported.data};
-                    for (int i = 0; i < 9; ++i)
-                        if (importedKind == kComponentKinds[i].kind)
-                            g_ComponentFilterKind = i;
-                }
-            } catch (const std::exception& e) {
-                g_ComponentStatus = std::string("Invalid component clipboard JSON: ") + e.what();
-            }
-        }
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Import a standalone component copied from Alter Ego.\n"
-                          "Creates a new independent ID; does not replace existing Loadouts.");
-    if (!g_ComponentStatus.empty())
-        ImGui::TextWrapped("%s", g_ComponentStatus.c_str());
+        [&]{g_ComponentKindFilters.clear();g_ComponentUnusedOnly=false;},"+",&createClicked);
+    if(createClicked)ImGui::OpenPopup("##component_create");
+    if(ImGui::BeginPopup("##component_create")){ComponentCreationMenu();ImGui::EndPopup();}
+    const char* sorts[]={"Name","Usage"};
+    const float gap=ImGui::GetStyle().ItemSpacing.x;
+    const float checkboxWidth=ImGui::GetFrameHeight()+ImGui::CalcTextSize("Unused only").x+ImGui::GetStyle().ItemInnerSpacing.x;
+    const float available=ImGui::GetContentRegionAvail().x;
+    const bool oneRow=available>=checkboxWidth+24.f+2*gap+75.f;
+    ImGui::SetNextItemWidth(std::max(50.f,std::min(120.f,available-24.f-gap-(oneRow?checkboxWidth+gap:0.f))));
+    if(UI::Combo("##component_sort",&g_ComponentSort,sorts,IM_ARRAYSIZE(sorts)))g_ComponentSortAscending=true;
+    ImGui::SameLine();UI::SortDirectionButton("##component_sortdir",g_ComponentSortAscending);
+    if(oneRow)ImGui::SameLine();
+    ImGui::Checkbox("Unused only",&g_ComponentUnusedOnly);
+    if(!g_ComponentStatus.empty())ImGui::TextWrapped("%s",g_ComponentStatus.c_str());
     ImGui::Separator();
-
-    const AlterEgo::UI::SplitPanel split(g_ComponentListWidth,270.f,160.f,220.f);
-    ImGui::BeginChild("##component_list", ImVec2(split.left, 0), true);
-    const auto group = doc["components"].find(kind);
-    if (group != doc["components"].end() && group->is_array()) {
-        std::vector<const ComponentJson*> visible;
-        for (const auto& item : *group) {
-            if (!item.is_object() || !item.contains("data") ||
-                !item["data"].is_object()) continue;
-            const std::string id = item.value("id", std::string());
-            const std::string name = item.value("name", id);
-            if (g_ComponentUnusedOnly && ComponentUIUsage(doc, kind, id) > 0)
-                continue;
-            if (!ComponentUISearchMatch(name, g_ComponentSearch) &&
-                !ComponentUISearchMatch(id, g_ComponentSearch) &&
-                !ComponentUISearchMatch(ComponentUIShortDescription(kind, item["data"]),
-                                         g_ComponentSearch)) continue;
-            visible.push_back(&item);
+    struct Group {std::string kind;std::vector<const ComponentJson*> items;};
+    std::vector<Group> groups;size_t count=0;
+    const bool searching=!g_ComponentSearch.empty();
+    const bool filtered=searching||g_ComponentUnusedOnly||!g_ComponentKindFilters.empty();
+    for(int n:kComponentGroupOrder){
+        const std::string kind=kComponentKinds[n].kind;
+        if(!g_ComponentKindFilters.empty()&&!g_ComponentKindFilters.count(kind))continue;
+        Group g{kind,{}};
+        const auto group=doc["components"].find(kind);
+        if(group!=doc["components"].end()&&group->is_array())for(const auto& item:*group){
+            if(!item.is_object()||!item.contains("data")||!item["data"].is_object())continue;
+            const auto id=item.value("id",std::string()),name=item.value("name",id);
+            if(g_ComponentUnusedOnly&&ComponentUIUsage(doc,kind,id)>0)continue;
+            if(!ComponentUISearchMatch(name,g_ComponentSearch)&&!ComponentUISearchMatch(id,g_ComponentSearch)&&
+               !ComponentUISearchMatch(ComponentUIShortDescription(kind,item["data"]),g_ComponentSearch))continue;
+            g.items.push_back(&item);
         }
-        std::stable_sort(visible.begin(), visible.end(),
-            [&](const ComponentJson* a, const ComponentJson* b) {
-                const int usesA = ComponentUIUsage(doc, kind,
-                    a->value("id", std::string()));
-                const int usesB = ComponentUIUsage(doc, kind,
-                    b->value("id", std::string()));
-                if (g_ComponentSort != 0 && usesA != usesB)
-                    return g_ComponentSort == 1 ? usesA > usesB : usesA < usesB;
-                std::string left = a->value("name", std::string());
-                std::string right = b->value("name", std::string());
-                std::transform(left.begin(), left.end(), left.begin(),
-                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                std::transform(right.begin(), right.end(), right.begin(),
-                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                return left < right;
-            });
-        ImGui::TextDisabled("%zu of %zu %s component%s", visible.size(), group->size(),
-            ComponentLabel(kind), group->size() == 1 ? "" : "s");
-        for (const auto* item : visible) {
-            const std::string id = item->value("id", std::string());
-            const std::string name = item->value("name", id);
-            const int users = ComponentUIUsage(doc, kind, id);
+        if(filtered&&g.items.empty())continue;
+        std::stable_sort(g.items.begin(),g.items.end(),[&](const ComponentJson* a,const ComponentJson* b){
+            if(g_ComponentSort==1){
+                const auto x=ComponentUIUsage(doc,kind,a->value("id",std::string())),y=ComponentUIUsage(doc,kind,b->value("id",std::string()));
+                if(x!=y)return g_ComponentSortAscending?x<y:x>y;
+            }
+            auto x=a->value("name",std::string()),y=b->value("name",std::string());
+            for(char& ch:x)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            for(char& ch:y)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if(x!=y)return g_ComponentSort==0&&!g_ComponentSortAscending?x>y:x<y;
+            return a->value("id",std::string())<b->value("id",std::string());
+        });
+        count+=g.items.size();groups.push_back(std::move(g));
+    }
+    ImGui::TextDisabled("%zu matching component%s",count,count==1?"":"s");
+    bool first=true;
+    for(const auto& g:groups){
+        const auto& kind=g.kind;ImGui::PushID(kind.c_str());
+        if(!first)ImGui::Spacing();first=false;
+        const bool expanded=searching||!g_ComponentCollapsedKinds.count(kind);
+        const auto summary=std::to_string(g.items.size());
+        if(CompletionTheme::CenteredSectionToggle(expanded,ComponentLabel(kind))&&!searching){
+            if(expanded)g_ComponentCollapsedKinds.insert(kind);else g_ComponentCollapsedKinds.erase(kind);
+        }
+        CompletionTheme::SectionHeading(ComponentLabel(kind),nullptr,summary.c_str(),CompletionTheme::kAvailableText);
+        // The canonical heading is drawn with a dummy; add a transparent
+        // hit target only over that heading, leaving the +/- button alone.
+        const auto lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax(),after=ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos(lo);ImGui::InvisibleButton("##category_actions",ImVec2(hi.x-lo.x,hi.y-lo.y));
+        if(ImGui::BeginPopupContextItem("##category_menu")){ComponentCreationMenu(kind);ImGui::EndPopup();}
+        ImGui::SetCursorScreenPos(after);
+        if(expanded)for(const auto* item:g.items){
+            const auto id=item->value("id",std::string()),name=item->value("name",id);
+            const int users=ComponentUIUsage(doc,kind,id);
             ImGui::PushID(id.c_str());
-            const std::string shown = name + "  [" + std::to_string(users) + "]";
-            if (ImGui::Selectable(shown.c_str(),
-                    g_ComponentSelectedKind == kind && g_ComponentSelectedId == id)) {
-                MarkNavigation();g_ComponentSelectedId = id;
-                g_ComponentSelectedKind = kind;
+            const std::string shown=name+"  ["+std::to_string(users)+"]###row";
+            if(ImGui::Selectable(shown.c_str(),g_ComponentSelectedKind==kind&&g_ComponentSelectedId==id)){
+                MarkNavigation();g_ComponentSelectedKind=kind;g_ComponentSelectedId=id;
             }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s\nReferenced by %d records", id.c_str(), users);
-            if(ImGui::BeginPopupContextItem("##component_name")){
-                CopyNameMenuItem(name);ImGui::EndPopup();
-            }
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%d direct reference%s; %d affected Loadout(s)",users,users==1?"":"s",ComponentUIEffectiveLoadoutCount(kind,id));
+            if(ImGui::BeginPopupContextItem("##component_actions")){ComponentRowMenu(doc,kind,*item);ImGui::EndPopup();}
             ImGui::PopID();
         }
+        ImGui::PopID();
+    }
+    if(ImGui::BeginPopupContextWindow("##component_empty_actions",ImGuiPopupFlags_MouseButtonRight|ImGuiPopupFlags_NoOpenOverItems)){
+        ComponentCreationMenu();ImGui::EndPopup();
     }
     ImGui::EndChild();
     if(split.Divider("##component_split",g_ComponentListWidth))SaveSettings();
-    ImGui::BeginChild("##component_detail", ImVec2(0, 0), true);
-    const auto* item = (g_ComponentSelectedKind == kind)
-        ? ComponentUIFind(doc, kind, g_ComponentSelectedId) : nullptr;
-    if (!item) ImGui::TextDisabled("Choose a saved component to view or edit.");
-    else {
-        const std::string id = item->value("id", std::string());
-        const std::string name = item->value("name", id);
-        const int usage = ComponentUIUsage(doc, kind, id);
-        ImGui::TextWrapped("%s", name.c_str());
-        ImGui::TextDisabled("%s | %d Loadout%s", ComponentLabel(kind),
-                            usage, usage == 1 ? "" : "s");
-        ImGui::TextWrapped("%s", ComponentUIShortDescription(kind, item->at("data")).c_str());
+    ImGui::BeginChild("##component_detail",ImVec2(0,0),true);
+    const std::string kind=g_ComponentSelectedKind;
+    const auto* item=ComponentUIFind(doc,kind,g_ComponentSelectedId);
+    const auto group=doc["components"].find(kind);
+    if(!item)ImGui::TextDisabled("Choose a saved component to view or edit.");
+    else{
+        const auto id=item->value("id",std::string()),name=item->value("name",id);
+        const int usage=ComponentUIUsage(doc,kind,id);
+        ImGui::TextWrapped("%s",name.c_str());
+        ImGui::TextDisabled("%s | %d reference%s | %d affected Loadout(s)",ComponentLabel(kind),usage,usage==1?"":"s",ComponentUIEffectiveLoadoutCount(kind,id));
+        ImGui::TextWrapped("%s",ComponentUIShortDescription(kind,item->at("data")).c_str());
         ImGui::Separator();
-        if (RenderActionButton("Copy Component##clipboard")) {
-            AlterEgo::Composable::Component exported;
-            exported.name = name;
-            exported.data = item->at("data");
-            const std::string portable = AlterEgo::Composable::ExportComponent(
-                kind, exported).dump(2);
-            ImGui::SetClipboardText(portable.c_str());
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Copy a portable independent component for importing elsewhere.\n"
-                              "Includes unknown stored fields but not the current library ID.");
-        ImGui::SameLine();
-        if (RenderActionButton("Rename##component_library"))
-            ComponentUIStartEditor("rename", kind, id, item);
-        ImGui::SameLine();
-        if (RenderActionButton("Duplicate##component_library"))
-            ComponentUIStartEditor("duplicate", kind, id, item);
-        ImGui::SameLine();
-        if (RenderActionButton("Edit Fields##component_library"))
-            ComponentUIStartEditor("edit", kind, id, item);
-        if (usage == 0) {
-            if (AlterEgo::UI::Button("Delete Unused##component_library", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive))
-                ImGui::OpenPopup("Delete unused component##ae");
-            if (ImGui::BeginPopupModal("Delete unused component##ae", nullptr,
-                                      ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::TextWrapped("Delete %s? This component is not referenced by a Loadout.",
-                                   name.c_str());
-                if (AlterEgo::UI::Button("Delete##component_confirm", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) {
-                    g_ComponentCommand = {ComponentUICommand::RemoveUnused,
-                        "", kind, id, "", ComponentJson::object()};
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::SameLine();
-                if (RenderActionButton("Cancel##component_confirm"))
-                    ImGui::CloseCurrentPopup();
-                ImGui::EndPopup();
-            }
-        } else {
-            ImGui::TextDisabled("Referenced components cannot be deleted.");
-        }
+        const auto action=[&](const char* label,ComponentAction command,bool sameLine){
+            if(sameLine&&ImGui::GetContentRegionMax().x+ImGui::GetWindowPos().x-ImGui::GetItemRectMax().x>=UI::CompactButtonWidth(label)+gap)ImGui::SameLine();
+            if(UI::Button(label,ImVec2(0,0),UI::ButtonRole::Compact))RunComponentAction(command,kind,*item);
+        };
+        action("Edit",ComponentAction::Edit,false);
+        action("Rename",ComponentAction::Rename,true);
+        action("Duplicate",ComponentAction::Duplicate,true);
+        action("Copy Component",ComponentAction::Copy,true);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Copy portable component including preserved imported fields.");
+        if(usage==0){
+            if(UI::Button("Delete Unused",ImVec2(0,0),UI::ButtonRole::CompactDestructive))
+                RunComponentAction(ComponentAction::Delete,kind,*item);
+        }else ImGui::TextDisabled("Referenced components cannot be deleted.");
         if (ImGui::CollapsingHeader("Exact duplicates##component_duplicates")) {
             static uint64_t duplicateRevision=0;
             static std::string duplicateKind,duplicateId;
@@ -1198,11 +1217,6 @@ static void RenderComponentLibrary() {
         }
         ImGui::Spacing();
         RenderComponentInventory(kind, item->at("data"));
-        if (ImGui::CollapsingHeader("Advanced: raw component data##preview")) {
-            ImGui::BeginChild("##component_json_preview", ImVec2(0, 180), true);
-            ImGui::TextUnformatted(item->at("data").dump(2).c_str());
-            ImGui::EndChild();
-        }
         ImGui::Spacing();
         ImGui::TextDisabled("Used by (select to open):");
         bool anyUsage = false;
@@ -1291,6 +1305,7 @@ static void RenderComponentLibrary() {
 
     }
     ImGui::EndChild();
+    RenderComponentDeleteConfirm(doc);
     RenderComponentUIEditor();
 }
 
@@ -1485,7 +1500,7 @@ static void ProcessComponentUICommand() {
         break;
     case ComponentUICommand::RemoveUnused:
         success = API::DeleteUnusedLoadoutComponent(command.kind, command.component_id);
-        if (success && g_ComponentSelectedId == command.component_id)
+        if (success && g_ComponentSelectedKind==command.kind && g_ComponentSelectedId == command.component_id)
             g_ComponentSelectedId.clear();
         break;
     default: break;

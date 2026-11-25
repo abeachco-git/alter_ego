@@ -155,3 +155,5 @@ Character propagation evidence: the [GW2 API client endpoint documentation](http
 - First UI batch offline suite passed (36/36); SQLite benchmark requires exactly one raw SQL block per migration. v22 migration expressed in that canonical form without changing its SQL. Replacement CI passed, including the final Save review.
 
 - Build 501dfb1: run 45680435305 passed all required offline regressions, SQLite benchmark, Windows x64 UCRT compilation, asset and distribution verification; artifact 15053612881 downloaded and independently verified (ZIP SHA-256 bca7b9897ad6c1530e0b9b75ac07634342fa702a0b51c594008fa9296ad265d4). In-game UI testing and inherited-category selection remain open.
+
+- [x] Components browse/action UI: default all categories, compact left controls, multi-type filters, shared collapsible groups, Name/Usage direction, contextual create/import/edit/rename/duplicate/copy/delete, common action handlers and guarded deletion, correct direct reference counts, remove raw preview. Shared header underline corrected at the actual 55% draw line (previous implementation missed it). CI and live testing pending; no storage or refresh changes.

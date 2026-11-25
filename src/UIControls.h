@@ -80,6 +80,19 @@ inline bool Combo(const char* label, int* selected, const char* const items[], i
                   int height = -1) {
     return ImGui::Combo(label, selected, items, count, height);
 }
+// Shared direction button; sorting remains a domain decision.
+inline bool SortDirectionButton(const char* id,bool& ascending,float width=24.f){
+    const bool changed=Button(id,ImVec2(width,0),ButtonRole::Compact);
+    if(changed)ascending=!ascending;
+    const auto lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();
+    const float x=(lo.x+hi.x)*.5f,y=(lo.y+hi.y)*.5f,r=5.f;
+    const auto color=IM_COL32(220,220,220,255);
+    auto* draw=ImGui::GetWindowDrawList();
+    if(ascending)draw->AddTriangleFilled(ImVec2(x,y-r),ImVec2(x-r,y+r),ImVec2(x+r,y+r),color);
+    else draw->AddTriangleFilled(ImVec2(x-r,y-r),ImVec2(x+r,y-r),ImVec2(x,y+r),color);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ascending?"Ascending; reverse sort":"Descending; reverse sort");
+    return changed;
+}
 inline bool SelectableOption(const char* label, bool selected = false) {
     const bool clicked = ImGui::Selectable(label, selected);
     if (selected) ImGui::SetItemDefaultFocus();

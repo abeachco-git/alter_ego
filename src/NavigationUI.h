@@ -10,7 +10,7 @@ struct NavigationSnapshot {
     uint32_t record=0,achievement=0;
     std::string id,kind,second,search,account,compareTarget;
     bool first=false,other=false,manual=false;
-    std::set<std::string> modes;
+    std::set<std::string> modes,componentKinds;
     Skinventory::SkinFilters skins;
     AlterEgo::NativeAccounts::InventoryNavigation inventory;
     std::map<ImGuiID,float> scroll;
@@ -50,7 +50,7 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
                 s.search=g_FashionSearch;s.category=g_FashionFilter;
             }else if(s.collection==2){
                 s.id=g_ComponentSelectedId;s.kind=g_ComponentSelectedKind;s.search=g_ComponentSearch;
-                s.category=g_ComponentFilterKind;s.sort=g_ComponentSort;s.first=g_ComponentUnusedOnly;
+                s.componentKinds=g_ComponentKindFilters;s.sort=g_ComponentSort;s.first=g_ComponentUnusedOnly;s.other=g_ComponentSortAscending;
             }else{s.id=g_EquipmentSetSelectedId;s.search=g_EquipmentSetSearch;}
             break;
         }
@@ -119,9 +119,9 @@ static void RestoreNavigation(const NavigationSnapshot& s){
                 for(int i=0;i<(int)g_FashionLibrary.looks.size();++i)if(g_FashionLibrary.looks[i].id==s.id){g_FashionSelected=i;break;}
                 g_FashionFilter=s.category;snprintf(g_FashionSearch,sizeof(g_FashionSearch),"%s",s.search.c_str());
             }else if(s.collection==2){
-                g_ComponentSelectedId=s.id;g_ComponentSelectedKind=s.kind;g_ComponentFilterKind=s.category;
-                g_ComponentSearch=s.search;g_ComponentSort=s.sort;g_ComponentUnusedOnly=s.first;
-                g_ComponentSelectIdPending.clear();g_ComponentSelectNamePending.clear();
+                g_ComponentSelectedId=s.id;g_ComponentSelectedKind=s.kind;g_ComponentKindFilters=s.componentKinds;
+                g_ComponentSearch=s.search;g_ComponentSort=s.sort;g_ComponentUnusedOnly=s.first;g_ComponentSortAscending=s.other;
+                g_ComponentSelectIdPending.clear();g_ComponentSelectNamePending.clear();g_ComponentPendingKind=-1;
             }else{g_EquipmentSetSelectedId=s.id;g_EquipmentSetSearch=s.search;}
             break;
         }

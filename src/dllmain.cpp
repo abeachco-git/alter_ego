@@ -1392,7 +1392,8 @@ static AlterEgo::SavedBuild g_SaveLibPendingCapture;
 static std::string g_SaveLibPendingKind, g_SaveLibPendingId, g_SaveLibPendingName;
 static bool g_SaveLibUpdateConfirmPending = false;
 static int g_SaveLibComponentKind = 0;
-static int g_ComponentFilterKind = 0; // Library > Components category
+static std::set<std::string> g_ComponentKindFilters; // empty = all categories
+static int g_ComponentPendingKind = -1; // typed capture reveal, never a filter
 static std::string g_ComponentSelectNamePending; // Newly captured component to highlight
 
 static int g_SaveLibEquipTab = 0;          // Selected equipment tab number (1-based)
@@ -8489,7 +8490,7 @@ static void RenderSaveToLibraryDialog() {
                     sb, keys[g_SaveLibComponentKind], name, &savedId,
                     !g_SaveLibNameManuallyEdited);
                 if (saved) {
-                    g_ComponentFilterKind = g_SaveLibComponentKind;
+                    g_ComponentPendingKind = g_SaveLibComponentKind;
                     g_ComponentSelectIdPending = savedId;
                     g_ComponentSelectNamePending.clear();
                     NavigateToLibraryCollection(2);
@@ -8563,7 +8564,7 @@ static void RenderSaveToLibraryDialog() {
             const bool applied = AlterEgo::GW2API::ReplaceCapturedLoadoutComponent(
                 g_SaveLibPendingCapture, g_SaveLibPendingKind, g_SaveLibPendingId);
             if (applied) {
-                g_ComponentFilterKind = g_SaveLibComponentKind;
+                g_ComponentPendingKind = g_SaveLibComponentKind;
                 g_ComponentSelectIdPending = g_SaveLibPendingId;
                 NavigateToLibraryCollection(2);
                 g_SaveLibDialogOpen = false;
@@ -13766,7 +13767,7 @@ void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix) {
         barTop, barTop, barBot, barBot);
 
     // Accent underline
-    dl->AddLine(ImVec2(pos.x + 4.0f, pos.y + h), ImVec2(pos.x + w * 0.55f, pos.y + h),
+    dl->AddLine(ImVec2(pos.x + 4.0f, pos.y + h), ImVec2(pos.x + w, pos.y + h),
         ImGui::ColorConvertFloat4ToU32(ImVec4(color.x, color.y, color.z, 0.35f)), 1.0f);
 
     ImGui::SetCursorScreenPos(ImVec2(pos.x + 10.0f,
@@ -16109,8 +16110,7 @@ void AddonRender() {
                     }
                     if (g_CharSortMode != Sort_Custom) {
                         ImGui::SameLine();
-                        if (AlterEgo::UI::Button("##sortdir", ImVec2(arrowBtnWidth, 0), AlterEgo::UI::ButtonRole::Compact)) {
-                            g_CharSortAscending = !g_CharSortAscending;
+                        if (AlterEgo::UI::SortDirectionButton("##sortdir",g_CharSortAscending,arrowBtnWidth)) {
                             std::string selName;
                             if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
                                 int ri = g_CharDisplayOrder[g_SelectedCharIdx];
@@ -16126,23 +16126,7 @@ void AddonRender() {
                             }
                             SaveCharSortConfig();
                         }
-                        // Draw triangle arrow on the button
-                        ImVec2 btnMin = ImGui::GetItemRectMin();
-                        ImVec2 btnMax = ImGui::GetItemRectMax();
-                        float cx = (btnMin.x + btnMax.x) * 0.5f;
-                        float cy = (btnMin.y + btnMax.y) * 0.5f;
-                        float sz = 5.0f;
-                        ImDrawList* dl = ImGui::GetWindowDrawList();
-                        ImU32 col = IM_COL32(220, 220, 220, 255);
-                        if (g_CharSortAscending) {
-                            // Up arrow
-                            dl->AddTriangleFilled(
-                                ImVec2(cx, cy - sz), ImVec2(cx - sz, cy + sz), ImVec2(cx + sz, cy + sz), col);
-                        } else {
-                            // Down arrow
-                            dl->AddTriangleFilled(
-                                ImVec2(cx - sz, cy - sz), ImVec2(cx + sz, cy - sz), ImVec2(cx, cy + sz), col);
-                        }
+
                     }
                     ImGui::Separator();
                 }
