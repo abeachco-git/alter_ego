@@ -34,7 +34,7 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 python3-pil ca-certificates ccache g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
           x86_64-w64-mingw32ucrt-g++ --version
       - name: Diagnose GW2 Wiki connectivity
-        if: github.ref == 'refs/heads/experiment/composable-loadouts'
+        if: github.event_name == 'workflow_dispatch'
         continue-on-error: true
         run: |
           python3 - <<'PY'
@@ -73,6 +73,29 @@ jobs:
                   print(f"HTTP {exc.code}: {exc.reason}; seconds={time.monotonic()-start:.3f}")
               except Exception as exc:
                   print(f"FAILED: {type(exc).__name__}: {exc}")
+          PY
+      - name: Verify public catalog API payloads
+        if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'Start public equipment and Vault catalog cache'
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          base = "https://api.guildwars2.com"
+          def get(path):
+              req = urllib.request.Request(base+path, headers={"User-Agent":"AlterEgo-Diagnostic/1.0"})
+              with urllib.request.urlopen(req, timeout=20) as r:
+                  data = json.load(r)
+                  print(path, "HTTP", r.status, "records", len(data))
+                  return data
+          objectives = get("/v2/wizardsvault/objectives?ids=all")
+          assert isinstance(objectives,list) and objectives
+          assert all({"id","title","track","acclaim"} <= o.keys() for o in objectives)
+          print("Vault sample:", objectives[0])
+          items = get("/v2/items?ids=91595,91439,100090,49424")
+          assert isinstance(items,list) and items
+          for item in items:
+              d = item.get("details",{})
+              print("Item sample:", item["id"],item["name"],item["type"],d.get("type"),d.get("infusion_upgrade_flags"),d.get("bonuses"),d.get("infix_upgrade"),item.get("description"))
           PY
       # Cache compiler outputs, never final executables or test results.
       - name: Restore compiler cache

@@ -77,3 +77,8 @@ Track release-specific identity, privacy, distribution and validation gates in t
 ## Acceptance
 
 Unit/regression coverage for account switching, late responses, permission failures, cancellation/unload, rate limits, complete-empty vs failed/partial scoped snapshots, guild dedup, legendary counts, filtering/sorting and stale search generation, cache reset and non-destructive migration. Validate native operation in game including multiple accounts and per-dataset refresh policies; preserve all existing CI gates and produce a verified Windows x64 UCRT DLL. Benchmark startup, refresh request counts, database size, search latency, and DLL size against the stabilized baseline; no performance or size target is claimed as measured today.
+
+
+### Public catalog modernization
+- First pass: shared equipment discovery, SQLite public upgrade and Vault definitions, seven-day refresh and Nexus manual actions.
+- Remaining: verify live catalog completeness and duplicate identity handling, integrate exact infusion/enrichment picker, remove legacy static upgrade identities after a validated replacement, audit individual existing reference endpoint freshness, retire redundant legend mappings, and implement Wiki-only schedules separately.

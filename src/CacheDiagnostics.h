@@ -86,6 +86,8 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                 {"Commerce prices","SELECT count(*) FROM commerce_skin_price_choices","commerce_prices"},
                 {"Items","SELECT count(*) FROM reference_items WHERE complete=1","item_cache"},
                 {"Item aliases","SELECT count(*) FROM item_name_aliases","item_name_cache"},
+                {"Equipment catalog","SELECT count(*) FROM public_upgrade_items","public_upgrades"},
+                {"Public Vault definitions","SELECT count(*) FROM public_vault_objectives","public_vault"},
                 {"Skills","SELECT count(*) FROM reference_skills","skill_cache"},
                 {"Traits","SELECT count(*) FROM reference_traits","trait_cache"},
                 {"Specializations","SELECT count(*) FROM reference_specializations","spec_cache"},

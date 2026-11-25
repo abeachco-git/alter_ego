@@ -3,6 +3,7 @@
 #include "HttpClient.h"
 #include "SkinCache.h"
 #include "CommerceCache.h"
+#include "PublicCatalog.h"
 #include "SkinDataCache.h"
 
 #include <nlohmann/json.hpp>
@@ -314,8 +315,7 @@ namespace Skinventory {
     }
 
     void Commerce::BuildItemMapAsync() {
-        if (s_item_map_building || s_item_map_ready) return;
-        s_item_map_building = true;
+        if (s_item_map_ready || s_item_map_building.exchange(true)) return;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_fetch_status = "Building item map...";
@@ -323,8 +323,26 @@ namespace Skinventory {
         AlterEgo::Background::Workers().Launch([] { ItemMapWorker(); }, [] { s_item_map_building = false; });
     }
 
+    void Commerce::RefreshUpgradeCatalogAsync(bool manual) {
+        using namespace AlterEgo;
+        if(!AutoRefreshPolicy::AllowRequest(manual,AutoRefreshPolicy::Dataset::PublicCatalog))return;
+        auto current=PublicCatalog::Get();
+        if(!PublicCatalog::Due(current->upgrades,current->upgradeAttempt,PublicCatalog::Now(),manual) ||
+           s_item_map_building.exchange(true))return;
+        const auto root=Cache::RootFromLegacySkinDirectory(s_data_dir);
+        {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Refreshing equipment catalogs...";}
+        Background::Workers().Launch([root]{
+            if(!s_item_map_ready || PublicCatalog::Get()->index.empty()){ItemMapWorker();return;}
+            PublicCatalog::RefreshUpgrades(root);
+            {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Equipment catalogs up to date";}
+            s_item_map_building=false;
+        },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Equipment catalog refresh failed; cache retained";s_item_map_building=false;});
+    }
+
     void Commerce::ItemMapWorker() {
         try {
+            const auto root=AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir);
+            AlterEgo::PublicCatalog::Attempt(root,"public_upgrades");
             // Step 1: Get all item IDs from the GW2 API
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
@@ -350,11 +368,9 @@ namespace Skinventory {
 
             if (!all_ids.is_array() || all_ids.empty()) throw std::runtime_error("Invalid item index");
 
-            std::vector<uint32_t> ids;
-            ids.reserve(all_ids.size());
-            for (const auto& id : all_ids) {
-                ids.push_back(id.get<uint32_t>());
-            }
+            const auto index=AlterEgo::PublicCatalog::Index(all_ids);
+            std::vector<uint32_t> ids(index.begin(),index.end());
+            json upgrades=json::array();
 
             // Step 2: Fetch items in batches, extract default_skin for Armor/Weapon types
             const size_t BATCH_SIZE = 200;
@@ -390,12 +406,13 @@ namespace Skinventory {
 
                 try {
                     json batch = json::parse(batch_response);
-                    if (!batch.is_array()) throw std::runtime_error("Invalid item metadata batch");
+                    AlterEgo::PublicCatalog::ValidateBatch(batch,std::set<uint32_t>(ids.begin()+i,ids.begin()+end));
 
                     for (const auto& item : batch) {
                         std::string type = item.value("type", "");
                         const uint32_t item_id=item.value("id",uint32_t(0));
                         if(!item_id) continue;
+                        if(!AlterEgo::PublicCatalog::Kind(item).empty())upgrades.push_back(item);
                         const uint32_t default_skin=item.value("default_skin",uint32_t(0));
                         const bool equipment=type=="Armor" || type=="Weapon" || type=="Back";
                         if(tradeable.count(item_id)) {
@@ -452,6 +469,7 @@ namespace Skinventory {
 
             // Step 3: Store
             AlterEgo::Background::Checkpoint();
+            AlterEgo::PublicCatalog::CommitUpgrades(root,index,upgrades);
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 s_skin_to_item = std::move(skin_map);

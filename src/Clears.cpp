@@ -40,6 +40,7 @@
 #include "RefreshUI.h"
 #include "WikiImage.h"
 #include "VaultAssistance.h"
+#include "PublicCatalog.h"
 #include "StoragePaths.h"
 #include "CompletionCache.h"
 
@@ -2031,6 +2032,14 @@ static ImU32 VaultTrackColor(const std::string& track) {
 // Assistance is contextual and never changes completion state or starts a query.
 static AlterEgo::VaultAssist::Options VaultOptions(const VaultObjective& obj) {
     if (!g_ShowVaultAssistance || obj.claimed || obj.isDone()) return {};
+    // The account response remains authoritative for current objective and progress.
+    // Resolve the public definition by exact ID; do not apply stale conflicting definitions.
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    auto it=catalog->objectives.find(obj.id);
+    if(it!=catalog->objectives.end() &&
+       AlterEgo::VaultAssist::Normalize(it->second.title)==AlterEgo::VaultAssist::Normalize(obj.title) &&
+       AlterEgo::VaultAssist::Normalize(it->second.track)==AlterEgo::VaultAssist::Normalize(obj.track))
+        return AlterEgo::VaultAssist::Match(it->second.title,it->second.track);
     return AlterEgo::VaultAssist::Match(obj.title,obj.track);
 }
 static void RenderVaultAssistance(AlterEgo::VaultAssist::Options options, float width, int64_t utc) {

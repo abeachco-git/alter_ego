@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 15;
+constexpr int kSchemaVersion = 16;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,16 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 16) {
+        db.Exec(R"SQL(
+CREATE TABLE public_item_index(id INTEGER PRIMARY KEY CHECK(id BETWEEN 1 AND 4294967295)) STRICT;
+CREATE TABLE public_upgrade_items(id INTEGER PRIMARY KEY REFERENCES reference_items(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('Rune','Sigil','Relic','Infusion','Enrichment'))) STRICT;
+CREATE TABLE public_vault_objectives(id INTEGER PRIMARY KEY CHECK(id BETWEEN 1 AND 4294967295),
+    title TEXT NOT NULL CHECK(length(title)>0), track TEXT NOT NULL, acclaim INTEGER NOT NULL CHECK(acclaim>=0)) STRICT;
+)SQL");
+        return;
+    }
     if (version == 15) {
         // Retire only the old single-achievement reference catalog.
         db.Exec(R"SQL(

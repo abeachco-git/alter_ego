@@ -47,6 +47,7 @@
 #include "SkinCache.h"
 #include "OwnedSkins.h"
 #include "Commerce.h"
+#include "PublicCatalog.h"
 #include "SkinSearchCore.h"
 #include "SkinFilters.h"
 #include "LibraryModeFilter.h"
@@ -6630,13 +6631,30 @@ static const int RELIC_COUNT = sizeof(RELIC_LIST) / sizeof(RELIC_LIST[0]);
 
 // Seed the persistent name→ID cache from the curated rune/sigil/relic tables.
 // Called once on startup so that even fresh installs can resolve names instantly.
+// Prefer validated public rows; legacy identities remain an offline bootstrap only.
+static std::vector<AlterEgo::PublicCatalog::Entry> GearCatalog(const std::string& kind) {
+    const auto snapshot=AlterEgo::PublicCatalog::Get();
+    std::vector<AlterEgo::PublicCatalog::Entry> rows;
+    for(const auto& e:snapshot->entries)if(e.kind==kind &&
+        ((kind!="Rune"&&kind!="Sigil")||e.rarity=="Exotic") &&
+        (kind!="Relic"||e.rarity=="Exotic"))rows.push_back(e);
+    if(snapshot->upgrades)return rows;
+    // Never present old hand-written effect summaries as current game data.
+    if(kind=="Rune")for(const auto& e:RUNE_LIST)rows.push_back({e.name,"Legacy entry (not refreshed)",kind,"",e.item_id});
+    if(kind=="Sigil")for(const auto& e:SIGIL_LIST)rows.push_back({e.name,"Legacy entry (not refreshed)",kind,"",e.item_id});
+    if(kind=="Relic")for(const auto& e:RELIC_LIST)rows.push_back({e.name,"Legacy entry (not refreshed)",kind,"",e.item_id});
+    return rows;
+}
 static void SeedItemNameCache() {
     for (int i = 0; i < RUNE_COUNT; i++)
-        AlterEgo::GW2API::CacheItemNameId(RUNE_LIST[i].name, RUNE_LIST[i].item_id);
+        if(!AlterEgo::GW2API::FindItemIdByName(RUNE_LIST[i].name))
+            AlterEgo::GW2API::CacheItemNameId(RUNE_LIST[i].name, RUNE_LIST[i].item_id);
     for (int i = 0; i < SIGIL_COUNT; i++)
-        AlterEgo::GW2API::CacheItemNameId(SIGIL_LIST[i].name, SIGIL_LIST[i].item_id);
+        if(!AlterEgo::GW2API::FindItemIdByName(SIGIL_LIST[i].name))
+            AlterEgo::GW2API::CacheItemNameId(SIGIL_LIST[i].name, SIGIL_LIST[i].item_id);
     for (int i = 0; i < RELIC_COUNT; i++)
-        AlterEgo::GW2API::CacheItemNameId(RELIC_LIST[i].name, RELIC_LIST[i].item_id);
+        if(!AlterEgo::GW2API::FindItemIdByName(RELIC_LIST[i].name))
+            AlterEgo::GW2API::CacheItemNameId(RELIC_LIST[i].name, RELIC_LIST[i].item_id);
 }
 
 // Slot display name for gear panel
@@ -7708,10 +7726,10 @@ static void RenderGearCustomizeDialog() {
             if (!editBuild->relic_name.empty()) {
                 ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(200, 180, 255, 255), editBuild->relic_name.c_str());
                 // Show bonus text if we can find it in the list
-                for (int i = 0; i < RELIC_COUNT; i++) {
-                    if (editBuild->relic_name == RELIC_LIST[i].name) {
+                for (const auto& entry : GearCatalog("Relic")) {
+                    if (editBuild->relic_name == entry.name) {
                         tp.y += 14.0f;
-                        ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(150, 150, 150, 220), RELIC_LIST[i].bonus);
+                        ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(150, 150, 150, 220), entry.bonus.c_str());
                         break;
                     }
                 }
@@ -7990,15 +8008,15 @@ static void RenderGearCustomizeDialog() {
             }
 
             ImGui::BeginChild("##relicList", ImVec2(0, -30), true);
-            for (int i = 0; i < RELIC_COUNT; i++) {
-                if (!AlterEgo::UI::CatalogMatches(RELIC_LIST[i].name, RELIC_LIST[i].bonus, filterLower)) continue;
+            for (const auto& entry : GearCatalog("Relic")) {
+                if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
 
-                ImGui::PushID(i);
-                bool isSel = (editBuild->relic_name == RELIC_LIST[i].name);
+                ImGui::PushID(static_cast<int>(entry.item_id));
+                bool isSel = (editBuild->relic_name == entry.name);
 
-                if (AlterEgo::UI::CatalogCard("##relsel", RELIC_LIST[i].name, RELIC_LIST[i].bonus, isSel)) {
-                    editBuild->relic_name = RELIC_LIST[i].name;
-                    editBuild->relic_id = RELIC_LIST[i].item_id;
+                if (AlterEgo::UI::CatalogCard("##relsel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
+                    editBuild->relic_name = entry.name;
+                    editBuild->relic_id = entry.item_id;
                     commitGear();
                 }
 
@@ -8060,16 +8078,16 @@ static void RenderGearCustomizeDialog() {
             ImGui::BeginChild("##upgradeList", ImVec2(0, -30), true);
 
             if (isArmor) {
-                for (int i = 0; i < RUNE_COUNT; i++) {
-                    if (!AlterEgo::UI::CatalogMatches(RUNE_LIST[i].name, RUNE_LIST[i].bonus, filterLower)) continue;
+                for (const auto& entry : GearCatalog("Rune")) {
+                    if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
 
-                    ImGui::PushID(i);
-                    bool isSel = (gs.rune == RUNE_LIST[i].name);
+                    ImGui::PushID(static_cast<int>(entry.item_id));
+                    bool isSel = (gs.rune == entry.name);
 
-                    if (AlterEgo::UI::CatalogCard("##rsel", RUNE_LIST[i].name, RUNE_LIST[i].bonus, isSel)) {
+                    if (AlterEgo::UI::CatalogCard("##rsel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
                         ExpandSharedRune(*editBuild);
-                        gs.rune = RUNE_LIST[i].name;
-                        gs.rune_id = RUNE_LIST[i].item_id;
+                        gs.rune = entry.name;
+                        gs.rune_id = entry.item_id;
                         commitGear();
                     }
 
@@ -8078,20 +8096,20 @@ static void RenderGearCustomizeDialog() {
                     ImGui::PopID();
                 }
             } else if (isWeapon) {
-                for (int i = 0; i < SIGIL_COUNT; i++) {
-                    if (!AlterEgo::UI::CatalogMatches(SIGIL_LIST[i].name, SIGIL_LIST[i].bonus, filterLower)) continue;
+                for (const auto& entry : GearCatalog("Sigil")) {
+                    if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
 
-                    ImGui::PushID(i);
+                    ImGui::PushID(static_cast<int>(entry.item_id));
                     const std::string& activeSigil = g_GearEditingSigil2 ? gs.sigil2 : gs.sigil;
-                    bool isSel = (activeSigil == SIGIL_LIST[i].name);
+                    bool isSel = (activeSigil == entry.name);
 
-                    if (AlterEgo::UI::CatalogCard("##ssel", SIGIL_LIST[i].name, SIGIL_LIST[i].bonus, isSel)) {
-                        uint32_t sid = AlterEgo::GW2API::FindItemIdByName(SIGIL_LIST[i].name);
+                    if (AlterEgo::UI::CatalogCard("##ssel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
+                        uint32_t sid = entry.item_id;
                         if (g_GearEditingSigil2) {
-                            gs.sigil2 = SIGIL_LIST[i].name;
+                            gs.sigil2 = entry.name;
                             gs.sigil2_id = sid;
                         } else {
-                            gs.sigil = SIGIL_LIST[i].name;
+                            gs.sigil = entry.name;
                             gs.sigil_id = sid;
                         }
                         commitGear();
@@ -8883,9 +8901,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     if (hovered && isRelicSlot && !build.relic_name.empty()) {
         ImGui::BeginTooltip();
         ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.8f, 1.0f), "%s", build.relic_name.c_str());
-        for (int ri = 0; ri < RELIC_COUNT; ri++) {
-            if (build.relic_name == RELIC_LIST[ri].name) {
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", RELIC_LIST[ri].bonus);
+        for (const auto& entry : GearCatalog("Relic")) {
+            if (build.relic_name == entry.name) {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", entry.bonus.c_str());
                 break;
             }
         }
@@ -12371,6 +12389,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::GW2API::LoadItemNameCache();
     AlterEgo::GW2API::LoadReferenceCaches();
     SeedItemNameCache();
+    AlterEgo::PublicCatalog::Load(AlterEgo::GW2API::GetDataDirectory());
     LoadLoginTimestamps();
     AlterEgo::GW2API::FetchAllItemStatsAsync();
     LoadCharSortConfig();
@@ -12473,6 +12492,8 @@ void AddonLoad(AddonAPI_t* aApi) {
             Skinventory::Commerce::BuildItemMapAsync();
         }
         Skinventory::Commerce::LoadPriceCache();
+        Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
+        AlterEgo::PublicCatalog::RefreshVault(dataDir,false);
 
         // Ping native API so Skinventory's OwnedSkins receives the pong
         // (must be after Initialize which subscribes to EV_HOARD_PONG)
@@ -17579,6 +17600,8 @@ void AddonOptions() {
             else if (g_MainTab == 6) RefreshClearsOnEntry();
             if (AlterEgo::AutoRefreshPolicy::Included(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog) && g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
                 Skinventory::SkinCache::UpdateCacheAsync();
+            Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
+            AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
             if ((!g_AchPinned.empty() || g_AchSelectedCatId > 0) &&
                 g_AchRetryAtMs.load() == 0) {
                 g_AchRetryAutomatic = true;
@@ -17626,6 +17649,15 @@ void AddonOptions() {
     ImGui::TextDisabled("Applies to automatic API refreshes across all tabs.");
     ImGui::TextDisabled("Manual Refresh still works; login/spec changes use MumbleLink (8s/90s).");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
+    RenderSectionHeader("Public reference catalogs", AlterEgo::UI::SectionGold);
+    ImGui::TextDisabled("Automatic refresh: 7 days; failed attempts: 24h. Shared across accounts.");
+    const auto publicData=AlterEgo::PublicCatalog::Get();
+    ImGui::Text("Equipment upgrades: %zu",publicData->entries.size());
+    if(RenderActionButton("Refresh equipment catalogs")) Skinventory::Commerce::RefreshUpgradeCatalogAsync(true);
+    ImGui::TextDisabled("%s",Skinventory::Commerce::GetFetchStatus().c_str());
+    ImGui::Text("Vault objective definitions: %zu",publicData->objectives.size());
+    if(RenderActionButton("Refresh Vault definitions")) AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),true);
+    ImGui::TextDisabled("%s",AlterEgo::PublicCatalog::VaultStatus().c_str());
     ImGui::Spacing();
     RenderSectionHeader("UI Settings", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Show Quick Access icon", &g_ShowQAIcon)) {

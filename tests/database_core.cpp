@@ -1,3 +1,4 @@
+#include "../src/PublicCatalogCache.h"
 #include "../src/WikiMetadataCache.h"
 #include "../src/Database.h"
 #include "../src/CacheDatabase.h"
@@ -45,6 +46,23 @@ void Upgrade(DB::Connection& db, int version) {
 }
 
 int case_database_core(int, char**) {
+    {
+    using namespace AlterEgo::PublicCatalog;
+    assert(Due(0,0,100,false));
+    assert(!Due(100,100,101,false));
+    assert(!Due(0,100,101,false));
+    assert(Due(100,100,101,true));
+    assert(Due(100,100,100+Week,false));
+    const auto vaultDefs=ParseObjectives(Json::parse(R"([{"id":20,"title":"Perform 3 Combo Skills in Combat","track":"PvE","acclaim":10}])"));
+    assert(vaultDefs.at(20).acclaim==10);
+    assert(Kind(Json::parse(R"({"type":"UpgradeComponent","details":{"type":"Default","infusion_upgrade_flags":["Infusion"]}})"))=="Infusion");
+    assert(Kind(Json::parse(R"({"type":"UpgradeComponent","details":{"type":"Default","infusion_upgrade_flags":["Enrichment"]}})"))=="Enrichment");
+    assert(Kind(Json::parse(R"({"type":"Relic"})"))=="Relic");
+    bool badBatch=false;
+    try{ValidateBatch(Json::parse(R"([{"id":1,"name":"Test","type":"Relic"}])"),{1,2});}catch(...){badBatch=true;}
+    assert(badBatch);
+    }
+
     Scratch temp;
     constexpr int id = 0x41454c42;
     {

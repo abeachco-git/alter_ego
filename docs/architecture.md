@@ -176,3 +176,7 @@ Hero point tracking was retired after authenticated tests confirmed the document
 ### Cache schema 15
 
 The legacy achievement waypoint catalog, raw upstream URL, generator and WP-only controls are removed. The migration drops the rebuildable `achievement_waypoints` table and its freshness marker only. Legacy cache cleanup can still archive the retired JSON file. Existing achievement progress, search, pins, Skinventory navigation, vendor links and Vault assistance are unchanged. Future achievement objective assistance is a separate design goal, modeled on verified contextual Vault assistance rather than bulk fuzzy location matching.
+
+
+### Public upgrade and Vault reference catalogs
+Cache v16 adds the discovered public item ID index, typed upgrade membership (canonical item details remain in reference_items), and public Vault definitions keyed by objective ID. The existing Commerce full scan captures upgrades in the same pass. Subsequent equipment refreshes fetch the public ID index, new IDs, and known upgrades in batches, sharing Commerce's in-flight gate. Public Vault definitions are separate from account completion. Both use seven-day successful freshness and 24-hour automatic failure backoff, existing Public catalogs opt-in, and manual Nexus options actions. UI reads immutable snapshots; network work stays on joinable workers. Legacy curated upgrade identities remain a temporary offline bootstrap without old effect text. Account Vault data remains authoritative if a public definition conflicts. Wiki diagnostic is manual-only.

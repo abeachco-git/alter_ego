@@ -147,7 +147,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     // Do not migrate or edit a foreign, damaged or unsupported database.
     const auto version=db.Scalar("PRAGMA user_version");
     if(db.Scalar("PRAGMA application_id")!=Cache::kApplicationId ||
-       (version!=Cache::kSchemaVersion && version!=14 && version!=13 && version!=8))
+       (version!=Cache::kSchemaVersion && version!=15 && version!=14 && version!=13 && version!=8))
         throw std::runtime_error("Unsupported cache database; use Rebuild all cache to quarantine it");
     // Upgrade known older schemas before selective operations.
     Cache::Initialize(db);
@@ -166,7 +166,9 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     case CacheOperation::PublicCatalog:
         // Item identities are shared by metadata and Commerce. Invalidate them
         // together; account ownership remains independent of catalog records.
-        db.Exec("DELETE FROM commerce_skin_price_choices; DELETE FROM commerce_item_prices;"
+        db.Exec("DELETE FROM public_item_index; DELETE FROM public_upgrade_items; DELETE FROM public_vault_objectives;"
+                "DELETE FROM reference_freshness WHERE dataset IN ('public_upgrades','public_upgrades_attempt','public_vault','public_vault_attempt');"
+                "DELETE FROM commerce_skin_price_choices; DELETE FROM commerce_item_prices;"
                 "DELETE FROM commerce_skin_items; DELETE FROM commerce_item_name_ids; DELETE FROM commerce_vendor_prices;"
                 "DELETE FROM item_name_aliases; DELETE FROM reference_items; DELETE FROM skins;"
                 "DELETE FROM reference_specializations; DELETE FROM reference_traits; DELETE FROM reference_skills;"

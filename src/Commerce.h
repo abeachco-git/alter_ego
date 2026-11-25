@@ -38,6 +38,7 @@ namespace Skinventory {
         // Item map: skin_id -> candidate item IDs and actual TP item names
         // Must be built once from /v2/items
         static void BuildItemMapAsync();
+        static void RefreshUpgradeCatalogAsync(bool manual);
         static bool IsItemMapReady();
         static uint32_t GetItemIdForSkin(uint32_t skin_id);
         static std::unordered_map<uint32_t,std::vector<uint32_t>> UniqueSkinCandidates();
