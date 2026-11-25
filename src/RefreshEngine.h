@@ -47,7 +47,7 @@ inline bool CharacterDue(bool active,int64_t activeSince,int64_t lastSeen,int64_
                          int64_t reconciledThrough=-1){
     if(manual)return true;
     if(attempt>0&&attempt<=now&&now-attempt<FailureSeconds)return false;
-    if(active)return success<=0||changedSpec||now-std::max(activeSince,success)>=CharacterSeconds;
+    if(active)return changedSpec||now-std::max(activeSince,success>now?int64_t(0):success)>=CharacterSeconds;
     if(!LogoutReady(lastSeen,now))return false;
     if(success<=0)return true;
     const auto covered=reconciledThrough>=0?reconciledThrough:success;

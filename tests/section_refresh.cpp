@@ -31,6 +31,9 @@ int case_section_refresh(int, char**) {
     assert(!F::CharacterDue(false,0,now-100000,now-90000,0,now));
     assert(!F::CharacterDue(true,now-10,now,now-100000,0,now));
     static_assert(F::CharacterSeconds==600);
+    assert(!F::CharacterDue(true,now-599,now,0,0,now));
+    assert(F::CharacterDue(true,now-600,now,0,0,now));
+    assert(F::CharacterDue(true,now-1,now,0,0,now,false,true));
     assert(F::CharacterDue(true,now-600,now,now-100000,0,now));
     assert(F::CharacterDue(true,now-10,now,now-100000,0,now,true));
     static_assert(F::LogoutGraceSeconds==600);
@@ -48,6 +51,10 @@ int case_section_refresh(int, char**) {
     namespace A=AlterEgo::CharacterActivity;
     A::Tracker tracker;const A::Key key{"account-a","Reaper"},other{"account-b","Reaper"};
     tracker.Observe(key.first,key.second,34,true,now);
+    assert(!tracker.Due(key,"Bags",0,0,now+599));
+    assert(tracker.Due(key,"Bags",0,0,now+600));
+    assert(tracker.Due(key,"Bags",0,0,now+1,false,true));
+    assert(tracker.Due({key.first,{}},"Bank",0,0,now+1,false));
     assert(!tracker.Due(key,"Bags",now-90000,0,now+10));
     assert(tracker.Due(key,"Bags",now-90000,0,now+646));
     assert(tracker.Fresh(other,"Bags",now-90000,now+646));

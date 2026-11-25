@@ -229,7 +229,17 @@ namespace AlterEgo {
         if(!names.empty())RequestNativeCharacters(names,false,crafting,{});
     }
     void GW2API::RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual){
-        if(!account.empty()&&!name.empty()&&demand)RequestNativeCharacters({name},false,true,{},account,demand,manual);
+        if(name.empty()||!demand)return;
+        std::string owner=account;
+        if(manual){
+            // Legacy character rows may contain an account display name or
+            // no account at all. Only explicit manual retrieval can discover
+            // their ownership; never broaden an automatic request.
+            for(const auto& linked:NativeAccounts::Linked())
+                if(!owner.empty()&&linked.name==owner){owner=linked.id;break;}
+            if(owner.empty())owner=NativeAccounts::VerifiedAccountForCharacter(name);
+        }
+        if(!owner.empty()||manual)RequestNativeCharacters({name},false,true,{},owner,demand,manual);
     }
     // Safe helpers: get value from JSON, return default if null or missing
     static int SafeInt(const json& j, const char* key, int def = 0) {

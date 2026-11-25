@@ -178,3 +178,5 @@ Character scope regression: section_refresh checks visible masks, specialization
 The v21 character cache fixture verifies legacy aggregate rows have no per-scope evidence, independent stamps and physical provenance round-trip, and invalid scope timestamps roll back the transaction. A coalesced physical response from before logout grace cannot reconcile a later consumer ticket.
 
 Priority admission regressions verify manual/objective overtaking, FIFO within rank, bounded queue and cancellation. API Activity tests verify reason-scope restoration and separate render/API/Wiki counts. Live: run catalog discovery while manually refreshing character or Vault, confirm the next admitted request honors priority without violating host spacing, and confirm no sensitive identifiers appear in diagnostics.
+
+Verify first-time missing character scope remains pending until ten minutes from login; explicit manual refresh can retrieve it immediately without treating the final offline state as reconciled. Live-test manual selected-character refresh of an original v2 legacy unscoped row and confirm only verified roster ownership is assigned.

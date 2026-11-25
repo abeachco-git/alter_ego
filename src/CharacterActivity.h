@@ -91,10 +91,15 @@ public:
         const auto attempt=std::max(externalAttempt,s.attempt);
         if(attempt>0&&attempt<=now&&attempt>=success&&now-attempt<RefreshEngine::FailureSeconds)return false;
         if(Active(k)){
-            if(success<=0||success>now)return true;
             const bool changed=specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
             if(changed&&now-e.specChanged>=8&&(s.success<e.specChanged||now-s.success>=RefreshEngine::CharacterSeconds))return true;
             const auto interval=k.second.empty()?RefreshEngine::BrowseSeconds:RefreshEngine::CharacterSeconds;
+            if(success<=0||success>now){
+                // First-time character demand is still subject to the login
+                // propagation window. Explicit manual requests bypass it.
+                // Account-level storage has its own initial-load behavior.
+                return k.second.empty()||now-e.login>=interval;
+            }
             return now-std::max(e.login,success)>=interval+RefreshEngine::Offset(k.first+"/"+k.second+"/"+scope);
         }
         if(!RefreshEngine::LogoutReady(e.lastSeen,now))return false;
