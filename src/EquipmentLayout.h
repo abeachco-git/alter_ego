@@ -42,20 +42,33 @@ void EquipmentLayout(const char* id,bool aquatic,Slot slot,Header header){
     }
     ImGui::Spacing();header("Weapons",2);
     const bool narrow=ImGui::GetContentRegionAvail().x<360.f;
-    if(narrow){
-        for(int n=0;n<2;++n){
-            ImGui::TextColored(SectionGold,"%s",n==0?"I":"II");
-            slot(n==0?"WeaponA1":"WeaponB1");slot(n==0?"WeaponA2":"WeaponB2");
-        }
-    }else if(ImGui::BeginTable("##weapon_sets",3,ImGuiTableFlags_RowBg|ImGuiTableFlags_SizingStretchSame)){
-        ImGui::TableSetupColumn("##set",ImGuiTableColumnFlags_WidthFixed,24.f);
+    // Keep the set marker in its own compact column, sized to the current font.
+    // At narrow widths the two weapons stack inside that same set's content cell.
+    if(ImGui::BeginTable("##weapon_sets",narrow?2:3,ImGuiTableFlags_SizingStretchSame)){
+        ImGui::TableSetupColumn("##set",ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize("Set II").x);
         ImGui::TableSetupColumn("##main",ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("##off",ImGuiTableColumnFlags_WidthStretch);
+        if(!narrow)ImGui::TableSetupColumn("##off",ImGuiTableColumnFlags_WidthStretch);
         for(int n=0;n<2;++n){
+            // An unshaded spacer separates the groups without shifting the banding.
+            if(n==1)ImGui::TableNextRow(ImGuiTableRowFlags_None,8.f);
             ImGui::TableNextRow();
-            ImGui::TableNextColumn();ImGui::TextColored(SectionGold,"%s",n==0?"I":"II");
-            ImGui::TableNextColumn();slot(n==0?"WeaponA1":"WeaponB1");
-            ImGui::TableNextColumn();slot(n==0?"WeaponA2":"WeaponB2");
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                ImGui::GetColorU32(n==0?ImGuiCol_TableRowBg:ImGuiCol_TableRowBgAlt));
+            ImGui::TableSetColumnIndex(0);
+            const auto labelPos=ImGui::GetCursorScreenPos();
+            ImGui::TableSetColumnIndex(1);
+            slot(n==0?"WeaponA1":"WeaponB1");
+            float bottom=ImGui::GetCursorScreenPos().y;
+            if(!narrow)ImGui::TableSetColumnIndex(2);
+            slot(n==0?"WeaponA2":"WeaponB2");
+            bottom=std::max(bottom,ImGui::GetCursorScreenPos().y);
+            // Both slot renderers advance the cursor past their wrapped content.
+            // Revisit the label cell on this row to center it against the taller slot.
+            ImGui::TableSetColumnIndex(0);
+            const float contentHeight=bottom-labelPos.y-ImGui::GetStyle().ItemSpacing.y;
+            ImGui::SetCursorScreenPos(ImVec2(labelPos.x,labelPos.y+
+                std::max(0.f,(contentHeight-ImGui::GetTextLineHeight())*0.5f)));
+            ImGui::TextColored(SectionGold,"%s",n==0?"Set I":"Set II");
         }
         ImGui::EndTable();
     }
