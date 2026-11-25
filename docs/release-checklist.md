@@ -23,6 +23,7 @@ This is a release gate, not an implementation plan. Track feature work in the [r
 
 - [ ] Pass offline regression, Windows x64 UCRT compilation, resource and binary verification for the exact release commit; package complete license notices.
 - [ ] Complete authenticated single/multi-account, library migration, cache recovery, clipboard/import/export, Fast Load, unload and core UI smoke tests; record known limitations.
+- [ ] Verify dependency inventory workflow, GitHub dependency graph submission and OSV coverage gaps; review advisories and include the exact-commit SBOM in release packaging. See [dependency maintenance](dependencies.md).
 - [ ] Establish versioned GitHub prereleases/releases with matching DLL, license files and SHA-256 checksum; retain exact-commit debugging map/symbol artifacts.
 - [ ] Test Nexus installation and update behavior from a clean environment. Verify the distributed DLL and its version/signature/update metadata.
 - [ ] Publish only after the maintainer approves the tested release and outstanding risks.

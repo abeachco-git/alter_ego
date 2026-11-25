@@ -115,7 +115,7 @@ Output: `build/AlterEgo.dll`. Verify the UCRT import with `objdump -p build/Alte
 
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md).
 
-Developer references: [Agent instructions](AGENTS.md) · [Architecture](docs/architecture.md) · [UI conventions](docs/ui-components.md) · [Regression testing](docs/regression-testing.md) · [Roadmap](docs/roadmap.md) · [Development status](docs/development-status.md) · [AE2 format](docs/shared-build-spec.md) · [Release checklist](docs/release-checklist.md).
+Developer references: [Agent instructions](AGENTS.md) · [Architecture](docs/architecture.md) · [UI conventions](docs/ui-components.md) · [Regression testing](docs/regression-testing.md) · [Roadmap](docs/roadmap.md) · [Development status](docs/development-status.md) · [AE2 format](docs/shared-build-spec.md) · [Release checklist](docs/release-checklist.md) · [Dependency maintenance](docs/dependencies.md).
 
 ## Credits
 
