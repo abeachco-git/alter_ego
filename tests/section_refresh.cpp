@@ -133,6 +133,39 @@ int case_section_refresh(int, char**) {
     joined.reset();
     assert(F::WaitForIds("join-test",{42},[]{return false;}));
     namespace S=AlterEgo::CharacterScopes;
+    // Footer reasons use the exact scheduler eligibility, never a parallel timer.
+    {
+        using W=A::WaitReason;
+        A::Tracker explain;
+        const A::Key hero{"account-explain","Hero"};
+        explain.Observe(hero.first,hero.second,34,true,now);
+        auto waiting=explain.Inspect(hero,"Core",0,now+1);
+        assert(waiting.active&&!waiting.fresh&&!waiting.eligibility.due);
+        assert(waiting.eligibility.reason==W::LoginGrace&&waiting.eligibility.at==now+600);
+        assert(explain.Due(hero,"Core",0,0,now+600));
+        auto attempt=explain.Begin(hero,"Core",now+600);
+        explain.Failure(hero,"Core",attempt,"HTTP 503");
+        auto retry=explain.Inspect(hero,"Core",0,now+601);
+        assert(retry.eligibility.reason==W::Retry&&retry.eligibility.at==now+1500);
+        assert(retry.error=="HTTP 503"&&!retry.eligibility.due);
+        auto newer=explain.Begin(hero,"Core",now+602);
+        explain.Failure(hero,"Core",attempt,"obsolete");
+        assert(explain.Inspect(hero,"Core",0,now+602).error.empty());
+        explain.Success(hero,"Core",newer,now+603);
+        auto current=explain.Inspect(hero,"Core",now+603,now+604);
+        assert(current.fresh&&current.error.empty()&&current.eligibility.reason==W::ActiveInterval);
+        explain.Observe(hero.first,hero.second,35,true,now+605);
+        auto spec=explain.Inspect(hero,"BuildTabs",now+603,now+606);
+        assert(spec.eligibility.reason==W::SpecDebounce&&spec.eligibility.at==now+613);
+        explain.Finish(now+620);
+        auto offline=explain.Inspect(hero,"Core",now+603,now+621);
+        assert(!offline.active&&!offline.fresh&&offline.eligibility.reason==W::LogoutGrace);
+        assert(offline.eligibility.at==now+1220);
+        assert(explain.Due(hero,"Core",now+603,0,now+1220));
+        auto finalPull=explain.Begin(hero,"Core",now+1220);
+        explain.Success(hero,"Core",finalPull,now+1221);
+        assert(explain.Inspect(hero,"Core",now+1221,now+99999).eligibility.reason==W::Current);
+    }
     A::Tracker scoped;S::Stamps stamps{};
     assert(S::Visible(1)==(S::Core|S::Crafting|S::Builds));
     assert((S::Compare&S::Crafting)==0);
