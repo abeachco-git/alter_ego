@@ -10,7 +10,7 @@
 #include <vector>
 namespace AlterEgo::RefreshEngine {
 inline constexpr int64_t BrowseSeconds=1800, DefaultObjectiveSeconds=900, FailureSeconds=900;
-inline constexpr int64_t CharacterSeconds=1800, LogoutGraceSeconds=300;
+inline constexpr int64_t CharacterSeconds=1800, LogoutGraceSeconds=600;
 inline constexpr int64_t SeasonSeconds=86400;
 inline std::atomic<int>& ObjectiveMinutesValue(){static std::atomic<int> n{15};return n;}
 inline int ObjectiveMinutes(){return ObjectiveMinutesValue().load();}
@@ -29,13 +29,27 @@ inline bool Due(int64_t success,int64_t attempt,int64_t now,int64_t interval,
     if(success<=0||success>now||success<minimumEpoch)return true;
     return now-success>=interval+offset;
 }
+// A request started during the propagation window cannot verify the final
+// logged-out state, even when a manual request completes successfully.
+inline bool LogoutReady(int64_t lastSeen,int64_t now){
+    return lastSeen<=0||(now>=lastSeen&&now-lastSeen>=LogoutGraceSeconds);
+}
+inline bool CanReconcileLogout(int64_t lastSeen,int64_t requestStarted){
+    return lastSeen>0&&LogoutReady(lastSeen,requestStarted);
+}
+// reconciledThrough is the latest observed activity explicitly covered by a
+// verified snapshot. Legacy callers may use success as their baseline, but
+// the activity scheduler must persist an independent watermark.
 inline bool CharacterDue(bool active,int64_t activeSince,int64_t lastSeen,int64_t success,
-                         int64_t attempt,int64_t now,bool changedSpec=false,bool manual=false){
+                         int64_t attempt,int64_t now,bool changedSpec=false,bool manual=false,
+                         int64_t reconciledThrough=-1){
     if(manual)return true;
     if(attempt>0&&attempt<=now&&now-attempt<FailureSeconds)return false;
+    if(active)return success<=0||changedSpec||now-std::max(activeSince,success)>=CharacterSeconds;
+    if(!LogoutReady(lastSeen,now))return false;
     if(success<=0)return true;
-    if(active)return changedSpec||now-std::max(activeSince,success)>=CharacterSeconds;
-    return lastSeen>success&&now-lastSeen>=LogoutGraceSeconds;
+    const auto covered=reconciledThrough>=0?reconciledThrough:success;
+    return lastSeen>covered;
 }
 // Claims are made BEFORE dispatching a worker. They live until the final
 // owner releases them, including cancellation/failed worker creation.

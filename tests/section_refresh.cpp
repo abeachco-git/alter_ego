@@ -29,8 +29,18 @@ int case_section_refresh(int, char**) {
     assert(!F::CharacterDue(true,now-10,now,now-100000,0,now));
     assert(F::CharacterDue(true,now-1800,now,now-100000,0,now));
     assert(F::CharacterDue(true,now-10,now,now-100000,0,now,true));
-    assert(F::CharacterDue(false,0,now-300,now-1000,0,now));
-    assert(!F::CharacterDue(false,0,now-299,now-1000,0,now));
+    static_assert(F::LogoutGraceSeconds==600);
+    assert(F::CharacterDue(false,0,now-600,now-1000,0,now));
+    assert(!F::CharacterDue(false,0,now-599,now-1000,0,now));
+    assert(!F::CharacterDue(false,0,now-599,0,0,now)); // even a missing offline snapshot waits
+    assert(F::CharacterDue(false,0,0,0,0,now)); // never observed; initial retrieval
+    assert(F::CharacterDue(false,0,now-10,now-1000,0,now,false,true)); // explicit refresh
+    assert(!F::CanReconcileLogout(now-599,now));
+    assert(F::CanReconcileLogout(now-600,now));
+    // An early manual success must not suppress the final eligible fetch.
+    assert(F::CharacterDue(false,0,now-600,now-300,0,now,false,false,now-1000));
+    assert(!F::CharacterDue(false,0,now-600,now-300,0,now,false,false,now-600));
+    assert(!F::CharacterDue(false,0,now-600,now-1000,now-10,now));
     auto a=F::ClaimIds("skills",{1,1,2});assert(a->ids.size()==2);
     auto b=F::ClaimIds("skills",{2,3},true);assert(b->ids==std::vector<uint32_t>{3});
     a.reset();assert(F::ClaimIds("skills",{1})->ids.empty());
