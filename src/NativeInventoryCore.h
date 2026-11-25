@@ -173,7 +173,10 @@ inline bool UsableLoose(const Slot& s,const std::string& account,const std::stri
     return true;
 }
 inline std::string Lower(std::string s){for(auto& c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;}
+inline bool Match(const std::string& name,uint32_t id,const std::vector<std::string>& words){
+    return Skinventory::Search::Matches(name+" "+std::to_string(id),words);
+}
 inline bool Match(const std::string& name,uint32_t id,const std::string& query){
-    return Skinventory::Search::Matches(name+" "+std::to_string(id),Skinventory::Search::Words(query));
+    return Match(name,id,Skinventory::Search::Words(query));
 }
 } // namespace AlterEgo::NativeInventory

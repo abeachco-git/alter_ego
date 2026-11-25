@@ -41,10 +41,19 @@ inline std::vector<std::string> Words(const std::string& s) {
     for (std::string token; in>>token;) out.push_back(token);
     return out;
 }
+// Opt-in minimum for search-first views; count non-whitespace bytes across
+// tokens so a short second word ("valk kr") remains valid.
+inline bool HasMinimumQuery(const std::vector<std::string>& query,size_t minimum=3) {
+    size_t count=0;
+    for(const auto& token:query){count+=token.size();if(count>=minimum)return true;}
+    return minimum==0;
+}
 inline bool Matches(const std::string& text, const std::vector<std::string>& query) {
     const auto hay=Lower(text);
     for (const auto& q:query) {
         if(hay.find(q)!=std::string::npos) continue;
+        // Numeric IDs are literal; do not turn a mistyped ID into a different item.
+        if(std::any_of(q.begin(),q.end(),[](unsigned char c){return std::isdigit(c)!=0;}))return false;
         bool found=false;
         for(const auto& word:Words(hay)) if(NearWord(q,word)) {found=true;break;}
         if(!found) return false;

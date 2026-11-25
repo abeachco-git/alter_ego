@@ -720,6 +720,14 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;});
     if(query!=previousQuery)nav.item=0;
     const char* sorts[]={"Name","Quantity"};ImGui::SetNextItemWidth(120);UI::Combo("##inventory_sort",&sort,sorts,2);
+    const auto tokens=Skinventory::Search::Words(query);
+    // Explicit Find in Inventory navigation can reveal even an unusually short ID.
+    const bool canSearch=Skinventory::Search::HasMinimumQuery(tokens)||
+        (nav.item!=0&&query==std::to_string(nav.item));
+    if(!canSearch){
+        ImGui::TextDisabled("Enter at least 3 characters to search inventory.");
+        return;
+    }
     // Cache the filtered aggregate: rebuild only on a new projection or changed controls.
     struct Group{uint32_t id;int64_t count=0;std::string name;std::vector<const Row*> locations;};
     static std::shared_ptr<const View> previous;static std::string prevKey;static std::vector<Group> groups;
@@ -728,7 +736,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         previous=v;prevKey=filterKey;groups.clear();std::map<uint32_t,size_t> index;
         for(const auto& row:v->inventory.rows){
             const auto& s=row.slot;
-            if(!allowed(s.account)||(!scope.empty()&&scope!=s.scope)||!MatchesFacet(binding,BindingName(s.binding))||!MatchesFacet(rarity,row.rarity)||!MatchesFacet(type,row.type)||!Match(row.name,s.id,query))continue;
+            if(!allowed(s.account)||(!scope.empty()&&scope!=s.scope)||!MatchesFacet(binding,BindingName(s.binding))||!MatchesFacet(rarity,row.rarity)||!MatchesFacet(type,row.type)||!Match(row.name,s.id,tokens))continue;
             if(!MatchesFacet(characterFilter,s.character))continue;
             const bool fresh=Fresh(*v,row);
             if((freshness==1&&!fresh)||(freshness==2&&fresh))continue;

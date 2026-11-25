@@ -78,6 +78,15 @@ int case_native_inventory(int,char**){
         assert(!Due(scope,100,0,1899)&&Due(scope,100,0,1900));
     }
     assert(Match("Superior Sigil of Force",10,"sigli force"));
+    using Skinventory::Search::Words;
+    using Skinventory::Search::HasMinimumQuery;
+    assert(!HasMinimumQuery(Words(""))&&!HasMinimumQuery(Words("  a b ")));
+    assert(HasMinimumQuery(Words("val"))&&HasMinimumQuery(Words("valk kr")));
+    assert(Match("Valkyrie Krait Star",12345,"valk kr"));
+    assert(Match("Valkyrie Krait Star",12345,"KR VALK"));
+    assert(!Match("Valkyrie Krait Star",12345,"valk sword"));
+    assert(!Match("Valkyrie Krait Star",12345,"12346"));
+    assert(Match("Valkyrie Krait Star",12345,"12345"));
     using AlterEgo::Cache::CompletionDataset;
     const auto vaultPeriod=[](int64_t stamp,int id){return Json{{"fetched_at",stamp},{"objectives",Json::array({Json{{"id",id},{"title","Objective"},{"claimed",false}}})}};};
     assert(Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"daily",vaultPeriod(100,1)},{"weekly",vaultPeriod(100,2)}}));
