@@ -110,7 +110,20 @@ int case_section_refresh(int, char**) {
     assert(gaps.Due(key,"Bags",now+1323,0,now+1922));
     auto a=F::ClaimIds("skills",{1,1,2});assert(a->ids.size()==2);
     auto b=F::ClaimIds("skills",{2,3},true);assert(b->ids==std::vector<uint32_t>{3});
+    a->MarkAttempted(a->ids.begin(),a->ids.begin()+1);
     a.reset();assert(F::ClaimIds("skills",{1})->ids.empty());
+    assert(F::ClaimIds("skills",{2})->ids.size()==1); // never attempted
+    auto abandoned=F::ClaimIds("cancel-test",{7,8});
+    abandoned.reset();
+    auto replacement=F::ClaimIds("cancel-test",{7,8});
+    assert(replacement->ids.size()==2);
+    replacement->MarkAttempted(replacement->ids.begin(),replacement->ids.begin()+1);
+    replacement.reset();
+    assert(F::ClaimIds("cancel-test",{7,8})->ids==std::vector<uint32_t>{8});
+    auto manualCancelled=F::ClaimIds("cancel-test",{7},true);
+    assert(manualCancelled->ids.size()==1);
+    manualCancelled.reset();
+    assert(F::ClaimIds("cancel-test",{7})->ids.empty()); // preserve original cooldown
     assert(F::ClaimIds("skills",{1},true)->ids.size()==1);
     assert(F::ClaimIds("items",{1})->ids.size()==1);
     auto joined=F::ClaimIds("join-test",{42});
