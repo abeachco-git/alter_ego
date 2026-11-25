@@ -95,6 +95,13 @@ int case_native_inventory(int,char**){
     assert(CanBrowseItems(true,false,false,false,false,false,true,false));
     assert(CanBrowseItems(true,false,false,false,false,false,false,true));
     const std::set<std::string> twoCharacters{"A","B"};
+    assert(MatchesStorageView("Bags",{"A"},"Bags","A"));
+    assert(!MatchesStorageView("Bags",{"A"},"Bags","B"));
+    assert(!MatchesStorageView("Bags",{"A"},"Equipment","A"));
+    assert(!MatchesStorageView("Items",{"A"},"Bank",""));
+    assert(MatchesStorageView("Items",twoCharacters,"Equipment","B"));
+    assert(MatchesStorageView("Items",{},"Bank",""));
+    assert(MatchesStorageView("Bags",{},"Bags","B"));
     assert(!CanBrowseItems(!twoCharacters.empty(),false,false,false,false,false,false,false));
     assert(Match("Valkyrie Krait Star",12345,"valk kr"));
     assert(Match("Valkyrie Krait Star",12345,"KR VALK"));
