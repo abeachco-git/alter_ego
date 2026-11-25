@@ -330,7 +330,7 @@ namespace AlterEgo {
         static std::string GetDataDirectory();
 
         // --- H&S integration ---
-        static HoardStatus GetAccountStatus();
+        static AccountStatus GetAccountStatus();
         static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via H&S
         static void RequestCharacterList();              // Fetch just the character name list
         static void RequestCharacterRefreshSelected(
