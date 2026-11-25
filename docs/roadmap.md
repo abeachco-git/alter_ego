@@ -8,12 +8,13 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 - [x] Direct native character/roster, equipment/build, skin, achievement, Clears and Vault consumers; no runtime H&S event dependency. Verified build c54865a; live testing outstanding.
 - [x] Account GUID ownership, same-account Fast Load gate, account-independent Library; conditional multi-account UI.
 - [x] Personal bank, shared inventory, material storage, bags, equipment, tools, armory and delivery item storage.
-- [x] Wallet balances and currency metadata, guild leader access and guild GUID-deduplicated stash/coins; implementation pending CI/live validation.
+- [x] Wallet balances and currency metadata, guild leader access and guild GUID-deduplicated stash/coins; CI passed at 972a3c9; live validation pending.
 - [x] Per-storage TTLs, failed-attempt cooldown, visible selected-account opt-in inventory refresh; broader dataset policies and independently committing Vault/Clears periods still outstanding.
 - [x] Inventory fuzzy search, rarity/type filters and name/quantity sort.
-- [x] Exact-ID Compare acquisition aid and binding/freshness-aware location display; Inventory navigation from equipment and Shopping List; cached unique acquisition candidates subtract personal loose stock from remaining shopping cost (CI/live validation pending).
+- [x] Exact-ID Compare acquisition aid and binding/freshness-aware location display; Inventory navigation from equipment and Shopping List; cached unique acquisition candidates subtract personal loose stock from remaining shopping cost (CI passed at 972a3c9; live validation pending).
 - [ ] Extend Compare to semantic stat/upgrade/infusion alternatives, quantities across all required components, and full eligibility; broaden Shopping candidate coverage beyond known TP item map.
-- [ ] Wallet favorites/categories, additional filters, refresh exclusions and fair bounded queue.
+- [x] Configurable automatic refresh exclusions by dataset, persisted in settings; manual refresh unaffected. Bounded FIFO shared HTTP admission with cancellation/timeout; CI/live validation pending.
+- [ ] Wallet favorites/categories, additional filters, endpoint deduplication and priority scheduling.
 - [ ] Full independent character/progress dataset freshness; per-section Clears/Vault commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.
 

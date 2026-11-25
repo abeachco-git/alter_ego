@@ -88,7 +88,7 @@ static void RestoreNavigation(const NavigationSnapshot& s){
         g_SelectedAccountFilter=s.account;
         if(!s.account.empty()){
             Skinventory::OwnedSkins::SetAccountName(s.account);
-            if(AlterEgo::AutoRefreshPolicy::Enabled())g_SkinRefreshOwned=true;
+            if(AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))g_SkinRefreshOwned=true;
             g_ClearsNeedRequery=true;g_VaultNeedRequery=true;g_AchNeedRequery=true;
         }
     }

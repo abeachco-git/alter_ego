@@ -1,4 +1,5 @@
 #include "ArenaNetTransport.h"
+#include "ArenaNetAdmission.h"
 #include "HttpSafety.h"
 #include <chrono>
 #include <mutex>
@@ -11,7 +12,8 @@ namespace AlterEgo::ArenaNet {
 using Clock=std::chrono::steady_clock;
 bool IsApiUrl(const std::string& url){return url.rfind(std::string(Origin)+"/v2/",0)==0;}
 namespace {
-std::mutex gate;
+Admission gate;
+struct GateLease {~GateLease(){gate.Release();}};
 Clock::time_point next{}, rateLimit{};
 struct Handle {
     HINTERNET value=nullptr;
@@ -24,12 +26,10 @@ struct Handle {
 Skinventory::HttpResponse Get(const std::string& path,const std::string& key,const std::string& extraHeaders){
     if(path.rfind("/v2/",0)!=0||path.find_first_of("\r\n\\#")!=std::string::npos||
        key.find_first_of("\r\n")!=std::string::npos)return {};
-    // One bounded in-flight request. Waiting workers check cancellation.
-    std::unique_lock<std::mutex> lock(gate,std::defer_lock);
-    while(!lock.try_lock()){
-        if(Background::Workers().Stopping())return {};
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
-    }
+    // FIFO admission with bounded queue and wait; callers retain previous
+    // snapshots on overload, timeout, cancellation or network failure.
+    if(!gate.Acquire([]{return Background::Workers().Stopping();},std::chrono::seconds(120)))return {};
+    GateLease lease;
     while(Clock::now()<std::max(next,rateLimit)){
         if(Background::Workers().Stopping())return {};
         std::this_thread::sleep_for(std::chrono::milliseconds(25));

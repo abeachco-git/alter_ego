@@ -156,8 +156,24 @@ void Remove(const std::string& id){
         Publish(removed?"Account unlinked. Library unchanged.":"Account unlinked; remove its remaining credential in Windows Credential Manager.");
     });
 }
+bool AutoScope(const std::string& scope){
+    using D=AutoRefreshPolicy::Dataset;
+    if(scope=="Bank")return AutoRefreshPolicy::Enabled(D::Bank);
+    if(scope=="Shared inventory")return AutoRefreshPolicy::Enabled(D::SharedInventory);
+    if(scope=="Materials")return AutoRefreshPolicy::Enabled(D::Materials);
+    if(scope=="Bags")return AutoRefreshPolicy::Enabled(D::Bags);
+    if(scope=="Equipment")return AutoRefreshPolicy::Enabled(D::Equipment);
+    if(scope=="Legendary Armory")return AutoRefreshPolicy::Enabled(D::Armory);
+    if(scope=="Delivery box")return AutoRefreshPolicy::Enabled(D::Delivery);
+    if(scope=="Wallet")return AutoRefreshPolicy::Enabled(D::Wallet);
+    if(scope=="Guild bank"||scope=="Guild access")return AutoRefreshPolicy::Enabled(D::Guild);
+    if(scope=="Roster")return AutoScope("Bags")||AutoScope("Equipment");
+    return false;
+}
 bool ScopeDue(const View& v,const std::string& account,const std::string& scope,const std::string& character={}){
     auto it=v.scopes.find({account,scope,character});
+    if(!AutoScope(scope))return false;
+    if(it!=v.scopes.end()&&it->second.status=="Missing permissions")return false;
     return it==v.scopes.end()||Due(scope,it->second.attempted,it->second.success,Now());
 }
 bool Fresh(const View& v,const Row& row){
@@ -243,7 +259,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             scope("Materials",{},"/v2/account/materials",false);
             scope("Legendary Armory",{},"/v2/account/legendaryarmory",false);
             scope("Delivery box",{},"/v2/commerce/delivery",false);
-            if(onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment"){
+            if((onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment")&&(!automatic||AutoScope("Roster"))){
                 if(!a.permissions.count("characters")){
                     ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};Record(root,failed);
                 }else try{
@@ -262,6 +278,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
         // Resolve names in bounded batches. Missing metadata cannot discard verified slots.
         auto cached=Read(root);
         for(const auto& row:cached.rows)if(!row.name.empty()&&cached.flags.count(row.slot.id))ids.erase(row.slot.id);
+        for(const auto& [id,g]:cached.guilds)for(const auto& row:g.rows)if(!row.name.empty()&&cached.flags.count(row.slot.id))ids.erase(row.slot.id);
         if(currencyMetadataNeeded&&std::any_of(cached.wallet.begin(),cached.wallet.end(),[](const WalletRow& w){return w.name.empty();}))
             try{StoreCurrencies(root,Fetch("/v2/currencies?ids=all",{}));}catch(...){} 
         std::string batch;unsigned count=0;

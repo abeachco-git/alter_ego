@@ -1586,6 +1586,7 @@ static void SaveSettings() {
     j["show_playtime"] = g_ShowPlaytime;
     j["show_last_login"] = g_ShowLastLogin;
     j["auto_refresh_enabled"] = g_AutoRefreshEnabled;
+    j["auto_refresh_datasets"] = AlterEgo::AutoRefreshPolicy::GetMask();
     j["auto_refresh_on_login"] = g_AutoRefreshOnLogin;
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
     j["warn_stale_specialization"] = g_WarnStaleSpecialization;
@@ -1631,6 +1632,9 @@ static void LoadSettings() {
     getBool("show_playtime", g_ShowPlaytime);
     getBool("show_last_login", g_ShowLastLogin);
     getBool("auto_refresh_enabled", g_AutoRefreshEnabled);
+    AlterEgo::AutoRefreshPolicy::SetMask(AlterEgo::AutoRefreshPolicy::AllMask);
+    if(j.contains("auto_refresh_datasets")&&j["auto_refresh_datasets"].is_number_unsigned())
+        AlterEgo::AutoRefreshPolicy::SetMask(j["auto_refresh_datasets"].get<uint32_t>());
     getBool("auto_refresh_on_login", g_AutoRefreshOnLogin);
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
     getBool("warn_stale_specialization", g_WarnStaleSpecialization);
@@ -2528,7 +2532,7 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
 }
 
 static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic,uint32_t categoryId){
-    if(!APIDefs||(automatic&&!AlterEgo::AutoRefreshPolicy::Enabled()))return;
+    if(!APIDefs||(automatic&&!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)))return;
     const std::string account=GetEffectiveAccountName();
     if(account.empty())return;
     uint64_t generation;
@@ -12605,7 +12609,7 @@ void AddonLoad(AddonAPI_t* aApi) {
         if (Skinventory::SkinCache::LoadFromDisk()) {
             // Refreshing cached API metadata obeys the global option;
             // initial catalog creation is required to use Skinventory.
-            if (AlterEgo::AutoRefreshPolicy::Enabled())
+            if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog))
                 Skinventory::SkinCache::UpdateCacheAsync();
         } else {
             Skinventory::SkinCache::FetchAllSkinsAsync();
@@ -12848,7 +12852,7 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
     const auto observed = g_AutoRefreshTracker.ObserveIdentity(
         newName, id->Specialization,
         AlterEgo::AutoRefreshTracker::Clock::now(),
-        AlterEgo::AutoRefreshPolicy::Enabled(),
+        AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters),
         g_AutoRefreshOnLogin, g_AutoRefreshOnSpecialization);
     if (newName.empty()) return;
     if (observed.login) {
@@ -14792,7 +14796,7 @@ static void RenderAchievements() {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             pinnedCopy = g_AchPinned;
         }
-        if (AlterEgo::AutoRefreshPolicy::Enabled() && !pinnedCopy.empty()) {
+        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) && !pinnedCopy.empty()) {
             SendAchProgressQuery(pinnedCopy, true);
         }
         // The active category is handled by the 30-minute per-category timer
@@ -14805,7 +14809,7 @@ static void RenderAchievements() {
         const uint32_t pendingCat = g_AchCatProgressPending.exchange(0);
         if (pendingCat > 0) {
             const bool automatic = g_AchCatProgressAutomatic.exchange(false);
-            if (!automatic || AlterEgo::AutoRefreshPolicy::Enabled()) {
+            if (!automatic || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)) {
                 std::vector<uint32_t> ids;
                 {
                     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -14821,7 +14825,7 @@ static void RenderAchievements() {
 
     // Refresh only the active category when due, not the entire cached account.
     // When definitions are missing, fetch just this category and continue later.
-    if (AlterEgo::AutoRefreshPolicy::Enabled() && !g_AchNeedsInitialFullLoad &&
+    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) && !g_AchNeedsInitialFullLoad &&
         g_AchSelectedCatId > 0 && !g_AchProgressFetching && !g_AchCatFetching &&
         g_AchCatProgressPending.load() == 0 && g_AchRetryAtMs.load() == 0 &&
         IsAchCategoryRefreshDue(g_AchSelectedCatId)) {
@@ -14857,7 +14861,7 @@ static void RenderAchievements() {
             }
         }
         if (!retryIds.empty() &&
-            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled())) {
+            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements))) {
             SendAchProgressQuery(retryIds, g_AchRetryAutomatic.load());
         }
     }
@@ -14868,7 +14872,7 @@ static void RenderAchievements() {
 
     // A full native account snapshot needs one request, not one per category.
     if(g_AchNeedsInitialFullLoad&&!g_AchProgressFetching&&!g_AchCatFetching&&
-       (AlterEgo::AutoRefreshPolicy::Enabled()||g_AchManualInitialScan)){
+       (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)||g_AchManualInitialScan)){
         static auto lastAttempt=std::chrono::steady_clock::time_point{};
         static std::string lastAccount;
         const auto account=GetAchievementCacheAccount();
@@ -15504,7 +15508,7 @@ static void RenderAchPopout() {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             pinnedCopy = g_AchPinned;
         }
-        if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) &&
             !pinnedCopy.empty() && !g_AchProgressFetching) {
             g_LastAchProgressQuery = std::chrono::steady_clock::now();
             SendAchProgressQuery(pinnedCopy, true);
@@ -15522,7 +15526,7 @@ static void RenderAchPopout() {
             pinnedCopy = g_AchPinned;
         }
         if (!pinnedCopy.empty() &&
-            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled())) {
+            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements))) {
             SendAchProgressQuery(pinnedCopy, g_AchRetryAutomatic.load());
         }
     }
@@ -15914,24 +15918,26 @@ static void RenderSkinventoryStatusRow() {
     }
     Skinventory::OwnedSkins::SetAccountName(visibleAccount);
     if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag() &&
-        AlterEgo::AutoRefreshPolicy::Enabled())
+        AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))
         g_SkinRefreshOwned = true;
     bool querying = Skinventory::OwnedSkins::IsQuerying();
     bool canRefresh = Skinventory::OwnedSkins::IsAccountAvailable() && !querying;
     {
         static std::string s_autoRefreshAccount;
+        static auto s_lastOwnershipAttempt=std::chrono::steady_clock::time_point{};
         const std::string currentAccount = GetEffectiveAccountName();
         const std::time_t lastSuccess = Skinventory::OwnedSkins::GetLastSuccessTime();
         const std::time_t now = std::time(nullptr);
         const bool stale = !Skinventory::OwnedSkins::HasData() ||
             lastSuccess <= 0 || (now > lastSuccess && now - lastSuccess > 15 * 60);
-        if (AlterEgo::AutoRefreshPolicy::Enabled() && canRefresh &&
+        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership) && canRefresh &&
             !currentAccount.empty() && stale &&
-            s_autoRefreshAccount != currentAccount) {
-            s_autoRefreshAccount = currentAccount;
+            (s_autoRefreshAccount != currentAccount||std::chrono::steady_clock::now()-s_lastOwnershipAttempt>=std::chrono::seconds(60))) {
+            s_autoRefreshAccount = currentAccount;s_lastOwnershipAttempt=std::chrono::steady_clock::now();
             g_SkinRefreshOwned = true;
         }
     }
+    if(g_SkinRefreshOwned&&!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))g_SkinRefreshOwned=false;
     if (g_SkinRefreshOwned && canRefresh) {
         g_SkinRefreshOwned = false;
         s_refreshPending = true;
@@ -16064,7 +16070,7 @@ struct DefaultFontScope {
 // Never dispatch API requests inside a MumbleLink event callback. The
 // render-driven scheduler checks readiness, throttling, and existing activity.
 static void PollAutoCharacterRefresh() {
-    if (!AlterEgo::AutoRefreshPolicy::Enabled()) {
+    if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters)) {
         g_AutoRefreshTracker.CancelPending();
         return;
     }
@@ -16076,7 +16082,7 @@ static void PollAutoCharacterRefresh() {
     std::string name;
     if (g_AutoRefreshTracker.TakeDueRequest(
             AlterEgo::AutoRefreshTracker::Clock::now(),
-            AlterEgo::AutoRefreshPolicy::Enabled(), ready, busy, name)) {
+            AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters), ready, busy, name)) {
         // Login/spec-change refreshes need equipment and builds, not crafting
         // professions that are already present in the persistent character cache.
         AlterEgo::GW2API::RequestCharacterRefreshSelected({name}, false);
@@ -16247,7 +16253,7 @@ void AddonRender() {
             bool firstRun = (s_lastPinnedRefresh == std::chrono::steady_clock::time_point{});
             bool expired  = !firstRun &&
                 (now - s_lastPinnedRefresh) >= std::chrono::minutes(10);
-            if (AlterEgo::AutoRefreshPolicy::Enabled() && (firstRun || expired)) {
+            if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) && (firstRun || expired)) {
                 std::vector<uint32_t> pinnedCopy;
                 {
                     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -16348,7 +16354,7 @@ void AddonRender() {
 
             // Auto-fetch character list when native API first becomes ready and we have no data
             // Wait for accounts data so we get characters from ALL accounts
-            if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+            if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters) &&
                 !g_AutoCharListRequested && hoardReady && !scanning &&
                 characters.empty() && pendingNames.empty() &&
                 AlterEgo::GW2API::HasAccountsData()) {
@@ -17541,7 +17547,7 @@ void AddonRender() {
                 }
                 if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
                     Skinventory::OwnedSkins::SetAccountName(g_SelectedAccountFilter);
-                    if (AlterEgo::AutoRefreshPolicy::Enabled())
+                    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))
                         g_SkinRefreshOwned = true;
                     g_ClearsNeedRequery = true;
                     g_VaultNeedRequery = true;
@@ -17928,7 +17934,7 @@ void AddonOptions() {
             // Refresh a stale visible section immediately when re-enabled.
             if (g_MainTab == 3) RefreshVaultOnEntry();
             else if (g_MainTab == 6) RefreshClearsOnEntry();
-            if (g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
+            if (AlterEgo::AutoRefreshPolicy::Included(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog) && g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
                 Skinventory::SkinCache::UpdateCacheAsync();
             if ((!g_AchPinned.empty() || g_AchSelectedCatId > 0) &&
                 g_AchRetryAtMs.load() == 0) {
@@ -17952,6 +17958,22 @@ void AddonOptions() {
         ImGui::PopItemFlag();
     }
     ImGui::Unindent(16.0f);
+    if(ImGui::TreeNode("Automatic refresh datasets")){
+        using namespace AlterEgo::AutoRefreshPolicy;
+        ImGui::TextDisabled("Excluded datasets can still be refreshed manually.");
+        for(uint32_t i=0;i<static_cast<uint32_t>(Dataset::Count);++i){
+            const auto dataset=static_cast<Dataset>(i);
+            bool included=Included(dataset);
+            if(ImGui::Checkbox(Labels[i],&included)){
+                SetIncluded(dataset,included);
+                if(!included&&dataset==Dataset::Characters)g_AutoRefreshTracker.CancelPending();
+                if(!included&&dataset==Dataset::SkinOwnership)g_SkinRefreshOwned=false;
+                if(!included&&dataset==Dataset::Achievements&&g_AchRetryAutomatic.load())g_AchRetryAtMs=0;
+                SaveSettings();
+            }
+        }
+        ImGui::TreePop();
+    }
     if (ImGui::Checkbox("Warn when live specialization differs from retrieved build##ae_warn_spec",
                         &g_WarnStaleSpecialization))
         SaveSettings();

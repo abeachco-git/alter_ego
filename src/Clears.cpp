@@ -2416,7 +2416,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         g_VaultStatusMessage.clear();
     }
 
-    if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault) &&
         !g_VaultFetched.load() && !g_VaultFetching.load() && !g_VaultInitialAttempted)
         FetchVaultData();
 
@@ -3102,7 +3102,7 @@ static void RenderClearsShared(bool showVault) {
         g_ClearsQueryPending = false;
         g_ClearsCompletionInFlight = false;
         g_ClearsQueryStartedAtMs = 0;
-        g_ClearsStatusMsg = AlterEgo::AutoRefreshPolicy::Enabled()
+        g_ClearsStatusMsg = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)
             ? "New daily reset detected; fetching current objectives..."
             : "Daily reset detected - click Refresh for current objectives";
         g_LastDailyReset = dailyReset;
@@ -3119,7 +3119,7 @@ static void RenderClearsShared(bool showVault) {
         g_LastWeeklyReset = weeklyReset;
         resetTriggered = true;
     }
-    if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
         resetTriggered && !g_ClearsFetching)
         FetchClears();
 
@@ -3138,11 +3138,12 @@ static void RenderClearsShared(bool showVault) {
             g_VaultPriorDailyIds = DailyIds(g_VaultDaily);
             if (!g_VaultWeeklyRolloverPending) g_VaultRolloverRetries = 0;
         }
+        ++g_VaultGeneration;g_VaultFetching=false;g_VaultRetryAtMs=0;
         g_VaultDailyRolloverPending = true;
         g_VaultDaily = {};  // do not display previous-day daily objectives
         g_VaultFetched = false;
         g_VaultInitialAttempted = true; // explicit FetchVaultData/retry owns this batch
-        g_VaultStatusMessage = AlterEgo::AutoRefreshPolicy::Enabled()
+        g_VaultStatusMessage = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)
             ? "New daily reset detected; fetching current Vault..."
             : "Daily reset detected - click Refresh for current Vault";
         g_VaultLastDailyReset = dailyReset;
@@ -3154,18 +3155,19 @@ static void RenderClearsShared(bool showVault) {
             g_VaultPriorWeekly = g_VaultWeekly;
             if (!g_VaultDailyRolloverPending) g_VaultRolloverRetries = 0;
         }
+        ++g_VaultGeneration;g_VaultFetching=false;g_VaultRetryAtMs=0;
         g_VaultWeeklyRolloverPending = true;
         g_VaultWeekly = {};  // never display the previous week's claimed objectives
         g_VaultFetched = false;
         g_VaultInitialAttempted = true; // explicit FetchVaultData/retry owns this batch
-        g_VaultStatusMessage = AlterEgo::AutoRefreshPolicy::Enabled()
+        g_VaultStatusMessage = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)
             ? "New weekly reset detected; fetching current Vault..."
             : "Weekly reset detected - click Refresh for current Vault";
         g_VaultLastWeeklyReset = weeklyReset;
         vaultResetTriggered = true;
     }
     // Do not refresh Vault while showing Clears or on unrelated tab visits.
-    if (showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if (showVault && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault) &&
         vaultResetTriggered && !g_VaultFetching.load())
         FetchVaultData();
 
@@ -3173,7 +3175,7 @@ static void RenderClearsShared(bool showVault) {
     // submit Nexus events), and never overlap with an in-flight fetch.
     if (!g_ClearsFetching && !g_ClearsQueryPending.load()) {
         const long long due = g_ClearsDailyRolloverRetryAtMs.load();
-        if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+        if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
             due != 0 && NowMs() >= due) {
             g_ClearsDailyRolloverRetryAtMs = 0;
             FetchClears();
@@ -3182,7 +3184,7 @@ static void RenderClearsShared(bool showVault) {
     bool retryVaultRollover = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+        if (showVault && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault) &&
             (g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending) &&
             !g_VaultFetching.load() && g_VaultRolloverRetryAtMs != 0 &&
             NowMs() >= g_VaultRolloverRetryAtMs) {
@@ -3190,7 +3192,7 @@ static void RenderClearsShared(bool showVault) {
             retryVaultRollover = true;
         }
     }
-    if (showVault && retryVaultRollover && AlterEgo::AutoRefreshPolicy::Enabled())
+    if (showVault && retryVaultRollover && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault))
         FetchVaultData();
 
     // A missing API response must not permanently suppress manual or
@@ -3221,11 +3223,11 @@ static void RenderClearsShared(bool showVault) {
             // Never display completion counts from the previous account,
             // even if the global automatic API refresh option is disabled.
             g_ClearsLastSuccessTime = 0;
-            g_ClearsStatusMsg = AlterEgo::AutoRefreshPolicy::Enabled()
+            g_ClearsStatusMsg = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)
                 ? "Refreshing completion for new account..."
                 : "Account changed - click Refresh to update completions";
         }
-        if (AlterEgo::AutoRefreshPolicy::Enabled()) {
+        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)) {
             if (g_ClearsFetched) SendClearsAchQuery();
             else FetchClears();
         }
@@ -3248,7 +3250,7 @@ static void RenderClearsShared(bool showVault) {
     }
 
     auto steadyNow = std::chrono::steady_clock::now();
-    if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
         !showVault && g_ClearsFetched && !g_ClearsFetching &&
         !g_ClearsDailyRolloverPending &&
         !g_ClearsCompletionInFlight.load() && !g_ClearsQueryPending.load() &&
@@ -3399,7 +3401,7 @@ void RenderVaultStatusRow() {
         showingData = g_VaultFetched.load();
         failed = g_VaultLastAttemptFailed;
         pending = g_VaultFetching.load();
-        waitingForRollover = AlterEgo::AutoRefreshPolicy::Enabled() &&
+        waitingForRollover = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault) &&
             (g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending) &&
             g_VaultRolloverRetryAtMs != 0;
         status = g_VaultStatusMessage;
@@ -3468,7 +3470,7 @@ void RenderClearsStatusRow() {
 // have already run. Navigation itself is the trigger; manual Refresh
 // intentionally continues to force a full request.
 void RefreshVaultOnEntry() {
-    if (!AlterEgo::AutoRefreshPolicy::Enabled()) return;
+    if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)) return;
     if (g_VaultNeedRequery || g_VaultFetching.load()) return;
     bool stale = false;
     bool haveData = false;
@@ -3484,7 +3486,7 @@ void RefreshVaultOnEntry() {
 }
 
 void RefreshClearsOnEntry() {
-    if (!AlterEgo::AutoRefreshPolicy::Enabled()) return;
+    if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)) return;
     if (g_ClearsNeedRequery || g_ClearsFetching ||
         g_ClearsCompletionInFlight.load() ||
         g_ClearsQueryPending.load() || g_ClearsRetryAtMs.load() != 0 ||
