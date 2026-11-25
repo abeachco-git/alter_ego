@@ -9481,6 +9481,8 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     // Re-resolve any item/stat names that weren't available at import time
     // (e.g. API rate-limited or offline). Queues async fetches for missing IDs.
     ResolveBuildItemNames(build);
+    RenderLoadoutComponentSelectors(source.id);
+    ImGui::Spacing();
 
     // Specializations with trait grid (same logic as RenderBuildPanel)
     const float iconSz = TRAIT_ICON_SIZE;
@@ -9963,8 +9965,6 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     ImGui::Spacing();
     ImGui::Spacing();
 
-    RenderLoadoutComponentSelectors(source.id);
-    ImGui::Spacing();
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
     if(g_GearDialogOpen)ImGui::TextDisabled("Save or cancel the gear customization draft first.");
     RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen);

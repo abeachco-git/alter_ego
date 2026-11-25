@@ -48,3 +48,5 @@ See the [roadmap](docs/roadmap.md) for internal work and the [release checklist]
 - Correct shared Windows Unicode clipboard writes to use a valid game-process window owner rather than a null owner.
 
 - Restore aquatic equipment in saved Loadouts, simplify Components context menus and slot disclosures, and allow standalone Equipment Set creation.
+
+- Rename visible Skins and Wizard's Vault tabs; add achievement Copy Name; use host clipboard callbacks; compact Loadout references with inline editing and shared popup fields; improve automatic component naming and utility comparison regression coverage.

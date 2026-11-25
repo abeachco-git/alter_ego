@@ -661,8 +661,7 @@ static void BeginNewEquipmentSet(){
     e.open=true;e.isSet=true;e.newSet=true;
     e.revision=AlterEgo::GW2API::GetBuildLibraryRevision();
 }
-static void DraftSelectEquipmentSet(const ComponentJson& doc,const std::string& id) {
-    auto& e=g_ReferenceEditor;
+static void SelectDraftEquipmentSet(ReferenceEditorDraft& e,const ComponentJson& doc,const std::string& id) {
     if(e.setId==id)return;
     if(const auto* old=ComponentUIFindSet(doc,e.setId))
         for(const auto& [kind,ref]:ComponentUIRefs(*old))e.refs[kind]=ref;
@@ -670,8 +669,43 @@ static void DraftSelectEquipmentSet(const ComponentJson& doc,const std::string& 
         for(const auto& [kind,ref]:ComponentUIRefs(*next))e.refs.erase(kind);
     e.setId=id;e.confirmed=false;
 }
+static void DraftSelectEquipmentSet(const ComponentJson& doc,const std::string& id){SelectDraftEquipmentSet(g_ReferenceEditor,doc,id);}
 static void RenderReferenceGroupLabel(const char* label) {
     ImGui::Spacing();ImGui::TextUnformatted(label);ImGui::Separator();
+}
+static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,const ComponentJson& item,bool reference=false,bool mutableActions=true);
+static bool ReferenceHitRow(const std::string& name,bool inherited,const char* hint){
+    const float width=std::max(1.f,ImGui::GetContentRegionAvail().x);
+    const float reserve=inherited?18.f:0.f;
+    const float wrap=std::max(1.f,width-reserve);
+    const auto start=ImGui::GetCursorScreenPos();
+    const float height=std::max(ImGui::GetTextLineHeight(),ImGui::CalcTextSize(name.c_str(),nullptr,false,wrap).y);
+    const bool clicked=ImGui::Selectable("##reference",false,ImGuiSelectableFlags_SpanAllColumns,ImVec2(width,height));
+    auto* draw=ImGui::GetWindowDrawList();
+    draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),start,ImGui::GetColorU32(ImGuiCol_Text),name.c_str(),nullptr,wrap);
+    if(inherited){
+        const float x=start.x+width-11.f,y=start.y+ImGui::GetTextLineHeight()*0.5f;
+        const auto color=ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        draw->AddCircle(ImVec2(x-3.f,y+2.f),3.f,color,12,1.2f);
+        draw->AddCircle(ImVec2(x+3.f,y-2.f),3.f,color,12,1.2f);
+        draw->AddLine(ImVec2(x-1.f,y+1.f),ImVec2(x+1.f,y-1.f),color,1.2f);
+    }
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",name.c_str(),hint);
+    return clicked;
+}
+static void ReferenceComponentActions(const ComponentJson& doc,const std::string& kind,const std::string& id,bool mutableActions){
+    if(const auto* part=ComponentUIFind(doc,kind,id))
+        if(ImGui::BeginPopupContextItem("##ref_actions")){
+            ComponentRowMenu(doc,kind,*part,true,mutableActions);
+            ImGui::EndPopup();
+        }
+}
+static void RenderReferenceValue(const ComponentJson& doc,const std::string& kind,const std::string& id,bool inherited,bool mutableActions,const char* empty="Not set"){
+    const auto name=ComponentUIRefName(doc,kind,id,empty);
+    if(!ComponentUIFind(doc,kind,id)){ImGui::TextDisabled("%s",name.c_str());return;}
+    const char* hint=inherited?"From Equipment Set. Right-click for actions.":"Right-click for actions.";
+    if(ReferenceHitRow(name,inherited,hint)&&mutableActions)ComponentUIOpenLibrary(kind,id);
+    ReferenceComponentActions(doc,kind,id,mutableActions);
 }
 static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* loadout,
     const std::string& kind,ReferenceMap& refs,bool allowOmit) {
@@ -692,7 +726,7 @@ static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* 
             }
         }
         ImGui::EndCombo();
-    }
+    }else ReferenceComponentActions(doc,kind,ref,false);
     return changed;
 }
 static std::string ComponentUIFashionName(const std::string& id){
@@ -701,6 +735,81 @@ static std::string ComponentUIFashionName(const std::string& id){
     return "(missing saved appearance)";
 }
 static constexpr int kEquipmentReferenceOrder[]={2,4,6,5,3,8,7};
+static constexpr int kBuildReferenceOrder[]={0,1};
+static void ReferenceTableColumns(){
+    ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,116.f);
+    ImGui::TableSetupColumn("Selection",ImGuiTableColumnFlags_WidthStretch);
+}
+static void ReferenceLabel(const char* label){
+    ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);
+    ImGui::TableSetColumnIndex(1);
+}
+static void RenderEditableReferenceRows(const ComponentJson& doc,const ComponentJson* owner,ReferenceEditorDraft& e,const int* kinds,int count){
+    const auto* linked=e.isSet?nullptr:ComponentUIFindSet(doc,e.setId);
+    ComponentJson candidate=owner?*owner:ComponentJson::object();
+    for(int j=0;j<count;++j){
+        const std::string kind=kComponentKinds[kinds[j]].kind;
+        ImGui::PushID(kind.c_str());ReferenceLabel(ComponentLabel(kind));
+        if(linked&&linked->at("refs").contains(kind)){
+            RenderReferenceValue(doc,kind,linked->at("refs").value(kind,std::string()),true,false);
+        }else{
+            candidate["refs"]=e.refs;
+            if(RenderReferencePicker(doc,e.isSet?nullptr:&candidate,kind,e.refs,e.isSet))e.confirmed=false;
+        }
+        ImGui::PopID();
+    }
+}
+static void RenderSetReferencePicker(const ComponentJson& doc,ReferenceEditorDraft& e){
+    const auto* linked=ComponentUIFindSet(doc,e.setId);
+    const auto label=linked?linked->value("name",e.setId):std::string("Independent components");
+    ImGui::SetNextItemWidth(-1);
+    if(AlterEgo::UI::BeginCombo("##draft_set",label.c_str())){
+        if(AlterEgo::UI::SelectableOption("Independent components",e.setId.empty()))SelectDraftEquipmentSet(e,doc,"");
+        if(doc.contains("equipment_sets"))for(const auto& set:doc.at("equipment_sets")){
+            const auto id=set.value("id",std::string());
+            if(AlterEgo::UI::SelectableOption((set.value("name",id)+"##"+id).c_str(),id==e.setId))SelectDraftEquipmentSet(e,doc,id);
+        }
+        ImGui::EndCombo();
+    }else if(linked&&ImGui::BeginPopupContextItem("##set_ref_copy")){
+        CopyNameMenuItem(label);ImGui::EndPopup();
+    }
+}
+static void RenderFashionReferencePicker(ReferenceEditorDraft& e){
+    ImGui::SetNextItemWidth(-1);
+    if(AlterEgo::UI::BeginCombo("##draft_fashion",ComponentUIFashionName(e.fashionId).c_str())){
+        if(AlterEgo::UI::SelectableOption("None",e.fashionId.empty()))e.fashionId.clear();
+        for(const auto& look:g_FashionLibrary.looks)
+            if(AlterEgo::UI::SelectableOption((look.name+"##"+look.id).c_str(),look.id==e.fashionId))e.fashionId=look.id;
+        ImGui::EndCombo();
+    }else if(!e.fashionId.empty()&&ImGui::BeginPopupContextItem("##fashion_ref_copy")){
+        CopyNameMenuItem(ComponentUIFashionName(e.fashionId));ImGui::EndPopup();
+    }
+}
+static void RenderEditableReferences(const ComponentJson& doc,const ComponentJson* owner,ReferenceEditorDraft& e){
+    if(!e.isSet){
+        RenderReferenceGroupLabel("Build");
+        if(ImGui::BeginTable("##draft_build",2,ImGuiTableFlags_SizingStretchProp)){
+            ReferenceTableColumns();RenderEditableReferenceRows(doc,owner,e,kBuildReferenceOrder,IM_ARRAYSIZE(kBuildReferenceOrder));ImGui::EndTable();
+        }
+    }
+    RenderReferenceGroupLabel("Equipment");
+    if(ImGui::BeginTable("##draft_equipment",2,ImGuiTableFlags_SizingStretchProp)){
+        ReferenceTableColumns();
+        if(!e.isSet){ReferenceLabel("Equipment Set");RenderSetReferencePicker(doc,e);}
+        RenderEditableReferenceRows(doc,owner,e,kEquipmentReferenceOrder,IM_ARRAYSIZE(kEquipmentReferenceOrder));
+        if(!e.isSet){ReferenceLabel("Fashion");RenderFashionReferencePicker(e);}
+        ImGui::EndTable();
+    }
+}
+static bool ApplyParentReferenceDraft(ReferenceEditorDraft& e){
+    if(!g_LibEditMode||!g_EditRefsReady||e.id!=g_EditDraftId||g_GearDialogOpen){
+        e.error="Parent Loadout draft is unavailable. Close gear editing first.";return false;
+    }
+    if(!AlterEgo::GW2API::RebaseLoadoutDraft(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,e.setId,e.fashionId,e.refs,e.revision,e.error))return false;
+    g_EditRefs=e.refs;g_EditSetId=e.setId;g_EditFashionId=e.fashionId;
+    g_EditSharedKinds.clear();g_LibDetailsFetched=false;MarkEditDirty();return true;
+}
 static void RenderReferenceEditor(){
     using namespace AlterEgo;
     auto& e=g_ReferenceEditor;
@@ -717,57 +826,7 @@ static void RenderReferenceEditor(){
     if(stale)ImGui::TextWrapped("Library changed. Cancel and reopen to avoid overwriting newer changes.");
     ImGui::BeginChild("##reference_editor_fields",ImVec2(0,-110),false);
     if(e.isSet){ImGui::SetNextItemWidth(-1);UI::InputText("Name",e.name);}
-    const auto renderRows=[&](const char* table,const int* kinds,int count){
-        if(ImGui::BeginTable(table,2,ImGuiTableFlags_SizingStretchProp)){
-            ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,116.f);
-            ImGui::TableSetupColumn("Selection",ImGuiTableColumnFlags_WidthStretch);
-            const auto* linked=e.isSet?nullptr:ComponentUIFindSet(doc,e.setId);
-            for(int j=0;j<count;++j){
-                const std::string kind=kComponentKinds[kinds[j]].kind;
-                ImGui::PushID(kind.c_str());ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
-                ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(ComponentLabel(kind));
-                ImGui::TableSetColumnIndex(1);
-                if(linked&&linked->at("refs").contains(kind)){
-                    const auto id=linked->at("refs").value(kind,std::string());
-                    ImGui::TextWrapped("%s",ComponentUIRefName(doc,kind,id).c_str());
-                    ImGui::TextDisabled("From Equipment Set");
-                }else if(RenderReferencePicker(doc,e.isSet?nullptr:owner,kind,e.refs,e.isSet))e.confirmed=false;
-                ImGui::PopID();
-            }
-            ImGui::EndTable();
-        }
-    };
-    if((owner||e.newSet)&&doc.contains("components")){
-        if(!e.isSet){
-            RenderReferenceGroupLabel("Build");
-            const int buildKinds[]={0,1};renderRows("##draft_build",buildKinds,2);
-        }
-        RenderReferenceGroupLabel("Equipment");
-        if(!e.isSet){
-            const auto* linked=ComponentUIFindSet(doc,e.setId);
-            const std::string shown=linked?linked->value("name",e.setId):"Independent components";
-            ImGui::TextUnformatted("Equipment Set");ImGui::SetNextItemWidth(-1);
-            if(UI::BeginCombo("##draft_set",shown.c_str())){
-                if(UI::SelectableOption("Independent components",e.setId.empty()))DraftSelectEquipmentSet(doc,"");
-                if(doc.contains("equipment_sets"))for(const auto& set:doc.at("equipment_sets")){
-                    const auto id=set.value("id",std::string());
-                    if(UI::SelectableOption((set.value("name",id)+"##"+id).c_str(),id==e.setId))DraftSelectEquipmentSet(doc,id);
-                }
-                ImGui::EndCombo();
-            }
-        }
-        renderRows("##draft_equipment",kEquipmentReferenceOrder,IM_ARRAYSIZE(kEquipmentReferenceOrder));
-        if(!e.isSet){
-            RenderReferenceGroupLabel("Fashion");
-            ImGui::SetNextItemWidth(-1);
-            if(UI::BeginCombo("##draft_fashion",ComponentUIFashionName(e.fashionId).c_str())){
-                if(UI::SelectableOption("None",e.fashionId.empty()))e.fashionId.clear();
-                for(const auto& look:g_FashionLibrary.looks)
-                    if(UI::SelectableOption((look.name+"##"+look.id).c_str(),look.id==e.fashionId))e.fashionId=look.id;
-                ImGui::EndCombo();
-            }
-        }
-    }
+    if((owner||e.newSet)&&doc.contains("components"))RenderEditableReferences(doc,owner,e);
     int users=0;bool adding=false;
     if(e.isSet&&owner){
         for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==e.id)++users;
@@ -784,16 +843,7 @@ static void RenderReferenceEditor(){
     const auto action=UI::SaveCancel("reference_editor",valid);
     if(action==UI::EditAction::Save){
         if(e.parentDraft){
-            if(!g_LibEditMode||e.id!=g_EditDraftId||g_GearDialogOpen)
-                e.error="Parent Loadout draft is no longer available.";
-            else if(GW2API::RebaseLoadoutDraft(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,
-                        e.setId,e.fashionId,e.refs,e.revision,e.error)){
-                g_EditRefs=e.refs;g_EditSetId=e.setId;g_EditFashionId=e.fashionId;
-                // Consent was for the previous identities, never transfer it
-                // silently to a newly selected component.
-                g_EditSharedKinds.clear();
-                MarkEditDirty();e.open=false;ImGui::CloseCurrentPopup();
-            }
+            if(ApplyParentReferenceDraft(e)){e.open=false;ImGui::CloseCurrentPopup();}
         }else{
             g_ComponentCommand={e.newSet?ComponentUICommand::CreateSet:e.isSet?ComponentUICommand::SaveSetDraft:ComponentUICommand::SaveReferences,e.id,"",e.setId,e.name,
                 ComponentJson{{"refs",e.refs},{"fashion",e.fashionId}},e.revision};
@@ -802,115 +852,116 @@ static void RenderReferenceEditor(){
     }else if(action==UI::EditAction::Cancel){e={};ImGui::CloseCurrentPopup();}
     ImGui::EndPopup();
 }
-// Read-only reference rows are identical in normal and aggregate edit views.
-// Payload edits have their own Save/Cancel dialog; reference changes are staged separately.
+// Read-only references share the same menu/action dispatcher as the Components collection.
 static void RenderReferencePreviewRow(const ComponentJson& doc,const std::string& kind,const std::string& ref,
-    const std::string& loadoutId,bool inherited,bool actions,const char* empty="Not set"){
-    ImGui::PushID(kind.c_str());ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
-    ImGui::TextUnformatted(ComponentLabel(kind));ImGui::TableSetColumnIndex(1);
-    ImGui::TextWrapped("%s",ComponentUIRefName(doc,kind,ref,empty).c_str());
-    if(inherited)ImGui::TextDisabled("From Equipment Set");
-    const auto* part=ComponentUIFind(doc,kind,ref);
-    if(actions&&part){
-        const auto fit=[&](const char* label){
-            const float right=ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x;
-            if(right-ImGui::GetItemRectMax().x>=AlterEgo::UI::CompactButtonWidth(label)+ImGui::GetStyle().ItemSpacing.x)ImGui::SameLine();
-        };
-        fit("Open");
-        if(AlterEgo::UI::Button("Open##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIOpenLibrary(kind,ref);
-        // Loadout payloads are edited through the parent draft. Standalone
-        // Equipment Sets keep their explicit shared-component editor.
-        if(loadoutId.empty()){
-            fit("Edit Shared");
-            if(AlterEgo::UI::Button("Edit Shared##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIStartEditor("edit",kind,ref,part);
-        }
-    }
+    const std::string&,bool inherited,bool actions,const char* empty="Not set"){
+    ImGui::PushID(kind.c_str());ReferenceLabel(ComponentLabel(kind));
+    RenderReferenceValue(doc,kind,ref,inherited,actions,empty);
     ImGui::PopID();
 }
 static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     using namespace AlterEgo;
     const auto& doc=ComponentUISnapshot();
-    const auto* l=ComponentUIFindLoadout(doc,loadoutId);
-    if(!l)return;
-    static bool expanded=false;
-    ImGui::PushID(loadoutId.c_str());
-    if(AlterEgo::UI::Button(expanded?"Loadout Components -##loadout_selector":"Loadout Components +##loadout_selector",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))expanded=!expanded;
-    ImGui::PopID();
-    if(!expanded)return;
+    const auto* l=ComponentUIFindLoadout(doc,loadoutId);if(!l)return;
+    static bool expanded=false,wasEditing=false;
+    static std::string lastId,inlineError;
     const bool editing=g_LibEditMode&&g_EditRefsReady&&loadoutId==g_EditDraftId;
+    if(editing&&(!wasEditing||lastId!=loadoutId)){expanded=true;inlineError.clear();}
+    if(lastId!=loadoutId)inlineError.clear();
+    lastId=loadoutId;wasEditing=editing;
+    ImGui::PushID(loadoutId.c_str());
+    if(UI::Button(expanded?"Loadout Components -##loadout_selector":"Loadout Components +##loadout_selector",ImVec2(0,0),UI::ButtonRole::Compact))expanded=!expanded;
+    if(!expanded){ImGui::PopID();return;}
+    if(editing&&!g_GearDialogOpen){
+        ReferenceEditorDraft e;e.id=loadoutId;e.revision=g_EditDraftRevision;e.refs=g_EditRefs;e.setId=g_EditSetId;e.fashionId=g_EditFashionId;
+        RenderEditableReferences(doc,l,e);
+        if(e.refs!=g_EditRefs||e.setId!=g_EditSetId||e.fashionId!=g_EditFashionId){
+            if(ApplyParentReferenceDraft(e))inlineError.clear();
+            else inlineError=e.error.empty()?"Cannot apply reference change; review the selected component.":e.error;
+        }
+        if(!inlineError.empty())ImGui::TextWrapped("%s",inlineError.c_str());
+        ImGui::PopID();return;
+    }
     const auto direct=editing?g_EditRefs:ComponentUIRefs(*l);
     const auto linkedId=editing?g_EditSetId:l->value("equipment_set_id",std::string());
     const auto* linked=ComponentUIFindSet(doc,linkedId);
     const auto inherited=linked?ComponentUIRefs(*linked):ReferenceMap{};
-    if(editing){
-        if(!g_GearDialogOpen&&RenderActionButton("Change Components"))BeginReferenceEditor(*l,false);
-        ImGui::TextWrapped("Edit gear and skills below. When saving, review any shared components and exact matches.");
-    }else if(g_LibEditMode)ImGui::TextDisabled("Component draft unavailable; cancel and reopen Edit.");
-    else if(RenderActionButton("Edit Components")){
-        for(const auto& build:GW2API::GetSavedBuilds())if(build.id==loadoutId){
-            g_LibEditBuildId=build.id;EnterBuildEditMode(build);
-            if(g_EditRefsReady)BeginReferenceEditor(*l,false);
-            break;
-        }
-    }
-    const auto rows=[&](const char* table,const int* kinds,int count){
-        if(ImGui::BeginTable(table,2,ImGuiTableFlags_SizingStretchProp)){
-            ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,110.f);
-            ImGui::TableSetupColumn("Selection",ImGuiTableColumnFlags_WidthStretch);
-            for(int j=0;j<count;++j){
-                const std::string kind=kComponentKinds[kinds[j]].kind;
-                const bool shared=inherited.count(kind)!=0;
-                const auto ref=ComponentUIRef(shared?inherited:direct,kind);
-                RenderReferencePreviewRow(doc,kind,ref,loadoutId,shared,!g_LibEditMode);
-
-            }
-            ImGui::EndTable();
-        }
-    };
+    const bool actions=!g_LibEditMode;
+    if(g_LibEditMode)ImGui::TextDisabled("Close gear editing or reopen the Loadout draft to change references.");
     RenderReferenceGroupLabel("Build");
-    const int buildKinds[]={0,1};rows("##loadout_build_refs",buildKinds,2);
+    if(ImGui::BeginTable("##loadout_build_refs",2,ImGuiTableFlags_SizingStretchProp)){
+        ReferenceTableColumns();
+        for(int i:kBuildReferenceOrder){
+            const std::string kind=kComponentKinds[i].kind;
+            RenderReferencePreviewRow(doc,kind,ComponentUIRef(direct,kind),loadoutId,false,actions);
+        }
+        ImGui::EndTable();
+    }
     RenderReferenceGroupLabel("Equipment");
-    ImGui::TextUnformatted("Equipment Set");ImGui::SameLine();
-    ImGui::TextWrapped("%s",linked?linked->value("name",linkedId).c_str():"Independent components");
-    if(!g_LibEditMode){
-        if(linked){
-            if(RenderActionButton("Open Set")){g_EquipmentSetSelectedId=linkedId;g_LibraryCollection=3;MarkNavigation();}
-            ImGui::SameLine();
-            if(RenderActionButton("Edit Shared Set"))BeginReferenceEditor(*linked,true);
-            ImGui::SameLine();
-            if(RenderActionButton("Detach Set")){
-                BeginReferenceEditor(*l,false);DraftSelectEquipmentSet(doc,"");
-            }
-            ImGui::SameLine();
+    static std::string setName;
+    static std::set<std::string> setKinds;
+    static uint64_t setDraftRevision=0;
+    bool nameSet=false;
+    if(ImGui::BeginTable("##loadout_equipment_refs",2,ImGuiTableFlags_SizingStretchProp)){
+        ReferenceTableColumns();
+        ImGui::PushID("equipment_set");ReferenceLabel("Equipment Set");
+        const std::string setLabel=linked?linked->value("name",linkedId):"Independent components";
+        if(ReferenceHitRow(setLabel,false,"Right-click for Equipment Set actions.")&&actions&&linked){
+            g_EquipmentSetSelectedId=linkedId;NavigateToLibraryCollection(3);
         }
-        static std::string setName;
-        static std::set<std::string> setKinds;
-        static uint64_t setDraftRevision=0;
-        if(RenderActionButton(linked?"Copy Set":"Save as Equipment Set")){
-            setName=(linked?linked->value("name",linkedId):l->at("metadata").value("name",loadoutId))+(linked?" - Copy":" - Equipment");
-            setKinds.clear();
-            for(const auto& [kind,id]:(linked?inherited:direct))if(Composable::IsEquipmentKind(kind))setKinds.insert(kind);
-            setDraftRevision=GW2API::GetBuildLibraryRevision();ImGui::OpenPopup("Name equipment set##loadout");
-        }
-        if(ImGui::BeginPopupModal("Name equipment set##loadout",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-            UI::InputText("Name",setName);
-            for(const auto& entry:kComponentKinds)if(Composable::IsEquipmentKind(entry.kind)){
-                bool included=setKinds.count(entry.kind)!=0;
-                if(ImGui::Checkbox(entry.label,&included)){if(included)setKinds.insert(entry.kind);else setKinds.erase(entry.kind);}
+        if(ImGui::BeginPopupContextItem("##set_actions")){
+            if(linked){
+                if(actions&&ImGui::MenuItem("Open in Equipment Sets")){g_EquipmentSetSelectedId=linkedId;NavigateToLibraryCollection(3);}
+                if(actions&&ImGui::MenuItem("Edit Shared Set"))BeginReferenceEditor(*linked,true);
+                if(actions&&ImGui::MenuItem("Detach Set")){BeginReferenceEditor(*l,false);DraftSelectEquipmentSet(doc,"");}
+                CopyNameMenuItem(setLabel);
             }
-            ImGui::TextWrapped("Save creates and links a separate named set. Existing component payloads remain shared.");
-            const auto action=UI::SaveCancel("new_set",!setKinds.empty()&&!Composable::ComponentNameKey(setName).empty());
-            if(action==UI::EditAction::Save){
-                g_ComponentCommand={ComponentUICommand::SaveSet,loadoutId,"","",setName,ComponentJson(setKinds),setDraftRevision};
-                ImGui::CloseCurrentPopup();
-            }else if(action==UI::EditAction::Cancel)ImGui::CloseCurrentPopup();
+            if(actions&&ImGui::MenuItem(linked?"Copy Set":"Save as Equipment Set")){
+                setName=(linked?setLabel:l->at("metadata").value("name",loadoutId))+(linked?" - Copy":" - Equipment");
+                setKinds.clear();
+                for(const auto& [kind,id]:(linked?inherited:direct))if(Composable::IsEquipmentKind(kind))setKinds.insert(kind);
+                setDraftRevision=GW2API::GetBuildLibraryRevision();nameSet=true;
+            }
             ImGui::EndPopup();
         }
+        ImGui::PopID();
+        for(int i:kEquipmentReferenceOrder){
+            const std::string kind=kComponentKinds[i].kind;
+            const bool shared=inherited.count(kind)!=0;
+            RenderReferencePreviewRow(doc,kind,ComponentUIRef(shared?inherited:direct,kind),loadoutId,shared,actions);
+        }
+        ImGui::PushID("fashion_ref");ReferenceLabel("Fashion");
+        const auto fashionId=editing?g_EditFashionId:l->value("fashion_id",std::string());
+        int index=-1;
+        for(int i=0;i<(int)g_FashionLibrary.looks.size();++i)if(g_FashionLibrary.looks[i].id==fashionId){index=i;break;}
+        if(index<0)ImGui::TextDisabled("%s",ComponentUIFashionName(fashionId).c_str());
+        else{
+            const auto& look=g_FashionLibrary.looks[index];
+            if(ReferenceHitRow(look.name,false,"Right-click for Fashion actions.")&&actions){g_FashionSelected=index;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
+            if(ImGui::BeginPopupContextItem("##fashion_actions")){
+                if(actions&&ImGui::MenuItem("Open in Fashion")){g_FashionSelected=index;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
+                if(actions&&ImGui::MenuItem("Edit Fashion"))StartFashionEdit(look,index);
+                CopyNameMenuItem(look.name);ImGui::EndPopup();
+            }
+        }
+        ImGui::PopID();ImGui::EndTable();
     }
-    rows("##loadout_equipment_refs",kEquipmentReferenceOrder,IM_ARRAYSIZE(kEquipmentReferenceOrder));
-    RenderReferenceGroupLabel("Fashion");
-    ImGui::TextWrapped("%s",ComponentUIFashionName(editing?g_EditFashionId:l->value("fashion_id",std::string())).c_str());
-    ImGui::Separator();
+    if(nameSet)ImGui::OpenPopup("Name equipment set##loadout");
+    if(ImGui::BeginPopupModal("Name equipment set##loadout",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        UI::InputText("Name",setName);
+        for(const auto& entry:kComponentKinds)if(Composable::IsEquipmentKind(entry.kind)){
+            bool included=setKinds.count(entry.kind)!=0;
+            if(ImGui::Checkbox(entry.label,&included)){if(included)setKinds.insert(entry.kind);else setKinds.erase(entry.kind);}
+        }
+        ImGui::TextWrapped("Save creates and links a separate named set. Existing component payloads remain shared.");
+        const auto action=UI::SaveCancel("new_set",actions&&!setKinds.empty()&&!Composable::ComponentNameKey(setName).empty()&&setDraftRevision==GW2API::GetBuildLibraryRevision());
+        if(action==UI::EditAction::Save){
+            g_ComponentCommand={ComponentUICommand::SaveSet,loadoutId,"","",setName,ComponentJson(setKinds),setDraftRevision};
+            ImGui::CloseCurrentPopup();
+        }else if(action==UI::EditAction::Cancel)ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
 }
 
 static void RenderLoadoutSaveReview(){
@@ -1004,17 +1055,22 @@ static void ComponentCreationMenu(const std::string& category={}){
     }else if(ImGui::MenuItem("New"))ComponentUIStartEditor("create",category,"",nullptr);
     if(ImGui::MenuItem("Paste"))ImportComponentClipboard();
 }
-static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,const ComponentJson& item){
+static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,const ComponentJson& item,bool reference,bool mutableActions){
     const auto id=item.value("id",std::string()),name=item.value("name",id);
-    if(ImGui::MenuItem("Edit"))RunComponentAction(ComponentAction::Edit,kind,item);
-    if(ImGui::MenuItem("Rename"))RunComponentAction(ComponentAction::Rename,kind,item);
-    if(ImGui::MenuItem("Duplicate"))RunComponentAction(ComponentAction::Duplicate,kind,item);
-    ImGui::Separator();CopyNameMenuItem(name);
+    if(mutableActions){
+        if(reference&&ImGui::MenuItem("Open in Components"))ComponentUIOpenLibrary(kind,id);
+        if(ImGui::MenuItem(reference?"Edit Shared":"Edit"))RunComponentAction(ComponentAction::Edit,kind,item);
+        if(ImGui::MenuItem("Rename"))RunComponentAction(ComponentAction::Rename,kind,item);
+        if(ImGui::MenuItem("Regenerate Name")){RunComponentAction(ComponentAction::Rename,kind,item);g_ComponentEditorAutoName=true;g_ComponentNameRequested=false;}
+        if(ImGui::MenuItem("Duplicate"))RunComponentAction(ComponentAction::Duplicate,kind,item);
+        ImGui::Separator();
+    }
+    CopyNameMenuItem(name);
     if(ImGui::MenuItem("Copy Component"))RunComponentAction(ComponentAction::Copy,kind,item);
-    ImGui::Separator();ComponentCreationMenu(kind);
-    ImGui::Separator();
-    if(AlterEgo::UI::DestructiveMenuItem("Delete",ComponentUIUsage(doc,kind,id)==0))
-        RunComponentAction(ComponentAction::Delete,kind,item);
+    if(!reference&&mutableActions){
+        ImGui::Separator();ComponentCreationMenu(kind);ImGui::Separator();
+        if(AlterEgo::UI::DestructiveMenuItem("Delete",ComponentUIUsage(doc,kind,id)==0))RunComponentAction(ComponentAction::Delete,kind,item);
+    }
 }
 static void RenderComponentDeleteConfirm(const ComponentJson& doc){
     auto& d=g_ComponentDelete;
