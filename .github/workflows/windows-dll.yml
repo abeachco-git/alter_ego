@@ -125,7 +125,7 @@ jobs:
           mkdir -p .wiki-reference-state
           args=""
           if [ "${{ github.event_name == 'workflow_dispatch' && inputs.wiki_refresh }}" = "true" ]; then args="--force"; fi
-          if [ "${{ github.event.head_commit.message == 'Bootstrap monthly Wiki rotation resources' }}" = "true" ]; then args="--force --probe"; fi
+          if [ "${{ github.event.head_commit.message == 'Bootstrap monthly Wiki rotation resources' || github.event.head_commit.message == 'Retry initial Wiki refresh with verified client identity' }}" = "true" ]; then args="--force --probe"; fi
           python3 tools/wiki_resources.py --state .wiki-reference-state/rotations.json --refresh $args
       - name: Save Wiki reference state
         uses: actions/cache/save@v5

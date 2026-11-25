@@ -16,7 +16,7 @@ SEED = ROOT / "assets/reference/wiki/rotations.json"
 MANIFEST = ROOT / "assets/reference/wiki/manifest.json"
 BASE = "https://wiki.guildwars2.com"
 MAX_BYTES = 4 * 1024 * 1024
-UA = "AlterEgo-ReferenceBuilder/1.0 (https://github.com/abeachco-git/alter_ego)"
+UA = "AlterEgo-Diagnostic/1.0"
 DAY = 86400
 
 def write(path, value):
