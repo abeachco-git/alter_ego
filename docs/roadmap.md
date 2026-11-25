@@ -18,12 +18,13 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 - [x] Durable wallet favorites, favorites/zero filters and sort; inventory character, freshness, minimum total quantity and potential transfer filters. CI passed at cdac06a; live validation pending.
 - [x] Inventory Items and Wallet search/filter controls use the existing shared SearchToolbar, FilterChoice, FilterInt and removable chips; Guild bank uses SearchField. CI passed at 57d47f9, live validation pending.
 - [ ] Wallet categories, armor/weapon subtype and level filters, endpoint deduplication and priority scheduling.
-- [ ] Full independent character/progress dataset freshness; per-section Clears/Vault commit; no startup burst.
+- [x] Independent Vault daily/weekly/special persistence and timestamps, section failure isolation, selective automatic refresh; CI/live validation pending.
+- [ ] Full independent character/progress dataset freshness; independent Clears section commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.
 
 ## UI consistency audit — outstanding corrections
 
-Source audit at 57d47f9 (not an in-game visual test). Checked items below are implemented in source; CI and live validation pending. Apply the existing UI guide; do not introduce separate per-page UI primitives or alter refresh scheduling as part of UI polish.
+Source audit at 57d47f9 (not an in-game visual test). Checked UI items passed Windows CI at 59216bc; live validation pending. Apply the existing UI guide; do not introduce separate per-page UI primitives or alter refresh scheduling as part of UI polish.
 
 - [x] High: unify Inventory's duplicate local account selector with the main account selection model; preserve active-account versus browsing-account semantics, single-account concealment, and explicit All Accounts browsing. Use stable account IDs in dropdowns.
 - [x] High: use the existing RefreshUI::Row bottom footer for Items, Wallet and Guild bank, with a reserved scrollable content child, disabled refresh during active work, scoped last-success timestamps and meaningful stale/partial/failure details. Do not present a batch completion as proof all datasets succeeded; retain scope-specific storage diagnostics.
