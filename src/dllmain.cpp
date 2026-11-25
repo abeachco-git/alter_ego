@@ -856,7 +856,6 @@ static void LoadCharacterActivity();
 static void SaveCharacterActivity(bool force=false);
 static void ObserveCharacterActivity();
 static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand);
-static bool CharacterDemandFresh(const AlterEgo::Character& ch,AlterEgo::CharacterScopes::Mask demand);
 
 // Build Library UI state
 static float g_LibListWidth = 220.0f; // Resizable build list column width
@@ -15539,6 +15538,94 @@ static void RenderSkinventory() {
 }
 
 
+// Render-only projection of the activity scheduler. No independent timers,
+// disk access or requests are introduced by the footer.
+static void DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::CharacterScopes::Mask demand,
+    AlterEgo::RefreshUI::State& state,std::string& detail,std::string& label){
+    namespace A=AlterEgo::CharacterActivity;
+    namespace S=AlterEgo::CharacterScopes;
+    namespace R=AlterEgo::RefreshUI;
+    using W=A::WaitReason;
+    const auto now=A::Now();
+    const bool enabled=AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters);
+    const bool linked=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
+    const bool owner=!ch.account_name.empty()&&AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name)==ch.account_name;
+    std::array<A::Inspection,5> rows{};
+    {
+        std::lock_guard<std::mutex> lock(A::Mutex());
+        for(auto s:S::Ordered)if(demand&s)rows[S::Index(s)]=A::State().Inspect(
+            {ch.account_name,ch.name},S::Name(s),ch.scope_stamps[S::Index(s)],now,
+            g_AutoRefreshOnSpecialization&&S::SpecSensitive(s));
+    }
+    const auto duration=[](int64_t seconds){
+        seconds=std::max<int64_t>(0,seconds);
+        return std::to_string(seconds/60)+"m "+std::to_string(seconds%60)+"s";
+    };
+    const auto reason=[](W w)->const char*{
+        switch(w){
+        case W::Due:return "Refresh due";
+        case W::LoginGrace:return "Login propagation grace";
+        case W::ActiveInterval:return "Active refresh interval";
+        case W::Stagger:return "Staggered refresh";
+        case W::LogoutGrace:return "Logout propagation grace";
+        case W::SpecDebounce:return "Specialization change";
+        case W::Retry:return "Retry cooldown";
+        default:return "Current";
+        }
+    };
+    const auto scopeLabel=[](S::Scope s)->const char*{
+        switch(s){case S::Core:return "Character details";case S::Builds:return "Build tabs";
+        case S::Tabs:return "Equipment tabs";case S::Physical:return "Physical equipment";
+        default:return "Crafting";}
+    };
+    std::string summary=ch.name;
+    const auto& core=rows[S::Index(S::Core)];
+    summary+=" - "+std::string(core.active?"Active":"Not active");
+    if(core.lastSeen>0)summary+="\nLast observed: "+R::Age(static_cast<std::time_t>(core.lastSeen));
+    summary+="\nAutomatic character refresh: "+std::string(enabled?"Enabled":"Disabled");
+    if(!linked)summary+="\nNo ready API account";
+    else if(!owner)summary+="\nCharacter ownership not verified; manual refresh required";
+    bool stale=false,due=false;
+    int64_t next=0;W nextReason=W::Current;
+    for(auto s:S::Ordered)if(demand&s){
+        const auto ix=S::Index(s);const auto& row=rows[ix];const auto& e=row.eligibility;
+        summary+="\n"+std::string(scopeLabel(s))+": "+(row.fresh?"Current":"Stale");
+        const auto stamp=ch.scope_stamps[ix];
+        summary+=" (last success: "+std::string(stamp>0?R::Age(static_cast<std::time_t>(stamp)):"not verified")+")";
+        if(e.reason!=W::Current){
+            summary+="\n  "+std::string(reason(e.reason));
+            if(e.at>now)summary+=" - "+duration(e.at-now);
+        }
+        if(row.attempt>0)summary+="\n  Last attempt: "+R::Age(static_cast<std::time_t>(row.attempt));
+        if(!row.error.empty())summary+="\n  "+row.error;
+        if(!row.fresh){
+            stale=true;due=due||e.due;
+            if(e.at>now&&(!next||e.at<next)){next=e.at;nextReason=e.reason;}
+        }
+    }
+    if(stale&&state!=R::State::Working){
+        state=R::State::Waiting;
+        if(!linked)label="No API";
+        else if(!owner)label="Unverified";
+        else if(!enabled)label="Auto disabled";
+        else if(due)label="Refresh due";
+        else if(nextReason==W::Retry)label="Retry in "+std::to_string((next-now+59)/60)+"m";
+        else if(nextReason==W::Stagger)label="Scheduled";
+        else if(nextReason==W::SpecDebounce)label="Spec change";
+        else if(nextReason==W::LoginGrace||nextReason==W::LogoutGrace)label="Awaiting sync";
+        else if(next)label="Scheduled";
+        else label="Stale";
+        if(enabled&&linked&&owner){
+            if(due)summary+="\nAutomatic refresh eligible now";
+            else if(next)summary+="\nNext eligible refresh: "+duration(next-now);
+        }
+    }
+    if(state!=R::State::Working&&linked)summary+="\nManual Refresh bypasses ordinary waiting periods.";
+    if(!detail.empty()&&detail!="Ready"&&detail.rfind("Ready - ",0)!=0)
+        summary+="\nRequest status: "+detail;
+    detail=std::move(summary);
+}
+
 static void RenderCharactersStatusRow() {
     const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
     const auto& chars = *charsSnapshot;
@@ -15576,12 +15663,11 @@ static void RenderCharactersStatusRow() {
             detail = "Refresh complete";
         }
     }
-    if(selected&&state==AlterEgo::RefreshUI::State::Ready&&!CharacterDemandFresh(*selected,demand)){
-        state=AlterEgo::RefreshUI::State::Waiting;detail="Cached data; refresh due or awaiting API synchronization";
-    }
+    std::string statusLabel;
+    if(selected)DescribeCharacterRefresh(*selected,demand,state,detail,statusLabel);
     bool more = false;
     if (AlterEgo::RefreshUI::Row("characters", selected ? S::Oldest(selected->scope_stamps,demand) : 0,
-          "selected character", state, detail, !hoardReady || busy, &more)) {
+          "selected character", state, detail, !hoardReady || busy, &more,statusLabel.c_str())) {
         if (selected) {
             const std::string name = selected->name;
             AlterEgo::GW2API::RequestCharacterActivityRefresh(selected->account_name,name,demand,true);
@@ -15636,11 +15722,10 @@ static void RenderCompareStatusRow() {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete";
     }
-    if(target&&state==AlterEgo::RefreshUI::State::Ready&&!CharacterDemandFresh(*target,S::Compare)){
-        state=AlterEgo::RefreshUI::State::Waiting;detail="Cached data; refresh due or awaiting API synchronization";
-    }
+    std::string statusLabel;
+    if(target)DescribeCharacterRefresh(*target,S::Compare,state,detail,statusLabel);
     if (AlterEgo::RefreshUI::Row("compare", target ? S::Oldest(target->scope_stamps,S::Compare) : 0,
-            "character build/equipment", state, detail, busy || !target)) {
+            "character build/equipment", state, detail, busy || !target || AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready,nullptr,statusLabel.c_str())) {
         const std::string name = target->name;
         g_LibCompareRefreshChar = name;
         g_LibCompareRefreshPending = true;
@@ -15848,11 +15933,6 @@ static void ObserveCharacterActivity(){
     const auto account=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name);
     A::Observe(account,name,spec,nexus->IsGameplay);
     SaveCharacterActivity();
-}
-static bool CharacterDemandFresh(const AlterEgo::Character& ch,AlterEgo::CharacterScopes::Mask demand){
-    namespace A=AlterEgo::CharacterActivity;
-    std::lock_guard<std::mutex> lock(A::Mutex());
-    return AlterEgo::CharacterScopes::Fresh(A::State(),{ch.account_name,ch.name},ch.scope_stamps,demand,A::Now(),g_AutoRefreshOnSpecialization);
 }
 static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand){
     namespace A=AlterEgo::CharacterActivity;
