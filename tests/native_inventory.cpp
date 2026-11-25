@@ -1,5 +1,6 @@
 #include "../src/NativeInventoryStore.h"
 #include "../src/NativeProgressCore.h"
+#include "../src/CompletionCache.h"
 #include <cassert>
 #include <filesystem>
 #include <chrono>
@@ -62,5 +63,17 @@ int case_native_inventory(int,char**){
     assert(UsableLoose(rows.front(),"account-a","B",{},true)&&!UsableLoose(rows.front(),"account-a","B",{},false));
     assert(!Due("Wallet",290,0,300)&&Due("Wallet",100,100,401)&&!Due("Legendary Armory",100,100,401));
     assert(Match("Superior Sigil of Force",10,"sigli force"));
+    using AlterEgo::Cache::CompletionDataset;
+    const auto vaultPeriod=[](int64_t stamp,int id){return Json{{"fetched_at",stamp},{"objectives",Json::array({Json{{"id",id},{"title","Objective"},{"claimed",false}}})}};};
+    assert(Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"daily",vaultPeriod(100,1)},{"weekly",vaultPeriod(100,2)}}));
+    assert(Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"daily",vaultPeriod(200,3)}}));
+    auto snap=Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a");
+    assert(snap&&snap->at("daily").at("fetched_at")==200&&snap->at("weekly").at("fetched_at")==100&&!snap->contains("special"));
+    assert(Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"daily",vaultPeriod(150,4)},{"special",vaultPeriod(210,5)}}));
+    snap=Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a");
+    assert(snap&&snap->at("daily").at("objectives").at(0).at("id")==3&&snap->at("special").at("fetched_at")==210);
+    assert(!Cache::ReadCompletion(root,CompletionDataset::Vault,"account-b"));
+    assert(!Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"weekly",vaultPeriod(0,6)}}));
+    assert(Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a")->at("weekly").at("fetched_at")==100);
     std::filesystem::remove_all(root);return 0;
 }

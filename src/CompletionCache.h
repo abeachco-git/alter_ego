@@ -91,7 +91,7 @@ inline void Store(Database::Connection& db,CompletionDataset d,const std::string
         mark.Execute();
         auto remove=db.Prepare("DELETE FROM vault_periods WHERE account=?");
         remove.Bind(1,account);remove.Execute();
-        auto period=db.Prepare("INSERT INTO vault_periods VALUES(?,?,?,?,?,?)");
+        auto period=db.Prepare("INSERT INTO vault_periods(account,section,meta_current,meta_complete,meta_astral,meta_claimed,fetched_at) VALUES(?,?,?,?,?,?,?)");
         auto objective=db.Prepare("INSERT INTO vault_objectives VALUES(?,?,?,?,?,?,?,?,?,?)");
         for(const char* key:{"daily","weekly","special"}) {
             if(!data.contains(key))continue;
@@ -99,7 +99,7 @@ inline void Store(Database::Connection& db,CompletionDataset d,const std::string
             if(!row.is_object())throw std::runtime_error("Invalid Vault period");
             const std::string kind=key;
             period.Bind(1,account);period.Bind(2,kind);period.Bind(3,Number(row,"meta_progress_current"));
-            period.Bind(4,Number(row,"meta_progress_complete"));period.Bind(5,Number(row,"meta_reward_astral"));period.Bind(6,Flag(row,"meta_reward_claimed"));period.Execute();period.Reset();
+            period.Bind(4,Number(row,"meta_progress_complete"));period.Bind(5,Number(row,"meta_reward_astral"));period.Bind(6,Flag(row,"meta_reward_claimed"));period.Bind(7,row.contains("fetched_at")?Number(row,"fetched_at"):stamp);period.Execute();period.Reset();
             int64_t ordinal=0;
             for(const auto& o:Array(row,"objectives")) {
                 if(!o.is_object())throw std::runtime_error("Invalid Vault objective");
@@ -142,12 +142,12 @@ inline std::optional<Json> Read(Database::Connection& db,CompletionDataset d,con
     } else {
         auto season=db.Prepare("SELECT season_end FROM vault_snapshots WHERE account=?");season.Bind(1,account);
         if(season.Step()&&!season.IsNull(0))out["season_end"]=season.Integer(0);
-        auto periods=db.Prepare("SELECT section,meta_current,meta_complete,meta_astral,meta_claimed FROM vault_periods WHERE account=?");periods.Bind(1,account);
+        auto periods=db.Prepare("SELECT section,meta_current,meta_complete,meta_astral,meta_claimed,fetched_at FROM vault_periods WHERE account=?");periods.Bind(1,account);
         auto objectives=db.Prepare("SELECT id,title,track,acclaim,progress_current,progress_complete,claimed FROM vault_objectives WHERE account=? AND section=? ORDER BY ordinal");
         while(periods.Step()) {
             auto kind=periods.Text(0);
             Json row={{"meta_progress_current",periods.Integer(1)},{"meta_progress_complete",periods.Integer(2)},
-                {"meta_reward_astral",periods.Integer(3)},{"meta_reward_claimed",periods.Integer(4)!=0},{"objectives",Json::array()}};
+                {"meta_reward_astral",periods.Integer(3)},{"meta_reward_claimed",periods.Integer(4)!=0},{"fetched_at",periods.Integer(5)},{"objectives",Json::array()}};
             objectives.Bind(1,account);objectives.Bind(2,kind);
             while(objectives.Step())row["objectives"].push_back({{"id",objectives.Integer(0)},{"title",objectives.Text(1)},
                 {"track",objectives.Text(2)},{"acclaim",objectives.Integer(3)},{"progress_current",objectives.Integer(4)},
@@ -182,6 +182,34 @@ inline bool WriteCompletion(const std::string& root,CompletionDataset d,const st
         Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
         Initialize(db);Database::Transaction tx(db);
         CompletionRows::Store(db,d,account,data);tx.Commit();return true;
+    }catch(...){return false;}
+}
+// Merge verified periods transactionally; omitted sections retain their own
+// timestamps and previous reset fingerprints.
+inline bool WriteVaultPeriods(const std::string& root,const std::string& account,const CompletionRows::Json& patch) {
+    using namespace CompletionRows;
+    if(root.empty()||account.empty()||!patch.is_object()||Text(patch,"account")!=account)return false;
+    try{
+        std::lock_guard<std::mutex> lock(Mutex());
+        const auto path=Storage::Paths(root).Cache();
+        std::filesystem::create_directories(path.parent_path());
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+        Initialize(db);Database::Transaction tx(db);
+        auto prior=Read(db,CompletionDataset::Vault,account);
+        Json merged=prior.value_or(Json{{"account",account},{"fetch_time",0}});
+        int64_t newest=Number(merged,"fetch_time");
+        for(const char* key:{"daily","weekly","special"}){
+            if(!patch.contains(key))continue;
+            const auto& row=patch.at(key);
+            auto stamp=Number(row,"fetched_at");
+            if(stamp<=0)throw std::runtime_error("Unverified Vault period");
+            if(merged.contains(key)&&stamp<Number(merged.at(key),"fetched_at"))continue;
+            merged[key]=row;newest=std::max(newest,stamp);
+        }
+        if(patch.contains("season_end")&&Number(patch,"season_end")>0)
+            merged["season_end"]=std::max(Number(merged,"season_end"),Number(patch,"season_end"));
+        merged["fetch_time"]=newest;
+        Store(db,CompletionDataset::Vault,account,merged);tx.Commit();return true;
     }catch(...){return false;}
 }
 inline std::optional<CompletionRows::Json> ReadCompletion(const std::string& root,CompletionDataset d,const std::string& account,bool singleAccount=false) {
