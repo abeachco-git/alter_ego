@@ -12,17 +12,18 @@ namespace AlterEgo::ApiActivity {
 enum class Endpoint : size_t {
     Characters, Builds, Equipment, Bags, Crafting, Roster,
     AchProgress, Vault, AccountStorage, Wallet, Guild, AccountOther,
-    AchDefinitions, Catalog, Commerce, ApiOther, WikiApi, WikiArtwork, WikiOther, Count
+    AchDefinitions, Catalog, Commerce, ApiOther, RenderArtwork, WikiApi, WikiArtwork, WikiOther, Count
 };
 inline constexpr size_t Count=static_cast<size_t>(Endpoint::Count);
 inline constexpr std::array<const char*,Count> Labels{{
     "Characters / core","Character builds","Character equipment","Character bags",
     "Character crafting","Roster","Achievement progress","Vault","Account storage",
     "Wallet","Guild","Other account","Achievement definitions","Public catalogs",
-    "Trading Post","Other ArenaNet","Wiki API","Wiki artwork","Other Wiki"
+    "Trading Post","Other ArenaNet","ArenaNet render artwork","Wiki API","Wiki artwork","Other Wiki"
 }};
 inline bool Prefix(std::string_view s,std::string_view p){return s.substr(0,p.size())==p;}
 inline bool WikiUrl(std::string_view u){return Prefix(u,"https://wiki.guildwars2.com/");}
+inline bool RenderUrl(std::string_view u){return Prefix(u,"https://render.guildwars2.com/");}
 inline Endpoint WikiEndpoint(std::string_view u){
     if(Prefix(u,"https://wiki.guildwars2.com/api.php"))return Endpoint::WikiApi;
     if(Prefix(u,"https://wiki.guildwars2.com/images/"))return Endpoint::WikiArtwork;

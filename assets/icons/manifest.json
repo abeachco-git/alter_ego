@@ -730,10 +730,11 @@
     {
       "id": 9100007,
       "file": "9100007.png",
-      "size": 21023,
-      "sha256": "743bb8e356c869d561050b1aa425b6686eb1c724303c1d7015650cfd9ec005e5",
+      "size": 5879,
+      "sha256": "d32174f78f973295592cdb081ff37a281ba5532441bc45519e56c40bfdd6c5e1",
       "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/scribe.png",
-      "field": "crafting icon"
+      "field": "crafting icon",
+      "provenance": "Original embedded icon, removed text metadata only; preserved pixel bytes, ICC profile, dimensions and transparency."
     },
     {
       "id": 9100008,

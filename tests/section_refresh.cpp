@@ -83,6 +83,9 @@ int case_section_refresh(int, char**) {
     assert(D::ApiEndpoint("/v2/account/achievements?access_token=secret")==D::Endpoint::AchProgress);
     assert(D::WikiUrl("https://wiki.guildwars2.com/api.php?action=query"));
     assert(!D::WikiUrl("https://wiki.guildwars2.com.example.org/api.php"));
+    assert(D::RenderUrl("https://render.guildwars2.com/file/a/123.png"));
+    assert(!D::RenderUrl("https://render.guildwars2.com.example.org/file/a/123.png"));
+    assert(D::Source(D::Endpoint::RenderArtwork)==0);
     D::Recorder rec;
     rec.Start(D::Endpoint::Equipment,100);rec.Finish(D::Endpoint::Equipment,200,true);
     rec.Start(D::Endpoint::Equipment,100);rec.Finish(D::Endpoint::Equipment,429,false);

@@ -34,6 +34,11 @@ namespace Skinventory {
         void Starting(){if(wiki)wikiNext=Clock::now()+std::chrono::seconds(1);}
         void Status(int status){if(wiki&&status==429)wikiNext=std::max(wikiNext,Clock::now()+std::chrono::seconds(60));}
     };
+    AlterEgo::ApiActivity::Endpoint ArtworkEndpoint(const std::string& url){
+        using namespace AlterEgo::ApiActivity;
+        return RenderUrl(url)?Endpoint::RenderArtwork:WikiEndpoint(url);
+    }
+    bool TrackedArtwork(const std::string& url){return AlterEgo::ApiActivity::RenderUrl(url)||AlterEgo::ApiActivity::WikiUrl(url);}
     int StatusCode(HINTERNET h){DWORD code=0,size=sizeof(code);HttpQueryInfoA(h,HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER,&code,&size,nullptr);return static_cast<int>(code);}
     }
     std::size_t HttpClient::WikiWaiting(){return wikiGate.Waiting();}
@@ -55,7 +60,7 @@ namespace Skinventory {
                       INTERNET_FLAG_SECURE;
 
         wiki.Starting();
-        AlterEgo::ApiActivity::Attempt activity(AlterEgo::ApiActivity::WikiEndpoint(url),wiki.wiki);
+        AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
         if (!hUrl) {
             InternetCloseHandle(hInternet);
@@ -88,7 +93,7 @@ namespace Skinventory {
                       INTERNET_FLAG_SECURE;
 
         wiki.Starting();
-        AlterEgo::ApiActivity::Attempt activity(AlterEgo::ApiActivity::WikiEndpoint(url),wiki.wiki);
+        AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
         if (!hUrl) {
             InternetCloseHandle(hInternet);
@@ -125,7 +130,7 @@ namespace Skinventory {
                       INTERNET_FLAG_SECURE;
 
         wiki.Starting();
-        AlterEgo::ApiActivity::Attempt activity(AlterEgo::ApiActivity::WikiEndpoint(url),wiki.wiki);
+        AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(),
             headers.c_str(), (DWORD)headers.size(), flags, 0);
         if (!hUrl) {
@@ -221,7 +226,7 @@ namespace Skinventory {
         AlterEgo::HttpSafety::Configure(hInternet);
 
         wiki.Starting();
-        AlterEgo::ApiActivity::Attempt activity(AlterEgo::ApiActivity::WikiEndpoint(url),wiki.wiki);
+        AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0,
             INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
         if (!hUrl) {
