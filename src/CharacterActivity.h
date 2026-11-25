@@ -189,7 +189,7 @@ public:
             if(e.lastSeen<0||e.login<0||e.specChanged<0)throw std::runtime_error("Invalid activity timestamp");
             for(auto it=row.at("scopes").begin();it!=row.at("scopes").end();++it){
                 Scope s{it.value().at("success").get<int64_t>(),it.value().at("attempt").get<int64_t>(),
-                    it.value().at("covered").get<int64_t>(),it.value().value("spec_covered",int64_t(0))};
+                    it.value().at("covered").get<int64_t>(),it.value().value("spec_covered",int64_t(0)),0,{}};
                 if(s.success<0||s.attempt<0||s.covered<0||s.specCovered<0)throw std::runtime_error("Invalid activity scope");
                 e.scopes[it.key()]=s;
             }
