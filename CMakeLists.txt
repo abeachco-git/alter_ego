@@ -44,6 +44,11 @@ set(IMGUI_SOURCES
 # Fixed UI artwork is version-controlled and embedded without network access.
 # Runtime GW2 item/skin/skill artwork continues using the disk cache.
 find_program(PYTHON3_EXECUTABLE python3 REQUIRED)
+set(AE_WIKI_STATE "${CMAKE_SOURCE_DIR}/assets/reference/wiki/rotations.json" CACHE FILEPATH "Validated Wiki snapshot")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/wiki-generated")
+execute_process(COMMAND "${PYTHON3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/wiki_resources.py"
+    --state "${AE_WIKI_STATE}" --generate "${CMAKE_BINARY_DIR}/wiki-generated" COMMAND_ERROR_IS_FATAL ANY)
+include_directories("${CMAKE_BINARY_DIR}/wiki-generated")
 set(EMBEDDED_ICONS_RC "${CMAKE_BINARY_DIR}/embedded_icons.rc")
 file(GLOB FIXED_ICON_FILES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/assets/icons/*.png" "${CMAKE_SOURCE_DIR}/assets/icons/*.jpg")

@@ -10,30 +10,7 @@
 namespace FractalScales {
 inline constexpr const char* kNames[101] = {
     nullptr,
-    // T1: 1-25
-    "Volcanic", "Uncategorized", "Snowblind", "Urban Battleground", "Swampland",
-    "Cliffside", "Aquatic Ruins", "Underground Facility", "Molten Furnace", "Molten Boss",
-    "Deepstone", "Siren's Reef", "Chaos", "Aetherblade", "Thaumanova Reactor",
-    "Twilight Oasis", "Kinfall", "Captain Mai Trin Boss", "Solitary Throne", "Solid Ocean",
-    "Silent Surf", "Nightmare", "Shattered Observatory", "Sunqua Peak", "Lonely Tower",
-    // T2: 26-50
-    "Aquatic Ruins", "Snowblind", "Volcanic", "Underground Facility", "Chaos",
-    "Urban Battleground", "Swampland", "Deepstone", "Thaumanova Reactor", "Solid Ocean",
-    "Uncategorized", "Siren's Reef", "Kinfall", "Molten Furnace", "Molten Boss",
-    "Twilight Oasis", "Captain Mai Trin Boss", "Silent Surf", "Solitary Throne", "Aetherblade",
-    "Cliffside", "Nightmare", "Shattered Observatory", "Sunqua Peak", "Lonely Tower",
-    // T3: 51-75
-    "Snowblind", "Volcanic", "Underground Facility", "Siren's Reef", "Thaumanova Reactor",
-    "Swampland", "Urban Battleground", "Molten Furnace", "Twilight Oasis", "Solid Ocean",
-    "Aquatic Ruins", "Uncategorized", "Chaos", "Solitary Throne", "Aetherblade",
-    "Silent Surf", "Deepstone", "Cliffside", "Molten Boss", "Kinfall",
-    "Captain Mai Trin Boss", "Nightmare", "Shattered Observatory", "Sunqua Peak", "Lonely Tower",
-    // T4: 76-100
-    "Aquatic Ruins", "Swampland", "Siren's Reef", "Uncategorized", "Solid Ocean",
-    "Underground Facility", "Thaumanova Reactor", "Molten Furnace", "Deepstone", "Urban Battleground",
-    "Snowblind", "Twilight Oasis", "Chaos", "Molten Boss", "Captain Mai Trin Boss",
-    "Volcanic", "Aetherblade", "Cliffside", "Solitary Throne", "Kinfall",
-    "Nightmare", "Shattered Observatory", "Sunqua Peak", "Silent Surf", "Lonely Tower",
+#include "WikiFractalScales.inc"
 };
 inline const char* NameForScale(int scale) {
     return scale >= 1 && scale <= 100 ? kNames[scale] : nullptr;

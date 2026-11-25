@@ -3,6 +3,10 @@ name: Build Alter Ego Windows DLL (UCRT)
 on:
   workflow_dispatch:
     inputs:
+      wiki_refresh:
+        description: 'Force bounded Wiki reference refresh'
+        type: boolean
+        default: false
       wiki_diagnostic:
         description: 'Run optional Wiki connectivity diagnostic'
         type: boolean
@@ -109,6 +113,26 @@ jobs:
           dyes = get("/v2/colors?ids=all")
           print("Dye sample:",dyes[0]["id"],dyes[0]["name"],dyes[0]["base_rgb"])
           PY
+      - name: Restore Wiki reference state
+        uses: actions/cache/restore@v5
+        with:
+          path: .wiki-reference-state
+          key: ae-wiki-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ae-wiki-v1-${{ github.ref_name }}-
+      - name: Refresh monthly Wiki resources
+        run: |
+          mkdir -p .wiki-reference-state
+          args=""
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.wiki_refresh }}" = "true" ]; then args="--force"; fi
+          if [ "${{ github.event.head_commit.message == 'Bootstrap monthly Wiki rotation resources' }}" = "true" ]; then args="--force --probe"; fi
+          python3 tools/wiki_resources.py --state .wiki-reference-state/rotations.json --refresh $args
+      - name: Save Wiki reference state
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: .wiki-reference-state
+          key: ae-wiki-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Cache compiler outputs, never final executables or test results.
       - name: Restore compiler cache
         uses: actions/cache/restore@v5
@@ -130,7 +154,7 @@ jobs:
         run: python3 tools/benchmark_sqlite.py --output sqlite-benchmark.json
       - name: Configure Windows release build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
+          cmake -S . -B build -DAE_WIKI_STATE="$PWD/.wiki-reference-state/rotations.json" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
       - name: Compile Windows DLL
         run: cmake --build build --parallel 2
       - name: Verify embedded fixed UI assets
@@ -170,8 +194,10 @@ jobs:
             build/AlterEgo.dll
             build/AlterEgo.map
             sqlite-benchmark.json
+            .wiki-reference-state/rotations.json
             LICENSE
             THIRD_PARTY_NOTICES.txt
+          include-hidden-files: true
           if-no-files-found: error
       - name: Save compiler cache
         uses: actions/cache/save@v5

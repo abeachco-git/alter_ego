@@ -458,3 +458,16 @@ Attribution does not substitute for any required permission. Review the
 provenance and terms of newly added artwork, datasets and community
 material before publishing them.
 
+
+
+Guild Wars 2 Wiki reference facts
+=================================
+Normalized raid bounty and fractal schedule/scale facts are derived from
+https://wiki.guildwars2.com/wiki/Template:Daily_Raid_Bounties
+https://wiki.guildwars2.com/wiki/Template:Daily_Fractal_Schedule
+https://wiki.guildwars2.com/wiki/Template:Daily_Recommended_Fractal_Schedule
+https://wiki.guildwars2.com/wiki/Template:Fractal_info
+See https://wiki.guildwars2.com/wiki/Guild_Wars_2_Wiki:Copyrights (original
+contributor content GFDL 1.3; game intellectual property remains with its
+owners). This addon extracts factual names, numeric scale assignments and
+rotations only; it does not distribute Wiki article prose or page markup.

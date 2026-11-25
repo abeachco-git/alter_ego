@@ -1,0 +1,494 @@
+{
+  "schema": 1,
+  "datasets": {
+    "raid_bounties": {
+      "last_success": 0,
+      "last_attempt": 0,
+      "source": "Existing audited ClearsRotation.h (2026-11-24)",
+      "data": [
+        [
+          "Shiverpeaks Pass",
+          "Voice and Claw of the Fallen",
+          "Fraenir of Jormag",
+          "Gorseval",
+          "Cairn",
+          "Mursaat Overseer",
+          "Shiverpeaks Pass",
+          "Voice and Claw of the Fallen",
+          "Fraenir of Jormag",
+          "Gorseval",
+          "Cairn",
+          "Mursaat Overseer"
+        ],
+        [
+          "Aetherblade Hideout",
+          "Cardinal Sabir",
+          "Whisper of Jormag",
+          "Vale Guardian",
+          "Cosmic Observatory",
+          "Cold War",
+          "Boneskinner",
+          "Sabetha",
+          "Xunlai Jade Junkyard",
+          "Temple of Febe",
+          "Keep Construct",
+          "Kela"
+        ],
+        [
+          "Slothasor",
+          "Matthias",
+          "Xera",
+          "Samarog",
+          "Conjured Amalgamate",
+          "Twin Largos",
+          "Decima",
+          "Cardinal Adina",
+          "Old Lion's Court",
+          "Ura",
+          "Kaineng Overlook",
+          "Deimos"
+        ],
+        [
+          "Qadim",
+          "Qadim the Peerless",
+          "Soulless Horror",
+          "Harvest Temple",
+          "Dhuum",
+          "Greer",
+          "Qadim",
+          "Qadim the Peerless",
+          "Soulless Horror",
+          "Harvest Temple",
+          "Dhuum",
+          "Greer"
+        ]
+      ]
+    },
+    "fractals": {
+      "last_success": 0,
+      "last_attempt": 0,
+      "source": "Existing audited ClearsRotation.h and FractalScales.h (2026-11-24)",
+      "data": {
+        "sets": [
+          {
+            "daily": [
+              "Nightmare",
+              "Snowblind",
+              "Volcanic"
+            ],
+            "recommended": [
+              [
+                2,
+                "Uncategorized"
+              ],
+              [
+                37,
+                "Siren's Reef"
+              ],
+              [
+                53,
+                "Underground Facility"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Aetherblade",
+              "Thaumanova Reactor",
+              "Uncategorized"
+            ],
+            "recommended": [
+              [
+                6,
+                "Cliffside"
+              ],
+              [
+                28,
+                "Volcanic"
+              ],
+              [
+                61,
+                "Aquatic Ruins"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Chaos",
+              "Cliffside",
+              "Twilight Oasis"
+            ],
+            "recommended": [
+              [
+                10,
+                "Molten Boss"
+              ],
+              [
+                32,
+                "Swampland"
+              ],
+              [
+                65,
+                "Aetherblade"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Captain Mai Trin Boss",
+              "Deepstone",
+              "Silent Surf"
+            ],
+            "recommended": [
+              [
+                14,
+                "Aetherblade"
+              ],
+              [
+                34,
+                "Thaumanova Reactor"
+              ],
+              [
+                74,
+                "Sunqua Peak"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Nightmare",
+              "Solitary Throne",
+              "Solid Ocean"
+            ],
+            "recommended": [
+              [
+                1,
+                "Volcanic"
+              ],
+              [
+                50,
+                "Lonely Tower"
+              ],
+              [
+                70,
+                "Kinfall"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Chaos",
+              "Uncategorized",
+              "Urban Battleground"
+            ],
+            "recommended": [
+              [
+                15,
+                "Thaumanova Reactor"
+              ],
+              [
+                48,
+                "Shattered Observatory"
+              ],
+              [
+                60,
+                "Solid Ocean"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Deepstone",
+              "Molten Furnace",
+              "Siren's Reef"
+            ],
+            "recommended": [
+              [
+                24,
+                "Sunqua Peak"
+              ],
+              [
+                35,
+                "Solid Ocean"
+              ],
+              [
+                66,
+                "Silent Surf"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Molten Boss",
+              "Twilight Oasis",
+              "Underground Facility"
+            ],
+            "recommended": [
+              [
+                21,
+                "Silent Surf"
+              ],
+              [
+                36,
+                "Uncategorized"
+              ],
+              [
+                75,
+                "Lonely Tower"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Silent Surf",
+              "Swampland",
+              "Volcanic"
+            ],
+            "recommended": [
+              [
+                7,
+                "Aquatic Ruins"
+              ],
+              [
+                40,
+                "Molten Boss"
+              ],
+              [
+                67,
+                "Deepstone"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Aquatic Ruins",
+              "Lonely Tower",
+              "Thaumanova Reactor"
+            ],
+            "recommended": [
+              [
+                8,
+                "Underground Facility"
+              ],
+              [
+                31,
+                "Urban Battleground"
+              ],
+              [
+                54,
+                "Siren's Reef"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Sunqua Peak",
+              "Underground Facility",
+              "Urban Battleground"
+            ],
+            "recommended": [
+              [
+                11,
+                "Deepstone"
+              ],
+              [
+                39,
+                "Molten Furnace"
+              ],
+              [
+                59,
+                "Twilight Oasis"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Aetherblade",
+              "Chaos",
+              "Nightmare"
+            ],
+            "recommended": [
+              [
+                18,
+                "Captain Mai Trin Boss"
+              ],
+              [
+                27,
+                "Snowblind"
+              ],
+              [
+                64,
+                "Solitary Throne"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Cliffside",
+              "Lonely Tower",
+              "Kinfall"
+            ],
+            "recommended": [
+              [
+                4,
+                "Urban Battleground"
+              ],
+              [
+                30,
+                "Chaos"
+              ],
+              [
+                58,
+                "Molten Furnace"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Deepstone",
+              "Solid Ocean",
+              "Swampland"
+            ],
+            "recommended": [
+              [
+                16,
+                "Twilight Oasis"
+              ],
+              [
+                42,
+                "Captain Mai Trin Boss"
+              ],
+              [
+                62,
+                "Uncategorized"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Captain Mai Trin Boss",
+              "Molten Boss",
+              "Shattered Observatory"
+            ],
+            "recommended": [
+              [
+                5,
+                "Swampland"
+              ],
+              [
+                47,
+                "Nightmare"
+              ],
+              [
+                68,
+                "Cliffside"
+              ]
+            ]
+          }
+        ],
+        "scales": [
+          "Volcanic",
+          "Uncategorized",
+          "Snowblind",
+          "Urban Battleground",
+          "Swampland",
+          "Cliffside",
+          "Aquatic Ruins",
+          "Underground Facility",
+          "Molten Furnace",
+          "Molten Boss",
+          "Deepstone",
+          "Siren's Reef",
+          "Chaos",
+          "Aetherblade",
+          "Thaumanova Reactor",
+          "Twilight Oasis",
+          "Kinfall",
+          "Captain Mai Trin Boss",
+          "Solitary Throne",
+          "Solid Ocean",
+          "Silent Surf",
+          "Nightmare",
+          "Shattered Observatory",
+          "Sunqua Peak",
+          "Lonely Tower",
+          "Aquatic Ruins",
+          "Snowblind",
+          "Volcanic",
+          "Underground Facility",
+          "Chaos",
+          "Urban Battleground",
+          "Swampland",
+          "Deepstone",
+          "Thaumanova Reactor",
+          "Solid Ocean",
+          "Uncategorized",
+          "Siren's Reef",
+          "Kinfall",
+          "Molten Furnace",
+          "Molten Boss",
+          "Twilight Oasis",
+          "Captain Mai Trin Boss",
+          "Silent Surf",
+          "Solitary Throne",
+          "Aetherblade",
+          "Cliffside",
+          "Nightmare",
+          "Shattered Observatory",
+          "Sunqua Peak",
+          "Lonely Tower",
+          "Snowblind",
+          "Volcanic",
+          "Underground Facility",
+          "Siren's Reef",
+          "Thaumanova Reactor",
+          "Swampland",
+          "Urban Battleground",
+          "Molten Furnace",
+          "Twilight Oasis",
+          "Solid Ocean",
+          "Aquatic Ruins",
+          "Uncategorized",
+          "Chaos",
+          "Solitary Throne",
+          "Aetherblade",
+          "Silent Surf",
+          "Deepstone",
+          "Cliffside",
+          "Molten Boss",
+          "Kinfall",
+          "Captain Mai Trin Boss",
+          "Nightmare",
+          "Shattered Observatory",
+          "Sunqua Peak",
+          "Lonely Tower",
+          "Aquatic Ruins",
+          "Swampland",
+          "Siren's Reef",
+          "Uncategorized",
+          "Solid Ocean",
+          "Underground Facility",
+          "Thaumanova Reactor",
+          "Molten Furnace",
+          "Deepstone",
+          "Urban Battleground",
+          "Snowblind",
+          "Twilight Oasis",
+          "Chaos",
+          "Molten Boss",
+          "Captain Mai Trin Boss",
+          "Volcanic",
+          "Aetherblade",
+          "Cliffside",
+          "Solitary Throne",
+          "Kinfall",
+          "Nightmare",
+          "Shattered Observatory",
+          "Sunqua Peak",
+          "Silent Surf",
+          "Lonely Tower"
+        ]
+      }
+    }
+  }
+}

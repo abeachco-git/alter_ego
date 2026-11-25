@@ -144,3 +144,5 @@ Public catalog coverage in database_core checks seven-day freshness, failure bac
 Public catalog tests cover v17 pet/legend persistence, exact protocol code resolution and historical picker display normalization. Live probes are bounded samples, not a full catalog scan or in-game validation.
 
 Public catalog cadence tests verify independent weekly discovery and monthly definition refresh, manual override, combined fetch planning, canonical new item persistence and independent success timestamps. In-game verify fresh checks skip network, new item/skin discovery, and failure retaining prior success ages.
+
+Wiki resources have offline Python validation tests and existing C++ rotation tests. Normal build compiles validated normalized tables; live probes are not evidence of complete acquisition catalogs. Verify first-run logs separately.
