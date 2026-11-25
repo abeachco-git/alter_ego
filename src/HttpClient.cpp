@@ -31,7 +31,7 @@ namespace Skinventory {
                 std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
         ~WikiLease(){if(acquired)wikiGate.Release();}
-        bool Ready()const{return !wiki||(acquired&&!AlterEgo::Background::Workers().Stopping());}
+        bool Ready()const{return !AlterEgo::Background::Workers().Stopping()&&(!wiki||acquired);}
         void Starting(){if(wiki)wikiNext=Clock::now()+std::chrono::seconds(1);}
         void Status(int status){if(wiki&&status==429)wikiNext=std::max(wikiNext,Clock::now()+std::chrono::seconds(60));}
     };
@@ -60,10 +60,15 @@ namespace Skinventory {
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                       INTERNET_FLAG_SECURE;
 
+        if (AlterEgo::Background::Workers().Stopping()) {
+            InternetCloseHandle(hInternet);
+            return {};
+        }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
-        if (!hUrl) {
+        if (!hUrl || AlterEgo::Background::Workers().Stopping()) {
+            if (hUrl) InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
             return "";
         }
@@ -93,10 +98,15 @@ namespace Skinventory {
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                       INTERNET_FLAG_SECURE;
 
+        if (AlterEgo::Background::Workers().Stopping()) {
+            InternetCloseHandle(hInternet);
+            return {};
+        }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
-        if (!hUrl) {
+        if (!hUrl || AlterEgo::Background::Workers().Stopping()) {
+            if (hUrl) InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
             return result;
         }
@@ -130,11 +140,16 @@ namespace Skinventory {
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                       INTERNET_FLAG_SECURE;
 
+        if (AlterEgo::Background::Workers().Stopping()) {
+            InternetCloseHandle(hInternet);
+            return {};
+        }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(),
             headers.c_str(), (DWORD)headers.size(), flags, 0);
-        if (!hUrl) {
+        if (!hUrl || AlterEgo::Background::Workers().Stopping()) {
+            if (hUrl) InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
             return result;
         }
@@ -180,13 +195,15 @@ namespace Skinventory {
 
         HINTERNET hConnect = InternetConnectA(hInternet, host, uc.nPort,
             NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
-        if (!hConnect) {
+        if (!hConnect || AlterEgo::Background::Workers().Stopping()) {
+            if (hConnect) InternetCloseHandle(hConnect);
             InternetCloseHandle(hInternet);
             return result;
         }
 
         HINTERNET hRequest = HttpOpenRequestA(hConnect, "POST", path, NULL, NULL, NULL, flags, 0);
-        if (!hRequest) {
+        if (!hRequest || AlterEgo::Background::Workers().Stopping()) {
+            if (hRequest) InternetCloseHandle(hRequest);
             InternetCloseHandle(hConnect);
             InternetCloseHandle(hInternet);
             return result;
@@ -196,7 +213,7 @@ namespace Skinventory {
         BOOL sent = HttpSendRequestA(hRequest,
             allHeaders.c_str(), (DWORD)allHeaders.size(),
             (LPVOID)jsonBody.c_str(), (DWORD)jsonBody.size());
-        if (!sent) {
+        if (!sent || AlterEgo::Background::Workers().Stopping()) {
             InternetCloseHandle(hRequest);
             InternetCloseHandle(hConnect);
             InternetCloseHandle(hInternet);
@@ -226,11 +243,16 @@ namespace Skinventory {
         if (!hInternet) return false;
         AlterEgo::HttpSafety::Configure(hInternet);
 
+        if (AlterEgo::Background::Workers().Stopping()) {
+            InternetCloseHandle(hInternet);
+            return {};
+        }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0,
             INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
-        if (!hUrl) {
+        if (!hUrl || AlterEgo::Background::Workers().Stopping()) {
+            if (hUrl) InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
             return false;
         }
@@ -244,7 +266,7 @@ namespace Skinventory {
         InternetCloseHandle(hUrl);
         InternetCloseHandle(hInternet);
 
-        if (!complete || status<200 || status>=300 || buffer.empty()) return false;
+        if (!complete || AlterEgo::Background::Workers().Stopping() || status<200 || status>=300 || buffer.empty()) return false;
 
         std::ofstream file(filePath, std::ios::binary);
         if (!file.is_open()) return false;
