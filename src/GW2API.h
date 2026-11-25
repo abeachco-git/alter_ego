@@ -17,6 +17,7 @@
 namespace AlterEgo {
 
     namespace Composable { struct Document; }
+    namespace RefreshEngine { struct IdBatch; }
 
     enum class FetchStatus {
         Idle,
@@ -615,9 +616,9 @@ namespace AlterEgo {
         static bool EnsureDataDirectory();
 
         // Batch fetch helpers (public endpoints, synchronous)
-        static void FetchItemDetailsClaimed(const std::vector<uint32_t>& item_ids, bool forceRefetch);
-        static void FetchSkinDetails(const std::vector<uint32_t>& skin_ids);
-        static void FetchTraitDetails(const std::vector<uint32_t>& trait_ids);
+        static void FetchItemDetailsClaimed(RefreshEngine::IdBatch& claim, bool forceRefetch);
+        static void FetchSkinDetails(RefreshEngine::IdBatch& claim);
+        static void FetchTraitDetails(RefreshEngine::IdBatch& claim);
 
         // Parse helpers
         static Character ParseCharacterJson(const nlohmann::json& cj);
