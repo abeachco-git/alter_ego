@@ -67,6 +67,10 @@ the temporary diagnostics tab. The integrated path still needs in-game testing.
 Locations belong only in row tooltips. Do not override API character metadata
 or require it to match live memory plausibility checks.
 
+## Independent release
+
+Track release-specific identity, privacy, distribution and validation gates in the [independent release checklist](release-checklist.md). Do not duplicate them in this implementation tracker.
+
 ## Acceptance
 
 Unit/regression coverage for account switching, late responses, permission failures, cancellation/unload, rate limits, complete-empty vs failed/partial scoped snapshots, guild dedup, legendary counts, filtering/sorting and stale search generation, cache reset and non-destructive migration. Validate native operation in game including multiple accounts and per-dataset refresh policies; preserve all existing CI gates and produce a verified Windows x64 UCRT DLL. Benchmark startup, refresh request counts, database size, search latency, and DLL size against the stabilized baseline; no performance or size target is claimed as measured today.

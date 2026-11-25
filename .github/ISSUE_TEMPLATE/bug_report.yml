@@ -1,0 +1,39 @@
+name: Bug report
+description: Report an addon behavior or regression
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, account identifiers, private character names, full backups or memory dumps. For security vulnerabilities, follow SECURITY.md rather than filing a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: Addon version or commit
+      description: Include the exact build if available.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Game and Nexus versions / environment
+      placeholder: "GW2 build, Nexus version, Windows version, single or multiple linked accounts (no account names)"
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the page or action, actual behavior and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include relevant refresh, account switching or restart steps if applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or redacted logs (optional)
+      description: Review screenshots and logs for credentials or private information before uploading.

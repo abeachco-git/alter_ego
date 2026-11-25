@@ -99,6 +99,8 @@ Use **Library → Import / Export** to transfer or back up selected collections.
 
 Keep pre-migration backups. Cache rebuilds are available in Nexus options under **Storage & Cache** and run on restart; they do not erase the saved library. API keys and rebuildable caches are not included in library exports.
 
+For details on stored data, external services and optional sharing, see [Privacy](PRIVACY.md).
+
 ## Development
 
 GitHub Actions builds and verifies the Windows x64 UCRT DLL. Local cross-build on Debian 13:
@@ -111,7 +113,9 @@ cmake --build build --parallel 2
 
 Output: `build/AlterEgo.dll`. Verify the UCRT import with `objdump -p build/AlterEgo.dll`; it must not import `msvcrt.dll`.
 
-Developer references: [Agent instructions](AGENTS.md) · [Architecture](docs/architecture.md) · [UI conventions](docs/ui-components.md) · [Regression testing](docs/regression-testing.md) · [Roadmap](docs/roadmap.md) · [Development status](docs/development-status.md) · [AE2 format](docs/shared-build-spec.md).
+[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md).
+
+Developer references: [Agent instructions](AGENTS.md) · [Architecture](docs/architecture.md) · [UI conventions](docs/ui-components.md) · [Regression testing](docs/regression-testing.md) · [Roadmap](docs/roadmap.md) · [Development status](docs/development-status.md) · [AE2 format](docs/shared-build-spec.md) · [Release checklist](docs/release-checklist.md).
 
 ## Credits
 
