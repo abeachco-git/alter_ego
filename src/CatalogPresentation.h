@@ -6,6 +6,23 @@ namespace AlterEgo::UI {
 // A fixed-height list row; caller owns stable ID, selection, context menu,
 // and domain-specific trailing content. No catalog requests from this helper.
 inline float CatalogRowHeight(){return ImMax(22.f,ImGui::GetTextLineHeight()+6.f);}
+// Shared striping for selectable catalog rows and ordinary wallet rows.
+inline void CatalogRowBackground(int row,ImVec2 p,ImVec2 end,bool selected=false,bool hovered=false){
+    const ImU32 bg=selected?IM_COL32(80,64,28,90):hovered?IM_COL32(60,56,40,60):row&1?IM_COL32(255,255,255,10):0;
+    if(bg)ImGui::GetWindowDrawList()->AddRectFilled(p,end,bg,2.f);
+}
+// Stable square hit target, with a neutral outline and gold favorite marker.
+inline bool FavoriteBox(bool favorite){
+    const float size=ImGui::GetFrameHeight();
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
+    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.55f,.51f,.43f,.9f));
+    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0,0,0,.18f));
+    ImGui::PushStyleColor(ImGuiCol_Text,SectionGold);
+    const bool clicked=Button(favorite?"*###favorite":"###favorite",ImVec2(size,size),ButtonRole::Compact);
+    ImGui::PopStyleColor(3);ImGui::PopStyleVar();
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s favorite",favorite?"Remove":"Add");
+    return clicked;
+}
 struct CatalogRowResult {bool clicked=false,hovered=false;};
 inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const std::string& url,const std::string& name,const std::string& rarity,
@@ -18,8 +35,7 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const bool hovered=ImGui::IsItemHovered(),clicked=ImGui::IsItemClicked();
     auto* dl=ImGui::GetWindowDrawList();
     const auto rc=GetSkinRarityColor(rarity);
-    const ImU32 bg=selected?IM_COL32(80,64,28,90):hovered?IM_COL32(60,56,40,60):row&1?IM_COL32(255,255,255,10):0;
-    if(bg)dl->AddRectFilled(p,end,bg,2.f);
+    CatalogRowBackground(row,p,end,selected,hovered);
     if(selected||hovered)dl->AddRect(p,end,selected?IM_COL32(232,196,122,220):IM_COL32(197,161,85,110),2.f);
     dl->AddRectFilled(ImVec2(p.x,p.y+2),ImVec2(p.x+3,end.y-2),ImGui::ColorConvertFloat4ToU32(dim?ImVec4(rc.x*.55f,rc.y*.55f,rc.z*.55f,.85f):rc));
     const float sz=16.f;

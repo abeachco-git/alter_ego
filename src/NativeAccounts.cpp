@@ -637,9 +637,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             ImGui::SetNextItemWidth(150);UI::Combo("##wallet_sort",&walletSort,walletSorts,3);
             for(const auto& a:accounts){
                 if(multi&&all)ImGui::TextUnformatted(Display(a).c_str());
-                const auto st=v->scopes.find({a.id,"Wallet",""});
-                if(st==v->scopes.end())ImGui::TextDisabled("Wallet not retrieved");
-                else ImGui::TextDisabled("%s%s",st->second.status.c_str(),Due("Wallet",0,st->second.success,Now())?" (stale)":"");
+                // Retrieval status belongs exclusively to the shared footer,
+                // including per-account failures and stale timestamps in its tooltip.
                 ImGui::PushID(a.id.c_str());
                 std::vector<const WalletRow*> visible;
                 for(const auto& w:v->inventory.wallet)if(w.account==a.id&&Match(w.name,w.id,q)&&(!favoriteFilter||walletFavorites.count(w.id))&&(!balanceFilter||w.value>0))visible.push_back(&w);
@@ -650,15 +649,17 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                     if(walletSort==1&&a->name!=b->name)return a->name<b->name;
                     return a->order==b->order?a->id<b->id:a->order<b->order;
                 });
+                int rowIndex=0;
                 for(const auto* ptr:visible){
                     const auto& w=*ptr;ImGui::PushID(static_cast<int>(w.id));
+                    const auto p=ImGui::GetCursorScreenPos();
+                    UI::CatalogRowBackground(rowIndex++,p,ImVec2(p.x+ImGui::GetContentRegionAvail().x,p.y+ImGui::GetFrameHeight()));
                     const bool favorite=walletFavorites.count(w.id)!=0;
-                    if(UI::SmallButton(favorite?"*":"+")){
+                    if(UI::FavoriteBox(favorite)){
                         if(favorite)walletFavorites.erase(w.id);else walletFavorites.insert(w.id);
                         if(saveSettings)saveSettings();
                     }
-                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s favorite",favorite?"Remove":"Add");
-                    ImGui::SameLine();
+                    ImGui::SameLine();ImGui::AlignTextToFramePadding();
                     std::string label=w.name.empty()?"Currency #"+std::to_string(w.id):w.name;
                     if(w.id==1){ImGui::Text("%s:",label.c_str());ImGui::SameLine();RenderCoins(w.value);}
                     else ImGui::Text("%s: %lld",label.c_str(),static_cast<long long>(w.value));
