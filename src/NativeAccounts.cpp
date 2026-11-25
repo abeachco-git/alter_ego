@@ -37,6 +37,7 @@ std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
 std::atomic<bool> busy{false};
 std::string message;
+RefreshUI::State messageState=RefreshUI::State::Ready;
 const std::vector<std::string> recommended={"account","characters","inventories","builds","progression","unlocks","wallet","guilds","tradingpost"};
 std::string Target(const std::string& id){return "AlterEgo/GW2/"+id;}
 bool ValidGuid(const std::string& s){
@@ -80,19 +81,19 @@ std::vector<Account> Accounts(){
     }
     return out;
 }
-void Publish(const std::string& msg,bool replaceMessage=true){
+void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State state=RefreshUI::State::Ready){
     std::lock_guard<std::mutex> serial(publishMutex);
     auto next=std::make_shared<View>();next->accounts=Accounts();next->inventory=Read(root);
     for(size_t i=0;i<next->inventory.rows.size();++i)next->index[next->inventory.rows[i].slot.id].push_back(i);
     for(const auto& s:next->inventory.states)next->scopes[{s.account,s.scope,s.character}]=s;
-    std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);++inventoryGeneration;if(replaceMessage)message=msg;registryReady=true;
+    std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);++inventoryGeneration;if(replaceMessage){message=msg;messageState=state;}registryReady=true;
 }
 std::shared_ptr<const View> Snapshot(){std::lock_guard<std::mutex> lock(viewMutex);return view;}
-void Message(const std::string& msg){std::lock_guard<std::mutex> lock(viewMutex);message=msg;}
+void Message(const std::string& msg,RefreshUI::State state=RefreshUI::State::Error){std::lock_guard<std::mutex> lock(viewMutex);message=msg;messageState=state;}
 std::string Status(){std::lock_guard<std::mutex> lock(viewMutex);return message;}
 template<class Job> void Launch(Job job){
     if(busy.exchange(true))return;
-    Message("Working...");
+    Message("Working...",RefreshUI::State::Working);
     Background::Workers().Launch([job=std::move(job)]{
         try{job();}catch(...){Message("Operation failed; previous verified data retained.");}
         busy=false;
@@ -142,7 +143,7 @@ void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std:
             if(!SaveKey(a.id,key->value)){Message("Windows Credential Manager rejected the key.");return;}
             try{tx.Commit();}catch(...){if(previous.value.empty())CredDeleteA(Target(a.id).c_str(),CRED_TYPE_GENERIC,0);else SaveKey(a.id,previous.value);throw;}
             if(a.permissions.count("characters")){try{Roster(a,key->value);}catch(...){}}
-            Publish("Account linked. Inventory can now be refreshed.");
+            Publish("Account linked. Inventory can now be refreshed.",true,RefreshUI::State::Success);
         }catch(const std::exception& e){
             // Never show arbitrary JSON exception text or HTTP response bodies.
             const std::string s=e.what();
@@ -158,7 +159,7 @@ void Remove(const std::string& id){
         Database::Transaction tx(db);auto q=db.Prepare("DELETE FROM accounts WHERE id=?");q.Bind(1,id);q.Execute();
         tx.Commit();
         const bool removed=CredDeleteA(Target(id).c_str(),CRED_TYPE_GENERIC,0)!=FALSE||GetLastError()==ERROR_NOT_FOUND;
-        Publish(removed?"Account unlinked. Library unchanged.":"Account unlinked; remove its remaining credential in Windows Credential Manager.");
+        Publish(removed?"Account unlinked. Library unchanged.":"Account unlinked; remove its remaining credential in Windows Credential Manager.",true,removed?RefreshUI::State::Success:RefreshUI::State::Error);
     });
 }
 bool AutoScope(const std::string& scope){
@@ -302,6 +303,14 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
     });
 }
 std::string Display(const Account& a){return a.label.empty()?a.name:a.label;}
+std::string LocationLabel(const Slot& s){
+    std::string label=s.scope;
+    if(!s.character.empty())label+=" / "+s.character;
+    if(s.scope=="Equipment"){const auto slash=s.position.find('/');if(slash!=std::string::npos)label+=" / "+s.position.substr(slash+1);}
+    if(s.scope=="Legendary Armory")label+=" (unlocked count)";
+    if(s.scope=="Delivery box")label+=" (not collected)";
+    return label;
+}
 std::string Active(const View& v,const std::string& ch){
     if(ch.empty())return {};std::string result;
     for(const auto& a:v.accounts){auto it=v.inventory.rosters.find(a.id);
@@ -383,7 +392,7 @@ void RenderItemAvailability(uint32_t id,const std::string& account,const std::st
         const auto a=std::find_if(v->accounts.begin(),v->accounts.end(),[&](const Account& a){return a.id==s.account;});
         if(a==v->accounts.end())continue;
         if(v->accounts.size()==1&&s.account!=account)continue;
-        std::string label=s.scope+(s.character.empty()?"":" / "+s.character);
+        std::string label=LocationLabel(s);
         if(v->accounts.size()>1)label=Display(*a)+" / "+label;
         std::string status;
         if(!Fresh(*v,r))status="Stale or failed";
@@ -466,7 +475,14 @@ void RenderOptions(){
         }
         ImGui::PopID();
     }
-    const auto status=Status();if(busy.load())RenderSpinner("Working...");else if(!status.empty())ImGui::TextWrapped("%s",status.c_str());
+    std::string status;RefreshUI::State statusState;
+    {std::lock_guard<std::mutex> lock(viewMutex);status=message;statusState=messageState;}
+    if(busy.load())RefreshUI::Status(RefreshUI::State::Working,"Working...");
+    else if(!status.empty()){
+        ImGui::PushTextWrapPos(0.0f);
+        RefreshUI::Status(statusState,status);
+        ImGui::PopTextWrapPos();
+    }
     ImGui::TextDisabled("Keys are stored in Windows Credential Manager, not exported with the Library.");
 }
 std::set<uint32_t> WalletFavorites(){return walletFavorites;}
@@ -617,6 +633,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         }
         return;
     }
+    const auto previousQuery=query;
     UI::SearchToolbar("native_inventory","Search items or ID",query,
         [&]{
             UI::FilterChips c;
@@ -647,6 +664,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             UI::FilterChoice("Transferability",transfer,transferOptions,2);
         },
         [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;});
+    if(query!=previousQuery)nav.item=0;
     const char* sorts[]={"Name","Quantity"};ImGui::SetNextItemWidth(120);UI::Combo("##inventory_sort",&sort,sorts,2);
     if(ImGui::TreeNode("Storage status")){
         for(const auto& a:accounts){
@@ -693,11 +711,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         ItemMenu(group.id,name,group.locations.front()->chat);
         if(opened){
             for(const auto* row:group.locations){
-                const auto& s=row->slot;std::string location=s.scope;
-                if(!s.character.empty())location+=" / "+s.character;
-                if(s.scope=="Equipment"){const auto slash=s.position.find('/');if(slash!=std::string::npos)location+=" / "+s.position.substr(slash+1);}
-                if(s.scope=="Legendary Armory")location+=" (unlocked count)";
-                if(s.scope=="Delivery box")location+=" (not collected)";
+                const auto& s=row->slot;std::string location=LocationLabel(s);
                 if(multi&&all)for(const auto& a:v->accounts)if(a.id==s.account){location=Display(a)+" / "+location;break;}
                 ImGui::Text("%s x%lld | %s%s",location.c_str(),static_cast<long long>(s.count),BindingName(s.binding),!Fresh(*v,*row)?" | Stale or failed":"");
                 if(!s.boundTo.empty())ImGui::TextDisabled("Bound to %s",s.boundTo.c_str());

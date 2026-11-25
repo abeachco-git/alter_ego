@@ -31,9 +31,11 @@ Source audit at 57d47f9 (not an in-game visual test). Checked items below are im
 - [x] Use existing tab dropdown conventions for Inventory subviews where appropriate; share existing menu hover/click behavior and avoid overflowing the primary tab row/account selector at narrow widths.
 - [x] Use canonical multi-select facets with independently removable chips for applicable Inventory type/rarity/binding/character choices; preserve single storage refresh scope unless explicitly decoupled. Keep wallet filtering canonical.
 - [x] Shared rarity and coin presentation, Items/Guild Bank context menus, Stock navigation via shared skin context menu and consistent price row geometry.
-- [ ] Verify large-list scrolling, narrow layout, common equipment location presentation and Shopping row geometry in game.
+- [x] Common location labels across Inventory, Compare and equipment location menus; global account selector moved into navigation header to avoid tab overlay.
+- [ ] Verify large-list scrolling, narrow layout and Shopping row geometry in game.
 - [x] Account options canonical password inputs, disabled actions, destructive unlink styling, grouped refresh preferences.
-- [ ] Further polish account validation feedback and master/child explanation; verify in game.
+- [x] Shared typed account validation/status feedback; preserve manual refresh independent of master settings.
+- [ ] Verify account options and master/child state in game.
 - [x] Compare location hints: use stable item IDs (not array position), concise location labels and shared Find in Inventory action; keep acquisition hints distinct from semantic matches.
 - [ ] Verify no-account/not-retrieved/empty/filter-no-match/permission-denied/failed states, conditional account labels, narrow window layouts, multiple font sizes, keyboard focus, clipboard and Back/Forward in game.
 

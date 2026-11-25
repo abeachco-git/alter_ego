@@ -11000,7 +11000,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
             for(const auto& [id,count]:totals){
                 ImGui::PushID(static_cast<int>(id));
                 const auto* item=AlterEgo::GW2API::GetItemInfo(id);
-                std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count);
+                std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count)+"###acquisition";
                 if(ImGui::TreeNode(label.c_str())){
                     AlterEgo::NativeAccounts::RenderItemAvailability(id,owner,character->name);
                     if(AlterEgo::UI::Button("Find in Inventory",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))OpenInventoryItem(id);
@@ -16333,13 +16333,51 @@ void AddonRender() {
     else if(!AlterEgo::NativeAccounts::HasLinkedAccounts())
         ImGui::TextWrapped("Link your GW2 API key in Nexus > Alter Ego options. Saved Library data remains available.");
 
-    // Account selector (only when multi-account) — rendered on the same row as
-    // the tab bar (right-aligned) to save vertical space.
+    // Global account scope, shown only for multiple linked accounts.
     static bool g_ForceCharactersTab = false;
     static bool accountFallbackNavigation=false;
     RenderNavigationControls();
     BeginNavigationFrame();
-    float tabRowY = ImGui::GetCursorPosY();
+        // Account selector shares the navigation header, never overlays main tabs.
+        if (AlterEgo::GW2API::IsMultiAccount()) {
+            const auto& accounts = AlterEgo::GW2API::GetAccounts();
+            std::string currentLabel = "All Accounts";
+            for (const auto& acct : accounts) {
+                if (acct.name == g_SelectedAccountFilter) {
+                    currentLabel = acct.display_name;
+                    break;
+                }
+            }
+            const float available=ImGui::GetContentRegionAvail().x;
+            if(available<ImGui::GetFontSize()*9.f)ImGui::NewLine();
+            const float comboWidth=std::min(180.f,std::max(1.f,ImGui::GetContentRegionAvail().x));
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),ImGui::GetWindowContentRegionMax().x-comboWidth));
+            if (RenderThemedCombo("##AccountSelect", currentLabel.c_str(), comboWidth)) {
+                std::string prevFilter = g_SelectedAccountFilter;
+                if (AlterEgo::UI::SelectableOption("All Accounts", g_SelectedAccountFilter.empty())) {
+                    g_SelectedAccountFilter.clear();
+                    if ((g_MainTab >= 2 && g_MainTab <= 4) || g_MainTab == 6) {
+                        g_ForceCharactersTab = true;accountFallbackNavigation=true;
+                    }
+                }
+                for (const auto& acct : accounts) {
+                    bool selected = (g_SelectedAccountFilter == acct.name);
+                    ImGui::PushID(acct.name.c_str());
+                    if (AlterEgo::UI::SelectableOption(acct.display_name.c_str(), selected)) g_SelectedAccountFilter = acct.name;
+                    ImGui::PopID();
+                }
+                if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
+                    Skinventory::OwnedSkins::SetAccountName(g_SelectedAccountFilter);
+                    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))
+                        g_SkinRefreshOwned = true;
+                    g_ClearsNeedRequery = true;
+                    g_VaultNeedRequery = true;
+                    g_AchNeedRequery = true;
+                }
+                ImGui::EndCombo();
+            }
+        }
+
 
     // Top-level tab bar: Characters | Build Library
     PollBuildSource();
@@ -17545,50 +17583,6 @@ void AddonRender() {
             ImGui::EndChild();
             AlterEgo::NativeAccounts::RenderInventoryStatusRow(g_SelectedAccountFilter);
             ImGui::EndTabItem();
-        }
-
-        // Right-aligned account selector on the same row as the tab strip.
-        // Drawn after tab items so it overlays the empty right-hand portion of
-        // the tab bar row (which has no clickable items there).
-        if (AlterEgo::GW2API::IsMultiAccount()) {
-            const auto& accounts = AlterEgo::GW2API::GetAccounts();
-            std::string currentLabel = "All Accounts";
-            for (const auto& acct : accounts) {
-                if (acct.name == g_SelectedAccountFilter) {
-                    currentLabel = acct.display_name;
-                    break;
-                }
-            }
-            const float comboWidth = 180.0f;
-            float afterY = ImGui::GetCursorPosY();
-            ImGui::SetCursorPos(ImVec2(
-                ImGui::GetContentRegionMax().x - comboWidth - ImGui::GetStyle().ItemSpacing.x,
-                tabRowY - 3.0f));
-            if (RenderThemedCombo("##AccountSelect", currentLabel.c_str(), comboWidth)) {
-                std::string prevFilter = g_SelectedAccountFilter;
-                if (AlterEgo::UI::SelectableOption("All Accounts", g_SelectedAccountFilter.empty())) {
-                    g_SelectedAccountFilter.clear();
-                    if ((g_MainTab >= 2 && g_MainTab <= 4) || g_MainTab == 6) {
-                        g_ForceCharactersTab = true;accountFallbackNavigation=true;
-                    }
-                }
-                for (const auto& acct : accounts) {
-                    bool selected = (g_SelectedAccountFilter == acct.name);
-                    ImGui::PushID(acct.name.c_str());
-                    if (AlterEgo::UI::SelectableOption(acct.display_name.c_str(), selected)) g_SelectedAccountFilter = acct.name;
-                    ImGui::PopID();
-                }
-                if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
-                    Skinventory::OwnedSkins::SetAccountName(g_SelectedAccountFilter);
-                    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))
-                        g_SkinRefreshOwned = true;
-                    g_ClearsNeedRequery = true;
-                    g_VaultNeedRequery = true;
-                    g_AchNeedRequery = true;
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetCursorPosY(afterY);
         }
 
         // ImGui restores the last selected main tab across sessions. Track
