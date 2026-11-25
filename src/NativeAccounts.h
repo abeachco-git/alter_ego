@@ -40,10 +40,10 @@ uint64_t InventoryGeneration();
 int64_t LooseCount(uint32_t id,const std::string& account,const std::string& character={},int64_t stat=-1);
 void RenderItemAvailability(uint32_t id,const std::string& account,const std::string& character,int64_t stat=-1);
 void RevealItem(uint32_t id);
-std::set<uint32_t> WalletFavorites();
-void SetWalletFavorites(const std::set<uint32_t>& ids);
+std::set<uint32_t> WalletPins();
+void SetWalletPins(const std::set<uint32_t>& ids);
 struct InventoryNavigation {
-    int subview=0,sort=0,walletSort=0,freshness=0,minQuantity=0,transfer=0,favoriteFilter=0,balanceFilter=0;
+    int subview=0,sort=0,freshness=0,minQuantity=0,transfer=0,pinFilter=0,balanceFilter=0;
     uint32_t item=0;
     std::string query,walletQuery,guildQuery,scope;
     std::set<std::string> binding,rarity,type,characters;

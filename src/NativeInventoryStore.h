@@ -7,7 +7,7 @@ namespace AlterEgo::NativeInventory {
 struct ScopeState {std::string account,scope,character,status;int64_t attempted=0,success=0;};
 struct Row {Slot slot;std::string name,rarity,type,chat;int64_t captured=0;};
 struct ItemPresentation {std::string icon,description;Json details=Json::object();bool complete=false;};
-struct WalletRow {std::string account,name,description;uint32_t id=0;int64_t value=0;int order=0;};
+struct WalletRow {std::string account,name,description;uint32_t id=0;int64_t value=0;int order=0;std::string icon;bool iconKnown=false;};
 struct GuildRow {std::string id,name,tag,status;int64_t attempted=0,success=0,coins=0;std::vector<Row> rows;};
 struct Projection {
     std::vector<WalletRow> wallet;
@@ -103,8 +103,8 @@ inline void StoreCurrencies(const std::string& root,const Json& j){
     if(!j.is_array())throw std::runtime_error("Invalid currency definitions");
     std::lock_guard<std::mutex> lock(Cache::Mutex());Database::Connection db(Storage::Paths(root).Cache().u8string(),Database::Connection::OpenMode::Existing);
     Cache::Initialize(db);Database::Transaction tx(db);
-    auto q=db.Prepare("INSERT INTO native_currencies VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,sort_order=excluded.sort_order");
-    for(const auto& r:j){q.Bind(1,ItemId(r.at("id")));q.Bind(2,r.at("name").get<std::string>());q.Bind(3,r.value("description",std::string{}));q.Bind(4,r.value("order",0));q.Execute();q.Reset();}tx.Commit();
+    auto q=db.Prepare("INSERT INTO native_currencies(id,name,description,sort_order,icon,icon_known) VALUES(?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,sort_order=excluded.sort_order,icon=CASE WHEN excluded.icon<>'' THEN excluded.icon ELSE native_currencies.icon END,icon_known=1");
+    for(const auto& r:j){q.Bind(1,ItemId(r.at("id")));q.Bind(2,r.at("name").get<std::string>());q.Bind(3,r.value("description",std::string{}));q.Bind(4,r.value("order",0));q.Bind(5,r.value("icon",std::string{}));q.Execute();q.Reset();}tx.Commit();
 }
 inline void StoreGuildAccess(const std::string& root,const std::string& account,const std::set<std::string>& ids,int64_t stamp){
     std::lock_guard<std::mutex> lock(Cache::Mutex());auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
@@ -163,8 +163,8 @@ inline Projection Read(const std::string& root){
     while(rosterState.Step())out.rosters[rosterState.Text(0)];
     auto roster=db.Prepare("SELECT account,character FROM native_rosters");
     while(roster.Step())out.rosters[roster.Text(0)].insert(roster.Text(1));
-    auto wallet=db.Prepare("SELECT w.account,w.currency_id,w.value,COALESCE(c.name,''),COALESCE(c.description,''),COALESCE(c.sort_order,0) FROM native_wallet w LEFT JOIN native_currencies c ON w.currency_id=c.id ORDER BY c.sort_order,w.currency_id");
-    while(wallet.Step())out.wallet.push_back({wallet.Text(0),wallet.Text(3),wallet.Text(4),static_cast<uint32_t>(wallet.Integer(1)),wallet.Integer(2),static_cast<int>(wallet.Integer(5))});
+    auto wallet=db.Prepare("SELECT w.account,w.currency_id,w.value,COALESCE(c.name,''),COALESCE(c.description,''),COALESCE(c.sort_order,0),COALESCE(c.icon,''),COALESCE(c.icon_known,0) FROM native_wallet w LEFT JOIN native_currencies c ON w.currency_id=c.id ORDER BY c.sort_order,w.currency_id");
+    while(wallet.Step())out.wallet.push_back({wallet.Text(0),wallet.Text(3),wallet.Text(4),static_cast<uint32_t>(wallet.Integer(1)),wallet.Integer(2),static_cast<int>(wallet.Integer(5)),wallet.Text(6),wallet.Integer(7)!=0});
     auto access=db.Prepare("SELECT account,guild_id FROM native_guild_access");while(access.Step())out.guildAccess[access.Text(0)].insert(access.Text(1));
     auto guilds=db.Prepare("SELECT guild_id,name,tag,status,attempted,success FROM native_guilds");while(guilds.Step()){GuildRow g;g.id=guilds.Text(0);g.name=guilds.Text(1);g.tag=guilds.Text(2);g.status=guilds.Text(3);g.attempted=guilds.Integer(4);g.success=guilds.Integer(5);out.guilds.emplace(g.id,std::move(g));}
     auto guildItems=db.Prepare("SELECT g.guild_id,g.position,g.item_id,g.quantity,COALESCE(i.name,''),COALESCE(i.rarity,''),COALESCE(i.type,''),COALESCE(i.chat_link,'') FROM native_guild_slots g LEFT JOIN reference_items i ON g.item_id=i.id");while(guildItems.Step()){auto& g=out.guilds.at(guildItems.Text(0));Row row;row.slot.account=g.id;row.slot.scope="Guild bank";row.slot.position=guildItems.Text(1);row.slot.id=static_cast<uint32_t>(guildItems.Integer(2));row.slot.count=guildItems.Integer(3);row.name=guildItems.Text(4);row.rarity=guildItems.Text(5);row.type=guildItems.Text(6);row.chat=guildItems.Text(7);row.captured=g.success;g.rows.push_back(std::move(row));}

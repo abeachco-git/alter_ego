@@ -802,7 +802,12 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     using namespace AlterEgo;
     const auto& doc=ComponentUISnapshot();
     const auto* l=ComponentUIFindLoadout(doc,loadoutId);
-    if(!l||!ImGui::CollapsingHeader("Loadout components##loadout_selector"))return;
+    if(!l)return;
+    static bool expanded=false;
+    ImGui::PushID(loadoutId.c_str());
+    if(AlterEgo::UI::Button(expanded?"Loadout Components -##loadout_selector":"Loadout Components +##loadout_selector",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))expanded=!expanded;
+    ImGui::PopID();
+    if(!expanded)return;
     const auto direct=ComponentUIRefs(*l);
     const auto linkedId=l->value("equipment_set_id",std::string());
     const auto* linked=ComponentUIFindSet(doc,linkedId);

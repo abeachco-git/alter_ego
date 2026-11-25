@@ -60,12 +60,16 @@ int case_native_inventory(int,char**){
     auto wallet=ParseWallet(Json::parse(R"([{"id":1,"value":123456},{"id":2,"value":0}])"));
     RecordWallet(root,{"account-a","Wallet","","Ready",200,200},&wallet);
     RecordWallet(root,{"account-a","Wallet","","Failed",201,0});
-    StoreCurrencies(root,Json::parse(R"([{"id":1,"name":"Coin","description":"","order":1}])"));
+    StoreCurrencies(root,Json::parse(R"([{"id":1,"name":"Coin","description":"","order":1,"icon":"https://render.guildwars2.com/file/test/1.png"}])"));
     auto g=ParseGuild(Json::parse(R"([{"upgrade_id":1,"size":2,"coins":500,"inventory":[{"id":10,"count":4},null]}])"),"guild-a");
     GuildRow gr;gr.id="guild-a";gr.name="Guild";gr.status="Ready";gr.attempted=200;gr.success=200;
     RecordGuild(root,gr,&g);StoreGuildAccess(root,"account-a",{"guild-a"},200);StoreGuildAccess(root,"account-b",{"guild-a"},200);
     v=Read(root);assert(v.guilds.size()==1&&v.guilds.at("guild-a").rows.size()==1&&v.guilds.at("guild-a").coins==500);
     assert(v.wallet.size()==2&&v.wallet.front().value>=0);
+    for(const auto& row:v.wallet){
+        if(row.id==1)assert(row.iconKnown&&row.icon=="https://render.guildwars2.com/file/test/1.png");
+        if(row.id==2)assert(!row.iconKnown&&row.icon.empty());
+    }
     assert(!UsableLoose(g.slots.front(),"account-a","B",{},true));
     assert(UsableLoose(rows.front(),"account-a","B",{},true)&&!UsableLoose(rows.front(),"account-a","B",{},false));
     for(const auto* scope:{"Wallet","Bags","Shared inventory","Bank","Equipment","Delivery box","Materials","Guild bank","Guild access","Legendary Armory"}){

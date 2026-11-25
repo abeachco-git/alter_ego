@@ -1597,7 +1597,7 @@ static void SaveSettings() {
     j["auto_refresh_enabled"] = g_AutoRefreshEnabled;
     j["auto_refresh_datasets"] = AlterEgo::AutoRefreshPolicy::GetMask();
     j["objective_tracking_minutes"] = AlterEgo::RefreshEngine::ObjectiveMinutes();
-    j["wallet_favorites"] = AlterEgo::NativeAccounts::WalletFavorites();
+    j["wallet_pins"] = AlterEgo::NativeAccounts::WalletPins();
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
     j["warn_stale_specialization"] = g_WarnStaleSpecialization;
     j["birthday_mode"] = g_BirthdayMode;
@@ -1649,8 +1649,10 @@ static void LoadSettings() {
     AlterEgo::AutoRefreshPolicy::SetMask(AlterEgo::AutoRefreshPolicy::AllMask);
     if(j.contains("auto_refresh_datasets")&&j["auto_refresh_datasets"].is_number_unsigned())
         AlterEgo::AutoRefreshPolicy::SetMask(j["auto_refresh_datasets"].get<uint32_t>());
-    if(j.contains("wallet_favorites")&&j["wallet_favorites"].is_array()){
-        try{AlterEgo::NativeAccounts::SetWalletFavorites(j["wallet_favorites"].get<std::set<uint32_t>>());}catch(...){}
+    // Migrate the old preference on next normal settings save.
+    const char* walletPinKey=j.contains("wallet_pins")?"wallet_pins":"wallet_favorites";
+    if(j.contains(walletPinKey)&&j[walletPinKey].is_array()){
+        try{AlterEgo::NativeAccounts::SetWalletPins(j[walletPinKey].get<std::set<uint32_t>>());}catch(...){}
     }
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
     AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;
@@ -9250,7 +9252,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         // Underline
         dl->AddLine(
             ImVec2(pos.x + 4, pos.y + h),
-            ImVec2(pos.x + w * 0.55f, pos.y + h),
+            ImVec2(pos.x + w, pos.y + h),
             ImGui::ColorConvertFloat4ToU32(ImVec4(profColor.x, profColor.y, profColor.z, 0.35f)), 1.0f);
 
         // Class icon on the left — prefer elite-spec emblem, fall back to profession
@@ -9448,6 +9450,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
 
 }
 
+namespace { static void RenderLoadoutComponentSelectors(const std::string& loadoutId); }
 static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool linkedEquipment) {
     auto build=source;
     // Try to resolve any placeholder traits (negative values from import without spec cache)
@@ -9938,6 +9941,8 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
     ImGui::Spacing();
     ImGui::Spacing();
 
+    RenderLoadoutComponentSelectors(source.id);
+    ImGui::Spacing();
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
     if(g_LibEditMode&&linkedEquipment)ImGui::TextDisabled("Use Edit Components for independent references and the set editor for included categories.");
     if(g_GearDialogOpen)ImGui::TextDisabled("Save or cancel the gear customization draft first.");
@@ -11903,7 +11908,6 @@ static void RenderBuildLibrary() {
         }
 
         ImGui::Separator();
-        RenderLoadoutComponentSelectors(build.id);
         const auto* loadoutGraph=ComponentUIFindLoadout(ComponentUISnapshot(),build.id);
         const bool linkedEquipment=loadoutGraph&&!loadoutGraph->value("equipment_set_id",std::string()).empty();
         RenderSavedBuildPreview(build,linkedEquipment);
@@ -14177,26 +14181,11 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     // Position the pin button
     float btnX = cmax.x - 4.0f;
     if (showPinButton) {
-        float pinW = 22.0f, pinH = 20.0f;
+        float pinW = 20.0f, pinH = 20.0f;
         btnX -= pinW;
         ImGui::SetCursorScreenPos(ImVec2(btnX, midY - pinH * 0.5f));
-        ImU32 pinBg = pinned ? IM_COL32(80, 64, 28, 200) : IM_COL32(0, 0, 0, 130);
-        ImU32 pinBorder = pinned ? IM_COL32(232, 196, 122, 230) : IM_COL32(140, 130, 110, 170);
-        ImU32 pinFg = pinned ? IM_COL32(245, 220, 150, 255) : IM_COL32(170, 158, 130, 230);
-        ImVec2 bMin = ImGui::GetCursorScreenPos();
-        ImVec2 bMax(bMin.x + pinW, bMin.y + pinH);
-        dl->AddRectFilled(bMin, bMax, pinBg, 3.0f);
-        dl->AddRect(bMin, bMax, pinBorder, 3.0f, 0, 1.0f);
-        const char* star = pinned ? "*" : "*";
-        ImVec2 sz = ImGui::CalcTextSize(star);
-        dl->AddText(ImVec2(bMin.x + (pinW - sz.x) * 0.5f, bMin.y + (pinH - sz.y) * 0.5f),
-            pinFg, star);
-        if (ImGui::InvisibleButton("##pinbtn", ImVec2(pinW, pinH))) {
+        if(AlterEgo::UI::PinButton("##pinbtn",pinned,"Pin to tracker","Unpin from tracker",pinH))
             ToggleAchPin(achId);
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(pinned ? "Unpin from tracker" : "Pin to tracker");
-        }
     }
 
     // Restore cursor to below the row
@@ -15180,24 +15169,12 @@ static void RenderAchPopout() {
                         dl->AddRectFilled(sMin, ImVec2(fillEnd, sMax.y), stateCol, 1.0f);
                 }
 
-                // Unpin button (small ×)
+                // Shared tracker pin button
                 {
                     float btnH = 18.0f;
                     ImGui::SetCursorScreenPos(ImVec2(cmax.x - unpinW - 4.0f, midY - btnH * 0.5f));
-                    ImVec2 bMin = ImGui::GetCursorScreenPos();
-                    ImVec2 bMax(bMin.x + unpinW, bMin.y + btnH);
-                    dl->AddRectFilled(bMin, bMax, IM_COL32(0, 0, 0, 130), 3.0f);
-                    dl->AddRect(bMin, bMax, IM_COL32(140, 130, 110, 170), 3.0f, 0, 1.0f);
-                    const char* x = "x";
-                    ImVec2 sz = ImGui::CalcTextSize(x);
-                    dl->AddText(ImVec2(bMin.x + (unpinW - sz.x) * 0.5f, bMin.y + (btnH - sz.y) * 0.5f),
-                        IM_COL32(180, 168, 130, 230), x);
-                    if (ImGui::InvisibleButton("##popunpin", ImVec2(unpinW, btnH))) {
+                    if(AlterEgo::UI::PinButton("##popunpin",true,"Pin to tracker","Unpin from tracker",btnH))
                         ToggleAchPin(disp.achId);
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Unpin from tracker");
-                    }
                 }
 
                 ImGui::SetCursorScreenPos(ImVec2(cmin.x, cmax.y + 2.0f));
@@ -17069,6 +17046,9 @@ void AddonRender() {
         const bool inventoryVisible=ImGui::BeginTabItem("Inventory    ##ae_inventory_dropdown",nullptr,inventoryFlags);
         const ImGuiID inventoryId=inventoryBar&&inventoryBar->LastTabItemIdx>=0?inventoryBar->Tabs[inventoryBar->LastTabItemIdx].ID:0;
         HandleTabDropdown(inventoryMenu,inventoryBar,beforeInventory,inventoryId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+        if(inventoryMenu.labelClicked){
+            MarkNavigation();AlterEgo::NativeAccounts::SetInventorySubview(0);g_SwitchToInventory=true;
+        }
         if(inventoryVisible){
             g_MainTab=7;
             ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);

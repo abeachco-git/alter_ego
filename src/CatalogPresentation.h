@@ -11,16 +11,22 @@ inline void CatalogRowBackground(int row,ImVec2 p,ImVec2 end,bool selected=false
     const ImU32 bg=selected?IM_COL32(80,64,28,90):hovered?IM_COL32(60,56,40,60):row&1?IM_COL32(255,255,255,10):0;
     if(bg)ImGui::GetWindowDrawList()->AddRectFilled(p,end,bg,2.f);
 }
-// Stable square hit target, with a neutral outline and gold favorite marker.
-inline bool FavoriteBox(bool favorite){
-    const float size=ImGui::GetFrameHeight();
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
-    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.55f,.51f,.43f,.9f));
-    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0,0,0,.18f));
-    ImGui::PushStyleColor(ImGuiCol_Text,SectionGold);
-    const bool clicked=Button(favorite?"*###favorite":"###favorite",ImVec2(size,size),ButtonRole::Compact);
-    ImGui::PopStyleColor(3);ImGui::PopStyleVar();
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s favorite",favorite?"Remove":"Add");
+// One graphic and stable hit target for every pin surface.
+inline bool PinButton(const char* id,bool pinned,const char* pinTip,const char* unpinTip,float size=0.f){
+    if(size<=0.f)size=ImGui::GetFrameHeight();
+    const ImVec2 p=ImGui::GetCursorScreenPos();
+    const ImVec2 end(p.x+size,p.y+size);
+    const bool clicked=ImGui::InvisibleButton(id,ImVec2(size,size));
+    auto* draw=ImGui::GetWindowDrawList();
+    draw->AddRectFilled(p,end,pinned?IM_COL32(80,64,28,200):
+        ImGui::IsItemHovered()?IM_COL32(60,56,40,150):IM_COL32(0,0,0,130),3.f);
+    draw->AddRect(p,end,pinned?IM_COL32(232,196,122,230):IM_COL32(140,130,110,170),3.f);
+    if(pinned){
+        const auto text=ImGui::CalcTextSize("*");
+        draw->AddText(ImVec2(p.x+(size-text.x)*.5f,p.y+(size-text.y)*.5f),
+            IM_COL32(245,220,150,255),"*");
+    }
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",pinned?unpinTip:pinTip);
     return clicked;
 }
 struct CatalogRowResult {bool clicked=false,hovered=false;};

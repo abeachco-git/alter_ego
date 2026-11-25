@@ -34,7 +34,7 @@ std::atomic<uint64_t> inventoryGeneration{0};
 uint32_t revealItem=0;
 InventoryNavigation navigation;
 // Render-thread preferences, persisted in the ordinary settings file.
-std::set<uint32_t> walletFavorites;
+std::set<uint32_t> walletPins;
 std::string root;
 std::mutex viewMutex,publishMutex,credentialMutex;
 std::atomic<uint64_t> registryGeneration{1};
@@ -380,7 +380,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
         auto cached=Read(root);
         for(const auto& [id,meta]:cached.metadata)if(meta.complete&&cached.flags.count(id))ids.erase(id);
         
-        if(currencyMetadataNeeded&&std::any_of(cached.wallet.begin(),cached.wallet.end(),[](const WalletRow& w){return w.name.empty();}))
+        if(currencyMetadataNeeded&&std::any_of(cached.wallet.begin(),cached.wallet.end(),[](const WalletRow& w){return w.name.empty()||!w.iconKnown;}))
             try{StoreCurrencies(root,Fetch("/v2/currencies?ids=all",{}));}catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();} 
         std::string batch;unsigned count=0;
         unsigned metadataDone=0;const auto metadataTotal=ids.size();
@@ -623,8 +623,8 @@ void RenderOptions(){
     }
     ImGui::TextDisabled("Keys are stored in Windows Credential Manager, not exported with the Library.");
 }
-std::set<uint32_t> WalletFavorites(){return walletFavorites;}
-void SetWalletFavorites(const std::set<uint32_t>& ids){walletFavorites=ids;}
+std::set<uint32_t> WalletPins(){return walletPins;}
+void SetWalletPins(const std::set<uint32_t>& ids){walletPins=ids;}
 InventoryNavigation CaptureInventoryNavigation(){return navigation;}
 void RestoreInventoryNavigation(const InventoryNavigation& state){navigation=state;revealItem=0;}
 int InventorySubview(){return navigation.subview;}
@@ -703,41 +703,37 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     PollDemand(selectedAccount,subview==1?"Wallet":subview==2?"Guild bank":"Items");
     if(subview!=0){
         auto& q=subview==1?nav.walletQuery:nav.guildQuery;
-        auto& favoriteFilter=nav.favoriteFilter;auto& balanceFilter=nav.balanceFilter;auto& walletSort=nav.walletSort;
+        auto& pinFilter=nav.pinFilter;auto& balanceFilter=nav.balanceFilter;
         if(subview==1){
             UI::SearchToolbar("native_wallet","Search currencies or ID",q,
                 [&]{
                     UI::FilterChips chips;
-                    if(favoriteFilter)chips.push_back({"favorites","Favorites only",[&]{favoriteFilter=0;}});
+                    if(pinFilter)chips.push_back({"pins","Pinned only",[&]{pinFilter=0;}});
                     if(balanceFilter)chips.push_back({"balance","Hide zero",[&]{balanceFilter=0;}});
                     return chips;
                 },
                 [&]{
-                    const char* favoriteOptions[]={"All","Favorites only"};
+                    const char* pinOptions[]={"All","Pinned only"};
                     const char* balanceOptions[]={"All","Nonzero only"};
-                    UI::FilterChoice("Favorites",favoriteFilter,favoriteOptions,2);
+                    UI::FilterChoice("Pinned",pinFilter,pinOptions,2);
                     UI::FilterChoice("Balance",balanceFilter,balanceOptions,2);
                 },
-                [&]{favoriteFilter=balanceFilter=0;});
+                [&]{pinFilter=balanceFilter=0;});
         }else{
             // Plain searchable list, no filter popup: same SearchField used by Characters.
             UI::SearchField("guild_search","Search items or ID",q);
         }
         if(subview==1){
-            const char* walletSorts[]={"Game order","Name","Quantity"};
-            ImGui::SetNextItemWidth(150);UI::Combo("##wallet_sort",&walletSort,walletSorts,3);
             for(const auto& a:accounts){
                 if(multi&&all)ImGui::TextUnformatted(Display(a).c_str());
                 // Retrieval status belongs exclusively to the shared footer,
                 // including per-account failures and stale timestamps in its tooltip.
                 ImGui::PushID(a.id.c_str());
                 std::vector<const WalletRow*> visible;
-                for(const auto& w:v->inventory.wallet)if(w.account==a.id&&Match(w.name,w.id,q)&&(!favoriteFilter||walletFavorites.count(w.id))&&(!balanceFilter||w.value>0))visible.push_back(&w);
+                for(const auto& w:v->inventory.wallet)if(w.account==a.id&&Match(w.name,w.id,q)&&(!pinFilter||walletPins.count(w.id))&&(!balanceFilter||w.value>0))visible.push_back(&w);
                 std::stable_sort(visible.begin(),visible.end(),[&](const WalletRow* a,const WalletRow* b){
-                    const bool fa=walletFavorites.count(a->id),fb=walletFavorites.count(b->id);
+                    const bool fa=walletPins.count(a->id),fb=walletPins.count(b->id);
                     if(fa!=fb)return fa;
-                    if(walletSort==2&&a->value!=b->value)return a->value>b->value;
-                    if(walletSort==1&&a->name!=b->name)return a->name<b->name;
                     return a->order==b->order?a->id<b->id:a->order<b->order;
                 });
                 int rowIndex=0;
@@ -745,10 +741,20 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                     const auto& w=*ptr;ImGui::PushID(static_cast<int>(w.id));
                     const auto p=ImGui::GetCursorScreenPos();
                     UI::CatalogRowBackground(rowIndex++,p,ImVec2(p.x+ImGui::GetContentRegionAvail().x,p.y+ImGui::GetFrameHeight()));
-                    const bool favorite=walletFavorites.count(w.id)!=0;
-                    if(UI::FavoriteBox(favorite)){
-                        if(favorite)walletFavorites.erase(w.id);else walletFavorites.insert(w.id);
+                    const bool pinned=walletPins.count(w.id)!=0;
+                    if(UI::PinButton("##currency_pin",pinned,"Pin currency","Unpin currency")){
+                        if(pinned)walletPins.erase(w.id);else walletPins.insert(w.id);
                         if(saveSettings)saveSettings();
+                    }
+                    ImGui::SameLine();
+                    // Reserved currency ID namespace; use the ordinary disk-backed icon queue.
+                    const uint32_t iconId=0x40000000u|w.id;
+                    const float iconSize=ImGui::GetFrameHeight();
+                    if(auto* tex=IconManager::GetIcon(iconId);tex&&tex->Resource)
+                        ImGui::Image(tex->Resource,ImVec2(iconSize,iconSize));
+                    else{
+                        ImGui::Dummy(ImVec2(iconSize,iconSize));
+                        if(!w.icon.empty())IconManager::RequestIcon(iconId,w.icon,true);
                     }
                     ImGui::SameLine();ImGui::AlignTextToFramePadding();
                     std::string label=w.name.empty()?"Currency #"+std::to_string(w.id):w.name;
