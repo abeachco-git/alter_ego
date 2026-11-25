@@ -82,6 +82,18 @@ int case_native_inventory(int,char**){
     using Skinventory::Search::HasMinimumQuery;
     assert(!HasMinimumQuery(Words(""))&&!HasMinimumQuery(Words("  a b ")));
     assert(HasMinimumQuery(Words("val"))&&HasMinimumQuery(Words("valk kr")));
+    assert(!CanBrowseItems(false,false,false,false,false,false,false,false));
+    assert(!CanBrowseItems(true,false,false,false,false,false,false,false));
+    assert(!CanBrowseItems(false,true,true,true,true,true,true,true));
+    assert(CanBrowseItems(true,true,false,false,false,false,false,false));
+    assert(CanBrowseItems(true,false,true,false,false,false,false,false));
+    assert(CanBrowseItems(true,false,false,true,false,false,false,false));
+    assert(CanBrowseItems(true,false,false,false,true,false,false,false));
+    assert(CanBrowseItems(true,false,false,false,false,true,false,false));
+    assert(CanBrowseItems(true,false,false,false,false,false,true,false));
+    assert(CanBrowseItems(true,false,false,false,false,false,false,true));
+    const std::set<std::string> twoCharacters{"A","B"};
+    assert(!CanBrowseItems(!twoCharacters.empty(),false,false,false,false,false,false,false));
     assert(Match("Valkyrie Krait Star",12345,"valk kr"));
     assert(Match("Valkyrie Krait Star",12345,"KR VALK"));
     assert(!Match("Valkyrie Krait Star",12345,"valk sword"));

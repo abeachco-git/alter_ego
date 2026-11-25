@@ -720,18 +720,24 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;});
     if(query!=previousQuery)nav.item=0;
     const char* sorts[]={"Name","Quantity"};ImGui::SetNextItemWidth(120);UI::Combo("##inventory_sort",&sort,sorts,2);
-    const auto tokens=Skinventory::Search::Words(query);
+    auto tokens=Skinventory::Search::Words(query);
     // Explicit Find in Inventory navigation can reveal even an unusually short ID.
     const bool canSearch=Skinventory::Search::HasMinimumQuery(tokens)||
         (nav.item!=0&&query==std::to_string(nav.item));
-    if(!canSearch){
-        ImGui::TextDisabled("Enter at least 3 characters to search inventory.");
+    const bool canBrowse=CanBrowseItems(!characterFilter.empty(),!scope.empty(),
+        !binding.empty(),!rarity.empty(),!type.empty(),freshness!=0,minQuantity>0,transfer!=0);
+    if(!canSearch&&!canBrowse){
+        ImGui::TextDisabled("Enter at least 3 characters, or select a character and another filter.");
         return;
+    }
+    if(!canSearch){
+        if(!tokens.empty())ImGui::TextDisabled("Enter 3 characters to narrow these filtered results.");
+        tokens.clear();
     }
     // Cache the filtered aggregate: rebuild only on a new projection or changed controls.
     struct Group{uint32_t id;int64_t count=0;std::string name;std::vector<const Row*> locations;};
     static std::shared_ptr<const View> previous;static std::string prevKey;static std::vector<Group> groups;
-    const auto filterKey=Json::array({selectedAccount,query,scope,binding,rarity,type,sort,characterFilter,freshness,minQuantity,transfer,(freshness||transfer)?Now()/10:0}).dump();
+    const auto filterKey=Json::array({selectedAccount,tokens,scope,binding,rarity,type,sort,characterFilter,freshness,minQuantity,transfer,(freshness||transfer)?Now()/10:0}).dump();
     if(previous!=v||prevKey!=filterKey){
         previous=v;prevKey=filterKey;groups.clear();std::map<uint32_t,size_t> index;
         for(const auto& row:v->inventory.rows){
