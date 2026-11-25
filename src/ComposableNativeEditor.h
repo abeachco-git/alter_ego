@@ -455,7 +455,7 @@ static void ComponentNativeInfusionSlots(ComponentJson& part) {
         part["infusion_snapshot"] = snapshot;
 }
 
-// Reuse the same curated rune, sigil and relic catalogs as the traditional
+// Reuse the same database-backed upgrade catalogs as the traditional
 // customization panel. The text/ID pair is updated together; unfamiliar
 // imported items remain editable via the exact-ID fallback fields.
 static std::string g_ComponentCatalogSearch;
@@ -467,6 +467,8 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
     ImGui::PushID(idField);
     const std::string selected = item.value(nameField, std::string());
     const auto storedId = item.find(idField);
+    const uint32_t selectedId = storedId != item.end() && storedId->is_number_integer()
+        ? storedId->get<uint32_t>() : 0;
     const std::string shown = !selected.empty() ? selected :
         (storedId != item.end() && storedId->is_number_integer() && *storedId != 0)
             ? ("#" + storedId->dump() + " (not in catalog)") : "(choose item)";
@@ -479,23 +481,17 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
         auto offer = [&](const char* name, uint32_t id, const char* bonus) {
             if (!AlterEgo::UI::CatalogMatches(name, bonus, g_ComponentCatalogSearch)) return;
             ImGui::PushID(static_cast<int>(id));
-            if (AlterEgo::UI::CatalogOption(name, bonus, selected == name)) {
+            if (AlterEgo::UI::CatalogOption(name, bonus, selectedId ? selectedId == id : selected == name)) {
                 item[idField] = id;
                 item[nameField] = name;
                 g_ComponentCatalogSearch.clear();
             }
             ImGui::PopID();
         };
-        if (std::strcmp(family, "runes") == 0) {
-            for (const auto& entry : RUNE_LIST)
-                offer(entry.name, entry.item_id, entry.bonus);
-        } else if (std::strcmp(family, "sigils") == 0) {
-            for (const auto& entry : SIGIL_LIST)
-                offer(entry.name, entry.item_id, entry.bonus);
-        } else {
-            for (const auto& entry : RELIC_LIST)
-                offer(entry.name, entry.item_id, entry.bonus);
-        }
+        const char* kind = std::strcmp(family, "runes") == 0 ? "Rune" :
+                           std::strcmp(family, "sigils") == 0 ? "Sigil" : "Relic";
+        for (const auto& entry : GearCatalog(kind))
+            offer(entry.name.c_str(), entry.item_id, entry.bonus.c_str());
         ImGui::EndCombo();
     }
     if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
