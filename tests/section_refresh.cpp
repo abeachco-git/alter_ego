@@ -113,12 +113,12 @@ int case_section_refresh(int, char**) {
     a->MarkAttempted(a->ids.begin(),a->ids.begin()+1);
     a.reset();assert(F::ClaimIds("skills",{1})->ids.empty());
     assert(F::ClaimIds("skills",{2})->ids.size()==1); // never attempted
-    auto abandoned=F::ClaimIds("cancel-test",{7,8});
-    abandoned.reset();
-    auto replacement=F::ClaimIds("cancel-test",{7,8});
-    assert(replacement->ids.size()==2);
-    replacement->MarkAttempted(replacement->ids.begin(),replacement->ids.begin()+1);
-    replacement.reset();
+    auto abandonedClaim=F::ClaimIds("cancel-test",{7,8});
+    abandonedClaim.reset();
+    auto replacementClaim=F::ClaimIds("cancel-test",{7,8});
+    assert(replacementClaim->ids.size()==2);
+    replacementClaim->MarkAttempted(replacementClaim->ids.begin(),replacementClaim->ids.begin()+1);
+    replacementClaim.reset();
     assert(F::ClaimIds("cancel-test",{7,8})->ids==std::vector<uint32_t>{8});
     auto manualCancelled=F::ClaimIds("cancel-test",{7},true);
     assert(manualCancelled->ids.size()==1);
