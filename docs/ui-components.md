@@ -165,3 +165,5 @@ Storage & Cache includes a collapsed API Activity tree. It samples the in-memory
 The Ranger pet picker displays 32px pet artwork from the existing IconManager; known IDs use embedded PNGs. Preserve the existing selection/disabled semantics and use stable pet ID scopes.
 
 API Activity shows separate ArenaNet API, Wiki and ArenaNet artwork rows and compact fixed initiation-reason counts. Queue waiting is shown only for hosts with shared admission, and metadata ID counts remain distinct from HTTP requests.
+
+Character and Compare retain the canonical RefreshUI::Row. Hover status or timestamp for per-demanded-scope success age, current/stale state, scheduler eligibility countdown, last observed activity, automatic policy, ownership and session-local endpoint failures. Status distinguishes propagation, cooldown, disabled policy, unverified ownership and due work; do not imply a request is running unless a worker is active. The timestamp remains the oldest confirmed scope. Tooltip uses the scheduler's eligibility decision, never a separate timer or network query.
