@@ -26,8 +26,10 @@ struct AchievementSnapshot {
 };
 inline void Upgrade(Database::Connection& db, int version) {
     if (version == 12) {
-        db.Exec("ALTER TABLE vault_periods ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0 CHECK(fetched_at>=0)");
-        db.Exec("UPDATE vault_periods SET fetched_at=(SELECT fetch_time FROM vault_snapshots WHERE vault_snapshots.account=vault_periods.account)");
+        db.Exec(R"SQL(
+ALTER TABLE vault_periods ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0 CHECK(fetched_at>=0);
+UPDATE vault_periods SET fetched_at=(SELECT fetch_time FROM vault_snapshots WHERE vault_snapshots.account=vault_periods.account);
+)SQL");
         return;
     }
     if (version == 11) {
