@@ -8,6 +8,7 @@
 #include "FashionModel.h"
 #include "NativeLibraryPortable.h"
 #include "ComposableLoadouts.h"
+#include "CharacterActivity.h"
 #include <nlohmann/json.hpp>
 #include <ctime>
 #include <filesystem>
@@ -27,7 +28,7 @@ using FileMap = BackupZip::Entries;
 inline bool IsOtherJson(const std::string& name) {
     static const std::set<std::string> names = {
         "settings.json", "session.json", "char_sort.json",
-        "ach_tracked.json", "login_times.json", "clears_ui.json"};
+        "ach_tracked.json", "login_times.json", "character_logins.json", "clears_ui.json"};
     return names.count(name) != 0;
 }
 inline bool EndsWithIgnoreCase(std::string value, std::string suffix) {
@@ -97,6 +98,10 @@ inline bool ValidateCollection(const std::string& name, const std::string& bytes
         error = name + ": invalid JSON: " + e.what(); return false;
     }
     if (!j.is_object()) { error = name + ": expected a JSON object."; return false; }
+    if(name=="character_logins.json"){
+        try{count=CharacterActivity::DecodeLoginHistory(j).size();return true;}
+        catch(const std::exception& e){error=name+": "+e.what();return false;}
+    }
     if (name == "library.json") {
         NativeLibrary::PortableLibrary data;
         if (!NativeLibrary::ParsePortableLibrary(j,data,error)) return false;
@@ -167,6 +172,21 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
                                  "ach_tracked.json", "login_times.json", "clears_ui.json"}) {
             if (!append(name, "")) return false;
         }
+        // Generate a portable projection from the flushed authoritative ledger;
+        // never include the activity/verification ledger itself in a backup.
+        try{
+            std::map<CharacterActivity::Key,int64_t> logins;
+            std::string ledger,pending;
+            if(!ReadExisting(dir,"character_activity.json",ledger,error)||
+               !ReadExisting(dir,"character_logins.json",pending,error))return false;
+            if(!ledger.empty()){
+                CharacterActivity::Tracker tracker;
+                tracker.Load(nlohmann::json::parse(ledger));logins=tracker.LoginTimes();
+            }
+            if(!pending.empty())CharacterActivity::MergeLoginHistory(logins,
+                CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(pending)));
+            if(!logins.empty())files["character_logins.json"]=CharacterActivity::EncodeLoginHistory(logins).dump(2);
+        }catch(const std::exception& e){error=std::string("Cannot export login history: ")+e.what();return false;}
         for (const auto& subfolder : {"portraits", "fonts"}) {
             const auto folder = std::filesystem::u8path(dir) / subfolder;
             std::error_code ec;
@@ -221,6 +241,7 @@ struct Package {
 inline std::string DetectOtherJsonType(const nlohmann::json& j) {
     // Individual backups may have been manually renamed. Prefer unmistakable
     // structural markers before falling back to the historical filename.
+    if(j.value("format",std::string())=="alter_ego_character_logins")return "character_logins.json";
     if (j.contains("show_qa_icon") || j.contains("auto_refresh_enabled") ||
         j.contains("font")) return "settings.json";
     if (j.contains("pinned") && j["pinned"].is_array()) return "ach_tracked.json";
@@ -345,6 +366,17 @@ inline bool Prepare(const std::string& dir, const Package& package,
     }
     for(const auto& [name,bytes]:package.files) {
         if(!(selected&Other)||GroupForName(name)!=Other)continue;
+        if(name=="character_logins.json"){
+            // Preserve even pending history if another restore is applied before
+            // its durable activity-ledger write succeeds.
+            try{
+                auto logins=CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(bytes));
+                std::string pending;if(!ReadExisting(dir,name,pending,error))return false;
+                if(!pending.empty())CharacterActivity::MergeLoginHistory(logins,CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(pending)));
+                plan.writeFiles[name]=CharacterActivity::EncodeLoginHistory(logins).dump(2);++plan.otherWritten;
+            }catch(const std::exception& e){error=std::string("Cannot import login history: ")+e.what();return false;}
+            continue;
+        }
         if(!replace&&Exists(FilePath(dir,name))){++plan.otherSkipped;continue;}
         plan.writeFiles[name]=bytes;++plan.otherWritten;
     }

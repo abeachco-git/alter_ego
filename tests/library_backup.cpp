@@ -41,6 +41,11 @@ int case_library_backup(int, char**) {
     Put(FilePath(src,"fashion_library.json"),fashion.dump());
     Put(FilePath(src,"settings.json"),R"({"show_age":true})");
     Put(FilePath(src,"ach_tracked.json"),R"({"pinned":[1,3,5]})");
+    CharacterActivity::Tracker history;
+    const CharacterActivity::Key hero{"account-a","Hero"};
+    history.Observe(hero.first,hero.second,34,true,2000);
+    history.Begin(hero,"Bags",2010);
+    Put(FilePath(src,"character_activity.json"),history.Save().dump());
     const std::string portrait("\x89PNG\r\n\0test", 11);
     Put(FilePath(src,"portraits/a.png"),portrait);
     std::string err;
@@ -52,6 +57,11 @@ int case_library_backup(int, char**) {
     assert(full.buildCount == 1 && full.fashionCount == 1);
     assert(full.files.at("portraits/a.png") == portrait);
     assert(full.files.count("settings.json") == 1);
+    assert(!full.files.count("character_activity.json"));
+    const auto portable=nlohmann::json::parse(full.files.at("character_logins.json"));
+    assert(CharacterActivity::DecodeLoginHistory(portable).at(hero)==2000);
+    assert(!portable.at("entries")[0].contains("scopes"));
+    assert(!portable.at("entries")[0].contains("last_seen"));
 
     // Single-collection export produces a directly importable JSON file.
     const std::string onlyBuilds = (base / "legacy-export.json").u8string();
@@ -84,6 +94,9 @@ int case_library_backup(int, char**) {
     assert(native.fashion.size()==1);
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":false})");
     assert(Get(FilePath(dst,"portraits/a.png")) == portrait);
+    assert(!Exists(FilePath(dst,"character_activity.json")));
+    assert(CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at(hero)==2000);
+    Put(FilePath(dst,"character_logins.json"),CharacterActivity::EncodeLoginHistory({{hero,3000}}).dump());
 
     // Replace a selected collection, never touch unchecked collections.
     assert(Prepare(dst, full, AlterEgo::Backup::Fashion, true, plan, err));
@@ -95,6 +108,7 @@ int case_library_backup(int, char**) {
     assert(Prepare(dst, full, Other, true, plan, err));
     assert(Apply(dst, plan, recovery, err));
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":true})");
+    assert(CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at(hero)==3000);
 
     // Empty collection files are valid backups and may clear a selected collection.
     Put((base/"empty.json").u8string(), R"({"builds":[]})");

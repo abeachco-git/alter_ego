@@ -210,6 +210,31 @@ public:
         *this=std::move(next); // no active identity survives restart
     }
 };
+// Portable backups contain only historical logins, never API verification or
+// request state. A restored history cannot make cached data appear fresh.
+inline Json EncodeLoginHistory(const std::map<Key,int64_t>& logins){
+    Json entries=Json::array();
+    for(const auto& [k,stamp]:logins)
+        if(!k.first.empty()&&!k.second.empty()&&stamp>0)
+            entries.push_back({{"account",k.first},{"character",k.second},{"login",stamp}});
+    return {{"format","alter_ego_character_logins"},{"version",1},{"entries",entries}};
+}
+inline std::map<Key,int64_t> DecodeLoginHistory(const Json& j){
+    if(j.at("format")!="alter_ego_character_logins"||j.at("version")!=1||!j.at("entries").is_array())
+        throw std::runtime_error("Invalid login history");
+    std::map<Key,int64_t> out;
+    for(const auto& row:j.at("entries")){
+        Key k{row.at("account").get<std::string>(),row.at("character").get<std::string>()};
+        if(!row.at("login").is_number_integer())throw std::runtime_error("Invalid login timestamp");
+        auto stamp=row.at("login").get<int64_t>();
+        if(k.first.empty()||k.second.empty()||stamp<=0||!out.emplace(k,stamp).second)
+            throw std::runtime_error("Invalid or duplicate login identity");
+    }
+    return out;
+}
+inline void MergeLoginHistory(std::map<Key,int64_t>& target,const std::map<Key,int64_t>& incoming){
+    for(const auto& [key,stamp]:incoming)target[key]=std::max(target[key],stamp);
+}
 // Keep unknown timestamps last regardless of direction; newest first is the default.
 inline bool LoginBefore(int64_t a,int64_t b,bool newestFirst){
     if(a<=0||b<=0)return a>0&&b<=0;

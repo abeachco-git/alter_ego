@@ -83,9 +83,10 @@ static void LibraryBackupRestoreCurrentState(unsigned selected) {
         LoadSettings();
         AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
         LoadAchTrackerState();
-        g_LoginTimestamps.clear();
-        LoadLoginTimestamps();
-        g_LoginTimestampsDirty = false;
+        LoadLegacyLoginHistory();
+        MigrateLegacyLoginHistory();
+        ImportPortableLoginHistory();
+        SyncLoginHistory();
         LoadCharSortConfig();
         RebuildCharDisplayOrder();
         LoadSession();
@@ -205,10 +206,11 @@ static void RenderLibraryBackupUI() {
                     SaveSession();
                     SaveAchTrackerState();
                     SaveCharSortConfig();
-                    SaveLoginTimestamps();
                 }
                 ui.error.clear();
-                if (AlterEgo::Backup::Export(
+                if ((mask & AlterEgo::Backup::Other) && !SaveCharacterActivity(true)) {
+                    ui.error = "Could not save current login history.";
+                } else if (AlterEgo::Backup::Export(
                         AlterEgo::GW2API::GetDataDirectory(), mask, filename, zip, ui.error)) {
                     LibraryBackupNotify(zip ? "Alter Ego ZIP backup exported." :
                                                "Library JSON exported.");
@@ -282,7 +284,7 @@ static void RenderLibraryBackupUI() {
         if (!ui.replace)
             ImGui::TextWrapped("Merge keeps existing entries with matching IDs. For other data, existing local files are kept.");
         else {
-            ImGui::TextWrapped("Replace overwrites only selected collections and files present in this backup. Linked Fashion dependencies are preserved or included.");
+            ImGui::TextWrapped("Replace overwrites only selected collections and files present in this backup. Linked Fashion dependencies are preserved or included. Login history always keeps newer observations.");
             ImGui::Checkbox("I understand the selected data will be replaced", &ui.replaceAcknowledged);
         }
         ImGui::TextDisabled("Recovery snapshots are saved in Alter Ego's backups/recovery folder.");

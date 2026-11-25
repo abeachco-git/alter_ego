@@ -844,6 +844,7 @@ static bool g_LegacyLoginArchivePending=false;
 static bool g_ActivityLoadValid=true;
 static uint64_t g_LoginProjectionRevision=0;
 static void LoadLegacyLoginHistory();
+static void ImportPortableLoginHistory();
 static void MigrateLegacyLoginHistory();
 static void SyncLoginHistory();
 static void LoadCharacterActivity();
@@ -12251,6 +12252,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     LoadCharacterActivity();
     LoadLegacyLoginHistory();
     MigrateLegacyLoginHistory();
+    ImportPortableLoginHistory();
     SyncLoginHistory();
     LoadCharSortConfig();
     RebuildCharDisplayOrder();
@@ -12491,6 +12493,20 @@ static void MigrateLegacyLoginHistory(){
         // If archival fails, leave the original intact; the import is idempotent.
         g_LegacyLoginArchivePending=false;
     }
+}
+static void ImportPortableLoginHistory(){
+    namespace A=AlterEgo::CharacterActivity;
+    if(!g_ActivityLoadValid)return;
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_logins.json");
+    try{
+        std::map<A::Key,int64_t> logins;
+        {std::ifstream f(path);if(!f)return;logins=A::DecodeLoginHistory(nlohmann::json::parse(f));}
+        {std::lock_guard<std::mutex> lock(A::Mutex());
+            for(const auto& [key,stamp]:logins)A::State().ImportLogin(key,stamp);}
+        if(SaveCharacterActivity(true)){
+            std::error_code ec;std::filesystem::remove(std::filesystem::u8path(path),ec);
+        } // on a failed write, leave the staged file for the next startup
+    }catch(...){/* retain invalid input; do not overwrite activity */}
 }
 static void SyncLoginHistory(){
     namespace A=AlterEgo::CharacterActivity;
