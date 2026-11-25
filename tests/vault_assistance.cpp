@@ -26,6 +26,10 @@ int case_vault_assistance(int, char**) {
     assert(NextSeconds(a.back(),0) == -1);
     a = Match("Defeat Tequatl the Sunless or Complete Events in Sparkfly Fen","PvE");
     assert(NextSeconds(a[0], 23 * 3600) == 3600);
+    a = Meta("castora");
+    auto event = std::find_if(a.begin(),a.end(),[](const auto& d){return d.label=="Shackles of the Ancients";});
+    assert(event!=a.end() && NextSeconds(*event,70*60)==5*60);
+    assert(NextSeconds(a.back(),119*60)==60);
     assert(Countdown(61) == "in 2m");
     assert(Countdown(0) == "Scheduled now");
     assert(Countdown(-1) == "Variable start");

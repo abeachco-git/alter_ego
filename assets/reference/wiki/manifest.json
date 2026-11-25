@@ -5,7 +5,7 @@
     "raid_bounties": {
       "enabled": true,
       "source": "Template:Daily Raid Bounties",
-      "format": "MediaWiki rendered table"
+      "format": "MediaWiki wikitext with rendered table fallback"
     },
     "fractals": {
       "enabled": true,
@@ -14,12 +14,12 @@
         "Template:Daily Recommended Fractal Schedule",
         "Template:Fractal info"
       ],
-      "format": "MediaWiki tables and scale template"
+      "format": "MediaWiki wikitext with rendered table fallback"
     },
     "event_timers": {
-      "enabled": false,
+      "enabled": true,
       "source": "Widget:Event timer/data.json",
-      "reason": "Validate schema and exact event phase matching first"
+      "format": "JSON in MediaWiki wikitext, direct raw JSON fallback"
     },
     "skin_acquisition": {
       "enabled": false,

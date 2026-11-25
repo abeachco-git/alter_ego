@@ -471,3 +471,5 @@ See https://wiki.guildwars2.com/wiki/Guild_Wars_2_Wiki:Copyrights (original
 contributor content GFDL 1.3; game intellectual property remains with its
 owners). This addon extracts factual names, numeric scale assignments and
 rotations only; it does not distribute Wiki article prose or page markup.
+
+Event timer factual schedule data: https://wiki.guildwars2.com/wiki/Widget:Event_timer/data.json (selected phase names and UTC start minutes only).

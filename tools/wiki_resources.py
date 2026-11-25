@@ -98,7 +98,28 @@ def clean_name(s):
         raise ValueError("Invalid name")
     return s
 
+def array_rows(raw, numeric=False):
+    match = re.search(r"\{\{#arraymap:\s*\n(.*?)\n\|\\n\|\$set\|", raw, re.S)
+    if not match:
+        raise ValueError("Missing schedule array")
+    rows = [[x.strip() for x in line.split(",")] for line in match[1].strip().splitlines()]
+    if len(rows) != 15 or any(len(row) != 3 for row in rows):
+        raise ValueError("Expected 15 triples")
+    return [[int(x) for x in row] if numeric else [clean_name(x) for x in row] for row in rows]
+
 def parse_raid(raw):
+    if "{{#switch: $set" in raw:
+        cols = []
+        for section in raw.split("{{#switch: $set")[1:]:
+            body = section.split("}}",1)[0]
+            rows = re.findall(r"^\s*\|\s*(\d+)\s*=\s*\[\[Daily Raid Bounties#Raid Bounty: ([^|\]]+)\|Raid Bounty:\]\]", body, re.M)
+            if len(rows) not in (6,12) or [int(n) for n,_ in rows] != list(range(1,len(rows)+1)):
+                raise ValueError("Incomplete raid switch")
+            cols.append([clean_name(x) for _,x in rows]*(12//len(rows)))
+        if len(cols)!=4:
+            raise ValueError("Expected four raid switches")
+        return cols
+
     cols = []
     for t in tables(raw):
         rows = numbered(t, 2)
@@ -113,6 +134,8 @@ def parse_raid(raw):
     return cols
 
 def parse_daily(raw):
+    if "{{#arraymap:" in raw:
+        return array_rows(raw)
     for t in tables(raw):
         rows = numbered(t, 4)
         if [int(r[0]) for r in rows] == list(range(1,16)):
@@ -120,6 +143,8 @@ def parse_daily(raw):
     raise ValueError("Expected fifteen daily fractal rows")
 
 def parse_recommended(raw):
+    if "{{#arraymap:" in raw:
+        return array_rows(raw, True)
     for t in tables(raw):
         rows = numbered(t, 4)
         if [int(r[0]) for r in rows] != list(range(1,16)):
@@ -137,19 +162,102 @@ def parse_recommended(raw):
     raise ValueError("Expected fifteen recommended rows")
 
 def parse_scales(raw):
-    # Template source has switch branches; rendered documentation may also
-    # contain the numbered mapping. Do not infer ranges or missing entries.
-    candidates = {}
-    for n, name in re.findall(r"(?:^|\n|\|)\s*(\d{1,3})\s*=\s*([^\n|<>{}]+)", raw):
-        n = int(n)
-        if 1 <= n <= 100:
-            name = clean_name(name.strip())
-            if n in candidates and candidates[n] != name:
-                raise ValueError("Conflicting scale mapping")
-            candidates[n] = name
-    if set(candidates) != set(range(1,101)):
-        raise ValueError("Expected complete scale mapping")
-    return [candidates[i] for i in range(1,101)]
+    # The template publishes both name->scales and scales->name. Validate
+    # the complete bijection in both directions before using it.
+    forward, reverse = {}, {}
+    for name, nums in re.findall(r"^\s*\|\s*([A-Za-z][^=|\n]*?)\s*=\s*(\d+(?:\s*,\s*\d+){3})\s*$", raw, re.M):
+        for n in map(int,nums.split(",")):
+            if n in forward:
+                raise ValueError("Duplicate scale")
+            forward[n] = clean_name(name)
+    for nums, name in re.findall(r"^\s*\|\s*(\d+(?:\s*\|\s*\d+){3})\s*=\s*([^|\n{}<>]+?)\s*$", raw, re.M):
+        for n in map(int,nums.split("|")):
+            if n in reverse:
+                raise ValueError("Duplicate reverse scale")
+            reverse[n] = clean_name(name)
+    if set(forward) != set(range(1,101)) or forward != reverse:
+        # HTML documentation fallback exposes 100 numbered list entries.
+        # Accept only a complete unambiguous map, never a partial table.
+        class Lists(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.active=None
+                self.rows=[]
+            def handle_starttag(self,tag,attrs):
+                if tag in ("li","ul") and self.active is None:
+                    self.active=[]
+            def handle_data(self,data):
+                if self.active is not None:
+                    self.active.append(data)
+            def handle_endtag(self,tag):
+                if tag in ("li","ul") and self.active is not None:
+                    self.rows.append(" ".join("".join(self.active).split()))
+                    self.active=None
+        p=Lists()
+        p.feed(raw)
+        forward={}
+        for row in p.rows:
+            m=re.fullmatch(r"(\d{1,3})\s*=\s*(.+)",row)
+            if m and 1<=int(m[1])<=100:
+                n=int(m[1])
+                if n in forward and forward[n]!=m[2]:
+                    raise ValueError("Conflicting HTML scale")
+                forward[n]=clean_name(m[2])
+        if set(forward)!=set(range(1,101)):
+            raise ValueError("Expected complete scale mapping")
+    return [forward[i] for i in range(1,101)]
+
+EVENT_PHASES = [["core-wb","Svanir Shaman Chief","Svanir Shaman Chief"],["core-wb","Megadestroyer","Megadestroyer"],["core-wb","Fire Elemental","Fire Elemental"],["core-wb","The Shatterer","The Shatterer"],["core-wb","Great Jungle Wurm","Great Jungle Wurm"],["core-wb","Shadow Behemoth","Shadow Behemoth"],["core-wb","Claw of Jormag","Claw of Jormag"],["core-wb","Golem Mark II","Inquest Golem Mark II"],["core-hwb","Tequatl the Sunless","Tequatl the Sunless"],["hot-ab","Battle in Tarir (Octovine)","Battle in Tarir"],["hot-td","King of the Jungle (Chak Gerent)","King of the Jungle"],["hot-ds","Start advancing on the Blighting Towers","Dragon's Stand"],["pof-er","The Path to Ascension: Augury Rock","Path to Ascension"],["pof-td","Maws of Torment","Maws of Torment"],["pof-dv","Forged with Fire","Forged with Fire"],["eod-sp","Aetherblade Assault","Aetherblade Assault"],["eod-nkc","Kaineng Blackout","Kaineng Blackout"],["eod-ew","Gang War","Gang War of Echovald"],["eod-de","The Battle for the Jade Sea","Battle for the Jade Sea"],["soto-sa","Unlocking the Wizard's Tower","Wizard's Tower"],["soto-am","Defense of Amnytas","Defense of Amnytas"],["jw-js","Of Mists and Monsters","Of Mists and Monsters"],["jw-bn","A Titanic Voyage","A Titanic Voyage"],["voe-ss","Hammerhart Rumble!","Hammerhart Rumble!"],["voe-sw","Secrets of the Weald","Secrets of the Weald"],["voe-eg","Shackles of the Ancients","Shackles of the Ancients"],["voe-lh","Depths of Cruelty","Depths of Cruelty"]]
+
+def parse_events(raw):
+    obj=json.loads(raw)
+    events=obj["events"]
+    if not isinstance(events,dict) or len(events)<40:
+        raise ValueError("Incomplete event timer")
+    out={}
+    for group,name,label in EVENT_PHASES:
+        event=events[group]
+        segments=event["segments"]
+        matches=[str(key) for key,value in segments.items() if value.get("name")==name]
+        if len(matches)!=1:
+            raise ValueError("Missing or ambiguous phase: "+label)
+        target=matches[0]
+        seq=event["sequences"]
+        partial,pattern=seq["partial"],seq["pattern"]
+        for step in partial+pattern:
+            if type(step["d"]) is not int or not 0<step["d"]<=1440 or str(step["r"]) not in segments:
+                raise ValueError("Invalid event sequence")
+        cycle=sum(step["d"] for step in pattern)
+        starts=[]
+        t=sum(step["d"] for step in partial) if cycle else 0
+        if cycle:
+            if 1440%cycle:
+                raise ValueError("Non-daily event cycle")
+            for step in pattern:
+                if str(step["r"])==target:
+                    starts.extend(range(t%cycle,1440,cycle))
+                t+=step["d"]
+        else:
+            if sum(step["d"] for step in partial)<1440:
+                raise ValueError("Incomplete daily sequence")
+            for step in partial:
+                if str(step["r"])==target and t<1440:
+                    starts.append(t)
+                t+=step["d"]
+        out[label]=sorted(set(starts))
+    validate("event_timers",out)
+    return out
+
+def fetch_events():
+    page="Widget:Event timer/data.json"
+    try:
+        data=parse_events(api(action="parse",page=page,prop="wikitext")["parse"]["wikitext"]["*"])
+        print(page+": API payload validated",flush=True)
+        return data
+    except Exception as exc:
+        print(page+": API failed ("+str(exc)[:180]+"); trying raw JSON",flush=True)
+    return parse_events(get("/wiki/Widget:Event_timer/data.json?action=raw"))
+
 
 def validate(name, value):
     if name == "raid_bounties":
@@ -178,25 +286,34 @@ def validate(name, value):
             for i, (n, title) in enumerate(rec):
                 if type(n) is not int or not (i*25+1 <= n <= (i+1)*25) or scales[n-1] != title:
                     raise ValueError("Recommended scale/name mismatch")
+    elif name == "event_timers":
+        if set(value)!={phase[2] for phase in EVENT_PHASES}:
+            raise ValueError("Incomplete event coverage")
+        for label, starts in value.items():
+            if not isinstance(starts,list) or not starts or starts!=sorted(set(starts)) or any(type(n) is not int or not 0<=n<1440 for n in starts):
+                raise ValueError("Invalid daily starts: "+label)
     else:
         raise ValueError("Unknown dataset")
 
 def refresh(name, old):
+    if name == "event_timers":
+        return fetch_events()
     if name == "raid_bounties":
-        result = fetch_page("Template:Daily Raid Bounties", parse_raid)
+        result = fetch_page("Template:Daily Raid Bounties", parse_raid, "wikitext")
         # A changed order requires a new verified UTC anchor; never silently
         # combine a different rotation with the existing historical anchor.
         if result != old:
             raise ValueError("Raid rotation changed; verify new UTC anchor before promotion")
         return result
-    daily = fetch_page("Template:Daily Fractal Schedule", parse_daily)
-    rec = fetch_page("Template:Daily Recommended Fractal Schedule", parse_recommended)
+    daily = fetch_page("Template:Daily Fractal Schedule", parse_daily, "wikitext")
+    rec = fetch_page("Template:Daily Recommended Fractal Schedule", parse_recommended, "wikitext")
     scales = fetch_page("Template:Fractal info", parse_scales, "wikitext")
+    rec = [[[n,scales[n-1]] if type(n) is int else n for n in row] for row in rec]
     return {"sets":[{"daily":d,"recommended":r} for d,r in zip(daily,rec)],"scales":scales}
 
 def load(path):
     obj = json.loads(path.read_text(encoding="utf-8"))
-    if obj["schema"] != 1 or set(obj["datasets"]) != {"raid_bounties","fractals"}:
+    if obj["schema"] != 1 or set(obj["datasets"]) != {"raid_bounties","fractals","event_timers"}:
         raise ValueError("Unknown resource schema")
     for name, entry in obj["datasets"].items():
         validate(name,entry["data"])
@@ -220,11 +337,11 @@ def generate(obj, out):
         lines.append("    {{{"+",".join(map(q,row["daily"]))+"}}, {{"+",".join(str(x[0]) for x in rec)+"}}, {{"+",".join(q(x[1]) for x in rec)+"}}},")
     write(out/"WikiFractalSets.inc","\n".join(lines)+"\n")
     write(out/"WikiFractalScales.inc","\n".join("    "+q(x)+"," for x in fractals["scales"])+"\n")
+    write(out/"WikiEventTimers.inc","\n".join("    {"+q(label)+",{"+",".join(map(str,starts))+"}}," for label,starts in sorted(d["event_timers"]["data"].items()))+"\n")
 
 def probe():
     # One bounded sample per unverified source; no full crawl or promotion.
     probes = [
-        ("event_timers", lambda: json.loads(get("/wiki/Widget:Event_timer/data.json?action=raw"))),
         ("skin_acquisition", lambda: api(action="ask",query="[[Has skin::+]]|?Has skin|?Has game id|limit=2")),
         ("currency_acquisition", lambda: api(action="ask",query="[[Category:Currencies]]|?Has game id|limit=2")),
     ]
@@ -252,6 +369,10 @@ def main():
         obj=load(a.state)
     except (OSError,ValueError,KeyError,TypeError):
         obj=copy.deepcopy(seed)
+    # A newer checked-in seed supersedes older restored CI state.
+    for name, entry in seed["datasets"].items():
+        if entry["last_success"] > obj["datasets"][name]["last_success"]:
+            obj["datasets"][name] = copy.deepcopy(entry)
     if a.refresh:
         days=json.loads(MANIFEST.read_text())["build_interval_days"]
         now=int(time.time())
@@ -268,6 +389,8 @@ def main():
             except Exception as exc:
                 print(name+": RETAINED LAST-KNOWN-GOOD: "+str(exc)[:300],flush=True)
             write(a.state,json.dumps(obj,indent=2,ensure_ascii=True)+"\n")
+    if a.refresh:
+        write(a.state,json.dumps(obj,indent=2,ensure_ascii=True)+"\n")
     if a.probe:
         probe()
     if a.generate:

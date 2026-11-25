@@ -117,22 +117,21 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .wiki-reference-state
-          key: ae-wiki-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ae-wiki-v2-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            ae-wiki-v1-${{ github.ref_name }}-
+            ae-wiki-v2-${{ github.ref_name }}-
       - name: Refresh monthly Wiki resources
         run: |
           mkdir -p .wiki-reference-state
           args=""
           if [ "${{ github.event_name == 'workflow_dispatch' && inputs.wiki_refresh }}" = "true" ]; then args="--force"; fi
-          if [ "${{ github.event.head_commit.message == 'Bootstrap monthly Wiki rotation resources' || github.event.head_commit.message == 'Retry initial Wiki refresh with verified client identity' }}" = "true" ]; then args="--force --probe"; fi
           python3 tools/wiki_resources.py --state .wiki-reference-state/rotations.json --refresh $args
       - name: Save Wiki reference state
         uses: actions/cache/save@v5
         continue-on-error: true
         with:
           path: .wiki-reference-state
-          key: ae-wiki-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ae-wiki-v2-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Cache compiler outputs, never final executables or test results.
       - name: Restore compiler cache
         uses: actions/cache/restore@v5

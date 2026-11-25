@@ -9,8 +9,16 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <map>
 
 namespace AlterEgo { namespace VaultAssist {
+inline const std::vector<int>* WikiStarts(const std::string& label) {
+    static const std::map<std::string,std::vector<int>> starts = {
+#include "WikiEventTimers.inc"
+    };
+    const auto it=starts.find(label);
+    return it==starts.end()?nullptr:&it->second;
+}
 struct Destination {
     std::string label, map, link, note;
     int offset = -1, period = 0;
@@ -18,7 +26,9 @@ struct Destination {
     Destination(std::string l, std::string m, std::string wp, std::string n,
                 int o = -1, int p = 0, std::vector<int> s = {})
         : label(std::move(l)), map(std::move(m)), link(std::move(wp)),
-          note(std::move(n)), offset(o), period(p), starts(std::move(s)) {}
+          note(std::move(n)), offset(o), period(p), starts(std::move(s)) {
+        if (const auto* verified=WikiStarts(label)) { starts=*verified; offset=-1; period=0; }
+    }
 };
 using Options = std::vector<Destination>;
 inline std::string Normalize(const std::string& title) {
@@ -78,30 +88,30 @@ inline Options Gather(bool plants, bool wood, bool ore, bool fish) {
 }
 inline Options Meta(const std::string& t) {
     if (Has(t,"cantha")) return {
-        {"Aetherblade Assault","Seitung Province","[&BGUNAAA=]","Daigo Ward Waypoint; scheduled event chain.",90,120},
-        {"Kaineng Blackout","New Kaineng City","[&BBkNAAA=]","Ministry Ward Waypoint; scheduled event chain.",0,120},
-        {"Gang War of Echovald","Echovald Wilds","[&BMwMAAA=]","Kropa Waypoint; scheduled event chain.",30,120},
-        {"Battle for the Jade Sea","Dragon's End","[&BPEMAAA=]","Frozen Sea Waypoint; escort phase scheduled.",60,120},
+        {"Aetherblade Assault","Seitung Province","[&BGUNAAA=]","Daigo Ward Waypoint; scheduled event chain."},
+        {"Kaineng Blackout","New Kaineng City","[&BBkNAAA=]","Ministry Ward Waypoint; scheduled event chain."},
+        {"Gang War of Echovald","Echovald Wilds","[&BMwMAAA=]","Kropa Waypoint; scheduled event chain."},
+        {"Battle for the Jade Sea","Dragon's End","[&BPEMAAA=]","Frozen Sea Waypoint; battle phase scheduled."},
         {"Destroy the Ravenous Wanderer","Gyala Delve","","Map-dependent chain; no fixed start assumed."}};
     if (Has(t,"heart of maguuma")) return {
-        {"Battle in Tarir","Auric Basin","[&BAIIAAA=]","Octovine phase; arrive earlier for preparations.",60,120},
-        {"King of the Jungle","Tangled Depths","[&BPUHAAA=]","Ley-Line Confluence Waypoint; Gerent phase.",30,120},
-        {"Dragon's Stand","Dragon's Stand","[&BBAIAAA=]","Scheduled map push; arrive early.",90,120}};
+        {"Battle in Tarir","Auric Basin","[&BAIIAAA=]","Octovine phase; arrive earlier for preparations."},
+        {"King of the Jungle","Tangled Depths","[&BPUHAAA=]","Ley-Line Confluence Waypoint; Gerent phase."},
+        {"Dragon's Stand","Dragon's Stand","[&BBAIAAA=]","Scheduled map push; arrive early."}};
     if (Has(t,"crystal desert")) return {
-        {"Path to Ascension","Elon Riverlands","[&BFMKAAA=]","Scheduled map meta phase.",90,120},
-        {"Maws of Torment","The Desolation","[&BKMKAAA=]","The Darklands Waypoint; scheduled meta phase.",60,120},
+        {"Path to Ascension","Elon Riverlands","[&BFMKAAA=]","Scheduled map meta phase."},
+        {"Maws of Torment","The Desolation","[&BKMKAAA=]","The Darklands Waypoint; scheduled meta phase."},
         {"Forged with Fire","Domain of Vabbi","","Check the map event chain."}};
     if (Has(t,"horn of maguuma")) return {
-        {"Wizard's Tower","Skywatch Archipelago","[&BOANAAA=]","Unlocking the Wizard's Tower meta; Rata Novus Promenade is a travel starting point.",60,120},
-        {"Defense of Amnytas","Amnytas","","Scheduled meta phase.",0,120},
+        {"Wizard's Tower","Skywatch Archipelago","[&BOANAAA=]","Unlocking the Wizard's Tower meta; Rata Novus Promenade is a travel starting point."},
+        {"Defense of Amnytas","Amnytas","","Scheduled meta phase."},
         {"The Spider's Lair","Inner Nayos","","Map-dependent chain."}};
     if (Has(t,"janthir")) return {
-        {"Of Mists and Monsters","Janthir Syntri","[&BCoPAAA=]","Stricken Plains Waypoint; travel starting point.",30,120},
-        {"A Titanic Voyage","Bava Nisos","[&BGEPAAA=]","Scheduled event chain.",80,120}};
+        {"Of Mists and Monsters","Janthir Syntri","[&BCoPAAA=]","Stricken Plains Waypoint; travel starting point."},
+        {"A Titanic Voyage","Bava Nisos","[&BGEPAAA=]","Scheduled event chain."}};
     if (Has(t,"castora")) return {
-        {"Hammerhart Rumble!","Shipwreck Strand","","Scheduled map meta phase.",40,120},
-        {"Secrets of the Weald","Starlit Weald","","Scheduled map meta phase.",100,120},
-        {"Shackles of the Ancients","Eternity's Garden","","Scheduled event chain.",70,120},
+        {"Hammerhart Rumble!","Shipwreck Strand","","Scheduled map meta phase."},
+        {"Secrets of the Weald","Starlit Weald","","Scheduled map meta phase."},
+        {"Shackles of the Ancients","Eternity's Garden","","Scheduled event chain."},
         {"Depths of Cruelty","Leyspring Hollows","","Check the map event chain."}};
     return {};
 }
@@ -110,17 +120,17 @@ inline Options Match(const std::string& title,const std::string& track) {
     if (!mode.empty() && mode != "pve") return {};
     // Exact/qualified English titles, not inferred rotation or account expansion.
     if (Has(t,"defeat") && Has(t,"world boss")) {
-        if (Has(t,"inquest golem mark ii")) return {{"Inquest Golem Mark II","Mount Maelstrom","[&BNQCAAA=]","Old Sledge Site Waypoint.",120,180}};
-        if (Has(t,"claw of jormag")) return {{"Claw of Jormag","Frostgorge Sound","[&BH0CAAA=]","Earthshake Waypoint.",150,180}};
-        if (Has(t,"megadestroyer")) return {{"Megadestroyer","Mount Maelstrom","[&BM0CAAA=]","Maelstrom's Waypoint.",30,180}};
-        if (Has(t,"shatterer")) return {{"The Shatterer","Blazeridge Steppes","[&BE4DAAA=]","Lowland Burns Waypoint.",60,180}};
-        if (Has(t,"great jungle wurm")) return {{"Great Jungle Wurm","Caledon Forest","[&BEEFAAA=]","Scheduled pre-event.",75,120}};
-        if (Has(t,"shadow behemoth")) return {{"Shadow Behemoth","Queensdale","[&BPcAAAA=]","Swamplost Haven Waypoint.",105,120}};
-        if (Has(t,"svanir shaman")) return {{"Svanir Shaman Chief","Wayfarer Foothills","[&BH4BAAA=]","Vendrake's Homestead Waypoint.",15,120}};
-        if (Has(t,"fire elemental")) return {{"Fire Elemental","Metrica Province","[&BEgAAAA=]","Desider Atum Waypoint; travel toward Thaumanova Reactor.",45,120}};
+        if (Has(t,"inquest golem mark ii")) return {{"Inquest Golem Mark II","Mount Maelstrom","[&BNQCAAA=]","Old Sledge Site Waypoint."}};
+        if (Has(t,"claw of jormag")) return {{"Claw of Jormag","Frostgorge Sound","[&BH0CAAA=]","Earthshake Waypoint."}};
+        if (Has(t,"megadestroyer")) return {{"Megadestroyer","Mount Maelstrom","[&BM0CAAA=]","Maelstrom's Waypoint."}};
+        if (Has(t,"shatterer")) return {{"The Shatterer","Blazeridge Steppes","[&BE4DAAA=]","Lowland Burns Waypoint."}};
+        if (Has(t,"great jungle wurm")) return {{"Great Jungle Wurm","Caledon Forest","[&BEEFAAA=]","Scheduled pre-event."}};
+        if (Has(t,"shadow behemoth")) return {{"Shadow Behemoth","Queensdale","[&BPcAAAA=]","Swamplost Haven Waypoint."}};
+        if (Has(t,"svanir shaman")) return {{"Svanir Shaman Chief","Wayfarer Foothills","[&BH4BAAA=]","Vendrake's Homestead Waypoint."}};
+        if (Has(t,"fire elemental")) return {{"Fire Elemental","Metrica Province","[&BEgAAAA=]","Desider Atum Waypoint; travel toward Thaumanova Reactor."}};
     }
     if (Has(t,"defeat") && Has(t,"tequatl the sunless"))
-        return {{"Tequatl the Sunless","Sparkfly Fen","[&BNABAAA=]","Splintered Coast Waypoint; arrive early.",-1,0,{0,180,420,690,960,1140}}};
+        return {{"Tequatl the Sunless","Sparkfly Fen","[&BNABAAA=]","Splintered Coast Waypoint; arrive early."}};
     if (Has(t,"meta event") && Has(t,"events in")) {
         auto m = Meta(t);
         if (!m.empty()) return m;
