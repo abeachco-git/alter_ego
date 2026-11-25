@@ -41,24 +41,24 @@ namespace Skinventory {
     void OwnedSkins::Initialize(AddonAPI_t* api){s_API=api;}
     void OwnedSkins::Shutdown(){s_API=nullptr;}
     void OwnedSkins::SetAccountName(const std::string& name){
+        uint64_t epoch=0;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             if(s_account_name==name)return;
-            s_account_name=name;++accountEpoch;s_querying=false;s_has_data=false;
+            s_account_name=name;epoch=++accountEpoch;s_querying=false;s_has_data=false;
             s_owned_skins.clear();s_queried_skins.clear();s_locally_marked.clear();
             s_last_success_time=0;++s_generation;
             s_status_message="No ownership data - click Refresh";
         }
         // Native GUID snapshots only; never adopt an unscoped H&S cache.
         if(name.empty())return;
-        const auto epoch=[&]{std::lock_guard<std::mutex> lock(s_mutex);return accountEpoch;}();
         const auto dir=s_data_dir;
         AlterEgo::Background::Workers().Launch([name,epoch,dir]{
             try{
                 auto snapshot=AlterEgo::Cache::ReadOwnership(AlterEgo::Cache::RootFromLegacySkinDirectory(dir),name);
                 if(!snapshot)return;
                 std::lock_guard<std::mutex> lock(s_mutex);
-                if(epoch!=accountEpoch||s_has_data)return;
+                if(epoch!=accountEpoch||s_account_name!=name||s_has_data||AlterEgo::Background::Workers().Stopping())return;
                 s_owned_skins=std::unordered_set<uint32_t>(snapshot->ids.begin(),snapshot->ids.end());
                 s_owned_skins.insert(s_locally_marked.begin(),s_locally_marked.end());
                 s_last_success_time=static_cast<std::time_t>(snapshot->fetchedAt);s_has_data=true;++s_generation;

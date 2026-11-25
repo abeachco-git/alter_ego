@@ -157,6 +157,13 @@ int case_section_refresh(int, char**) {
     assert(!cancelling.Due(key,"Bags",0,0,now+612));
     cancelling.Cancel(key,"Bags",replacement);
     assert(cancelling.Due(key,"Bags",0,0,now+612));
+    auto sameSecondOld=cancelling.Begin(key,"Bags",now+612);
+    auto sameSecondNew=cancelling.Begin(key,"Bags",now+612);
+    cancelling.Cancel(key,"Bags",sameSecondOld);
+    cancelling.Success(key,"Bags",sameSecondOld,now+612);
+    assert(!cancelling.Due(key,"Bags",0,0,now+612));
+    cancelling.Cancel(key,"Bags",sameSecondNew);
+    assert(cancelling.Due(key,"Bags",0,0,now+612));
     auto success=cancelling.Begin(key,"Bags",now+613);
     cancelling.Success(key,"Bags",success,now+614);
     cancelling.Cancel(key,"Bags",success);

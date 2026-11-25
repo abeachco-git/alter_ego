@@ -9,19 +9,20 @@ using Json=nlohmann::json;
 using Key=std::pair<std::string,std::string>;
 struct Scope {
     int64_t success=0,attempt=0,covered=0,specCovered=0;
+    uint64_t attemptSerial=0; // local only; distinct even within the same second
 };
 struct Entry {
     int64_t lastSeen=0,login=0,specChanged=0;
     uint32_t spec=0;
     std::map<std::string,Scope> scopes;
 };
-struct Ticket {int64_t started=0,seen=0,login=0,specChanged=0;bool active=false;int64_t verificationStarted=0;};
+struct Ticket {int64_t started=0,seen=0,login=0,specChanged=0;bool active=false;int64_t verificationStarted=0;uint64_t serial=0;};
 class Tracker {
     std::map<Key,Entry> rows_;
     Key active_;
     int64_t missingSince_=0;
     bool dirty_=false;
-    uint64_t revision_=0;
+    uint64_t revision_=0,nextTicket_=0;
     void Dirty(){dirty_=true;++revision_;}
     bool Active(const Key& k)const{
         return !active_.first.empty()&&k.first==active_.first&&(k.second.empty()||k.second==active_.second);
@@ -107,13 +108,13 @@ public:
         return success<=0||success>now||e.lastSeen>Covered(e,s,success);
     }
     Ticket Begin(const Key& k,const std::string& scope,int64_t now){
-        auto& e=rows_[k];e.scopes[scope].attempt=now;Dirty();
-        return {now,e.lastSeen,e.login,e.specChanged,Active(k)};
+        auto& e=rows_[k];auto& s=e.scopes[scope];s.attempt=now;s.attemptSerial=++nextTicket_;Dirty();
+        return {now,e.lastSeen,e.login,e.specChanged,Active(k),0,s.attemptSerial};
     }
     void Success(const Key& k,const std::string& scope,const Ticket& t,int64_t success,bool specVerified=true){
         auto& e=rows_[k];auto& s=e.scopes[scope];
-        if(s.success>success||s.attempt>t.started)return;
-        s.success=success;s.attempt=0;
+        if(s.success>success||s.attempt>t.started||s.attemptSerial!=t.serial)return;
+        s.success=success;s.attempt=0;s.attemptSerial=0;
         const auto verifiedStart=t.verificationStarted>0?std::min(t.started,t.verificationStarted):t.started;
         // Only an offline, post-grace request that did not overlap newer
         // activity covers the logout. Early manual pulls remain useful but dirty.
@@ -127,7 +128,9 @@ public:
         auto it=row->second.scopes.find(scope);if(it==row->second.scopes.end())return;
         // Only the owning attempt may clear its own cooldown. Never undo
         // verified success or the coverage watermark.
-        if(it->second.attempt==t.started){it->second.attempt=0;Dirty();}
+        if(it->second.attempt==t.started&&it->second.attemptSerial==t.serial){
+            it->second.attempt=0;it->second.attemptSerial=0;Dirty();
+        }
     }
     bool DirtyState()const{return dirty_;}
     uint64_t Revision()const{return revision_;}

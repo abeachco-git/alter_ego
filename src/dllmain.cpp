@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include <string>
 #include <vector>
+#include <deque>
 #include <cstring>
 #include <sstream>
 #include <algorithm>
@@ -474,7 +475,7 @@ struct SkinShopEntry {
     uint32_t ownedItem=0;
 };
 static std::vector<SkinShopEntry> g_SkinShopList;
-static bool g_SkinShopListDirty = true;
+static std::atomic<bool> g_SkinShopListDirty{true};
 
 // =========================================================================
 // Achievement Tracker
@@ -530,7 +531,7 @@ static std::unordered_map<uint32_t, uint32_t> g_AchIdToCategory; // ach id -> ca
 static std::unordered_set<uint32_t> g_AchHiddenCatIds;          // categories to hide (e.g. Character Adventure Guide)
 
 static std::recursive_mutex g_AchMutex;
-static bool g_AchGroupsFetched = false;
+static std::atomic<bool> g_AchGroupsFetched{false};
 static int64_t g_AchGroupsCacheFetchedAt = 0; // last successful groups/categories snapshot
 static uint64_t g_AchGroupsGeneration = 0;   // changes after cache load / network refresh
 static std::atomic<bool> g_AchGroupsFetching{false};
@@ -552,11 +553,11 @@ static bool g_AchNeedRequery = false;      // deferred requery on account change
 static std::atomic<bool> g_AchProgressDirty{false};
 static bool g_AchSwitchingAccount=false; // guarded by g_AchMutex    // persistent cache needs flushing
 static std::string g_AchCachedAccount;     // account whose data is currently in g_AchProgress
-static int64_t g_AchProgressCacheSavedAt = 0; // last successful achievement progress retrieval
+static std::atomic<int64_t> g_AchProgressCacheSavedAt{0}; // last successful achievement progress retrieval
 // The loaded snapshot timestamp is stable across pinned updates, unlike saved_at.
 static int64_t g_AchProgressLoadedSnapshotAt = 0;
-static bool g_AchNeedsInitialFullLoad = true;
-static bool g_AchManualInitialScan = false;
+static std::atomic<bool> g_AchNeedsInitialFullLoad{true};
+static std::atomic<bool> g_AchManualInitialScan{false};
 // Refresh timestamps are scoped to the active category and reset on account change.
 static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_AchCategoryRefreshAt;
 static std::chrono::steady_clock::time_point g_AchRefreshSuccessUntil{};
@@ -579,7 +580,7 @@ static std::atomic<long long> g_AchRetryAtMs{0};
 // Keep manual retries alive when the global auto-refresh switch changes.
 static std::atomic<bool> g_AchRetryAutomatic{false};
 static std::atomic<bool> g_AchQueryAutomatic{false};
-static uint64_t g_AchProgressGen = 0;      // incremented when progress updates, triggers popout cache rebuild
+static std::atomic<uint64_t> g_AchProgressGen{0};      // incremented when progress updates, triggers popout cache rebuild
 static char g_AchSearchBuf[128] = "";
 static bool g_AchPopoutVisible = false;    // popout tracker window visibility
 static bool g_AchHideEmptyCats = false;    // rail filter: hide categories with no progress data
@@ -836,6 +837,15 @@ struct MumbleIdentity {
 };
 static std::string g_CurrentCharName; // currently logged-in character name from MumbleLink
 static AlterEgo::AutoRefreshTracker g_AutoRefreshTracker;
+struct IdentityObservation {
+    std::string name;
+    uint32_t spec;
+    AlterEgo::AutoRefreshTracker::Clock::time_point observed;
+    int64_t epoch;
+};
+static std::mutex g_IdentityMutex;
+static std::deque<IdentityObservation> g_PendingIdentity;
+static void DrainIdentityObservations();
 
 // Local login timestamps (character name -> unix epoch)
 static std::unordered_map<std::string, int64_t> g_LoginTimestamps;
@@ -1022,9 +1032,11 @@ static void OnEvAlertAchievementCompleted(void* eventArgs) {
     // This alert describes the logged-in character, not necessarily the
     // account selected in the Achievements view. Never apply it to another
     // account's progress file.
-    const std::string selected=GetAchievementCacheAccount();
+    // The selected-account UI filter is render-owned. The cached account
+    // identity is checked under the progress mutex below; the outgoing
+    // account's final valid alert will be flushed before switching.
     const std::string loggedIn = AlterEgo::GW2API::GetCurrentAccountName();
-    if (loggedIn.empty() || loggedIn!=selected)return;
+    if (loggedIn.empty())return;
     auto* payload = (AlertUnlockPayload*)eventArgs;
     if (payload->ID != 0) {
         {
@@ -2452,8 +2464,9 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
     AlterEgo::Background::Workers().Launch([account,generation,automatic,ids,interval]{
         auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),account,!automatic,interval);
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account||AlterEgo::Background::Workers().Stopping())return;
+        if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account)return;
         g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;
+        if(AlterEgo::Background::Workers().Stopping())return;
         if(!result.snapshot){
             g_AchRefreshError=result.error;
             // Shared broker records failed attempts; the next automatic check respects its cooldown.
@@ -12428,37 +12441,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     LoadCharSortConfig();
     RebuildCharDisplayOrder();
 
-    // Subscribe to MumbleLink identity for current character indicator
-    APIDefs->Events_Subscribe("EV_MUMBLE_IDENTITY_UPDATED", OnMumbleIdentityUpdated);
-
-    // Subscribe to Events: Chat for build link detection
-    APIDefs->Events_Subscribe(EV_CHAT_MESSAGE, OnEvChatMessage);
-
-    // Subscribe to Events: Alerts for real-time skin unlock + achievement completion
-    APIDefs->Events_Subscribe(EV_ALERT_UNLOCKED_SKIN, OnEvAlertSkinUnlocked);
-    APIDefs->Events_Subscribe(EV_ALERT_ACHIEVEMENT_COMPLETED, OnEvAlertAchievementCompleted);
-
-    // Pie UI inter-addon bridge — subscribe before announcing so we catch Pie's
-    // synchronous reply to our ping.
-    APIDefs->Events_Subscribe(EV_ALTER_EGO_PING, OnAlterEgoPing);
-    APIDefs->Events_Subscribe(EV_ALTER_EGO_IMPORT_BUILD, OnPieImportBuild);
-    APIDefs->Events_Subscribe(EV_PIE_UI_READY, OnPieUIReady);
-
-
-    // Pie UI bridge: announce AE (so an already-loaded Pie sees us) and probe for
-    // an already-loaded Pie (which replies EV_PIE_UI_READY).
-    APIDefs->Events_Raise(EV_ALTER_EGO_READY, nullptr);
-    APIDefs->Events_Raise(EV_PIE_UI_PING, nullptr);
-
-    // Register render functions
-    APIDefs->GUI_Register(RT_Render, AddonRender);
-    APIDefs->WndProc_Register(NavigationWndProc);
-    APIDefs->GUI_Register(RT_OptionsRender, AddonOptions);
-
-    // Register keybind
-    APIDefs->InputBinds_RegisterWithString("KB_ALTER_EGO_TOGGLE", ProcessKeybind, "CTRL+SHIFT+E");
-    APIDefs->InputBinds_RegisterWithString("KB_ALTER_EGO_TRACKER", ProcessKeybind, "(null)");
-
     // Load icon textures from embedded PNG data
     APIDefs->Textures_LoadFromMemory(TEX_ICON, (void*)ICON_NORMAL, ICON_NORMAL_size, nullptr);
     APIDefs->Textures_LoadFromMemory(TEX_ICON_HOVER, (void*)ICON_HOVER, ICON_HOVER_size, nullptr);
@@ -12477,14 +12459,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     LoadAchGroupCache();
     LoadAchDefCache();
     LoadAchNameIndex();
-
-    // Register quick access shortcut
-    if (g_ShowQAIcon) {
-        APIDefs->QuickAccess_Add(QA_ID, TEX_ICON, TEX_ICON_HOVER, "KB_ALTER_EGO_TOGGLE", "Alter Ego");
-    }
-
-    // Register close-on-escape
-    APIDefs->GUI_RegisterCloseOnEscape("Alter Ego", &g_WindowVisible);
 
     // Dye data loads independently. Profession metadata is now fetched lazily
     // when a relevant view needs it: avoid a burst of nine background HTTP
@@ -12536,6 +12510,47 @@ void AddonLoad(AddonAPI_t* aApi) {
         g_SkinInitialized = true;
     }
 
+    // Startup state, settings and subsystem caches are ready before exposing
+    // callback-driven refresh scheduling or rendering to the host.
+    // Subscribe to MumbleLink identity for current character indicator
+    APIDefs->Events_Subscribe("EV_MUMBLE_IDENTITY_UPDATED", OnMumbleIdentityUpdated);
+
+    // Subscribe to Events: Chat for build link detection
+    APIDefs->Events_Subscribe(EV_CHAT_MESSAGE, OnEvChatMessage);
+
+    // Subscribe to Events: Alerts for real-time skin unlock + achievement completion
+    APIDefs->Events_Subscribe(EV_ALERT_UNLOCKED_SKIN, OnEvAlertSkinUnlocked);
+    APIDefs->Events_Subscribe(EV_ALERT_ACHIEVEMENT_COMPLETED, OnEvAlertAchievementCompleted);
+
+    // Pie UI inter-addon bridge — subscribe before announcing so we catch Pie's
+    // synchronous reply to our ping.
+    APIDefs->Events_Subscribe(EV_ALTER_EGO_PING, OnAlterEgoPing);
+    APIDefs->Events_Subscribe(EV_ALTER_EGO_IMPORT_BUILD, OnPieImportBuild);
+    APIDefs->Events_Subscribe(EV_PIE_UI_READY, OnPieUIReady);
+
+
+    // Pie UI bridge: announce AE (so an already-loaded Pie sees us) and probe for
+    // an already-loaded Pie (which replies EV_PIE_UI_READY).
+    APIDefs->Events_Raise(EV_ALTER_EGO_READY, nullptr);
+    APIDefs->Events_Raise(EV_PIE_UI_PING, nullptr);
+
+    // Register keybind
+    APIDefs->InputBinds_RegisterWithString("KB_ALTER_EGO_TOGGLE", ProcessKeybind, "CTRL+SHIFT+E");
+    APIDefs->InputBinds_RegisterWithString("KB_ALTER_EGO_TRACKER", ProcessKeybind, "(null)");
+
+    // Register quick access shortcut
+    if (g_ShowQAIcon) {
+        APIDefs->QuickAccess_Add(QA_ID, TEX_ICON, TEX_ICON_HOVER, "KB_ALTER_EGO_TOGGLE", "Alter Ego");
+    }
+
+    // Register close-on-escape
+    APIDefs->GUI_RegisterCloseOnEscape("Alter Ego", &g_WindowVisible);
+
+    // Register render functions
+    APIDefs->GUI_Register(RT_Render, AddonRender);
+    APIDefs->WndProc_Register(NavigationWndProc);
+    APIDefs->GUI_Register(RT_OptionsRender, AddonOptions);
+
     APIDefs->Log(LOGL_INFO, "AlterEgo", "Addon loaded successfully");
 }
 
@@ -12571,6 +12586,7 @@ void AddonUnload() {
     // No new callback body can enter; drain admitted work before teardown.
     // Do not hold a subsystem lock while waiting (events may reenter synchronously).
     AlterEgo::Callbacks::Runtime().Drain();
+    DrainIdentityObservations();
     // End observation at shutdown, not after a slow HTTP worker joins.
     {std::lock_guard<std::mutex> lock(AlterEgo::CharacterActivity::Mutex());
         AlterEgo::CharacterActivity::State().Finish(shutdownAt);}
@@ -12789,19 +12805,29 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
         if (c == ' ' || c == '-' || isalpha(c) || c >= 0x80) continue;
         return; // invalid — likely garbage data from uninitialized MumbleLink
     }
-    const auto observed = g_AutoRefreshTracker.ObserveIdentity(
-        newName, id->Specialization,
-        AlterEgo::AutoRefreshTracker::Clock::now(),
-        AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters),
-        false, false); // identity only; demand scheduler owns network requests
-    if (newName.empty()) return;
-    if (observed.login) {
-        g_LoginTimestamps[newName] = (int64_t)std::time(nullptr);
-        g_LoginTimestampsDirty = true;
-        g_CharLastLoginSortDirty = true;
-        g_CurrentCharName = newName;
-        // Resolve which account this character belongs to
-        AlterEgo::GW2API::SetCurrentAccountFromCharacter(newName);
+    if(newName.empty())return;
+    // Event payload memory belongs to the host. Copy only the fields we
+    // need, and let the render/lifecycle owner mutate UI and login state.
+    std::lock_guard<std::mutex> lock(g_IdentityMutex);
+    if(g_PendingIdentity.size()>=128)g_PendingIdentity.pop_front();
+    g_PendingIdentity.push_back({newName,id->Specialization,AlterEgo::AutoRefreshTracker::Clock::now(),
+        static_cast<int64_t>(std::time(nullptr))});
+    // Alerts may arrive before the next render. Publish the verified-account
+    // lookup's identity immediately through its own synchronized setter.
+    AlterEgo::GW2API::SetCurrentAccountFromCharacter(newName);
+}
+static void DrainIdentityObservations(){
+    std::deque<IdentityObservation> pending;
+    {std::lock_guard<std::mutex> lock(g_IdentityMutex);pending.swap(g_PendingIdentity);}
+    for(const auto& event:pending){
+        const auto observed=g_AutoRefreshTracker.ObserveIdentity(event.name,event.spec,event.observed,
+            AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters),false,false);
+        if(observed.login){
+            g_LoginTimestamps[event.name]=event.epoch;
+            g_LoginTimestampsDirty=true;
+            g_CharLastLoginSortDirty=true;
+            g_CurrentCharName=event.name;
+        }
     }
 }
 
@@ -13556,8 +13582,7 @@ static void RenderSkinShoppingList() {
         lastOwned=owned; lastPrice=priceGen; lastCatalog=data.catalog; needsInitial=false;
         g_SkinShopListDirty=true;
     }
-    if(g_SkinShopListDirty && !isFetching) {
-        g_SkinShopListDirty=false;
+    if(!isFetching&&g_SkinShopListDirty.exchange(false)) {
         candidates.clear();
         std::vector<uint32_t> priceIds;
         const auto acquisitions=Skinventory::Commerce::UniqueSkinCandidates();
@@ -15223,7 +15248,7 @@ static void RenderAchPopout() {
         }
         if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) &&
             !pinnedCopy.empty() && !g_AchProgressFetching) {
-            g_LastAchProgressQuery = std::chrono::steady_clock::now();
+            {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);g_LastAchProgressQuery=std::chrono::steady_clock::now();}
             SendAchProgressQuery(pinnedCopy, true);
         }
     }
@@ -15707,29 +15732,33 @@ static void RenderAchievementsStatusRow() {
     const bool namesWorking = g_AchNameIndexFetching.load();
     const bool working = g_AchGroupsFetching || g_AchCatFetching || namesWorking ||
         g_AchProgressFetching || g_AchRetryAtMs.load() != 0;
-    std::string detail, namesError;
+    std::string detail, namesError, refreshError;
+    std::chrono::steady_clock::time_point successUntil;
+    int64_t verifiedAt=0;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         detail = namesWorking ? g_AchNameIndexStatus : g_AchStatusMsg;
         namesError = g_AchNameIndexError;
+        refreshError=g_AchRefreshError;successUntil=g_AchRefreshSuccessUntil;
+        verifiedAt=g_AchProgressCacheSavedAt.load();
     }
     AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
     if (working) {
         state = AlterEgo::RefreshUI::State::Working;
         if (detail.empty()) detail = "Querying achievement progress...";
-    } else if (!g_AchRefreshError.empty()) {
+    } else if (!refreshError.empty()) {
         state = AlterEgo::RefreshUI::State::Error;
-        detail = g_AchRefreshError;
+        detail = refreshError;
     } else if (!namesError.empty()) {
         state = AlterEgo::RefreshUI::State::Error;
         detail = namesError;
-    } else if (std::chrono::steady_clock::now() < g_AchRefreshSuccessUntil) {
+    } else if (std::chrono::steady_clock::now() < successUntil) {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete";
     } else {
         detail = g_AchGroupsFetched ? "Ready" : "Loading achievement categories...";
     }
-    if (AlterEgo::RefreshUI::Row("achievements", (std::time_t)g_AchProgressCacheSavedAt,
+    if (AlterEgo::RefreshUI::Row("achievements", (std::time_t)verifiedAt,
             "achievement progress", state, detail)) {
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -15966,6 +15995,7 @@ void AddonRender() {
             priorCount=accounts.size();
         }
     }
+    DrainIdentityObservations();
     ObserveCharacterActivity(); // local only, no character HTTP while hidden
     PollAchievementCachePersistence(); // load/save disk progress, even when window is hidden
     SyncCompletionAccountCaches(); // selected-account Clears/Vault snapshots, even with UI hidden
