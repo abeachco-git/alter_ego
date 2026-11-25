@@ -1086,13 +1086,14 @@ namespace AlterEgo {
         std::vector<uint32_t> missing;
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
         if(missing.empty())return;
-        auto claim=RefreshEngine::ClaimIds("items",missing);
-        if(!claim->ids.empty())FetchItemDetailsClaimed(claim->ids,forceRefetch);
+        auto claim=RefreshEngine::ClaimIds("items",missing,forceRefetch);
+        if(!claim->ids.empty())FetchItemDetailsClaimed(*claim,forceRefetch);
         claim.reset();
         RefreshEngine::WaitForIds("items",missing,[]{return Background::Workers().Stopping();});
     }
 
-    void GW2API::FetchItemDetailsClaimed(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
+    void GW2API::FetchItemDetailsClaimed(RefreshEngine::IdBatch& claim, bool forceRefetch) {
+        const auto& item_ids=claim.ids;
         if (item_ids.empty()) return;
 
         std::vector<uint32_t> to_fetch;
@@ -1121,6 +1122,8 @@ namespace AlterEgo {
 
             std::string url = "https://api.guildwars2.com/v2/items?ids=" + ids_param;
             std::string response = HttpGet(url);
+            if (Background::Workers().Stopping()) return;
+            claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
@@ -1157,7 +1160,8 @@ namespace AlterEgo {
         SaveItemCache();
     }
 
-    void GW2API::FetchSkinDetails(const std::vector<uint32_t>& skin_ids) {
+    void GW2API::FetchSkinDetails(RefreshEngine::IdBatch& claim) {
+        const auto& skin_ids=claim.ids;
         if (skin_ids.empty()) return;
 
         std::vector<uint32_t> to_fetch;
@@ -1191,6 +1195,8 @@ namespace AlterEgo {
 
             std::string url = "https://api.guildwars2.com/v2/skins?ids=" + ids_param;
             std::string response = HttpGet(url);
+            if (Background::Workers().Stopping()) return;
+            claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
@@ -1240,9 +1246,9 @@ namespace AlterEgo {
     void GW2API::FetchItemDetailsAsync(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
         std::vector<uint32_t> missing;
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
-        auto claim=RefreshEngine::ClaimIds("items",missing);
+        auto claim=RefreshEngine::ClaimIds("items",missing,forceRefetch);
         if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchItemDetailsClaimed(claim->ids, forceRefetch); });
+        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchItemDetailsClaimed(*claim, forceRefetch); });
     }
 
     void GW2API::FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids) {
@@ -1251,7 +1257,7 @@ namespace AlterEgo {
             if(id&&(it==s_skin_cache.end()||(it->second->type=="Armor"&&it->second->weight_class.empty())))missing.push_back(id);}}
         auto claim=RefreshEngine::ClaimIds("skins",missing);
         if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchSkinDetails(claim->ids); });
+        AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchSkinDetails(*claim); });
     }
 
     void GW2API::FetchSpecDetailsAsync(const std::vector<uint32_t>& spec_ids) {
@@ -1284,6 +1290,8 @@ namespace AlterEgo {
 
             std::string url = "https://api.guildwars2.com/v2/specializations?ids=" + ids_param;
             std::string response = HttpGet(url);
+            if (Background::Workers().Stopping()) return;
+            claim->MarkAttempted(to_fetch.begin(),to_fetch.end());
             if (response.empty()) return;
 
             try {
@@ -1295,6 +1303,7 @@ namespace AlterEgo {
                         SpecializationInfo info;
                         info.id = spec["id"].get<uint32_t>();
                         info.name = spec.value("name", "");
+                        if(info.name.empty()||!std::binary_search(to_fetch.begin(),to_fetch.end(),info.id))continue;
                         info.icon_url = spec.value("icon", "");
                         info.background_url = spec.value("background", "");
                         info.profession = spec.value("profession", "");
@@ -1333,7 +1342,8 @@ namespace AlterEgo {
         });
     }
 
-    void GW2API::FetchTraitDetails(const std::vector<uint32_t>& trait_ids) {
+    void GW2API::FetchTraitDetails(RefreshEngine::IdBatch& claim) {
+        const auto& trait_ids=claim.ids;
         if (trait_ids.empty()) return;
         std::vector<uint32_t> to_fetch;
         {
@@ -1359,6 +1369,8 @@ namespace AlterEgo {
             }
 
             std::string response = HttpGet("https://api.guildwars2.com/v2/traits?ids=" + ids_param);
+            if (Background::Workers().Stopping()) return;
+            claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
@@ -1394,7 +1406,7 @@ namespace AlterEgo {
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:trait_ids)if(id&&!s_trait_cache.count(id))missing.push_back(id);}
         auto claim=RefreshEngine::ClaimIds("traits",missing);
         if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchTraitDetails(claim->ids); });
+        AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchTraitDetails(*claim); });
     }
 
     void GW2API::FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids) {
@@ -1430,6 +1442,8 @@ namespace AlterEgo {
                 }
 
                 std::string response = HttpGet("https://api.guildwars2.com/v2/skills?ids=" + ids_param);
+            if (Background::Workers().Stopping()) return;
+            claim->MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
                 if (response.empty()) continue;
 
                 try {
@@ -1441,6 +1455,7 @@ namespace AlterEgo {
                             SkillInfo info;
                             info.id = skill["id"].get<uint32_t>();
                             info.name = skill.value("name", "");
+                            if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
                             info.icon_url = skill.value("icon", "");
                             if (skill.contains("description"))
                                 info.description = StripHtmlTags(skill["description"].get<std::string>());
@@ -1495,6 +1510,8 @@ namespace AlterEgo {
                 }
 
                 std::string response = HttpGet("https://api.guildwars2.com/v2/itemstats?ids=" + ids_param);
+            if (Background::Workers().Stopping()) return;
+            claim->MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
                 if (response.empty()) continue;
 
                 try {
@@ -1506,6 +1523,7 @@ namespace AlterEgo {
                             ItemStatInfo info;
                             info.id = stat["id"].get<uint32_t>();
                             info.name = stat.value("name", "");
+                            if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
                             if (stat.contains("attributes") && stat["attributes"].is_array()) {
                                 for (const auto& attr : stat["attributes"]) {
                                     info.attributes.push_back(attr.value("attribute", ""));
