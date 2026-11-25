@@ -236,8 +236,7 @@ namespace AlterEgo {
         std::map<int, std::string> equipment_tab_names; // tab number -> name
         int active_build_tab = 0;
         int active_equipment_tab = 0;
-        std::vector<std::string> heropoints;    // Completed hero challenge IDs (e.g. "0-29")
-        std::string account_name;              // Native account GUID; legacy name/unknown rows remain readable
+            std::string account_name;              // Native account GUID; legacy name/unknown rows remain readable
     };
 
     // Item location result from native API cache query

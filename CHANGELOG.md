@@ -16,7 +16,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 
 ### Changed
 
-- Stop unused hero point requests during character refresh and retire dormant hero challenge catalog loading and bundled JSON.
+- Remove hero point tracking, its unused requests, dormant UI and reference tooling. Cache schema 14 removes only the obsolete hero point tables.
 
 - Disabled external one-time-code relay sharing and imports by default; local sharing remains available.
 

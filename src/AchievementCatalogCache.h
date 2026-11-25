@@ -6,12 +6,11 @@
 
 namespace AlterEgo::Cache {
 using Json = nlohmann::json;
-enum class AchievementDataset { Names, Waypoints, HeroChallenges, Definitions, Groups };
+enum class AchievementDataset { Names, Waypoints, Definitions, Groups };
 inline const char* DatasetName(AchievementDataset d) {
     switch(d) {
     case AchievementDataset::Names: return "ach_name_index";
     case AchievementDataset::Waypoints: return "ach_waypoints";
-    case AchievementDataset::HeroChallenges: return "hero_challenges";
     case AchievementDataset::Definitions: return "ach_defs";
     case AchievementDataset::Groups: return "ach_groups";
     }
@@ -46,13 +45,6 @@ inline void WriteCatalogRows(Database::Connection& db, AchievementDataset d,cons
                 if(n!=b.size()) throw std::runtime_error("Invalid waypoint bit");
                 put(bit,code.get<std::string>());
             } else throw std::runtime_error("Invalid waypoint");
-        }
-    } else if(d==AchievementDataset::HeroChallenges) {
-        db.Exec("DELETE FROM hero_challenges");
-        auto q=db.Prepare("INSERT INTO hero_challenges VALUES(?,?,?)");
-        for(const auto& [key,v]:data.items()) {
-            q.Bind(1,key);q.Bind(2,v.value("map_name",""));q.Bind(3,v.value("expansion",""));
-            q.Execute();q.Reset();
         }
     } else if(d==AchievementDataset::Definitions) {
         db.Exec("DELETE FROM achievement_definitions");
@@ -121,9 +113,6 @@ inline Json ReadCatalogRows(Database::Connection& db,AchievementDataset d,int64_
     } else if(d==AchievementDataset::Waypoints) {
         auto q=db.Prepare("SELECT achievement_id,bit,code FROM achievement_waypoints");
         while(q.Step()) out[std::to_string(q.Integer(0))][std::to_string(q.Integer(1))]=q.Text(2);
-    } else if(d==AchievementDataset::HeroChallenges) {
-        auto q=db.Prepare("SELECT id,map_name,expansion FROM hero_challenges");
-        while(q.Step()) out[q.Text(0)]={{"map_name",q.Text(1)},{"expansion",q.Text(2)}};
     } else if(d==AchievementDataset::Definitions) {
         auto q=db.Prepare("SELECT id,name,description,requirement,icon_url,type,max_count,total_ap FROM achievement_definitions");
         while(q.Step()) out[std::to_string(q.Integer(0))]={{"id",q.Integer(0)},{"name",q.Text(1)},

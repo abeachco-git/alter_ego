@@ -147,7 +147,6 @@ inline void Store(Database::Connection& db,const Json& data,bool incremental=fal
     auto tabnames=db.Prepare("INSERT INTO character_equipment_tab_names VALUES(?,?,?)");
     auto bt=db.Prepare("INSERT INTO character_build_tabs(character_id,ordinal,tab,is_active,name,profession,spec0_id,spec0_trait0,spec0_trait1,spec0_trait2,spec1_id,spec1_trait0,spec1_trait1,spec1_trait2,spec2_id,spec2_trait0,spec2_trait1,spec2_trait2,bar0_heal,bar0_utility0,bar0_utility1,bar0_utility2,bar0_elite,bar1_heal,bar1_utility0,bar1_utility1,bar1_utility2,bar1_elite,pet0,pet1,pet2,pet3,legend0,legend1,legend2,legend3,weapons_known) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     auto weapons=db.Prepare("INSERT INTO character_build_weapons VALUES(?,?,?,?)");
-    auto hp=db.Prepare("INSERT INTO character_hero_points VALUES(?,?,?)");
     int64_t id=0;
     for(auto ch:Array(data,"characters")) {
         if(!ch.is_object())throw std::runtime_error("Invalid character");
@@ -199,10 +198,6 @@ inline void Store(Database::Connection& db,const Json& data,bool incremental=fal
             }
             ++n;
         }
-        n=0;
-        for(const auto& value:Array(ch,"heropoints")) {
-            hp.Bind(1,id);hp.Bind(2,n++);hp.Bind(3,value.get<std::string>());hp.Execute();hp.Reset();
-        }
     }
     auto mark=db.Prepare("INSERT INTO character_snapshot VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET last_updated=excluded.last_updated");
     mark.Bind(1,incremental?std::max(stamp,oldStamp):stamp);mark.Execute();
@@ -219,7 +214,6 @@ inline std::optional<Json> Read(Database::Connection& db) {
     auto tabnames=db.Prepare("SELECT tab,name FROM character_equipment_tab_names WHERE character_id=? ORDER BY tab");
     auto builds=db.Prepare("SELECT ordinal,tab,is_active,name,profession,spec0_id,spec0_trait0,spec0_trait1,spec0_trait2,spec1_id,spec1_trait0,spec1_trait1,spec1_trait2,spec2_id,spec2_trait0,spec2_trait1,spec2_trait2,bar0_heal,bar0_utility0,bar0_utility1,bar0_utility2,bar0_elite,bar1_heal,bar1_utility0,bar1_utility1,bar1_utility2,bar1_elite,pet0,pet1,pet2,pet3,legend0,legend1,legend2,legend3,weapons_known FROM character_build_tabs WHERE character_id=? ORDER BY ordinal");
     auto weapons=db.Prepare("SELECT weapon_id FROM character_build_weapons WHERE character_id=? AND build_ordinal=? ORDER BY ordinal");
-    auto hp=db.Prepare("SELECT hero_point FROM character_hero_points WHERE character_id=? ORDER BY ordinal");
     while(chars.Step()) {
         const auto id=chars.Integer(0);
         auto ch=ReadFields(chars,1,kCharacter);
@@ -254,9 +248,6 @@ inline std::optional<Json> Read(Database::Connection& db) {
             ch["build_tabs"].push_back(std::move(bt));
         }
         builds.Reset();
-        hp.Bind(1,id);
-        while(hp.Step())ch["heropoints"].push_back(hp.Text(0));
-        hp.Reset();
         out["characters"].push_back(std::move(ch));
     }
     return out;

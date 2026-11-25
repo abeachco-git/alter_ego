@@ -357,10 +357,6 @@ namespace AlterEgo {
                         auto c=ParseCharacterJson(json{{"crafting",craft}});
                         ch.crafting=std::move(c.crafting);ch.crafting_levels=std::move(c.crafting_levels);ch.crafting_active=std::move(c.crafting_active);ch.crafting_cached=true;
                     }
-                    // The Hero Points UI is dormant; do not request the unreliable
-                    // endpoint on character refresh. Preserve previously cached IDs
-                    // for compatibility, but do not treat them as current progress.
-                    if(old)ch.heropoints=old->heropoints;
                     if(!NativeAccounts::Current(a))throw std::runtime_error("Account changed");
                     ch.data_refreshed=std::time(nullptr);bool remapped=false;
                     {
@@ -1498,9 +1494,6 @@ namespace AlterEgo {
                 }
                 cj["build_tabs"] = bt_arr;
 
-                if (!ch.heropoints.empty()) {
-                    cj["heropoints"] = ch.heropoints;
-                }
                 if (!ch.account_name.empty()) {
                     cj["account_name"] = ch.account_name;
                 }
@@ -1651,11 +1644,6 @@ namespace AlterEgo {
                         }
                     }
 
-                    if (cj.contains("heropoints") && cj["heropoints"].is_array()) {
-                        for (const auto& hp : cj["heropoints"]) {
-                            if (hp.is_string()) ch.heropoints.push_back(hp.get<std::string>());
-                        }
-                    }
                     ch.account_name = cj.value("account_name", "");
 
                     if (!ch.name.empty()) restored.push_back(std::move(ch));

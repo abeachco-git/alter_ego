@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 13;
+constexpr int kSchemaVersion = 14;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,16 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 14) {
+        // Only obsolete, rebuildable hero point records are removed.
+        // Historical migrations remain intact for existing cache upgrades.
+        db.Exec(R"SQL(
+DROP TABLE character_hero_points;
+DROP TABLE hero_challenges;
+DELETE FROM reference_freshness WHERE dataset='hero_challenges';
+)SQL");
+        return;
+    }
     if (version == 13) {
         db.Exec(R"SQL(
 ALTER TABLE character_equipment ADD COLUMN charges INTEGER CHECK(charges>=0);

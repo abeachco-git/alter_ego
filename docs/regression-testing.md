@@ -64,7 +64,7 @@ Native editing and portable interchange are covered by `persistence.native_editi
 
 The database core case also covers 5,000 achievement progress rows and completed bits, exact account-name isolation, older snapshot rejection, transaction rollback, disposable cache deletion, configuration migration and archive independence. These are correctness regressions, not a timing benchmark.
 
-Achievement catalog regression coverage includes ordered group/category membership, definition bits/flags/prerequisites, rollback on invalid identity, group freshness rejection, legacy name migration, waypoint and hero-challenge round trips.
+Achievement catalog regression coverage includes ordered group/category membership, definition bits/flags/prerequisites, rollback on invalid identity, group freshness rejection, legacy name migration, waypoint round trips. A populated v13 cache migration verifies retirement of both hero point tables while preserving character rows and achievement names/freshness. Legacy character import ignores retired hero point fields.
 
 Skin metadata tests cover preservation of catalog fields and Fashion dye data across both projections, ownership account isolation and stale snapshot rejection.
 

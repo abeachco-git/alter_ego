@@ -192,9 +192,28 @@ int case_database_core(int, char**) {
         J waypoints={{"1",{{"-1","[&ABC=]"},{"2","[&DEF=]"}}}};
         assert(Cache::WriteCatalog(root,D::Waypoints,waypoints));
         assert(Cache::ReadCatalog(root,D::Waypoints)==waypoints);
-        J heroes={{"123",{{"map_name","Map"},{"expansion","HoT"}}}};
-        assert(Cache::WriteCatalog(root,D::HeroChallenges,heroes));
-        assert(Cache::ReadCatalog(root,D::HeroChallenges)==heroes);
+        // Retired hero point tables are absent after a fresh migration.
+        DB::Connection db(AlterEgo::Storage::Paths(root).Cache().u8string(),DB::Connection::OpenMode::Existing);
+        assert(db.Scalar("SELECT count(*) FROM sqlite_schema WHERE name IN ('hero_challenges','character_hero_points')")==0);
+    }
+    {
+        // A real v13 database upgrades without losing other reference or character records.
+        namespace Cache=AlterEgo::Cache;
+        const auto path=temp.dir/"hero-retirement-v13.db";
+        DB::Connection db(path.u8string(),DB::Connection::OpenMode::Create);
+        DB::Migrate(db,Cache::kApplicationId,13,Cache::Upgrade);
+        db.Exec("INSERT INTO character_rows(character_id,account_name,name) VALUES(1,'A.B','Hero');"
+                "INSERT INTO character_hero_points VALUES(1,0,'0-29');"
+                "INSERT INTO hero_challenges VALUES('0-29','Map','Core');"
+                "INSERT INTO achievement_names VALUES(1,'Retain');"
+                "INSERT INTO reference_freshness VALUES('hero_challenges',100),('ach_name_index',100);");
+        Cache::Initialize(db);
+        assert(db.Scalar("PRAGMA user_version")==14);
+        assert(db.Scalar("SELECT count(*) FROM sqlite_schema WHERE name IN ('hero_challenges','character_hero_points')")==0);
+        assert(db.Scalar("SELECT count(*) FROM reference_freshness WHERE dataset='hero_challenges'")==0);
+        assert(db.Scalar("SELECT count(*) FROM reference_freshness WHERE dataset='ach_name_index'")==1);
+        assert(db.Scalar("SELECT count(*) FROM character_rows WHERE name='Hero'")==1);
+        assert(db.Scalar("SELECT count(*) FROM achievement_names WHERE name='Retain'")==1);
     }
     {
         namespace Cache=AlterEgo::Cache;
@@ -446,13 +465,15 @@ int case_database_core(int, char**) {
         J lure={{"id",44},{"slot","FishingLure"},{"tab",0},{"charges",17}};
         J ch={{"name","Hero"},{"account_name","A.B"},{"data_refreshed",99},{"crafting_cached",true},
             {"crafting",J::array({{{"discipline","Chef"},{"rating",400},{"active",false}}})},
-            {"equipment",J::array({eq,tool,lure})},{"build_tabs",J::array({bt})},{"equipment_tab_names",{{"2","Gear"}}},{"heropoints",{"0-29","0-10"}}};
+            {"equipment",J::array({eq,tool,lure})},{"build_tabs",J::array({bt})},{"equipment_tab_names",{{"2","Gear"}}}};
         J other=ch;other["account_name"]="A_B";
         J unknown=ch;unknown.erase("account_name");unknown["build_tabs"][0].erase("pets");unknown["build_tabs"][0].erase("legends");unknown["build_tabs"][0].erase("weapons");
         J data={{"last_updated",100},{"characters",J::array({ch,other,unknown})}};
         std::filesystem::create_directories(paths.base);
-        AlterEgo::Storage::WriteMigrationBytes(paths.base/"characters.json",data.dump());
+        auto legacyData=data;legacyData["characters"][0]["heropoints"]={"0-29","0-10"};
+        AlterEgo::Storage::WriteMigrationBytes(paths.base/"characters.json",legacyData.dump());
         auto read=Cache::ReadCharacters(root);assert(read&&read->at("characters").size()==3);
+        assert(!read->at("characters")[0].contains("heropoints"));
         assert(read->at("characters")[0]==ch);
         assert(!read->at("characters")[0]["equipment"][0].contains("charges"));
         assert(read->at("characters")[0]["equipment"][1]["charges"]==0);

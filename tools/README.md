@@ -11,7 +11,6 @@ These utilities are retained for active build use, dataset maintenance, or usefu
 | `audit_skill_icons.py` | Manual skill-icon size research workflow |
 | `fetch_achievement_names.py` | Refresh achievement name dataset |
 | `build_achievement_waypoints.py` | Refresh achievement waypoint dataset |
-| `build_hero_challenges.py` | Manual hero point coverage research; no tracked or runtime JSON catalog |
 | `gen_ae_icon.py` | Regenerate Quick Access icon arrays from the source `ae.png`; manual tool, not a build step |
 | `fetch_item_ids.py`, `scrape_wiki_ids.py`, `wiki_item_ids.json` | Manual item-ID research/reference; not authoritative runtime data or CI dependencies |
 
