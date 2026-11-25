@@ -85,3 +85,5 @@ Unit/regression coverage for account switching, late responses, permission failu
 - Second pass: public pet/legend SQLite catalogs, exact schema-versioned legend codes, seven-day complete checks for item stats and dyes, Nexus manual refresh, legacy effect text removed. Preserve old saved values; live validation outstanding.
 
 - Third pass: split seven-day item/skin discovery from 30-day upgrade, pet, legend, dye and stat definition refresh; shared incremental item mapping, verified skin checks, manual discovery actions. In-game full discovery and lifecycle validation still outstanding.
+
+- Wiki resource policy agreed: all static Wiki reference datasets (including skin acquisition and currency/vendor metadata where bounded bulk retrieval is feasible) target a 30-day build-time refresh; active event data remains a six-hour runtime cache. Implementation pending: verify exact bulk sources, normalized schemas, attribution, last-known-good persistence and fallback; wire consumers and offline tests. Never perform a full per-skin Wiki crawl during ordinary builds.
