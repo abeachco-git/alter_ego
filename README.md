@@ -15,25 +15,24 @@ Updated screenshots will be added before release.
 
 ### Characters, Library and Compare
 
-- **Characters:** Browse characters, equipment and build tabs, gathering tools, fishing and Jade Bot equipment. View Agony Resistance, upgrades, infusions and stats. Sort by locally observed last login, add custom portraits, and use right-click **Load** to switch to another eligible character.
-- **Loadout Library:** Save complete loadouts or reusable build, skill and equipment components. Combine selected equipment categories into shared Equipment Sets, reuse them across loadouts, or maintain independent components. Edit shared records or make a separate copy.
-- **Fashion:** Save appearances from a selected equipment tab or import Wardrobe Template links. Manage skins and dyes separately from combat loadouts.
-- **Compare:** Check a character's retrieved build and equipment against a saved loadout. See differences, missing or unverified information, utility changes and optional exact-item comparisons. Locate missing items in cached inventory.
-- **Import and share:** Import Snow Crows and MetaBattle build URLs, supported game chat links and portable library data. Share builds, components and loadouts with other users.
+- **Characters:** Browse your characters' builds, equipment and upgrades without switching characters. Find saved loadout matches, view character portraits and switch to an eligible character using Fast Load.
+- **Library:** Organize complete loadouts and reusable build, skill and equipment components. Share Equipment Sets between loadouts, or keep equipment choices independent. Create and edit loadouts directly in the Library.
+- **Fashion:** Save appearances from character equipment or Wardrobe Template links, independently of combat loadouts.
+- **Compare:** Check a character against a saved loadout, identify differences or missing equipment, and find items in your inventory.
+- **Import and share:** Import supported game chat links, Snow Crows and MetaBattle builds, and portable library data. Share builds and reusable components.
 
-### Inventory and Skinventory
+### Inventory and Skins
 
-- **Inventory:** Search items across bags, equipped gear, bank, shared inventory, material storage, gathering tools, legendary armory and delivery storage. Filter by location, character, rarity, type and binding; inspect individual locations.
-- **Wallet:** Browse balances, pin favorite currencies and hide zero balances.
-- **Guild Bank:** Browse available guild storage and coins when your linked account has the required access.
-- **Skinventory:** Explore the wardrobe, filter owned or missing skins, and maintain a shopping list with price and eligible owned-stock information.
+- **Inventory:** Search items and wallet currencies across linked accounts. Find items in character inventories, equipped gear, bank, material storage, shared inventory and legendary armory.
+- **Wallet and Guild Bank:** Browse currency balances and accessible guild storage.
+- **Skins:** Explore your wardrobe, track missing skins and maintain a shopping list with price estimates and eligible owned-stock information.
 
 ### Account progress
 
-- **Vault:** Track daily, weekly and special Wizard's Vault objectives.
+- **Wizard's Vault:** Track daily, weekly and special objectives, with assistance for supported objectives.
 - **Clears:** Track daily fractals and raid bounties, weekly strikes and raid encounters.
-- **Achievements:** Search achievements, pin goals and open a compact tracker.
-- **Multi-account support:** Link multiple accounts and browse account-scoped data while keeping a shared, account-independent library.
+- **Achievements:** Search achievements, pin goals and follow progress in a compact tracker.
+- **Multi-account support:** Link multiple accounts while keeping a shared, account-independent library.
 
 ## Getting started
 
@@ -64,13 +63,13 @@ Automatic refresh is opt-in and configurable by dataset. Manual refresh is alway
 
 ### Save and compare
 
-In Characters, select a character and choose **Save**. Choose what to save, name it and select the applicable build or equipment tabs. Open the Library to manage saved records, or Compare to check a loadout against retrieved character data.
+In Characters, use **Save to Library** to capture a loadout, component, Equipment Set or appearance. In the Library, choose **Edit** to change component selections and individual gear or skills. Use Compare to check saved loadouts against retrieved character data.
 
 Changes to a shared component or Equipment Set can affect every referencing loadout. Use a separate copy for private changes. Equipment Sets may contain only the equipment categories you want to share.
 
 ### Finding items
 
-In Inventory, enter at least three non-whitespace characters, or select a Character filter and another item filter to browse. Equipment, Compare and Shopping List can navigate directly to cached item locations.
+In Inventory, search by name or narrow the results with filters. Select Wallet or Currency to browse balances without a search term. Equipment, Compare and Shopping List can also navigate directly to cached item locations.
 
 ### Limitations
 
