@@ -9,6 +9,7 @@
 #include "../src/CacheDiagnostics.h"
 #include "../src/CacheMaintenance.h"
 #include "../src/CharacterCache.h"
+#include "../src/CharacterToolsCore.h"
 #include "../src/CompletionCache.h"
 #include "../src/NativeLibraryStore.h"
 #include <cassert>
@@ -441,9 +442,11 @@ int case_database_core(int, char**) {
             {"skills",{{"heal",10},{"utilities",{11,12,13}},{"elite",14}}}};
         J eq={{"id",42},{"slot","Helm"},{"tab",2},{"binding","Character"},{"bound_to","Hero"},
             {"upgrades",{3,4}},{"infusions",{9,8,7}},{"dyes",{0,22}},{"attributes",{{"Power",123}}}};
+        J tool={{"id",43},{"slot","Pick"},{"tab",0},{"charges",0},{"upgrades",{55}}};
+        J lure={{"id",44},{"slot","FishingLure"},{"tab",0},{"charges",17}};
         J ch={{"name","Hero"},{"account_name","A.B"},{"data_refreshed",99},{"crafting_cached",true},
             {"crafting",J::array({{{"discipline","Chef"},{"rating",400},{"active",false}}})},
-            {"equipment",J::array({eq})},{"build_tabs",J::array({bt})},{"equipment_tab_names",{{"2","Gear"}}},{"heropoints",{"0-29","0-10"}}};
+            {"equipment",J::array({eq,tool,lure})},{"build_tabs",J::array({bt})},{"equipment_tab_names",{{"2","Gear"}}},{"heropoints",{"0-29","0-10"}}};
         J other=ch;other["account_name"]="A_B";
         J unknown=ch;unknown.erase("account_name");unknown["build_tabs"][0].erase("pets");unknown["build_tabs"][0].erase("legends");unknown["build_tabs"][0].erase("weapons");
         J data={{"last_updated",100},{"characters",J::array({ch,other,unknown})}};
@@ -451,6 +454,15 @@ int case_database_core(int, char**) {
         AlterEgo::Storage::WriteMigrationBytes(paths.base/"characters.json",data.dump());
         auto read=Cache::ReadCharacters(root);assert(read&&read->at("characters").size()==3);
         assert(read->at("characters")[0]==ch);
+        assert(!read->at("characters")[0]["equipment"][0].contains("charges"));
+        assert(read->at("characters")[0]["equipment"][1]["charges"]==0);
+        assert(read->at("characters")[0]["equipment"][2]["charges"]==17);
+        struct ToolRow {int id;std::string slot;int tab;};
+        const std::vector<ToolRow> tools{{1,"Pick",2},{2,"Pick",0},{3,"Axe",3},{4,"Sickle",2}};
+        assert(AlterEgo::CharacterTools::Find(tools,"Pick",2)->id==2);
+        assert(!AlterEgo::CharacterTools::Find(tools,"Axe",2));
+        assert(AlterEgo::CharacterTools::Find(tools,"Sickle",2)->id==4);
+        assert(!AlterEgo::CharacterTools::Find(tools,"Helm",2));
         assert(read->at("characters")[1]==other);
         assert(read->at("characters")[2].at("account_name")=="");
         assert(!read->at("characters")[2]["build_tabs"][0].contains("pets"));

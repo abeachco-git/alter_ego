@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 12;
+constexpr int kSchemaVersion = 13;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,12 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 13) {
+        db.Exec(R"SQL(
+ALTER TABLE character_equipment ADD COLUMN charges INTEGER CHECK(charges>=0);
+)SQL");
+        return;
+    }
     if (version == 12) {
         db.Exec(R"SQL(
 ALTER TABLE vault_periods ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0 CHECK(fetched_at>=0);

@@ -42,6 +42,7 @@ namespace AlterEgo {
         int tab = 0;                // Equipment tab number
         uint32_t stat_id = 0;       // Selected itemstat ID (for legendary/ascended)
         std::map<std::string, int> attributes; // e.g. {"Power": 251, "Precision": 179}
+        int64_t charges = -1; // absent/unknown, distinct from zero remaining
     };
 
     // Cached itemstat info from /v2/itemstats (public, no auth)

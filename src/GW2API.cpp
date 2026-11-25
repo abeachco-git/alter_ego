@@ -10,6 +10,7 @@
 #include "CharacterCache.h"
 #include "AutoRefreshPolicy.h"
 #include "NativeAccounts.h"
+#include "CharacterToolsCore.h"
 #include "RefreshProgress.h"
 #include "OwnedSkins.h"
 #include "HttpClient.h"
@@ -324,10 +325,14 @@ namespace AlterEgo {
                     ch.active_equipment_tab=activeEquipment;
                     auto supplement=require(path+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"},"Additional equipment");
                     if(!supplement.at("equipment").is_array())throw std::runtime_error("Invalid supplemental equipment");
-                    const std::set<std::string> slots={"Relic","PowerCore","Sickle","Axe","Pick","FishingRod","FishingBait","FishingLure","SensoryArray","ServiceChip"};
                     for(const auto& raw:supplement.at("equipment")){
-                        const auto slot=SafeStr(raw,"slot");if(!slots.count(slot))continue;
+                        const auto slot=SafeStr(raw,"slot");if(slot!="Relic"&&!CharacterTools::Utility(slot))continue;
                         auto item=ParseEquipmentItem(raw);if(!item.id)throw std::runtime_error("Invalid supplemental equipment ID");
+                        if(CharacterTools::Utility(slot)){
+                            item.tab=0;
+                            ch.equipment.erase(std::remove_if(ch.equipment.begin(),ch.equipment.end(),[&](const EquipmentItem& e){return e.slot==slot;}),ch.equipment.end());
+                            ch.equipment.push_back(std::move(item));continue;
+                        }
                         const auto add=[&](int tab){auto copy=item;copy.tab=tab;
                             if(std::none_of(ch.equipment.begin(),ch.equipment.end(),[&](const EquipmentItem& e){return e.tab==tab&&e.slot==slot;}))ch.equipment.push_back(std::move(copy));};
                         if(raw.contains("tabs")&&raw.at("tabs").is_array()&&!raw.at("tabs").empty()){
@@ -395,6 +400,9 @@ namespace AlterEgo {
         eq.bound_to = SafeStr(item_json, "bound_to");
         eq.binding_known = item_json.contains("binding");
         eq.bound_to_known = item_json.contains("bound_to");
+        if(item_json.contains("charges")&&item_json["charges"].is_number_integer()){
+            const auto value=item_json["charges"].get<int64_t>();if(value>=0)eq.charges=value;
+        }
 
         if (item_json.contains("upgrades") && item_json["upgrades"].is_array()) {
             for (const auto& u : item_json["upgrades"])
@@ -1433,6 +1441,7 @@ namespace AlterEgo {
                     ej["tab"] = eq.tab;
                     if(eq.binding_known||!eq.binding.empty())ej["binding"]=eq.binding;
                     if(eq.bound_to_known||!eq.bound_to.empty())ej["bound_to"]=eq.bound_to;
+                    if(eq.charges>=0)ej["charges"]=eq.charges;
                     if (!eq.upgrades.empty()) ej["upgrades"] = eq.upgrades;
                     if (!eq.infusions.empty()) ej["infusions"] = eq.infusions;
                     if (!eq.dyes.empty()) ej["dyes"] = eq.dyes;
@@ -1560,6 +1569,7 @@ namespace AlterEgo {
                             eq.bound_to_known=ej.contains("bound_to");
                             eq.binding=ej.value("binding",std::string());
                             eq.bound_to=ej.value("bound_to",std::string());
+                            eq.charges=ej.value("charges",int64_t(-1));
                             if (ej.contains("upgrades")) {
                                 for (const auto& u : ej["upgrades"])
                                     eq.upgrades.push_back(u.get<uint32_t>());

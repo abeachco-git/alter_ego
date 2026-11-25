@@ -53,6 +53,7 @@
 #include "HttpClient.h"
 #include <nlohmann/json.hpp>
 #include "AddonShared.h"
+#include "CharacterToolsCore.h"
 #include "Clears.h"
 #include "CompletionTheme.h"
 #include "EquipmentTabCore.h"
@@ -3194,6 +3195,8 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
             ImGui::BeginGroup();
             ImGui::TextColored(GetRarityColor(rarity), "%s", display_name.c_str());
 
+            if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
+
             // Defense or weapon strength from item details
             if (item_info && item_info->details.is_object()) {
                 const auto& det = item_info->details;
@@ -3824,6 +3827,69 @@ static void RenderLiveComponentSaveMenu(const AlterEgo::Character& ch, int tab,
         }
         ImGui::EndPopup();
     }
+}
+
+// Character-wide utility items use the existing equipment icon, tooltip and
+// context menu; no template selector or save-to-loadout action.
+static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
+    using namespace AlterEgo;
+    const auto row=[&](const char* slot,const char* label,bool gathering,bool charges) {
+        ImGui::PushID(slot);
+        const auto* eq=CharacterTools::Find(ch.equipment,slot,ch.active_equipment_tab);
+        if(!eq){
+            ImGui::TextUnformatted(label);
+            ImGui::SameLine();
+            ImGui::TextDisabled("Not reported");
+            ImGui::PopID();return;
+        }
+        const auto* info=GW2API::GetItemInfo(eq->id);
+        const std::string name=info&&!info->name.empty()?info->name:"Item #"+std::to_string(eq->id);
+        RenderEquipmentSlot(eq,label);
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::TextDisabled("%s",label);
+        ImGui::PushStyleColor(ImGuiCol_Text,GetRarityColor(info?info->rarity:"Basic"));
+        ImGui::TextWrapped("%s",name.c_str());
+        ImGui::PopStyleColor();
+        if(eq->skin){
+            const auto* skin=GW2API::GetSkinInfo(eq->skin);
+            const auto skinName=skin&&!skin->name.empty()?skin->name:"Skin #"+std::to_string(eq->skin);
+            ImGui::TextWrapped("Skin: %s",skinName.c_str());
+        }
+        if(charges){
+            if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
+            else ImGui::TextDisabled("Charges: Not reported");
+        }
+        if(gathering){
+            bool reported=false;
+            for(auto id:eq->upgrades){
+                if(!id)continue;
+                reported=true;
+                const auto* glyph=GW2API::GetItemInfo(id);
+                const auto glyphName=glyph&&!glyph->name.empty()?glyph->name:"Item #"+std::to_string(id);
+                ImGui::TextWrapped("Glyph: %s",glyphName.c_str());
+            }
+            if(!reported){
+                ImGui::TextDisabled("Glyph: Unknown");
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("The GW2 API may omit installed glyphs. Unknown does not mean empty.");
+            }
+        }
+        ImGui::EndGroup();
+        ImGui::Spacing();
+        ImGui::PopID();
+    };
+    RenderSectionHeader("Gathering Tools",UI::SectionGold);
+    row("Pick","Mining Pick",true,true);
+    row("Axe","Logging Axe",true,true);
+    row("Sickle","Harvesting Sickle",true,true);
+    RenderSectionHeader("Fishing",UI::SectionGold);
+    row("FishingRod","Fishing Rod",false,false);
+    row("FishingLure","Lure",false,true);
+    row("FishingBait","Bait",false,true);
+    RenderSectionHeader("Jade Bot",UI::SectionGold);
+    row("PowerCore","Power Core",false,false);
+    row("SensoryArray","Sensory Array",false,false);
+    row("ServiceChip","Service Chip",false,false);
 }
 
 static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
@@ -17238,7 +17304,7 @@ void AddonRender() {
                     ImGui::Spacing();
                     ImGui::Separator();
 
-                    // Tab bar: Equipment | Build
+                    // Tab bar: Equipment | Build | Tools
                     if (ImGui::BeginTabBar("##detail_tabs")) {
                         if (ImGui::BeginTabItem("Equipment",nullptr,NavigationDetailFlags(0))) {
                             if(g_SelectedTab!=0)MarkNavigation();g_SelectedTab = 0;
@@ -17254,9 +17320,16 @@ void AddonRender() {
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
+                        if (ImGui::BeginTabItem("Tools",nullptr,NavigationDetailFlags(2))) {
+                            if(g_SelectedTab!=2)MarkNavigation();g_SelectedTab=2;
+                            ImGui::BeginChild("ToolsScroll", ImVec2(0, 0), false);
+                            RenderCharacterToolsPanel(ch);
+                            ImGui::EndChild();
+                            ImGui::EndTabItem();
+                        }
                         // Hero Challenges tab hidden — GW2 API /heropoints returns [] for all characters (upstream bug)
                         // if (ImGui::BeginTabItem("Hero Challenges")) {
-                        //     g_SelectedTab = 2;
+                        //     g_SelectedTab = 3;
                         //     ImGui::BeginChild("HeroChallengeScroll", ImVec2(0, 0), false);
                         //     RenderHeroChallengesPanel(ch);
                         //     ImGui::EndChild();

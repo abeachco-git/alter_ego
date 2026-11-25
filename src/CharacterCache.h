@@ -33,7 +33,8 @@ inline constexpr Field kEquipment[] = {
     {"/tab", FieldType::Integer},
     {"/stat_id", FieldType::Integer},
     {"/binding", FieldType::Text},
-    {"/bound_to", FieldType::Text}
+    {"/bound_to", FieldType::Text},
+    {"/charges", FieldType::Integer}
 };
 inline constexpr Field kBuild[] = {
     {"/tab", FieldType::Integer},
@@ -140,7 +141,7 @@ inline void Store(Database::Connection& db,const Json& data,bool incremental=fal
     int64_t nextId=incremental?db.Scalar("SELECT coalesce(max(character_id),0) FROM character_rows"):0;
     auto character=db.Prepare("INSERT INTO character_rows(character_id,account_name,name,race,gender,profession,level,age,created,last_modified,data_refreshed,deaths,crafting_cached,active_build_tab,active_equipment_tab) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     auto crafting=db.Prepare("INSERT INTO character_crafting VALUES(?,?,?,?,?)");
-    auto eq=db.Prepare("INSERT INTO character_equipment(character_id,ordinal,item_id,slot,skin,tab,stat_id,binding,bound_to) VALUES(?,?,?,?,?,?,?,?,?)");
+    auto eq=db.Prepare("INSERT INTO character_equipment(character_id,ordinal,item_id,slot,skin,tab,stat_id,binding,bound_to,charges) VALUES(?,?,?,?,?,?,?,?,?,?)");
     auto values=db.Prepare("INSERT INTO character_equipment_values VALUES(?,?,?,?,?)");
     auto attrs=db.Prepare("INSERT INTO character_equipment_attributes VALUES(?,?,?,?)");
     auto tabnames=db.Prepare("INSERT INTO character_equipment_tab_names VALUES(?,?,?)");
@@ -212,7 +213,7 @@ inline std::optional<Json> Read(Database::Connection& db) {
     Json out={{"last_updated",mark.Integer(0)},{"characters",Json::array()}};
     auto chars=db.Prepare("SELECT character_id,account_name,name,race,gender,profession,level,age,created,last_modified,data_refreshed,deaths,crafting_cached,active_build_tab,active_equipment_tab FROM character_rows ORDER BY character_id");
     auto crafting=db.Prepare("SELECT discipline,rating,active FROM character_crafting WHERE character_id=? ORDER BY ordinal");
-    auto equipment=db.Prepare("SELECT ordinal,item_id,slot,skin,tab,stat_id,binding,bound_to FROM character_equipment WHERE character_id=? ORDER BY ordinal");
+    auto equipment=db.Prepare("SELECT ordinal,item_id,slot,skin,tab,stat_id,binding,bound_to,charges FROM character_equipment WHERE character_id=? ORDER BY ordinal");
     auto values=db.Prepare("SELECT kind,value FROM character_equipment_values WHERE character_id=? AND equipment_ordinal=? ORDER BY kind,ordinal");
     auto attrs=db.Prepare("SELECT attribute,value FROM character_equipment_attributes WHERE character_id=? AND equipment_ordinal=? ORDER BY attribute");
     auto tabnames=db.Prepare("SELECT tab,name FROM character_equipment_tab_names WHERE character_id=? ORDER BY tab");
