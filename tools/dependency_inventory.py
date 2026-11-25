@@ -11,6 +11,8 @@ import subprocess
 import sys
 import urllib.request
 
+from dependency_vex import annotate, load_assessments, openvex
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -129,7 +131,16 @@ def main():
     data = json.loads((ROOT / "dependencies.json").read_text(encoding="utf-8"))
     components = validate(data)
     sha = git("rev-parse", "HEAD")
+    assessments = load_assessments(
+        json.loads((ROOT / "vulnerability-assessments.json").read_text(encoding="utf-8")),
+        components, git)
     out = Path(args.output)
+    write(out / "openvex.json", openvex(assessments, components, sha, timestamp(),
+          os.environ.get("GITHUB_REPOSITORY", "abeachco-git/alter_ego")))
+    for a in assessments.values():
+        if a["stale_reasons"]:
+            print(f"::warning title=Stale vulnerability assessment::{a['advisory']}: "
+                  + "; ".join(a["stale_reasons"]))
     write(out / "sbom.cdx.json", sbom(components, sha))
     print(f"Verified {len(components)} component fingerprints; generated CycloneDX SBOM.")
     if args.snapshot:
@@ -137,15 +148,24 @@ def main():
             raise ValueError("Snapshot requires exact checked-out branch commit")
         write(out / "github-snapshot.json", snapshot(components, sha))
     if args.osv:
-        report = osv(components)
+        report = annotate(osv(components), assessments)
         write(out / "osv-report.json", report)
         summary = ["## Vendored dependency advisory review", "",
                    "| Component | Version | OSV result |", "| --- | --- | --- |"]
         for c in report["components"]:
-            result = ", ".join(c["advisories"]) or c["status"]
+            result = ", ".join(f"{f['advisory']} ({f['status']})"
+                               for f in c["findings"]) or c["status"]
             summary.append(f"| {c['id']} | {c['version']} | {result} |")
-            if c["advisories"]:
-                print(f"::warning title=Vendored dependency advisory::{c['id']}: {result}")
+            for f in c["findings"]:
+                if f["status"] not in ("not_affected", "fixed"):
+                    print(f"::warning title=Vendored dependency advisory::{c['id']}: "
+                          f"{f['advisory']} ({f['status']})")
+        summary += ["", "### Recorded product assessments", ""]
+        for a in assessments.values():
+            summary.append(f"- {a['advisory']} ({a['component']} {a['version']}): "
+                           f"**{a['effective_status']}** — "
+                           + ("; ".join(a["stale_reasons"]) if a["stale_reasons"]
+                              else a["evidence"] + " [Upstream](" + a["source"] + ")"))
         summary += ["", report["limitations"]]
         print("\n".join(summary))
         if os.environ.get("GITHUB_STEP_SUMMARY"):

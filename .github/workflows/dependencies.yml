@@ -17,6 +17,8 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+      - name: Test vulnerability assessment rules
+        run: python3 -m unittest discover -s tools -p test_dependency_vex.py
       - name: Validate inventory and generate reports
         run: python3 tools/dependency_inventory.py --snapshot
       - name: Query OSV advisory database
