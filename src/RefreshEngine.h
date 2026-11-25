@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -69,9 +70,21 @@ inline void ResetMetadata(){auto& r=Metadata();std::lock_guard<std::mutex> lock(
 struct IdBatch {
     std::string dataset;
     std::vector<uint32_t> ids;
+    // Only the owning worker records completed transport attempts. An
+    // abandoned claim (including failed launch) must not create a cooldown.
+    std::set<uint32_t> attempted;
+    template<class Iterator> void MarkAttempted(Iterator first,Iterator last){
+        attempted.insert(first,last);
+    }
     ~IdBatch(){
         auto& r=Metadata();std::lock_guard<std::mutex> lock(r.mutex);
-        for(auto id:ids){auto& e=r.records[{dataset,id}];e.pending=false;e.retry=MetadataRegistry::Clock::now()+std::chrono::seconds(FailureSeconds);}
+        for(auto id:ids){
+            auto it=r.records.find({dataset,id});
+            if(it==r.records.end())continue;
+            auto& e=it->second;
+            e.pending=false;
+            if(attempted.count(id))e.retry=MetadataRegistry::Clock::now()+std::chrono::seconds(FailureSeconds);
+        }
         r.changed.notify_all();
     }
 };
