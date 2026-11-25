@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build data/hero_challenges.json from the GW2 continents API.
+Research hero challenge coverage from the GW2 continents API (manual only).
 
 Generates a mapping of hero challenge IDs to their map/expansion info.
 The character endpoint /v2/characters/:name/heropoints returns completed IDs.
@@ -11,7 +11,8 @@ Coverage:
 - EoD, JW: coordinates only (no IDs in API — need manual curation)
 - LWS3, LWS4, IBS, SotO: not in continents API skill_challenges at all
 
-Usage: python3 tools/build_hero_challenges.py
+Usage: python3 tools/build_hero_challenges.py /path/to/new-candidate.json
+This is a research export only, not a runtime or tracked reference catalog.
 """
 
 import json
@@ -108,7 +109,11 @@ def main():
             "expansion": hc["expansion"],
         }
 
-    out_path = "data/hero_challenges.json"
+    if len(sys.argv) != 2:
+        raise SystemExit("Usage: python3 tools/build_hero_challenges.py /path/to/new-candidate.json")
+    out_path = sys.argv[1]
+    if out_path == "data/hero_challenges.json":
+        raise SystemExit("Use a separate research output; the bundled catalog is retired.")
     with open(out_path, "w") as f:
         json.dump(output, f, separators=(",", ":"), sort_keys=True)
     print(f"\nWrote {out_path} ({len(output)} entries)")

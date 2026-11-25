@@ -357,11 +357,10 @@ namespace AlterEgo {
                         auto c=ParseCharacterJson(json{{"crafting",craft}});
                         ch.crafting=std::move(c.crafting);ch.crafting_levels=std::move(c.crafting_levels);ch.crafting_active=std::move(c.crafting_active);ch.crafting_cached=true;
                     }
-                    stage("Hero points");
-                    auto hp=NativeAccounts::Request(a,path+"/heropoints",{"characters","progression"});
-                    if(hp&&hp.data.is_array()){
-                        for(const auto& p:hp.data){if(!p.is_string())throw std::runtime_error("Invalid hero challenge");ch.heropoints.push_back(p.get<std::string>());}
-                    }else if(old)ch.heropoints=old->heropoints;
+                    // The Hero Points UI is dormant; do not request the unreliable
+                    // endpoint on character refresh. Preserve previously cached IDs
+                    // for compatibility, but do not treat them as current progress.
+                    if(old)ch.heropoints=old->heropoints;
                     if(!NativeAccounts::Current(a))throw std::runtime_error("Account changed");
                     ch.data_refreshed=std::time(nullptr);bool remapped=false;
                     {

@@ -533,7 +533,6 @@ static std::string g_AchStatusMsg;
 
 #define ACH_NAME_INDEX_URL "https://raw.githubusercontent.com/PieOrCake/alter_ego/main/data/achievement_names.json"
 #define ACH_WAYPOINTS_URL "https://raw.githubusercontent.com/PieOrCake/alter_ego/main/data/achievement_waypoints.json"
-#define HERO_CHALLENGES_URL "https://raw.githubusercontent.com/PieOrCake/alter_ego/main/data/hero_challenges.json"
 
 // Hero challenge data: id -> { map_name, expansion }
 struct HeroChallengeInfo {
@@ -542,7 +541,6 @@ struct HeroChallengeInfo {
 };
 static std::unordered_map<std::string, HeroChallengeInfo> g_HeroChallenges; // id -> info
 static bool g_HeroChallengesReady = false;
-static std::atomic<bool> g_HeroChallengesFetching{false};
 
 // Waypoint data: achId -> (bitIndex -> chatCode), bitIndex -1 = achievement-level waypoint
 static std::unordered_map<uint32_t, std::unordered_map<int, std::string>> g_AchWaypoints;
@@ -827,9 +825,6 @@ static void SaveAchWaypoints();
 static void LoadAchWaypoints();
 static void FetchAchWaypoints();
 static void FetchActiveSpecialEvent();
-static void SaveHeroChallenges();
-static void LoadHeroChallenges();
-static void FetchHeroChallenges();
 
 // Character search
 static char g_CharSearchBuf[128] = "";
@@ -2168,19 +2163,7 @@ static void FetchAchWaypoints() {
 // Hero Challenges — Data
 // =========================================================================
 
-static void SaveHeroChallenges() {
-    nlohmann::json j;
-    for (const auto& [id, info] : g_HeroChallenges) {
-        nlohmann::json entry;
-        entry["map_name"] = info.map_name;
-        entry["expansion"] = info.expansion;
-        j[id] = entry;
-    }
-    if (!AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::HeroChallenges, j) && APIDefs)
-        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save hero_challenges cache");
-}
-
-static void LoadHeroChallenges() {
+[[maybe_unused]] static void LoadHeroChallenges() {
     try {
         auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::HeroChallenges);
         if (!snapshot) return;
@@ -2196,31 +2179,6 @@ static void LoadHeroChallenges() {
             g_HeroChallengesReady = !g_HeroChallenges.empty();
         }
     } catch (...) {}
-}
-
-static void FetchHeroChallenges() {
-    if (g_HeroChallengesFetching) return;
-    g_HeroChallengesFetching = true;
-    AlterEgo::Background::Workers().Launch([]() {
-        std::string json = Skinventory::HttpClient::Get(HERO_CHALLENGES_URL);
-        if (!json.empty()) {
-            try {
-                auto j = nlohmann::json::parse(json);
-                if (j.is_object()) {
-                    g_HeroChallenges.clear();
-                    for (auto& [id, val] : j.items()) {
-                        HeroChallengeInfo info;
-                        info.map_name = val.value("map_name", "");
-                        info.expansion = val.value("expansion", "");
-                        g_HeroChallenges[id] = std::move(info);
-                    }
-                    g_HeroChallengesReady = true;
-                    SaveHeroChallenges();
-                }
-            } catch (...) {}
-        }
-        g_HeroChallengesFetching = false;
-    }, [] { g_HeroChallengesFetching = false; });
 }
 
 // =========================================================================
@@ -4301,14 +4259,11 @@ struct HCExpansionEntry {
     int completed = 0;
 };
 
-static void RenderHeroChallengesPanel(const AlterEgo::Character& ch) {
-    // Trigger fetch if not loaded
-    if (!g_HeroChallengesReady && !g_HeroChallengesFetching) {
-        FetchHeroChallenges();
-    }
-
+// Dormant UI retained for future investigation. No network or SQL on draw.
+// Restore only after the authenticated endpoint and catalog coverage are verified.
+[[maybe_unused]] static void RenderHeroChallengesPanel(const AlterEgo::Character& ch) {
     if (!g_HeroChallengesReady) {
-        RenderSpinner("Loading hero challenge data...");
+        ImGui::TextDisabled("Hero point reference data unavailable.");
         return;
     }
 
@@ -12724,7 +12679,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     LoadAchDefCache();
     LoadAchNameIndex();
     LoadAchWaypoints();
-    LoadHeroChallenges();
 
     // Register quick access shortcut
     if (g_ShowQAIcon) {
@@ -17178,8 +17132,9 @@ void AddonRender() {
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
-                        // Hero Challenges tab hidden — GW2 API /heropoints returns [] for all characters (upstream bug)
-                        // if (ImGui::BeginTabItem("Hero Challenges")) {
+                        // Hero Points tab dormant: endpoint historically unreliable; no refresh or catalog load.
+                        // Revisit only after authenticated API verification.
+                        // if (ImGui::BeginTabItem("Hero Points")) {
                         //     g_SelectedTab = 3;
                         //     ImGui::BeginChild("HeroChallengeScroll", ImVec2(0, 0), false);
                         //     RenderHeroChallengesPanel(ch);
