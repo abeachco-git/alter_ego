@@ -7385,6 +7385,13 @@ static void RenderPetPickerDialog() {
             ImGui::BeginChild("##petlist", ImVec2(280, 360), true);
             for (const auto& p : pets) {
                 bool usedOther = (g_EditDraft.pets.terrestrial[other] == p.id);
+                ImGui::PushID(static_cast<int>(p.id));
+                const uint32_t iconId=9400000u+p.id;
+                auto* icon=AlterEgo::IconManager::GetIcon(iconId);
+                const float iconSize=32.0f;
+                if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(iconSize,iconSize),ImVec2(0,0),ImVec2(1,1),usedOther?ImVec4(1,1,1,0.4f):ImVec4(1,1,1,1));
+                else {ImGui::Dummy(ImVec2(iconSize,iconSize));if(!p.icon_url.empty())AlterEgo::IconManager::RequestIcon(iconId,p.icon_url);}
+                ImGui::SameLine();
                 if (usedOther) {
                     ImGui::TextDisabled("%s", p.name.c_str());
                 } else if (ImGui::Selectable(p.name.c_str())) {
@@ -7394,6 +7401,7 @@ static void RenderPetPickerDialog() {
                     g_PetPickerSlot = -1;
                     ImGui::CloseCurrentPopup();
                 }
+                ImGui::PopID();
             }
             ImGui::EndChild();
             if (AlterEgo::UI::Button("(None)", ImVec2(0,0), AlterEgo::UI::ButtonRole::Compact)) {

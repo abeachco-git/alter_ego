@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 import urllib.request
 import sys
+from generate_embedded_icons import COMPANION_ICONS
 
 BASE = "https://api.guildwars2.com"
 PROFESSIONS = {
@@ -78,14 +79,14 @@ def main(output):
     local = Path(__file__).resolve().parents[1] / 'assets' / 'icons'
     manifest = json.loads((local / 'manifest.json').read_text(encoding='utf-8'))
     for record in manifest['icons']:
-        if record['id'] not in (9100007, 9300001, 9300002):
+        if record['id'] not in (9100007, 9300001, 9300002) and record['id'] not in COMPANION_ICONS:
             continue
         content = (local / record['file']).read_bytes()
         if hashlib.sha256(content).hexdigest() != record['sha256'] or len(content) != record['size']:
             raise ValueError('Changed raid modifier asset: ' + record['file'])
         (folder / record['file']).write_bytes(content)
         records.append(record)
-    if len(records) != 3:
+    if len(records) != 3 + len(COMPANION_ICONS):
         raise ValueError('Missing reviewed raid modifier assets')
     for asset_id, url in sorted(images.items()):
         if asset_id==9100007:continue # reviewed lossless metadata cleanup

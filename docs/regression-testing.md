@@ -166,3 +166,5 @@ section_refresh covers fixed endpoint classification without retaining request U
 The fixed-icon generator enforces raid modifier IDs and 32x32 RGBA PNG format; linked DLL verification compares exact bytes. In-game test both Clears layouts with Wiki offline and artwork cache absent. No Wiki request for these icons should occur.
 
 Artwork smoke: with a cleared artwork cache and offline network, verify all embedded icons render in both Clears and character views; delayed Nexus texture creation must not trigger HTTP. Dynamic artwork uses shared transport counts; verified cached artwork does not re-fetch across restart, failed download backs off seven days, cache rebuild clears failures, and shutdown cancellation does not record a failure.
+
+Companion fixed assets: verify all 75 exact resource IDs and 64px RGBA PNGs at build time. In-game: open Revenant legend editor and Ranger pet picker with an existing public catalog and the artwork cache removed; no HTTP artwork downloads for the checked-in IDs. Unknown future IDs retain dynamic retrieval.

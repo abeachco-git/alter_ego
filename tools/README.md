@@ -28,3 +28,5 @@ The primary rotation parser reads the actual MediaWiki template arrays/switches;
 The generator emits WikiEventMetadata.inc from the manifest and verified snapshot, sharing exact phase identities and runtime age with the native parser. Build-time eligibility is 24 hours; runtime SQLite event refresh is 30 days.
 
 Fixed raid modifier IDs 9300001/9300002 are 32x32 RGBA PNGs retained during manual asset staging. Normal resource generation and verification remain offline.
+
+`stage_companion_icons.py` is a manual acquisition/review tool for bounded legend-swap and pet icons; it is not invoked by normal builds. The manual staging workflow is read-only and uploads a review artifact. Reviewed assets are preserved by update_embedded_icons.py; new companion IDs require a reviewed manifest/generator update.

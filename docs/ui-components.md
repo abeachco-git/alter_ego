@@ -161,3 +161,5 @@ Nexus automatic refresh includes Objective tracking (minutes), default 15, clamp
 Nexus refresh no longer exposes an unconditional login refresh option. Character/Compare footer uses activity freshness, not raw snapshot age; Inventory freshness and availability share the same scope predicate. Display previous cached data while awaiting API synchronization. Active interval 10 minutes with visible demand; offline grace 10 minutes. Manual refresh retains existing controls.
 
 Storage & Cache includes a collapsed API Activity tree. It samples the in-memory transport counters once per second while expanded, independent of Inspect Storage. Show rolling 10-minute/hour and session request totals, outcome/429, active/waiting and peak starts per second, with endpoint groups under a nested tree. No filesystem, SQL or network access is triggered by this diagnostic.
+
+The Ranger pet picker displays 32px pet artwork from the existing IconManager; known IDs use embedded PNGs. Preserve the existing selection/disabled semantics and use stable pet ID scopes.

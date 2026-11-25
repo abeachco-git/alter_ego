@@ -503,3 +503,5 @@ user-supplied PNGs with provenance and hashes; original game artwork remains
 subject to ArenaNet/NCSOFT rights and terms. Source references:
 https://wiki.guildwars2.com/wiki/File:Emboldened.png
 https://wiki.guildwars2.com/wiki/File:Call_of_the_Mists.png
+
+Companion icons: eight Revenant legend swap skills and 67 Ranger pets are ArenaNet game artwork from the official render service, normalized to 64px PNG. The source URL and reviewed acquisition provenance are recorded per asset in assets/icons/manifest.json. Existing ArenaNet/NCSOFT content rights and terms apply.
