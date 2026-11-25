@@ -11,6 +11,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 - Reusable loadout components, shared Equipment Sets and independent Fashion records.
 - Direct account linking with Windows Credential Manager, account-scoped inventory, wallet and guild bank views.
 - Item-location navigation from character equipment, Compare and Skinventory shopping.
+- Inventory search includes owned wallet currencies, with shared filters and account-wallet location details.
 - Character gathering, fishing and Jade Bot details; explicit right-click character loading.
 - Portable library import/export, recovery backups and Storage & Cache maintenance controls.
 - Validated Wiki reference schedules for raid bounties, fractals and selected Vault event timers, with daily-eligible build refresh and an embedded/SQLite fallback for event timers. Opted-in runtime event timer refresh is eligible after 30 days.

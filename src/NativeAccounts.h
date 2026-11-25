@@ -45,6 +45,7 @@ void SetWalletPins(const std::set<uint32_t>& ids);
 struct InventoryNavigation {
     int subview=0,sort=0,freshness=0,minQuantity=0,transfer=0,pinFilter=0,balanceFilter=0;
     uint32_t item=0;
+    bool currency=false;
     std::string query,walletQuery,guildQuery,scope;
     std::set<std::string> binding,rarity,type,characters;
 };

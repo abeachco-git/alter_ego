@@ -182,6 +182,18 @@ inline bool MatchesStorageView(const std::string& selectedScope,const std::set<s
     return (selectedScope.empty()||selectedScope=="Items"||selectedScope==scope)&&
         (characters.empty()||(!character.empty()&&characters.count(character)!=0));
 }
+// Wallet balances are not physical items: inapplicable facets exclude them.
+inline bool WalletMatchesFacets(const std::string& scope,const std::set<std::string>& characters,
+                                const std::set<std::string>& binding,const std::set<std::string>& rarity,
+                                const std::set<std::string>& type,bool transfer) {
+    return (scope.empty()||scope=="Items"||scope=="Wallet")&&characters.empty()&&
+        binding.empty()&&rarity.empty()&&(type.empty()||type.count("Currency"))&&!transfer;
+}
+inline bool WalletMatchesBalance(int64_t value,bool fresh,int freshness) {
+    return value>0&&(freshness!=1||fresh)&&(freshness!=2||!fresh);
+}
+// Search identity must never collide between ArenaNet item and currency IDs.
+using SearchIdentity=std::pair<bool,uint32_t>;
 inline bool CanBrowseItems(bool character, bool storage, bool binding, bool rarity,
                            bool type, bool freshness, bool quantity, bool transfer) {
     return character&&(storage||binding||rarity||type||freshness||quantity||transfer);

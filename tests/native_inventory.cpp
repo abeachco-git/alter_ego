@@ -57,6 +57,17 @@ int case_native_inventory(int,char**){
     const auto special=NativeProgress::ParseVault(Json::parse(R"({"objectives":[{"id":9,"title":"Objective","track":"PvE","acclaim":100,"progress_current":1,"progress_complete":2,"claimed":false}]})"),true);
     assert(special.objectives.size()==1&&!special.objectives[0].isDone());
     rejected=false;try{NativeProgress::ParseVault(Json::parse(R"({"objectives":[]})"),false);}catch(...){rejected=true;}assert(rejected);
+    assert(WalletMatchesFacets("",{},{},{},{},false));
+    assert(WalletMatchesFacets("Wallet",{},{},{},{"Currency","Armor"},false));
+    assert(!WalletMatchesFacets("Bank",{},{},{},{},false));
+    assert(!WalletMatchesFacets("",{"A"},{},{},{},false));
+    assert(!WalletMatchesFacets("",{},{"Unknown"},{},{},false));
+    assert(!WalletMatchesFacets("",{},{},{"Basic"},{},false));
+    assert(!WalletMatchesFacets("",{},{},{},{"Armor"},false));
+    assert(!WalletMatchesFacets("",{},{},{},{},true));
+    assert(WalletMatchesBalance(1,true,1)&&WalletMatchesBalance(1,false,2));
+    assert(!WalletMatchesBalance(0,true,0)&&!WalletMatchesBalance(1,false,1)&&!WalletMatchesBalance(1,true,2));
+    assert((SearchIdentity{false,10}!=SearchIdentity{true,10}));
     auto wallet=ParseWallet(Json::parse(R"([{"id":1,"value":123456},{"id":2,"value":0}])"));
     RecordWallet(root,{"account-a","Wallet","","Ready",200,200},&wallet);
     RecordWallet(root,{"account-a","Wallet","","Failed",201,0});
