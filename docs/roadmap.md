@@ -14,12 +14,26 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 - [x] Exact-ID Compare acquisition aid and binding/freshness-aware location display; Inventory navigation from equipment and Shopping List; cached unique acquisition candidates subtract personal loose stock from remaining shopping cost (CI passed at 972a3c9; live validation pending).
 - [x] Compare exact-ID upgrade, rune, sigil, relic and exact-infusion deficit hints; attribute-based alternatives remain semantic only.
 - [ ] Semantic inventory alternatives, full loadout eligibility, broaden Shopping acquisition mapping beyond known TP item map.
-- [x] Configurable automatic refresh exclusions by dataset, persisted in settings; manual refresh unaffected. Bounded FIFO shared HTTP admission with cancellation/timeout; CI/live validation pending.
+- [x] Configurable automatic refresh exclusions by dataset, persisted in settings; manual refresh unaffected. Bounded FIFO shared HTTP admission with cancellation/timeout; CI passed at cdac06a, live validation pending.
 - [x] Durable wallet favorites, favorites/zero filters and sort; inventory character, freshness, minimum total quantity and potential transfer filters. CI passed at cdac06a; live validation pending.
-- [x] Inventory Items and Wallet search/filter controls use the existing shared SearchToolbar, FilterChoice, FilterInt and removable chips; Guild bank uses SearchField. CI/live validation pending.
+- [x] Inventory Items and Wallet search/filter controls use the existing shared SearchToolbar, FilterChoice, FilterInt and removable chips; Guild bank uses SearchField. CI passed at 57d47f9, live validation pending.
 - [ ] Wallet categories, armor/weapon subtype and level filters, endpoint deduplication and priority scheduling.
 - [ ] Full independent character/progress dataset freshness; per-section Clears/Vault commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.
+
+## UI consistency audit — outstanding corrections
+
+Source audit at 57d47f9 (not an in-game visual test). Apply the existing UI guide; do not introduce separate per-page UI primitives or alter refresh scheduling as part of UI polish.
+
+- [ ] High: unify Inventory's duplicate local account selector with the main account selection model; preserve active-account versus browsing-account semantics, single-account concealment, and explicit All Accounts browsing. Use stable account IDs in dropdowns.
+- [ ] High: use the existing RefreshUI::Row bottom footer for Items, Wallet and Guild bank, with a reserved scrollable content child, disabled refresh during active work, scoped last-success timestamps and meaningful stale/partial/failure details. Do not present a batch completion as proof all datasets succeeded; retain scope-specific storage diagnostics.
+- [ ] High: capture/restore Inventory subview, search, filters, sort, target item ID and account context in NavigationUI; use MarkNavigation for explicit destinations and avoid new history entries on filtering. Reveal a target by clearing conflicting filters, preserving compatible account scope when possible.
+- [ ] Use existing tab dropdown conventions for Inventory subviews where appropriate; share existing menu hover/click behavior and avoid overflowing the primary tab row/account selector at narrow widths.
+- [ ] Use canonical multi-select facets with independently removable chips for applicable Inventory type/rarity/binding/character choices; preserve single storage refresh scope unless explicitly decoupled. Keep wallet filtering canonical.
+- [ ] Use common rarity and coin presentation, consistent compact result rows and stable item IDs. Share item copy/chat-link/wiki/location actions with Guild bank and equipment; use existing compact UI buttons and context menus. Verify large-list scrolling and Shopping clipper row geometry for Stock versus price rows.
+- [ ] Account options: canonical UI::InputText with password flags, shared action/confirmation styles, visually disabled actions while busy, clear validation and error status, destructive unlink styling. Group refresh preferences and explain master/child state without changing policy.
+- [ ] Compare location hints: use stable item IDs (not array position), concise location labels and shared Find in Inventory action; keep acquisition hints distinct from semantic matches.
+- [ ] Verify no-account/not-retrieved/empty/filter-no-match/permission-denied/failed states, conditional account labels, narrow window layouts, multiple font sizes, keyboard focus, clipboard and Back/Forward in game.
 
 ## Goal and architecture
 
