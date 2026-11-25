@@ -34,8 +34,10 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
     if(version==22){
-        db.Exec("ALTER TABLE native_currencies ADD COLUMN icon TEXT NOT NULL DEFAULT ''");
-        db.Exec("ALTER TABLE native_currencies ADD COLUMN icon_known INTEGER NOT NULL DEFAULT 0 CHECK(icon_known IN (0,1))");
+        db.Exec(R"SQL(
+ALTER TABLE native_currencies ADD COLUMN icon TEXT NOT NULL DEFAULT '';
+ALTER TABLE native_currencies ADD COLUMN icon_known INTEGER NOT NULL DEFAULT 0 CHECK(icon_known IN (0,1));
+)SQL");
         return;
     }
     if(version==21){
