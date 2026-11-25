@@ -9,7 +9,20 @@ Inspect characters without logging into each one, organize reusable builds and e
 
 ## Screenshots
 
-Updated screenshots will be added before release.
+![Character equipment, saved loadout matching and sharing menu](docs/screenshots/characters-equipment.png)
+
+| Library | Compare |
+| --- | --- |
+| [![Saved loadouts](docs/screenshots/library-loadouts.png)](docs/screenshots/library-loadouts.png) | [![Loadout comparison](docs/screenshots/compare.png)](docs/screenshots/compare.png) |
+| **Inventory** | **Account progress** |
+| [![Item locations](docs/screenshots/inventory-item-locations.png)](docs/screenshots/inventory-item-locations.png) | [![Wizard's Vault objectives](docs/screenshots/wizards-vault.png)](docs/screenshots/wizards-vault.png) |
+
+More screenshots:
+
+- **Characters:** [Builds](docs/screenshots/characters-build.png) · [Tools and glyphs](docs/screenshots/characters-tools.png)
+- **Library:** [Component editor](docs/screenshots/library-components.png) · [Equipment Sets](docs/screenshots/library-equipment-sets.png) · [Gear customization](docs/screenshots/equipment-customization.png)
+- **Inventory and skins:** [Inventory filters](docs/screenshots/inventory-filters.png) · [Skin browser](docs/screenshots/skins-browser.png)
+- **Account progress:** [Clears](docs/screenshots/clears.png) · [Achievements](docs/screenshots/achievements.png)
 
 ## Features
 
