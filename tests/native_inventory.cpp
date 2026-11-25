@@ -102,6 +102,11 @@ int case_native_inventory(int,char**){
     assert(MatchesStorageView("Items",twoCharacters,"Equipment","B"));
     assert(MatchesStorageView("Items",{},"Bank",""));
     assert(MatchesStorageView("Bags",{},"Bags","B"));
+    assert(MatchesStorageView("Items",twoCharacters,"Bags","A"));
+    assert(MatchesStorageView("Items",twoCharacters,"Equipment","B"));
+    assert(!MatchesStorageView("Items",twoCharacters,"Bags","C"));
+    assert(!MatchesStorageView("Bank",twoCharacters,"Bank",""));
+    assert(MatchesStorageView("",{},"Bank",""));
     assert(!CanBrowseItems(!twoCharacters.empty(),false,false,false,false,false,false,false));
     assert(Match("Valkyrie Krait Star",12345,"valk kr"));
     assert(Match("Valkyrie Krait Star",12345,"KR VALK"));

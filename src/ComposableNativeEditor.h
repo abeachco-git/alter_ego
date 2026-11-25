@@ -165,6 +165,8 @@ static bool ComponentNativeSkill(ComponentJson& parent, const char* key,
         ImGui::EndPopup();
     }
     if (ImGui::BeginPopupContextItem("##component_skill_id")) {
+        const auto skill=AlterEgo::GW2API::GetSkillInfo(id);
+        if(skill)CopyNameMenuItem(skill->name);
         if (ImGui::MenuItem("Clear Skill")) { parent[key] = 0; changed = true; }
         ImGui::TextDisabled("Advanced: exact skill ID");
         ComponentNativeNumber(parent, key, "Skill ID");
@@ -495,6 +497,8 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
         ImGui::EndCombo();
     }
     if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
+        const auto info=selectedId?AlterEgo::GW2API::GetItemInfo(selectedId):nullptr;
+        CopyNameMenuItem(info&&!info->name.empty()?info->name:selected);
         if (ImGui::MenuItem("Clear")) { item.erase(idField); item.erase(nameField); }
         ImGui::EndPopup();
     }
@@ -568,6 +572,33 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,
 // Same canonical slot order and readable details as Components > Inventory.
 // Graphical choice controls below reuse the original Loadout's profession,
 // stat, item, rune/sigil and relic metadata; all writes target only the draft.
+// Read-only presentation action, shared by the editor and component viewer.
+// Resolve exact stored names without mutating imported data or inventing IDs.
+static void ComponentStoredNameActions(const ComponentJson& item){
+    if(!item.is_object())return;
+    const auto text=[&](const char* field){
+        auto it=item.find(field);
+        return it!=item.end()&&it->is_string()?it->get<std::string>():std::string{};
+    };
+    const auto name=[&](const char* field,const char* idField){
+        auto id=item.find(idField);
+        if(id!=item.end()&&id->is_number_integer()){
+            const auto info=AlterEgo::GW2API::GetItemInfo(id->get<uint32_t>());
+            if(info&&!info->name.empty())return info->name;
+        }
+        return text(field);
+    };
+    CopyNameMenuItem(name("item_name","item_id"));
+    CopyNameMenuItem(name("rune","rune_id"),"Copy Rune Name");
+    CopyNameMenuItem(name("sigil","sigil_id"),"Copy Sigil Name");
+    CopyNameMenuItem(name("sigil2","sigil2_id"),"Copy Second Sigil Name");
+    auto infusions=item.find("infusion_ids");
+    if(infusions!=item.end()&&infusions->is_array()){
+        std::vector<uint32_t> ids;
+        for(const auto& id:*infusions)if(id.is_number_integer())ids.push_back(id.get<uint32_t>());
+        CopyCachedItemNamesMenu(ids,"Copy Infusion Name");
+    }
+}
 static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                                 const std::string& profession) {
     ImGui::TextUnformatted("Equipment slots");
@@ -620,6 +651,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             g_ComponentStatSearch.clear();
         }
         if (ImGui::BeginPopupContextItem("##native_slot_context")) {
+            ComponentStoredNameActions(data["gear"].at(slot));
             if (ImGui::MenuItem("Copy")) {
                 copiedSlot = data["gear"].at(slot);
                 copiedKind = kind;

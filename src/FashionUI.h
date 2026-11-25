@@ -291,6 +291,7 @@ static void RenderFashionLibrary() {
         ImGui::PushID(i);
         if (ImGui::Selectable(look.name.c_str(), i == g_FashionSelected)) {MarkNavigation();g_FashionSelected = i;}
         if (ImGui::BeginPopupContextItem("##fashion_actions")) {
+            CopyNameMenuItem(look.name);
             if (ImGui::MenuItem("Copy Wardrobe Link"))
                 CopyFashionWardrobeLink(look);
             if (ImGui::MenuItem("Edit")) {

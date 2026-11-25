@@ -179,6 +179,7 @@ static std::string ComponentUIShortDescription(const std::string& kind,
 // Human-readable inventory before the advanced JSON representation. This
 // remains deliberately lossless: it reads the same component payload, without
 // interpreting missing item names as empty slots.
+static void ComponentStoredNameActions(const ComponentJson& item);
 static void RenderComponentInventory(const std::string& kind, const ComponentJson& data) {
     if (!data.is_object()) return;
     if (kind == "runes" || kind == "sigils" || kind == "infusions") {
@@ -205,8 +206,13 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
         }
     }
     if (kind == "relic") {
-        if (data.contains("relic_name") && data["relic_name"].is_string())
-            ImGui::Text("Relic: %s", data["relic_name"].get<std::string>().c_str());
+        if (data.contains("relic_name") && data["relic_name"].is_string()){
+            const auto name=data["relic_name"].get<std::string>();
+            ImGui::Text("Relic: %s",name.c_str());
+            if(ImGui::BeginPopupContextItem("##component_relic_name")){
+                CopyNameMenuItem(name);ImGui::EndPopup();
+            }
+        }
         if (data.contains("relic_id") && data["relic_id"].is_number_integer())
             ImGui::Text("Item ID: %lld",
                 static_cast<long long>(data["relic_id"].get<int64_t>()));
@@ -246,9 +252,12 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
                 ImGui::TableSetColumnIndex(0);
                 ImGui::TextUnformatted(GearSlotDisplayName(slotName));
                 ImGui::TableSetColumnIndex(1);
+                ImGui::PushID(slotName.c_str());
                 ImGui::TextWrapped("%s", AlterEgo::Composable::Presentation::
                     GearSlotSummary(kind, item).c_str());
-                ImGui::PushID(slotName.c_str());
+                if(ImGui::BeginPopupContextItem("##component_item_names")){
+                    ComponentStoredNameActions(item);ImGui::EndPopup();
+                }
                 if (ImGui::TreeNode("Exact stored fields##component_slot")) {
                     if (item.is_object()) {
                         for (auto field = item.begin(); field != item.end(); ++field)
@@ -991,6 +1000,9 @@ static void RenderComponentLibrary() {
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s\nReferenced by %d records", id.c_str(), users);
+            if(ImGui::BeginPopupContextItem("##component_name")){
+                CopyNameMenuItem(name);ImGui::EndPopup();
+            }
             ImGui::PopID();
         }
     }
@@ -1222,6 +1234,9 @@ static void RenderEquipmentSetLibrary() {
         if(UI::SelectableOption((name+"##"+id).c_str(),id==g_EquipmentSetSelectedId)) {
             MarkNavigation();g_EquipmentSetSelectedId=id;selected=&set;
         }
+        ImGui::PushID(id.c_str());
+        if(ImGui::BeginPopupContextItem("##set_name")){CopyNameMenuItem(name);ImGui::EndPopup();}
+        ImGui::PopID();
     }
     ImGui::EndChild();
     if(!selected){ImGui::TextDisabled("Select an equipment set.");return;}

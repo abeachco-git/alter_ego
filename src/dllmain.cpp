@@ -1569,19 +1569,18 @@ static const char* GetCraftingIconUrl(const std::string& disc) {
     return it != urls.end() ? it->second.c_str() : nullptr;
 }
 
-// Copy text to Windows clipboard
+// Names are UTF-8 in the API; Unicode clipboard preserves non-ASCII names.
 void CopyToClipboard(const std::string& text) {
-    if (!OpenClipboard(NULL)) return;
-    EmptyClipboard();
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
-    if (hMem) {
-        char* p = (char*)GlobalLock(hMem);
-        if (p) {
-            memcpy(p, text.c_str(), text.size() + 1);
-            GlobalUnlock(hMem);
-            SetClipboardData(CF_TEXT, hMem);
-        }
-    }
+    const int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.c_str(),-1,nullptr,0);
+    if(length<=0)return;
+    HGLOBAL memory=GlobalAlloc(GMEM_MOVEABLE,static_cast<size_t>(length)*sizeof(wchar_t));
+    if(!memory)return;
+    auto* dest=static_cast<wchar_t*>(GlobalLock(memory));
+    if(!dest){GlobalFree(memory);return;}
+    const bool converted=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.c_str(),-1,dest,length)==length;
+    GlobalUnlock(memory);
+    if(!converted||!OpenClipboard(nullptr)){GlobalFree(memory);return;}
+    if(!EmptyClipboard()||!SetClipboardData(CF_UNICODETEXT,memory))GlobalFree(memory);
     CloseClipboard();
 }
 
@@ -2991,6 +2990,20 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
 }
 
 // Render a single equipment slot with icon and tooltip
+// Exact cached names only: never copy an ID or trigger metadata retrieval
+// merely because the user opens a menu. Reused by all equipment editors.
+static void CopyCachedItemNamesMenu(const std::vector<uint32_t>& ids,const char* label){
+    std::vector<std::string> names;
+    for(auto id:ids){
+        const auto info=id?AlterEgo::GW2API::GetItemInfo(id):nullptr;
+        if(info&&!info->name.empty()&&std::find(names.begin(),names.end(),info->name)==names.end())
+            names.push_back(info->name);
+    }
+    if(!names.empty()&&ImGui::BeginMenu(label)){
+        for(const auto& name:names)CopyNameMenuItem(name,name.c_str());
+        ImGui::EndMenu();
+    }
+}
 static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
 
@@ -3301,6 +3314,8 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                     CopyToClipboard(link);
                 }
             }
+            CopyCachedItemNamesMenu(eq->upgrades,"Copy Upgrade Name");
+            CopyCachedItemNamesMenu(eq->infusions,"Copy Infusion Name");
             ImGui::Separator();
             if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(eq->id);
             if(ImGui::BeginMenu("Item Locations")){
@@ -3831,7 +3846,7 @@ static void DrawDottedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, floa
 // Helper: render a single trait icon with selected/dimmed state and tooltip
 // Returns the center screen position of the rendered icon
 static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, float size,
-                              bool editable = false, bool* clicked = nullptr) {
+                              bool editable = false, bool* clicked = nullptr,bool externalContext=false) {
     const auto tinfo = AlterEgo::GW2API::GetTraitInfo(trait_id);
 
     ImGui::PushID((int)(trait_id + 2000000));
@@ -3897,7 +3912,7 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
         ImGui::EndTooltip();
     }
 
-    if(tinfo&&(!g_LibEditMode||!selected||isMinor)&&ImGui::BeginPopupContextItem("##trait_name")) {
+    if(tinfo&&!externalContext&&ImGui::BeginPopupContextItem("##trait_name")) {
         CopyNameMenuItem(tinfo->name);ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -3906,7 +3921,7 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
 
 // Clickable skill icon for the build editor (icon cache = skill_id + 5000000).
 // Returns true when clicked. skill_id 0 draws an empty slot.
-static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable) {
+static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,bool nameMenu=true) {
     const auto sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 max(pos.x + size, pos.y + size);
@@ -3939,14 +3954,14 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable) {
         }
         ImGui::EndTooltip();
     }
-    if(!editable&&sinfo&&ImGui::BeginPopupContextItem("##skill_name")) {
+    if(nameMenu&&sinfo&&ImGui::BeginPopupContextItem("##skill_name")) {
         CopyNameMenuItem(sinfo->name);ImGui::EndPopup();
     }
     ImGui::PopID();
     return clicked;
 }
-static bool RenderEditableSkillIcon(uint32_t skill_id, float size) {
-    return RenderSkillIconCore(skill_id, size, true);
+static bool RenderEditableSkillIcon(uint32_t skill_id, float size,bool nameMenu=true) {
+    return RenderSkillIconCore(skill_id, size, true,nameMenu);
 }
 
 static void RenderSkillIcon(uint32_t skill_id, float size);
@@ -4552,6 +4567,9 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                     dl, specName, specColor, rowOrigin, rowH, nameAnchor);
                 ImGui::SetCursorScreenPos(nameAnchor);
                 ImGui::InvisibleButton("##specname", hitSz);
+                if(!g_LibEditMode&&ImGui::BeginPopupContextItem("##spec_name")){
+                    CopyNameMenuItem(specName);ImGui::EndPopup();
+                }
                 if (ImGui::IsItemHovered()) {
                     ImGui::BeginTooltip();
                     ImGui::TextColored(specColor, "%s", specName.c_str());
@@ -4614,7 +4632,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                             int majorIdx = tier * 3 + row;
                             uint32_t tid = specInfo->major_traits[majorIdx];
                             bool selected = ((uint32_t)spec.traits[tier] == tid);
-                            ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz);
+                            ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz,false,nullptr,g_LibEditMode&&selected);
                             if (g_LibEditMode && selected &&
                                 ImGui::BeginPopupContextItem("##trait_edit_context")) {
                                 const auto trait=AlterEgo::GW2API::GetTraitInfo(tid);
@@ -6787,6 +6805,9 @@ static bool SelectProfessionCharacterEntry(const char* id, bool selected,
     const bool clicked=ImGui::Selectable(id,selected,flags,size);
     DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),
         ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),profession,name,prefix);
+    if(ImGui::BeginPopupContextItem("##character_name")){
+        CopyNameMenuItem(name);ImGui::EndPopup();
+    }
     return clicked;
 }
 
@@ -7422,6 +7443,7 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
         CopyNameMenuItem(gear.rune,"Copy Rune Name");
         CopyNameMenuItem(gear.sigil,"Copy Sigil Name");
         CopyNameMenuItem(gear.sigil2,"Copy Second Sigil Name");
+        CopyCachedItemNamesMenu(gear.infusion_ids,"Copy Infusion Name");
     }
     auto capture = [&](GearCopyField field) { return CaptureGearClipboard(b,slot,field); };
     if (ImGui::MenuItem("Edit")) {
@@ -7552,6 +7574,9 @@ static void RenderGearCustomizeDialog() {
                 memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
             }
 
+            if(ImGui::BeginPopupContextItem("##relic_name")){
+                CopyNameMenuItem(editBuild->relic_name);ImGui::EndPopup();
+            }
             ImVec2 tp(p.x + 6, p.y + 3);
             if (!editBuild->relic_name.empty()) {
                 ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(200, 180, 255, 255), editBuild->relic_name.c_str());
@@ -8712,10 +8737,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
             CopyNameMenuItem(gearSlot->rune,"Copy Rune Name");
             CopyNameMenuItem(gearSlot->sigil,"Copy Sigil Name");
             CopyNameMenuItem(gearSlot->sigil2,"Copy Second Sigil Name");
-            for(size_t n=0;n<gearSlot->infusion_ids.size();++n){
-                const auto infusion=AlterEgo::GW2API::GetItemInfo(gearSlot->infusion_ids[n]);
-                if(infusion){ImGui::PushID(static_cast<int>(n));CopyNameMenuItem(infusion->name,"Copy Infusion Name");ImGui::PopID();}
-            }
+            CopyCachedItemNamesMenu(gearSlot->infusion_ids,"Copy Infusion Name");
         }
         ImGui::EndPopup();
     }
@@ -8934,7 +8956,7 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src, float sz, bool 
         if (editable) {
             ImGui::PushID(slot + 700);
             ImVec2 p = ImGui::GetCursorScreenPos();
-            if (RenderEditableSkillIcon(sid, sz)) {
+            if (RenderEditableSkillIcon(sid, sz,false)) {
                 g_SkillPickerSlot = slot;
                 g_SkillPickerAnchor = ImVec2(p.x, p.y + sz + 2.0f);
             }
@@ -9540,6 +9562,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
                 if (g_LibEditMode) {
                     if (ImGui::IsItemClicked()) g_SpecPickerSlot = i;
                     if (ImGui::BeginPopupContextItem("##spec_edit_context")) {
+                        CopyNameMenuItem(specName);
                         if (ImGui::MenuItem("Clear Specialization")) {
                             g_EditDraft.specializations[i] = {};
                             MarkEditDirty();
@@ -9857,8 +9880,9 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
                 ImGui::BeginGroup();
                 if (g_LibEditMode) {
                     ImVec2 ip = ImGui::GetCursorScreenPos();
-                    if (RenderEditableSkillIcon(swap, 40.0f)) g_LegendPickerSlot = slot;
+                    if (RenderEditableSkillIcon(swap, 40.0f,false)) g_LegendPickerSlot = slot;
                     if (ImGui::BeginPopupContextItem("##legend_edit_context")) {
+                        if(code)CopyNameMenuItem(LegendNameForCode(code));
                         if (ImGui::MenuItem("Clear Legend",nullptr,false,code != 0)) {
                             g_EditDraft.legend_codes[slot] = 0;
                             g_EditDraft.legend_codes[slot+2] = 0;
@@ -9897,6 +9921,9 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
                                  g_EditDraft.pets.terrestrial[slot] != 0))
                 g_PetPickerSlot = slot;
             if (ImGui::BeginPopupContextItem("##pet_edit_context")) {
+                if(g_EditDraft.pets.terrestrial[slot]){
+                    for(const auto& pet:pets)if(pet.id==g_EditDraft.pets.terrestrial[slot])CopyNameMenuItem(pet.name);
+                }
                 if (ImGui::MenuItem("Clear Pet")) {
                     g_EditDraft.pets.terrestrial[slot] = 0;
                     g_EditDraft.pets.aquatic[slot] = 0;
@@ -10691,6 +10718,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     section.sourceName.c_str());
         if (!section.sourceId.empty() &&
             ImGui::BeginPopupContextItem("##component_actions")) {
+            CopyNameMenuItem(section.sourceName);
             if (ImGui::MenuItem("Open saved component"))
                 ComponentUIOpenLibrary(section.kind, section.sourceId);
             ImGui::EndPopup();
@@ -15479,6 +15507,11 @@ static void RenderCompareStatusRow() {
     }
     std::string statusLabel;
     if(target)DescribeCharacterRefresh(*target,S::Compare,state,detail,statusLabel);
+    else if(!busy){
+        if(AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready){
+            state=AlterEgo::RefreshUI::State::Error;statusLabel="No API";detail="Link or verify an API account in Nexus options.";
+        }else{state=AlterEgo::RefreshUI::State::Ready;statusLabel="No character";}
+    }
     if (AlterEgo::RefreshUI::Row("compare", target ? S::Oldest(target->scope_stamps,S::Compare) : 0,
             "character build/equipment", state, detail, busy || !target || AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready,nullptr,statusLabel.c_str(),true)) {
         const std::string name = target->name;

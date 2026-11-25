@@ -258,9 +258,8 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             Background::Checkpoint();Secret key(Key(a.id));
             if(key.value.empty()){Message("Stored credential unavailable. Replace it in Account Management.");continue;}
             auto scope=[&](const std::string& name,const std::string& character,const std::string& path,bool bags){
-                if(!onlyScope.empty()&&onlyScope!="Items"&&onlyScope!=name)return;
+                if(!MatchesStorageView(onlyScope,characterFilter,name,character))return;
                 if(!onlyCharacter.empty()&&character!=onlyCharacter)return;
-                if(!characterFilter.empty()&&(character.empty()||!characterFilter.count(character)))return;
                 if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
                 Background::Checkpoint();
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
@@ -962,7 +961,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     const bool characterFiltered=itemView&&!nav.characters.empty();
     const std::set<std::string> noCharacters;
     const auto& characters=characterFiltered?nav.characters:noCharacters;
-    bool missing=false,failed=false,stale=false,needsManual=false;
+    bool missing=false,failed=false,stale=false,needsManual=false,retrying=false;
     std::map<ScopeKey,ScopeState> progress;std::string current;unsigned processed=0;
     {std::lock_guard<std::mutex> lock(viewMutex);progress=liveScopes;current=activeScope;processed=processedScopes;}
     std::time_t oldest=0;unsigned count=0;
@@ -976,7 +975,11 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
             if(show)detail+="; "+RefreshUI::Age(static_cast<std::time_t>(success));
         }
         if((success<=0||!ScopeFresh(account,ttlScope,ch,success))&&!AutoScope(ttlScope))needsManual=true;
-        if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing")failed=true;
+        if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing"){
+            const bool transient=status=="Rate limited; retry later"||status=="Transport failed or cancelled"||
+                status=="HTTP 429"||status.rfind("HTTP 5",0)==0;
+            if(transient&&AutoScope(ttlScope))retrying=true;else failed=true;
+        }
         ++count;
     };
     const auto mark=[&](const Account& a,const std::string& dataset,const std::string& ch={},RefreshProgress::Counts* group=nullptr){
@@ -1051,13 +1054,14 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     auto state=RefreshUI::State::Ready;
     if(busy.load()){state=RefreshUI::State::Working;detail=std::to_string(processed)+" storage scopes processed"+(current.empty()?"":"\nCurrent: "+current)+"\n\n"+detail;}
     else if(failed)state=RefreshUI::State::Error;
-    else if((missing||stale||!count)&&needsManual)state=RefreshUI::State::Waiting;
-    const char* idleLabel=state==RefreshUI::State::Waiting?"Auto disabled":
+    else if(retrying||((missing||stale||!count)&&needsManual))state=RefreshUI::State::Waiting;
+    const char* idleLabel=state==RefreshUI::State::Waiting?(retrying?"Retrying":"Auto disabled"):
         state==RefreshUI::State::Ready&&(missing||stale||!count)?(count?"Scheduled":"No scopes"):nullptr;
     if(!count&&characterFiltered)detail="No verified storage scopes match the selected characters and storage filter.";
     if(characterFiltered&&count)detail+="\n\nTimestamp and manual Refresh cover matching character storage only.";
     if(accounts.empty())detail="Link or select an account.";
-    if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty(),nullptr,idleLabel,true))
+    const bool incompatible=characterFiltered&&scope!="Items"&&scope!="Bags"&&scope!="Equipment";
+    if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty()||incompatible,nullptr,idleLabel,true))
         Refresh(accounts,scope,false,{},characterFiltered?characters:noCharacters);
 }
 

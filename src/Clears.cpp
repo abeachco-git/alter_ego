@@ -3547,9 +3547,8 @@ void RenderClearsStatusRow() {
         state = AlterEgo::RefreshUI::State::Working;
         detail = status.empty() ? "Querying completion..." : status;
     } else if (waitingForDailyRollover) {
-        // Scheduled API retries are not a hung request. Keep manual Refresh
-        // enabled, show an informative waiting state without a busy indicator.
-        state = AlterEgo::RefreshUI::State::Waiting;
+        // Normal daily reset propagation is scheduled, not a failed retrieval.
+        state = AlterEgo::RefreshUI::State::Ready;
         const auto remaining=std::max<long long>(0,g_ClearsDailyRolloverRetryAtMs.load()-NowMs());
         detail = (status.empty() ? "Daily API delayed" : status) +
             "; retry in " + std::to_string((remaining+999)/1000) + "s";
@@ -3560,7 +3559,8 @@ void RenderClearsStatusRow() {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete";
     }
-    if (AlterEgo::RefreshUI::Row("clears", updated, "Clears", state, detail, fetching))
+    if (AlterEgo::RefreshUI::Row("clears", updated, "Clears", state, detail, fetching,nullptr,
+            !fetching&&waitingForDailyRollover?"Awaiting sync":nullptr,true))
         FetchClears(true);
 }
 
