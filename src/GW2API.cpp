@@ -343,9 +343,10 @@ namespace AlterEgo {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     s_fetch_message=RefreshProgress::Character(ordinal,targets.size(),name,label);
                 };
+                std::string scopeError;
                 const auto require=[&](const std::string& endpoint,const std::vector<std::string>& perms,const char* label){
                     stage(label);auto r=NativeAccounts::Request(a,endpoint,perms);
-                    if(!r)throw std::runtime_error(r.error);return std::move(r.data);
+                    if(!r){scopeError=r.error;throw std::runtime_error("Character endpoint failed");}return std::move(r.data);
                 };
                 bool identityVerified=!needsIdentity;
                 for(auto scope:S::Ordered){
@@ -355,6 +356,7 @@ namespace AlterEgo {
                     if(scope!=S::Core&&!identityVerified){partial=true;continue;}
                     const auto ticket=attempts.BeginScope(S::Name(scope));
                     bool specVerified=true;
+                    scopeError.clear();
                     try{
                         // Stage each scope against the current candidate. A
                         // malformed response cannot erase its previous fields.
@@ -430,7 +432,7 @@ namespace AlterEgo {
                         case S::Physical:{
                             stage("Physical equipment");
                             auto physical=NativeAccounts::RequestPhysicalEquipment(a,name,manual);
-                            if(!physical.response)throw std::runtime_error(physical.response.error);
+                            if(!physical.response){scopeError=physical.response.error;throw std::runtime_error("Physical equipment endpoint failed");}
                             const auto& supplement=physical.response.data;
                             if(!supplement.at("equipment").is_array())throw std::runtime_error("Invalid supplemental equipment");
                             next.equipment.erase(std::remove_if(next.equipment.begin(),next.equipment.end(),[](const EquipmentItem& e){
@@ -476,13 +478,25 @@ namespace AlterEgo {
                         verified.push_back({scope,ticket,stamp,specVerified});
                         ch=std::move(next);
                         if(scope==S::Core)identityVerified=true;
-                    }catch(const Background::Cancelled&){throw;}catch(...){partial=true;}
+                    }catch(const Background::Cancelled&){throw;}catch(...){
+                        partial=true;
+                        if(!Background::Workers().Stopping()){
+                            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                            CharacterActivity::State().Failure(key,S::Name(scope),ticket,
+                                scopeError.empty()?"Invalid or incomplete endpoint response":scopeError);
+                        }
+                    }
                 }
                 Background::Checkpoint();
                 if(verified.empty()||!identityVerified||!NativeAccounts::Current(a)){partial=true;continue;}
                 ch.data_refreshed=std::time(nullptr);
                 stage("Saving verified scopes");
-                if(!SaveCharacterData(a.id,name,&ch,a.name,[&]{return NativeAccounts::Current(a);})){partial=true;continue;}
+                if(!SaveCharacterData(a.id,name,&ch,a.name,[&]{return NativeAccounts::Current(a);})){ 
+                    partial=true;
+                    std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                    for(const auto& v:verified)CharacterActivity::State().Failure(key,S::Name(v.scope),v.ticket,"Could not save verified data");
+                    continue;
+                }
                 for(const auto& v:verified)CharacterActivity::Success(key,S::Name(v.scope),v.ticket,v.stamp,v.specVerified);
                 {std::lock_guard<std::mutex> lock(s_mutex);++s_chars_fetched;}
             }
