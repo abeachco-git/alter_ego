@@ -26,7 +26,7 @@ class Tracker {
     Key active_;
     int64_t missingSince_=0;
     bool dirty_=false;
-    uint64_t revision_=0,nextTicket_=0;
+    uint64_t revision_=0,nextTicket_=0,loginRevision_=0;
     void Dirty(){dirty_=true;++revision_;}
     bool Active(const Key& k)const{
         return !active_.first.empty()&&k.first==active_.first&&(k.second.empty()||k.second==active_.second);
@@ -67,6 +67,7 @@ public:
             if(!oldAccount.empty()){Touch(active_,now);Touch({oldAccount,{}},now);}
             active_=k;
             auto& e=rows_[k];e.login=now;e.spec=spec;e.specChanged=0;
+            ++loginRevision_;
             if(oldAccount!=account)rows_[{account,{}}].login=now;
             Dirty();
         }else if(spec&&rows_[k].spec&&spec!=rows_[k].spec){
@@ -76,6 +77,16 @@ public:
     }
     void Finish(int64_t now){End(missingSince_?std::min(now,missingSince_):now);missingSince_=0;}
     Key ActiveKey()const{return active_;}
+    uint64_t LoginRevision()const{return loginRevision_;}
+    int64_t LastLogin(const Key& k)const{auto i=rows_.find(k);return i==rows_.end()?0:i->second.login;}
+    std::map<Key,int64_t> LoginTimes()const{
+        std::map<Key,int64_t> out;for(const auto& [k,e]:rows_)if(!k.second.empty()&&e.login>0)out.emplace(k,e.login);return out;
+    }
+    // Historical login information is not evidence of logout or API activity.
+    bool ImportLogin(const Key& k,int64_t stamp){
+        if(k.first.empty()||k.second.empty()||stamp<=0||stamp<=LastLogin(k)||Active(k))return false;
+        rows_[k].login=stamp;++loginRevision_;Dirty();return true;
+    }
     bool SpecMatches(const Key& k,uint32_t spec)const{auto it=rows_.find(k);return it==rows_.end()||!it->second.spec||it->second.spec==spec;}
     int64_t LastSeen(const Key& k)const{auto i=rows_.find(k);return i==rows_.end()?0:i->second.lastSeen;}
     bool Fresh(const Key& k,const std::string& scope,int64_t success,int64_t now,bool specSignal=true)const{
@@ -195,9 +206,15 @@ public:
             }
             next.rows_[k]=std::move(e);
         }
+        next.loginRevision_=loginRevision_+1;
         *this=std::move(next); // no active identity survives restart
     }
 };
+// Keep unknown timestamps last regardless of direction; newest first is the default.
+inline bool LoginBefore(int64_t a,int64_t b,bool newestFirst){
+    if(a<=0||b<=0)return a>0&&b<=0;
+    return newestFirst?a>b:a<b;
+}
 inline std::atomic<bool>& SpecSignal(){static std::atomic<bool> enabled{true};return enabled;}
 inline Tracker& State(){static Tracker state;return state;}
 inline std::mutex& Mutex(){static std::mutex mutex;return mutex;}

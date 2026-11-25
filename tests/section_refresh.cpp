@@ -50,6 +50,27 @@ int case_section_refresh(int, char**) {
     assert(!F::CharacterDue(false,0,now-600,now-1000,now-10,now));
     namespace A=AlterEgo::CharacterActivity;
     A::Tracker tracker;const A::Key key{"account-a","Reaper"},other{"account-b","Reaper"};
+    A::Tracker logins;
+    assert(logins.ImportLogin(key,now-100));
+    assert(!logins.ImportLogin(key,now-200));
+    assert(logins.LastSeen(key)==0); // migration cannot fabricate freshness activity
+    assert(logins.LastLogin(other)==0);
+    assert(A::LoginBefore(now,now-100,true)&&A::LoginBefore(now-100,now,false));
+    assert(A::LoginBefore(now,0,true)&&A::LoginBefore(now,0,false));
+    assert(!A::LoginBefore(0,now,true)&&!A::LoginBefore(0,0,false));
+    auto revision=logins.LoginRevision();
+    logins.Observe(key.first,key.second,34,true,now);
+    assert(logins.LastLogin(key)==now&&logins.LoginRevision()!=revision);
+    revision=logins.LoginRevision();
+    logins.Observe(key.first,key.second,35,true,now+1);
+    assert(logins.LoginRevision()==revision);
+    logins.Observe(key.first,key.second,35,false,now+2);
+    logins.Observe(key.first,key.second,35,false,now+14);
+    assert(logins.LoginRevision()==revision);
+    logins.Observe(key.first,key.second,35,true,now+15);
+    assert(logins.LastLogin(key)==now+15&&logins.LoginRevision()!=revision);
+    A::Tracker loginReload;loginReload.Load(logins.Save());
+    assert(loginReload.LastLogin(key)==now+15&&loginReload.ActiveKey().first.empty());
     tracker.Observe(key.first,key.second,34,true,now);
     assert(!tracker.Due(key,"Bags",0,0,now+599));
     assert(tracker.Due(key,"Bags",0,0,now+600));

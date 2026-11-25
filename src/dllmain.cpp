@@ -37,7 +37,6 @@
 #include "SnowCrowsImport.h"
 #include "MetaBattleImport.h"
 #include "BuildRelayPolicy.h"
-#include "AutoRefreshCore.h"
 #include "CharacterActivity.h"
 #include "AutoRefreshPolicy.h"
 #include "FontResolve.h"
@@ -836,26 +835,24 @@ struct MumbleIdentity {
     float FOV;
     unsigned UISize;
 };
-static std::string g_CurrentCharName; // currently logged-in character name from MumbleLink
-static AlterEgo::AutoRefreshTracker g_AutoRefreshTracker;
-struct IdentityObservation {
-    std::string name;
-    uint32_t spec;
-    AlterEgo::AutoRefreshTracker::Clock::time_point observed;
-    int64_t epoch;
-};
-static std::mutex g_IdentityMutex;
-static std::deque<IdentityObservation> g_PendingIdentity;
-static void DrainIdentityObservations();
-
-// Local login timestamps (character name -> unix epoch)
-static std::unordered_map<std::string, int64_t> g_LoginTimestamps;
-static bool g_LoginTimestampsDirty = false;
-static void SaveLoginTimestamps();
-static void LoadLoginTimestamps();
+static std::string g_CurrentCharName; // render-owned gameplay identity
+static uint32_t g_LiveSpecialization=0;
+// Read-only presentation projection; CharacterActivity is the sole login writer.
+static std::map<AlterEgo::CharacterActivity::Key,int64_t> g_LoginHistory;
+static std::map<std::string,int64_t> g_LegacyLoginHistory;
+static bool g_LegacyLoginArchivePending=false;
+static bool g_ActivityLoadValid=true;
+static uint64_t g_LoginProjectionRevision=0;
+static void LoadLegacyLoginHistory();
+static void MigrateLegacyLoginHistory();
+static void SyncLoginHistory();
 static void LoadCharacterActivity();
-static void SaveCharacterActivity(bool force=false);
+static bool SaveCharacterActivity(bool force=false);
 static void ObserveCharacterActivity();
+static int64_t CharacterLastLogin(const AlterEgo::Character& ch){
+    auto it=g_LoginHistory.find({ch.account_name,ch.name});
+    return it==g_LoginHistory.end()?0:it->second;
+}
 static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand);
 
 // Build Library UI state
@@ -1164,15 +1161,15 @@ static bool g_CharSortAscending = true;            // true = default direction, 
 static std::vector<int> g_CharDisplayOrder;        // indices into GetCharacters()
 static std::vector<std::string> g_CustomCharOrder;  // saved custom name order
 static int g_CharDragIdx = -1;                      // drag-and-drop source index in display order
-static size_t g_LastCharCount = 0;                  // detect character list changes
+static std::shared_ptr<const std::vector<AlterEgo::Character>> g_CharOrderRoster;
+static std::string g_CharOrderAccount;
 static bool g_CharLastLoginSortDirty = false;        // rebuild recency sort after Mumble character change
 
 static void SaveCharSortConfig();
 static void LoadCharSortConfig();
 static int DaysUntilBirthday(const std::string& created);
 
-static void RebuildCharDisplayOrder() {
-    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+static void RebuildCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& charsSnapshot = AlterEgo::GW2API::GetCharacters()) {
     const auto& chars = *charsSnapshot;
     int n = (int)chars.size();
     g_CharDisplayOrder.resize(n);
@@ -1230,12 +1227,8 @@ static void RebuildCharDisplayOrder() {
             // preserves incoming order when timestamps tie or are unavailable.
             std::stable_sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
                 [&](int a, int b) {
-                    const auto ia = g_LoginTimestamps.find(chars[a].name);
-                    const auto ib = g_LoginTimestamps.find(chars[b].name);
-                    const int64_t ta = ia == g_LoginTimestamps.end() ? 0 : ia->second;
-                    const int64_t tb = ib == g_LoginTimestamps.end() ? 0 : ib->second;
-                    if (ta <= 0 || tb <= 0) return ta > 0 && tb <= 0;
-                    return asc ? ta > tb : ta < tb;
+                    return AlterEgo::CharacterActivity::LoginBefore(
+                        CharacterLastLogin(chars[a]),CharacterLastLogin(chars[b]),asc);
                 });
             break;
         case Sort_Custom:
@@ -1285,7 +1278,42 @@ static void RebuildCharDisplayOrder() {
                 return ra < rb;
             });
     }
-    g_LastCharCount = chars.size();
+    g_CharOrderRoster=charsSnapshot;
+    g_CharOrderAccount=AlterEgo::GW2API::GetCurrentAccountName();
+    if(g_CharSortMode==Sort_LastLogin)g_CharLastLoginSortDirty=false;
+}
+
+// Numeric indices are valid only for the roster they were built from. A data
+// refresh with unchanged identities/sort keys does not require a re-sort.
+static void EnsureCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& roster){
+    bool changed=!g_CharOrderRoster||g_CharOrderRoster->size()!=roster->size()||
+        g_CharOrderAccount!=AlterEgo::GW2API::GetCurrentAccountName()||
+        (g_CharSortMode==Sort_LastLogin&&g_CharLastLoginSortDirty);
+    if(!changed&&g_CharOrderRoster!=roster){
+        for(size_t i=0;i<roster->size();++i){
+            const auto& a=(*g_CharOrderRoster)[i];const auto& b=(*roster)[i];
+            if(a.name!=b.name||a.account_name!=b.account_name||
+                (g_CharSortMode==Sort_Profession&&a.profession!=b.profession)||
+                (g_CharSortMode==Sort_Level&&a.level!=b.level)||
+                ((g_CharSortMode==Sort_Age||g_CharSortMode==Sort_Birthday)&&a.created!=b.created)){changed=true;break;}
+        }
+    }
+    if(!changed){g_CharOrderRoster=roster;return;}
+    AlterEgo::CharacterActivity::Key selected;
+    if(g_CharOrderRoster&&g_SelectedCharIdx>=0&&g_SelectedCharIdx<(int)g_CharDisplayOrder.size()){
+        const int old=g_CharDisplayOrder[g_SelectedCharIdx];
+        if(old>=0&&old<(int)g_CharOrderRoster->size()){
+            const auto& ch=(*g_CharOrderRoster)[old];selected={ch.account_name,ch.name};
+        }
+    }
+    RebuildCharDisplayOrder(roster);
+    if(!selected.second.empty()){
+        g_SelectedCharIdx=-1;
+        for(size_t i=0;i<g_CharDisplayOrder.size();++i){
+            const auto& ch=(*roster)[g_CharDisplayOrder[i]];
+            if(ch.account_name==selected.first&&ch.name==selected.second){g_SelectedCharIdx=(int)i;break;}
+        }
+    }
 }
 
 // Character refresh selection popup state
@@ -4392,9 +4420,9 @@ static void RenderCharacterHeaderMetadata(const AlterEgo::Character& ch, float w
             "https://render.guildwars2.com/file/5C759EC1C95F3BE53C167A7D9F0D27BF3AE56277/625611.png",
             "Birthday", std::to_string(birthdayDays) + "d away", true);
     }
-    auto login = g_LoginTimestamps.find(ch.name);
-    if (login != g_LoginTimestamps.end()) {
-        const int elapsed = (int)difftime(std::time(nullptr), (time_t)login->second);
+    const auto login = CharacterLastLogin(ch);
+    if (login > 0) {
+        const int elapsed = (int)difftime(std::time(nullptr), (time_t)login);
         const std::string ago = elapsed < 60 ? "Just now" :
             elapsed < 3600 ? std::to_string(elapsed / 60) + "m ago" :
             elapsed < 86400 ? std::to_string(elapsed / 3600) + "h ago" :
@@ -10014,8 +10042,8 @@ static bool HasLiveSpecCacheMismatch(const AlterEgo::Character& ch) {
     if (!g_WarnStaleSpecialization) return false;
     const int index = GetActiveBuildIndex(ch);
     if (index < 0) return false;
-    return g_AutoRefreshTracker.LiveSpecializationDiffers(
-        ch.name, ch.build_tabs[index].specializations[2].spec_id);
+    const auto cached=ch.build_tabs[index].specializations[2].spec_id;
+    return ch.name==g_CurrentCharName&&g_LiveSpecialization!=0&&cached!=0&&g_LiveSpecialization!=cached;
 }
 static const char* GetSpecNameForWarning(uint32_t id) {
     const auto info = AlterEgo::GW2API::GetSpecInfo(id);
@@ -10510,7 +10538,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     if (character->name == g_CurrentCharName &&
         HasLiveSpecCacheMismatch(*character)) {
         const int cachedIndex = GetActiveBuildIndex(*character);
-        const uint32_t currentId = g_AutoRefreshTracker.LiveSpecialization();
+        const uint32_t currentId = g_LiveSpecialization;
         const uint32_t cachedId =
             character->build_tabs[cachedIndex].specializations[2].spec_id;
         ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
@@ -10968,33 +10996,7 @@ static void RenderCompareTab() {
     // Active (auto) remains the first popup option regardless of sort mode.
     const auto compareRosterSnapshot = AlterEgo::GW2API::GetCharacters();
     const auto& compareRoster = *compareRosterSnapshot;
-    static std::string s_compareAccount;
-    const std::string compareAccount = AlterEgo::GW2API::GetCurrentAccountName();
-    if (g_CharDisplayOrder.size() != compareRoster.size() ||
-        (g_CharSortMode == Sort_LastLogin && g_CharLastLoginSortDirty) ||
-        compareAccount != s_compareAccount) {
-        // Roster/last-login refresh may require a rebuild while Compare is
-        // active. Keep the Characters tab's highlighted hero selected by name.
-        std::string selectedName;
-        if (g_SelectedCharIdx >= 0 &&
-            g_SelectedCharIdx < static_cast<int>(g_CharDisplayOrder.size())) {
-            const int oldIdx = g_CharDisplayOrder[g_SelectedCharIdx];
-            if (oldIdx >= 0 && oldIdx < static_cast<int>(compareRoster.size()))
-                selectedName = compareRoster[oldIdx].name;
-        }
-        RebuildCharDisplayOrder();
-        s_compareAccount = compareAccount;
-        if (!selectedName.empty()) {
-            for (int i = 0; i < static_cast<int>(g_CharDisplayOrder.size()); ++i) {
-                if (compareRoster[g_CharDisplayOrder[i]].name == selectedName) {
-                    g_SelectedCharIdx = i;
-                    break;
-                }
-            }
-        }
-        if (g_CharSortMode == Sort_LastLogin)
-            g_CharLastLoginSortDirty = false;
-    }
+    EnsureCharDisplayOrder(compareRosterSnapshot);
 
     std::vector<const AlterEgo::Character*> compareMatches;
     compareMatches.reserve(compareRoster.size());
@@ -12246,8 +12248,10 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::PublicCatalog::Load(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::WikiEvents::Load(AlterEgo::GW2API::GetDataDirectory());
     if(!AlterEgo::PublicCatalog::Get()->upgrades)SeedItemNameCache();
-    LoadLoginTimestamps();
     LoadCharacterActivity();
+    LoadLegacyLoginHistory();
+    MigrateLegacyLoginHistory();
+    SyncLoginHistory();
     LoadCharSortConfig();
     RebuildCharDisplayOrder();
 
@@ -12396,7 +12400,6 @@ void AddonUnload() {
     // No new callback body can enter; drain admitted work before teardown.
     // Do not hold a subsystem lock while waiting (events may reenter synchronously).
     AlterEgo::Callbacks::Runtime().Drain();
-    DrainIdentityObservations();
     // End observation at shutdown, not after a slow HTTP worker joins.
     {std::lock_guard<std::mutex> lock(AlterEgo::CharacterActivity::Mutex());
         AlterEgo::CharacterActivity::State().Finish(shutdownAt);}
@@ -12424,7 +12427,6 @@ void AddonUnload() {
     SaveSession();
     SaveSettings();
     SaveAchTrackerState();
-    if (g_LoginTimestampsDirty) SaveLoginTimestamps();
     AlterEgo::GW2API::SaveItemNameCache();
     AlterEgo::FontManager::Shutdown();
     AlterEgo::NativeLibrary::RuntimeStore().Close();
@@ -12435,45 +12437,68 @@ static void LoadCharacterActivity(){
     namespace A=AlterEgo::CharacterActivity;
     std::lock_guard<std::mutex> lock(A::Mutex());A::State()=A::Tracker{};
     const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_activity.json");
-    try{std::ifstream f(path);if(f)A::State().Load(nlohmann::json::parse(f));}catch(...){}
+    g_ActivityLoadValid=true;
+    try{std::ifstream f(path);if(f)A::State().Load(nlohmann::json::parse(f));}catch(...){g_ActivityLoadValid=false;}
+    g_LoginProjectionRevision=~uint64_t(0);
 }
-static void SaveCharacterActivity(bool force){
+static bool SaveCharacterActivity(bool force){
     namespace A=AlterEgo::CharacterActivity;
     static std::mutex saveMutex;
     std::lock_guard<std::mutex> saving(saveMutex);
     static auto last=std::chrono::steady_clock::time_point{};
     const auto now=std::chrono::steady_clock::now();
-    if(!force&&now-last<std::chrono::seconds(30))return;
+    if(!force&&now-last<std::chrono::seconds(30))return false;
     last=now;
     nlohmann::json data;uint64_t revision=0;
-    {std::lock_guard<std::mutex> lock(A::Mutex());if(!A::State().DirtyState())return;
+    {std::lock_guard<std::mutex> lock(A::Mutex());if(!A::State().DirtyState())return true;
         data=A::State().Save();revision=A::State().Revision();}
     const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_activity.json");
     if(WriteFileAtomic(path,data.dump())){
-        std::lock_guard<std::mutex> lock(A::Mutex());A::State().Saved(revision);
+        std::lock_guard<std::mutex> lock(A::Mutex());A::State().Saved(revision);return true;
+    }
+    return false;
+}
+static void LoadLegacyLoginHistory(){
+    g_LegacyLoginHistory.clear();g_LegacyLoginArchivePending=false;
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"login_times.json");
+    try{
+        std::ifstream f(path);if(!f)return;
+        const auto j=nlohmann::json::parse(f);if(!j.is_object())return;
+        bool valid=true;
+        for(auto it=j.begin();it!=j.end();++it){
+            if(!it.key().empty()&&it.value().is_number_integer()&&it.value().get<int64_t>()>0)
+                g_LegacyLoginHistory.emplace(it.key(),it.value().get<int64_t>());
+            else valid=false;
+        }
+        g_LegacyLoginArchivePending=valid&&g_ActivityLoadValid;
+    }catch(...){g_LegacyLoginArchivePending=false;}
+}
+static void MigrateLegacyLoginHistory(){
+    namespace A=AlterEgo::CharacterActivity;
+    if(!g_ActivityLoadValid)return;
+    for(auto it=g_LegacyLoginHistory.begin();it!=g_LegacyLoginHistory.end();){
+        const auto account=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(it->first);
+        if(account.empty()){++it;continue;} // retain original file until all identities resolve
+        {std::lock_guard<std::mutex> lock(A::Mutex());
+            A::State().ImportLogin({account,it->first},it->second);}
+        it=g_LegacyLoginHistory.erase(it);
+    }
+    if(g_LegacyLoginArchivePending&&g_LegacyLoginHistory.empty()&&SaveCharacterActivity(true)){
+        const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"login_times.json");
+        std::error_code ec;
+        const auto archive=path+".migrated";
+        if(!std::filesystem::exists(archive,ec)&&!ec)std::filesystem::rename(path,archive,ec);
+        // If archival fails, leave the original intact; the import is idempotent.
+        g_LegacyLoginArchivePending=false;
     }
 }
-static void SaveLoginTimestamps() {
-    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "login_times.json");
-    nlohmann::json j;
-    for (const auto& [name, ts] : g_LoginTimestamps)
-        j[name] = ts;
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump(2);
-    g_LoginTimestampsDirty = false;
-}
-
-static void LoadLoginTimestamps() {
-    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "login_times.json");
-    std::ifstream file(path);
-    if (!file.is_open()) return;
-    try {
-        auto j = nlohmann::json::parse(file);
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            if (it.value().is_number())
-                g_LoginTimestamps[it.key()] = it.value().get<int64_t>();
-        }
-    } catch (...) {}
+static void SyncLoginHistory(){
+    namespace A=AlterEgo::CharacterActivity;
+    std::lock_guard<std::mutex> lock(A::Mutex());
+    const auto revision=A::State().LoginRevision();
+    if(revision==g_LoginProjectionRevision)return;
+    g_LoginHistory=A::State().LoginTimes();g_LoginProjectionRevision=revision;
+    g_CharLastLoginSortDirty=true;
 }
 
 // Sanitize an account name to a filename-safe slug (account names contain '.').
@@ -12616,29 +12641,9 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
         return; // invalid — likely garbage data from uninitialized MumbleLink
     }
     if(newName.empty())return;
-    // Event payload memory belongs to the host. Copy only the fields we
-    // need, and let the render/lifecycle owner mutate UI and login state.
-    std::lock_guard<std::mutex> lock(g_IdentityMutex);
-    if(g_PendingIdentity.size()>=128)g_PendingIdentity.pop_front();
-    g_PendingIdentity.push_back({newName,id->Specialization,AlterEgo::AutoRefreshTracker::Clock::now(),
-        static_cast<int64_t>(std::time(nullptr))});
-    // Alerts may arrive before the next render. Publish the verified-account
-    // lookup's identity immediately through its own synchronized setter.
+    // The event publishes verified account context immediately for alert
+    // callbacks. Gameplay sampling is the sole owner of activity and UI state.
     AlterEgo::GW2API::SetCurrentAccountFromCharacter(newName);
-}
-static void DrainIdentityObservations(){
-    std::deque<IdentityObservation> pending;
-    {std::lock_guard<std::mutex> lock(g_IdentityMutex);pending.swap(g_PendingIdentity);}
-    for(const auto& event:pending){
-        const auto observed=g_AutoRefreshTracker.ObserveIdentity(event.name,event.spec,event.observed,
-            AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters),false,false);
-        if(observed.login){
-            g_LoginTimestamps[event.name]=event.epoch;
-            g_LoginTimestampsDirty=true;
-            g_CharLastLoginSortDirty=true;
-            g_CurrentCharName=event.name;
-        }
-    }
 }
 
 void ProcessKeybind(const char* aIdentifier, bool aIsRelease) {
@@ -15722,9 +15727,23 @@ static void ObserveCharacterActivity(){
     if(identity){
         char buf[20]={};memcpy(buf,identity->Name,19);name=buf;spec=identity->Specialization;
         for(unsigned char c:name)if(c!=' '&&c!='-'&&!isalpha(c)&&c<0x80){name.clear();break;}
-    }else{name=g_CurrentCharName;spec=g_AutoRefreshTracker.LiveSpecialization();}
+    }
+    if(nexus->IsGameplay&&!name.empty())AlterEgo::GW2API::SetCurrentAccountFromCharacter(name);
     const auto account=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name);
     A::Observe(account,name,spec,nexus->IsGameplay);
+    const auto active=A::ActiveKey();
+    // The live identity remains useful without an API key, but unverified
+    // ownership must never create account-scoped login history.
+    static auto lastIdentity=std::chrono::steady_clock::time_point{};
+    if(nexus->IsGameplay&&!name.empty()){
+        if(g_CurrentCharName!=name){g_CurrentCharName=name;g_LiveSpecialization=spec;}
+        else if(spec)g_LiveSpecialization=spec;
+        lastIdentity=now;
+    }else if(active.first.empty()&&now-lastIdentity>=std::chrono::seconds(12)){
+        g_CurrentCharName.clear();g_LiveSpecialization=0;
+    }
+    MigrateLegacyLoginHistory();
+    SyncLoginHistory();
     SaveCharacterActivity();
 }
 static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand){
@@ -15868,7 +15887,6 @@ void AddonRender() {
             priorCount=accounts.size();
         }
     }
-    DrainIdentityObservations();
     ObserveCharacterActivity(); // local only, no character HTTP while hidden
     PollAchievementCachePersistence(); // load/save disk progress, even when window is hidden
     SyncCompletionAccountCaches(); // selected-account Clears/Vault snapshots, even with UI hidden
@@ -15888,9 +15906,6 @@ void AddonRender() {
             }
         }
     }
-
-    // Persist login timestamps when dirty (crash-safe)
-    if (g_LoginTimestampsDirty) SaveLoginTimestamps();
 
     // One account-wide objective tick for all achievement browser/popout consumers.
     {
@@ -16043,34 +16058,7 @@ void AddonRender() {
             }
 
             if (!characters.empty()) {
-                // Rebuild when the roster, account, or Mumble-observed last
-                // login changes. Preserve the selected character by NAME so
-                // auto-resorting does not silently select another character.
-                static std::string s_lastCurrentAcct;
-                const std::string& curAcct = AlterEgo::GW2API::GetCurrentAccountName();
-                const bool recencyChanged = g_CharSortMode == Sort_LastLogin &&
-                                            g_CharLastLoginSortDirty;
-                if (characters.size() != g_LastCharCount ||
-                    curAcct != s_lastCurrentAcct || recencyChanged) {
-                    std::string selectedName;
-                    if (g_SelectedCharIdx >= 0 &&
-                        g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
-                        const int currentIndex = g_CharDisplayOrder[g_SelectedCharIdx];
-                        if (currentIndex >= 0 && currentIndex < (int)characters.size())
-                            selectedName = characters[currentIndex].name;
-                    }
-                    s_lastCurrentAcct = curAcct;
-                    RebuildCharDisplayOrder();
-                    if (!selectedName.empty()) {
-                        for (int i = 0; i < (int)g_CharDisplayOrder.size(); ++i) {
-                            if (characters[g_CharDisplayOrder[i]].name == selectedName) {
-                                g_SelectedCharIdx = i;
-                                break;
-                            }
-                        }
-                    }
-                    if (recencyChanged) g_CharLastLoginSortDirty = false;
-                }
+                EnsureCharDisplayOrder(charactersSnapshot);
 
                 // Auto-select first character if none selected, or restore session
                 if (g_SelectedCharIdx < 0 || g_SelectedCharIdx >= (int)g_CharDisplayOrder.size()) {
@@ -16113,7 +16101,7 @@ void AddonRender() {
                             int ri = g_CharDisplayOrder[g_SelectedCharIdx];
                             if (ri >= 0 && ri < (int)characters.size()) selName = characters[ri].name;
                         }
-                        RebuildCharDisplayOrder();
+                        RebuildCharDisplayOrder(charactersSnapshot);
                         g_SelectedCharIdx = 0;
                         for (int di = 0; di < (int)g_CharDisplayOrder.size(); di++) {
                             if (characters[g_CharDisplayOrder[di]].name == selName) {
@@ -16131,7 +16119,7 @@ void AddonRender() {
                                 int ri = g_CharDisplayOrder[g_SelectedCharIdx];
                                 if (ri >= 0 && ri < (int)characters.size()) selName = characters[ri].name;
                             }
-                            RebuildCharDisplayOrder();
+                            RebuildCharDisplayOrder(charactersSnapshot);
                             g_SelectedCharIdx = 0;
                             for (int di = 0; di < (int)g_CharDisplayOrder.size(); di++) {
                                 if (characters[g_CharDisplayOrder[di]].name == selName) {
@@ -16175,6 +16163,7 @@ void AddonRender() {
                         acctDisplayNames[acct.name] = acct.display_name;
                 }
                 std::string lastAcctHeader;
+                bool seenKnownLogin=false,shownUnknownLogin=false;
 
                 for (int di = 0; di < (int)g_CharDisplayOrder.size(); di++) {
                     int realIdx = g_CharDisplayOrder[di];
@@ -16199,6 +16188,7 @@ void AddonRender() {
                     // Account group header
                     if (showAcctHeaders && ch.account_name != lastAcctHeader) {
                         lastAcctHeader = ch.account_name;
+                        seenKnownLogin=false;shownUnknownLogin=false;
                         auto it = acctDisplayNames.find(ch.account_name);
                         const char* label = it != acctDisplayNames.end() ? it->second.c_str() : ch.account_name.c_str();
                         if (di > 0) ImGui::Spacing();
@@ -16206,6 +16196,14 @@ void AddonRender() {
                         ImGui::Separator();
                     }
 
+                    const auto lastLogin=CharacterLastLogin(ch);
+                    if(g_CharSortMode==Sort_LastLogin){
+                        if(lastLogin>0)seenKnownLogin=true;
+                        else if(seenKnownLogin&&!shownUnknownLogin){
+                            ImGui::Spacing();ImGui::Separator();ImGui::TextDisabled("No recorded login");
+                            shownUnknownLogin=true;
+                        }
+                    }
                     ImGui::PushID(di);
 
                     bool selected = (g_SelectedCharIdx == di);
@@ -16218,7 +16216,7 @@ void AddonRender() {
                         if (g_ShowCraftingIcons && !ch.crafting.empty()) extraLines++;
                         if (g_ShowAge && !ch.created.empty()) extraLines++;
                         if (g_ShowPlaytime && ch.age > 0) extraLines++;
-                        if (g_ShowLastLogin && g_LoginTimestamps.count(ch.name)) extraLines++;
+                        if (g_ShowLastLogin && lastLogin>0) extraLines++;
                         if (g_BirthdayMode != 2) {
                             int bdays = DaysUntilBirthday(ch.created);
                             bool showBday = (g_BirthdayMode == 0 && bdays >= 0) ||
@@ -16427,7 +16425,7 @@ void AddonRender() {
                                 "Live spec differs - refresh");
                             if (ImGui::IsItemHovered())
                                 ImGui::SetTooltip("MumbleLink reports %s, cached active build reports %s.",
-                                    GetSpecNameForWarning(g_AutoRefreshTracker.LiveSpecialization()),
+                                    GetSpecNameForWarning(g_LiveSpecialization),
                                     GetSpecNameForWarning(ch.build_tabs[GetActiveBuildIndex(ch)].specializations[2].spec_id));
                         }
                         const auto& match = GetLoggedInSavedBuildMatch();
@@ -16583,12 +16581,11 @@ void AddonRender() {
                                 ImGui::TextColored(dimCol, "%dh", hours);
                         }
 
-                        // 5. Last Login (from local MumbleLink tracking):
+                        // 5. Last Login (from the shared gameplay activity history):
                         if (g_ShowLastLogin) {
-                            auto tsIt = g_LoginTimestamps.find(ch.name);
-                            if (tsIt != g_LoginTimestamps.end()) {
+                            if (lastLogin>0) {
                                 time_t now_t = std::time(nullptr);
-                                int elapsed = (int)difftime(now_t, (time_t)tsIt->second);
+                                int elapsed = (int)difftime(now_t, (time_t)lastLogin);
                                 std::string ago;
                                 if (elapsed < 60) ago = "Just Now";
                                 else if (elapsed < 3600) ago = std::to_string(elapsed / 60) + "m ago";
@@ -17605,7 +17602,6 @@ void AddonOptions() {
     if (ImGui::Checkbox("Automatically refresh API data##ae_auto", &g_AutoRefreshEnabled)) {
         AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
         if (!g_AutoRefreshEnabled) {
-            g_AutoRefreshTracker.CancelPending();
             g_SkinRefreshOwned = false;
             // Discard deferred boot refreshes; manually initiated requests
             // and the retry phases of ongoing requests remain available.
@@ -17670,7 +17666,6 @@ void AddonOptions() {
                     AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
                     AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
                 }
-                if(!included&&dataset==Dataset::Characters)g_AutoRefreshTracker.CancelPending();
                 if(!included&&dataset==Dataset::SkinOwnership)g_SkinRefreshOwned=false;
                 if(!included&&dataset==Dataset::Achievements&&g_AchRetryAutomatic.load())g_AchRetryAtMs=0;
                 SaveSettings();
