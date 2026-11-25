@@ -442,6 +442,7 @@ NCSOFT or Raidcore.
 ArenaNet Content Terms of Use:
 https://www.arena.net/en/legal/content-terms-of-use
 
+Fixed embedded icons are retained in assets/icons with a provenance/hash manifest.
 Game icons are sourced from ArenaNet's API/render service and, for crafting
 icons, the GW2Icon mirror (https://github.com/gw2ocs/gw2icon), which credits
 ArenaNet. No MIT license is asserted over those images.

@@ -101,7 +101,7 @@ Cache schema v2 also stores achievement definitions, ordered bits/flags/prerequi
 
 The bundled Inter font and its OFL notice are embedded Windows resources. Custom fonts use the Nexus file registration API. The default font path leaves the ambient Nexus font unchanged. Preserve exact stored fields when presenting or editing incomplete imported data; Cancel must not persist edits.
 
-Fixed profession, specialization, crafting and status icons are embedded during compilation. Item, skin and skill artwork uses a persistent runtime cache. Do not reintroduce removed raid/strike banner artwork unless explicitly requested.
+Fixed profession, specialization, crafting and status icons are version-controlled in `assets/icons/` and embedded offline during compilation. The manifest records provenance and hashes; CI checks linked resource bytes. Update artwork only through explicit reviewed maintenance. Item, skin and skill artwork uses a persistent runtime cache. Do not reintroduce removed raid/strike banner artwork unless explicitly requested.
 
 The three files in `data/` provide achievement names, achievement waypoints and hero challenge locations. This branch currently retrieves those datasets from the upstream project's raw GitHub URLs; retaining the local copies and generators supports maintenance and upstream compatibility. See [tool inventory](../tools/README.md).
 

@@ -36,7 +36,7 @@ and saves an updated cache after successful artifact packaging. Compiler
 content, flags, source and header dependencies remain part of ccache validation;
 do not enable unsafe sloppiness options. The 500 MB cache holds compiler
 outputs only, never final test executables, test results or packaged DLLs.
-Every build still configures, links, runs all offline tests, verifies embedded
+Every build still configures, links, runs all offline tests, verifies the exact committed icon bytes in the linked DLL and embedded
 assets and UCRT imports, and packages a newly linked DLL. Cold builds may be
 slightly slower; use the reported ccache hit/miss statistics and workflow step
 timings to evaluate warm builds. If the cache is absent or evicted, compile

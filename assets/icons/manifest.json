@@ -1,0 +1,827 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "method": "Extracted byte-for-byte from previously verified DLL; source URLs/fields document original generator inputs, not a fresh download.",
+    "commit": "4401930325adfd94876d02373a73bf4532a91acc",
+    "run_id": 45620677316,
+    "artifact_id": 15025240296
+  },
+  "icons": [
+    {
+      "id": 43766,
+      "file": "43766.png",
+      "size": 5607,
+      "sha256": "f9fb915853429716811958ad708cdb39fd9fcf0d44b41ac2d8fb3e9157c1d4f8",
+      "source": "https://render.guildwars2.com/file/1932B731E2F70F2F1E3D453A4B7C26B24CF647C0/603246.png",
+      "field": "fixed status render"
+    },
+    {
+      "id": 68326,
+      "file": "68326.png",
+      "size": 5640,
+      "sha256": "2a87da8ce043161e3911d0f805e81a10b3604791e4ec053581885b2d0b1fa69a",
+      "source": "https://render.guildwars2.com/file/01E7C8B0EB04F6E0CB25AA0403C96E0355B63A39/924581.png",
+      "field": "fixed status render"
+    },
+    {
+      "id": 98501,
+      "file": "98501.png",
+      "size": 5342,
+      "sha256": "58bd3765bffbf23b30ac0fe0d2989d4026837741c5fb1964df191fdb926bae0e",
+      "source": "https://render.guildwars2.com/file/5C759EC1C95F3BE53C167A7D9F0D27BF3AE56277/625611.png",
+      "field": "fixed status render"
+    },
+    {
+      "id": 1500005,
+      "file": "1500005.png",
+      "size": 6107,
+      "sha256": "f75ce1ddbdac4c14dec385ac6cbf834871e10aa87f1a0b75c2d5597f4303aaeb",
+      "source": "https://api.guildwars2.com/v2/specializations/5",
+      "field": "icon"
+    },
+    {
+      "id": 1500007,
+      "file": "1500007.png",
+      "size": 5582,
+      "sha256": "301c641a4b7585b9b3d3cde6dd1981ffdbdfbf5e55714d17214c5ef00c733460",
+      "source": "https://api.guildwars2.com/v2/specializations/7",
+      "field": "icon"
+    },
+    {
+      "id": 1500018,
+      "file": "1500018.png",
+      "size": 5661,
+      "sha256": "68cf0a5c40d21a1c23c4edc3b634a8630dc46fd362188fea2d5cf2bb1d73bd7c",
+      "source": "https://api.guildwars2.com/v2/specializations/18",
+      "field": "icon"
+    },
+    {
+      "id": 1500027,
+      "file": "1500027.png",
+      "size": 3986,
+      "sha256": "5b22eecb9c2a6dc5bb42d8e6f9fd4c1b7def1d832b4dd81b9026978def3bcab2",
+      "source": "https://api.guildwars2.com/v2/specializations/27",
+      "field": "icon"
+    },
+    {
+      "id": 1500034,
+      "file": "1500034.png",
+      "size": 5813,
+      "sha256": "e63617ab015ecce2b650f862476be815fc51361de1053ed148efbae88b168493",
+      "source": "https://api.guildwars2.com/v2/specializations/34",
+      "field": "icon"
+    },
+    {
+      "id": 1500040,
+      "file": "1500040.png",
+      "size": 6204,
+      "sha256": "68edbbf177bbd79ed15752fe57bec8d1851419519da9abecb1017700d37ba40f",
+      "source": "https://api.guildwars2.com/v2/specializations/40",
+      "field": "icon"
+    },
+    {
+      "id": 1500043,
+      "file": "1500043.png",
+      "size": 5734,
+      "sha256": "b924d0e501958662a8809962d8d8f1591526f1a3b0327998c9067c16c8c92304",
+      "source": "https://api.guildwars2.com/v2/specializations/43",
+      "field": "icon"
+    },
+    {
+      "id": 1500048,
+      "file": "1500048.png",
+      "size": 6058,
+      "sha256": "f19ab2b517c602d7107e053b87a25da102bfdf1cd5161893a7a0b014bba54e77",
+      "source": "https://api.guildwars2.com/v2/specializations/48",
+      "field": "icon"
+    },
+    {
+      "id": 1500052,
+      "file": "1500052.png",
+      "size": 6060,
+      "sha256": "57eef5a502677c167a98a80364df6036b12245264a506e895a2a3591af36ad6e",
+      "source": "https://api.guildwars2.com/v2/specializations/52",
+      "field": "icon"
+    },
+    {
+      "id": 1500055,
+      "file": "1500055.png",
+      "size": 5794,
+      "sha256": "df87f515cf5faabe00a7c6732827b646831516f9b72ec5619331804fb71fa259",
+      "source": "https://api.guildwars2.com/v2/specializations/55",
+      "field": "icon"
+    },
+    {
+      "id": 1500056,
+      "file": "1500056.png",
+      "size": 6148,
+      "sha256": "8ec6ecdf183afba42f1944c140451635df573190ccc7e0a7a8a82020e9ecfc1b",
+      "source": "https://api.guildwars2.com/v2/specializations/56",
+      "field": "icon"
+    },
+    {
+      "id": 1500057,
+      "file": "1500057.png",
+      "size": 5794,
+      "sha256": "aa243e75b400c5793fe5a8bcd47fbfed7c7acd674951e92bda6d09c3bc8ef808",
+      "source": "https://api.guildwars2.com/v2/specializations/57",
+      "field": "icon"
+    },
+    {
+      "id": 1500058,
+      "file": "1500058.png",
+      "size": 4719,
+      "sha256": "719fa84f187efa3eda406d2bc257d58b7cff9004f4a7dd4e6a1d31d4b3b00d25",
+      "source": "https://api.guildwars2.com/v2/specializations/58",
+      "field": "icon"
+    },
+    {
+      "id": 1500059,
+      "file": "1500059.png",
+      "size": 5892,
+      "sha256": "58184d7260a3088b06974350a26ec0029e872be26b647936f2a2114ffaa7d1e1",
+      "source": "https://api.guildwars2.com/v2/specializations/59",
+      "field": "icon"
+    },
+    {
+      "id": 1500060,
+      "file": "1500060.png",
+      "size": 5457,
+      "sha256": "fcd869dbf36d2c1a59f06ff101366df0478be0afffa644a3f97b877191842ca9",
+      "source": "https://api.guildwars2.com/v2/specializations/60",
+      "field": "icon"
+    },
+    {
+      "id": 1500061,
+      "file": "1500061.png",
+      "size": 5846,
+      "sha256": "cfda3298c47675259ddf9804dbca926399ca4120bdf6d13cc343046dd8b74288",
+      "source": "https://api.guildwars2.com/v2/specializations/61",
+      "field": "icon"
+    },
+    {
+      "id": 1500062,
+      "file": "1500062.png",
+      "size": 5894,
+      "sha256": "4b3e6753d07e5c5cc0503e7186543edc13889dbb12ff147b8315ae4974bd2284",
+      "source": "https://api.guildwars2.com/v2/specializations/62",
+      "field": "icon"
+    },
+    {
+      "id": 1500063,
+      "file": "1500063.png",
+      "size": 5399,
+      "sha256": "18722f2f7e0150d0656e18e1ca08889cedf553e940fce56e4d960b68e7fe41e5",
+      "source": "https://api.guildwars2.com/v2/specializations/63",
+      "field": "icon"
+    },
+    {
+      "id": 1500064,
+      "file": "1500064.png",
+      "size": 5337,
+      "sha256": "71d7c79089b82fa44aabd5943e59cf876ffd160c1a49398aaca0db8f6dc64da2",
+      "source": "https://api.guildwars2.com/v2/specializations/64",
+      "field": "icon"
+    },
+    {
+      "id": 1500065,
+      "file": "1500065.png",
+      "size": 5891,
+      "sha256": "22e66ceb6505623ebf8592bb2d5816756959343d73dc417aba5fe95a2568f106",
+      "source": "https://api.guildwars2.com/v2/specializations/65",
+      "field": "icon"
+    },
+    {
+      "id": 1500066,
+      "file": "1500066.png",
+      "size": 5798,
+      "sha256": "afbf309a66248cd17f73167c6670ee5212c70cdab0010256d47b9b559908bdef",
+      "source": "https://api.guildwars2.com/v2/specializations/66",
+      "field": "icon"
+    },
+    {
+      "id": 1500067,
+      "file": "1500067.png",
+      "size": 4948,
+      "sha256": "c59af6d129d6544f9caccb7a9bec8fad6e7896ef84c931a3519e3143ddd3d819",
+      "source": "https://api.guildwars2.com/v2/specializations/67",
+      "field": "icon"
+    },
+    {
+      "id": 1500068,
+      "file": "1500068.png",
+      "size": 4155,
+      "sha256": "7ca2c8e4657b967cdf976033b385325bee40507ff65046eea15eb0d5f9be6627",
+      "source": "https://api.guildwars2.com/v2/specializations/68",
+      "field": "icon"
+    },
+    {
+      "id": 1500069,
+      "file": "1500069.png",
+      "size": 4008,
+      "sha256": "51eb6fc567ff25b43fe9e7293a00b27dab271e62bff5c036c024a7d9cdddadd6",
+      "source": "https://api.guildwars2.com/v2/specializations/69",
+      "field": "icon"
+    },
+    {
+      "id": 1500070,
+      "file": "1500070.png",
+      "size": 5849,
+      "sha256": "923dd86b3e5542993909951caa7f7d0c02ba250473b8c8eaddcee303198533fd",
+      "source": "https://api.guildwars2.com/v2/specializations/70",
+      "field": "icon"
+    },
+    {
+      "id": 1500071,
+      "file": "1500071.png",
+      "size": 5250,
+      "sha256": "a0efaeb5bb706f922d64d4c518707598b35823ac919c54a7963ebb547bc8ff39",
+      "source": "https://api.guildwars2.com/v2/specializations/71",
+      "field": "icon"
+    },
+    {
+      "id": 1500072,
+      "file": "1500072.png",
+      "size": 4180,
+      "sha256": "a8c85cb8a4c945251db3cb50697f4a6312ad086d26cc80322f7ab50a92845de8",
+      "source": "https://api.guildwars2.com/v2/specializations/72",
+      "field": "icon"
+    },
+    {
+      "id": 1500073,
+      "file": "1500073.png",
+      "size": 5854,
+      "sha256": "ab6c626c8a7b3a23bc128f459f42720ea68cf721276906a6fd0d8064b63d298e",
+      "source": "https://api.guildwars2.com/v2/specializations/73",
+      "field": "icon"
+    },
+    {
+      "id": 1500074,
+      "file": "1500074.png",
+      "size": 6026,
+      "sha256": "242aeb50742ce505765eea476f50f05a82ec1563dc9235318211e09bb0a3fe66",
+      "source": "https://api.guildwars2.com/v2/specializations/74",
+      "field": "icon"
+    },
+    {
+      "id": 1500075,
+      "file": "1500075.png",
+      "size": 6184,
+      "sha256": "b281f6ad03705f1bd3c3904e47a1d8bfb9a6b1303df5cad12c81bf82791c503c",
+      "source": "https://api.guildwars2.com/v2/specializations/75",
+      "field": "icon"
+    },
+    {
+      "id": 1500076,
+      "file": "1500076.png",
+      "size": 5781,
+      "sha256": "c4e7acdc270cc83e8391fa792fc7a71429d3610e7128cae2355814a38d9864c1",
+      "source": "https://api.guildwars2.com/v2/specializations/76",
+      "field": "icon"
+    },
+    {
+      "id": 1500077,
+      "file": "1500077.png",
+      "size": 5544,
+      "sha256": "9b1dd5927d9c4544d48d1b6fd64b93ca4dbbcee3d4bae7c7e1ed78f2da284472",
+      "source": "https://api.guildwars2.com/v2/specializations/77",
+      "field": "icon"
+    },
+    {
+      "id": 1500078,
+      "file": "1500078.png",
+      "size": 5687,
+      "sha256": "c41e98158676605510ac0a385f995f837d1516c810d48024dba6f6c3e78b010e",
+      "source": "https://api.guildwars2.com/v2/specializations/78",
+      "field": "icon"
+    },
+    {
+      "id": 1500079,
+      "file": "1500079.png",
+      "size": 5921,
+      "sha256": "ad7623f66f52dfce6e54ee9ddebf4c09a15bc64aea376fd5042e04e59bffdd56",
+      "source": "https://api.guildwars2.com/v2/specializations/79",
+      "field": "icon"
+    },
+    {
+      "id": 1500080,
+      "file": "1500080.png",
+      "size": 5888,
+      "sha256": "ffb3d7487bb704c73e1e330925af0059ad22dfecb591cd0c8241e6bee32bf1da",
+      "source": "https://api.guildwars2.com/v2/specializations/80",
+      "field": "icon"
+    },
+    {
+      "id": 1500081,
+      "file": "1500081.png",
+      "size": 6099,
+      "sha256": "431ebbbaa8dfb6c982beaa68b34eebac9a0268bd0ef51f82140f999c3b06f997",
+      "source": "https://api.guildwars2.com/v2/specializations/81",
+      "field": "icon"
+    },
+    {
+      "id": 2000005,
+      "file": "2000005.png",
+      "size": 4870,
+      "sha256": "0f6881967395561f92695190f03e418d02e309aa2a86f67bd1f755fff871b8f5",
+      "source": "https://api.guildwars2.com/v2/specializations/5",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000007,
+      "file": "2000007.png",
+      "size": 4888,
+      "sha256": "d143b849be4c48294eab5051b3f30dd92ac94712955501dee7dd8f6a2209bcc1",
+      "source": "https://api.guildwars2.com/v2/specializations/7",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000018,
+      "file": "2000018.png",
+      "size": 5456,
+      "sha256": "6585322edf4bf09b944d5f815a379fe32c70cfd8383dec03c11af918553a1bd1",
+      "source": "https://api.guildwars2.com/v2/specializations/18",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000027,
+      "file": "2000027.png",
+      "size": 4746,
+      "sha256": "13d772e428ad9fcab0470316d9941ed099ba99584c4f95f04d1cb8cd5f450d7d",
+      "source": "https://api.guildwars2.com/v2/specializations/27",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000034,
+      "file": "2000034.png",
+      "size": 4904,
+      "sha256": "5a7c93f4e16eb1bb67dcd4353b4bee04a790333a603b82d335d990ce1bffae61",
+      "source": "https://api.guildwars2.com/v2/specializations/34",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000040,
+      "file": "2000040.png",
+      "size": 5161,
+      "sha256": "161fdbded7da0d197ccbe0bae3a299dd10f1bbc82c968b75fbebff16f5eef212",
+      "source": "https://api.guildwars2.com/v2/specializations/40",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000043,
+      "file": "2000043.png",
+      "size": 5031,
+      "sha256": "54cde8cc8822a6517032497aecc7ca05e755793be4ffa2d0064c89a68b92925b",
+      "source": "https://api.guildwars2.com/v2/specializations/43",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000048,
+      "file": "2000048.png",
+      "size": 5010,
+      "sha256": "00dd6161355edfbf6c12c75f0f85c3739fd7b50cc1b578e2e70e2588b499633c",
+      "source": "https://api.guildwars2.com/v2/specializations/48",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000052,
+      "file": "2000052.png",
+      "size": 5019,
+      "sha256": "7de81930d78687e92e83582e96d3c3ba590b8228de8620ccce8b51cde32504b8",
+      "source": "https://api.guildwars2.com/v2/specializations/52",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000055,
+      "file": "2000055.png",
+      "size": 5102,
+      "sha256": "4a04a0d39eb5e12f57c21812d03dbf491f09bb6cb79f242eaab0f02416c7c59a",
+      "source": "https://api.guildwars2.com/v2/specializations/55",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000056,
+      "file": "2000056.png",
+      "size": 4672,
+      "sha256": "af007489d3f9631d33623cf8e8c6f13bb9b0227aac3cc5cb26050a9207e73a2e",
+      "source": "https://api.guildwars2.com/v2/specializations/56",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000057,
+      "file": "2000057.png",
+      "size": 4836,
+      "sha256": "f1f721e460a4ef6f87b25a11428f7f81a49fc0b2e6b8df277770f5419b919965",
+      "source": "https://api.guildwars2.com/v2/specializations/57",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000058,
+      "file": "2000058.png",
+      "size": 5038,
+      "sha256": "0f94e6d78c4c36535daf8aa45aa0256187c66cc7f5133b786c578b92317c2281",
+      "source": "https://api.guildwars2.com/v2/specializations/58",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000059,
+      "file": "2000059.png",
+      "size": 4815,
+      "sha256": "cf0abf49ee9fe65d2c52ad03c503ece2fab1f499fc2f7445c6c288038d07c06a",
+      "source": "https://api.guildwars2.com/v2/specializations/59",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000060,
+      "file": "2000060.png",
+      "size": 5131,
+      "sha256": "58a593336e498284780c8e22a9b516088f1b006b67bc556003380c48b6136fad",
+      "source": "https://api.guildwars2.com/v2/specializations/60",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000061,
+      "file": "2000061.png",
+      "size": 5024,
+      "sha256": "df077a98ab19b7b611d4e106ef4780ca51469034615d00945d291092b81401a0",
+      "source": "https://api.guildwars2.com/v2/specializations/61",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000062,
+      "file": "2000062.png",
+      "size": 4638,
+      "sha256": "9a5fbd2e81160f675cea15d81e6199647e0300b6e7e8eb2ac4d3466f56f8c8e4",
+      "source": "https://api.guildwars2.com/v2/specializations/62",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000063,
+      "file": "2000063.png",
+      "size": 4695,
+      "sha256": "c693bf42e96275a3495bce42478b5b5b08dc09c879987006aee2e4570090a468",
+      "source": "https://api.guildwars2.com/v2/specializations/63",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000064,
+      "file": "2000064.png",
+      "size": 1541,
+      "sha256": "ddd09750bf8707624a6b9ecac9aedb38dba678b19c924fc4e973fc7d1b6315b7",
+      "source": "https://api.guildwars2.com/v2/specializations/64",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000065,
+      "file": "2000065.png",
+      "size": 1643,
+      "sha256": "d2906fc85d9bf699184c6d3f67a73e89b4e22fab2a83d4efc306d887a16b83b3",
+      "source": "https://api.guildwars2.com/v2/specializations/65",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000066,
+      "file": "2000066.png",
+      "size": 1608,
+      "sha256": "9d03ac7443b97ac1dd83b870484ba9ed5ff31299638f6a3c3f33001398406bc1",
+      "source": "https://api.guildwars2.com/v2/specializations/66",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000067,
+      "file": "2000067.png",
+      "size": 1596,
+      "sha256": "f253ab063021659f446d26d2dc8992efe53af9c75285fb353e31c4cb9e01c0ae",
+      "source": "https://api.guildwars2.com/v2/specializations/67",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000068,
+      "file": "2000068.png",
+      "size": 1570,
+      "sha256": "3e01231fb6a083417cc37bfe08602ed00edb007c85b56844532586cb8641b8ed",
+      "source": "https://api.guildwars2.com/v2/specializations/68",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000069,
+      "file": "2000069.png",
+      "size": 1616,
+      "sha256": "89aed5849f60eb0fb654828e0870d0f679ecc38085ec8783b1637c5954a1063a",
+      "source": "https://api.guildwars2.com/v2/specializations/69",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000070,
+      "file": "2000070.png",
+      "size": 1658,
+      "sha256": "019bd467a01586ead754da418715e5e94669acd63952cb9042f558f6d3406d71",
+      "source": "https://api.guildwars2.com/v2/specializations/70",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000071,
+      "file": "2000071.png",
+      "size": 1537,
+      "sha256": "fd35440d7b591fb3789e0c0d7be305248aab66e640ec4959665c2e5143283d29",
+      "source": "https://api.guildwars2.com/v2/specializations/71",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000072,
+      "file": "2000072.png",
+      "size": 1618,
+      "sha256": "e9d87e34b1eec1cd091c79dc704ae46b442ee4735f93a68e77e8e023caa85435",
+      "source": "https://api.guildwars2.com/v2/specializations/72",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000073,
+      "file": "2000073.png",
+      "size": 1583,
+      "sha256": "6330b7ce0b1a34c86090850aa6e63df20f9d2c3aaa1975484d1c0114cce52d3e",
+      "source": "https://api.guildwars2.com/v2/specializations/73",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000074,
+      "file": "2000074.png",
+      "size": 1606,
+      "sha256": "6acb7a20ab2bdf51aa24dcaba6ca34edcd726e70fee1efb08818ea79df730f8c",
+      "source": "https://api.guildwars2.com/v2/specializations/74",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000075,
+      "file": "2000075.png",
+      "size": 1594,
+      "sha256": "31fa68076d5727fca51f932220a2bc51d705bd54eee46c3322c618b20da23b96",
+      "source": "https://api.guildwars2.com/v2/specializations/75",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000076,
+      "file": "2000076.png",
+      "size": 1561,
+      "sha256": "a9f834f4aea29fc6e7b529377fd11f678f7487432cdf80dde6899678faac59a0",
+      "source": "https://api.guildwars2.com/v2/specializations/76",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000077,
+      "file": "2000077.png",
+      "size": 1699,
+      "sha256": "64059fbcc243ff7e78752687cc75527c8e506987ff6aceceea2caa5abfffd463",
+      "source": "https://api.guildwars2.com/v2/specializations/77",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000078,
+      "file": "2000078.png",
+      "size": 1713,
+      "sha256": "6df6cf1b24d49c3e2b06f9241a76533c95144b1703e78ca63e7d58ecbd6a42a4",
+      "source": "https://api.guildwars2.com/v2/specializations/78",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000079,
+      "file": "2000079.png",
+      "size": 1743,
+      "sha256": "dc2e75a4d693583a9b66b0d362222171dfeeaca0603edd8f2e21388cf0799ee2",
+      "source": "https://api.guildwars2.com/v2/specializations/79",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000080,
+      "file": "2000080.png",
+      "size": 1546,
+      "sha256": "82e2d1a00a304685ade4e2bed72c1b339448d46039f52034e14865abda3f8288",
+      "source": "https://api.guildwars2.com/v2/specializations/80",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 2000081,
+      "file": "2000081.png",
+      "size": 1633,
+      "sha256": "04c181f42e4ab54aacd800492bf462836b1493cac728a13556213b4057253563",
+      "source": "https://api.guildwars2.com/v2/specializations/81",
+      "field": "profession_icon_big"
+    },
+    {
+      "id": 9000001,
+      "file": "9000001.png",
+      "size": 926,
+      "sha256": "24b3da5daae7c69332f7465db5ef33708cc4ea905551b92b30b861175dcc4618",
+      "source": "https://api.guildwars2.com/v2/professions/Guardian",
+      "field": "icon"
+    },
+    {
+      "id": 9000002,
+      "file": "9000002.png",
+      "size": 1026,
+      "sha256": "5d4387ab398349f25d21141b744fec73a478a98c64e38e3cce4eb1159b942ee9",
+      "source": "https://api.guildwars2.com/v2/professions/Warrior",
+      "field": "icon"
+    },
+    {
+      "id": 9000003,
+      "file": "9000003.png",
+      "size": 950,
+      "sha256": "977807eb9485aef736023cf5e73848c7efa6d5987db15f8243865b94b9586c6b",
+      "source": "https://api.guildwars2.com/v2/professions/Engineer",
+      "field": "icon"
+    },
+    {
+      "id": 9000004,
+      "file": "9000004.png",
+      "size": 1264,
+      "sha256": "eff24477d14a75b50986a20f2c2c6a4760653ad5b69d465ecc6468e9e7f4818f",
+      "source": "https://api.guildwars2.com/v2/professions/Ranger",
+      "field": "icon"
+    },
+    {
+      "id": 9000005,
+      "file": "9000005.png",
+      "size": 1248,
+      "sha256": "f4850db0626dcddabb92ba476c90c25707502d080a222f3b5868a992d2efaf0f",
+      "source": "https://api.guildwars2.com/v2/professions/Thief",
+      "field": "icon"
+    },
+    {
+      "id": 9000006,
+      "file": "9000006.png",
+      "size": 890,
+      "sha256": "e13af211307470698ab1d75b517c28f163c5ca831db9e5c696c66283b182eda9",
+      "source": "https://api.guildwars2.com/v2/professions/Elementalist",
+      "field": "icon"
+    },
+    {
+      "id": 9000007,
+      "file": "9000007.png",
+      "size": 871,
+      "sha256": "20aa3d7deb5816aae65b15a3b91b3fd5050eb366d08d44d3417f3900fa8bd61d",
+      "source": "https://api.guildwars2.com/v2/professions/Mesmer",
+      "field": "icon"
+    },
+    {
+      "id": 9000008,
+      "file": "9000008.png",
+      "size": 1171,
+      "sha256": "d85f78fb680b881cc6afcbb5c2664ac28536fd40834074e6e97c1b0de8344d07",
+      "source": "https://api.guildwars2.com/v2/professions/Necromancer",
+      "field": "icon"
+    },
+    {
+      "id": 9000009,
+      "file": "9000009.png",
+      "size": 949,
+      "sha256": "3e54bbe38309e4937975ffd63991c017f173c16f442da77cb7b45281d792e016",
+      "source": "https://api.guildwars2.com/v2/professions/Revenant",
+      "field": "icon"
+    },
+    {
+      "id": 9100001,
+      "file": "9100001.png",
+      "size": 5261,
+      "sha256": "509c34965677b7a41c60c778c0f2c32af033fca7adb3cd183b8b8933b1119950",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/armorsmith.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9100002,
+      "file": "9100002.png",
+      "size": 5270,
+      "sha256": "08fa9436879aa7c8f9b1513a58c30cc170357fa61ee0fe4a9cec3c3fef9b9a32",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/artificer.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9100003,
+      "file": "9100003.png",
+      "size": 4803,
+      "sha256": "fec1259226b05929a5daea3ba5a9d0fbd439def090e8f07139b5364d1f4b96a4",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/chef.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9100004,
+      "file": "9100004.png",
+      "size": 4496,
+      "sha256": "e684763fe743d8718643575ce13f2f6914793597d7502d3397b2ba5dce0bf609",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/huntsman.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9100005,
+      "file": "9100005.png",
+      "size": 5887,
+      "sha256": "80d88efc0506acabfd81342f576aa17cd865219295dd9bedcfdfaf626037b362",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/jeweler.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9100006,
+      "file": "9100006.png",
+      "size": 6077,
+      "sha256": "989063fd7c5287561ccb76a7c53abfd47bd0df4617f6335d084e9f31130d6185",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/leatherworker.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9100007,
+      "file": "9100007.png",
+      "size": 21023,
+      "sha256": "743bb8e356c869d561050b1aa425b6686eb1c724303c1d7015650cfd9ec005e5",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/scribe.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9100008,
+      "file": "9100008.png",
+      "size": 5258,
+      "sha256": "5237e5e08a23260673ebdea23ba30546aea586684c93ae484960f4f959a59839",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/tailor.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9100009,
+      "file": "9100009.png",
+      "size": 5062,
+      "sha256": "bf0017c72fb6a8e205c0ac75d703c437ed34093a2443b18221e1128013130eaa",
+      "source": "https://raw.githubusercontent.com/gw2ocs/gw2icon/master/src/img/characters/weaponsmith.png",
+      "field": "crafting icon"
+    },
+    {
+      "id": 9200001,
+      "file": "9200001.png",
+      "size": 4840,
+      "sha256": "6cb7069523cb24365e2dadb04564e7108db9e35c0fbdd297ba0fbad7fe63d42d",
+      "source": "https://api.guildwars2.com/v2/professions/Guardian",
+      "field": "icon_big"
+    },
+    {
+      "id": 9200002,
+      "file": "9200002.png",
+      "size": 4819,
+      "sha256": "9084c8bfd1cd4d4285b1629225fd4dfb075e4499a1b2b7e83b8e55144953db64",
+      "source": "https://api.guildwars2.com/v2/professions/Warrior",
+      "field": "icon_big"
+    },
+    {
+      "id": 9200003,
+      "file": "9200003.png",
+      "size": 4824,
+      "sha256": "b150a948aec300c9c244805e5848d1559074a7f35be77a6094e0043eba158ff0",
+      "source": "https://api.guildwars2.com/v2/professions/Engineer",
+      "field": "icon_big"
+    },
+    {
+      "id": 9200004,
+      "file": "9200004.png",
+      "size": 4883,
+      "sha256": "8da9c80deadf6dc7a0babf0358cabe260daef194412a7773a7d043344494c352",
+      "source": "https://api.guildwars2.com/v2/professions/Ranger",
+      "field": "icon_big"
+    },
+    {
+      "id": 9200005,
+      "file": "9200005.png",
+      "size": 4864,
+      "sha256": "73846f89f4535b3f311fe8e84947e50555f62eea92cc65a976642ed9b16c1820",
+      "source": "https://api.guildwars2.com/v2/professions/Thief",
+      "field": "icon_big"
+    },
+    {
+      "id": 9200006,
+      "file": "9200006.png",
+      "size": 4943,
+      "sha256": "567f2aefbe73ab1acc5f8117c4dbc816d535fc752e51b042cade16b88719ed6c",
+      "source": "https://api.guildwars2.com/v2/professions/Elementalist",
+      "field": "icon_big"
+    },
+    {
+      "id": 9200007,
+      "file": "9200007.png",
+      "size": 4822,
+      "sha256": "fecbbc636cfc18ab7a7f30a3ac91334b5928017563f7c1f0bf249ead0621fbb8",
+      "source": "https://api.guildwars2.com/v2/professions/Mesmer",
+      "field": "icon_big"
+    },
+    {
+      "id": 9200008,
+      "file": "9200008.png",
+      "size": 4863,
+      "sha256": "dfd8df6e839868deeb1c505faa386544dd024d274f4962ecb7e06b2f6b793b76",
+      "source": "https://api.guildwars2.com/v2/professions/Necromancer",
+      "field": "icon_big"
+    },
+    {
+      "id": 9200009,
+      "file": "9200009.png",
+      "size": 4874,
+      "sha256": "b6a22fcc0a8a2916afc8061fd9c6702caebaa24dc126bb407ffef7ec60696e22",
+      "source": "https://api.guildwars2.com/v2/professions/Revenant",
+      "field": "icon_big"
+    }
+  ]
+}

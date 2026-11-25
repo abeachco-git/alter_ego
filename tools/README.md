@@ -5,7 +5,9 @@ These utilities are retained for active build use, dataset maintenance, or usefu
 | Tool | Purpose |
 | --- | --- |
 | `dependency_inventory.py` | Validate vendored dependency inventory, generate CycloneDX and GitHub snapshots, optionally query OSV |
-| `generate_embedded_icons.py` | Required fixed icon generation during Windows DLL builds |
+| `generate_embedded_icons.py` | Offline fixed icon resource generation from checked-in assets |
+| `update_embedded_icons.py` | Manual acquisition into a new staging directory; review before updating Git assets |
+| `verify_embedded_icons.py` | Verify linked DLL resources against the checked-in assets |
 | `audit_skill_icons.py` | Manual skill-icon size research workflow |
 | `fetch_achievement_names.py` | Refresh achievement name dataset |
 | `build_achievement_waypoints.py` | Refresh achievement waypoint dataset |

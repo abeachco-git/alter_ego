@@ -10,6 +10,7 @@ on:
       - 'tests/**'
       - 'include/**'
       - 'lib/**'
+      - 'assets/**'
       - 'CMakeLists.txt'
       - 'AlterEgo.def'
       - 'LICENSE'
@@ -58,6 +59,7 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Verify embedded fixed UI assets
         run: |
+          python3 tools/verify_embedded_icons.py build/AlterEgo.dll
           test -s build/embedded_icons.rc
           grep -q 'AE_9000008' build/embedded_icons.rc
           grep -q 'AE_9200008' build/embedded_icons.rc
