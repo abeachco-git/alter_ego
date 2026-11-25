@@ -1,0 +1,61 @@
+name: Capture already embedded fixed icons
+on:
+  push:
+    branches: [experiment/composable-loadouts]
+    paths: ['.github/workflows/capture-fixed-icons.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: AlterEgo-UCRT-Windows-x64
+          run-id: 45620677316
+          github-token: ${{ github.token }}
+          path: captured
+      - name: Extract fixed image resources from verified existing DLL
+        run: |
+          python3 - <<'PY'
+          import struct, pathlib, hashlib, base64
+          b=pathlib.Path('captured/build/AlterEgo.dll').read_bytes()
+          u16=lambda o:struct.unpack_from('<H',b,o)[0]
+          u32=lambda o:struct.unpack_from('<I',b,o)[0]
+          p=u32(0x3c); opt=p+24; n=u16(p+6); sec=opt+u16(p+20)
+          assert u16(opt)==0x20b
+          sections=[]
+          for i in range(n):
+              q=sec+40*i
+              sections.append((u32(q+12),max(u32(q+8),u32(q+16)),u32(q+20)))
+          def off(r):
+              for va,sz,raw in sections:
+                  if va<=r<va+sz:return raw+r-va
+              raise ValueError(r)
+          base=off(u32(opt+112+16))
+          def entries(rel):
+              p=base+rel
+              for i in range(u16(p+12)+u16(p+14)):
+                  a,c=struct.unpack_from('<II',b,p+16+8*i)
+                  if a>>31:
+                      q=base+(a&0x7fffffff)
+                      a=b[q+2:q+2+2*u16(q)].decode('utf-16le')
+                  yield a,c&0x7fffffff
+          images={}
+          for typ,d in entries(0):
+              if typ!=10:continue
+              for name,lang in entries(d):
+                  if not isinstance(name,str) or not name.startswith('AE_'):continue
+                  _,dat=next(entries(lang));p=base+dat;start=off(u32(p));v=b[start:start+u32(p+4)]
+                  ext='png' if v.startswith(bytes.fromhex('89504e470d0a1a0a')) else 'jpg' if v.startswith(bytes.fromhex('ffd8ff')) else None
+                  assert ext, name
+                  images[name[3:]+'.'+ext]=v
+          assert len(images)==102
+          for name,v in sorted(images.items()):
+              encoded=base64.b64encode(v).decode()
+              digest=hashlib.sha256(v).hexdigest()
+              print(f'ICON_META {name} {len(v)} {digest}',flush=True)
+              for i in range(0,len(encoded),2048):
+                  print(f'ICON_DATA {name} {i//2048} {encoded[i:i+2048]}',flush=True)
+          PY
