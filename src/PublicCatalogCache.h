@@ -116,11 +116,73 @@ inline std::string Summary(const Json& details,const std::string& description) {
     if(out.empty())out=description;
     return out;
 }
+struct Pet {uint32_t id=0;std::string name,icon;};
+struct Legend {uint8_t code=0;std::string apiId,name,icon;uint32_t swap=0;};
+inline std::vector<Pet> ParsePets(const Json& rows) {
+    if(!rows.is_array()||rows.empty())throw std::runtime_error("Empty pet catalog");
+    std::set<uint32_t> seen;std::vector<Pet> out;
+    for(const auto& r:rows){
+        auto id=Id(r.at("id"));auto name=r.at("name").get<std::string>();
+        if(id>255||name.empty()||!seen.insert(id).second)throw std::runtime_error("Invalid pet");
+        out.push_back({id,name,r.value("icon",std::string{})});
+    }
+    return out;
+}
+inline std::vector<Legend> ParseLegends(const Json& rows,const Json& skills) {
+    if(!rows.is_array()||rows.empty()||!skills.is_array())throw std::runtime_error("Empty legend catalog");
+    std::map<uint32_t,std::pair<std::string,std::string>> names;
+    for(const auto& s:skills){
+        auto id=Id(s.at("id"));auto name=s.at("name").get<std::string>();
+        if(name.empty()||!names.emplace(id,std::make_pair(name,s.value("icon",std::string{}))).second)
+            throw std::runtime_error("Invalid legend skill");
+    }
+    std::set<uint32_t> codes;std::set<std::string> ids;std::vector<Legend> out;
+    for(const auto& r:rows){
+        auto code=Id(r.at("code"));auto id=r.at("id").get<std::string>();auto swap=Id(r.at("swap"));
+        auto it=names.find(swap);
+        if(code>255||id.empty()||!codes.insert(code).second||!ids.insert(id).second||it==names.end())
+            throw std::runtime_error("Invalid legend identity");
+        out.push_back({static_cast<uint8_t>(code),id,it->second.first,it->second.second,swap});
+    }
+    return out;
+}
+inline void StorePets(Database::Connection& db,const std::vector<Pet>& rows,int64_t stamp) {
+    if(rows.empty()||stamp<Fresh(db,"public_pets")||
+       static_cast<int64_t>(rows.size())<db.Scalar("SELECT count(*) FROM public_pets")*9/10)
+        throw std::runtime_error("Incomplete pet catalog");
+    db.Exec("DELETE FROM public_pets");auto q=db.Prepare("INSERT INTO public_pets VALUES(?,?,?)");
+    for(const auto& r:rows){q.Bind(1,r.id);q.Bind(2,r.name);q.Bind(3,r.icon);q.Execute();q.Reset();}
+    Mark(db,"public_pets",stamp);
+}
+inline void StoreLegends(Database::Connection& db,const std::vector<Legend>& rows,int64_t stamp) {
+    if(rows.empty()||stamp<Fresh(db,"public_legends")||
+       static_cast<int64_t>(rows.size())<db.Scalar("SELECT count(*) FROM public_legends"))
+        throw std::runtime_error("Incomplete legend catalog");
+    db.Exec("DELETE FROM public_legends");auto q=db.Prepare("INSERT INTO public_legends VALUES(?,?,?,?,?)");
+    for(const auto& r:rows){q.Bind(1,static_cast<int>(r.code));q.Bind(2,r.apiId);q.Bind(3,r.swap);q.Bind(4,r.name);q.Bind(5,r.icon);q.Execute();q.Reset();}
+    Mark(db,"public_legends",stamp);
+}
+inline uint8_t LegendCode(const std::vector<Legend>& rows,const std::string& id) {
+    for(const auto& row:rows)if(row.apiId==id)return row.code;
+    // The original known template protocol codes are preserved offline.
+    // Do not derive arbitrary new codes from an ID suffix.
+    if(id.size()==7&&id.compare(0,6,"Legend")==0&&id[6]>='1'&&id[6]<='8')
+        return static_cast<uint8_t>(id[6]-'0');
+    return 0;
+}
+inline uint8_t CanonicalLegendCode(uint8_t code) {
+    // Historical experimental picker wrote 13..19; preserve its meaning on
+    // explicit display/edit/export, never rewrite durable library records.
+    return code>=13&&code<=19?static_cast<uint8_t>(code-12):code;
+}
 struct Snapshot {
     int64_t upgrades=0,upgradeAttempt=0,vault=0,vaultAttempt=0;
     std::set<uint32_t> index,upgradeIds;
     std::vector<Entry> entries;
     std::map<uint32_t,Objective> objectives;
+    std::vector<Pet> pets;
+    std::vector<Legend> legends;
+    std::map<std::string,std::pair<int64_t,int64_t>> freshness;
 };
 inline Snapshot Read(Database::Connection& db) {
     Snapshot out;
@@ -135,6 +197,16 @@ inline Snapshot Read(Database::Connection& db) {
     }
     auto q=db.Prepare("SELECT id,title,track,acclaim FROM public_vault_objectives");
     while(q.Step())out.objectives.emplace(static_cast<uint32_t>(q.Integer(0)),Objective{q.Text(1),q.Text(2),q.Integer(3)});
+    auto pets=db.Prepare("SELECT id,name,icon FROM public_pets ORDER BY name,id");
+    while(pets.Step())out.pets.push_back({static_cast<uint32_t>(pets.Integer(0)),pets.Text(1),pets.Text(2)});
+    auto legends=db.Prepare("SELECT code,api_id,name,icon,swap_skill FROM public_legends ORDER BY code");
+    while(legends.Step())out.legends.push_back({static_cast<uint8_t>(legends.Integer(0)),legends.Text(1),legends.Text(2),legends.Text(3),static_cast<uint32_t>(legends.Integer(4))});
+    for(const char* name:{"public_pets","public_legends","public_stats","public_dyes"})
+        out.freshness.emplace(name,std::make_pair(Fresh(db,name),Fresh(db,std::string(name)+"_attempt")));
     return out;
+}
+inline bool DatasetDue(const Snapshot& s,const std::string& name,int64_t now,bool manual) {
+    auto it=s.freshness.find(name);
+    return it==s.freshness.end()||Due(it->second.first,it->second.second,now,manual);
 }
 } // namespace AlterEgo::PublicCatalog

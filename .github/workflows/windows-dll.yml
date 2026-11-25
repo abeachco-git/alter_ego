@@ -84,7 +84,7 @@ jobs:
                   print(f"FAILED: {type(exc).__name__}: {exc}")
           PY
       - name: Verify public catalog API payloads
-        if: github.event_name == 'workflow_dispatch' && inputs.public_api_diagnostic
+        if: (github.event_name == 'workflow_dispatch' && inputs.public_api_diagnostic) || github.event.head_commit.message == 'Persist companion catalogs and refresh reference metadata'
         continue-on-error: true
         run: |
           python3 - <<'PY'
@@ -96,15 +96,18 @@ jobs:
                   data = json.load(r)
                   print(path, "HTTP", r.status, "records", len(data))
                   return data
-          objectives = get("/v2/wizardsvault/objectives?ids=all")
-          assert isinstance(objectives,list) and objectives
-          assert all({"id","title","track","acclaim"} <= o.keys() for o in objectives)
-          print("Vault sample:", objectives[0])
-          items = get("/v2/items?ids=91595,91439,100090,49424")
-          assert isinstance(items,list) and items
-          for item in items:
-              d = item.get("details",{})
-              print("Item sample:", item["id"],item["name"],item["type"],d.get("type"),d.get("infusion_upgrade_flags"),d.get("bonuses"),d.get("infix_upgrade"),item.get("description"))
+          legends = get("/v2/legends?ids=all&v=2019-12-19T00:00:00.000Z")
+          assert all({"id","code","swap"} <= l.keys() for l in legends)
+          print("Legend identities:", [(l["id"], l["code"], l["swap"]) for l in legends])
+          swaps = get("/v2/skills?ids="+",".join(str(i) for i in sorted({l["swap"] for l in legends})))
+          print("Legend names:", [(s["id"],s["name"]) for s in swaps])
+          pets = get("/v2/pets?ids=all")
+          assert pets and all({"id","name"} <= p.keys() for p in pets)
+          print("Pet sample:", pets[0]["id"],pets[0]["name"])
+          stats = get("/v2/itemstats?ids=all")
+          print("Stat sample:",stats[0])
+          dyes = get("/v2/colors?ids=all")
+          print("Dye sample:",dyes[0]["id"],dyes[0]["name"],dyes[0]["base_rgb"])
           PY
       # Cache compiler outputs, never final executables or test results.
       - name: Restore compiler cache

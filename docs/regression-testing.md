@@ -140,3 +140,5 @@ Main tab grouping visual smoke: verify the muted dividers before Inventory and V
 Waypoint retirement smoke test: expand Lighting the Echovald Wilds in Achievements and the popout; no obsolete WP actions should appear. Pin/unpin, copy objective names in the tracker, sub-achievement/Skinventory navigation and Open in Wiki must still work. Vault assistance and vendor location links remain independent.
 
 Public catalog coverage in database_core checks seven-day freshness, failure backoff/manual override, typed upgrade classification, Vault definition parsing and rejection of incomplete batches. Live API samples are an optional diagnostic, not an offline regression gate.
+
+Public catalog tests cover v17 pet/legend persistence, exact protocol code resolution and historical picker display normalization. Live probes are bounded samples, not a full catalog scan or in-game validation.

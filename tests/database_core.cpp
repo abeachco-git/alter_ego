@@ -81,7 +81,17 @@ int case_database_core(int, char**) {
             P::StoreObjectives(db,{{20,{"Combo","PvE",10}}},100);
             tx.Commit();
         }
+        const auto pets=P::ParsePets(P::Json::parse(R"([{"id":4,"name":"Pet","icon":"url"}])"));
+        const auto legends=P::ParseLegends(P::Json::parse(R"([{"id":"Legend8","code":8,"swap":500}])"),
+            P::Json::parse(R"([{"id":500,"name":"Legendary Entity Stance","icon":"url"}])"));
+        {DB::Transaction tx(db);P::StorePets(db,pets,100);P::StoreLegends(db,legends,100);tx.Commit();}
         auto saved=P::Read(db);
+        assert(saved.pets.size()==1&&saved.pets[0].id==4);
+        assert(saved.legends.size()==1&&saved.legends[0].swap==500);
+        assert(P::LegendCode(saved.legends,"Legend8")==8);
+        assert(P::LegendCode(saved.legends,"Legend9")==0);
+        assert(P::CanonicalLegendCode(13)==1&&P::CanonicalLegendCode(19)==7&&P::CanonicalLegendCode(8)==8);
+        assert(!P::DatasetDue(saved,"public_pets",101,false));
         assert(saved.upgrades==100&&saved.vault==100&&saved.index.size()==6&&saved.entries.size()==5);
         assert(saved.objectives.at(20).title=="Combo");
         assert(db.Scalar("SELECT count(*) FROM reference_items WHERE complete=1")==5);

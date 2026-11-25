@@ -4196,10 +4196,9 @@ static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
     }
 
     if (bt.profession == "Revenant") {
-        auto LegendByte = [](const std::string& s) -> uint8_t {
-            if (s.size() > 6 && s.substr(0, 6) == "Legend")
-                return (uint8_t)std::atoi(s.c_str() + 6);
-            return 0;
+        const auto catalog=AlterEgo::PublicCatalog::Get();
+        auto LegendByte = [&](const std::string& s) -> uint8_t {
+            return AlterEgo::PublicCatalog::LegendCode(catalog->legends,s);
         };
         link.legends[0] = LegendByte(bt.legends.terrestrial[0]);
         link.legends[1] = LegendByte(bt.legends.terrestrial[1]);
@@ -4274,10 +4273,9 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
             sb.aquatic_skills = capturedTab->aquatic_skills;
             sb.pets = capturedTab->pets;
             sb.weapons = capturedTab->weapons;
-            auto legendCode = [](const std::string& value) -> uint8_t {
-                if (value.rfind("Legend", 0) != 0) return 0;
-                int v = std::atoi(value.c_str() + 6);
-                return (v > 0 && v <= 255) ? static_cast<uint8_t>(v) : 0;
+            const auto catalog=AlterEgo::PublicCatalog::Get();
+            auto legendCode = [&](const std::string& value) -> uint8_t {
+                return AlterEgo::PublicCatalog::LegendCode(catalog->legends,value);
             };
             sb.legend_codes[0] = legendCode(capturedTab->legends.terrestrial[0]);
             sb.legend_codes[1] = legendCode(capturedTab->legends.terrestrial[1]);
@@ -6315,317 +6313,317 @@ static const char* FriendlyAttrName(const std::string& attr) {
     return attr.c_str();
 }
 
-// Curated rune list (name + item_id + summary). IDs from GW2 API.
-struct RuneEntry { const char* name; uint32_t item_id; const char* bonus; };
+// Curated rune list (name + item_id (offline bootstrap only)). IDs from GW2 API.
+struct RuneEntry { const char* name; uint32_t item_id; };
 static const RuneEntry RUNE_LIST[] = {
-    {"Superior Rune of the Scholar",      91595, "+Power, +Ferocity, +10% dmg >90% HP"},
-    {"Superior Rune of the Eagle",        91433, "+Power, +Precision, +Ferocity, +10% dmg >80% HP"},
-    {"Superior Rune of Strength",         91423, "+Power, +Ferocity, +5% dmg on might"},
-    {"Superior Rune of the Dragonhunter", 91432, "+Power, +Ferocity, +7% vs burning foes"},
-    {"Superior Rune of the Berserker",    91397, "+Power, +Ferocity, +5% crit dmg"},
-    {"Superior Rune of the Thief",        91579, "+Power, +Precision, +10% dmg from stealth"},
-    {"Superior Rune of the Firebrand",    91538, "+Condi Dmg, +Expertise, +7% burning dmg"},
-    {"Superior Rune of Balthazar",        91513, "+Condi Dmg, +Burning duration"},
-    {"Superior Rune of the Trapper",      91508, "+Condi Dmg, +Expertise, +10% condi dur"},
-    {"Superior Rune of the Afflicted",    91460, "+Condi Dmg, +Expertise"},
-    {"Superior Rune of Tormenting",       91516, "+Condi Dmg, +Expertise, torment on hit"},
-    {"Superior Rune of the Tempest",      91583, "+Ferocity, +Precision, stun on crit"},
-    {"Superior Rune of Surging",          91591, "+Power, +Ferocity, swiftness on swap"},
-    {"Superior Rune of the Pack",         91592, "+Power, +Precision, might/fury/swiftness"},
-    {"Superior Rune of Vampirism",        91545, "+Power, +Ferocity, lifesteal"},
-    {"Superior Rune of the Monk",         91501, "+Healing, +Outgoing Heal, +Boon Duration"},
-    {"Superior Rune of the Water",        91518, "+Healing, +Boon Duration"},
-    {"Superior Rune of Durability",       91444, "+Toughness, +Vitality, +Boon Duration"},
-    {"Superior Rune of the Defender",     91404, "+Toughness, +Vitality"},
-    {"Superior Rune of the Traveler",     91485, "+All stats, +25% movement"},
-    {"Superior Rune of the Rebirth",      91627, "+Healing, +Boon Duration, auto-rez"},
-    {"Superior Rune of the Nightmare",    91410, "+Condi Dmg, +Condi Duration"},
-    {"Superior Rune of Thorns",           91381, "+Condi Dmg, +Expertise, +bleeding"},
-    {"Superior Rune of the Citadel",      91588, "+Power, +Ferocity, +might on kill"},
-    {"Superior Rune of Fireworks",        91482, "+Power, +Boon Duration"},
-    {"Superior Rune of the Grove",        91475, "+Condi Dmg, +Healing"},
-    {"Superior Rune of Sanctuary",        91605, "+Vitality, +Toughness, barrier on heal"},
-    {"Superior Rune of Snowfall",         91512, "+Power, +Precision, superspeed"},
-    {"Superior Rune of the Sunless",      91515, "+Condi Dmg, +Expertise, +torment"},
-    {"Superior Rune of Resistance",       91411, "+Vitality, +Toughness, Resistance"},
-    {"Superior Rune of the Weaver",       91451, "+Power, +Condi Dmg, +Ferocity"},
-    {"Superior Rune of Scavenging",       91553, "+MF, +Power, +Precision"},
-    {"Superior Rune of Antitoxin",        91641, "+Vitality, +Healing, condi cleanse"},
-    {"Superior Rune of the Aristocracy",  91602, "+Power, +Precision, +might dur"},
-    {"Superior Rune of Rage",             91503, "+Power, +Ferocity, fury on crit"},
+    {"Superior Rune of the Scholar",      91595},
+    {"Superior Rune of the Eagle",        91433},
+    {"Superior Rune of Strength",         91423},
+    {"Superior Rune of the Dragonhunter", 91432},
+    {"Superior Rune of the Berserker",    91397},
+    {"Superior Rune of the Thief",        91579},
+    {"Superior Rune of the Firebrand",    91538},
+    {"Superior Rune of Balthazar",        91513},
+    {"Superior Rune of the Trapper",      91508},
+    {"Superior Rune of the Afflicted",    91460},
+    {"Superior Rune of Tormenting",       91516},
+    {"Superior Rune of the Tempest",      91583},
+    {"Superior Rune of Surging",          91591},
+    {"Superior Rune of the Pack",         91592},
+    {"Superior Rune of Vampirism",        91545},
+    {"Superior Rune of the Monk",         91501},
+    {"Superior Rune of the Water",        91518},
+    {"Superior Rune of Durability",       91444},
+    {"Superior Rune of the Defender",     91404},
+    {"Superior Rune of the Traveler",     91485},
+    {"Superior Rune of the Rebirth",      91627},
+    {"Superior Rune of the Nightmare",    91410},
+    {"Superior Rune of Thorns",           91381},
+    {"Superior Rune of the Citadel",      91588},
+    {"Superior Rune of Fireworks",        91482},
+    {"Superior Rune of the Grove",        91475},
+    {"Superior Rune of Sanctuary",        91605},
+    {"Superior Rune of Snowfall",         91512},
+    {"Superior Rune of the Sunless",      91515},
+    {"Superior Rune of Resistance",       91411},
+    {"Superior Rune of the Weaver",       91451},
+    {"Superior Rune of Scavenging",       91553},
+    {"Superior Rune of Antitoxin",        91641},
+    {"Superior Rune of the Aristocracy",  91602},
+    {"Superior Rune of Rage",             91503},
     // --- Additional runes ---
-    {"Superior Rune of Melandru",         24771, "+Toughness, -Condition Duration on self"},
-    {"Superior Rune of the Chronomancer", 73399, "+Power, +Precision, +Boon Duration"},
-    {"Superior Rune of Hoelbrak",         24729, "+Power, +Might dur, +Condi dur, +Boon dur"},
-    {"Superior Rune of Divinity",         24732, "+All stats, +Crit damage"},
-    {"Superior Rune of Dwayna",           24768, "+Healing, +Regeneration, +Vitality"},
-    {"Superior Rune of the Undead",       24757, "+Condi Dmg, +Toughness"},
-    {"Superior Rune of the Ogre",         24756, "+Power, +Ferocity, +Vitality"},
-    {"Superior Rune of Altruism",         38206, "+Healing, +Boon Duration, +Vitality"},
-    {"Superior Rune of the Warrior",      24821, "+Vitality, +Power"},
-    {"Superior Rune of the Engineer",     24812, "+Toughness, +Condi Dmg"},
-    {"Superior Rune of Grenth",           24779, "+Condi Dmg, +Chill duration"},
-    {"Superior Rune of the Herald",       76100, "+Toughness, +Boon Duration"},
-    {"Superior Rune of the Dolyak",       24699, "+Toughness, +Vitality, stability"},
-    {"Superior Rune of the Ranger",       24815, "+Precision, +Ferocity"},
-    {"Superior Rune of Leadership",       70600, "+All stats, +Boon Duration"},
+    {"Superior Rune of Melandru",         24771},
+    {"Superior Rune of the Chronomancer", 73399},
+    {"Superior Rune of Hoelbrak",         24729},
+    {"Superior Rune of Divinity",         24732},
+    {"Superior Rune of Dwayna",           24768},
+    {"Superior Rune of the Undead",       24757},
+    {"Superior Rune of the Ogre",         24756},
+    {"Superior Rune of Altruism",         38206},
+    {"Superior Rune of the Warrior",      24821},
+    {"Superior Rune of the Engineer",     24812},
+    {"Superior Rune of Grenth",           24779},
+    {"Superior Rune of the Herald",       76100},
+    {"Superior Rune of the Dolyak",       24699},
+    {"Superior Rune of the Ranger",       24815},
+    {"Superior Rune of Leadership",       70600},
     // --- Remaining superior runes ---
-    {"Superior Rune of Evasion",          67344, "+Vitality, endurance refill on dodge"},
-    {"Superior Rune of Exuberance",       44951, "+Vitality, +Toughness, +Might dur"},
-    {"Superior Rune of Infiltration",     24703, "+Power, +Precision, stealth on skill"},
-    {"Superior Rune of Lyssa",            24776, "+Condi Dmg, all boons + cleanse on elite"},
-    {"Superior Rune of Mercy",            24708, "+Healing, +Vitality, faster revive"},
-    {"Superior Rune of Nature's Bounty",  81091, "+Condi Dmg, +Expertise, +Regen dur"},
-    {"Superior Rune of Orr",              24860, "+Condi Dmg, +Condi Duration"},
-    {"Superior Rune of Perplexity",       44957, "+Condi Dmg, confusion on interrupt"},
-    {"Superior Rune of Radiance",         67342, "+Power, +Ferocity, blind on swap"},
-    {"Superior Rune of Rata Sum",         24726, "+Precision, +Ferocity, golem at low HP"},
-    {"Superior Rune of Speed",            24720, "+Power, +Swiftness dur, +25% swiftness"},
-    {"Superior Rune of Svanir",           24794, "+Toughness, +Chill dur, frost armor"},
-    {"Superior Rune of the Adventurer",   24830, "+Power, +Precision, endurance on heal"},
-    {"Superior Rune of the Air",          24750, "+Precision, +Ferocity, lightning on hit"},
-    {"Superior Rune of the Baelfire",     24854, "+Condi Dmg, +Burn dur, condi remove"},
-    {"Superior Rune of the Brawler",      24833, "+Power, +Ferocity, might on heal"},
-    {"Superior Rune of the Cavalier",     83367, "+Toughness, +Ferocity, +25% movement"},
-    {"Superior Rune of the Centaur",      24788, "+Power, +Swiftness dur, swiftness on heal"},
-    {"Superior Rune of the Daredevil",    72852, "+Power, +Ferocity, daze on dodge"},
-    {"Superior Rune of the Deadeye",      82791, "+Precision, +Ferocity, fury on stealth"},
-    {"Superior Rune of the Druid",        70450, "+Healing, +Boon dur, heal on dodge"},
-    {"Superior Rune of the Earth",        24744, "+Toughness, +Bleed dur, bleed on hit"},
-    {"Superior Rune of the Elementalist", 24800, "+Power, +Ferocity, aura on swap"},
-    {"Superior Rune of the Fire",         24747, "+Power, +Burn dur, fire aura on hit"},
-    {"Superior Rune of the Flame Legion", 24797, "+Power, +Burn dur, burn on hit"},
-    {"Superior Rune of the Flock",        24696, "+Power, +Vitality, heal on hit"},
-    {"Superior Rune of the Forgeman",     24851, "+Toughness, +Burn dur, fire shield"},
-    {"Superior Rune of the Golemancer",   24785, "+Power, +Ferocity, mini golem at low HP"},
-    {"Superior Rune of the Guardian",     24824, "+Power, +Boon dur, aegis on hit"},
-    {"Superior Rune of the Holosmith",    82633, "+Power, +Ferocity, lightning on crit"},
-    {"Superior Rune of the Ice",          24753, "+Toughness, +Chill dur, chill on hit"},
-    {"Superior Rune of the Krait",        24762, "+Condi Dmg, +Bleed dur, torment on bleed"},
-    {"Superior Rune of the Lich",         24688, "+Condi Dmg, +Ferocity, lifesteal on crit"},
-    {"Superior Rune of the Mad King",     36044, "+Power, +Ferocity, plague at low HP"},
-    {"Superior Rune of the Mesmer",       24803, "+Condi Dmg, +Confusion dur"},
-    {"Superior Rune of the Mirage",       84127, "+Condi Dmg, +Expertise, mirror on dodge"},
-    {"Superior Rune of the Necromancer",  24806, "+Condi Dmg, +Vitality, life siphon"},
-    {"Superior Rune of the Privateer",    24782, "+Power, +Swiftness dur, might on kill"},
-    {"Superior Rune of the Reaper",       70829, "+Power, +Ferocity, chill on crit"},
-    {"Superior Rune of the Renegade",     83502, "+Condi Dmg, +Expertise, summon Razah"},
-    {"Superior Rune of the Revenant",     69370, "+All stats, +Boon Duration"},
-    {"Superior Rune of the Scourge",      83663, "+Condi Dmg, +Expertise, torment on hit"},
-    {"Superior Rune of the Scrapper",     71276, "+Toughness, +Vitality, barrier on hit"},
-    {"Superior Rune of the Soulbeast",    83964, "+Precision, +Ferocity, fury on swap"},
-    {"Superior Rune of the Spellbreaker", 84749, "+Power, +Precision, boon strip on hit"},
-    {"Superior Rune of the Stars",        85713, "+All stats, -Incoming Condi"},
-    {"Superior Rune of the Trooper",      24827, "+Toughness, +Boon dur, shouts cleanse"},
-    {"Superior Rune of the Wurm",         24791, "+Power, +Toughness, wurm at low HP"},
-    {"Superior Rune of the Zephyrite",    88118, "+All stats, swiftness on dodge"},
+    {"Superior Rune of Evasion",          67344},
+    {"Superior Rune of Exuberance",       44951},
+    {"Superior Rune of Infiltration",     24703},
+    {"Superior Rune of Lyssa",            24776},
+    {"Superior Rune of Mercy",            24708},
+    {"Superior Rune of Nature's Bounty",  81091},
+    {"Superior Rune of Orr",              24860},
+    {"Superior Rune of Perplexity",       44957},
+    {"Superior Rune of Radiance",         67342},
+    {"Superior Rune of Rata Sum",         24726},
+    {"Superior Rune of Speed",            24720},
+    {"Superior Rune of Svanir",           24794},
+    {"Superior Rune of the Adventurer",   24830},
+    {"Superior Rune of the Air",          24750},
+    {"Superior Rune of the Baelfire",     24854},
+    {"Superior Rune of the Brawler",      24833},
+    {"Superior Rune of the Cavalier",     83367},
+    {"Superior Rune of the Centaur",      24788},
+    {"Superior Rune of the Daredevil",    72852},
+    {"Superior Rune of the Deadeye",      82791},
+    {"Superior Rune of the Druid",        70450},
+    {"Superior Rune of the Earth",        24744},
+    {"Superior Rune of the Elementalist", 24800},
+    {"Superior Rune of the Fire",         24747},
+    {"Superior Rune of the Flame Legion", 24797},
+    {"Superior Rune of the Flock",        24696},
+    {"Superior Rune of the Forgeman",     24851},
+    {"Superior Rune of the Golemancer",   24785},
+    {"Superior Rune of the Guardian",     24824},
+    {"Superior Rune of the Holosmith",    82633},
+    {"Superior Rune of the Ice",          24753},
+    {"Superior Rune of the Krait",        24762},
+    {"Superior Rune of the Lich",         24688},
+    {"Superior Rune of the Mad King",     36044},
+    {"Superior Rune of the Mesmer",       24803},
+    {"Superior Rune of the Mirage",       84127},
+    {"Superior Rune of the Necromancer",  24806},
+    {"Superior Rune of the Privateer",    24782},
+    {"Superior Rune of the Reaper",       70829},
+    {"Superior Rune of the Renegade",     83502},
+    {"Superior Rune of the Revenant",     69370},
+    {"Superior Rune of the Scourge",      83663},
+    {"Superior Rune of the Scrapper",     71276},
+    {"Superior Rune of the Soulbeast",    83964},
+    {"Superior Rune of the Spellbreaker", 84749},
+    {"Superior Rune of the Stars",        85713},
+    {"Superior Rune of the Trooper",      24827},
+    {"Superior Rune of the Wurm",         24791},
+    {"Superior Rune of the Zephyrite",    88118},
 };
 static const int RUNE_COUNT = sizeof(RUNE_LIST) / sizeof(RUNE_LIST[0]);
 
-// Curated sigil list (name + item_id + summary). IDs from GW2 API.
-struct SigilEntry { const char* name; uint32_t item_id; const char* bonus; };
+// Curated sigil list (name + item_id (offline bootstrap only)). IDs from GW2 API.
+struct SigilEntry { const char* name; uint32_t item_id; };
 static const SigilEntry SIGIL_LIST[] = {
-    {"Superior Sigil of Force",           91439, "+5% damage"},
-    {"Superior Sigil of Impact",          91405, "+3% stun duration"},
-    {"Superior Sigil of Accuracy",        91607, "+7% crit chance"},
-    {"Superior Sigil of the Night",       91389, "+10% dmg at night"},
-    {"Superior Sigil of Undead Slaying",  91524, "+10% vs undead"},
-    {"Superior Sigil of Demon Slaying",   91431, "+10% vs demons"},
-    {"Superior Sigil of Air",             91520, "Lightning strike on crit"},
-    {"Superior Sigil of Fire",            91559, "AoE fire on crit"},
-    {"Superior Sigil of Earth",           91531, "Bleed on crit"},
-    {"Superior Sigil of Geomancy",        91552, "Bleed AoE on swap"},
-    {"Superior Sigil of Doom",            91480, "Poison on swap"},
-    {"Superior Sigil of Torment",         91412, "Torment on crit"},
-    {"Superior Sigil of Malice",          91478, "+10% condition duration"},
-    {"Superior Sigil of Smoldering",      91488, "+20% burning duration"},
-    {"Superior Sigil of Venom",           91532, "+20% poison duration"},
-    {"Superior Sigil of Agony",           91534, "+20% torment duration"},
-    {"Superior Sigil of Bursting",        91416, "+5% condition damage"},
-    {"Superior Sigil of Concentration",   91473, "+10% boon duration"},
-    {"Superior Sigil of Transference",    91448, "+10% outgoing heal"},
-    {"Superior Sigil of Renewal",         91400, "Heal on kill"},
-    {"Superior Sigil of Blood",           91604, "Lifesteal on crit"},
-    {"Superior Sigil of Strength",        91561, "Might on crit"},
-    {"Superior Sigil of Severance",       91499, "Quickness on cc"},
-    {"Superior Sigil of Energy",          91441, "Endurance on swap"},
-    {"Superior Sigil of Paralyzation",    91398, "+30% stun duration"},
-    {"Superior Sigil of Absorption",      91589, "Steal boon on hit"},
-    {"Superior Sigil of Cleansing",       91548, "Condi cleanse on swap"},
-    {"Superior Sigil of Draining",        91544, "Steal HP on swap"},
-    {"Superior Sigil of Demons",          91388, "+10% vs demons"},
-    {"Superior Sigil of Serpent Slaying", 91456, "+10% vs destroyers"},
+    {"Superior Sigil of Force",           91439},
+    {"Superior Sigil of Impact",          91405},
+    {"Superior Sigil of Accuracy",        91607},
+    {"Superior Sigil of the Night",       91389},
+    {"Superior Sigil of Undead Slaying",  91524},
+    {"Superior Sigil of Demon Slaying",   91431},
+    {"Superior Sigil of Air",             91520},
+    {"Superior Sigil of Fire",            91559},
+    {"Superior Sigil of Earth",           91531},
+    {"Superior Sigil of Geomancy",        91552},
+    {"Superior Sigil of Doom",            91480},
+    {"Superior Sigil of Torment",         91412},
+    {"Superior Sigil of Malice",          91478},
+    {"Superior Sigil of Smoldering",      91488},
+    {"Superior Sigil of Venom",           91532},
+    {"Superior Sigil of Agony",           91534},
+    {"Superior Sigil of Bursting",        91416},
+    {"Superior Sigil of Concentration",   91473},
+    {"Superior Sigil of Transference",    91448},
+    {"Superior Sigil of Renewal",         91400},
+    {"Superior Sigil of Blood",           91604},
+    {"Superior Sigil of Strength",        91561},
+    {"Superior Sigil of Severance",       91499},
+    {"Superior Sigil of Energy",          91441},
+    {"Superior Sigil of Paralyzation",    91398},
+    {"Superior Sigil of Absorption",      91589},
+    {"Superior Sigil of Cleansing",       91548},
+    {"Superior Sigil of Draining",        91544},
+    {"Superior Sigil of Demons",          91388},
+    {"Superior Sigil of Serpent Slaying", 91456},
     // --- Additional sigils ---
-    {"Superior Sigil of Battle",          24601, "Might on weapon swap"},
-    {"Superior Sigil of Vision",          24600, "Crit after weapon swap"},
-    {"Superior Sigil of Hydromancy",      24597, "Chill on weapon swap"},
-    {"Superior Sigil of Nullification",   24572, "Remove boon on hit"},
-    {"Superior Sigil of Bloodlust",       24575, "+Power stacks on kill"},
-    {"Superior Sigil of Corruption",      24578, "+Condi stacks on kill"},
-    {"Superior Sigil of Ice",             24555, "Chill on crit"},
-    {"Superior Sigil of Chilling",        24630, "Chill on hit"},
-    {"Superior Sigil of Leeching",        24599, "Steal HP on kill"},
-    {"Superior Sigil of Celerity",        24865, "Quickness on disable"},
+    {"Superior Sigil of Battle",          24601},
+    {"Superior Sigil of Vision",          24600},
+    {"Superior Sigil of Hydromancy",      24597},
+    {"Superior Sigil of Nullification",   24572},
+    {"Superior Sigil of Bloodlust",       24575},
+    {"Superior Sigil of Corruption",      24578},
+    {"Superior Sigil of Ice",             24555},
+    {"Superior Sigil of Chilling",        24630},
+    {"Superior Sigil of Leeching",        24599},
+    {"Superior Sigil of Celerity",        24865},
     // --- Remaining superior sigils ---
-    {"Superior Sigil of Agility",         72092, "Swiftness + quickness on swap"},
-    {"Superior Sigil of Benevolence",     24584, "Outgoing heal stacks on kill"},
-    {"Superior Sigil of Blight",          67913, "Poison AoE on crit"},
-    {"Superior Sigil of Bounty",          81045, "Concentration stacks on kill"},
-    {"Superior Sigil of Centaur Slaying", 24645, "+7% vs centaurs"},
-    {"Superior Sigil of Cruelty",         67341, "Ferocity stacks on kill"},
-    {"Superior Sigil of Debility",        24636, "+20% weakness duration"},
-    {"Superior Sigil of Destroyer Slaying",24654,"+7% vs destroyers"},
-    {"Superior Sigil of Dreams",          24681, "+7% vs Nightmare Court"},
-    {"Superior Sigil of Elemental Slaying",24661,"+7% vs elementals"},
-    {"Superior Sigil of Frailty",         24567, "Vuln on flank/behind/defiant"},
-    {"Superior Sigil of Frenzy",          82876, "-2s skill cooldown on kill"},
-    {"Superior Sigil of Generosity",      38294, "Transfer condi on crit"},
-    {"Superior Sigil of Ghost Slaying",   24809, "+7% vs ghosts"},
-    {"Superior Sigil of Grawl Slaying",   24648, "+7% vs grawl"},
-    {"Superior Sigil of Hobbling",        24627, "+20% cripple duration"},
-    {"Superior Sigil of Hologram Slaying",91339, "+17% vs holograms"},
-    {"Superior Sigil of Icebrood Slaying",24651, "+7% vs icebrood"},
-    {"Superior Sigil of Incapacitation",  67343, "Cripple on flank/defiant"},
-    {"Superior Sigil of Justice",         24678, "+7% vs outlaws"},
-    {"Superior Sigil of Karka Slaying",   37912, "+7% vs karka"},
-    {"Superior Sigil of Life",            24582, "Healing stacks on kill"},
-    {"Superior Sigil of Luck",            24591, "75% boon on kill"},
-    {"Superior Sigil of Mad Scientists",  24672, "+7% vs Inquest"},
-    {"Superior Sigil of Mischief",        68436, "Blinding snowballs on swap"},
-    {"Superior Sigil of Momentum",        49457, "Toughness stacks on kill"},
-    {"Superior Sigil of Ogre Slaying",    24655, "+7% vs ogres"},
-    {"Superior Sigil of Perception",      24580, "Precision stacks on kill"},
-    {"Superior Sigil of Peril",           24621, "+20% vuln duration"},
-    {"Superior Sigil of Purity",          24571, "Cleanse on flank/defiant"},
-    {"Superior Sigil of Rage",            24561, "Quickness on crit"},
-    {"Superior Sigil of Rending",         73532, "Vuln on interrupt"},
-    {"Superior Sigil of Restoration",     24594, "Heal on interrupt"},
-    {"Superior Sigil of Ruthlessness",    71130, "Might on interrupt"},
-    {"Superior Sigil of Smothering",      24675, "+7% vs Flame Legion"},
-    {"Superior Sigil of Sorrow",          24684, "+7% vs dredge"},
-    {"Superior Sigil of Speed",           24589, "Swiftness on kill"},
-    {"Superior Sigil of Stamina",         24592, "Endurance refill on kill"},
-    {"Superior Sigil of Water",           24551, "AoE heal on crit"},
-    {"Superior Sigil of Wrath",           24667, "+7% vs Sons of Svanir"},
-    {"Superior Sigil of the Stars",       86170, "All stats stacks on kill"},
+    {"Superior Sigil of Agility",         72092},
+    {"Superior Sigil of Benevolence",     24584},
+    {"Superior Sigil of Blight",          67913},
+    {"Superior Sigil of Bounty",          81045},
+    {"Superior Sigil of Centaur Slaying", 24645},
+    {"Superior Sigil of Cruelty",         67341},
+    {"Superior Sigil of Debility",        24636},
+    {"Superior Sigil of Destroyer Slaying",24654},
+    {"Superior Sigil of Dreams",          24681},
+    {"Superior Sigil of Elemental Slaying",24661},
+    {"Superior Sigil of Frailty",         24567},
+    {"Superior Sigil of Frenzy",          82876},
+    {"Superior Sigil of Generosity",      38294},
+    {"Superior Sigil of Ghost Slaying",   24809},
+    {"Superior Sigil of Grawl Slaying",   24648},
+    {"Superior Sigil of Hobbling",        24627},
+    {"Superior Sigil of Hologram Slaying",91339},
+    {"Superior Sigil of Icebrood Slaying",24651},
+    {"Superior Sigil of Incapacitation",  67343},
+    {"Superior Sigil of Justice",         24678},
+    {"Superior Sigil of Karka Slaying",   37912},
+    {"Superior Sigil of Life",            24582},
+    {"Superior Sigil of Luck",            24591},
+    {"Superior Sigil of Mad Scientists",  24672},
+    {"Superior Sigil of Mischief",        68436},
+    {"Superior Sigil of Momentum",        49457},
+    {"Superior Sigil of Ogre Slaying",    24655},
+    {"Superior Sigil of Perception",      24580},
+    {"Superior Sigil of Peril",           24621},
+    {"Superior Sigil of Purity",          24571},
+    {"Superior Sigil of Rage",            24561},
+    {"Superior Sigil of Rending",         73532},
+    {"Superior Sigil of Restoration",     24594},
+    {"Superior Sigil of Ruthlessness",    71130},
+    {"Superior Sigil of Smothering",      24675},
+    {"Superior Sigil of Sorrow",          24684},
+    {"Superior Sigil of Speed",           24589},
+    {"Superior Sigil of Stamina",         24592},
+    {"Superior Sigil of Water",           24551},
+    {"Superior Sigil of Wrath",           24667},
+    {"Superior Sigil of the Stars",       86170},
 };
 static const int SIGIL_COUNT = sizeof(SIGIL_LIST) / sizeof(SIGIL_LIST[0]);
 
 // Curated relic list with exotic item IDs from GW2 API
-struct RelicEntry { const char* name; uint32_t item_id; const char* bonus; };
+struct RelicEntry { const char* name; uint32_t item_id; };
 static const RelicEntry RELIC_LIST[] = {
-    {"Relic of the Eagle",          104241, "+10% dmg >80% HP"},
-    {"Relic of Fireworks",          100947, "Strike dmg on weapon skill"},
-    {"Relic of the Thief",          100976, "Weapon skill CDR, strike dmg"},
-    {"Relic of Cerus",              100074, "Elite skill +dmg, boon/condi"},
-    {"Relic of Isgarren",            99997, "+strike/condi dur after evade"},
-    {"Relic of the Brawler",        100527, "Strike dmg, protection, resolution"},
-    {"Relic of the Claw",           103574, "Strike dmg on disable"},
-    {"Relic of the Deadeye",        100924, "Strike dmg, cantrip bonus"},
-    {"Relic of the Dragonhunter",   100090, "Trap dmg + condi dur"},
-    {"Relic of Mount Balrior",      103872, "Elite skill +strike dmg"},
-    {"Relic of Peitha",             100177, "Torment/strike on shadowstep"},
-    {"Relic of Lyhr",               100461, "Heal + strike dmg"},
-    {"Relic of Fire",               104501, "Fire aura on heal skill"},
-    {"Relic of Dagda",              100942, "Elite skill condi transfer"},
-    {"Relic of the Fractal",        100153, "Bleed, burn, torment"},
-    {"Relic of Akeem",              100432, "Confusion + torment on disable"},
-    {"Relic of the Aristocracy",    100849, "Condi dur, weakness, vuln"},
-    {"Relic of the Afflicted",      100693, "Poison + bleed"},
-    {"Relic of the Nightmare",      100579, "Elite: fear + poison"},
-    {"Relic of the Krait",          100230, "Elite: conditions"},
-    {"Relic of the Sorcerer",       101863, "Vuln on cripple/chill/immob"},
-    {"Relic of the Mirage",         100158, "Torment on evade"},
-    {"Relic of Thorns",             104424, "Condition dmg, poison"},
-    {"Relic of the Blightbringer",  102199, "Poison + condi"},
-    {"Relic of Nourys",             101191, "Boon strip + dmg/heal"},
-    {"Relic of the Scourge",        100368, "Barrier + condi dur"},
-    {"Relic of the Demon Queen",    101166, "Poison on disable"},
-    {"Relic of Mosyn",              101801, "Condition on evade"},
-    {"Relic of the Biomancer",      106364, "Heal + bleed/poison"},
-    {"Relic of the First Revenant", 105585, "Condi dmg + resistance"},
-    {"Relic of Durability",         100562, "Protection/regen/resolution on heal"},
-    {"Relic of the Monk",           100031, "Healing + boon"},
-    {"Relic of the Flock",          100633, "Heal on healing skill"},
-    {"Relic of Castora",            105652, "Heal based on HP"},
-    {"Relic of the Water",          100659, "Condi cleanse on heal skill"},
-    {"Relic of the Defender",       100934, "Heal on block"},
-    {"Relic of Vampirism",          100676, "Lifesteal + heal on kill"},
-    {"Relic of Dwayna",             100442, "Regen"},
-    {"Relic of the Centaur",        100385, "Stability on heal skill"},
-    {"Relic of Mercy",              100429, "Revive speed + heal"},
-    {"Relic of Nayos",              101198, "Condi + heal"},
-    {"Relic of Karakosa",           101268, "Heal on blast finisher"},
-    {"Relic of the Nautical Beast", 106920, "Heal + water field"},
-    {"Relic of the Living City",    104938, "Titan Potential on field/disable/evade"},
-    {"Relic of Leadership",         100625, "Condi cleanse + boon"},
-    {"Relic of the Herald",         100219, "Concentration + boon"},
-    {"Relic of the Firebrand",      100453, "Mantra + boon dur"},
-    {"Relic of Rivers",             103015, "Alacrity + regen on dodge"},
-    {"Relic of the Chronomancer",   100450, "Quickness on well"},
-    {"Relic of the Pack",           100752, "Superspeed/might/fury on elite"},
-    {"Relic of Altruism",           104256, "Might + fury on heal skill"},
-    {"Relic of the Cavalier",       100542, "Aegis/quickness/swiftness on engage"},
-    {"Relic of the Twin Generals",  101767, "Might + weakness on heal"},
-    {"Relic of Mabon",              100115, "Might + Mabon's Strength"},
-    {"Relic of the Midnight King",  101139, "Might + fury on disable"},
-    {"Relic of Speed",              100148, "Movement speed + swiftness"},
-    {"Relic of the Wayfinder",      101943, "Movement speed + burst speed"},
-    {"Relic of Febe",               101116, "Heal skill + swiftness"},
-    {"Relic of the Adventurer",     100561, "Endurance on heal skill"},
-    {"Relic of Evasion",            100886, "Vigor + evade bonus"},
-    {"Relic of Fog",                107030, "Dodge: glancing blows"},
-    {"Relic of the Daredevil",      100345, "Dodge rolling bonuses"},
-    {"Relic of Geysers",            103763, "Endurance + vigor"},
-    {"Relic of Resistance",         100794, "Resistance on heal skill"},
-    {"Relic of Antitoxin",          100390, "Condi cleanse"},
-    {"Relic of the Trooper",        100411, "Condi cleanse on shout"},
-    {"Relic of the Astral Ward",    100388, "Signet + resistance"},
-    {"Relic of Reunification",      103984, "Frost/light aura on heal"},
-    {"Relic of Surging",            100063, "Shocking aura on elite"},
-    {"Relic of the Earth",          100435, "Protection + magnetic aura"},
-    {"Relic of the Warrior",        100299, "Weapon swap CDR"},
-    {"Relic of the Alliance",       107192, "Signet bonus"},
-    {"Relic of Shackles",           106916, "Immobilize"},
-    {"Relic of the Necromancer",    100580, "Fear"},
-    {"Relic of the Scoundrel",      106355, "Blind/weakness on crit"},
-    {"Relic of the Reaper",         100739, "Chill on shout"},
-    {"Relic of Atrocity",           102245, "Lifesteal"},
-    {"Relic of the Mist Stranger",  106206, "Siphon health"},
-    {"Relic of the Ogre",           100311, "Summon rock dog"},
-    {"Relic of the Lich",           100238, "Summon jagged horror"},
-    {"Relic of the Golemancer",     100403, "Summon golem"},
-    {"Relic of the Privateer",      100479, "Summon parrot"},
-    {"Relic of the Beehive",        103977, "Elite skill summon"},
-    {"Relic of Sorrow",             103424, "Elite: destroy projectiles"},
-    {"Relic of the Citadel",        100448, "Elite: stun"},
-    {"Relic of the Holosmith",      100908, "Elite skill bonus"},
-    {"Relic of the Ice",            100048, "Elite: chill"},
-    {"Relic of the Sunless",        100400, "Elite: poison/cripple"},
-    {"Relic of the Wizard's Tower", 100557, "Elite: reflect + pull"},
-    {"Relic of the Pirate Queen",   106221, "Quickness on disable"},
-    {"Relic of the Phenom",         104733, "Cantrip/meditation + protection"},
-    {"Relic of the Weaver",         100194, "Stance + strike dmg"},
-    {"Relic of Bava Nisos",         104848, "Stance bonus"},
-    {"Relic of the Zephyrite",      100893, "Protection + resolution"},
-    {"Relic of Bloodstone",         104800, "Bloodstone blast finisher"},
-    {"Relic of the Unseen Invasion",100694, "Superspeed + stealth"},
-    {"Relic of Mistburn",           104994, "WvW combat bonus"},
-    {"Relic of the Forest Dweller", 107124, "Nature bonus"},
-    {"Relic of the Founding",       101737, "Barrier on combo field"},
-    {"Relic of the Mists Tide",     103901, "Condi on combo finisher"},
-    {"Relic of the Stormsinger",    102595, "Movement skill bonus"},
-    {"Relic of the Steamshrieker",  104022, "Burn on water combo"},
-    {"Relic of Vass",               100775, "Heal + elixir + poison"},
-    {"Relic of Zakiros",            101955, "Fury + crit dmg + healing"},
-    {"Relic of the Coral Heart",    107061, "Underwater bonus"},
-    {"Relic of Agony",              104849, "Interrupt bonus"},
-    {"Relic of Galdra",             109264, "Elite: burning projectiles"},
-    {"Relic of the Cruel Overseer", 109664, "Condi stacks -> healing burst"},
-    {"Relic of the Director",       109351, "Vuln on heal + damage bonus"},
-    {"Relic of the Doyen",          109522, "Dmg reduction while resolution"},
-    {"Relic of the Sacred Grounds", 109267, "Protection on well/consecration"},
-    {"Relic of Watch",              109709, "Immob duration + weaken on immob"},
+    {"Relic of the Eagle",          104241},
+    {"Relic of Fireworks",          100947},
+    {"Relic of the Thief",          100976},
+    {"Relic of Cerus",              100074},
+    {"Relic of Isgarren",            99997},
+    {"Relic of the Brawler",        100527},
+    {"Relic of the Claw",           103574},
+    {"Relic of the Deadeye",        100924},
+    {"Relic of the Dragonhunter",   100090},
+    {"Relic of Mount Balrior",      103872},
+    {"Relic of Peitha",             100177},
+    {"Relic of Lyhr",               100461},
+    {"Relic of Fire",               104501},
+    {"Relic of Dagda",              100942},
+    {"Relic of the Fractal",        100153},
+    {"Relic of Akeem",              100432},
+    {"Relic of the Aristocracy",    100849},
+    {"Relic of the Afflicted",      100693},
+    {"Relic of the Nightmare",      100579},
+    {"Relic of the Krait",          100230},
+    {"Relic of the Sorcerer",       101863},
+    {"Relic of the Mirage",         100158},
+    {"Relic of Thorns",             104424},
+    {"Relic of the Blightbringer",  102199},
+    {"Relic of Nourys",             101191},
+    {"Relic of the Scourge",        100368},
+    {"Relic of the Demon Queen",    101166},
+    {"Relic of Mosyn",              101801},
+    {"Relic of the Biomancer",      106364},
+    {"Relic of the First Revenant", 105585},
+    {"Relic of Durability",         100562},
+    {"Relic of the Monk",           100031},
+    {"Relic of the Flock",          100633},
+    {"Relic of Castora",            105652},
+    {"Relic of the Water",          100659},
+    {"Relic of the Defender",       100934},
+    {"Relic of Vampirism",          100676},
+    {"Relic of Dwayna",             100442},
+    {"Relic of the Centaur",        100385},
+    {"Relic of Mercy",              100429},
+    {"Relic of Nayos",              101198},
+    {"Relic of Karakosa",           101268},
+    {"Relic of the Nautical Beast", 106920},
+    {"Relic of the Living City",    104938},
+    {"Relic of Leadership",         100625},
+    {"Relic of the Herald",         100219},
+    {"Relic of the Firebrand",      100453},
+    {"Relic of Rivers",             103015},
+    {"Relic of the Chronomancer",   100450},
+    {"Relic of the Pack",           100752},
+    {"Relic of Altruism",           104256},
+    {"Relic of the Cavalier",       100542},
+    {"Relic of the Twin Generals",  101767},
+    {"Relic of Mabon",              100115},
+    {"Relic of the Midnight King",  101139},
+    {"Relic of Speed",              100148},
+    {"Relic of the Wayfinder",      101943},
+    {"Relic of Febe",               101116},
+    {"Relic of the Adventurer",     100561},
+    {"Relic of Evasion",            100886},
+    {"Relic of Fog",                107030},
+    {"Relic of the Daredevil",      100345},
+    {"Relic of Geysers",            103763},
+    {"Relic of Resistance",         100794},
+    {"Relic of Antitoxin",          100390},
+    {"Relic of the Trooper",        100411},
+    {"Relic of the Astral Ward",    100388},
+    {"Relic of Reunification",      103984},
+    {"Relic of Surging",            100063},
+    {"Relic of the Earth",          100435},
+    {"Relic of the Warrior",        100299},
+    {"Relic of the Alliance",       107192},
+    {"Relic of Shackles",           106916},
+    {"Relic of the Necromancer",    100580},
+    {"Relic of the Scoundrel",      106355},
+    {"Relic of the Reaper",         100739},
+    {"Relic of Atrocity",           102245},
+    {"Relic of the Mist Stranger",  106206},
+    {"Relic of the Ogre",           100311},
+    {"Relic of the Lich",           100238},
+    {"Relic of the Golemancer",     100403},
+    {"Relic of the Privateer",      100479},
+    {"Relic of the Beehive",        103977},
+    {"Relic of Sorrow",             103424},
+    {"Relic of the Citadel",        100448},
+    {"Relic of the Holosmith",      100908},
+    {"Relic of the Ice",            100048},
+    {"Relic of the Sunless",        100400},
+    {"Relic of the Wizard's Tower", 100557},
+    {"Relic of the Pirate Queen",   106221},
+    {"Relic of the Phenom",         104733},
+    {"Relic of the Weaver",         100194},
+    {"Relic of Bava Nisos",         104848},
+    {"Relic of the Zephyrite",      100893},
+    {"Relic of Bloodstone",         104800},
+    {"Relic of the Unseen Invasion",100694},
+    {"Relic of Mistburn",           104994},
+    {"Relic of the Forest Dweller", 107124},
+    {"Relic of the Founding",       101737},
+    {"Relic of the Mists Tide",     103901},
+    {"Relic of the Stormsinger",    102595},
+    {"Relic of the Steamshrieker",  104022},
+    {"Relic of Vass",               100775},
+    {"Relic of Zakiros",            101955},
+    {"Relic of the Coral Heart",    107061},
+    {"Relic of Agony",              104849},
+    {"Relic of Galdra",             109264},
+    {"Relic of the Cruel Overseer", 109664},
+    {"Relic of the Director",       109351},
+    {"Relic of the Doyen",          109522},
+    {"Relic of the Sacred Grounds", 109267},
+    {"Relic of Watch",              109709},
 };
 static const int RELIC_COUNT = sizeof(RELIC_LIST) / sizeof(RELIC_LIST[0]);
 
@@ -6900,17 +6898,22 @@ static const char* kBuildProfessions[9] = {
     "Elementalist", "Mesmer", "Necromancer", "Revenant"
 };
 
-// Revenant legend byte codes (13..19) → display name. Codes confirmed against
-// /v2/legends swap-skill names (Legend1..Legend7 = byte 13..19).
-struct LegendOption { uint8_t code; const char* name; };
-static const LegendOption kRevLegends[7] = {
-    {13, "Dragon (Herald)"},  {14, "Assassin (Shiro)"}, {15, "Dwarf (Jalis)"},
-    {16, "Demon (Mallyx)"},   {17, "Renegade (Kalla)"}, {18, "Centaur (Ventari)"},
-    {19, "Alliance (Vindicator)"}
-};
-static const char* LegendNameForCode(uint8_t code) {
-    for (const auto& l : kRevLegends) if (l.code == code) return l.name;
-    return "Choose legend";
+// Public legend definitions replace the old name-keyword mapping. Known
+// protocol labels are retained only for offline display/selection.
+struct LegendOption { uint8_t code; std::string name; uint32_t swap=0; std::string icon; };
+static std::vector<LegendOption> LegendOptions() {
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    std::vector<LegendOption> out;
+    for(const auto& l:catalog->legends)out.push_back({l.code,l.name,l.swap,l.icon});
+    if(out.empty())out={{1,"Dragon (Herald)",0,{}},{2,"Assassin (Shiro)",0,{}},{3,"Dwarf (Jalis)",0,{}},
+        {4,"Demon (Mallyx)",0,{}},{5,"Renegade (Kalla)",0,{}},{6,"Centaur (Ventari)",0,{}},
+        {7,"Alliance (Vindicator)",0,{}},{8,"Entity (Conduit)",0,{}}};
+    return out;
+}
+static std::string LegendNameForCode(uint8_t code) {
+    code=AlterEgo::PublicCatalog::CanonicalLegendCode(code);
+    for (const auto& l : LegendOptions()) if (l.code == code) return l.name;
+    return code?"Unknown legend ("+std::to_string(code)+")":"Choose legend";
 }
 
 // Render the same GW2 profession image used in the Characters roster in
@@ -7301,13 +7304,13 @@ static void RenderLegendPickerDialog() {
         const int slot = g_LegendPickerSlot; // 0 or 1
         const int other = slot == 0 ? 1 : 0;
         AlterEgo::GW2API::FetchLegendsAsync();
-        for (const auto& l : kRevLegends) {
-            bool usedOther = (g_EditDraft.legend_codes[other] == l.code);
+        for (const auto& l : LegendOptions()) {
+            bool usedOther = (AlterEgo::PublicCatalog::CanonicalLegendCode(g_EditDraft.legend_codes[other]) == l.code);
             ImGui::PushID((int)l.code);
 
             // Legend emblem icon (the swap skill's icon).
             const float legIconSz = 26.0f;
-            uint32_t swap = AlterEgo::GW2API::GetLegendSwapSkill(l.code);
+            uint32_t swap = l.swap;
             uint32_t ikey = swap + 5000000u;
             Texture_t* itex = swap ? AlterEgo::IconManager::GetIcon(ikey) : nullptr;
             if (itex && itex->Resource) {
@@ -7315,16 +7318,15 @@ static void RenderLegendPickerDialog() {
                              ImVec2(0, 0), ImVec2(1, 1),
                              usedOther ? ImVec4(1, 1, 1, 0.4f) : ImVec4(1, 1, 1, 1));
             } else {
-                const auto* sk = swap ? AlterEgo::GW2API::GetSkillInfo(swap) : nullptr;
-                if (sk && !sk->icon_url.empty()) AlterEgo::IconManager::RequestIcon(ikey, sk->icon_url);
+                if (swap && !l.icon.empty()) AlterEgo::IconManager::RequestIcon(ikey, l.icon);
                 ImGui::Dummy(ImVec2(legIconSz, legIconSz));
             }
             ImGui::SameLine(0, 8);
             ImGui::AlignTextToFramePadding();
 
             bool clicked = false;
-            if (usedOther) ImGui::TextDisabled("%s", l.name);
-            else clicked = ImGui::Selectable(l.name);
+            if (usedOther) ImGui::TextDisabled("%s", l.name.c_str());
+            else clicked = ImGui::Selectable(l.name.c_str());
             ImGui::PopID();
 
             if (clicked) {
@@ -10080,7 +10082,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
                 }
                 ImGui::TextColored(code ? ImVec4(0.85f, 0.82f, 0.70f, 1.0f)
                                         : ImVec4(0.55f, 0.55f, 0.55f, 1.0f),
-                                   "%s", code ? LegendNameForCode(code) : "Choose legend");
+                                   "%s", LegendNameForCode(code).c_str());
                 ImGui::EndGroup();
                 ImGui::PopID();
             }
@@ -10089,7 +10091,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
     if (g_LibEditMode && build.profession == "Ranger") {
         ImGui::Spacing();
         RenderSectionHeader("Pets", AlterEgo::UI::SectionGold);
-        if (AlterEgo::GW2API::GetPets().empty()) AlterEgo::GW2API::FetchPetsAsync();
+        AlterEgo::GW2API::FetchPetsAsync();
         auto pets = AlterEgo::GW2API::GetPets();
         auto petName = [&](uint32_t id) -> const char* {
             if (!id) return "Choose pet";
@@ -12393,7 +12395,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::PublicCatalog::Load(AlterEgo::GW2API::GetDataDirectory());
     if(!AlterEgo::PublicCatalog::Get()->upgrades)SeedItemNameCache();
     LoadLoginTimestamps();
-    AlterEgo::GW2API::FetchAllItemStatsAsync();
     LoadCharSortConfig();
     RebuildCharDisplayOrder();
 
@@ -12458,6 +12459,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     // Dye data loads independently. Profession metadata is now fetched lazily
     // when a relevant view needs it: avoid a burst of nine background HTTP
     // workers immediately during addon startup.
+    AlterEgo::GW2API::FetchAllItemStatsAsync();
     AlterEgo::GW2API::FetchDyeColorsAsync();
 
     // Ping native API to check availability
@@ -12491,7 +12493,9 @@ void AddonLoad(AddonAPI_t* aApi) {
         }
 
         if (!Skinventory::Commerce::LoadItemMap()) {
-            Skinventory::Commerce::BuildItemMapAsync();
+            const auto catalog=AlterEgo::PublicCatalog::Get();
+            if(!catalog->upgradeAttempt || AlterEgo::PublicCatalog::Now()-catalog->upgradeAttempt>=AlterEgo::PublicCatalog::Retry)
+                Skinventory::Commerce::BuildItemMapAsync();
         }
         Skinventory::Commerce::LoadPriceCache();
         Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
@@ -17602,6 +17606,8 @@ void AddonOptions() {
             else if (g_MainTab == 6) RefreshClearsOnEntry();
             if (AlterEgo::AutoRefreshPolicy::Included(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog) && g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
                 Skinventory::SkinCache::UpdateCacheAsync();
+            AlterEgo::GW2API::FetchAllItemStatsAsync();
+            AlterEgo::GW2API::FetchDyeColorsAsync();
             Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
             AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
             if ((!g_AchPinned.empty() || g_AchSelectedCatId > 0) &&
@@ -17638,6 +17644,8 @@ void AddonOptions() {
             if(ImGui::Checkbox(Labels[i],&included)){
                 SetIncluded(dataset,included);
                 if(included&&dataset==Dataset::PublicCatalog){
+                    AlterEgo::GW2API::FetchAllItemStatsAsync();
+                    AlterEgo::GW2API::FetchDyeColorsAsync();
                     Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
                     AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
                 }
@@ -17666,6 +17674,18 @@ void AddonOptions() {
     if(publicData->vault)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->vault)/86400));
     if(RenderActionButton("Refresh Vault definitions")) AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),true);
     ImGui::TextDisabled("%s",AlterEgo::PublicCatalog::VaultStatus().c_str());
+    auto referenceAction=[&](const char* label,const char* dataset,auto refresh){
+        auto it=publicData->freshness.find(dataset);
+        if(it!=publicData->freshness.end()&&it->second.first)
+            ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-it->second.first)/86400));
+        if(RenderActionButton(label))refresh();
+        const auto status=AlterEgo::PublicCatalog::DatasetStatus(dataset);
+        if(!status.empty())ImGui::TextDisabled("%s",status.c_str());
+    };
+    referenceAction("Refresh item stats","public_stats",[]{AlterEgo::GW2API::FetchAllItemStatsAsync(true);});
+    referenceAction("Refresh dyes","public_dyes",[]{AlterEgo::GW2API::FetchDyeColorsAsync(true);});
+    referenceAction("Refresh ranger pets","public_pets",[]{AlterEgo::PublicCatalog::RefreshPets(AlterEgo::GW2API::GetDataDirectory(),true);});
+    referenceAction("Refresh revenant legends","public_legends",[]{AlterEgo::PublicCatalog::RefreshLegends(AlterEgo::GW2API::GetDataDirectory(),true);});
     ImGui::Spacing();
     RenderSectionHeader("UI Settings", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Show Quick Access icon", &g_ShowQAIcon)) {

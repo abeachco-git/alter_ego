@@ -88,6 +88,8 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                 {"Item aliases","SELECT count(*) FROM item_name_aliases","item_name_cache"},
                 {"Equipment catalog","SELECT count(*) FROM public_upgrade_items","public_upgrades"},
                 {"Public Vault definitions","SELECT count(*) FROM public_vault_objectives","public_vault"},
+                {"Ranger pets","SELECT count(*) FROM public_pets","public_pets"},
+                {"Revenant legends","SELECT count(*) FROM public_legends","public_legends"},
                 {"Skills","SELECT count(*) FROM reference_skills","skill_cache"},
                 {"Traits","SELECT count(*) FROM reference_traits","trait_cache"},
                 {"Specializations","SELECT count(*) FROM reference_specializations","spec_cache"},

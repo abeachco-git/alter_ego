@@ -127,10 +127,7 @@ namespace AlterEgo {
     std::unordered_map<std::string, std::unordered_map<uint16_t, uint32_t>> GW2API::s_palette_to_skill;
     std::unordered_map<std::string, std::unordered_map<uint32_t, uint16_t>> GW2API::s_skill_to_palette;
     std::unordered_set<std::string> GW2API::s_palette_fetching;
-    std::vector<PetInfo> GW2API::s_pets;
-    std::atomic<bool> GW2API::s_petsFetching{false};
-    std::map<uint8_t, uint32_t> GW2API::s_legend_swap;
-    std::atomic<bool> GW2API::s_legendsFetching{false};
+
     std::mutex GW2API::s_mutex;
 
     // --- Nexus integration ---
@@ -838,41 +835,36 @@ namespace AlterEgo {
         return s_itemstat_cache;
     }
 
-    void GW2API::FetchAllItemStatsAsync() {
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            if (s_itemstat_cache.size() > 50) return; // Already loaded
-        }
-        AlterEgo::Background::Workers().Launch([]() {
-            std::string response = HttpGet("https://api.guildwars2.com/v2/itemstats?ids=all");
-            if (response.empty()) return;
-            try {
-                json j = json::parse(response);
-                if (j.is_array()) {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    for (const auto& stat : j) {
-                        if (!stat.contains("id")) continue;
-                        uint32_t id = stat["id"].get<uint32_t>();
-                        if (s_itemstat_cache.find(id) != s_itemstat_cache.end()) continue;
-                        ItemStatInfo info;
-                        info.id = id;
-                        info.name = stat.value("name", "");
-                        if (info.name.empty()) continue;
-                        if (stat.contains("attributes") && stat["attributes"].is_array()) {
-                            for (const auto& attr : stat["attributes"]) {
-                                info.attributes.push_back(attr.value("attribute", ""));
-                            }
-                        }
-                        s_itemstat_cache[id] = std::move(info);
-                    }
-                }
-                if (s_api) {
-                    std::string msg = "Loaded " + std::to_string(s_itemstat_cache.size()) + " stat combos";
-                    s_api->Log(LOGL_INFO, "AlterEgo", msg.c_str());
-                }
-            } catch (...) {}
-            SaveItemStatCache();
-        });
+    void GW2API::FetchAllItemStatsAsync(bool manual) {
+        bool missing;{std::lock_guard<std::mutex> lock(s_mutex);missing=s_itemstat_cache.empty();}
+        if(!PublicCatalog::BeginDataset("public_stats",manual,missing))return;
+        const auto root=GetDataDirectory();
+        Background::Workers().Launch([root]{
+            PublicCatalog::Attempt(root,"public_stats");
+            auto raw=PublicCatalog::Fetch("/v2/itemstats?ids=all");
+            if(!raw.is_array()||raw.size()<50)throw std::runtime_error("Incomplete item stats");
+            std::map<uint32_t,ItemStatInfo> staged;
+            for(const auto& r:raw){
+                ItemStatInfo info;info.id=Cache::ReferenceId(r.at("id"));info.name=r.at("name").get<std::string>();
+                if(info.name.empty())continue; // nonselectable unnamed stat records
+                for(const auto& a:r.at("attributes"))info.attributes.push_back(a.at("attribute").get<std::string>());
+                if(!staged.emplace(info.id,std::move(info)).second)throw std::runtime_error("Duplicate item stat");
+            }
+            if(staged.size()<50)throw std::runtime_error("Incomplete named item stats");
+            json rows=json::array();
+            for(const auto& [id,info]:staged)rows.push_back({{"id",id},{"name",info.name},{"attributes",info.attributes}});
+            Background::Checkpoint();
+            PublicCatalog::WithDb(root,[&](auto& db){
+                Database::Transaction tx(db);
+                // Retain historical stat identities still used by saved gear.
+                auto previous=Cache::ReadReferenceRows(db,Cache::ReferenceDataset::ItemStats);
+                for(const auto& r:previous)if(!staged.count(Cache::ReferenceId(r.at("id"))))rows.push_back(r);
+                Cache::StoreReferenceSnapshot(db,Cache::ReferenceDataset::ItemStats,rows,Cache::ReferenceSnapshotTime());
+                PublicCatalog::Mark(db,"public_stats",PublicCatalog::Now());tx.Commit();PublicCatalog::Publish(db);
+            });
+            {std::lock_guard<std::mutex> lock(s_mutex);for(auto& [id,info]:staged)s_itemstat_cache[id]=std::move(info);}
+            PublicCatalog::EndDataset("public_stats",true);
+        },[]{PublicCatalog::EndDataset("public_stats",false);});
     }
 
     const ProfessionInfo* GW2API::GetProfessionInfo(const std::string& profession) {
@@ -956,6 +948,22 @@ namespace AlterEgo {
     }
 
     // --- Batch fetch: items ---
+
+    void GW2API::AdoptPublicItems(const nlohmann::json& rows) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for(const auto& item:rows) {
+            ItemInfo info;info.id=item.at("id").get<uint32_t>();
+            info.name=item.value("name",std::string{});
+            info.icon_url=item.value("icon",std::string{});
+            info.rarity=item.value("rarity",std::string{});
+            info.type=item.value("type",std::string{});
+            info.chat_link=item.value("chat_link",std::string{});
+            info.default_skin=item.value("default_skin",0u);
+            info.description=StripHtmlTags(item.value("description",std::string{}));
+            if(item.contains("details"))info.details=item.at("details");
+            s_item_cache[info.id]=std::move(info);
+        }
+    }
 
     void GW2API::FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
         if (item_ids.empty()) return;
@@ -1359,47 +1367,50 @@ namespace AlterEgo {
         });
     }
 
-    void GW2API::FetchDyeColorsAsync() {
-        AlterEgo::Background::Workers().Launch([]() {
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                if (!s_dye_cache.empty()) return;
+    void GW2API::FetchDyeColorsAsync(bool manual) {
+        bool missing;{std::lock_guard<std::mutex> lock(s_mutex);missing=s_dye_cache.empty();}
+        if(!PublicCatalog::BeginDataset("public_dyes",manual,missing))return;
+        const auto root=GetDataDirectory();
+        Background::Workers().Launch([root]{
+            PublicCatalog::Attempt(root,"public_dyes");
+            auto raw=PublicCatalog::Fetch("/v2/colors?ids=all");
+            if(!raw.is_array()||raw.size()<100)throw std::runtime_error("Incomplete dye catalog");
+            std::map<int,DyeColor> staged;json rows=json::array();
+            for(const auto& r:raw){
+                DyeColor dc;dc.id=r.at("id").get<int>();dc.name=r.at("name").get<std::string>();
+                if(dc.id<0||dc.name.empty())throw std::runtime_error("Invalid dye");
+                auto rgb=[&](const json& a,int& x,int& y,int& z){
+                    if(!a.is_array()||a.size()!=3)throw std::runtime_error("Invalid dye RGB");
+                    json wrapper={{"rgb",a}};
+                    x=static_cast<int>(Cache::ReferenceChannel(wrapper,"rgb",0));
+                    y=static_cast<int>(Cache::ReferenceChannel(wrapper,"rgb",1));
+                    z=static_cast<int>(Cache::ReferenceChannel(wrapper,"rgb",2));
+                };
+                rgb(r.at("base_rgb"),dc.r,dc.g,dc.b);
+                auto mat=[&](const char* key,int& x,int& y,int& z){
+                    if(r.contains(key)&&r.at(key).contains("rgb"))rgb(r.at(key).at("rgb"),x,y,z);
+                    else{x=dc.r;y=dc.g;z=dc.b;}
+                };
+                mat("cloth",dc.cloth_r,dc.cloth_g,dc.cloth_b);
+                mat("leather",dc.leather_r,dc.leather_g,dc.leather_b);
+                mat("metal",dc.metal_r,dc.metal_g,dc.metal_b);
+                if(!staged.emplace(dc.id,dc).second)throw std::runtime_error("Duplicate dye");
+                rows.push_back({{"id",dc.id},{"name",dc.name},{"base",{dc.r,dc.g,dc.b}},
+                    {"cloth",{dc.cloth_r,dc.cloth_g,dc.cloth_b}},{"leather",{dc.leather_r,dc.leather_g,dc.leather_b}},
+                    {"metal",{dc.metal_r,dc.metal_g,dc.metal_b}}});
             }
-
-            std::string response = HttpGet("https://api.guildwars2.com/v2/colors?ids=all");
-            if (response.empty()) return;
-
-            try {
-                json j = json::parse(response);
-                if (j.is_array()) {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    for (const auto& color : j) {
-                        if (!color.contains("id")) continue;
-                        DyeColor dc;
-                        dc.id = color["id"].get<int>();
-                        dc.name = color.value("name", "");
-                        if (color.contains("base_rgb") && color["base_rgb"].is_array() && color["base_rgb"].size() >= 3) {
-                            dc.r = color["base_rgb"][0].get<int>();
-                            dc.g = color["base_rgb"][1].get<int>();
-                            dc.b = color["base_rgb"][2].get<int>();
-                        }
-                        auto parseMat = [&](const char* key, int& mr, int& mg, int& mb) {
-                            if (color.contains(key) && color[key].contains("rgb") &&
-                                color[key]["rgb"].is_array() && color[key]["rgb"].size() >= 3) {
-                                mr = color[key]["rgb"][0].get<int>();
-                                mg = color[key]["rgb"][1].get<int>();
-                                mb = color[key]["rgb"][2].get<int>();
-                            } else { mr = dc.r; mg = dc.g; mb = dc.b; }
-                        };
-                        parseMat("cloth", dc.cloth_r, dc.cloth_g, dc.cloth_b);
-                        parseMat("leather", dc.leather_r, dc.leather_g, dc.leather_b);
-                        parseMat("metal", dc.metal_r, dc.metal_g, dc.metal_b);
-                        s_dye_cache[dc.id] = dc;
-                    }
-                }
-            } catch (...) {}
-            SaveDyeColorsCache();
-        });
+            Background::Checkpoint();
+            PublicCatalog::WithDb(root,[&](auto& db){
+                Database::Transaction tx(db);
+                auto previous=Cache::ReadReferenceRows(db,Cache::ReferenceDataset::Dyes);
+                if(rows.size()<previous.size()*9/10)throw std::runtime_error("Truncated dye catalog");
+                for(const auto& r:previous)if(!staged.count(r.at("id").get<int>()))rows.push_back(r);
+                Cache::StoreReferenceSnapshot(db,Cache::ReferenceDataset::Dyes,rows,Cache::ReferenceSnapshotTime());
+                PublicCatalog::Mark(db,"public_dyes",PublicCatalog::Now());tx.Commit();PublicCatalog::Publish(db);
+            });
+            {std::lock_guard<std::mutex> lock(s_mutex);for(auto& [id,dc]:staged)s_dye_cache[id]=std::move(dc);}
+            PublicCatalog::EndDataset("public_dyes",true);
+        },[]{PublicCatalog::EndDataset("public_dyes",false);});
     }
 
     // =========================================================================
@@ -1841,110 +1852,27 @@ namespace AlterEgo {
     }
 
     std::vector<PetInfo> GW2API::GetPets() {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        return s_pets;
+        auto catalog=PublicCatalog::Get();std::vector<PetInfo> out;
+        for(const auto& p:catalog->pets)out.push_back({p.id,p.name,p.icon});
+        return out;
     }
 
     void GW2API::FetchPetsAsync() {
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            if (!s_pets.empty()) return;
-        }
-        if (s_petsFetching.exchange(true)) return;
-        AlterEgo::Background::Workers().Launch([]() {
-            std::string response = HttpGet("https://api.guildwars2.com/v2/pets?ids=all");
-            std::vector<PetInfo> pets;
-            if (!response.empty()) {
-                try {
-                    json j = json::parse(response);
-                    if (j.is_array())
-                        for (const auto& p : j) {
-                            if (!p.contains("id")) continue;
-                            PetInfo info;
-                            info.id = p["id"].get<uint32_t>();
-                            info.name = p.value("name", "");
-                            info.icon_url = p.value("icon", "");
-                            pets.push_back(std::move(info));
-                        }
-                } catch (...) {}
-            }
-            std::sort(pets.begin(), pets.end(),
-                      [](const PetInfo& a, const PetInfo& b) { return a.name < b.name; });
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_pets = std::move(pets);
-            }
-            s_petsFetching = false;
-        }, [] { s_petsFetching = false; });
+        PublicCatalog::RefreshPets(GetDataDirectory(),false,PublicCatalog::Get()->pets.empty());
     }
 
     uint32_t GW2API::GetLegendSwapSkill(uint8_t code) {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        auto it = s_legend_swap.find(code);
-        return it != s_legend_swap.end() ? it->second : 0u;
+        auto catalog=PublicCatalog::Get();
+        code=PublicCatalog::CanonicalLegendCode(code);
+        for(const auto& l:catalog->legends)if(l.code==code)return l.swap;
+        return 0;
     }
 
     void GW2API::FetchLegendsAsync() {
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            if (!s_legend_swap.empty()) return;
-        }
-        if (s_legendsFetching.exchange(true)) return;
-        AlterEgo::Background::Workers().Launch([]() {
-            // 1) /v2/legends -> each legend's swap-skill id.
-            std::vector<uint32_t> swaps;
-            std::string resp = HttpGet("https://api.guildwars2.com/v2/legends?ids=all");
-            if (!resp.empty()) {
-                try {
-                    json j = json::parse(resp);
-                    if (j.is_array())
-                        for (const auto& l : j)
-                            if (l.contains("swap") && l["swap"].is_number())
-                                swaps.push_back(l["swap"].get<uint32_t>());
-                } catch (...) {}
-            }
-            // 2) Fetch those swap skills (for their names + emblem icons), match the
-            //    name keyword to the AE legend byte code, and cache the skill so the
-            //    icon loads via the normal skill-icon path.
-            if (!swaps.empty()) {
-                std::string idsp;
-                for (uint32_t id : swaps) { if (!idsp.empty()) idsp += ","; idsp += std::to_string(id); }
-                std::string sresp = HttpGet("https://api.guildwars2.com/v2/skills?ids=" + idsp);
-                if (!sresp.empty()) {
-                    try {
-                        json sj = json::parse(sresp);
-                        if (sj.is_array()) {
-                            std::lock_guard<std::mutex> lock(s_mutex);
-                            for (const auto& sk : sj) {
-                                if (!sk.contains("id")) continue;
-                                SkillInfo info;
-                                info.id = sk["id"].get<uint32_t>();
-                                info.name = sk.value("name", "");
-                                info.icon_url = sk.value("icon", "");
-                                info.type = sk.value("type", "");
-                                if (sk.contains("professions") && sk["professions"].is_array())
-                                    for (const auto& p : sk["professions"])
-                                        if (p.is_string()) info.professions.push_back(p.get<std::string>());
-                                s_skill_cache[info.id] = info;
-                                const std::string& n = info.name;
-                                uint8_t code = 0;
-                                if      (n.find("Dragon")   != std::string::npos) code = 13;
-                                else if (n.find("Assassin") != std::string::npos) code = 14;
-                                else if (n.find("Dwarf")    != std::string::npos) code = 15;
-                                else if (n.find("Demon")    != std::string::npos) code = 16;
-                                else if (n.find("Renegade") != std::string::npos) code = 17;
-                                else if (n.find("Centaur")  != std::string::npos) code = 18;
-                                else if (n.find("Alliance") != std::string::npos) code = 19;
-                                if (code) s_legend_swap[code] = info.id;
-                            }
-                        }
-                    } catch (...) {}
-                }
-                SaveSkillCache();
-            }
-            s_legendsFetching = false;
-        }, [] { s_legendsFetching = false; });
+        PublicCatalog::RefreshLegends(GetDataDirectory(),false,PublicCatalog::Get()->legends.empty());
     }
+
+
 
     SavedBuild GW2API::CreateBlankBuild(const std::string& profession, GameMode mode) {
         SavedBuild b;
@@ -3024,11 +2952,6 @@ namespace AlterEgo {
         }
         return "";
     }
-
-    static const std::unordered_map<std::string, uint8_t> LEGEND_NAME_TO_CODE = {
-        {"Legend1", 1}, {"Legend2", 2}, {"Legend3", 3}, {"Legend4", 4},
-        {"Legend5", 5}, {"Legend6", 6}, {"Legend7", 7}, {"Legend8", 8}
-    };
 
     bool GW2API::HasPaletteData(const std::string& profession) {
         std::lock_guard<std::mutex> lock(s_mutex);

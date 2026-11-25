@@ -81,4 +81,5 @@ Unit/regression coverage for account switching, late responses, permission failu
 
 ### Public catalog modernization
 - First pass: shared equipment discovery, SQLite public upgrade and Vault definitions, seven-day refresh and Nexus manual actions.
-- Remaining: verify live catalog completeness and duplicate identity handling, remove legacy static upgrade identities after a validated replacement, audit individual existing reference endpoint freshness, retire redundant legend mappings, and implement Wiki-only schedules separately.
+- Remaining: verify live catalog completeness and duplicate identity handling, remove legacy static upgrade identities after a validated replacement, finish skills/traits/profession and specialization per-record freshness, and implement Wiki-only schedules separately.
+- Second pass: public pet/legend SQLite catalogs, exact schema-versioned legend codes, seven-day complete checks for item stats and dyes, Nexus manual refresh, legacy effect text removed. Preserve old saved values; live validation outstanding.

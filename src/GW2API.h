@@ -393,7 +393,8 @@ namespace AlterEgo {
         static const DyeColor* GetDyeColor(int color_id);
         static const ItemStatInfo* GetItemStatInfo(uint32_t stat_id);
         static const std::unordered_map<uint32_t, ItemStatInfo>& GetAllItemStats();
-        static void FetchAllItemStatsAsync();
+        static void FetchAllItemStatsAsync(bool manual=false);
+        static void AdoptPublicItems(const nlohmann::json& rows);
         static const ProfessionInfo* GetProfessionInfo(const std::string& profession);
         static void FetchProfessionInfoAsync(const std::string& profession);
         static const std::map<std::string, ProfessionWeaponData>* GetProfessionWeapons(const std::string& profession);
@@ -406,7 +407,7 @@ namespace AlterEgo {
         static void FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids);
         static void FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids);
         static void FetchItemStatDetailsAsync(const std::vector<uint32_t>& stat_ids);
-        static void FetchDyeColorsAsync();
+        static void FetchDyeColorsAsync(bool manual=false);
 
         // Persistence
         static bool LoadCharacterData();
@@ -588,10 +589,7 @@ namespace AlterEgo {
         static std::unordered_map<std::string, std::map<std::string, ProfessionWeaponData>> s_profession_weapons;
 
         // Ranger pets cache (build editor)
-        static std::vector<PetInfo> s_pets;
-        static std::atomic<bool> s_petsFetching;
-        static std::map<uint8_t, uint32_t> s_legend_swap; // legend byte code -> swap skill id
-        static std::atomic<bool> s_legendsFetching;
+
 
         // Build library
         static std::vector<SavedBuild> s_saved_builds;
