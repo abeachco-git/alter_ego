@@ -73,7 +73,7 @@ Skinventory::HttpResponse Get(const std::string& path,const std::string& key,con
     while(!Background::Workers().Stopping()&&Clock::now()<deadline){
         DWORD n=0;
         if(!InternetReadFile(request.value,buffer,sizeof(buffer),&n))return {};
-        if(!n){activity.Complete();return result;}
+        if(!n){if(Background::Workers().Stopping())return {};activity.Complete();return result;}
         if(result.body.size()+n>64u*1024u*1024u)return {};
         result.body.append(buffer,n);
     }

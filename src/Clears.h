@@ -4,14 +4,14 @@
 #include <string>
 
 // Cross-module globals — read/written from dllmain.cpp event handlers and render loop
-extern bool g_ClearsFetched;
-extern bool g_ClearsFetching;
-extern bool g_ClearsNeedRequery;
+extern std::atomic<bool> g_ClearsFetched;
+extern std::atomic<bool> g_ClearsFetching;
+extern std::atomic<bool> g_ClearsNeedRequery;
 extern std::atomic<bool> g_ClearsQueryPending;
 // Boot-time completion query is automatic, unlike the pending completion
 // phase of a user-requested FetchClears. They must not share a cancellation path.
 extern std::atomic<bool> g_ClearsAutoBootPending;
-extern bool g_VaultNeedRequery;
+extern std::atomic<bool> g_VaultNeedRequery;
 
 // Public API
 void LoadClearsCache();

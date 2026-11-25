@@ -130,7 +130,7 @@ template<class Job> void Launch(Job job){
     ClearProgress();
     Message("Working...",RefreshUI::State::Working);
     Background::Workers().Launch([job=std::move(job)]{
-        try{job();}catch(...){Message("Operation failed; previous verified data retained.");}
+        try{job();}catch(const Background::Cancelled&){Message("Operation cancelled.");}catch(...){Message("Operation failed; previous verified data retained.");}
         ClearProgress();busy=false;
     },[]{Message("Operation cancelled.");ClearProgress();busy=false;});
 }
@@ -142,7 +142,9 @@ std::string Error(int code){
     return "HTTP "+std::to_string(code);
 }
 Json Fetch(const std::string& path,const std::string& key){
+    Background::Checkpoint();
     auto r=ArenaNet::Get(path,key);
+    Background::Checkpoint();
     if(r.status_code!=200)throw std::runtime_error(Error(r.status_code));
     return Json::parse(r.body);
 }
@@ -269,6 +271,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                 if(!permitted){
                     state.status="Missing permissions";Record(root,state);EndScope(state);publishProgress();return;
                 }
+                CharacterActivity::CancelOnShutdown attempts({a.id,character});
                 try{
                     if(name=="Equipment"){
                         const auto links=Linked();auto linked=std::find_if(links.begin(),links.end(),[&](const auto& x){return x.id==a.id;});
@@ -282,7 +285,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                         for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
                         EndScope(state);publishProgress();return;
                     }
-                    const auto ticket=ActivityScope(name)?CharacterActivity::Begin({a.id,character},name):CharacterActivity::Ticket{};
+                    const auto ticket=ActivityScope(name)?attempts.BeginScope(name):CharacterActivity::Ticket{};
                     auto j=Fetch(path,key.value);std::vector<Slot> slots;
                     if(bags){
                         const auto& b=j.at("bags");if(!b.is_array())throw std::runtime_error("Invalid bags");
@@ -293,10 +296,11 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     else if(name=="Legendary Armory")slots=ParseArmory(j,a.id);
                     else if(name=="Delivery box")slots=ParseArray(j.at("items"),a.id,name,{},{},false);
                     else slots=ParseArray(j,a.id,name,character,{},name!="Materials");
-                    state.success=Now();Record(root,state,&slots);
+                    Background::Checkpoint();state.success=Now();Record(root,state,&slots);
                     if(ActivityScope(name))CharacterActivity::Success({a.id,character},name,ticket,state.success);
                     for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
                 }catch(const std::exception& e){
+                    Background::Checkpoint();
                     const std::string what=e.what();
                     state.status=what.rfind("HTTP ",0)==0||what=="Invalid key or missing permission"||what=="Transport failed or cancelled"||what=="Rate limited; retry later"?what:"Invalid or incomplete response";
                     Record(root,state);
@@ -310,7 +314,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     if(!a.permissions.count("wallet"))throw std::runtime_error("Missing wallet permission");
                     auto rows=ParseWallet(Fetch("/v2/account/wallet",key.value));state.success=Now();
                     RecordWallet(root,state,&rows);currencyMetadataNeeded=true;
-                }catch(...){state.status=a.permissions.count("wallet")?"Wallet request failed":"Missing permissions";RecordWallet(root,state);}
+                }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();state.status=a.permissions.count("wallet")?"Wallet request failed":"Missing permissions";RecordWallet(root,state);}
                 EndScope(state);publishProgress();
             }
             if((onlyScope.empty()||onlyScope=="Guild bank")&&(!automatic||ScopeDue(*previous,a.id,"Guild access"))){
@@ -330,16 +334,16 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                         SetActiveScope("Guild bank / "+(old!=previous->inventory.guilds.end()&&!old->second.name.empty()?old->second.name:id));
                         try{
                             auto meta=Fetch("/v2/guild/"+id,{});g.name=meta.at("name").get<std::string>();g.tag=meta.value("tag",std::string{});
-                        }catch(...){}
+                        }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();}
                         try{
                             auto stock=ParseGuild(Fetch("/v2/guild/"+id+"/stash",key.value),id);
                             g.status="Ready";g.success=Now();RecordGuild(root,g,&stock);
                             for(const auto& s:stock.slots)ids.insert(s.id);
                             fetchedGuilds.insert(id);
-                        }catch(...){g.status="Guild stash unavailable";RecordGuild(root,g);}
+                        }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();g.status="Guild stash unavailable";RecordGuild(root,g);}
                         publishProgress(true);
                     }
-                }catch(...){
+                }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();
                     ScopeState state{a.id,"Guild access","",a.permissions.count("guilds")?"Guild access request failed":"Missing permissions",Now(),0};Record(root,state);
                 }
                 SetActiveScope("");publishProgress(true);
@@ -367,7 +371,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                         scope("Bags",ch,path+"/inventory",true);
                         scope("Equipment",ch,path+"/equipment?v=2024-04-01T00:00:00.000Z",false);
                     }
-                }catch(...){ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};Record(root,failed);EndScope(failed);publishProgress(true);}
+                }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};Record(root,failed);EndScope(failed);publishProgress(true);}
             }
         }
         // Resolve names in bounded batches. Missing metadata cannot discard verified slots.
@@ -377,10 +381,10 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
         for(const auto& [id,meta]:cached.metadata)if(meta.complete&&cached.flags.count(id))ids.erase(id);
         
         if(currencyMetadataNeeded&&std::any_of(cached.wallet.begin(),cached.wallet.end(),[](const WalletRow& w){return w.name.empty();}))
-            try{StoreCurrencies(root,Fetch("/v2/currencies?ids=all",{}));}catch(...){} 
+            try{StoreCurrencies(root,Fetch("/v2/currencies?ids=all",{}));}catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();} 
         std::string batch;unsigned count=0;
         unsigned metadataDone=0;const auto metadataTotal=ids.size();
-        auto flush=[&]{if(batch.empty())return;SetActiveScope("Item metadata "+std::to_string(metadataDone)+"/"+std::to_string(metadataTotal));try{StoreNames(root,Fetch("/v2/items?ids="+batch,{}));}catch(...){}metadataDone+=count;batch.clear();count=0;publishProgress();};
+        auto flush=[&]{if(batch.empty())return;SetActiveScope("Item metadata "+std::to_string(metadataDone)+"/"+std::to_string(metadataTotal));try{StoreNames(root,Fetch("/v2/items?ids="+batch,{}));}catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();}metadataDone+=count;batch.clear();count=0;publishProgress();};
         for(auto id:ids){Background::Checkpoint();if(count==100)flush();if(count++)batch+=",";batch+=std::to_string(id);}flush();
         Publish("Refresh finished. Check individual storage status for failures or stale data.");
     });
@@ -425,6 +429,7 @@ Result Request(const LinkedAccount& a,const std::string& path,const std::vector<
     Secret key(Key(a.id));lock.unlock();
     if(key.value.empty())return {401,{},"API key unavailable"};
     auto r=ArenaNet::Get(path,key.value);
+    if(Background::Workers().Stopping())return {0,{},"Cancelled"};
     if(!Current(a))return {0,{},"Account changed"};
     if(r.status_code!=200)return {r.status_code,{},Error(r.status_code)};
     try{return {200,Json::parse(r.body),{}};}catch(...){return {0,{},"Invalid API response"};}
@@ -443,7 +448,9 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
     auto& e=physicalCache[k];
     if(e.epoch==a.generation&&e.value.response&&e.value.inventoryCommitted&&
        (e.finished>=queued||(!manual&&Clock::now()-e.finished<std::chrono::seconds(15))))return e.value;
-    const auto ticket=CharacterActivity::Begin(k,"Equipment");
+    if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};
+    CharacterActivity::CancelOnShutdown attempts(k);
+    const auto ticket=attempts.BeginScope("Equipment");
     auto r=Request(a,"/v2/characters/"+Encode(character)+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"});
     PhysicalEquipmentResult result{std::move(r),ticket.started,Now()};
     if(!result.response)return result;
@@ -453,6 +460,7 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
         auto slots=ParseEquipment(result.response.data,a.id,character);
         {
             std::lock_guard<std::mutex> credentialLock(credentialMutex);
+            if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};
             if(!Current(a))return {{0,{},"Account changed"},0,0};
             ScopeState state{a.id,"Equipment",character,"Ready",ticket.started,result.success};
             Record(root,state,&slots);

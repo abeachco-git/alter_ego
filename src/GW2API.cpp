@@ -337,6 +337,7 @@ namespace AlterEgo {
                 if(!requested)continue;
                 struct Verified { S::Scope scope; CharacterActivity::Ticket ticket; int64_t stamp; bool specVerified; };
                 std::vector<Verified> verified;
+                CharacterActivity::CancelOnShutdown attempts(key);
                 const std::string path="/v2/characters/"+UrlEncode(name);
                 const auto stage=[&](const std::string& label){
                     std::lock_guard<std::mutex> lock(s_mutex);
@@ -352,7 +353,7 @@ namespace AlterEgo {
                     Background::Checkpoint();
                     if(!NativeAccounts::Current(a)){partial=true;break;}
                     if(scope!=S::Core&&!identityVerified){partial=true;continue;}
-                    const auto ticket=CharacterActivity::Begin(key,S::Name(scope));
+                    const auto ticket=attempts.BeginScope(S::Name(scope));
                     bool specVerified=true;
                     try{
                         // Stage each scope against the current candidate. A
@@ -475,8 +476,9 @@ namespace AlterEgo {
                         verified.push_back({scope,ticket,stamp,specVerified});
                         ch=std::move(next);
                         if(scope==S::Core)identityVerified=true;
-                    }catch(...){partial=true;}
+                    }catch(const Background::Cancelled&){throw;}catch(...){partial=true;}
                 }
+                Background::Checkpoint();
                 if(verified.empty()||!identityVerified||!NativeAccounts::Current(a)){partial=true;continue;}
                 ch.data_refreshed=std::time(nullptr);
                 stage("Saving verified scopes");
@@ -489,7 +491,7 @@ namespace AlterEgo {
                 s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;
                 s_fetch_message=std::to_string(s_chars_fetched)+"/"+std::to_string(s_chars_total)+(partial?" characters refreshed; failed data retained":" characters refreshed");
             }
-            if(!partial)ReconcileCharactersWithRoster();
+            if(!partial&&!Background::Workers().Stopping())ReconcileCharactersWithRoster();
         },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message="Character refresh cancelled";s_current_char={};});
     }
 

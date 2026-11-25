@@ -1,5 +1,6 @@
 #pragma once
 #include "RefreshEngine.h"
+#include "BackgroundWorkers.h"
 #include <nlohmann/json.hpp>
 #include <tuple>
 #include <ctime>
@@ -68,7 +69,7 @@ public:
         }else if(spec&&!rows_[k].spec){rows_[k].spec=spec;Dirty();}
         Touch(k,now);Touch({account,{}},now);
     }
-    void Finish(int64_t now){End(now);missingSince_=0;}
+    void Finish(int64_t now){End(missingSince_?std::min(now,missingSince_):now);missingSince_=0;}
     Key ActiveKey()const{return active_;}
     bool SpecMatches(const Key& k,uint32_t spec)const{auto it=rows_.find(k);return it==rows_.end()||!it->second.spec||it->second.spec==spec;}
     int64_t LastSeen(const Key& k)const{auto i=rows_.find(k);return i==rows_.end()?0:i->second.lastSeen;}
@@ -121,6 +122,13 @@ public:
         if(specVerified&&e.specChanged==t.specChanged&&verifiedStart>=t.specChanged)s.specCovered=t.specChanged;
         Dirty();
     }
+    void Cancel(const Key& k,const std::string& scope,const Ticket& t){
+        auto row=rows_.find(k);if(row==rows_.end())return;
+        auto it=row->second.scopes.find(scope);if(it==row->second.scopes.end())return;
+        // Only the owning attempt may clear its own cooldown. Never undo
+        // verified success or the coverage watermark.
+        if(it->second.attempt==t.started){it->second.attempt=0;Dirty();}
+    }
     bool DirtyState()const{return dirty_;}
     uint64_t Revision()const{return revision_;}
     void Saved(uint64_t rev){if(rev==revision_)dirty_=false;}
@@ -170,6 +178,22 @@ inline bool Due(const Key& k,const std::string& scope,int64_t success,int64_t at
 inline Ticket Begin(const Key& k,const std::string& scope){
     std::lock_guard<std::mutex> lock(Mutex());return State().Begin(k,scope,Now());
 }
+inline void Cancel(const Key& k,const std::string& scope,const Ticket& t){
+    std::lock_guard<std::mutex> lock(Mutex());State().Cancel(k,scope,t);
+}
+class CancelOnShutdown {
+    Key key_;
+    std::vector<std::pair<std::string,Ticket>> tickets_;
+public:
+    explicit CancelOnShutdown(Key key):key_(std::move(key)){}
+    Ticket BeginScope(const std::string& scope){
+        auto ticket=Begin(key_,scope);tickets_.emplace_back(scope,ticket);return ticket;
+    }
+    ~CancelOnShutdown(){
+        if(Background::Workers().Stopping())
+            for(const auto& [scope,ticket]:tickets_)Cancel(key_,scope,ticket);
+    }
+};
 inline void Success(const Key& k,const std::string& scope,const Ticket& t,int64_t stamp,bool specVerified=true){
     std::lock_guard<std::mutex> lock(Mutex());State().Success(k,scope,t,stamp,specVerified);
 }

@@ -549,7 +549,8 @@ static std::atomic<bool> g_AchProgressFetching{false}; // fetching account progr
 static std::atomic<uint64_t> g_AchRequestGeneration{0};
 static std::atomic<long long> g_AchProgressQueryStartMs{0}; // watchdog for missing API responses
 static bool g_AchNeedRequery = false;      // deferred requery on account change
-static bool g_AchProgressDirty = false;    // persistent cache needs flushing
+static std::atomic<bool> g_AchProgressDirty{false};
+static bool g_AchSwitchingAccount=false; // guarded by g_AchMutex    // persistent cache needs flushing
 static std::string g_AchCachedAccount;     // account whose data is currently in g_AchProgress
 static int64_t g_AchProgressCacheSavedAt = 0; // last successful achievement progress retrieval
 // The loaded snapshot timestamp is stable across pinned updates, unlike saved_at.
@@ -1021,14 +1022,14 @@ static void OnEvAlertAchievementCompleted(void* eventArgs) {
     // This alert describes the logged-in character, not necessarily the
     // account selected in the Achievements view. Never apply it to another
     // account's progress file.
-    if (g_AchCachedAccount.empty() ||
-        g_AchCachedAccount != GetAchievementCacheAccount()) return;
+    const std::string selected=GetAchievementCacheAccount();
     const std::string loggedIn = AlterEgo::GW2API::GetCurrentAccountName();
-    if (loggedIn.empty() || loggedIn != g_AchCachedAccount) return;
+    if (loggedIn.empty() || loggedIn!=selected)return;
     auto* payload = (AlertUnlockPayload*)eventArgs;
     if (payload->ID != 0) {
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            if(g_AchSwitchingAccount||g_AchCachedAccount!=loggedIn)return;
             auto it = g_AchProgress.find(payload->ID);
             if (it != g_AchProgress.end()) {
                 // Increment progress — handle completion based on achievement type
@@ -2451,7 +2452,7 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
     AlterEgo::Background::Workers().Launch([account,generation,automatic,ids,interval]{
         auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),account,!automatic,interval);
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account)return;
+        if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account||AlterEgo::Background::Workers().Stopping())return;
         g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;
         if(!result.snapshot){
             g_AchRefreshError=result.error;
@@ -12539,6 +12540,7 @@ void AddonLoad(AddonAPI_t* aApi) {
 }
 
 void AddonUnload() {
+    const auto shutdownAt=AlterEgo::CharacterActivity::Now();
     AlterEgo::Callbacks::Runtime().Close();
     AlterEgo::Background::Workers().RequestStop();
     AlterEgo::IconManager::RequestStop();
@@ -12569,6 +12571,9 @@ void AddonUnload() {
     // No new callback body can enter; drain admitted work before teardown.
     // Do not hold a subsystem lock while waiting (events may reenter synchronously).
     AlterEgo::Callbacks::Runtime().Drain();
+    // End observation at shutdown, not after a slow HTTP worker joins.
+    {std::lock_guard<std::mutex> lock(AlterEgo::CharacterActivity::Mutex());
+        AlterEgo::CharacterActivity::State().Finish(shutdownAt);}
 
     // All one-shot jobs must finish before their state/API is destroyed.
     AlterEgo::Background::Workers().JoinAll();
@@ -12578,9 +12583,9 @@ void AddonUnload() {
     if (g_AchProgressDirty && !g_AchCachedAccount.empty())
         SaveAchProgress(g_AchCachedAccount);
 
-    {std::lock_guard<std::mutex> lock(AlterEgo::CharacterActivity::Mutex());
-        AlterEgo::CharacterActivity::State().Finish(AlterEgo::CharacterActivity::Now());}
     SaveCharacterActivity(true);
+    AlterEgo::NativeProgress::Reset();
+    AlterEgo::RefreshEngine::ResetMetadata();
 
     // Shutdown Skinventory subsystems
     Skinventory::WikiImage::Shutdown();
@@ -12608,6 +12613,8 @@ static void LoadCharacterActivity(){
 }
 static void SaveCharacterActivity(bool force){
     namespace A=AlterEgo::CharacterActivity;
+    static std::mutex saveMutex;
+    std::lock_guard<std::mutex> saving(saveMutex);
     static auto last=std::chrono::steady_clock::time_point{};
     const auto now=std::chrono::steady_clock::now();
     if(!force&&now-last<std::chrono::seconds(30))return;
@@ -15724,12 +15731,12 @@ static void RenderAchievementsStatusRow() {
     }
     if (AlterEgo::RefreshUI::Row("achievements", (std::time_t)g_AchProgressCacheSavedAt,
             "achievement progress", state, detail)) {
-        g_AchRefreshError.clear();
-        ++g_AchRequestGeneration;
-        g_AchProgressFetching = false; // invalidate a replaced request
-        g_AchProgressQueryStartMs = 0;
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchRefreshError.clear();
+            ++g_AchRequestGeneration;
+            g_AchProgressFetching = false; // invalidate a replaced request
+            g_AchProgressQueryStartMs = 0;
             g_AchStatusMsg.clear();
         }
         // A manual refresh targets the selected category, not every category.
@@ -15753,13 +15760,15 @@ static void RenderAchievementsStatusRow() {
 static void PollAchievementCachePersistence() {
     const std::string account = GetAchievementCacheAccount();
     if (account != g_AchCachedAccount) {
+        {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchSwitchingAccount=true;++g_AchRequestGeneration;}
         // Flush outgoing data before loading another account. Account switching
         // must never overwrite the previous account's progress file.
         if (g_AchProgressDirty && !g_AchCachedAccount.empty())
             SaveAchProgress(g_AchCachedAccount);
         if(!account.empty())LoadAchProgress(account);
         else {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);g_AchProgress.clear();g_AchOptimisticTime.clear();g_AchCachedAccount.clear();g_AchProgressCacheSavedAt=0;g_AchProgressLoadedSnapshotAt=0;g_AchProgressDirty=false;++g_AchProgressGen;}
-        ++g_AchRequestGeneration;
+        {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);g_AchSwitchingAccount=false;}
 
         // Responses/retries issued for the old account must not update the new
         // cache. Fresh queries can be scheduled for the selected account.
@@ -15772,8 +15781,9 @@ static void PollAchievementCachePersistence() {
     // Runs even while the Achievements tab (or the whole addon window) is
     // closed, so API replies and alerts are persisted without opening the tab.
     if (g_AchProgressDirty && !g_AchCachedAccount.empty()) {
-        if (std::chrono::steady_clock::now() - g_AchLastSave >= std::chrono::seconds(30))
-            SaveAchProgress(g_AchCachedAccount);
+        bool due;
+        {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);due=std::chrono::steady_clock::now()-g_AchLastSave>=std::chrono::seconds(30);}
+        if(due)SaveAchProgress(g_AchCachedAccount);
     }
 }
 
@@ -15966,11 +15976,13 @@ void AddonRender() {
     if (g_AchProgressFetching) {
         const long long started = g_AchProgressQueryStartMs.load();
         if (started > 0 && NowMs() - started > 120000) {
-            ++g_AchRequestGeneration;
-            g_AchProgressFetching = false;
-            g_AchProgressQueryStartMs = 0;
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchStatusMsg = "Achievement progress timed out. Click Refresh to retry.";
+            if(g_AchProgressFetching&&g_AchProgressQueryStartMs==started){
+                ++g_AchRequestGeneration;
+                g_AchProgressFetching = false;
+                g_AchProgressQueryStartMs = 0;
+                g_AchStatusMsg = "Achievement progress timed out. Click Refresh to retry.";
+            }
         }
     }
 

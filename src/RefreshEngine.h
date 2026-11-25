@@ -64,6 +64,8 @@ struct MetadataRegistry {
     Clock::time_point pruneAt{};
 };
 inline MetadataRegistry& Metadata(){static MetadataRegistry r;return r;}
+// Called only after callback drain and worker join; no live claim owners.
+inline void ResetMetadata(){auto& r=Metadata();std::lock_guard<std::mutex> lock(r.mutex);r.records.clear();r.pruneAt={};r.changed.notify_all();}
 struct IdBatch {
     std::string dataset;
     std::vector<uint32_t> ids;

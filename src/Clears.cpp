@@ -100,9 +100,9 @@ static bool g_ClearsRetrySelective = false;
 static constexpr long long CLEARS_QUERY_TIMEOUT_MS = 120000;
 
 // Public globals — declared extern in Clears.h, accessed from dllmain.cpp
-bool g_ClearsFetched = false;
-bool g_ClearsFetching = false;
-bool g_ClearsNeedRequery = false;
+std::atomic<bool> g_ClearsFetched{false};
+std::atomic<bool> g_ClearsFetching{false};
+std::atomic<bool> g_ClearsNeedRequery{false};
 std::atomic<bool> g_ClearsQueryPending{false};
 std::atomic<bool> g_ClearsAutoBootPending{false};
 
@@ -149,7 +149,7 @@ static int g_VaultRolloverRetries = 0;
 static long long g_VaultRolloverRetryAtMs = 0;
 static std::string g_VaultRequestAccount;
 static constexpr long long VAULT_TIMEOUT_MS = 120000;
-bool g_VaultNeedRequery = false;
+std::atomic<bool> g_VaultNeedRequery{false};
 
 static std::string g_ClearsCacheAccount; // the account represented by current Clears data
 static std::string g_VaultCacheAccount;  // the account represented by current Vault data
@@ -318,9 +318,10 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
     if (!APIDefs || g_ClearsCompletionInFlight.load()) return;
     const std::string acctName=GetEffectiveAccountName();
     std::vector<uint32_t> allIds;
+    uint64_t generation=0;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if(acctName.empty() || acctName!=g_ClearsCacheAccount)return;
+        if(acctName.empty() || acctName!=g_ClearsCacheAccount||g_ClearsCompletionInFlight||g_ClearsFetching)return;
         const bool needFractals = !skipCompletedSections ||
             !AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals);
         const bool needBounties = !skipCompletedSections ||
@@ -340,18 +341,19 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
         if (allIds.empty()) return; // every known section is done
         g_ClearsRetrySelective = skipCompletedSections;
         g_ClearsCompletionInFlight = true;
+        generation=++g_ClearsGeneration;
         g_ClearsQueryStartedAtMs = NowMs();
         g_ClearsStatusMsg = skipCompletedSections
             ? "Refreshing incomplete sections..." : "Querying completion...";
     }
 
-    uint64_t generation;{std::lock_guard<std::mutex> lock(g_ClearsMutex);generation=++g_ClearsGeneration;}
     const auto now=std::chrono::system_clock::now();
     const auto daily=CalcLastDailyReset(now);
     const auto weekly=CalcLastWeeklyReset(now);
     const auto minimumEpoch=std::chrono::system_clock::to_time_t(std::max(daily,weekly));
     AlterEgo::Background::Workers().Launch([acctName,allIds,generation,manual,minimumEpoch]{
         auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),acctName,manual,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimumEpoch);
+        AlterEgo::Background::Checkpoint();
         bool save=false;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
@@ -449,6 +451,7 @@ static void RefreshVaultSeason(bool manual){
             }
         }catch(...){/* Preserve in-memory metadata; attempt a verified refresh. */}
         auto r=AlterEgo::ArenaNet::Get("/v2/wizardsvault");
+        AlterEgo::Background::Checkpoint();
         std::chrono::system_clock::time_point tp{};
         if(r.status_code==200)try{tp=ParseISO8601(nlohmann::json::parse(r.body).at("end").get<std::string>());}catch(...){}
         const AlterEgo::Cache::VaultSeasonSnapshot next{
@@ -458,7 +461,8 @@ static void RefreshVaultSeason(bool manual){
         try{saved=AlterEgo::Cache::WriteVaultSeason(root,next);}catch(...){}
         if(!saved){finish(false);return;}
         apply(next);finish(true);SaveVaultCache();
-    },[]{std::lock_guard<std::mutex> lock(g_ClearsMutex);g_PublicVaultSeasonPending=false;});
+    },[]{std::lock_guard<std::mutex> lock(g_ClearsMutex);g_PublicVaultSeasonPending=false;
+        if(AlterEgo::Background::Workers().Stopping())g_PublicVaultSeasonAttempt=0;});
 }
 
 static void FetchVaultData(bool skipClaimedSections) {
@@ -529,6 +533,11 @@ static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t g
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         if(type>2||generation!=g_VaultGeneration||!g_VaultFetching.load()||
             account!=g_VaultRequestAccount||account!=g_VaultCacheAccount||g_VaultTerminal[type])return;
+        if(AlterEgo::Background::Workers().Stopping()){
+            g_VaultSectionAttempt[account][type]=0;g_VaultTerminal[type]=true;g_VaultRetryNeeded[type]=false;
+            if(std::all_of(std::begin(g_VaultTerminal),std::end(g_VaultTerminal),[](bool x){return x;}))g_VaultFetching=false;
+            return;
+        }
         if(status==429&&++g_VaultRetryAttempts[type]<=3){
             g_VaultRetryNeeded[type]=true;
             g_VaultRetryAtMs=std::max(g_VaultRetryAtMs,NowMs()+5000LL);
@@ -654,8 +663,11 @@ static void FetchClears(bool manual) {
     if (g_ClearsFetching||g_ClearsCompletionInFlight.load()||g_ClearsQueryPending.load()) return;
     const auto account=GetEffectiveAccountName();
     if(account.empty())return;
+    uint64_t generation=0;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if(account!=g_ClearsCacheAccount||g_ClearsFetching||g_ClearsCompletionInFlight||g_ClearsQueryPending)return;
+        generation=++g_ClearsGeneration;
         const auto now=static_cast<int64_t>(std::time(nullptr));
         auto& attempt=g_ClearsDefinitionAttempt[account];
         if(!manual&&!g_ClearsDailyRolloverPending&&!AlterEgo::RefreshEngine::Due(0,attempt,now,0))return;
@@ -664,7 +676,7 @@ static void FetchClears(bool manual) {
         // Keep successfully cached data displayed during a refresh.
     }
 
-    AlterEgo::Background::Workers().Launch([manual,account]() {
+    AlterEgo::Background::Workers().Launch([manual,account,generation]() {
         AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
         // Reuse still-current weekly/daily definitions unless explicitly refreshing.
         const int64_t requestToken = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -673,6 +685,7 @@ static void FetchClears(bool manual) {
         std::vector<ClearEntry> cachedFractals,cachedBounties,cachedWeekly;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             if(g_ClearsDailyRolloverPending){
                 priorFractals=g_ClearsPriorDailyFractalIds;
                 priorBounties=g_ClearsPriorDailyBountyIds;
@@ -689,10 +702,12 @@ static void FetchClears(bool manual) {
         auto bountyIds = cachedBounties.empty()?FetchCategoryIds(CAT_DAILY_BOUNTIES,requestToken,priorBounties):DailyIds(cachedBounties);
         auto weeklyIds = cachedWeekly.empty()?FetchCategoryIds(CAT_WEEKLY_RAIDS,requestToken,{}):DailyIds(cachedWeekly);
 
+        AlterEgo::Background::Checkpoint();
         // A partial HTTP failure must never replace one of the sections with
         // an empty definition list just because another category succeeded.
         if (fractalIds.empty() || bountyIds.empty() || weeklyIds.empty()) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             g_ClearsStatusMsg = "Failed to fetch all achievement categories; cached data preserved";
             if (g_ClearsDailyRolloverPending) {
                 const int attempt = ++g_ClearsDailyRolloverRetries;
@@ -709,6 +724,7 @@ static void FetchClears(bool manual) {
         // prior verified weekly data and retry using the existing cadence.
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             if(g_ClearsDailyRolloverPending &&
                ClearsReset::LooksUnrotated(g_ClearsPriorDailyFractalIds,fractalIds) &&
                ClearsReset::LooksUnrotated(g_ClearsPriorDailyBountyIds,bountyIds)){
@@ -723,6 +739,7 @@ static void FetchClears(bool manual) {
         // Step 2: Fetch all achievement details
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             g_ClearsStatusMsg = "Fetching achievement details...";
         }
 
@@ -741,6 +758,7 @@ static void FetchClears(bool manual) {
             !AlterEgo::Identity::ExactIds(bountyIds,DailyIds(bountyEntries)) ||
             !AlterEgo::Identity::ExactIds(weeklyIds,DailyIds(weeklyEntries))) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             g_ClearsStatusMsg = "Incomplete achievement details; existing data preserved";
             if (g_ClearsDailyRolloverPending) {
                 const int attempt = ++g_ClearsDailyRolloverRetries;
@@ -786,6 +804,7 @@ static void FetchClears(bool manual) {
 
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             const bool fractalsHeld = ClearsReset::LooksUnrotated(
                 g_ClearsPriorDailyFractalIds, DailyIds(fractalEntries));
             const bool bountiesHeld = ClearsReset::LooksUnrotated(
@@ -807,7 +826,6 @@ static void FetchClears(bool manual) {
                 g_ClearsFetching = false;
                 return;
             }
-            if(account!=g_ClearsCacheAccount){g_ClearsFetching=false;return;}
             g_ClearsDefinitionAttempt[account]=std::time(nullptr);
             g_DailyFractals = std::move(fractalEntries);
             g_DailyBounties = std::move(bountyEntries);
@@ -820,13 +838,16 @@ static void FetchClears(bool manual) {
             g_ClearsDailyRolloverRetries = 0;
             g_ClearsDailyRolloverRetryAtMs = 0;
             g_ClearsStatusMsg = "Querying completion...";
+            g_ClearsPendingManual=manual;
+            g_ClearsQueryPending=true;
+            g_ClearsFetching=false;
         }
-
-        // Background fetch done — allow render thread to send native completion query
-        g_ClearsFetching = false;
-        g_ClearsPendingManual=manual;
-        g_ClearsQueryPending = true;
-    }, [] { g_ClearsFetching = false; });
+    }, [account,generation] {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
+        g_ClearsFetching=false;
+        if(AlterEgo::Background::Workers().Stopping())g_ClearsDefinitionAttempt[account]=0;
+    });
 }
 
 // =========================================================================
@@ -3148,6 +3169,7 @@ static void RenderClearsShared(bool showVault) {
     bool resetTriggered = false;
     if (ClearsReset::Due(ResetEpoch(g_LastDailyReset), dailyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        ++g_ClearsGeneration;g_ClearsFetching=false;g_ClearsPendingManual=false;
         if (!g_ClearsDailyRolloverPending) {
             g_ClearsPriorDailyFractalIds = DailyIds(g_DailyFractals);
             g_ClearsPriorDailyBountyIds = DailyIds(g_DailyBounties);
@@ -3174,6 +3196,7 @@ static void RenderClearsShared(bool showVault) {
     }
     if (ClearsReset::Due(ResetEpoch(g_LastWeeklyReset), weeklyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        ++g_ClearsGeneration;g_ClearsFetching=false;g_ClearsPendingManual=false;
         g_WeeklyWings.clear();
         g_WeeklyStrikes = ClearEntry{};
         g_ClearsDefinitionAttempt[g_ClearsCacheAccount]=0;
@@ -3265,6 +3288,7 @@ static void RenderClearsShared(bool showVault) {
         const long long started = g_ClearsQueryStartedAtMs.load();
         if (started != 0 && NowMs() - started >= CLEARS_QUERY_TIMEOUT_MS) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            ++g_ClearsGeneration;
             g_ClearsCompletionInFlight = false;
             g_ClearsQueryStartedAtMs = 0;
             g_ClearsStatusMsg = "Completion query timed out; retry Refresh.";
@@ -3276,6 +3300,7 @@ static void RenderClearsShared(bool showVault) {
         g_ClearsNeedRequery = false;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            ++g_ClearsGeneration;g_ClearsQueryPending=false;g_ClearsPendingManual=false;
             g_ClearsCompletionInFlight = false;
             g_ClearsQueryStartedAtMs = 0;
             g_ClearsRetryAtMs = 0;
@@ -3301,7 +3326,7 @@ static void RenderClearsShared(bool showVault) {
     // Boot-time account registry only confirms availability. Never query Clears
     // before this tab is opened, even when a cached account is selected.
     if (!showVault) g_ClearsAutoBootPending = false;
-    if (!showVault && g_ClearsQueryPending.exchange(false) && !g_ClearsFetching)
+    if (!showVault && !g_ClearsFetching && g_ClearsQueryPending.exchange(false))
         SendClearsAchQuery(false,g_ClearsPendingManual.exchange(false));
     // Fire a scheduled BUSY backoff retry once its delay has elapsed.
     {
@@ -3309,7 +3334,9 @@ static void RenderClearsShared(bool showVault) {
         if (!showVault && retryAt != 0 && NowMs() >= retryAt &&
             !g_ClearsFetching) {
             g_ClearsRetryAtMs = 0;
-            SendClearsAchQuery(g_ClearsRetrySelective);
+            bool selective;
+            {std::lock_guard<std::mutex> lock(g_ClearsMutex);selective=g_ClearsRetrySelective;}
+            SendClearsAchQuery(selective);
         }
     }
 
@@ -3323,17 +3350,16 @@ static void RenderClearsShared(bool showVault) {
     }
     if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
         !showVault && g_ClearsFetched && !g_ClearsFetching &&
-        !g_ClearsDailyRolloverPending &&
         !g_ClearsCompletionInFlight.load() && !g_ClearsQueryPending.load() &&
         g_ClearsRetryAtMs.load() == 0 &&
-        (g_LastClearsCompletionQuery == std::chrono::steady_clock::time_point{} ||
-         (steadyNow - g_LastClearsCompletionQuery) >= std::chrono::seconds(2)) &&
         ([&]() {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(g_ClearsDailyRolloverPending||
+               (g_LastClearsCompletionQuery!=std::chrono::steady_clock::time_point{}&&steadyNow-g_LastClearsCompletionQuery<std::chrono::seconds(2)))return false;
             const auto minimum=std::chrono::system_clock::to_time_t(std::max(dailyReset,weeklyReset));
             return AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,g_ClearsLastSuccessTime,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimum);
         })()) {
-        g_LastClearsCompletionQuery = steadyNow;
+        {std::lock_guard<std::mutex> lock(g_ClearsMutex);g_LastClearsCompletionQuery=steadyNow;}
         SendClearsAchQuery(true);
     }
 
@@ -3578,7 +3604,7 @@ void RefreshClearsOnEntry() {
     if (!haveData) {
         FetchClears(); // no usable IDs yet: retrieve category definitions
     } else {
-        g_LastClearsCompletionQuery = std::chrono::steady_clock::now();
+        {std::lock_guard<std::mutex> lock(g_ClearsMutex);g_LastClearsCompletionQuery=std::chrono::steady_clock::now();}
         SendClearsAchQuery(true);
     }
 }

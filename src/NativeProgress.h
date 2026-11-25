@@ -24,6 +24,8 @@ struct AchievementEntry {
 };
 inline std::mutex& AchievementMutex(){static std::mutex m;return m;}
 inline std::map<std::string,AchievementEntry>& AchievementEntries(){static std::map<std::string,AchievementEntry> e;return e;}
+// Only after joining all refresh workers, before a subsequent addon load.
+inline void Reset(){std::lock_guard<std::mutex> lock(AchievementMutex());AchievementEntries().clear();}
 inline bool AchievementDue(const std::string& account,int64_t localSuccess,int64_t interval,int64_t minimumEpoch=0){
     std::unique_lock<std::mutex> lock(AchievementMutex(),std::try_to_lock);
     if(!lock.owns_lock())return false;
@@ -52,6 +54,7 @@ inline AchievementResult FetchAchievements(const std::string& root,const std::st
         if(Background::Workers().Stopping())return {0,"Cancelled",{}};
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
+    if(Background::Workers().Stopping())return {0,"Cancelled",{}};
     NativeAccounts::LinkedAccount a;
     for(const auto& linked:NativeAccounts::Linked())if(linked.id==account){a=linked;break;}
     if(!NativeAccounts::Current(a))return {401,"No linked account",{}};
@@ -77,10 +80,12 @@ inline AchievementResult FetchAchievements(const std::string& root,const std::st
         return AchievementResult{status,std::move(error),{}};
     };
     auto r=NativeAccounts::Request(a,"/v2/account/achievements",{"progression"});
+    if(Background::Workers().Stopping())return {0,"Cancelled",{}};
     if(!r)return fail(r.status,r.error);
     try{
         auto snapshot=std::make_shared<const Cache::AchievementSnapshot>(ParseAchievements(r.data,std::time(nullptr)));
         if(!NativeAccounts::Current(a))return {0,"Account changed",{}};
+        if(Background::Workers().Stopping())return {0,"Cancelled",{}};
         if(!Cache::WriteAchievements(root,account,*snapshot,Cache::AchievementSnapshotKind::Verified))
             return fail(0,"Could not commit verified achievement snapshot");
         if(!NativeAccounts::Current(a))return {0,"Account changed",{}};

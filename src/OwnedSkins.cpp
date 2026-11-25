@@ -76,6 +76,7 @@ namespace Skinventory {
         }
         AlterEgo::Background::Workers().Launch([account,epoch]{
             auto result=AlterEgo::NativeAccounts::Request(account,"/v2/account/skins",{"unlocks"});
+            AlterEgo::Background::Checkpoint();
             std::unordered_set<uint32_t> parsed;bool valid=false;
             try{
                 if(result&&result.data.is_array()){
