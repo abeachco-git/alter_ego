@@ -114,15 +114,15 @@ namespace AlterEgo {
     int GW2API::s_chars_fetched = 0;
     int GW2API::s_chars_total = 0;
     Character GW2API::s_current_char;
-    std::unordered_map<uint32_t, ItemInfo> GW2API::s_item_cache;
-    std::unordered_map<uint32_t, SkinInfo> GW2API::s_skin_cache;
-    std::unordered_map<uint32_t, SpecializationInfo> GW2API::s_spec_cache;
-    std::unordered_map<uint32_t, TraitInfo> GW2API::s_trait_cache;
-    std::unordered_map<uint32_t, SkillInfo> GW2API::s_skill_cache;
-    std::unordered_map<int, DyeColor> GW2API::s_dye_cache;
-    std::unordered_map<uint32_t, ItemStatInfo> GW2API::s_itemstat_cache;
-    std::unordered_map<std::string, ProfessionInfo> GW2API::s_profession_cache;
-    std::unordered_map<std::string, std::map<std::string, ProfessionWeaponData>> GW2API::s_profession_weapons;
+    std::unordered_map<uint32_t, std::shared_ptr<const ItemInfo>> GW2API::s_item_cache;
+    std::unordered_map<uint32_t, std::shared_ptr<const SkinInfo>> GW2API::s_skin_cache;
+    std::unordered_map<uint32_t, std::shared_ptr<const SpecializationInfo>> GW2API::s_spec_cache;
+    std::unordered_map<uint32_t, std::shared_ptr<const TraitInfo>> GW2API::s_trait_cache;
+    std::unordered_map<uint32_t, std::shared_ptr<const SkillInfo>> GW2API::s_skill_cache;
+    std::unordered_map<int, std::shared_ptr<const DyeColor>> GW2API::s_dye_cache;
+    std::unordered_map<uint32_t, std::shared_ptr<const ItemStatInfo>> GW2API::s_itemstat_cache;
+    std::unordered_map<std::string, std::shared_ptr<const ProfessionInfo>> GW2API::s_profession_cache;
+    std::unordered_map<std::string, std::shared_ptr<const std::map<std::string, ProfessionWeaponData>>> GW2API::s_profession_weapons;
     std::vector<SavedBuild> GW2API::s_saved_builds;
     std::unordered_map<std::string, uint32_t> GW2API::s_item_name_id_cache;
     bool GW2API::s_item_name_cache_dirty = false;
@@ -796,10 +796,10 @@ namespace AlterEgo {
     // Cache accessors
     // =========================================================================
 
-    const ItemInfo* GW2API::GetItemInfo(uint32_t item_id) {
+    std::shared_ptr<const ItemInfo> GW2API::GetItemInfo(uint32_t item_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_item_cache.find(item_id);
-        return (it != s_item_cache.end()) ? &it->second : nullptr;
+        return (it != s_item_cache.end()) ? it->second : nullptr;
     }
 
     uint32_t GW2API::FindItemIdByName(const std::string& name) {
@@ -817,7 +817,8 @@ namespace AlterEgo {
         }
         if(match)return ambiguous?0:match;
         // Check full item cache first
-        for (const auto& [id, info] : s_item_cache) {
+        for (const auto& [id, row] : s_item_cache) {
+                const auto& info=*row;
             if (info.name == name) return id;
         }
         // Fallback to persistent name→ID cache
@@ -906,43 +907,44 @@ namespace AlterEgo {
         return true;
     }
 
-    const SkinInfo* GW2API::GetSkinInfo(uint32_t skin_id) {
+    std::shared_ptr<const SkinInfo> GW2API::GetSkinInfo(uint32_t skin_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_skin_cache.find(skin_id);
-        return (it != s_skin_cache.end()) ? &it->second : nullptr;
+        return (it != s_skin_cache.end()) ? it->second : nullptr;
     }
 
-    const SpecializationInfo* GW2API::GetSpecInfo(uint32_t spec_id) {
+    std::shared_ptr<const SpecializationInfo> GW2API::GetSpecInfo(uint32_t spec_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_spec_cache.find(spec_id);
-        return (it != s_spec_cache.end()) ? &it->second : nullptr;
+        return (it != s_spec_cache.end()) ? it->second : nullptr;
     }
 
-    const TraitInfo* GW2API::GetTraitInfo(uint32_t trait_id) {
+    std::shared_ptr<const TraitInfo> GW2API::GetTraitInfo(uint32_t trait_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_trait_cache.find(trait_id);
-        return (it != s_trait_cache.end()) ? &it->second : nullptr;
+        return (it != s_trait_cache.end()) ? it->second : nullptr;
     }
 
-    const SkillInfo* GW2API::GetSkillInfo(uint32_t skill_id) {
+    std::shared_ptr<const SkillInfo> GW2API::GetSkillInfo(uint32_t skill_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_skill_cache.find(skill_id);
-        return (it != s_skill_cache.end()) ? &it->second : nullptr;
+        return (it != s_skill_cache.end()) ? it->second : nullptr;
     }
 
-    const DyeColor* GW2API::GetDyeColor(int color_id) {
+    std::shared_ptr<const DyeColor> GW2API::GetDyeColor(int color_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_dye_cache.find(color_id);
-        return (it != s_dye_cache.end()) ? &it->second : nullptr;
+        return (it != s_dye_cache.end()) ? it->second : nullptr;
     }
 
-    const ItemStatInfo* GW2API::GetItemStatInfo(uint32_t stat_id) {
+    std::shared_ptr<const ItemStatInfo> GW2API::GetItemStatInfo(uint32_t stat_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_itemstat_cache.find(stat_id);
-        return (it != s_itemstat_cache.end()) ? &it->second : nullptr;
+        return (it != s_itemstat_cache.end()) ? it->second : nullptr;
     }
 
-    const std::unordered_map<uint32_t, ItemStatInfo>& GW2API::GetAllItemStats() {
+    std::unordered_map<uint32_t, std::shared_ptr<const ItemStatInfo>> GW2API::GetAllItemStats() {
+        std::lock_guard<std::mutex> lock(s_mutex);
         return s_itemstat_cache;
     }
 
@@ -974,21 +976,21 @@ namespace AlterEgo {
                 Cache::StoreReferenceSnapshot(db,Cache::ReferenceDataset::ItemStats,rows,Cache::ReferenceSnapshotTime());
                 PublicCatalog::Mark(db,"public_stats",PublicCatalog::Now());tx.Commit();PublicCatalog::Publish(db);
             });
-            {std::lock_guard<std::mutex> lock(s_mutex);for(auto& [id,info]:staged)s_itemstat_cache[id]=std::move(info);}
+            {std::lock_guard<std::mutex> lock(s_mutex);for(auto& [id,info]:staged)s_itemstat_cache[id]=std::make_shared<const ItemStatInfo>(std::move(info));}
             PublicCatalog::EndDataset("public_stats",true);
         },[]{PublicCatalog::EndDataset("public_stats",false);});
     }
 
-    const ProfessionInfo* GW2API::GetProfessionInfo(const std::string& profession) {
+    std::shared_ptr<const ProfessionInfo> GW2API::GetProfessionInfo(const std::string& profession) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_profession_cache.find(profession);
-        return (it != s_profession_cache.end()) ? &it->second : nullptr;
+        return (it != s_profession_cache.end()) ? it->second : nullptr;
     }
 
-    const std::map<std::string, ProfessionWeaponData>* GW2API::GetProfessionWeapons(const std::string& profession) {
+    std::shared_ptr<const std::map<std::string, ProfessionWeaponData>> GW2API::GetProfessionWeapons(const std::string& profession) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_profession_weapons.find(profession);
-        return (it != s_profession_weapons.end()) ? &it->second : nullptr;
+        return (it != s_profession_weapons.end()) ? it->second : nullptr;
     }
 
     void GW2API::FetchProfessionInfoAsync(const std::string& profession) {
@@ -1028,7 +1030,7 @@ namespace AlterEgo {
                         const auto specIds = info.specialization_ids;
                         {
                             std::lock_guard<std::mutex> lock(s_mutex);
-                            s_profession_cache[prof] = std::move(info);
+                            s_profession_cache[prof]=std::make_shared<const ProfessionInfo>(std::move(info));
                         }
                         if (!specIds.empty()) FetchSpecDetailsAsync(specIds);
                         if (s_api) {
@@ -1073,7 +1075,7 @@ namespace AlterEgo {
             info.default_skin=item.value("default_skin",0u);
             info.description=StripHtmlTags(item.value("description",std::string{}));
             if(item.contains("details"))info.details=item.at("details");
-            s_item_cache[info.id]=std::move(info);
+            s_item_cache[info.id]=std::make_shared<const ItemInfo>(std::move(info));
         }
     }
 
@@ -1143,7 +1145,7 @@ namespace AlterEgo {
                             s_item_name_id_cache[info.name] = info.id;
                             s_item_name_cache_dirty = true;
                         }
-                        s_item_cache[info.id] = info;
+                        s_item_cache[info.id]=std::make_shared<const ItemInfo>(info);
                     }
                 }
             } catch (...) {}
@@ -1166,7 +1168,7 @@ namespace AlterEgo {
                 if (id == 0) continue;
                 auto found = s_skin_cache.find(id);
                 if (found == s_skin_cache.end() ||
-                    (found->second.type == "Armor" && found->second.weight_class.empty()))
+                    (found->second->type == "Armor" && found->second->weight_class.empty()))
                     to_fetch.push_back(id);
             }
         }
@@ -1221,7 +1223,7 @@ namespace AlterEgo {
                             }
                             info.dye_slot_count = count;
                         }
-                        s_skin_cache[info.id] = info;
+                        s_skin_cache[info.id]=std::make_shared<const SkinInfo>(info);
                     }
                 }
             } catch (...) {}
@@ -1244,7 +1246,7 @@ namespace AlterEgo {
     void GW2API::FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids) {
         std::vector<uint32_t> missing;
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:skin_ids){auto it=s_skin_cache.find(id);
-            if(id&&(it==s_skin_cache.end()||(it->second.type=="Armor"&&it->second.weight_class.empty())))missing.push_back(id);}}
+            if(id&&(it==s_skin_cache.end()||(it->second->type=="Armor"&&it->second->weight_class.empty())))missing.push_back(id);}}
         auto claim=RefreshEngine::ClaimIds("skins",missing);
         if(claim->ids.empty())return;
         AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchSkinDetails(claim->ids); });
@@ -1305,7 +1307,7 @@ namespace AlterEgo {
                             for (const auto& t : spec["major_traits"])
                                 info.major_traits.push_back(t.get<uint32_t>());
                         }
-                        s_spec_cache[info.id] = info;
+                        s_spec_cache[info.id]=std::make_shared<const SpecializationInfo>(info);
                     }
                 }
             } catch (...) {}
@@ -1319,8 +1321,8 @@ namespace AlterEgo {
                 for (uint32_t sid : to_fetch) {
                     auto it = s_spec_cache.find(sid);
                     if (it == s_spec_cache.end()) continue;
-                    for (uint32_t tid : it->second.minor_traits) all_trait_ids.push_back(tid);
-                    for (uint32_t tid : it->second.major_traits) all_trait_ids.push_back(tid);
+                    for (uint32_t tid : it->second->minor_traits) all_trait_ids.push_back(tid);
+                    for (uint32_t tid : it->second->major_traits) all_trait_ids.push_back(tid);
                 }
             }
             if (!all_trait_ids.empty()) {
@@ -1375,7 +1377,7 @@ namespace AlterEgo {
                         info.slot = trait.value("slot", "");
                         if (trait.contains("facts"))
                             info.facts = trait["facts"];
-                        s_trait_cache[info.id] = info;
+                        s_trait_cache[info.id]=std::make_shared<const TraitInfo>(info);
                     }
                 }
             } catch (...) {}
@@ -1447,7 +1449,7 @@ namespace AlterEgo {
                                     if (p.is_string()) info.professions.push_back(p.get<std::string>());
                             if (skill.contains("facts"))
                                 info.facts = skill["facts"];
-                            s_skill_cache[info.id] = info;
+                            s_skill_cache[info.id]=std::make_shared<const SkillInfo>(info);
                         }
                     }
                 } catch (...) {}
@@ -1507,7 +1509,7 @@ namespace AlterEgo {
                                     info.attributes.push_back(attr.value("attribute", ""));
                                 }
                             }
-                            s_itemstat_cache[info.id] = info;
+                            s_itemstat_cache[info.id]=std::make_shared<const ItemStatInfo>(info);
                         }
                     }
                 } catch (...) {}
@@ -1560,7 +1562,7 @@ namespace AlterEgo {
                 Cache::StoreReferenceSnapshot(db,Cache::ReferenceDataset::Dyes,rows,Cache::ReferenceSnapshotTime());
                 PublicCatalog::Mark(db,"public_dyes",PublicCatalog::Now());tx.Commit();PublicCatalog::Publish(db);
             });
-            {std::lock_guard<std::mutex> lock(s_mutex);for(auto& [id,dc]:staged)s_dye_cache[id]=std::move(dc);}
+            {std::lock_guard<std::mutex> lock(s_mutex);for(auto& [id,dc]:staged)s_dye_cache[id]=std::make_shared<const DyeColor>(std::move(dc));}
             PublicCatalog::EndDataset("public_dyes",true);
         },[]{PublicCatalog::EndDataset("public_dyes",false);});
     }
@@ -1976,7 +1978,7 @@ namespace AlterEgo {
         link.profession = profCode(b.profession);
         for (int i = 0; i < 3; i++) {
             link.specs[i].spec_id = (uint8_t)b.specializations[i].spec_id;
-            const auto* si = GetSpecInfo(b.specializations[i].spec_id);
+            const auto si = GetSpecInfo(b.specializations[i].spec_id);
             for (int t = 0; t < 3; t++) {
                 int traitId = b.specializations[i].traits[t];
                 uint8_t choice = 0;
@@ -2018,7 +2020,7 @@ namespace AlterEgo {
     std::vector<uint32_t> GW2API::GetProfessionSpecIds(const std::string& profession) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_profession_cache.find(profession);
-        return it != s_profession_cache.end() ? it->second.specialization_ids
+        return it != s_profession_cache.end() ? it->second->specialization_ids
                                               : std::vector<uint32_t>{};
     }
 
@@ -2196,15 +2198,15 @@ namespace AlterEgo {
 
     static std::string LookupComponentDisplayName(const std::string& category, uint32_t id) {
         if (category == "spec") {
-            if (const auto* info = GW2API::GetSpecInfo(id)) return info->name;
+            if (const auto info = GW2API::GetSpecInfo(id)) return info->name;
             GW2API::FetchSpecDetailsAsync({id});
         } else if (category == "skill") {
-            if (const auto* info = GW2API::GetSkillInfo(id)) return info->name;
+            if (const auto info = GW2API::GetSkillInfo(id)) return info->name;
             GW2API::FetchSkillDetailsAsync({id});
         } else if (category == "stat") {
-            if (const auto* info = GW2API::GetItemStatInfo(id)) return info->name;
+            if (const auto info = GW2API::GetItemStatInfo(id)) return info->name;
         } else {
-            if (const auto* info = GW2API::GetItemInfo(id)) return info->name;
+            if (const auto info = GW2API::GetItemInfo(id)) return info->name;
             GW2API::FetchItemDetailsAsync({id});
         }
         return {};
@@ -2821,7 +2823,8 @@ namespace AlterEgo {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             captured=Cache::ReferenceSnapshotTime();
-            for (const auto& [id, info] : s_item_cache) {
+            for (const auto& [id, row] : s_item_cache) {
+                const auto& info=*row;
                 json j;
                 j["id"] = info.id;
                 j["name"] = info.name;
@@ -2844,7 +2847,8 @@ namespace AlterEgo {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             arr = json::array();
-            for (const auto& [id, info] : s_skin_cache) {
+            for (const auto& [id, row] : s_skin_cache) {
+                const auto& info=*row;
                 json j;
                 j["id"] = info.id;
                 j["name"] = info.name;
@@ -2868,7 +2872,8 @@ namespace AlterEgo {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
-            for (const auto& [id, info] : s_spec_cache) {
+            for (const auto& [id, row] : s_spec_cache) {
+                const auto& info=*row;
                 json j;
                 j["id"] = info.id;
                 j["name"] = info.name;
@@ -2894,7 +2899,8 @@ namespace AlterEgo {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
-            for (const auto& [id, info] : s_trait_cache) {
+            for (const auto& [id, row] : s_trait_cache) {
+                const auto& info=*row;
                 json j;
                 j["id"] = info.id;
                 j["name"] = info.name;
@@ -2918,7 +2924,8 @@ namespace AlterEgo {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
-            for (const auto& [id, info] : s_skill_cache) {
+            for (const auto& [id, row] : s_skill_cache) {
+                const auto& info=*row;
                 json j;
                 j["id"] = info.id;
                 j["name"] = info.name;
@@ -2942,7 +2949,8 @@ namespace AlterEgo {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
-            for (const auto& [id, info] : s_itemstat_cache) {
+            for (const auto& [id, row] : s_itemstat_cache) {
+                const auto& info=*row;
                 json j;
                 j["id"] = info.id;
                 j["name"] = info.name;
@@ -2961,7 +2969,8 @@ namespace AlterEgo {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
             arr = json::array();
-            for (const auto& [id, dc] : s_dye_cache) {
+            for (const auto& [id, row] : s_dye_cache) {
+                const auto& dc=*row;
                 json j;
                 j["id"] = dc.id;
                 j["name"] = dc.name;
@@ -2998,7 +3007,7 @@ namespace AlterEgo {
                 info.default_skin = it.value("default_skin", 0u);
                 if (it.contains("details")) info.details = it["details"];
                 if(!info.name.empty())s_item_name_id_cache.emplace(info.name,info.id);
-                s_item_cache[info.id] = std::move(info);
+                s_item_cache[info.id]=std::make_shared<const ItemInfo>(std::move(info));
             }
         }
         if ([&]() {
@@ -3024,7 +3033,7 @@ namespace AlterEgo {
                     for (const auto& m : it["dye_slot_materials"])
                         info.dye_slot_materials.push_back(m.get<std::string>());
                 }
-                s_skin_cache[info.id] = std::move(info);
+                s_skin_cache[info.id]=std::make_shared<const SkinInfo>(std::move(info));
             }
         }
         if (readReference(Cache::ReferenceDataset::Specializations, j)) {
@@ -3044,7 +3053,7 @@ namespace AlterEgo {
                     for (const auto& t : it["minor_traits"]) info.minor_traits.push_back(t.get<uint32_t>());
                 if (it.contains("major_traits"))
                     for (const auto& t : it["major_traits"]) info.major_traits.push_back(t.get<uint32_t>());
-                s_spec_cache[info.id] = std::move(info);
+                s_spec_cache[info.id]=std::make_shared<const SpecializationInfo>(std::move(info));
             }
         }
         if (readReference(Cache::ReferenceDataset::Traits, j)) {
@@ -3060,7 +3069,7 @@ namespace AlterEgo {
                 info.order = it.value("order", 0);
                 info.slot = it.value("slot", "");
                 if (it.contains("facts")) info.facts = it["facts"];
-                s_trait_cache[info.id] = std::move(info);
+                s_trait_cache[info.id]=std::make_shared<const TraitInfo>(std::move(info));
             }
         }
         if (readReference(Cache::ReferenceDataset::Skills, j)) {
@@ -3082,7 +3091,7 @@ namespace AlterEgo {
                     for (const auto& p : it["professions"])
                         if (p.is_string()) info.professions.push_back(p.get<std::string>());
                 if (it.contains("facts")) info.facts = it["facts"];
-                s_skill_cache[info.id] = std::move(info);
+                s_skill_cache[info.id]=std::make_shared<const SkillInfo>(std::move(info));
             }
         }
         if (readReference(Cache::ReferenceDataset::ItemStats, j)) {
@@ -3094,7 +3103,7 @@ namespace AlterEgo {
                 info.name = it.value("name", "");
                 if (it.contains("attributes") && it["attributes"].is_array())
                     for (const auto& a : it["attributes"]) info.attributes.push_back(a.get<std::string>());
-                s_itemstat_cache[info.id] = std::move(info);
+                s_itemstat_cache[info.id]=std::make_shared<const ItemStatInfo>(std::move(info));
             }
         }
         if (readReference(Cache::ReferenceDataset::Dyes, j)) {
@@ -3113,7 +3122,7 @@ namespace AlterEgo {
                 readRGB("cloth", dc.cloth_r, dc.cloth_g, dc.cloth_b);
                 readRGB("leather", dc.leather_r, dc.leather_g, dc.leather_b);
                 readRGB("metal", dc.metal_r, dc.metal_g, dc.metal_b);
-                s_dye_cache[dc.id] = std::move(dc);
+                s_dye_cache[dc.id]=std::make_shared<const DyeColor>(std::move(dc));
             }
         }
         return true;
@@ -3239,7 +3248,7 @@ namespace AlterEgo {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     s_palette_to_skill[prof] = std::move(p2s);
                     s_skill_to_palette[prof] = std::move(s2p);
-                    if (!weapons.empty()) s_profession_weapons[prof] = std::move(weapons);
+                    if (!weapons.empty()) s_profession_weapons[prof]=std::make_shared<const std::map<std::string, ProfessionWeaponData>>(std::move(weapons));
                     s_palette_fetching.erase(prof);
 
                     if (s_api) {

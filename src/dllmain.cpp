@@ -1507,7 +1507,7 @@ static void DrawProfessionCharacterName(ImDrawList* draw, ImVec2 pos,
 }
 // Optional URL fallback: fixed profession artwork now comes from DLL resources.
 static const char* GetProfessionIconUrl(const std::string& prof) {
-    const auto* info = AlterEgo::GW2API::GetProfessionInfo(prof);
+    const auto info = AlterEgo::GW2API::GetProfessionInfo(prof);
     if (info && !info->icon_url.empty()) return info->icon_url.c_str();
     return nullptr;
 }
@@ -2712,7 +2712,7 @@ static void FetchDetailsForCharacter(const AlterEgo::Character& ch) {
         for (auto inf : eq.infusions) if (inf != 0) item_ids.push_back(inf);
 
         if (eq.id != 0 && eq.skin == 0 && wardrobeSlot(eq.slot)) {
-            const auto* ii = AlterEgo::GW2API::GetItemInfo(eq.id);
+            const auto ii = AlterEgo::GW2API::GetItemInfo(eq.id);
             if (ii && ii->default_skin == 0) backfill_ids.push_back(eq.id);
         }
     }
@@ -2816,7 +2816,7 @@ static void RenderProfessionEmblem(const std::string& profession, float size) {
 
     // Trigger fetch if we don't already have it
     AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
-    const auto* prof = AlterEgo::GW2API::GetProfessionInfo(profession);
+    const auto prof = AlterEgo::GW2API::GetProfessionInfo(profession);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -2882,7 +2882,7 @@ static void RenderCharacterAvatar(const AlterEgo::Character& ch, float size) {
         drewImage = true;
     } else {
         // Fallback: profession icon
-        const auto* prof = AlterEgo::GW2API::GetProfessionInfo(ch.profession);
+        const auto prof = AlterEgo::GW2API::GetProfessionInfo(ch.profession);
         if (GetProfessionIconId(ch.profession)) {
             uint32_t profIconId = GetProfessionIconId(ch.profession);
             Texture_t* ptex = AlterEgo::IconManager::GetIcon(profIconId);
@@ -2924,7 +2924,7 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
 
     // Stat name (e.g. "Berserker", from "Berserker's")
     if (eq->stat_id != 0) {
-        const auto* si = AlterEgo::GW2API::GetItemStatInfo(eq->stat_id);
+        const auto si = AlterEgo::GW2API::GetItemStatInfo(eq->stat_id);
         if (si && !si->name.empty()) {
             out = si->name;
             if (!out.empty() && out.back() == 's' && out.size() > 2 &&
@@ -2933,12 +2933,12 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
             }
         }
     } else {
-        const auto* item_info = AlterEgo::GW2API::GetItemInfo(eq->id);
+        const auto item_info = AlterEgo::GW2API::GetItemInfo(eq->id);
         if (item_info && item_info->details.is_object() &&
             item_info->details.contains("infix_upgrade") &&
             item_info->details["infix_upgrade"].contains("id")) {
             uint32_t fixedStatId = item_info->details["infix_upgrade"]["id"].get<uint32_t>();
-            const auto* si = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
+            const auto si = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
             if (si && !si->name.empty()) {
                 out = si->name;
                 if (!out.empty() && out.back() == 's' && out.size() > 2 &&
@@ -2951,7 +2951,7 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
 
     // First upgrade (rune for armor, sigil for weapon) — short form
     if (!eq->upgrades.empty() && eq->upgrades[0] != 0) {
-        const auto* uinfo = AlterEgo::GW2API::GetItemInfo(eq->upgrades[0]);
+        const auto uinfo = AlterEgo::GW2API::GetItemInfo(eq->upgrades[0]);
         if (uinfo && !uinfo->name.empty()) {
             std::string upgradeShort = uinfo->name;
             // Strip "Superior Rune of " / "Superior Sigil of " / "the "
@@ -2997,8 +2997,8 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
         }
     } else {
         // Show skin icon when available, item icon as fallback
-        const AlterEgo::ItemInfo* item_info = AlterEgo::GW2API::GetItemInfo(eq->id);
-        const AlterEgo::SkinInfo* skin_info = eq->skin ? AlterEgo::GW2API::GetSkinInfo(eq->skin) : nullptr;
+        const auto item_info = AlterEgo::GW2API::GetItemInfo(eq->id);
+        const auto skin_info = eq->skin ? AlterEgo::GW2API::GetSkinInfo(eq->skin) : nullptr;
 
         // Use offset ID for skin icons to avoid cache collision with item icons
         uint32_t display_id;
@@ -3093,7 +3093,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
 
             // Stat type name (e.g. "Berserker's", "Minstrel's")
             if (eq->stat_id != 0) {
-                const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(eq->stat_id);
+                const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(eq->stat_id);
                 if (statInfo && !statInfo->name.empty()) {
                     ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s", statInfo->name.c_str());
                 }
@@ -3101,7 +3101,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                        item_info->details.contains("infix_upgrade") &&
                        item_info->details["infix_upgrade"].contains("id")) {
                 uint32_t fixedStatId = item_info->details["infix_upgrade"]["id"].get<uint32_t>();
-                const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
+                const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
                 if (statInfo && !statInfo->name.empty()) {
                     ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s", statInfo->name.c_str());
                 }
@@ -3146,7 +3146,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                     "Infusions (%zu)", infusionCount);
                 for (uint32_t id : eq->infusions) {
                     if (id == 0) continue;
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(id);
                     if (info && !info->name.empty())
                         ImGui::BulletText("%s", info->name.c_str());
                     else
@@ -3157,7 +3157,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
             // Upgrades (Runes/Sigils)
             for (auto upgrade_id : eq->upgrades) {
                 if (upgrade_id == 0) continue;
-                const auto* uinfo = AlterEgo::GW2API::GetItemInfo(upgrade_id);
+                const auto uinfo = AlterEgo::GW2API::GetItemInfo(upgrade_id);
                 if (uinfo) {
                     ImGui::Spacing();
                     ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "%s", uinfo->name.c_str());
@@ -3241,7 +3241,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 bool hasAny = false;
                 for (int di = 0; di < maxDyes; di++) {
                     if (eq->dyes[di] == 0) continue;
-                    const auto* dye = AlterEgo::GW2API::GetDyeColor(eq->dyes[di]);
+                    const auto dye = AlterEgo::GW2API::GetDyeColor(eq->dyes[di]);
                     if (dye) {
                         if (!hasAny) { ImGui::Spacing(); hasAny = true; }
                         // Pick material-specific RGB; default to cloth when no skin material info
@@ -3320,8 +3320,8 @@ static void ResolveEquipDisplay(const AlterEgo::EquipmentItem* eq, const char* s
         outName = SlotDisplayName(slot);
         return;
     }
-    const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
-    const auto* skin = eq->skin ? AlterEgo::GW2API::GetSkinInfo(eq->skin) : nullptr;
+    const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
+    const auto skin = eq->skin ? AlterEgo::GW2API::GetSkinInfo(eq->skin) : nullptr;
     if (info) outRarity = info->rarity;
     if (std::string(slot) == "Relic" && info && info->rarity == "Legendary") {
         outName = "Legendary Relic";
@@ -3618,7 +3618,7 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
     auto skinOf = [](const EquipmentItem* eq) -> uint16_t {
         if (!eq) return 0;
         if (eq->skin) return (uint16_t)eq->skin;
-        const ItemInfo* ii = GW2API::GetItemInfo(eq->id);
+        const auto ii = GW2API::GetItemInfo(eq->id);
         if (ii && ii->default_skin) return (uint16_t)ii->default_skin;
         return 0;
     };
@@ -3723,7 +3723,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
             ImGui::TextDisabled("Not reported");
             ImGui::PopID();return;
         }
-        const auto* info=GW2API::GetItemInfo(eq->id);
+        const auto info = GW2API::GetItemInfo(eq->id);
         const std::string name=info&&!info->name.empty()?info->name:"Item #"+std::to_string(eq->id);
         RenderEquipmentSlot(eq,label);
         ImGui::SameLine();
@@ -3733,7 +3733,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
         ImGui::TextWrapped("%s",name.c_str());
         ImGui::PopStyleColor();
         if(eq->skin){
-            const auto* skin=GW2API::GetSkinInfo(eq->skin);
+            const auto skin = GW2API::GetSkinInfo(eq->skin);
             const auto skinName=skin&&!skin->name.empty()?skin->name:"Skin #"+std::to_string(eq->skin);
             ImGui::TextWrapped("Skin: %s",skinName.c_str());
         }
@@ -3746,7 +3746,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
             for(auto id:eq->upgrades){
                 if(!id)continue;
                 reported=true;
-                const auto* glyph=GW2API::GetItemInfo(id);
+                const auto glyph = GW2API::GetItemInfo(id);
                 const auto glyphName=glyph&&!glyph->name.empty()?glyph->name:"Item #"+std::to_string(id);
                 ImGui::TextWrapped("Glyph: %s",glyphName.c_str());
             }
@@ -4048,7 +4048,7 @@ static void DrawDottedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, floa
 // Returns the center screen position of the rendered icon
 static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, float size,
                               bool editable = false, bool* clicked = nullptr) {
-    const auto* tinfo = AlterEgo::GW2API::GetTraitInfo(trait_id);
+    const auto tinfo = AlterEgo::GW2API::GetTraitInfo(trait_id);
 
     ImGui::PushID((int)(trait_id + 2000000));
 
@@ -4120,7 +4120,7 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
 // Clickable skill icon for the build editor (icon cache = skill_id + 5000000).
 // Returns true when clicked. skill_id 0 draws an empty slot.
 static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable) {
-    const auto* sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
+    const auto sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 max(pos.x + size, pos.y + size);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -4330,14 +4330,14 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
                         // Resolve stat name
                         gs.stat_id = eq.stat_id;
                         if (!gs.stat_id && eq.id) {
-                            const auto* item = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            const auto item = AlterEgo::GW2API::GetItemInfo(eq.id);
                             if (item && item->details.contains("infix_upgrade") &&
                                 item->details["infix_upgrade"].contains("id") &&
                                 item->details["infix_upgrade"]["id"].is_number_unsigned())
                                 gs.stat_id = item->details["infix_upgrade"]["id"].get<uint32_t>();
                         }
                         if (gs.stat_id) {
-                            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+                            const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                             if (statInfo) gs.stat_name = statInfo->name;
                         }
 
@@ -4350,7 +4350,7 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
                         // Resolve upgrades (runes for armor, sigils for weapons)
                         for (size_t ui = 0; ui < eq.upgrades.size(); ui++) {
                             if (eq.upgrades[ui] == 0) continue;
-                            const auto* upInfo = AlterEgo::GW2API::GetItemInfo(eq.upgrades[ui]);
+                            const auto upInfo = AlterEgo::GW2API::GetItemInfo(eq.upgrades[ui]);
                             std::string upName = upInfo?upInfo->name:std::string();
                             if(!upName.empty())AlterEgo::GW2API::CacheItemNameId(upName, eq.upgrades[ui]);
                             if (isArmor && ui == 0) {
@@ -4368,7 +4368,7 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
 
                         // Resolve weapon type from item details
                         if (isWeapon && eq.id != 0) {
-                            const auto* itemInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            const auto itemInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
                             if (itemInfo && itemInfo->details.contains("type"))
                                 gs.weapon_type = itemInfo->details["type"].get<std::string>();
                         }
@@ -4396,7 +4396,7 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
                             AlterEgo::IsEquipmentInCapturedBuild(
                                 eq.slot, eq.tab, equipTab) &&
                             eq.id != 0) {
-                            const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            const auto relicInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
                             if (relicInfo) {
                                 sb.relic_name = relicInfo->name;
                                 // Use exotic relic ID from name cache (legendary relic has a shared ID)
@@ -4673,7 +4673,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
             continue;
         }
 
-        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
         std::string specName = specInfo ? specInfo->name : ("Spec " + std::to_string(spec.spec_id));
         bool isElite = specInfo ? specInfo->elite : false;
         ImVec4 specColor = isElite ? ImVec4(1.0f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
@@ -5315,7 +5315,7 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
             gs.stat_id = statId;
 
             // Resolve stat name from cache
-            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(statId);
+            const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(statId);
             if (statInfo) gs.stat_name = statInfo->name;
 
             out.gear[gs.slot] = gs;
@@ -5326,7 +5326,7 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
             if (pos + 4 > data.size()) { error = "AE2 rune data truncated."; return false; }
             out.rune_id = ReadU32LE(&data[pos]); pos += 4;
             // Resolve rune name from item cache
-            const auto* runeInfo = AlterEgo::GW2API::GetItemInfo(out.rune_id);
+            const auto runeInfo = AlterEgo::GW2API::GetItemInfo(out.rune_id);
             if (runeInfo) out.rune_name = runeInfo->name;
         }
 
@@ -5334,7 +5334,7 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
         if (hasRelic) {
             if (pos + 4 > data.size()) { error = "AE2 relic data truncated."; return false; }
             out.relic_id = ReadU32LE(&data[pos]); pos += 4;
-            const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(out.relic_id);
+            const auto relicInfo = AlterEgo::GW2API::GetItemInfo(out.relic_id);
             if (relicInfo) out.relic_name = relicInfo->name;
         }
 
@@ -5369,26 +5369,26 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
 
         // Now resolve names from the cache (after sync fetch) and populate name→ID cache
         if (out.rune_id != 0 && out.rune_name.empty()) {
-            const auto* runeInfo = AlterEgo::GW2API::GetItemInfo(out.rune_id);
+            const auto runeInfo = AlterEgo::GW2API::GetItemInfo(out.rune_id);
             if (runeInfo) out.rune_name = runeInfo->name;
         }
         if (out.rune_id != 0 && !out.rune_name.empty())
             AlterEgo::GW2API::CacheItemNameId(out.rune_name, out.rune_id);
         if (out.relic_id != 0 && out.relic_name.empty()) {
-            const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(out.relic_id);
+            const auto relicInfo = AlterEgo::GW2API::GetItemInfo(out.relic_id);
             if (relicInfo) out.relic_name = relicInfo->name;
         }
         if (out.relic_id != 0 && !out.relic_name.empty())
             AlterEgo::GW2API::CacheItemNameId(out.relic_name, out.relic_id);
         for (auto& [slot, gs] : out.gear) {
             if (gs.sigil_id != 0 && gs.sigil.empty()) {
-                const auto* sigilInfo = AlterEgo::GW2API::GetItemInfo(gs.sigil_id);
+                const auto sigilInfo = AlterEgo::GW2API::GetItemInfo(gs.sigil_id);
                 if (sigilInfo) gs.sigil = sigilInfo->name;
             }
             if (gs.sigil_id != 0 && !gs.sigil.empty())
                 AlterEgo::GW2API::CacheItemNameId(gs.sigil, gs.sigil_id);
             if (gs.sigil2_id != 0 && gs.sigil2.empty()) {
-                const auto* sigil2Info = AlterEgo::GW2API::GetItemInfo(gs.sigil2_id);
+                const auto sigil2Info = AlterEgo::GW2API::GetItemInfo(gs.sigil2_id);
                 if (sigil2Info) gs.sigil2 = sigil2Info->name;
             }
             if (gs.sigil2_id != 0 && !gs.sigil2.empty())
@@ -5542,26 +5542,26 @@ static bool ImportBuildFromRelay(const std::string& code, AlterEgo::SavedBuild& 
 
                 // Resolve names and populate name→ID cache
                 if (out.rune_id != 0 && out.rune_name.empty()) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(out.rune_id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(out.rune_id);
                     if (info) out.rune_name = info->name;
                 }
                 if (out.rune_id != 0 && !out.rune_name.empty())
                     AlterEgo::GW2API::CacheItemNameId(out.rune_name, out.rune_id);
                 if (out.relic_id != 0 && out.relic_name.empty()) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(out.relic_id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(out.relic_id);
                     if (info) out.relic_name = info->name;
                 }
                 if (out.relic_id != 0 && !out.relic_name.empty())
                     AlterEgo::GW2API::CacheItemNameId(out.relic_name, out.relic_id);
                 for (auto& [slot, gs] : out.gear) {
                     if (gs.sigil_id != 0 && gs.sigil.empty()) {
-                        const auto* info = AlterEgo::GW2API::GetItemInfo(gs.sigil_id);
+                        const auto info = AlterEgo::GW2API::GetItemInfo(gs.sigil_id);
                         if (info) gs.sigil = info->name;
                     }
                     if (gs.sigil_id != 0 && !gs.sigil.empty())
                         AlterEgo::GW2API::CacheItemNameId(gs.sigil, gs.sigil_id);
                     if (gs.sigil2_id != 0 && gs.sigil2.empty()) {
-                        const auto* info = AlterEgo::GW2API::GetItemInfo(gs.sigil2_id);
+                        const auto info = AlterEgo::GW2API::GetItemInfo(gs.sigil2_id);
                         if (info) gs.sigil2 = info->name;
                     }
                     if (gs.sigil2_id != 0 && !gs.sigil2.empty())
@@ -5805,7 +5805,7 @@ static bool DecodeBuildLink(const std::string& link, const std::string& name,
     // Resolve trait choices to trait IDs using spec cache
     for (int i = 0; i < 3; i++) {
         if (decoded.specs[i].spec_id == 0) continue;
-        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
         if (specInfo && specInfo->major_traits.size() >= 9) {
             for (int tier = 0; tier < 3; tier++) {
                 uint8_t choice = decoded.specs[i].traits[tier]; // 1=top, 2=mid, 3=bot
@@ -5956,7 +5956,7 @@ static void OnEvChatMessage(void* eventArgs) {
                             std::string specName;
                             for (int i = 2; i >= 0; i--) {
                                 if (decoded.specs[i].spec_id != 0) {
-                                    const auto* si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
+                                    const auto si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
                                     if (si && si->elite) specName = si->name;
                                     break;
                                 }
@@ -6022,7 +6022,7 @@ static void OnEvChatMessage(void* eventArgs) {
             std::string specName;
             for (int i = 2; i >= 0; i--) {
                 if (decoded.specs[i].spec_id != 0) {
-                    const auto* si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
+                    const auto si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
                     if (si && si->elite) specName = si->name;
                     break;
                 }
@@ -6286,7 +6286,7 @@ static void OnPieImportBuild(void* eventArgs) {
     std::string specName;
     for (int i = 2; i >= 0; i--) {
         if (decoded.specs[i].spec_id != 0) {
-            const auto* si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
+            const auto si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
             if (si && si->elite) specName = si->name;
             break;
         }
@@ -6703,7 +6703,7 @@ static bool IsTrinketSlot(const std::string& s) {
 }
 static bool IsWeaponTwoHanded(const std::string& profession, const std::string& weaponType) {
     if (weaponType.empty()) return false;
-    const auto* profWeapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
+    const auto profWeapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
     if (profWeapons) {
         auto it = profWeapons->find(weaponType);
         if (it != profWeapons->end()) return it->second.two_handed;
@@ -6814,8 +6814,8 @@ static void OpenGearDialog(const std::string& buildId, const std::string& slot,
 }
 
 // Build a sorted list of stat combos for the selection panel
-static std::vector<const AlterEgo::ItemStatInfo*> GetSortedStatCombos(const char* filter) {
-    std::vector<const AlterEgo::ItemStatInfo*> result;
+static std::vector<std::shared_ptr<const AlterEgo::ItemStatInfo>> GetSortedStatCombos(const char* filter) {
+    std::vector<std::shared_ptr<const AlterEgo::ItemStatInfo>> result;
     const auto& allStats = AlterEgo::GW2API::GetAllItemStats();
     std::string filterLower;
     if (filter && filter[0]) {
@@ -6823,7 +6823,8 @@ static std::vector<const AlterEgo::ItemStatInfo*> GetSortedStatCombos(const char
         for (auto& c : filterLower) c = (char)tolower(c);
     }
     std::set<std::string> seenNames;
-    for (const auto& [id, info] : allStats) {
+    for (const auto& [id, row] : allStats) {
+        const auto& info=*row;
         if (info.name.empty() || info.attributes.empty()) continue;
         // Deduplicate: GW2 API has multiple stat IDs with the same name (different tiers)
         if (!seenNames.insert(info.name).second) continue;
@@ -6838,10 +6839,10 @@ static std::vector<const AlterEgo::ItemStatInfo*> GetSortedStatCombos(const char
             }
             if (nameLower.find(filterLower) == std::string::npos && !matchesAttr) continue;
         }
-        result.push_back(&info);
+        result.push_back(row);
     }
     std::sort(result.begin(), result.end(),
-        [](const AlterEgo::ItemStatInfo* a, const AlterEgo::ItemStatInfo* b) {
+        [](const auto& a, const auto& b) {
             return a->name < b->name;
         });
     return result;
@@ -7128,7 +7129,7 @@ static void RenderSpecPickerDialog() {
             AlterEgo::GW2API::FetchProfessionInfoAsync(g_EditDraft.profession);
         } else {
             for (uint32_t sid : specIds) {
-                const auto* si = AlterEgo::GW2API::GetSpecInfo(sid);
+                const auto si = AlterEgo::GW2API::GetSpecInfo(sid);
                 if (!si) continue;
                 // Elite specs are only valid on the third spec line (slot index 2).
                 if (si->elite && g_SpecPickerSlot != 2) continue;
@@ -7163,7 +7164,7 @@ static void RenderSpecPickerDialog() {
                     if (si->elite)
                         for (int o = 0; o < 3; o++) {
                             if (o == g_SpecPickerSlot) continue;
-                            const auto* oi = AlterEgo::GW2API::GetSpecInfo(
+                            const auto oi = AlterEgo::GW2API::GetSpecInfo(
                                 g_EditDraft.specializations[o].spec_id);
                             if (oi && oi->elite)
                                 g_EditDraft.specializations[o] = AlterEgo::SpecLine{};
@@ -7206,7 +7207,7 @@ static std::vector<uint32_t> SelectableBuildSkillIds(
     std::vector<uint32_t> missing;
     std::vector<uint32_t> matches;
     for (uint32_t id : allIds) {
-        const auto* skill = AlterEgo::GW2API::GetSkillInfo(id);
+        const auto skill = AlterEgo::GW2API::GetSkillInfo(id);
         if (!skill) { missing.push_back(id); continue; }
         if (skill->type != type) continue;
         if (!allowAllSpecializations && skill->specialization &&
@@ -7443,7 +7444,7 @@ static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string
     const bool two = it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
     int capacity = AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
     if (capacity && it != b.gear.end() && it->second.item_id) {
-        const auto* info = AlterEgo::GW2API::GetItemInfo(it->second.item_id);
+        const auto info = AlterEgo::GW2API::GetItemInfo(it->second.item_id);
         if (info && info->details.is_object() && info->details.contains("infusion_slots") &&
             info->details["infusion_slots"].is_array())
             capacity = std::min(capacity, static_cast<int>(info->details["infusion_slots"].size()));
@@ -7474,7 +7475,7 @@ static bool GearCanPaste(const AlterEgo::SavedBuild& b,const std::string& slot,c
     if (!GearSameGroup(slot,c.slot)) return false;
     if (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0) return true;
     if (c.data.weapon_type.empty()) return false;
-    const auto* weapons = AlterEgo::GW2API::GetProfessionWeapons(b.profession);
+    const auto weapons = AlterEgo::GW2API::GetProfessionWeapons(b.profession);
     if (!weapons) return false;
     const auto it = weapons->find(c.data.weapon_type);
     return it != weapons->end() && AlterEgo::EquipmentChoice::WeaponEligible(
@@ -7770,7 +7771,7 @@ static void RenderGearCustomizeDialog() {
             // Dynamic height: stat name line + one line per attribute + padding
             int numAttrs = 0;
             if (gs.stat_id != 0) {
-                const auto* si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+                const auto si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                 if (si) numAttrs = (int)si->attributes.size();
             }
             float h = 6.0f + 16.0f + numAttrs * 13.0f;
@@ -7789,7 +7790,7 @@ static void RenderGearCustomizeDialog() {
             ImVec2 tp(p.x + 6, p.y + 3);
             if (gs.stat_id != 0 && !gs.stat_name.empty()) {
                 ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(255, 210, 80, 255), gs.stat_name.c_str());
-                const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+                const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                 if (statInfo) {
                     for (const auto& a : statInfo->attributes) {
                         tp.y += 13.0f;
@@ -7904,7 +7905,7 @@ static void RenderGearCustomizeDialog() {
                 const std::string attr = i < gs.infusion_attributes.size()
                     ? gs.infusion_attributes[i] : std::string();
                 const uint32_t id = gs.infusion_ids[i];
-                const auto* item = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
+                const auto item = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
                 const std::string selected = !attr.empty()
                     ? std::string("Stat: ") + InfusionAttributeLabel(attr)
                     : (id ? (std::string("Exact: ") +
@@ -8055,7 +8056,7 @@ static void RenderGearCustomizeDialog() {
             // --- Stat combo selector ---
             ImGui::BeginChild("##statList", ImVec2(0, -30), true);
             auto combos = GetSortedStatCombos(g_GearStatSearch);
-            for (const auto* stat : combos) {
+            for (const auto& stat : combos) {
                 ImGui::PushID((int)stat->id);
                 bool isSelected = (g_GearSelectedStatId == stat->id);
 
@@ -8150,7 +8151,7 @@ static void RenderGearCustomizeDialog() {
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 2 && isWeapon) {
             // --- Weapon type selector ---
-            const auto* profWeapons = AlterEgo::GW2API::GetProfessionWeapons(editBuild->profession);
+            const auto profWeapons = AlterEgo::GW2API::GetProfessionWeapons(editBuild->profession);
             if (!profWeapons) {
                 AlterEgo::GW2API::FetchProfessionPaletteAsync(editBuild->profession);
                 RenderSpinner("Loading weapon data...");
@@ -8186,7 +8187,7 @@ static void RenderGearCustomizeDialog() {
                     else if (wd.mainhand) desc = "Main Hand";
                     else if (wd.offhand) desc = "Off Hand";
                     if (wd.specialization != 0) {
-                        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(wd.specialization);
+                        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(wd.specialization);
                         if (specInfo) desc += " (" + specInfo->name + ")";
                     }
 
@@ -8298,7 +8299,7 @@ static void RenderGearCustomizeDialog() {
                 ImGui::EndChild();
             } else {
                 const uint32_t exactId = gs.infusion_ids[index];
-                const auto* exactInfo = exactId
+                const auto exactInfo = exactId
                     ? AlterEgo::GW2API::GetItemInfo(exactId) : nullptr;
                 ImGui::TextWrapped("Exact ID: %u (%s)", exactId,
                     exactInfo ? exactInfo->name.c_str() : "name not cached");
@@ -8782,7 +8783,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     uint32_t iconItemId = GetGearSlotIconItemId(build, slot);
     Texture_t* tex = nullptr;
     if (iconItemId != 0) {
-        const auto* itemInfo = AlterEgo::GW2API::GetItemInfo(iconItemId);
+        const auto itemInfo = AlterEgo::GW2API::GetItemInfo(iconItemId);
         if (itemInfo && !itemInfo->icon_url.empty()) {
             AlterEgo::IconManager::RequestIcon(iconItemId, itemInfo->icon_url);
             tex = AlterEgo::IconManager::GetIcon(iconItemId);
@@ -8944,7 +8945,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         if (hasStat) {
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s %s",
                 it->second.stat_name.c_str(), GearSlotDisplayName(slot));
-            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(it->second.stat_id);
+            const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(it->second.stat_id);
             if (statInfo) {
                 for (const auto& a : statInfo->attributes) {
                     ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "  +%s", FriendlyAttrName(a));
@@ -8962,7 +8963,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
                 if (!attribute.empty()) {
                     ImGui::BulletText("Any %s infusion", InfusionAttributeLabel(attribute));
                 } else if (id != 0) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(id);
                     if (info && !info->name.empty())
                         ImGui::BulletText("%s (exact)", info->name.c_str());
                     else
@@ -9036,7 +9037,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
 
     auto tryItem = [&](uint32_t id, std::string& name) {
         if (id == 0 || !name.empty()) return;
-        const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+        const auto info = AlterEgo::GW2API::GetItemInfo(id);
         if (info && !info->name.empty()) {
             name = info->name;
             changed = true;
@@ -9073,7 +9074,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
             changed = true;
         }
         if (gs.stat_id == 0 && gs.item_id != 0) {
-            const auto* item = AlterEgo::GW2API::GetItemInfo(gs.item_id);
+            const auto item = AlterEgo::GW2API::GetItemInfo(gs.item_id);
             if (!item) {
                 missingItems.push_back(gs.item_id);
             } else if (item->details.is_object() &&
@@ -9082,7 +9083,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
                        item->details["infix_upgrade"].contains("id") &&
                        item->details["infix_upgrade"]["id"].is_number_unsigned()) {
                 const uint32_t id = item->details["infix_upgrade"]["id"].get<uint32_t>();
-                const auto* info = AlterEgo::GW2API::GetItemStatInfo(id);
+                const auto info = AlterEgo::GW2API::GetItemStatInfo(id);
                 if (!info) missingStats.push_back(id);
                 // A fixed item's public stats verify the text prefix. If the
                 // source requested a different selected stat, do not silently
@@ -9096,7 +9097,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
             }
         }
         if (gs.stat_id != 0 && gs.stat_name.empty()) {
-            const auto* si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+            const auto si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
             if (si && !si->name.empty()) {
                 gs.stat_name = si->name;
                 changed = true;
@@ -9119,7 +9120,7 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
     bool changed = false;
     for (int i = 0; i < 3; i++) {
         if (build.specializations[i].spec_id == 0) continue;
-        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
         if (!specInfo || specInfo->major_traits.size() < 9) continue;
         for (int tier = 0; tier < 3; tier++) {
             if (build.specializations[i].traits[tier] >= 0) continue;
@@ -9135,7 +9136,7 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
         // Correct partially specified Snow Crows lines using the canonical
         // specialization metadata once it has arrived from the GW2 API.
         for (int i = 0; i < 3; ++i) {
-            const auto* spec = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
+            const auto spec = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
             if (!spec || spec->major_traits.size() < 9) continue;
             std::array<int, 3> arranged{};
             bool allKnown = true;
@@ -9231,7 +9232,7 @@ static AlterEgo::SavedBuild SourcePageToSavedBuild(const AlterEgo::SnowCrows::Pa
     build.relic_name = page.relicName;
     for (int s = 0; s < 3; ++s) {
         build.specializations[s].spec_id = page.specs[s].id;
-        const auto* spec = GW2API::GetSpecInfo(page.specs[s].id);
+        const auto spec = GW2API::GetSpecInfo(page.specs[s].id);
         for (size_t t = 0; t < page.specs[s].traits.size(); ++t) {
             const uint32_t trait = page.specs[s].traits[t];
             int tier = -1;
@@ -9241,7 +9242,7 @@ static AlterEgo::SavedBuild SourcePageToSavedBuild(const AlterEgo::SnowCrows::Pa
                 for (int pos = 0; pos < 9; ++pos)
                     if (spec->major_traits[pos] == trait) tier = pos / 3;
             if (tier < 0) {
-                const auto* info = GW2API::GetTraitInfo(trait);
+                const auto info = GW2API::GetTraitInfo(trait);
                 if (info && info->tier >= 1 && info->tier <= 3)
                     tier = info->tier - 1;
             }
@@ -9427,11 +9428,11 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
     ImVec4 profColor = GetProfessionColor(build.profession);
     {
         // Detect elite spec — use its icon and name in the header when present
-        const AlterEgo::SpecializationInfo* eliteSpec = nullptr;
+        std::shared_ptr<const AlterEgo::SpecializationInfo> eliteSpec;
         for (int s = 0; s < 3; s++) {
             uint32_t sid = build.specializations[s].spec_id;
             if (!sid) continue;
-            const auto* si = AlterEgo::GW2API::GetSpecInfo(sid);
+            const auto si = AlterEgo::GW2API::GetSpecInfo(sid);
             if (si && si->elite) { eliteSpec = si; break; }
         }
 
@@ -9479,7 +9480,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             uint32_t profIconId = GetProfessionBigIconId(build.profession);
             iconTex = AlterEgo::IconManager::GetIcon(profIconId);
             if (!iconTex || !iconTex->Resource) {
-                const auto* prof = AlterEgo::GW2API::GetProfessionInfo(build.profession);
+                const auto prof = AlterEgo::GW2API::GetProfessionInfo(build.profession);
                 AlterEgo::IconManager::RequestIcon(profIconId,
                     prof ? prof->icon_big_url : "", /*priority=*/true);
             }
@@ -9686,7 +9687,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
             continue;
         }
 
-        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
         std::string specName = specInfo ? specInfo->name : ("Spec " + std::to_string(spec.spec_id));
         bool isElite = specInfo ? specInfo->elite : false;
         ImVec4 specColor = isElite ? ImVec4(1.0f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
@@ -9918,7 +9919,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
                                std::vector<uint32_t>& outSkills, std::string& outLabel) {
         outSkills.clear();
         outLabel.clear();
-        const auto* profWeapons = AlterEgo::GW2API::GetProfessionWeapons(gearSrc.profession);
+        const auto profWeapons = AlterEgo::GW2API::GetProfessionWeapons(gearSrc.profession);
         if (!profWeapons) return;
 
         auto mhIt = gearSrc.gear.find(mhSlot);
@@ -10189,7 +10190,7 @@ static bool HasLiveSpecCacheMismatch(const AlterEgo::Character& ch) {
         ch.name, ch.build_tabs[index].specializations[2].spec_id);
 }
 static const char* GetSpecNameForWarning(uint32_t id) {
-    const auto* info = AlterEgo::GW2API::GetSpecInfo(id);
+    const auto info = AlterEgo::GW2API::GetSpecInfo(id);
     return info && !info->name.empty() ? info->name.c_str() : "Unknown";
 }
 static int GetActiveEquipmentTab(const AlterEgo::Character& ch) {
@@ -10220,7 +10221,7 @@ static AlterEgo::ObservedInfusion GetObservedInfusion(uint32_t itemId) {
     AlterEgo::ObservedInfusion observed;
     observed.itemId = itemId;
     if (!itemId) return observed;
-    const auto* info = AlterEgo::GW2API::GetItemInfo(itemId);
+    const auto info = AlterEgo::GW2API::GetItemInfo(itemId);
     if (!info || !info->details.is_object()) return observed;
     auto upgrade = info->details.find("infix_upgrade");
     if (upgrade == info->details.end() || !upgrade->is_object()) return observed;
@@ -10245,19 +10246,19 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     auto idKey = [](uint32_t id) { return std::to_string(id); };
     auto numberLabel = [](uint32_t id) { return id ? ("#" + std::to_string(id)) : "(empty)"; };
     auto specName = [&](uint32_t id) {
-        const auto* info = AlterEgo::GW2API::GetSpecInfo(id);
+        const auto info = AlterEgo::GW2API::GetSpecInfo(id);
         return info ? info->name : numberLabel(id);
     };
     auto traitName = [&](uint32_t id) {
-        const auto* info = AlterEgo::GW2API::GetTraitInfo(id);
+        const auto info = AlterEgo::GW2API::GetTraitInfo(id);
         return info ? info->name : numberLabel(id);
     };
     auto skillName = [&](uint32_t id) {
-        const auto* info = AlterEgo::GW2API::GetSkillInfo(id);
+        const auto info = AlterEgo::GW2API::GetSkillInfo(id);
         return info ? info->name : numberLabel(id);
     };
     auto itemName = [&](uint32_t id) {
-        const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+        const auto info = AlterEgo::GW2API::GetItemInfo(id);
         return info ? info->name : numberLabel(id);
     };
     auto addId = [&](const std::string& group, const std::string& field,
@@ -10267,7 +10268,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     auto traitId = [&](uint32_t spec, int tier, int id) -> uint32_t {
         if (id >= 0) return (uint32_t)id;
         // Negative values in older imports encode an unresolved trait choice.
-        const auto* info = AlterEgo::GW2API::GetSpecInfo(spec);
+        const auto info = AlterEgo::GW2API::GetSpecInfo(spec);
         int choice = -id;
         if (info && info->major_traits.size() >= 9 && choice >= 1 && choice <= 3)
             return info->major_traits[tier * 3 + choice - 1];
@@ -10360,7 +10361,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             }
             uint32_t liveStat = eq->stat_id;
             if (!liveStat && eq->id) {
-                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                 if (info && info->details.contains("infix_upgrade") &&
                     info->details["infix_upgrade"].contains("id") &&
                     info->details["infix_upgrade"]["id"].is_number_unsigned())
@@ -10372,23 +10373,23 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             // even if the library detail page has not yet been opened.
             uint32_t savedStat = gs.stat_id;
             if (!savedStat && gs.item_id) {
-                const auto* savedItem = AlterEgo::GW2API::GetItemInfo(gs.item_id);
+                const auto savedItem = AlterEgo::GW2API::GetItemInfo(gs.item_id);
                 if (savedItem && savedItem->details.is_object() &&
                     savedItem->details.contains("infix_upgrade") &&
                     savedItem->details["infix_upgrade"].is_object() &&
                     savedItem->details["infix_upgrade"].contains("id") &&
                     savedItem->details["infix_upgrade"]["id"].is_number_unsigned()) {
                     const uint32_t possible = savedItem->details["infix_upgrade"]["id"].get<uint32_t>();
-                    const auto* definition = AlterEgo::GW2API::GetItemStatInfo(possible);
+                    const auto definition = AlterEgo::GW2API::GetItemStatInfo(possible);
                     if (definition && (gs.stat_name.empty() ||
                         AlterEgo::NamedStats::SameCanonicalStat(gs.stat_name, definition->name)))
                         savedStat = possible;
                 }
             }
             if (savedStat || !gs.stat_name.empty()) {
-                const auto* savedInfo = savedStat
+                const auto savedInfo = savedStat
                     ? AlterEgo::GW2API::GetItemStatInfo(savedStat) : nullptr;
-                const auto* liveInfo = liveStat
+                const auto liveInfo = liveStat
                     ? AlterEgo::GW2API::GetItemStatInfo(liveStat) : nullptr;
                 const std::string savedName =
                     (savedInfo && !savedInfo->name.empty()) ? savedInfo->name
@@ -10421,7 +10422,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             // functional comparison is aggregated by type and weapon set.
             if (slot.rfind("Weapon", 0) == 0) {
                 if (!gs.weapon_type.empty()) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                     if (info && info->details.contains("type") &&
                         info->details["type"].is_string()) {
                         auto liveType = info->details["type"].get<std::string>();
@@ -10599,7 +10600,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         if (saved.relic_id || !saved.relic_name.empty()) {
             const auto* eq = getEquipped("Relic");
             uint32_t id = eq ? eq->id : 0;
-            const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+            const auto info = AlterEgo::GW2API::GetItemInfo(id);
             if (info && !saved.relic_name.empty())
                 result.Add("Relic", "Effect / item name", saved.relic_name, info->name,
                            saved.relic_name, info->name);
@@ -10883,7 +10884,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
             for(const auto& [id,count]:missing)totals[id]+=count;
             for(const auto& [id,count]:totals){
                 ImGui::PushID(static_cast<int>(id));
-                const auto* item=AlterEgo::GW2API::GetItemInfo(id);
+                const auto item = AlterEgo::GW2API::GetItemInfo(id);
                 std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count)+"###acquisition";
                 if(ImGui::TreeNode(label.c_str())){
                     AlterEgo::NativeAccounts::RenderItemAvailability(id,owner,character->name);
@@ -11062,7 +11063,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
             if (gs.stat_id != 0 || !gs.stat_name.empty()) {
                 uint32_t liveStat = eq->stat_id;
                 if (!liveStat && eq->id) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                     if (info && info->details.contains("infix_upgrade") &&
                         info->details["infix_upgrade"].contains("id") &&
                         info->details["infix_upgrade"]["id"].is_number_unsigned())
@@ -11071,12 +11072,12 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
                 if (!liveStat) requiredDataMissing = true;
             }
             if (!gs.weapon_type.empty()) {
-                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                 if (!info || !info->details.contains("type") ||
                     !info->details["type"].is_string()) requiredDataMissing = true;
             }
             if (slot == "Relic" && !saved.relic_name.empty() && saved.relic_id == 0) {
-                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                 if (!info) requiredDataMissing = true;
             }
         }
@@ -11787,11 +11788,11 @@ static void RenderBuildLibrary() {
             // Determine elite spec for this build (if any). Search all three
             // specialization slots — elite isn't always in position 2.
             uint32_t eliteSpecId = 0;
-            const AlterEgo::SpecializationInfo* eliteSpec = nullptr;
+            std::shared_ptr<const AlterEgo::SpecializationInfo> eliteSpec;
             for (int s = 0; s < 3; s++) {
                 uint32_t sid = b.specializations[s].spec_id;
                 if (!sid) continue;
-                const auto* si = AlterEgo::GW2API::GetSpecInfo(sid);
+                const auto si = AlterEgo::GW2API::GetSpecInfo(sid);
                 if (si && si->elite) { eliteSpecId = sid; eliteSpec = si; break; }
             }
             // If we have a spec id but no info yet, kick off a fetch so we can
@@ -11823,7 +11824,7 @@ static void RenderBuildLibrary() {
                 uint32_t profIconId = GetProfessionBigIconId(b.profession);
                 iconTex = AlterEgo::IconManager::GetIcon(profIconId);
                 if (!iconTex || !iconTex->Resource) {
-                    const auto* prof = AlterEgo::GW2API::GetProfessionInfo(b.profession);
+                    const auto prof = AlterEgo::GW2API::GetProfessionInfo(b.profession);
                     AlterEgo::IconManager::RequestIcon(profIconId,
                         prof ? prof->icon_big_url : "", /*priority=*/true);
                 }

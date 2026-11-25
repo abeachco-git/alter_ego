@@ -59,12 +59,12 @@ static std::string ComponentNativeProfession(const std::string& kind,
 
 static std::string ComponentNativeSkillName(uint32_t id) {
     if (!id) return "(empty)";
-    const auto* skill = AlterEgo::GW2API::GetSkillInfo(id);
+    const auto skill = AlterEgo::GW2API::GetSkillInfo(id);
     return skill ? skill->name : "#" + std::to_string(id);
 }
 static std::string ComponentNativeSpecName(uint32_t id) {
     if (!id) return "(empty)";
-    const auto* spec = AlterEgo::GW2API::GetSpecInfo(id);
+    const auto spec = AlterEgo::GW2API::GetSpecInfo(id);
     return spec ? spec->name : "#" + std::to_string(id);
 }
 
@@ -263,7 +263,7 @@ static void ComponentNativeSpecializations(ComponentJson& data,
             if (AlterEgo::UI::BeginCombo("##specialization", ComponentNativeSpecName(priorId).c_str())) {
                 if (ImGui::Selectable("(none)", !priorId)) spec["id"] = 0;
                 for (uint32_t choice : candidates) {
-                    const auto* definition = AlterEgo::GW2API::GetSpecInfo(choice);
+                    const auto definition = AlterEgo::GW2API::GetSpecInfo(choice);
                     if (!definition) continue;
                     if (definition->elite && i != 2) continue;
                     bool alreadyUsed = false;
@@ -297,7 +297,7 @@ static void ComponentNativeSpecializations(ComponentJson& data,
         ComponentJson traits = spec.contains("traits") && spec["traits"].is_array()
             ? spec["traits"] : ComponentJson::array();
         while (traits.size() < 3) traits.push_back(0);
-        const auto* definition = AlterEgo::GW2API::GetSpecInfo(specId);
+        const auto definition = AlterEgo::GW2API::GetSpecInfo(specId);
         const char* tiers[] = {"Adept", "Master", "Grandmaster"};
         for (int tier = 0; tier < 3; ++tier) {
             ImGui::PushID(tier);
@@ -504,7 +504,7 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
 static void ComponentNativeStatChoice(ComponentJson& item) {
     ImGui::PushID("##native_stats");
     const uint32_t id = item.value("stat_id", uint32_t(0));
-    const auto* info = AlterEgo::GW2API::GetItemStatInfo(id);
+    const auto info = AlterEgo::GW2API::GetItemStatInfo(id);
     const std::string storedName = item.value("stat_name", std::string());
     const std::string shown = !storedName.empty() ? storedName :
         info ? info->name : id ? "#" + std::to_string(id) : "(choose stats)";
@@ -542,7 +542,7 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,
         ImGui::TextDisabled("Assign to a Loadout for profession-filtered weapons.");
         return;
     }
-    const auto* weapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
+    const auto weapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
     if (!weapons || weapons->empty()) {
         ImGui::TextDisabled("Weapon definitions not available.");
         if (RenderActionButton("Fetch weapon data##component"))
@@ -689,7 +689,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         auto& item = data["gear"][slot];
         if (kind == "armor" || kind == "weapons" || kind == "trinkets") {
             const uint32_t id = item.value("item_id", uint32_t(0));
-            const auto* info = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
+            const auto info = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
             if (info && !info->icon_url.empty()) {
                 AlterEgo::IconManager::RequestIcon(id, info->icon_url);
                 Texture_t* tex = AlterEgo::IconManager::GetIcon(id);

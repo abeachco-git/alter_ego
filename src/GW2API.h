@@ -383,25 +383,25 @@ namespace AlterEgo {
         static const ItemLocationResult* GetItemLocation(uint32_t item_id);
 
         // Item/Skin/Spec/Trait/Skill/Color caches (public endpoints, fetched directly)
-        static const ItemInfo* GetItemInfo(uint32_t item_id);
+        static std::shared_ptr<const ItemInfo> GetItemInfo(uint32_t item_id);
         static uint32_t FindItemIdByName(const std::string& name); // searches item cache + name cache
         static std::vector<std::pair<std::string, uint32_t>> SearchKnownInfusions(
             const std::string& query, size_t maxResults = 100, bool enrichment = false);
         static void CacheItemNameId(const std::string& name, uint32_t id); // add to persistent name→ID cache
         static bool LoadItemNameCache();
         static bool SaveItemNameCache();
-        static const SkinInfo* GetSkinInfo(uint32_t skin_id);
-        static const SpecializationInfo* GetSpecInfo(uint32_t spec_id);
-        static const TraitInfo* GetTraitInfo(uint32_t trait_id);
-        static const SkillInfo* GetSkillInfo(uint32_t skill_id);
-        static const DyeColor* GetDyeColor(int color_id);
-        static const ItemStatInfo* GetItemStatInfo(uint32_t stat_id);
-        static const std::unordered_map<uint32_t, ItemStatInfo>& GetAllItemStats();
+        static std::shared_ptr<const SkinInfo> GetSkinInfo(uint32_t skin_id);
+        static std::shared_ptr<const SpecializationInfo> GetSpecInfo(uint32_t spec_id);
+        static std::shared_ptr<const TraitInfo> GetTraitInfo(uint32_t trait_id);
+        static std::shared_ptr<const SkillInfo> GetSkillInfo(uint32_t skill_id);
+        static std::shared_ptr<const DyeColor> GetDyeColor(int color_id);
+        static std::shared_ptr<const ItemStatInfo> GetItemStatInfo(uint32_t stat_id);
+        static std::unordered_map<uint32_t, std::shared_ptr<const ItemStatInfo>> GetAllItemStats();
         static void FetchAllItemStatsAsync(bool manual=false);
         static void AdoptPublicItems(const nlohmann::json& rows);
-        static const ProfessionInfo* GetProfessionInfo(const std::string& profession);
+        static std::shared_ptr<const ProfessionInfo> GetProfessionInfo(const std::string& profession);
         static void FetchProfessionInfoAsync(const std::string& profession);
-        static const std::map<std::string, ProfessionWeaponData>* GetProfessionWeapons(const std::string& profession);
+        static std::shared_ptr<const std::map<std::string, ProfessionWeaponData>> GetProfessionWeapons(const std::string& profession);
 
         // Fetch detail data on-demand (direct HTTP — no auth needed)
         static void FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch = false); // synchronous
@@ -581,17 +581,17 @@ namespace AlterEgo {
         // native API cached data
 
         // Caches (public endpoint data)
-        static std::unordered_map<uint32_t, ItemInfo> s_item_cache;
-        static std::unordered_map<uint32_t, SkinInfo> s_skin_cache;
-        static std::unordered_map<uint32_t, SpecializationInfo> s_spec_cache;
-        static std::unordered_map<uint32_t, TraitInfo> s_trait_cache;
-        static std::unordered_map<uint32_t, SkillInfo> s_skill_cache;
-        static std::unordered_map<int, DyeColor> s_dye_cache;
-        static std::unordered_map<uint32_t, ItemStatInfo> s_itemstat_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const ItemInfo>> s_item_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const SkinInfo>> s_skin_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const SpecializationInfo>> s_spec_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const TraitInfo>> s_trait_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const SkillInfo>> s_skill_cache;
+        static std::unordered_map<int, std::shared_ptr<const DyeColor>> s_dye_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const ItemStatInfo>> s_itemstat_cache;
 
         // Profession info cache
-        static std::unordered_map<std::string, ProfessionInfo> s_profession_cache;
-        static std::unordered_map<std::string, std::map<std::string, ProfessionWeaponData>> s_profession_weapons;
+        static std::unordered_map<std::string, std::shared_ptr<const ProfessionInfo>> s_profession_cache;
+        static std::unordered_map<std::string, std::shared_ptr<const std::map<std::string, ProfessionWeaponData>>> s_profession_weapons;
 
         // Ranger pets cache (build editor)
 

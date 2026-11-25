@@ -58,7 +58,7 @@ static AlterEgo::InfusionSummary ComputeInfusionSummary(
     for (const auto& [id, count] : items) {
         if (!id || count <= 0) continue;
         total.present = true;
-        const auto* item = AlterEgo::GW2API::GetItemInfo(id);
+        const auto item = AlterEgo::GW2API::GetItemInfo(id);
         if (!item || !item->details.is_object()) {
             total.complete = false;
             continue;
@@ -128,7 +128,7 @@ static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::Saved
     static AlterEgo::InfusionSummary cached;
     static std::vector<uint32_t> pending;
     const bool arrived = std::any_of(pending.begin(),pending.end(),[](uint32_t id) {
-        const auto* item = AlterEgo::GW2API::GetItemInfo(id);
+        const auto item = AlterEgo::GW2API::GetItemInfo(id);
         return item && item->details.is_object();
     });
     if (!initialized || ids != lastIds || flexible != lastFlexible || recorded != lastRecorded || arrived) {
@@ -140,7 +140,7 @@ static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::Saved
         if (!flexible.empty()) cached.complete = false;
         pending.clear();
         for (uint32_t id : ids) {
-            const auto* item = AlterEgo::GW2API::GetItemInfo(id);
+            const auto item = AlterEgo::GW2API::GetItemInfo(id);
             if (!item || !item->details.is_object()) pending.push_back(id);
         }
         if (!pending.empty()) AlterEgo::GW2API::FetchItemDetailsAsync(pending);

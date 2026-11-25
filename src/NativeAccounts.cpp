@@ -917,8 +917,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         if(slot.stat>0)ImGui::TextDisabled("Selected stat ID: %lld",static_cast<long long>(slot.stat));
         const bool glyph=slot.scope=="Equipment"&&(slot.position.find("/Pick")!=std::string::npos||slot.position.find("/Axe")!=std::string::npos||slot.position.find("/Sickle")!=std::string::npos);
         if(glyph&&slot.upgrades.empty())ImGui::TextDisabled("Glyph: Unknown (not reported)");
-        for(auto id:slot.upgrades){const auto* item=GW2API::GetItemInfo(id);ImGui::TextWrapped("%s: %s",glyph?"Glyph":"Upgrade",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
-        for(auto id:slot.infusions){const auto* item=GW2API::GetItemInfo(id);ImGui::TextWrapped("Infusion: %s",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
+        for(auto id:slot.upgrades){const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("%s: %s",glyph?"Glyph":"Upgrade",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
+        for(auto id:slot.infusions){const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("Infusion: %s",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
         ImGui::Separator();ImGui::PopID();
     }
     RenderSectionHeader("Item Information",UI::SectionGold);

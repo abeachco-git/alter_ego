@@ -30,7 +30,7 @@ static std::string FashionWeightFromSkins(const AlterEgo::DecodedWardrobeLink& w
     for (const auto id : {w.helm_skin,w.shoulders_skin,w.chest_skin,w.gloves_skin,w.leggings_skin,w.boots_skin}) {
         if (!id) continue;
         hasArmor = true;
-        const auto* skin = AlterEgo::GW2API::GetSkinInfo(id);
+        const auto skin = AlterEgo::GW2API::GetSkinInfo(id);
         if (!skin || skin->weight_class.empty()) { unknown = true; continue; }
         const auto& candidate = skin->weight_class;
         if (candidate == "Clothing") continue;
@@ -209,7 +209,7 @@ static void RenderFashionSlot(const char* label, uint16_t skinID, const uint16_t
     ImGui::PushID(label);
     ImGui::TextUnformatted(label);
     ImGui::SameLine(126);
-    const auto* skin = skinID ? AlterEgo::GW2API::GetSkinInfo(skinID) : nullptr;
+    const auto skin = skinID ? AlterEgo::GW2API::GetSkinInfo(skinID) : nullptr;
     if (!skinID) ImGui::TextDisabled("(none)");
     else {
         if (skin && !skin->icon_url.empty()) {
@@ -234,7 +234,7 @@ static void RenderFashionSlot(const char* label, uint16_t skinID, const uint16_t
             if (displayed) ImGui::SameLine(0, 4);
             displayed = true;
             ImGui::PushID(i);
-            const auto* dye = id > 1 ? AlterEgo::GW2API::GetDyeColor(id) : nullptr;
+            const auto dye = id > 1 ? AlterEgo::GW2API::GetDyeColor(id) : nullptr;
             int r = dye ? dye->r : 65, g = dye ? dye->g : 65, b = dye ? dye->b : 65;
             if (dye && skin && i < (int)skin->dye_slot_materials.size()) {
                 const auto& mat = skin->dye_slot_materials[i];
@@ -378,7 +378,7 @@ static void RenderFashionLibrary() {
                     if (i) ImGui::SameLine(0, 4);
                     ImGui::PushID(100+i);
                     int id = w.outfit_dyes[i];
-                    const auto* dye = id > 1 ? AlterEgo::GW2API::GetDyeColor(id) : nullptr;
+                    const auto dye = id > 1 ? AlterEgo::GW2API::GetDyeColor(id) : nullptr;
                     ImGui::ColorButton("##outfit_dye", ImVec4(dye ? dye->cloth_r/255.f : .3f,
                         dye ? dye->cloth_g/255.f : .3f, dye ? dye->cloth_b/255.f : .3f, 1),
                         ImGuiColorEditFlags_NoTooltip, ImVec2(17,17));
