@@ -2,6 +2,20 @@
 
 Status: implementation authorized on experiment/composable-loadouts; native account and inventory checkpoint in progress, not complete. Main must remain unchanged. No H&S credential, label or inventory import. Source audit: [Hoard & Seek v1.1.0.0](https://github.com/PieOrCake/hoard_and_seek/tree/v1.1.0.0) (MIT).
 
+## Implementation tracker (living)
+
+- [x] Native registry, explicit API key setup, permission reporting, Windows Credential Manager, no H&S credential import.
+- [x] Direct native character/roster, equipment/build, skin, achievement, Clears and Vault consumers; no runtime H&S event dependency. Verified build c54865a; live testing outstanding.
+- [x] Account GUID ownership, same-account Fast Load gate, account-independent Library; conditional multi-account UI.
+- [x] Personal bank, shared inventory, material storage, bags, equipment, tools, armory and delivery item storage.
+- [x] Wallet balances and currency metadata, guild leader access and guild GUID-deduplicated stash/coins; implementation pending CI/live validation.
+- [x] Per-storage TTLs, failed-attempt cooldown, visible selected-account opt-in inventory refresh; broader dataset policies and independently committing Vault/Clears periods still outstanding.
+- [x] Inventory fuzzy search, rarity/type filters and name/quantity sort.
+- [ ] Inventory-aware Compare, Shopping List ownership, navigation and detailed eligibility.
+- [ ] Wallet favorites/categories, additional filters, refresh exclusions and fair bounded queue.
+- [ ] Full independent character/progress dataset freshness; per-section Clears/Vault commit; no startup burst.
+- [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.
+
 ## Goal and architecture
 
 Make native authenticated account access and inventory available within Alter Ego without requiring a separate Hoard & Seek DLL. Integrate functionality rather than wholesale copying its addon, UI, caches or lifecycle. Use a single native typed service boundary; remove the H&S dependency and obsolete event/callback paths, with no permanent dual-provider architecture or compatibility bridge. Any future third-party interoperability requires a separately approved design. Route public and authenticated ArenaNet API requests through one shared handler (not arbitrary third-party artwork or website requests), with shared scheduling, transport, diagnostics and throttling. Each account/dataset/scope has its own freshness policy, refresh priority and completeness; avoid indiscriminate all-account startup refreshes. Preserve upstream compatibility and Nexus ImGui 1.80 ABI.
