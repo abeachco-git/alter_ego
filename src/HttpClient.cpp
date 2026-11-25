@@ -1,6 +1,10 @@
 #include "HttpSafety.h"
 #include "HttpClient.h"
 #include "ArenaNetTransport.h"
+#include "ArenaNetAdmission.h"
+#include "ApiActivity.h"
+#include <thread>
+#include <chrono>
 
 #include <windows.h>
 #include <wininet.h>
@@ -10,6 +14,29 @@
 #include <vector>
 
 namespace Skinventory {
+    namespace {
+    using Clock=std::chrono::steady_clock;
+    AlterEgo::ArenaNet::Admission wikiGate;
+    Clock::time_point wikiNext{};
+    // One shared admission gate for all runtime Wiki GETs and artwork. Hold
+    // until the response completes; do not hold a domain or UI mutex here.
+    struct WikiLease {
+        bool wiki=false,acquired=false;
+        explicit WikiLease(const std::string& url):wiki(AlterEgo::ApiActivity::WikiUrl(url)){
+            if(!wiki)return;
+            acquired=wikiGate.Acquire([]{return AlterEgo::Background::Workers().Stopping();},std::chrono::seconds(120));
+            if(!acquired)return;
+            while(Clock::now()<wikiNext&&!AlterEgo::Background::Workers().Stopping())
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        ~WikiLease(){if(acquired)wikiGate.Release();}
+        bool Ready()const{return !wiki||(acquired&&!AlterEgo::Background::Workers().Stopping());}
+        void Starting(){if(wiki)wikiNext=Clock::now()+std::chrono::seconds(1);}
+        void Status(int status){if(wiki&&status==429)wikiNext=std::max(wikiNext,Clock::now()+std::chrono::seconds(60));}
+    };
+    int StatusCode(HINTERNET h){DWORD code=0,size=sizeof(code);HttpQueryInfoA(h,HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER,&code,&size,nullptr);return static_cast<int>(code);}
+    }
+    std::size_t HttpClient::WikiWaiting(){return wikiGate.Waiting();}
 
     std::string HttpClient::Get(const std::string& url) {
         if (AlterEgo::ArenaNet::IsApiUrl(url)) {
@@ -17,6 +44,8 @@ namespace Skinventory {
             return r.status_code>=200&&r.status_code<300?std::move(r.body):std::string{};
         }
         if (AlterEgo::Background::Workers().Stopping()) return {};
+        WikiLease wiki(url);
+        if(!wiki.Ready())return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return "";
@@ -25,24 +54,31 @@ namespace Skinventory {
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                       INTERNET_FLAG_SECURE;
 
+        wiki.Starting();
+        AlterEgo::ApiActivity::Attempt activity(AlterEgo::ApiActivity::WikiEndpoint(url),wiki.wiki);
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
         if (!hUrl) {
             InternetCloseHandle(hInternet);
             return "";
         }
 
+        const int status=StatusCode(hUrl);
+        activity.Status(status);wiki.Status(status);
         std::string result;
         const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.append(data, count); });
 
+        if(complete)activity.Complete();
         InternetCloseHandle(hUrl);
         InternetCloseHandle(hInternet);
-        return complete ? result : std::string{};
+        return complete && status>=200 && status<300 ? result : std::string{};
     }
 
     HttpResponse HttpClient::GetEx(const std::string& url) {
         if(AlterEgo::ArenaNet::IsApiUrl(url))return AlterEgo::ArenaNet::Get(url.substr(std::strlen(AlterEgo::ArenaNet::Origin)));
         HttpResponse result;
         if (AlterEgo::Background::Workers().Stopping()) return {};
+        WikiLease wiki(url);
+        if(!wiki.Ready())return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return result;
@@ -51,6 +87,8 @@ namespace Skinventory {
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                       INTERNET_FLAG_SECURE;
 
+        wiki.Starting();
+        AlterEgo::ApiActivity::Attempt activity(AlterEgo::ApiActivity::WikiEndpoint(url),wiki.wiki);
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
         if (!hUrl) {
             InternetCloseHandle(hInternet);
@@ -62,9 +100,11 @@ namespace Skinventory {
         HttpQueryInfoA(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
                        &statusCode, &statusSize, NULL);
         result.status_code = (int)statusCode;
+        activity.Status(result.status_code);wiki.Status(result.status_code);
 
         const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.body.append(data, count); });
 
+        if(complete)activity.Complete();
         InternetCloseHandle(hUrl);
         InternetCloseHandle(hInternet);
         return complete ? result : HttpResponse{};
@@ -74,6 +114,8 @@ namespace Skinventory {
         if(AlterEgo::ArenaNet::IsApiUrl(url))return AlterEgo::ArenaNet::Get(url.substr(std::strlen(AlterEgo::ArenaNet::Origin)),{},headers);
         HttpResponse result;
         if (AlterEgo::Background::Workers().Stopping()) return {};
+        WikiLease wiki(url);
+        if(!wiki.Ready())return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return result;
@@ -82,6 +124,8 @@ namespace Skinventory {
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                       INTERNET_FLAG_SECURE;
 
+        wiki.Starting();
+        AlterEgo::ApiActivity::Attempt activity(AlterEgo::ApiActivity::WikiEndpoint(url),wiki.wiki);
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(),
             headers.c_str(), (DWORD)headers.size(), flags, 0);
         if (!hUrl) {
@@ -94,9 +138,11 @@ namespace Skinventory {
         HttpQueryInfoA(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
                        &statusCode, &statusSize, NULL);
         result.status_code = (int)statusCode;
+        activity.Status(result.status_code);wiki.Status(result.status_code);
 
         const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.body.append(data, count); });
 
+        if(complete)activity.Complete();
         InternetCloseHandle(hUrl);
         InternetCloseHandle(hInternet);
         return complete ? result : HttpResponse{};
@@ -167,11 +213,15 @@ namespace Skinventory {
 
     bool HttpClient::DownloadToFile(const std::string& url, const std::string& filePath) {
         if (AlterEgo::Background::Workers().Stopping()) return {};
+        WikiLease wiki(url);
+        if(!wiki.Ready())return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return false;
         AlterEgo::HttpSafety::Configure(hInternet);
 
+        wiki.Starting();
+        AlterEgo::ApiActivity::Attempt activity(AlterEgo::ApiActivity::WikiEndpoint(url),wiki.wiki);
         HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0,
             INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
         if (!hUrl) {
@@ -179,19 +229,22 @@ namespace Skinventory {
             return false;
         }
 
+        const int status=StatusCode(hUrl);
+        activity.Status(status);wiki.Status(status);
         std::vector<char> buffer;
         const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { buffer.insert(buffer.end(), data, data + count); });
 
+        if(complete)activity.Complete();
         InternetCloseHandle(hUrl);
         InternetCloseHandle(hInternet);
 
-        if (!complete || buffer.empty()) return false;
+        if (!complete || status<200 || status>=300 || buffer.empty()) return false;
 
         std::ofstream file(filePath, std::ios::binary);
         if (!file.is_open()) return false;
         file.write(buffer.data(), buffer.size());
         file.close();
-        return true;
+        return file.good();
     }
 
 }

@@ -1,5 +1,6 @@
 #include "ArenaNetTransport.h"
 #include "ArenaNetAdmission.h"
+#include "ApiActivity.h"
 #include "HttpSafety.h"
 #include <chrono>
 #include <mutex>
@@ -23,6 +24,7 @@ struct Handle {
     Handle& operator=(const Handle&)=delete;
 };
 }
+size_t Waiting(){return gate.Waiting();}
 Skinventory::HttpResponse Get(const std::string& path,const std::string& key,const std::string& extraHeaders){
     if(path.rfind("/v2/",0)!=0||path.find_first_of("\r\n\\#")!=std::string::npos||
        key.find_first_of("\r\n")!=std::string::npos)return {};
@@ -48,12 +50,14 @@ Skinventory::HttpResponse Get(const std::string& path,const std::string& key,con
     if(!request.value)return {};
     std::string headers=extraHeaders;
     if(!key.empty())headers+="Authorization: Bearer "+key+"\r\n";
+    ApiActivity::Attempt activity(ApiActivity::ApiEndpoint(path));
     const BOOL sent=HttpSendRequestA(request.value,headers.empty()?nullptr:headers.c_str(),
         static_cast<DWORD>(headers.size()),nullptr,0);
     if(!headers.empty())SecureZeroMemory(&headers[0],headers.size());
     if(!sent)return {};
     DWORD code=0,size=sizeof(code);
     if(!HttpQueryInfoA(request.value,HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER,&code,&size,nullptr))return {};
+    activity.Status(static_cast<int>(code));
     if(code==429){
         char retry[64]{};size=sizeof(retry);unsigned long seconds=5;
         if(HttpQueryInfoA(request.value,HTTP_QUERY_RETRY_AFTER,retry,&size,nullptr)){
@@ -68,7 +72,7 @@ Skinventory::HttpResponse Get(const std::string& path,const std::string& key,con
     while(!Background::Workers().Stopping()&&Clock::now()<deadline){
         DWORD n=0;
         if(!InternetReadFile(request.value,buffer,sizeof(buffer),&n))return {};
-        if(!n)return result;
+        if(!n){activity.Complete();return result;}
         if(result.body.size()+n>64u*1024u*1024u)return {};
         result.body.append(buffer,n);
     }

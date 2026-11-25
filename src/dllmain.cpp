@@ -55,6 +55,8 @@
 #include "LibraryModeFilter.h"
 #include "WikiImage.h"
 #include "HttpClient.h"
+#include "ApiActivity.h"
+#include "ArenaNetTransport.h"
 #include <nlohmann/json.hpp>
 #include "AddonShared.h"
 #include "CatalogPresentation.h"
@@ -12497,7 +12499,9 @@ void AddonLoad(AddonAPI_t* aApi) {
         Skinventory::OwnedSkins::Initialize(APIDefs);
         Skinventory::WikiImage::Initialize(APIDefs, wikiCacheDir);
         // Prefetch raid rotation icons used by the Clears tab.
-        Skinventory::WikiImage::DownloadCurrencyIcons("Emboldened,Call_of_the_Mists");
+        AlterEgo::Background::Workers().Launch([]{
+            Skinventory::WikiImage::DownloadCurrencyIcons("Emboldened,Call_of_the_Mists");
+        });
 
         if (Skinventory::SkinCache::LoadFromDisk()) {
             // Refreshing cached API metadata obeys the global option;
@@ -17581,6 +17585,47 @@ static void RenderStorageDiagnostics() {
             if(RenderActionButton("Cancel##ae_cache_confirm"))ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
+    }
+    if(ImGui::TreeNode("API Activity##ae_api_activity")) {
+        using namespace ApiActivity;
+        static Snapshot activity;
+        static int64_t sampled=-1;
+        static size_t apiWaiting=0,wikiWaiting=0;
+        const auto now=Now();
+        if(sampled!=now){
+            activity=Session().Read(now);sampled=now;
+            apiWaiting=ArenaNet::Waiting();wikiWaiting=Skinventory::HttpClient::WikiWaiting();
+        }
+        const char* sources[]={"ArenaNet","Wiki"};
+        for(size_t source=0;source<2;++source){
+            Totals totals;
+            for(size_t i=0;i<Count;++i)if(Source(static_cast<Endpoint>(i))==source){
+                const auto& t=activity.endpoints[i];
+                totals.started+=t.started;totals.success+=t.success;totals.failed+=t.failed;
+                totals.limited+=t.limited;totals.active+=t.active;
+            }
+            ImGui::Text("%s: %llu / %llu / %llu",sources[source],
+                (unsigned long long)activity.last10[source],(unsigned long long)activity.last60[source],
+                (unsigned long long)totals.started);
+            ImGui::TextWrapped("  OK %llu | failed %llu (429: %llu) | active %llu | waiting %llu | peak %llu/s",
+                (unsigned long long)totals.success,(unsigned long long)totals.failed,
+                (unsigned long long)totals.limited,(unsigned long long)totals.active,
+                (unsigned long long)(source==0?apiWaiting:wikiWaiting),(unsigned long long)activity.peak[source]);
+        }
+        ImGui::TextDisabled("Requests: last 10 min / hour / session");
+        ImGui::Text("Achievement broker: %llu cache hits, %llu coalesced",
+            (unsigned long long)activity.sharedHits,(unsigned long long)activity.sharedCoalesced);
+        if(ImGui::TreeNode("Endpoint groups##ae_api_endpoints")){
+            for(size_t i=0;i<Count;++i){
+                const auto& t=activity.endpoints[i];if(!t.started)continue;
+                ImGui::TextWrapped("%s: %llu requests, %llu OK, %llu failed (%llu 429)",
+                    Labels[i],(unsigned long long)t.started,(unsigned long long)t.success,
+                    (unsigned long long)t.failed,(unsigned long long)t.limited);
+            }
+            ImGui::TreePop();
+        }
+        ImGui::TextDisabled("Local session only; HTTP success is not dataset validation.");
+        ImGui::TreePop();
     }
     if(!inspected)return;
     auto database=[](const char* label,const Storage::DatabaseDiagnostic& info) {

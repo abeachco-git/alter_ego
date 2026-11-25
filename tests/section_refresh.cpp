@@ -1,5 +1,6 @@
 #include "../src/SectionRefresh.h"
 #include "../src/CharacterActivity.h"
+#include "../src/ApiActivity.h"
 #include <cassert>
 #include <ctime>
 #include <vector>
@@ -76,6 +77,28 @@ int case_section_refresh(int, char**) {
     a.reset();assert(F::ClaimIds("skills",{1})->ids.empty());
     assert(F::ClaimIds("skills",{1},true)->ids.size()==1);
     assert(F::ClaimIds("items",{1})->ids.size()==1);
+    namespace D=AlterEgo::ApiActivity;
+    assert(D::ApiEndpoint("/v2/characters/Private%20Name/equipmenttabs?tabs=all")==D::Endpoint::Equipment);
+    assert(D::ApiEndpoint("/v2/characters/Private%20Name/inventory")==D::Endpoint::Bags);
+    assert(D::ApiEndpoint("/v2/account/achievements?access_token=secret")==D::Endpoint::AchProgress);
+    assert(D::WikiUrl("https://wiki.guildwars2.com/api.php?action=query"));
+    assert(!D::WikiUrl("https://wiki.guildwars2.com.example.org/api.php"));
+    D::Recorder rec;
+    rec.Start(D::Endpoint::Equipment,100);rec.Finish(D::Endpoint::Equipment,200,true);
+    rec.Start(D::Endpoint::Equipment,100);rec.Finish(D::Endpoint::Equipment,429,false);
+    rec.Start(D::Endpoint::WikiApi,101);rec.Finish(D::Endpoint::WikiApi,200,false);
+    rec.Start(D::Endpoint::Bags,700);
+    rec.Shared(false);rec.Shared(true);
+    auto diag=rec.Read(700);
+    assert(diag.last10[0]==1&&diag.last10[1]==1&&diag.last60[0]==3);
+    assert(diag.peak[0]==2&&diag.peak[1]==1);
+    auto eq=diag.endpoints[static_cast<size_t>(D::Endpoint::Equipment)];
+    assert(eq.started==2&&eq.success==1&&eq.failed==1&&eq.limited==1&&!eq.active);
+    assert(diag.endpoints[static_cast<size_t>(D::Endpoint::Bags)].active==1);
+    assert(diag.sharedHits==1&&diag.sharedCoalesced==1);
+    assert(rec.Read(3700).last60[0]==1);
+    rec.Start(D::Endpoint::Catalog,3700);
+    assert(rec.Read(3700).last60[0]==2);
     assert(Stale(0, now));
     assert(!Stale(now - 900, now));
     assert(Stale(now - 901, now));
