@@ -954,6 +954,10 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     auto v=Snapshot();const auto accounts=SelectedAccounts(*v,selectedAccount);
     const auto& nav=navigation;
     const auto scope=nav.subview==1?std::string("Wallet"):nav.subview==2?std::string("Guild bank"):nav.scope.empty()?std::string("Items"):nav.scope;
+    const bool itemView=nav.subview==0;
+    const bool characterFiltered=itemView&&!nav.characters.empty();
+    const std::set<std::string> noCharacters;
+    const auto& characters=characterFiltered?nav.characters:noCharacters;
     bool missing=false,failed=false,stale=false;
     std::map<ScopeKey,ScopeState> progress;std::string current;unsigned processed=0;
     {std::lock_guard<std::mutex> lock(viewMutex);progress=liveScopes;current=activeScope;processed=processedScopes;}
@@ -978,6 +982,29 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
         const auto status=s?s->status:"Not retrieved";const auto success=s?s->success:0;
         note(name,success,status,dataset,group==nullptr,a.id,ch);
         if(group)group->Add(status=="Ready"&&success>0&&!ScopeFresh(a.id,dataset,ch,success)?"Stale":status,success>0);
+        if(!group&&ActivityScope(dataset)){
+            namespace A=CharacterActivity;
+            A::Inspection inspection;
+            A::Eligibility eligible;
+            const auto now=Now();
+            {
+                std::lock_guard<std::mutex> lock(A::Mutex());
+                const bool spec=dataset=="Equipment"&&A::SpecSignal().load();
+                inspection=A::State().Inspect({a.id,ch},dataset,success,now,spec);
+                eligible=A::State().Eligible({a.id,ch},dataset,success,s&&status!="Ready"?s->attempted:0,now,spec);
+            }
+            detail+="; "+std::string(inspection.active?"active":"not active");
+            if(!AutoScope(dataset))detail+="; auto refresh disabled";
+            else if(eligible.due)detail+="; refresh due";
+            else if(eligible.at>now){
+                const auto remaining=eligible.at-now;
+                using W=A::WaitReason;
+                const char* reason=eligible.reason==W::Retry?"retry cooldown":
+                    eligible.reason==W::LoginGrace?"login grace":eligible.reason==W::LogoutGrace?"logout grace":
+                    eligible.reason==W::SpecDebounce?"specialization change":eligible.reason==W::Stagger?"staggered refresh":"active interval";
+                detail+="; "+std::string(reason)+" "+std::to_string(remaining/60)+"m "+std::to_string(remaining%60)+"s";
+            }else if(inspection.fresh&&!inspection.active)detail+="; no unverified observed activity";
+        }
     };
     std::set<std::string> guilds;
     for(const auto& a:accounts){
@@ -988,15 +1015,23 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
             continue;
         }
         for(const auto* dataset:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box"})
-            if(scope=="Items"||scope==dataset)mark(a,dataset);
+            if(MatchesStorageView(scope,characters,dataset,{}))mark(a,dataset);
         if(scope=="Items"||scope=="Bags"||scope=="Equipment"){
-            mark(a,"Roster");auto roster=v->inventory.rosters.find(a.id);
-            if(roster!=v->inventory.rosters.end())for(const auto* dataset:{"Bags","Equipment"}){
+            auto roster=v->inventory.rosters.find(a.id);
+            // Roster is a prerequisite, not a bag/equipment retrieval.
+            if(roster==v->inventory.rosters.end()){
+                mark(a,"Roster");missing=true;continue;
+            }
+            for(const auto* dataset:{"Bags","Equipment"}){
                 if(scope!="Items"&&scope!=dataset)continue;
                 RefreshProgress::Counts group;
-                for(const auto& ch:roster->second)mark(a,dataset,ch,&group);
-                if(!detail.empty())detail+="\n";
-                detail+=(accounts.size()>1?Display(a)+" / ":"")+dataset+": "+group.Summary();
+                for(const auto& ch:roster->second)
+                    if(MatchesStorageView(scope,characters,dataset,ch))
+                        mark(a,dataset,ch,characterFiltered?nullptr:&group);
+                if(!characterFiltered){
+                    if(!detail.empty())detail+="\n";
+                    detail+=(accounts.size()>1?Display(a)+" / ":"")+dataset+": "+group.Summary();
+                }
             }
         }
     }
@@ -1013,8 +1048,10 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     else if(failed)state=RefreshUI::State::Error;
     else if(missing||stale||!count)state=RefreshUI::State::Waiting;
     const char* idleLabel=state==RefreshUI::State::Waiting?(missing||!count?"Not retrieved":"Stale data"):nullptr;
+    if(!count&&characterFiltered)detail="No verified storage scopes match the selected characters and storage filter.";
+    if(characterFiltered&&count)detail+="\n\nTimestamp covers matching storage only. Manual Refresh retains the selected storage scope across the account.";
     if(accounts.empty())detail="Link or select an account.";
-    if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty(),nullptr,idleLabel))
+    if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty(),nullptr,idleLabel,true))
         Refresh(accounts,scope);
 }
 
