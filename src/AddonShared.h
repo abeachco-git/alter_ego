@@ -5,6 +5,7 @@
 #include <string>
 #include <functional>
 #include <cstdint>
+#include <set>
 #include "nexus/Nexus.h"
 #include "imgui.h"
 #include "UIControls.h"
@@ -61,6 +62,11 @@ void RenderEmptyCard(Texture_t* iconTex,
 
 // Inline animated loading spinner: rotating arc + label.
 void RenderSpinner(const char* label, ImVec4 color = ImVec4(0.7f, 0.85f, 0.95f, 1.0f));
+
+// Character filter shares Compare's profession rows; empty means All.
+// Names are limited to the caller's verified roster; unknown class stays selectable.
+bool RenderCharacterMultiFilter(const char* label, std::set<std::string>& selected,
+                                const std::set<std::string>& names);
 
 // Common item presentation and actions, shared by Skinventory and native Inventory.
 ImVec4 GetSkinRarityColor(const std::string& rarity);

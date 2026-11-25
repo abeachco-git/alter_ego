@@ -689,26 +689,28 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     UI::SearchToolbar("native_inventory","Search items or ID",query,
         [&]{
             UI::FilterChips c;
+            AddFacetChips(c,"character",characterFilter);
             if(!scope.empty())c.push_back({"scope",scope,[&]{scope.clear();}});
             AddFacetChips(c,"binding",binding);AddFacetChips(c,"rarity",rarity);
-            AddFacetChips(c,"type",type);AddFacetChips(c,"character",characterFilter);
+            AddFacetChips(c,"type",type);
             if(freshness)c.push_back({"freshness",freshness==1?"Fresh":"Stale / failed",[&]{freshness=0;}});
             if(minQuantity)c.push_back({"quantity","Min "+std::to_string(minQuantity),[&]{minQuantity=0;}});
             if(transfer)c.push_back({"transfer","Potentially transferable",[&]{transfer=0;}});
             return c;
         },
         [&]{
-            UI::FilterChoice("Storage",scope,{"Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"});
-            UI::MultiFilterChoice("Binding",binding,Choices({"Unknown","Unbound","Account bound","Character bound"}));
-            UI::MultiFilterChoice("Rarity",rarity,{{"Junk","Junk"},{"Basic","Basic"},{"Fine","Fine"},{"Masterwork","Masterwork"},{"Rare","Rare"},{"Exotic","Exotic"},{"Ascended","Ascended"},{"Legendary","Legendary"}});
-            std::set<std::string> types=type,names=characterFilter;
-            for(const auto& r:v->inventory.rows)if(allowed(r.slot.account)&&!r.type.empty())types.insert(r.type);
+            std::set<std::string> names=characterFilter;
             for(const auto& a:accounts){
                 auto it=v->inventory.rosters.find(a.id);
                 if(it!=v->inventory.rosters.end())names.insert(it->second.begin(),it->second.end());
             }
+            RenderCharacterMultiFilter("Character",characterFilter,names);
+            UI::FilterChoice("Storage",scope,{"Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"});
+            UI::MultiFilterChoice("Binding",binding,Choices({"Unknown","Unbound","Account bound","Character bound"}));
+            UI::MultiFilterChoice("Rarity",rarity,{{"Junk","Junk"},{"Basic","Basic"},{"Fine","Fine"},{"Masterwork","Masterwork"},{"Rare","Rare"},{"Exotic","Exotic"},{"Ascended","Ascended"},{"Legendary","Legendary"}});
+            std::set<std::string> types=type;
+            for(const auto& r:v->inventory.rows)if(allowed(r.slot.account)&&!r.type.empty())types.insert(r.type);
             UI::MultiFilterChoice("Type",type,Choices(types));
-            UI::MultiFilterChoice("Character",characterFilter,Choices(names));
             const char* freshOptions[]={"All","Fresh","Stale / failed"};
             UI::FilterChoice("Freshness",freshness,freshOptions,3);
             UI::FilterInt("Min quantity",minQuantity);if(minQuantity<0)minQuantity=0;
@@ -718,20 +720,6 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;});
     if(query!=previousQuery)nav.item=0;
     const char* sorts[]={"Name","Quantity"};ImGui::SetNextItemWidth(120);UI::Combo("##inventory_sort",&sort,sorts,2);
-    if(ImGui::TreeNode("Storage status")){
-        for(const auto& a:accounts){
-            for(const auto* storage:{"Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"}){
-                bool found=false;
-                for(const auto& state:v->inventory.states)if(state.account==a.id&&state.scope==storage){
-                    found=true;std::string name=(multi&&all?Display(a)+" / ":"")+state.scope;
-                    if(!state.character.empty())name+=" / "+state.character;
-                    ImGui::Text("%s: %s%s",name.c_str(),state.status.c_str(),state.success&&Now()-state.success>=FreshSeconds(state.scope)?" (stale)":"");
-                }
-                if(!found)ImGui::Text("%s%s: Not retrieved",multi&&all?(Display(a)+" / ").c_str():"",storage);
-            }
-        }
-        ImGui::TreePop();
-    }
     // Cache the filtered aggregate: rebuild only on a new projection or changed controls.
     struct Group{uint32_t id;int64_t count=0;std::string name;std::vector<const Row*> locations;};
     static std::shared_ptr<const View> previous;static std::string prevKey;static std::vector<Group> groups;
@@ -752,7 +740,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         std::sort(groups.begin(),groups.end(),[&](const Group& a,const Group& b){if(sort==1&&a.count!=b.count)return a.count>b.count;return a.name==b.name?a.id<b.id:a.name<b.name;});
     }
     ImGui::Text("%zu matching items",groups.size());ImGui::Separator();
-    if(groups.empty())ImGui::TextDisabled("%s",busy.load()?"Refreshing inventory; verified items will appear as available.":"No matching cached items. Check storage status to see which scopes have been retrieved.");
+    if(groups.empty())ImGui::TextDisabled("%s",busy.load()?"Refreshing inventory; verified items will appear as available.":"No matching cached items. Hover the refresh status for retrieval details.");
     for(const auto& group:groups){
         ImGui::PushID(static_cast<int>(group.id));
         const std::string name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;

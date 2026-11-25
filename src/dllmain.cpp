@@ -7128,10 +7128,7 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
                          itemMin.y + (itemHeight - iconSize) * 0.5f);
     const ImVec2 iconMax(iconMin.x + iconSize, iconMin.y + iconSize);
     const uint32_t iconId = GetProfessionIconId(profession);
-    const char* iconUrl = GetProfessionIconUrl(profession);
-    if (iconId && !iconUrl) {
-        AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
-    }
+    // Fixed class artwork is embedded. Opening a picker must not fetch metadata.
     if (iconId) {
         Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
         if (tex && tex->Resource) {
@@ -7139,9 +7136,9 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
             return;
         }
         // The DLL image and disk cache both work without metadata.
-        AlterEgo::IconManager::RequestIcon(iconId, iconUrl ? iconUrl : "");
+        AlterEgo::IconManager::RequestIcon(iconId, "");
     }
-    // Keep a readable fallback while profession artwork is still downloading.
+    // Keep a readable fallback if the embedded texture is not yet available.
     if (!profession.empty()) {
         const std::string initial = profession.substr(0, 1);
         dl->AddText(ImVec2(iconMin.x + 3.0f,
@@ -7153,7 +7150,7 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
 
 // Use the same icon and profession color for Characters, Compare and the New
 // Build profession choices. Optional prefixes stay neutral.
-static void DrawCompareProfessionCharacterEntry(ImDrawList* draw,
+static void DrawProfessionCharacterEntry(ImDrawList* draw,
     ImVec2 min, ImVec2 max, const std::string& profession,
     const std::string& name, const char* prefix = nullptr,
     bool preview = false) {
@@ -7170,6 +7167,68 @@ static void DrawCompareProfessionCharacterEntry(ImDrawList* draw,
     }
     DrawProfessionCharacterName(draw, ImVec2(x,y), name, profession);
     draw->PopClipRect();
+}
+
+// Shared selectable row for single-target and multi-target character pickers.
+// Keep the native ImGui control responsible for selection, hover and keyboard focus.
+static bool SelectProfessionCharacterEntry(const char* id, bool selected,
+    const std::string& profession, const std::string& name,
+    const char* prefix = nullptr, ImGuiSelectableFlags flags = ImGuiSelectableFlags_None) {
+    const ImVec2 size(0.0f, ImMax(24.0f, ImGui::GetTextLineHeightWithSpacing()+3.0f));
+    const bool clicked=ImGui::Selectable(id,selected,flags,size);
+    DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),
+        ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),profession,name,prefix);
+    return clicked;
+}
+
+bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selected,
+                                const std::set<std::string>& names) {
+    using namespace AlterEgo;
+    ImGui::PushID(label);
+    UI::FilterFieldLabel(label);
+    const auto chars=GW2API::GetCharacters();
+    std::map<std::string,std::string> professions;
+    std::vector<std::string> order;
+    std::set<std::string> remaining=names;
+    // Reuse the Characters/Compare order when available and append roster-only
+    // names so inventory remains filterable before detailed character retrieval.
+    auto add=[&](const Character& c){
+        if(names.count(c.name)&&!c.profession.empty())professions[c.name]=c.profession;
+        if(remaining.erase(c.name))order.push_back(c.name);
+    };
+    for(int idx:g_CharDisplayOrder)
+        if(idx>=0&&static_cast<size_t>(idx)<chars->size())add((*chars)[idx]);
+    for(const auto& c:*chars)add(c);
+    order.insert(order.end(),remaining.begin(),remaining.end());
+    const bool single=selected.size()==1;
+    const auto preview=selected.empty()?std::string("All"):
+        single?*selected.begin():std::to_string(selected.size())+" selected";
+    const auto profession=single&&professions.count(preview)?professions.at(preview):std::string{};
+    const bool decorated=!profession.empty();
+    const auto pos=ImGui::GetCursorScreenPos();
+    const float width=UI::FilterFieldWidth(),height=ImGui::GetFrameHeight();
+    auto* draw=ImGui::GetWindowDrawList();
+    bool changed=false;
+    if(UI::BeginCombo("##value",decorated?"":preview.c_str(),0,width)){
+        if(ImGui::Selectable("All",selected.empty(),ImGuiSelectableFlags_DontClosePopups)&&!selected.empty()){
+            selected.clear();changed=true;
+        }
+        for(const auto& name:order){
+            ImGui::PushID(name.c_str());
+            const bool on=selected.count(name)!=0;
+            const auto it=professions.find(name);
+            if(SelectProfessionCharacterEntry("##character",on,it==professions.end()?std::string{}:it->second,
+                name,nullptr,ImGuiSelectableFlags_DontClosePopups)){
+                if(on)selected.erase(name);else selected.insert(name);
+                changed=true;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    if(decorated)DrawProfessionCharacterEntry(draw,pos,ImVec2(pos.x+width,pos.y+height),profession,preview,nullptr,true);
+    ImGui::PopID();
+    return changed;
 }
 
 // "+ New Build" dialog: pick a profession + game mode, create a blank build,
@@ -7201,7 +7260,7 @@ static void RenderNewBuildDialog() {
                 const float width = ImGui::GetContentRegionAvail().x;
                 const bool clicked = RenderActionButton("##newProfession",
                     ImVec2(width, ImMax(32.0f, ImGui::GetFrameHeight())));
-                DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
+                DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),
                     ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
                     profession, profession);
                 if (clicked) {
@@ -11389,12 +11448,8 @@ static void RenderCompareTab() {
             const AlterEgo::Character* autoCharacter = character;
             for (const auto* ch : compareMatches)
                 if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
-            const ImVec2 rowSize(0.0f, ImMax(24.0f, ImGui::GetTextLineHeightWithSpacing()+3.0f));
-            const bool autoClicked = ImGui::Selectable("##compareAutoCharacter",
-                g_LibCompareChar.empty(), ImGuiSelectableFlags_None, rowSize);
-            DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
-                ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                autoCharacter->profession, autoCharacter->name, autoPrefix);
+            const bool autoClicked = SelectProfessionCharacterEntry("##compareAutoCharacter",
+                g_LibCompareChar.empty(),autoCharacter->profession,autoCharacter->name,autoPrefix);
             if (autoClicked) {
                 MarkNavigation();g_LibCompareChar.clear();
                 g_LibCompareSavedManual = false;
@@ -11402,11 +11457,8 @@ static void RenderCompareTab() {
             for (const auto* ch : compareMatches) {
                 ImGui::PushID(ch->name.c_str());
                 const bool selected = ch->name == g_LibCompareChar;
-                const bool clicked = ImGui::Selectable("##compareCharacterEntry",
-                    selected, ImGuiSelectableFlags_None, rowSize);
-                DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
-                    ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                    ch->profession, ch->name);
+                const bool clicked = SelectProfessionCharacterEntry("##compareCharacterEntry",
+                    selected,ch->profession,ch->name);
                 if (clicked) {
                     MarkNavigation();g_LibCompareChar = ch->name;
                     g_LibCompareSavedManual = false;
@@ -11418,7 +11470,7 @@ static void RenderCompareTab() {
             }
             ImGui::EndCombo();
         }
-        DrawCompareProfessionCharacterEntry(previewDraw, previewMin,
+        DrawProfessionCharacterEntry(previewDraw, previewMin,
             ImVec2(previewMin.x+previewWidth, previewMin.y+previewHeight),
             character->profession, character->name,
             g_LibCompareChar.empty() ? autoPrefix : nullptr, true);
