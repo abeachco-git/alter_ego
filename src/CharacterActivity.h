@@ -10,6 +10,7 @@ using Key=std::pair<std::string,std::string>;
 struct Scope {
     int64_t success=0,attempt=0,covered=0,specCovered=0;
     uint64_t attemptSerial=0; // local only; distinct even within the same second
+    std::string error; // session-local, never persisted
 };
 struct Entry {
     int64_t lastSeen=0,login=0,specChanged=0;
@@ -17,6 +18,9 @@ struct Entry {
     std::map<std::string,Scope> scopes;
 };
 struct Ticket {int64_t started=0,seen=0,login=0,specChanged=0;bool active=false;int64_t verificationStarted=0;uint64_t serial=0;};
+enum class WaitReason { Current, Due, LoginGrace, ActiveInterval, Stagger, LogoutGrace, SpecDebounce, Retry };
+struct Eligibility { WaitReason reason=WaitReason::Current; int64_t at=0; bool due=false; };
+struct Inspection { bool active=false, fresh=false; int64_t login=0,lastSeen=0,attempt=0; Eligibility eligibility; std::string error; };
 class Tracker {
     std::map<Key,Entry> rows_;
     Key active_;
@@ -85,36 +89,66 @@ public:
         }
         return e.lastSeen<=Covered(e,s,success);
     }
-    bool Due(const Key& k,const std::string& scope,int64_t success,int64_t externalAttempt,int64_t now,
-             bool specSignal=true,bool manual=false)const{
-        if(manual)return true;
+    Eligibility Eligible(const Key& k,const std::string& scope,int64_t success,int64_t externalAttempt,int64_t now,
+                         bool specSignal=true)const{
         auto i=rows_.find(k);const Entry empty{};const auto& e=i==rows_.end()?empty:i->second;
         auto it=e.scopes.find(scope);const Scope s=it==e.scopes.end()?Scope{}:it->second;
         const auto attempt=std::max(externalAttempt,s.attempt);
-        if(attempt>0&&attempt<=now&&attempt>=success&&now-attempt<RefreshEngine::FailureSeconds)return false;
+        Eligibility result;
         if(Active(k)){
-            const bool changed=specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
-            if(changed&&now-e.specChanged>=8&&(s.success<e.specChanged||now-s.success>=RefreshEngine::CharacterSeconds))return true;
+            const bool missing=success<=0||success>now;
             const auto interval=k.second.empty()?RefreshEngine::BrowseSeconds:RefreshEngine::CharacterSeconds;
-            if(success<=0||success>now){
-                // First-time character demand is still subject to the login
-                // propagation window. Explicit manual requests bypass it.
-                // Account-level storage has its own initial-load behavior.
-                return k.second.empty()||now-e.login>=interval;
+            const auto base=missing?e.login:std::max(e.login,success);
+            const auto normalAt=missing&&k.second.empty()?now:base+interval+
+                (missing?0:RefreshEngine::Offset(k.first+"/"+k.second+"/"+scope));
+            result={missing||base==e.login?WaitReason::LoginGrace:WaitReason::ActiveInterval,normalAt,now>=normalAt};
+            if(!missing&&now>=base+interval&&now<normalAt)result.reason=WaitReason::Stagger;
+            const bool changed=specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
+            if(changed){
+                const auto specAt=std::max(e.specChanged+8,s.success<e.specChanged?int64_t(0):s.success+RefreshEngine::CharacterSeconds);
+                if(specAt<normalAt)result={WaitReason::SpecDebounce,specAt,now>=specAt};
             }
-            return now-std::max(e.login,success)>=interval+RefreshEngine::Offset(k.first+"/"+k.second+"/"+scope);
+        }else if(success<=0||success>now||e.lastSeen>Covered(e,s,success)){
+            const auto at=e.lastSeen>0?e.lastSeen+RefreshEngine::LogoutGraceSeconds:now;
+            result={WaitReason::LogoutGrace,at,now>=at};
         }
-        if(!RefreshEngine::LogoutReady(e.lastSeen,now))return false;
-        return success<=0||success>now||e.lastSeen>Covered(e,s,success);
+        if(result.reason==WaitReason::Current)return result;
+        if(attempt>0&&attempt<=now&&attempt>=success&&now-attempt<RefreshEngine::FailureSeconds){
+            const auto retryAt=attempt+RefreshEngine::FailureSeconds;
+            if(retryAt>=result.at)return {WaitReason::Retry,retryAt,false};
+            // A longer propagation or activity interval remains the binding constraint.
+            result.due=false;
+        }
+        if(result.due)result.reason=WaitReason::Due;
+        return result;
+    }
+    bool Due(const Key& k,const std::string& scope,int64_t success,int64_t externalAttempt,int64_t now,
+             bool specSignal=true,bool manual=false)const{
+        return manual||Eligible(k,scope,success,externalAttempt,now,specSignal).due;
+    }
+    Inspection Inspect(const Key& k,const std::string& scope,int64_t success,int64_t now,bool specSignal=true)const{
+        Inspection out;out.active=Active(k);out.fresh=Fresh(k,scope,success,now,specSignal);
+        out.eligibility=Eligible(k,scope,success,0,now,specSignal);
+        auto i=rows_.find(k);if(i!=rows_.end()){
+            out.login=i->second.login;out.lastSeen=i->second.lastSeen;
+            auto s=i->second.scopes.find(scope);
+            if(s!=i->second.scopes.end()){out.attempt=s->second.attempt;out.error=s->second.error;}
+        }
+        return out;
+    }
+    void Failure(const Key& k,const std::string& scope,const Ticket& t,const std::string& message){
+        auto row=rows_.find(k);if(row==rows_.end())return;
+        auto it=row->second.scopes.find(scope);if(it==row->second.scopes.end())return;
+        if(it->second.attemptSerial==t.serial&&it->second.attempt==t.started)it->second.error=message;
     }
     Ticket Begin(const Key& k,const std::string& scope,int64_t now){
-        auto& e=rows_[k];auto& s=e.scopes[scope];s.attempt=now;s.attemptSerial=++nextTicket_;Dirty();
+        auto& e=rows_[k];auto& s=e.scopes[scope];s.attempt=now;s.attemptSerial=++nextTicket_;s.error.clear();Dirty();
         return {now,e.lastSeen,e.login,e.specChanged,Active(k),0,s.attemptSerial};
     }
     void Success(const Key& k,const std::string& scope,const Ticket& t,int64_t success,bool specVerified=true){
         auto& e=rows_[k];auto& s=e.scopes[scope];
         if(s.success>success||s.attempt>t.started||s.attemptSerial!=t.serial)return;
-        s.success=success;s.attempt=0;s.attemptSerial=0;
+        s.success=success;s.attempt=0;s.attemptSerial=0;s.error.clear();
         const auto verifiedStart=t.verificationStarted>0?std::min(t.started,t.verificationStarted):t.started;
         // Only an offline, post-grace request that did not overlap newer
         // activity covers the logout. Early manual pulls remain useful but dirty.
@@ -129,7 +163,7 @@ public:
         // Only the owning attempt may clear its own cooldown. Never undo
         // verified success or the coverage watermark.
         if(it->second.attempt==t.started&&it->second.attemptSerial==t.serial){
-            it->second.attempt=0;it->second.attemptSerial=0;Dirty();
+            it->second.attempt=0;it->second.attemptSerial=0;it->second.error.clear();Dirty();
         }
     }
     bool DirtyState()const{return dirty_;}
