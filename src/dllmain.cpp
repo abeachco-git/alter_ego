@@ -48,6 +48,7 @@
 #include "OwnedSkins.h"
 #include "Commerce.h"
 #include "PublicCatalog.h"
+#include "WikiEventRuntime.h"
 #include "SkinSearchCore.h"
 #include "SkinFilters.h"
 #include "LibraryModeFilter.h"
@@ -12393,6 +12394,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::GW2API::LoadItemNameCache();
     AlterEgo::GW2API::LoadReferenceCaches();
     AlterEgo::PublicCatalog::Load(AlterEgo::GW2API::GetDataDirectory());
+    AlterEgo::WikiEvents::Load(AlterEgo::GW2API::GetDataDirectory());
     if(!AlterEgo::PublicCatalog::Get()->upgrades)SeedItemNameCache();
     LoadLoginTimestamps();
     LoadCharSortConfig();
@@ -12500,6 +12502,7 @@ void AddonLoad(AddonAPI_t* aApi) {
         Skinventory::Commerce::LoadPriceCache();
         Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
         AlterEgo::PublicCatalog::RefreshVault(dataDir,false);
+        AlterEgo::WikiEvents::Refresh(dataDir);
 
         // Ping native API so Skinventory's OwnedSkins receives the pong
         // (must be after Initialize which subscribes to EV_HOARD_PONG)
@@ -17610,6 +17613,7 @@ void AddonOptions() {
             AlterEgo::GW2API::FetchDyeColorsAsync();
             Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
             AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
+                    AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
             if ((!g_AchPinned.empty() || g_AchSelectedCatId > 0) &&
                 g_AchRetryAtMs.load() == 0) {
                 g_AchRetryAutomatic = true;
@@ -17649,6 +17653,7 @@ void AddonOptions() {
                     AlterEgo::GW2API::FetchDyeColorsAsync();
                     Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
                     AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
+                    AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
                 }
                 if(!included&&dataset==Dataset::Characters)g_AutoRefreshTracker.CancelPending();
                 if(!included&&dataset==Dataset::SkinOwnership)g_SkinRefreshOwned=false;
@@ -17689,6 +17694,15 @@ void AddonOptions() {
     referenceAction("Refresh dyes","public_dyes",[]{AlterEgo::GW2API::FetchDyeColorsAsync(true);});
     referenceAction("Refresh ranger pets","public_pets",[]{AlterEgo::PublicCatalog::RefreshPets(AlterEgo::GW2API::GetDataDirectory(),true);});
     referenceAction("Refresh revenant legends","public_legends",[]{AlterEgo::PublicCatalog::RefreshLegends(AlterEgo::GW2API::GetDataDirectory(),true);});
+    ImGui::Spacing();
+    RenderSectionHeader("Wiki reference schedules", AlterEgo::UI::SectionGold);
+    ImGui::TextDisabled("Build assets: 24 hours. Runtime event timers: 30 days; retry: 24h.");
+    const auto wikiTimers=AlterEgo::WikiEvents::Get();
+    ImGui::Text("Event timer phases: %zu (%s)",wikiTimers->timers.size(),wikiTimers->embedded?"embedded baseline":"runtime cache");
+    ImGui::TextDisabled("Last verified: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-wikiTimers->verified)/86400));
+    if(RenderActionButton("Refresh Wiki event timers")) AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory(),true);
+    const auto wikiStatus=AlterEgo::WikiEvents::Status();
+    if(!wikiStatus.empty())ImGui::TextDisabled("%s",wikiStatus.c_str());
     ImGui::Spacing();
     RenderSectionHeader("UI Settings", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Show Quick Access icon", &g_ShowQAIcon)) {

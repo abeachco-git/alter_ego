@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "build_interval_days": 30,
+  "build_interval_days": 1,
   "resources": {
     "raid_bounties": {
       "enabled": true,
@@ -19,7 +19,9 @@
     "event_timers": {
       "enabled": true,
       "source": "Widget:Event timer/data.json",
-      "format": "JSON in MediaWiki wikitext, direct raw JSON fallback"
+      "format": "JSON in MediaWiki wikitext, direct raw JSON fallback",
+      "runtime_interval_days": 30,
+      "runtime_enabled": true
     },
     "skin_acquisition": {
       "enabled": false,
@@ -48,6 +50,8 @@
     "special_events_hours": 6,
     "arena_new_items_skins_vault_days": 7,
     "arena_stable_definitions_days": 30,
-    "wiki_skin_currency_on_demand_days": 30
+    "wiki_skin_currency_on_demand_days": 30,
+    "wiki_event_timers_days": 30,
+    "failed_reference_retry_hours": 24
   }
 }

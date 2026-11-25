@@ -1,4 +1,5 @@
 #include "../src/PublicCatalogCache.h"
+#include "../src/WikiEventCache.h"
 #include "../src/WikiMetadataCache.h"
 #include "../src/Database.h"
 #include "../src/CacheDatabase.h"
@@ -46,6 +47,32 @@ void Upgrade(DB::Connection& db, int version) {
 }
 
 int case_database_core(int, char**) {
+    {
+        namespace W=AlterEgo::WikiEvents;
+        Scratch scratch;
+        DB::Connection db(scratch.path("wiki-events.db"),DB::Connection::OpenMode::Create);
+        AlterEgo::Cache::Initialize(db);
+        auto first=W::LoadBest(db);
+        assert(first.embedded&&first.verified==W::EmbeddedVerifiedAt&&first.timers==W::Embedded().timers);
+        auto older=first;older.verified--;older.embedded=false;
+        assert(W::Select(first,older).embedded);
+        auto newer=first;newer.verified++;newer.embedded=false;
+        newer.timers.at("Kaineng Blackout")[0]=1;
+        W::Validate(newer.timers);
+        {DB::Transaction tx(db);W::Store(db,newer);tx.Commit();}
+        assert(!W::LoadBest(db).embedded&&W::LoadBest(db).timers==newer.timers);
+        AlterEgo::PublicCatalog::Mark(db,W::AttemptDataset,newer.verified+10);
+        auto cached=W::LoadBest(db);
+        assert(cached.verified==newer.verified&&cached.attempt==newer.verified+10);
+        assert(!W::Due(cached,newer.verified+29*86400LL,false));
+        assert(W::Due(cached,newer.verified+30*86400LL,false));
+        assert(W::Due(cached,newer.verified+10,true));
+        auto broken=newer;broken.verified++;broken.timers.erase("Kaineng Blackout");
+        bool failed=false;try{DB::Transaction tx(db);W::Store(db,broken);tx.Commit();}catch(...){failed=true;}
+        assert(failed&&W::Read(db).timers==newer.timers&&W::Read(db).verified==newer.verified);
+        failed=false;try{DB::Transaction tx(db);W::Store(db,older);tx.Commit();}catch(...){failed=true;}
+        assert(failed&&W::Read(db).timers==newer.timers);
+    }
     {
     using namespace AlterEgo::PublicCatalog;
     assert(Due(0,0,100,false));

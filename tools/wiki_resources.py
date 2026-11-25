@@ -338,6 +338,13 @@ def generate(obj, out):
     write(out/"WikiFractalSets.inc","\n".join(lines)+"\n")
     write(out/"WikiFractalScales.inc","\n".join("    "+q(x)+"," for x in fractals["scales"])+"\n")
     write(out/"WikiEventTimers.inc","\n".join("    {"+q(label)+",{"+",".join(map(str,starts))+"}}," for label,starts in sorted(d["event_timers"]["data"].items()))+"\n")
+    policy=json.loads(MANIFEST.read_text())
+    write(out/"WikiEventMetadata.inc",
+          "inline constexpr int64_t EmbeddedVerifiedAt = "+str(d["event_timers"]["last_success"])+";\n"
+          +"inline constexpr int RuntimeDays = "+str(policy["resources"]["event_timers"]["runtime_interval_days"])+";\n"
+          +"inline constexpr Phase Phases[] = {\n"
+          +"\n".join("    {"+",".join(map(q,phase))+"}," for phase in EVENT_PHASES)
+          +"\n};\n")
 
 def probe():
     # One bounded sample per unverified source; no full crawl or promotion.

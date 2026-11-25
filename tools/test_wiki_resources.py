@@ -14,6 +14,10 @@ class Resources(unittest.TestCase):
         self.assertTrue(w.due({"last_attempt":0},1,30))
         self.assertFalse(w.due({"last_attempt":100},100+29*w.DAY,30))
         self.assertTrue(w.due({"last_attempt":100},100+30*w.DAY,30))
+        self.assertFalse(w.due({"last_attempt":100},100+w.DAY-1,1))
+        self.assertTrue(w.due({"last_attempt":100},100+w.DAY,1))
+        import json
+        self.assertEqual(json.loads(w.MANIFEST.read_text())["build_interval_days"],1)
     def test_tables(self):
         raw="<table>"+"".join("<tr><td>%d</td><td>A</td><td>B</td><td>C</td></tr>"%i for i in range(1,16))+"</table>"
         self.assertEqual(len(w.parse_daily(raw)),15)

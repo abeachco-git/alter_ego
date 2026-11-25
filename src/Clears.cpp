@@ -40,6 +40,7 @@
 #include "RefreshUI.h"
 #include "WikiImage.h"
 #include "VaultAssistance.h"
+#include "WikiEventRuntime.h"
 #include "PublicCatalog.h"
 #include "StoragePaths.h"
 #include "CompletionCache.h"
@@ -3443,6 +3444,7 @@ void RenderClearsStatusRow() {
 // have already run. Navigation itself is the trigger; manual Refresh
 // intentionally continues to force a full request.
 void RefreshVaultOnEntry() {
+    AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
     if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)) return;
     if (g_VaultNeedRequery || g_VaultFetching.load()) return;
     bool stale = false;

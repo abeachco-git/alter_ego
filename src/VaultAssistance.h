@@ -9,16 +9,9 @@
 #include <string>
 #include <vector>
 #include <utility>
-#include <map>
+#include "WikiEventCore.h"
 
 namespace AlterEgo { namespace VaultAssist {
-inline const std::vector<int>* WikiStarts(const std::string& label) {
-    static const std::map<std::string,std::vector<int>> starts = {
-#include "WikiEventTimers.inc"
-    };
-    const auto it=starts.find(label);
-    return it==starts.end()?nullptr:&it->second;
-}
 struct Destination {
     std::string label, map, link, note;
     int offset = -1, period = 0;
@@ -27,7 +20,9 @@ struct Destination {
                 int o = -1, int p = 0, std::vector<int> s = {})
         : label(std::move(l)), map(std::move(m)), link(std::move(wp)),
           note(std::move(n)), offset(o), period(p), starts(std::move(s)) {
-        if (const auto* verified=WikiStarts(label)) { starts=*verified; offset=-1; period=0; }
+        const auto snapshot=WikiEvents::Get();
+        const auto it=snapshot->timers.find(label);
+        if(it!=snapshot->timers.end()){starts=it->second;offset=-1;period=0;}
     }
 };
 using Options = std::vector<Destination>;

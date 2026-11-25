@@ -100,6 +100,7 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                 {"Characters","SELECT count(*) FROM character_rows",nullptr},
                 {"Clears entries","SELECT count(*) FROM clears_entries",nullptr},
                 {"Vault objectives","SELECT count(*) FROM vault_objectives",nullptr},
+                {"Wiki event timer starts","SELECT count(*) FROM wiki_event_starts","wiki_event_timers"},
                 {"Wiki acquisition metadata","SELECT count(*) FROM wiki_skin_metadata",nullptr},
                 {"Wiki skin failures","SELECT count(*) FROM wiki_skin_failures",nullptr},
                 {"Wiki currency failures","SELECT count(*) FROM wiki_currency_failures",nullptr}

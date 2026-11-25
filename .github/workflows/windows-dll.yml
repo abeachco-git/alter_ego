@@ -120,7 +120,7 @@ jobs:
           key: ae-wiki-v2-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             ae-wiki-v2-${{ github.ref_name }}-
-      - name: Refresh monthly Wiki resources
+      - name: Refresh daily-eligible Wiki build resources
         run: |
           mkdir -p .wiki-reference-state
           args=""
