@@ -224,6 +224,37 @@ inline bool MultiFilterChoice(const char* label,std::set<std::string>& selected,
     ImGui::PopID();
     return changed;
 }
+// Decorative group dividers in the gaps between central tabs. Draw after
+// submitting all tabs (the layout is current), without adding any ImGui item,
+// hit target, selection, keyboard stop or width to the tab bar.
+inline void TabGroupDividerBefore(const ImGuiTabBar* bar,ImGuiID following){
+    if(!bar||!following)return;
+    for(int i=1;i<bar->Tabs.Size;++i){
+        const auto& next=bar->Tabs[i];
+        const auto& prev=bar->Tabs[i-1];
+        if(next.ID!=following)continue;
+        if(next.LastFrameVisible!=ImGui::GetFrameCount()||
+           prev.LastFrameVisible!=ImGui::GetFrameCount())return;
+        // Both main-tab groups use the central section. Respect the real gap
+        // and clipping rectangle from the vendored ImGui 1.80 tab layout.
+        const float left=bar->BarRect.Min.x+IM_FLOOR(prev.Offset-bar->ScrollingAnim)+prev.Width;
+        const float right=bar->BarRect.Min.x+IM_FLOOR(next.Offset-bar->ScrollingAnim);
+        if(right-left<2.f)return;
+        const float x=IM_FLOOR((left+right)*.5f)+.5f;
+        const float y=bar->BarRect.Min.y;
+        const float h=bar->BarRect.GetHeight();
+        if(x<bar->ScrollingRectMinX+1.f||x>bar->ScrollingRectMaxX-1.f||h<=0.f)return;
+        auto* draw=ImGui::GetWindowDrawList();
+        draw->PushClipRect(ImVec2(bar->ScrollingRectMinX,y),
+                           ImVec2(bar->ScrollingRectMaxX,y+h),true);
+        auto color=ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+        color.w*=.58f;
+        draw->AddLine(ImVec2(x,y+h*.15f),ImVec2(x,y+h*.85f),
+                      ImGui::GetColorU32(color),1.f);
+        draw->PopClipRect();
+        return;
+    }
+}
 // Splitter owns both SameLine calls. Capture before drawing the left child.
 // Persist only explicit drag/reset, not temporary clamping on window resize.
 struct SplitPanel {

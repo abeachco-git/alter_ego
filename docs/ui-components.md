@@ -147,3 +147,5 @@ Inventory Items and Skinventory list view share CatalogPresentation.h (fixed row
 Wallet rows share CatalogRowBackground with Items/Skinventory. FavoriteBox is a fixed-size outlined square, empty or gold asterisk, with one stable control ID and add/remove tooltip; favorites stay pinned and saved in settings. Wallet retrieval status is only in the shared footer and its per-account tooltip, not an inline Ready label. No rarity stripe for currencies (no rarity data).
 
 Main tab display order: Characters, Library, Compare, Inventory, Skinventory, Vault, Clears, Achievements. Inventory stays available in All Accounts mode; existing internal page IDs are independent of visual order.
+
+Main tabs use UI::TabGroupDividerBefore for purely decorative, muted one-pixel separators before Inventory and Vault. Draw in the existing central-tab gap after all tabs have been submitted; do not create spacer tabs, hit targets or navigation IDs. Respect the actual tab-bar clip rectangle and skip missing/stale layout entries. No extra width or label, and the All Accounts Vault button uses its own ID.

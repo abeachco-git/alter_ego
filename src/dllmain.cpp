@@ -17543,6 +17543,12 @@ void AddonRender() {
             }
         }
 
+        // Group boundaries are drawn in existing tab gaps, never as tabs.
+        // The Vault ID differs in All Accounts mode (nonselecting tab button).
+        const ImGuiID vaultGroupId=ImGui::GetID(acctTabsDisabled?"Vault":"Vault    ##ae_vault_dropdown");
+        AlterEgo::UI::TabGroupDividerBefore(GImGui->CurrentTabBar,inventoryId);
+        AlterEgo::UI::TabGroupDividerBefore(GImGui->CurrentTabBar,vaultGroupId);
+
         // ImGui restores the last selected main tab across sessions. Track
         // actual navigation instead of comparing against the saved tab ID.
         // Trigger after rendering so reset and account-switch checks run first.

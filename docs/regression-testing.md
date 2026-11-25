@@ -130,3 +130,5 @@ Inventory filter smoke test: confirm no Storage status tree, Character is the fi
 Tools smoke test: select characters with different gathering/fishing/Jade Bot items, verify names, icons, right-click Find in Inventory, known glyphs vs Unknown, charges including zero, and unchanged utility rows when switching Equipment templates. Check Back/Forward between Tools and Equipment; restart to verify cache round-trip. The database regression covers absent, zero and positive charges plus utility slot selection priority.
 
 Wallet visual smoke: empty favorite box and gold asterisk use identical size, toggling persists and pins/unpins currency, alternating row shading remains after filtering/sorting, coin display and descriptions remain intact. No duplicate Ready/stale label in the list; footer reports missing, failed and stale per account.
+
+Main tab grouping visual smoke: verify the muted dividers before Inventory and Vault with either adjacent tab selected, All Accounts disabled tabs, and a narrow/scrolling tab bar. Dividers must not be clickable, selectable or affect dropdown hit targets.
