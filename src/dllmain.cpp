@@ -8012,7 +8012,7 @@ static void RenderGearCustomizeDialog() {
                 if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
 
                 ImGui::PushID(static_cast<int>(entry.item_id));
-                bool isSel = (editBuild->relic_name == entry.name);
+                bool isSel = editBuild->relic_id ? editBuild->relic_id==entry.item_id : editBuild->relic_name==entry.name;
 
                 if (AlterEgo::UI::CatalogCard("##relsel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
                     editBuild->relic_name = entry.name;
@@ -8082,7 +8082,7 @@ static void RenderGearCustomizeDialog() {
                     if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
 
                     ImGui::PushID(static_cast<int>(entry.item_id));
-                    bool isSel = (gs.rune == entry.name);
+                    bool isSel = gs.rune_id ? gs.rune_id==entry.item_id : gs.rune==entry.name;
 
                     if (AlterEgo::UI::CatalogCard("##rsel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
                         ExpandSharedRune(*editBuild);
@@ -8101,7 +8101,8 @@ static void RenderGearCustomizeDialog() {
 
                     ImGui::PushID(static_cast<int>(entry.item_id));
                     const std::string& activeSigil = g_GearEditingSigil2 ? gs.sigil2 : gs.sigil;
-                    bool isSel = (activeSigil == entry.name);
+                    const auto activeId=g_GearEditingSigil2?gs.sigil2_id:gs.sigil_id;
+                    bool isSel = activeId ? activeId==entry.item_id : activeSigil==entry.name;
 
                     if (AlterEgo::UI::CatalogCard("##ssel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
                         uint32_t sid = entry.item_id;
@@ -8283,10 +8284,11 @@ static void RenderGearCustomizeDialog() {
                     AlterEgo::GW2API::FetchItemDetailsAsync({gs.infusion_ids[index]});
                     commitGear(true);
                 }
-                ImGui::TextDisabled("Search infusions already found in the item cache:");
+                const bool enrichment=g_GearDialogSlot=="Amulet";
+                ImGui::TextDisabled(enrichment?"Search enrichment catalog:":"Search infusion catalog:");
                 if (g_GearStatSearch[0]) {
                     const auto entries = AlterEgo::GW2API::SearchKnownInfusions(
-                        g_GearStatSearch, 100);
+                        g_GearStatSearch, 100, enrichment);
                     ImGui::BeginChild("##knownInfusions", ImVec2(0, -30), true);
                     for (const auto& entry : entries) {
                         const std::string itemLabel = entry.first + " (ID " +
@@ -8304,7 +8306,7 @@ static void RenderGearCustomizeDialog() {
                         ImGui::TextDisabled("No cached matches. Enter an item ID instead.");
                     ImGui::EndChild();
                 } else {
-                    ImGui::TextDisabled("Use Search above to filter known infusion names.");
+                    ImGui::TextDisabled("Use Search above to filter catalog names.");
                 }
             }
         }
@@ -12388,8 +12390,8 @@ void AddonLoad(AddonAPI_t* aApi) {
     g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::GW2API::LoadItemNameCache();
     AlterEgo::GW2API::LoadReferenceCaches();
-    SeedItemNameCache();
     AlterEgo::PublicCatalog::Load(AlterEgo::GW2API::GetDataDirectory());
+    if(!AlterEgo::PublicCatalog::Get()->upgrades)SeedItemNameCache();
     LoadLoginTimestamps();
     AlterEgo::GW2API::FetchAllItemStatsAsync();
     LoadCharSortConfig();
@@ -17635,6 +17637,10 @@ void AddonOptions() {
             bool included=Included(dataset);
             if(ImGui::Checkbox(Labels[i],&included)){
                 SetIncluded(dataset,included);
+                if(included&&dataset==Dataset::PublicCatalog){
+                    Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
+                    AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
+                }
                 if(!included&&dataset==Dataset::Characters)g_AutoRefreshTracker.CancelPending();
                 if(!included&&dataset==Dataset::SkinOwnership)g_SkinRefreshOwned=false;
                 if(!included&&dataset==Dataset::Achievements&&g_AchRetryAutomatic.load())g_AchRetryAtMs=0;
@@ -17653,9 +17659,11 @@ void AddonOptions() {
     ImGui::TextDisabled("Automatic refresh: 7 days; failed attempts: 24h. Shared across accounts.");
     const auto publicData=AlterEgo::PublicCatalog::Get();
     ImGui::Text("Equipment upgrades: %zu",publicData->entries.size());
+    if(publicData->upgrades)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->upgrades)/86400));
     if(RenderActionButton("Refresh equipment catalogs")) Skinventory::Commerce::RefreshUpgradeCatalogAsync(true);
     ImGui::TextDisabled("%s",Skinventory::Commerce::GetFetchStatus().c_str());
     ImGui::Text("Vault objective definitions: %zu",publicData->objectives.size());
+    if(publicData->vault)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->vault)/86400));
     if(RenderActionButton("Refresh Vault definitions")) AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),true);
     ImGui::TextDisabled("%s",AlterEgo::PublicCatalog::VaultStatus().c_str());
     ImGui::Spacing();

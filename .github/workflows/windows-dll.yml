@@ -2,6 +2,15 @@ name: Build Alter Ego Windows DLL (UCRT)
 
 on:
   workflow_dispatch:
+    inputs:
+      wiki_diagnostic:
+        description: 'Run optional Wiki connectivity diagnostic'
+        type: boolean
+        default: false
+      public_api_diagnostic:
+        description: 'Run optional public catalog API sample probe'
+        type: boolean
+        default: false
   push:
     branches: [main, feature/save-and-compare-retrieved-sets, experiment/composable-loadouts]
     paths:
@@ -34,7 +43,7 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 python3-pil ca-certificates ccache g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
           x86_64-w64-mingw32ucrt-g++ --version
       - name: Diagnose GW2 Wiki connectivity
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.wiki_diagnostic
         continue-on-error: true
         run: |
           python3 - <<'PY'
@@ -75,7 +84,7 @@ jobs:
                   print(f"FAILED: {type(exc).__name__}: {exc}")
           PY
       - name: Verify public catalog API payloads
-        if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'Start public equipment and Vault catalog cache'
+        if: github.event_name == 'workflow_dispatch' && inputs.public_api_diagnostic
         continue-on-error: true
         run: |
           python3 - <<'PY'

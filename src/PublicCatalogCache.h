@@ -60,6 +60,9 @@ inline void Mark(Database::Connection& db,const std::string& dataset,int64_t sta
 }
 inline void StoreUpgrades(Database::Connection& db,const std::set<uint32_t>& ids,const Json& rows,int64_t stamp) {
     if(ids.empty()||!rows.is_array()||rows.empty())throw std::runtime_error("Empty upgrade catalog");
+    const auto previousCount=db.Scalar("SELECT count(*) FROM public_item_index");
+    if(previousCount>0&&static_cast<int64_t>(ids.size())<previousCount*9/10)
+        throw std::runtime_error("Unexpectedly truncated item index");
     if(stamp<Fresh(db,"public_upgrades"))throw std::runtime_error("Older upgrade catalog");
     std::set<uint32_t> seen;std::set<std::string> kinds;
     for(const auto& row:rows) {

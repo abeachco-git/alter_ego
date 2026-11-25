@@ -64,6 +64,39 @@ int case_database_core(int, char**) {
     }
 
     Scratch temp;
+    {
+        namespace P=AlterEgo::PublicCatalog;
+        DB::Connection db(temp.path("public-catalog.db"),DB::Connection::OpenMode::Create);
+        AlterEgo::Cache::Initialize(db);
+        const auto rows=P::Json::parse(R"([
+            {"id":1,"name":"Rune","type":"UpgradeComponent","rarity":"Exotic","details":{"type":"Rune","bonuses":["+25 Power"]}},
+            {"id":2,"name":"Sigil","type":"UpgradeComponent","rarity":"Exotic","details":{"type":"Sigil","infix_upgrade":{"buff":{"description":"+5% Damage"}}}},
+            {"id":3,"name":"Relic","type":"Relic","rarity":"Exotic","description":"Effect"},
+            {"id":4,"name":"Infusion","type":"UpgradeComponent","details":{"type":"Default","infusion_upgrade_flags":["Infusion"]}},
+            {"id":5,"name":"Enrichment","type":"UpgradeComponent","details":{"type":"Default","infusion_upgrade_flags":["Enrichment"]}}
+        ])");
+        {
+            DB::Transaction tx(db);
+            P::StoreUpgrades(db,{1,2,3,4,5,6},rows,100);
+            P::StoreObjectives(db,{{20,{"Combo","PvE",10}}},100);
+            tx.Commit();
+        }
+        auto saved=P::Read(db);
+        assert(saved.upgrades==100&&saved.vault==100&&saved.index.size()==6&&saved.entries.size()==5);
+        assert(saved.objectives.at(20).title=="Combo");
+        assert(db.Scalar("SELECT count(*) FROM reference_items WHERE complete=1")==5);
+        bool failed=false;
+        try{
+            DB::Transaction tx(db);
+            auto partial=rows;partial.erase(0);
+            P::StoreUpgrades(db,{1,2,3,4,5,6},partial,200);
+            tx.Commit();
+        }catch(...){failed=true;}
+        assert(failed&&P::Read(db).upgrades==100&&P::Read(db).entries.size()==5);
+        failed=false;
+        try{DB::Transaction tx(db);P::StoreObjectives(db,{},200);tx.Commit();}catch(...){failed=true;}
+        assert(failed&&P::Read(db).objectives.size()==1);
+    }
     constexpr int id = 0x41454c42;
     {
         DB::Connection db(temp.path("library.db"), DB::Connection::OpenMode::Create);
@@ -236,7 +269,7 @@ int case_database_core(int, char**) {
                 "INSERT INTO achievement_waypoints VALUES(1,0,'[&ABC=]');"
                 "INSERT INTO reference_freshness VALUES('hero_challenges',100),('ach_name_index',100),('ach_waypoints',100),('ach_name_index_verified',200);");
         Cache::Initialize(db);
-        assert(db.Scalar("PRAGMA user_version")==15);
+        assert(db.Scalar("PRAGMA user_version")==Cache::kSchemaVersion);
         assert(db.Scalar("SELECT count(*) FROM sqlite_schema WHERE name IN ('hero_challenges','character_hero_points','achievement_waypoints')")==0);
         assert(db.Scalar("SELECT count(*) FROM reference_freshness WHERE dataset IN ('hero_challenges','ach_waypoints')")==0);
         assert(db.Scalar("SELECT saved_at FROM reference_freshness WHERE dataset='ach_name_index_verified'")==200);

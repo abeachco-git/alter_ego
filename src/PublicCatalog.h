@@ -50,7 +50,8 @@ inline void RefreshUpgrades(const std::string& root) {
     for(size_t start=0;start<todo.size();start+=200) {
         std::set<uint32_t> expected;std::string query;
         for(size_t i=start;i<std::min(todo.size(),start+200);++i){
-            if(!query.empty())query+=',';query+=std::to_string(todo[i]);expected.insert(todo[i]);
+            if(!query.empty())query+=',';
+            query+=std::to_string(todo[i]);expected.insert(todo[i]);
         }
         auto batch=Fetch("/v2/items?ids="+query);ValidateBatch(batch,expected);
         for(const auto& item:batch)if(!Kind(item).empty())rows.push_back(item);

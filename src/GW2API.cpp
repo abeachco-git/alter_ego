@@ -7,6 +7,7 @@
 #include "SkinDataCache.h"
 #include "ReferenceMetadataCache.h"
 #include "ItemMetadataCache.h"
+#include "PublicCatalog.h"
 #include "CharacterCache.h"
 #include "AutoRefreshPolicy.h"
 #include "NativeAccounts.h"
@@ -696,6 +697,17 @@ namespace AlterEgo {
     uint32_t GW2API::FindItemIdByName(const std::string& name) {
         if (name.empty()) return 0;
         std::lock_guard<std::mutex> lock(s_mutex);
+        // The validated catalog wins over legacy seed aliases. If duplicate
+        // public names exist, keep a known exact alias only if it is a candidate.
+        const auto catalog=PublicCatalog::Get();
+        uint32_t match=0;bool ambiguous=false;
+        const auto alias=s_item_name_id_cache.find(name);
+        for(const auto& e:catalog->entries)if(e.name==name) {
+            if(alias!=s_item_name_id_cache.end()&&alias->second==e.item_id)return e.item_id;
+            if(match&&match!=e.item_id)ambiguous=true;
+            match=e.item_id;
+        }
+        if(match)return ambiguous?0:match;
         // Check full item cache first
         for (const auto& [id, info] : s_item_cache) {
             if (info.name == name) return id;
@@ -707,7 +719,7 @@ namespace AlterEgo {
     }
 
     std::vector<std::pair<std::string, uint32_t>> GW2API::SearchKnownInfusions(
-        const std::string& query, size_t maxResults) {
+        const std::string& query, size_t maxResults, bool enrichment) {
         std::vector<std::pair<std::string, uint32_t>> results;
         if (query.empty() || maxResults == 0) return results;
         auto lower = [](std::string str) {
@@ -716,12 +728,19 @@ namespace AlterEgo {
             return str;
         };
         const std::string needle = lower(query);
+        const auto catalog=PublicCatalog::Get();
+        if(catalog->upgrades) {
+            for(const auto& e:catalog->entries)if(e.kind==(enrichment?"Enrichment":"Infusion")&&
+                (lower(e.name).find(needle)!=std::string::npos||std::to_string(e.item_id).find(needle)!=std::string::npos))
+                results.emplace_back(e.name,e.item_id);
+            if(results.size()>maxResults)results.resize(maxResults);
+            return results;
+        }
         std::lock_guard<std::mutex> lock(s_mutex);
         for (const auto& [name, id] : s_item_name_id_cache) {
             const std::string folded = lower(name);
             // Do not treat arbitrary item names as eligible infusions.
-            if (folded.find("infusion") == std::string::npos &&
-                folded.find("enrichment") == std::string::npos)
+            if (folded.find(enrichment?"enrichment":"infusion") == std::string::npos)
                 continue;
             if (folded.find(needle) != std::string::npos ||
                 std::to_string(id).find(needle) != std::string::npos)
