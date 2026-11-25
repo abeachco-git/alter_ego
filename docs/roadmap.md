@@ -1,11 +1,11 @@
-# Future roadmap — native account inventory and Hoard & Seek replacement
+# Roadmap — account data and inventory
 
-Status: implementation authorized on experiment/composable-loadouts; native account and inventory checkpoint in progress, not complete. Main must remain unchanged. No H&S credential, label or inventory import. Source audit: [Hoard & Seek v1.1.0.0](https://github.com/PieOrCake/hoard_and_seek/tree/v1.1.0.0) (MIT).
+Living implementation tracker for the experimental branch. Checked items indicate implementation, not necessarily in-game validation. See [development status](development-status.md) for broader stabilization work.
 
 ## Implementation tracker (living)
 
-- [x] Native registry, explicit API key setup, permission reporting, Windows Credential Manager, no H&S credential import.
-- [x] Direct native character/roster, equipment/build, skin, achievement, Clears and Vault consumers; no runtime H&S event dependency. Verified build c54865a; live testing outstanding.
+- [x] Native registry, explicit API key setup, permission reporting, Windows Credential Manager.
+- [x] Direct native character/roster, equipment/build, skin, achievement, Clears and Vault consumers. Verified build c54865a; live testing outstanding.
 - [x] Account GUID ownership, same-account Fast Load gate, account-independent Library; conditional multi-account UI.
 - [x] Personal bank, shared inventory, material storage, bags, equipment, tools, armory and delivery item storage.
 - [x] Wallet balances and currency metadata, guild leader access and guild GUID-deduplicated stash/coins; CI passed at 972a3c9; live validation pending.
@@ -21,7 +21,7 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 - [x] Independent Vault daily/weekly/special persistence and timestamps, section failure isolation, selective automatic refresh; CI/live validation pending.
 - [x] Registry snapshots carry their credential generation; obsolete snapshot permissions cannot acquire a replacement credential.
 - [ ] Full independent character/progress dataset freshness; independent Clears section commit; no startup burst.
-- [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.
+- [ ] Authenticated single/multi-account tests, installed glyph field verification, and benchmark.
 
 ## UI consistency audit — outstanding corrections
 
@@ -41,20 +41,15 @@ Source audit at 57d47f9 (not an in-game visual test). Checked UI items passed Wi
 - [x] Compare location hints: use stable item IDs (not array position), concise location labels and shared Find in Inventory action; keep acquisition hints distinct from semantic matches.
 - [ ] Verify no-account/not-retrieved/empty/filter-no-match/permission-denied/failed states, conditional account labels, narrow window layouts, multiple font sizes, keyboard focus, clipboard and Back/Forward in game.
 
-## Goal and architecture
+## Remaining architecture and feature goals
 
-Make native authenticated account access and inventory available within Alter Ego without requiring a separate Hoard & Seek DLL. Integrate functionality rather than wholesale copying its addon, UI, caches or lifecycle. Use a single native typed service boundary; remove the H&S dependency and obsolete event/callback paths, with no permanent dual-provider architecture or compatibility bridge. Any future third-party interoperability requires a separately approved design. Route public and authenticated ArenaNet API requests through one shared handler (not arbitrary third-party artwork or website requests), with shared scheduling, transport, diagnostics and throttling. Each account/dataset/scope has its own freshness policy, refresh priority and completeness; avoid indiscriminate all-account startup refreshes. Preserve upstream compatibility and Nexus ImGui 1.80 ABI.
+See [Architecture](architecture.md) for implemented storage, account identity, transport and freshness rules. Keep a single native API service and independent dataset policies. No third-party compatibility bridge without a separately approved design.
 
-## Cohesive implementation pass
-
-Implement the native replacement, inventory UI and cross-feature integration as one substantial development pass with internal verification checkpoints, not mandatory separate phase handoffs. Preserve the existing refresh behavior during consumer conversion where appropriate, then establish independent dataset policies.
-
-1. Audit authenticated endpoint consumers and H&S contracts. Add native account/key management with validated account identity and permission scopes, DPAPI-protected durable credentials, explicit account selection (no implicit first-account fallback for scoped requests), redacted diagnostics, strict HTTPS hostname/certificate validation, bounded cancellable requests, rate limiting/429 backoff, fair bounded queue, in-flight deduplication and typed request IDs/results. Reuse existing owned workers and callback gate. Do not cache failed HTTP/JSON results as successes. Never expose credentials through diagnostics, cache exports or generic external proxy.
-2. Migrate all existing character, roster, achievement, Vault, Clears, skin/recipe/mastery and item-location consumers to the native handler; migrate public GW2 API requests as well. Remove H&S-only registrations, pending response structures and dependency checks once native consumers work. Keep no network activity from ordinary rendering/search/filter. Validate account, endpoint, request generation and permissions; reject stale completions.
-3. Add relational inventory repositories in rebuildable cache.db (schema version to be chosen when implemented). Reuse reference_items, shared metadata and character equipment; avoid duplicate data and opaque JSON blobs. Typed inventory snapshots, slots, wallet balances, currency metadata, guild GUID/membership/storage, legendary armory. Store exact account, character, scope and slot identity, count, binding, freshness, completeness, and relevant item-specific data. Handle bank, material storage, shared inventory, character bags/equipment, guild stash, delivery box, wallet and armory. Account and guild access must be scoped; deduplicate guilds by GUID, not name. Distinguish successfully empty from skipped, failed, denied and unknown; preserve previous successful scope on failure, publish atomic scoped commits and immutable snapshots. Distinguish legendary ownership from equipped references, wallet from items, and accessible stock from guild/delivery/equipped/bound stock. Keep configuration/refresh exclusions outside rebuildable cache. No render-time SQL. Revisit journal/connection policy only with measurements.
-4. No H&S import. Users enter keys directly in Nexus Alter Ego options; native account GUIDs own cached data, while the Library stays account-independent. Use Windows Credential Manager or DPAPI; credentials excluded from exports. Hide account-specific browsing controls for a single linked account. Keep actual active account distinct from selected browsing account; Fast Load requires verified same-account ownership. Distinguish binding, transferability and accessibility.
-5. Build Inventory primary tab with shared UI::SearchToolbar, removable chips, search x, clear filters, stable sorts, compact expandable item rows, exact location details and freshness indicators. Allow empty-query browsing; substring/token/typo matching, item-ID lookup, localized/English names and accent/case normalization. Filters: account/current account, storage location, character, rarity, item type/subtype, armor weight, weapon type, level, binding, quantity, tradeability, freshness; show only relevant filter controls and preserve compatible selections. Suggested subviews: all items, materials, wallet, bank. Sort by name, quantity and relevant metadata; optional favorites. Right-click copy name/chat link, open wiki, view locations, navigate to character/equipment. Use immutable cached search snapshots, debounce if necessary, reject stale search generations, no fetch on typing/filter/sort. Group quantities accurately by selected scope.
-6. Cross-feature enhancements: compare loadout missing items against accessible account inventory with location links; Skinventory/shopping subtract owned usable acquisition items and show remaining cost; legendary material and currency requirement tracking; wallet favorites/categories; account-wide unused ascended gear/upgrade finder. Avoid claiming items are interchangeable or available when binding, stat selection, legendary reuse or stale/incomplete inventory prevents certainty.
+- Complete per-dataset scheduling, endpoint deduplication, rate limiting/backoff, priorities, cancellation and request correlation. Avoid all-account startup bursts. Preserve verified snapshots on failed or incomplete responses.
+- Extend the relational inventory model and immutable search projections only where needed. Distinguish empty, failed, denied, unknown and stale scopes. Keep credentials and user settings outside the rebuildable cache.
+- Extend item filters with armor weight, weapon subtype, level and tradeability where supported; add wallet categories. Preserve the shared search-first behavior, stable sorting, explicit refresh scope and navigation.
+- Broaden acquisition aids: semantic alternatives, full loadout eligibility, shopping mappings, legendary material/currency requirements and unused ascended gear/upgrade discovery. Never infer usability from ownership alone.
+- Keep account-independent library records separate from account-scoped character and inventory data. Fast Load requires verified same-account ownership and must reject the active character.
 
 ## Gathering tools and glyphs
 
@@ -63,19 +58,15 @@ Implement the native replacement, inventory UI and cross-feature integration as 
 - Include tool/glyph item-location search and navigation to the owning character. Inventory-aware Compare must distinguish physical ownership, availability, and incomplete data.
 - References: [ArenaNet equipment tab announcement](https://en-forum.guildwars2.com/topic/65255-api-updates-december-18-2019/), [GW2 character equipment API](https://wiki.guildwars2.com/wiki/API:2/characters/:id/equipment), [API endpoint index](https://wiki.guildwars2.com/wiki/API).
 
-## Independent near-term feature — character loading and location
+## Character loading and location
 
 Implemented on the experimental branch after user-led live verification of the
 standalone test. See [architecture](architecture.md) and [UI components](ui-components.md).
-No dependency on Fast Swap or H&S for the memory reader/switch; do not reintroduce
+The memory reader and switch are implemented locally; do not reintroduce
 the temporary diagnostics tab. The integrated path still needs in-game testing.
 Locations belong only in row tooltips. Do not override API character metadata
 or require it to match live memory plausibility checks.
 
-## Source audit cautions
-
-Do not port detached threads, raw unlocked metadata pointers, TLS hostname-validation bypass, plaintext key persistence, broad JSON rewrites under locks, coarse account-wide clearing on partial fetch, stale search publication, guild name-based deduplication, or success without HTTP validation. Adapt the useful token-bucket/backoff and selective refresh ideas, not the implementation unchanged. Source references: [GW2API.cpp](https://github.com/PieOrCake/hoard_and_seek/blob/v1.1.0.0/src/GW2API.cpp), [dllmain.cpp](https://github.com/PieOrCake/hoard_and_seek/blob/v1.1.0.0/src/dllmain.cpp), [ProxyThrottle.cpp](https://github.com/PieOrCake/hoard_and_seek/blob/v1.1.0.0/src/ProxyThrottle.cpp).
-
 ## Acceptance
 
-Unit/regression coverage for account switching, late responses, permission failures, cancellation/unload, rate limits, complete-empty vs failed/partial scoped snapshots, guild dedup, legendary counts, filtering/sorting and stale search generation, cache reset and non-destructive migration. Validate native operation in game without H&S installed, including multiple accounts and per-dataset refresh policies; preserve all existing CI gates and produce a verified Windows x64 UCRT DLL. Benchmark startup, refresh request counts, database size, search latency, and DLL size against the stabilized baseline; no performance or size target is claimed as measured today.
+Unit/regression coverage for account switching, late responses, permission failures, cancellation/unload, rate limits, complete-empty vs failed/partial scoped snapshots, guild dedup, legendary counts, filtering/sorting and stale search generation, cache reset and non-destructive migration. Validate native operation in game including multiple accounts and per-dataset refresh policies; preserve all existing CI gates and produce a verified Windows x64 UCRT DLL. Benchmark startup, refresh request counts, database size, search latency, and DLL size against the stabilized baseline; no performance or size target is claimed as measured today.

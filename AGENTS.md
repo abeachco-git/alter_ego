@@ -4,7 +4,7 @@
 
 - Requests to discuss or suggest are discussion only. Implement when approved; do not ask again for routine in-scope decisions.
 - Work on the requested branch. Never modify or merge into main or another branch without approval.
-- Preserve upstream PieOrCake import compatibility, saved data, exact native component identity and independent functional Compare semantics and the Nexus ImGui 1.80 ABI. Do not upgrade ImGui or change its allocator/context contract independently.
+- Preserve original Alter Ego library import compatibility, saved data, exact native component identity and independent functional Compare semantics and the Nexus ImGui 1.80 ABI. Do not upgrade ImGui or change its allocator/context contract independently.
 - Prefer existing modules and canonical helpers over parallel implementations. Keep changes cohesive; extract a focused helper when useful rather than growing `dllmain.cpp` unnecessarily. Avoid unrelated refactors.
 
 ## Read only the relevant references
@@ -46,5 +46,5 @@ Discussion-only and documentation-only requests do not require a new DLL unless 
 
 - Keep durable guidance in the relevant existing reference, not duplicated instructions or dated plans. Update docs only when behavior or conventions change.
 - Preserve useful vendored libraries, licenses, compatibility code and reference tools. Remove confirmed obsolete artifacts, not working code merely to save space. Git history is the archive.
-- Synchronize README screenshot links and remove superseded unreferenced screenshots.
+- Keep the public README concise and organized around current user-facing features, setup, usage, storage, development, credits and license. Keep internal detail in the linked references; acknowledge original authorship in Credits, not feature-by-feature comparisons. Update screenshot links when current images are available; remove superseded unreferenced screenshots at that time.
 - Remove temporary diagnostics, scratch artifacts and experimental scaffolding when their purpose ends; retain useful failure diagnostics and tests.

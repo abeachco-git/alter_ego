@@ -17,7 +17,7 @@ Add related coverage to existing cases; add a new case only for distinct behavio
 and register it in the existing domain in tests/CMakeLists.txt. No new standalone
 test executable per bug. Use invariant checks for presentation rather than fixed
 pixel values or exact cosmetic wording. Preserve semantic, data integrity,
-upstream compatibility and import checks. Obsolete experimental fixtures may be
+original library compatibility and import checks. Obsolete experimental fixtures may be
 removed after demonstrating that the behavior is no longer supported; Git history
 is the archive. Do not remove tests solely because they fail.
 
@@ -123,7 +123,7 @@ The character_request regression includes plausible level/profession/race/gender
 
 Character loading compatibility is structural rather than timestamp-based: both inspected November 2026 executable revisions have identical relevant layout and full switch/request function bytes. Host regression covers fingerprint mutation and truncation. An altered layout or function body must block loading; runtime validation remains mandatory after game updates.
 
-Clears daily rollover requests use the existing category endpoint first and a documented alternate bulk route with explicit schema 2022-03-23 and language when a response is missing or unchanged. Both use no-cache headers, HTTP status and category identity validation; both numeric and object achievement-ID formats are tested. Unchanged lists remain unverified, incomplete detail ID sets cannot replace data, and the existing bounded retry cadence is preserved. The status row shows Waiting for API rather than Ready during backoff. This does not guarantee the upstream service rotates promptly; a live reset remains necessary to validate behavior.
+Clears daily rollover requests use the existing category endpoint first and a documented alternate bulk route with explicit schema 2022-03-23 and language when a response is missing or unchanged. Both use no-cache headers, HTTP status and category identity validation; both numeric and object achievement-ID formats are tested. Unchanged lists remain unverified, incomplete detail ID sets cannot replace data, and the existing bounded retry cadence is preserved. The status row shows Waiting for API rather than Ready during backoff. This does not guarantee the ArenaNet service rotates promptly; a live reset remains necessary to validate behavior.
 
 Inventory filter smoke test: confirm no Storage status tree, Character is the first filter, profession icons and colors match Compare, multiple selected characters remain selected while the popup is open, and All clears the character facet alone. Check roster-only names without class metadata, removable chips, account scope, and that opening or changing filters starts no API requests. Compare retains its Active choice and closes after choosing one character.
 

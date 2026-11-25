@@ -6,7 +6,7 @@
 
 ## Overview
 
-Alter Ego Shared Build Templates allow Guild Wars 2 build websites and tools to export complete build configurations — including traits, skills, gear stats, runes, sigils, weapon types, and relics — in a format that can be imported directly into the [Alter Ego](https://github.com/PieOrCake/alter_ego) addon for Guild Wars 2.
+Alter Ego Shared Build Templates allow Guild Wars 2 build websites and tools to export complete build configurations — including traits, skills, gear stats, runes, sigils, weapon types, and relics — in a format that can be imported directly into the [Alter Ego](https://github.com/abeachco-git/alter_ego) addon for Guild Wars 2.
 
 Unlike GW2 build chat links (`[&...]`), which only encode traits, skills, pets, and legends, shared build templates carry the **full gear configuration** needed to recreate a build.
 
@@ -239,7 +239,9 @@ To implement AE2 without the JS library:
 4. Resolve item IDs against `/v2/items` for display names
 5. Apply gear/rune/sigil/relic data
 
-## Contact
+## Credits and contact
 
-- **Repository:** [github.com/PieOrCake/alter_ego](https://github.com/PieOrCake/alter_ego)
+The AE2 shared build format originated with [PieOrCake's Alter Ego](https://github.com/PieOrCake/alter_ego). This document is maintained for the independent fork.
+
+- **Repository:** [github.com/abeachco-git/alter_ego](https://github.com/PieOrCake/alter_ego)
 - **Homepage:** [pie.rocks.cc/projects/alter-ego](https://pie.rocks.cc/projects/alter-ego/)
