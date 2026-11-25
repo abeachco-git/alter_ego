@@ -27,8 +27,10 @@ struct AchievementSnapshot {
 inline void Upgrade(Database::Connection& db, int version) {
     if (version == 15) {
         // Retire only the old single-achievement reference catalog.
-        db.Exec("DROP TABLE achievement_waypoints;"
-                "DELETE FROM reference_freshness WHERE dataset='ach_waypoints';");
+        db.Exec(R"SQL(
+DROP TABLE achievement_waypoints;
+DELETE FROM reference_freshness WHERE dataset='ach_waypoints';
+)SQL");
         return;
     }
     if (version == 14) {
