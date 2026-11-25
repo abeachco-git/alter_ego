@@ -14,7 +14,7 @@ namespace Skinventory {
 
     class OwnedSkins {
     public:
-        // Initialize: subscribe to H&S events
+        // Initialize: subscribe to native API events
         static void Initialize(AddonAPI_t* api);
         // Cleanup: unsubscribe from events
         static void Shutdown();
@@ -25,15 +25,15 @@ namespace Skinventory {
         // Set data directory for disk cache
         static void SetDataDirectory(const std::string& dir);
 
-        // Set account name for multi-account H&S v3 queries
+        // Set account name for multi-account native API v3 queries
         static void SetAccountName(const std::string& name);
 
-        // Ping H&S to check availability
+        // Ping native API to check availability
 
-        // Request owned skins via H&S API proxy (/v2/account/skins) — single request
+        // Request owned skins via native API API proxy (/v2/account/skins) — single request
         static void RequestOwnedSkinsViaApi();
 
-        // Request owned skin data from H&S (batched, up to 200 at a time)
+        // Request owned skin data from native API (batched, up to 200 at a time)
         // Fallback if API proxy response is truncated.
         static void RequestOwnedSkins(const std::vector<uint32_t>& skin_ids);
 
@@ -45,16 +45,16 @@ namespace Skinventory {
         // Mark a skin as owned at runtime (e.g. from Events: Alerts unlock notification)
         static void MarkOwned(uint32_t skin_id);
 
-        // Has H&S responded with data?
+        // Has native API responded with data?
         static bool HasData();
 
-        // Is H&S available?
+        // Is native API available?
         static bool IsAccountAvailable();
 
         // Is a query in progress?
         static bool IsQuerying();
 
-        // Was H&S data updated since last check? (auto-clears on read)
+        // Was native API data updated since last check? (auto-clears on read)
         static bool ConsumeDataUpdatedFlag();
 
         // Status message for UI
@@ -85,7 +85,7 @@ namespace Skinventory {
         static std::atomic<uint64_t> s_generation;
         static std::unordered_set<uint32_t> s_locally_marked; // skins marked via alerts, protected from API overwrites
 
-        static std::string s_account_name; // for multi-account H&S v3 queries
+        static std::string s_account_name; // for multi-account native API v3 queries
     };
 
 }

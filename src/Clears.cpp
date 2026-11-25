@@ -89,7 +89,7 @@ static std::chrono::steady_clock::time_point g_ClearsSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 static std::atomic<long long> g_ClearsRetryAtMs{0};
 // A completion query can be outstanding even though category fetching is done.
-// Track it separately so navigating between tabs cannot double-query H&S.
+// Track it separately so navigating between tabs cannot duplicate API queries.
 static uint64_t g_ClearsGeneration=0,g_VaultGeneration=0;
 static std::atomic<bool> g_ClearsCompletionInFlight{false};
 static std::atomic<long long> g_ClearsQueryStartedAtMs{0};
@@ -121,7 +121,7 @@ static bool g_VaultLastAttemptFailed = false;
 static std::chrono::steady_clock::time_point g_VaultSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 // These per-type retry states and the staged responses are protected by
-// g_ClearsMutex: H&S delivers Vault responses from a worker thread.
+// g_ClearsMutex: the API worker delivers Vault responses from a worker thread.
 static long long g_VaultRetryAtMs = 0;
 static bool g_VaultRetryNeeded[3] = {};
 static int g_VaultRetryAttempts[3] = {};
@@ -164,7 +164,7 @@ static std::chrono::system_clock::time_point g_VaultLastWeeklyReset{};
 static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
 
 // =========================================================================
-// Clears - Backend (reset calculations, fetch, H&S response)
+// Clears - Backend (reset calculations, fetch, API response)
 // =========================================================================
 
 // Forward declarations of private helpers
@@ -189,6 +189,185 @@ static std::vector<uint32_t> DailyIds(const VaultPeriod& period) {
 static int64_t ResetEpoch(std::chrono::system_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::seconds>(
         t.time_since_epoch()).count();
+}
+static void RequestVaultSection(uint8_t type, const std::string& account);
+static void SaveVaultCache();
+static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr);
+static void RenderVaultPeriodSection(int sectionIndex, const char* title, const char* resetLabel,
+                                     ImVec4 color, const VaultPeriod& period);
+static void RenderVaultTab(const std::string& dailyResetStr, const std::string& weeklyResetStr);
+
+// Calculate the most recent daily reset (00:00 UTC) before 'now'
+std::chrono::system_clock::time_point CalcLastDailyReset(std::chrono::system_clock::time_point now) {
+    auto tt = std::chrono::system_clock::to_time_t(now);
+    struct tm utc{};
+#ifdef _WIN32
+    gmtime_s(&utc, &tt);
+#else
+    gmtime_r(&tt, &utc);
+#endif
+    utc.tm_hour = 0; utc.tm_min = 0; utc.tm_sec = 0;
+    auto reset = std::chrono::system_clock::from_time_t(
+#ifdef _WIN32
+        _mkgmtime(&utc)
+#else
+        timegm(&utc)
+#endif
+    );
+    if (reset > now) reset -= std::chrono::hours(24);
+    return reset;
+}
+
+// Calculate the most recent weekly reset (Monday 07:30 UTC) before 'now'
+std::chrono::system_clock::time_point CalcLastWeeklyReset(std::chrono::system_clock::time_point now) {
+    auto tt = std::chrono::system_clock::to_time_t(now);
+    struct tm utc{};
+#ifdef _WIN32
+    gmtime_s(&utc, &tt);
+#else
+    gmtime_r(&tt, &utc);
+#endif
+    // tm_wday: 0=Sun, 1=Mon, ...
+    int daysSinceMonday = (utc.tm_wday + 6) % 7; // Mon=0, Tue=1, ... Sun=6
+    utc.tm_hour = 7; utc.tm_min = 30; utc.tm_sec = 0;
+    utc.tm_mday -= daysSinceMonday;
+    auto reset = std::chrono::system_clock::from_time_t(
+#ifdef _WIN32
+        _mkgmtime(&utc)
+#else
+        timegm(&utc)
+#endif
+    );
+    if (reset > now) reset -= std::chrono::hours(24 * 7);
+    return reset;
+}
+
+// Format time until next reset as human-readable string
+static std::string FormatTimeUntilReset(std::chrono::system_clock::time_point resetTime,
+                                         std::chrono::hours period) {
+    auto now = std::chrono::system_clock::now();
+    auto nextReset = resetTime + period;
+    if (nextReset <= now) return "now";
+    auto remaining = std::chrono::duration_cast<std::chrono::seconds>(nextReset - now).count();
+    int d = (int)(remaining / 86400);
+    int h = (int)((remaining % 86400) / 3600);
+    int m = (int)((remaining % 3600) / 60);
+    if (d > 0) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%dd %dh", d, h);
+        return buf;
+    }
+    if (h > 0) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%dh %dm", h, m);
+        return buf;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%dm", m);
+    return buf;
+}
+
+static std::chrono::system_clock::time_point ParseISO8601(const std::string& s) {
+    int year = 0, mon = 0, day = 0, hour = 0, min = 0, sec = 0;
+    if (sscanf(s.c_str(), "%d-%d-%dT%d:%d:%d", &year, &mon, &day, &hour, &min, &sec) != 6)
+        return {};
+    struct tm t{};
+    t.tm_year = year - 1900; t.tm_mon = mon - 1; t.tm_mday = day;
+    t.tm_hour = hour; t.tm_min = min; t.tm_sec = sec;
+#ifdef _WIN32
+    return std::chrono::system_clock::from_time_t(_mkgmtime(&t));
+#else
+    return std::chrono::system_clock::from_time_t(timegm(&t));
+#endif
+}
+
+// Parse tier from fractal achievement name
+static std::string ParseFractalTier(const std::string& name) {
+    if (name.find("Tier 4") != std::string::npos) return "T4";
+    if (name.find("Tier 3") != std::string::npos) return "T3";
+    if (name.find("Tier 2") != std::string::npos) return "T2";
+    if (name.find("Tier 1") != std::string::npos) return "T1";
+    if (name.find("Recommended") != std::string::npos) return "Rec";
+    return "";
+}
+
+// Monotonic milliseconds, used to schedule single-shot BUSY backoff retries.
+static long long NowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Query incomplete sections only when opportunistically refreshing.
+// Manual Refresh and reset fetching continue querying every achievement.
+static void SendClearsAchQuery(bool skipCompletedSections) {
+    if (!APIDefs || g_ClearsCompletionInFlight.load()) return;
+    const std::string acctName=GetEffectiveAccountName();
+    std::vector<uint32_t> allIds;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if(acctName.empty() || acctName!=g_ClearsCacheAccount)return;
+        const bool needFractals = !skipCompletedSections ||
+            !AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals);
+        const bool needBounties = !skipCompletedSections ||
+            !AlterEgo::SectionRefresh::ClearsDone(g_DailyBounties);
+        const bool needRaids = !skipCompletedSections ||
+            !AlterEgo::SectionRefresh::ClearsDone(g_WeeklyWings);
+        const bool needStrikes = !skipCompletedSections ||
+            !(g_WeeklyStrikes.id != 0 && g_WeeklyStrikes.done);
+        if (needFractals)
+            for (const auto& e : g_DailyFractals) if (e.id) allIds.push_back(e.id);
+        if (needBounties)
+            for (const auto& e : g_DailyBounties) if (e.id) allIds.push_back(e.id);
+        if (needRaids)
+            for (const auto& e : g_WeeklyWings) if (e.id) allIds.push_back(e.id);
+        if (needStrikes && g_WeeklyStrikes.id > 0)
+            allIds.push_back(g_WeeklyStrikes.id);
+        if (allIds.empty()) return; // every known section is done
+        g_ClearsRetrySelective = skipCompletedSections;
+        g_ClearsCompletionInFlight = true;
+        g_ClearsQueryStartedAtMs = NowMs();
+        g_ClearsStatusMsg = skipCompletedSections
+            ? "Refreshing incomplete sections..." : "Querying completion...";
+    }
+
+    uint64_t generation;{std::lock_guard<std::mutex> lock(g_ClearsMutex);generation=++g_ClearsGeneration;}
+    AlterEgo::Background::Workers().Launch([acctName,allIds,generation]{
+        auto result=AlterEgo::NativeProgress::FetchAchievements(acctName,true);
+        bool save=false;
+        {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||!g_ClearsCompletionInFlight||acctName!=g_ClearsCacheAccount)return;
+            g_ClearsCompletionInFlight=false;g_ClearsQueryStartedAtMs=0;g_ClearsFetching=false;
+            if(!result.snapshot){
+                g_ClearsStatusMsg=result.error;
+                if(result.status==429)g_ClearsRetryAtMs=NowMs()+5000;
+                return;
+            }
+            const std::set<uint32_t> requested(allIds.begin(),allIds.end());
+            auto apply=[&](ClearEntry& e){
+                if(!requested.count(e.id))return;
+                auto it=result.snapshot->entries.find(e.id);
+                e.bitDone.assign(e.bitNames.size(),false);
+                if(it==result.snapshot->entries.end()){e.done=false;e.current=0;return;}
+                const auto& p=it->second;e.done=p.done;e.current=p.current;if(p.max>0)e.max=p.max;
+                if(p.done&&e.max>0&&e.current>=e.max)e.bitDone.assign(e.bitNames.size(),true);
+                else for(auto bit:p.completed_bits)if(bit<e.bitDone.size())e.bitDone[bit]=true;
+            };
+            for(auto& e:g_DailyFractals)apply(e);for(auto& e:g_DailyBounties)apply(e);
+            for(auto& e:g_WeeklyWings)apply(e);apply(g_WeeklyStrikes);
+            g_ClearsFetched=true;g_ClearsStatusMsg.clear();g_ClearsLastSuccessTime=result.snapshot->fetchedAt;
+            g_LastClearsCompletionQuery=std::chrono::steady_clock::now();g_ClearsSuccessUntil=g_LastClearsCompletionQuery+std::chrono::seconds(4);save=true;
+        }
+        if(save)SaveClearsCache();
+    },[generation]{std::lock_guard<std::mutex> lock(g_ClearsMutex);if(generation==g_ClearsGeneration){g_ClearsCompletionInFlight=false;g_ClearsQueryStartedAtMs=0;g_ClearsStatusMsg="Completion refresh cancelled";}});
+}
+
+// =========================================================================
+// Clears - Wizard's Vault fetch and response
+// =========================================================================
+static const char* VaultSectionName(uint8_t type) {
+    static const char* names[] = {"daily", "weekly", "special"};
+    return type < 3 ? names[type] : "unknown";
 }
 static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t generation,int status,VaultPeriod period);
 static void RequestVaultSection(uint8_t type,const std::string& account){
@@ -322,7 +501,7 @@ static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t g
             for (bool ok : g_VaultResponsesOK) if (ok) ++received;
             if (received == 3) {
                 // A successful response is not proof that its objectives
-                // belong to the new reset period. In particular H&S may
+                // belong to the new reset period. In particular ArenaNet may
                 // return the previous week's *claimed* objectives briefly.
                 const bool dailyHeld = g_VaultDailyRolloverPending &&
                     ClearsReset::LooksUnrotated(
@@ -599,7 +778,7 @@ static void FetchClears() {
             g_ClearsStatusMsg = "Querying completion...";
         }
 
-        // Background fetch done — allow render thread to send H&S completion query
+        // Background fetch done — allow render thread to send native completion query
         g_ClearsFetching = false;
         g_ClearsQueryPending = true;
     }, [] { g_ClearsFetching = false; });
@@ -667,7 +846,7 @@ void LoadClearsCache() {
     }
     const auto snapshot=AlterEgo::Cache::ReadCompletion(AlterEgo::GW2API::GetDataDirectory(),
         AlterEgo::Cache::CompletionDataset::Clears,account,
-        AlterEgo::GW2API::HasAccountsData()&&AlterEgo::GW2API::GetAccountCount()==1);
+        false);
     if(!snapshot)return;
 
     auto deserializeEntry = [](const nlohmann::json& ej) -> ClearEntry {
@@ -876,7 +1055,7 @@ void LoadVaultCache() {
     }
     const auto snapshot=AlterEgo::Cache::ReadCompletion(AlterEgo::GW2API::GetDataDirectory(),
         AlterEgo::Cache::CompletionDataset::Vault,account,
-        AlterEgo::GW2API::HasAccountsData()&&AlterEgo::GW2API::GetAccountCount()==1);
+        false);
     if(!snapshot)return;
 
     auto deserializePeriod = [](const nlohmann::json& j) -> VaultPeriod {
@@ -2461,7 +2640,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     } else {
         ImGui::Indent(4.0f);
         // Build three daily map cards, then a fourth Recommended card.
-        // Status comes from the existing H&S achievement completion data.
+        // Status comes from the existing native achievement completion data.
         std::vector<DailyFractalCard> cards;
         for (const auto& e : g_DailyFractals) {
             int tier = -1;
@@ -3014,7 +3193,7 @@ static void RenderClearsShared(bool showVault) {
     if (showVault && retryVaultRollover && AlterEgo::AutoRefreshPolicy::Enabled())
         FetchVaultData();
 
-    // A missing H&S response must not permanently suppress manual or
+    // A missing API response must not permanently suppress manual or
     // automatic refreshes. An expired query can be replaced after 45s.
     if (g_ClearsCompletionInFlight.load()) {
         const long long started = g_ClearsQueryStartedAtMs.load();
@@ -3053,7 +3232,7 @@ static void RenderClearsShared(bool showVault) {
     }
     // Boot synchronization is automatic. Manual FetchClears follow-through
     // uses g_ClearsQueryPending and must run regardless of the policy setting.
-    // Boot-time H&S pong only confirms availability. Never query Clears
+    // Boot-time account registry only confirms availability. Never query Clears
     // before this tab is opened, even when a cached account is selected.
     if (!showVault) g_ClearsAutoBootPending = false;
     if (!showVault && g_ClearsQueryPending.exchange(false) && !g_ClearsFetching)
@@ -3102,7 +3281,7 @@ void SyncCompletionAccountCaches() {
     const std::string account = GetEffectiveAccountName();
     if (account == g_ClearsCacheAccount && account == g_VaultCacheAccount) {
         // At cold startup the active account name can become known before
-        // H&S confirms there is exactly one configured account. Retry legacy
+        // account registry confirms there is exactly one configured account. Retry legacy
         // migration once after that confirmation rather than losing the old
         // disk snapshot until the next successful network refresh.
         static std::string legacyCheckedAccount;

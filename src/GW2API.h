@@ -224,7 +224,7 @@ namespace AlterEgo {
         int age = 0;                // Seconds played
         std::string created;        // ISO date
         std::string last_modified;  // ISO date — last login/modification
-        time_t data_refreshed = 0; // Last successful character snapshot from H&S
+        time_t data_refreshed = 0; // Last successful character snapshot from native API
         int deaths = 0;
         std::vector<std::string> crafting;      // Crafting disciplines (active first)
         std::vector<int> crafting_levels;
@@ -239,7 +239,7 @@ namespace AlterEgo {
         std::string account_name;              // Native account GUID; legacy name/unknown rows remain readable
     };
 
-    // Item location result from H&S cache query
+    // Item location result from native API cache query
     struct ItemLocationEntry {
         std::string location;       // e.g. "Bank", character name
         std::string sublocation;    // e.g. "Bag", "Equipped"
@@ -329,14 +329,14 @@ namespace AlterEgo {
         // Data path helper
         static std::string GetDataDirectory();
 
-        // --- H&S integration ---
+        // --- native API integration ---
         static AccountStatus GetAccountStatus();
-        static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via H&S
+        static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via native API
         static void RequestCharacterList();              // Fetch just the character name list
         static void RequestCharacterRefreshSelected(
             const std::vector<std::string>& names, bool refreshCrafting = true); // Manual=true; auto=false
 
-        // H&S cached queries (synchronous, from H&S in-memory cache)
+        // native API cached queries (synchronous, from native API in-memory cache)
         static void QuerySkinUnlocks(const std::vector<uint32_t>& skin_ids);
         static void QueryItemLocation(uint32_t item_id);
 
@@ -370,12 +370,12 @@ namespace AlterEgo {
         // so characters deleted in-game stop appearing in the list.
         static void ReconcileCharactersWithRoster();
 
-        // Skin unlock status (from H&S cache)
+        // Skin unlock status (from native API cache)
         static bool IsSkinUnlocked(uint32_t skin_id);  // true if unlocked, false if unknown/locked
         static bool HasSkinUnlockData(uint32_t skin_id); // true if we've queried this skin
         static void MarkSkinUnlocked(uint32_t skin_id);  // mark a skin as unlocked (e.g. from Events: Alerts)
 
-        // Item location (from H&S cache)
+        // Item location (from native API cache)
         static const ItemLocationResult* GetItemLocation(uint32_t item_id);
 
         // Item/Skin/Spec/Trait/Skill/Color caches (public endpoints, fetched directly)
@@ -572,7 +572,7 @@ namespace AlterEgo {
         static int s_chars_total;
         static Character s_current_char;
 
-        // H&S cached data
+        // native API cached data
 
         // Caches (public endpoint data)
         static std::unordered_map<uint32_t, ItemInfo> s_item_cache;

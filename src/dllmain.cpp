@@ -1012,8 +1012,8 @@ static void OnEvAlertSkinUnlocked(void* eventArgs) {
 
 #define EV_ALERT_ACHIEVEMENT_COMPLETED "EV_ALERT:AchievementCompleted"
 
-// When H&S becomes available, signal render thread to query progress + clears.
-// This handler may run on H&S's thread — never call Events_Raise here.
+// When native API becomes available, signal render thread to query progress + clears.
+// This handler may run on native API's thread — never call Events_Raise here.
 
 static void OnEvAlertAchievementCompleted(void* eventArgs) {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
@@ -1263,8 +1263,8 @@ static void RebuildCharDisplayOrder() {
 
 // Character refresh selection popup state
 static bool g_RefreshPopupOpen = false;
-static bool g_RefreshListFetching = false;     // waiting for char list from H&S
-static bool g_AutoCharListRequested = false;   // auto-fetched char list on H&S connect
+static bool g_RefreshListFetching = false;     // waiting for char list from native API
+static bool g_AutoCharListRequested = false;   // auto-fetched char list on native API connect
 static std::vector<std::string> g_RefreshNames; // all character names from API
 static std::vector<bool> g_RefreshSelection;    // parallel checkbox state
 
@@ -1288,7 +1288,7 @@ std::string GetEffectiveAccountName() {
 
  // Achievement progress is per-account, not per-currently-logged-in character.
  // In multi-account mode the dropdown's selected account is authoritative.
- // In single-account mode, use H&S's account name even when the dropdown is empty.
+ // In single-account mode, use native API's account name even when the dropdown is empty.
 static std::string GetAchievementCacheAccount() {
     if (!g_SelectedAccountFilter.empty()) return g_SelectedAccountFilter;
     if (AlterEgo::GW2API::IsMultiAccount()) return {};
@@ -2479,7 +2479,7 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
 
     if (toFetch.empty()) {
         g_AchCatFetching = false;
-        // Even a fully cached definition must route its H&S progress query
+        // Even a fully cached definition must route its native API progress query
         // to the render thread. Startup callers mark it as automatic.
         g_AchCatProgressAutomatic = automatic;
         g_AchCatProgressPending = catId;
@@ -2717,7 +2717,7 @@ static void FetchPinnedAchDefs() {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
         SaveAchDefCache();
-        // Progress queried via OnHoardPongForAch when H&S is ready
+        // Progress queried via OnHoardPongForAch when native API is ready
     });
 }
 
@@ -2847,7 +2847,7 @@ static void FetchDetailsForCharacter(const AlterEgo::Character& ch) {
     if (!skill_ids.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(skill_ids);
     if (!stat_ids.empty()) AlterEgo::GW2API::FetchItemStatDetailsAsync(stat_ids);
 
-    // Query skin unlock status from H&S cache (instant, no API call)
+    // Query skin unlock status from native API cache (instant, no API call)
     if (!skin_ids.empty()) AlterEgo::GW2API::QuerySkinUnlocks(skin_ids);
 
     // Fetch profession icon for equipment panel silhouette
@@ -2855,7 +2855,7 @@ static void FetchDetailsForCharacter(const AlterEgo::Character& ch) {
 }
 
 // Reject any string that contains path-traversal characters before joining
-// it into a filesystem path. Character names come from MumbleLink / H&S and
+// it into a filesystem path. Character names come from MumbleLink / native API and
 // SHOULD never contain these, but we don't want a malformed source to escape
 // the portrait directory.
 static bool IsSafePathComponent(const std::string& s) {
@@ -3390,7 +3390,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 }
             }
             ImGui::Separator();
-            // Show item locations from H&S cache
+            // Show item locations from native API cache
             if (item_info) {
                 const auto* loc = AlterEgo::GW2API::GetItemLocation(eq->id);
                 if (loc) {
@@ -4445,7 +4445,7 @@ static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
     return AlterEgo::ChatLink::EncodeBuild(link);
 }
 
-// Capture an H&S build tab directly rather than round-tripping through a chat link.
+// Capture an native API build tab directly rather than round-tripping through a chat link.
 // A link is still recorded when the profession palette is available, but missing
 // palette data cannot prevent saving the real skill/trait IDs already in memory.
 static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
@@ -11060,7 +11060,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
 }
 
 // Only the logged-in character is compared against saved builds, and only
-// when the H&S character data or Build Library revision changes. We reuse
+// when the native API character data or Build Library revision changes. We reuse
 // the same comparison rules as the dedicated Compare tab.
 struct ActiveSavedBuildMatch {
     std::string name;
@@ -12519,7 +12519,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     APIDefs->Events_Subscribe(EV_ALTER_EGO_IMPORT_BUILD, OnPieImportBuild);
     APIDefs->Events_Subscribe(EV_PIE_UI_READY, OnPieUIReady);
 
-    // Subscribe to H&S events
 
     // Pie UI bridge: announce AE (so an already-loaded Pie sees us) and probe for
     // an already-loaded Pie (which replies EV_PIE_UI_READY).
@@ -12544,7 +12543,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
     LoadSession();
     // Restore the selected account's achievement progress during addon startup.
-    // If H&S has not revealed the single-account name yet, the global render
+    // If native API has not revealed the single-account name yet, the global render
     // poll loads it as soon as that identity becomes available.
     const std::string startupAchAccount = GetAchievementCacheAccount();
     if (!startupAchAccount.empty()) LoadAchProgress(startupAchAccount);
@@ -12569,7 +12568,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     // workers immediately during addon startup.
     AlterEgo::GW2API::FetchDyeColorsAsync();
 
-    // Ping H&S to check availability
+    // Ping native API to check availability
 
     // Achievement definitions and progress are restored from disk above.
     // Do not fetch pinned or selected-category definitions during startup;
@@ -12604,7 +12603,7 @@ void AddonLoad(AddonAPI_t* aApi) {
         }
         Skinventory::Commerce::LoadPriceCache();
 
-        // Ping H&S so Skinventory's OwnedSkins receives the pong
+        // Ping native API so Skinventory's OwnedSkins receives the pong
         // (must be after Initialize which subscribes to EV_HOARD_PONG)
 
         g_SkinInitialized = true;
@@ -12640,7 +12639,6 @@ void AddonUnload() {
     APIDefs->Events_Unsubscribe(EV_ALTER_EGO_IMPORT_BUILD, OnPieImportBuild);
     APIDefs->Events_Unsubscribe(EV_PIE_UI_READY, OnPieUIReady);
 
-    // Unsubscribe H&S events
 
     // No new callback body can enter; drain admitted work before teardown.
     // Do not hold a subsystem lock while waiting (events may reenter synchronously).
@@ -16184,7 +16182,7 @@ void AddonRender() {
     SyncCompletionAccountCaches(); // selected-account Clears/Vault snapshots, even with UI hidden
     Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
 
-    // H&S can drop a progress response (or an addon can be reloaded during a
+    // native API can drop a progress response (or an addon can be reloaded during a
     // query). Never leave the Achievements Refresh action stuck indefinitely.
     if (g_AchProgressFetching) {
         const long long started = g_AchProgressQueryStartMs.load();
@@ -16257,7 +16255,7 @@ void AddonRender() {
         return;
     }
 
-    // H&S status
+    // native API status
     auto hoardStatus = AlterEgo::GW2API::GetAccountStatus();
     auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
     bool scanning = (fetchStatus == AlterEgo::FetchStatus::InProgress);
@@ -16312,7 +16310,7 @@ void AddonRender() {
             // Also check pending names from a list-only fetch (new user, no full data yet)
             const auto& pendingNames = AlterEgo::GW2API::GetPendingCharNames();
 
-            // Auto-fetch character list when H&S first becomes ready and we have no data
+            // Auto-fetch character list when native API first becomes ready and we have no data
             // Wait for accounts data so we get characters from ALL accounts
             if (AlterEgo::AutoRefreshPolicy::Enabled() &&
                 !g_AutoCharListRequested && hoardReady && !scanning &&
@@ -17886,7 +17884,7 @@ void AddonOptions() {
             // Discard deferred boot refreshes; manually initiated requests
             // and the retry phases of ongoing requests remain available.
             // Only cancel an automatic pending achievement query. A manually
-            // started H&S request and its busy-backoff retry must continue.
+            // started native API request and its busy-backoff retry must continue.
             if (g_AchRetryAutomatic.load()) g_AchRetryAtMs = 0;
         } else {
             // Refresh a stale visible section immediately when re-enabled.
