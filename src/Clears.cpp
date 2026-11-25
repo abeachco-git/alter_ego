@@ -826,10 +826,8 @@ void LoadClearsCache() {
     try {
         const auto& j=*snapshot;
 
-        std::array<std::time_t,3> stamps{};
-        for(uint8_t i=0;i<3;++i)if(j.contains(VaultSectionName(i)))stamps[i]=static_cast<std::time_t>(j.at(VaultSectionName(i)).value("fetched_at",int64_t{0}));
-        auto dailyTime=std::chrono::system_clock::from_time_t(stamps[0]);
-        auto weeklyTime=std::chrono::system_clock::from_time_t(stamps[1]);
+        int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
+        auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
         // Check if a reset has occurred since the cached data was fetched
         // Add 60s buffer so we don't treat cache as stale before the API has updated
         auto now = std::chrono::system_clock::now();
@@ -1041,8 +1039,10 @@ void LoadVaultCache() {
 
     try {
         const auto& j=*snapshot;
-        int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
-        auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
+        std::array<std::time_t,3> stamps{};
+        for(uint8_t i=0;i<3;++i)if(j.contains(VaultSectionName(i)))stamps[i]=static_cast<std::time_t>(j.at(VaultSectionName(i)).value("fetched_at",int64_t{0}));
+        auto dailyTime=std::chrono::system_clock::from_time_t(stamps[0]);
+        auto weeklyTime=std::chrono::system_clock::from_time_t(stamps[1]);
         auto now         = std::chrono::system_clock::now();
         auto dailyReset  = CalcLastDailyReset(now)  + std::chrono::seconds(60);
         auto weeklyReset = CalcLastWeeklyReset(now) + std::chrono::seconds(60);
