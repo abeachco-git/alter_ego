@@ -19,7 +19,9 @@ using namespace NativeInventory;
 struct Account {std::string id,name,label;std::set<std::string> permissions;};
 struct View {std::vector<Account> accounts;Projection inventory;};
 std::string root;
-std::mutex viewMutex;
+std::mutex viewMutex,publishMutex,credentialMutex;
+std::atomic<uint64_t> registryGeneration{1};
+std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
 std::atomic<bool> busy{false};
 std::string message;
@@ -66,9 +68,10 @@ std::vector<Account> Accounts(){
     }
     return out;
 }
-void Publish(const std::string& msg){
+void Publish(const std::string& msg,bool replaceMessage=true){
+    std::lock_guard<std::mutex> serial(publishMutex);
     auto next=std::make_shared<View>();next->accounts=Accounts();next->inventory=Read(root);
-    std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);message=msg;
+    std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);if(replaceMessage)message=msg;registryReady=true;
 }
 std::shared_ptr<const View> Snapshot(){std::lock_guard<std::mutex> lock(viewMutex);return view;}
 void Message(const std::string& msg){std::lock_guard<std::mutex> lock(viewMutex);message=msg;}
@@ -119,6 +122,8 @@ void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std:
             Database::Transaction tx(db);
             auto q=db.Prepare("INSERT INTO accounts VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,label=excluded.label,permissions=excluded.permissions");
             q.Bind(1,a.id);q.Bind(2,a.name);q.Bind(3,a.label);q.Bind(4,Json(a.permissions).dump());q.Execute();
+            std::unique_lock<std::mutex> credentialLock(credentialMutex);
+            ++registryGeneration;
             Secret previous(Key(a.id));
             if(!SaveKey(a.id,key->value)){Message("Windows Credential Manager rejected the key.");return;}
             try{tx.Commit();}catch(...){if(previous.value.empty())CredDeleteA(Target(a.id).c_str(),CRED_TYPE_GENERIC,0);else SaveKey(a.id,previous.value);throw;}
@@ -133,6 +138,8 @@ void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std:
 }
 void Remove(const std::string& id){
     Launch([id]{
+        std::lock_guard<std::mutex> credentialLock(credentialMutex);
+        ++registryGeneration;
         Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
         Database::Transaction tx(db);auto q=db.Prepare("DELETE FROM accounts WHERE id=?");q.Bind(1,id);q.Execute();
         tx.Commit();
@@ -210,10 +217,64 @@ std::string Active(const View& v,const std::string& ch){
     return result;
 }
 }
-void Initialize(const std::string& directory){
-    root=directory;Launch([]{Publish("");});
+std::vector<LinkedAccount> Linked(){
+    auto v=Snapshot();std::vector<LinkedAccount> out;const auto gen=registryGeneration.load();
+    for(const auto& a:v->accounts){
+        LinkedAccount row;row.id=a.id;row.name=a.name;row.label=a.label;row.permissions=a.permissions;row.generation=gen;
+        const auto it=v->inventory.rosters.find(a.id);
+        if(it!=v->inventory.rosters.end()){row.rosterKnown=true;row.characters=it->second;}
+        out.push_back(std::move(row));
+    }
+    return out;
 }
-void Shutdown(){std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();}
+bool Ready(){return registryReady.load();}
+bool Current(const LinkedAccount& a){
+    if(a.id.empty()||a.generation!=registryGeneration.load())return false;
+    auto v=Snapshot();
+    return std::any_of(v->accounts.begin(),v->accounts.end(),[&](const Account& b){return b.id==a.id;});
+}
+Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions){
+    if(!Current(a))return {0,{},"Account changed"};
+    for(const auto& p:permissions)if(!a.permissions.count(p))return {403,{},"Missing API permission: "+p};
+    std::unique_lock<std::mutex> lock(credentialMutex);
+    if(!Current(a))return {0,{},"Account changed"};
+    Secret key(Key(a.id));lock.unlock();
+    if(key.value.empty())return {401,{},"API key unavailable"};
+    auto r=ArenaNet::Get(path,key.value);
+    if(!Current(a))return {0,{},"Account changed"};
+    if(r.status_code!=200)return {r.status_code,{},Error(r.status_code)};
+    try{return {200,Json::parse(r.body),{}};}catch(...){return {0,{},"Invalid API response"};}
+}
+Result Request(const std::string& id,const std::string& path,const std::vector<std::string>& permissions){
+    for(const auto& a:Linked())if(a.id==id)return Request(a,path,permissions);
+    return {401,{},"No linked account"};
+}
+bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names){
+    const auto r=Request(a,"/v2/characters",{"characters"});
+    if(!r||!r.data.is_array())return false;
+    try{
+        std::set<std::string> parsed;
+        for(const auto& n:r.data){auto s=n.get<std::string>();if(s.empty()||!parsed.insert(s).second)return false;}
+        std::lock_guard<std::mutex> lock(credentialMutex);
+        if(!Current(a))return false;
+        StoreRoster(root,a.id,parsed,Now());
+        Publish("",false);names=std::move(parsed);return true;
+    }catch(...){return false;}
+}
+std::vector<Location> Locations(uint32_t id){
+    auto v=Snapshot();std::vector<Location> out;
+    for(const auto& row:v->inventory.rows){
+        const auto& s=row.slot;if(s.id!=id)continue;
+        for(const auto& a:v->accounts)if(a.id==s.account){
+            out.push_back({a.id,s.scope,s.character,s.position,BindingName(s.binding),s.count});break;
+        }
+    }
+    return out;
+}
+void Initialize(const std::string& directory){
+    root=directory;registryReady=false;Launch([]{try{Publish("");}catch(...){registryReady=true;throw;}});
+}
+void Shutdown(){registryReady=false;++registryGeneration;std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();}
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
 std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}
 void RenderOptions(){

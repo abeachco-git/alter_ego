@@ -99,6 +99,8 @@ inline Projection Read(const std::string& root){
         auto& s=out.rows[it->second].slot;
         (sockets.Integer(4)?s.infusions:s.upgrades).push_back(static_cast<uint32_t>(sockets.Integer(5)));
     }
+    auto rosterState=db.Prepare("SELECT account FROM native_roster_state");
+    while(rosterState.Step())out.rosters[rosterState.Text(0)];
     auto roster=db.Prepare("SELECT account,character FROM native_rosters");
     while(roster.Step())out.rosters[roster.Text(0)].insert(roster.Text(1));
     tx.Commit();return out;

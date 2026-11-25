@@ -1015,19 +1015,6 @@ static void OnEvAlertSkinUnlocked(void* eventArgs) {
 
 // When H&S becomes available, signal render thread to query progress + clears.
 // This handler may run on H&S's thread — never call Events_Raise here.
-static void OnHoardPongForAch(void* eventArgs) {
-    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
-    if (!callbackLease) return;
-    if (!eventArgs) return;
-    auto* pong = (HoardPongPayload*)eventArgs;
-    if (pong->api_version < 2) return;
-
-    // No automatic H&S API requests when the Nexus option is off.
-    if (!AlterEgo::AutoRefreshPolicy::Enabled()) return;
-    // H&S availability is not permission to perform API work at startup.
-    // Achievements and Clears issue requests only from their active tabs
-    // (or when the user opens the pinned-achievement popout).
-}
 
 static void OnEvAlertAchievementCompleted(void* eventArgs) {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
@@ -3465,12 +3452,6 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 }
             }
             ImGui::Separator();
-            // Find item in H&S (opens H&S search window)
-            if (item_info && !item_info->name.empty()) {
-                if (ImGui::MenuItem("Find in Hoard & Seek")) {
-                    APIDefs->Events_Raise(EV_HOARD_SEARCH, (void*)item_info->name.c_str());
-                }
-            }
             // Show item locations from H&S cache
             if (item_info) {
                 const auto* loc = AlterEgo::GW2API::GetItemLocation(eq->id);
@@ -12601,19 +12582,10 @@ void AddonLoad(AddonAPI_t* aApi) {
     APIDefs->Events_Subscribe(EV_PIE_UI_READY, OnPieUIReady);
 
     // Subscribe to H&S events
-    APIDefs->Events_Subscribe(EV_HOARD_PONG, AlterEgo::GW2API::OnHoardPong);
-    APIDefs->Events_Subscribe(EV_HOARD_PONG, OnHoardPongForAch);
-    APIDefs->Events_Subscribe(EV_HOARD_DATA_UPDATED, AlterEgo::GW2API::OnHoardDataUpdated);
-    APIDefs->Events_Subscribe(EV_AE_CHAR_LIST_RESP, AlterEgo::GW2API::OnCharListResponse);
-    APIDefs->Events_Subscribe(EV_AE_CHAR_DATA_RESP, AlterEgo::GW2API::OnCharDataResponse);
-    APIDefs->Events_Subscribe(EV_AE_SKIN_UNLOCK_RESP, AlterEgo::GW2API::OnSkinUnlocksResponse);
-    APIDefs->Events_Subscribe(EV_AE_ITEM_LOC_RESP, AlterEgo::GW2API::OnItemLocationResponse);
     APIDefs->Events_Subscribe(EV_AE_CLEARS_ACH_RESPONSE, OnClearsAchResponse);
     APIDefs->Events_Subscribe(EV_AE_VAULT_RESPONSE, OnVaultResponse);
     APIDefs->Events_Subscribe(EV_AE_VAULT_SEASON_RESP, OnVaultSeasonResponse);
     APIDefs->Events_Subscribe(EV_AE_ACH_PROGRESS_RESPONSE, OnAchProgressResponse);
-    APIDefs->Events_Subscribe(EV_AE_ACCOUNTS_RESP, AlterEgo::GW2API::OnAccountsResponse);
-    APIDefs->Events_Subscribe(EV_HOARD_ACCOUNTS_CHANGED, AlterEgo::GW2API::OnAccountsChanged);
 
     // Pie UI bridge: announce AE (so an already-loaded Pie sees us) and probe for
     // an already-loaded Pie (which replies EV_PIE_UI_READY).
@@ -12664,7 +12636,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::GW2API::FetchDyeColorsAsync();
 
     // Ping H&S to check availability
-    AlterEgo::GW2API::PingHoard();
 
     // Achievement definitions and progress are restored from disk above.
     // Do not fetch pinned or selected-category definitions during startup;
@@ -12701,7 +12672,6 @@ void AddonLoad(AddonAPI_t* aApi) {
 
         // Ping H&S so Skinventory's OwnedSkins receives the pong
         // (must be after Initialize which subscribes to EV_HOARD_PONG)
-        Skinventory::OwnedSkins::PingHoardAndSeek();
 
         g_SkinInitialized = true;
     }
@@ -12737,19 +12707,10 @@ void AddonUnload() {
     APIDefs->Events_Unsubscribe(EV_PIE_UI_READY, OnPieUIReady);
 
     // Unsubscribe H&S events
-    APIDefs->Events_Unsubscribe(EV_HOARD_PONG, AlterEgo::GW2API::OnHoardPong);
-    APIDefs->Events_Unsubscribe(EV_HOARD_PONG, OnHoardPongForAch);
-    APIDefs->Events_Unsubscribe(EV_HOARD_DATA_UPDATED, AlterEgo::GW2API::OnHoardDataUpdated);
-    APIDefs->Events_Unsubscribe(EV_AE_CHAR_LIST_RESP, AlterEgo::GW2API::OnCharListResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_CHAR_DATA_RESP, AlterEgo::GW2API::OnCharDataResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_SKIN_UNLOCK_RESP, AlterEgo::GW2API::OnSkinUnlocksResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_ITEM_LOC_RESP, AlterEgo::GW2API::OnItemLocationResponse);
     APIDefs->Events_Unsubscribe(EV_AE_CLEARS_ACH_RESPONSE, OnClearsAchResponse);
     APIDefs->Events_Unsubscribe(EV_AE_VAULT_RESPONSE, OnVaultResponse);
     APIDefs->Events_Unsubscribe(EV_AE_VAULT_SEASON_RESP, OnVaultSeasonResponse);
     APIDefs->Events_Unsubscribe(EV_AE_ACH_PROGRESS_RESPONSE, OnAchProgressResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_ACCOUNTS_RESP, AlterEgo::GW2API::OnAccountsResponse);
-    APIDefs->Events_Unsubscribe(EV_HOARD_ACCOUNTS_CHANGED, AlterEgo::GW2API::OnAccountsChanged);
 
     // No new callback body can enter; drain admitted work before teardown.
     // Do not hold a subsystem lock while waiting (events may reenter synchronously).
@@ -13139,10 +13100,7 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
         if(ImGui::MenuItem("Copy Item Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeItem(price->item_id));
     }
     ImGui::Separator();
-    if(APIDefs && APIDefs->Events_Raise && Skinventory::OwnedSkins::IsHoardAndSeekAvailable() && ImGui::MenuItem("Find in Hoard & Seek")) {
-        const auto name=price && price->item_id ? Skinventory::Commerce::GetItemName(price->item_id) : std::string();
-        APIDefs->Events_Raise(EV_HOARD_SEARCH,(void*)(name.empty()?skin.name.c_str():name.c_str()));
-    }
+
     const auto wiki=Skinventory::WikiImage::GetWikiData(skin.id);
     if(!wiki.vendor_waypoint.empty() && ImGui::MenuItem("Copy Vendor Waypoint")) CopyToClipboard(wiki.vendor_waypoint);
     if(ImGui::MenuItem("Open Wiki Page")) {
@@ -13762,7 +13720,7 @@ static int g_ShopNavigationSource=0,g_ShopNavigationMaxGold=0;
 static bool g_ShopNavigationFilterDirty=true;
 static void RenderSkinShoppingList() {
     if (!Skinventory::OwnedSkins::HasData()) {
-        ImGui::TextWrapped("Hoard & Seek data not yet loaded. Ensure Hoard & Seek is installed and has fetched account data.");
+        ImGui::TextWrapped("No ownership data. Link an API key and refresh.");
         return;
     }
 
@@ -15934,13 +15892,12 @@ static void RenderCharactersStatusRow() {
         const int ri = g_CharDisplayOrder[g_SelectedCharIdx];
         if (ri >= 0 && ri < (int)chars.size()) selected = &chars[ri];
     }
-    const auto hoard = AlterEgo::GW2API::GetHoardStatus();
-    const bool hoardReady = hoard == AlterEgo::HoardStatus::Available ||
-                            hoard == AlterEgo::HoardStatus::Ready;
+    const auto hoard = AlterEgo::GW2API::GetAccountStatus();
+    const bool hoardReady = hoard == AlterEgo::AccountStatus::Ready;
     const auto fetch = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
     AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
-    std::string detail = hoardReady ? "Ready" : "Waiting for Hoard & Seek...";
+    std::string detail = hoardReady ? "Ready" : "Link an API key in Nexus options";
     if (busy) {
         g_FetchDoneTime = std::chrono::steady_clock::time_point{};
         state = AlterEgo::RefreshUI::State::Working;
@@ -16038,7 +15995,7 @@ static void RenderSkinventoryStatusRow() {
         AlterEgo::AutoRefreshPolicy::Enabled())
         g_SkinRefreshOwned = true;
     bool querying = Skinventory::OwnedSkins::IsQuerying();
-    bool canRefresh = Skinventory::OwnedSkins::IsHoardAndSeekAvailable() && !querying;
+    bool canRefresh = Skinventory::OwnedSkins::IsAccountAvailable() && !querying;
     {
         static std::string s_autoRefreshAccount;
         const std::string currentAccount = GetEffectiveAccountName();
@@ -16081,8 +16038,8 @@ static void RenderSkinventoryStatusRow() {
     } else if (std::chrono::steady_clock::now() < s_successUntil) {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete - " + std::to_string(Skinventory::OwnedSkins::GetOwnedCount()) + " owned";
-    } else if (!Skinventory::OwnedSkins::IsHoardAndSeekAvailable()) {
-        detail = "Waiting for Hoard & Seek...";
+    } else if (!Skinventory::OwnedSkins::IsAccountAvailable()) {
+        detail = "Link an API key in Nexus options";
     }
     if (Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Updating) {
         state = AlterEgo::RefreshUI::State::Working;
@@ -16187,9 +16144,8 @@ static void PollAutoCharacterRefresh() {
         return;
     }
     if (g_AutoRefreshTracker.PendingCharacter().empty()) return;
-    const auto status = AlterEgo::GW2API::GetHoardStatus();
-    const bool ready = status == AlterEgo::HoardStatus::Available ||
-                       status == AlterEgo::HoardStatus::Ready;
+    const auto status = AlterEgo::GW2API::GetAccountStatus();
+    const bool ready = status == AlterEgo::AccountStatus::Ready;
     const bool busy = AlterEgo::GW2API::GetFetchStatus() ==
                       AlterEgo::FetchStatus::InProgress;
     std::string name;
@@ -16319,7 +16275,19 @@ void AddonRender() {
     AlterEgo::IconManager::Tick();
     Skinventory::WikiImage::Tick();
     Skinventory::OwnedSkins::Tick();
-    AlterEgo::GW2API::PollRetries();   // fire any scheduled H&S BUSY backoff retry
+    // Normalize legacy saved account names to the registry GUID. The active
+    // character and the selected browsing account are independent.
+    if(AlterEgo::NativeAccounts::Ready()){
+        const auto accounts=AlterEgo::NativeAccounts::Linked();
+        if(accounts.size()<=1)g_SelectedAccountFilter.clear();
+        else{
+            for(const auto& a:accounts)if(g_SelectedAccountFilter==a.name){g_SelectedAccountFilter=a.id;break;}
+            if(!g_SelectedAccountFilter.empty()&&std::none_of(accounts.begin(),accounts.end(),[](const auto& a){return a.id==g_SelectedAccountFilter;}))g_SelectedAccountFilter.clear();
+            static size_t priorCount=0;
+            if(priorCount<2&&g_SelectedAccountFilter.empty())g_SelectedAccountFilter=AlterEgo::GW2API::GetCurrentAccountName();
+            priorCount=accounts.size();
+        }
+    }
     PollAutoCharacterRefresh();     // MumbleLink-triggered requests (debounced, cooldown, no overlap)
     PollAchievementCachePersistence(); // load/save disk progress, even when window is hidden
     SyncCompletionAccountCaches(); // selected-account Clears/Vault snapshots, even with UI hidden
@@ -16344,9 +16312,8 @@ void AddonRender() {
     // Achievements tab or tracker popout is visible. No startup API burst.
     {
         static auto s_lastPinnedRefresh = std::chrono::steady_clock::time_point{};
-        auto hStatus = AlterEgo::GW2API::GetHoardStatus();
-        bool hReady = (hStatus == AlterEgo::HoardStatus::Available ||
-                       hStatus == AlterEgo::HoardStatus::Ready);
+        auto hStatus = AlterEgo::GW2API::GetAccountStatus();
+        bool hReady = (hStatus == AlterEgo::AccountStatus::Ready);
         const bool achievementsInUse =
             g_AchPopoutVisible || (g_WindowVisible && g_MainTab == 4);
         if (achievementsInUse && hReady && !g_AchProgressFetching) {
@@ -16399,35 +16366,15 @@ void AddonRender() {
     }
 
     // H&S status
-    auto hoardStatus = AlterEgo::GW2API::GetHoardStatus();
+    auto hoardStatus = AlterEgo::GW2API::GetAccountStatus();
     auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
     bool scanning = (fetchStatus == AlterEgo::FetchStatus::InProgress);
-    bool hoardReady = (hoardStatus == AlterEgo::HoardStatus::Available ||
-                       hoardStatus == AlterEgo::HoardStatus::Ready);
+    bool hoardReady = (hoardStatus == AlterEgo::AccountStatus::Ready);
 
-    // H&S connection warnings (shown globally, above tab bar)
-    if (hoardStatus == AlterEgo::HoardStatus::Unknown) {
-        RenderSpinner("Checking for Hoard & Seek...");
-        static auto lastPing = std::chrono::steady_clock::time_point{};
-        auto now = std::chrono::steady_clock::now();
-        if (now - lastPing > std::chrono::seconds(5)) {
-            lastPing = now;
-            AlterEgo::GW2API::PingHoard();
-        }
-    } else if (hoardStatus == AlterEgo::HoardStatus::Unavailable) {
-        ImGui::TextWrapped("Character and progress migration is incomplete; these features still require Hoard & Seek. Native Inventory and the Library remain available.");
-    } else if (hoardStatus == AlterEgo::HoardStatus::PermDenied) {
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "H&S permission denied. Enable in H&S settings.");
-    }
-
-    // Auto-query accounts when H&S becomes available (multi-account)
-    {
-        static bool s_accountsQuerySent = false;
-        if (hoardReady && AlterEgo::AutoRefreshPolicy::Enabled() && !s_accountsQuerySent) {
-            s_accountsQuerySent = true;
-            AlterEgo::GW2API::QueryAccounts();
-        }
-    }
+    // No separate addon is needed for character and inventory retrieval.
+    if(!AlterEgo::NativeAccounts::Ready())RenderSpinner("Loading linked accounts...");
+    else if(!AlterEgo::NativeAccounts::HasLinkedAccounts())
+        ImGui::TextWrapped("Link your GW2 API key in Nexus > Alter Ego options. Saved Library data remains available.");
 
     // Account selector (only when multi-account) — rendered on the same row as
     // the tab bar (right-aligned) to save vertical space.
@@ -16723,15 +16670,16 @@ void AddonRender() {
                     // the character whose details happen to be selected.
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
-                        auto loadUnavailable=AlterEgo::GameMemory::LoadUnavailableReason(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
-                        if(AlterEgo::NativeAccounts::HasLinkedAccounts()){
+                        const auto verifiedTarget=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name);
+                        auto loadUnavailable=AlterEgo::GameMemory::LoadUnavailableReason(g_CurrentCharName,ch.name,memoryAccount,verifiedTarget);
+                        {
                             const auto active=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(g_CurrentCharName);
                             const auto target=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name);
                             if(active.empty()||target.empty()||active!=target)
                                 loadUnavailable="Character ownership is unknown or belongs to another linked account.";
                         }
                         if (ImGui::MenuItem("Load",nullptr,false,loadUnavailable.empty())) {
-                            loadTarget=ch.name;loadAccount=ch.account_name;
+                            loadTarget=ch.name;loadAccount=verifiedTarget;
                         }
                         if (!loadUnavailable.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                             ImGui::SetTooltip("%s",loadUnavailable.c_str());
@@ -16918,15 +16866,15 @@ void AddonRender() {
                             ImGui::TextColored(buildColor, "%s", shortLabel.c_str());
                             if (ImGui::IsItemHovered()) {
                                 if (match.checkUtilities)
-                                    ImGui::SetTooltip("%s - Check Utilities\n%s\n(cached H&S data)",
+                                    ImGui::SetTooltip("%s - Check Utilities\n%s\n(cached API data)",
                                         label.c_str(), match.skillDifferences.c_str());
                                 else
-                                    ImGui::SetTooltip("%s (cached H&S data)", label.c_str());
+                                    ImGui::SetTooltip("%s (cached API data)", label.c_str());
                             }
                             if (match.checkUtilities) {
                                 ImGui::TextColored(buildColor, "Check Utilities");
                                 if (ImGui::IsItemHovered())
-                                    ImGui::SetTooltip("Saved vs retrieved skills:\n%s\n(cached H&S data)",
+                                    ImGui::SetTooltip("Saved vs retrieved skills:\n%s\n(cached API data)",
                                         match.skillDifferences.c_str());
                             }
 
@@ -16951,7 +16899,7 @@ void AddonRender() {
                                     : std::string();
                             ImGui::TextColored(gearColor, "%s", shownGearText.c_str());
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s (last retrieved H&S data)", gearText);
+                                ImGui::SetTooltip("%s (last retrieved API data)", gearText);
                             if (!match.infusionWarning.empty()) {
                                 ImGui::TextColored(ImVec4(0.90f, 0.75f, 0.48f, 1.0f),
                                     "Infusions: check totals");
@@ -17341,8 +17289,6 @@ void AddonRender() {
                 // Prune any cached characters deleted in-game now that we have a
                 // fresh, authoritative roster. Only on success — an errored fetch
                 // must not wipe the cache.
-                if (AlterEgo::GW2API::GetFetchStatus() == AlterEgo::FetchStatus::Success)
-                    AlterEgo::GW2API::ReconcileCharactersWithRoster();
                 const auto& names = AlterEgo::GW2API::GetPendingCharNames();
                 if (!names.empty()) {
                     // Filter by selected account if applicable
@@ -17482,7 +17428,7 @@ void AddonRender() {
             // unwound, using the exact right-clicked character identity.
             if (!loadTarget.empty()) {
                 std::string message;
-                if(AlterEgo::NativeAccounts::HasLinkedAccounts()){
+                {
                     const auto active=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(g_CurrentCharName);
                     const auto target=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(loadTarget);
                     if(active.empty()||target.empty()||active!=target)
@@ -18038,34 +17984,6 @@ void AddonOptions() {
 
     AlterEgo::NativeAccounts::RenderOptions();
     ImGui::Spacing();
-    // H&S connection status
-    RenderSectionHeader("Data Source: Hoard & Seek", AlterEgo::UI::SectionGold);
-    auto hoardStatus = AlterEgo::GW2API::GetHoardStatus();
-    switch (hoardStatus) {
-        case AlterEgo::HoardStatus::Unknown:
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Status: Checking...");
-            break;
-        case AlterEgo::HoardStatus::Unavailable:
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Status: Not detected");
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                "Hoard & Seek is required. Install it from the Nexus addon library.");
-            break;
-        case AlterEgo::HoardStatus::Available:
-            ImGui::TextColored(ImVec4(0.35f, 0.82f, 0.35f, 1.0f), "Status: Connected");
-            break;
-        case AlterEgo::HoardStatus::PermDenied:
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Status: Permission denied");
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                "Re-enable in H&S settings under Permissions.");
-            if (RenderGoldButton("Retry Connection")) {
-                AlterEgo::GW2API::PingHoard();
-            }
-            break;
-        case AlterEgo::HoardStatus::Ready:
-            ImGui::TextColored(ImVec4(0.35f, 0.82f, 0.35f, 1.0f), "Status: Ready");
-            break;
-    }
-
     ImGui::Spacing();
     RenderSectionHeader("Automatic API Refresh", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Automatically refresh API data##ae_auto", &g_AutoRefreshEnabled)) {
@@ -18252,7 +18170,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef() {
     AddonDef.Version.Build = V_BUILD;
     AddonDef.Version.Revision = V_REVISION;
     AddonDef.Author = "PieOrCake.7635";
-    AddonDef.Description = "Manage characters, builds, skins, clears, achievements. Requires Hoard & Seek addon for account data retrieval. Optional - Events:Chat and Events:Alerts";
+    AddonDef.Description = "Manage characters, builds, skins, clears, achievements. Native account API key required for authenticated data. Optional - Events:Chat and Events:Alerts";
     AddonDef.Load = AddonLoad;
     AddonDef.Unload = AddonUnload;
     AddonDef.Flags = AF_None;

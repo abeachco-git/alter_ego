@@ -24,14 +24,8 @@ namespace AlterEgo {
         Error
     };
 
-    // H&S connection state
-    enum class HoardStatus {
-        Unknown,        // Haven't pinged yet
-        Unavailable,    // Ping sent, no pong received
-        Available,      // Pong received, H&S is running
-        PermDenied,     // User denied this addon in H&S settings
-        Ready           // Data flowing
-    };
+    // Native account configuration status
+    enum class AccountStatus { Unknown, Unavailable, Ready };
 
     // Equipment slot on a character
     struct EquipmentItem {
@@ -242,7 +236,7 @@ namespace AlterEgo {
         int active_build_tab = 0;
         int active_equipment_tab = 0;
         std::vector<std::string> heropoints;    // Completed hero challenge IDs (e.g. "0-29")
-        std::string account_name;              // Which H&S account owns this character
+        std::string account_name;              // Native account GUID; legacy name/unknown rows remain readable
     };
 
     // Item location result from H&S cache query
@@ -253,9 +247,9 @@ namespace AlterEgo {
         std::string account_name;   // Which account this location belongs to
     };
 
-    // Account info from H&S v3
+    // Native account projection
     struct AccountInfo {
-        std::string name;           // GW2 account name (e.g. "PieOrCake.7635")
+        std::string name;           // Stable native account GUID
         std::string label;          // User-assigned friendly name (e.g. "Main")
         std::string display_name;   // label if non-empty, else name
         int64_t last_updated = 0;
@@ -326,13 +320,6 @@ namespace AlterEgo {
         std::string ae2_code;
     };
 
-    // Response event names for H&S queries
-    #define EV_AE_CHAR_LIST_RESP   "EV_ALTER_EGO_CHAR_LIST"
-    #define EV_AE_CHAR_DATA_RESP   "EV_ALTER_EGO_CHAR_DATA"
-    #define EV_AE_SKIN_UNLOCK_RESP "EV_ALTER_EGO_SKIN_UNLOCKS"
-    #define EV_AE_ITEM_LOC_RESP    "EV_ALTER_EGO_ITEM_LOC"
-    #define EV_AE_ACCOUNTS_RESP    "EV_ALTER_EGO_ACCOUNTS"
-
     class GW2API {
     public:
         // --- Nexus integration ---
@@ -343,30 +330,17 @@ namespace AlterEgo {
         static std::string GetDataDirectory();
 
         // --- H&S integration ---
-        static HoardStatus GetHoardStatus();
-        static void PingHoard();                    // Check if H&S is available
+        static HoardStatus GetAccountStatus();
         static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via H&S
         static void RequestCharacterList();              // Fetch just the character name list
         static void RequestCharacterRefreshSelected(
             const std::vector<std::string>& names, bool refreshCrafting = true); // Manual=true; auto=false
-        static void PollRetries();                       // Per-frame: fire a scheduled HOARD_STATUS_BUSY backoff retry
 
         // H&S cached queries (synchronous, from H&S in-memory cache)
         static void QuerySkinUnlocks(const std::vector<uint32_t>& skin_ids);
         static void QueryItemLocation(uint32_t item_id);
 
-        // H&S event handlers (registered via Events_Subscribe)
-        static void OnHoardPong(void* eventArgs);
-        static void OnHoardDataUpdated(void* eventArgs);
-        static void OnCharListResponse(void* eventArgs);
-        static void OnCharDataResponse(void* eventArgs);
-        static void OnSkinUnlocksResponse(void* eventArgs);
-        static void OnItemLocationResponse(void* eventArgs);
-        static void OnAccountsResponse(void* eventArgs);
-        static void OnAccountsChanged(void* eventArgs);
-
         // --- Multi-account ---
-        static void QueryAccounts();                     // Fetch account list from H&S
         static uint32_t GetAccountCount();               // Number of configured accounts (0 = unknown)
         static std::vector<AccountInfo> GetAccounts();
         static std::string GetCurrentAccountName(); // Account for the logged-in character
@@ -378,7 +352,7 @@ namespace AlterEgo {
 
         // --- Fetch state ---
         static FetchStatus GetFetchStatus();
-        static const std::string& GetFetchStatusMessage();
+        static std::string GetFetchStatusMessage();
         static std::string GetCurrentFetchCharName();
 
         // --- Query ---
@@ -582,16 +556,11 @@ namespace AlterEgo {
         static bool CommitComposableEdit(
             const std::function<bool(Composable::Document&, std::string&)>& edit);
         static AddonAPI_t* s_api;
-        static HoardStatus s_hoard_status;
         static FetchStatus s_fetch_status;
         static std::string s_fetch_message;
 
         // Multi-account state
-        static uint32_t s_account_count;                 // from pong/data_updated
-        static std::vector<AccountInfo> s_accounts;      // from QueryAccounts
-        static std::string s_current_account_name;       // resolved from MumbleLink char
-        static std::unordered_map<std::string, std::string> s_char_to_account; // char name -> account_name
-        static bool s_accounts_queried;                  // have we queried accounts at least once
+        static std::string s_active_character;
 
         static std::vector<Character> s_characters;
         static bool s_has_character_data;
@@ -601,24 +570,9 @@ namespace AlterEgo {
         static std::vector<std::string> s_pending_char_names;
         static int s_chars_fetched;
         static int s_chars_total;
-        static std::string s_priority_char_name;
-        static int s_pending_char_idx; // index into s_pending_char_names for next char to fetch
-        static bool s_list_only_mode;  // true = just fetch name list, don't start char data fetch
-        static int s_multi_acct_list_idx;  // index into s_accounts for multi-account char list fetch (-1 = not active)
-
-        // Sub-endpoint fetch state
-        // Phase 0: /core
-        // Phase 1: /equipmenttabs (just IDs)
-        // Phase 2: /equipmenttabs/:N (one per tab)
-        // Phase 3: /buildtabs?tabs=all
         static Character s_current_char;
-        static int s_fetch_phase;
-        static std::vector<int> s_equip_tab_ids;
-        static int s_equip_tab_idx;
 
         // H&S cached data
-        static std::unordered_map<uint32_t, bool> s_skin_unlocks;  // skin_id -> unlocked
-        static std::unordered_map<uint32_t, ItemLocationResult> s_item_locations;
 
         // Caches (public endpoint data)
         static std::unordered_map<uint32_t, ItemInfo> s_item_cache;
@@ -667,7 +621,7 @@ namespace AlterEgo {
         static BuildTemplate ParseBuildTemplate(const nlohmann::json& tab_json);
 
         // Sub-endpoint fetch for current character (phase 0/1/2)
-        static void FetchCharacterPhase();
+        static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority);
     };
 
 }

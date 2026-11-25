@@ -29,7 +29,6 @@ namespace Skinventory {
         static void SetAccountName(const std::string& name);
 
         // Ping H&S to check availability
-        static void PingHoardAndSeek();
 
         // Request owned skins via H&S API proxy (/v2/account/skins) — single request
         static void RequestOwnedSkinsViaApi();
@@ -40,6 +39,8 @@ namespace Skinventory {
 
         // Check if a specific skin is owned (returns false if unknown/not yet queried)
         static bool IsOwned(uint32_t skin_id);
+        static bool HasDataForAccount(const std::string& account);
+        static bool IsOwnedForAccount(const std::string& account,uint32_t id);
 
         // Mark a skin as owned at runtime (e.g. from Events: Alerts unlock notification)
         static void MarkOwned(uint32_t skin_id);
@@ -48,7 +49,7 @@ namespace Skinventory {
         static bool HasData();
 
         // Is H&S available?
-        static bool IsHoardAndSeekAvailable();
+        static bool IsAccountAvailable();
 
         // Is a query in progress?
         static bool IsQuerying();
@@ -69,13 +70,7 @@ namespace Skinventory {
         static std::unordered_set<uint32_t> GetOwnedSnapshot();
 
     private:
-        static void OnPong(void* eventArgs);
-        static void OnSkinsResponse(void* eventArgs);
-        static void OnApiResponse(void* eventArgs);
-        static void OnDataUpdated(void* eventArgs);
-
         static bool SaveToCache();
-        static bool LoadFromCache();
 
         static AddonAPI_t* s_API;
         static std::string s_data_dir;
@@ -83,7 +78,6 @@ namespace Skinventory {
         static std::unordered_set<uint32_t> s_queried_skins; // All skins we've asked about
         static std::mutex s_mutex;
         static std::atomic<bool> s_has_data;
-        static std::atomic<bool> s_hs_available;
         static std::atomic<bool> s_querying;
         static std::atomic<bool> s_data_updated;
         static std::string s_status_message;
@@ -91,11 +85,6 @@ namespace Skinventory {
         static std::atomic<uint64_t> s_generation;
         static std::unordered_set<uint32_t> s_locally_marked; // skins marked via alerts, protected from API overwrites
 
-        // Batch query state
-        static std::vector<uint32_t> s_pending_ids;
-        static size_t s_batch_index;
-        static std::atomic<bool> s_batch_pending; // deferred to next Tick()
-        static void SendNextBatch();
         static std::string s_account_name; // for multi-account H&S v3 queries
     };
 
