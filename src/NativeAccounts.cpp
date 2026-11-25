@@ -321,12 +321,16 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             scope("Delivery box",{},"/v2/commerce/delivery",false);
             if((onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment")&&(!automatic||AutoScope("Roster"))){
                 if(!a.permissions.count("characters")){
+                    if(automatic&&!ScopeDue(*previous,a.id,"Roster"))continue;
                     ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};BeginScope(failed,"Roster");Record(root,failed);EndScope(failed);publishProgress(true);
                 }else try{
                     std::set<std::string> names;
                     auto cached=previous->inventory.rosters.find(a.id);
-                    if(automatic&&cached!=previous->inventory.rosters.end()&&!ScopeDue(*previous,a.id,"Roster"))names=cached->second;
-                    else{ScopeState state{a.id,"Roster","","Ready",Now(),0};BeginScope(state,"Roster");names=Roster(a,key.value);state.success=Now();Record(root,state);EndScope(state);publishProgress(true);}
+                    if(automatic&&!ScopeDue(*previous,a.id,"Roster")){
+                        if(cached!=previous->inventory.rosters.end())names=cached->second;
+                        // No cached roster and cooldown still active: leave empty,
+                        // rather than retrying the roster from another due scope.
+                    }else{ScopeState state{a.id,"Roster","","Ready",Now(),0};BeginScope(state,"Roster");names=Roster(a,key.value);state.success=Now();Record(root,state);EndScope(state);publishProgress(true);}
                     for(const auto& ch:names){
                         const auto path="/v2/characters/"+Encode(ch);
                         scope("Bags",ch,path+"/inventory",true);

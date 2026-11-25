@@ -66,7 +66,17 @@ int case_native_inventory(int,char**){
     assert(v.wallet.size()==2&&v.wallet.front().value>=0);
     assert(!UsableLoose(g.slots.front(),"account-a","B",{},true));
     assert(UsableLoose(rows.front(),"account-a","B",{},true)&&!UsableLoose(rows.front(),"account-a","B",{},false));
-    assert(!Due("Wallet",290,0,300)&&Due("Wallet",100,100,401)&&!Due("Legendary Armory",100,100,401));
+    for(const auto* scope:{"Wallet","Bags","Shared inventory","Bank","Equipment","Delivery box","Materials","Guild bank","Guild access"}){
+        assert(FreshSeconds(scope)==1800);
+        assert(!Due(scope,100,0,1899)&&Due(scope,100,0,1900));
+        assert(!Due(scope,100,100,1899)&&Due(scope,100,100,1900));
+        assert(Due(scope,0,0,100));
+    }
+    for(const auto* scope:{"Legendary Armory","Roster"}){
+        assert(FreshSeconds(scope)==3600);
+        assert(!Due(scope,100,100,3699)&&Due(scope,100,100,3700));
+        assert(!Due(scope,100,0,1899)&&Due(scope,100,0,1900));
+    }
     assert(Match("Superior Sigil of Force",10,"sigli force"));
     using AlterEgo::Cache::CompletionDataset;
     const auto vaultPeriod=[](int64_t stamp,int id){return Json{{"fetched_at",stamp},{"objectives",Json::array({Json{{"id",id},{"title","Objective"},{"claimed",false}}})}};};
