@@ -1,4 +1,5 @@
 #include "../src/NativeInventoryStore.h"
+#include "../src/NativeProgressCore.h"
 #include <cassert>
 #include <filesystem>
 #include <chrono>
@@ -42,5 +43,11 @@ int case_native_inventory(int,char**){
     assert(socket);
     auto armory=ParseArmory(Json::parse(R"([{"id":21,"count":2}])"),"account-a");
     assert(armory.size()==1&&armory[0].binding==Binding::Account&&armory[0].count==2);
+    const auto progress=NativeProgress::ParseAchievements(Json::parse(R"([{"id":1,"current":2,"max":3,"done":false,"bits":[0,70]},{"id":2,"done":true,"repeated":4}])"),500);
+    assert(progress.entries.size()==2&&progress.entries.at(1).completed_bits.count(70)&&progress.entries.at(2).repeated==4);
+    rejected=false;try{NativeProgress::ParseAchievements(Json::parse(R"([{"id":1,"done":false},{"id":1,"done":true}])"),500);}catch(...){rejected=true;}assert(rejected);
+    const auto special=NativeProgress::ParseVault(Json::parse(R"({"objectives":[{"id":9,"title":"Objective","track":"PvE","acclaim":100,"progress_current":1,"progress_complete":2,"claimed":false}]})"),true);
+    assert(special.objectives.size()==1&&!special.objectives[0].isDone());
+    rejected=false;try{NativeProgress::ParseVault(Json::parse(R"({"objectives":[]})"),false);}catch(...){rejected=true;}assert(rejected);
     std::filesystem::remove_all(root);return 0;
 }

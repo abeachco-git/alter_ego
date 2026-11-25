@@ -41,7 +41,7 @@
 #include "FontManager.h"
 #include "IconManager.h"
 #include "ChatLink.h"
-#include "HoardAndSeekAPI.h"
+#include "NativeProgress.h"
 #include "SpecDescriptions.h"
 #include "SkinCache.h"
 #include "OwnedSkins.h"
@@ -405,7 +405,7 @@ static bool g_ShowCraftingIcons = false;
 static bool g_ShowAge = false;
 static bool g_ShowPlaytime = false;
 static bool g_ShowLastLogin = false;
-// Explicit opt-in: no additional H&S requests unless enabled in Nexus options.
+// Explicit opt-in: no additional API requests unless enabled in Nexus options.
 static bool g_AutoRefreshEnabled = false;
 static bool g_AutoRefreshOnLogin = true;
 static bool g_AutoRefreshOnSpecialization = true;
@@ -464,8 +464,6 @@ static bool g_SkinShopListDirty = true;
 // =========================================================================
 // Achievement Tracker
 // =========================================================================
-#define EV_AE_ACH_PROGRESS_RESPONSE "EV_ALTER_EGO_ACH_PROGRESS_RESP"
-static void OnAchProgressResponse(void* eventArgs);
 
 struct AchGroupDef {
     std::string id;            // UUID string
@@ -548,7 +546,8 @@ static std::string g_AchSelectedGroupId;   // currently selected group UUID
 static uint32_t g_AchSelectedCatId = 0;    // currently selected category ID
 static std::atomic<bool> g_AchCatFetching{false};      // fetching defs for selected category
 static std::atomic<bool> g_AchProgressFetching{false}; // fetching account progress
-static std::atomic<long long> g_AchProgressQueryStartMs{0}; // watchdog for missing H&S responses
+static std::atomic<uint64_t> g_AchRequestGeneration{0};
+static std::atomic<long long> g_AchProgressQueryStartMs{0}; // watchdog for missing API responses
 static bool g_AchNeedRequery = false;      // deferred requery on account change
 static bool g_AchProgressDirty = false;    // persistent cache needs flushing
 static std::string g_AchCachedAccount;     // account whose data is currently in g_AchProgress
@@ -1026,7 +1025,7 @@ static void OnEvAlertAchievementCompleted(void* eventArgs) {
     if (g_AchCachedAccount.empty() ||
         g_AchCachedAccount != GetAchievementCacheAccount()) return;
     const std::string loggedIn = AlterEgo::GW2API::GetCurrentAccountName();
-    if (!loggedIn.empty() && loggedIn != g_AchCachedAccount) return;
+    if (loggedIn.empty() || loggedIn != g_AchCachedAccount) return;
     auto* payload = (AlertUnlockPayload*)eventArgs;
     if (payload->ID != 0) {
         {
@@ -2457,7 +2456,7 @@ static bool IsAchCategoryRefreshDue(uint32_t catId) {
     for (uint32_t id : cat->second.achievements) {
         if (g_AchProgress.count(id)) { hasProgress = true; break; }
     }
-    if (!hasProgress) return true;
+    if (!hasProgress && g_AchProgressLoadedSnapshotAt<=0) return true;
     const int64_t now = (int64_t)std::time(nullptr);
     return g_AchProgressLoadedSnapshotAt <= 0 ||
            now < g_AchProgressLoadedSnapshotAt ||
@@ -2525,124 +2524,63 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
     }, [] { g_AchCatFetching = false; });
 }
 
-static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic,
-                                 uint32_t categoryId) {
-    if (ids.empty() || !APIDefs ||
-        (automatic && !AlterEgo::AutoRefreshPolicy::Enabled())) return;
-    if (categoryId) g_AchCategoryRefreshAt[categoryId] = std::chrono::steady_clock::now();
-    g_AchQueryAutomatic.store(automatic);
-
-    // Send via H&S achievement query (same mechanism as Clears)
-    std::string acctName = GetEffectiveAccountName();
-    HoardQueryAchievementRequest req{};
-    req.api_version = HOARD_API_VERSION;
-    strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
-    strncpy(req.response_event, EV_AE_ACH_PROGRESS_RESPONSE, sizeof(req.response_event) - 1);
-    if (!acctName.empty())
-        strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
-
-    // Batch into chunks of 200 (H&S limit)
-    for (size_t start = 0; start < ids.size(); start += 200) {
-        size_t end = std::min(start + 200, ids.size());
-        req.id_count = (uint32_t)(end - start);
-        for (size_t i = start; i < end; i++) {
-            req.ids[i - start] = ids[i];
-        }
-        // Mark busy BEFORE dispatch. H&S may respond synchronously, in which
-        // case the callback must be allowed to clear the flag permanently.
-        g_AchProgressQueryStartMs = NowMs();
-        g_AchProgressFetching = true;
-        APIDefs->Events_Raise(EV_HOARD_QUERY_ACHIEVEMENT, &req);
-    }
-}
-
-static void OnAchProgressResponse(void* eventArgs) {
-    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
-    if (!callbackLease) { delete static_cast<HoardQueryAchievementResponse*>(eventArgs); return; }
-    if (!eventArgs) return;
-    auto* resp = (HoardQueryAchievementResponse*)eventArgs;
-    std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
-    if (resp->api_version < 2) { return; }
-
-    const bool single=AlterEgo::GW2API::HasAccountsData() && AlterEgo::GW2API::GetAccountCount()==1;
-    const std::string echoed=resp->api_version>=3 ?
-        std::string(resp->account_name,strnlen(resp->account_name,sizeof(resp->account_name))) : std::string{};
-    // Use the represented account under the same mutex as publication.
-    // Do not read the mutable UI account selection on an H&S worker thread.
-    std::lock_guard<std::recursive_mutex> responseLock(g_AchMutex);
-    if(resp->entry_count>200 ||
-       !AlterEgo::Identity::MatchesReply({g_AchCachedAccount},{echoed},resp->api_version>=3,single))return;
-
-    if (resp->status != HOARD_STATUS_OK) {
-        if (resp->status == HOARD_STATUS_BUSY) {
-            // Preserve provenance: a manual refresh retry is never suppressed
-            // by disabling automatic API refreshes.
-            g_AchRetryAutomatic = g_AchQueryAutomatic.load();
-            g_AchRetryAtMs = NowMs() + (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
-        } else {
-            g_AchRefreshError = resp->status == HOARD_STATUS_DENIED
-                ? "Hoard & Seek permission denied" : "Achievement progress refresh failed";
-        }
-        g_AchProgressFetching = false;
-        g_AchProgressQueryStartMs = 0;
-        return;
-    }
-
+static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic,uint32_t categoryId){
+    if(!APIDefs||(automatic&&!AlterEgo::AutoRefreshPolicy::Enabled()))return;
+    const std::string account=GetEffectiveAccountName();
+    if(account.empty())return;
+    uint64_t generation;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        for (uint32_t i = 0; i < resp->entry_count; i++) {
-            auto& e = resp->entries[i];
-            AchProgress p;
-            p.id = e.id;
-            p.done = e.done;
-            p.current = e.current;
-            p.max = e.max;
-            for (uint32_t b = 0; b < e.bit_count && b < 64; b++) {
-                p.completed_bits.insert(e.bits[b]);
-            }
-            // For infinite repeatables, the API returns done=true if ever completed,
-            // even after restart. Override based on current progress.
-            if (p.done && p.max > 0 && p.current < p.max) {
-                auto defIt = g_AchDefs.find(e.id);
-                if (defIt != g_AchDefs.end()) {
-                    bool isRepeatable = false, isDailyOrWeekly = false;
-                    for (const auto& f : defIt->second.flags) {
-                        if (f == "Repeatable") isRepeatable = true;
-                        if (f == "Daily" || f == "Weekly") isDailyOrWeekly = true;
-                    }
-                    if (isRepeatable && !isDailyOrWeekly) {
-                        p.done = false;
-                    }
-                }
-            }
-            // Grace period: protect optimistic alert increments from stale API data
-            auto optIt = g_AchOptimisticTime.find(e.id);
-            if (optIt != g_AchOptimisticTime.end()) {
-                auto elapsed = std::chrono::steady_clock::now() - optIt->second;
-                auto existIt = g_AchProgress.find(e.id);
-                if (elapsed < std::chrono::minutes(10) && existIt != g_AchProgress.end()
-                    && p.current < existIt->second.current) {
-                    // API hasn't caught up — keep our optimistic current/done,
-                    // but merge in any newly completed bits from the API
-                    for (uint32_t bit : p.completed_bits) {
-                        existIt->second.completed_bits.insert(bit);
-                    }
-                    continue;
-                }
-                // API caught up or grace period expired — accept and clear
-                g_AchOptimisticTime.erase(optIt);
-            }
-            g_AchProgress[e.id] = std::move(p);
+        if(account!=g_AchCachedAccount||g_AchProgressFetching)return;
+        if(automatic&&g_AchProgressCacheSavedAt>0&&std::time(nullptr)-g_AchProgressCacheSavedAt<15){
+            if(categoryId)g_AchCategoryRefreshAt[categoryId]=std::chrono::steady_clock::now();return;
         }
-        g_LastAchProgressQuery = std::chrono::steady_clock::now();
-        g_AchProgressCacheSavedAt = (int64_t)std::time(nullptr);
-        g_AchRefreshSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
-        g_AchRefreshError.clear();
-        g_AchProgressGen++;
-        g_AchProgressDirty = true;
+        generation=++g_AchRequestGeneration;g_AchProgressFetching=true;g_AchProgressQueryStartMs=NowMs();
+        g_AchQueryAutomatic=automatic;
+        if(categoryId)g_AchCategoryRefreshAt[categoryId]=std::chrono::steady_clock::now();
     }
-    g_AchProgressFetching = false;
-    g_AchProgressQueryStartMs = 0;
+    AlterEgo::Background::Workers().Launch([account,generation,automatic,ids]{
+        auto result=AlterEgo::NativeProgress::FetchAchievements(account,!automatic);
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account)return;
+        g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;
+        if(!result.snapshot){
+            g_AchRefreshError=result.error;
+            if(result.status==429){g_AchRetryAutomatic=automatic;g_AchRetryAtMs=NowMs()+5000;}
+            return;
+        }
+        std::unordered_map<uint32_t,AchProgress> next;
+        for(const auto& [id,source]:result.snapshot->entries){
+            auto p=source;
+            if(p.done&&p.max>0&&p.current<p.max){
+                auto def=g_AchDefs.find(id);
+                if(def!=g_AchDefs.end()){
+                    const auto& flags=def->second.flags;
+                    if(std::find(flags.begin(),flags.end(),"Repeatable")!=flags.end()&&
+                       std::find(flags.begin(),flags.end(),"Daily")==flags.end()&&
+                       std::find(flags.begin(),flags.end(),"Weekly")==flags.end())p.done=false;
+                }
+            }
+            next.emplace(id,std::move(p));
+        }
+        for(auto it=g_AchOptimisticTime.begin();it!=g_AchOptimisticTime.end();){
+            auto old=g_AchProgress.find(it->first);auto incoming=next.find(it->first);
+            if(old!=g_AchProgress.end()&&std::chrono::steady_clock::now()-it->second<std::chrono::minutes(10)&&
+               (incoming==next.end()||incoming->second.current<old->second.current)){
+                auto p=old->second;if(incoming!=next.end())p.completed_bits.insert(incoming->second.completed_bits.begin(),incoming->second.completed_bits.end());
+                next[it->first]=std::move(p);++it;
+            }else it=g_AchOptimisticTime.erase(it);
+        }
+        const auto zero=[&](uint32_t id){if(!next.count(id)){AchProgress p;p.id=id;next.emplace(id,p);}};
+        for(auto id:ids)zero(id);
+        for(const auto& [catId,cat]:g_AchCategories){(void)catId;for(auto id:cat.achievements)zero(id);}
+        for(auto id:g_AchPinned)zero(id);
+        g_AchProgress=std::move(next);g_AchNeedsInitialFullLoad=false;g_AchManualInitialScan=false;
+        g_AchProgressCacheSavedAt=result.snapshot->fetchedAt;g_AchProgressLoadedSnapshotAt=result.snapshot->fetchedAt;
+        g_LastAchProgressQuery=std::chrono::steady_clock::now();
+        g_AchRefreshSuccessUntil=g_LastAchProgressQuery+std::chrono::seconds(4);
+        g_AchRefreshError.clear();++g_AchProgressGen;g_AchProgressDirty=true;
+    },[generation]{std::lock_guard<std::recursive_mutex> lock(g_AchMutex);if(generation==g_AchRequestGeneration){g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;g_AchRefreshError="Achievement refresh cancelled";}});
 }
 
 static void FetchAchNameIndex() {
@@ -12582,10 +12520,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     APIDefs->Events_Subscribe(EV_PIE_UI_READY, OnPieUIReady);
 
     // Subscribe to H&S events
-    APIDefs->Events_Subscribe(EV_AE_CLEARS_ACH_RESPONSE, OnClearsAchResponse);
-    APIDefs->Events_Subscribe(EV_AE_VAULT_RESPONSE, OnVaultResponse);
-    APIDefs->Events_Subscribe(EV_AE_VAULT_SEASON_RESP, OnVaultSeasonResponse);
-    APIDefs->Events_Subscribe(EV_AE_ACH_PROGRESS_RESPONSE, OnAchProgressResponse);
 
     // Pie UI bridge: announce AE (so an already-loaded Pie sees us) and probe for
     // an already-loaded Pie (which replies EV_PIE_UI_READY).
@@ -12707,10 +12641,6 @@ void AddonUnload() {
     APIDefs->Events_Unsubscribe(EV_PIE_UI_READY, OnPieUIReady);
 
     // Unsubscribe H&S events
-    APIDefs->Events_Unsubscribe(EV_AE_CLEARS_ACH_RESPONSE, OnClearsAchResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_VAULT_RESPONSE, OnVaultResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_VAULT_SEASON_RESP, OnVaultSeasonResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_ACH_PROGRESS_RESPONSE, OnAchProgressResponse);
 
     // No new callback body can enter; drain admitted work before teardown.
     // Do not hold a subsystem lock while waiting (events may reenter synchronously).
@@ -12883,7 +12813,7 @@ static void LoadAchProgress(const std::string& account) {
         g_AchCachedAccount = account;
         g_AchProgressCacheSavedAt = valid ? fetchedAt : 0;
         g_AchProgressLoadedSnapshotAt = valid ? fetchedAt : 0;
-        g_AchNeedsInitialFullLoad = !valid || g_AchProgress.empty();
+        g_AchNeedsInitialFullLoad = !valid;
         g_AchManualInitialScan = false;
         g_AchCategoryRefreshAt.clear();
         g_AchProgressDirty = false;
@@ -14902,59 +14832,17 @@ static void RenderAchievements() {
 
     if (!g_AchGroupsFetched) return;
 
-    // Full account prefetch is ONLY for an account without an existing valid
-    // progress cache. A stale snapshot must not trigger 8,000 API requests.
-    // Drain initial batches slowly to avoid H&S / GW2 API rate limiting.
-    static std::vector<uint32_t> s_progressQueue;
-    static std::string s_prefetchedAccount;
-    static uint64_t s_prefetchedGroupsGeneration = 0;
-    {
-        std::string currentAccount = GetAchievementCacheAccount();
-        if (s_prefetchedAccount != currentAccount ||
-            s_prefetchedGroupsGeneration != g_AchGroupsGeneration) {
-            s_prefetchedAccount = currentAccount;
-            s_prefetchedGroupsGeneration = g_AchGroupsGeneration;
-            s_progressQueue.clear();
-            // Reuse any existing progress data, regardless of its age.
-            // Per-category and pinned timers manage ordinary refreshes.
-            if (!currentAccount.empty() && g_AchNeedsInitialFullLoad) {
-                std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                std::unordered_set<uint32_t> pinnedSet(g_AchPinned.begin(), g_AchPinned.end());
-                std::unordered_set<uint32_t> queued;
-                for (const auto& [catId, cat] : g_AchCategories) {
-                    if (g_AchHiddenCatIds.count(catId)) continue;
-                    for (uint32_t aid : cat.achievements) {
-                        if (pinnedSet.count(aid)) continue;
-                        if (g_AchProgress.count(aid)) continue;
-                        if (queued.insert(aid).second) s_progressQueue.push_back(aid);
-                    }
-                }
-                // Put pinned last: drained first; pinned also get periodic refresh.
-                for (uint32_t aid : g_AchPinned) {
-                    if (g_AchProgress.count(aid)) continue;
-                    if (queued.insert(aid).second) s_progressQueue.push_back(aid);
-                }
-            }
+    // A full native account snapshot needs one request, not one per category.
+    if(g_AchNeedsInitialFullLoad&&!g_AchProgressFetching&&!g_AchCatFetching&&
+       (AlterEgo::AutoRefreshPolicy::Enabled()||g_AchManualInitialScan)){
+        static auto lastAttempt=std::chrono::steady_clock::time_point{};
+        static std::string lastAccount;
+        const auto account=GetAchievementCacheAccount();
+        const auto now=std::chrono::steady_clock::now();
+        if(!account.empty()&&(lastAccount!=account||lastAttempt==std::chrono::steady_clock::time_point{}||
+            now-lastAttempt>=std::chrono::seconds(30))){
+            lastAccount=account;lastAttempt=now;SendAchProgressQuery({},!g_AchManualInitialScan);
         }
-    }
-    if ((AlterEgo::AutoRefreshPolicy::Enabled() || g_AchManualInitialScan) &&
-        !s_progressQueue.empty() && !g_AchProgressFetching) {
-        static auto s_lastBatchTime = std::chrono::steady_clock::time_point{};
-        auto now = std::chrono::steady_clock::now();
-        if (s_lastBatchTime == std::chrono::steady_clock::time_point{} ||
-            (now - s_lastBatchTime) >= std::chrono::milliseconds(750)) {
-            s_lastBatchTime = now;
-            constexpr size_t BATCH = 200;
-            size_t take = std::min(BATCH, s_progressQueue.size());
-            std::vector<uint32_t> batch(s_progressQueue.end() - take, s_progressQueue.end());
-            s_progressQueue.erase(s_progressQueue.end() - take, s_progressQueue.end());
-            SendAchProgressQuery(batch, !g_AchManualInitialScan);
-        }
-    }
-    if (g_AchNeedsInitialFullLoad && s_progressQueue.empty() && !g_AchProgressFetching &&
-        !g_AchCatFetching && !g_AchGroupsFetching) {
-        g_AchNeedsInitialFullLoad = false;
-        g_AchManualInitialScan = false;
     }
 
     // Search mode — cached results to avoid iterating 8000+ names every frame
@@ -16074,7 +15962,8 @@ static void RenderAchievementsStatusRow() {
     if (AlterEgo::RefreshUI::Row("achievements", (std::time_t)g_AchProgressCacheSavedAt,
             "achievement progress", state, detail)) {
         g_AchRefreshError.clear();
-        g_AchProgressFetching = false; // allow manual retry of a lost response
+        ++g_AchRequestGeneration;
+        g_AchProgressFetching = false; // invalidate a replaced request
         g_AchProgressQueryStartMs = 0;
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -16092,7 +15981,7 @@ static void RenderAchievementsStatusRow() {
                 std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
                 pinnedCopy = g_AchPinned;
             }
-            if (!pinnedCopy.empty()) SendAchProgressQuery(pinnedCopy);
+            SendAchProgressQuery(pinnedCopy);
         }
     }
 }
@@ -16100,12 +15989,14 @@ static void RenderAchievementsStatusRow() {
 
 static void PollAchievementCachePersistence() {
     const std::string account = GetAchievementCacheAccount();
-    if (!account.empty() && account != g_AchCachedAccount) {
+    if (account != g_AchCachedAccount) {
         // Flush outgoing data before loading another account. Account switching
         // must never overwrite the previous account's progress file.
         if (g_AchProgressDirty && !g_AchCachedAccount.empty())
             SaveAchProgress(g_AchCachedAccount);
-        LoadAchProgress(account);
+        if(!account.empty())LoadAchProgress(account);
+        else {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);g_AchProgress.clear();g_AchOptimisticTime.clear();g_AchCachedAccount.clear();g_AchProgressCacheSavedAt=0;g_AchProgressLoadedSnapshotAt=0;g_AchProgressDirty=false;++g_AchProgressGen;}
+        ++g_AchRequestGeneration;
 
         // Responses/retries issued for the old account must not update the new
         // cache. Fresh queries can be scheduled for the selected account.
@@ -16136,7 +16027,7 @@ struct DefaultFontScope {
     ~DefaultFontScope() { if (pushed) ImGui::PopFont(); }
 };
 
-// Never dispatch H&S requests inside a MumbleLink event callback. The
+// Never dispatch API requests inside a MumbleLink event callback. The
 // render-driven scheduler checks readiness, throttling, and existing activity.
 static void PollAutoCharacterRefresh() {
     if (!AlterEgo::AutoRefreshPolicy::Enabled()) {
@@ -16297,7 +16188,8 @@ void AddonRender() {
     // query). Never leave the Achievements Refresh action stuck indefinitely.
     if (g_AchProgressFetching) {
         const long long started = g_AchProgressQueryStartMs.load();
-        if (started > 0 && NowMs() - started > 20000) {
+        if (started > 0 && NowMs() - started > 120000) {
+            ++g_AchRequestGeneration;
             g_AchProgressFetching = false;
             g_AchProgressQueryStartMs = 0;
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -18027,7 +17919,7 @@ void AddonOptions() {
     if (ImGui::Checkbox("Warn when live specialization differs from retrieved build##ae_warn_spec",
                         &g_WarnStaleSpecialization))
         SaveSettings();
-    ImGui::TextDisabled("Applies to automatic H&S API refreshes across all tabs.");
+    ImGui::TextDisabled("Applies to automatic API refreshes across all tabs.");
     ImGui::TextDisabled("Manual Refresh still works; login/spec changes use MumbleLink (8s/90s).");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     ImGui::Spacing();
