@@ -1248,7 +1248,7 @@ namespace AlterEgo {
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
         auto claim=RefreshEngine::ClaimIds("items",missing,forceRefetch);
         if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchItemDetailsClaimed(*claim, forceRefetch); });
+        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { ApiActivity::ReasonScope reason(forceRefetch?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);FetchItemDetailsClaimed(*claim, forceRefetch); });
     }
 
     void GW2API::FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids) {
