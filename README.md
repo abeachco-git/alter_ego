@@ -121,10 +121,10 @@ Developer references: [Agent instructions](AGENTS.md) · [Architecture](docs/arc
 
 Alter Ego is an independent fork of [PieOrCake's original Alter Ego addon](https://github.com/PieOrCake/alter_ego). Credit to PieOrCake for creating the original addon and its foundational work, including the character/build interface and shared build format. This fork is maintained separately and is not an official upstream release.
 
-Thanks to Raidcore for Nexus, ArenaNet for the Guild Wars 2 API, and the community resources and open-source libraries that support the addon. Development is AI-assisted.
+Thanks to Raidcore for Nexus, ArenaNet for the Guild Wars 2 API, the [Guild Wars 2 Wiki](https://wiki.guildwars2.com/) community and contributors for public reference data, and the open-source libraries that support the addon. Development is AI-assisted.
 
 ## License
 
-Addon code is licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.txt) for bundled libraries, fonts and game-content attribution. Guild Wars 2 artwork and data are not relicensed under MIT.
+Addon code is licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.txt) for bundled libraries, fonts, game content and Wiki data attribution, including the schedule source pages and applicable Wiki copyright terms. Third-party content is not relicensed under MIT.
 
 This is an unofficial fan project and is not endorsed by ArenaNet, NCSOFT or Raidcore.

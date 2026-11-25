@@ -460,16 +460,40 @@ material before publishing them.
 
 
 
-Guild Wars 2 Wiki reference facts
-=================================
-Normalized raid bounty and fractal schedule/scale facts are derived from
-https://wiki.guildwars2.com/wiki/Template:Daily_Raid_Bounties
-https://wiki.guildwars2.com/wiki/Template:Daily_Fractal_Schedule
-https://wiki.guildwars2.com/wiki/Template:Daily_Recommended_Fractal_Schedule
-https://wiki.guildwars2.com/wiki/Template:Fractal_info
-See https://wiki.guildwars2.com/wiki/Guild_Wars_2_Wiki:Copyrights (original
-contributor content GFDL 1.3; game intellectual property remains with its
-owners). This addon extracts factual names, numeric scale assignments and
-rotations only; it does not distribute Wiki article prose or page markup.
+Guild Wars 2 Wiki reference data
+================================
 
-Event timer factual schedule data: https://wiki.guildwars2.com/wiki/Widget:Event_timer/data.json (selected phase names and UTC start minutes only).
+Thanks to the Guild Wars 2 Wiki community and its contributors for maintaining
+the public reference information used by Alter Ego.
+
+Sources for the embedded raid bounty, fractal and event timer schedules
+(and the runtime event timer refresh):
+  https://wiki.guildwars2.com/wiki/Template:Daily_Raid_Bounties
+  https://wiki.guildwars2.com/wiki/Template:Daily_Fractal_Schedule
+  https://wiki.guildwars2.com/wiki/Template:Daily_Recommended_Fractal_Schedule
+  https://wiki.guildwars2.com/wiki/Template:Fractal_info
+  https://wiki.guildwars2.com/wiki/Widget:Event_timer/data.json
+
+The linked pages and their MediaWiki histories identify source contributors
+and revisions. The checked-in normalized snapshot and build resource
+manifest are in assets/reference/wiki; refreshed build snapshots retain
+source and verification metadata.
+
+Wiki copyright policy:
+  https://wiki.guildwars2.com/wiki/Guild_Wars_2_Wiki:Copyrights
+Original copyrightable contributor material is available under the GNU
+Free Documentation License (GFDL), version 1.3 or any later version:
+  https://www.gnu.org/licenses/fdl-1.3.html
+ArenaNet/NCSOFT game content remains subject to its owners' rights and
+applicable terms; it is not granted under the Wiki contributors' license.
+
+The schedule generators extract selected factual names, scale numbers,
+rotation assignments and UTC start minutes into addon-defined structures.
+They do not redistribute article prose, source template code or page markup
+as part of these schedule resources. The addon code remains MIT; no MIT
+license is asserted over third-party content. This attribution is not a
+grant of rights or a blanket finding that every Wiki dataset is reusable.
+Before distributing additional copyrightable Wiki material (including
+descriptions, images, or a protected compilation), review its particular
+source and applicable terms, and fulfill any permission, attribution,
+license-text, history and source-format obligations before enabling it.

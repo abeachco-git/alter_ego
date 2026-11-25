@@ -13,6 +13,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 - Item-location navigation from character equipment, Compare and Skinventory shopping.
 - Character gathering, fishing and Jade Bot details; explicit right-click character loading.
 - Portable library import/export, recovery backups and Storage & Cache maintenance controls.
+- Validated Wiki reference schedules for raid bounties, fractals and selected Vault event timers, with daily-eligible build refresh and an embedded/SQLite fallback for event timers. Opted-in runtime event timer refresh is eligible after 30 days.
 
 ### Changed
 
@@ -27,7 +28,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 - Native SQLite storage for durable library data and rebuildable caches.
 - More consistent searches, filters, resizable panels, navigation and refresh feedback.
 - Account-aware data retrieval, per-dataset refresh preferences and independent Vault period storage.
-- Independent project documentation, MIT license and third-party notices.
+- Independent project documentation, MIT license and third-party notices, including Wiki contributor credit and reference dataset source attribution.
 
 ### Known limitations
 

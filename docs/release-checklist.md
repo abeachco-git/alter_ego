@@ -14,7 +14,7 @@ This is a release gate, not an implementation plan. Track feature work in the [r
 
 - [ ] Discuss Fast Load and memory access with Raidcore before catalog submission; confirm applicable disclosure labels, including AI-assisted development.
 - [ ] Provide About & Licenses access in the addon, including embedded or otherwise accessible complete license notices for standalone DLL distribution.
-- [ ] Review final icon, artwork and dataset provenance under applicable rights and terms.
+- [ ] Review final icon, artwork and dataset provenance under applicable rights and terms, including Wiki source pages/revisions where available, factual versus expressive material, compilation rights, and any required permissions or GFDL obligations. Verify Wiki source attribution in the packaged third-party notices and standalone DLL license access; do not treat attribution as permission.
 - [ ] Re-audit outbound network destinations after the rename; update [privacy](../PRIVACY.md) to match actual behavior.
 - [ ] Enable repository Issues and private vulnerability reporting on the public release repository; verify [security policy](../SECURITY.md) and both issue forms are reachable on its default branch.
 - [ ] Replace README screenshots and install instructions, confirm final release name and update the [changelog](../CHANGELOG.md).
