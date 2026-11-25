@@ -15394,6 +15394,15 @@ static void DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::Cha
     summary+="\nAutomatic character refresh: "+std::string(enabled?"Enabled":"Disabled");
     if(!linked)summary+="\nNo ready API account";
     else if(!owner)summary+="\nCharacter ownership not verified; manual refresh required";
+    // Logout propagation is a character-level wait. Report it once, while
+    // retaining any independent scope-specific retry or scheduling constraints.
+    int64_t logoutWait=0;
+    for(auto s:S::Ordered)if(demand&s){
+        const auto& row=rows[S::Index(s)];
+        if(!row.fresh&&row.eligibility.reason==W::LogoutGrace&&row.eligibility.at>now)
+            logoutWait=std::max(logoutWait,row.eligibility.at);
+    }
+    if(logoutWait)summary+="\nWaiting for API sync after logout: "+duration(logoutWait-now);
     bool stale=false,due=false;
     int64_t next=0;W nextReason=W::Current;
     for(auto s:S::Ordered)if(demand&s){
@@ -15401,7 +15410,7 @@ static void DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::Cha
         summary+="\n"+std::string(scopeLabel(s))+": "+(row.fresh?"Current":"Stale");
         const auto stamp=ch.scope_stamps[ix];
         summary+=" (last success: "+std::string(stamp>0?R::Age(static_cast<std::time_t>(stamp)):"not verified")+")";
-        if(e.reason!=W::Current){
+        if(e.reason!=W::Current&&!(logoutWait&&e.reason==W::LogoutGrace&&e.at==logoutWait)){
             summary+="\n  "+std::string(reason(e.reason));
             if(e.at>now)summary+=" - "+duration(e.at-now);
         }
@@ -15426,7 +15435,7 @@ static void DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::Cha
         else label="Stale";
         if(enabled&&linked&&owner){
             if(due)summary+="\nAutomatic refresh eligible now";
-            else if(next)summary+="\nNext eligible refresh: "+duration(next-now);
+            else if(next&&next!=logoutWait)summary+="\nNext eligible refresh: "+duration(next-now);
         }
     }
     if(state!=R::State::Working&&linked)summary+="\nManual Refresh bypasses ordinary waiting periods.";
