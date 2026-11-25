@@ -163,3 +163,11 @@ Character propagation evidence: the [GW2 API client endpoint documentation](http
 - [x] Correct explicit clipboard writes to use a validated same-process window owner, preserving Unicode conversion and cleanup on failure. Keep Nexus ImGui callbacks unchanged. Windows runtime clipboard smoke tests and independent investigation of the reported Defender detection remain pending; no claim of malware clearance.
 
 - [x] Restore aquatic section on Loadout Edit and conditionally show on View; align component creation/paste and inline details; add standalone Equipment Set creation through shared reference editor. Offline regression/build and in-game UI verification pending.
+
+## Queued Library and naming polish (discussion only; awaiting approval)
+
+- [ ] Remove direct Win32 clipboard calls from Alter Ego application code, route shared copy/paste through existing Nexus ImGui callbacks; audit all app-owned paths and preserve Unicode, plain names, chat links, portable import/export and text input. AGENTS.md records this permanent rule. Do not override host callbacks or change vendored ImGui ABI; investigate unavailable host clipboard explicitly, without native fallback.
+- [ ] Rename visible main tab Vault to Wizard's Vault, including disabled/account states, dropdown labels, navigation references, tooltips and settings where applicable. Preserve stable internal tab identities, dataset keys and saved preferences. Distinguish actual account/bank Vault terminology.
+- [ ] Add Copy Name to achievement row right-click menus alongside Open in Wiki; cover tracker/popout and other achievement name surfaces with existing shared actions, using exact title and no new requests.
+- [ ] Rename user-visible Skinventory to Skins throughout the app, including tabs, disabled states, navigation, settings, messages and help; preserve internal namespace, filenames, cache/storage keys, IDs and migration compatibility unless a separate internal cleanup is approved.
+- [ ] In Loadout component preview, render Fashion as a two-column label/selection row aligned with other reference rows (e.g. Fashion | Power Reaper), not a full-width heading with name beneath; align view/edit and retain missing/none state. Check narrow widths and editor reference picker alignment.
