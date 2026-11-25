@@ -75,7 +75,7 @@ inline float RowHeight() {
 // The optional ellipsis reuses the Characters multi-character picker.
 inline bool Row(const char* id, std::time_t stamp, const char* source,
                 State state, const std::string& detail, bool disabled = false,
-                bool* moreClicked = nullptr, const char* statusOverride = nullptr) {
+                bool* moreClicked = nullptr, const char* statusOverride = nullptr, bool timestampDetails = false) {
     ImGui::PushID(id);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
@@ -133,9 +133,11 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
 #endif
             char when[64] = {};
             std::strftime(when, sizeof(when), "%b %d, %Y at %I:%M:%S %p", &local);
-            ImGui::SetTooltip("Last successful %s retrieval:\\n%s (local time)", source, when);
+            ImGui::SetTooltip("Last successful %s retrieval:\n%s (local time)%s%s", source, when,
+                timestampDetails&&!detail.empty()?"\n\n":"",timestampDetails?detail.c_str():"");
         } else {
-            ImGui::SetTooltip("No confirmed successful %s retrieval time", source);
+            ImGui::SetTooltip("No confirmed successful %s retrieval time%s%s", source,
+                timestampDetails&&!detail.empty()?"\n\n":"",timestampDetails?detail.c_str():"");
         }
     }
     ImGui::PopID();
