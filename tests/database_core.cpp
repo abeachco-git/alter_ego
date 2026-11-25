@@ -201,12 +201,9 @@ int case_database_core(int, char**) {
         assert(Cache::ReadNameIndexVerification(root)==100);
         assert(Cache::WriteCatalog(root,D::Names,more,200));
         assert(Cache::ReadNameIndexVerification(root)==200);
-        J waypoints={{"1",{{"-1","[&ABC=]"},{"2","[&DEF=]"}}}};
-        assert(Cache::WriteCatalog(root,D::Waypoints,waypoints));
-        assert(Cache::ReadCatalog(root,D::Waypoints)==waypoints);
-        // Retired hero point tables are absent after a fresh migration.
+        // Retired reference tables are absent after a fresh migration.
         DB::Connection db(AlterEgo::Storage::Paths(root).Cache().u8string(),DB::Connection::OpenMode::Existing);
-        assert(db.Scalar("SELECT count(*) FROM sqlite_schema WHERE name IN ('hero_challenges','character_hero_points')")==0);
+        assert(db.Scalar("SELECT count(*) FROM sqlite_schema WHERE name IN ('hero_challenges','character_hero_points','achievement_waypoints')")==0);
     }
     {
         // A real v13 database upgrades without losing other reference or character records.
@@ -218,11 +215,13 @@ int case_database_core(int, char**) {
                 "INSERT INTO character_hero_points VALUES(1,0,'0-29');"
                 "INSERT INTO hero_challenges VALUES('0-29','Map','Core');"
                 "INSERT INTO achievement_names VALUES(1,'Retain');"
-                "INSERT INTO reference_freshness VALUES('hero_challenges',100),('ach_name_index',100);");
+                "INSERT INTO achievement_waypoints VALUES(1,0,'[&ABC=]');"
+                "INSERT INTO reference_freshness VALUES('hero_challenges',100),('ach_name_index',100),('ach_waypoints',100),('ach_name_index_verified',200);");
         Cache::Initialize(db);
-        assert(db.Scalar("PRAGMA user_version")==14);
-        assert(db.Scalar("SELECT count(*) FROM sqlite_schema WHERE name IN ('hero_challenges','character_hero_points')")==0);
-        assert(db.Scalar("SELECT count(*) FROM reference_freshness WHERE dataset='hero_challenges'")==0);
+        assert(db.Scalar("PRAGMA user_version")==15);
+        assert(db.Scalar("SELECT count(*) FROM sqlite_schema WHERE name IN ('hero_challenges','character_hero_points','achievement_waypoints')")==0);
+        assert(db.Scalar("SELECT count(*) FROM reference_freshness WHERE dataset IN ('hero_challenges','ach_waypoints')")==0);
+        assert(db.Scalar("SELECT saved_at FROM reference_freshness WHERE dataset='ach_name_index_verified'")==200);
         assert(db.Scalar("SELECT count(*) FROM reference_freshness WHERE dataset='ach_name_index'")==1);
         assert(db.Scalar("SELECT count(*) FROM character_rows WHERE name='Hero'")==1);
         assert(db.Scalar("SELECT count(*) FROM achievement_names WHERE name='Retain'")==1);

@@ -79,7 +79,6 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                 {"Achievement definitions","SELECT count(*) FROM achievement_definitions","ach_defs"},
                 {"Achievement names","SELECT count(*) FROM achievement_names","ach_name_index_verified"},
                 {"Achievement categories","SELECT count(*) FROM achievement_categories","ach_groups"},
-                {"Achievement waypoints","SELECT count(*) FROM achievement_waypoints","ach_waypoints"},
                 {"Skin catalog","SELECT count(*) FROM skins WHERE catalog=1","skin_catalog"},
                 {"Fashion skins","SELECT count(*) FROM skins WHERE fashion=1","skin_fashion"},
                 {"Owned skin records","SELECT count(*) FROM owned_skins",nullptr},

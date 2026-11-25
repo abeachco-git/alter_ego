@@ -9,7 +9,6 @@ These utilities are retained for active build use, dataset maintenance, or usefu
 | `update_embedded_icons.py` | Manual acquisition into a new staging directory; review before updating Git assets |
 | `verify_embedded_icons.py` | Verify linked DLL resources against the checked-in assets |
 | `audit_skill_icons.py` | Manual skill-icon size research workflow |
-| `build_achievement_waypoints.py` | Refresh achievement waypoint dataset |
 | `gen_ae_icon.py` | Regenerate Quick Access icon arrays from the source `ae.png`; manual tool, not a build step |
 | `fetch_item_ids.py`, `scrape_wiki_ids.py`, `wiki_item_ids.json` | Manual item-ID research/reference; not authoritative runtime data or CI dependencies |
 

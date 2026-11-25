@@ -536,14 +536,6 @@ static std::string g_AchNameIndexStatus, g_AchNameIndexError; // guarded by g_Ac
 static std::atomic<bool> g_AchNameIndexFetching{false};
 static std::string g_AchStatusMsg;
 
-#define ACH_WAYPOINTS_URL "https://raw.githubusercontent.com/PieOrCake/alter_ego/main/data/achievement_waypoints.json"
-
-// Waypoint data: achId -> (bitIndex -> chatCode), bitIndex -1 = achievement-level waypoint
-static std::unordered_map<uint32_t, std::unordered_map<int, std::string>> g_AchWaypoints;
-static bool g_AchWaypointsReady = false;
-static std::atomic<bool> g_AchWaypointsFetching{false};
-
-// UI state
 static std::string g_AchSelectedGroupId;   // currently selected group UUID
 static uint32_t g_AchSelectedCatId = 0;    // currently selected category ID
 static std::atomic<bool> g_AchCatFetching{false};      // fetching defs for selected category
@@ -818,9 +810,6 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic = false);
 static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic = false,
                                  uint32_t categoryId = 0);
 static void FetchPinnedAchDefs();
-static void SaveAchWaypoints();
-static void LoadAchWaypoints();
-static void FetchAchWaypoints();
 static void FetchActiveSpecialEvent();
 
 // Character search
@@ -2108,83 +2097,6 @@ static void PublishAchDefinition(AchDef def) {
     }
     g_AchDefs[def.id] = std::move(def);
     ++g_AchCatalogGeneration;
-}
-
-// =========================================================================
-// Achievement Tracker — Waypoint Data
-// =========================================================================
-
-static void SaveAchWaypoints() {
-
-    nlohmann::json j;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        for (const auto& [achId, bits] : g_AchWaypoints) {
-            nlohmann::json entry;
-            for (const auto& [bitIdx, code] : bits) {
-                entry[std::to_string(bitIdx)] = code;
-            }
-            j[std::to_string(achId)] = entry;
-        }
-    }
-
-    if (!AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Waypoints, j) && APIDefs)
-        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save ach_waypoints cache");
-}
-
-static void LoadAchWaypoints() {
-    try {
-        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Waypoints);
-        if (!snapshot) return;
-        auto& j = *snapshot;
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        g_AchWaypoints.clear();
-        for (auto& [achKey, val] : j.items()) {
-            uint32_t achId = (uint32_t)std::stoul(achKey);
-            if (val.is_string()) {
-                // Single waypoint for the whole achievement
-                g_AchWaypoints[achId][-1] = val.get<std::string>();
-            } else if (val.is_object()) {
-                for (auto& [bitKey, code] : val.items()) {
-                    int bitIdx = std::stoi(bitKey);
-                    g_AchWaypoints[achId][bitIdx] = code.get<std::string>();
-                }
-            }
-        }
-        if (!g_AchWaypoints.empty()) g_AchWaypointsReady = true;
-    } catch (...) {}
-}
-
-static void FetchAchWaypoints() {
-    if (g_AchWaypointsFetching) return;
-    g_AchWaypointsFetching = true;
-
-    AlterEgo::Background::Workers().Launch([]() {
-        std::string json = Skinventory::HttpClient::Get(ACH_WAYPOINTS_URL);
-        if (!json.empty()) {
-            try {
-                auto j = nlohmann::json::parse(json);
-                if (j.is_object()) {
-                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                    g_AchWaypoints.clear();
-                    for (auto& [achKey, val] : j.items()) {
-                        uint32_t achId = (uint32_t)std::stoul(achKey);
-                        if (val.is_string()) {
-                            g_AchWaypoints[achId][-1] = val.get<std::string>();
-                        } else if (val.is_object()) {
-                            for (auto& [bitKey, code] : val.items()) {
-                                int bitIdx = std::stoi(bitKey);
-                                g_AchWaypoints[achId][bitIdx] = code.get<std::string>();
-                            }
-                        }
-                    }
-                    g_AchWaypointsReady = true;
-                    SaveAchWaypoints();
-                }
-            } catch (...) {}
-        }
-        g_AchWaypointsFetching = false;
-    }, [] { g_AchWaypointsFetching = false; });
 }
 
 // =========================================================================
@@ -12513,7 +12425,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     LoadAchGroupCache();
     LoadAchDefCache();
     LoadAchNameIndex();
-    LoadAchWaypoints();
 
     // Register quick access shortcut
     if (g_ShowQAIcon) {
@@ -14260,24 +14171,8 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     AlterEgo::CompletionTheme::DrawCompleteMark(
         dl, ImVec2(cmin.x + 10.0f, cmin.y + rowH * 0.5f), done);
 
-    // Main row hit area (excluding the pin button + WP button on the right)
-    float pinReserve = showPinButton ? 22.0f : 0.0f;
-    float wpReserve = 0.0f;
-    bool hasAchWp = false;
-    std::string achWaypoint;
-    {
-        auto wpIt = g_AchWaypoints.find(achId);
-        if (wpIt != g_AchWaypoints.end()) {
-            auto wpBitIt = wpIt->second.find(-1);
-            if (wpBitIt != wpIt->second.end()) {
-                hasAchWp = true;
-                achWaypoint = wpBitIt->second;
-                wpReserve = 26.0f;
-            }
-        }
-    }
-    float rightReserve = pinReserve + wpReserve + 8.0f;
-
+    // Main row hit area excludes the pin button.
+    const float rightReserve = (showPinButton ? 22.0f : 0.0f) + 8.0f;
     ImGui::InvisibleButton("##achrow", ImVec2(availRowW - rightReserve, rowH));
     bool rowHovered = ImGui::IsItemHovered();
     bool rowClicked = ImGui::IsItemClicked();
@@ -14386,7 +14281,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
         ImGui::EndTooltip();
     }
 
-    // Position the right-side buttons (WP, Pin)
+    // Position the pin button
     float btnX = cmax.x - 4.0f;
     if (showPinButton) {
         float pinW = 22.0f, pinH = 20.0f;
@@ -14409,27 +14304,6 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(pinned ? "Unpin from tracker" : "Pin to tracker");
         }
-        btnX -= 4.0f;
-    }
-
-    if (hasAchWp) {
-        float wpW = 22.0f, wpH = 20.0f;
-        btnX -= wpW;
-        ImGui::SetCursorScreenPos(ImVec2(btnX, midY - wpH * 0.5f));
-        ImVec2 bMin = ImGui::GetCursorScreenPos();
-        ImVec2 bMax(bMin.x + wpW, bMin.y + wpH);
-        dl->AddRectFilled(bMin, bMax, IM_COL32(0, 0, 0, 130), 3.0f);
-        dl->AddRect(bMin, bMax, IM_COL32(140, 130, 110, 170), 3.0f, 0, 1.0f);
-        const char* wp = "WP";
-        ImVec2 sz = ImGui::CalcTextSize(wp);
-        dl->AddText(ImVec2(bMin.x + (wpW - sz.x) * 0.5f, bMin.y + (wpH - sz.y) * 0.5f),
-            IM_COL32(180, 168, 130, 230), wp);
-        if (ImGui::InvisibleButton("##wpbtn", ImVec2(wpW, wpH))) {
-            ImGui::SetClipboardText(achWaypoint.c_str());
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Copy waypoint: %s", achWaypoint.c_str());
-        }
     }
 
     // Restore cursor to below the row
@@ -14437,7 +14311,6 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
 
     // Expanded bits (sub-objectives) — shown when clicked
     if (hasBits && expanded) {
-        auto wpIt = g_AchWaypoints.find(achId);
         ImGui::Indent(16.0f);
         for (size_t i = 0; i < def.bits.size(); i++) {
             bool bitDone = (progIt != g_AchProgress.end()) &&
@@ -14465,15 +14338,6 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                 subAchId = FindAchIdByName(bit.text, def.name);
             } else {
                 label = bit.text.empty() ? ("Step " + std::to_string(i + 1)) : bit.text;
-            }
-
-            // Check for per-bit waypoint
-            std::string bitWaypoint;
-            if (wpIt != g_AchWaypoints.end()) {
-                auto wpBitIt = wpIt->second.find((int)i);
-                if (wpBitIt != wpIt->second.end()) {
-                    bitWaypoint = wpBitIt->second;
-                }
             }
 
             ImGui::PushID((int)i);
@@ -14526,16 +14390,6 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                 ImGui::TextColored(AlterEgo::CompletionTheme::TextColor(false),
                                         "%s", label.c_str());
             }
-            // Waypoint copy button for this bit
-            if (!bitWaypoint.empty()) {
-                ImGui::SameLine();
-                if (AlterEgo::UI::SmallButton("WP")) {
-                    ImGui::SetClipboardText(bitWaypoint.c_str());
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Copy waypoint: %s", bitWaypoint.c_str());
-                }
-            }
             ImGui::PopID();
         }
         ImGui::Unindent(16.0f);
@@ -14574,9 +14428,6 @@ static void RenderAchievements() {
             g_AchNameIndexVerifiedAt.load(), std::time(nullptr), g_AchNameIndexRetryAt.load(),
             AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog))) {
         FetchAchNameIndex();
-    }
-    if (!g_AchWaypointsReady && !g_AchWaypointsFetching) {
-        FetchAchWaypoints();
     }
     if (g_AchGroupsFetched && !g_AchActiveEventFetched && !g_AchActiveEventFetching) {
         FetchActiveSpecialEvent();
@@ -15190,7 +15041,6 @@ struct PopoutBitDisplay {
     std::string skinWeightClass;
     std::string skinSubtype;
     std::string skinName;
-    std::string waypoint;
     bool done = false;
 };
 
@@ -15237,7 +15087,6 @@ static void RebuildPopoutCache() {
             disp.hasBits = !def.bits.empty() && !disp.done;
 
             if (disp.hasBits) {
-                auto wpIt = g_AchWaypoints.find(achId);
                 disp.bits.reserve(def.bits.size());
                 for (size_t i = 0; i < def.bits.size(); i++) {
                     PopoutBitDisplay bd;
@@ -15264,12 +15113,6 @@ static void RebuildPopoutCache() {
                         bd.label = bit.text.empty() ? ("Step " + std::to_string(i + 1)) : bit.text;
                     }
 
-                    if (wpIt != g_AchWaypoints.end()) {
-                        auto wpBitIt = wpIt->second.find((int)i);
-                        if (wpBitIt != wpIt->second.end()) {
-                            bd.waypoint = wpBitIt->second;
-                        }
-                    }
                     disp.bits.push_back(std::move(bd));
                 }
             }
@@ -15524,21 +15367,11 @@ static void RenderAchPopout() {
                                 ImGui::SetTooltip("Click to navigate to achievement");
                             }
                         } else {
-                            if (!bd.waypoint.empty()) {
-                                std::string selLabel = "    [ ] " + bd.label + "###popbit";
-                                if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
-                                    ImGui::SetClipboardText(bd.waypoint.c_str());
-                                }
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip("Click to copy: %s", bd.waypoint.c_str());
-                                }
-                            } else {
-                                ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "    [ ] %s", bd.label.c_str());
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip("Click to copy name");
-                                    if (ImGui::IsItemClicked()) {
-                                        ImGui::SetClipboardText(bd.label.c_str());
-                                    }
+                            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "    [ ] %s", bd.label.c_str());
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip("Click to copy name");
+                                if (ImGui::IsItemClicked()) {
+                                    ImGui::SetClipboardText(bd.label.c_str());
                                 }
                             }
                         }

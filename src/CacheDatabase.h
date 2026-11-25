@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 14;
+constexpr int kSchemaVersion = 15;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,12 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 15) {
+        // Retire only the old single-achievement reference catalog.
+        db.Exec("DROP TABLE achievement_waypoints;"
+                "DELETE FROM reference_freshness WHERE dataset='ach_waypoints';");
+        return;
+    }
     if (version == 14) {
         // Only obsolete, rebuildable hero point records are removed.
         // Historical migrations remain intact for existing cache upgrades.

@@ -21,6 +21,8 @@ Living implementation tracker for the experimental branch. Checked items indicat
 - [x] Independent Vault daily/weekly/special persistence and timestamps, section failure isolation, selective automatic refresh; CI/live validation pending.
 - [x] Registry snapshots carry their credential generation; obsolete snapshot permissions cannot acquire a replacement credential.
 - [x] Independent achievement name catalog: direct ArenaNet retrieval, SQLite persistence, missing-ID checks, complete-check freshness, explicit full name refresh and no startup name download. Live validation pending.
+- [x] Retire single-achievement waypoint catalog and external dataset downloads; preserve unrelated location assistance.
+- [ ] Explore contextual achievement objective assistance (like Vault assistance): actionable hints and verified chat links when useful, no forced external page, no guessed fuzzy matches. Discussion/design only; scope and sources require approval.
 - [ ] Full independent character/progress dataset freshness; independent Clears section commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, and benchmark.
 

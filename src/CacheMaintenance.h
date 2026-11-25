@@ -147,7 +147,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     // Do not migrate or edit a foreign, damaged or unsupported database.
     const auto version=db.Scalar("PRAGMA user_version");
     if(db.Scalar("PRAGMA application_id")!=Cache::kApplicationId ||
-       (version!=Cache::kSchemaVersion && version!=13 && version!=8))
+       (version!=Cache::kSchemaVersion && version!=14 && version!=13 && version!=8))
         throw std::runtime_error("Unsupported cache database; use Rebuild all cache to quarantine it");
     // Upgrade known older schemas before selective operations.
     Cache::Initialize(db);
@@ -160,9 +160,9 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     case CacheOperation::AccountProgress:
         db.Exec("DELETE FROM achievement_snapshots; DELETE FROM ownership_snapshots; DELETE FROM clears_snapshots; DELETE FROM vault_snapshots;");break;
     case CacheOperation::AchievementCatalog:
-        db.Exec("DELETE FROM achievement_names; DELETE FROM achievement_waypoints;"
+        db.Exec("DELETE FROM achievement_names;"
                 "DELETE FROM achievement_definitions; DELETE FROM achievement_groups; DELETE FROM achievement_categories;"
-                "DELETE FROM reference_freshness WHERE dataset IN ('ach_name_index','ach_name_index_verified','ach_waypoints','ach_defs','ach_groups');");break;
+                "DELETE FROM reference_freshness WHERE dataset IN ('ach_name_index','ach_name_index_verified','ach_defs','ach_groups');");break;
     case CacheOperation::PublicCatalog:
         // Item identities are shared by metadata and Commerce. Invalidate them
         // together; account ownership remains independent of catalog records.

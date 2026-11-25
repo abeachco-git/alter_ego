@@ -6,11 +6,10 @@
 
 namespace AlterEgo::Cache {
 using Json = nlohmann::json;
-enum class AchievementDataset { Names, Waypoints, Definitions, Groups };
+enum class AchievementDataset { Names, Definitions, Groups };
 inline const char* DatasetName(AchievementDataset d) {
     switch(d) {
     case AchievementDataset::Names: return "ach_name_index";
-    case AchievementDataset::Waypoints: return "ach_waypoints";
     case AchievementDataset::Definitions: return "ach_defs";
     case AchievementDataset::Groups: return "ach_groups";
     }
@@ -32,21 +31,6 @@ inline void WriteCatalogRows(Database::Connection& db, AchievementDataset d,cons
             const auto id=CatalogId(key);const auto name=v.get<std::string>();
             if(!id || name.empty()) throw std::runtime_error("Invalid achievement name");
             q.Bind(1,id);q.Bind(2,name);q.Execute();q.Reset();
-        }
-    } else if(d==AchievementDataset::Waypoints) {
-        db.Exec("DELETE FROM achievement_waypoints");
-        auto q=db.Prepare("INSERT INTO achievement_waypoints VALUES(?,?,?)");
-        for(const auto& [key,v]:data.items()) {
-            const auto id=CatalogId(key);
-            auto put=[&](int bit,const std::string& code) {
-                q.Bind(1,id);q.Bind(2,bit);q.Bind(3,code);q.Execute();q.Reset();
-            };
-            if(v.is_string()) put(-1,v.get<std::string>());
-            else if(v.is_object()) for(const auto& [b,code]:v.items()) {
-                size_t n=0;int bit=std::stoi(b,&n);
-                if(n!=b.size()) throw std::runtime_error("Invalid waypoint bit");
-                put(bit,code.get<std::string>());
-            } else throw std::runtime_error("Invalid waypoint");
         }
     } else if(d==AchievementDataset::Definitions) {
         db.Exec("DELETE FROM achievement_definitions");
@@ -112,9 +96,6 @@ inline Json ReadCatalogRows(Database::Connection& db,AchievementDataset d,int64_
     if(d==AchievementDataset::Names) {
         auto q=db.Prepare("SELECT id,name FROM achievement_names");
         while(q.Step()) out[std::to_string(q.Integer(0))]=q.Text(1);
-    } else if(d==AchievementDataset::Waypoints) {
-        auto q=db.Prepare("SELECT achievement_id,bit,code FROM achievement_waypoints");
-        while(q.Step()) out[std::to_string(q.Integer(0))][std::to_string(q.Integer(1))]=q.Text(2);
     } else if(d==AchievementDataset::Definitions) {
         auto q=db.Prepare("SELECT id,name,description,requirement,icon_url,type,max_count,total_ap FROM achievement_definitions");
         while(q.Step()) out[std::to_string(q.Integer(0))]={{"id",q.Integer(0)},{"name",q.Text(1)},
