@@ -17431,6 +17431,24 @@ void AddonRender() {
             ImGui::EndTabItem();
         }
 
+        auto inventoryFlags=NavigationTabFlags(7);
+        if(g_SwitchToInventory){inventoryFlags|=ImGuiTabItemFlags_SetSelected;g_SwitchToInventory=false;}
+        ImGuiTabBar* inventoryBar=GImGui->CurrentTabBar;
+        const ImGuiID beforeInventory=inventoryBar?inventoryBar->SelectedTabId:0;
+        const bool inventoryVisible=ImGui::BeginTabItem("Inventory    ##ae_inventory_dropdown",nullptr,inventoryFlags);
+        const ImGuiID inventoryId=inventoryBar&&inventoryBar->LastTabItemIdx>=0?inventoryBar->Tabs[inventoryBar->LastTabItemIdx].ID:0;
+        HandleTabDropdown(inventoryMenu,inventoryBar,beforeInventory,inventoryId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+        if(inventoryVisible){
+            g_MainTab=7;
+            ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
+            TickCharacterLoad();
+            AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings,g_InventoryListWidth);
+            ImGui::EndChild();
+            AlterEgo::NativeAccounts::RenderInventoryStatusRow(g_SelectedAccountFilter);
+            ImGui::EndTabItem();
+            ProcessCharacterLoad();
+        }
+
         // Disable account-scoped tabs when viewing "All Accounts"
         bool acctTabsDisabled = AlterEgo::GW2API::IsMultiAccount() && g_SelectedAccountFilter.empty();
         const char* acctTabTooltip = "Select a specific account to use this tab.";
@@ -17523,24 +17541,6 @@ void AddonRender() {
             RenderAchievementsStatusRow();
             ImGui::EndTabItem();
             }
-        }
-
-        auto inventoryFlags=NavigationTabFlags(7);
-        if(g_SwitchToInventory){inventoryFlags|=ImGuiTabItemFlags_SetSelected;g_SwitchToInventory=false;}
-        ImGuiTabBar* inventoryBar=GImGui->CurrentTabBar;
-        const ImGuiID beforeInventory=inventoryBar?inventoryBar->SelectedTabId:0;
-        const bool inventoryVisible=ImGui::BeginTabItem("Inventory    ##ae_inventory_dropdown",nullptr,inventoryFlags);
-        const ImGuiID inventoryId=inventoryBar&&inventoryBar->LastTabItemIdx>=0?inventoryBar->Tabs[inventoryBar->LastTabItemIdx].ID:0;
-        HandleTabDropdown(inventoryMenu,inventoryBar,beforeInventory,inventoryId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
-        if(inventoryVisible){
-            g_MainTab=7;
-            ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
-            TickCharacterLoad();
-            AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings,g_InventoryListWidth);
-            ImGui::EndChild();
-            AlterEgo::NativeAccounts::RenderInventoryStatusRow(g_SelectedAccountFilter);
-            ImGui::EndTabItem();
-            ProcessCharacterLoad();
         }
 
         // ImGui restores the last selected main tab across sessions. Track
