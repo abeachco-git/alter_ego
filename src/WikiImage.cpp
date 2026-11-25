@@ -9,6 +9,8 @@
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
+#include <ctime>
+#include <cctype>
 
 using json = nlohmann::json;
 
@@ -20,6 +22,8 @@ namespace Skinventory {
     std::string WikiImage::s_cacheDir;
     std::unordered_map<uint32_t, Texture_t*> WikiImage::s_imageCache;
     std::unordered_map<uint32_t, WikiSkinData> WikiImage::s_wikiDataCache;
+    std::map<uint32_t,AlterEgo::WikiFreshness::Stamp> WikiImage::s_metadataFreshness;
+    std::unordered_set<uint32_t> WikiImage::s_metadataPending;
     std::unordered_map<uint32_t, bool> WikiImage::s_loading;
     std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> WikiImage::s_failed;
     std::unordered_map<uint32_t, int64_t> WikiImage::s_failedPersistent;
@@ -42,6 +46,7 @@ namespace Skinventory {
         } catch (...) {}
 
         LoadWikiDataCache();
+        try {s_metadataFreshness=AlterEgo::Cache::Wiki::WithDb(AlterEgo::GW2API::GetDataDirectory(),[](auto& db){return AlterEgo::Cache::Wiki::ReadFreshness(db);});}catch(...){}
         LoadFailedCache();
 
         try {
@@ -75,6 +80,8 @@ namespace Skinventory {
         s_currencyReadyQueue.clear();
         s_currencyIcons.clear();
         s_wikiDataCache.clear();
+        s_metadataFreshness.clear();
+        s_metadataPending.clear();
         s_failed.clear();
         s_failedPersistent.clear();
         s_currencyFailedPersistent.clear();
@@ -96,30 +103,17 @@ namespace Skinventory {
         return {};
     }
 
-    void WikiImage::SaveWikiDataCache() {
-        static std::mutex saveMutex;
-        std::lock_guard<std::mutex> saving(saveMutex);
-        try {
-            json j = json::object();
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                for (const auto& [id, data] : s_wikiDataCache) {
-                    json entry;
-                    if (!data.acquisition.empty()) entry["acquisition"] = data.acquisition;
-                    if (!data.collection.empty()) entry["collection"] = data.collection;
-                    if (!data.set_name.empty()) entry["set"] = data.set_name;
-                    if (!data.vendor_name.empty()) entry["vendor"] = data.vendor_name;
-                    if (!data.vendor_location.empty()) entry["vendor_location"] = data.vendor_location;
-                    if (!data.vendor_waypoint.empty()) entry["vendor_waypoint"] = data.vendor_waypoint;
-                    if (!data.vendor_cost.empty()) entry["vendor_cost"] = data.vendor_cost;
-                    if (!data.vendor_cost_keys.empty()) entry["vendor_cost_keys"] = data.vendor_cost_keys;
-                    if (!entry.empty()) j[std::to_string(id)] = entry;
-                }
-            }
-            if (!AlterEgo::Cache::Wiki::Write(AlterEgo::GW2API::GetDataDirectory(),
-                    AlterEgo::Cache::Wiki::Kind::Metadata,j) && s_API)
-                s_API->Log(LOGL_WARNING,"AlterEgo","Could not persist wiki metadata cache.");
-        } catch (...) {}
+    void WikiImage::RequestMetadata(uint32_t skinId,const std::string& skinName,const std::string& weightClass) {
+        namespace W=AlterEgo::WikiFreshness;
+        const auto now=static_cast<int64_t>(std::time(nullptr));
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if(s_stopWorker||!W::Due(s_metadataFreshness[skinId],now,W::SkinInterval,W::SkinRetry)||
+                !s_metadataPending.insert(skinId).second)return;
+            try{s_requestQueue.push_back({skinId,skinName,weightClass,true});}
+            catch(...){s_metadataPending.erase(skinId);return;}
+        }
+        s_queueCV.notify_one();
     }
 
     void WikiImage::LoadWikiDataCache() {
@@ -635,7 +629,8 @@ namespace Skinventory {
 
     void WikiImage::RequestImage(uint32_t skinId, const std::string& skinName,
                                      const std::string& weightClass) {
-        if (!s_API || s_stopWorker || skinName.empty()) return;
+        if (!s_API || s_stopWorker || skinName.empty() || !skinId) return;
+        RequestMetadata(skinId,skinName,weightClass);
 
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -905,7 +900,9 @@ namespace Skinventory {
             json j = json::parse(resp);
             if (j.contains("parse") && j["parse"].contains("wikitext")) {
                 std::string wikitext = j["parse"]["wikitext"].value("*", "");
-                if (!wikitext.empty()) {
+                std::string lower=wikitext;
+                std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+                if (lower.find("{{skin infobox")!=std::string::npos||lower.find("{{item infobox")!=std::string::npos) {
                     return ParseSkinInfobox(wikitext);
                 }
             }
@@ -1132,6 +1129,76 @@ namespace Skinventory {
         if (failedDirty) SaveFailedCache();
     }
 
+    void WikiImage::RefreshMetadata(uint32_t id,const std::string& name,const std::string& weight) {
+        namespace W=AlterEgo::Cache::Wiki;
+        const auto root=AlterEgo::GW2API::GetDataDirectory();
+        const auto attempt=static_cast<int64_t>(std::time(nullptr));
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_metadataFreshness[id].attempt=attempt;
+        }
+        W::WithDb(root,[&](auto& db){W::MarkAttempt(db,id,attempt);});
+        if(s_stopWorker)return;
+        std::vector<std::string> candidates;
+        if(!weight.empty()){
+            auto wc=weight;
+            std::transform(wc.begin(),wc.end(),wc.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+            candidates.push_back(name+" ("+wc+" skin)");
+            candidates.push_back(name+" ("+wc+")");
+        }
+        candidates.push_back(name);
+        WikiSkinData data;
+        auto usable=[](const WikiSkinData& d){return !d.acquisition.empty()||!d.collection.empty()||!d.set_name.empty();};
+        for(const auto& page:candidates){
+            if(s_stopWorker)return;
+            data=ScrapeAcquisitionFromPage(page);
+            if(usable(data))break;
+        }
+        if(!usable(data)){
+            if(s_stopWorker)return;
+            auto page=WikiSearchPageTitle(name);
+            if(!page.empty()&&std::find(candidates.begin(),candidates.end(),page)==candidates.end())
+                data=ScrapeAcquisitionFromPage(page);
+        }
+        if(!usable(data))return;
+        if(!data.set_name.empty()){
+            if(s_stopWorker)return;
+            auto response=HttpClient::GetEx("https://wiki.guildwars2.com/api.php?action=parse&page="+UrlEncode(data.set_name)+"&prop=wikitext&format=json");
+            if(response.status_code!=200)return;
+            auto parsed=json::parse(response.body);
+            auto body=parsed.at("parse").at("wikitext").at("*").get<std::string>();
+            if(body.empty())return;
+            ParseSetPageVendors(body,data.vendor_name,data.vendor_location,data.vendor_waypoint,data.vendor_cost,data.vendor_cost_keys);
+        }
+        if(s_stopWorker)return;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            const auto it=s_wikiDataCache.find(id);
+            if(it!=s_wikiDataCache.end()){
+                const auto& old=it->second;
+                if((!old.acquisition.empty()&&data.acquisition.empty())||
+                   (!old.collection.empty()&&data.collection.empty())||
+                   (!old.set_name.empty()&&data.set_name.empty())||
+                   (!old.vendor_name.empty()&&data.vendor_name.empty())||
+                   (!old.vendor_cost.empty()&&data.vendor_cost.empty())||
+                   (!old.vendor_location.empty()&&data.vendor_location.empty())||
+                   (!old.vendor_waypoint.empty()&&data.vendor_waypoint.empty())||
+                   (!old.vendor_cost_keys.empty()&&data.vendor_cost_keys.empty()))return;
+            }
+        }
+        json row={{"acquisition",data.acquisition},{"collection",data.collection},{"set",data.set_name},
+                  {"vendor",data.vendor_name},{"vendor_location",data.vendor_location},{"vendor_waypoint",data.vendor_waypoint},
+                  {"vendor_cost",data.vendor_cost},{"vendor_cost_keys",data.vendor_cost_keys}};
+        const auto verified=static_cast<int64_t>(std::time(nullptr));
+        W::WithDb(root,[&](auto& db){W::StoreVerified(db,id,row,verified);});
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_wikiDataCache[id]=data;
+            s_metadataFreshness[id]={verified,verified};
+        }
+        if(!data.vendor_cost_keys.empty()&&!s_stopWorker)DownloadCurrencyIcons(data.vendor_cost_keys);
+    }
+
     void WikiImage::DownloadWorker() {
         while (!s_stopWorker) {
             QueuedRequest req;
@@ -1148,62 +1215,17 @@ namespace Skinventory {
                 s_requestQueue.erase(s_requestQueue.begin());
             }
 
+            if(req.metadataOnly){
+                try{RefreshMetadata(req.skinId,req.skinName,req.weightClass);}catch(...){}
+                {std::lock_guard<std::mutex> lock(s_mutex);s_metadataPending.erase(req.skinId);}
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
             try {
-            // Scrape wiki for image URL and acquisition data
+            // Scrape wiki for image URL only
             std::string matchedPage;
             std::string imageUrl = ScrapeWikiImageUrl(req.skinName, req.weightClass, matchedPage);
             if(s_stopWorker)return;
-
-            // Scrape acquisition data from the matched page (or skin-specific page)
-            if (!matchedPage.empty()) {
-                WikiSkinData wikiData = ScrapeAcquisitionFromPage(matchedPage);
-                // If the matched page is an item page (not a skin page), try the skin page too
-                if (wikiData.acquisition.empty() && !req.weightClass.empty()) {
-                    std::string wcLower = req.weightClass;
-                    std::transform(wcLower.begin(), wcLower.end(), wcLower.begin(), ::tolower);
-                    std::string skinPage = req.skinName + " (" + wcLower + " skin)";
-                    if (skinPage != matchedPage && WikiPageExists(skinPage)) {
-                        wikiData = ScrapeAcquisitionFromPage(skinPage);
-                    }
-                }
-
-                // If we have a set name, follow to the set page for vendor info
-                if (!wikiData.set_name.empty() && wikiData.vendor_name.empty()) {
-                    std::string setUrl = "https://wiki.guildwars2.com/api.php?action=parse"
-                                          "&page=" + UrlEncode(wikiData.set_name) +
-                                          "&prop=wikitext&format=json";
-                    std::string setResp = HttpClient::Get(setUrl);
-                    if (!setResp.empty()) {
-                        try {
-                            json sj = json::parse(setResp);
-                            if (sj.contains("parse") && sj["parse"].contains("wikitext")) {
-                                std::string setWikitext = sj["parse"]["wikitext"].value("*", "");
-                                ParseSetPageVendors(setWikitext,
-                                    wikiData.vendor_name,
-                                    wikiData.vendor_location,
-                                    wikiData.vendor_waypoint,
-                                    wikiData.vendor_cost,
-                                    wikiData.vendor_cost_keys);
-
-                                // Download currency icons for any found currencies
-                                if (!wikiData.vendor_cost_keys.empty()) {
-                                    DownloadCurrencyIcons(wikiData.vendor_cost_keys);
-                                }
-                            }
-                        } catch (...) {}
-                    }
-                }
-
-                if (!wikiData.acquisition.empty() || !wikiData.collection.empty() ||
-                    !wikiData.set_name.empty() || !wikiData.vendor_name.empty()) {
-                    {
-                        std::lock_guard<std::mutex> lock(s_mutex);
-                        if(s_stopWorker)return;
-                        s_wikiDataCache[req.skinId] = wikiData;
-                    }
-                    SaveWikiDataCache();
-                }
-            }
 
             if (imageUrl.empty()) {
                 RecordFailure(req.skinId);

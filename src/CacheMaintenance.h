@@ -147,14 +147,14 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     // Do not migrate or edit a foreign, damaged or unsupported database.
     const auto version=db.Scalar("PRAGMA user_version");
     if(db.Scalar("PRAGMA application_id")!=Cache::kApplicationId ||
-       (version!=Cache::kSchemaVersion && version!=17 && version!=16 && version!=15 && version!=14 && version!=13 && version!=8))
+       (version!=Cache::kSchemaVersion && version!=18 && version!=17 && version!=16 && version!=15 && version!=14 && version!=13 && version!=8))
         throw std::runtime_error("Unsupported cache database; use Rebuild all cache to quarantine it");
     // Upgrade known older schemas before selective operations.
     Cache::Initialize(db);
     Database::Transaction tx(db);
     switch(op) {
     case CacheOperation::Artwork:
-        db.Exec("DELETE FROM wiki_skin_failures; DELETE FROM wiki_currency_failures; INSERT OR IGNORE INTO wiki_cache_state VALUES('failures');");break;
+        db.Exec("DELETE FROM wiki_skin_failures; DELETE FROM wiki_currency_failures; UPDATE wiki_skin_freshness SET attempt=0; INSERT OR IGNORE INTO wiki_cache_state VALUES('failures');");break;
     case CacheOperation::Characters:
         db.Exec("DELETE FROM character_rows; DELETE FROM character_snapshot;");break;
     case CacheOperation::AccountProgress:

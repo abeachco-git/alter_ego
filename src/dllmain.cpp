@@ -67,6 +67,7 @@
 #include "CacheDatabase.h"
 #include "AchievementCatalogCache.h"
 #include "AchievementNamesCore.h"
+#include "WikiFreshness.h"
 #include "StoragePaths.h"
 #include "GameMemory.h"
 #include "NativeAccounts.h"
@@ -593,7 +594,7 @@ static uint32_t g_AchNavigateToId = 0;     // pending navigation: jump to this a
 static std::vector<uint32_t> g_AchActiveMainCatIds;   // main/Historical categories for top of tree
 static std::vector<uint32_t> g_AchActiveDailyCatIds;   // daily categories for top of Daily group
 static std::string g_AchActiveEventName;                // display name for the active event node
-static bool g_AchActiveEventFetched = false;
+static std::atomic<int64_t> g_AchActiveEventNextCheck{0};
 static std::atomic<bool> g_AchActiveEventFetching{false};
 
 // Festival daily category IDs (hidden from Daily group when their festival is not active)
@@ -750,7 +751,7 @@ static int AeParseWikiDate(const std::string& s) {
 // Extract the "== Active events ==" section, find its {{Special event row}} blocks,
 // select the one whose [start,end] window contains today, and map its title to a
 // category ID. Falls back to the first recognised row if dates are unparseable.
-static ActiveEventResult ParseActiveSpecialEvent(const std::string& wikitext, int todayYmd) {
+static ActiveEventResult ParseActiveSpecialEvent(const std::string& wikitext, int todayYmd, bool allowUndated) {
     ActiveEventResult empty{"", 0};
     size_t h = wikitext.find("== Active events ==");
     if (h == std::string::npos) return empty;
@@ -784,15 +785,14 @@ static ActiveEventResult ParseActiveSpecialEvent(const std::string& wikitext, in
         }
 
         ActiveEventResult r{title, catId};
-        if (!haveFirst) { firstRow = r; haveFirst = true; }
-
         int startYmd = AeParseWikiDate(AeWikiField(block, "start date"));
         int endYmd   = AeParseWikiDate(AeWikiField(block, "end date"));
-        if (startYmd && endYmd && todayYmd >= startYmd && todayYmd <= endYmd) {
+        if (allowUndated && !haveFirst && (!startYmd || !endYmd)) { firstRow=r; haveFirst=true; }
+        if (AlterEgo::WikiFreshness::DateMatches(startYmd,endYmd,todayYmd)) {
             return r; // dated window contains today — definitive
         }
     }
-    return firstRow; // no dated match; fall back to first active row
+    return firstRow; // only an undated row from a fresh source may be a fallback
 }
 
 // Optimistic update grace period — protects alert-based increments from stale API snapback
@@ -2218,43 +2218,54 @@ static void FetchAchGroups() {
 }
 
 static void FetchActiveSpecialEvent() {
-    if (g_AchActiveEventFetching) return;
-    g_AchActiveEventFetching = true;
+    namespace W=AlterEgo::WikiFreshness;
+    const auto now=static_cast<int64_t>(std::time(nullptr));
+    if(now<g_AchActiveEventNextCheck.load()||g_AchActiveEventFetching.exchange(true))return;
+    g_AchActiveEventNextCheck=now+W::SpecialRetry;
     AlterEgo::Background::Workers().Launch([]() {
-        // 6-hour disk cache: {ts, body} wrapper. Events change weekly, so 6h is safe.
+        const auto now=static_cast<int64_t>(std::time(nullptr));
+        W::Stamp stamp;
         std::string wikitext;
-        std::string cachePath = AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(), "wiki_special_event.json");
+        const auto cachePath=AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(),"wiki_special_event.json");
         try {
             std::ifstream cf(cachePath);
-            if (cf.is_open()) {
-                nlohmann::json wrap; cf >> wrap;
-                if (wrap.is_object() && wrap.contains("ts") && wrap.contains("body")) {
-                    int64_t ts = wrap["ts"].get<int64_t>();
-                    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
-                    if (now - ts < 21600 && wrap["body"].is_string())
-                        wikitext = wrap["body"].get<std::string>();
+            if(cf.is_open()){
+                nlohmann::json wrap;cf>>wrap;
+                const auto body=wrap.value("body",std::string{});
+                stamp.attempt=wrap.value("attempt",int64_t{0});
+                if(W::ValidSpecialBody(body)){
+                    wikitext=body;stamp.success=wrap.value("ts",int64_t{0});
                 }
+                if(stamp.success<0||stamp.success>now)stamp.success=0;
+                if(stamp.attempt<0||stamp.attempt>now)stamp.attempt=0;
             }
-        } catch (...) {}
-
-        if (wikitext.empty()) {
-            std::string resp = Skinventory::HttpClient::Get(
-                "https://wiki.guildwars2.com/api.php?action=parse&page=Special_event"
-                "&prop=wikitext&format=json");
-            if (!resp.empty()) {
-                try {
-                    auto j = nlohmann::json::parse(resp);
-                    wikitext = j["parse"]["wikitext"]["*"].get<std::string>();
-                    nlohmann::json wrap;
-                    wrap["ts"] = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
-                    wrap["body"] = wikitext;
-                    WriteFileAtomic(cachePath, wrap.dump());
-                } catch (...) { wikitext.clear(); }
-            }
+        }catch(...){stamp={};wikitext.clear();}
+        auto persist=[&]{
+            nlohmann::json wrap={{"ts",stamp.success},{"attempt",stamp.attempt},{"body",wikitext}};
+            return WriteFileAtomic(cachePath,wrap.dump());
+        };
+        if(W::Due(stamp,now,W::SpecialInterval,W::SpecialRetry)){
+            stamp.attempt=now;
+            persist();
+            try{
+                auto response=Skinventory::HttpClient::GetEx(
+                    "https://wiki.guildwars2.com/api.php?action=parse&page=Special_event&prop=wikitext&format=json");
+                if(response.status_code!=200)throw std::runtime_error("Wiki special event HTTP failure");
+                auto j=nlohmann::json::parse(response.body);
+                const auto& parsed=j.at("parse");
+                auto body=parsed.at("wikitext").at("*").get<std::string>();
+                if(parsed.at("title").get<std::string>()!="Special event"||!W::ValidSpecialBody(body))
+                    throw std::runtime_error("Invalid Wiki special event page");
+                AlterEgo::Background::Checkpoint();
+                wikitext=std::move(body);stamp.success=static_cast<int64_t>(std::time(nullptr));
+                persist();
+            }catch(const AlterEgo::Background::Cancelled&){throw;}
+            catch(...){ /* retain last known good, including original success age */ }
         }
-        if (wikitext.empty()) { g_AchActiveEventFetching = false; return; }
+        const bool fresh=stamp.success>0&&now-stamp.success<W::SpecialInterval;
+        g_AchActiveEventNextCheck=fresh?stamp.success+W::SpecialInterval:
+            std::max(now+int64_t{1},stamp.attempt+W::SpecialRetry);
+        if(wikitext.empty()){g_AchActiveEventFetching=false;return;}
 
         // Today's date as YYYYMMDD (local time — event windows are day-granular).
         std::time_t tt = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -2266,7 +2277,7 @@ static void FetchActiveSpecialEvent() {
 #endif
         int todayYmd = (lt.tm_year + 1900) * 10000 + (lt.tm_mon + 1) * 100 + lt.tm_mday;
 
-        ActiveEventResult res = ParseActiveSpecialEvent(wikitext, todayYmd);
+        ActiveEventResult res = ParseActiveSpecialEvent(wikitext, todayYmd, fresh);
 
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -2297,7 +2308,6 @@ static void FetchActiveSpecialEvent() {
                     g_AchActiveMainCatIds.clear(); // name-only banner (no tracked category)
             }
             g_AchActiveDailyCatIds.clear(); // wiki path drives main category only
-            g_AchActiveEventFetched = true;
             g_AchActiveEventFetching = false;
         }
     }, [] { g_AchActiveEventFetching = false; });
@@ -12373,6 +12383,8 @@ void AddonLoad(AddonAPI_t* aApi) {
     g_StorageMaintenancePending=AlterEgo::Storage::MaintenancePending(maintenanceRoot);
     g_StorageMaintenanceMessage.clear();
     AlterEgo::Background::Workers().Open();
+    g_AchActiveEventNextCheck=0;
+    g_AchActiveEventFetching=false;
     AlterEgo::Callbacks::Runtime().Open();
     APIDefs = aApi;
     ImGui::SetCurrentContext((ImGuiContext*)APIDefs->ImguiContext);
@@ -14459,7 +14471,8 @@ static void RenderAchievements() {
             AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog))) {
         FetchAchNameIndex();
     }
-    if (g_AchGroupsFetched && !g_AchActiveEventFetched && !g_AchActiveEventFetching) {
+    if (g_AchGroupsFetched && !g_AchActiveEventFetching &&
+        std::time(nullptr)>=g_AchActiveEventNextCheck.load()) {
         FetchActiveSpecialEvent();
     }
 

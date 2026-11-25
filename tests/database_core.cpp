@@ -48,6 +48,44 @@ void Upgrade(DB::Connection& db, int version) {
 
 int case_database_core(int, char**) {
     {
+        namespace F=AlterEgo::WikiFreshness;
+        namespace W=AlterEgo::Cache::Wiki;
+        using namespace AlterEgo;
+        const int64_t now=10000000;
+        static_assert(F::SpecialRetry==3600);
+        assert(F::Due({},now,F::SkinInterval,F::SkinRetry));
+        assert(!F::Due({now-F::SkinInterval+1,0},now,F::SkinInterval,F::SkinRetry));
+        assert(F::Due({now-F::SkinInterval,0},now,F::SkinInterval,F::SkinRetry));
+        assert(!F::Due({0,now-F::SkinRetry+1},now,F::SkinInterval,F::SkinRetry));
+        assert(F::Due({0,now-F::SkinRetry},now,F::SkinInterval,F::SkinRetry));
+        assert(!F::Due({now-F::SpecialInterval+1,0},now,F::SpecialInterval,F::SpecialRetry));
+        assert(F::Due({now-F::SpecialInterval,0},now,F::SpecialInterval,F::SpecialRetry));
+        assert(!F::Due({0,now-F::SpecialRetry+1},now,F::SpecialInterval,F::SpecialRetry));
+        assert(F::Due({0,now-F::SpecialRetry},now,F::SpecialInterval,F::SpecialRetry));
+        assert(!F::ValidSpecialBody("error")&&F::ValidSpecialBody("== Active events ==\n"));
+        assert(F::DateMatches(20261101,20261125,20261125));
+        assert(!F::DateMatches(20261101,20261124,20261125));
+        Scratch scratch;
+        DB::Connection db(scratch.path("wiki-freshness.db"),DB::Connection::OpenMode::Create);
+        DB::Migrate(db,Cache::kApplicationId,18,Cache::Upgrade);
+        W::Replace(db,W::Kind::Metadata,{{"42",{{"vendor","Old"}}}});
+        Cache::Initialize(db);
+        assert(W::ReadFreshness(db).empty());
+        assert(W::Project(db,W::Kind::Metadata).at("42").at("vendor")=="Old");
+        W::MarkAttempt(db,42,now);
+        auto stamp=W::ReadFreshness(db).at(42);
+        assert(stamp.attempt==now&&stamp.success==0);
+        bool failed=false;
+        try{W::StoreVerified(db,42,nlohmann::json::object(),now);}catch(...){failed=true;}
+        assert(failed&&W::ReadFreshness(db).at(42).success==0);
+        assert(W::Project(db,W::Kind::Metadata).at("42").at("vendor")=="Old");
+        W::StoreVerified(db,42,{{"vendor","New"}},now+1);
+        W::MarkAttempt(db,42,now+F::SkinInterval+2);
+        stamp=W::ReadFreshness(db).at(42);
+        assert(stamp.success==now+1&&stamp.attempt==now+F::SkinInterval+2);
+        assert(W::Project(db,W::Kind::Metadata).at("42").at("vendor")=="New");
+    }
+    {
         namespace W=AlterEgo::WikiEvents;
         Scratch scratch;
         DB::Connection db(scratch.path("wiki-events.db"),DB::Connection::OpenMode::Create);

@@ -1,5 +1,6 @@
 #pragma once
 #include "CacheDatabase.h"
+#include "WikiFreshness.h"
 #include <array>
 #include <limits>
 
@@ -133,4 +134,39 @@ inline std::optional<Json> Read(const std::string& root,Kind kind,const std::fil
     if(Storage::ReadMigrationBytes(legacy)==bytes)std::filesystem::remove(legacy,ec);
     return verified;
 }
+inline std::map<uint32_t,WikiFreshness::Stamp> ReadFreshness(Database::Connection& db) {
+    std::map<uint32_t,WikiFreshness::Stamp> out;
+    auto q=db.Prepare("SELECT skin_id,success,attempt FROM wiki_skin_freshness");
+    while(q.Step())out[static_cast<uint32_t>(q.Integer(0))]={q.Integer(1),q.Integer(2)};
+    return out;
+}
+inline void MarkAttempt(Database::Connection& db,uint32_t id,int64_t now) {
+    auto q=db.Prepare("INSERT INTO wiki_skin_freshness VALUES(?,0,?) ON CONFLICT(skin_id) DO UPDATE SET attempt=excluded.attempt");
+    q.Bind(1,id);q.Bind(2,now);q.Execute();
+}
+inline void StoreVerified(Database::Connection& db,uint32_t id,const Json& row,int64_t now) {
+    const auto normalized=Normalize(Kind::Metadata,Json{{std::to_string(id),row}});
+    if(normalized.empty()||now<=0)throw std::runtime_error("Incomplete Wiki acquisition metadata");
+    Database::Transaction tx(db);
+    auto existing=db.Prepare("SELECT success FROM wiki_skin_freshness WHERE skin_id=?");
+    existing.Bind(1,id);
+    if(existing.Step()&&existing.Integer(0)>now)throw std::runtime_error("Older Wiki acquisition snapshot");
+    auto put=db.Prepare("INSERT INTO wiki_skin_metadata VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(skin_id) DO UPDATE SET acquisition=excluded.acquisition,collection=excluded.collection,set_name=excluded.set_name,vendor_name=excluded.vendor_name,vendor_location=excluded.vendor_location,vendor_waypoint=excluded.vendor_waypoint,vendor_cost=excluded.vendor_cost,vendor_cost_keys=excluded.vendor_cost_keys");
+    put.Bind(1,id);
+    for(size_t i=0;i<Fields.size();++i)put.Bind(static_cast<int>(i+2),row.value(Fields[i],std::string{}));
+    put.Execute();
+    auto stamp=db.Prepare("INSERT INTO wiki_skin_freshness VALUES(?,?,?) ON CONFLICT(skin_id) DO UPDATE SET success=excluded.success,attempt=excluded.attempt");
+    stamp.Bind(1,id);stamp.Bind(2,now);stamp.Bind(3,now);stamp.Execute();
+    db.Exec("INSERT OR IGNORE INTO wiki_cache_state VALUES('metadata')");
+    tx.Commit();
+}
+template<class Fn> inline auto WithDb(const std::string& root,Fn fn) {
+    std::lock_guard<std::mutex> lock(Cache::Mutex());
+    auto path=Storage::Paths(root).Cache();
+    std::filesystem::create_directories(path.parent_path());
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+    Cache::Initialize(db);
+    return fn(db);
+}
+
 }

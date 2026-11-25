@@ -95,3 +95,5 @@ Unit/regression coverage for account switching, late responses, permission failu
 - Hybrid Wiki event timer resources: v18 SQLite baseline merge, validated runtime parser and newest snapshot, 30-day automatic runtime checks, manual Nexus action and daily build eligibility. Pending: live Windows runtime verification, remaining Wiki datasets and durable promotion of newer CI snapshots; complex rotation templates remain build-only.
 
 - Wiki attribution: current raid/fractal/event timer source credits and rights boundaries documented in third-party notices; new sources require dataset-specific provenance and reuse review. Specialization prose and bulk acquisition remain gated; final distribution rights/notice review is tracked in the release checklist.
+
+- Final Wiki freshness: active special-event retry/recheck and v19 on-demand skin acquisition success/attempt tracking implemented; live smoke tests pending. Emboldened, Call of the Mists, festival mappings, specialization prose and bulk skin/currency catalog research deferred unless a practical need arises. Manual promotion of reviewed build snapshots remains acceptable.
