@@ -6,7 +6,13 @@
 namespace AlterEgo::NativeInventory {
 struct ScopeState {std::string account,scope,character,status;int64_t attempted=0,success=0;};
 struct Row {Slot slot;std::string name,rarity,type,chat;int64_t captured=0;};
+struct WalletRow {std::string account,name,description;uint32_t id=0;int64_t value=0;int order=0;};
+struct GuildRow {std::string id,name,tag,status;int64_t attempted=0,success=0,coins=0;std::vector<Row> rows;};
 struct Projection {
+    std::vector<WalletRow> wallet;
+    std::map<std::string,GuildRow> guilds;
+    std::map<std::string,std::set<std::string>> guildAccess;
+    std::map<uint32_t,ItemFlags> flags;
     std::vector<Row> rows;
     std::vector<ScopeState> states;
     std::map<std::string,std::set<std::string>> rosters;
@@ -58,7 +64,7 @@ inline void StoreRoster(const std::string& root,const std::string& account,const
     auto put=db.Prepare("INSERT INTO native_rosters VALUES(?,?)");
     for(const auto& name:names){put.Bind(1,account);put.Bind(2,name);put.Execute();put.Reset();}
     // Remove only scopes of characters confirmed absent from this successful roster.
-    auto prune=db.Prepare("DELETE FROM native_inventory_scopes WHERE account=? AND character<>'' AND character NOT IN (SELECT character FROM native_rosters WHERE account=?)");
+    auto prune=db.Prepare("DELETE FROM native_inventory_scopes WHERE account=? AND scope IN ('Bags','Equipment') AND character<>'' AND character NOT IN (SELECT character FROM native_rosters WHERE account=?)");
     prune.Bind(1,account);prune.Bind(2,account);prune.Execute();tx.Commit();
 }
 inline void StoreNames(const std::string& root,const Json& rows){
@@ -67,12 +73,62 @@ inline void StoreNames(const std::string& root,const Json& rows){
     const auto path=Storage::Paths(root).Cache();
     Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
     Cache::Initialize(db);Database::Transaction tx(db);
+    auto flags=db.Prepare("INSERT INTO native_item_flags VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET account_bound=excluded.account_bound,soulbound=excluded.soulbound,bind_on_use=excluded.bind_on_use");
     auto q=db.Prepare("INSERT INTO reference_items(id,name,rarity,type,chat_link) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,rarity=excluded.rarity,type=excluded.type,chat_link=excluded.chat_link WHERE reference_items.complete=0");
     for(const auto& row:rows){
         q.Bind(1,ItemId(row.at("id")));q.Bind(2,row.at("name").get<std::string>());q.Bind(3,row.value("rarity",std::string{}));
         q.Bind(4,row.value("type",std::string{}));q.Bind(5,row.value("chat_link",std::string{}));q.Execute();q.Reset();
+        if(row.contains("flags")){auto f=ParseFlags(row.at("flags"));flags.Bind(1,ItemId(row.at("id")));flags.Bind(2,int(f.accountBound));flags.Bind(3,int(f.soulbound));flags.Bind(4,int(f.bindOnUse));flags.Execute();flags.Reset();}
     }
     tx.Commit();
+}
+inline void RecordWallet(const std::string& root,const ScopeState& state,const std::vector<CurrencyBalance>* rows=nullptr){
+    if(state.scope!="Wallet")throw std::runtime_error("Wrong wallet scope");
+    std::lock_guard<std::mutex> lock(Cache::Mutex());auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);Cache::Initialize(db);Database::Transaction tx(db);
+    auto old=db.Prepare("SELECT attempted FROM native_inventory_scopes WHERE account=? AND scope='Wallet' AND character=''");
+    old.Bind(1,state.account);if(old.Step()&&old.Integer(0)>state.attempted)return;
+    auto mark=db.Prepare("INSERT INTO native_inventory_scopes VALUES(?,'Wallet','',?,?,?) ON CONFLICT(account,scope,character) DO UPDATE SET attempted=excluded.attempted,status=excluded.status,success=CASE WHEN excluded.status='Ready' THEN excluded.success ELSE native_inventory_scopes.success END");
+    mark.Bind(1,state.account);mark.Bind(2,state.status);mark.Bind(3,state.attempted);mark.Bind(4,state.success);mark.Execute();
+    if(rows){
+        if(state.status!="Ready")throw std::runtime_error("Incomplete wallet");
+        auto del=db.Prepare("DELETE FROM native_wallet WHERE account=?");del.Bind(1,state.account);del.Execute();
+        auto put=db.Prepare("INSERT INTO native_wallet VALUES(?,?,?)");
+        for(auto& r:*rows){put.Bind(1,state.account);put.Bind(2,r.id);put.Bind(3,r.value);put.Execute();put.Reset();}
+    }tx.Commit();
+}
+inline void StoreCurrencies(const std::string& root,const Json& j){
+    if(!j.is_array())throw std::runtime_error("Invalid currency definitions");
+    std::lock_guard<std::mutex> lock(Cache::Mutex());Database::Connection db(Storage::Paths(root).Cache().u8string(),Database::Connection::OpenMode::Existing);
+    Cache::Initialize(db);Database::Transaction tx(db);
+    auto q=db.Prepare("INSERT INTO native_currencies VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,sort_order=excluded.sort_order");
+    for(const auto& r:j){q.Bind(1,ItemId(r.at("id")));q.Bind(2,r.at("name").get<std::string>());q.Bind(3,r.value("description",std::string{}));q.Bind(4,r.value("order",0));q.Execute();q.Reset();}tx.Commit();
+}
+inline void StoreGuildAccess(const std::string& root,const std::string& account,const std::set<std::string>& ids,int64_t stamp){
+    std::lock_guard<std::mutex> lock(Cache::Mutex());auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);Cache::Initialize(db);Database::Transaction tx(db);
+    auto old=db.Prepare("SELECT attempted FROM native_inventory_scopes WHERE account=? AND scope='Guild access' AND character=''");
+    old.Bind(1,account);if(old.Step()&&old.Integer(0)>stamp)return;
+    auto del=db.Prepare("DELETE FROM native_guild_access WHERE account=?");del.Bind(1,account);del.Execute();
+    auto put=db.Prepare("INSERT INTO native_guild_access VALUES(?,?)");for(auto& id:ids){put.Bind(1,account);put.Bind(2,id);put.Execute();put.Reset();}
+    auto mark=db.Prepare("INSERT INTO native_inventory_scopes VALUES(?,'Guild access','','Ready',?,?) ON CONFLICT(account,scope,character) DO UPDATE SET status='Ready',attempted=excluded.attempted,success=excluded.success");
+    mark.Bind(1,account);mark.Bind(2,stamp);mark.Bind(3,stamp);mark.Execute();tx.Commit();
+}
+inline void RecordGuild(const std::string& root,const GuildRow& g,const GuildStock* stock=nullptr){
+    std::lock_guard<std::mutex> lock(Cache::Mutex());auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);Cache::Initialize(db);Database::Transaction tx(db);
+    auto old=db.Prepare("SELECT attempted FROM native_guilds WHERE guild_id=?");old.Bind(1,g.id);if(old.Step()&&old.Integer(0)>g.attempted)return;
+    auto mark=db.Prepare("INSERT INTO native_guilds VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET name=CASE WHEN excluded.name<>'' THEN excluded.name ELSE native_guilds.name END,tag=CASE WHEN excluded.tag<>'' THEN excluded.tag ELSE native_guilds.tag END,status=excluded.status,attempted=excluded.attempted,success=CASE WHEN excluded.status='Ready' THEN excluded.success ELSE native_guilds.success END");
+    mark.Bind(1,g.id);mark.Bind(2,g.name);mark.Bind(3,g.tag);mark.Bind(4,g.status);mark.Bind(5,g.attempted);mark.Bind(6,g.success);mark.Execute();
+    if(stock){
+        if(g.status!="Ready")throw std::runtime_error("Incomplete guild stock");
+        auto del=db.Prepare("DELETE FROM native_guild_slots WHERE guild_id=?");del.Bind(1,g.id);del.Execute();
+        auto d2=db.Prepare("DELETE FROM native_guild_coins WHERE guild_id=?");d2.Bind(1,g.id);d2.Execute();
+        auto put=db.Prepare("INSERT INTO native_guild_slots VALUES(?,?,?,?)");
+        for(auto& s:stock->slots){if(s.account!=g.id)throw std::runtime_error("Guild mismatch");put.Bind(1,g.id);put.Bind(2,s.position);put.Bind(3,s.id);put.Bind(4,s.count);put.Execute();put.Reset();}
+        auto coins=db.Prepare("INSERT INTO native_guild_coins VALUES(?,?,?)");
+        for(auto& [section,value]:stock->coins){coins.Bind(1,g.id);coins.Bind(2,section);coins.Bind(3,value);coins.Execute();coins.Reset();}
+    }tx.Commit();
 }
 inline Projection Read(const std::string& root){
     Projection out;
@@ -103,6 +159,13 @@ inline Projection Read(const std::string& root){
     while(rosterState.Step())out.rosters[rosterState.Text(0)];
     auto roster=db.Prepare("SELECT account,character FROM native_rosters");
     while(roster.Step())out.rosters[roster.Text(0)].insert(roster.Text(1));
+    auto wallet=db.Prepare("SELECT w.account,w.currency_id,w.value,COALESCE(c.name,''),COALESCE(c.description,''),COALESCE(c.sort_order,0) FROM native_wallet w LEFT JOIN native_currencies c ON w.currency_id=c.id ORDER BY c.sort_order,w.currency_id");
+    while(wallet.Step())out.wallet.push_back({wallet.Text(0),wallet.Text(3),wallet.Text(4),static_cast<uint32_t>(wallet.Integer(1)),wallet.Integer(2),static_cast<int>(wallet.Integer(5))});
+    auto access=db.Prepare("SELECT account,guild_id FROM native_guild_access");while(access.Step())out.guildAccess[access.Text(0)].insert(access.Text(1));
+    auto guilds=db.Prepare("SELECT guild_id,name,tag,status,attempted,success FROM native_guilds");while(guilds.Step()){GuildRow g;g.id=guilds.Text(0);g.name=guilds.Text(1);g.tag=guilds.Text(2);g.status=guilds.Text(3);g.attempted=guilds.Integer(4);g.success=guilds.Integer(5);out.guilds.emplace(g.id,std::move(g));}
+    auto guildItems=db.Prepare("SELECT g.guild_id,g.position,g.item_id,g.quantity,COALESCE(i.name,''),COALESCE(i.rarity,''),COALESCE(i.type,''),COALESCE(i.chat_link,'') FROM native_guild_slots g LEFT JOIN reference_items i ON g.item_id=i.id");while(guildItems.Step()){auto& g=out.guilds.at(guildItems.Text(0));Row row;row.slot.account=g.id;row.slot.scope="Guild bank";row.slot.position=guildItems.Text(1);row.slot.id=static_cast<uint32_t>(guildItems.Integer(2));row.slot.count=guildItems.Integer(3);row.name=guildItems.Text(4);row.rarity=guildItems.Text(5);row.type=guildItems.Text(6);row.chat=guildItems.Text(7);row.captured=g.success;g.rows.push_back(std::move(row));}
+    auto coins=db.Prepare("SELECT guild_id,value FROM native_guild_coins");while(coins.Step())out.guilds.at(coins.Text(0)).coins+=coins.Integer(1);
+    auto flags=db.Prepare("SELECT item_id,account_bound,soulbound,bind_on_use FROM native_item_flags");while(flags.Step())out.flags[static_cast<uint32_t>(flags.Integer(0))]={true,flags.Integer(1)!=0,flags.Integer(2)!=0,flags.Integer(3)!=0};
     tx.Commit();return out;
 }
 }

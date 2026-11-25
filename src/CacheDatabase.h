@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 10;
+constexpr int kSchemaVersion = 11;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,18 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 11) {
+        db.Exec(R"SQL(
+CREATE TABLE native_wallet(account TEXT NOT NULL,currency_id INTEGER NOT NULL,value INTEGER NOT NULL CHECK(value>=0),PRIMARY KEY(account,currency_id)) STRICT;
+CREATE TABLE native_currencies(id INTEGER PRIMARY KEY,name TEXT NOT NULL,description TEXT NOT NULL,sort_order INTEGER NOT NULL) STRICT;
+CREATE TABLE native_guild_access(account TEXT NOT NULL,guild_id TEXT NOT NULL,PRIMARY KEY(account,guild_id)) STRICT;
+CREATE TABLE native_guilds(guild_id TEXT PRIMARY KEY,name TEXT NOT NULL,tag TEXT NOT NULL,status TEXT NOT NULL,attempted INTEGER NOT NULL,success INTEGER NOT NULL) STRICT;
+CREATE TABLE native_guild_slots(guild_id TEXT NOT NULL REFERENCES native_guilds ON DELETE CASCADE,position TEXT NOT NULL,item_id INTEGER NOT NULL,quantity INTEGER NOT NULL CHECK(quantity>0),PRIMARY KEY(guild_id,position)) STRICT;
+CREATE TABLE native_guild_coins(guild_id TEXT NOT NULL REFERENCES native_guilds ON DELETE CASCADE,section TEXT NOT NULL,value INTEGER NOT NULL CHECK(value>=0),PRIMARY KEY(guild_id,section)) STRICT;
+CREATE TABLE native_item_flags(item_id INTEGER PRIMARY KEY,account_bound INTEGER NOT NULL,soulbound INTEGER NOT NULL,bind_on_use INTEGER NOT NULL) STRICT;
+)SQL");
+        return;
+    }
     if (version == 10) {
         db.Exec(R"SQL(
 CREATE TABLE native_roster_state(account TEXT PRIMARY KEY, fetched_at INTEGER NOT NULL) STRICT;

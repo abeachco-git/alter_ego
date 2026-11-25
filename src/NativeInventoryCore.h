@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cctype>
 #include <set>
+#include <map>
+#include "SkinSearchCore.h"
 
 namespace AlterEgo::NativeInventory {
 using Json=nlohmann::json;
@@ -114,14 +116,65 @@ inline std::vector<Slot> ParseArmory(const Json& j,const std::string& account){
     for(auto& row:rows){if(!seen.insert(row.id).second)throw std::runtime_error("Duplicate armory ID");row.binding=Binding::Account;}
     return rows;
 }
+struct CurrencyBalance {uint32_t id=0;int64_t value=0;};
+inline int64_t Nonnegative(const Json& j){
+    if(!j.is_number_integer())throw std::runtime_error("Invalid quantity");
+    auto n=j.get<int64_t>();if(n<0)throw std::runtime_error("Negative quantity");return n;
+}
+inline std::vector<CurrencyBalance> ParseWallet(const Json& j){
+    if(!j.is_array())throw std::runtime_error("Invalid wallet");
+    std::vector<CurrencyBalance> out;std::set<uint32_t> seen;
+    for(const auto& r:j){auto id=ItemId(r.at("id"));if(!seen.insert(id).second)throw std::runtime_error("Duplicate currency");out.push_back({id,Nonnegative(r.at("value"))});}
+    return out;
+}
+struct GuildStock {std::vector<Slot> slots;std::map<std::string,int64_t> coins;};
+inline GuildStock ParseGuild(const Json& j,const std::string& guid){
+    if(!j.is_array())throw std::runtime_error("Invalid guild stash");
+    GuildStock out;std::set<std::string> sections;
+    for(const auto& r:j){
+        auto section=std::to_string(ItemId(r.at("upgrade_id")));
+        if(!sections.insert(section).second)throw std::runtime_error("Duplicate stash section");
+        const auto& inv=r.at("inventory");
+        if(!inv.is_array()||Nonnegative(r.at("size"))!=static_cast<int64_t>(inv.size()))throw std::runtime_error("Incomplete stash");
+        auto slots=ParseArray(inv,guid,"Guild bank",{},section+"/",false);
+        out.slots.insert(out.slots.end(),slots.begin(),slots.end());
+        out.coins[section]=Nonnegative(r.at("coins"));
+    }
+    return out;
+}
+inline int64_t FreshSeconds(const std::string& scope){
+    if(scope=="Wallet"||scope=="Bags"||scope=="Shared inventory")return 300;
+    if(scope=="Bank"||scope=="Equipment"||scope=="Delivery box")return 900;
+    if(scope=="Materials"||scope=="Guild bank"||scope=="Guild access")return 1800;
+    if(scope=="Legendary Armory"||scope=="Roster")return 3600;
+    return 900;
+}
+inline bool Due(const std::string& scope,int64_t attempted,int64_t success,int64_t now){
+    if(attempted>0&&now>=attempted&&now-attempted<60)return false;
+    return success<=0||now<success||now-success>=FreshSeconds(scope);
+}
+struct ItemFlags {bool known=false,accountBound=false,soulbound=false,bindOnUse=false;};
+inline ItemFlags ParseFlags(const Json& flags){
+    if(!flags.is_array())throw std::runtime_error("Invalid flags");
+    ItemFlags f;f.known=true;
+    for(const auto& v:flags){auto s=v.get<std::string>();
+        if(s=="AccountBound")f.accountBound=true;
+        if(s=="SoulbindOnAcquire"||s=="SoulBindOnAcquire")f.soulbound=true;
+        if(s=="AccountBindOnUse"||s=="SoulBindOnUse"||s=="SoulbindOnUse")f.bindOnUse=true;
+    }return f;
+}
+inline bool UsableLoose(const Slot& s,const std::string& account,const std::string& character,
+                       const ItemFlags& f,bool fresh,int64_t requestedStat=-1){
+    if(!fresh||account.empty()||s.account!=account)return false;
+    if(s.scope!="Bank"&&s.scope!="Shared inventory"&&s.scope!="Bags"&&s.scope!="Materials")return false;
+    if(requestedStat>0&&s.stat>0&&requestedStat!=s.stat)return false;
+    if(s.binding==Binding::Character)return !character.empty()&&s.boundTo==character;
+    if(s.binding==Binding::Unknown)return f.known&&!f.soulbound&&s.scope=="Materials";
+    if(f.known&&f.soulbound&&s.binding==Binding::Unbound)return false;
+    return true;
+}
 inline std::string Lower(std::string s){for(auto& c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;}
 inline bool Match(const std::string& name,uint32_t id,const std::string& query){
-    const auto hay=Lower(name)+" "+std::to_string(id);const auto q=Lower(query);
-    size_t start=0;
-    while(start<q.size()){auto end=q.find(' ',start);if(end==std::string::npos)end=q.size();
-        if(end>start&&hay.find(q.substr(start,end-start))==std::string::npos)return false;
-        start=end+1;
-    }
-    return true;
+    return Skinventory::Search::Matches(name+" "+std::to_string(id),Skinventory::Search::Words(query));
 }
 } // namespace AlterEgo::NativeInventory
