@@ -611,6 +611,7 @@ namespace AlterEgo {
         static bool EnsureDataDirectory();
 
         // Batch fetch helpers (public endpoints, synchronous)
+        static void FetchItemDetailsClaimed(const std::vector<uint32_t>& item_ids, bool forceRefetch);
         static void FetchSkinDetails(const std::vector<uint32_t>& skin_ids);
         static void FetchTraitDetails(const std::vector<uint32_t>& trait_ids);
 

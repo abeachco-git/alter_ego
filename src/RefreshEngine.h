@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include "ApiActivity.h"
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -57,6 +59,7 @@ struct MetadataRegistry {
     using Clock=std::chrono::steady_clock;
     struct Entry{bool pending=false;Clock::time_point retry{};};
     std::mutex mutex;
+    std::condition_variable changed;
     std::map<std::pair<std::string,uint32_t>,Entry> records;
     Clock::time_point pruneAt{};
 };
@@ -67,6 +70,7 @@ struct IdBatch {
     ~IdBatch(){
         auto& r=Metadata();std::lock_guard<std::mutex> lock(r.mutex);
         for(auto id:ids){auto& e=r.records[{dataset,id}];e.pending=false;e.retry=MetadataRegistry::Clock::now()+std::chrono::seconds(FailureSeconds);}
+        r.changed.notify_all();
     }
 };
 inline std::shared_ptr<IdBatch> ClaimIds(const std::string& dataset,const std::vector<uint32_t>& ids,bool manual=false){
@@ -79,12 +83,34 @@ inline std::shared_ptr<IdBatch> ClaimIds(const std::string& dataset,const std::v
         }
         r.pruneAt=now+std::chrono::minutes(1);
     }
+    uint64_t coalesced=0,cooldown=0;
     for(auto id:ids){
         if(!id)continue;
         auto& e=r.records[{dataset,id}];
-        if(e.pending||(!manual&&now<e.retry))continue;
+        if(e.pending){++coalesced;continue;}
+        if(!manual&&now<e.retry){++cooldown;continue;}
         batch->ids.push_back(id);e.pending=true;
     }
+    ApiActivity::Session().MetadataClaim(batch->ids.size(),coalesced,cooldown,manual);
     return batch;
+}
+// Synchronous callers that actually consume metadata immediately can join
+// an existing owner instead of starting a duplicate HTTP request. Ordinary
+// asynchronous discovery never waits; shutdown and timeouts remain bounded.
+template<class Stopping>
+inline bool WaitForIds(const std::string& dataset,const std::vector<uint32_t>& ids,
+                      Stopping stopping,std::chrono::milliseconds timeout=std::chrono::seconds(30)){
+    auto& r=Metadata();
+    const auto until=MetadataRegistry::Clock::now()+timeout;
+    std::unique_lock<std::mutex> lock(r.mutex);
+    const auto pending=[&]{
+        for(auto id:ids){auto it=r.records.find({dataset,id});if(it!=r.records.end()&&it->second.pending)return true;}
+        return false;
+    };
+    while(pending()){
+        if(stopping()||MetadataRegistry::Clock::now()>=until)return false;
+        r.changed.wait_until(lock,std::min(until,MetadataRegistry::Clock::now()+std::chrono::milliseconds(50)));
+    }
+    return !stopping();
 }
 }

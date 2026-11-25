@@ -988,6 +988,16 @@ namespace AlterEgo {
     }
 
     void GW2API::FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
+        std::vector<uint32_t> missing;
+        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
+        if(missing.empty())return;
+        auto claim=RefreshEngine::ClaimIds("items",missing);
+        if(!claim->ids.empty())FetchItemDetailsClaimed(claim->ids,forceRefetch);
+        claim.reset();
+        RefreshEngine::WaitForIds("items",missing,[]{return Background::Workers().Stopping();});
+    }
+
+    void GW2API::FetchItemDetailsClaimed(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
         if (item_ids.empty()) return;
 
         std::vector<uint32_t> to_fetch;
@@ -1027,6 +1037,7 @@ namespace AlterEgo {
                         ItemInfo info;
                         info.id = item["id"].get<uint32_t>();
                         info.name = item.value("name", "");
+                        if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
                         info.icon_url = item.value("icon", "");
                         info.rarity = item.value("rarity", "");
                         info.type = item.value("type", "");
@@ -1096,6 +1107,7 @@ namespace AlterEgo {
                         SkinInfo info;
                         info.id = skin["id"].get<uint32_t>();
                         info.name = skin.value("name", "");
+                        if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
                         info.icon_url = skin.value("icon", "");
                         info.type = skin.value("type", "");
                         info.rarity = skin.value("rarity", "");
@@ -1135,7 +1147,7 @@ namespace AlterEgo {
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
         auto claim=RefreshEngine::ClaimIds("items",missing);
         if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { FetchItemDetails(claim->ids, forceRefetch); });
+        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { FetchItemDetailsClaimed(claim->ids, forceRefetch); });
     }
 
     void GW2API::FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids) {
@@ -1220,7 +1232,7 @@ namespace AlterEgo {
                 }
             }
             if (!all_trait_ids.empty()) {
-                FetchTraitDetails(all_trait_ids);
+                FetchTraitDetailsAsync(all_trait_ids);
             }
         });
     }
@@ -1262,6 +1274,7 @@ namespace AlterEgo {
                         TraitInfo info;
                         info.id = trait["id"].get<uint32_t>();
                         info.name = trait.value("name", "");
+                        if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
                         info.icon_url = trait.value("icon", "");
                         if (trait.contains("description"))
                             info.description = StripHtmlTags(trait["description"].get<std::string>());

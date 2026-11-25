@@ -65,6 +65,7 @@ struct Snapshot {
     std::array<Totals,Count> endpoints{};
     std::array<uint64_t,2> last10{},last60{},peak{};
     uint64_t sharedHits=0,sharedCoalesced=0;
+    uint64_t metadataOwned=0,metadataCoalesced=0,metadataCooldown=0,metadataManual=0;
 };
 class Recorder {
     struct Bucket {int64_t second=-1;std::array<uint64_t,2> starts{};};
@@ -90,6 +91,11 @@ public:
     void Shared(bool coalesced){
         std::lock_guard<std::mutex> lock(mutex_);
         if(coalesced)++session_.sharedCoalesced;else ++session_.sharedHits;
+    }
+    void MetadataClaim(uint64_t owned,uint64_t coalesced,uint64_t cooldown,bool manual){
+        std::lock_guard<std::mutex> lock(mutex_);
+        session_.metadataOwned+=owned;session_.metadataCoalesced+=coalesced;
+        session_.metadataCooldown+=cooldown;if(manual)session_.metadataManual+=owned;
     }
     Snapshot Read(int64_t now=Now()){
         std::lock_guard<std::mutex> lock(mutex_);

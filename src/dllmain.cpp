@@ -17619,6 +17619,9 @@ static void RenderStorageDiagnostics() {
         ImGui::TextDisabled("Requests: last 10 min / hour / session");
         ImGui::Text("Achievement broker: %llu cache hits, %llu coalesced",
             (unsigned long long)activity.sharedHits,(unsigned long long)activity.sharedCoalesced);
+        ImGui::TextWrapped("Metadata IDs: %llu claimed (%llu manual), %llu coalesced, %llu cooldown suppressed",
+            (unsigned long long)activity.metadataOwned,(unsigned long long)activity.metadataManual,
+            (unsigned long long)activity.metadataCoalesced,(unsigned long long)activity.metadataCooldown);
         if(ImGui::TreeNode("Endpoint groups##ae_api_endpoints")){
             for(size_t i=0;i<Count;++i){
                 const auto& t=activity.endpoints[i];if(!t.started)continue;
