@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 9;
+constexpr int kSchemaVersion = 10;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -25,6 +25,17 @@ struct AchievementSnapshot {
     std::map<uint32_t, AchievementProgress> entries;
 };
 inline void Upgrade(Database::Connection& db, int version) {
+    if (version == 10) {
+        db.Exec(R"SQL(
+CREATE TABLE native_roster_state(account TEXT PRIMARY KEY, fetched_at INTEGER NOT NULL) STRICT;
+CREATE TABLE native_rosters(account TEXT NOT NULL REFERENCES native_roster_state(account) ON DELETE CASCADE,character TEXT NOT NULL,PRIMARY KEY(account,character)) STRICT;
+CREATE TABLE native_inventory_scopes(account TEXT NOT NULL,scope TEXT NOT NULL,character TEXT NOT NULL,status TEXT NOT NULL,attempted INTEGER NOT NULL,success INTEGER NOT NULL,PRIMARY KEY(account,scope,character)) STRICT;
+CREATE TABLE native_inventory_slots(account TEXT NOT NULL,scope TEXT NOT NULL,character TEXT NOT NULL,position TEXT NOT NULL,item_id INTEGER NOT NULL CHECK(item_id BETWEEN 1 AND 4294967295),quantity INTEGER NOT NULL CHECK(quantity>0),binding INTEGER NOT NULL CHECK(binding BETWEEN 0 AND 3),bound_to TEXT NOT NULL,stat_id INTEGER NOT NULL,charges INTEGER NOT NULL,PRIMARY KEY(account,scope,character,position),FOREIGN KEY(account,scope,character) REFERENCES native_inventory_scopes ON DELETE CASCADE) STRICT;
+CREATE TABLE native_inventory_sockets(account TEXT NOT NULL,scope TEXT NOT NULL,character TEXT NOT NULL,position TEXT NOT NULL,kind INTEGER NOT NULL CHECK(kind IN (0,1)),ordinal INTEGER NOT NULL,item_id INTEGER NOT NULL,PRIMARY KEY(account,scope,character,position,kind,ordinal),FOREIGN KEY(account,scope,character,position) REFERENCES native_inventory_slots ON DELETE CASCADE) STRICT;
+CREATE INDEX native_inventory_item_lookup ON native_inventory_slots(item_id,account);
+)SQL");
+        return;
+    }
     if (version == 9) {
         db.Exec(R"SQL(
 CREATE TABLE wiki_cache_state(kind TEXT PRIMARY KEY CHECK(kind IN ('metadata','failures'))) STRICT;

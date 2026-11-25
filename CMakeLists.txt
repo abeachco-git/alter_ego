@@ -68,6 +68,8 @@ set(SOURCES
     src/IconManager.cpp
     src/ChatLink.cpp
     src/HttpClient.cpp
+    src/ArenaNetTransport.cpp
+    src/NativeAccounts.cpp
     src/SkinCache.cpp
     src/OwnedSkins.cpp
     src/Commerce.cpp
@@ -89,6 +91,7 @@ target_link_libraries(AlterEgo
     ae_sqlite
     gdi32
     wininet
+    advapi32
     shell32
     comdlg32
 )

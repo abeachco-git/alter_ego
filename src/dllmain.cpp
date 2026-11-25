@@ -63,6 +63,7 @@
 #include "AchievementCatalogCache.h"
 #include "StoragePaths.h"
 #include "GameMemory.h"
+#include "NativeAccounts.h"
 
 // Version constants
 #define V_MAJOR 1
@@ -12567,6 +12568,7 @@ void AddonLoad(AddonAPI_t* aApi) {
 
     // Initialize subsystems
     AlterEgo::GW2API::Initialize(APIDefs);
+    AlterEgo::NativeAccounts::Initialize(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::FontManager::Initialize(APIDefs);
     AlterEgo::IconManager::Initialize(APIDefs);
 
@@ -12766,6 +12768,7 @@ void AddonUnload() {
     Skinventory::OwnedSkins::Shutdown();
 
     AlterEgo::IconManager::Shutdown();
+    AlterEgo::NativeAccounts::Shutdown();
     AlterEgo::GW2API::Shutdown();
 
     SaveSession();
@@ -17623,6 +17626,12 @@ void AddonRender() {
             }
         }
 
+        if (ImGui::BeginTabItem("Inventory",nullptr,NavigationTabFlags(7))) {
+            g_MainTab=7;
+            AlterEgo::NativeAccounts::RenderInventory(g_CurrentCharName);
+            ImGui::EndTabItem();
+        }
+
         // Right-aligned account selector on the same row as the tab strip.
         // Drawn after tab items so it overlays the empty right-hand portion of
         // the tab bar row (which has no clickable items there).
@@ -18025,6 +18034,8 @@ void AddonOptions() {
     ThemeGuard themeGuard;
     ImGui::Text("Alter Ego");
 
+    AlterEgo::NativeAccounts::RenderOptions();
+    ImGui::Spacing();
     // H&S connection status
     RenderSectionHeader("Data Source: Hoard & Seek", AlterEgo::UI::SectionGold);
     auto hoardStatus = AlterEgo::GW2API::GetHoardStatus();

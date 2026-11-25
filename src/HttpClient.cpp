@@ -1,14 +1,21 @@
 #include "HttpSafety.h"
 #include "HttpClient.h"
+#include "ArenaNetTransport.h"
 
 #include <windows.h>
 #include <wininet.h>
 #include <fstream>
+#include <cstring>
+#include <utility>
 #include <vector>
 
 namespace Skinventory {
 
     std::string HttpClient::Get(const std::string& url) {
+        if (AlterEgo::ArenaNet::IsApiUrl(url)) {
+            auto r=AlterEgo::ArenaNet::Get(url.substr(std::strlen(AlterEgo::ArenaNet::Origin)));
+            return r.status_code>=200&&r.status_code<300?std::move(r.body):std::string{};
+        }
         if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
@@ -33,6 +40,7 @@ namespace Skinventory {
     }
 
     HttpResponse HttpClient::GetEx(const std::string& url) {
+        if(AlterEgo::ArenaNet::IsApiUrl(url))return AlterEgo::ArenaNet::Get(url.substr(std::strlen(AlterEgo::ArenaNet::Origin)));
         HttpResponse result;
         if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",
@@ -63,6 +71,7 @@ namespace Skinventory {
     }
 
     HttpResponse HttpClient::GetEx(const std::string& url, const std::string& headers) {
+        if(AlterEgo::ArenaNet::IsApiUrl(url))return AlterEgo::ArenaNet::Get(url.substr(std::strlen(AlterEgo::ArenaNet::Origin)),{},headers);
         HttpResponse result;
         if (AlterEgo::Background::Workers().Stopping()) return {};
         HINTERNET hInternet = InternetOpenA("Skinventory/1.0",

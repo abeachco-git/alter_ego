@@ -10,6 +10,7 @@
 #include "CharacterCache.h"
 #include "AutoRefreshPolicy.h"
 #include "HoardAndSeekAPI.h"
+#include "HttpClient.h"
 #include "ChatLink.h"
 #include "BuildGroupOrder.h"
 #include "NativeLibraryStore.h"
@@ -1978,27 +1979,7 @@ namespace AlterEgo {
     // =========================================================================
 
     std::string GW2API::HttpGet(const std::string& url) {
-        if (AlterEgo::Background::Workers().Stopping()) return {};
-        HINTERNET hInternet = InternetOpenA("AlterEgo/1.0",
-            INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-        if (!hInternet) return "";
-        AlterEgo::HttpSafety::Configure(hInternet);
-
-        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
-                      INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID;
-
-        HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
-        if (!hUrl) {
-            InternetCloseHandle(hInternet);
-            return "";
-        }
-
-        std::string result;
-        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.append(data, count); });
-
-        InternetCloseHandle(hUrl);
-        InternetCloseHandle(hInternet);
-        return complete ? result : std::string{};
+        return Skinventory::HttpClient::Get(url);
     }
 
     // --- Batch fetch: items ---
