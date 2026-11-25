@@ -72,5 +72,33 @@ int case_native_editing(int,char**) {
     assert(PutLoadout(doc,wrongLoadout,err));
     assert(doc.loadouts.back().refs.at("skills")!=skills);
     assert(VerifiedSkillsProfession(doc,"missing").empty());
+    // A unified private edit forks only the linked shared set and changed
+    // categories; subsequent edits in that same fork cannot mutate the old set.
+    {
+        Composable::Document graph;std::string error;
+        assert(PutLoadout(graph,a,error));assert(PutLoadout(graph,b,error));
+        assert(SaveSetFromLoadout(graph,"a","set","Set",error,{"armor","sigils"}));
+        assert(ApplyEquipmentSet(graph,"b","set",error));
+        const auto oldSet=*Composable::FindEquipmentSet(graph,"set");
+        Json edit=a;edit["gear"]["Helm"]["stat_id"]=9;edit["gear"]["WeaponA1"]["sigil_id"]=7;edit["name"]="Edited";
+        assert(PutUnifiedLoadout(graph,edit,{},error));
+        assert(Composable::FindLoadout(graph,"a")->equipment_set_id!="set");
+        assert(Composable::FindLoadout(graph,"b")->equipment_set_id=="set");
+        assert(Composable::FindEquipmentSet(graph,"set")->refs==oldSet.refs);
+        Json resolved;assert(Composable::Resolve(graph,*Composable::FindLoadout(graph,"b"),resolved,error));
+        assert(resolved==b);
+        assert(Composable::Resolve(graph,*Composable::FindLoadout(graph,"a"),resolved,error));assert(resolved==edit);
+        // Reverting a private change reuses an exact existing identity.
+        edit["gear"]["Helm"]["stat_id"]=1;
+        assert(PutUnifiedLoadout(graph,edit,{},error));
+        assert(Composable::EffectiveRefs(graph,*Composable::FindLoadout(graph,"a")).at("armor")==oldSet.refs.at("armor"));
+        edit["gear"]["Helm"]["stat_id"]=8;
+        assert(PutUnifiedLoadout(graph,edit,{"armor"},error));
+        assert(Composable::Resolve(graph,*Composable::FindLoadout(graph,"b"),resolved,error));
+        assert(resolved["gear"]["Helm"]["stat_id"]==8&&resolved["gear"]["Helm"]["unknown"]==42);
+        const auto saved=Composable::ToJson(graph);
+        edit["profession"]="Necromancer";
+        assert(!PutUnifiedLoadout(graph,edit,{},error));assert(Composable::ToJson(graph)==saved);
+    }
     return 0;
 }

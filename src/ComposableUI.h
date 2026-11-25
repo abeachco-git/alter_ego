@@ -47,7 +47,7 @@ struct ComponentUICommand {
 static ComponentUICommand g_ComponentCommand;
 using ReferenceMap=std::map<std::string,std::string>;
 struct ReferenceEditorDraft {
-    bool open=false, isSet=false, queued=false, confirmed=false;
+    bool open=false, isSet=false, queued=false, confirmed=false, parentDraft=false;
     uint64_t revision=0;
     std::string id,name,setId,fashionId,error;
     ReferenceMap refs,originalRefs;
@@ -644,6 +644,12 @@ static void BeginReferenceEditor(const ComponentJson& owner,bool isSet) {
         e.name=owner.at("metadata").value("name",e.id);
         e.setId=e.originalSet=owner.value("equipment_set_id",std::string());
         e.fashionId=e.originalFashion=owner.value("fashion_id",std::string());
+        if(g_LibEditMode&&g_EditRefsReady&&e.id==g_EditDraftId){
+            e.parentDraft=true;e.revision=g_EditDraftRevision;
+            e.refs=e.originalRefs=g_EditRefs;
+            e.setId=e.originalSet=g_EditSetId;
+            e.fashionId=e.originalFashion=g_EditFashionId;
+        }
     }
 }
 static void DraftSelectEquipmentSet(const ComponentJson& doc,const std::string& id) {
@@ -765,11 +771,25 @@ static void RenderReferenceEditor(){
     const bool valid=!stale&&dirty&&(!e.isSet||(!e.refs.empty()&&!Composable::ComponentNameKey(e.name).empty()&&(!adding||!users||e.confirmed)));
     if(e.isSet&&e.refs.empty())ImGui::TextDisabled("Include at least one equipment category.");
     if(!e.error.empty())ImGui::TextWrapped("%s",e.error.c_str());
+    if(e.parentDraft)ImGui::TextWrapped("Save here stages selections in the Loadout draft. The top Save commits all changes; Cancel discards them.");
     const auto action=UI::SaveCancel("reference_editor",valid);
     if(action==UI::EditAction::Save){
-        g_ComponentCommand={e.isSet?ComponentUICommand::SaveSetDraft:ComponentUICommand::SaveReferences,e.id,"",e.setId,e.name,
-            ComponentJson{{"refs",e.refs},{"fashion",e.fashionId}},e.revision};
-        e.queued=true;e.open=false;ImGui::CloseCurrentPopup();
+        if(e.parentDraft){
+            if(!g_LibEditMode||e.id!=g_EditDraftId||g_GearDialogOpen)
+                e.error="Parent Loadout draft is no longer available.";
+            else if(GW2API::RebaseLoadoutDraft(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,
+                        e.setId,e.fashionId,e.refs,e.revision,e.error)){
+                g_EditRefs=e.refs;g_EditSetId=e.setId;g_EditFashionId=e.fashionId;
+                // Consent was for the previous identities, never transfer it
+                // silently to a newly selected component.
+                g_EditSharedKinds.clear();
+                MarkEditDirty();e.open=false;ImGui::CloseCurrentPopup();
+            }
+        }else{
+            g_ComponentCommand={e.isSet?ComponentUICommand::SaveSetDraft:ComponentUICommand::SaveReferences,e.id,"",e.setId,e.name,
+                ComponentJson{{"refs",e.refs},{"fashion",e.fashionId}},e.revision};
+            e.queued=true;e.open=false;ImGui::CloseCurrentPopup();
+        }
     }else if(action==UI::EditAction::Cancel){e={};ImGui::CloseCurrentPopup();}
     ImGui::EndPopup();
 }
@@ -808,11 +828,15 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     if(AlterEgo::UI::Button(expanded?"Loadout Components -##loadout_selector":"Loadout Components +##loadout_selector",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))expanded=!expanded;
     ImGui::PopID();
     if(!expanded)return;
-    const auto direct=ComponentUIRefs(*l);
-    const auto linkedId=l->value("equipment_set_id",std::string());
+    const bool editing=g_LibEditMode&&g_EditRefsReady&&loadoutId==g_EditDraftId;
+    const auto direct=editing?g_EditRefs:ComponentUIRefs(*l);
+    const auto linkedId=editing?g_EditSetId:l->value("equipment_set_id",std::string());
     const auto* linked=ComponentUIFindSet(doc,linkedId);
     const auto inherited=linked?ComponentUIRefs(*linked):ReferenceMap{};
-    if(g_LibEditMode)ImGui::TextDisabled("Save or cancel the Loadout details before editing component references.");
+    if(editing){
+        if(!g_GearDialogOpen&&RenderActionButton("Change Components"))BeginReferenceEditor(*l,false);
+        ImGui::TextWrapped("Content edits are private by default. Choose shared editing only for components you intend to change everywhere.");
+    }else if(g_LibEditMode)ImGui::TextDisabled("Component draft unavailable; cancel and reopen Edit.");
     else if(RenderActionButton("Edit Components"))BeginReferenceEditor(*l,false);
     const auto rows=[&](const char* table,const int* kinds,int count){
         if(ImGui::BeginTable(table,2,ImGuiTableFlags_SizingStretchProp)){
@@ -821,7 +845,20 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             for(int j=0;j<count;++j){
                 const std::string kind=kComponentKinds[kinds[j]].kind;
                 const bool shared=inherited.count(kind)!=0;
-                RenderReferencePreviewRow(doc,kind,ComponentUIRef(shared?inherited:direct,kind),loadoutId,shared,!g_LibEditMode);
+                const auto ref=ComponentUIRef(shared?inherited:direct,kind);
+                RenderReferencePreviewRow(doc,kind,ref,loadoutId,shared,!g_LibEditMode);
+                if(editing&&!ref.empty()){
+                    const int uses=ComponentUIEffectiveLoadoutCount(kind,ref);
+                    if(uses>1||ComponentUIUsage(doc,kind,ref)>1){
+                        ImGui::PushID(kind.c_str());
+                        bool editShared=g_EditSharedKinds.count(kind)!=0;
+                        const auto label="Edit shared ("+std::to_string(uses)+" Loadouts)";
+                        if(ImGui::Checkbox(label.c_str(),&editShared)){
+                            if(editShared)g_EditSharedKinds.insert(kind);else g_EditSharedKinds.erase(kind);
+                        }
+                        ImGui::PopID();
+                    }
+                }
             }
             ImGui::EndTable();
         }
@@ -868,7 +905,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     }
     rows("##loadout_equipment_refs",kEquipmentReferenceOrder,IM_ARRAYSIZE(kEquipmentReferenceOrder));
     RenderReferenceGroupLabel("Fashion");
-    ImGui::TextWrapped("%s",ComponentUIFashionName(l->value("fashion_id",std::string())).c_str());
+    ImGui::TextWrapped("%s",ComponentUIFashionName(editing?g_EditFashionId:l->value("fashion_id",std::string())).c_str());
     ImGui::Separator();
 }
 

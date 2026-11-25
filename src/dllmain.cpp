@@ -870,6 +870,10 @@ static std::vector<AlterEgo::GameMode> g_NewBuildModes{AlterEgo::GameMode::PvE};
 // Build editor: working draft + spec picker state
 static AlterEgo::SavedBuild g_EditDraft;   // working copy while editing a build's definition
 static uint64_t g_EditDraftRevision = 0;
+static bool g_EditRefsReady=false;
+static std::string g_EditSetId,g_EditFashionId;
+static std::map<std::string,std::string> g_EditRefs;
+static std::set<std::string> g_EditSharedKinds;
 static std::string g_EditDraftId;          // id the draft currently mirrors
 static bool g_EditDirty = false;           // true once the draft diverges from the snapshot
 static bool g_EditIsNewBuild = false;      // true while editing a freshly-created build (cancel discards it)
@@ -919,6 +923,16 @@ static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
     g_EditDraft = build;
     g_EditDraftId = build.id;
     g_EditDraftRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
+    g_EditRefsReady=false;g_EditRefs.clear();g_EditSetId.clear();g_EditFashionId.clear();g_EditSharedKinds.clear();
+    nlohmann::json graph;
+    if(AlterEgo::GW2API::GetComposableLoadouts(graph)&&graph.contains("loadouts")){
+        for(const auto& owner:graph.at("loadouts"))if(owner.value("id",std::string())==build.id){
+            g_EditRefs=owner.at("refs").get<std::map<std::string,std::string>>();
+            g_EditSetId=owner.value("equipment_set_id",std::string());
+            g_EditFashionId=owner.value("fashion_id",std::string());
+            g_EditRefsReady=true;break;
+        }
+    }
     g_LibEditName = build.name;
     g_LibEditNotes = build.notes;
     g_EditDirty = false;
@@ -9365,7 +9379,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 float startX = pos.x + w - (wSave + gap + wCancel) - 8.0f;
 
                 // ImGui 1.80 has no BeginDisabled — dim when clean and guard the click.
-                bool canSave = g_EditDirty && !g_GearDialogOpen;
+                bool canSave = g_EditDirty && g_EditRefsReady && !g_GearDialogOpen;
                 if (!canSave) ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
                                                   ImGui::GetStyle().Alpha * 0.5f);
                 ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
@@ -9451,7 +9465,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
 }
 
 namespace { static void RenderLoadoutComponentSelectors(const std::string& loadoutId); }
-static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool linkedEquipment) {
+static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     auto build=source;
     // Try to resolve any placeholder traits (negative values from import without spec cache)
     // Safe to cast: we only mutate trait values from negative to positive
@@ -9944,14 +9958,13 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source,bool link
     RenderLoadoutComponentSelectors(source.id);
     ImGui::Spacing();
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
-    if(g_LibEditMode&&linkedEquipment)ImGui::TextDisabled("Use Edit Components for independent references and the set editor for included categories.");
     if(g_GearDialogOpen)ImGui::TextDisabled("Save or cancel the gear customization draft first.");
-    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&!linkedEquipment&&!g_GearDialogOpen);
+    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen);
 
     // One shared footer for Saved and Edit; notes always follow infusion totals.
     const auto& snapshot = g_LibEditMode ? g_EditDraft : build;
     RenderInfusionTotals(GetSavedInfusionSummary(snapshot),
-        g_LibEditMode&&!linkedEquipment&&!g_GearDialogOpen ? &g_EditDraft : nullptr);
+        g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen ? &g_EditDraft : nullptr);
     ImGui::Spacing();
     // Use the standard white, regular-size section label in both modes.
     // Editing previously used muted brown and the read-only view compressed
@@ -11908,9 +11921,7 @@ static void RenderBuildLibrary() {
         }
 
         ImGui::Separator();
-        const auto* loadoutGraph=ComponentUIFindLoadout(ComponentUISnapshot(),build.id);
-        const bool linkedEquipment=loadoutGraph&&!loadoutGraph->value("equipment_set_id",std::string()).empty();
-        RenderSavedBuildPreview(build,linkedEquipment);
+        RenderSavedBuildPreview(build);
         ImGui::EndChild(); // ##LibDetailScroll
         // Paint the edit-state outline around the fixed viewport instead of
         // inside its scrolling contents. The 12px inner padding above reserves
@@ -17407,13 +17418,13 @@ void AddonRender() {
     ImGui::End();
     if (g_EditSavePending) {
         g_EditSavePending = false;
-        if (g_LibEditMode && AlterEgo::GW2API::SaveEditedLoadout(g_EditDraft, g_EditDraftRevision)) {
+        if (g_LibEditMode && g_EditRefsReady && AlterEgo::GW2API::SaveUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditSharedKinds,g_EditDraftRevision)) {
             g_EditDraftId.clear();
             g_LibEditMode = false; g_EditDirty = false;
             g_EditIsNewBuild = false;
             g_GearDialogOpen = false;
         } else if (APIDefs) {
-            APIDefs->GUI_SendAlert("Could not save Loadout. If linked, detach the set before editing gear. Otherwise check the library revision. Draft retained.");
+            APIDefs->GUI_SendAlert("Could not save Loadout. Check the library revision or component compatibility. Draft retained.");
         }
     }
 }

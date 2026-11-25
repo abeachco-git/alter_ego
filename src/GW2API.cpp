@@ -2512,6 +2512,50 @@ namespace AlterEgo {
         });
     }
 
+    bool GW2API::RebaseLoadoutDraft(SavedBuild& draft,const std::string& oldSet,const std::string& oldFashion,
+        const std::map<std::string,std::string>& oldRefs,const std::string& newSet,const std::string& newFashion,
+        const std::map<std::string,std::string>& newRefs,uint64_t revision,std::string& error){
+        json snapshot;Composable::Document doc;
+        if(revision!=GetBuildLibraryRevision()||!GetComposableLoadouts(snapshot)||
+           revision!=GetBuildLibraryRevision()||!Composable::FromJson(snapshot,doc,error))
+            return Composable::Fail(error,"Library changed or could not be loaded.");
+        if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,oldSet,oldFashion,oldRefs,error))return false;
+        auto* l=Composable::FindLoadout(doc,draft.id);
+        json before;SavedBuild baseline;
+        if(!l||!Composable::Resolve(doc,*l,before,error)||!DeserializeSavedBuild(before,baseline))return false;
+        const auto previousRefs=Composable::EffectiveRefs(doc,*l);
+        const auto edited=NativeLibrary::PatchDraft(before,SerializeSavedBuild(baseline),SerializeSavedBuild(draft));
+        if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,newSet,newFashion,newRefs,error))return false;
+        l=Composable::FindLoadout(doc,draft.id);
+        json replacement;if(!l||!Composable::Resolve(doc,*l,replacement,error))return false;
+        const auto afterRefs=Composable::EffectiveRefs(doc,*l);
+        const auto oldParts=Composable::Split(before),editedParts=Composable::Split(edited);
+        for(const auto& [kind,data]:editedParts){
+            const auto old=previousRefs.find(kind),now=afterRefs.find(kind);
+            const auto oldId=old==previousRefs.end()?std::string{}:old->second;
+            const auto newId=now==afterRefs.end()?std::string{}:now->second;
+            if(oldId!=newId&&!NativeLibrary::ExactContent(oldParts.at(kind),data))
+                return Composable::Fail(error,"Cannot replace "+kind+" while it has unsaved content edits. Undo those edits or save first.");
+        }
+        SavedBuild rebased;
+        if(!DeserializeSavedBuild(NativeLibrary::PatchDraft(replacement,before,edited),rebased))
+            return Composable::Fail(error,"Selected components cannot be projected.");
+        draft=std::move(rebased);return true;
+    }
+
+    bool GW2API::SaveUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
+        const std::map<std::string,std::string>& refs,const std::set<std::string>& sharedKinds,uint64_t revision){
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(revision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
+            if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,setId,fashionId,refs,error))return false;
+            auto* l=Composable::FindLoadout(doc,draft.id);
+            json raw;SavedBuild baseline;
+            if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,baseline))return false;
+            return NativeLibrary::PutUnifiedLoadout(doc,NativeLibrary::PatchDraft(raw,SerializeSavedBuild(baseline),SerializeSavedBuild(draft)),
+                sharedKinds,error,LookupComponentDisplayName);
+        });
+    }
+
     bool GW2API::GetComposableLoadouts(nlohmann::json& snapshot) {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (!g_loadoutDocumentLoaded) return false;

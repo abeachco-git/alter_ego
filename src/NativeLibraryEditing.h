@@ -338,6 +338,88 @@ inline bool SaveLoadoutReferenceDraft(Composable::Document& doc,const std::strin
         Json raw;return Composable::Resolve(next,*l,raw,err);
     },error);
 }
+// Save the edited projection over the selected reference graph. Only changed
+// component kinds are touched; absent categories and unknown fields remain
+// absent/preserved. Private inherited changes fork a shared set, not its
+// untouched components. Shared mutation requires a per-kind explicit choice.
+inline bool PutUnifiedLoadout(Composable::Document& doc,const Json& raw,
+    const std::set<std::string>& sharedKinds,std::string& error,
+    const Composable::ComponentNameLookup& lookup={}){
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err){
+        const auto id=raw.value("id",std::string());
+        auto* l=Composable::FindLoadout(next,id);
+        Json before;
+        if(!l||!Composable::Resolve(next,*l,before,err))return false;
+        if(Composable::ProfessionOf(next,*l)!=raw.value("profession",std::string()))
+            return Composable::Fail(err,"Cannot change profession of a referenced Loadout.");
+        const auto prior=Composable::Split(before),edited=Composable::Split(raw);
+        const auto refs=Composable::EffectiveRefs(next,*l);
+        const auto profession=Composable::ProfessionOf(next,*l);
+        const auto index=EditIndex(next);
+        // The index references next. Evaluate all exact candidates before any
+        // component mutation so no stale fingerprint bucket is consulted.
+        std::map<std::string,std::vector<Match>> candidates;
+        std::map<std::string,Json> payloads;
+        for(const auto& [kind,data]:edited){
+            if(ExactContent(prior.at(kind),data))continue;
+            const auto r=refs.find(kind);
+            const auto* part=r==refs.end()?nullptr:Composable::Find(next,kind,r->second);
+            payloads[kind]=part?PatchDraft(part->data,prior.at(kind),data):data;
+            candidates[kind]=index.Matches(kind,payloads[kind],profession);
+        }
+        l->metadata=PatchDraft(l->metadata,Composable::Metadata(before),Composable::Metadata(raw));
+        for(const auto& [kind,data]:payloads){
+            const auto r=refs.find(kind);
+            const std::string oldId=r==refs.end()?std::string{}:r->second;
+            auto* part=oldId.empty()?nullptr:Composable::Find(next,kind,oldId);
+            const bool inherited=Composable::SetOwns(next,*l,kind);
+            const bool shared=part&&sharedKinds.count(kind);
+            if(shared){
+                if(kind=="base_build"&&part->data.value("profession",std::string())!=data.value("profession",std::string()))
+                    return Composable::Fail(err,"Shared Base Build profession cannot change.");
+                part->data=data;
+                continue;
+            }
+            std::string chosen;
+            for(const auto& match:candidates.at(kind)){
+                const auto* existing=Composable::Find(next,kind,match.id);
+                if(existing&&ExactContent(existing->data,data)){chosen=match.id;break;}
+            }
+            const bool setShared=inherited&&Composable::EquipmentSetUsers(next,l->equipment_set_id).size()>1;
+            const bool originallyShared=Composable::EffectiveComponentUsers(next,kind,oldId).size()>1;
+            if(chosen.empty()&&part&&!setShared&&!originallyShared&&index.Users(kind,oldId).size()==1){
+                part->data=data;chosen=oldId;
+            }
+            if(chosen.empty()){
+                chosen=kind+":"+id+":edit";
+                for(unsigned n=1;Composable::Find(next,kind,chosen);++n)chosen=kind+":"+id+":edit:"+std::to_string(n);
+                next.components[kind].push_back({chosen,Composable::UniqueComponentName(next,kind,Composable::SuggestComponentName(kind,data,lookup)),data});
+            }
+            if(inherited){
+                if(chosen==oldId)continue;
+                if(setShared){
+                    auto copy=*Composable::FindEquipmentSet(next,l->equipment_set_id);
+                    copy.id=l->equipment_set_id+":"+id+":edit";
+                    const auto prefix=copy.id;
+                    for(unsigned n=1;Composable::FindEquipmentSet(next,copy.id);++n)copy.id=prefix+":"+std::to_string(n);
+                    copy.name+=" - "+l->metadata.value("name",id);
+                    l->equipment_set_id=copy.id;
+                    next.equipment_sets.push_back(std::move(copy));
+                }
+                auto* set=Composable::FindEquipmentSet(next,l->equipment_set_id);
+                set->refs[kind]=chosen;
+            }else l->refs[kind]=chosen;
+        }
+        Json assembled;
+        if(!Composable::Resolve(next,*l,assembled,err)||!ExactContent(assembled,raw))
+            return Composable::Fail(err,"Edited Loadout cannot round-trip without changing recorded fields.");
+        // A shared edit must also resolve every affected owner before commit.
+        for(const auto& owner:next.loadouts){
+            Json projection;if(!Composable::Resolve(next,owner,projection,err))return false;
+        }
+        return true;
+    },error);
+}
 inline std::vector<Match> ExactEquipmentSets(const Composable::Document& doc,const Json& raw) {
     std::vector<Match> result;
     const auto parts=Composable::Split(raw);
