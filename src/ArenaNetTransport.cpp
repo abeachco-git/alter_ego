@@ -40,22 +40,22 @@ Skinventory::HttpResponse Get(const std::string& path,const std::string& key,con
     if(Background::Workers().Stopping())return {};
     next=Clock::now()+std::chrono::milliseconds(250);
     Handle session(InternetOpenA("AlterEgo/1.0",key.empty()?INTERNET_OPEN_TYPE_PRECONFIG:INTERNET_OPEN_TYPE_DIRECT,nullptr,nullptr,0));
-    if(!session.value)return {};
+    if(!session.value||Background::Workers().Stopping())return {};
     HttpSafety::Configure(session.value);
     Handle connection(InternetConnectA(session.value,"api.guildwars2.com",INTERNET_DEFAULT_HTTPS_PORT,
                                       nullptr,nullptr,INTERNET_SERVICE_HTTP,0,0));
-    if(!connection.value)return {};
+    if(!connection.value||Background::Workers().Stopping())return {};
     Handle request(HttpOpenRequestA(connection.value,"GET",path.c_str(),nullptr,nullptr,nullptr,
         INTERNET_FLAG_SECURE|INTERNET_FLAG_NO_AUTO_REDIRECT|INTERNET_FLAG_RELOAD|
         INTERNET_FLAG_NO_CACHE_WRITE|INTERNET_FLAG_NO_COOKIES|INTERNET_FLAG_NO_AUTH,0));
-    if(!request.value)return {};
+    if(!request.value||Background::Workers().Stopping())return {};
     std::string headers=extraHeaders;
     if(!key.empty())headers+="Authorization: Bearer "+key+"\r\n";
     ApiActivity::Attempt activity(ApiActivity::ApiEndpoint(path));
     const BOOL sent=HttpSendRequestA(request.value,headers.empty()?nullptr:headers.c_str(),
         static_cast<DWORD>(headers.size()),nullptr,0);
     if(!headers.empty())SecureZeroMemory(&headers[0],headers.size());
-    if(!sent)return {};
+    if(!sent||Background::Workers().Stopping())return {};
     DWORD code=0,size=sizeof(code);
     if(!HttpQueryInfoA(request.value,HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER,&code,&size,nullptr))return {};
     activity.Status(static_cast<int>(code));
@@ -68,15 +68,8 @@ Skinventory::HttpResponse Get(const std::string& path,const std::string& key,con
         rateLimit=Clock::now()+std::chrono::seconds(seconds);
     }
     Skinventory::HttpResponse result;result.status_code=static_cast<int>(code);
-    const auto deadline=Clock::now()+std::chrono::seconds(30);
-    char buffer[8192];
-    while(!Background::Workers().Stopping()&&Clock::now()<deadline){
-        DWORD n=0;
-        if(!InternetReadFile(request.value,buffer,sizeof(buffer),&n))return {};
-        if(!n){if(Background::Workers().Stopping())return {};activity.Complete();return result;}
-        if(result.body.size()+n>64u*1024u*1024u)return {};
-        result.body.append(buffer,n);
-    }
-    return {};
+    if(!HttpSafety::ReadBody(request.value,[&](const char* data,DWORD count){result.body.append(data,count);}))return {};
+    activity.Complete();
+    return result;
 }
 }
