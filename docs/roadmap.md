@@ -20,6 +20,7 @@ Living implementation tracker for the experimental branch. Checked items indicat
 - [ ] Wallet categories, armor/weapon subtype and level filters, endpoint deduplication and priority scheduling.
 - [x] Independent Vault daily/weekly/special persistence and timestamps, section failure isolation, selective automatic refresh; CI/live validation pending.
 - [x] Registry snapshots carry their credential generation; obsolete snapshot permissions cannot acquire a replacement credential.
+- [x] Independent achievement name catalog: direct ArenaNet retrieval, SQLite persistence, missing-ID checks, complete-check freshness, explicit full name refresh and no startup name download. Live validation pending.
 - [ ] Full independent character/progress dataset freshness; independent Clears section commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, and benchmark.
 

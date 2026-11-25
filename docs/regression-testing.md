@@ -11,7 +11,7 @@ ctest --test-dir build-tests --output-on-failure
 Run a single domain with `ctest --test-dir build-tests -L comparison --output-on-failure`.
 Run a single case with `ctest --test-dir build-tests -R 'comparison.infusion_totals' --output-on-failure`.
 
-Nine domain executables contain 33 independently runnable regression cases.
+Nine domain executables contain 34 independently runnable regression cases.
 Each CTest case is a separate process. Keep assertions enabled even in Release.
 Add related coverage to existing cases; add a new case only for distinct behavior,
 and register it in the existing domain in tests/CMakeLists.txt. No new standalone
@@ -134,3 +134,5 @@ Wallet visual smoke: empty favorite box and gold asterisk use identical size, to
 Main tab grouping visual smoke: verify the muted dividers before Inventory and Vault with either adjacent tab selected, All Accounts disabled tabs, and a narrow/scrolling tab bar. Dividers must not be clickable, selectable or affect dropdown hit targets.
 
 `imports.build_relay_policy` checks both enabled and disabled code recognition and import guidance. In-game smoke test: with the default disabled flag, inspect all share/context menus and import modal, paste a four-character code (generic rejection, no request), and verify AE2, game links and URL imports remain available. If re-enabling, test both directions against the relay and update privacy disclosures.
+
+`refresh.achievement_names` exercises initial/daily/full planning, retry cooldown, automatic policy and exact batch identity validation (partial, duplicate, unexpected, malformed or empty results rejected). Database core verifies separate completed-check freshness, legacy import, rollback and ordinary name writes preserving verification. In-game smoke test: on startup no names fetch; open Achievements with an empty cache, search while it populates, restart and confirm cached names, enable Public Catalogs and verify incremental check after 24 hours, use Refresh Achievement Names to revalidate all listed IDs. Check failures leave old search results usable and report incomplete status; same query and popout reflect newly fetched names. Confirm ordinary progress refresh is unchanged.

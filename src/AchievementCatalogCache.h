@@ -29,7 +29,9 @@ inline void WriteCatalogRows(Database::Connection& db, AchievementDataset d,cons
         db.Exec("DELETE FROM achievement_names");
         auto q=db.Prepare("INSERT INTO achievement_names VALUES(?,?)");
         for(const auto& [key,v]:data.items()) {
-            q.Bind(1,CatalogId(key));q.Bind(2,v.get<std::string>());q.Execute();q.Reset();
+            const auto id=CatalogId(key);const auto name=v.get<std::string>();
+            if(!id || name.empty()) throw std::runtime_error("Invalid achievement name");
+            q.Bind(1,id);q.Bind(2,name);q.Execute();q.Reset();
         }
     } else if(d==AchievementDataset::Waypoints) {
         db.Exec("DELETE FROM achievement_waypoints");
@@ -146,8 +148,9 @@ inline Json ReadCatalogRows(Database::Connection& db,AchievementDataset d,int64_
     }
     return out;
 }
-inline bool WriteCatalog(const std::string& root,AchievementDataset d,const Json& data) {
-    if(!data.is_object() || data.empty()) return false;
+inline bool WriteCatalog(const std::string& root,AchievementDataset d,const Json& data,int64_t nameIndexVerifiedAt=0) {
+    if(!data.is_object() || data.empty() || nameIndexVerifiedAt<0 ||
+       (nameIndexVerifiedAt>0 && d!=AchievementDataset::Names)) return false;
     try {
         std::lock_guard<std::mutex> lock(Mutex());
         const auto path=Storage::Paths(root).Cache();
@@ -165,8 +168,21 @@ inline bool WriteCatalog(const std::string& root,AchievementDataset d,const Json
         WriteCatalogRows(db,d,data);
         auto q=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=excluded.saved_at");
         q.Bind(1,std::string(DatasetName(d)));q.Bind(2,stamp);q.Execute();
+        if(nameIndexVerifiedAt>0) {
+            auto verified=db.Prepare("INSERT INTO reference_freshness VALUES('ach_name_index_verified',?) ON CONFLICT(dataset) DO UPDATE SET saved_at=max(saved_at,excluded.saved_at)");
+            verified.Bind(1,nameIndexVerifiedAt);verified.Execute();
+        }
         tx.Commit();return true;
     } catch(...) { return false; }
+}
+// The ordinary names save time is not proof of a complete ArenaNet ID check.
+inline int64_t ReadNameIndexVerification(const std::string& root) {
+    std::lock_guard<std::mutex> lock(Mutex());
+    const auto path=Storage::Paths(root).Cache();
+    if(!std::filesystem::exists(path)) return 0;
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
+    Initialize(db);
+    return db.Scalar("SELECT coalesce((SELECT saved_at FROM reference_freshness WHERE dataset='ach_name_index_verified'),0)");
 }
 inline std::optional<Json> ReadCatalog(const std::string& root,AchievementDataset d) {
     {

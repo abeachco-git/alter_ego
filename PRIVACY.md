@@ -15,7 +15,7 @@ Alter Ego runs locally inside Guild Wars 2 through Raidcore Nexus. Its account f
 | --- | --- |
 | ArenaNet API and render service | Key validation, account data, item metadata, prices and artwork |
 | Guild Wars 2 Wiki and image hosts | Public reference information, search and artwork |
-| GitHub raw content | Achievement names and waypoints; currently hosted in the original project's repository |
+| GitHub raw content | Curated achievement waypoints; currently hosted in the original project's repository |
 | Snow Crows and MetaBattle | Explicit build URL imports and source refreshes |
 
 The legacy one-time build-sharing relay is disabled in this build. Its import and upload actions are unavailable; the addon does not contact that service for sharing. Clipboard build codes and portable library exports work locally. If a future build restores the relay, its privacy implications must be reviewed and disclosed.

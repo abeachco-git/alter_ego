@@ -43,7 +43,7 @@ ae_suite(persistence CHATLINK CASES library_backup composable_backup fashion_lib
 target_link_libraries(ae_persistence PRIVATE ae_sqlite)
 target_sources(ae_persistence PRIVATE ../src/NativeLibrary.cpp ../src/NativeLibraryStore.cpp)
 find_package(Threads REQUIRED)
-ae_suite(refresh CASES auto_refresh_policy section_refresh auto_refresh_tracker background_workers character_request callback_lifetime)
+ae_suite(refresh CASES auto_refresh_policy section_refresh auto_refresh_tracker background_workers character_request callback_lifetime achievement_names)
 target_link_libraries(ae_refresh PRIVATE Threads::Threads)
 ae_suite(vault_clears CASES clears_rotation strike_display_name vault_assistance)
 ae_suite(skinventory CASES skin_search)

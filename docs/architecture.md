@@ -103,7 +103,7 @@ The bundled Inter font and its OFL notice are embedded Windows resources. Custom
 
 Fixed profession, specialization, crafting and status icons are version-controlled in `assets/icons/` and embedded offline during compilation. The manifest records provenance and hashes; CI checks linked resource bytes. Update artwork only through explicit reviewed maintenance. Item, skin and skill artwork uses a persistent runtime cache. Do not reintroduce removed raid/strike banner artwork unless explicitly requested.
 
-The two files in `data/` provide achievement names and achievement waypoints. This branch currently retrieves those datasets from the upstream project's raw GitHub URLs; retaining the local copies and generators supports maintenance and upstream compatibility. See [tool inventory](../tools/README.md).
+The remaining `data/achievement_waypoints.json` contains curated waypoint mappings and is currently retrieved from the original project's raw GitHub URL. Achievement names no longer require a bundled dataset or third-party host. See [tool inventory](../tools/README.md).
 
 AE2 interchange is separate from the internal native data model: see [shared build specification](shared-build-spec.md) and the vendored JavaScript reference implementation in `lib/alter-ego-build/`.
 
@@ -168,3 +168,7 @@ Cache schema 13 adds nullable remaining charges to character equipment; older ro
 ### Cache schema 14
 
 Hero point tracking was retired after authenticated tests confirmed the documented empty hero point and training responses. The migration drops only the two obsolete rebuildable cache tables and associated freshness marker. Character and achievement records, settings, and the durable library are preserved. Legacy character snapshots ignore retired fields; cache maintenance can still quarantine obsolete local files. Git history retains the former feature and research script.
+
+### Achievement names
+
+`AchievementNamesCore.h` validates the public ArenaNet ID list and complete batches, and plans missing-only or explicit full retrievals. Startup reads existing SQLite names and fills gaps from cached definitions without HTTP. A first unverified catalog is checked lazily when Achievements opens; verified catalogs check after 24 hours only with Public Catalogs auto-refresh enabled. Failures back off five minutes; the explicit Achievements menu action Refresh Achievement Names bypasses the timer and revalidates every listed ID. Valid batches merge into the shared in-memory catalog and typed SQLite names/definitions; failed batches never replace existing data. Retired IDs are retained for historical/pinned name resolution. The `ach_name_index_verified` freshness key records only completed ID checks, separately from ordinary writes and legacy imports. Definition fetches for categories/pins update names and invalidate local search/popout projections. Capture and writes are serialized; no SQL on the render path. Cache maintenance clears both freshness keys. Account progress scheduling and waypoint mappings are unchanged.

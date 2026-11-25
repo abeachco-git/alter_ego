@@ -189,6 +189,18 @@ int case_database_core(int, char**) {
         AlterEgo::Storage::WriteMigrationBytes(AlterEgo::Storage::Paths(root).base/"ach_name_index.json",names.dump());
         assert(Cache::ReadCatalog(root,D::Names)==names);
         assert(!std::filesystem::exists(AlterEgo::Storage::Paths(root).base/"ach_name_index.json"));
+        assert(Cache::ReadNameIndexVerification(root)==0); // legacy save is not verification
+        assert(Cache::WriteCatalog(root,D::Names,names,100));
+        assert(Cache::ReadNameIndexVerification(root)==100);
+        auto more=names;more["3"]="New";
+        assert(Cache::WriteCatalog(root,D::Names,more));
+        assert(Cache::ReadNameIndexVerification(root)==100);
+        auto invalid=more;invalid["1"]="";
+        assert(!Cache::WriteCatalog(root,D::Names,invalid,200));
+        assert(Cache::ReadCatalog(root,D::Names)==more);
+        assert(Cache::ReadNameIndexVerification(root)==100);
+        assert(Cache::WriteCatalog(root,D::Names,more,200));
+        assert(Cache::ReadNameIndexVerification(root)==200);
         J waypoints={{"1",{{"-1","[&ABC=]"},{"2","[&DEF=]"}}}};
         assert(Cache::WriteCatalog(root,D::Waypoints,waypoints));
         assert(Cache::ReadCatalog(root,D::Waypoints)==waypoints);

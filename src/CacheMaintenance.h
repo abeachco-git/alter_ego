@@ -162,7 +162,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     case CacheOperation::AchievementCatalog:
         db.Exec("DELETE FROM achievement_names; DELETE FROM achievement_waypoints;"
                 "DELETE FROM achievement_definitions; DELETE FROM achievement_groups; DELETE FROM achievement_categories;"
-                "DELETE FROM reference_freshness WHERE dataset IN ('ach_name_index','ach_waypoints','ach_defs','ach_groups');");break;
+                "DELETE FROM reference_freshness WHERE dataset IN ('ach_name_index','ach_name_index_verified','ach_waypoints','ach_defs','ach_groups');");break;
     case CacheOperation::PublicCatalog:
         // Item identities are shared by metadata and Commerce. Invalidate them
         // together; account ownership remains independent of catalog records.

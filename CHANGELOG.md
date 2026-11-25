@@ -16,6 +16,8 @@ This is a draft for the experimental branch, not a published or fully validated 
 
 ### Changed
 
+- Retrieve achievement names directly from ArenaNet into SQLite, reuse cached definitions, refresh missing names incrementally and support explicit full revalidation without a hosted index.
+
 - Remove hero point tracking, its unused requests, dormant UI and reference tooling. Cache schema 14 removes only the obsolete hero point tables.
 
 - Disabled external one-time-code relay sharing and imports by default; local sharing remains available.
