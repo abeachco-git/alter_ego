@@ -1,142 +1,259 @@
 # Alter Ego
 
-A Guild Wars 2 addon for [Raidcore Nexus](https://raidcore.gg/Nexus) that brings your characters, loadouts, inventory, wardrobe and account progress together in one in-game window.
+**Your Guild Wars 2 characters, loadouts, inventory, wardrobe and account progress — all in one place.**
 
-Inspect characters without logging into each one, organize reusable builds and equipment, find items across your account, and track what you still need to complete.
+Alter Ego is an addon for [Raidcore Nexus](https://raidcore.gg/Nexus) designed to make managing your Guild Wars 2 account easier without leaving the game.
 
-> [!NOTE]
-> This branch is an independently developed experimental fork. Features are under active development; automated builds do not replace in-game testing. Keep a backup of your library.
+Browse your characters without switching between them, organize reusable loadouts, compare equipment and builds, locate items across your accounts, and track your progress toward your next goal.
 
-## Screenshots
-
-![Character equipment, saved loadout matching and sharing menu](docs/screenshots/characters-equipment.png)
-
-| Library | Compare |
-| --- | --- |
-| [![Saved loadouts](docs/screenshots/library-loadouts.png)](docs/screenshots/library-loadouts.png) | [![Loadout comparison](docs/screenshots/compare.png)](docs/screenshots/compare.png) |
-| **Inventory** | **Account progress** |
-| [![Item locations](docs/screenshots/inventory-item-locations.png)](docs/screenshots/inventory-item-locations.png) | [![Wizard's Vault objectives](docs/screenshots/wizards-vault.png)](docs/screenshots/wizards-vault.png) |
-
-More screenshots:
-
-- **Characters:** [Builds](docs/screenshots/characters-build.png) · [Tools and glyphs](docs/screenshots/characters-tools.png)
-- **Library:** [Component editor](docs/screenshots/library-components.png) · [Equipment Sets](docs/screenshots/library-equipment-sets.png) · [Gear customization](docs/screenshots/equipment-customization.png)
-- **Inventory and skins:** [Inventory filters](docs/screenshots/inventory-filters.png) · [Skin browser](docs/screenshots/skins-browser.png)
-- **Account progress:** [Clears](docs/screenshots/clears.png) · [Achievements](docs/screenshots/achievements.png)
+![Alter Ego - Characters](screenshots/characters-equipment.png)
 
 ## Features
 
-### Characters, Library and Compare
+### Characters
 
-- **Characters:** Browse your characters' builds, equipment and upgrades without switching characters. Find saved loadout matches, view character portraits and switch to an eligible character using Fast Load.
-- **Library:** Organize complete loadouts and reusable build, skill and equipment components. Share Equipment Sets between loadouts, or keep equipment choices independent. Create and edit loadouts directly in the Library.
-- **Fashion:** Save appearances from character equipment or Wardrobe Template links, independently of combat loadouts.
-- **Compare:** Check a character against a saved loadout, identify differences or missing equipment, and find items in your inventory.
-- **Import and share:** Import supported game chat links, Snow Crows and MetaBattle builds, and portable library data. Share builds and reusable components.
+- Browse characters, builds, equipment, crafting disciplines and gathering tools.
+- View equipment templates, upgrades, infusions and glyphs.
+- Identify which saved loadout matches your active character.
+- Sort characters by name, profession, level, age, birthday, last login or custom order.
+- Quickly switch between eligible characters using Fast Load.
+- Personalize your character list with custom portraits.
 
-### Inventory and Skins
+| Character Builds | Gathering Tools |
+| --- | --- |
+| [![Character Builds](screenshots/characters-build.png)](screenshots/characters-build.png) | [![Gathering Tools](screenshots/characters-tools.png)](screenshots/characters-tools.png) |
 
-- **Inventory:** Search items and wallet currencies across linked accounts. Find items in character inventories, equipped gear, bank, material storage, shared inventory and legendary armory.
-- **Wallet and Guild Bank:** Browse currency balances and accessible guild storage.
-- **Skins:** Explore your wardrobe, track missing skins and maintain a shopping list with price estimates and eligible owned-stock information.
+### Library
 
-### Account progress
+Build and maintain a personal collection of loadouts, reusable components, equipment sets and appearances.
 
-- **Wizard's Vault:** Track daily, weekly and special objectives, with assistance for supported objectives.
-- **Clears:** Track daily fractals and raid bounties, weekly strikes and raid encounters.
-- **Achievements:** Search achievements, pin goals and follow progress in a compact tracker.
-- **Multi-account support:** Link multiple accounts while keeping a shared, account-independent library.
+- Save complete loadouts directly from your characters.
+- Create and customize loadouts independently of your characters.
+- Reuse build, skill and equipment components across multiple loadouts.
+- Share Equipment Sets between loadouts, so changes can be managed in one place.
+- Organize loadouts by profession and game mode.
+- Save Fashion independently of combat builds.
+- Import builds from Snow Crows, MetaBattle and supported chat links.
+- Share and transfer library data using portable exports.
 
-## Getting started
+Equipment Sets can contain only the equipment categories you want to share, allowing individual loadouts to retain their own equipment choices.
+
+| Loadouts | Components |
+| --- | --- |
+| [![Loadouts](screenshots/library-loadouts.png)](screenshots/library-loadouts.png) | [![Components](screenshots/library-components.png)](screenshots/library-components.png) |
+| **Equipment Sets** | **Equipment Customization** |
+| [![Equipment Sets](screenshots/library-equipment-sets.png)](screenshots/library-equipment-sets.png) | [![Equipment Customization](screenshots/equipment-customization.png)](screenshots/equipment-customization.png) |
+
+### Compare
+
+Compare your characters against saved loadouts to identify what needs to change.
+
+- Compare traits, skills, equipment, stats and upgrades.
+- Identify missing or mismatched equipment.
+- Find relevant items already owned by your account.
+- Compare individual equipment and build templates.
+- Recognize functional matches without requiring identical utility skill ordering.
+
+![Compare](screenshots/compare.png)
+
+### Inventory
+
+Find what you own without manually searching through characters and storage.
+
+- Search across character inventories, equipped items, bank, shared inventory, material storage and Legendary Armory.
+- Locate individual items and their quantities.
+- Filter by character, storage location, rarity, item type and other attributes.
+- Browse wallet currencies and mark favorites.
+- Browse accessible guild bank storage.
+- Navigate directly to relevant inventory results from other areas of Alter Ego.
+
+| Item Locations | Inventory Filters |
+| --- | --- |
+| [![Item Locations](screenshots/inventory-item-locations.png)](screenshots/inventory-item-locations.png) | [![Inventory Filters](screenshots/inventory-filters.png)](screenshots/inventory-filters.png) |
+
+### Skins
+
+Explore your wardrobe and work toward completing your collection.
+
+- Browse unlocked and missing skins.
+- Filter by category, rarity, weapon type, armor weight and ownership.
+- View collection progress.
+- Browse using list or grid layouts.
+- Maintain a shopping list with Trading Post price estimates and eligible owned-stock information.
+
+![Skin Browser](screenshots/skins-browser.png)
+
+### Wizard's Vault, Clears and Achievements
+
+Keep track of account objectives and recurring content without leaving the game.
+
+- **Wizard's Vault:** Track daily, weekly and special objectives, with additional guidance for supported objectives.
+- **Clears:** Track daily fractals, raid bounties, weekly strikes and raid encounters.
+- **Achievements:** Search achievements, review completion progress and pin goals to a compact achievement tracker.
+
+| Wizard's Vault | Clears |
+| --- | --- |
+| [![Wizard's Vault](screenshots/wizards-vault.png)](screenshots/wizards-vault.png) | [![Clears](screenshots/clears.png)](screenshots/clears.png) |
+
+![Achievements](screenshots/achievements.png)
+
+### Multi-Account Support
+
+Link multiple Guild Wars 2 accounts and browse their characters, inventory, currencies and progress from a single interface.
+
+Your Loadout and Fashion libraries remain independent of your accounts, allowing saved builds and appearances to be reused across them.
+
+## Getting Started
 
 ### Requirements
 
-- [Raidcore Nexus](https://raidcore.gg/Nexus) (API v6).
-- A [Guild Wars 2 API key](https://account.guildwars2.com/applications) for account data.
+- Guild Wars 2
+- [Raidcore Nexus](https://raidcore.gg/Nexus) (API v6)
+- A Guild Wars 2 API key for account-related features
 
-Optional Nexus integrations: Events: Chat for chat-link detection and Events: Alerts for skin unlock and achievement notifications.
+Optional Nexus integrations:
+
+- **Events: Chat** — Chat link detection.
+- **Events: Alerts** — Skin unlock and achievement completion notifications.
 
 ### Installation
 
-Copy `AlterEgo.dll` to `<GW2>/addons/AlterEgo.dll` and load it through Nexus.
+1. Install Raidcore Nexus.
+2. Place `AlterEgo.dll` in your Guild Wars 2 `addons` directory.
+3. Load Alter Ego through Nexus.
+4. Open Alter Ego using its quick-access icon.
 
-This is an experimental branch, not a published Nexus catalog release. Use a build intended for this branch; do not load two copies of the addon at once.
+> [!NOTE]
+> This version of Alter Ego is under active development and is not currently a published Nexus catalog release. Do not load multiple copies of Alter Ego simultaneously.
 
-### Link your account
+### API Key Setup
 
-Create an API key with these permissions for full functionality:
+Create an API key at the [Guild Wars 2 account management website](https://account.guildwars2.com/applications).
 
-`account`, `characters`, `inventories`, `builds`, `progression`, `unlocks`, `wallet`, `guilds`, `tradingpost`.
+For full functionality, enable the following permissions:
 
-Open **Nexus → Alter Ego options**, enter the key and validate the account. Additional accounts can be linked there. API keys are stored in Windows Credential Manager, never in library exports.
+| Permission | Purpose |
+| --- | --- |
+| `account` | Account identification |
+| `characters` | Character information |
+| `builds` | Build and equipment templates |
+| `inventories` | Inventory and equipment |
+| `wallet` | Currency balances |
+| `unlocks` | Wardrobe and other unlocks |
+| `progression` | Achievements and account progress |
+| `guilds` | Guild information and accessible storage |
+| `tradingpost` | Trading Post account information |
 
-Automatic refresh is opt-in and configurable by dataset. Manual refresh is always available for linked, authorized data.
+Open **Nexus → Alter Ego options** to enter your API key and link your account.
 
-## Usage notes
+Additional accounts can be linked from the same settings page.
 
-### Save and compare
+API keys are stored locally in Windows Credential Manager and are excluded from library exports.
 
-In Characters, use **Save to Library** to capture a loadout, component, Equipment Set or appearance. In the Library, choose **Edit** to change component selections and individual gear or skills. Use Compare to check saved loadouts against retrieved character data.
+## Automatic Refresh
 
-Changes to a shared component or Equipment Set can affect every referencing loadout. Use a separate copy for private changes. Equipment Sets may contain only the equipment categories you want to share.
+Alter Ego maintains a local cache of retrieved account information.
 
-### Finding items
+Automatic refresh is optional and can be configured individually for different types of account data. Refreshes are designed around actual usage, data freshness and API propagation delays rather than continuously retrieving everything.
 
-In Inventory, search by name or narrow the results with filters. Select Wallet or Currency to browse balances without a search term. Equipment, Compare and Shopping List can also navigate directly to cached item locations.
+Manual refresh remains available when needed.
 
-### Limitations
+Guild Wars 2 API data may lag behind changes made in-game. Recently changed equipment, builds and inventory may not appear immediately.
 
-- Character builds and gear come from the GW2 API and can lag behind in-game changes. Compare does not equip anything.
-- Fast Load is an explicit, version-sensitive character switch; loading the active character or a character without verified same-account ownership is blocked.
-- Equipped fashion captures may be partial. Use a Wardrobe Template chat link for fuller appearance information. Installed gathering glyphs are shown only when reported by the API.
-- Item locations and shopping estimates depend on successful, recent API retrieval. Ownership alone does not establish that an item is transferable or usable.
+## Custom Character Portraits
 
-### Custom portraits
+You can personalize your character profiles by adding custom portraits to:
 
-Save a `.png`, `.jpg` or `.jpeg` named exactly like your character in `<GW2>/addons/AlterEgo/portraits/`. Re-select the character to refresh its portrait.
+```text
+<GW2>/addons/AlterEgo/portraits/
+```
 
-## Data and backups
+Name the image exactly as your character appears in-game.
 
-Local data is stored under `<GW2>/addons/AlterEgo/`.
+Supported formats:
+
+- PNG
+- JPG
+- JPEG
+
+Re-select your character to display the updated portrait.
+
+## Data and Backups
+
+Alter Ego stores its local data under:
+
+```text
+<GW2>/addons/AlterEgo/
+```
 
 | Location | Contents |
 | --- | --- |
-| `library/library.db` | Saved loadouts, components, Equipment Sets and Fashion |
-| `config/` | Settings and linked-account metadata |
-| `cache/` | Rebuildable account data, reference catalogs and downloaded artwork |
+| `library/` | Saved loadouts, components, equipment sets and Fashion |
+| `config/` | Settings, preferences and activity history |
+| `cache/` | Rebuildable account data and reference information |
 | `portraits/` | Custom character portraits |
-| `backups/` | Recovery snapshots and archived data |
+| `fonts/` | Custom fonts |
+| `backups/` | Recovery snapshots and migration backups |
 
-Use **Library → Import / Export** to transfer or back up selected collections. Portable ZIP and JSON formats support library interchange, including recognized original build-library exports. Merge preserves existing records; replacement is explicit and creates a recovery snapshot.
+Saved Loadout and Fashion libraries use SQLite and are stored separately from rebuildable cached data.
 
-Keep pre-migration backups. Cache rebuilds are available in Nexus options under **Storage & Cache** and run on restart; they do not erase the saved library. API keys and rebuildable caches are not included in library exports.
+Use **Library → Import / Export** to back up or transfer your library, preferences and custom assets.
 
-For details on stored data, external services and optional sharing, see [Privacy](PRIVACY.md).
+Recognized original Alter Ego build-library exports can also be imported.
+
+Cache inspection and maintenance are available under **Storage & Cache** in Nexus options. Rebuilding the cache does not remove your saved library.
+
+Regular backups are recommended, particularly before upgrading experimental builds.
+
+For more information about local storage, credentials and external services, see the [Privacy Policy](PRIVACY.md).
+
+## Limitations
+
+- Compare identifies differences but does not automatically equip items or apply builds.
+- Character and account information is subject to Guild Wars 2 API availability and update delays.
+- Some equipment, fashion and gathering tool details may be incomplete when they are not reported by the API.
+- Fast Load depends on compatibility with the current game version and verified character ownership.
+- Inventory ownership does not necessarily mean an item can be transferred or used by another character.
 
 ## Development
 
-GitHub Actions builds and verifies the Windows x64 UCRT DLL. Local cross-build on Debian 13:
+Alter Ego is written in C++ using the Nexus addon API, Dear ImGui and SQLite.
 
-```bash
-sudo apt-get install cmake make g++-mingw-w64-ucrt64 gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-mcrtdll=ucrtbase -DCMAKE_C_FLAGS=-mcrtdll=ucrtbase
-cmake --build build --parallel 2
-```
+Windows x64 UCRT builds and automated regression testing are performed through GitHub Actions.
 
-Output: `build/AlterEgo.dll`. Verify the UCRT import with `objdump -p build/AlterEgo.dll`; it must not import `msvcrt.dll`.
+Contributions, bug reports and feature suggestions are welcome.
 
-[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md).
+### Project Documentation
 
-Developer references: [Agent instructions](AGENTS.md) · [Architecture](docs/architecture.md) · [UI conventions](docs/ui-components.md) · [Regression testing](docs/regression-testing.md) · [Roadmap](docs/roadmap.md) · [Development status](docs/development-status.md) · [AE2 format](docs/shared-build-spec.md) · [Release checklist](docs/release-checklist.md) · [Dependency maintenance](docs/dependencies.md).
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [Roadmap](docs/roadmap.md)
+- [Architecture](docs/architecture.md)
+- [UI Conventions](docs/ui-components.md)
+- [Regression Testing](docs/regression-testing.md)
+- [Shared Build Format](docs/shared-build-spec.md)
+- [Agent Instructions](AGENTS.md)
+- [Security](SECURITY.md)
 
 ## Credits
 
-Alter Ego is an independent fork of [PieOrCake's original Alter Ego addon](https://github.com/PieOrCake/alter_ego). Credit to PieOrCake for creating the original addon and its foundational work, including the character/build interface and shared build format. This fork is maintained separately and is not an official upstream release.
+Alter Ego is an independently maintained fork of [PieOrCake's original Alter Ego addon](https://github.com/PieOrCake/alter_ego).
 
-Thanks to Raidcore for Nexus, ArenaNet for the Guild Wars 2 API, the [Guild Wars 2 Wiki](https://wiki.guildwars2.com/) community and contributors for public reference data, and the open-source libraries that support the addon. Development is AI-assisted.
+Special thanks to:
+
+- **PieOrCake** — Original creator of Alter Ego and its foundational character, build and sharing features.
+- **Raidcore** — Nexus and its addon ecosystem.
+- **ArenaNet** — Guild Wars 2 and the public API.
+- **Guild Wars 2 Wiki contributors** — Public reference information and documentation.
+- **Snow Crows and MetaBattle** — Community build resources.
+- **Open-source contributors** — The libraries and tools that make this project possible.
+
+Development is AI-assisted.
 
 ## License
 
-Addon code is licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.txt) for bundled libraries, fonts, game content and Wiki data attribution, including the schedule source pages and applicable Wiki copyright terms. Third-party content is not relicensed under MIT.
+Alter Ego's source code is licensed under the [MIT License](LICENSE).
 
-This is an unofficial fan project and is not endorsed by ArenaNet, NCSOFT or Raidcore.
+See [Third-Party Notices](THIRD_PARTY_NOTICES.txt) for bundled dependencies, artwork, fonts and applicable third-party content licenses.
+
+Alter Ego is an unofficial fan project and is not affiliated with or endorsed by ArenaNet, NCSOFT or Raidcore.
