@@ -239,8 +239,8 @@ bool Fresh(const View& v,const Row& row){
     const auto& s=row.slot;auto it=v.scopes.find({s.account,s.scope,s.character});
     return it!=v.scopes.end()&&it->second.status=="Ready"&&ScopeFresh(s.account,s.scope,s.character,row.captured);
 }
-void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={}){
-    Launch([accounts,onlyScope,automatic,onlyCharacter]{
+void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const std::set<std::string>& characterFilter={}){
+    Launch([accounts,onlyScope,automatic,onlyCharacter,characterFilter]{
         ApiActivity::ReasonScope reason(automatic?ApiActivity::Reason::Visible:ApiActivity::Reason::Manual);
         const auto previous=Snapshot();
         std::set<uint32_t> ids;std::set<std::string> fetchedGuilds;
@@ -260,6 +260,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             auto scope=[&](const std::string& name,const std::string& character,const std::string& path,bool bags){
                 if(!onlyScope.empty()&&onlyScope!="Items"&&onlyScope!=name)return;
                 if(!onlyCharacter.empty()&&character!=onlyCharacter)return;
+                if(!characterFilter.empty()&&(character.empty()||!characterFilter.count(character)))return;
                 if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
                 Background::Checkpoint();
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
@@ -550,7 +551,7 @@ std::vector<Account> SelectedAccounts(const View& v,const std::string& account){
 void ItemMenu(uint32_t id,const std::string& name,const std::string& chat,const std::map<std::pair<std::string,std::string>,int64_t>& targets={}){
     if(!ImGui::BeginPopupContextItem("##inventory_item_actions"))return;
     ImGui::TextDisabled("%s",name.c_str());ImGui::Separator();
-    if(ImGui::MenuItem("Copy Item Name"))CopyToClipboard(name);
+    CopyNameMenuItem(name);
     if(ImGui::MenuItem("Copy Item Chat Link"))CopyToClipboard(chat.empty()?AlterEgo::ChatLink::EncodeItem(id):chat);
     if(ImGui::MenuItem("Open Wiki Page")){
         auto url="https://wiki.guildwars2.com/wiki/Special:Search/"+Encode(name);
@@ -915,8 +916,11 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         label+=" x"+std::to_string(slot.count);
         ImGui::Selectable((label+"###location").c_str(),false);
         if(ImGui::BeginPopupContextItem("##location_actions")){
-            if(!slot.character.empty())RenderCharacterLoadMenu("Load Character",slot.character,slot.account);
-            if(ImGui::MenuItem("Copy Item Name"))CopyToClipboard(name);
+            if(!slot.character.empty()){
+                CopyNameMenuItem(slot.character,"Copy Character Name");
+                RenderCharacterLoadMenu("Load Character",slot.character,slot.account);
+            }
+            CopyNameMenuItem(name);
             ImGui::EndPopup();
         }
         ImGui::TextDisabled("%s%s",BindingName(slot.binding),Fresh(*v,row)?"":" | Stale or failed");
@@ -958,7 +962,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     const bool characterFiltered=itemView&&!nav.characters.empty();
     const std::set<std::string> noCharacters;
     const auto& characters=characterFiltered?nav.characters:noCharacters;
-    bool missing=false,failed=false,stale=false;
+    bool missing=false,failed=false,stale=false,needsManual=false;
     std::map<ScopeKey,ScopeState> progress;std::string current;unsigned processed=0;
     {std::lock_guard<std::mutex> lock(viewMutex);progress=liveScopes;current=activeScope;processed=processedScopes;}
     std::time_t oldest=0;unsigned count=0;
@@ -971,6 +975,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
             if(!ScopeFresh(account,ttlScope,ch,success)){stale=true;if(show)detail+=" (stale or awaiting synchronization)";}
             if(show)detail+="; "+RefreshUI::Age(static_cast<std::time_t>(success));
         }
+        if((success<=0||!ScopeFresh(account,ttlScope,ch,success))&&!AutoScope(ttlScope))needsManual=true;
         if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing")failed=true;
         ++count;
     };
@@ -1046,13 +1051,14 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     auto state=RefreshUI::State::Ready;
     if(busy.load()){state=RefreshUI::State::Working;detail=std::to_string(processed)+" storage scopes processed"+(current.empty()?"":"\nCurrent: "+current)+"\n\n"+detail;}
     else if(failed)state=RefreshUI::State::Error;
-    else if(missing||stale||!count)state=RefreshUI::State::Waiting;
-    const char* idleLabel=state==RefreshUI::State::Waiting?(missing||!count?"Not retrieved":"Stale data"):nullptr;
+    else if((missing||stale||!count)&&needsManual)state=RefreshUI::State::Waiting;
+    const char* idleLabel=state==RefreshUI::State::Waiting?"Auto disabled":
+        state==RefreshUI::State::Ready&&(missing||stale||!count)?(count?"Scheduled":"No scopes"):nullptr;
     if(!count&&characterFiltered)detail="No verified storage scopes match the selected characters and storage filter.";
-    if(characterFiltered&&count)detail+="\n\nTimestamp covers matching storage only. Manual Refresh retains the selected storage scope across the account.";
+    if(characterFiltered&&count)detail+="\n\nTimestamp and manual Refresh cover matching character storage only.";
     if(accounts.empty())detail="Link or select an account.";
     if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty(),nullptr,idleLabel,true))
-        Refresh(accounts,scope);
+        Refresh(accounts,scope,false,{},characterFiltered?characters:noCharacters);
 }
 
 }

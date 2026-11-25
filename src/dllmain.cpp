@@ -60,6 +60,7 @@
 #include "ArenaNetTransport.h"
 #include <nlohmann/json.hpp>
 #include "AddonShared.h"
+#include "EquipmentLayout.h"
 #include "CatalogPresentation.h"
 #include "CharacterToolsCore.h"
 #include "Clears.h"
@@ -3280,6 +3281,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
         // Right-click context menu
         if (ImGui::BeginPopupContextItem("##eq_ctx")) {
             if (item_info) {
+                CopyNameMenuItem(item_info->name);
                 if (ImGui::MenuItem("Copy Item Chat Link")) {
                     std::string link = AlterEgo::ChatLink::EncodeItem(eq->id, 1, eq->skin,
                         eq->upgrades.size() > 0 ? eq->upgrades[0] : 0,
@@ -3293,6 +3295,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 }
             }
             if (skin_info) {
+                CopyNameMenuItem(skin_info->name,"Copy Skin Name");
                 if (ImGui::MenuItem("Copy Skin Chat Link")) {
                     std::string link = AlterEgo::ChatLink::EncodeSkin(eq->skin);
                     CopyToClipboard(link);
@@ -3361,116 +3364,20 @@ static std::string TruncateToWidth(const std::string& s, float maxW) {
     return s.substr(0, lo) + ell;
 }
 
-// Card-style equipment row. dir = +1 (icon-left), -1 (icon-right / trinkets column).
-static void RenderEquipCard(const AlterEgo::Character& ch, const char* slot, int tab, int dir) {
-    const auto* eq = FindEquipment(ch, slot, tab);
-    std::string name, rarity;
-    ResolveEquipDisplay(eq, slot, name, rarity);
-    bool hasItem = (eq && eq->id != 0);
-    std::string subtitle = hasItem ? BuildEquipSubtitle(eq) : "";
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    float availW = ImGui::GetContentRegionAvail().x;
-    float cardH = ICON_SIZE + 6.0f;
-    ImVec2 cardMin = ImGui::GetCursorScreenPos();
-    ImVec2 cardMax(cardMin.x + availW, cardMin.y + cardH);
-
-    // Card background — solid at the outer edge, fades to transparent toward the centre
-    // so the character portrait shows through the middle of the panel.
-    if (hasItem) {
-        ImU32 outerCol = IM_COL32(28, 26, 32, 215);
-        ImU32 innerCol = IM_COL32(28, 26, 32, 25);
-        if (dir > 0) {
-            dl->AddRectFilledMultiColor(cardMin, cardMax, outerCol, innerCol, innerCol, outerCol);
-        } else {
-            dl->AddRectFilledMultiColor(cardMin, cardMax, innerCol, outerCol, outerCol, innerCol);
-        }
-    } else {
-        // Empty slots: very faint, same fade direction
-        ImU32 outerCol = IM_COL32(20, 19, 24, 80);
-        ImU32 innerCol = IM_COL32(20, 19, 24, 0);
-        if (dir > 0) {
-            dl->AddRectFilledMultiColor(cardMin, cardMax, outerCol, innerCol, innerCol, outerCol);
-        } else {
-            dl->AddRectFilledMultiColor(cardMin, cardMax, innerCol, outerCol, outerCol, innerCol);
-        }
-    }
-
-    // Rarity accent strip on the outer edge only
-    if (hasItem) {
-        ImVec4 rcol = GetRarityColor(rarity);
-        ImU32 raccent = ImGui::ColorConvertFloat4ToU32(ImVec4(rcol.x, rcol.y, rcol.z, 0.70f));
-        if (dir > 0) {
-            dl->AddRectFilled(cardMin, ImVec2(cardMin.x + 2.0f, cardMax.y), raccent);
-        } else {
-            dl->AddRectFilled(ImVec2(cardMax.x - 2.0f, cardMin.y), cardMax, raccent);
-        }
-    }
-
-    float pad = 4.0f;
-    float textGap = 6.0f;
-    float textW = availW - ICON_SIZE - pad * 2 - textGap;
-    float lineH = ImGui::GetTextLineHeight();
-
-    if (dir > 0) {
-        // Icon on left
-        ImGui::SetCursorScreenPos(ImVec2(cardMin.x + pad, cardMin.y + 3.0f));
-        RenderEquipmentSlot(eq, SlotDisplayName(slot));
-
-        if (hasItem) {
-            float textX = cardMin.x + pad + ICON_SIZE + textGap;
-            std::string nTrunc = TruncateToWidth(name, textW);
-            std::string sTrunc = subtitle.empty() ? "" : TruncateToWidth(subtitle, textW);
-            // If subtitle would lose more than half its content, drop it entirely
-            if (!sTrunc.empty() && sTrunc != subtitle) {
-                if ((float)sTrunc.size() < (float)subtitle.size() * 0.5f) sTrunc.clear();
-            }
-            float blockH = sTrunc.empty() ? lineH : lineH * 2 + 1.0f;
-            float textTopY = cardMin.y + (cardH - blockH) * 0.5f;
-            dl->AddText(ImVec2(textX, textTopY),
-                ImGui::ColorConvertFloat4ToU32(GetRarityColor(rarity)), nTrunc.c_str());
-            if (!sTrunc.empty()) {
-                dl->AddText(ImVec2(textX, textTopY + lineH + 1.0f),
-                    IM_COL32(150, 142, 120, 230), sTrunc.c_str());
-            }
-        }
-    } else {
-        // Text on left, icon on right (trinkets column)
-        float iconX = cardMax.x - pad - ICON_SIZE;
-
-        if (hasItem) {
-            float textRightX = iconX - textGap;
-            std::string nTrunc = TruncateToWidth(name, textW);
-            std::string sTrunc = subtitle.empty() ? "" : TruncateToWidth(subtitle, textW);
-            if (!sTrunc.empty() && sTrunc != subtitle) {
-                if ((float)sTrunc.size() < (float)subtitle.size() * 0.5f) sTrunc.clear();
-            }
-            float nW = ImGui::CalcTextSize(nTrunc.c_str()).x;
-            float sW = sTrunc.empty() ? 0.0f : ImGui::CalcTextSize(sTrunc.c_str()).x;
-            float blockH = sTrunc.empty() ? lineH : lineH * 2 + 1.0f;
-            float textTopY = cardMin.y + (cardH - blockH) * 0.5f;
-            dl->AddText(ImVec2(textRightX - nW, textTopY),
-                ImGui::ColorConvertFloat4ToU32(GetRarityColor(rarity)), nTrunc.c_str());
-            if (!sTrunc.empty()) {
-                dl->AddText(ImVec2(textRightX - sW, textTopY + lineH + 1.0f),
-                    IM_COL32(150, 142, 120, 230), sTrunc.c_str());
-            }
-        }
-        ImGui::SetCursorScreenPos(ImVec2(iconX, cardMin.y + 3.0f));
-        RenderEquipmentSlot(eq, SlotDisplayName(slot));
-    }
-
-    // Advance cursor below the card
-    ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.0f));
-}
-
-static void RenderEquipRowReverse(const AlterEgo::Character& ch, const char* slot, int tab) {
-    RenderEquipCard(ch, slot, tab, -1);
-}
-
-// Helper: render one equipment row (icon + name) for the paper-doll grid
+// Live data keeps its own icon, tooltip and instance-specific actions, but
+// shares geometry and text wrapping with saved equipment.
 static void RenderEquipRow(const AlterEgo::Character& ch, const char* slot, int tab) {
-    RenderEquipCard(ch, slot, tab, +1);
+    const auto* eq=FindEquipment(ch,slot,tab);
+    std::string name,rarity;ResolveEquipDisplay(eq,slot,name,rarity);
+    const auto pos=ImGui::GetCursorScreenPos();
+    const float width=ImGui::GetContentRegionAvail().x;
+    RenderEquipmentSlot(eq,SlotDisplayName(slot));
+    AlterEgo::UI::EquipmentText text(pos,ICON_SIZE,width);
+    if(eq&&eq->id){
+        text.Line(name,ImGui::ColorConvertFloat4ToU32(GetRarityColor(rarity)));
+        text.Line(BuildEquipSubtitle(eq),IM_COL32(150,142,120,230));
+    }else text.Line(name,ImGui::GetColorU32(ImGuiCol_TextDisabled));
+    text.Finish();
 }
 
 // Draw a race silhouette as a semi-transparent background overlay
@@ -3741,7 +3648,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
         RenderEquipmentSlot(eq,label);
         ImGui::SameLine();
         ImGui::BeginGroup();
-        ImGui::TextDisabled("%s",label);
+        ImGui::TextUnformatted(label);
         ImGui::PushStyleColor(ImGuiCol_Text,GetRarityColor(info?info->rarity:"Basic"));
         ImGui::TextWrapped("%s",name.c_str());
         ImGui::PopStyleColor();
@@ -3752,7 +3659,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
         }
         if(charges){
             if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
-            else ImGui::TextDisabled("Charges: Not reported");
+            // Unknown charges are omitted; explicit zero is still reported.
         }
         if(gathering){
             bool reported=false;
@@ -3863,148 +3770,12 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
 
     ImGui::Spacing();
 
-    // Main layout: Left (Armor + Weapons) | Right (Trinkets)
-    {
-        float totalW = ImGui::GetContentRegionAvail().x;
-        float gap = 8.0f;
-        float pad = 6.0f;
-        float leftW = totalW * 0.54f;
-
-        // ===== LEFT COLUMN: Armor + Weapons =====
-        ImGui::BeginGroup();
-        ImGui::Indent(pad);
-
-        RenderSectionHeader("Armor", AlterEgo::UI::SectionGold);
-        RenderLiveComponentSaveMenu(ch, tab, 4, "##save_live_armor");
-        RenderEquipRow(ch, "Helm", tab);
-        RenderEquipRow(ch, "Shoulders", tab);
-        RenderEquipRow(ch, "Coat", tab);
-        RenderEquipRow(ch, "Gloves", tab);
-        RenderEquipRow(ch, "Leggings", tab);
-        RenderEquipRow(ch, "Boots", tab);
-
-        ImGui::Spacing();
-
-        RenderSectionHeader("Weapons", AlterEgo::UI::SectionGold);
-        RenderLiveComponentSaveMenu(ch, tab, 2, "##save_live_weapons");
-        {
-            auto DrawSetLabel = [](const char* roman, float rowH) {
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                ImVec2 lp = ImGui::GetCursorScreenPos();
-                float w = 28.0f;
-                float h = rowH;
-                ImU32 bgTop = IM_COL32(26, 22, 18, 255);
-                ImU32 bgBot = IM_COL32(20, 17, 13, 255);
-                dl->AddRectFilledMultiColor(lp, ImVec2(lp.x + w, lp.y + h), bgTop, bgTop, bgBot, bgBot);
-                dl->AddRect(lp, ImVec2(lp.x + w, lp.y + h),
-                    IM_COL32(70, 60, 40, 140), 3.0f, 0, 1.0f);
-                ImVec2 ts = ImGui::CalcTextSize(roman);
-                dl->AddText(
-                    ImVec2(lp.x + w * 0.5f - ts.x * 0.5f, lp.y + h * 0.5f - ts.y * 0.5f),
-                    IM_COL32(197, 161, 85, 255), roman);
-                ImGui::Dummy(ImVec2(w, h));
-            };
-
-            float rowH = ICON_SIZE + 10.0f;
-            float labelW = 28.0f;
-            float innerGap = 6.0f;
-            float weaponsW = leftW - pad * 2 - labelW - innerGap;
-            float primaryW = (weaponsW - 8.0f) * 0.62f;
-            float secondaryW = (weaponsW - 8.0f) - primaryW;
-
-            auto RenderWeaponSet = [&](const char* roman, const char* a, const char* b) {
-                ImGui::BeginGroup();
-                DrawSetLabel(roman, rowH);
-                ImGui::EndGroup();
-                ImGui::SameLine(0, innerGap);
-
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
-
-                ImGui::PushID(a);
-                ImGui::BeginChild("##wA", ImVec2(primaryW, rowH), false,
-                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-                RenderEquipRow(ch, a, tab);
-                ImGui::EndChild();
-                ImGui::PopID();
-
-                ImGui::SameLine(0, 8.0f);
-
-                ImGui::PushID(b);
-                ImGui::BeginChild("##wB", ImVec2(secondaryW, rowH), false,
-                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-                RenderEquipRow(ch, b, tab);
-                ImGui::EndChild();
-                ImGui::PopID();
-
-                ImGui::PopStyleVar(2);
-            };
-
-            RenderWeaponSet("I",  "WeaponA1", "WeaponA2");
-            RenderWeaponSet("II", "WeaponB1", "WeaponB2");
-        }
-
-        ImGui::Unindent(pad);
-        ImGui::EndGroup();
-
-        ImGui::SameLine(leftW + gap);
-
-        // ===== RIGHT COLUMN: Trinkets =====
-        ImGui::BeginGroup();
-
-        {
-            float colW = totalW - leftW - gap;
-            float headerW = ImGui::CalcTextSize("Trinkets").x;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + colW - headerW - pad);
-            ImGui::TextColored(AlterEgo::UI::SectionGold, "Trinkets");
-            RenderLiveComponentSaveMenu(ch, tab, 6, "##save_live_trinkets");
-            // Accent underline (right-aligned)
-            ImVec2 pos = ImGui::GetCursorScreenPos();
-            ImGui::GetWindowDrawList()->AddLine(
-                ImVec2(pos.x + colW * 0.4f, pos.y),
-                ImVec2(pos.x + colW - pad, pos.y),
-                ImGui::ColorConvertFloat4ToU32(ImVec4(0.70f, 0.58f, 0.20f, 0.30f)), 1.0f);
-            ImGui::Spacing();
-        }
-        RenderEquipRowReverse(ch, "Backpack", tab);
-        RenderEquipRowReverse(ch, "Accessory1", tab);
-        RenderEquipRowReverse(ch, "Accessory2", tab);
-        RenderEquipRowReverse(ch, "Amulet", tab);
-        RenderEquipRowReverse(ch, "Ring1", tab);
-        RenderEquipRowReverse(ch, "Ring2", tab);
-        RenderEquipRowReverse(ch, "Relic", tab);
-
-        ImGui::EndGroup();
-    }
-
-    ImGui::Spacing();
-
-    // ===== AQUATIC: Aquabreather + Aquatic Weapons =====
-    ImGui::Indent(6.0f);
-    RenderSectionHeader("Aquatic", AlterEgo::UI::SectionGold);
-    RenderEquipRow(ch, "HelmAquatic", tab);
-    {
-        float rowH = ICON_SIZE + 6.0f + 4.0f;
-        float halfW = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
-
-        ImGui::BeginChild("##aqA", ImVec2(halfW, rowH), false,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        RenderEquipRow(ch, "WeaponAquaticA", tab);
-        ImGui::EndChild();
-
-        ImGui::SameLine(0, 8.0f);
-
-        ImGui::BeginChild("##aqB", ImVec2(halfW, rowH), false,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        RenderEquipRow(ch, "WeaponAquaticB", tab);
-        ImGui::EndChild();
-
-        ImGui::PopStyleVar(2);
-    }
-    ImGui::Unindent(6.0f);
+    AlterEgo::UI::EquipmentLayout("##live_gear",true,
+        [&](const char* slot){RenderEquipRow(ch,slot,tab);},
+        [&](const char* label,int kind){
+            RenderSectionHeader(label,AlterEgo::UI::SectionGold);
+            if(kind>=0){ImGui::PushID(label);RenderLiveComponentSaveMenu(ch,tab,kind,"##save_live_section");ImGui::PopID();}
+        });
     RenderInfusionTotals(GetLiveInfusionSummary(ch, tab), nullptr, [&]() {
         RenderLiveComponentSaveMenu(ch, tab, 8, "##save_live_infusions");
     });
@@ -4126,6 +3897,9 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
         ImGui::EndTooltip();
     }
 
+    if(tinfo&&(!g_LibEditMode||!selected||isMinor)&&ImGui::BeginPopupContextItem("##trait_name")) {
+        CopyNameMenuItem(tinfo->name);ImGui::EndPopup();
+    }
     ImGui::PopID();
     return center;
 }
@@ -4164,6 +3938,9 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable) {
             ImGui::TextDisabled("Click to choose a skill");
         }
         ImGui::EndTooltip();
+    }
+    if(!editable&&sinfo&&ImGui::BeginPopupContextItem("##skill_name")) {
+        CopyNameMenuItem(sinfo->name);ImGui::EndPopup();
     }
     ImGui::PopID();
     return clicked;
@@ -4840,6 +4617,8 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                             ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz);
                             if (g_LibEditMode && selected &&
                                 ImGui::BeginPopupContextItem("##trait_edit_context")) {
+                                const auto trait=AlterEgo::GW2API::GetTraitInfo(tid);
+                                if(trait)CopyNameMenuItem(trait->name);
                                 if (ImGui::MenuItem("Clear Trait")) {
                                     g_EditDraft.specializations[i].traits[tier] = 0;
                                     MarkEditDirty();
@@ -7633,6 +7412,17 @@ static void CopyWeaponSetSigils(AlterEgo::SavedBuild& b,const std::string& sourc
 static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slot,bool& clearAfter) {
     if (!ImGui::BeginPopupContextItem("##gear_edit_context")) return;
     const bool relic = slot == "Relic";
+    const auto saved=b.gear.find(slot);
+    if(relic)CopyNameMenuItem(b.relic_name);
+    else if(saved!=b.gear.end()){
+        const auto& gear=saved->second;
+        const auto actual=gear.item_id?AlterEgo::GW2API::GetItemInfo(gear.item_id):nullptr;
+        const auto name=actual&&!actual->name.empty()?actual->name:gear.stat_name.empty()?std::string{}:gear.stat_name+" "+GearSlotDisplayName(slot);
+        CopyNameMenuItem(name);
+        CopyNameMenuItem(gear.rune,"Copy Rune Name");
+        CopyNameMenuItem(gear.sigil,"Copy Sigil Name");
+        CopyNameMenuItem(gear.sigil2,"Copy Second Sigil Name");
+    }
     auto capture = [&](GearCopyField field) { return CaptureGearClipboard(b,slot,field); };
     if (ImGui::MenuItem("Edit")) {
         auto c = capture(GearCopyField::All); c.data.slot = slot;
@@ -7858,6 +7648,7 @@ static void RenderGearCustomizeDialog() {
                 }
 
                 if (ImGui::BeginPopupContextItem("##single_upgrade_edit")) {
+                    if(upgradeName)CopyNameMenuItem(*upgradeName);
                     auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Upgrade);
                     if (isWeapon) {
                         if (sigilIdx == 1) {
@@ -7935,6 +7726,7 @@ static void RenderGearCustomizeDialog() {
                 }
                 bool removeInfusion = false;
                 if (ImGui::BeginPopupContextItem("##single_infusion_edit")) {
+                    if(item)CopyNameMenuItem(item->name);
                     auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Infusions);
                     snapshot.data.infusion_ids = {id};
                     snapshot.data.infusion_attributes = {attr};
@@ -8882,12 +8674,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     hasStat = it != build.gear.end() && (it->second.stat_id || !it->second.stat_name.empty());
     hasWeaponType = it != build.gear.end() && !it->second.weapon_type.empty();
 
-    // Name text next to icon — draw directly so lines fit within icon height
+    // Text is wrapped by the same responsive helper as live equipment.
     bool isRelicSlot = (strcmp(slot, "Relic") == 0);
-    float lineH = ImGui::GetTextLineHeight();
-    float textX = pos.x + iconSz + 4.0f;
-    float textY = pos.y;
-    auto* dl = ImGui::GetWindowDrawList();
+    AlterEgo::UI::EquipmentText text(pos,iconSz,ImGui::GetContentRegionAvail().x);
 
     // Line 1: stat/slot name
     char line1[256] = {};
@@ -8916,28 +8705,27 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         snprintf(line1, sizeof(line1), "%s", GearSlotDisplayName(slot));
         line1Col = IM_COL32(128, 128, 128, 255);
     }
-    dl->AddText(ImVec2(textX, textY), line1Col, line1);
-    textY += lineH;
-
-    // Line 2: rune or sigil
-    if (!isRelicSlot && it != build.gear.end()) {
-        if (!it->second.rune.empty()) {
-            dl->AddText(ImVec2(textX, textY), IM_COL32(153, 153, 255, 255), it->second.rune.c_str());
-            textY += lineH;
+    if(!editable&&!disabled&&hasData&&ImGui::BeginPopupContextItem("##saved_gear_name")){
+        const auto actual=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
+        CopyNameMenuItem(actual&&!actual->name.empty()?actual->name:std::string(line1));
+        if(gearSlot){
+            CopyNameMenuItem(gearSlot->rune,"Copy Rune Name");
+            CopyNameMenuItem(gearSlot->sigil,"Copy Sigil Name");
+            CopyNameMenuItem(gearSlot->sigil2,"Copy Second Sigil Name");
+            for(size_t n=0;n<gearSlot->infusion_ids.size();++n){
+                const auto infusion=AlterEgo::GW2API::GetItemInfo(gearSlot->infusion_ids[n]);
+                if(infusion){ImGui::PushID(static_cast<int>(n));CopyNameMenuItem(infusion->name,"Copy Infusion Name");ImGui::PopID();}
+            }
         }
-        if (!it->second.sigil.empty()) {
-            dl->AddText(ImVec2(textX, textY), IM_COL32(153, 153, 255, 255), it->second.sigil.c_str());
-            textY += lineH;
-        }
-        // Line 3: second sigil (two-handed weapons)
-        if (!it->second.sigil2.empty()) {
-            dl->AddText(ImVec2(textX, textY), IM_COL32(153, 153, 255, 255), it->second.sigil2.c_str());
-            textY += lineH;
-        }
+        ImGui::EndPopup();
     }
-
-    // Advance cursor past the icon
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + iconSz + 2.0f));
+    text.Line(line1,line1Col);
+    if (!isRelicSlot && it != build.gear.end()) {
+        text.Line(it->second.rune,IM_COL32(153,153,255,255));
+        text.Line(it->second.sigil,IM_COL32(153,153,255,255));
+        text.Line(it->second.sigil2,IM_COL32(153,153,255,255));
+    }
+    text.Finish();
 
     // Tooltip
     if (hovered && isRelicSlot && !build.relic_name.empty()) {
@@ -8998,45 +8786,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
 
 // Render the full gear section for a saved build
 static void RenderBuildGearPanel(AlterEgo::SavedBuild& build,bool editable) {
-    if (ImGui::BeginTable("##buildGear", 2, ImGuiTableFlags_None)) {
-        ImGui::TableSetupColumn("##gearLeft", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("##gearRight", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableNextRow();
-
-        // Left column: Armor
-        ImGui::TableNextColumn();
-        ImGui::Indent(2.0f);
-        RenderSectionHeader("Armor", AlterEgo::UI::SectionGold);
-        RenderBuildGearSlot(build, "Helm",editable);
-        RenderBuildGearSlot(build, "Shoulders",editable);
-        RenderBuildGearSlot(build, "Coat",editable);
-        RenderBuildGearSlot(build, "Gloves",editable);
-        RenderBuildGearSlot(build, "Leggings",editable);
-        RenderBuildGearSlot(build, "Boots",editable);
-
-        ImGui::Spacing();
-        RenderSectionHeader("Weapons", AlterEgo::UI::SectionGold);
-        RenderBuildGearSlot(build, "WeaponA1",editable);
-        RenderBuildGearSlot(build, "WeaponA2",editable);
-        RenderBuildGearSlot(build, "WeaponB1",editable);
-        RenderBuildGearSlot(build, "WeaponB2",editable);
-        ImGui::Unindent(2.0f);
-
-        // Right column: Trinkets + Relic + Rune
-        ImGui::TableNextColumn();
-        ImGui::Indent(2.0f);
-        RenderSectionHeader("Trinkets", AlterEgo::UI::SectionGold);
-        RenderBuildGearSlot(build, "Backpack",editable);
-        RenderBuildGearSlot(build, "Accessory1",editable);
-        RenderBuildGearSlot(build, "Accessory2",editable);
-        RenderBuildGearSlot(build, "Amulet",editable);
-        RenderBuildGearSlot(build, "Ring1",editable);
-        RenderBuildGearSlot(build, "Ring2",editable);
-        RenderBuildGearSlot(build, "Relic",editable);
-        ImGui::Unindent(2.0f);
-
-        ImGui::EndTable();
-    }
+    AlterEgo::UI::EquipmentLayout("##saved_gear",false,
+        [&](const char* slot){RenderBuildGearSlot(build,slot,editable);},
+        [](const char* label,int){RenderSectionHeader(label,AlterEgo::UI::SectionGold);});
 }
 
 // Re-resolve item names (rune, relic, sigils, stats) for a saved build from
@@ -9187,6 +8939,8 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src, float sz, bool 
                 g_SkillPickerAnchor = ImVec2(p.x, p.y + sz + 2.0f);
             }
             if (ImGui::BeginPopupContextItem("##skill_edit_context")) {
+                const auto skill=AlterEgo::GW2API::GetSkillInfo(sid);
+                if(skill)CopyNameMenuItem(skill->name);
                 if (ImGui::MenuItem("Clear Skill",nullptr,false,sid != 0)) {
                     auto& bar = g_EditDraft.terrestrial_skills;
                     if (slot == 0) bar.heal = 0;
@@ -11937,6 +11691,7 @@ static void RenderBuildLibrary() {
                 g_LibDetailsFetched = false;
             }
             if (!g_LibEditMode && ImGui::BeginPopupContextItem("##build_actions")) {
+                CopyNameMenuItem(b.name);
                 if (ImGui::MenuItem("Copy Portable Loadout")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, b, i);
                 if (ImGui::MenuItem("Compare")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, b, i);
                 if (ImGui::BeginMenu("Share")) {
@@ -12995,7 +12750,7 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t sto
     if (!ImGui::BeginPopupContextItem("##skin_actions")) return;
     ImGui::TextDisabled("%s",skin.name.c_str());
     ImGui::Separator();
-    if(ImGui::MenuItem("Copy Skin Name")) CopyToClipboard(skin.name);
+    CopyNameMenuItem(skin.name);
     if(ImGui::MenuItem("Copy Skin Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeSkin(skin.id));
     // Pie UI documents native skin-link preview through EV_PIEUI_OPEN_CHATLINK.
     if(g_PieUIPresent.load() && ImGui::MenuItem("Preview in Game"))
@@ -13004,7 +12759,7 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t sto
     if(price && price->tradeable && price->item_id) {
         const auto name=Skinventory::Commerce::GetItemName(price->item_id);
         if(!name.empty()) {
-            if(ImGui::MenuItem("Copy Trading Post Item Name")) CopyToClipboard(name);
+            CopyNameMenuItem(name,"Copy Trading Post Item Name");
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",name.c_str());
         }
         if(ImGui::MenuItem("Copy Item Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeItem(price->item_id));
@@ -15604,12 +15359,12 @@ static void DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::Cha
         }
     }
     if(stale&&state!=R::State::Working){
-        state=R::State::Waiting;
-        if(!linked)label="No API";
-        else if(!owner)label="Unverified";
-        else if(!enabled)label="Auto disabled";
+        state=R::State::Ready;
+        if(!linked){state=R::State::Error;label="No API";}
+        else if(!owner){state=R::State::Error;label="Unverified";}
+        else if(!enabled){state=R::State::Waiting;label="Auto disabled";}
         else if(due)label="Refresh due";
-        else if(nextReason==W::Retry)label="Retry in "+std::to_string((next-now+59)/60)+"m";
+        else if(nextReason==W::Retry){state=R::State::Waiting;label="Retry in "+std::to_string((next-now+59)/60)+"m";}
         else if(nextReason==W::Stagger)label="Scheduled";
         else if(nextReason==W::SpecDebounce)label="Spec change";
         else if(nextReason==W::LoginGrace||nextReason==W::LogoutGrace)label="Awaiting sync";
@@ -16200,7 +15955,13 @@ void AddonRender() {
 
     // Top-level tab bar: Characters | Build Library
     PollBuildSource();
-    if (ImGui::BeginTabBar("##main_tabs")) {
+    // The main tab layout is calculated by the first submitted tab. Add
+    // six pixels to its gaps (three on either side of each group divider).
+    const auto mainInnerSpacing=ImGui::GetStyle().ItemInnerSpacing;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,ImVec2(mainInnerSpacing.x+6.f,mainInnerSpacing.y));
+    const bool mainTabBarOpen=ImGui::BeginTabBar("##main_tabs");
+    if(!mainTabBarOpen)ImGui::PopStyleVar();
+    if (mainTabBarOpen) {
         static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu, skinMenu, inventoryMenu;
 
         ImGuiTabItemFlags charTabFlags = NavigationTabFlags(0);
@@ -16209,6 +15970,7 @@ void AddonRender() {
             g_ForceCharactersTab = false;
         }
         const bool charactersTabVisible = ImGui::BeginTabItem("Characters", nullptr, charTabFlags);
+        ImGui::PopStyleVar(); // content and nested tabs keep their existing spacing
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Live and cached character data from your GW2 account");
         if (charactersTabVisible) {
@@ -16482,6 +16244,7 @@ void AddonRender() {
                     // the character whose details happen to be selected.
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
+                        CopyNameMenuItem(ch.name);
                         RenderCharacterLoadMenu("Load",ch.name,ch.account_name);
                         const int activeBuild = ActiveBuildIndex(ch);
                         const int activeEquip = ActiveEquipmentTab(ch);
