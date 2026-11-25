@@ -22,6 +22,7 @@ using namespace NativeInventory;
 struct Account {std::string id,name,label;std::set<std::string> permissions;};
 struct View {
     std::vector<Account> accounts;Projection inventory;
+    uint64_t credentialEpoch=1;
     std::map<uint32_t,std::vector<size_t>> index;
     std::map<std::tuple<std::string,std::string,std::string>,ScopeState> scopes;
 };
@@ -83,7 +84,7 @@ std::vector<Account> Accounts(){
 }
 void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State state=RefreshUI::State::Ready){
     std::lock_guard<std::mutex> serial(publishMutex);
-    auto next=std::make_shared<View>();next->accounts=Accounts();next->inventory=Read(root);
+    auto next=std::make_shared<View>();next->credentialEpoch=registryGeneration.load();next->accounts=Accounts();next->inventory=Read(root);
     for(size_t i=0;i<next->inventory.rows.size();++i)next->index[next->inventory.rows[i].slot.id].push_back(i);
     for(const auto& s:next->inventory.states)next->scopes[{s.account,s.scope,s.character}]=s;
     std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);++inventoryGeneration;if(replaceMessage){message=msg;messageState=state;}registryReady=true;
@@ -138,10 +139,10 @@ void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std:
             auto q=db.Prepare("INSERT INTO accounts VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,label=excluded.label,permissions=excluded.permissions");
             q.Bind(1,a.id);q.Bind(2,a.name);q.Bind(3,a.label);q.Bind(4,Json(a.permissions).dump());q.Execute();
             std::unique_lock<std::mutex> credentialLock(credentialMutex);
-            ++registryGeneration;
             Secret previous(Key(a.id));
             if(!SaveKey(a.id,key->value)){Message("Windows Credential Manager rejected the key.");return;}
             try{tx.Commit();}catch(...){if(previous.value.empty())CredDeleteA(Target(a.id).c_str(),CRED_TYPE_GENERIC,0);else SaveKey(a.id,previous.value);throw;}
+            ++registryGeneration;
             if(a.permissions.count("characters")){try{Roster(a,key->value);}catch(...){}}
             Publish("Account linked. Inventory can now be refreshed.",true,RefreshUI::State::Success);
         }catch(const std::exception& e){
@@ -154,10 +155,9 @@ void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std:
 void Remove(const std::string& id){
     Launch([id]{
         std::lock_guard<std::mutex> credentialLock(credentialMutex);
-        ++registryGeneration;
         Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
         Database::Transaction tx(db);auto q=db.Prepare("DELETE FROM accounts WHERE id=?");q.Bind(1,id);q.Execute();
-        tx.Commit();
+        tx.Commit();++registryGeneration;
         const bool removed=CredDeleteA(Target(id).c_str(),CRED_TYPE_GENERIC,0)!=FALSE||GetLastError()==ERROR_NOT_FOUND;
         Publish(removed?"Account unlinked. Library unchanged.":"Account unlinked; remove its remaining credential in Windows Credential Manager.",true,removed?RefreshUI::State::Success:RefreshUI::State::Error);
     });
@@ -319,7 +319,7 @@ std::string Active(const View& v,const std::string& ch){
 }
 }
 std::vector<LinkedAccount> Linked(){
-    auto v=Snapshot();std::vector<LinkedAccount> out;const auto gen=registryGeneration.load();
+    auto v=Snapshot();std::vector<LinkedAccount> out;const auto gen=v->credentialEpoch;
     for(const auto& a:v->accounts){
         LinkedAccount row;row.id=a.id;row.name=a.name;row.label=a.label;row.permissions=a.permissions;row.generation=gen;
         const auto it=v->inventory.rosters.find(a.id);
@@ -332,7 +332,7 @@ bool Ready(){return registryReady.load();}
 bool Current(const LinkedAccount& a){
     if(a.id.empty()||a.generation!=registryGeneration.load())return false;
     auto v=Snapshot();
-    return std::any_of(v->accounts.begin(),v->accounts.end(),[&](const Account& b){return b.id==a.id;});
+    return v->credentialEpoch==a.generation&&std::any_of(v->accounts.begin(),v->accounts.end(),[&](const Account& b){return b.id==a.id;});
 }
 Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions){
     if(!Current(a))return {0,{},"Account changed"};

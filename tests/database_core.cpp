@@ -531,10 +531,11 @@ int case_database_core(int, char**) {
         AlterEgo::Storage::WriteMigrationBytes(paths.base/"vault_cache.json",vault.dump());
         assert(!Cache::ReadCompletion(root,D::Vault,"A.B",false));
         vault["account"]="A.B";
+        for(const char* section:{"daily","weekly","special"})vault[section]["fetched_at"]=200;
         assert(Cache::ReadCompletion(root,D::Vault,"A.B",true)==vault);
         assert(Cache::HasCompletion(root,D::Vault,"A.B"));
         assert(!Cache::HasCompletion(root,D::Vault,"A_B"));
-        auto reset=vault;reset["fetch_time"]=201;reset["weekly"]["objectives"][0]["claimed"]=false;
+        auto reset=vault;reset["fetch_time"]=201;reset["weekly"]["fetched_at"]=201;reset["weekly"]["objectives"][0]["claimed"]=false;
         reset["weekly"]["objectives"][0]["progress_current"]=0;
         assert(Cache::WriteCompletion(root,D::Vault,"A.B",reset));
         assert(Cache::ReadCompletion(root,D::Vault,"A.B")==reset);

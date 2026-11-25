@@ -2331,12 +2331,16 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
                 g_VaultRetryAtMs = 0;
                 std::string missing;
                 for (int i = 0; i < 3; ++i) {
-                    if (!g_VaultResponsesOK[i]) {
+                    if (!g_VaultTerminal[i]) {
                         if (!missing.empty()) missing += ", ";
                         missing += VaultSectionName((uint8_t)i);
                     }
                 }
                 g_VaultStatusMessage = "Vault refresh timed out waiting for: " + missing;
+                if(g_VaultDailyRolloverPending||g_VaultWeeklyRolloverPending){
+                    const auto delay=ClearsReset::RetryDelaySeconds(++g_VaultRolloverRetries);
+                    g_VaultRolloverRetryAtMs=NowMs()+delay*1000;
+                }
             } else if (g_VaultRetryAtMs != 0 && now >= g_VaultRetryAtMs) {
                 for (uint8_t i = 0; i < 3; ++i) {
                     if (g_VaultRetryNeeded[i] && !g_VaultResponsesOK[i]) {
@@ -3433,13 +3437,13 @@ void RefreshVaultOnEntry() {
     if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)) return;
     if (g_VaultNeedRequery || g_VaultFetching.load()) return;
     bool stale = false;
-    bool haveData = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         stale = AlterEgo::SectionRefresh::Stale(
             g_VaultLastSuccessTime, std::time(nullptr)) ||
-            g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending;
-        haveData = g_VaultFetched.load();
+            g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending ||
+            g_VaultSeasonEnd==std::chrono::system_clock::time_point{} ||
+            std::chrono::system_clock::now()>=g_VaultSeasonEnd;
     }
     if (!stale) return;
     FetchVaultData(true);

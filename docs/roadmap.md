@@ -19,6 +19,7 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 - [x] Inventory Items and Wallet search/filter controls use the existing shared SearchToolbar, FilterChoice, FilterInt and removable chips; Guild bank uses SearchField. CI passed at 57d47f9, live validation pending.
 - [ ] Wallet categories, armor/weapon subtype and level filters, endpoint deduplication and priority scheduling.
 - [x] Independent Vault daily/weekly/special persistence and timestamps, section failure isolation, selective automatic refresh; CI/live validation pending.
+- [x] Registry snapshots carry their credential generation; obsolete snapshot permissions cannot acquire a replacement credential.
 - [ ] Full independent character/progress dataset freshness; independent Clears section commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.
 
