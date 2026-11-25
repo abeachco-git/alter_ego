@@ -1,4 +1,5 @@
 #include "../src/SectionRefresh.h"
+#include "../src/CharacterActivity.h"
 #include <cassert>
 #include <ctime>
 #include <vector>
@@ -27,7 +28,8 @@ int case_section_refresh(int, char**) {
     assert(F::Offset("account/vault/0")<=45);
     assert(!F::CharacterDue(false,0,now-100000,now-90000,0,now));
     assert(!F::CharacterDue(true,now-10,now,now-100000,0,now));
-    assert(F::CharacterDue(true,now-1800,now,now-100000,0,now));
+    static_assert(F::CharacterSeconds==600);
+    assert(F::CharacterDue(true,now-600,now,now-100000,0,now));
     assert(F::CharacterDue(true,now-10,now,now-100000,0,now,true));
     static_assert(F::LogoutGraceSeconds==600);
     assert(F::CharacterDue(false,0,now-600,now-1000,0,now));
@@ -41,6 +43,34 @@ int case_section_refresh(int, char**) {
     assert(F::CharacterDue(false,0,now-600,now-300,0,now,false,false,now-1000));
     assert(!F::CharacterDue(false,0,now-600,now-300,0,now,false,false,now-600));
     assert(!F::CharacterDue(false,0,now-600,now-1000,now-10,now));
+    namespace A=AlterEgo::CharacterActivity;
+    A::Tracker tracker;const A::Key key{"account-a","Reaper"},other{"account-b","Reaper"};
+    tracker.Observe(key.first,key.second,34,true,now);
+    assert(!tracker.Due(key,"Bags",now-90000,0,now+10));
+    assert(tracker.Due(key,"Bags",now-90000,0,now+646));
+    assert(tracker.Fresh(other,"Bags",now-90000,now+646));
+    tracker.Observe(key.first,key.second,35,true,now+20);
+    assert(!tracker.Due(key,"Character",now-100,0,now+27));
+    assert(tracker.Due(key,"Character",now-100,0,now+28));
+    assert(!tracker.Due(key,"Bags",now-100,0,now+28,false));
+    tracker.Observe(key.first,key.second,35,false,now+40);
+    tracker.Observe(key.first,key.second,35,true,now+45); // transient map load
+    assert(tracker.ActiveKey()==key);
+    tracker.Observe(key.first,key.second,35,false,now+60);
+    tracker.Observe(key.first,key.second,35,false,now+72);
+    assert(tracker.ActiveKey().first.empty());
+    assert(!tracker.Due(key,"Bags",now-100,0,now+659));
+    auto early=tracker.Begin(key,"Bags",now+300);
+    tracker.Success(key,"Bags",early,now+301);
+    assert(!tracker.Fresh(key,"Bags",now+301,now+660));
+    assert(tracker.Due(key,"Bags",now+301,0,now+660));
+    auto late=tracker.Begin(key,"Bags",now+660);tracker.Success(key,"Bags",late,now+661);
+    assert(tracker.Fresh(key,"Bags",now+661,now+999999));
+    assert(!tracker.Due(key,"Bags",now+661,0,now+999999));
+    assert(tracker.Due(key,"Equipment",now-100,0,now+999999));
+    A::Tracker restored;restored.Load(tracker.Save());
+    assert(restored.Fresh(key,"Bags",now+661,now+999999));
+    assert(restored.Due(key,"Equipment",now-100,0,now+999999));
     auto a=F::ClaimIds("skills",{1,1,2});assert(a->ids.size()==2);
     auto b=F::ClaimIds("skills",{2,3},true);assert(b->ids==std::vector<uint32_t>{3});
     a.reset();assert(F::ClaimIds("skills",{1})->ids.empty());

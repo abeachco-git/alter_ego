@@ -334,7 +334,8 @@ namespace AlterEgo {
         static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via native API
         static void RequestCharacterList();              // Fetch just the character name list
         static void RequestCharacterRefreshSelected(
-            const std::vector<std::string>& names, bool refreshCrafting = true); // Manual=true; auto=false
+            const std::vector<std::string>& names, bool refreshCrafting = true);
+        static void RequestCharacterActivityRefresh(const std::string& account,const std::string& name);
 
         // native API cached queries (synchronous, from native API in-memory cache)
         static void QuerySkinUnlocks(const std::vector<uint32_t>& skin_ids);
@@ -619,7 +620,7 @@ namespace AlterEgo {
         static BuildTemplate ParseBuildTemplate(const nlohmann::json& tab_json);
 
         // Sub-endpoint fetch for current character (phase 0/1/2)
-        static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority);
+        static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly={});
     };
 
 }

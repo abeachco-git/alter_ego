@@ -6,6 +6,7 @@
 #include "CatalogPresentation.h"
 #include "GW2API.h"
 #include "AutoRefreshPolicy.h"
+#include "CharacterActivity.h"
 #include "RefreshUI.h"
 #include "RefreshProgress.h"
 #include "ChatLink.h"
@@ -40,6 +41,9 @@ std::atomic<uint64_t> registryGeneration{1};
 std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
 std::atomic<bool> busy{false};
+std::mutex physicalMutex;
+struct PhysicalEntry {uint64_t epoch=0;PhysicalEquipmentResult value;std::chrono::steady_clock::time_point finished{};};
+std::map<std::pair<std::string,std::string>,PhysicalEntry> physicalCache;
 std::string message;
 RefreshUI::State messageState=RefreshUI::State::Ready;
 using ScopeKey=std::tuple<std::string,std::string,std::string>;
@@ -206,10 +210,15 @@ bool AutoScope(const std::string& scope){
     if(scope=="Roster")return AutoScope("Bags")||AutoScope("Equipment");
     return false;
 }
+bool ActivityScope(const std::string& scope){return scope=="Bags"||scope=="Equipment"||scope=="Bank"||scope=="Shared inventory"||scope=="Materials"||scope=="Legendary Armory";}
+bool ScopeFresh(const std::string& account,const std::string& scope,const std::string& character,int64_t success){
+    if(ActivityScope(scope))return CharacterActivity::Fresh({account,character},scope,success,scope=="Equipment");
+    return success>0&&Now()>=success&&Now()-success<FreshSeconds(scope);
+}
 bool ScopeDue(const View& v,const std::string& account,const std::string& scope,const std::string& character={}){
     auto it=v.scopes.find({account,scope,character});
     if(!AutoScope(scope))return false;
-    if(it!=v.scopes.end()&&it->second.status=="Missing permissions"){
+    {
         auto a=std::find_if(v.accounts.begin(),v.accounts.end(),[&](const Account& a){return a.id==account;});
         if(a==v.accounts.end())return false;
         const bool permitted=scope=="Wallet"?a->permissions.count("wallet"):
@@ -219,14 +228,17 @@ bool ScopeDue(const View& v,const std::string& account,const std::string& scope,
             a->permissions.count("inventories")&&((scope!="Bags"&&scope!="Equipment")||a->permissions.count("characters"))&&(scope!="Legendary Armory"||a->permissions.count("unlocks"));
         if(!permitted)return false;
     }
-    return it==v.scopes.end()||Due(scope,it->second.attempted,it->second.success,Now());
+    const auto success=it==v.scopes.end()?0:it->second.success;
+    const auto attempt=it==v.scopes.end()||it->second.status=="Ready"?0:it->second.attempted;
+    if(ActivityScope(scope))return CharacterActivity::Due({account,character},scope,success,attempt,scope=="Equipment");
+    return Due(scope,attempt,success,Now());
 }
 bool Fresh(const View& v,const Row& row){
     const auto& s=row.slot;auto it=v.scopes.find({s.account,s.scope,s.character});
-    return it!=v.scopes.end()&&it->second.status=="Ready"&&row.captured>0&&Now()>=row.captured&&Now()-row.captured<FreshSeconds(s.scope);
+    return it!=v.scopes.end()&&it->second.status=="Ready"&&ScopeFresh(s.account,s.scope,s.character,row.captured);
 }
-void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,bool automatic=false){
-    Launch([accounts,onlyScope,automatic]{
+void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={}){
+    Launch([accounts,onlyScope,automatic,onlyCharacter]{
         const auto previous=Snapshot();
         std::set<uint32_t> ids;std::set<std::string> fetchedGuilds;
         bool currencyMetadataNeeded=false;
@@ -244,6 +256,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             if(key.value.empty()){Message("Stored credential unavailable. Replace it in Account Management.");continue;}
             auto scope=[&](const std::string& name,const std::string& character,const std::string& path,bool bags){
                 if(!onlyScope.empty()&&onlyScope!="Items"&&onlyScope!=name)return;
+                if(!onlyCharacter.empty()&&character!=onlyCharacter)return;
                 if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
                 Background::Checkpoint();
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
@@ -256,6 +269,18 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     state.status="Missing permissions";Record(root,state);EndScope(state);publishProgress();return;
                 }
                 try{
+                    if(name=="Equipment"){
+                        const auto links=Linked();auto linked=std::find_if(links.begin(),links.end(),[&](const auto& x){return x.id==a.id;});
+                        if(linked==links.end())throw std::runtime_error("Account changed");
+                        auto physical=RequestPhysicalEquipment(*linked,character,!automatic);
+                        if(!physical.response)throw std::runtime_error(physical.response.error);
+                        auto slots=ParseEquipment(physical.response.data,a.id,character);
+                        state.attempted=physical.started;state.success=physical.success;
+                        // RequestPhysicalEquipment already committed the exact physical projection.
+                        for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
+                        EndScope(state);publishProgress();return;
+                    }
+                    const auto ticket=ActivityScope(name)?CharacterActivity::Begin({a.id,character},name):CharacterActivity::Ticket{};
                     auto j=Fetch(path,key.value);std::vector<Slot> slots;
                     if(bags){
                         const auto& b=j.at("bags");if(!b.is_array())throw std::runtime_error("Invalid bags");
@@ -267,6 +292,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     else if(name=="Delivery box")slots=ParseArray(j.at("items"),a.id,name,{},{},false);
                     else slots=ParseArray(j,a.id,name,character,{},name!="Materials");
                     state.success=Now();Record(root,state,&slots);
+                    if(ActivityScope(name))CharacterActivity::Success({a.id,character},name,ticket,state.success);
                     for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
                 }catch(const std::exception& e){
                     const std::string what=e.what();
@@ -321,14 +347,15 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             scope("Materials",{},"/v2/account/materials",false);
             scope("Legendary Armory",{},"/v2/account/legendaryarmory",false);
             scope("Delivery box",{},"/v2/commerce/delivery",false);
-            if((onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment")&&(!automatic||AutoScope("Roster"))){
+            if((onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment"||onlyScope=="Roster")&&(!automatic||AutoScope("Roster"))){
                 if(!a.permissions.count("characters")){
                     if(automatic&&!ScopeDue(*previous,a.id,"Roster"))continue;
                     ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};BeginScope(failed,"Roster");Record(root,failed);EndScope(failed);publishProgress(true);
                 }else try{
                     std::set<std::string> names;
                     auto cached=previous->inventory.rosters.find(a.id);
-                    if(automatic&&!ScopeDue(*previous,a.id,"Roster")){
+                    if(automatic&&onlyScope!="Roster"&&cached!=previous->inventory.rosters.end()){names=cached->second;}
+                    else if(automatic&&!ScopeDue(*previous,a.id,"Roster")){
                         if(cached!=previous->inventory.rosters.end())names=cached->second;
                         // No cached roster and cooldown still active: leave empty,
                         // rather than retrying the roster from another due scope.
@@ -336,7 +363,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     for(const auto& ch:names){
                         const auto path="/v2/characters/"+Encode(ch);
                         scope("Bags",ch,path+"/inventory",true);
-                        scope("Equipment",ch,path+"/equipment?v=latest",false);
+                        scope("Equipment",ch,path+"/equipment?v=2024-04-01T00:00:00.000Z",false);
                     }
                 }catch(...){ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};Record(root,failed);EndScope(failed);publishProgress(true);}
             }
@@ -404,6 +431,34 @@ Result Request(const std::string& id,const std::string& path,const std::vector<s
     for(const auto& a:Linked())if(a.id==id)return Request(a,path,permissions);
     return {401,{},"No linked account"};
 }
+PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const std::string& character,bool manual){
+    using Clock=std::chrono::steady_clock;
+    const auto queued=Clock::now();
+    std::unique_lock<std::mutex> lock(physicalMutex,std::defer_lock);
+    while(!lock.try_lock()){if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};std::this_thread::sleep_for(std::chrono::milliseconds(25));}
+    if(!Current(a))return {{0,{},"Account changed"},0,0};
+    const CharacterActivity::Key k{a.id,character};
+    auto& e=physicalCache[k];
+    if(e.epoch==a.generation&&e.value.response&&
+       (e.finished>=queued||(!manual&&Clock::now()-e.finished<std::chrono::seconds(15))))return e.value;
+    const auto ticket=CharacterActivity::Begin(k,"Equipment");
+    auto r=Request(a,"/v2/characters/"+Encode(character)+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"});
+    PhysicalEquipmentResult result{std::move(r),ticket.started,Now()};
+    if(!result.response)return result;
+    // Character tabs and physical inventory have different validation needs.
+    // Only a complete physical projection can advance Inventory freshness.
+    try{
+        auto slots=ParseEquipment(result.response.data,a.id,character);
+        if(!Current(a))return {{0,{},"Account changed"},0,0};
+        ScopeState state{a.id,"Equipment",character,"Ready",ticket.started,result.success};
+        Record(root,state,&slots);
+        CharacterActivity::Success(k,"Equipment",ticket,result.success);
+        Publish("",false);
+    }catch(...){
+        // Preserve character consumer's raw response; Inventory validates it separately.
+    }
+    e={a.generation,result,Clock::now()};return result;
+}
 bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names){
     const auto r=Request(a,"/v2/characters",{"characters"});
     if(!r||!r.data.is_array())return false;
@@ -412,7 +467,8 @@ bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names){
         for(const auto& n:r.data){auto s=n.get<std::string>();if(s.empty()||!parsed.insert(s).second)return false;}
         std::lock_guard<std::mutex> lock(credentialMutex);
         if(!Current(a))return false;
-        StoreRoster(root,a.id,parsed,Now());
+        const auto stamp=Now();StoreRoster(root,a.id,parsed,stamp);
+        Record(root,{a.id,"Roster",{},"Ready",stamp,stamp});
         Publish("",false);names=std::move(parsed);return true;
     }catch(...){return false;}
 }
@@ -570,6 +626,46 @@ std::string RevealAccount(uint32_t id,const std::string& selectedAccount){
     }
     return !selectedHas&&otherHas?std::string{}:selectedAccount;
 }
+static void PollDemand(const std::string& selectedAccount,const std::string& requested){
+    if(!AutoRefreshPolicy::Enabled()||!Ready()||busy.load())return;
+    static auto last=std::chrono::steady_clock::time_point{};
+    const auto now=std::chrono::steady_clock::now();
+    if(now-last<std::chrono::seconds(5))return;
+    auto v=Snapshot();auto active=CharacterActivity::ActiveKey();
+    auto selected=selectedAccount;
+    if(selected.empty()&&v->accounts.size()>1){selected=active.first;if(selected.empty())return;}
+    const auto accounts=SelectedAccounts(*v,selected);
+    for(const auto& a:accounts){
+        auto run=[&](const std::string& scope,const std::string& ch={}){
+            if(!ScopeDue(*v,a.id,scope,ch))return false;
+            last=now;Refresh({a},scope=="Guild access"?"Guild bank":scope,true,ch);return true;
+        };
+        if(requested=="Wallet"){if(run("Wallet"))return;continue;}
+        if(requested=="Guild bank"){if(run("Guild access"))return;continue;}
+        const bool items=requested=="Items";
+        const bool bags=items||requested=="Bags",equipment=items||requested=="Equipment";
+        auto roster=v->inventory.rosters.find(a.id);
+        if((bags||equipment)&&roster==v->inventory.rosters.end()&&run("Roster"))return;
+        if((bags||equipment)&&roster!=v->inventory.rosters.end()){
+            if(active.first==a.id&&roster->second.count(active.second)){
+                if(bags&&run("Bags",active.second))return;
+                if(equipment&&run("Equipment",active.second))return;
+            }
+        }
+        for(const auto* s:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box"})
+            if((items||requested==s)&&run(s))return;
+        if((bags||equipment)&&roster!=v->inventory.rosters.end()){
+            for(const auto& ch:roster->second){
+                if(active.first==a.id&&ch==active.second)continue;
+                if(bags&&run("Bags",ch))return;
+                if(equipment&&run("Equipment",ch))return;
+            }
+        }
+        if((bags||equipment)&&run("Roster"))return;
+    }
+    last=now;
+}
+void PollItemDemand(const std::string& selectedAccount){PollDemand(selectedAccount,"Items");}
 void RenderInventory(const std::string& selectedAccount,const std::function<void()>& saveSettings,float& listWidth){
     auto v=Snapshot();
     if(!Ready()){RenderSpinner("Loading linked accounts...");return;}
@@ -590,26 +686,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     if(accounts.empty()){ImGui::TextDisabled("Select a linked account to browse.");return;}
     const char* names[]={"Items","Wallet","Guild Bank"};
     RenderSectionHeader(names[subview],UI::SectionGold);
-    const auto autoScope=subview==1?"Wallet":subview==2?"Guild bank":"";
-    // No automatic all-account startup sweep. Only the visible selected
-    // account and stale storage scopes are eligible, after global opt-in.
-    static auto lastAuto=std::chrono::steady_clock::time_point{};
-    if(AutoRefreshPolicy::Enabled()&&!all&&!accounts.empty()&&!busy.load()&&
-        std::chrono::steady_clock::now()-lastAuto>=std::chrono::seconds(30)){
-        lastAuto=std::chrono::steady_clock::now();
-        bool due=false;
-        for(const auto& a:accounts){
-            if(subview==1)due=ScopeDue(*v,a.id,"Wallet");
-            else if(subview==2)due=ScopeDue(*v,a.id,"Guild access");
-            else{
-                for(const auto* s:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box","Roster"})if(ScopeDue(*v,a.id,s))due=true;
-                auto roster=v->inventory.rosters.find(a.id);
-                if(roster!=v->inventory.rosters.end())for(const auto& ch:roster->second)for(const auto* s:{"Bags","Equipment"})if(ScopeDue(*v,a.id,s,ch))due=true;
-                if((scope=="Bags"||scope=="Equipment")&&ScopeDue(*v,a.id,"Roster"))due=true;
-            }
-        }
-        if(due)Refresh(accounts,subview==0?"Items":autoScope,true);
-    }
+    PollDemand(selectedAccount,subview==1?"Wallet":subview==2?"Guild bank":scope.empty()?"Items":scope);
     if(subview!=0){
         auto& q=subview==1?nav.walletQuery:nav.guildQuery;
         auto& favoriteFilter=nav.favoriteFilter;auto& balanceFilter=nav.balanceFilter;auto& walletSort=nav.walletSort;
@@ -868,12 +945,12 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     {std::lock_guard<std::mutex> lock(viewMutex);progress=liveScopes;current=activeScope;processed=processedScopes;}
     std::time_t oldest=0;unsigned count=0;
     std::string detail;
-    const auto note=[&](const std::string& name,int64_t success,const std::string& status,const std::string& ttlScope,bool show=true){
+    const auto note=[&](const std::string& name,int64_t success,const std::string& status,const std::string& ttlScope,bool show=true,const std::string& account={},const std::string& ch={}){
         if(show){if(!detail.empty())detail+="\n";detail+=name+": "+status;}
         if(success<=0)missing=true;
         else{
             if(!oldest||success<oldest)oldest=static_cast<std::time_t>(success);
-            if(Now()-success>=FreshSeconds(ttlScope)){stale=true;if(show)detail+=" (stale)";}
+            if(!ScopeFresh(account,ttlScope,ch,success)){stale=true;if(show)detail+=" (stale or awaiting synchronization)";}
             if(show)detail+="; "+RefreshUI::Age(static_cast<std::time_t>(success));
         }
         if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing")failed=true;
@@ -885,7 +962,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
         const auto* s=live!=progress.end()?&live->second:it!=v->scopes.end()?&it->second:nullptr;
         auto name=(accounts.size()>1?Display(a)+" / ":"")+dataset+(ch.empty()?"":" / "+ch);
         const auto status=s?s->status:"Not retrieved";const auto success=s?s->success:0;
-        note(name,success,status,dataset,group==nullptr);
+        note(name,success,status,dataset,group==nullptr,a.id,ch);
         if(group)group->Add(status,success>0);
     };
     std::set<std::string> guilds;

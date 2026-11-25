@@ -10,7 +10,7 @@
 #include <vector>
 namespace AlterEgo::RefreshEngine {
 inline constexpr int64_t BrowseSeconds=1800, DefaultObjectiveSeconds=900, FailureSeconds=900;
-inline constexpr int64_t CharacterSeconds=1800, LogoutGraceSeconds=600;
+inline constexpr int64_t CharacterSeconds=600, LogoutGraceSeconds=600;
 inline constexpr int64_t SeasonSeconds=86400;
 inline std::atomic<int>& ObjectiveMinutesValue(){static std::atomic<int> n{15};return n;}
 inline int ObjectiveMinutes(){return ObjectiveMinutesValue().load();}

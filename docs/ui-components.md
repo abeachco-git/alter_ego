@@ -157,3 +157,5 @@ Legacy achievement-specific WP buttons have been retired from rows and the popou
 Nexus Wiki reference schedules uses the standard section header and action button; show event phase count, source (embedded baseline/runtime cache), last verified age and refresh status. The displayed state is an immutable snapshot; rendering does not perform SQL or network requests.
 
 Nexus automatic refresh includes Objective tracking (minutes), default 15, clamped 5–60, shared by pinned achievements, Clears and daily/weekly Vault. General browsing and Vault Special use 30 minutes. Retain dataset opt-in/exclusions and existing canonical refresh footers. Explicit refresh bypasses ordinary cooldown, never permissions or in-flight safety.
+
+Nexus refresh no longer exposes an unconditional login refresh option. Character/Compare footer uses activity freshness, not raw snapshot age; Inventory freshness and availability share the same scope predicate. Display previous cached data while awaiting API synchronization. Active interval 10 minutes with visible demand; offline grace 10 minutes. Manual refresh retains existing controls.

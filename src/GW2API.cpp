@@ -11,6 +11,7 @@
 #include "CharacterCache.h"
 #include "AutoRefreshPolicy.h"
 #include "RefreshEngine.h"
+#include "CharacterActivity.h"
 #include "NativeAccounts.h"
 #include "CharacterToolsCore.h"
 #include "RefreshProgress.h"
@@ -227,6 +228,9 @@ namespace AlterEgo {
     void GW2API::RequestCharacterRefreshSelected(const std::vector<std::string>& names,bool crafting){
         if(!names.empty())RequestNativeCharacters(names,false,crafting,{});
     }
+    void GW2API::RequestCharacterActivityRefresh(const std::string& account,const std::string& name){
+        if(!account.empty()&&!name.empty())RequestNativeCharacters({name},false,true,{},account);
+    }
     // Safe helpers: get value from JSON, return default if null or missing
     static int SafeInt(const json& j, const char* key, int def = 0) {
         if (!j.contains(key) || j[key].is_null()) return def;
@@ -246,8 +250,9 @@ namespace AlterEgo {
     }
 
 
-    void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority){
-        const auto accounts=NativeAccounts::Linked();
+    void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly){
+        auto accounts=NativeAccounts::Linked();
+        if(!accountOnly.empty())accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[&](const auto& a){return a.id!=accountOnly;}),accounts.end());
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             if(s_fetch_status==FetchStatus::InProgress)return;
@@ -297,6 +302,8 @@ namespace AlterEgo {
                     std::lock_guard<std::mutex> lock(s_mutex);s_current_char.name=name;
                     s_fetch_message=RefreshProgress::Character(ordinal,targets.size(),name,"Starting refresh");
                 }
+                const CharacterActivity::Key activityKey{a.id,name};
+                const auto activityTicket=CharacterActivity::Begin(activityKey,"Character");
                 try{
                     const std::string path="/v2/characters/"+UrlEncode(name);
                     const auto stage=[&](const std::string& label){
@@ -322,7 +329,10 @@ namespace AlterEgo {
                     }
                     if(!activeEquipment)throw std::runtime_error("Missing active equipment tab");
                     ch.active_equipment_tab=activeEquipment;
-                    auto supplement=require(path+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"},"Additional equipment");
+                    stage("Additional equipment");
+                    auto physical=NativeAccounts::RequestPhysicalEquipment(a,name,accountOnly.empty());
+                    if(!physical.response)throw std::runtime_error(physical.response.error);
+                    auto supplement=std::move(physical.response.data);
                     if(!supplement.at("equipment").is_array())throw std::runtime_error("Invalid supplemental equipment");
                     for(const auto& raw:supplement.at("equipment")){
                         const auto slot=SafeStr(raw,"slot");if(slot!="Relic"&&!CharacterTools::Utility(slot))continue;
@@ -357,7 +367,17 @@ namespace AlterEgo {
                         ch.crafting=std::move(c.crafting);ch.crafting_levels=std::move(c.crafting_levels);ch.crafting_active=std::move(c.crafting_active);ch.crafting_cached=true;
                     }
                     if(!NativeAccounts::Current(a))throw std::runtime_error("Account changed");
-                    ch.data_refreshed=std::time(nullptr);bool remapped=false;
+                    ch.data_refreshed=std::time(nullptr);const auto savedStamp=ch.data_refreshed;
+                    bool specVerified=true;
+                    if(activityTicket.active&&activityTicket.specChanged){
+                        for(const auto& tab:ch.build_tabs)if(tab.is_active){
+                            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                            // The activity timestamp is cleared only for a verified matching live spec.
+                            specVerified=CharacterActivity::State().SpecMatches(activityKey,tab.specializations[2].spec_id);
+                            break;
+                        }
+                    }
+                    bool remapped=false;
                     {
                         std::lock_guard<std::mutex> lock(s_mutex);
                         // Only verified roster + successful character retrieval can
@@ -372,6 +392,7 @@ namespace AlterEgo {
                     }
                     stage("Saving character");
                     if(!SaveCharacterData(remapped?std::string{}:a.id,remapped?std::string{}:name))partial=true;
+                    else CharacterActivity::Success(activityKey,"Character",activityTicket,savedStamp,specVerified);
                 }catch(...){partial=true;}
             }
             {

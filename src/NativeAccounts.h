@@ -26,6 +26,9 @@ Result Request(const LinkedAccount& account,const std::string& path,
 Result Request(const std::string& accountId,const std::string& path,
                const std::vector<std::string>& permissions);
 bool RefreshRoster(const LinkedAccount& account,std::set<std::string>& names);
+struct PhysicalEquipmentResult {Result response;int64_t started=0,success=0;};
+PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& account,const std::string& character,bool manual);
+void PollItemDemand(const std::string& selectedAccount);
 struct Location {std::string account,scope,character,position,binding;int64_t count=0;};
 std::vector<Location> Locations(uint32_t id);
 void Initialize(const std::string& root);

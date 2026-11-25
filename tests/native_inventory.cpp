@@ -70,14 +70,14 @@ int case_native_inventory(int,char**){
     assert(UsableLoose(rows.front(),"account-a","B",{},true)&&!UsableLoose(rows.front(),"account-a","B",{},false));
     for(const auto* scope:{"Wallet","Bags","Shared inventory","Bank","Equipment","Delivery box","Materials","Guild bank","Guild access","Legendary Armory"}){
         assert(FreshSeconds(scope)==1800);
-        assert(!Due(scope,100,0,1899)&&Due(scope,100,0,1900));
+        assert(!Due(scope,100,0,999)&&Due(scope,100,0,1000));
         assert(!Due(scope,100,100,1899)&&Due(scope,100,100,1900));
         assert(Due(scope,0,0,100));
     }
     for(const auto* scope:{"Roster"}){
-        assert(FreshSeconds(scope)==3600);
-        assert(!Due(scope,100,100,3699)&&Due(scope,100,100,3700));
-        assert(!Due(scope,100,0,1899)&&Due(scope,100,0,1900));
+        assert(FreshSeconds(scope)==86400);
+        assert(!Due(scope,100,100,86499)&&Due(scope,100,100,86500));
+        assert(!Due(scope,100,0,999)&&Due(scope,100,0,1000));
     }
     assert(Match("Superior Sigil of Force",10,"sigli force"));
     using Skinventory::Search::Words;

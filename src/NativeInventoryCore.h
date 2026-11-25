@@ -143,13 +143,12 @@ inline GuildStock ParseGuild(const Json& j,const std::string& guid){
     return out;
 }
 inline int64_t FreshSeconds(const std::string& scope){
-    if(scope=="Roster")return 3600;
+    if(scope=="Roster")return 86400;
     return 1800;
 }
 inline bool Due(const std::string& scope,int64_t attempted,int64_t success,int64_t now){
-    // Automatic refresh also backs off for 30 minutes after a failed attempt.
-    // Manual refresh bypasses Due; no automatic retry storm on missing data.
-    if(attempted>0&&now>=attempted&&now-attempted<1800)return false;
+    // Failed attempts back off 15 minutes; manual refresh bypasses Due.
+    if(attempted>0&&attempted>=success&&now>=attempted&&now-attempted<900)return false;
     return success<=0||now<success||now-success>=FreshSeconds(scope);
 }
 struct ItemFlags {bool known=false,accountBound=false,soulbound=false,bindOnUse=false;};

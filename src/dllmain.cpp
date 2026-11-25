@@ -37,6 +37,7 @@
 #include "MetaBattleImport.h"
 #include "BuildRelayPolicy.h"
 #include "AutoRefreshCore.h"
+#include "CharacterActivity.h"
 #include "AutoRefreshPolicy.h"
 #include "FontResolve.h"
 #include "FontManager.h"
@@ -414,7 +415,7 @@ static bool g_ShowPlaytime = false;
 static bool g_ShowLastLogin = false;
 // Explicit opt-in: no additional API requests unless enabled in Nexus options.
 static bool g_AutoRefreshEnabled = false;
-static bool g_AutoRefreshOnLogin = true;
+// Login is observed locally; it never independently requests data.
 static bool g_AutoRefreshOnSpecialization = true;
 static bool g_WarnStaleSpecialization = true;
 static int g_BirthdayMode = 1;         // 0 = Always, 1 = A week out, 2 = Never
@@ -838,6 +839,10 @@ static std::unordered_map<std::string, int64_t> g_LoginTimestamps;
 static bool g_LoginTimestampsDirty = false;
 static void SaveLoginTimestamps();
 static void LoadLoginTimestamps();
+static void LoadCharacterActivity();
+static void SaveCharacterActivity(bool force=false);
+static void ObserveCharacterActivity();
+static void PollDemandCharacter(const std::string& account,const std::string& name,int64_t success);
 
 // Build Library UI state
 static float g_LibListWidth = 220.0f; // Resizable build list column width
@@ -1578,7 +1583,6 @@ static void SaveSettings() {
     j["auto_refresh_datasets"] = AlterEgo::AutoRefreshPolicy::GetMask();
     j["objective_tracking_minutes"] = AlterEgo::RefreshEngine::ObjectiveMinutes();
     j["wallet_favorites"] = AlterEgo::NativeAccounts::WalletFavorites();
-    j["auto_refresh_on_login"] = g_AutoRefreshOnLogin;
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
     j["warn_stale_specialization"] = g_WarnStaleSpecialization;
     j["birthday_mode"] = g_BirthdayMode;
@@ -1633,7 +1637,6 @@ static void LoadSettings() {
     if(j.contains("wallet_favorites")&&j["wallet_favorites"].is_array()){
         try{AlterEgo::NativeAccounts::SetWalletFavorites(j["wallet_favorites"].get<std::set<uint32_t>>());}catch(...){}
     }
-    getBool("auto_refresh_on_login", g_AutoRefreshOnLogin);
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
     getBool("warn_stale_specialization", g_WarnStaleSpecialization);
     getInt("birthday_mode", g_BirthdayMode);
@@ -12406,6 +12409,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::WikiEvents::Load(AlterEgo::GW2API::GetDataDirectory());
     if(!AlterEgo::PublicCatalog::Get()->upgrades)SeedItemNameCache();
     LoadLoginTimestamps();
+    LoadCharacterActivity();
     LoadCharSortConfig();
     RebuildCharDisplayOrder();
 
@@ -12562,6 +12566,10 @@ void AddonUnload() {
     if (g_AchProgressDirty && !g_AchCachedAccount.empty())
         SaveAchProgress(g_AchCachedAccount);
 
+    {std::lock_guard<std::mutex> lock(AlterEgo::CharacterActivity::Mutex());
+        AlterEgo::CharacterActivity::State().Finish(AlterEgo::CharacterActivity::Now());}
+    SaveCharacterActivity(true);
+
     // Shutdown Skinventory subsystems
     Skinventory::WikiImage::Shutdown();
     Skinventory::OwnedSkins::Shutdown();
@@ -12580,6 +12588,26 @@ void AddonUnload() {
     APIDefs = nullptr;
 }
 
+static void LoadCharacterActivity(){
+    namespace A=AlterEgo::CharacterActivity;
+    std::lock_guard<std::mutex> lock(A::Mutex());A::State()=A::Tracker{};
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_activity.json");
+    try{std::ifstream f(path);if(f)A::State().Load(nlohmann::json::parse(f));}catch(...){}
+}
+static void SaveCharacterActivity(bool force){
+    namespace A=AlterEgo::CharacterActivity;
+    static auto last=std::chrono::steady_clock::time_point{};
+    const auto now=std::chrono::steady_clock::now();
+    if(!force&&now-last<std::chrono::seconds(30))return;
+    last=now;
+    nlohmann::json data;uint64_t revision=0;
+    {std::lock_guard<std::mutex> lock(A::Mutex());if(!A::State().DirtyState())return;
+        data=A::State().Save();revision=A::State().Revision();}
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_activity.json");
+    if(WriteFileAtomic(path,data.dump())){
+        std::lock_guard<std::mutex> lock(A::Mutex());A::State().Saved(revision);
+    }
+}
 static void SaveLoginTimestamps() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "login_times.json");
     nlohmann::json j;
@@ -12746,7 +12774,7 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
         newName, id->Specialization,
         AlterEgo::AutoRefreshTracker::Clock::now(),
         AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters),
-        g_AutoRefreshOnLogin, g_AutoRefreshOnSpecialization);
+        false, false); // identity only; demand scheduler owns network requests
     if (newName.empty()) return;
     if (observed.login) {
         g_LoginTimestamps[newName] = (int64_t)std::time(nullptr);
@@ -15458,6 +15486,7 @@ static void RenderSkinventory() {
             if(g_SkinActiveTab!=1)MarkNavigation();
             g_SkinActiveTab = 1;
             ImGui::Spacing();
+            AlterEgo::NativeAccounts::PollItemDemand(GetEffectiveAccountName());
             RenderSkinShoppingList();
             ImGui::EndTabItem();
         }
@@ -15473,6 +15502,12 @@ static void RenderCharactersStatusRow() {
     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
         const int ri = g_CharDisplayOrder[g_SelectedCharIdx];
         if (ri >= 0 && ri < (int)chars.size()) selected = &chars[ri];
+    }
+    if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->data_refreshed);
+    const auto active=AlterEgo::CharacterActivity::ActiveKey();
+    if(!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&(!selected||selected->name!=active.second)){
+        int64_t stamp=0;for(const auto& ch:chars)if(ch.account_name==active.first&&ch.name==active.second){stamp=ch.data_refreshed;break;}
+        PollDemandCharacter(active.first,active.second,stamp);
     }
     const auto hoard = AlterEgo::GW2API::GetAccountStatus();
     const bool hoardReady = hoard == AlterEgo::AccountStatus::Ready;
@@ -15494,6 +15529,9 @@ static void RenderCharactersStatusRow() {
             state = AlterEgo::RefreshUI::State::Success;
             detail = "Refresh complete";
         }
+    }
+    if(selected&&state==AlterEgo::RefreshUI::State::Ready&&!AlterEgo::CharacterActivity::Fresh({selected->account_name,selected->name},"Character",selected->data_refreshed,g_AutoRefreshOnSpecialization)){
+        state=AlterEgo::RefreshUI::State::Waiting;detail="Cached data; refresh due or awaiting API synchronization";
     }
     bool more = false;
     if (AlterEgo::RefreshUI::Row("characters", selected ? selected->data_refreshed : 0,
@@ -15520,6 +15558,8 @@ static void RenderCompareStatusRow() {
     for (const auto& ch : chars) {
         if (ch.name == g_LibComparePreviousTarget) { target = &ch; break; }
     }
+    if(target)PollDemandCharacter(target->account_name,target->name,target->data_refreshed);
+    AlterEgo::NativeAccounts::PollItemDemand(GetEffectiveAccountName());
     const auto fetch = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
     if (g_LibCompareRefreshPending && !busy) {
@@ -15548,6 +15588,9 @@ static void RenderCompareStatusRow() {
                std::chrono::steady_clock::now() < g_LibCompareSuccessUntil) {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete";
+    }
+    if(target&&state==AlterEgo::RefreshUI::State::Ready&&!AlterEgo::CharacterActivity::Fresh({target->account_name,target->name},"Character",target->data_refreshed,g_AutoRefreshOnSpecialization)){
+        state=AlterEgo::RefreshUI::State::Waiting;detail="Cached data; refresh due or awaiting API synchronization";
     }
     if (AlterEgo::RefreshUI::Row("compare", target ? target->data_refreshed : 0,
             "character build/equipment", state, detail, busy || !target)) {
@@ -15732,28 +15775,35 @@ struct DefaultFontScope {
     ~DefaultFontScope() { if (pushed) ImGui::PopFont(); }
 };
 
-// Never dispatch API requests inside a MumbleLink event callback. The
-// render-driven scheduler checks readiness, throttling, and existing activity.
-static void PollAutoCharacterRefresh() {
-    if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters)) {
-        g_AutoRefreshTracker.CancelPending();
-        return;
-    }
-    if (g_AutoRefreshTracker.PendingCharacter().empty()) return;
-    const auto status = AlterEgo::GW2API::GetAccountStatus();
-    const bool ready = status == AlterEgo::AccountStatus::Ready;
-    const bool busy = AlterEgo::GW2API::GetFetchStatus() ==
-                      AlterEgo::FetchStatus::InProgress;
-    std::string name;
-    if (g_AutoRefreshTracker.TakeDueRequest(
-            AlterEgo::AutoRefreshTracker::Clock::now(),
-            AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters), ready, busy, name)) {
-        // Login/spec-change refreshes need equipment and builds, not crafting
-        // professions that are already present in the persistent character cache.
-        AlterEgo::GW2API::RequestCharacterRefreshSelected({name}, false);
-    }
+// Local gameplay observations run while the addon window is hidden. The
+// Nexus gameplay flag avoids treating an old identity as active at selection.
+static void ObserveCharacterActivity(){
+    namespace A=AlterEgo::CharacterActivity;
+    static auto last=std::chrono::steady_clock::time_point{};
+    const auto now=std::chrono::steady_clock::now();
+    if(now-last<std::chrono::seconds(1))return;
+    last=now;
+    const auto* nexus=APIDefs?static_cast<const NexusLinkData_t*>(APIDefs->DataLink_Get(DL_NEXUS_LINK)):nullptr;
+    if(!nexus)return; // no reliable gameplay signal; do not invent activity
+    const auto* identity=static_cast<const MumbleIdentity*>(APIDefs->DataLink_Get(DL_MUMBLE_LINK_IDENTITY));
+    std::string name;uint32_t spec=0;
+    if(identity){
+        char buf[20]={};memcpy(buf,identity->Name,19);name=buf;spec=identity->Specialization;
+        for(unsigned char c:name)if(c!=' '&&c!='-'&&!isalpha(c)&&c<0x80){name.clear();break;}
+    }else{name=g_CurrentCharName;spec=g_AutoRefreshTracker.LiveSpecialization();}
+    const auto account=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name);
+    A::Observe(account,name,spec,nexus->IsGameplay);
+    SaveCharacterActivity();
 }
-
+static void PollDemandCharacter(const std::string& account,const std::string& name,int64_t success){
+    namespace A=AlterEgo::CharacterActivity;
+    if(account.empty()||name.empty()||!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters)||
+       AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready||
+       AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress)return;
+    if(AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name)!=account)return;
+    if(A::Due({account,name},"Character",success,0,g_AutoRefreshOnSpecialization))
+        AlterEgo::GW2API::RequestCharacterActivityRefresh(account,name);
+}
 
 struct TabDropdownState {
     bool pinned = false;
@@ -15884,7 +15934,7 @@ void AddonRender() {
             priorCount=accounts.size();
         }
     }
-    PollAutoCharacterRefresh();     // MumbleLink-triggered requests (debounced, cooldown, no overlap)
+    ObserveCharacterActivity(); // local only, no character HTTP while hidden
     PollAchievementCachePersistence(); // load/save disk progress, even when window is hidden
     SyncCompletionAccountCaches(); // selected-account Clears/Vault snapshots, even with UI hidden
     Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
@@ -17603,8 +17653,7 @@ void AddonOptions() {
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
-    if (ImGui::Checkbox("When a character logs in##ae_auto_login", &g_AutoRefreshOnLogin))
-        SaveSettings();
+    ImGui::TextDisabled("Characters: 10 minutes while relevant views are open; login alone does not fetch.");
     if (ImGui::Checkbox("When specialization changes##ae_auto_spec", &g_AutoRefreshOnSpecialization))
         SaveSettings();
     int objectiveMinutes=AlterEgo::RefreshEngine::ObjectiveMinutes();
@@ -17649,7 +17698,7 @@ void AddonOptions() {
                         &g_WarnStaleSpecialization))
         SaveSettings();
     ImGui::TextDisabled("Applies to automatic API refreshes across all tabs.");
-    ImGui::TextDisabled("Manual Refresh still works; login/spec changes use MumbleLink (8s/90s).");
+    ImGui::TextDisabled("Manual Refresh bypasses ordinary freshness/cooldown; offline automatic refresh waits 10 minutes.");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     RenderSectionHeader("Public reference catalogs", AlterEgo::UI::SectionGold);
     ImGui::TextDisabled("Items/skins/Vault: 7 days. Other reference catalogs: 30 days. Retry: 24h.");

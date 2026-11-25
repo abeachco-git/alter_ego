@@ -24,7 +24,7 @@ struct Paths {
 };
 inline bool ConfigName(const std::string& name) {
     return name=="settings.json" || name=="session.json" ||
-           name=="char_sort.json" || name=="clears_ui.json";
+           name=="char_sort.json" || name=="clears_ui.json" || name=="character_activity.json";
 }
 inline bool DurableName(const std::string& name) {
     return name=="ach_tracked.json" || name=="login_times.json";
