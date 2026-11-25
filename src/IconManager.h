@@ -14,6 +14,9 @@
 
 namespace AlterEgo {
 
+inline constexpr uint32_t kEmboldenedIcon=9300001;
+inline constexpr uint32_t kCallOfTheMistsIcon=9300002;
+
 class IconManager {
 public:
     static void Initialize(AddonAPI_t* api);

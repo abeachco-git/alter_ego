@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import struct
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "icons"
 
@@ -24,9 +25,12 @@ def read_icons(folder=ASSETS):
         if (not content.startswith(signature) or len(content) != icon["size"]
                 or hashlib.sha256(content).hexdigest() != icon["sha256"]):
             raise ValueError(f"Invalid or changed fixed icon: {name}")
+        if asset_id in (9300001, 9300002):
+            if not name.endswith('.png') or len(content) < 33 or struct.unpack_from('>IIBB', content, 16) != (32, 32, 8, 6):
+                raise ValueError(f'Raid modifier must be 32x32 8-bit RGBA PNG: {name}')
         images[asset_id] = (name, content)
     expected = set(range(9000001, 9000010)) | set(range(9200001, 9200010))
-    expected |= set(range(9100001, 9100010)) | {43766, 98501, 68326}
+    expected |= set(range(9100001, 9100010)) | {43766, 98501, 68326, 9300001, 9300002}
     small = {i-1500000 for i in images if 1500000 < i < 1600000}
     large = {i-2000000 for i in images if 2000000 < i < 2100000}
     if small != large or len(small) < 36:

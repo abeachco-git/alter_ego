@@ -497,3 +497,9 @@ Before distributing additional copyrightable Wiki material (including
 descriptions, images, or a protected compilation), review its particular
 source and applicable terms, and fulfill any permission, attribution,
 license-text, history and source-format obligations before enabling it.
+
+Fixed raid modifier artwork (Emboldened and Call of the Mists) is retained as
+user-supplied PNGs with provenance and hashes; original game artwork remains
+subject to ArenaNet/NCSOFT rights and terms. Source references:
+https://wiki.guildwars2.com/wiki/File:Emboldened.png
+https://wiki.guildwars2.com/wiki/File:Call_of_the_Mists.png

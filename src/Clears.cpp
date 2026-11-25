@@ -38,7 +38,7 @@
 #include "CompletionTheme.h"
 #include "RaidChipWidths.h"
 #include "RefreshUI.h"
-#include "WikiImage.h"
+#include "IconManager.h"
 #include "VaultAssistance.h"
 #include "WikiEventRuntime.h"
 #include "PublicCatalog.h"
@@ -1907,11 +1907,11 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
         const float iconY = topY + (ImGui::GetTextLineHeight() - iconSz) * 0.5f;
         float iconX = cmin.x + padX + wsSz.x + 10.0f + nameSz.x + 10.0f;
         const float rightLimit = cmax.x - padX - pSz.x - 10.0f;
-        auto drawModifierIcon = [&](const char* key, const char* tooltip) {
+        auto drawModifierIcon = [&](uint32_t iconId, const char* tooltip) {
             if (iconX + iconSz > rightLimit) return;
             const ImVec2 min(iconX, iconY);
             const ImVec2 max(iconX + iconSz, iconY + iconSz);
-            Texture_t* tex = Skinventory::WikiImage::GetCurrencyIcon(key);
+            Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
             if (tex && tex->Resource) {
                 dl->AddImage(tex->Resource, min, max);
             } else {
@@ -1919,7 +1919,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             }
             const ImVec2 previous = ImGui::GetCursorScreenPos();
             ImGui::SetCursorScreenPos(min);
-            ImGui::PushID(key);
+            ImGui::PushID(static_cast<int>(iconId));
             ImGui::InvisibleButton("##weeklyModifier", ImVec2(iconSz, iconSz));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
             ImGui::PopID();
@@ -1927,10 +1927,10 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             iconX += iconSz + 6.0f;
         };
         if (isCallOfTheMists)
-            drawModifierIcon("Call_of_the_Mists",
+            drawModifierIcon(AlterEgo::kCallOfTheMistsIcon,
                 "Call of the Mists - boss gold and XP are doubled this week.");
         if (isEmboldened)
-            drawModifierIcon("Emboldened",
+            drawModifierIcon(AlterEgo::kEmboldenedIcon,
                 "Emboldened Mode - stacking buff for easier clears this week.");
     }
 
@@ -2005,24 +2005,24 @@ static void RenderCompactWingBanner(const std::string& wingShortName,
 
     // Keep both weekly modifier icons beside the abbreviated wing label.
     float iconX = min.x + 40.0f;
-    auto modifier = [&](bool enabled, const char* key, const char* tip) {
+    auto modifier = [&](bool enabled, uint32_t iconId, const char* tip) {
         if (!enabled) return;
         const float iconSize = 16.0f;
         const ImVec2 iMin(iconX, min.y + (height - iconSize) * 0.5f);
         const ImVec2 iMax(iMin.x + iconSize, iMin.y + iconSize);
-        Texture_t* tex = Skinventory::WikiImage::GetCurrencyIcon(key);
+        Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
         if (tex && tex->Resource) dl->AddImage(tex->Resource, iMin, iMax);
         else dl->AddText(iMin, AlterEgo::CompletionTheme::kUnknownText, "?");
         ImGui::SetCursorScreenPos(iMin);
-        ImGui::PushID(key);
+        ImGui::PushID(static_cast<int>(iconId));
         ImGui::InvisibleButton("##wingModifier", ImVec2(iconSize, iconSize));
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
         ImGui::PopID();
         iconX += iconSize + 3.0f;
     };
-    modifier(isCallOfTheMists, "Call_of_the_Mists",
+    modifier(isCallOfTheMists, AlterEgo::kCallOfTheMistsIcon,
              "Call of the Mists - boss gold and XP are doubled this week.");
-    modifier(isEmboldened, "Emboldened",
+    modifier(isEmboldened, AlterEgo::kEmboldenedIcon,
              "Emboldened Mode - stacking buff for easier clears this week.");
 
     char fraction[32];

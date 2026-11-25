@@ -162,3 +162,5 @@ Activity integration: section_refresh covers active demand eligibility, speciali
 Confirm that disabling specialization refresh suppresses early build/equipment pulls but leaves normal 10-minute demand checks intact, and that a physical projection parse/storage failure does not mark Inventory current.
 
 section_refresh covers fixed endpoint classification without retaining request URLs, rolling second-bucket expiration, session counts, HTTP 429 including incomplete reads, active counts, peak and shared broker counters. In-game verify API Activity stays quiet while hidden, manual and periodic actions produce expected transport counts, Wiki request starts are spaced, and startup prefetch/unload do not block the render thread. HTTP success alone is not data validation.
+
+The fixed-icon generator enforces raid modifier IDs and 32x32 RGBA PNG format; linked DLL verification compares exact bytes. In-game test both Clears layouts with Wiki offline and artwork cache absent. No Wiki request for these icons should occur.

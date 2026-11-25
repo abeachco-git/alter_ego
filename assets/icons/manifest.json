@@ -822,6 +822,28 @@
       "sha256": "b6a22fcc0a8a2916afc8061fd9c6702caebaa24dc126bb407ffef7ec60696e22",
       "source": "https://api.guildwars2.com/v2/professions/Revenant",
       "field": "icon_big"
+    },
+    {
+      "id": 9300001,
+      "file": "9300001.png",
+      "size": 1299,
+      "sha256": "e396736038ff57143a040cd843f3f39a24ffe76eaa0f8f30e17a8d234560c2aa",
+      "source": "https://wiki.guildwars2.com/wiki/File:Emboldened.png",
+      "field": "fixed raid modifier",
+      "provenance": "User-supplied game artwork, 2026-11-25; EXIF removed, original compressed pixels and sRGB retained.",
+      "width": 32,
+      "height": 32
+    },
+    {
+      "id": 9300002,
+      "file": "9300002.png",
+      "size": 1264,
+      "sha256": "c5b4d77aa1265be3fee28d3e5fe3601974604fab779dace80aac2778f25d5158",
+      "source": "https://wiki.guildwars2.com/wiki/File:Call_of_the_Mists.png",
+      "field": "fixed raid modifier",
+      "provenance": "User-supplied game artwork, 2026-11-25; EXIF removed, original compressed pixels and sRGB retained.",
+      "width": 32,
+      "height": 32
     }
   ]
 }

@@ -74,6 +74,19 @@ def main(output):
     images.update(STATUS)
 
     records = []
+    # Preserve reviewed local raid modifiers without a Wiki dependency.
+    local = Path(__file__).resolve().parents[1] / 'assets' / 'icons'
+    manifest = json.loads((local / 'manifest.json').read_text(encoding='utf-8'))
+    for record in manifest['icons']:
+        if record['id'] not in (9300001, 9300002):
+            continue
+        content = (local / record['file']).read_bytes()
+        if hashlib.sha256(content).hexdigest() != record['sha256'] or len(content) != record['size']:
+            raise ValueError('Changed raid modifier asset: ' + record['file'])
+        (folder / record['file']).write_bytes(content)
+        records.append(record)
+    if len(records) != 2:
+        raise ValueError('Missing reviewed raid modifier assets')
     for asset_id, url in sorted(images.items()):
         content = download(url)
         if content.startswith(b"\x89PNG\r\n\x1a\n"):

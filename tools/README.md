@@ -26,3 +26,5 @@ Wiki resource generation is separate from the existing manual item-ID research s
 The primary rotation parser reads the actual MediaWiki template arrays/switches; event timers parse nested JSON and use explicit phase identities. Seed refreshed from Debian 2026-11-25. For a normal build, no Wiki requests until the per-resource 24-hour attempt age expires.
 
 The generator emits WikiEventMetadata.inc from the manifest and verified snapshot, sharing exact phase identities and runtime age with the native parser. Build-time eligibility is 24 hours; runtime SQLite event refresh is 30 days.
+
+Fixed raid modifier IDs 9300001/9300002 are 32x32 RGBA PNGs retained during manual asset staging. Normal resource generation and verification remain offline.

@@ -12498,10 +12498,6 @@ void AddonLoad(AddonAPI_t* aApi) {
         Skinventory::OwnedSkins::SetDataDirectory(skinDataDir);
         Skinventory::OwnedSkins::Initialize(APIDefs);
         Skinventory::WikiImage::Initialize(APIDefs, wikiCacheDir);
-        // Prefetch raid rotation icons used by the Clears tab.
-        AlterEgo::Background::Workers().Launch([]{
-            Skinventory::WikiImage::DownloadCurrencyIcons("Emboldened,Call_of_the_Mists");
-        });
 
         if (Skinventory::SkinCache::LoadFromDisk()) {
             // Refreshing cached API metadata obeys the global option;
