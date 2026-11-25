@@ -2,6 +2,12 @@
 #include <cassert>
 #include <vector>
 int case_build_compare_core(int, char**) {
+    const auto key=AlterEgo::CanonicalUtilityIds({1,2,3});
+    std::array<uint32_t,3> permutation={1,2,3};
+    do{assert(AlterEgo::CanonicalUtilityIds(permutation)==key);}while(std::next_permutation(permutation.begin(),permutation.end()));
+    assert(AlterEgo::CanonicalUtilityIds({0,2,2})==AlterEgo::CanonicalUtilityIds({2,0,2}));
+    assert(AlterEgo::CanonicalUtilityIds({1,2,2})!=key);
+    assert(AlterEgo::CanonicalUtilityIds({0,2,3})!=key);
     AlterEgo::BuildComparison c;
     c.Add("Skills", "Heal", "100", "100", "Skill (name available)", "#100 (name missing)");
     c.Add("Gear", "Helm stat", "161", "168", "Berserker's", "Viper's");

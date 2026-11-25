@@ -68,6 +68,21 @@ int case_composable_loadouts(int, char**) {
         {"specializations",Json::array({Json{{"id",1}}})}}, lookup) == "Necromancer / Spite");
     assert(SuggestComponentName("skills", Json{{"skills",{{"elite",2}}}}, lookup) ==
         "Chilled to the Bone!");
+    const Json unresolved={{"skills",{{"heal",999},{"elite",2}}}};
+    assert(SuggestComponentName("skills",unresolved,lookup)=="Chilled to the Bone! (metadata pending)");
+    assert(SuggestComponentName("skills",unresolved,[](const std::string&,uint32_t id){return id==999?std::string("Heal"):std::string("Elite");})=="Heal / Elite");
+    Json bar={{"heal",1},{"elite",2},{"utilities",{3,4,5}}};
+    Json skillData={{"skills",bar},{"aquatic_skills",bar}};
+    const auto originalSkillData=skillData;
+    std::array<int,3> util={3,4,5};
+    do{auto reordered=skillData;reordered["skills"]["utilities"]=util;
+        assert(ReuseKey("skills",reordered)==ReuseKey("skills",skillData));
+        assert(Semantics::SameUtilities(reordered["skills"],bar));
+    }while(std::next_permutation(util.begin(),util.end()));
+    auto diff=skillData;diff["skills"]["heal"]=2;assert(ReuseKey("skills",diff)!=ReuseKey("skills",skillData));
+    diff=skillData;diff["aquatic_skills"]["elite"]=3;assert(ReuseKey("skills",diff)!=ReuseKey("skills",skillData));
+    diff=skillData;diff["skills"]["utilities"]={3,4,4};assert(ReuseKey("skills",diff)!=ReuseKey("skills",skillData));
+    assert(skillData==originalSkillData);
     assert(ExactReusableComponent(named, "armor", sampleArmor)->id == "armor:one");
     assert(!ExactReusableComponent(named, "armor", Json::object()));
     const Json sigilsA = {{"gear",{{"WeaponA1",{{"sigil_id",100},{"sigil2_id",101}}}}}};

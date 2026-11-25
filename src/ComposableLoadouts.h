@@ -231,6 +231,8 @@ inline Json Metadata(const Json& old) {
 using ComponentNameLookup = std::function<std::string(const std::string&, uint32_t)>;
 inline std::string SuggestComponentName(const std::string& kind, const Json& data,
                                         const ComponentNameLookup& lookup = {}) {
+    bool incomplete=false;
+    auto finish=[&](std::string name){return incomplete?name+" (metadata pending)":name;};
     std::map<std::string, int> names;
     auto add = [&](std::string value) {
         for (const std::string prefix : {"Superior Sigil of the ", "Superior Rune of the ", "Superior Sigil of ", "Superior Rune of ", "Sigil of the ", "Rune of the ", "Sigil of ", "Rune of "}) {
@@ -251,7 +253,8 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
                     auto resolved = lookup(category, it->get<uint32_t>());
                     if (!resolved.empty()) return resolved;
                 }
-                return "#" + it->dump();
+                incomplete=true;
+                return {};
             }
         }
         return {};
@@ -290,28 +293,25 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
                 const auto id = field(spec, "name", "id", "spec");
                 if (!id.empty()) profession += " / " + id;
             }
-        return profession.empty() ? "Base Build" : profession;
+        return finish(profession.empty() ? "Base Build" : profession);
     }
     if (kind == "skills") {
-        std::string name = "Skills";
-        if (data.contains("skills") && data["skills"].is_object()) {
-            const auto& bar = data["skills"];
-            auto elite = field(bar, "elite_name", "elite", "skill");
-            auto heal = field(bar, "heal_name", "heal", "skill");
-            if (!elite.empty()) name = elite;
-            if (!heal.empty()) name += " / " + heal;
-            if (bar.contains("utilities") && bar["utilities"].is_array()) {
-                std::vector<std::string> utilities;
-                for (const auto& id : bar["utilities"]) {
-                    if (!id.is_number_integer() || id == 0) continue;
-                    const auto skill = field(Json{{"id", id}}, "name", "id", "skill");
-                    if (!skill.empty()) utilities.push_back(skill);
-                }
-                std::sort(utilities.begin(), utilities.end());
-                for (const auto& skill : utilities) name += " / " + skill;
-            }
+        const auto describe=[&](const Json& bar){
+            std::string result;
+            auto append=[&](const std::string& value){if(!value.empty()){if(!result.empty())result+=" / ";result+=value;}};
+            append(field(bar,"heal_name","heal","skill"));
+            if(bar.contains("utilities")&&bar["utilities"].is_array())
+                for(const auto& id:bar["utilities"])
+                    if(id.is_number_integer()&&id!=0)append(field(Json{{"id",id}},"name","id","skill"));
+            append(field(bar,"elite_name","elite","skill"));
+            return result;
+        };
+        std::string name=data.contains("skills")&&data["skills"].is_object()?describe(data["skills"]):"";
+        if(data.contains("aquatic_skills")&&data["aquatic_skills"].is_object()){
+            const auto water=describe(data["aquatic_skills"]);
+            if(!water.empty()&&water!=name){if(!name.empty())name+=" | ";name+="Aquatic: "+water;}
         }
-        return name;
+        return finish(name.empty()?"Skills":name);
     }
     std::string name;
     for (const auto& entry : names) {
@@ -320,7 +320,8 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
         if (entry.second > 1 && (names.size() > 1 || kind == "runes") && kind != "sigils")
             name += " x" + std::to_string(entry.second);
     }
-    if (!name.empty()) return name;
+    if (!name.empty()) return finish(name);
+    if(incomplete){std::string label=kind;label[0]=static_cast<char>(std::toupper(static_cast<unsigned char>(label[0])));return finish(label);}
     if (kind == "armor") return "Armor (unspecified)";
     if (kind == "trinkets") return "Trinkets (unspecified)";
     if (kind == "weapons") return "Weapons (unspecified)";

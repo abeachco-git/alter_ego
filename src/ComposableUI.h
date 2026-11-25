@@ -66,6 +66,8 @@ static std::string g_ComponentEditorId;
 static std::string g_ComponentEditorKind;
 static std::string g_ComponentEditorName;
 static bool g_ComponentEditorAutoName = false;
+static ComponentJson g_ComponentNameRequestedDraft;
+static bool g_ComponentNameRequested=false;
 static std::string g_ComponentSkillProfessionHint; // UI-only skill picker filter
 static ComponentJson g_ComponentEditorDraft = ComponentJson::object();
 static std::string g_ComponentEditorError;
@@ -294,6 +296,7 @@ static void ComponentUIStartEditor(const std::string& mode,
     g_ComponentEditorMode = mode;
     g_ComponentEditorRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
     g_ComponentEditorAutoName = (mode == "create");
+    g_ComponentNameRequested=false;
     g_ComponentEditorKind = kind;
     g_ComponentEditorId = id;
     g_ComponentEditorPrivateLoadoutId.clear();
@@ -386,14 +389,17 @@ static void RenderComponentUIEditor() {
     } else {
         ImGui::TextDisabled("Components may be reused by multiple Loadouts.");
     }
-    if (g_ComponentEditorAutoName)
-        g_ComponentEditorName = AlterEgo::GW2API::SuggestLibraryComponentName(
-            g_ComponentEditorKind, g_ComponentEditorDraft);
+    if(g_ComponentEditorAutoName){
+        const bool changed=!g_ComponentNameRequested||g_ComponentNameRequestedDraft!=g_ComponentEditorDraft;
+        g_ComponentEditorName=AlterEgo::GW2API::SuggestLibraryComponentName(g_ComponentEditorKind,g_ComponentEditorDraft,changed);
+        if(changed){g_ComponentNameRequestedDraft=g_ComponentEditorDraft;g_ComponentNameRequested=true;}
+    }
     ImGui::SetNextItemWidth(-1);
     if (AlterEgo::UI::InputText("Name##component_name", g_ComponentEditorName))
         g_ComponentEditorAutoName = false;
-    if (RenderActionButton("Auto Name##component_editor")) {
+    if (RenderActionButton("Regenerate Name##component_editor")) {
         g_ComponentEditorAutoName = true;
+        g_ComponentNameRequested=false;
         g_ComponentEditorName = AlterEgo::GW2API::SuggestLibraryComponentName(
             g_ComponentEditorKind, g_ComponentEditorDraft);
     }
@@ -507,9 +513,7 @@ static void RenderComponentUIEditor() {
             cmd.kind = g_ComponentEditorKind;
             cmd.expected_revision = g_ComponentEditorMode=="create" ? 0 : g_ComponentEditorRevision;
             cmd.component_id = g_ComponentEditorId;
-            cmd.name = g_ComponentEditorAutoName
-                ? AlterEgo::GW2API::SuggestLibraryComponentName(g_ComponentEditorKind, g_ComponentEditorDraft)
-                : g_ComponentEditorName;
+            cmd.name = g_ComponentEditorName;
             if (g_ComponentEditorMode == "copy_for_loadout") {
                 cmd.type = ComponentUICommand::CopyEditedForLoadout;
                 cmd.loadout_id = g_ComponentEditorPrivateLoadoutId;
@@ -612,7 +616,7 @@ static void CopyPortableLoadout(const std::string& loadoutId) {
             AlterEgo::Composable::ExportPortableLoadout(current, loadoutId,
                                                        packet, error)) {
             const std::string text = packet.dump(2);
-            ImGui::SetClipboardText(text.c_str());
+            CopyToClipboard(text);
             if (APIDefs) APIDefs->GUI_SendAlert(
                 "Portable Loadout copied with all referenced components.");
         } else if (APIDefs) APIDefs->GUI_SendAlert(

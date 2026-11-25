@@ -5,11 +5,14 @@
 #include <cstddef>
 #include <algorithm>
 #include <cstdint>
+#include <array>
 #include "AscendedStatNames.h"
 
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
 // labels are resolved names and may differ when cache lookups are incomplete.
 namespace AlterEgo {
+inline std::array<uint32_t,3> CanonicalUtilityIds(std::array<uint32_t,3> ids){std::sort(ids.begin(),ids.end());return ids;}
+
 // Relics can be shared across equipment tabs (tab 0) in Hoard & Seek's
 // /equipment response, while regular gear belongs to one specific tab.
 // Do not accidentally save other shared slots, such as gathering tools.

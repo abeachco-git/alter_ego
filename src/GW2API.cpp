@@ -2233,15 +2233,12 @@ namespace AlterEgo {
     static std::string LookupComponentDisplayName(const std::string& category, uint32_t id) {
         if (category == "spec") {
             if (const auto info = GW2API::GetSpecInfo(id)) return info->name;
-            GW2API::FetchSpecDetailsAsync({id});
         } else if (category == "skill") {
             if (const auto info = GW2API::GetSkillInfo(id)) return info->name;
-            GW2API::FetchSkillDetailsAsync({id});
         } else if (category == "stat") {
             if (const auto info = GW2API::GetItemStatInfo(id)) return info->name;
         } else {
             if (const auto info = GW2API::GetItemInfo(id)) return info->name;
-            GW2API::FetchItemDetailsAsync({id});
         }
         return {};
     }
@@ -2743,8 +2740,24 @@ namespace AlterEgo {
 
 
     std::string GW2API::SuggestLibraryComponentName(const std::string& kind,
-                                                      const nlohmann::json& data) {
-        return Composable::SuggestComponentName(kind, data, LookupComponentDisplayName);
+                                                      const nlohmann::json& data,bool requestMissing) {
+        if(!requestMissing)return Composable::SuggestComponentName(kind,data,LookupComponentDisplayName);
+        std::vector<uint32_t> specs,skills,items;
+        auto name=Composable::SuggestComponentName(kind,data,[&](const std::string& category,uint32_t id){
+            auto resolved=LookupComponentDisplayName(category,id);
+            if(resolved.empty()){
+                if(category=="spec")specs.push_back(id);
+                else if(category=="skill")skills.push_back(id);
+                else if(category=="item")items.push_back(id);
+            }
+            return resolved;
+        });
+        auto dedup=[](auto& ids){std::sort(ids.begin(),ids.end());ids.erase(std::unique(ids.begin(),ids.end()),ids.end());};
+        dedup(specs);dedup(skills);dedup(items);
+        if(!specs.empty())FetchSpecDetailsAsync(specs);
+        if(!skills.empty())FetchSkillDetailsAsync(skills);
+        if(!items.empty())FetchItemDetailsAsync(items);
+        return name;
     }
 
     std::string GW2API::SuggestCapturedComponentName(const SavedBuild& capture,

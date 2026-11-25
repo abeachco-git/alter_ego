@@ -1585,29 +1585,13 @@ static const char* GetCraftingIconUrl(const std::string& disc) {
     return it != urls.end() ? it->second.c_str() : nullptr;
 }
 
-// Names are UTF-8 in the API; Unicode clipboard preserves non-ASCII names.
+// Explicit user copy actions use the Nexus-owned ImGui callbacks.
 void CopyToClipboard(const std::string& text) {
-    // EmptyClipboard assigns ownership to the window passed to OpenClipboard.
-    // Only use a window belonging to the host process; never clear the
-    // clipboard without a valid owner or borrow another application's window.
-    const auto ownedWindow=[](HWND window){
-        DWORD process=0;
-        return window&&GetWindowThreadProcessId(window,&process)!=0&&process==GetCurrentProcessId();
-    };
-    HWND owner=GetActiveWindow();
-    if(!ownedWindow(owner))owner=GetForegroundWindow();
-    if(!ownedWindow(owner))return;
-    const int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.c_str(),-1,nullptr,0);
-    if(length<=0)return;
-    HGLOBAL memory=GlobalAlloc(GMEM_MOVEABLE,static_cast<size_t>(length)*sizeof(wchar_t));
-    if(!memory)return;
-    auto* dest=static_cast<wchar_t*>(GlobalLock(memory));
-    if(!dest){GlobalFree(memory);return;}
-    const bool converted=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.c_str(),-1,dest,length)==length;
-    GlobalUnlock(memory);
-    if(!converted||!OpenClipboard(owner)){GlobalFree(memory);return;}
-    if(!EmptyClipboard()||!SetClipboardData(CF_UNICODETEXT,memory))GlobalFree(memory);
-    CloseClipboard();
+    if(!ImGui::GetCurrentContext()||!ImGui::GetIO().SetClipboardTextFn){
+        if(APIDefs)APIDefs->GUI_SendAlert("Clipboard unavailable.");
+        return;
+    }
+    ImGui::SetClipboardText(text.c_str());
 }
 
 // Settings persistence
@@ -10131,10 +10115,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         // Utility order is a control-layout preference, not a combat
         // configuration difference. Keep original order on disk/export.
         auto sortedUtilities = [&](const AlterEgo::SkillBar& bar) {
-            std::array<uint32_t,3> ids = {
-                bar.utilities[0], bar.utilities[1], bar.utilities[2]
-            };
-            std::sort(ids.begin(), ids.end());
+            const auto ids=AlterEgo::CanonicalUtilityIds({bar.utilities[0],bar.utilities[1],bar.utilities[2]});
             std::string key, names;
             for (uint32_t id : ids) {
                 if (!key.empty()) { key += ","; names += ", "; }
@@ -14062,6 +14043,17 @@ static void RenderAchProgressBar(float fraction, const ImVec4& color, float heig
     ImGui::Dummy(ImVec2(width, height));
 }
 
+static void AchievementNameContextMenu(const std::string& name){
+    if(ImGui::BeginPopupContextItem("##ach_name_actions")){
+        CopyNameMenuItem(name);
+        if(ImGui::MenuItem("Open in Wiki")){
+            std::string url="https://wiki.guildwars2.com/wiki/"+name;
+            std::replace(url.begin(),url.end(),' ','_');
+            ShellExecuteA(NULL,"open",url.c_str(),NULL,NULL,SW_SHOWNORMAL);
+        }
+        ImGui::EndPopup();
+    }
+}
 static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     auto defIt = g_AchDefs.find(achId);
     auto progIt = g_AchProgress.find(achId);
@@ -14111,15 +14103,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
 
     // Hover does not draw a gold outline; borders mean completed only.
 
-    // Right-click context (open wiki)
-    if (ImGui::BeginPopupContextItem("##ach_ctx")) {
-        if (ImGui::MenuItem("Open in Wiki")) {
-            std::string wikiUrl = "https://wiki.guildwars2.com/wiki/" + def.name;
-            std::replace(wikiUrl.begin(), wikiUrl.end(), ' ', '_');
-            ShellExecuteA(NULL, "open", wikiUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
-        }
-        ImGui::EndPopup();
-    }
+    AchievementNameContextMenu(def.name);
 
     if (rowClicked && hasBits) {
         if (expanded) g_AchExpandedInList.erase(achId);
@@ -14292,7 +14276,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                     Skinventory::Commerce::FetchPriceForSkin(skinId);
                 }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Click to view in Skinventory");
+                    ImGui::SetTooltip("Click to view in Skins");
                 }
             } else if (subAchId > 0) {
                 // Clickable sub-achievement → navigate to it
@@ -15146,6 +15130,7 @@ static void RenderAchPopout() {
                 ImGui::InvisibleButton("##poprow", ImVec2(rowHitW, rowH));
                 bool rowHovered = ImGui::IsItemHovered();
                 bool rowClicked = ImGui::IsItemClicked();
+                AchievementNameContextMenu(disp.name);
                 if (rowHovered)
                     dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 130), 3.0f, 0, 1.0f);
                 if (rowClicked && disp.hasBits) {
@@ -15243,7 +15228,7 @@ static void RenderAchPopout() {
                                 Skinventory::Commerce::FetchPriceForSkin(bd.skinId);
                             }
                             if (ImGui::IsItemHovered()) {
-                                ImGui::SetTooltip("Click to view in Skinventory");
+                                ImGui::SetTooltip("Click to view in Skins");
                             }
                         } else if (bd.subAchId > 0) {
                             std::string selLabel = "    [ ] " + bd.label + "###popsubach";
@@ -15258,7 +15243,7 @@ static void RenderAchPopout() {
                             if (ImGui::IsItemHovered()) {
                                 ImGui::SetTooltip("Click to copy name");
                                 if (ImGui::IsItemClicked()) {
-                                    ImGui::SetClipboardText(bd.label.c_str());
+                                    CopyToClipboard(bd.label);
                                 }
                             }
                         }
@@ -17089,14 +17074,14 @@ void AddonRender() {
         }
         if (acctTabsDisabled) {
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.4f);
-            ImGui::TabItemButton("Skinventory", ImGuiTabItemFlags_NoReorder);
+            ImGui::TabItemButton("Skins", ImGuiTabItemFlags_NoReorder);
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", acctTabTooltip);
         } else if (g_SkinInitialized) {
             ImGuiTabBar* skinBar=GImGui->CurrentTabBar;
             ImGuiID beforeSkin=skinBar?skinBar->SelectedTabId:0;
-            const bool skinVisible=ImGui::BeginTabItem("Skinventory    ##ae_skin_dropdown",nullptr,skinTabFlags);
+            const bool skinVisible=ImGui::BeginTabItem("Skins    ##ae_skin_dropdown",nullptr,skinTabFlags);
             const ImGuiID skinId=skinBar&&skinBar->LastTabItemIdx>=0?skinBar->Tabs[skinBar->LastTabItemIdx].ID:0;
             HandleTabDropdown(skinMenu,skinBar,beforeSkin,skinId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
             if(skinVisible) {
@@ -17111,7 +17096,7 @@ void AddonRender() {
 
         if (acctTabsDisabled) {
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.4f);
-            ImGui::TabItemButton("Vault", ImGuiTabItemFlags_NoReorder);
+            ImGui::TabItemButton("Wizard's Vault", ImGuiTabItemFlags_NoReorder);
             ImGui::TabItemButton("Clears", ImGuiTabItemFlags_NoReorder);
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
@@ -17119,7 +17104,7 @@ void AddonRender() {
         } else {
             ImGuiTabBar* accountTabBar = GImGui->CurrentTabBar;
             ImGuiID beforeVault = accountTabBar ? accountTabBar->SelectedTabId : 0;
-            const bool vaultVisible = ImGui::BeginTabItem("Vault    ##ae_vault_dropdown",nullptr,NavigationTabFlags(3));
+            const bool vaultVisible = ImGui::BeginTabItem("Wizard's Vault    ##ae_vault_dropdown",nullptr,NavigationTabFlags(3));
             const ImGuiID vaultId = accountTabBar && accountTabBar->LastTabItemIdx >= 0
                 ? accountTabBar->Tabs[accountTabBar->LastTabItemIdx].ID : 0;
             HandleTabDropdown(vaultMenu, accountTabBar, beforeVault, vaultId,
@@ -17174,7 +17159,7 @@ void AddonRender() {
 
         // Group boundaries are drawn in existing tab gaps, never as tabs.
         // The Vault ID differs in All Accounts mode (nonselecting tab button).
-        const ImGuiID vaultGroupId=ImGui::GetID(acctTabsDisabled?"Vault":"Vault    ##ae_vault_dropdown");
+        const ImGuiID vaultGroupId=ImGui::GetID(acctTabsDisabled?"Wizard's Vault":"Wizard's Vault    ##ae_vault_dropdown");
         AlterEgo::UI::TabGroupDividerBefore(GImGui->CurrentTabBar,inventoryId);
         AlterEgo::UI::TabGroupDividerBefore(GImGui->CurrentTabBar,vaultGroupId);
 
@@ -17692,15 +17677,15 @@ void AddonOptions() {
     ImGui::TextDisabled("Manual Refresh bypasses ordinary freshness/cooldown; offline automatic refresh waits 10 minutes.");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     RenderSectionHeader("Public reference catalogs", AlterEgo::UI::SectionGold);
-    ImGui::TextDisabled("Items/skins/Vault: 7 days. Other reference catalogs: 30 days. Retry: 24h.");
+    ImGui::TextDisabled("Items/skins/Wizard's Vault: 7 days. Other reference catalogs: 30 days. Retry: 24h.");
     const auto publicData=AlterEgo::PublicCatalog::Get();
     ImGui::Text("Equipment upgrades: %zu",publicData->entries.size());
     if(publicData->upgrades)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->upgrades)/86400));
     if(RenderActionButton("Refresh equipment catalogs")) Skinventory::Commerce::RefreshUpgradeCatalogAsync(true);
     ImGui::TextDisabled("%s",Skinventory::Commerce::GetFetchStatus().c_str());
-    ImGui::Text("Vault objective definitions: %zu",publicData->objectives.size());
+    ImGui::Text("Wizard's Vault objective definitions: %zu",publicData->objectives.size());
     if(publicData->vault)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->vault)/86400));
-    if(RenderActionButton("Refresh Vault definitions")) AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),true);
+    if(RenderActionButton("Refresh Wizard's Vault definitions")) AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),true);
     ImGui::TextDisabled("%s",AlterEgo::PublicCatalog::VaultStatus().c_str());
     auto referenceAction=[&](const char* label,const char* dataset,auto refresh){
         auto it=publicData->freshness.find(dataset);

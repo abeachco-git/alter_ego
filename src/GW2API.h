@@ -496,7 +496,7 @@ namespace AlterEgo {
         // Capture an independent component from live or imported SavedBuild
         // data, without creating a new Loadout or mutating existing ones.
         static std::string SuggestLibraryComponentName(const std::string& kind,
-                                                         const nlohmann::json& data);
+                                                         const nlohmann::json& data,bool requestMissing=false);
         static std::string SuggestCapturedComponentName(const SavedBuild& capture,
                                                         const std::string& kind);
         static bool SaveCapturedLoadoutComponent(const SavedBuild& capture,
