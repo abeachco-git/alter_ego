@@ -2543,6 +2543,29 @@ namespace AlterEgo {
         draft=std::move(rebased);return true;
     }
 
+    bool GW2API::ReviewUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
+        const std::map<std::string,std::string>& refs,uint64_t revision,json& review,std::string& error){
+        json snapshot;Composable::Document doc;
+        review=json::array();
+        if(revision!=GetBuildLibraryRevision()||!GetComposableLoadouts(snapshot)||
+           revision!=GetBuildLibraryRevision()||!Composable::FromJson(snapshot,doc,error))
+            return Composable::Fail(error,"Library changed or could not be loaded.");
+        if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,setId,fashionId,refs,error))return false;
+        const auto* l=Composable::FindLoadout(doc,draft.id);
+        json raw;SavedBuild baseline;
+        if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,baseline))return false;
+        const auto edited=NativeLibrary::PatchDraft(raw,SerializeSavedBuild(baseline),SerializeSavedBuild(draft));
+        for(const auto& change:NativeLibrary::UnifiedChanges(doc,*l,raw,edited)){
+            const bool shared=!change.oldId.empty()&&(change.owners>1||change.loadouts>1||change.setUsers>1);
+            if(!shared&&change.matches.empty())continue;
+            std::string reuse;
+            if(!change.matches.empty())reuse=change.matches.front().name;
+            review.push_back({{"kind",change.kind},{"name",change.name},{"shared",shared},
+                {"owners",change.owners},{"loadouts",change.loadouts},{"set_users",change.setUsers},{"reuse",reuse}});
+        }
+        return true;
+    }
+
     bool GW2API::SaveUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
         const std::map<std::string,std::string>& refs,const std::set<std::string>& sharedKinds,uint64_t revision){
         return CommitComposableEdit([&](Composable::Document& doc,std::string& error){

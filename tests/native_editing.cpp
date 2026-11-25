@@ -81,6 +81,9 @@ int case_native_editing(int,char**) {
         assert(ApplyEquipmentSet(graph,"b","set",error));
         const auto oldSet=*Composable::FindEquipmentSet(graph,"set");
         Json edit=a;edit["gear"]["Helm"]["stat_id"]=9;edit["gear"]["WeaponA1"]["sigil_id"]=7;edit["name"]="Edited";
+        const auto changes=UnifiedChanges(graph,*Composable::FindLoadout(graph,"a"),a,edit);
+        assert(changes.size()==2);
+        for(const auto& change:changes)assert(change.setUsers==2&&change.loadouts==2);
         assert(PutUnifiedLoadout(graph,edit,{},error));
         assert(Composable::FindLoadout(graph,"a")->equipment_set_id!="set");
         assert(Composable::FindLoadout(graph,"b")->equipment_set_id=="set");

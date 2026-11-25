@@ -940,6 +940,7 @@ static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
 }
 static inline void MarkEditDirty() { g_EditDirty = true; }
 static bool g_EditSavePending = false;
+static bool g_EditReviewPending=false;
 
 static std::string g_LibEditBuildId;   // which build is being edited
 static int g_LibCtxDeleteIdx = -1;     // deferred delete from context menu
@@ -9391,7 +9392,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                     g_EditDraft.game_mode = g_EditDraft.game_modes.front();
                     // Defer commit until after the render pass: the transactional
                     // component projection can invalidate saved-build references.
-                    g_EditSavePending = true;
+                    g_EditReviewPending = true;
                 }
                 if (!canSave) ImGui::PopStyleVar();
 
@@ -17412,6 +17413,7 @@ void AddonRender() {
     RenderLibraryBackupUI();
     if constexpr (AlterEgo::BuildRelay::Enabled) RenderShareRelayPopups();
     RenderReferenceEditor();
+    RenderLoadoutSaveReview();
     ProcessComponentUICommand();
     EndNavigationFrame();
 

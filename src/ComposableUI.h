@@ -809,11 +809,11 @@ static void RenderReferencePreviewRow(const ComponentJson& doc,const std::string
         };
         fit("Open");
         if(AlterEgo::UI::Button("Open##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIOpenLibrary(kind,ref);
-        fit("Edit Shared");
-        if(AlterEgo::UI::Button("Edit Shared##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIStartEditor("edit",kind,ref,part);
-        if(!loadoutId.empty()&&!inherited){
-            fit("Copy & Edit");
-            if(AlterEgo::UI::Button("Copy & Edit##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIStartPrivateEditor(loadoutId,kind,ref,part);
+        // Loadout payloads are edited through the parent draft. Standalone
+        // Equipment Sets keep their explicit shared-component editor.
+        if(loadoutId.empty()){
+            fit("Edit Shared");
+            if(AlterEgo::UI::Button("Edit Shared##ref",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))ComponentUIStartEditor("edit",kind,ref,part);
         }
     }
     ImGui::PopID();
@@ -835,9 +835,15 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     const auto inherited=linked?ComponentUIRefs(*linked):ReferenceMap{};
     if(editing){
         if(!g_GearDialogOpen&&RenderActionButton("Change Components"))BeginReferenceEditor(*l,false);
-        ImGui::TextWrapped("Content edits are private by default. Choose shared editing only for components you intend to change everywhere.");
+        ImGui::TextWrapped("Edit gear and skills below. When saving, review any shared components and exact matches.");
     }else if(g_LibEditMode)ImGui::TextDisabled("Component draft unavailable; cancel and reopen Edit.");
-    else if(RenderActionButton("Edit Components"))BeginReferenceEditor(*l,false);
+    else if(RenderActionButton("Edit Components")){
+        for(const auto& build:GW2API::GetSavedBuilds())if(build.id==loadoutId){
+            g_LibEditBuildId=build.id;EnterBuildEditMode(build);
+            if(g_EditRefsReady)BeginReferenceEditor(*l,false);
+            break;
+        }
+    }
     const auto rows=[&](const char* table,const int* kinds,int count){
         if(ImGui::BeginTable(table,2,ImGuiTableFlags_SizingStretchProp)){
             ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,110.f);
@@ -847,18 +853,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
                 const bool shared=inherited.count(kind)!=0;
                 const auto ref=ComponentUIRef(shared?inherited:direct,kind);
                 RenderReferencePreviewRow(doc,kind,ref,loadoutId,shared,!g_LibEditMode);
-                if(editing&&!ref.empty()){
-                    const int uses=ComponentUIEffectiveLoadoutCount(kind,ref);
-                    if(uses>1||ComponentUIUsage(doc,kind,ref)>1){
-                        ImGui::PushID(kind.c_str());
-                        bool editShared=g_EditSharedKinds.count(kind)!=0;
-                        const auto label="Edit shared ("+std::to_string(uses)+" Loadouts)";
-                        if(ImGui::Checkbox(label.c_str(),&editShared)){
-                            if(editShared)g_EditSharedKinds.insert(kind);else g_EditSharedKinds.erase(kind);
-                        }
-                        ImGui::PopID();
-                    }
-                }
+
             }
             ImGui::EndTable();
         }
@@ -907,6 +902,52 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     RenderReferenceGroupLabel("Fashion");
     ImGui::TextWrapped("%s",ComponentUIFashionName(editing?g_EditFashionId:l->value("fashion_id",std::string())).c_str());
     ImGui::Separator();
+}
+
+static void RenderLoadoutSaveReview(){
+    using namespace AlterEgo;
+    static ComponentJson review=ComponentJson::array();
+    static std::string error;
+    if(g_EditReviewPending){
+        g_EditReviewPending=false;
+        error.clear();
+        g_EditSharedKinds.clear(); // no implicit consent from an earlier attempt
+        if(!g_LibEditMode||!g_EditRefsReady||g_GearDialogOpen)return;
+        if(!GW2API::ReviewUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditDraftRevision,review,error)){
+            if(error.empty())error="Could not review the Loadout draft.";
+            ImGui::OpenPopup("Review Loadout changes##ae_unified_review");
+        }else if(review.empty())g_EditSavePending=true;
+        else ImGui::OpenPopup("Review Loadout changes##ae_unified_review");
+    }
+    if(!ImGui::BeginPopupModal("Review Loadout changes##ae_unified_review",nullptr,ImGuiWindowFlags_AlwaysAutoResize))return;
+    const bool valid=g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen&&
+        g_EditDraftRevision==GW2API::GetBuildLibraryRevision()&&error.empty();
+    if(!error.empty())ImGui::TextWrapped("%s",error.c_str());
+    else if(!valid)ImGui::TextWrapped("Library changed. Cancel this review and reopen the Loadout editor.");
+    else{
+        ImGui::TextWrapped("Private changes affect only this Loadout. Choose shared editing only if every listed owner should change.");
+        for(const auto& row:review){
+            const auto kind=row.value("kind",std::string()),name=row.value("name",std::string()),reuse=row.value("reuse",std::string());
+            const bool shared=row.value("shared",false);
+            ImGui::PushID(kind.c_str());
+            RenderSectionHeader(ComponentLabel(kind),UI::SectionGold);
+            if(!name.empty())ImGui::TextWrapped("%s",name.c_str());
+            const bool useShared=g_EditSharedKinds.count(kind)!=0;
+            const std::string privateLabel=reuse.empty()?"Only this Loadout":"Reuse "+reuse;
+            if(shared){
+                if(ImGui::RadioButton((privateLabel+"##private").c_str(),!useShared))g_EditSharedKinds.erase(kind);
+                const auto label="Edit shared ("+std::to_string(row.value("loadouts",0))+" Loadouts, "+std::to_string(row.value("owners",0))+" direct owners)";
+                if(ImGui::RadioButton((label+"##shared").c_str(),useShared))g_EditSharedKinds.insert(kind);
+                if(row.value("set_users",0)>1&&!useShared)
+                    ImGui::TextDisabled("Private changes may copy the linked Equipment Set.");
+            }else if(!reuse.empty())ImGui::TextWrapped("Reuse identical component: %s",reuse.c_str());
+            ImGui::PopID();
+        }
+    }
+    const auto action=UI::SaveCancel("unified_review",valid);
+    if(action==UI::EditAction::Save){g_EditSavePending=true;ImGui::CloseCurrentPopup();}
+    else if(action==UI::EditAction::Cancel){g_EditSharedKinds.clear();ImGui::CloseCurrentPopup();}
+    ImGui::EndPopup();
 }
 
 static void RenderComponentLibrary() {

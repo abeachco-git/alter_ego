@@ -338,6 +338,40 @@ inline bool SaveLoadoutReferenceDraft(Composable::Document& doc,const std::strin
         Json raw;return Composable::Resolve(next,*l,raw,err);
     },error);
 }
+// Review and commit use exactly the same patch/candidate computation.
+// This is a disposable projection of the selected reference graph.
+struct UnifiedChange {
+    std::string kind,oldId,name;
+    Json data;
+    std::vector<Match> matches;
+    size_t owners=0,loadouts=0,setUsers=0;
+};
+inline std::vector<UnifiedChange> UnifiedChanges(const Composable::Document& doc,
+    const Composable::Loadout& l,const Json& before,const Json& raw){
+    std::vector<UnifiedChange> changes;
+    const auto prior=Composable::Split(before),edited=Composable::Split(raw);
+    const auto refs=Composable::EffectiveRefs(doc,l);
+    const EditIndex index(doc);
+    const auto profession=Composable::ProfessionOf(doc,l);
+    for(const auto& [kind,data]:edited){
+        if(ExactContent(prior.at(kind),data))continue;
+        const auto r=refs.find(kind);
+        const auto* part=r==refs.end()?nullptr:Composable::Find(doc,kind,r->second);
+        UnifiedChange change;
+        change.kind=kind;
+        if(part){
+            change.oldId=part->id;change.name=part->name;
+            change.owners=index.Users(kind,part->id).size();
+            change.loadouts=Composable::EffectiveComponentUsers(doc,kind,part->id).size();
+        }
+        if(Composable::SetOwns(doc,l,kind))
+            change.setUsers=Composable::EquipmentSetUsers(doc,l.equipment_set_id).size();
+        change.data=part?PatchDraft(part->data,prior.at(kind),data):data;
+        change.matches=index.Matches(kind,change.data,profession);
+        changes.push_back(std::move(change));
+    }
+    return changes;
+}
 // Save the edited projection over the selected reference graph. Only changed
 // component kinds are touched; absent categories and unknown fields remain
 // absent/preserved. Private inherited changes fork a shared set, not its
@@ -352,25 +386,12 @@ inline bool PutUnifiedLoadout(Composable::Document& doc,const Json& raw,
         if(!l||!Composable::Resolve(next,*l,before,err))return false;
         if(Composable::ProfessionOf(next,*l)!=raw.value("profession",std::string()))
             return Composable::Fail(err,"Cannot change profession of a referenced Loadout.");
-        const auto prior=Composable::Split(before),edited=Composable::Split(raw);
-        const auto refs=Composable::EffectiveRefs(next,*l);
-        const auto profession=Composable::ProfessionOf(next,*l);
-        const auto index=EditIndex(next);
-        // The index references next. Evaluate all exact candidates before any
-        // component mutation so no stale fingerprint bucket is consulted.
-        std::map<std::string,std::vector<Match>> candidates;
-        std::map<std::string,Json> payloads;
-        for(const auto& [kind,data]:edited){
-            if(ExactContent(prior.at(kind),data))continue;
-            const auto r=refs.find(kind);
-            const auto* part=r==refs.end()?nullptr:Composable::Find(next,kind,r->second);
-            payloads[kind]=part?PatchDraft(part->data,prior.at(kind),data):data;
-            candidates[kind]=index.Matches(kind,payloads[kind],profession);
-        }
+        const auto changes=UnifiedChanges(next,*l,before,raw);
         l->metadata=PatchDraft(l->metadata,Composable::Metadata(before),Composable::Metadata(raw));
-        for(const auto& [kind,data]:payloads){
-            const auto r=refs.find(kind);
-            const std::string oldId=r==refs.end()?std::string{}:r->second;
+        for(const auto& change:changes){
+            const auto& kind=change.kind;
+            const auto& data=change.data;
+            const auto& oldId=change.oldId;
             auto* part=oldId.empty()?nullptr:Composable::Find(next,kind,oldId);
             const bool inherited=Composable::SetOwns(next,*l,kind);
             const bool shared=part&&sharedKinds.count(kind);
@@ -381,13 +402,13 @@ inline bool PutUnifiedLoadout(Composable::Document& doc,const Json& raw,
                 continue;
             }
             std::string chosen;
-            for(const auto& match:candidates.at(kind)){
+            for(const auto& match:change.matches){
                 const auto* existing=Composable::Find(next,kind,match.id);
                 if(existing&&ExactContent(existing->data,data)){chosen=match.id;break;}
             }
             const bool setShared=inherited&&Composable::EquipmentSetUsers(next,l->equipment_set_id).size()>1;
             const bool originallyShared=Composable::EffectiveComponentUsers(next,kind,oldId).size()>1;
-            if(chosen.empty()&&part&&!setShared&&!originallyShared&&index.Users(kind,oldId).size()==1){
+            if(chosen.empty()&&part&&!setShared&&!originallyShared&&change.owners==1){
                 part->data=data;chosen=oldId;
             }
             if(chosen.empty()){

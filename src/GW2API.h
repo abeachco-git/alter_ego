@@ -544,6 +544,8 @@ namespace AlterEgo {
         static bool RebaseLoadoutDraft(SavedBuild& draft,const std::string& oldSet,const std::string& oldFashion,
             const std::map<std::string,std::string>& oldRefs,const std::string& newSet,const std::string& newFashion,
             const std::map<std::string,std::string>& newRefs,uint64_t revision,std::string& error);
+        static bool ReviewUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
+            const std::map<std::string,std::string>& refs,uint64_t revision,nlohmann::json& review,std::string& error);
         static bool SaveUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
             const std::map<std::string,std::string>& refs,const std::set<std::string>& sharedKinds,uint64_t revision);
         static bool ConsolidateLoadoutComponent(const std::string& kind, const std::string& source, const std::string& survivor, uint64_t expectedRevision);
