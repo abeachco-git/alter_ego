@@ -1587,6 +1587,7 @@ static void SaveSettings() {
     j["show_last_login"] = g_ShowLastLogin;
     j["auto_refresh_enabled"] = g_AutoRefreshEnabled;
     j["auto_refresh_datasets"] = AlterEgo::AutoRefreshPolicy::GetMask();
+    j["wallet_favorites"] = AlterEgo::NativeAccounts::WalletFavorites();
     j["auto_refresh_on_login"] = g_AutoRefreshOnLogin;
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
     j["warn_stale_specialization"] = g_WarnStaleSpecialization;
@@ -1635,6 +1636,9 @@ static void LoadSettings() {
     AlterEgo::AutoRefreshPolicy::SetMask(AlterEgo::AutoRefreshPolicy::AllMask);
     if(j.contains("auto_refresh_datasets")&&j["auto_refresh_datasets"].is_number_unsigned())
         AlterEgo::AutoRefreshPolicy::SetMask(j["auto_refresh_datasets"].get<uint32_t>());
+    if(j.contains("wallet_favorites")&&j["wallet_favorites"].is_array()){
+        try{AlterEgo::NativeAccounts::SetWalletFavorites(j["wallet_favorites"].get<std::set<uint32_t>>());}catch(...){}
+    }
     getBool("auto_refresh_on_login", g_AutoRefreshOnLogin);
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
     getBool("warn_stale_specialization", g_WarnStaleSpecialization);
@@ -10963,18 +10967,36 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     // Aggregate deficits across the selected tab before checking stock.
     if(!saved.gear.empty()&&!character->equipment.empty()){
         std::map<uint32_t,int> wanted,have;
-        for(const auto& [slot,gs]:saved.gear)if(gs.item_id)++wanted[gs.item_id];
+        std::map<uint32_t,int> upgradesWanted,upgradesHave;
+        for(const auto& [slot,gs]:saved.gear){
+            if(gs.item_id)++wanted[gs.item_id];
+            if(gs.rune_id)++upgradesWanted[gs.rune_id];
+            else if(saved.rune_id&&(slot=="Helm"||slot=="Shoulders"||slot=="Coat"||slot=="Gloves"||slot=="Leggings"||slot=="Boots"))++upgradesWanted[saved.rune_id];
+            if(gs.sigil_id)++upgradesWanted[gs.sigil_id];
+            if(gs.sigil2_id)++upgradesWanted[gs.sigil2_id];
+            if(saved.infusion_totals.empty())for(size_t n=0;n<gs.infusion_ids.size();++n)
+                if(gs.infusion_ids[n]&&(n>=gs.infusion_attributes.size()||gs.infusion_attributes[n].empty()))++upgradesWanted[gs.infusion_ids[n]];
+        }
+        for(const auto& req:saved.infusion_totals)if(req.item_id&&req.attribute.empty()&&req.count>0)upgradesWanted[req.item_id]+=req.count;
+        if(saved.relic_id&&std::none_of(saved.gear.begin(),saved.gear.end(),[](const auto& entry){return entry.first=="Relic"&&entry.second.item_id!=0;}))++wanted[saved.relic_id];
+        for(const auto& e:character->equipment)if(AlterEgo::IsEquipmentInCapturedBuild(e.slot,e.tab,equipmentTab)){
+            for(auto id:e.upgrades)if(id)++upgradesHave[id];
+            for(auto id:e.infusions)if(id)++upgradesHave[id];
+            if(e.slot=="Relic"&&!saved.gear.count("Relic")&&e.id)++have[e.id];
+        }
         for(const auto& [slot,gs]:saved.gear){
             (void)gs;const auto* eq=FindEquipment(*character,slot,equipmentTab);
             if(eq&&eq->id)++have[eq->id];
         }
         std::vector<std::pair<uint32_t,int>> missing;
         for(const auto& [id,count]:wanted)if(count>have[id])missing.emplace_back(id,count-have[id]);
-        if(!missing.empty()&&ImGui::TreeNode("Exact saved item locations")){
-            ImGui::TextWrapped("Exact IDs only; equivalent gear may already match. Verify stats, upgrades, restrictions and template reuse before moving equipment.");
+        for(const auto& [id,count]:upgradesWanted)if(count>upgradesHave[id])missing.emplace_back(id,count-upgradesHave[id]);
+        if(!missing.empty()&&ImGui::TreeNode("Exact saved item and upgrade locations")){
+            ImGui::TextWrapped("Exact gear and upgrade ID deficits only; equivalent gear or attribute-based infusions may already match. Verify stats, restrictions and template reuse before moving items.");
             const auto owner=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character->name);
+            int acquisitionRow=0;
             for(const auto& [id,count]:missing){
-                ImGui::PushID(static_cast<int>(id));
+                ImGui::PushID(acquisitionRow++);
                 const auto* item=AlterEgo::GW2API::GetItemInfo(id);
                 std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count);
                 if(ImGui::TreeNode(label.c_str())){
@@ -15975,7 +15997,11 @@ static void RenderSkinventoryStatusRow() {
     }
     if (AlterEgo::RefreshUI::Row("skinventory", Skinventory::OwnedSkins::GetLastSuccessTime(),
              "owned skins", state, detail, !canRefresh))
-        g_SkinRefreshOwned = true;
+    {
+        g_SkinRefreshOwned=false;
+        s_refreshPending=true;s_refreshStartingGeneration=Skinventory::OwnedSkins::GetGeneration();
+        Skinventory::OwnedSkins::RequestOwnedSkinsViaApi();
+    }
 }
 
 static void RenderAchievementsStatusRow() {
@@ -17510,7 +17536,7 @@ void AddonRender() {
         if(g_SwitchToInventory){inventoryFlags|=ImGuiTabItemFlags_SetSelected;g_SwitchToInventory=false;}
         if (ImGui::BeginTabItem("Inventory",nullptr,inventoryFlags)) {
             g_MainTab=7;
-            AlterEgo::NativeAccounts::RenderInventory(g_CurrentCharName);
+            AlterEgo::NativeAccounts::RenderInventory(g_CurrentCharName,SaveSettings);
             ImGui::EndTabItem();
         }
 

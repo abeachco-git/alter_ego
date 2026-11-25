@@ -12,9 +12,11 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 - [x] Per-storage TTLs, failed-attempt cooldown, visible selected-account opt-in inventory refresh; broader dataset policies and independently committing Vault/Clears periods still outstanding.
 - [x] Inventory fuzzy search, rarity/type filters and name/quantity sort.
 - [x] Exact-ID Compare acquisition aid and binding/freshness-aware location display; Inventory navigation from equipment and Shopping List; cached unique acquisition candidates subtract personal loose stock from remaining shopping cost (CI passed at 972a3c9; live validation pending).
-- [ ] Extend Compare to semantic stat/upgrade/infusion alternatives, quantities across all required components, and full eligibility; broaden Shopping candidate coverage beyond known TP item map.
+- [x] Compare exact-ID upgrade, rune, sigil, relic and exact-infusion deficit hints; attribute-based alternatives remain semantic only.
+- [ ] Semantic inventory alternatives, full loadout eligibility, broaden Shopping acquisition mapping beyond known TP item map.
 - [x] Configurable automatic refresh exclusions by dataset, persisted in settings; manual refresh unaffected. Bounded FIFO shared HTTP admission with cancellation/timeout; CI/live validation pending.
-- [ ] Wallet favorites/categories, additional filters, endpoint deduplication and priority scheduling.
+- [x] Durable wallet favorites, favorites/zero filters and sort; inventory character, freshness, minimum total quantity and potential transfer filters. CI/live validation pending.
+- [ ] Wallet categories, armor/weapon subtype and level filters, endpoint deduplication and priority scheduling.
 - [ ] Full independent character/progress dataset freshness; per-section Clears/Vault commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.
 
