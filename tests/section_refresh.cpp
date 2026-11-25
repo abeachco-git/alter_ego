@@ -1,5 +1,6 @@
 #include "../src/SectionRefresh.h"
 #include "../src/CharacterActivity.h"
+#include "../src/CharacterScopes.h"
 #include "../src/ApiActivity.h"
 #include <cassert>
 #include <ctime>
@@ -111,6 +112,35 @@ int case_section_refresh(int, char**) {
     assert(F::WaitForIds("join-test",{43},[]{return false;}));
     joined.reset();
     assert(F::WaitForIds("join-test",{42},[]{return false;}));
+    namespace S=AlterEgo::CharacterScopes;
+    A::Tracker scoped;S::Stamps stamps{};
+    assert(S::Visible(1)==(S::Core|S::Crafting|S::Builds));
+    assert((S::Compare&S::Crafting)==0);
+    scoped.Observe(key.first,key.second,34,true,now);
+    stamps.fill(now-100);
+    assert(!S::Due(scoped,key,stamps,S::All,now+10,true));
+    scoped.Observe(key.first,key.second,35,true,now+20);
+    assert(S::Due(scoped,key,stamps,S::All,now+28,true)==(S::Builds|S::Tabs|S::Physical));
+    assert(!S::Due(scoped,key,stamps,S::Visible(1),now+28,false));
+    assert(S::Due(scoped,key,stamps,S::Visible(1),now+28,true)==S::Builds);
+    assert(!S::Fresh(scoped,key,stamps,S::Visible(1),now+28,true));
+    const auto buildTicket=scoped.Begin(key,S::Name(S::Builds),now+29);
+    scoped.Success(key,S::Name(S::Builds),buildTicket,now+30);
+    stamps[S::Index(S::Builds)]=now+30;
+    assert(S::Fresh(scoped,key,stamps,S::Visible(1),now+31,true));
+    assert(S::Oldest(stamps,S::Builds)==now+30);
+    assert(S::Oldest(stamps,S::Compare)==now-100);
+    assert(S::Due(scoped,key,stamps,S::Compare,now+31,true)==(S::Tabs|S::Physical));
+    // A coalesced response obtained before the grace cannot cover logout,
+    // even if the supplement consumer joined after the grace expired.
+    A::Tracker joinedActivity;
+    joinedActivity.Observe(key.first,key.second,34,true,now);
+    joinedActivity.Finish(now+10);
+    auto joinedTicket=joinedActivity.Begin(key,S::Name(S::Physical),now+610);
+    joinedTicket.verificationStarted=now+609;
+    joinedActivity.Success(key,S::Name(S::Physical),joinedTicket,now+611);
+    assert(!joinedActivity.Fresh(key,S::Name(S::Physical),now+611,now+612));
+    assert(joinedActivity.Due(key,S::Name(S::Physical),now+611,0,now+612));
     namespace D=AlterEgo::ApiActivity;
     assert(D::ApiEndpoint("/v2/characters/Private%20Name/equipmenttabs?tabs=all")==D::Endpoint::Equipment);
     assert(D::ApiEndpoint("/v2/characters/Private%20Name/inventory")==D::Endpoint::Bags);

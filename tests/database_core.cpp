@@ -658,6 +658,7 @@ int case_database_core(int, char**) {
         auto read=Cache::ReadCharacters(root);assert(read&&read->at("characters").size()==3);
         assert(!read->at("characters")[0].contains("heropoints"));
         assert(read->at("characters")[0]==ch);
+        assert(!read->at("characters")[0].contains("core_verified")); // old aggregate is not per-scope evidence
         assert(!read->at("characters")[0]["equipment"][0].contains("charges"));
         assert(read->at("characters")[0]["equipment"][1]["charges"]==0);
         assert(read->at("characters")[0]["equipment"][2]["charges"]==17);
@@ -682,17 +683,24 @@ int case_database_core(int, char**) {
         assert(db.Scalar("SELECT count(*) FROM character_rows")==3);
         const auto beforeIncrement=Cache::ReadCharacters(root);
         auto one=ch;one["data_refreshed"]=102;one["equipment"][0]["infusions"]={77};
+        one["core_verified"]=100;one["tabs_verified"]=102;one["physical_verified"]=101;
+        one["equipment"][1]["physical_supplement"]=true;
         J change={{"last_updated",102},{"characters",J::array({one})}};
         assert(Cache::HasCharacterSnapshot(root)==std::optional<bool>(true));
         assert(Cache::WriteCharacters(root,change,true));
         auto afterIncrement=Cache::ReadCharacters(root);
         assert(afterIncrement->at("characters")[0]==one);
+        assert(!afterIncrement->at("characters")[0].contains("builds_verified"));
+        assert(afterIncrement->at("characters")[0]["equipment"][1]["physical_supplement"]==true);
         assert(afterIncrement->at("characters")[1]==beforeIncrement->at("characters")[1]);
         assert(afterIncrement->at("characters")[2]==beforeIncrement->at("characters")[2]);
         assert(!Cache::WriteCharacters(root,J{{"last_updated",103},{"characters",J::array({ch})}},true));
         assert(Cache::ReadCharacters(root)==afterIncrement);
         auto malformed=one;malformed["data_refreshed"]=103;malformed["equipment"][0]["infusions"]="invalid";
         assert(!Cache::WriteCharacters(root,J{{"last_updated",103},{"characters",J::array({malformed})}},true));
+        assert(Cache::ReadCharacters(root)==afterIncrement);
+        auto invalidScope=one;invalidScope["data_refreshed"]=103;invalidScope["core_verified"]=-1;
+        assert(!Cache::WriteCharacters(root,J{{"last_updated",103},{"characters",J::array({invalidScope})}},true));
         assert(Cache::ReadCharacters(root)==afterIncrement);
         auto newChar=one;newChar["name"]="New Hero";
         assert(Cache::WriteCharacters(root,J{{"last_updated",103},{"characters",J::array({newChar})}},true));

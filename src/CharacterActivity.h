@@ -14,7 +14,7 @@ struct Entry {
     uint32_t spec=0;
     std::map<std::string,Scope> scopes;
 };
-struct Ticket {int64_t started=0,seen=0,login=0,specChanged=0;bool active=false;};
+struct Ticket {int64_t started=0,seen=0,login=0,specChanged=0;bool active=false;int64_t verificationStarted=0;};
 class Tracker {
     std::map<Key,Entry> rows_;
     Key active_;
@@ -108,11 +108,12 @@ public:
         auto& e=rows_[k];auto& s=e.scopes[scope];
         if(s.success>success||s.attempt>t.started)return;
         s.success=success;s.attempt=0;
+        const auto verifiedStart=t.verificationStarted>0?std::min(t.started,t.verificationStarted):t.started;
         // Only an offline, post-grace request that did not overlap newer
         // activity covers the logout. Early manual pulls remain useful but dirty.
         if(!t.active&&!Active(k)&&e.lastSeen==t.seen&&e.login==t.login&&
-           RefreshEngine::CanReconcileLogout(t.seen,t.started))s.covered=std::max(s.covered,t.seen);
-        if(specVerified&&e.specChanged==t.specChanged&&t.started>=t.specChanged)s.specCovered=t.specChanged;
+           RefreshEngine::CanReconcileLogout(t.seen,verifiedStart))s.covered=std::max(s.covered,t.seen);
+        if(specVerified&&e.specChanged==t.specChanged&&verifiedStart>=t.specChanged)s.specCovered=t.specChanged;
         Dirty();
     }
     bool DirtyState()const{return dirty_;}

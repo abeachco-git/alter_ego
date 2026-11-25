@@ -12,6 +12,7 @@
 #include <optional>
 #include <nlohmann/json.hpp>
 #include "nexus/Nexus.h"
+#include "CharacterScopes.h"
 
 namespace AlterEgo {
 
@@ -43,6 +44,7 @@ namespace AlterEgo {
         uint32_t stat_id = 0;       // Selected itemstat ID (for legendary/ascended)
         std::map<std::string, int> attributes; // e.g. {"Power": 251, "Precision": 179}
         int64_t charges = -1; // absent/unknown, distinct from zero remaining
+        bool physical_supplement=false; // fallback provenance, not an equipment-tab row
     };
 
     // Cached itemstat info from /v2/itemstats (public, no auth)
@@ -225,7 +227,8 @@ namespace AlterEgo {
         int age = 0;                // Seconds played
         std::string created;        // ISO date
         std::string last_modified;  // ISO date — last login/modification
-        time_t data_refreshed = 0; // Last successful character snapshot from native API
+        time_t data_refreshed = 0; // Latest committed scope (not proof of complete freshness)
+        CharacterScopes::Stamps scope_stamps{};
         int deaths = 0;
         std::vector<std::string> crafting;      // Crafting disciplines (active first)
         std::vector<int> crafting_levels;
@@ -335,7 +338,7 @@ namespace AlterEgo {
         static void RequestCharacterList();              // Fetch just the character name list
         static void RequestCharacterRefreshSelected(
             const std::vector<std::string>& names, bool refreshCrafting = true);
-        static void RequestCharacterActivityRefresh(const std::string& account,const std::string& name);
+        static void RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual=false);
 
         // native API cached queries (synchronous, from native API in-memory cache)
         static void QuerySkinUnlocks(const std::vector<uint32_t>& skin_ids);
@@ -412,7 +415,8 @@ namespace AlterEgo {
 
         // Persistence
         static bool LoadCharacterData();
-        static bool SaveCharacterData(const std::string& account = {}, const std::string& name = {});
+        static bool SaveCharacterData(const std::string& account = {}, const std::string& name = {},
+            const Character* replacement=nullptr,const std::string& legacyAccount={},const std::function<bool()>& current={});
 
         // Reference-data caches (items, skins, specs, traits, skills,
         // itemstats, dye colors). Persisted to disk so a refreshed character's
@@ -621,7 +625,7 @@ namespace AlterEgo {
         static BuildTemplate ParseBuildTemplate(const nlohmann::json& tab_json);
 
         // Sub-endpoint fetch for current character (phase 0/1/2)
-        static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly={});
+        static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly={},CharacterScopes::Mask demand=CharacterScopes::All,bool manual=true);
     };
 
 }

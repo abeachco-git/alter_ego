@@ -844,7 +844,8 @@ static void LoadLoginTimestamps();
 static void LoadCharacterActivity();
 static void SaveCharacterActivity(bool force=false);
 static void ObserveCharacterActivity();
-static void PollDemandCharacter(const std::string& account,const std::string& name,int64_t success);
+static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand);
+static bool CharacterDemandFresh(const AlterEgo::Character& ch,AlterEgo::CharacterScopes::Mask demand);
 
 // Build Library UI state
 static float g_LibListWidth = 220.0f; // Resizable build list column width
@@ -15512,11 +15513,13 @@ static void RenderCharactersStatusRow() {
         const int ri = g_CharDisplayOrder[g_SelectedCharIdx];
         if (ri >= 0 && ri < (int)chars.size()) selected = &chars[ri];
     }
-    if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->data_refreshed);
+    namespace S=AlterEgo::CharacterScopes;
+    const auto demand=S::Visible(g_SelectedTab);
+    if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
     const auto active=AlterEgo::CharacterActivity::ActiveKey();
     if(!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&(!selected||selected->name!=active.second)){
-        int64_t stamp=0;for(const auto& ch:chars)if(ch.account_name==active.first&&ch.name==active.second){stamp=ch.data_refreshed;break;}
-        PollDemandCharacter(active.first,active.second,stamp);
+        S::Stamps stamps{};for(const auto& ch:chars)if(ch.account_name==active.first&&ch.name==active.second){stamps=ch.scope_stamps;break;}
+        PollDemandCharacter(active.first,active.second,stamps,S::Core);
     }
     const auto hoard = AlterEgo::GW2API::GetAccountStatus();
     const bool hoardReady = hoard == AlterEgo::AccountStatus::Ready;
@@ -15539,15 +15542,15 @@ static void RenderCharactersStatusRow() {
             detail = "Refresh complete";
         }
     }
-    if(selected&&state==AlterEgo::RefreshUI::State::Ready&&!AlterEgo::CharacterActivity::Fresh({selected->account_name,selected->name},"Character",selected->data_refreshed,g_AutoRefreshOnSpecialization)){
+    if(selected&&state==AlterEgo::RefreshUI::State::Ready&&!CharacterDemandFresh(*selected,demand)){
         state=AlterEgo::RefreshUI::State::Waiting;detail="Cached data; refresh due or awaiting API synchronization";
     }
     bool more = false;
-    if (AlterEgo::RefreshUI::Row("characters", selected ? selected->data_refreshed : 0,
+    if (AlterEgo::RefreshUI::Row("characters", selected ? S::Oldest(selected->scope_stamps,demand) : 0,
           "selected character", state, detail, !hoardReady || busy, &more)) {
         if (selected) {
             const std::string name = selected->name;
-            AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+            AlterEgo::GW2API::RequestCharacterActivityRefresh(selected->account_name,name,demand,true);
             g_DetailsFetched = false;
         } else {
             g_RefreshListFetching = true;
@@ -15567,7 +15570,8 @@ static void RenderCompareStatusRow() {
     for (const auto& ch : chars) {
         if (ch.name == g_LibComparePreviousTarget) { target = &ch; break; }
     }
-    if(target){PollDemandCharacter(target->account_name,target->name,target->data_refreshed);
+    namespace S=AlterEgo::CharacterScopes;
+    if(target){PollDemandCharacter(target->account_name,target->name,target->scope_stamps,S::Compare);
         AlterEgo::NativeAccounts::PollItemDemand(target->account_name);}
     const auto fetch = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
@@ -15598,16 +15602,16 @@ static void RenderCompareStatusRow() {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete";
     }
-    if(target&&state==AlterEgo::RefreshUI::State::Ready&&!AlterEgo::CharacterActivity::Fresh({target->account_name,target->name},"Character",target->data_refreshed,g_AutoRefreshOnSpecialization)){
+    if(target&&state==AlterEgo::RefreshUI::State::Ready&&!CharacterDemandFresh(*target,S::Compare)){
         state=AlterEgo::RefreshUI::State::Waiting;detail="Cached data; refresh due or awaiting API synchronization";
     }
-    if (AlterEgo::RefreshUI::Row("compare", target ? target->data_refreshed : 0,
+    if (AlterEgo::RefreshUI::Row("compare", target ? S::Oldest(target->scope_stamps,S::Compare) : 0,
             "character build/equipment", state, detail, busy || !target)) {
         const std::string name = target->name;
         g_LibCompareRefreshChar = name;
         g_LibCompareRefreshPending = true;
         g_LibCompareRefreshResult.clear();
-        AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+        AlterEgo::GW2API::RequestCharacterActivityRefresh(target->account_name,name,S::Compare,true);
     }
 }
 
@@ -15804,14 +15808,21 @@ static void ObserveCharacterActivity(){
     A::Observe(account,name,spec,nexus->IsGameplay);
     SaveCharacterActivity();
 }
-static void PollDemandCharacter(const std::string& account,const std::string& name,int64_t success){
+static bool CharacterDemandFresh(const AlterEgo::Character& ch,AlterEgo::CharacterScopes::Mask demand){
+    namespace A=AlterEgo::CharacterActivity;
+    std::lock_guard<std::mutex> lock(A::Mutex());
+    return AlterEgo::CharacterScopes::Fresh(A::State(),{ch.account_name,ch.name},ch.scope_stamps,demand,A::Now(),g_AutoRefreshOnSpecialization);
+}
+static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand){
     namespace A=AlterEgo::CharacterActivity;
     if(account.empty()||name.empty()||!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters)||
        AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready||
        AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress)return;
     if(AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name)!=account)return;
-    if(A::Due({account,name},"Character",success,0,g_AutoRefreshOnSpecialization))
-        AlterEgo::GW2API::RequestCharacterActivityRefresh(account,name);
+    AlterEgo::CharacterScopes::Mask due=0;
+    {std::lock_guard<std::mutex> lock(A::Mutex());
+        due=AlterEgo::CharacterScopes::Due(A::State(),{account,name},stamps,demand,A::Now(),g_AutoRefreshOnSpecialization);}
+    if(due)AlterEgo::GW2API::RequestCharacterActivityRefresh(account,name,due);
 }
 
 struct TabDropdownState {

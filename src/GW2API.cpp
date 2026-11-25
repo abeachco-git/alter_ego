@@ -228,8 +228,8 @@ namespace AlterEgo {
     void GW2API::RequestCharacterRefreshSelected(const std::vector<std::string>& names,bool crafting){
         if(!names.empty())RequestNativeCharacters(names,false,crafting,{});
     }
-    void GW2API::RequestCharacterActivityRefresh(const std::string& account,const std::string& name){
-        if(!account.empty()&&!name.empty())RequestNativeCharacters({name},false,true,{},account);
+    void GW2API::RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual){
+        if(!account.empty()&&!name.empty()&&demand)RequestNativeCharacters({name},false,true,{},account,demand,manual);
     }
     // Safe helpers: get value from JSON, return default if null or missing
     static int SafeInt(const json& j, const char* key, int def = 0) {
@@ -250,7 +250,7 @@ namespace AlterEgo {
     }
 
 
-    void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly){
+    void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly,CharacterScopes::Mask demand,bool manual){
         auto accounts=NativeAccounts::Linked();
         if(!accountOnly.empty())accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[&](const auto& a){return a.id!=accountOnly;}),accounts.end());
         {
@@ -260,7 +260,7 @@ namespace AlterEgo {
             s_fetch_status=FetchStatus::InProgress;s_fetch_message="Checking character roster...";
             s_current_char={};g_rosterReady=false;s_chars_fetched=0;s_chars_total=0;
         }
-        Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly]{
+        Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual]{
             auto fail=[](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;s_current_char={};};
             std::map<std::string,std::set<std::string>> roster;
             std::vector<std::pair<NativeAccounts::LinkedAccount,std::string>> targets;
@@ -271,6 +271,7 @@ namespace AlterEgo {
             for(const auto& a:accounts){
                 Background::Checkpoint();++rosterOrdinal;std::set<std::string> names=a.characters;
                 if(listOnly||selected.empty()||!a.rosterKnown){
+                    if(!manual){partial=true;continue;} // automatic demand never discovers unrelated rosters
                     {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_message="Checking roster "+std::to_string(rosterOrdinal)+"/"+std::to_string(accounts.size())+(accounts.size()>1?" - "+a.name:"");}
                     if(!NativeAccounts::RefreshRoster(a,names)){partial=true;continue;}
                     roster[a.id]=names;
@@ -302,98 +303,175 @@ namespace AlterEgo {
                     std::lock_guard<std::mutex> lock(s_mutex);s_current_char.name=name;
                     s_fetch_message=RefreshProgress::Character(ordinal,targets.size(),name,"Starting refresh");
                 }
-                const CharacterActivity::Key activityKey{a.id,name};
-                const auto activityTicket=CharacterActivity::Begin(activityKey,"Character");
-                try{
-                    const std::string path="/v2/characters/"+UrlEncode(name);
-                    const auto stage=[&](const std::string& label){
-                        std::lock_guard<std::mutex> lock(s_mutex);
-                        s_fetch_message=RefreshProgress::Character(ordinal,targets.size(),name,label);
-                    };
-                    const auto require=[&](const std::string& endpoint,const std::vector<std::string>& perms,const char* label){
-                        stage(label);
-                        auto r=NativeAccounts::Request(a,endpoint,perms);
-                        if(!r)throw std::runtime_error(r.error);return std::move(r.data);
-                    };
-                    auto core=require(path+"/core",{"characters"},"Character details");
-                    if(!core.is_object()||core.value("name",std::string{})!=name)throw std::runtime_error("Invalid character identity");
-                    Character ch=ParseCharacterJson(core);ch.account_name=a.id;ch.last_modified=SafeStr(core,"last_modified");
-                    const auto eq=require(path+"/equipmenttabs?tabs=all&v=2024-04-01T00:00:00.000Z",{"characters","builds"},"Equipment tabs");
-                    if(!eq.is_array()||eq.empty())throw std::runtime_error("Invalid equipment tabs");
-                    ch.equipment.clear();std::set<int> tabs;int activeEquipment=0;
-                    for(const auto& tab:eq){
-                        const auto id=SafeInt(tab,"tab");if(id<=0||!tabs.insert(id).second||!tab.at("equipment").is_array())throw std::runtime_error("Invalid equipment tab");
-                        ch.equipment_tab_names[id]=SafeStr(tab,"name");
-                        if(SafeBool(tab,"is_active")){if(activeEquipment)throw std::runtime_error("Multiple active equipment tabs");activeEquipment=id;}
-                        for(const auto& raw:tab.at("equipment")){auto item=ParseEquipmentItem(raw);if(!item.id)throw std::runtime_error("Invalid equipment ID");item.tab=id;ch.equipment.push_back(std::move(item));}
-                    }
-                    if(!activeEquipment)throw std::runtime_error("Missing active equipment tab");
-                    ch.active_equipment_tab=activeEquipment;
-                    stage("Additional equipment");
-                    auto physical=NativeAccounts::RequestPhysicalEquipment(a,name,accountOnly.empty());
-                    if(!physical.response)throw std::runtime_error(physical.response.error);
-                    auto supplement=std::move(physical.response.data);
-                    if(!supplement.at("equipment").is_array())throw std::runtime_error("Invalid supplemental equipment");
-                    for(const auto& raw:supplement.at("equipment")){
-                        const auto slot=SafeStr(raw,"slot");if(slot!="Relic"&&!CharacterTools::Utility(slot))continue;
-                        auto item=ParseEquipmentItem(raw);if(!item.id)throw std::runtime_error("Invalid supplemental equipment ID");
-                        if(CharacterTools::Utility(slot)){
-                            item.tab=0;
-                            ch.equipment.erase(std::remove_if(ch.equipment.begin(),ch.equipment.end(),[&](const EquipmentItem& e){return e.slot==slot;}),ch.equipment.end());
-                            ch.equipment.push_back(std::move(item));continue;
+                namespace S=CharacterScopes;
+                const CharacterActivity::Key key{a.id,name};
+                std::optional<Character> old;
+                {std::lock_guard<std::mutex> lock(s_mutex);
+                    for(const auto& existing:s_characters)
+                        if(existing.name==name&&(existing.account_name==a.id||existing.account_name==a.name||existing.account_name.empty())){
+                            old=existing;if(existing.account_name==a.id)break;
                         }
-                        const auto add=[&](int tab){auto copy=item;copy.tab=tab;
-                            if(std::none_of(ch.equipment.begin(),ch.equipment.end(),[&](const EquipmentItem& e){return e.tab==tab&&e.slot==slot;}))ch.equipment.push_back(std::move(copy));};
-                        if(raw.contains("tabs")&&raw.at("tabs").is_array()&&!raw.at("tabs").empty()){
-                            for(const auto& t:raw.at("tabs"))if(!t.is_null()&&tabs.count(t.get<int>()))add(t.get<int>());
-                        }else add(0);
-                    }
-                    auto builds=require(path+"/buildtabs?tabs=all&v=2021-07-15T13:00:00.000Z",{"characters","builds"},"Build tabs");
-                    if(!builds.is_array()||builds.empty())throw std::runtime_error("Invalid build tabs");
-                    ch.build_tabs.clear();std::set<int> buildIds;int activeBuild=0;
-                    for(const auto& row:builds){auto b=ParseBuildTemplate(row);if(b.tab<=0||!buildIds.insert(b.tab).second)throw std::runtime_error("Invalid build tab");
-                        if(b.is_active){if(activeBuild)throw std::runtime_error("Multiple active build tabs");activeBuild=b.tab;}ch.build_tabs.push_back(std::move(b));}
-                    if(!activeBuild)throw std::runtime_error("Missing active build tab");ch.active_build_tab=activeBuild;
-                    std::optional<Character> old;
-                    {std::lock_guard<std::mutex> lock(s_mutex);for(const auto& existing:s_characters)
-                        if(existing.name==name&&(existing.account_name==a.id||existing.account_name==a.name||existing.account_name.empty())){old=existing;if(existing.account_name==a.id)break;}}
-                    if(!refreshCrafting&&old&&old->crafting_cached){
-                        ch.crafting=old->crafting;ch.crafting_levels=old->crafting_levels;ch.crafting_active=old->crafting_active;ch.crafting_cached=true;
-                    }else{
-                        auto craft=require(path+"/crafting",{"characters"},"Crafting");
-                        if(craft.is_object())craft=craft.at("crafting").get<json>();
-                        if(!craft.is_array())throw std::runtime_error("Invalid crafting");
-                        auto c=ParseCharacterJson(json{{"crafting",craft}});
-                        ch.crafting=std::move(c.crafting);ch.crafting_levels=std::move(c.crafting_levels);ch.crafting_active=std::move(c.crafting_active);ch.crafting_cached=true;
-                    }
-                    if(!NativeAccounts::Current(a))throw std::runtime_error("Account changed");
-                    ch.data_refreshed=std::time(nullptr);const auto savedStamp=ch.data_refreshed;
+                }
+                Character ch=old.value_or(Character{});
+                const bool needsIdentity=!old||old->account_name!=a.id;
+                ch.name=name;ch.account_name=a.id;
+                auto requested=demand;
+                if(needsIdentity)requested|=S::Core;
+                if(!refreshCrafting&&ch.crafting_cached)requested&=~S::Crafting;
+                if(!manual){
+                    std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                    requested=S::Due(CharacterActivity::State(),key,ch.scope_stamps,requested,
+                        CharacterActivity::Now(),CharacterActivity::SpecSignal().load());
+                }
+                if(!requested)continue;
+                struct Verified { S::Scope scope; CharacterActivity::Ticket ticket; int64_t stamp; bool specVerified; };
+                std::vector<Verified> verified;
+                const std::string path="/v2/characters/"+UrlEncode(name);
+                const auto stage=[&](const std::string& label){
+                    std::lock_guard<std::mutex> lock(s_mutex);
+                    s_fetch_message=RefreshProgress::Character(ordinal,targets.size(),name,label);
+                };
+                const auto require=[&](const std::string& endpoint,const std::vector<std::string>& perms,const char* label){
+                    stage(label);auto r=NativeAccounts::Request(a,endpoint,perms);
+                    if(!r)throw std::runtime_error(r.error);return std::move(r.data);
+                };
+                bool identityVerified=!needsIdentity;
+                for(auto scope:S::Ordered){
+                    if(!(requested&scope))continue;
+                    Background::Checkpoint();
+                    if(!NativeAccounts::Current(a)){partial=true;break;}
+                    if(scope!=S::Core&&!identityVerified){partial=true;continue;}
+                    const auto ticket=CharacterActivity::Begin(key,S::Name(scope));
                     bool specVerified=true;
-                    if(activityTicket.active&&activityTicket.specChanged){
-                        for(const auto& tab:ch.build_tabs)if(tab.is_active){
-                            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
-                            // The activity timestamp is cleared only for a verified matching live spec.
-                            specVerified=CharacterActivity::State().SpecMatches(activityKey,tab.specializations[2].spec_id);
+                    try{
+                        // Stage each scope against the current candidate. A
+                        // malformed response cannot erase its previous fields.
+                        Character next=ch;
+                        switch(scope){
+                        case S::Core:{
+                            auto core=require(path+"/core",{"characters"},"Character details");
+                            if(!core.is_object()||core.value("name",std::string{})!=name||
+                                !core.contains("profession")||!core.contains("race")||!core.contains("gender")||
+                                !core.contains("level")||!core.contains("age")||!core.contains("created")||!core.contains("deaths"))
+                                throw std::runtime_error("Invalid character core");
+                            auto c=ParseCharacterJson(core);
+                            if(c.profession.empty()||c.race.empty()||c.gender.empty()||c.created.empty()||c.level<1||c.level>80)
+                                throw std::runtime_error("Incomplete character core");
+                            next.race=c.race;next.gender=c.gender;next.profession=c.profession;
+                            next.level=c.level;next.age=c.age;next.created=c.created;next.deaths=c.deaths;
+                            next.last_modified=SafeStr(core,"last_modified");
                             break;
                         }
-                    }
-                    bool remapped=false;
-                    {
-                        std::lock_guard<std::mutex> lock(s_mutex);
-                        // Only verified roster + successful character retrieval can
-                        // replace the same name's unscoped/old account-name record.
-                        const auto before=s_characters.size();
-                        s_characters.erase(std::remove_if(s_characters.begin(),s_characters.end(),[&](const Character& c){
-                            return c.name==name&&c.account_name!=a.id&&(c.account_name==a.name||c.account_name.empty());}),s_characters.end());
-                        remapped=before!=s_characters.size();
-                        auto it=std::find_if(s_characters.begin(),s_characters.end(),[&](const Character& c){return c.name==name&&c.account_name==a.id;});
-                        if(it==s_characters.end())s_characters.push_back(std::move(ch));else *it=std::move(ch);
-                        s_has_character_data=true;s_last_updated=std::time(nullptr);++g_characterDataRevision;++s_chars_fetched;
-                    }
-                    stage("Saving character");
-                    if(!SaveCharacterData(remapped?std::string{}:a.id,remapped?std::string{}:name))partial=true;
-                    else CharacterActivity::Success(activityKey,"Character",activityTicket,savedStamp,specVerified);
-                }catch(...){partial=true;}
+                        case S::Builds:{
+                            const auto builds=require(path+"/buildtabs?tabs=all&v=2021-07-15T13:00:00.000Z",{"characters","builds"},"Build tabs");
+                            if(!builds.is_array()||builds.empty())throw std::runtime_error("Invalid build tabs");
+                            next.build_tabs.clear();std::set<int> ids;int active=0;
+                            for(const auto& row:builds){
+                                if(!row.at("build").is_object())throw std::runtime_error("Invalid build body");
+                                auto b=ParseBuildTemplate(row);
+                                if(b.tab<=0||!ids.insert(b.tab).second)throw std::runtime_error("Invalid build tab");
+                                if(b.is_active){if(active)throw std::runtime_error("Multiple active build tabs");active=b.tab;}
+                                next.build_tabs.push_back(std::move(b));
+                            }
+                            if(!active)throw std::runtime_error("Missing active build tab");
+                            next.active_build_tab=active;
+                            if(ticket.active&&ticket.specChanged){
+                                for(const auto& b:next.build_tabs)if(b.is_active){
+                                    std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                                    specVerified=CharacterActivity::State().SpecMatches(key,b.specializations[2].spec_id);break;
+                                }
+                            }
+                            break;
+                        }
+                        case S::Tabs:{
+                            const auto eq=require(path+"/equipmenttabs?tabs=all&v=2024-04-01T00:00:00.000Z",{"characters","builds"},"Equipment tabs");
+                            if(!eq.is_array()||eq.empty())throw std::runtime_error("Invalid equipment tabs");
+                            next.equipment.clear();next.equipment_tab_names.clear();std::set<int> tabs;int active=0;
+                            for(const auto& tab:eq){
+                                const auto id=SafeInt(tab,"tab");
+                                if(id<=0||!tabs.insert(id).second||!tab.at("equipment").is_array())throw std::runtime_error("Invalid equipment tab");
+                                next.equipment_tab_names[id]=SafeStr(tab,"name");
+                                if(SafeBool(tab,"is_active")){if(active)throw std::runtime_error("Multiple active equipment tabs");active=id;}
+                                for(const auto& raw:tab.at("equipment")){
+                                    auto item=ParseEquipmentItem(raw);if(!item.id)throw std::runtime_error("Invalid equipment ID");
+                                    if(CharacterTools::Utility(item.slot))continue; // physical endpoint owns character-wide tools
+                                    item.tab=id;next.equipment.push_back(std::move(item));
+                                }
+                            }
+                            if(!active)throw std::runtime_error("Missing active equipment tab");
+                            next.active_equipment_tab=active;
+                            // Preserve independently retrieved physical fields.
+                            // Legacy utilities were never tab-specific.
+                            for(auto item:ch.equipment){
+                                if(CharacterTools::Utility(item.slot)){item.tab=0;item.physical_supplement=true;}
+                                else if(!item.physical_supplement){
+                                    if(item.slot!="Relic"||ch.scope_stamps[S::Index(S::Tabs)]>0)continue;
+                                    // Legacy composite relic provenance was unknown.
+                                    item.physical_supplement=true;
+                                }
+                                if(item.tab&&!tabs.count(item.tab))continue;
+                                if(std::none_of(next.equipment.begin(),next.equipment.end(),[&](const EquipmentItem& e){return e.tab==item.tab&&e.slot==item.slot;}))
+                                    next.equipment.push_back(std::move(item));
+                            }
+                            break;
+                        }
+                        case S::Physical:{
+                            stage("Physical equipment");
+                            auto physical=NativeAccounts::RequestPhysicalEquipment(a,name,manual);
+                            if(!physical.response)throw std::runtime_error(physical.response.error);
+                            const auto& supplement=physical.response.data;
+                            if(!supplement.at("equipment").is_array())throw std::runtime_error("Invalid supplemental equipment");
+                            next.equipment.erase(std::remove_if(next.equipment.begin(),next.equipment.end(),[](const EquipmentItem& e){
+                                return e.physical_supplement||CharacterTools::Utility(e.slot);
+                            }),next.equipment.end());
+                            for(const auto& raw:supplement.at("equipment")){
+                                const auto slot=SafeStr(raw,"slot");if(slot!="Relic"&&!CharacterTools::Utility(slot))continue;
+                                auto item=ParseEquipmentItem(raw);if(!item.id)throw std::runtime_error("Invalid supplemental equipment ID");
+                                item.physical_supplement=true;
+                                const auto add=[&](int tab){auto copy=item;copy.tab=tab;
+                                    if(std::none_of(next.equipment.begin(),next.equipment.end(),[&](const EquipmentItem& e){return e.tab==tab&&e.slot==slot;}))
+                                        next.equipment.push_back(std::move(copy));};
+                                if(CharacterTools::Utility(slot)){add(0);continue;}
+                                if(raw.contains("tabs")&&raw.at("tabs").is_array()&&!raw.at("tabs").empty()){
+                                    for(const auto& t:raw.at("tabs"))if(!t.is_null()){
+                                        const int id=t.get<int>();
+                                        if(id>0)add(id); // retain associations even when tabs have not been retrieved yet
+                                    }
+                                }else add(0);
+                            }
+                            // A reused physical response must not advance this
+                            // scope past the actual retrieval or cover a later logout.
+                            const auto stamp=physical.success;
+                            if(stamp<=0||stamp<ch.scope_stamps[S::Index(scope)])throw std::runtime_error("Invalid physical verification");
+                            next.scope_stamps[S::Index(scope)]=stamp;
+                            auto actual=ticket;actual.verificationStarted=physical.started;
+                            verified.push_back({scope,actual,stamp,true});
+                            ch=std::move(next);continue;
+                        }
+                        case S::Crafting:{
+                            auto craft=require(path+"/crafting",{"characters"},"Crafting");
+                            if(craft.is_object())craft=craft.at("crafting").get<json>();
+                            if(!craft.is_array())throw std::runtime_error("Invalid crafting");
+                            for(const auto& row:craft)if(!row.is_object()||!row.contains("discipline")||!row.contains("rating")||!row.contains("active"))
+                                throw std::runtime_error("Incomplete crafting row");
+                            auto c=ParseCharacterJson(json{{"crafting",craft}});
+                            next.crafting=std::move(c.crafting);next.crafting_levels=std::move(c.crafting_levels);
+                            next.crafting_active=std::move(c.crafting_active);next.crafting_cached=true;break;
+                        }
+                        }
+                        const auto stamp=CharacterActivity::Now();
+                        next.scope_stamps[S::Index(scope)]=stamp;
+                        verified.push_back({scope,ticket,stamp,specVerified});
+                        ch=std::move(next);
+                        if(scope==S::Core)identityVerified=true;
+                    }catch(...){partial=true;}
+                }
+                if(verified.empty()||!identityVerified||!NativeAccounts::Current(a)){partial=true;continue;}
+                ch.data_refreshed=std::time(nullptr);
+                stage("Saving verified scopes");
+                if(!SaveCharacterData(a.id,name,&ch,a.name,[&]{return NativeAccounts::Current(a);})){partial=true;continue;}
+                for(const auto& v:verified)CharacterActivity::Success(key,S::Name(v.scope),v.ticket,v.stamp,v.specVerified);
+                {std::lock_guard<std::mutex> lock(s_mutex);++s_chars_fetched;}
             }
             {
                 std::lock_guard<std::mutex> lock(s_mutex);s_current_char={};
@@ -1474,19 +1552,36 @@ namespace AlterEgo {
     // Persistence
     // =========================================================================
 
-    bool GW2API::SaveCharacterData(const std::string& account,const std::string& name) {
+    bool GW2API::SaveCharacterData(const std::string& account,const std::string& name,
+        const Character* replacement,const std::string& legacyAccount,const std::function<bool()>& current) {
         EnsureDataDirectory();
         // Serialize snapshot capture and persistence in the same order. No Nexus calls under this lock.
         std::lock_guard<std::mutex> saveLock(g_characterSaveMutex);
         const auto native=Cache::HasCharacterSnapshot(GetDataDirectory());
         if(!native)return false;
-        const bool incremental=!name.empty() && *native;
-        json j;
+        bool incremental=!name.empty() && *native;
+        if(current&&!current())return false;
+        std::vector<Character> candidate;
+        time_t stamp=0;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            j["last_updated"] = (int64_t)s_last_updated;
+            candidate=s_characters;stamp=s_last_updated;
+        }
+        if(replacement){
+            const auto before=candidate.size();
+            candidate.erase(std::remove_if(candidate.begin(),candidate.end(),[&](const Character& c){
+                return c.name==name&&c.account_name!=account&&(c.account_name.empty()||c.account_name==legacyAccount);
+            }),candidate.end());
+            if(before!=candidate.size())incremental=false;
+            auto it=std::find_if(candidate.begin(),candidate.end(),[&](const Character& c){return c.name==name&&c.account_name==account;});
+            if(it==candidate.end())candidate.push_back(*replacement);else *it=*replacement;
+            stamp=std::max(stamp,replacement->data_refreshed);
+        }
+        json j;
+        {
+            j["last_updated"] = (int64_t)stamp;
             json chars_arr = json::array();
-            for (const auto& ch : s_characters) {
+            for (const auto& ch : candidate) {
                 if(incremental && (ch.name!=name || ch.account_name!=account))continue;
                 json cj;
                 cj["name"] = ch.name;
@@ -1498,6 +1593,8 @@ namespace AlterEgo {
                 cj["created"] = ch.created;
                 cj["last_modified"] = ch.last_modified;
                 cj["data_refreshed"] = (int64_t)ch.data_refreshed;
+                static constexpr const char* stamps[]={"core_verified","builds_verified","tabs_verified","physical_verified","crafting_verified"};
+                for(size_t i=0;i<ch.scope_stamps.size();++i)cj[stamps[i]]=ch.scope_stamps[i];
                 cj["deaths"] = ch.deaths;
                 cj["crafting_cached"] = ch.crafting_cached;
                 if (!ch.crafting.empty()) {
@@ -1524,6 +1621,7 @@ namespace AlterEgo {
                     if(eq.binding_known||!eq.binding.empty())ej["binding"]=eq.binding;
                     if(eq.bound_to_known||!eq.bound_to.empty())ej["bound_to"]=eq.bound_to;
                     if(eq.charges>=0)ej["charges"]=eq.charges;
+                    ej["physical_supplement"]=eq.physical_supplement;
                     if (!eq.upgrades.empty()) ej["upgrades"] = eq.upgrades;
                     if (!eq.infusions.empty()) ej["infusions"] = eq.infusions;
                     if (!eq.dyes.empty()) ej["dyes"] = eq.dyes;
@@ -1591,7 +1689,15 @@ namespace AlterEgo {
         }
 
         if(incremental && j["characters"].size()!=1)return false;
-        return Cache::WriteCharacters(GetDataDirectory(),j,incremental);
+        if(current&&!current())return false;
+        if(!Cache::WriteCharacters(GetDataDirectory(),j,incremental))return false;
+        if(current&&!current())return false;
+        if(replacement){
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_characters=std::move(candidate);s_has_character_data=!s_characters.empty();
+            s_last_updated=stamp;++g_characterDataRevision;
+        }
+        return true;
     }
 
     bool GW2API::LoadCharacterData() {
@@ -1617,6 +1723,8 @@ namespace AlterEgo {
                     ch.created = cj.value("created", "");
                     ch.last_modified = cj.value("last_modified", "");
                     ch.data_refreshed = (time_t)cj.value("data_refreshed", (int64_t)0);
+                    static constexpr const char* stamps[]={"core_verified","builds_verified","tabs_verified","physical_verified","crafting_verified"};
+                    for(size_t i=0;i<ch.scope_stamps.size();++i)ch.scope_stamps[i]=cj.value(stamps[i],int64_t(0));
                     ch.deaths = cj.value("deaths", 0);
                     // Older character caches contain crafting arrays but no
                     // explicit fetched marker. Keep them valid automatically.
@@ -1649,6 +1757,7 @@ namespace AlterEgo {
                             eq.binding=ej.value("binding",std::string());
                             eq.bound_to=ej.value("bound_to",std::string());
                             eq.charges=ej.value("charges",int64_t(-1));
+                            eq.physical_supplement=ej.value("physical_supplement",false);
                             if (ej.contains("upgrades")) {
                                 for (const auto& u : ej["upgrades"])
                                     eq.upgrades.push_back(u.get<uint32_t>());

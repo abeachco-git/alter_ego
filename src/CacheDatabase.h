@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 20;
+constexpr int kSchemaVersion = 21;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -33,6 +33,18 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 }
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if(version==21){
+        db.Exec(R"SQL(
+ALTER TABLE character_rows ADD COLUMN core_verified INTEGER NOT NULL DEFAULT 0 CHECK(core_verified>=0);
+ALTER TABLE character_rows ADD COLUMN builds_verified INTEGER NOT NULL DEFAULT 0 CHECK(builds_verified>=0);
+ALTER TABLE character_rows ADD COLUMN tabs_verified INTEGER NOT NULL DEFAULT 0 CHECK(tabs_verified>=0);
+ALTER TABLE character_rows ADD COLUMN physical_verified INTEGER NOT NULL DEFAULT 0 CHECK(physical_verified>=0);
+ALTER TABLE character_rows ADD COLUMN crafting_verified INTEGER NOT NULL DEFAULT 0 CHECK(crafting_verified>=0);
+ALTER TABLE character_equipment ADD COLUMN physical_supplement INTEGER CHECK(physical_supplement IN (0,1));
+)SQL");
+        // Legacy composite timestamps cannot prove independent scope coverage.
+        return;
+    }
     if (version == 20) {
         db.Exec(R"SQL(
 CREATE TABLE verified_achievement_snapshots(
