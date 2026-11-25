@@ -174,6 +174,14 @@ inline bool UsableLoose(const Slot& s,const std::string& account,const std::stri
 inline std::string Lower(std::string s){for(auto& c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;}
 // Character is one facet, regardless of the number of selected names.
 // Account scope is a navigation context, not an additional item filter.
+// Match the storage and character facets of the displayed Items view.
+// Account-level storage has no character and is excluded by a character facet.
+// Text, rarity and other item filters do not change the verified storage scope.
+inline bool MatchesStorageView(const std::string& selectedScope,const std::set<std::string>& characters,
+                               const std::string& scope,const std::string& character){
+    return (selectedScope.empty()||selectedScope=="Items"||selectedScope==scope)&&
+        (characters.empty()||(!character.empty()&&characters.count(character)!=0));
+}
 inline bool CanBrowseItems(bool character, bool storage, bool binding, bool rarity,
                            bool type, bool freshness, bool quantity, bool transfer) {
     return character&&(storage||binding||rarity||type||freshness||quantity||transfer);
