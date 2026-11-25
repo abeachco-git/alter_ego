@@ -485,14 +485,31 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
     }
     if(subview!=0){
         static std::string walletQuery,guildQuery;auto& q=subview==1?walletQuery:guildQuery;
-        UI::SearchField(subview==1?"wallet_search":"guild_search","Search name or ID",q);
-        if(RenderActionButton("Refresh")&&!busy.load()&&!accounts.empty())Refresh(accounts,autoScope);
-        ImGui::SameLine();if(busy.load())ImGui::TextDisabled("Working...");
+        static int favoriteFilter=0,balanceFilter=0,walletSort=0;
+        bool refresh=false;
         if(subview==1){
-            static bool favoritesOnly=false,hideZero=false;
-            static int walletSort=0;
-            ImGui::Checkbox("Favorites only",&favoritesOnly);ImGui::SameLine();
-            ImGui::Checkbox("Hide zero",&hideZero);
+            UI::SearchToolbar("native_wallet","Search currencies or ID",q,
+                [&]{
+                    UI::FilterChips chips;
+                    if(favoriteFilter)chips.push_back({"favorites","Favorites only",[&]{favoriteFilter=0;}});
+                    if(balanceFilter)chips.push_back({"balance","Hide zero",[&]{balanceFilter=0;}});
+                    return chips;
+                },
+                [&]{
+                    const char* favoriteOptions[]={"All","Favorites only"};
+                    const char* balanceOptions[]={"All","Nonzero only"};
+                    UI::FilterChoice("Favorites",favoriteFilter,favoriteOptions,2);
+                    UI::FilterChoice("Balance",balanceFilter,balanceOptions,2);
+                },
+                [&]{favoriteFilter=balanceFilter=0;},"Refresh",&refresh);
+        }else{
+            // Plain searchable list, no filter popup: same SearchField used by Characters.
+            UI::SearchField("guild_search","Search items or ID",q);
+            refresh=RenderActionButton("Refresh");
+        }
+        if(refresh&&!busy.load()&&!accounts.empty())Refresh(accounts,autoScope);
+        if(busy.load())ImGui::TextDisabled("Working...");
+        if(subview==1){
             const char* walletSorts[]={"Game order","Name","Quantity"};
             ImGui::SetNextItemWidth(150);UI::Combo("##wallet_sort",&walletSort,walletSorts,3);
             for(const auto& a:accounts){
@@ -502,7 +519,7 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
                 else ImGui::TextDisabled("%s%s",st->second.status.c_str(),Due("Wallet",0,st->second.success,Now())?" (stale)":"");
                 ImGui::PushID(a.id.c_str());
                 std::vector<const WalletRow*> visible;
-                for(const auto& w:v->inventory.wallet)if(w.account==a.id&&Match(w.name,w.id,q)&&(!favoritesOnly||walletFavorites.count(w.id))&&(!hideZero||w.value>0))visible.push_back(&w);
+                for(const auto& w:v->inventory.wallet)if(w.account==a.id&&Match(w.name,w.id,q)&&(!favoriteFilter||walletFavorites.count(w.id))&&(!balanceFilter||w.value>0))visible.push_back(&w);
                 std::stable_sort(visible.begin(),visible.end(),[&](const WalletRow* a,const WalletRow* b){
                     const bool fa=walletFavorites.count(a->id),fb=walletFavorites.count(b->id);
                     if(fa!=fb)return fa;
@@ -557,26 +574,26 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
     UI::SearchToolbar("native_inventory","Search item or ID",query,
         [&]{UI::FilterChips c;if(!scope.empty())c.push_back({"scope",scope,[&]{scope.clear();}});
             if(!binding.empty())c.push_back({"binding",binding,[&]{binding.clear();}});if(!rarity.empty())c.push_back({"rarity",rarity,[&]{rarity.clear();}});if(!type.empty())c.push_back({"type",type,[&]{type.clear();}});if(!characterFilter.empty())c.push_back({"character",characterFilter,[&]{characterFilter.clear();}});if(freshness)c.push_back({"freshness",freshness==1?"Fresh":"Stale / failed",[&]{freshness=0;}});if(minQuantity)c.push_back({"quantity","Min "+std::to_string(minQuantity),[&]{minQuantity=0;}});if(transfer)c.push_back({"transfer","Potentially transferable",[&]{transfer=0;}});return c;},
-        [&]{if(ImGui::BeginCombo("Storage",scope.empty()?"All":scope.c_str())){
-                for(const auto* s:{"","Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"})
-                    if(ImGui::Selectable(*s?s:"All",scope==s))scope=s;
-                ImGui::EndCombo();}
-            if(ImGui::BeginCombo("Binding",binding.empty()?"All":binding.c_str())){
-                for(const auto* s:{"","Unknown","Unbound","Account bound","Character bound"})
-                    if(ImGui::Selectable(*s?s:"All",binding==s))binding=s;
-                ImGui::EndCombo();}
-            if(ImGui::BeginCombo("Rarity",rarity.empty()?"All":rarity.c_str())){for(const auto* s:{"","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"})if(ImGui::Selectable(*s?s:"All",rarity==s))rarity=s;ImGui::EndCombo();}
-            if(UI::BeginCombo("Type",type.empty()?"All":type.c_str())){std::set<std::string> types;for(const auto& r:v->inventory.rows)if(!r.type.empty())types.insert(r.type);if(ImGui::Selectable("All",type.empty()))type.clear();for(const auto& s:types)if(ImGui::Selectable(s.c_str(),type==s))type=s;ImGui::EndCombo();}
-            if(UI::BeginCombo("Character",characterFilter.empty()?"All":characterFilter.c_str())){
-                if(ImGui::Selectable("All",characterFilter.empty()))characterFilter.clear();
-                std::set<std::string> names;for(const auto& a:accounts){auto it=v->inventory.rosters.find(a.id);if(it!=v->inventory.rosters.end())names.insert(it->second.begin(),it->second.end());}
-                for(const auto& n:names)if(ImGui::Selectable(n.c_str(),characterFilter==n))characterFilter=n;
-                ImGui::EndCombo();
+        [&]{
+            UI::FilterChoice("Storage",scope,{"Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"});
+            UI::FilterChoice("Binding",binding,{"Unknown","Unbound","Account bound","Character bound"});
+            UI::FilterChoice("Rarity",rarity,{"Junk","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"});
+            std::set<std::string> types,names;
+            for(const auto& r:v->inventory.rows)if(allowed(r.slot.account)&&!r.type.empty())types.insert(r.type);
+            for(const auto& a:accounts){
+                auto it=v->inventory.rosters.find(a.id);
+                if(it!=v->inventory.rosters.end())names.insert(it->second.begin(),it->second.end());
             }
+            // Keep an active selection removable even if its last matching row disappeared.
+            if(!type.empty())types.insert(type);
+            if(!characterFilter.empty())names.insert(characterFilter);
+            UI::FilterChoice("Type",type,std::vector<std::string>(types.begin(),types.end()));
+            UI::FilterChoice("Character",characterFilter,std::vector<std::string>(names.begin(),names.end()));
             const char* freshOptions[]={"All","Fresh","Stale / failed"};
             UI::FilterChoice("Freshness",freshness,freshOptions,3);
-            UI::FilterInt("Minimum total quantity",minQuantity);if(minQuantity<0)minQuantity=0;
-            bool onlyTransfer=transfer!=0;if(ImGui::Checkbox("Potentially transferable",&onlyTransfer))transfer=onlyTransfer?1:0;
+            UI::FilterInt("Min quantity",minQuantity);if(minQuantity<0)minQuantity=0;
+            const char* transferOptions[]={"All","Potentially transferable"};
+            UI::FilterChoice("Transferability",transfer,transferOptions,2);
         },
         [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;},"Refresh",&refresh);
     if(refresh&&!busy.load()&&!accounts.empty())Refresh(accounts,scope.empty()?"Items":scope);

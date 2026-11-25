@@ -15,7 +15,8 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 - [x] Compare exact-ID upgrade, rune, sigil, relic and exact-infusion deficit hints; attribute-based alternatives remain semantic only.
 - [ ] Semantic inventory alternatives, full loadout eligibility, broaden Shopping acquisition mapping beyond known TP item map.
 - [x] Configurable automatic refresh exclusions by dataset, persisted in settings; manual refresh unaffected. Bounded FIFO shared HTTP admission with cancellation/timeout; CI/live validation pending.
-- [x] Durable wallet favorites, favorites/zero filters and sort; inventory character, freshness, minimum total quantity and potential transfer filters. CI/live validation pending.
+- [x] Durable wallet favorites, favorites/zero filters and sort; inventory character, freshness, minimum total quantity and potential transfer filters. CI passed at cdac06a; live validation pending.
+- [x] Inventory Items and Wallet search/filter controls use the existing shared SearchToolbar, FilterChoice, FilterInt and removable chips; Guild bank uses SearchField. CI/live validation pending.
 - [ ] Wallet categories, armor/weapon subtype and level filters, endpoint deduplication and priority scheduling.
 - [ ] Full independent character/progress dataset freshness; per-section Clears/Vault commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.
