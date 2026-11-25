@@ -56,7 +56,8 @@ inline void RefreshVault(const std::string& root,bool manual) {
     if(!AutoRefreshPolicy::AllowRequest(manual,AutoRefreshPolicy::Dataset::PublicCatalog))return;
     auto old=Get();if(!Due(old->vault,old->vaultAttempt,Now(),manual)||vaultBusy.exchange(true))return;
     {std::lock_guard<std::mutex> lock(stateMutex);vaultStatus="Refreshing...";}
-    Background::Workers().Launch([root]{
+    Background::Workers().Launch([root,manual]{
+        ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
         Attempt(root,"public_vault");
         auto rows=ParseObjectives(Fetch("/v2/wizardsvault/objectives?ids=all"));
         Background::Checkpoint();
@@ -82,7 +83,8 @@ inline std::string DatasetStatus(const std::string& name) {
 }
 inline void RefreshPets(const std::string& root,bool manual=false,bool initialRequired=false) {
     if(!BeginDataset("public_pets",manual,initialRequired))return;
-    Background::Workers().Launch([root]{
+    Background::Workers().Launch([root,manual]{
+        ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
         Attempt(root,"public_pets");
         auto rows=ParsePets(Fetch("/v2/pets?ids=all"));
         Background::Checkpoint();
@@ -92,7 +94,8 @@ inline void RefreshPets(const std::string& root,bool manual=false,bool initialRe
 }
 inline void RefreshLegends(const std::string& root,bool manual=false,bool initialRequired=false) {
     if(!BeginDataset("public_legends",manual,initialRequired))return;
-    Background::Workers().Launch([root]{
+    Background::Workers().Launch([root,manual]{
+        ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
         Attempt(root,"public_legends");
         auto raw=Fetch("/v2/legends?ids=all&v=2019-12-19T00:00:00.000Z");
         if(!raw.is_array()||raw.empty())throw std::runtime_error("Empty legend API");

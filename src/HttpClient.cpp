@@ -24,7 +24,8 @@ namespace Skinventory {
         bool wiki=false,acquired=false;
         explicit WikiLease(const std::string& url):wiki(AlterEgo::ApiActivity::WikiUrl(url)){
             if(!wiki)return;
-            acquired=wikiGate.Acquire([]{return AlterEgo::Background::Workers().Stopping();},std::chrono::seconds(120));
+            acquired=wikiGate.Acquire([]{return AlterEgo::Background::Workers().Stopping();},std::chrono::seconds(120),
+                AlterEgo::ApiActivity::Priority(AlterEgo::ApiActivity::CurrentReason()));
             if(!acquired)return;
             while(Clock::now()<wikiNext&&!AlterEgo::Background::Workers().Stopping())
                 std::this_thread::sleep_for(std::chrono::milliseconds(25));

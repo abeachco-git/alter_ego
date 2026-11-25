@@ -239,6 +239,7 @@ bool Fresh(const View& v,const Row& row){
 }
 void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={}){
     Launch([accounts,onlyScope,automatic,onlyCharacter]{
+        ApiActivity::ReasonScope reason(automatic?ApiActivity::Reason::Visible:ApiActivity::Reason::Manual);
         const auto previous=Snapshot();
         std::set<uint32_t> ids;std::set<std::string> fetchedGuilds;
         bool currencyMetadataNeeded=false;

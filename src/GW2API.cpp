@@ -261,6 +261,7 @@ namespace AlterEgo {
             s_current_char={};g_rosterReady=false;s_chars_fetched=0;s_chars_total=0;
         }
         Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual]{
+            ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
             auto fail=[](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;s_current_char={};};
             std::map<std::string,std::set<std::string>> roster;
             std::vector<std::pair<NativeAccounts::LinkedAccount,std::string>> targets;
@@ -939,7 +940,8 @@ namespace AlterEgo {
         bool missing;{std::lock_guard<std::mutex> lock(s_mutex);missing=s_itemstat_cache.empty();}
         if(!PublicCatalog::BeginDataset("public_stats",manual,missing))return;
         const auto root=GetDataDirectory();
-        Background::Workers().Launch([root]{
+        Background::Workers().Launch([root,manual]{
+            ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
             PublicCatalog::Attempt(root,"public_stats");
             auto raw=PublicCatalog::Fetch("/v2/itemstats?ids=all");
             if(!raw.is_array()||raw.size()<50)throw std::runtime_error("Incomplete item stats");
@@ -1066,6 +1068,7 @@ namespace AlterEgo {
     }
 
     void GW2API::FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
+        ApiActivity::ReasonScope reason(ApiActivity::Reason::Manual);
         std::vector<uint32_t> missing;
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
         if(missing.empty())return;
@@ -1225,7 +1228,7 @@ namespace AlterEgo {
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
         auto claim=RefreshEngine::ClaimIds("items",missing);
         if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { FetchItemDetailsClaimed(claim->ids, forceRefetch); });
+        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchItemDetailsClaimed(claim->ids, forceRefetch); });
     }
 
     void GW2API::FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids) {
@@ -1234,7 +1237,7 @@ namespace AlterEgo {
             if(id&&(it==s_skin_cache.end()||(it->second.type=="Armor"&&it->second.weight_class.empty())))missing.push_back(id);}}
         auto claim=RefreshEngine::ClaimIds("skins",missing);
         if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim]() { FetchSkinDetails(claim->ids); });
+        AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchSkinDetails(claim->ids); });
     }
 
     void GW2API::FetchSpecDetailsAsync(const std::vector<uint32_t>& spec_ids) {
@@ -1244,6 +1247,7 @@ namespace AlterEgo {
         if(claim->ids.empty())return;
         auto ids=claim->ids;
         AlterEgo::Background::Workers().Launch([ids,claim]() {
+            ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
@@ -1376,7 +1380,7 @@ namespace AlterEgo {
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:trait_ids)if(id&&!s_trait_cache.count(id))missing.push_back(id);}
         auto claim=RefreshEngine::ClaimIds("traits",missing);
         if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim]() { FetchTraitDetails(claim->ids); });
+        AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchTraitDetails(claim->ids); });
     }
 
     void GW2API::FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids) {
@@ -1386,6 +1390,7 @@ namespace AlterEgo {
         if(claim->ids.empty())return;
         auto ids=claim->ids;
         AlterEgo::Background::Workers().Launch([ids,claim]() {
+            ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
@@ -1450,6 +1455,7 @@ namespace AlterEgo {
         if(claim->ids.empty())return;
         auto ids=claim->ids;
         AlterEgo::Background::Workers().Launch([ids,claim]() {
+            ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
@@ -1506,7 +1512,8 @@ namespace AlterEgo {
         bool missing;{std::lock_guard<std::mutex> lock(s_mutex);missing=s_dye_cache.empty();}
         if(!PublicCatalog::BeginDataset("public_dyes",manual,missing))return;
         const auto root=GetDataDirectory();
-        Background::Workers().Launch([root]{
+        Background::Workers().Launch([root,manual]{
+            ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
             PublicCatalog::Attempt(root,"public_dyes");
             auto raw=PublicCatalog::Fetch("/v2/colors?ids=all");
             if(!raw.is_array()||raw.size()<100)throw std::runtime_error("Incomplete dye catalog");

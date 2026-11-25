@@ -44,6 +44,7 @@ inline bool AchievementDue(const std::string& account,int64_t localSuccess,int64
 }
 inline AchievementResult FetchAchievements(const std::string& root,const std::string& account,bool force=false,
         int64_t maxAge=RefreshEngine::BrowseSeconds,int64_t minimumEpoch=0){
+    ApiActivity::ReasonScope reason(force?ApiActivity::Reason::Manual:ApiActivity::Reason::Objective);
     using Clock=std::chrono::steady_clock;
     const auto started=Clock::now();
     std::unique_lock<std::mutex> lock(AchievementMutex(),std::defer_lock);

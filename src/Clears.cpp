@@ -205,7 +205,7 @@ static int64_t ResetEpoch(std::chrono::system_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::seconds>(
         t.time_since_epoch()).count();
 }
-static void RequestVaultSection(uint8_t type, const std::string& account);
+static void RequestVaultSection(uint8_t type, const std::string& account,bool manual=false);
 static void SaveVaultCache();
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr);
 static void RenderVaultPeriodSection(int sectionIndex, const char* title, const char* resetLabel,
@@ -389,10 +389,11 @@ static const char* VaultSectionName(uint8_t type) {
     return type < 3 ? names[type] : "unknown";
 }
 static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t generation,int status,VaultPeriod period);
-static void RequestVaultSection(uint8_t type,const std::string& account){
+static void RequestVaultSection(uint8_t type,const std::string& account,bool manual){
     uint64_t generation;
     {std::lock_guard<std::mutex> lock(g_ClearsMutex);generation=g_VaultGeneration;}
-    AlterEgo::Background::Workers().Launch([type,account,generation]{
+    AlterEgo::Background::Workers().Launch([type,account,generation,manual]{
+        AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
         auto r=AlterEgo::NativeAccounts::Request(account,std::string("/v2/account/wizardsvault/")+VaultSectionName(type),{"progression"});
         VaultPeriod period;
         if(r){try{period=AlterEgo::NativeProgress::ParseVault(r.data,type==2);}catch(...){r.status=0;}}
@@ -416,6 +417,7 @@ static void RefreshVaultSeason(bool manual){
         if(fetchSeason){g_PublicVaultSeasonPending=true;g_PublicVaultSeasonAttempt=now;}
     }
     if(fetchSeason)AlterEgo::Background::Workers().Launch([manual]{
+        AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
         const auto root=AlterEgo::GW2API::GetDataDirectory();
         const auto apply=[](const AlterEgo::Cache::VaultSeasonSnapshot& season){
             const auto tp=std::chrono::system_clock::from_time_t(static_cast<std::time_t>(season.end));
@@ -515,7 +517,7 @@ static void FetchVaultData(bool skipClaimedSections) {
 
     for (uint8_t type = 0; type < 3; ++type) {
         if (!g_VaultFetching.load()) break;
-        if (request[type]) RequestVaultSection(type, account);
+        if (request[type]) RequestVaultSection(type, account,!skipClaimedSections);
     }
 
 
@@ -663,6 +665,7 @@ static void FetchClears(bool manual) {
     }
 
     AlterEgo::Background::Workers().Launch([manual,account]() {
+        AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
         // Reuse still-current weekly/daily definitions unless explicitly refreshing.
         const int64_t requestToken = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();

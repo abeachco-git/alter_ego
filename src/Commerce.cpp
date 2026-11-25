@@ -170,7 +170,7 @@ namespace Skinventory {
             }
         }
         if(item_ids.empty()) { s_fetching=false; return; }
-        AlterEgo::Background::Workers().Launch([ids = std::move(item_ids), mapping = std::move(item_to_skin)]() mutable { FetchPriceWorker(std::move(ids), std::move(mapping)); }, [] { s_fetching = false; });
+        AlterEgo::Background::Workers().Launch([ids = std::move(item_ids), mapping = std::move(item_to_skin)]() mutable { AlterEgo::ApiActivity::ReasonScope reason(AlterEgo::ApiActivity::Reason::Visible);FetchPriceWorker(std::move(ids), std::move(mapping)); }, [] { s_fetching = false; });
     }
 
     void Commerce::FetchPriceWorker(std::vector<uint32_t> item_ids,
@@ -320,7 +320,7 @@ namespace Skinventory {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_fetch_status = "Building item map...";
         }
-        AlterEgo::Background::Workers().Launch([] { ItemMapWorker(); }, [] { s_item_map_building = false; });
+        AlterEgo::Background::Workers().Launch([] { AlterEgo::ApiActivity::ReasonScope reason(AlterEgo::ApiActivity::Reason::Background);ItemMapWorker(); }, [] { s_item_map_building = false; });
     }
 
     void Commerce::RefreshUpgradeCatalogAsync(bool manual,bool itemsOnly) {
@@ -332,7 +332,8 @@ namespace Skinventory {
         const bool refresh=PublicCatalog::Due(current->upgrades,current->upgradeAttempt,now,manual&&!itemsOnly,PublicCatalog::Month);
         if((!discover&&!refresh)||s_item_map_building.exchange(true))return;
         {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Refreshing public item catalogs...";}
-        Background::Workers().Launch([discover,refresh]{
+        Background::Workers().Launch([discover,refresh,manual]{
+            ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
             if(!s_item_map_ready || PublicCatalog::Get()->index.empty()){ItemMapWorker();return;}
             ItemMapWorker(true,discover,refresh);
         },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Item catalog refresh failed; cache retained";s_item_map_building=false;});

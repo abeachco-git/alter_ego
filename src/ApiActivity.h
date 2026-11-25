@@ -57,28 +57,45 @@ inline Endpoint ApiEndpoint(std::string_view p){
        Prefix(p,"/v2/legends"))return Endpoint::Catalog;
     return Endpoint::ApiOther;
 }
-inline size_t Source(Endpoint e){return e>=Endpoint::WikiApi?1u:0u;}
+inline constexpr size_t SourceCount=3;
+inline size_t Source(Endpoint e){return e==Endpoint::RenderArtwork?2u:e>=Endpoint::WikiApi?1u:0u;}
+enum class Reason : size_t { Unclassified, Background, Visible, Objective, Manual, Count };
+inline constexpr size_t ReasonCount=static_cast<size_t>(Reason::Count);
+inline Reason& CurrentReason(){static thread_local Reason reason=Reason::Unclassified;return reason;}
+class ReasonScope {
+    Reason previous_;
+public:
+    explicit ReasonScope(Reason reason):previous_(CurrentReason()){CurrentReason()=reason;}
+    ~ReasonScope(){CurrentReason()=previous_;}
+    ReasonScope(const ReasonScope&)=delete;
+    ReasonScope& operator=(const ReasonScope&)=delete;
+};
+inline unsigned Priority(Reason r){
+    return r==Reason::Manual?3u:r==Reason::Objective?2u:r==Reason::Background?0u:1u;
+}
 inline int64_t Now(){return std::chrono::duration_cast<std::chrono::seconds>(
     std::chrono::steady_clock::now().time_since_epoch()).count();}
 struct Totals {uint64_t started=0,success=0,failed=0,limited=0,active=0;};
 struct Snapshot {
     std::array<Totals,Count> endpoints{};
-    std::array<uint64_t,2> last10{},last60{},peak{};
+    std::array<uint64_t,SourceCount> last10{},last60{},peak{};
+    std::array<std::array<uint64_t,ReasonCount>,SourceCount> reasons{};
     uint64_t sharedHits=0,sharedCoalesced=0;
     uint64_t metadataOwned=0,metadataCoalesced=0,metadataCooldown=0,metadataManual=0;
 };
 class Recorder {
-    struct Bucket {int64_t second=-1;std::array<uint64_t,2> starts{};};
+    struct Bucket {int64_t second=-1;std::array<uint64_t,SourceCount> starts{};};
     std::mutex mutex_;
     std::array<Bucket,3600> buckets_{};
     Snapshot session_{};
 public:
-    void Start(Endpoint e,int64_t second=Now()){
+    void Start(Endpoint e,int64_t second=Now(),Reason reason=CurrentReason()){
         std::lock_guard<std::mutex> lock(mutex_);
         auto& t=session_.endpoints[static_cast<size_t>(e)];++t.started;++t.active;
         auto& b=buckets_[static_cast<size_t>(second)%buckets_.size()];
         if(b.second!=second){b={};b.second=second;}
         auto& n=b.starts[Source(e)];++n;
+        ++session_.reasons[Source(e)][static_cast<size_t>(reason)];
         auto& peak=session_.peak[Source(e)];peak=std::max(peak,n);
     }
     void Finish(Endpoint e,int status,bool complete){
@@ -102,7 +119,7 @@ public:
         auto s=session_;
         for(const auto& b:buckets_){
             if(b.second<0||b.second>now||now-b.second>=3600)continue;
-            for(size_t i=0;i<2;++i){
+            for(size_t i=0;i<SourceCount;++i){
                 s.last60[i]+=b.starts[i];
                 if(now-b.second<600)s.last10[i]+=b.starts[i];
             }

@@ -28,9 +28,10 @@ size_t Waiting(){return gate.Waiting();}
 Skinventory::HttpResponse Get(const std::string& path,const std::string& key,const std::string& extraHeaders){
     if(path.rfind("/v2/",0)!=0||path.find_first_of("\r\n\\#")!=std::string::npos||
        key.find_first_of("\r\n")!=std::string::npos)return {};
-    // FIFO admission with bounded queue and wait; callers retain previous
-    // snapshots on overload, timeout, cancellation or network failure.
-    if(!gate.Acquire([]{return Background::Workers().Stopping();},std::chrono::seconds(120)))return {};
+    // Interactive/objective work overtakes background discovery before
+    // admission; FIFO within priority and aging prevent starvation.
+    if(!gate.Acquire([]{return Background::Workers().Stopping();},std::chrono::seconds(120),
+        ApiActivity::Priority(ApiActivity::CurrentReason())))return {};
     GateLease lease;
     while(Clock::now()<std::max(next,rateLimit)){
         if(Background::Workers().Stopping())return {};

@@ -211,7 +211,7 @@ namespace Skinventory {
         if(!PublicCatalog::BeginDataset("public_skins",false,true))return;
         s_status=CacheStatus::Loading;
         {std::lock_guard<std::mutex> lock(s_mutex);s_status_message="Starting skin fetch...";}
-        Background::Workers().Launch([] { FetchWorker(); }, [] {
+        Background::Workers().Launch([] { ApiActivity::ReasonScope reason(ApiActivity::Reason::Background);FetchWorker(); }, [] {
             PublicCatalog::EndDataset("public_skins",false);
             std::lock_guard<std::mutex> lock(s_mutex);s_status_message="Skin fetch interrupted";s_status=CacheStatus::Error;
         });
@@ -224,7 +224,7 @@ namespace Skinventory {
         const bool empty=expected==CacheStatus::Empty||expected==CacheStatus::Error;
         s_status=empty?CacheStatus::Loading:CacheStatus::Updating;
         {std::lock_guard<std::mutex> lock(s_mutex);s_status_message="Checking for new skins...";}
-        Background::Workers().Launch([empty] {if(empty)FetchWorker();else UpdateWorker();}, [empty] {
+        Background::Workers().Launch([empty,manual] {ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);if(empty)FetchWorker();else UpdateWorker();}, [empty] {
             PublicCatalog::EndDataset("public_skins",false);
             std::lock_guard<std::mutex> lock(s_mutex);s_status_message="Skin update interrupted";s_status=empty?CacheStatus::Error:CacheStatus::Ready;
         });

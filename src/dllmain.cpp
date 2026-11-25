@@ -2396,6 +2396,7 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
     if(claim->ids.empty()){g_AchCatFetching=false;g_AchCatProgressAutomatic=automatic;g_AchCatProgressPending=catId;return;}
     toFetch=claim->ids;
     AlterEgo::Background::Workers().Launch([toFetch, catId, automatic, claim]() {
+        AlterEgo::ApiActivity::ReasonScope reason(automatic?AlterEgo::ApiActivity::Reason::Visible:AlterEgo::ApiActivity::Reason::Manual);
         // Fetch in batches of 200
         for (size_t start = 0; start < toFetch.size(); start += 200) {
             AlterEgo::Background::Checkpoint();
@@ -17611,8 +17612,8 @@ static void RenderStorageDiagnostics() {
             activity=Session().Read(now);sampled=now;
             apiWaiting=ArenaNet::Waiting();wikiWaiting=Skinventory::HttpClient::WikiWaiting();
         }
-        const char* sources[]={"ArenaNet","Wiki"};
-        for(size_t source=0;source<2;++source){
+        const char* sources[]={"ArenaNet API","Wiki","ArenaNet artwork"};
+        for(size_t source=0;source<SourceCount;++source){
             Totals totals;
             for(size_t i=0;i<Count;++i)if(Source(static_cast<Endpoint>(i))==source){
                 const auto& t=activity.endpoints[i];
@@ -17625,7 +17626,14 @@ static void RenderStorageDiagnostics() {
             ImGui::TextWrapped("  OK %llu | failed %llu (429: %llu) | active %llu | waiting %llu | peak %llu/s",
                 (unsigned long long)totals.success,(unsigned long long)totals.failed,
                 (unsigned long long)totals.limited,(unsigned long long)totals.active,
-                (unsigned long long)(source==0?apiWaiting:wikiWaiting),(unsigned long long)activity.peak[source]);
+                (unsigned long long)(source==0?apiWaiting:source==1?wikiWaiting:0),(unsigned long long)activity.peak[source]);
+            const auto& reasons=activity.reasons[source];
+            ImGui::TextDisabled("  Manual %llu | objective %llu | visible %llu | background %llu | other %llu",
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Manual)],
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Objective)],
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Visible)],
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Background)],
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Unclassified)]);
         }
         ImGui::TextDisabled("Requests: last 10 min / hour / session");
         ImGui::Text("Achievement broker: %llu cache hits, %llu coalesced",

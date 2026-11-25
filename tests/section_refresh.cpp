@@ -149,17 +149,27 @@ int case_section_refresh(int, char**) {
     assert(!D::WikiUrl("https://wiki.guildwars2.com.example.org/api.php"));
     assert(D::RenderUrl("https://render.guildwars2.com/file/a/123.png"));
     assert(!D::RenderUrl("https://render.guildwars2.com.example.org/file/a/123.png"));
-    assert(D::Source(D::Endpoint::RenderArtwork)==0);
+    assert(D::Source(D::Endpoint::RenderArtwork)==2);
+    assert(D::Priority(D::Reason::Manual)>D::Priority(D::Reason::Objective));
+    assert(D::CurrentReason()==D::Reason::Unclassified);
+    {D::ReasonScope outer(D::Reason::Manual);
+        assert(D::CurrentReason()==D::Reason::Manual);
+        {D::ReasonScope inner(D::Reason::Background);assert(D::CurrentReason()==D::Reason::Background);}
+        assert(D::CurrentReason()==D::Reason::Manual);}
+    assert(D::CurrentReason()==D::Reason::Unclassified);
     D::Recorder rec;
     rec.Start(D::Endpoint::Equipment,100);rec.Finish(D::Endpoint::Equipment,200,true);
     rec.Start(D::Endpoint::Equipment,100);rec.Finish(D::Endpoint::Equipment,429,false);
-    rec.Start(D::Endpoint::WikiApi,101);rec.Finish(D::Endpoint::WikiApi,200,false);
+    rec.Start(D::Endpoint::WikiApi,101,D::Reason::Objective);rec.Finish(D::Endpoint::WikiApi,200,false);
+    rec.Start(D::Endpoint::RenderArtwork,101,D::Reason::Visible);rec.Finish(D::Endpoint::RenderArtwork,200,true);
     rec.Start(D::Endpoint::Bags,700);
     rec.Shared(false);rec.Shared(true);
     rec.MetadataClaim(2,3,4,true);rec.MetadataClaim(1,0,5,false);
     auto diag=rec.Read(700);
     assert(diag.last10[0]==1&&diag.last10[1]==1&&diag.last60[0]==3);
-    assert(diag.peak[0]==2&&diag.peak[1]==1);
+    assert(diag.peak[0]==2&&diag.peak[1]==1&&diag.peak[2]==1);
+    assert(diag.last10[2]==1&&diag.reasons[1][static_cast<size_t>(D::Reason::Objective)]==1);
+    assert(diag.reasons[2][static_cast<size_t>(D::Reason::Visible)]==1);
     auto eq=diag.endpoints[static_cast<size_t>(D::Endpoint::Equipment)];
     assert(eq.started==2&&eq.success==1&&eq.failed==1&&eq.limited==1&&!eq.active);
     assert(diag.endpoints[static_cast<size_t>(D::Endpoint::Bags)].active==1);

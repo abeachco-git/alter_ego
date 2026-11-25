@@ -39,5 +39,24 @@ int case_auto_refresh_policy(int, char**) {
     assert(!queue.Acquire([]{return false;},milliseconds(10)));
     assert(queue.Waiting()==0);queue.Release();
     assert(!queue.Acquire([]{return true;},seconds(1)));
+    // Pending interactive and objective requests precede background work,
+    // but the currently admitted request remains non-preemptible.
+    AlterEgo::ArenaNet::Admission priorityQueue(8);
+    assert(priorityQueue.Acquire([]{return false;},seconds(1)));
+    order.clear();
+    auto prioritized=[&](int id,unsigned priority){
+        assert(priorityQueue.Acquire([]{return false;},seconds(5),priority));
+        order.push_back(id);priorityQueue.Release();
+    };
+    std::thread background(prioritized,1,0);
+    while(priorityQueue.Waiting()!=1)std::this_thread::yield();
+    std::thread manual(prioritized,2,3);
+    while(priorityQueue.Waiting()!=2)std::this_thread::yield();
+    std::thread objective(prioritized,3,2);
+    while(priorityQueue.Waiting()!=3)std::this_thread::yield();
+    std::thread manual2(prioritized,4,3);
+    while(priorityQueue.Waiting()!=4)std::this_thread::yield();
+    priorityQueue.Release();background.join();manual.join();objective.join();manual2.join();
+    assert((order==std::vector<int>{2,4,3,1}));
     return 0;
 }
