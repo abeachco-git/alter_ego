@@ -72,6 +72,34 @@ int case_section_refresh(int, char**) {
     A::Tracker restored;restored.Load(tracker.Save());
     assert(restored.Fresh(key,"Bags",now+661,now+999999));
     assert(restored.Due(key,"Equipment",now-100,0,now+999999));
+    // A snapshot timestamp that advanced without its matching verification
+    // ledger must never be treated as a verified legacy snapshot.
+    assert(!restored.Fresh(key,"Bags",now+900,now+1000));
+    assert(restored.Due(key,"Bags",now+900,0,now+1000));
+    A::Tracker failed;
+    failed.Observe(key.first,key.second,34,true,now);
+    failed.Finish(now+10);
+    failed.Begin(key,"Bags",now+20);
+    assert(!failed.Fresh(key,"Bags",now+620,now+1000));
+    // Unknown account identity during a brief transition preserves the
+    // session; a long observation gap resets active freshness.
+    A::Tracker gaps;
+    gaps.Observe(key.first,key.second,34,true,now);
+    gaps.Observe("",key.second,34,true,now+100);
+    assert(gaps.ActiveKey()==key);
+    gaps.Observe(key.first,key.second,34,true,now+101);
+    assert(gaps.Due(key,"Character",now-100,0,now+646));
+    gaps.Observe("",key.second,34,true,now+700);
+    gaps.Observe(key.first,key.second,34,true,now+713);
+    assert(!gaps.Due(key,"Character",now-100,0,now+714));
+    // An offline response that overlaps a resumed session cannot cover it.
+    gaps.Finish(now+720);
+    auto pending=gaps.Begin(key,"Bags",now+1320);
+    gaps.Observe(key.first,key.second,34,true,now+1321);
+    gaps.Finish(now+1322);
+    gaps.Success(key,"Bags",pending,now+1323);
+    assert(!gaps.Fresh(key,"Bags",now+1323,now+1922));
+    assert(gaps.Due(key,"Bags",now+1323,0,now+1922));
     auto a=F::ClaimIds("skills",{1,1,2});assert(a->ids.size()==2);
     auto b=F::ClaimIds("skills",{2,3},true);assert(b->ids==std::vector<uint32_t>{3});
     a.reset();assert(F::ClaimIds("skills",{1})->ids.empty());
