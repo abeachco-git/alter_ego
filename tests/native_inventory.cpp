@@ -68,13 +68,13 @@ int case_native_inventory(int,char**){
     assert(v.wallet.size()==2&&v.wallet.front().value>=0);
     assert(!UsableLoose(g.slots.front(),"account-a","B",{},true));
     assert(UsableLoose(rows.front(),"account-a","B",{},true)&&!UsableLoose(rows.front(),"account-a","B",{},false));
-    for(const auto* scope:{"Wallet","Bags","Shared inventory","Bank","Equipment","Delivery box","Materials","Guild bank","Guild access"}){
+    for(const auto* scope:{"Wallet","Bags","Shared inventory","Bank","Equipment","Delivery box","Materials","Guild bank","Guild access","Legendary Armory"}){
         assert(FreshSeconds(scope)==1800);
         assert(!Due(scope,100,0,1899)&&Due(scope,100,0,1900));
         assert(!Due(scope,100,100,1899)&&Due(scope,100,100,1900));
         assert(Due(scope,0,0,100));
     }
-    for(const auto* scope:{"Legendary Armory","Roster"}){
+    for(const auto* scope:{"Roster"}){
         assert(FreshSeconds(scope)==3600);
         assert(!Due(scope,100,100,3699)&&Due(scope,100,100,3700));
         assert(!Due(scope,100,0,1899)&&Due(scope,100,0,1900));

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <array>
 #include <cstddef>
+#include "RefreshEngine.h"
 namespace AlterEgo::AutoRefreshPolicy {
 inline std::atomic<bool>& Switch() {
     static std::atomic<bool> enabled{false}; // opt-in, including before settings load

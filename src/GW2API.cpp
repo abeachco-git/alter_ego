@@ -10,6 +10,7 @@
 #include "PublicCatalog.h"
 #include "CharacterCache.h"
 #include "AutoRefreshPolicy.h"
+#include "RefreshEngine.h"
 #include "NativeAccounts.h"
 #include "CharacterToolsCore.h"
 #include "RefreshProgress.h"
@@ -1109,18 +1110,29 @@ namespace AlterEgo {
     // --- Async wrappers ---
 
     void GW2API::FetchItemDetailsAsync(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
-        auto ids = item_ids;
-        AlterEgo::Background::Workers().Launch([ids, forceRefetch]() { FetchItemDetails(ids, forceRefetch); });
+        std::vector<uint32_t> missing;
+        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
+        auto claim=RefreshEngine::ClaimIds("items",missing);
+        if(claim->ids.empty())return;
+        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { FetchItemDetails(claim->ids, forceRefetch); });
     }
 
     void GW2API::FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids) {
-        auto ids = skin_ids;
-        AlterEgo::Background::Workers().Launch([ids]() { FetchSkinDetails(ids); });
+        std::vector<uint32_t> missing;
+        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:skin_ids){auto it=s_skin_cache.find(id);
+            if(id&&(it==s_skin_cache.end()||(it->second.type=="Armor"&&it->second.weight_class.empty())))missing.push_back(id);}}
+        auto claim=RefreshEngine::ClaimIds("skins",missing);
+        if(claim->ids.empty())return;
+        AlterEgo::Background::Workers().Launch([claim]() { FetchSkinDetails(claim->ids); });
     }
 
     void GW2API::FetchSpecDetailsAsync(const std::vector<uint32_t>& spec_ids) {
-        auto ids = spec_ids;
-        AlterEgo::Background::Workers().Launch([ids]() {
+        std::vector<uint32_t> missing;
+        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:spec_ids)if(id&&!s_spec_cache.count(id))missing.push_back(id);}
+        auto claim=RefreshEngine::ClaimIds("specializations",missing);
+        if(claim->ids.empty())return;
+        auto ids=claim->ids;
+        AlterEgo::Background::Workers().Launch([ids,claim]() {
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
@@ -1248,13 +1260,20 @@ namespace AlterEgo {
     }
 
     void GW2API::FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids) {
-        auto ids = trait_ids;
-        AlterEgo::Background::Workers().Launch([ids]() { FetchTraitDetails(ids); });
+        std::vector<uint32_t> missing;
+        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:trait_ids)if(id&&!s_trait_cache.count(id))missing.push_back(id);}
+        auto claim=RefreshEngine::ClaimIds("traits",missing);
+        if(claim->ids.empty())return;
+        AlterEgo::Background::Workers().Launch([claim]() { FetchTraitDetails(claim->ids); });
     }
 
     void GW2API::FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids) {
-        auto ids = skill_ids;
-        AlterEgo::Background::Workers().Launch([ids]() {
+        std::vector<uint32_t> missing;
+        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:skill_ids)if(id&&!s_skill_cache.count(id))missing.push_back(id);}
+        auto claim=RefreshEngine::ClaimIds("skills",missing);
+        if(claim->ids.empty())return;
+        auto ids=claim->ids;
+        AlterEgo::Background::Workers().Launch([ids,claim]() {
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
@@ -1313,8 +1332,12 @@ namespace AlterEgo {
     }
 
     void GW2API::FetchItemStatDetailsAsync(const std::vector<uint32_t>& stat_ids) {
-        auto ids = stat_ids;
-        AlterEgo::Background::Workers().Launch([ids]() {
+        std::vector<uint32_t> missing;
+        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:stat_ids)if(id&&!s_itemstat_cache.count(id))missing.push_back(id);}
+        auto claim=RefreshEngine::ClaimIds("itemstats",missing);
+        if(claim->ids.empty())return;
+        auto ids=claim->ids;
+        AlterEgo::Background::Workers().Launch([ids,claim]() {
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {

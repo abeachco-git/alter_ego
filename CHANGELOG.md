@@ -17,6 +17,8 @@ This is a draft for the experimental branch, not a published or fully validated 
 
 ### Changed
 
+- Start unified freshness scheduling: configurable objective tracking, shared achievement progress, per-section Vault refresh and automatic failure cooldowns, pre-dispatch public metadata deduplication, and 30-minute Legendary Armory freshness.
+
 - Recheck active special events after six hours with a 60-minute failure cooldown and cached fallback; refresh skin acquisition metadata on selection after 30 days independently of cached artwork.
 
 - Retire the single-achievement waypoint catalog and its obsolete controls; preserve Vault assistance and vendor location links.

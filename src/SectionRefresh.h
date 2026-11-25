@@ -4,6 +4,7 @@
 // caches before these checks, and manual Refresh always requests everything.
 #include <algorithm>
 #include <ctime>
+#include "RefreshEngine.h"
 
 namespace AlterEgo::SectionRefresh {
 inline constexpr std::time_t kRefreshIntervalSeconds = 15 * 60;

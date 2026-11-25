@@ -1576,6 +1576,7 @@ static void SaveSettings() {
     j["show_last_login"] = g_ShowLastLogin;
     j["auto_refresh_enabled"] = g_AutoRefreshEnabled;
     j["auto_refresh_datasets"] = AlterEgo::AutoRefreshPolicy::GetMask();
+    j["objective_tracking_minutes"] = AlterEgo::RefreshEngine::ObjectiveMinutes();
     j["wallet_favorites"] = AlterEgo::NativeAccounts::WalletFavorites();
     j["auto_refresh_on_login"] = g_AutoRefreshOnLogin;
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
@@ -1623,6 +1624,9 @@ static void LoadSettings() {
     getBool("show_playtime", g_ShowPlaytime);
     getBool("show_last_login", g_ShowLastLogin);
     getBool("auto_refresh_enabled", g_AutoRefreshEnabled);
+    if(j.contains("objective_tracking_minutes")&&j["objective_tracking_minutes"].is_number_integer()){
+        try{AlterEgo::RefreshEngine::SetObjectiveMinutes(j["objective_tracking_minutes"].get<int>());}catch(...){}
+    }
     AlterEgo::AutoRefreshPolicy::SetMask(AlterEgo::AutoRefreshPolicy::AllMask);
     if(j.contains("auto_refresh_datasets")&&j["auto_refresh_datasets"].is_number_unsigned())
         AlterEgo::AutoRefreshPolicy::SetMask(j["auto_refresh_datasets"].get<uint32_t>());
@@ -2348,26 +2352,14 @@ static AchDef ParseAchDef(const nlohmann::json& ach) {
     return d;
 }
 
-static bool IsAchCategoryRefreshDue(uint32_t catId) {
-    if (!catId) return false;
-    auto attempt = g_AchCategoryRefreshAt.find(catId);
-    if (attempt != g_AchCategoryRefreshAt.end())
-        return std::chrono::steady_clock::now() - attempt->second >= std::chrono::minutes(30);
-
-    // An existing account cache is the baseline, not a reason to fetch
-    // every category again. Query a category immediately if it has no data.
+static int64_t AchievementRefreshInterval(){
     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-    const auto cat = g_AchCategories.find(catId);
-    if (cat == g_AchCategories.end() || cat->second.achievements.empty()) return false;
-    bool hasProgress = false;
-    for (uint32_t id : cat->second.achievements) {
-        if (g_AchProgress.count(id)) { hasProgress = true; break; }
-    }
-    if (!hasProgress && g_AchProgressLoadedSnapshotAt<=0) return true;
-    const int64_t now = (int64_t)std::time(nullptr);
-    return g_AchProgressLoadedSnapshotAt <= 0 ||
-           now < g_AchProgressLoadedSnapshotAt ||
-           now - g_AchProgressLoadedSnapshotAt >= 1800;
+    return !g_AchPinned.empty()?AlterEgo::RefreshEngine::ObjectiveSeconds():AlterEgo::RefreshEngine::BrowseSeconds;
+}
+static bool IsAchCategoryRefreshDue(uint32_t catId) {
+    (void)catId;
+    return AlterEgo::NativeProgress::AchievementDue(GetEffectiveAccountName(),
+        g_AchProgressCacheSavedAt,AchievementRefreshInterval());
 }
 
 static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
@@ -2393,7 +2385,10 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
         return;
     }
 
-    AlterEgo::Background::Workers().Launch([toFetch, catId, automatic]() {
+    auto claim=AlterEgo::RefreshEngine::ClaimIds("achievement-definitions",toFetch,!automatic);
+    if(claim->ids.empty()){g_AchCatFetching=false;g_AchCatProgressAutomatic=automatic;g_AchCatProgressPending=catId;return;}
+    toFetch=claim->ids;
+    AlterEgo::Background::Workers().Launch([toFetch, catId, automatic, claim]() {
         // Fetch in batches of 200
         for (size_t start = 0; start < toFetch.size(); start += 200) {
             AlterEgo::Background::Checkpoint();
@@ -2439,21 +2434,20 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         if(account!=g_AchCachedAccount||g_AchProgressFetching)return;
-        if(automatic&&g_AchProgressCacheSavedAt>0&&std::time(nullptr)-g_AchProgressCacheSavedAt<15){
-            if(categoryId)g_AchCategoryRefreshAt[categoryId]=std::chrono::steady_clock::now();return;
-        }
+        if(automatic&&!AlterEgo::NativeProgress::AchievementDue(account,g_AchProgressCacheSavedAt,AchievementRefreshInterval()))return;
         generation=++g_AchRequestGeneration;g_AchProgressFetching=true;g_AchProgressQueryStartMs=NowMs();
         g_AchQueryAutomatic=automatic;
         if(categoryId)g_AchCategoryRefreshAt[categoryId]=std::chrono::steady_clock::now();
     }
-    AlterEgo::Background::Workers().Launch([account,generation,automatic,ids]{
-        auto result=AlterEgo::NativeProgress::FetchAchievements(account,!automatic);
+    const auto interval=AchievementRefreshInterval();
+    AlterEgo::Background::Workers().Launch([account,generation,automatic,ids,interval]{
+        auto result=AlterEgo::NativeProgress::FetchAchievements(account,!automatic,interval);
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account)return;
         g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;
         if(!result.snapshot){
             g_AchRefreshError=result.error;
-            if(result.status==429){g_AchRetryAutomatic=automatic;g_AchRetryAtMs=NowMs()+5000;}
+            // Shared broker records failed attempts; the next automatic check respects its cooldown.
             return;
         }
         std::unordered_map<uint32_t,AchProgress> next;
@@ -2580,7 +2574,10 @@ static void FetchPinnedAchDefs() {
     }
     if (missing.empty()) return; // All defs cached; progress queried via OnHoardPongForAch
 
-    AlterEgo::Background::Workers().Launch([missing]() {
+    auto claim=AlterEgo::RefreshEngine::ClaimIds("achievement-definitions",missing);
+    if(claim->ids.empty())return;
+    missing=claim->ids;
+    AlterEgo::Background::Workers().Launch([missing,claim]() {
         for (size_t start = 0; start < missing.size(); start += 200) {
             AlterEgo::Background::Checkpoint();
             size_t end = std::min(start + 200, missing.size());
@@ -14512,27 +14509,8 @@ static void RenderAchievements() {
         }
     }
 
-    // Refresh only the active category when due, not the entire cached account.
-    // When definitions are missing, fetch just this category and continue later.
-    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) && !g_AchNeedsInitialFullLoad &&
-        g_AchSelectedCatId > 0 && !g_AchProgressFetching && !g_AchCatFetching &&
-        g_AchCatProgressPending.load() == 0 && g_AchRetryAtMs.load() == 0 &&
-        IsAchCategoryRefreshDue(g_AchSelectedCatId)) {
-        std::vector<uint32_t> ids;
-        bool missingDefs = false;
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            const auto it = g_AchCategories.find(g_AchSelectedCatId);
-            if (it != g_AchCategories.end()) {
-                ids = it->second.achievements;
-                for (uint32_t id : ids) {
-                    if (!g_AchDefs.count(id)) { missingDefs = true; break; }
-                }
-            }
-        }
-        if (missingDefs) FetchAchCategoryDefs(g_AchSelectedCatId, true);
-        else if (!ids.empty()) SendAchProgressQuery(ids, true, g_AchSelectedCatId);
-    }
+    // Category selection fetches missing public definitions. The global
+    // objective tick owns periodic account-wide progress requests.
 
     // Fire a scheduled ach-progress query (boot query or BUSY backoff retry).
     if (g_AchRetryAtMs.load() != 0 && NowMs() >= g_AchRetryAtMs.load() && !g_AchProgressFetching) {
@@ -15610,7 +15588,7 @@ static void RenderSkinventoryStatusRow() {
             lastSuccess <= 0 || (now > lastSuccess && now - lastSuccess > 15 * 60);
         if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership) && canRefresh &&
             !currentAccount.empty() && stale &&
-            (s_autoRefreshAccount != currentAccount||std::chrono::steady_clock::now()-s_lastOwnershipAttempt>=std::chrono::seconds(60))) {
+            (s_autoRefreshAccount != currentAccount||std::chrono::steady_clock::now()-s_lastOwnershipAttempt>=std::chrono::seconds(AlterEgo::RefreshEngine::FailureSeconds))) {
             s_autoRefreshAccount = currentAccount;s_lastOwnershipAttempt=std::chrono::steady_clock::now();
             g_SkinRefreshOwned = true;
         }
@@ -15927,31 +15905,16 @@ void AddonRender() {
     // Persist login timestamps when dirty (crash-safe)
     if (g_LoginTimestampsDirty) SaveLoginTimestamps();
 
-    // Refresh pinned achievements on their 10-minute timer only while the
-    // Achievements tab or tracker popout is visible. No startup API burst.
+    // One account-wide objective tick for all achievement browser/popout consumers.
     {
-        static auto s_lastPinnedRefresh = std::chrono::steady_clock::time_point{};
-        auto hStatus = AlterEgo::GW2API::GetAccountStatus();
-        bool hReady = (hStatus == AlterEgo::AccountStatus::Ready);
-        const bool achievementsInUse =
-            g_AchPopoutVisible || (g_WindowVisible && g_MainTab == 4);
-        if (achievementsInUse && hReady && !g_AchProgressFetching) {
-            auto now = std::chrono::steady_clock::now();
-            bool firstRun = (s_lastPinnedRefresh == std::chrono::steady_clock::time_point{});
-            bool expired  = !firstRun &&
-                (now - s_lastPinnedRefresh) >= std::chrono::minutes(10);
-            if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) && (firstRun || expired)) {
-                std::vector<uint32_t> pinnedCopy;
-                {
-                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                    pinnedCopy = g_AchPinned;
-                }
-                if (!pinnedCopy.empty()) {
-                    s_lastPinnedRefresh = now;
-                    g_LastAchProgressQuery = now;
-                    SendAchProgressQuery(pinnedCopy, true);
-                }
-            }
+        static auto lastCheck=std::chrono::steady_clock::time_point{};
+        const auto now=std::chrono::steady_clock::now();
+        if((g_AchPopoutVisible||(g_WindowVisible&&g_MainTab==4))&&
+           AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)&&
+           !g_AchProgressFetching&&AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready&&
+           now-lastCheck>=std::chrono::seconds(2)){
+            lastCheck=now;
+            if(IsAchCategoryRefreshDue(g_AchSelectedCatId))SendAchProgressQuery({},true);
         }
     }
 
@@ -17644,6 +17607,12 @@ void AddonOptions() {
         SaveSettings();
     if (ImGui::Checkbox("When specialization changes##ae_auto_spec", &g_AutoRefreshOnSpecialization))
         SaveSettings();
+    int objectiveMinutes=AlterEgo::RefreshEngine::ObjectiveMinutes();
+    ImGui::SetNextItemWidth(100.0f);
+    if(ImGui::InputInt("Objective tracking (minutes)##ae_objective_interval",&objectiveMinutes,1,5)){
+        AlterEgo::RefreshEngine::SetObjectiveMinutes(objectiveMinutes);SaveSettings();
+    }
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Pinned achievements, Clears and daily/weekly Wizard\'s Vault. General browsing and Special: 30 minutes.");
     if (!g_AutoRefreshEnabled) {
         ImGui::PopStyleVar();
         ImGui::PopItemFlag();

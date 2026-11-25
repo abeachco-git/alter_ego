@@ -143,7 +143,7 @@ inline GuildStock ParseGuild(const Json& j,const std::string& guid){
     return out;
 }
 inline int64_t FreshSeconds(const std::string& scope){
-    if(scope=="Legendary Armory"||scope=="Roster")return 3600;
+    if(scope=="Roster")return 3600;
     return 1800;
 }
 inline bool Due(const std::string& scope,int64_t attempted,int64_t success,int64_t now){
