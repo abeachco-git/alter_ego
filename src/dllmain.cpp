@@ -15667,7 +15667,7 @@ static void RenderCharactersStatusRow() {
     if(selected)DescribeCharacterRefresh(*selected,demand,state,detail,statusLabel);
     bool more = false;
     if (AlterEgo::RefreshUI::Row("characters", selected ? S::Oldest(selected->scope_stamps,demand) : 0,
-          "selected character", state, detail, !hoardReady || busy, &more,statusLabel.c_str())) {
+          "selected character", state, detail, !hoardReady || busy, &more,statusLabel.c_str(),true)) {
         if (selected) {
             const std::string name = selected->name;
             AlterEgo::GW2API::RequestCharacterActivityRefresh(selected->account_name,name,demand,true);
@@ -15725,7 +15725,7 @@ static void RenderCompareStatusRow() {
     std::string statusLabel;
     if(target)DescribeCharacterRefresh(*target,S::Compare,state,detail,statusLabel);
     if (AlterEgo::RefreshUI::Row("compare", target ? S::Oldest(target->scope_stamps,S::Compare) : 0,
-            "character build/equipment", state, detail, busy || !target || AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready,nullptr,statusLabel.c_str())) {
+            "character build/equipment", state, detail, busy || !target || AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready,nullptr,statusLabel.c_str(),true)) {
         const std::string name = target->name;
         g_LibCompareRefreshChar = name;
         g_LibCompareRefreshPending = true;
