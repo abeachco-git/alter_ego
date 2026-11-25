@@ -35,6 +35,10 @@ class Tracker {
     static int64_t Covered(const Entry& e,const Scope& s,int64_t success){
         if(!success)return 0;
         if(s.success==success)return s.covered;
+        // A mismatched snapshot with an existing ledger is not a legacy
+        // snapshot. Its request may have started before the logout grace or
+        // failed to persist the verification watermark. Reconcile again.
+        if(s.success||s.attempt)return 0;
         // A pre-migration snapshot is trustworthy for known activity only if
         // retrieved beyond its propagation window. Unknown history is not
         // evidence of change; retain cached rows until observed activity.
@@ -42,14 +46,16 @@ class Tracker {
     }
 public:
     void Observe(const std::string& account,const std::string& name,uint32_t spec,bool gameplay,int64_t now){
-        if(!gameplay||name.empty()){
+        if(!gameplay||name.empty()||account.empty()){
             if(!missingSince_)missingSince_=now;
             if(now-missingSince_>=12&&!active_.first.empty())End(missingSince_);
             return;
         }
+        // A long gap can end between observations (e.g. a paused render
+        // callback). A resumed identical identity is still a new session.
+        if(missingSince_&&now-missingSince_>=12)End(missingSince_);
         missingSince_=0;
         const Key k{account,name};
-        if(account.empty()){End(now);return;}
         if(k!=active_){
             const auto oldAccount=active_.first;
             if(!oldAccount.empty()){Touch(active_,now);Touch({oldAccount,{}},now);}
