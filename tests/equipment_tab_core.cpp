@@ -9,7 +9,7 @@ struct Character {
     std::map<int,std::string> equipment_tab_names;
     int active_equipment_tab = 0;
 };
-int main() {
+int case_equipment_tab_core(int, char**) {
     using AlterEgo::EquipmentTabCore::Count;
     Character ch;
     assert(Count(ch) == 1);
@@ -26,4 +26,5 @@ int main() {
     assert(Count(ch) == 2);
     ch.equipment_tab_names = {{4,"WvW"}};
     assert(Count(ch) == 4);
+    return 0;
 }

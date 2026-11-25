@@ -8,7 +8,7 @@ std::string Ids(const std::vector<Build>& v) {
     for (const auto& b : v) text += b.id + ",";
     return text;
 }
-int main() {
+int case_build_group_order(int, char**) {
     using namespace AlterEgo::BuildGroupOrder;
     std::vector<Build> v = {
         {"N1","Necromancer"}, {"E1","Engineer"}, {"N2","Necromancer"},
@@ -29,4 +29,5 @@ int main() {
     assert(Ids(v) == "N2,N1,G1,E2,E1,");
     assert(!MoveWithinGroup(v, "missing", "E1", true));
     assert(v.size() == 5);
+    return 0;
 }

@@ -1,11 +1,31 @@
 #include "../src/ClearsRotation.h"
 #include "../src/ClearsReset.h"
 #include "../src/FractalScales.h"
+#include "../src/FractalCardLayout.h"
 #include <cassert>
+#include <nlohmann/json.hpp>
 #include <string>
-int main() {
+int case_clears_rotation(int, char**) {
     using namespace ClearsRotation;
     using namespace ClearsReset;
+    // Actual visible cards determine wrapping and section height.
+    std::vector<FractalCardLayout::Card> cards{
+        {0,240,false,true},{1,260,false,true},{2,250,false,true},{3,150,true,true}};
+    auto wide=FractalCardLayout::Pack(cards,1050,6);
+    assert(wide.rows==1 && wide.cards.size()==4);
+    assert(wide.cards.back().width==150 && wide.cards.back().x+150<=1050.01f);
+    auto narrow=FractalCardLayout::Pack(cards,650,6);
+    assert(narrow.rows==2 && narrow.cards[2].row==1 && narrow.cards[3].row==1);
+    assert(narrow.cards.back().width==150);
+    cards[0].visible=cards[1].visible=cards[2].visible=false;
+    auto rec=FractalCardLayout::Pack(cards,1050,6);
+    assert(rec.rows==1 && rec.cards.size()==1 && rec.cards[0].index==3);
+    assert(rec.cards[0].x==0 && rec.cards[0].width==150);
+    cards[3].visible=false;
+    assert(FractalCardLayout::Pack(cards,1050,6).rows==0);
+    cards[1].visible=true; cards[3].visible=true;
+    auto tiny=FractalCardLayout::Pack(cards,100,6);
+    assert(tiny.rows==2 && tiny.cards[0].width==100 && tiny.cards[1].width==100);
     // At 00:00 UTC we must NOT consume the reset marker before the API grace
     // period. This was the cause of Vault + daily Fractals missing rollover.
     constexpr int64_t day = 86400, reset = 1795305600;
@@ -60,6 +80,20 @@ int main() {
            std::to_string(reset + 61000));
     assert(FreshCategoryUrl(475, reset + 61001) !=
            FreshCategoryUrl(475, reset + 61000));
+    assert(AlternateCategoryUrl(88,1234)==
+           "https://api.guildwars2.com/v2/achievements/categories?ids=88&v=2022-03-23T19%3A00%3A00.000Z&lang=en&ae_refresh=1234");
+    using nlohmann::json;
+    const auto oldCategory=json::parse(R"({"id":88,"achievements":[101,102]})");
+    const auto newCategory=json::parse(R"([{"id":88,"achievements":[{"id":101},{"id":103},{"id":103}]}])");
+    assert(CategoryIds(oldCategory,88)==std::vector<uint32_t>({101,102}));
+    assert(CategoryIds(newCategory,88)==std::vector<uint32_t>({101,103}));
+    assert(LooksUnrotated({101,102},CategoryIds(oldCategory,88)));
+    assert(!LooksUnrotated({101,102},CategoryIds(newCategory,88)));
+    assert(CategoryIds(oldCategory,475).empty());
+    assert(CategoryIds(json::parse(R"({"id":88,"achievements":[101,"bad"]})"),88).empty());
+    assert(CategoryIds(json::parse(R"({"id":88,"achievements":[0,1]})"),88).empty());
+    assert(CategoryIds(json::parse(R"({"id":88,"achievements":[-1]})"),88).empty());
+    assert(CategoryIds(json::parse(R"([{"id":88,"achievements":[1]},{"id":88,"achievements":[2]}])"),88).empty());
     assert(RetryDelaySeconds(1) == 30 && RetryDelaySeconds(2) == 60);
     assert(RetryDelaySeconds(3) == 120 && RetryDelaySeconds(6) == 300);
     constexpr int64_t nov21 = 1795219200;
@@ -154,4 +188,5 @@ int main() {
     assert(FractalScales::DailyTooltip("Sunqua Peak").find("T4 (98)") != std::string::npos);
     for (int scale = 1; scale <= 100; ++scale)
         assert(FractalScales::NameForScale(scale) != nullptr);
+    return 0;
 }

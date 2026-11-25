@@ -2,6 +2,9 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <map>
+#include "WikiFreshness.h"
 #include <mutex>
 #include <atomic>
 #include <vector>
@@ -27,6 +30,7 @@ namespace Skinventory {
     class WikiImage {
     public:
         static void Initialize(AddonAPI_t* api, const std::string& cacheDir);
+        static void RequestStop();
         static void Shutdown();
 
         // Request a wiki image for a skin by name (async, on-click)
@@ -65,7 +69,8 @@ namespace Skinventory {
         static std::string GetWikiDataCachePath();
         static std::string GetFailedCachePath();
         static bool LoadFromDisk(uint32_t skinId);
-        static void SaveWikiDataCache();
+        static void RequestMetadata(uint32_t skinId,const std::string& skinName,const std::string& weightClass);
+        static void RefreshMetadata(uint32_t skinId,const std::string& skinName,const std::string& weightClass);
         static void LoadWikiDataCache();
         static void SaveFailedCache();
         static void LoadFailedCache();
@@ -79,10 +84,13 @@ namespace Skinventory {
             uint32_t skinId;
             std::string skinName;
             std::string weightClass;
+            bool metadataOnly=false;
         };
 
         static std::unordered_map<uint32_t, Texture_t*> s_imageCache;
         static std::unordered_map<uint32_t, WikiSkinData> s_wikiDataCache;
+        static std::map<uint32_t,AlterEgo::WikiFreshness::Stamp> s_metadataFreshness;
+        static std::unordered_set<uint32_t> s_metadataPending;
         static std::unordered_map<uint32_t, bool> s_loading;
         static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> s_failed;
         static std::unordered_map<uint32_t, int64_t> s_failedPersistent; // skin_id -> unix_timestamp

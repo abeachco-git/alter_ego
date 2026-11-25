@@ -1,7 +1,7 @@
 #include "../src/InfusionTotalsCore.h"
 #include <cassert>
 using namespace AlterEgo;
-int main() {
+int case_infusion_totals(int, char**) {
     assert(AgonyRequirement(162) == 150);
     assert(AgonyRequirement(135) == 135);
     assert(AgonyRequirement(-1) == 0);

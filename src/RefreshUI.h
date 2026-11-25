@@ -4,11 +4,12 @@
 #include <ctime>
 #include <string>
 #include "imgui.h"
+#include "UIControls.h"
 
 // Compact, consistent refresh/status presentation for Alter Ego tabs.
 namespace AlterEgo::RefreshUI {
 
-enum class State { Ready, Working, Success, Error };
+enum class State { Ready, Working, Success, Error, Waiting };
 
 inline std::string Age(std::time_t stamp) {
     if (stamp <= 0) return "not available";
@@ -53,6 +54,8 @@ inline void Status(State state, const std::string& message) {
         constexpr char chars[] = "|/-\\";
         const int i = (int)(ImGui::GetTime() * 8.0) % 4;
         ImGui::TextColored(warn, "%c  %s", chars[i], message.c_str());
+    } else if (state == State::Waiting) {
+        ImGui::TextColored(warn, "%s", message.c_str());
     } else if (state == State::Error) {
         ImGui::TextColored(bad, "!  %s", message.c_str());
     } else if (state == State::Success) {
@@ -63,7 +66,7 @@ inline void Status(State state, const std::string& message) {
 }
 
 inline float RowHeight() {
-    return std::max(30.0f, ImGui::GetFrameHeight()) + ImGui::GetStyle().ItemSpacing.y + 3.0f;
+    return UI::ActionButtonHeight() + ImGui::GetStyle().ItemSpacing.y + 3.0f;
 }
 
 // One shared bottom status row for Characters, Compare, Skinventory, Vault,
@@ -72,20 +75,20 @@ inline float RowHeight() {
 // The optional ellipsis reuses the Characters multi-character picker.
 inline bool Row(const char* id, std::time_t stamp, const char* source,
                 State state, const std::string& detail, bool disabled = false,
-                bool* moreClicked = nullptr) {
+                bool* moreClicked = nullptr, const char* statusOverride = nullptr, bool timestampDetails = false) {
     ImGui::PushID(id);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    const float buttonH = std::max(30.0f, ImGui::GetFrameHeight());
+    const float buttonH = UI::ActionButtonHeight();
     if (disabled) {
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
-    const bool clicked = ImGui::Button("Refresh", ImVec2(0, buttonH));
+    const bool clicked = UI::Button("Refresh", ImVec2(0, buttonH));
     if (disabled) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     if (moreClicked) {
         ImGui::SameLine(0.0f, 5.0f);
-        *moreClicked = ImGui::Button("...", ImVec2(29.0f, buttonH));
+        *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH));
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Choose one or more characters to refresh");
     }
@@ -99,12 +102,14 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     const float maxStatus = std::max(0.0f, stampX - statusX - 8.0f);
     const char* shortStatus = state == State::Working ? "Refreshing" :
                               state == State::Success ? "Complete" :
-                              state == State::Error ? "Failed" : "Ready";
+                              state == State::Error ? "Failed" :
+                              state == State::Waiting ? "Waiting for API" : "Ready";
+    if(statusOverride&&*statusOverride)shortStatus=statusOverride;
     std::string statusText(shortStatus);
     while (!statusText.empty() &&
            ImGui::CalcTextSize(statusText.c_str()).x > maxStatus)
         statusText.pop_back();
-    const ImVec4 statusColor = state == State::Working ? ImVec4(0.98f, 0.80f, 0.34f, 1.0f) :
+    const ImVec4 statusColor = (state == State::Working || state == State::Waiting) ? ImVec4(0.98f, 0.80f, 0.34f, 1.0f) :
         state == State::Success ? ImVec4(0.48f, 0.82f, 0.52f, 1.0f) :
         state == State::Error ? ImVec4(0.98f, 0.42f, 0.40f, 1.0f) :
         ImVec4(0.58f, 0.58f, 0.58f, 1.0f);
@@ -128,9 +133,11 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
 #endif
             char when[64] = {};
             std::strftime(when, sizeof(when), "%b %d, %Y at %I:%M:%S %p", &local);
-            ImGui::SetTooltip("Last successful %s retrieval:\\n%s (local time)", source, when);
+            ImGui::SetTooltip("Last successful %s retrieval:\n%s (local time)%s%s", source, when,
+                timestampDetails&&!detail.empty()?"\n\n":"",timestampDetails?detail.c_str():"");
         } else {
-            ImGui::SetTooltip("No confirmed successful %s retrieval time", source);
+            ImGui::SetTooltip("No confirmed successful %s retrieval time%s%s", source,
+                timestampDetails&&!detail.empty()?"\n\n":"",timestampDetails?detail.c_str():"");
         }
     }
     ImGui::PopID();

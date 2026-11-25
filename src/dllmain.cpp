@@ -1,8 +1,12 @@
+#include "AccountIdentity.h"
+#include "CallbackLifetime.h"
+#include "BackgroundWorkers.h"
 #include <windows.h>
 #include <commdlg.h>
 #include <shellapi.h>
 #include <string>
 #include <vector>
+#include <deque>
 #include <cstring>
 #include <sstream>
 #include <algorithm>
@@ -25,30 +29,52 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "GW2API.h"
+#include "FashionModel.h"
 #include "BuildCompareCore.h"
+#include "ComposableSemantics.h"
 #include "InfusionMatchCore.h"
 #include "InfusionTotalsCore.h"
 #include "SnowCrowsImport.h"
 #include "MetaBattleImport.h"
-#include "AutoRefreshCore.h"
+#include "BuildRelayPolicy.h"
+#include "CharacterActivity.h"
 #include "AutoRefreshPolicy.h"
 #include "FontResolve.h"
 #include "FontManager.h"
 #include "IconManager.h"
 #include "ChatLink.h"
-#include "HoardAndSeekAPI.h"
+#include "NativeProgress.h"
 #include "SpecDescriptions.h"
 #include "SkinCache.h"
 #include "OwnedSkins.h"
 #include "Commerce.h"
+#include "PublicCatalog.h"
+#include "WikiEventRuntime.h"
+#include "SkinSearchCore.h"
+#include "SkinFilters.h"
+#include "LibraryModeFilter.h"
 #include "WikiImage.h"
 #include "HttpClient.h"
+#include "ApiActivity.h"
+#include "ArenaNetTransport.h"
 #include <nlohmann/json.hpp>
 #include "AddonShared.h"
+#include "EquipmentLayout.h"
+#include "CatalogPresentation.h"
+#include "CharacterToolsCore.h"
 #include "Clears.h"
 #include "CompletionTheme.h"
 #include "EquipmentTabCore.h"
+#include "EquipmentChoiceCore.h"
+#include "GearEditCore.h"
 #include "RefreshUI.h"
+#include "CacheDatabase.h"
+#include "AchievementCatalogCache.h"
+#include "AchievementNamesCore.h"
+#include "WikiFreshness.h"
+#include "StoragePaths.h"
+#include "GameMemory.h"
+#include "NativeAccounts.h"
 
 // Version constants
 #define V_MAJOR 1
@@ -390,24 +416,29 @@ static bool g_ShowCraftingIcons = false;
 static bool g_ShowAge = false;
 static bool g_ShowPlaytime = false;
 static bool g_ShowLastLogin = false;
-// Explicit opt-in: no additional H&S requests unless enabled in Nexus options.
+// Explicit opt-in: no additional API requests unless enabled in Nexus options.
 static bool g_AutoRefreshEnabled = false;
-static bool g_AutoRefreshOnLogin = true;
+// Login is observed locally; it never independently requests data.
 static bool g_AutoRefreshOnSpecialization = true;
 static bool g_WarnStaleSpecialization = true;
 static int g_BirthdayMode = 1;         // 0 = Always, 1 = A week out, 2 = Never
 static float g_CharListWidth = 200.0f; // Resizable character list column width
 static bool g_DetailsFetched = false;  // Track if we've requested details for current character
+// Render-thread navigation intent. Ordinary filter/refresh changes do not branch history.
+static int g_NavIntentFrames=0;
+static void MarkNavigation(){g_NavIntentFrames=3;}
+void MarkInventoryNavigation(){MarkNavigation();}
 static int g_MainTab = 0;             // Stable session IDs: 0=Characters, 1=Build Library, 2=Skinventory, 3=Vault, 4=Achievements, 5=Compare
 static std::chrono::steady_clock::time_point g_FetchDoneTime{}; // For status message fade-out
 
 // Skinventory UI state
 static int g_SkinActiveTab = 0; // 0 = Browser, 1 = Shopping List
 static bool g_SkinSwitchToBrowser = false;
+static bool g_SkinSwitchToShopping = false;
 static bool g_SkinScrollToSkin = false;
-static std::string g_SkinSelectedType = "Armor";
-static std::string g_SkinSelectedWeightClass = "Heavy";
-static std::string g_SkinSelectedSubtype = "Helm";
+static Skinventory::SkinFilters g_SkinBrowserFilters;
+static float g_InventoryListWidth=420.f;
+static float g_SkinListWidth=420.f, g_FashionListWidth=220.f, g_ComponentListWidth=270.f;
 static uint32_t g_SkinSelectedId = 0;
 static char g_SkinSearchFilter[256] = "";
 static bool g_SkinShowOwned = true;
@@ -415,6 +446,8 @@ static bool g_SkinShowUnowned = true;
 static int  g_SkinViewMode = 0; // 0 = List, 1 = Grid
 static bool g_SkinRefreshOwned = false;
 static bool g_SkinInitialized = false;
+static bool g_SwitchToInventory = false;
+static void OpenInventoryItem(uint32_t id);
 static bool g_SwitchToSkinventory = false; // set by achievements tab to navigate to Skinventory
 static bool g_SwitchToCompare = false;     // set by Build Library to open Compare with its selected build
 
@@ -438,15 +471,15 @@ struct SkinShopEntry {
     uint32_t skinId;
     int price;      // in copper
     int source;     // 0 = TP, 1 = Vendor
+    std::string name, subtype; // cached sort keys
+    uint32_t ownedItem=0;
 };
 static std::vector<SkinShopEntry> g_SkinShopList;
-static bool g_SkinShopListDirty = true;
+static std::atomic<bool> g_SkinShopListDirty{true};
 
 // =========================================================================
 // Achievement Tracker
 // =========================================================================
-#define EV_AE_ACH_PROGRESS_RESPONSE "EV_ALTER_EGO_ACH_PROGRESS_RESP"
-static void OnAchProgressResponse(void* eventArgs);
 
 struct AchGroupDef {
     std::string id;            // UUID string
@@ -485,15 +518,7 @@ struct AchDef {
     std::vector<uint32_t> prerequisites;
 };
 
-struct AchProgress {
-    uint32_t id = 0;
-    int current = 0;
-    int max = 0;
-    bool done = false;
-    int repeated = 0;
-    bool unlocked = true;                // absent in API = unlocked
-    std::set<uint32_t> completed_bits;   // indices of completed bits
-};
+using AchProgress = AlterEgo::Cache::AchievementProgress;
 
 // Achievement tracker state
 static std::vector<AchGroupDef> g_AchGroups;
@@ -506,46 +531,33 @@ static std::unordered_map<uint32_t, uint32_t> g_AchIdToCategory; // ach id -> ca
 static std::unordered_set<uint32_t> g_AchHiddenCatIds;          // categories to hide (e.g. Character Adventure Guide)
 
 static std::recursive_mutex g_AchMutex;
-static bool g_AchGroupsFetched = false;
+static std::atomic<bool> g_AchGroupsFetched{false};
 static int64_t g_AchGroupsCacheFetchedAt = 0; // last successful groups/categories snapshot
 static uint64_t g_AchGroupsGeneration = 0;   // changes after cache load / network refresh
 static std::atomic<bool> g_AchGroupsFetching{false};
-static bool g_AchNameIndexReady = false;
+static std::atomic<bool> g_AchNameIndexReady{false};
+static std::atomic<int64_t> g_AchNameIndexVerifiedAt{0}, g_AchNameIndexRetryAt{0};
+static std::atomic<uint64_t> g_AchCatalogGeneration{0};
+static std::mutex g_AchNamePersistMutex, g_AchDefPersistMutex;
+static std::string g_AchNameIndexStatus, g_AchNameIndexError; // guarded by g_AchMutex
 static std::atomic<bool> g_AchNameIndexFetching{false};
 static std::string g_AchStatusMsg;
 
-#define ACH_NAME_INDEX_URL "https://raw.githubusercontent.com/PieOrCake/alter_ego/main/data/achievement_names.json"
-#define ACH_WAYPOINTS_URL "https://raw.githubusercontent.com/PieOrCake/alter_ego/main/data/achievement_waypoints.json"
-#define HERO_CHALLENGES_URL "https://raw.githubusercontent.com/PieOrCake/alter_ego/main/data/hero_challenges.json"
-
-// Hero challenge data: id -> { map_name, expansion }
-struct HeroChallengeInfo {
-    std::string map_name;
-    std::string expansion;
-};
-static std::unordered_map<std::string, HeroChallengeInfo> g_HeroChallenges; // id -> info
-static bool g_HeroChallengesReady = false;
-static std::atomic<bool> g_HeroChallengesFetching{false};
-
-// Waypoint data: achId -> (bitIndex -> chatCode), bitIndex -1 = achievement-level waypoint
-static std::unordered_map<uint32_t, std::unordered_map<int, std::string>> g_AchWaypoints;
-static bool g_AchWaypointsReady = false;
-static std::atomic<bool> g_AchWaypointsFetching{false};
-
-// UI state
 static std::string g_AchSelectedGroupId;   // currently selected group UUID
 static uint32_t g_AchSelectedCatId = 0;    // currently selected category ID
 static std::atomic<bool> g_AchCatFetching{false};      // fetching defs for selected category
 static std::atomic<bool> g_AchProgressFetching{false}; // fetching account progress
-static std::atomic<long long> g_AchProgressQueryStartMs{0}; // watchdog for missing H&S responses
+static std::atomic<uint64_t> g_AchRequestGeneration{0};
+static std::atomic<long long> g_AchProgressQueryStartMs{0}; // watchdog for missing API responses
 static bool g_AchNeedRequery = false;      // deferred requery on account change
-static bool g_AchProgressDirty = false;    // persistent cache needs flushing
+static std::atomic<bool> g_AchProgressDirty{false};
+static bool g_AchSwitchingAccount=false; // guarded by g_AchMutex    // persistent cache needs flushing
 static std::string g_AchCachedAccount;     // account whose data is currently in g_AchProgress
-static int64_t g_AchProgressCacheSavedAt = 0; // last successful achievement progress retrieval
+static std::atomic<int64_t> g_AchProgressCacheSavedAt{0}; // last successful achievement progress retrieval
 // The loaded snapshot timestamp is stable across pinned updates, unlike saved_at.
 static int64_t g_AchProgressLoadedSnapshotAt = 0;
-static bool g_AchNeedsInitialFullLoad = true;
-static bool g_AchManualInitialScan = false;
+static std::atomic<bool> g_AchNeedsInitialFullLoad{true};
+static std::atomic<bool> g_AchManualInitialScan{false};
 // Refresh timestamps are scoped to the active category and reset on account change.
 static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_AchCategoryRefreshAt;
 static std::chrono::steady_clock::time_point g_AchRefreshSuccessUntil{};
@@ -568,7 +580,7 @@ static std::atomic<long long> g_AchRetryAtMs{0};
 // Keep manual retries alive when the global auto-refresh switch changes.
 static std::atomic<bool> g_AchRetryAutomatic{false};
 static std::atomic<bool> g_AchQueryAutomatic{false};
-static uint64_t g_AchProgressGen = 0;      // incremented when progress updates, triggers popout cache rebuild
+static std::atomic<uint64_t> g_AchProgressGen{0};      // incremented when progress updates, triggers popout cache rebuild
 static char g_AchSearchBuf[128] = "";
 static bool g_AchPopoutVisible = false;    // popout tracker window visibility
 static bool g_AchHideEmptyCats = false;    // rail filter: hide categories with no progress data
@@ -587,7 +599,7 @@ static uint32_t g_AchNavigateToId = 0;     // pending navigation: jump to this a
 static std::vector<uint32_t> g_AchActiveMainCatIds;   // main/Historical categories for top of tree
 static std::vector<uint32_t> g_AchActiveDailyCatIds;   // daily categories for top of Daily group
 static std::string g_AchActiveEventName;                // display name for the active event node
-static bool g_AchActiveEventFetched = false;
+static std::atomic<int64_t> g_AchActiveEventNextCheck{0};
 static std::atomic<bool> g_AchActiveEventFetching{false};
 
 // Festival daily category IDs (hidden from Daily group when their festival is not active)
@@ -744,7 +756,7 @@ static int AeParseWikiDate(const std::string& s) {
 // Extract the "== Active events ==" section, find its {{Special event row}} blocks,
 // select the one whose [start,end] window contains today, and map its title to a
 // category ID. Falls back to the first recognised row if dates are unparseable.
-static ActiveEventResult ParseActiveSpecialEvent(const std::string& wikitext, int todayYmd) {
+static ActiveEventResult ParseActiveSpecialEvent(const std::string& wikitext, int todayYmd, bool allowUndated) {
     ActiveEventResult empty{"", 0};
     size_t h = wikitext.find("== Active events ==");
     if (h == std::string::npos) return empty;
@@ -778,15 +790,14 @@ static ActiveEventResult ParseActiveSpecialEvent(const std::string& wikitext, in
         }
 
         ActiveEventResult r{title, catId};
-        if (!haveFirst) { firstRow = r; haveFirst = true; }
-
         int startYmd = AeParseWikiDate(AeWikiField(block, "start date"));
         int endYmd   = AeParseWikiDate(AeWikiField(block, "end date"));
-        if (startYmd && endYmd && todayYmd >= startYmd && todayYmd <= endYmd) {
+        if (allowUndated && !haveFirst && (!startYmd || !endYmd)) { firstRow=r; haveFirst=true; }
+        if (AlterEgo::WikiFreshness::DateMatches(startYmd,endYmd,todayYmd)) {
             return r; // dated window contains today — definitive
         }
     }
-    return firstRow; // no dated match; fall back to first active row
+    return firstRow; // only an undated row from a fresh source may be a fallback
 }
 
 // Optimistic update grace period — protects alert-based increments from stale API snapback
@@ -798,20 +809,15 @@ static void SaveAchTrackerState();
 static void LoadAchTrackerState();
 static void SaveAchGroupCache();
 static void LoadAchGroupCache();
-static void SaveAchDefCache();
+static bool SaveAchDefCache(int64_t verifiedAt = 0);
+static bool SaveAchNameIndex(int64_t verifiedAt = 0);
 static void LoadAchDefCache();
 static void FetchAchGroups();
 static void FetchAchCategoryDefs(uint32_t catId, bool automatic = false);
 static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic = false,
                                  uint32_t categoryId = 0);
 static void FetchPinnedAchDefs();
-static void SaveAchWaypoints();
-static void LoadAchWaypoints();
-static void FetchAchWaypoints();
 static void FetchActiveSpecialEvent();
-static void SaveHeroChallenges();
-static void LoadHeroChallenges();
-static void FetchHeroChallenges();
 
 // Character search
 static char g_CharSearchBuf[128] = "";
@@ -829,26 +835,43 @@ struct MumbleIdentity {
     float FOV;
     unsigned UISize;
 };
-static std::string g_CurrentCharName; // currently logged-in character name from MumbleLink
-static AlterEgo::AutoRefreshTracker g_AutoRefreshTracker;
-
-// Local login timestamps (character name -> unix epoch)
-static std::unordered_map<std::string, int64_t> g_LoginTimestamps;
-static bool g_LoginTimestampsDirty = false;
-static void SaveLoginTimestamps();
-static void LoadLoginTimestamps();
+static std::string g_CurrentCharName; // render-owned gameplay identity
+static uint32_t g_LiveSpecialization=0;
+// Read-only presentation projection; CharacterActivity is the sole login writer.
+static std::map<AlterEgo::CharacterActivity::Key,int64_t> g_LoginHistory;
+static std::map<std::string,int64_t> g_LegacyLoginHistory;
+static bool g_LegacyLoginArchivePending=false;
+static bool g_ActivityLoadValid=true;
+static uint64_t g_LoginProjectionRevision=0;
+static void LoadLegacyLoginHistory();
+static void ImportPortableLoginHistory();
+static void MigrateLegacyLoginHistory();
+static void SyncLoginHistory();
+static void LoadCharacterActivity();
+static bool SaveCharacterActivity(bool force=false);
+static void ObserveCharacterActivity();
+static int64_t CharacterLastLogin(const AlterEgo::Character& ch){
+    auto it=g_LoginHistory.find({ch.account_name,ch.name});
+    return it==g_LoginHistory.end()?0:it->second;
+}
+static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand);
 
 // Build Library UI state
 static float g_LibListWidth = 220.0f; // Resizable build list column width
-static int g_LibraryCollection = 0; // 0 Builds, 1 Fashion
+static int g_LibraryCollection = 0; // 0 Loadouts, 1 Fashion, 2 Components, 3 Equipment Sets
 static bool g_SwitchToLibrary = false; // select Library after creation/import/navigation
 static int g_LibSelectedIdx = -1;
-// Build editor: "+ New Build" dialog state
+// Build editor: "+ New Loadout" dialog state
 static bool g_NewBuildDialogOpen = false;
 static std::string g_NewBuildProfessionPending;
 static std::vector<AlterEgo::GameMode> g_NewBuildModes{AlterEgo::GameMode::PvE};
 // Build editor: working draft + spec picker state
 static AlterEgo::SavedBuild g_EditDraft;   // working copy while editing a build's definition
+static uint64_t g_EditDraftRevision = 0;
+static bool g_EditRefsReady=false;
+static std::string g_EditSetId,g_EditFashionId;
+static std::map<std::string,std::string> g_EditRefs;
+static std::set<std::string> g_EditSharedKinds;
 static std::string g_EditDraftId;          // id the draft currently mirrors
 static bool g_EditDirty = false;           // true once the draft diverges from the snapshot
 static bool g_EditIsNewBuild = false;      // true while editing a freshly-created build (cancel discards it)
@@ -858,7 +881,7 @@ static int g_SkillPickerSlot = -1;         // 0=heal,1-3=util,4=elite while open
 static ImVec2 g_SkillPickerAnchor;         // screen pos of the clicked skill icon (flyout anchor)
 static int g_LegendPickerSlot = -1;        // 0..1 (Revenant) while open, else -1
 static int g_PetPickerSlot = -1;           // 0..1 (Ranger) while open, else -1
-static int g_LibFilterMode = 0;        // 0=All, 1=PvE, 2=WvW, 3=PvP, 4=Raid, 5=Fractal
+static std::set<std::string> g_LibFilterModes; // empty = All; selected modes are ORed
 static char g_LibSearchBuf[128] = "";
 static char g_LibImportBuf[4096] = "";
 static char g_LibImportName[128] = "";
@@ -897,37 +920,29 @@ static std::string g_LibEditNotes;
 static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
     g_EditDraft = build;
     g_EditDraftId = build.id;
+    g_EditDraftRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
+    g_EditRefsReady=false;g_EditRefs.clear();g_EditSetId.clear();g_EditFashionId.clear();g_EditSharedKinds.clear();
+    nlohmann::json graph;
+    if(AlterEgo::GW2API::GetComposableLoadouts(graph)&&graph.contains("loadouts")){
+        for(const auto& owner:graph.at("loadouts"))if(owner.value("id",std::string())==build.id){
+            g_EditRefs=owner.at("refs").get<std::map<std::string,std::string>>();
+            g_EditSetId=owner.value("equipment_set_id",std::string());
+            g_EditFashionId=owner.value("fashion_id",std::string());
+            g_EditRefsReady=true;break;
+        }
+    }
     g_LibEditName = build.name;
     g_LibEditNotes = build.notes;
     g_EditDirty = false;
     g_LibEditMode = true;
 }
 static inline void MarkEditDirty() { g_EditDirty = true; }
+static bool g_EditSavePending = false;
+static bool g_EditReviewPending=false;
 
-static int ImGuiInputStringResizeCallback(ImGuiInputTextCallbackData* data) {
-    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
-        auto* str = static_cast<std::string*>(data->UserData);
-        str->resize(data->BufTextLen);
-        data->Buf = str->data();
-    }
-    return 0;
-}
-
-static bool InputTextString(const char* label, std::string& str, ImGuiInputTextFlags flags = 0) {
-    flags |= ImGuiInputTextFlags_CallbackResize;
-    return ImGui::InputText(label, str.data(), str.capacity() + 1,
-        flags, ImGuiInputStringResizeCallback, &str);
-}
-
-static bool InputTextMultilineString(const char* label, std::string& str, const ImVec2& size,
-                                     ImGuiInputTextFlags flags = 0) {
-    flags |= ImGuiInputTextFlags_CallbackResize;
-    return ImGui::InputTextMultiline(label, str.data(), str.capacity() + 1,
-        size, flags, ImGuiInputStringResizeCallback, &str);
-}
 static std::string g_LibEditBuildId;   // which build is being edited
 static int g_LibCtxDeleteIdx = -1;     // deferred delete from context menu
-static bool g_RelaySending = false;    // relay POST in progress
+static std::atomic<bool> g_RelaySending{false};    // relay POST in progress
 static std::string g_RelayResultCode;  // 4-char code on success
 static std::string g_RelayResultError; // error message on failure
 
@@ -1007,6 +1022,8 @@ struct AlertUnlockPayload {
 };
 
 static void OnEvAlertSkinUnlocked(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     auto* payload = (AlertUnlockPayload*)eventArgs;
     if (payload->ID != 0) {
@@ -1018,33 +1035,26 @@ static void OnEvAlertSkinUnlocked(void* eventArgs) {
 
 #define EV_ALERT_ACHIEVEMENT_COMPLETED "EV_ALERT:AchievementCompleted"
 
-// When H&S becomes available, signal render thread to query progress + clears.
-// This handler may run on H&S's thread — never call Events_Raise here.
-static void OnHoardPongForAch(void* eventArgs) {
-    if (!eventArgs) return;
-    auto* pong = (HoardPongPayload*)eventArgs;
-    if (pong->api_version < 2) return;
-
-    // No automatic H&S API requests when the Nexus option is off.
-    if (!AlterEgo::AutoRefreshPolicy::Enabled()) return;
-    // H&S availability is not permission to perform API work at startup.
-    // Achievements and Clears issue requests only from their active tabs
-    // (or when the user opens the pinned-achievement popout).
-}
+// When native API becomes available, signal render thread to query progress + clears.
+// This handler may run on native API's thread — never call Events_Raise here.
 
 static void OnEvAlertAchievementCompleted(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     // This alert describes the logged-in character, not necessarily the
     // account selected in the Achievements view. Never apply it to another
     // account's progress file.
-    if (g_AchCachedAccount.empty() ||
-        g_AchCachedAccount != GetAchievementCacheAccount()) return;
+    // The selected-account UI filter is render-owned. The cached account
+    // identity is checked under the progress mutex below; the outgoing
+    // account's final valid alert will be flushed before switching.
     const std::string loggedIn = AlterEgo::GW2API::GetCurrentAccountName();
-    if (!loggedIn.empty() && loggedIn != g_AchCachedAccount) return;
+    if (loggedIn.empty())return;
     auto* payload = (AlertUnlockPayload*)eventArgs;
     if (payload->ID != 0) {
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            if(g_AchSwitchingAccount||g_AchCachedAccount!=loggedIn)return;
             auto it = g_AchProgress.find(payload->ID);
             if (it != g_AchProgress.end()) {
                 // Increment progress — handle completion based on achievement type
@@ -1152,15 +1162,16 @@ static bool g_CharSortAscending = true;            // true = default direction, 
 static std::vector<int> g_CharDisplayOrder;        // indices into GetCharacters()
 static std::vector<std::string> g_CustomCharOrder;  // saved custom name order
 static int g_CharDragIdx = -1;                      // drag-and-drop source index in display order
-static size_t g_LastCharCount = 0;                  // detect character list changes
+static std::shared_ptr<const std::vector<AlterEgo::Character>> g_CharOrderRoster;
+static std::string g_CharOrderAccount;
 static bool g_CharLastLoginSortDirty = false;        // rebuild recency sort after Mumble character change
 
 static void SaveCharSortConfig();
 static void LoadCharSortConfig();
 static int DaysUntilBirthday(const std::string& created);
 
-static void RebuildCharDisplayOrder() {
-    const auto& chars = AlterEgo::GW2API::GetCharacters();
+static void RebuildCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& charsSnapshot = AlterEgo::GW2API::GetCharacters()) {
+    const auto& chars = *charsSnapshot;
     int n = (int)chars.size();
     g_CharDisplayOrder.resize(n);
     for (int i = 0; i < n; i++) g_CharDisplayOrder[i] = i;
@@ -1217,12 +1228,8 @@ static void RebuildCharDisplayOrder() {
             // preserves incoming order when timestamps tie or are unavailable.
             std::stable_sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
                 [&](int a, int b) {
-                    const auto ia = g_LoginTimestamps.find(chars[a].name);
-                    const auto ib = g_LoginTimestamps.find(chars[b].name);
-                    const int64_t ta = ia == g_LoginTimestamps.end() ? 0 : ia->second;
-                    const int64_t tb = ib == g_LoginTimestamps.end() ? 0 : ib->second;
-                    if (ta <= 0 || tb <= 0) return ta > 0 && tb <= 0;
-                    return asc ? ta > tb : ta < tb;
+                    return AlterEgo::CharacterActivity::LoginBefore(
+                        CharacterLastLogin(chars[a]),CharacterLastLogin(chars[b]),asc);
                 });
             break;
         case Sort_Custom:
@@ -1272,18 +1279,54 @@ static void RebuildCharDisplayOrder() {
                 return ra < rb;
             });
     }
-    g_LastCharCount = chars.size();
+    g_CharOrderRoster=charsSnapshot;
+    g_CharOrderAccount=AlterEgo::GW2API::GetCurrentAccountName();
+    if(g_CharSortMode==Sort_LastLogin)g_CharLastLoginSortDirty=false;
+}
+
+// Numeric indices are valid only for the roster they were built from. A data
+// refresh with unchanged identities/sort keys does not require a re-sort.
+static void EnsureCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& roster){
+    bool changed=!g_CharOrderRoster||g_CharOrderRoster->size()!=roster->size()||
+        g_CharOrderAccount!=AlterEgo::GW2API::GetCurrentAccountName()||
+        (g_CharSortMode==Sort_LastLogin&&g_CharLastLoginSortDirty);
+    if(!changed&&g_CharOrderRoster!=roster){
+        for(size_t i=0;i<roster->size();++i){
+            const auto& a=(*g_CharOrderRoster)[i];const auto& b=(*roster)[i];
+            if(a.name!=b.name||a.account_name!=b.account_name||
+                (g_CharSortMode==Sort_Profession&&a.profession!=b.profession)||
+                (g_CharSortMode==Sort_Level&&a.level!=b.level)||
+                ((g_CharSortMode==Sort_Age||g_CharSortMode==Sort_Birthday)&&a.created!=b.created)){changed=true;break;}
+        }
+    }
+    if(!changed){g_CharOrderRoster=roster;return;}
+    AlterEgo::CharacterActivity::Key selected;
+    if(g_CharOrderRoster&&g_SelectedCharIdx>=0&&g_SelectedCharIdx<(int)g_CharDisplayOrder.size()){
+        const int old=g_CharDisplayOrder[g_SelectedCharIdx];
+        if(old>=0&&old<(int)g_CharOrderRoster->size()){
+            const auto& ch=(*g_CharOrderRoster)[old];selected={ch.account_name,ch.name};
+        }
+    }
+    RebuildCharDisplayOrder(roster);
+    if(!selected.second.empty()){
+        g_SelectedCharIdx=-1;
+        for(size_t i=0;i<g_CharDisplayOrder.size();++i){
+            const auto& ch=(*roster)[g_CharDisplayOrder[i]];
+            if(ch.account_name==selected.first&&ch.name==selected.second){g_SelectedCharIdx=(int)i;break;}
+        }
+    }
 }
 
 // Character refresh selection popup state
 static bool g_RefreshPopupOpen = false;
-static bool g_RefreshListFetching = false;     // waiting for char list from H&S
-static bool g_AutoCharListRequested = false;   // auto-fetched char list on H&S connect
+static bool g_RefreshListFetching = false;     // waiting for char list from native API
+static bool g_AutoCharListRequested = false;   // auto-fetched char list on native API connect
 static std::vector<std::string> g_RefreshNames; // all character names from API
 static std::vector<bool> g_RefreshSelection;    // parallel checkbox state
 
 // Multi-account selector state
-static std::string g_SelectedAccountFilter;    // empty = "All Accounts", else specific account_name
+static std::string g_SelectedAccountFilter;    // empty = "All Accounts", else specific account GUID
+static void OpenInventoryItem(uint32_t id){if(id){MarkNavigation();g_SelectedAccountFilter=AlterEgo::NativeAccounts::RevealAccount(id,g_SelectedAccountFilter);AlterEgo::NativeAccounts::RevealItem(id);g_SwitchToInventory=true;}}
 
 // Returns the account name to use for per-account queries (dropdown selection only)
 std::string GetEffectiveAccountName() {
@@ -1302,7 +1345,7 @@ std::string GetEffectiveAccountName() {
 
  // Achievement progress is per-account, not per-currently-logged-in character.
  // In multi-account mode the dropdown's selected account is authoritative.
- // In single-account mode, use H&S's account name even when the dropdown is empty.
+ // In single-account mode, use native API's account name even when the dropdown is empty.
 static std::string GetAchievementCacheAccount() {
     if (!g_SelectedAccountFilter.empty()) return g_SelectedAccountFilter;
     if (AlterEgo::GW2API::IsMultiAccount()) return {};
@@ -1343,6 +1386,9 @@ bool WriteFileAtomic(const std::string& finalPath, const std::string& content) {
 
 // Gear customization dialog state
 static bool g_GearDialogOpen = false;
+static AlterEgo::SavedBuild g_GearDialogDraft;
+static bool g_GearDialogDirty=false;
+static AddonWindowFocusRequest g_GearDialogFocus;
 static std::string g_GearDialogSlot;          // Which slot is being edited
 static std::string g_GearDialogBuildId;       // Which saved build
 static char g_GearStatSearch[128] = "";       // Search filter for stat combos
@@ -1354,14 +1400,33 @@ static int g_GearExactInfusionId = 0;
 
 // Save to Library dialog state
 static bool g_SaveLibDialogOpen = false;
+static AddonWindowFocusRequest g_SaveLibDialogFocus;
 static char g_SaveLibName[128] = "";
 static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
 static bool g_SaveLibNameManuallyEdited = false;
-static bool g_SaveLibIncludeEquip = false;
+static constexpr int kSaveEntireEquipmentSet = 9;
+static std::string g_EquipmentSetSelectedId, g_SaveLibAccount;
+static constexpr int kSaveFashionTarget=3;
+static int g_SaveLibEquipmentMode=0; // offer exact match, independent, new named set
+static std::string g_SaveLibSetName;
+static std::set<std::string> g_SaveLibSetKinds;
+static std::vector<std::pair<std::string,std::string>> g_SaveLibExactSets;
+static std::string g_SaveLibSelectedSet;
+static int g_SaveLibTarget = 0; // 0 Loadout, 1 new component, 2 replace existing, 3 Fashion
+static AlterEgo::Fashion::Look g_SaveLibPendingFashion;
+static std::string g_SaveLibFashionError;
+static std::string g_SaveLibUpdateId;
+static std::string g_ComponentSelectIdPending;
+static AlterEgo::SavedBuild g_SaveLibPendingCapture;
+static std::string g_SaveLibPendingKind, g_SaveLibPendingId, g_SaveLibPendingName;
+static bool g_SaveLibUpdateConfirmPending = false;
+static int g_SaveLibComponentKind = 0;
+static std::set<std::string> g_ComponentKindFilters; // empty = all categories
+static int g_ComponentPendingKind = -1; // typed capture reveal, never a filter
+static std::string g_ComponentSelectNamePending; // Newly captured component to highlight
+
 static int g_SaveLibEquipTab = 0;          // Selected equipment tab number (1-based)
-static std::string g_SaveLibChatLink;      // Pre-built chat link
 static std::string g_SaveLibCharName;      // Character name (to find equipment)
-static std::string g_SaveLibProfession;    // Profession name
 static int g_SaveLibBuildTab = 0;       // Live build tab ID being captured
 
 // Saved vs. retrieved character comparison state (never mutates a saved build).
@@ -1500,7 +1565,7 @@ static void DrawProfessionCharacterName(ImDrawList* draw, ImVec2 pos,
 }
 // Optional URL fallback: fixed profession artwork now comes from DLL resources.
 static const char* GetProfessionIconUrl(const std::string& prof) {
-    const auto* info = AlterEgo::GW2API::GetProfessionInfo(prof);
+    const auto info = AlterEgo::GW2API::GetProfessionInfo(prof);
     if (info && !info->icon_url.empty()) return info->icon_url.c_str();
     return nullptr;
 }
@@ -1549,27 +1614,18 @@ static const char* GetCraftingIconUrl(const std::string& disc) {
     return it != urls.end() ? it->second.c_str() : nullptr;
 }
 
-// Copy text to Windows clipboard
+// Explicit user copy actions use the Nexus-owned ImGui callbacks.
 void CopyToClipboard(const std::string& text) {
-    if (!OpenClipboard(NULL)) return;
-    EmptyClipboard();
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
-    if (hMem) {
-        char* p = (char*)GlobalLock(hMem);
-        if (p) {
-            memcpy(p, text.c_str(), text.size() + 1);
-            GlobalUnlock(hMem);
-            SetClipboardData(CF_TEXT, hMem);
-        }
+    if(!ImGui::GetCurrentContext()||!ImGui::GetIO().SetClipboardTextFn){
+        if(APIDefs)APIDefs->GUI_SendAlert("Clipboard unavailable.");
+        return;
     }
-    CloseClipboard();
+    ImGui::SetClipboardText(text.c_str());
 }
 
 // Settings persistence
 static void SaveSettings() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/settings.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "settings.json");
     nlohmann::json j;
     j["show_qa_icon"] = g_ShowQAIcon;
     j["compact_char_list"] = g_CompactCharList;
@@ -1578,12 +1634,18 @@ static void SaveSettings() {
     j["show_playtime"] = g_ShowPlaytime;
     j["show_last_login"] = g_ShowLastLogin;
     j["auto_refresh_enabled"] = g_AutoRefreshEnabled;
-    j["auto_refresh_on_login"] = g_AutoRefreshOnLogin;
+    j["auto_refresh_datasets"] = AlterEgo::AutoRefreshPolicy::GetMask();
+    j["objective_tracking_minutes"] = AlterEgo::RefreshEngine::ObjectiveMinutes();
+    j["wallet_pins"] = AlterEgo::NativeAccounts::WalletPins();
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
     j["warn_stale_specialization"] = g_WarnStaleSpecialization;
     j["birthday_mode"] = g_BirthdayMode;
     j["char_list_width"] = g_CharListWidth;
     j["lib_list_width"] = g_LibListWidth;
+    j["skin_list_width"]=g_SkinListWidth;
+    j["inventory_list_width"]=g_InventoryListWidth;
+    j["fashion_list_width"]=g_FashionListWidth;
+    j["component_list_width"]=g_ComponentListWidth;
     j["library_collection"] = g_LibraryCollection;
     j["chat_build_detection"] = g_ChatBuildDetection;
     j["toast_pos_x"] = g_ToastPosX;
@@ -1598,7 +1660,7 @@ static void SaveSettings() {
 }
 
 static void LoadSettings() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/settings.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "settings.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     nlohmann::json j;
@@ -1620,14 +1682,29 @@ static void LoadSettings() {
     getBool("show_playtime", g_ShowPlaytime);
     getBool("show_last_login", g_ShowLastLogin);
     getBool("auto_refresh_enabled", g_AutoRefreshEnabled);
-    getBool("auto_refresh_on_login", g_AutoRefreshOnLogin);
+    if(j.contains("objective_tracking_minutes")&&j["objective_tracking_minutes"].is_number_integer()){
+        try{AlterEgo::RefreshEngine::SetObjectiveMinutes(j["objective_tracking_minutes"].get<int>());}catch(...){}
+    }
+    AlterEgo::AutoRefreshPolicy::SetMask(AlterEgo::AutoRefreshPolicy::AllMask);
+    if(j.contains("auto_refresh_datasets")&&j["auto_refresh_datasets"].is_number_unsigned())
+        AlterEgo::AutoRefreshPolicy::SetMask(j["auto_refresh_datasets"].get<uint32_t>());
+    // Migrate the old preference on next normal settings save.
+    const char* walletPinKey=j.contains("wallet_pins")?"wallet_pins":"wallet_favorites";
+    if(j.contains(walletPinKey)&&j[walletPinKey].is_array()){
+        try{AlterEgo::NativeAccounts::SetWalletPins(j[walletPinKey].get<std::set<uint32_t>>());}catch(...){}
+    }
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
+    AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;
     getBool("warn_stale_specialization", g_WarnStaleSpecialization);
     getInt("birthday_mode", g_BirthdayMode);
     getFloat("char_list_width", g_CharListWidth);
     getFloat("lib_list_width", g_LibListWidth);
+    getFloat("skin_list_width",g_SkinListWidth);
+    getFloat("inventory_list_width",g_InventoryListWidth);
+    getFloat("fashion_list_width",g_FashionListWidth);
+    getFloat("component_list_width",g_ComponentListWidth);
     getInt("library_collection", g_LibraryCollection);
-    if (g_LibraryCollection != 1) g_LibraryCollection = 0;
+    if (g_LibraryCollection < 0 || g_LibraryCollection > 3) g_LibraryCollection = 0;
     getBool("chat_build_detection", g_ChatBuildDetection);
     getFloat("toast_pos_x", g_ToastPosX);
     getFloat("toast_pos_y", g_ToastPosY);
@@ -1644,9 +1721,7 @@ static void LoadSettings() {
 
 // Character sort persistence
 static void SaveCharSortConfig() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/char_sort.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "char_sort.json");
     nlohmann::json j;
     j["sort_mode"] = g_CharSortMode;
     j["sort_ascending"] = g_CharSortAscending;
@@ -1656,7 +1731,7 @@ static void SaveCharSortConfig() {
 }
 
 static void LoadCharSortConfig() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/char_sort.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "char_sort.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     try {
@@ -1675,15 +1750,14 @@ static void LoadCharSortConfig() {
 static std::string g_SessionSelectedCharName; // deferred: resolve to index after chars load
 
 static void SaveSession() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/session.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "session.json");
 
     nlohmann::json j;
     j["main_tab"] = g_MainTab;
 
     // Characters tab state — save by name for stability across sort/order changes
-    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& chars = *charsSnapshot;
     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
         int ri = g_CharDisplayOrder[g_SelectedCharIdx];
         if (ri >= 0 && ri < (int)chars.size())
@@ -1697,7 +1771,7 @@ static void SaveSession() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
     if (g_LibSelectedIdx >= 0 && g_LibSelectedIdx < (int)builds.size())
         j["lib_selected_id"] = builds[g_LibSelectedIdx].id;
-    j["lib_filter"] = g_LibFilterMode;
+    j["lib_filter_modes"] = g_LibFilterModes;
     j["lib_collapsed_professions"] = g_LibCollapsedProfessions;
     if (!g_LibCompareBuildId.empty()) j["compare_saved_id"] = g_LibCompareBuildId;
 
@@ -1706,9 +1780,8 @@ static void SaveSession() {
 
     // Skinventory state
     j["skin_active_tab"] = g_SkinActiveTab;
-    j["skin_type"] = g_SkinSelectedType;
-    j["skin_weight"] = g_SkinSelectedWeightClass;
-    j["skin_subtype"] = g_SkinSelectedSubtype;
+    j["skin_filters"]={{"category",g_SkinBrowserFilters.category},{"weight",g_SkinBrowserFilters.weight},
+        {"slot",g_SkinBrowserFilters.slot},{"weapon",g_SkinBrowserFilters.weapon},{"rarity",g_SkinBrowserFilters.rarity}};
     j["skin_selected_id"] = g_SkinSelectedId;
     j["skin_show_owned"] = g_SkinShowOwned;
     j["skin_show_unowned"] = g_SkinShowUnowned;
@@ -1719,7 +1792,7 @@ static void SaveSession() {
 }
 
 static void LoadSession() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/session.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "session.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     try {
@@ -1746,7 +1819,12 @@ static void LoadSession() {
                 if (builds[i].id == savedId) { g_LibSelectedIdx = i; break; }
             }
         }
-        if (j.contains("lib_filter")) g_LibFilterMode = j["lib_filter"].get<int>();
+        if(j.contains("lib_filter_modes")&&j["lib_filter_modes"].is_array()) {
+            g_LibFilterModes.clear();
+            for(const auto& value:j["lib_filter_modes"])if(value.is_string())g_LibFilterModes.insert(value.get<std::string>());
+            AlterEgo::LibraryFilter::Validate(g_LibFilterModes);
+        } else if(j.contains("lib_filter")&&j["lib_filter"].is_number_integer())
+            g_LibFilterModes=AlterEgo::LibraryFilter::Legacy(j["lib_filter"].get<int>());
         if (j.contains("lib_collapsed_professions") &&
             j["lib_collapsed_professions"].is_array()) {
             g_LibCollapsedProfessions.clear();
@@ -1763,9 +1841,15 @@ static void LoadSession() {
 
         // Skinventory
         if (j.contains("skin_active_tab")) g_SkinActiveTab = j["skin_active_tab"].get<int>();
-        if (j.contains("skin_type")) g_SkinSelectedType = j["skin_type"].get<std::string>();
-        if (j.contains("skin_weight")) g_SkinSelectedWeightClass = j["skin_weight"].get<std::string>();
-        if (j.contains("skin_subtype")) g_SkinSelectedSubtype = j["skin_subtype"].get<std::string>();
+        if(j.contains("skin_filters")&&j["skin_filters"].is_object()) {
+            const auto& sf=j["skin_filters"];
+            g_SkinBrowserFilters.category=sf.value("category",Skinventory::Choices{});
+            g_SkinBrowserFilters.weight=sf.value("weight",Skinventory::Choices{});
+            g_SkinBrowserFilters.slot=sf.value("slot",Skinventory::Choices{});
+            g_SkinBrowserFilters.weapon=sf.value("weapon",Skinventory::Choices{});
+            g_SkinBrowserFilters.rarity=sf.value("rarity",Skinventory::Choices{});
+            g_SkinBrowserFilters.Prune();
+        } // Old mandatory category navigation is intentionally not a new filter.
         if (j.contains("skin_selected_id")) g_SkinSelectedId = j["skin_selected_id"].get<uint32_t>();
         if (j.contains("skin_show_owned")) g_SkinShowOwned = j["skin_show_owned"].get<bool>();
         if (j.contains("skin_show_unowned")) g_SkinShowUnowned = j["skin_show_unowned"].get<bool>();
@@ -1779,9 +1863,7 @@ static void LoadSession() {
 // =========================================================================
 
 static void SaveAchTrackerState() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_tracked.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "ach_tracked.json");
 
     nlohmann::json j;
     {
@@ -1810,7 +1892,7 @@ static void SaveAchTrackerState() {
 }
 
 static void LoadAchTrackerState() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_tracked.json";
+    std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "ach_tracked.json");
     std::ifstream file(path);
     if (!file.is_open()) return;
     try {
@@ -1841,9 +1923,6 @@ static void LoadAchTrackerState() {
 }
 
 static void SaveAchGroupCache() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_groups.json";
 
     nlohmann::json j;
     auto epochSecs = std::chrono::duration_cast<std::chrono::seconds>(
@@ -1879,7 +1958,7 @@ static void SaveAchGroupCache() {
         j["categories"] = cats;
     }
 
-    if (WriteFileAtomic(path, j.dump(2))) {
+    if (AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Groups, j)) {
         g_AchGroupsCacheFetchedAt = epochSecs;
     } else if (APIDefs) {
         APIDefs->Log(LOGL_WARNING, "AlterEgo",
@@ -1888,11 +1967,10 @@ static void SaveAchGroupCache() {
 }
 
 static void LoadAchGroupCache() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_groups.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
     try {
-        auto j = nlohmann::json::parse(file);
+        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Groups);
+        if (!snapshot) return;
+        auto& j = *snapshot;
 
         // Restore the last-known categories immediately, even across the daily
         // reset. A stale snapshot is usable offline and is refreshed in the
@@ -1957,10 +2035,9 @@ static void LoadAchGroupCache() {
     } catch (...) {}
 }
 
-static void SaveAchDefCache() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_defs.json";
+static bool SaveAchDefCache(int64_t verifiedAt) {
+    // Serialize capture + persistence across the category, pinned and name workers.
+    std::lock_guard<std::mutex> saveLock(g_AchDefPersistMutex);
 
     nlohmann::json j;
     {
@@ -1990,16 +2067,18 @@ static void SaveAchDefCache() {
         }
     }
 
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
+    const bool definitionsSaved = AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Definitions, j);
+    if (!definitionsSaved && APIDefs)
+        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save ach_defs cache");
+    const bool namesSaved = SaveAchNameIndex(verifiedAt);
+    return definitionsSaved && namesSaved;
 }
 
 static void LoadAchDefCache() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_defs.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
     try {
-        auto j = nlohmann::json::parse(file);
+        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Definitions);
+        if (!snapshot) return;
+        auto& j = *snapshot;
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         for (auto& [key, dj] : j.items()) {
             AchDef d;
@@ -2031,10 +2110,8 @@ static void LoadAchDefCache() {
     } catch (...) {}
 }
 
-static void SaveAchNameIndex() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_name_index.json";
+static bool SaveAchNameIndex(int64_t verifiedAt) {
+    std::lock_guard<std::mutex> saveLock(g_AchNamePersistMutex);
 
     nlohmann::json j;
     {
@@ -2044,166 +2121,48 @@ static void SaveAchNameIndex() {
         }
     }
 
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
+    const bool saved = AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Names, j, verifiedAt);
+    if (saved && verifiedAt > 0) g_AchNameIndexVerifiedAt = std::max(g_AchNameIndexVerifiedAt.load(), verifiedAt);
+    if (!saved && APIDefs) APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save ach_name_index cache");
+    return saved;
 }
 
 static void LoadAchNameIndex() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_name_index.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
+    // Reuse existing cached definitions without any network traffic at startup.
     try {
-        auto j = nlohmann::json::parse(file);
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        g_AchNameIndex.clear();
-        for (auto& [key, val] : j.items()) {
-            uint32_t id = (uint32_t)std::stoul(key);
-            g_AchNameIndex[id] = val.get<std::string>();
+        auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Names);
+        if (snapshot) {
+            std::unordered_map<uint32_t, std::string> loaded;
+            for (const auto& [key, value] : snapshot->items()) {
+                const auto id = AlterEgo::Cache::CatalogId(key);
+                const auto name = value.get<std::string>();
+                if (id && !name.empty()) loaded.emplace(id, name);
+            }
+            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchNameIndex = std::move(loaded);
         }
-        if (!g_AchNameIndex.empty()) g_AchNameIndexReady = true;
+        g_AchNameIndexVerifiedAt = AlterEgo::Cache::ReadNameIndexVerification(AlterEgo::GW2API::GetDataDirectory());
     } catch (...) {}
-}
-
-// =========================================================================
-// Achievement Tracker — Waypoint Data
-// =========================================================================
-
-static void SaveAchWaypoints() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/ach_waypoints.json";
-
-    nlohmann::json j;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        for (const auto& [achId, bits] : g_AchWaypoints) {
-            nlohmann::json entry;
-            for (const auto& [bitIdx, code] : bits) {
-                entry[std::to_string(bitIdx)] = code;
-            }
-            j[std::to_string(achId)] = entry;
+        for (const auto& [id, def] : g_AchDefs) {
+            if (id && !def.name.empty()) g_AchNameIndex.emplace(id, def.name);
         }
+        g_AchNameIndexReady = !g_AchNameIndex.empty();
+        ++g_AchCatalogGeneration;
     }
-
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
 }
 
-static void LoadAchWaypoints() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/ach_waypoints.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
-    try {
-        auto j = nlohmann::json::parse(file);
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        g_AchWaypoints.clear();
-        for (auto& [achKey, val] : j.items()) {
-            uint32_t achId = (uint32_t)std::stoul(achKey);
-            if (val.is_string()) {
-                // Single waypoint for the whole achievement
-                g_AchWaypoints[achId][-1] = val.get<std::string>();
-            } else if (val.is_object()) {
-                for (auto& [bitKey, code] : val.items()) {
-                    int bitIdx = std::stoi(bitKey);
-                    g_AchWaypoints[achId][bitIdx] = code.get<std::string>();
-                }
-            }
-        }
-        if (!g_AchWaypoints.empty()) g_AchWaypointsReady = true;
-    } catch (...) {}
-}
-
-static void FetchAchWaypoints() {
-    if (g_AchWaypointsFetching) return;
-    g_AchWaypointsFetching = true;
-
-    std::thread([]() {
-        std::string json = Skinventory::HttpClient::Get(ACH_WAYPOINTS_URL);
-        if (!json.empty()) {
-            try {
-                auto j = nlohmann::json::parse(json);
-                if (j.is_object()) {
-                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                    g_AchWaypoints.clear();
-                    for (auto& [achKey, val] : j.items()) {
-                        uint32_t achId = (uint32_t)std::stoul(achKey);
-                        if (val.is_string()) {
-                            g_AchWaypoints[achId][-1] = val.get<std::string>();
-                        } else if (val.is_object()) {
-                            for (auto& [bitKey, code] : val.items()) {
-                                int bitIdx = std::stoi(bitKey);
-                                g_AchWaypoints[achId][bitIdx] = code.get<std::string>();
-                            }
-                        }
-                    }
-                    g_AchWaypointsReady = true;
-                    SaveAchWaypoints();
-                }
-            } catch (...) {}
-        }
-        g_AchWaypointsFetching = false;
-    }).detach();
-}
-
-// =========================================================================
-// Hero Challenges — Data
-// =========================================================================
-
-static void SaveHeroChallenges() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/hero_challenges.json";
-    nlohmann::json j;
-    for (const auto& [id, info] : g_HeroChallenges) {
-        nlohmann::json entry;
-        entry["map_name"] = info.map_name;
-        entry["expansion"] = info.expansion;
-        j[id] = entry;
+// Call only while holding g_AchMutex. Every accepted API definition also
+// contributes its name to the shared catalog, including pinned/category fetches.
+static void PublishAchDefinition(AchDef def) {
+    if (!def.id) return;
+    if (!def.name.empty()) {
+        g_AchNameIndex[def.id] = def.name;
+        g_AchNameIndexReady = true;
     }
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump();
-}
-
-static void LoadHeroChallenges() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/hero_challenges.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
-    try {
-        auto j = nlohmann::json::parse(file);
-        if (j.is_object()) {
-            g_HeroChallenges.clear();
-            for (auto& [id, val] : j.items()) {
-                HeroChallengeInfo info;
-                info.map_name = val.value("map_name", "");
-                info.expansion = val.value("expansion", "");
-                g_HeroChallenges[id] = std::move(info);
-            }
-            g_HeroChallengesReady = !g_HeroChallenges.empty();
-        }
-    } catch (...) {}
-}
-
-static void FetchHeroChallenges() {
-    if (g_HeroChallengesFetching) return;
-    g_HeroChallengesFetching = true;
-    std::thread([]() {
-        std::string json = Skinventory::HttpClient::Get(HERO_CHALLENGES_URL);
-        if (!json.empty()) {
-            try {
-                auto j = nlohmann::json::parse(json);
-                if (j.is_object()) {
-                    g_HeroChallenges.clear();
-                    for (auto& [id, val] : j.items()) {
-                        HeroChallengeInfo info;
-                        info.map_name = val.value("map_name", "");
-                        info.expansion = val.value("expansion", "");
-                        g_HeroChallenges[id] = std::move(info);
-                    }
-                    g_HeroChallengesReady = true;
-                    SaveHeroChallenges();
-                }
-            } catch (...) {}
-        }
-        g_HeroChallengesFetching = false;
-    }).detach();
+    g_AchDefs[def.id] = std::move(def);
+    ++g_AchCatalogGeneration;
 }
 
 // =========================================================================
@@ -2218,7 +2177,7 @@ static void FetchAchGroups() {
         g_AchStatusMsg = "Fetching achievement groups...";
     }
 
-    std::thread([]() {
+    AlterEgo::Background::Workers().Launch([]() {
         // Fetch all groups
         std::string groupsJson = Skinventory::HttpClient::Get(
             "https://api.guildwars2.com/v2/achievements/groups?ids=all");
@@ -2319,47 +2278,58 @@ static void FetchAchGroups() {
 
         SaveAchGroupCache();
         FetchActiveSpecialEvent();
-    }).detach();
+    }, [] { g_AchGroupsFetching = false; });
 }
 
 static void FetchActiveSpecialEvent() {
-    if (g_AchActiveEventFetching) return;
-    g_AchActiveEventFetching = true;
-    std::thread([]() {
-        // 6-hour disk cache: {ts, body} wrapper. Events change weekly, so 6h is safe.
+    namespace W=AlterEgo::WikiFreshness;
+    const auto now=static_cast<int64_t>(std::time(nullptr));
+    if(now<g_AchActiveEventNextCheck.load()||g_AchActiveEventFetching.exchange(true))return;
+    g_AchActiveEventNextCheck=now+W::SpecialRetry;
+    AlterEgo::Background::Workers().Launch([]() {
+        const auto now=static_cast<int64_t>(std::time(nullptr));
+        W::Stamp stamp;
         std::string wikitext;
-        std::string cachePath = AlterEgo::GW2API::GetDataDirectory() + "/wiki_special_event.json";
+        const auto cachePath=AlterEgo::Storage::ResolveCache(AlterEgo::GW2API::GetDataDirectory(),"wiki_special_event.json");
         try {
             std::ifstream cf(cachePath);
-            if (cf.is_open()) {
-                nlohmann::json wrap; cf >> wrap;
-                if (wrap.is_object() && wrap.contains("ts") && wrap.contains("body")) {
-                    int64_t ts = wrap["ts"].get<int64_t>();
-                    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
-                    if (now - ts < 21600 && wrap["body"].is_string())
-                        wikitext = wrap["body"].get<std::string>();
+            if(cf.is_open()){
+                nlohmann::json wrap;cf>>wrap;
+                const auto body=wrap.value("body",std::string{});
+                stamp.attempt=wrap.value("attempt",int64_t{0});
+                if(W::ValidSpecialBody(body)){
+                    wikitext=body;stamp.success=wrap.value("ts",int64_t{0});
                 }
+                if(stamp.success<0||stamp.success>now)stamp.success=0;
+                if(stamp.attempt<0||stamp.attempt>now)stamp.attempt=0;
             }
-        } catch (...) {}
-
-        if (wikitext.empty()) {
-            std::string resp = Skinventory::HttpClient::Get(
-                "https://wiki.guildwars2.com/api.php?action=parse&page=Special_event"
-                "&prop=wikitext&format=json");
-            if (!resp.empty()) {
-                try {
-                    auto j = nlohmann::json::parse(resp);
-                    wikitext = j["parse"]["wikitext"]["*"].get<std::string>();
-                    nlohmann::json wrap;
-                    wrap["ts"] = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
-                    wrap["body"] = wikitext;
-                    WriteFileAtomic(cachePath, wrap.dump());
-                } catch (...) { wikitext.clear(); }
-            }
+        }catch(...){stamp={};wikitext.clear();}
+        auto persist=[&]{
+            nlohmann::json wrap={{"ts",stamp.success},{"attempt",stamp.attempt},{"body",wikitext}};
+            return WriteFileAtomic(cachePath,wrap.dump());
+        };
+        if(W::Due(stamp,now,W::SpecialInterval,W::SpecialRetry)){
+            stamp.attempt=now;
+            persist();
+            try{
+                auto response=Skinventory::HttpClient::GetEx(
+                    "https://wiki.guildwars2.com/api.php?action=parse&page=Special_event&prop=wikitext&format=json");
+                if(response.status_code!=200)throw std::runtime_error("Wiki special event HTTP failure");
+                auto j=nlohmann::json::parse(response.body);
+                const auto& parsed=j.at("parse");
+                auto body=parsed.at("wikitext").at("*").get<std::string>();
+                if(parsed.at("title").get<std::string>()!="Special event"||!W::ValidSpecialBody(body))
+                    throw std::runtime_error("Invalid Wiki special event page");
+                AlterEgo::Background::Checkpoint();
+                wikitext=std::move(body);stamp.success=static_cast<int64_t>(std::time(nullptr));
+                persist();
+            }catch(const AlterEgo::Background::Cancelled&){throw;}
+            catch(...){ /* retain last known good, including original success age */ }
         }
-        if (wikitext.empty()) { g_AchActiveEventFetching = false; return; }
+        const bool fresh=stamp.success>0&&now-stamp.success<W::SpecialInterval;
+        g_AchActiveEventNextCheck=fresh?stamp.success+W::SpecialInterval:
+            std::max(now+int64_t{1},stamp.attempt+W::SpecialRetry);
+        if(wikitext.empty()){g_AchActiveEventFetching=false;return;}
 
         // Today's date as YYYYMMDD (local time — event windows are day-granular).
         std::time_t tt = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -2371,7 +2341,7 @@ static void FetchActiveSpecialEvent() {
 #endif
         int todayYmd = (lt.tm_year + 1900) * 10000 + (lt.tm_mon + 1) * 100 + lt.tm_mday;
 
-        ActiveEventResult res = ParseActiveSpecialEvent(wikitext, todayYmd);
+        ActiveEventResult res = ParseActiveSpecialEvent(wikitext, todayYmd, fresh);
 
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -2402,10 +2372,9 @@ static void FetchActiveSpecialEvent() {
                     g_AchActiveMainCatIds.clear(); // name-only banner (no tracked category)
             }
             g_AchActiveDailyCatIds.clear(); // wiki path drives main category only
-            g_AchActiveEventFetched = true;
             g_AchActiveEventFetching = false;
         }
-    }).detach();
+    }, [] { g_AchActiveEventFetching = false; });
 }
 
 static AchDef ParseAchDef(const nlohmann::json& ach) {
@@ -2443,26 +2412,14 @@ static AchDef ParseAchDef(const nlohmann::json& ach) {
     return d;
 }
 
-static bool IsAchCategoryRefreshDue(uint32_t catId) {
-    if (!catId) return false;
-    auto attempt = g_AchCategoryRefreshAt.find(catId);
-    if (attempt != g_AchCategoryRefreshAt.end())
-        return std::chrono::steady_clock::now() - attempt->second >= std::chrono::minutes(30);
-
-    // An existing account cache is the baseline, not a reason to fetch
-    // every category again. Query a category immediately if it has no data.
+static int64_t AchievementRefreshInterval(){
     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-    const auto cat = g_AchCategories.find(catId);
-    if (cat == g_AchCategories.end() || cat->second.achievements.empty()) return false;
-    bool hasProgress = false;
-    for (uint32_t id : cat->second.achievements) {
-        if (g_AchProgress.count(id)) { hasProgress = true; break; }
-    }
-    if (!hasProgress) return true;
-    const int64_t now = (int64_t)std::time(nullptr);
-    return g_AchProgressLoadedSnapshotAt <= 0 ||
-           now < g_AchProgressLoadedSnapshotAt ||
-           now - g_AchProgressLoadedSnapshotAt >= 1800;
+    return !g_AchPinned.empty()?AlterEgo::RefreshEngine::ObjectiveSeconds():AlterEgo::RefreshEngine::BrowseSeconds;
+}
+static bool IsAchCategoryRefreshDue(uint32_t catId) {
+    (void)catId;
+    return AlterEgo::NativeProgress::AchievementDue(GetEffectiveAccountName(),
+        g_AchProgressCacheSavedAt,AchievementRefreshInterval());
 }
 
 static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
@@ -2481,16 +2438,21 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
 
     if (toFetch.empty()) {
         g_AchCatFetching = false;
-        // Even a fully cached definition must route its H&S progress query
+        // Even a fully cached definition must route its native API progress query
         // to the render thread. Startup callers mark it as automatic.
         g_AchCatProgressAutomatic = automatic;
         g_AchCatProgressPending = catId;
         return;
     }
 
-    std::thread([toFetch, catId, automatic]() {
+    auto claim=AlterEgo::RefreshEngine::ClaimIds("achievement-definitions",toFetch,!automatic);
+    if(claim->ids.empty()){g_AchCatFetching=false;g_AchCatProgressAutomatic=automatic;g_AchCatProgressPending=catId;return;}
+    toFetch=claim->ids;
+    AlterEgo::Background::Workers().Launch([toFetch, catId, automatic, claim]() {
+        AlterEgo::ApiActivity::ReasonScope reason(automatic?AlterEgo::ApiActivity::Reason::Visible:AlterEgo::ApiActivity::Reason::Manual);
         // Fetch in batches of 200
         for (size_t start = 0; start < toFetch.size(); start += 200) {
+            AlterEgo::Background::Checkpoint();
             size_t end = std::min(start + 200, toFetch.size());
             std::string idStr;
             for (size_t i = start; i < end; i++) {
@@ -2507,7 +2469,7 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
                         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
                         for (const auto& ach : j) {
                             AchDef d = ParseAchDef(ach);
-                            if (d.id > 0) g_AchDefs[d.id] = std::move(d);
+                            PublishAchDefinition(std::move(d));
                         }
                     }
                 } catch (...) {}
@@ -2515,231 +2477,153 @@ static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
+        AlterEgo::Background::Checkpoint();
         g_AchCatFetching = false;
         SaveAchDefCache();
 
         // Signal render thread; preserve the originating request's policy.
         g_AchCatProgressAutomatic = automatic;
         g_AchCatProgressPending = catId;
-    }).detach();
+    }, [] { g_AchCatFetching = false; });
 }
 
-static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic,
-                                 uint32_t categoryId) {
-    if (ids.empty() || !APIDefs ||
-        (automatic && !AlterEgo::AutoRefreshPolicy::Enabled())) return;
-    if (categoryId) g_AchCategoryRefreshAt[categoryId] = std::chrono::steady_clock::now();
-    g_AchQueryAutomatic.store(automatic);
-
-    // Send via H&S achievement query (same mechanism as Clears)
-    std::string acctName = GetEffectiveAccountName();
-    HoardQueryAchievementRequest req{};
-    req.api_version = HOARD_API_VERSION;
-    strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
-    strncpy(req.response_event, EV_AE_ACH_PROGRESS_RESPONSE, sizeof(req.response_event) - 1);
-    if (!acctName.empty())
-        strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
-
-    // Batch into chunks of 200 (H&S limit)
-    for (size_t start = 0; start < ids.size(); start += 200) {
-        size_t end = std::min(start + 200, ids.size());
-        req.id_count = (uint32_t)(end - start);
-        for (size_t i = start; i < end; i++) {
-            req.ids[i - start] = ids[i];
-        }
-        // Mark busy BEFORE dispatch. H&S may respond synchronously, in which
-        // case the callback must be allowed to clear the flag permanently.
-        g_AchProgressQueryStartMs = NowMs();
-        g_AchProgressFetching = true;
-        APIDefs->Events_Raise(EV_HOARD_QUERY_ACHIEVEMENT, &req);
-    }
-}
-
-static void OnAchProgressResponse(void* eventArgs) {
-    if (!eventArgs) return;
-    auto* resp = (HoardQueryAchievementResponse*)eventArgs;
-    std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
-    if (resp->api_version < 2) { return; }
-
-    // Reject late responses from a previously selected account. H&S echoes the
-    // requested account (v3+); a response must never mix two accounts' progress.
-    const std::string cacheAccount = GetAchievementCacheAccount();
-    if (cacheAccount.empty() || g_AchCachedAccount != cacheAccount) return;
-    if (resp->api_version >= 3) {
-        const std::string responseAccount(resp->account_name,
-            std::find(resp->account_name, resp->account_name + sizeof(resp->account_name),
-                      '\0'));
-        if ((!responseAccount.empty() && responseAccount != cacheAccount) ||
-            (AlterEgo::GW2API::IsMultiAccount() && responseAccount.empty()))
-            return;
-    }
-
-    if (resp->status != HOARD_STATUS_OK) {
-        if (resp->status == HOARD_STATUS_BUSY) {
-            // Preserve provenance: a manual refresh retry is never suppressed
-            // by disabling automatic API refreshes.
-            g_AchRetryAutomatic = g_AchQueryAutomatic.load();
-            g_AchRetryAtMs = NowMs() + (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
-        } else {
-            g_AchRefreshError = resp->status == HOARD_STATUS_DENIED
-                ? "Hoard & Seek permission denied" : "Achievement progress refresh failed";
-        }
-        g_AchProgressFetching = false;
-        g_AchProgressQueryStartMs = 0;
-        return;
-    }
-
+static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic,uint32_t categoryId){
+    if(!APIDefs||(automatic&&!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)))return;
+    const std::string account=GetEffectiveAccountName();
+    if(account.empty())return;
+    uint64_t generation;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        for (uint32_t i = 0; i < resp->entry_count; i++) {
-            auto& e = resp->entries[i];
-            AchProgress p;
-            p.id = e.id;
-            p.done = e.done;
-            p.current = e.current;
-            p.max = e.max;
-            for (uint32_t b = 0; b < e.bit_count && b < 64; b++) {
-                p.completed_bits.insert(e.bits[b]);
-            }
-            // For infinite repeatables, the API returns done=true if ever completed,
-            // even after restart. Override based on current progress.
-            if (p.done && p.max > 0 && p.current < p.max) {
-                auto defIt = g_AchDefs.find(e.id);
-                if (defIt != g_AchDefs.end()) {
-                    bool isRepeatable = false, isDailyOrWeekly = false;
-                    for (const auto& f : defIt->second.flags) {
-                        if (f == "Repeatable") isRepeatable = true;
-                        if (f == "Daily" || f == "Weekly") isDailyOrWeekly = true;
-                    }
-                    if (isRepeatable && !isDailyOrWeekly) {
-                        p.done = false;
-                    }
-                }
-            }
-            // Grace period: protect optimistic alert increments from stale API data
-            auto optIt = g_AchOptimisticTime.find(e.id);
-            if (optIt != g_AchOptimisticTime.end()) {
-                auto elapsed = std::chrono::steady_clock::now() - optIt->second;
-                auto existIt = g_AchProgress.find(e.id);
-                if (elapsed < std::chrono::minutes(10) && existIt != g_AchProgress.end()
-                    && p.current < existIt->second.current) {
-                    // API hasn't caught up — keep our optimistic current/done,
-                    // but merge in any newly completed bits from the API
-                    for (uint32_t bit : p.completed_bits) {
-                        existIt->second.completed_bits.insert(bit);
-                    }
-                    continue;
-                }
-                // API caught up or grace period expired — accept and clear
-                g_AchOptimisticTime.erase(optIt);
-            }
-            g_AchProgress[e.id] = std::move(p);
-        }
-        g_LastAchProgressQuery = std::chrono::steady_clock::now();
-        g_AchProgressCacheSavedAt = (int64_t)std::time(nullptr);
-        g_AchRefreshSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
-        g_AchRefreshError.clear();
-        g_AchProgressGen++;
-        g_AchProgressDirty = true;
+        if(account!=g_AchCachedAccount||g_AchProgressFetching)return;
+        if(automatic&&!AlterEgo::NativeProgress::AchievementDue(account,g_AchProgressCacheSavedAt,AchievementRefreshInterval()))return;
+        generation=++g_AchRequestGeneration;g_AchProgressFetching=true;g_AchProgressQueryStartMs=NowMs();
+        g_AchQueryAutomatic=automatic;
+        if(categoryId)g_AchCategoryRefreshAt[categoryId]=std::chrono::steady_clock::now();
     }
-    g_AchProgressFetching = false;
-    g_AchProgressQueryStartMs = 0;
+    const auto interval=AchievementRefreshInterval();
+    AlterEgo::Background::Workers().Launch([account,generation,automatic,ids,interval]{
+        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),account,!automatic,interval);
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account)return;
+        g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;
+        if(AlterEgo::Background::Workers().Stopping())return;
+        if(!result.snapshot){
+            g_AchRefreshError=result.error;
+            // Shared broker records failed attempts; the next automatic check respects its cooldown.
+            return;
+        }
+        std::unordered_map<uint32_t,AchProgress> next;
+        for(const auto& [id,source]:result.snapshot->entries){
+            auto p=source;
+            if(p.done&&p.max>0&&p.current<p.max){
+                auto def=g_AchDefs.find(id);
+                if(def!=g_AchDefs.end()){
+                    const auto& flags=def->second.flags;
+                    if(std::find(flags.begin(),flags.end(),"Repeatable")!=flags.end()&&
+                       std::find(flags.begin(),flags.end(),"Daily")==flags.end()&&
+                       std::find(flags.begin(),flags.end(),"Weekly")==flags.end())p.done=false;
+                }
+            }
+            next.emplace(id,std::move(p));
+        }
+        for(auto it=g_AchOptimisticTime.begin();it!=g_AchOptimisticTime.end();){
+            auto old=g_AchProgress.find(it->first);auto incoming=next.find(it->first);
+            if(old!=g_AchProgress.end()&&std::chrono::steady_clock::now()-it->second<std::chrono::minutes(10)&&
+               (incoming==next.end()||incoming->second.current<old->second.current)){
+                auto p=old->second;if(incoming!=next.end())p.completed_bits.insert(incoming->second.completed_bits.begin(),incoming->second.completed_bits.end());
+                next[it->first]=std::move(p);++it;
+            }else it=g_AchOptimisticTime.erase(it);
+        }
+        const auto zero=[&](uint32_t id){if(!next.count(id)){AchProgress p;p.id=id;next.emplace(id,p);}};
+        for(auto id:ids)zero(id);
+        for(const auto& [catId,cat]:g_AchCategories){(void)catId;for(auto id:cat.achievements)zero(id);}
+        for(auto id:g_AchPinned)zero(id);
+        g_AchProgress=std::move(next);g_AchNeedsInitialFullLoad=false;g_AchManualInitialScan=false;
+        g_AchProgressCacheSavedAt=result.snapshot->fetchedAt;g_AchProgressLoadedSnapshotAt=result.snapshot->fetchedAt;
+        g_LastAchProgressQuery=std::chrono::steady_clock::now();
+        g_AchRefreshSuccessUntil=g_LastAchProgressQuery+std::chrono::seconds(4);
+        g_AchRefreshError.clear();++g_AchProgressGen;g_AchProgressDirty=true;
+    },[generation]{std::lock_guard<std::recursive_mutex> lock(g_AchMutex);if(generation==g_AchRequestGeneration){g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;g_AchRefreshError="Achievement refresh cancelled";}});
 }
 
-static void FetchAchNameIndex() {
-    if (g_AchNameIndexFetching) return;
-    g_AchNameIndexFetching = true;
+static void FinishAchNameIndex(const std::string& error) {
+    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+    g_AchNameIndexStatus.clear();
+    g_AchNameIndexError = error;
+    g_AchNameIndexRetryAt = error.empty() ? 0 : std::time(nullptr) + AlterEgo::AchievementNames::RetryInterval;
+    g_AchNameIndexFetching = false;
+}
 
-    std::thread([]() {
-        // Try GitHub hosted index first
-        std::string json = Skinventory::HttpClient::Get(ACH_NAME_INDEX_URL);
-        if (!json.empty()) {
-            try {
-                auto j = nlohmann::json::parse(json);
-                if (j.is_object() && j.size() > 100) {
-                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                    g_AchNameIndex.clear();
-                    for (auto& [key, val] : j.items()) {
-                        uint32_t id = (uint32_t)std::stoul(key);
-                        g_AchNameIndex[id] = val.get<std::string>();
-                    }
-                    g_AchNameIndexReady = true;
-                    g_AchNameIndexFetching = false;
-                    SaveAchNameIndex();
-                    return;
-                }
-            } catch (...) {}
-        }
-
-        // Fallback: build index from GW2 API by fetching all achievement IDs in batches
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchStatusMsg = "Building achievement index...";
-        }
-
-        // Get all achievement IDs
-        std::string idsJson = Skinventory::HttpClient::Get(
-            "https://api.guildwars2.com/v2/achievements");
-        if (idsJson.empty()) { g_AchNameIndexFetching = false; return; }
-
-        std::vector<uint32_t> allIds;
+static void FetchAchNameIndex(bool full = false) {
+    if (g_AchNameIndexFetching.exchange(true)) return;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        g_AchNameIndexError.clear();
+        g_AchNameIndexStatus = "Checking achievement IDs...";
+    }
+    AlterEgo::Background::Workers().Launch([full]() {
+        namespace Names = AlterEgo::AchievementNames;
+        bool complete = false, fetchedAny = false;
+        std::string error;
         try {
-            auto j = nlohmann::json::parse(idsJson);
-            if (j.is_array()) {
-                for (const auto& id : j) allIds.push_back(id.get<uint32_t>());
+            const auto ids = Names::ParseIds(nlohmann::json::parse(Skinventory::HttpClient::Get(
+                "https://api.guildwars2.com/v2/achievements")));
+            std::vector<uint32_t> pending;
+            {
+                std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+                pending = Names::Plan(ids, g_AchNameIndex, full);
+                g_AchNameIndexStatus = "Retrieving achievement names (0/" + std::to_string(pending.size()) + ")...";
             }
-        } catch (...) {}
-
-        if (allIds.empty()) { g_AchNameIndexFetching = false; return; }
-
-        std::unordered_map<uint32_t, std::string> nameIndex;
-        for (size_t start = 0; start < allIds.size(); start += 200) {
-            size_t end = std::min(start + 200, allIds.size());
-            std::string idStr;
-            for (size_t i = start; i < end; i++) {
-                if (i > start) idStr += ",";
-                idStr += std::to_string(allIds[i]);
+            for (size_t start = 0; start < pending.size(); start += Names::BatchSize) {
+                AlterEgo::Background::Checkpoint();
+                const size_t end = std::min(start + Names::BatchSize, pending.size());
+                std::vector<uint32_t> batch(pending.begin() + start, pending.begin() + end);
+                if (!full) {
+                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+                    batch = Names::Plan(batch, g_AchNameIndex, false);
+                }
+                if (batch.empty()) continue;
+                std::string idStr;
+                for (const auto id : batch) {
+                    if (!idStr.empty()) idStr += ",";
+                    idStr += std::to_string(id);
+                }
+                const auto data = nlohmann::json::parse(Skinventory::HttpClient::Get(
+                    "https://api.guildwars2.com/v2/achievements?ids=" + idStr));
+                Names::ValidateBatch(batch, data);
+                std::vector<AchDef> defs;
+                defs.reserve(data.size());
+                for (const auto& row : data) {
+                    auto def = ParseAchDef(row);
+                    if (def.id != Names::Id(row.at("id")) || def.name.empty())
+                        throw std::runtime_error("Invalid achievement definition");
+                    defs.push_back(std::move(def));
+                }
+                AlterEgo::Background::Checkpoint();
+                {
+                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+                    for (auto& def : defs) PublishAchDefinition(std::move(def));
+                    g_AchNameIndexStatus = "Retrieving achievement names (" + std::to_string(end) + "/" + std::to_string(pending.size()) + ")...";
+                }
+                fetchedAny = true;
+                if (end < pending.size()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
-
-            std::string batchJson = Skinventory::HttpClient::Get(
-                "https://api.guildwars2.com/v2/achievements?ids=" + idStr);
-            if (!batchJson.empty()) {
-                try {
-                    auto j = nlohmann::json::parse(batchJson);
-                    if (j.is_array()) {
-                        for (const auto& ach : j) {
-                            uint32_t id = ach.value("id", 0u);
-                            std::string name = ach.value("name", "");
-                            if (id > 0 && !name.empty()) nameIndex[id] = name;
-                        }
-
-                        // Also cache full defs while we have them
-                        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                        for (const auto& ach : j) {
-                            AchDef d = ParseAchDef(ach);
-                            if (d.id > 0 && g_AchDefs.find(d.id) == g_AchDefs.end()) {
-                                g_AchDefs[d.id] = std::move(d);
-                            }
-                        }
-                    }
-                } catch (...) {}
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            complete = true;
+        } catch (const AlterEgo::Background::Cancelled&) {
+            throw;
+        } catch (...) {
+            error = "Achievement name check incomplete; cached names retained. Retry from the Achievements menu.";
         }
-
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchNameIndex = std::move(nameIndex);
-            g_AchNameIndexReady = !g_AchNameIndex.empty();
-            g_AchStatusMsg = "";
+        AlterEgo::Background::Checkpoint();
+        const int64_t verifiedAt = complete ? std::time(nullptr) : 0;
+        // Save successful batches even if a later request failed. Never advance
+        // the complete-check timestamp for an incomplete response.
+        if (fetchedAny || complete) {
+            const bool saved = fetchedAny ? SaveAchDefCache(verifiedAt) : SaveAchNameIndex(verifiedAt);
+            if (!saved) error = "Could not save achievement catalog; retry from the Achievements menu.";
         }
-        g_AchNameIndexFetching = false;
-
-        if (g_AchNameIndexReady) {
-            SaveAchNameIndex();
-            SaveAchDefCache();
-        }
-    }).detach();
+        FinishAchNameIndex(error);
+    }, [] { FinishAchNameIndex("Achievement name check cancelled; cached names retained."); });
 }
 
 static void FetchPinnedAchDefs() {
@@ -2752,8 +2636,12 @@ static void FetchPinnedAchDefs() {
     }
     if (missing.empty()) return; // All defs cached; progress queried via OnHoardPongForAch
 
-    std::thread([missing]() {
+    auto claim=AlterEgo::RefreshEngine::ClaimIds("achievement-definitions",missing);
+    if(claim->ids.empty())return;
+    missing=claim->ids;
+    AlterEgo::Background::Workers().Launch([missing,claim]() {
         for (size_t start = 0; start < missing.size(); start += 200) {
+            AlterEgo::Background::Checkpoint();
             size_t end = std::min(start + 200, missing.size());
             std::string idStr;
             for (size_t i = start; i < end; i++) {
@@ -2769,7 +2657,7 @@ static void FetchPinnedAchDefs() {
                         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
                         for (const auto& ach : j) {
                             AchDef d = ParseAchDef(ach);
-                            if (d.id > 0) g_AchDefs[d.id] = std::move(d);
+                            PublishAchDefinition(std::move(d));
                         }
                     }
                 } catch (...) {}
@@ -2777,8 +2665,8 @@ static void FetchPinnedAchDefs() {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
         SaveAchDefCache();
-        // Progress queried via OnHoardPongForAch when H&S is ready
-    }).detach();
+        // Progress queried via OnHoardPongForAch when native API is ready
+    });
 }
 
 // DLL entry point
@@ -2797,6 +2685,7 @@ void AddonLoad(AddonAPI_t* aApi);
 void AddonUnload();
 void ProcessKeybind(const char* aIdentifier, bool aIsRelease);
 void AddonRender();
+static UINT NavigationWndProc(HWND,UINT,WPARAM,LPARAM);
 void AddonOptions();
 void OnMumbleIdentityUpdated(void* eventArgs);
 
@@ -2877,7 +2766,7 @@ static void FetchDetailsForCharacter(const AlterEgo::Character& ch) {
         for (auto inf : eq.infusions) if (inf != 0) item_ids.push_back(inf);
 
         if (eq.id != 0 && eq.skin == 0 && wardrobeSlot(eq.slot)) {
-            const auto* ii = AlterEgo::GW2API::GetItemInfo(eq.id);
+            const auto ii = AlterEgo::GW2API::GetItemInfo(eq.id);
             if (ii && ii->default_skin == 0) backfill_ids.push_back(eq.id);
         }
     }
@@ -2906,7 +2795,7 @@ static void FetchDetailsForCharacter(const AlterEgo::Character& ch) {
     if (!skill_ids.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(skill_ids);
     if (!stat_ids.empty()) AlterEgo::GW2API::FetchItemStatDetailsAsync(stat_ids);
 
-    // Query skin unlock status from H&S cache (instant, no API call)
+    // Query skin unlock status from native API cache (instant, no API call)
     if (!skin_ids.empty()) AlterEgo::GW2API::QuerySkinUnlocks(skin_ids);
 
     // Fetch profession icon for equipment panel silhouette
@@ -2914,7 +2803,7 @@ static void FetchDetailsForCharacter(const AlterEgo::Character& ch) {
 }
 
 // Reject any string that contains path-traversal characters before joining
-// it into a filesystem path. Character names come from MumbleLink / H&S and
+// it into a filesystem path. Character names come from MumbleLink / native API and
 // SHOULD never contain these, but we don't want a malformed source to escape
 // the portrait directory.
 static bool IsSafePathComponent(const std::string& s) {
@@ -2981,7 +2870,7 @@ static void RenderProfessionEmblem(const std::string& profession, float size) {
 
     // Trigger fetch if we don't already have it
     AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
-    const auto* prof = AlterEgo::GW2API::GetProfessionInfo(profession);
+    const auto prof = AlterEgo::GW2API::GetProfessionInfo(profession);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -3047,7 +2936,7 @@ static void RenderCharacterAvatar(const AlterEgo::Character& ch, float size) {
         drewImage = true;
     } else {
         // Fallback: profession icon
-        const auto* prof = AlterEgo::GW2API::GetProfessionInfo(ch.profession);
+        const auto prof = AlterEgo::GW2API::GetProfessionInfo(ch.profession);
         if (GetProfessionIconId(ch.profession)) {
             uint32_t profIconId = GetProfessionIconId(ch.profession);
             Texture_t* ptex = AlterEgo::IconManager::GetIcon(profIconId);
@@ -3089,7 +2978,7 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
 
     // Stat name (e.g. "Berserker", from "Berserker's")
     if (eq->stat_id != 0) {
-        const auto* si = AlterEgo::GW2API::GetItemStatInfo(eq->stat_id);
+        const auto si = AlterEgo::GW2API::GetItemStatInfo(eq->stat_id);
         if (si && !si->name.empty()) {
             out = si->name;
             if (!out.empty() && out.back() == 's' && out.size() > 2 &&
@@ -3098,12 +2987,12 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
             }
         }
     } else {
-        const auto* item_info = AlterEgo::GW2API::GetItemInfo(eq->id);
+        const auto item_info = AlterEgo::GW2API::GetItemInfo(eq->id);
         if (item_info && item_info->details.is_object() &&
             item_info->details.contains("infix_upgrade") &&
             item_info->details["infix_upgrade"].contains("id")) {
             uint32_t fixedStatId = item_info->details["infix_upgrade"]["id"].get<uint32_t>();
-            const auto* si = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
+            const auto si = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
             if (si && !si->name.empty()) {
                 out = si->name;
                 if (!out.empty() && out.back() == 's' && out.size() > 2 &&
@@ -3116,7 +3005,7 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
 
     // First upgrade (rune for armor, sigil for weapon) — short form
     if (!eq->upgrades.empty() && eq->upgrades[0] != 0) {
-        const auto* uinfo = AlterEgo::GW2API::GetItemInfo(eq->upgrades[0]);
+        const auto uinfo = AlterEgo::GW2API::GetItemInfo(eq->upgrades[0]);
         if (uinfo && !uinfo->name.empty()) {
             std::string upgradeShort = uinfo->name;
             // Strip "Superior Rune of " / "Superior Sigil of " / "the "
@@ -3142,6 +3031,20 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
 }
 
 // Render a single equipment slot with icon and tooltip
+// Exact cached names only: never copy an ID or trigger metadata retrieval
+// merely because the user opens a menu. Reused by all equipment editors.
+static void CopyCachedItemNamesMenu(const std::vector<uint32_t>& ids,const char* label){
+    std::vector<std::string> names;
+    for(auto id:ids){
+        const auto info=id?AlterEgo::GW2API::GetItemInfo(id):nullptr;
+        if(info&&!info->name.empty()&&std::find(names.begin(),names.end(),info->name)==names.end())
+            names.push_back(info->name);
+    }
+    if(!names.empty()&&ImGui::BeginMenu(label)){
+        for(const auto& name:names)CopyNameMenuItem(name,name.c_str());
+        ImGui::EndMenu();
+    }
+}
 static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
 
@@ -3162,8 +3065,8 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
         }
     } else {
         // Show skin icon when available, item icon as fallback
-        const AlterEgo::ItemInfo* item_info = AlterEgo::GW2API::GetItemInfo(eq->id);
-        const AlterEgo::SkinInfo* skin_info = eq->skin ? AlterEgo::GW2API::GetSkinInfo(eq->skin) : nullptr;
+        const auto item_info = AlterEgo::GW2API::GetItemInfo(eq->id);
+        const auto skin_info = eq->skin ? AlterEgo::GW2API::GetSkinInfo(eq->skin) : nullptr;
 
         // Use offset ID for skin icons to avoid cache collision with item icons
         uint32_t display_id;
@@ -3241,6 +3144,8 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
             ImGui::BeginGroup();
             ImGui::TextColored(GetRarityColor(rarity), "%s", display_name.c_str());
 
+            if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
+
             // Defense or weapon strength from item details
             if (item_info && item_info->details.is_object()) {
                 const auto& det = item_info->details;
@@ -3256,7 +3161,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
 
             // Stat type name (e.g. "Berserker's", "Minstrel's")
             if (eq->stat_id != 0) {
-                const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(eq->stat_id);
+                const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(eq->stat_id);
                 if (statInfo && !statInfo->name.empty()) {
                     ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s", statInfo->name.c_str());
                 }
@@ -3264,7 +3169,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                        item_info->details.contains("infix_upgrade") &&
                        item_info->details["infix_upgrade"].contains("id")) {
                 uint32_t fixedStatId = item_info->details["infix_upgrade"]["id"].get<uint32_t>();
-                const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
+                const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
                 if (statInfo && !statInfo->name.empty()) {
                     ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s", statInfo->name.c_str());
                 }
@@ -3309,7 +3214,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                     "Infusions (%zu)", infusionCount);
                 for (uint32_t id : eq->infusions) {
                     if (id == 0) continue;
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(id);
                     if (info && !info->name.empty())
                         ImGui::BulletText("%s", info->name.c_str());
                     else
@@ -3320,7 +3225,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
             // Upgrades (Runes/Sigils)
             for (auto upgrade_id : eq->upgrades) {
                 if (upgrade_id == 0) continue;
-                const auto* uinfo = AlterEgo::GW2API::GetItemInfo(upgrade_id);
+                const auto uinfo = AlterEgo::GW2API::GetItemInfo(upgrade_id);
                 if (uinfo) {
                     ImGui::Spacing();
                     ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "%s", uinfo->name.c_str());
@@ -3404,7 +3309,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 bool hasAny = false;
                 for (int di = 0; di < maxDyes; di++) {
                     if (eq->dyes[di] == 0) continue;
-                    const auto* dye = AlterEgo::GW2API::GetDyeColor(eq->dyes[di]);
+                    const auto dye = AlterEgo::GW2API::GetDyeColor(eq->dyes[di]);
                     if (dye) {
                         if (!hasAny) { ImGui::Spacing(); hasAny = true; }
                         // Pick material-specific RGB; default to cloth when no skin material info
@@ -3430,6 +3335,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
         // Right-click context menu
         if (ImGui::BeginPopupContextItem("##eq_ctx")) {
             if (item_info) {
+                CopyNameMenuItem(item_info->name);
                 if (ImGui::MenuItem("Copy Item Chat Link")) {
                     std::string link = AlterEgo::ChatLink::EncodeItem(eq->id, 1, eq->skin,
                         eq->upgrades.size() > 0 ? eq->upgrades[0] : 0,
@@ -3443,41 +3349,19 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 }
             }
             if (skin_info) {
+                CopyNameMenuItem(skin_info->name,"Copy Skin Name");
                 if (ImGui::MenuItem("Copy Skin Chat Link")) {
                     std::string link = AlterEgo::ChatLink::EncodeSkin(eq->skin);
                     CopyToClipboard(link);
                 }
             }
+            CopyCachedItemNamesMenu(eq->upgrades,"Copy Upgrade Name");
+            CopyCachedItemNamesMenu(eq->infusions,"Copy Infusion Name");
             ImGui::Separator();
-            // Find item in H&S (opens H&S search window)
-            if (item_info && !item_info->name.empty()) {
-                if (ImGui::MenuItem("Find in Hoard & Seek")) {
-                    APIDefs->Events_Raise(EV_HOARD_SEARCH, (void*)item_info->name.c_str());
-                }
-            }
-            // Show item locations from H&S cache
-            if (item_info) {
-                const auto* loc = AlterEgo::GW2API::GetItemLocation(eq->id);
-                if (loc) {
-                    if (ImGui::BeginMenu("Item Locations")) {
-                        ImGui::Text("Total: %d", loc->total_count);
-                        ImGui::Separator();
-                        for (const auto& entry : loc->locations) {
-                            ImGui::Text("%s", entry.location.c_str());
-                            ImGui::SameLine(150);
-                            if (!entry.sublocation.empty()) {
-                                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", entry.sublocation.c_str());
-                                ImGui::SameLine(280);
-                            }
-                            ImGui::Text("x%d", entry.count);
-                        }
-                        ImGui::EndMenu();
-                    }
-                } else {
-                    if (ImGui::MenuItem("Query Item Locations")) {
-                        AlterEgo::GW2API::QueryItemLocation(eq->id);
-                    }
-                }
+            if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(eq->id);
+            if(ImGui::BeginMenu("Item Locations")){
+                AlterEgo::NativeAccounts::RenderItemAvailability(eq->id,AlterEgo::GW2API::GetCurrentAccountName(),g_CurrentCharName);
+                ImGui::EndMenu();
             }
             ImGui::EndPopup();
         }
@@ -3508,8 +3392,8 @@ static void ResolveEquipDisplay(const AlterEgo::EquipmentItem* eq, const char* s
         outName = SlotDisplayName(slot);
         return;
     }
-    const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
-    const auto* skin = eq->skin ? AlterEgo::GW2API::GetSkinInfo(eq->skin) : nullptr;
+    const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
+    const auto skin = eq->skin ? AlterEgo::GW2API::GetSkinInfo(eq->skin) : nullptr;
     if (info) outRarity = info->rarity;
     if (std::string(slot) == "Relic" && info && info->rarity == "Legendary") {
         outName = "Legendary Relic";
@@ -3536,116 +3420,20 @@ static std::string TruncateToWidth(const std::string& s, float maxW) {
     return s.substr(0, lo) + ell;
 }
 
-// Card-style equipment row. dir = +1 (icon-left), -1 (icon-right / trinkets column).
-static void RenderEquipCard(const AlterEgo::Character& ch, const char* slot, int tab, int dir) {
-    const auto* eq = FindEquipment(ch, slot, tab);
-    std::string name, rarity;
-    ResolveEquipDisplay(eq, slot, name, rarity);
-    bool hasItem = (eq && eq->id != 0);
-    std::string subtitle = hasItem ? BuildEquipSubtitle(eq) : "";
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    float availW = ImGui::GetContentRegionAvail().x;
-    float cardH = ICON_SIZE + 6.0f;
-    ImVec2 cardMin = ImGui::GetCursorScreenPos();
-    ImVec2 cardMax(cardMin.x + availW, cardMin.y + cardH);
-
-    // Card background — solid at the outer edge, fades to transparent toward the centre
-    // so the character portrait shows through the middle of the panel.
-    if (hasItem) {
-        ImU32 outerCol = IM_COL32(28, 26, 32, 215);
-        ImU32 innerCol = IM_COL32(28, 26, 32, 25);
-        if (dir > 0) {
-            dl->AddRectFilledMultiColor(cardMin, cardMax, outerCol, innerCol, innerCol, outerCol);
-        } else {
-            dl->AddRectFilledMultiColor(cardMin, cardMax, innerCol, outerCol, outerCol, innerCol);
-        }
-    } else {
-        // Empty slots: very faint, same fade direction
-        ImU32 outerCol = IM_COL32(20, 19, 24, 80);
-        ImU32 innerCol = IM_COL32(20, 19, 24, 0);
-        if (dir > 0) {
-            dl->AddRectFilledMultiColor(cardMin, cardMax, outerCol, innerCol, innerCol, outerCol);
-        } else {
-            dl->AddRectFilledMultiColor(cardMin, cardMax, innerCol, outerCol, outerCol, innerCol);
-        }
-    }
-
-    // Rarity accent strip on the outer edge only
-    if (hasItem) {
-        ImVec4 rcol = GetRarityColor(rarity);
-        ImU32 raccent = ImGui::ColorConvertFloat4ToU32(ImVec4(rcol.x, rcol.y, rcol.z, 0.70f));
-        if (dir > 0) {
-            dl->AddRectFilled(cardMin, ImVec2(cardMin.x + 2.0f, cardMax.y), raccent);
-        } else {
-            dl->AddRectFilled(ImVec2(cardMax.x - 2.0f, cardMin.y), cardMax, raccent);
-        }
-    }
-
-    float pad = 4.0f;
-    float textGap = 6.0f;
-    float textW = availW - ICON_SIZE - pad * 2 - textGap;
-    float lineH = ImGui::GetTextLineHeight();
-
-    if (dir > 0) {
-        // Icon on left
-        ImGui::SetCursorScreenPos(ImVec2(cardMin.x + pad, cardMin.y + 3.0f));
-        RenderEquipmentSlot(eq, SlotDisplayName(slot));
-
-        if (hasItem) {
-            float textX = cardMin.x + pad + ICON_SIZE + textGap;
-            std::string nTrunc = TruncateToWidth(name, textW);
-            std::string sTrunc = subtitle.empty() ? "" : TruncateToWidth(subtitle, textW);
-            // If subtitle would lose more than half its content, drop it entirely
-            if (!sTrunc.empty() && sTrunc != subtitle) {
-                if ((float)sTrunc.size() < (float)subtitle.size() * 0.5f) sTrunc.clear();
-            }
-            float blockH = sTrunc.empty() ? lineH : lineH * 2 + 1.0f;
-            float textTopY = cardMin.y + (cardH - blockH) * 0.5f;
-            dl->AddText(ImVec2(textX, textTopY),
-                ImGui::ColorConvertFloat4ToU32(GetRarityColor(rarity)), nTrunc.c_str());
-            if (!sTrunc.empty()) {
-                dl->AddText(ImVec2(textX, textTopY + lineH + 1.0f),
-                    IM_COL32(150, 142, 120, 230), sTrunc.c_str());
-            }
-        }
-    } else {
-        // Text on left, icon on right (trinkets column)
-        float iconX = cardMax.x - pad - ICON_SIZE;
-
-        if (hasItem) {
-            float textRightX = iconX - textGap;
-            std::string nTrunc = TruncateToWidth(name, textW);
-            std::string sTrunc = subtitle.empty() ? "" : TruncateToWidth(subtitle, textW);
-            if (!sTrunc.empty() && sTrunc != subtitle) {
-                if ((float)sTrunc.size() < (float)subtitle.size() * 0.5f) sTrunc.clear();
-            }
-            float nW = ImGui::CalcTextSize(nTrunc.c_str()).x;
-            float sW = sTrunc.empty() ? 0.0f : ImGui::CalcTextSize(sTrunc.c_str()).x;
-            float blockH = sTrunc.empty() ? lineH : lineH * 2 + 1.0f;
-            float textTopY = cardMin.y + (cardH - blockH) * 0.5f;
-            dl->AddText(ImVec2(textRightX - nW, textTopY),
-                ImGui::ColorConvertFloat4ToU32(GetRarityColor(rarity)), nTrunc.c_str());
-            if (!sTrunc.empty()) {
-                dl->AddText(ImVec2(textRightX - sW, textTopY + lineH + 1.0f),
-                    IM_COL32(150, 142, 120, 230), sTrunc.c_str());
-            }
-        }
-        ImGui::SetCursorScreenPos(ImVec2(iconX, cardMin.y + 3.0f));
-        RenderEquipmentSlot(eq, SlotDisplayName(slot));
-    }
-
-    // Advance cursor below the card
-    ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.0f));
-}
-
-static void RenderEquipRowReverse(const AlterEgo::Character& ch, const char* slot, int tab) {
-    RenderEquipCard(ch, slot, tab, -1);
-}
-
-// Helper: render one equipment row (icon + name) for the paper-doll grid
+// Live data keeps its own icon, tooltip and instance-specific actions, but
+// shares geometry and text wrapping with saved equipment.
 static void RenderEquipRow(const AlterEgo::Character& ch, const char* slot, int tab) {
-    RenderEquipCard(ch, slot, tab, +1);
+    const auto* eq=FindEquipment(ch,slot,tab);
+    std::string name,rarity;ResolveEquipDisplay(eq,slot,name,rarity);
+    const auto pos=ImGui::GetCursorScreenPos();
+    const float width=ImGui::GetContentRegionAvail().x;
+    RenderEquipmentSlot(eq,SlotDisplayName(slot));
+    AlterEgo::UI::EquipmentText text(pos,ICON_SIZE,width);
+    if(eq&&eq->id){
+        text.Line(name,ImGui::ColorConvertFloat4ToU32(GetRarityColor(rarity)));
+        text.Line(BuildEquipSubtitle(eq),IM_COL32(150,142,120,230));
+    }else text.Line(name,ImGui::GetColorU32(ImGuiCol_TextDisabled));
+    text.Finish();
 }
 
 // Draw a race silhouette as a semi-transparent background overlay
@@ -3806,7 +3594,7 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
     auto skinOf = [](const EquipmentItem* eq) -> uint16_t {
         if (!eq) return 0;
         if (eq->skin) return (uint16_t)eq->skin;
-        const ItemInfo* ii = GW2API::GetItemInfo(eq->id);
+        const auto ii = GW2API::GetItemInfo(eq->id);
         if (ii && ii->default_skin) return (uint16_t)ii->default_skin;
         return 0;
     };
@@ -3864,7 +3652,8 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
 // build-selection logic.
 // One navigation path for the Library menu, saved Fashion and imported builds.
 static void NavigateToLibraryCollection(int collection) {
-    g_LibraryCollection = collection == 1 ? 1 : 0;
+    MarkNavigation();
+    g_LibraryCollection = (collection >= 0 && collection <= 3) ? collection : 0;
     g_SwitchToLibrary = true;
     g_WindowVisible = true;
     SaveSettings();
@@ -3880,6 +3669,85 @@ static int GetRetrievedEquipmentTabCount(const AlterEgo::Character& ch) {
 }
 
 #include "InfusionTotalsView.h"
+
+static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
+                                    const AlterEgo::BuildTemplate& bt,
+                                    int equipmentTab = 0, int componentKind = -1);
+static void RenderLiveComponentSaveMenu(const AlterEgo::Character& ch, int tab,
+                                        int kind, const char* label) {
+    if (ImGui::BeginPopupContextItem(label)) {
+        if (ImGui::MenuItem("Save to Library...", nullptr, false, !ch.equipment.empty())) {
+            int idx = 0;
+            for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
+                if (ch.build_tabs[i].is_active) { idx = i; break; }
+            OpenSaveLiveBuildDialog(ch, ch.build_tabs.empty()?AlterEgo::BuildTemplate{}:ch.build_tabs[idx], tab, kind);
+        }
+        ImGui::EndPopup();
+    }
+}
+
+// Character-wide utility items use the existing equipment icon, tooltip and
+// context menu; no template selector or save-to-loadout action.
+static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
+    using namespace AlterEgo;
+    const auto row=[&](const char* slot,const char* label,bool gathering,bool charges) {
+        ImGui::PushID(slot);
+        const auto* eq=CharacterTools::Find(ch.equipment,slot,ch.active_equipment_tab);
+        if(!eq){
+            ImGui::TextUnformatted(label);
+            ImGui::SameLine();
+            ImGui::TextDisabled("Not reported");
+            ImGui::PopID();return;
+        }
+        const auto info = GW2API::GetItemInfo(eq->id);
+        const std::string name=info&&!info->name.empty()?info->name:"Item #"+std::to_string(eq->id);
+        RenderEquipmentSlot(eq,label);
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(label);
+        ImGui::PushStyleColor(ImGuiCol_Text,GetRarityColor(info?info->rarity:"Basic"));
+        ImGui::TextWrapped("%s",name.c_str());
+        ImGui::PopStyleColor();
+        if(eq->skin){
+            const auto skin = GW2API::GetSkinInfo(eq->skin);
+            const auto skinName=skin&&!skin->name.empty()?skin->name:"Skin #"+std::to_string(eq->skin);
+            ImGui::TextWrapped("Skin: %s",skinName.c_str());
+        }
+        if(charges){
+            if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
+            // Unknown charges are omitted; explicit zero is still reported.
+        }
+        if(gathering){
+            bool reported=false;
+            for(auto id:eq->upgrades){
+                if(!id)continue;
+                reported=true;
+                const auto glyph = GW2API::GetItemInfo(id);
+                const auto glyphName=glyph&&!glyph->name.empty()?glyph->name:"Item #"+std::to_string(id);
+                ImGui::TextWrapped("Glyph: %s",glyphName.c_str());
+            }
+            if(!reported){
+                ImGui::TextDisabled("Glyph: Unknown");
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("The GW2 API may omit installed glyphs. Unknown does not mean empty.");
+            }
+        }
+        ImGui::EndGroup();
+        ImGui::Spacing();
+        ImGui::PopID();
+    };
+    RenderSectionHeader("Gathering Tools",UI::SectionGold);
+    row("Pick","Mining Pick",true,true);
+    row("Axe","Logging Axe",true,true);
+    row("Sickle","Harvesting Sickle",true,true);
+    RenderSectionHeader("Fishing",UI::SectionGold);
+    row("FishingRod","Fishing Rod",false,false);
+    row("FishingLure","Lure",false,true);
+    row("FishingBait","Bait",false,true);
+    RenderSectionHeader("Jade Bot",UI::SectionGold);
+    row("PowerCore","Power Core",false,false);
+    row("SensoryArray","Sensory Array",false,false);
+    row("ServiceChip","Service Chip",false,false);
+}
 
 static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Both detail views start at the same origin below the Equipment / Build tabs.
@@ -3914,7 +3782,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         int fashionChip = -1;
         if (RenderChipStrip(labels, activeMarkers, selIdx, g_EquipTabScroll, "##equip_chips",
                             "Right-click for fashion options", &fashionChip)) {
-            g_SelectedEquipTab = selIdx + 1;
+            MarkNavigation();g_SelectedEquipTab = selIdx + 1;
             g_DetailsFetched = false;
         }
         if (fashionChip >= 0) {
@@ -3923,9 +3791,22 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         }
     }
 
+    // Refresh the displayed tab immediately after a chip selection.
+    if (g_SelectedEquipTab > 0 && g_SelectedEquipTab <= maxTab)
+        tab = g_SelectedEquipTab;
+
     // Fashion menu: share the right-clicked tab's look as a wardrobe template chat link.
     if (ImGui::BeginPopup("##fashion_menu")) {
         int fTab = (g_FashionTab > 0) ? g_FashionTab : tab;
+        if (ImGui::MenuItem("Save to Library...", nullptr, false, !ch.build_tabs.empty()||!ch.equipment.empty())) {
+            int idx = 0;
+            for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
+                if (ch.build_tabs[i].is_active) { idx = i; break; }
+            OpenSaveLiveBuildDialog(ch,ch.build_tabs.empty()?AlterEgo::BuildTemplate{}:ch.build_tabs[idx],
+                fTab,ch.build_tabs.empty()?kSaveEntireEquipmentSet:-1);
+        }
+        if(ImGui::MenuItem("Save Equipment Set...",nullptr,false,!ch.equipment.empty()))
+            OpenSaveLiveBuildDialog(ch,AlterEgo::BuildTemplate{},fTab,kSaveEntireEquipmentSet);
         if (ImGui::Selectable("Copy Wardrobe Template chat link")) {
             std::string link = BuildWardrobeLink(ch, fTab);
             if (!link.empty()) {
@@ -3945,146 +3826,15 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
 
     ImGui::Spacing();
 
-    // Main layout: Left (Armor + Weapons) | Right (Trinkets)
-    {
-        float totalW = ImGui::GetContentRegionAvail().x;
-        float gap = 8.0f;
-        float pad = 6.0f;
-        float leftW = totalW * 0.54f;
-
-        // ===== LEFT COLUMN: Armor + Weapons =====
-        ImGui::BeginGroup();
-        ImGui::Indent(pad);
-
-        RenderSectionHeader("Armor", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-        RenderEquipRow(ch, "Helm", tab);
-        RenderEquipRow(ch, "Shoulders", tab);
-        RenderEquipRow(ch, "Coat", tab);
-        RenderEquipRow(ch, "Gloves", tab);
-        RenderEquipRow(ch, "Leggings", tab);
-        RenderEquipRow(ch, "Boots", tab);
-
-        ImGui::Spacing();
-
-        RenderSectionHeader("Weapons", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-        {
-            auto DrawSetLabel = [](const char* roman, float rowH) {
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                ImVec2 lp = ImGui::GetCursorScreenPos();
-                float w = 28.0f;
-                float h = rowH;
-                ImU32 bgTop = IM_COL32(26, 22, 18, 255);
-                ImU32 bgBot = IM_COL32(20, 17, 13, 255);
-                dl->AddRectFilledMultiColor(lp, ImVec2(lp.x + w, lp.y + h), bgTop, bgTop, bgBot, bgBot);
-                dl->AddRect(lp, ImVec2(lp.x + w, lp.y + h),
-                    IM_COL32(70, 60, 40, 140), 3.0f, 0, 1.0f);
-                ImVec2 ts = ImGui::CalcTextSize(roman);
-                dl->AddText(
-                    ImVec2(lp.x + w * 0.5f - ts.x * 0.5f, lp.y + h * 0.5f - ts.y * 0.5f),
-                    IM_COL32(197, 161, 85, 255), roman);
-                ImGui::Dummy(ImVec2(w, h));
-            };
-
-            float rowH = ICON_SIZE + 10.0f;
-            float labelW = 28.0f;
-            float innerGap = 6.0f;
-            float weaponsW = leftW - pad * 2 - labelW - innerGap;
-            float primaryW = (weaponsW - 8.0f) * 0.62f;
-            float secondaryW = (weaponsW - 8.0f) - primaryW;
-
-            auto RenderWeaponSet = [&](const char* roman, const char* a, const char* b) {
-                ImGui::BeginGroup();
-                DrawSetLabel(roman, rowH);
-                ImGui::EndGroup();
-                ImGui::SameLine(0, innerGap);
-
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
-
-                ImGui::PushID(a);
-                ImGui::BeginChild("##wA", ImVec2(primaryW, rowH), false,
-                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-                RenderEquipRow(ch, a, tab);
-                ImGui::EndChild();
-                ImGui::PopID();
-
-                ImGui::SameLine(0, 8.0f);
-
-                ImGui::PushID(b);
-                ImGui::BeginChild("##wB", ImVec2(secondaryW, rowH), false,
-                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-                RenderEquipRow(ch, b, tab);
-                ImGui::EndChild();
-                ImGui::PopID();
-
-                ImGui::PopStyleVar(2);
-            };
-
-            RenderWeaponSet("I",  "WeaponA1", "WeaponA2");
-            RenderWeaponSet("II", "WeaponB1", "WeaponB2");
-        }
-
-        ImGui::Unindent(pad);
-        ImGui::EndGroup();
-
-        ImGui::SameLine(leftW + gap);
-
-        // ===== RIGHT COLUMN: Trinkets =====
-        ImGui::BeginGroup();
-
-        {
-            float colW = totalW - leftW - gap;
-            float headerW = ImGui::CalcTextSize("Trinkets").x;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + colW - headerW - pad);
-            ImGui::TextColored(ImVec4(0.70f, 0.58f, 0.20f, 1.0f), "Trinkets");
-            // Accent underline (right-aligned)
-            ImVec2 pos = ImGui::GetCursorScreenPos();
-            ImGui::GetWindowDrawList()->AddLine(
-                ImVec2(pos.x + colW * 0.4f, pos.y),
-                ImVec2(pos.x + colW - pad, pos.y),
-                ImGui::ColorConvertFloat4ToU32(ImVec4(0.70f, 0.58f, 0.20f, 0.30f)), 1.0f);
-            ImGui::Spacing();
-        }
-        RenderEquipRowReverse(ch, "Backpack", tab);
-        RenderEquipRowReverse(ch, "Accessory1", tab);
-        RenderEquipRowReverse(ch, "Accessory2", tab);
-        RenderEquipRowReverse(ch, "Amulet", tab);
-        RenderEquipRowReverse(ch, "Ring1", tab);
-        RenderEquipRowReverse(ch, "Ring2", tab);
-        RenderEquipRowReverse(ch, "Relic", tab);
-
-        ImGui::EndGroup();
-    }
-
-    ImGui::Spacing();
-
-    // ===== AQUATIC: Aquabreather + Aquatic Weapons =====
-    ImGui::Indent(6.0f);
-    RenderSectionHeader("Aquatic", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-    RenderEquipRow(ch, "HelmAquatic", tab);
-    {
-        float rowH = ICON_SIZE + 6.0f + 4.0f;
-        float halfW = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
-
-        ImGui::BeginChild("##aqA", ImVec2(halfW, rowH), false,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        RenderEquipRow(ch, "WeaponAquaticA", tab);
-        ImGui::EndChild();
-
-        ImGui::SameLine(0, 8.0f);
-
-        ImGui::BeginChild("##aqB", ImVec2(halfW, rowH), false,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        RenderEquipRow(ch, "WeaponAquaticB", tab);
-        ImGui::EndChild();
-
-        ImGui::PopStyleVar(2);
-    }
-    ImGui::Unindent(6.0f);
-    RenderInfusionTotals(GetLiveInfusionSummary(ch, tab));
+    AlterEgo::UI::EquipmentLayout("##live_gear",true,
+        [&](const char* slot){RenderEquipRow(ch,slot,tab);},
+        [&](const char* label,int kind){
+            RenderSectionHeader(label,AlterEgo::UI::SectionGold);
+            if(kind>=0){ImGui::PushID(label);RenderLiveComponentSaveMenu(ch,tab,kind,"##save_live_section");ImGui::PopID();}
+        });
+    RenderInfusionTotals(GetLiveInfusionSummary(ch, tab), nullptr, [&]() {
+        RenderLiveComponentSaveMenu(ch, tab, 8, "##save_live_infusions");
+    });
 }
 
 // Keep every specialization name readable inside the left trait-art gutter.
@@ -4137,8 +3887,8 @@ static void DrawDottedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, floa
 // Helper: render a single trait icon with selected/dimmed state and tooltip
 // Returns the center screen position of the rendered icon
 static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, float size,
-                              bool editable = false, bool* clicked = nullptr) {
-    const auto* tinfo = AlterEgo::GW2API::GetTraitInfo(trait_id);
+                              bool editable = false, bool* clicked = nullptr,bool externalContext=false) {
+    const auto tinfo = AlterEgo::GW2API::GetTraitInfo(trait_id);
 
     ImGui::PushID((int)(trait_id + 2000000));
 
@@ -4203,198 +3953,56 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
         ImGui::EndTooltip();
     }
 
+    if(tinfo&&!externalContext&&ImGui::BeginPopupContextItem("##trait_name")) {
+        CopyNameMenuItem(tinfo->name);ImGui::EndPopup();
+    }
     ImGui::PopID();
     return center;
 }
 
 // Clickable skill icon for the build editor (icon cache = skill_id + 5000000).
 // Returns true when clicked. skill_id 0 draws an empty slot.
-static bool RenderEditableSkillIcon(uint32_t skill_id, float size) {
-    // Callers PushID per slot/entry to disambiguate (empty slots share skill_id 0).
-    const auto* sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton("##es", ImVec2(size, size));
+static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,bool nameMenu=true) {
+    const auto sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 max(pos.x + size, pos.y + size);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     Texture_t* tex = skill_id ? AlterEgo::IconManager::GetIcon(skill_id + 5000000) : nullptr;
-    if (tex && tex->Resource) {
-        dl->AddImage(tex->Resource, pos, ImVec2(pos.x + size, pos.y + size));
+    ImGui::PushID((int)(skill_id + 5000000));
+    bool clicked = false;
+    if (editable) {
+        clicked = ImGui::InvisibleButton("##es", ImVec2(size, size));
+        if (tex && tex->Resource) dl->AddImage(tex->Resource, pos, max);
+    } else if (tex && tex->Resource) {
+        ImGui::Image(tex->Resource, ImVec2(size, size));
     } else {
-        dl->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size), IM_COL32(35, 35, 35, 180));
-        dl->AddRect(pos, ImVec2(pos.x + size, pos.y + size), IM_COL32(90, 80, 50, 200));
+        ImGui::Dummy(ImVec2(size, size));
+    }
+    if (!tex || !tex->Resource) {
+        dl->AddRectFilled(pos, max, editable ? IM_COL32(35,35,35,180) :
+            skill_id ? IM_COL32(40,40,60,200) : IM_COL32(30,30,30,200));
+        if (editable) dl->AddRect(pos, max, IM_COL32(90,80,50,200));
         if (sinfo && !sinfo->icon_url.empty())
             AlterEgo::IconManager::RequestIcon(skill_id + 5000000, sinfo->icon_url);
     }
-    if (ImGui::IsItemHovered()) {
+    if (ImGui::IsItemHovered() && (sinfo || editable)) {
         ImGui::BeginTooltip();
         if (sinfo) {
-            ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.5f, 1.0f), "%s", sinfo->name.c_str());
-            if (!sinfo->description.empty()) {
-                ImGui::PushTextWrapPos(300.0f);
-                ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", sinfo->description.c_str());
-                ImGui::PopTextWrapPos();
-            }
+            const std::string desc = StripGW2Markup(sinfo->description);
+            AlterEgo::UI::TooltipText(sinfo->name.c_str(), desc.c_str());
         } else {
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Click to choose a skill");
+            ImGui::TextDisabled("Click to choose a skill");
         }
         ImGui::EndTooltip();
     }
+    if(nameMenu&&sinfo&&ImGui::BeginPopupContextItem("##skill_name")) {
+        CopyNameMenuItem(sinfo->name);ImGui::EndPopup();
+    }
+    ImGui::PopID();
     return clicked;
 }
-
-// =========================================================================
-// Hero Challenges Panel
-// =========================================================================
-
-struct HCMapEntry {
-    std::string map_name;
-    int total = 0;
-    int completed = 0;
-};
-
-struct HCExpansionEntry {
-    std::string expansion;
-    std::vector<HCMapEntry> maps;
-    int total = 0;
-    int completed = 0;
-};
-
-static void RenderHeroChallengesPanel(const AlterEgo::Character& ch) {
-    // Trigger fetch if not loaded
-    if (!g_HeroChallengesReady && !g_HeroChallengesFetching) {
-        FetchHeroChallenges();
-    }
-
-    if (!g_HeroChallengesReady) {
-        RenderSpinner("Loading hero challenge data...");
-        return;
-    }
-
-    // Cache: rebuild only when character changes
-    static std::string s_hcCacheCharName;
-    static size_t s_hcCacheHPCount = 0;
-    static std::vector<HCExpansionEntry> s_hcCache;
-    static int s_hcTotalAll = 0;
-    static int s_hcCompletedAll = 0;
-    static int s_hcUnknownCompleted = 0; // completed IDs not in our data
-
-    if (s_hcCacheCharName != ch.name || s_hcCacheHPCount != ch.heropoints.size()) {
-        s_hcCacheCharName = ch.name;
-        s_hcCacheHPCount = ch.heropoints.size();
-        s_hcCache.clear();
-        s_hcTotalAll = 0;
-        s_hcCompletedAll = 0;
-        s_hcUnknownCompleted = 0;
-
-        // Build completed set
-        std::unordered_set<std::string> completedSet(ch.heropoints.begin(), ch.heropoints.end());
-
-        // Group by expansion -> map
-        // expansion -> map_name -> {total, completed}
-        std::map<std::string, std::map<std::string, std::pair<int, int>>> grouped;
-
-        // Define expansion order
-        static const std::vector<std::string> expansionOrder = {
-            "Core", "Living World Season 2", "Heart of Thorns", "Path of Fire"
-        };
-        // Pre-populate order
-        for (const auto& exp : expansionOrder) {
-            grouped[exp]; // ensure key exists
-        }
-
-        for (const auto& [id, info] : g_HeroChallenges) {
-            auto& mapEntry = grouped[info.expansion][info.map_name];
-            mapEntry.first++;  // total
-            if (completedSet.count(id)) {
-                mapEntry.second++;  // completed
-            }
-        }
-
-        // Count completed IDs not in our data
-        for (const auto& hp : ch.heropoints) {
-            if (g_HeroChallenges.find(hp) == g_HeroChallenges.end()) {
-                s_hcUnknownCompleted++;
-            }
-        }
-
-        // Build display entries
-        for (const auto& [exp, maps] : grouped) {
-            if (maps.empty()) continue;
-            HCExpansionEntry entry;
-            entry.expansion = exp;
-            for (const auto& [mapName, counts] : maps) {
-                HCMapEntry me;
-                me.map_name = mapName;
-                me.total = counts.first;
-                me.completed = counts.second;
-                entry.total += me.total;
-                entry.completed += me.completed;
-                entry.maps.push_back(std::move(me));
-            }
-            // Sort maps alphabetically
-            std::sort(entry.maps.begin(), entry.maps.end(),
-                [](const HCMapEntry& a, const HCMapEntry& b) { return a.map_name < b.map_name; });
-            s_hcTotalAll += entry.total;
-            s_hcCompletedAll += entry.completed;
-            s_hcCache.push_back(std::move(entry));
-        }
-    }
-
-    // Summary
-    ImGui::Text("Hero Challenges: %d / %d", s_hcCompletedAll, s_hcTotalAll);
-    if (s_hcUnknownCompleted > 0) {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-            "(+ %d from expansions not yet tracked)", s_hcUnknownCompleted);
-    }
-
-    // Progress bar
-    float progress = s_hcTotalAll > 0 ? (float)s_hcCompletedAll / (float)s_hcTotalAll : 0.0f;
-    ImGui::ProgressBar(progress, ImVec2(-1, 0));
-    ImGui::Spacing();
-
-    if (ch.heropoints.empty()) {
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
-            "No hero challenge data available for this character.\nTry refreshing character data.");
-        return;
-    }
-
-    // Render expansion trees
-    for (const auto& exp : s_hcCache) {
-        int remaining = exp.total - exp.completed;
-        char label[256];
-        if (remaining == 0) {
-            snprintf(label, sizeof(label), "%s  (%d/%d) " "\xE2\x9C\x93",
-                exp.expansion.c_str(), exp.completed, exp.total);
-        } else {
-            snprintf(label, sizeof(label), "%s  (%d/%d) — %d remaining",
-                exp.expansion.c_str(), exp.completed, exp.total, remaining);
-        }
-
-        bool allDone = (exp.completed == exp.total);
-        if (allDone) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.7f, 0.5f, 1.0f));
-
-        // Default open if there are incomplete challenges
-        if (!allDone) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-        if (ImGui::TreeNode(exp.expansion.c_str(), "%s", label)) {
-            for (const auto& m : exp.maps) {
-                int mRemaining = m.total - m.completed;
-                bool mapDone = (m.completed == m.total);
-
-                if (mapDone) {
-                    ImGui::TextColored(ImVec4(0.5f, 0.7f, 0.5f, 1.0f),
-                        "  %s  %d/%d " "\xE2\x9C\x93", m.map_name.c_str(), m.completed, m.total);
-                } else {
-                    ImGui::Text("  %s  %d/%d", m.map_name.c_str(), m.completed, m.total);
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.3f, 1.0f),
-                        "— %d remaining", mRemaining);
-                }
-            }
-            ImGui::TreePop();
-        }
-
-        if (allDone) ImGui::PopStyleColor();
-    }
+static bool RenderEditableSkillIcon(uint32_t skill_id, float size,bool nameMenu=true) {
+    return RenderSkillIconCore(skill_id, size, true,nameMenu);
 }
 
 static void RenderSkillIcon(uint32_t skill_id, float size);
@@ -4450,10 +4058,9 @@ static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
     }
 
     if (bt.profession == "Revenant") {
-        auto LegendByte = [](const std::string& s) -> uint8_t {
-            if (s.size() > 6 && s.substr(0, 6) == "Legend")
-                return (uint8_t)std::atoi(s.c_str() + 6);
-            return 0;
+        const auto catalog=AlterEgo::PublicCatalog::Get();
+        auto LegendByte = [&](const std::string& s) -> uint8_t {
+            return AlterEgo::PublicCatalog::LegendCode(catalog->legends,s);
         };
         link.legends[0] = LegendByte(bt.legends.terrestrial[0]);
         link.legends[1] = LegendByte(bt.legends.terrestrial[1]);
@@ -4467,26 +4074,44 @@ static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
     return AlterEgo::ChatLink::EncodeBuild(link);
 }
 
-// Capture an H&S build tab directly rather than round-tripping through a chat link.
+// Capture an native API build tab directly rather than round-tripping through a chat link.
 // A link is still recorded when the profession palette is available, but missing
 // palette data cannot prevent saving the real skill/trait IDs already in memory.
 static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
-                                    const AlterEgo::BuildTemplate& bt) {
+                                    const AlterEgo::BuildTemplate& bt,
+                                    int equipmentTab, int componentKind) {
+    const int requestedEquipment = equipmentTab > 0 ? equipmentTab :
+        (ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1);
+    // Compare the original launch context, not the user's edited form fields.
+    // Reopening the same dialog should reveal it without discarding its draft.
+    static std::string launchCharacter,launchAccount;
+    static int launchBuildTab = 0, launchEquipmentTab = 0, launchKind = -1;
+    g_SaveLibDialogFocus.Request();
+    if (g_SaveLibDialogOpen && launchCharacter == ch.name && launchAccount==ch.account_name &&
+        launchBuildTab == bt.tab && launchEquipmentTab == requestedEquipment &&
+        launchKind == componentKind) return;
+    launchCharacter = ch.name;
+    launchAccount=ch.account_name;
+    g_SaveLibAccount=ch.account_name;
+    launchBuildTab = bt.tab;
+    launchEquipmentTab = requestedEquipment;
+    launchKind = componentKind;
     g_SaveLibCharName = ch.name;
     g_SaveLibBuildTab = bt.tab;
-    g_SaveLibProfession = bt.profession.empty() ? ch.profession : bt.profession;
-    g_SaveLibChatLink.clear();
-    if (AlterEgo::GW2API::HasPaletteData(g_SaveLibProfession))
-        g_SaveLibChatLink = EncodeBuildTabChatLink(bt);
-    else
-        AlterEgo::GW2API::FetchProfessionPaletteAsync(g_SaveLibProfession);
+    const auto profession=bt.profession.empty()?ch.profession:bt.profession;
+    if(bt.tab>0&&componentKind<2&&!AlterEgo::GW2API::HasPaletteData(profession))
+        AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
     std::string defaultName = ch.name + " - " +
         (bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name);
     snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", defaultName.c_str());
     g_SaveLibModes = {AlterEgo::GameMode::PvE};
     g_SaveLibNameManuallyEdited = false;
-    g_SaveLibIncludeEquip = true;
-    g_SaveLibEquipTab = ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
+    g_SaveLibEquipmentMode=0;g_SaveLibSetName.clear();g_SaveLibSetKinds={"weapons","armor","trinkets","runes","sigils","infusions","relic"};g_SaveLibExactSets.clear();g_SaveLibSelectedSet.clear();
+    g_SaveLibTarget = componentKind >= 0 ? 1 : 0;
+    g_SaveLibComponentKind = componentKind >= 0 ? componentKind : 0;
+    g_SaveLibUpdateId.clear();
+    g_SaveLibFashionError.clear();
+    g_SaveLibEquipTab = requestedEquipment;
     g_SaveLibDialogOpen = true;
 }
 
@@ -4510,10 +4135,9 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
             sb.aquatic_skills = capturedTab->aquatic_skills;
             sb.pets = capturedTab->pets;
             sb.weapons = capturedTab->weapons;
-            auto legendCode = [](const std::string& value) -> uint8_t {
-                if (value.rfind("Legend", 0) != 0) return 0;
-                int v = std::atoi(value.c_str() + 6);
-                return (v > 0 && v <= 255) ? static_cast<uint8_t>(v) : 0;
+            const auto catalog=AlterEgo::PublicCatalog::Get();
+            auto legendCode = [&](const std::string& value) -> uint8_t {
+                return AlterEgo::PublicCatalog::LegendCode(catalog->legends,value);
             };
             sb.legend_codes[0] = legendCode(capturedTab->legends.terrestrial[0]);
             sb.legend_codes[1] = legendCode(capturedTab->legends.terrestrial[1]);
@@ -4552,14 +4176,14 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
                         // Resolve stat name
                         gs.stat_id = eq.stat_id;
                         if (!gs.stat_id && eq.id) {
-                            const auto* item = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            const auto item = AlterEgo::GW2API::GetItemInfo(eq.id);
                             if (item && item->details.contains("infix_upgrade") &&
                                 item->details["infix_upgrade"].contains("id") &&
                                 item->details["infix_upgrade"]["id"].is_number_unsigned())
                                 gs.stat_id = item->details["infix_upgrade"]["id"].get<uint32_t>();
                         }
                         if (gs.stat_id) {
-                            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+                            const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                             if (statInfo) gs.stat_name = statInfo->name;
                         }
 
@@ -4572,10 +4196,9 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
                         // Resolve upgrades (runes for armor, sigils for weapons)
                         for (size_t ui = 0; ui < eq.upgrades.size(); ui++) {
                             if (eq.upgrades[ui] == 0) continue;
-                            const auto* upInfo = AlterEgo::GW2API::GetItemInfo(eq.upgrades[ui]);
-                            if (!upInfo) continue;
-                            std::string upName = upInfo->name;
-                            AlterEgo::GW2API::CacheItemNameId(upName, eq.upgrades[ui]);
+                            const auto upInfo = AlterEgo::GW2API::GetItemInfo(eq.upgrades[ui]);
+                            std::string upName = upInfo?upInfo->name:std::string();
+                            if(!upName.empty())AlterEgo::GW2API::CacheItemNameId(upName, eq.upgrades[ui]);
                             if (isArmor && ui == 0) {
                                 gs.rune = upName;
                                 gs.rune_id = eq.upgrades[ui];
@@ -4591,7 +4214,7 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
 
                         // Resolve weapon type from item details
                         if (isWeapon && eq.id != 0) {
-                            const auto* itemInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            const auto itemInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
                             if (itemInfo && itemInfo->details.contains("type"))
                                 gs.weapon_type = itemInfo->details["type"].get<std::string>();
                         }
@@ -4619,7 +4242,7 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
                             AlterEgo::IsEquipmentInCapturedBuild(
                                 eq.slot, eq.tab, equipTab) &&
                             eq.id != 0) {
-                            const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
+                            const auto relicInfo = AlterEgo::GW2API::GetItemInfo(eq.id);
                             if (relicInfo) {
                                 sb.relic_name = relicInfo->name;
                                 // Use exotic relic ID from name cache (legendary relic has a shared ID)
@@ -4679,21 +4302,24 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         for (int i = 0; i < static_cast<int>(ch.build_tabs.size()); ++i) {
             if (ch.build_tabs[i].is_active) { buildIdx = i; break; }
         }
-        g_SelectedBuildTab = buildIdx;
+        MarkNavigation();g_SelectedBuildTab = buildIdx;
     }
 
     if (!hasBuilds) {
-        ImGui::TextDisabled("No retrieved build available to save or share.");
+        if(!ch.equipment.empty()) {
+            if(RenderActionButton("Save##live_save",ImVec2(buttonWidth,0)))
+                OpenSaveLiveBuildDialog(ch,AlterEgo::BuildTemplate{},preferredEquipTab,kSaveEntireEquipmentSet);
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Save retrieved equipment to Library.");
+        } else ImGui::TextDisabled("No retrieved build or equipment available.");
         return;
     }
 
     if (RenderActionButton("Save##live_save", ImVec2(buttonWidth, 0))) {
-        OpenSaveLiveBuildDialog(ch, ch.build_tabs[buildIdx]);
-        if (preferredEquipTab > 0) g_SaveLibEquipTab = preferredEquipTab;
+        OpenSaveLiveBuildDialog(ch, ch.build_tabs[ActiveBuildIndex(ch)], preferredEquipTab);
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Save Current Build + Gear to Library...\n"
-            "Save the selected retrieved build and choose the equipment set to include.");
+            "Save a complete Loadout, equipment set, individual component, or Fashion.");
 
     if (!stacked) ImGui::SameLine();
     if (RenderActionButton("Share##live_share", ImVec2(buttonWidth, 0))) {
@@ -4795,9 +4421,9 @@ static void RenderCharacterHeaderMetadata(const AlterEgo::Character& ch, float w
             "https://render.guildwars2.com/file/5C759EC1C95F3BE53C167A7D9F0D27BF3AE56277/625611.png",
             "Birthday", std::to_string(birthdayDays) + "d away", true);
     }
-    auto login = g_LoginTimestamps.find(ch.name);
-    if (login != g_LoginTimestamps.end()) {
-        const int elapsed = (int)difftime(std::time(nullptr), (time_t)login->second);
+    const auto login = CharacterLastLogin(ch);
+    if (login > 0) {
+        const int elapsed = (int)difftime(std::time(nullptr), (time_t)login);
         const std::string ago = elapsed < 60 ? "Just now" :
             elapsed < 3600 ? std::to_string(elapsed / 60) + "m ago" :
             elapsed < 86400 ? std::to_string(elapsed / 3600) + "h ago" :
@@ -4819,15 +4445,9 @@ static void RenderCharacterHeaderActions(const AlterEgo::Character& ch, float bu
     ImGui::PushID("##character_header_actions");
     // GroupOffset preserves the manually positioned header X across multiple
     // ImGui::Button calls. Without this, only Save stays right-aligned and the
-    // following Share / Save Active Fashion buttons jump to the left margin.
+    // following Share button jumps to the left margin.
     ImGui::BeginGroup();
     RenderSaveLiveBuildAction(ch, 0, true, buttonWidth);
-    if (RenderActionButton("Save Active Fashion##live_fashion",
-                           ImVec2(buttonWidth, 0))) {
-        StartLiveFashionSave(ch, ActiveEquipmentTab(ch));
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Save the character's active in-game equipment tab appearance to Library > Fashion.");
     ImGui::EndGroup();
     ImGui::PopID();
 }
@@ -4899,7 +4519,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
             continue;
         }
 
-        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
         std::string specName = specInfo ? specInfo->name : ("Spec " + std::to_string(spec.spec_id));
         bool isElite = specInfo ? specInfo->elite : false;
         ImVec4 specColor = isElite ? ImVec4(1.0f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
@@ -4988,6 +4608,9 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                     dl, specName, specColor, rowOrigin, rowH, nameAnchor);
                 ImGui::SetCursorScreenPos(nameAnchor);
                 ImGui::InvisibleButton("##specname", hitSz);
+                if(!g_LibEditMode&&ImGui::BeginPopupContextItem("##spec_name")){
+                    CopyNameMenuItem(specName);ImGui::EndPopup();
+                }
                 if (ImGui::IsItemHovered()) {
                     ImGui::BeginTooltip();
                     ImGui::TextColored(specColor, "%s", specName.c_str());
@@ -5050,7 +4673,17 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                             int majorIdx = tier * 3 + row;
                             uint32_t tid = specInfo->major_traits[majorIdx];
                             bool selected = ((uint32_t)spec.traits[tier] == tid);
-                            ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz);
+                            ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz,false,nullptr,g_LibEditMode&&selected);
+                            if (g_LibEditMode && selected &&
+                                ImGui::BeginPopupContextItem("##trait_edit_context")) {
+                                const auto trait=AlterEgo::GW2API::GetTraitInfo(tid);
+                                if(trait)CopyNameMenuItem(trait->name);
+                                if (ImGui::MenuItem("Clear Trait")) {
+                                    g_EditDraft.specializations[i].traits[tier] = 0;
+                                    MarkEditDirty();
+                                }
+                                ImGui::EndPopup();
+                            }
                             if (selected) {
                                 selectedCenters[tier] = c;
                                 hasSelected[tier] = true;
@@ -5160,7 +4793,6 @@ static const char* ProfessionFromCode(uint8_t code) {
     }
 }
 
-static const char* GameModeNames[] = { "All", "PvE", "WvW", "PvP", "Raid", "Fractal", "Other" };
 static const char* GameModeImportNames[] = { "PvE", "WvW", "PvP", "Raid", "Fractal", "Other" };
 
 static AlterEgo::GameMode GameModeFromIndex(int idx) {
@@ -5206,25 +4838,8 @@ static bool RenderGameModeSelector(const char* id, std::vector<AlterEgo::GameMod
     return changed;
 }
 
-static bool GameModeMatchesFilter(const AlterEgo::SavedBuild& build, int filter) {
-    if (!build.game_modes.empty()) {
-        if (filter == 0) return true;
-        for (auto mode : build.game_modes) {
-            if ((filter >= 1 && filter <= 5 && (int)mode == filter - 1) ||
-                (filter == 6 && mode == AlterEgo::GameMode::Other)) return true;
-        }
-        return false;
-    }
-    const auto mode = build.game_mode;
-    if (filter == 0) return true; // All
-    switch (filter) {
-        case 1: return mode == AlterEgo::GameMode::PvE;
-        case 2: return mode == AlterEgo::GameMode::WvW;
-        case 3: return mode == AlterEgo::GameMode::PvP;
-        case 4: return mode == AlterEgo::GameMode::Raid;
-        case 5: return mode == AlterEgo::GameMode::Fractal;
-        default: return true;
-    }
+static bool GameModeMatchesFilter(const AlterEgo::SavedBuild& build,const std::set<std::string>& filters) {
+    return AlterEgo::LibraryFilter::Matches(filters,build.game_modes,build.game_mode,GameModeLabel);
 }
 
 static const char* GameModeLabel(AlterEgo::GameMode m) {
@@ -5551,7 +5166,7 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
             gs.stat_id = statId;
 
             // Resolve stat name from cache
-            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(statId);
+            const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(statId);
             if (statInfo) gs.stat_name = statInfo->name;
 
             out.gear[gs.slot] = gs;
@@ -5562,7 +5177,7 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
             if (pos + 4 > data.size()) { error = "AE2 rune data truncated."; return false; }
             out.rune_id = ReadU32LE(&data[pos]); pos += 4;
             // Resolve rune name from item cache
-            const auto* runeInfo = AlterEgo::GW2API::GetItemInfo(out.rune_id);
+            const auto runeInfo = AlterEgo::GW2API::GetItemInfo(out.rune_id);
             if (runeInfo) out.rune_name = runeInfo->name;
         }
 
@@ -5570,7 +5185,7 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
         if (hasRelic) {
             if (pos + 4 > data.size()) { error = "AE2 relic data truncated."; return false; }
             out.relic_id = ReadU32LE(&data[pos]); pos += 4;
-            const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(out.relic_id);
+            const auto relicInfo = AlterEgo::GW2API::GetItemInfo(out.relic_id);
             if (relicInfo) out.relic_name = relicInfo->name;
         }
 
@@ -5605,26 +5220,26 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
 
         // Now resolve names from the cache (after sync fetch) and populate name→ID cache
         if (out.rune_id != 0 && out.rune_name.empty()) {
-            const auto* runeInfo = AlterEgo::GW2API::GetItemInfo(out.rune_id);
+            const auto runeInfo = AlterEgo::GW2API::GetItemInfo(out.rune_id);
             if (runeInfo) out.rune_name = runeInfo->name;
         }
         if (out.rune_id != 0 && !out.rune_name.empty())
             AlterEgo::GW2API::CacheItemNameId(out.rune_name, out.rune_id);
         if (out.relic_id != 0 && out.relic_name.empty()) {
-            const auto* relicInfo = AlterEgo::GW2API::GetItemInfo(out.relic_id);
+            const auto relicInfo = AlterEgo::GW2API::GetItemInfo(out.relic_id);
             if (relicInfo) out.relic_name = relicInfo->name;
         }
         if (out.relic_id != 0 && !out.relic_name.empty())
             AlterEgo::GW2API::CacheItemNameId(out.relic_name, out.relic_id);
         for (auto& [slot, gs] : out.gear) {
             if (gs.sigil_id != 0 && gs.sigil.empty()) {
-                const auto* sigilInfo = AlterEgo::GW2API::GetItemInfo(gs.sigil_id);
+                const auto sigilInfo = AlterEgo::GW2API::GetItemInfo(gs.sigil_id);
                 if (sigilInfo) gs.sigil = sigilInfo->name;
             }
             if (gs.sigil_id != 0 && !gs.sigil.empty())
                 AlterEgo::GW2API::CacheItemNameId(gs.sigil, gs.sigil_id);
             if (gs.sigil2_id != 0 && gs.sigil2.empty()) {
-                const auto* sigil2Info = AlterEgo::GW2API::GetItemInfo(gs.sigil2_id);
+                const auto sigil2Info = AlterEgo::GW2API::GetItemInfo(gs.sigil2_id);
                 if (sigil2Info) gs.sigil2 = sigil2Info->name;
             }
             if (gs.sigil2_id != 0 && !gs.sigil2.empty())
@@ -5666,11 +5281,7 @@ static AlterEgo::GameMode GameModeFromLabel(const std::string& label) {
 // ---- Mobile relay import ----
 
 static bool IsRelayCode(const std::string& s) {
-    if (s.size() != 4) return false;
-    for (char c : s) {
-        if (!isalnum((unsigned char)c)) return false;
-    }
-    return true;
+    return AlterEgo::BuildRelay::AcceptsCode(s);
 }
 
 // Cache the last relay response so a retry (e.g. waiting for palette data) doesn't
@@ -5679,6 +5290,10 @@ static std::string g_RelayCache_Code;
 static std::string g_RelayCache_Body;
 
 static bool ImportBuildFromRelay(const std::string& code, AlterEgo::SavedBuild& out, std::string& error) {
+    if constexpr (!AlterEgo::BuildRelay::Enabled) {
+        error = "Not a recognized build or wardrobe format.";
+        return false;
+    }
     // Defense in depth: callers validate via IsRelayCode, but reject anything
     // unexpected here too before splicing it into the URL.
     if (!IsRelayCode(code)) {
@@ -5778,26 +5393,26 @@ static bool ImportBuildFromRelay(const std::string& code, AlterEgo::SavedBuild& 
 
                 // Resolve names and populate name→ID cache
                 if (out.rune_id != 0 && out.rune_name.empty()) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(out.rune_id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(out.rune_id);
                     if (info) out.rune_name = info->name;
                 }
                 if (out.rune_id != 0 && !out.rune_name.empty())
                     AlterEgo::GW2API::CacheItemNameId(out.rune_name, out.rune_id);
                 if (out.relic_id != 0 && out.relic_name.empty()) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(out.relic_id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(out.relic_id);
                     if (info) out.relic_name = info->name;
                 }
                 if (out.relic_id != 0 && !out.relic_name.empty())
                     AlterEgo::GW2API::CacheItemNameId(out.relic_name, out.relic_id);
                 for (auto& [slot, gs] : out.gear) {
                     if (gs.sigil_id != 0 && gs.sigil.empty()) {
-                        const auto* info = AlterEgo::GW2API::GetItemInfo(gs.sigil_id);
+                        const auto info = AlterEgo::GW2API::GetItemInfo(gs.sigil_id);
                         if (info) gs.sigil = info->name;
                     }
                     if (gs.sigil_id != 0 && !gs.sigil.empty())
                         AlterEgo::GW2API::CacheItemNameId(gs.sigil, gs.sigil_id);
                     if (gs.sigil2_id != 0 && gs.sigil2.empty()) {
-                        const auto* info = AlterEgo::GW2API::GetItemInfo(gs.sigil2_id);
+                        const auto info = AlterEgo::GW2API::GetItemInfo(gs.sigil2_id);
                         if (info) gs.sigil2 = info->name;
                     }
                     if (gs.sigil2_id != 0 && !gs.sigil2.empty())
@@ -5833,11 +5448,12 @@ static bool ImportBuildFromRelay(const std::string& code, AlterEgo::SavedBuild& 
 
 // Send a saved build to the relay server, returning the 4-char code or an error.
 static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
+    if constexpr (!AlterEgo::BuildRelay::Enabled) return;
     g_RelaySending = true;
     g_RelayResultCode.clear();
     g_RelayResultError.clear();
 
-    std::thread([build]() {
+    AlterEgo::Background::Workers().Launch([build]() {
         // Build the buildJson string (matches mobile app schema)
         nlohmann::json bj;
         {
@@ -5924,7 +5540,7 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
             g_RelayResultError = "Relay error (HTTP " + std::to_string(resp.status_code) + ")";
         }
         g_RelaySending = false;
-    }).detach();
+    }, [] { g_RelayResultError = "Relay request interrupted."; g_RelaySending = false; });
 }
 
 // Both saved-library builds and retrieved character snapshots share the same
@@ -5963,15 +5579,17 @@ static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
                         } else if (APIDefs) APIDefs->GUI_SendAlert("Fashion link unavailable; refresh character data.");
                     }
                 }
-                if (!g_RelaySending && ImGui::Selectable("Share complete build via one-time code")) {
-                    if (build.chat_link.empty()) {
-                        if (APIDefs) APIDefs->GUI_SendAlert("Cannot send: build has no chat link.");
-                    } else {
-                        SendBuildToRelay(build);
+                if constexpr (AlterEgo::BuildRelay::Enabled) {
+                    if (!g_RelaySending && ImGui::Selectable("Share complete build via one-time code")) {
+                        if (build.chat_link.empty()) {
+                            if (APIDefs) APIDefs->GUI_SendAlert("Cannot send: build has no chat link.");
+                        } else {
+                            SendBuildToRelay(build);
+                        }
                     }
-                }
-                if (g_RelaySending) {
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Sending...");
+                    if (g_RelaySending) {
+                        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Sending...");
+                    }
                 }
  }
 
@@ -5983,8 +5601,10 @@ static bool ImportSharedBuild(const std::string& input, AlterEgo::SavedBuild& ou
         return ImportBuildFromAE2(input, out, error);
     }
     // 4-character alphanumeric code — mobile relay import
-    if (IsRelayCode(input)) {
-        return ImportBuildFromRelay(input, out, error);
+    if (AlterEgo::BuildRelay::HasCodeShape(input)) {
+        if (IsRelayCode(input)) return ImportBuildFromRelay(input, out, error);
+        error = "Not a recognized build or wardrobe format.";
+        return false;
     }
     // Chat link
     if (input.size() > 4 && input[0] == '[' && input[1] == '&') {
@@ -6036,7 +5656,7 @@ static bool DecodeBuildLink(const std::string& link, const std::string& name,
     // Resolve trait choices to trait IDs using spec cache
     for (int i = 0; i < 3; i++) {
         if (decoded.specs[i].spec_id == 0) continue;
-        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
         if (specInfo && specInfo->major_traits.size() >= 9) {
             for (int tier = 0; tier < 3; tier++) {
                 uint8_t choice = decoded.specs[i].traits[tier]; // 1=top, 2=mid, 3=bot
@@ -6129,6 +5749,8 @@ static const char* ChatChannelName(ChatMessageType type) {
 }
 
 static void OnEvChatMessage(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     g_ChatAddonConnected = true;
     if (!g_ChatBuildDetection) return;
@@ -6185,7 +5807,7 @@ static void OnEvChatMessage(void* eventArgs) {
                             std::string specName;
                             for (int i = 2; i >= 0; i--) {
                                 if (decoded.specs[i].spec_id != 0) {
-                                    const auto* si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
+                                    const auto si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
                                     if (si && si->elite) specName = si->name;
                                     break;
                                 }
@@ -6251,7 +5873,7 @@ static void OnEvChatMessage(void* eventArgs) {
             std::string specName;
             for (int i = 2; i >= 0; i--) {
                 if (decoded.specs[i].spec_id != 0) {
-                    const auto* si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
+                    const auto si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
                     if (si && si->elite) specName = si->name;
                     break;
                 }
@@ -6385,7 +6007,7 @@ static void RenderBuildToast() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.18f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.60f, 0.25f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.30f, 0.70f, 0.30f, 1.00f));
-        if (ImGui::Button("Import to Library", ImVec2(buttonWidth, 32))) {
+        if (RenderActionButton("Import to Library", ImVec2(buttonWidth, 32))) {
             std::string buildName = g_BuildToast.spec_name.empty()
                 ? g_BuildToast.profession
                 : g_BuildToast.spec_name;
@@ -6436,7 +6058,7 @@ static void RenderBuildToast() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.20f, 0.12f, 0.80f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.30f, 0.14f, 0.90f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.38f, 0.16f, 1.00f));
-        if (ImGui::Button("Dismiss", ImVec2(buttonWidth, 32))) {
+        if (RenderActionButton("Dismiss", ImVec2(buttonWidth, 32))) {
             g_BuildToast.active = false;
         }
         ImGui::PopStyleColor(3);
@@ -6460,11 +6082,15 @@ static void RenderBuildToast() {
 
 // Pie UI announced itself (on its load, or replying to our ping).
 static void OnPieUIReady(void* /*eventArgs*/) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     g_PieUIPresent.store(true);
 }
 
 // Pie UI (or any addon) is probing for Alter Ego — reply with our presence.
 static void OnAlterEgoPing(void* /*eventArgs*/) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (APIDefs && APIDefs->Events_Raise)
         APIDefs->Events_Raise(EV_ALTER_EGO_READY, nullptr);
 }
@@ -6474,6 +6100,8 @@ static void OnAlterEgoPing(void* /*eventArgs*/) {
 // the toast's Import button does the actual import. Runs on Pie UI's thread (Nexus
 // dispatches synchronously), so copy the payload immediately.
 static void OnPieImportBuild(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     std::string payload((const char*)eventArgs);
     if (payload.empty()) return;
@@ -6509,7 +6137,7 @@ static void OnPieImportBuild(void* eventArgs) {
     std::string specName;
     for (int i = 2; i >= 0; i--) {
         if (decoded.specs[i].spec_id != 0) {
-            const auto* si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
+            const auto si = AlterEgo::GW2API::GetSpecInfo(decoded.specs[i].spec_id);
             if (si && si->elite) specName = si->name;
             break;
         }
@@ -6535,42 +6163,7 @@ static void OnPieImportBuild(void* eventArgs) {
 
 // Render a skill icon with tooltip
 static void RenderSkillIcon(uint32_t skill_id, float size) {
-    if (skill_id == 0) {
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            ImGui::GetCursorScreenPos(),
-            ImVec2(ImGui::GetCursorScreenPos().x + size, ImGui::GetCursorScreenPos().y + size),
-            IM_COL32(30, 30, 30, 200));
-        ImGui::Dummy(ImVec2(size, size));
-        return;
-    }
-
-    ImGui::PushID((int)(skill_id + 5000000));
-    const auto* sinfo = AlterEgo::GW2API::GetSkillInfo(skill_id);
-    Texture_t* tex = AlterEgo::IconManager::GetIcon(skill_id + 5000000);
-
-    if (tex && tex->Resource) {
-        ImGui::Image(tex->Resource, ImVec2(size, size));
-    } else {
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::GetWindowDrawList()->AddRectFilled(pos,
-            ImVec2(pos.x + size, pos.y + size), IM_COL32(40, 40, 60, 200));
-        ImGui::Dummy(ImVec2(size, size));
-        if (sinfo && !sinfo->icon_url.empty())
-            AlterEgo::IconManager::RequestIcon(skill_id + 5000000, sinfo->icon_url);
-    }
-
-    if (ImGui::IsItemHovered() && sinfo) {
-        ImGui::BeginTooltip();
-        ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.5f, 1.0f), "%s", sinfo->name.c_str());
-        if (!sinfo->description.empty()) {
-            ImGui::PushTextWrapPos(300.0f);
-            std::string sdesc = StripGW2Markup(sinfo->description);
-            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", sdesc.c_str());
-            ImGui::PopTextWrapPos();
-        }
-        ImGui::EndTooltip();
-    }
-    ImGui::PopID();
+    RenderSkillIconCore(skill_id, size, false);
 }
 
 // =========================================================================
@@ -6587,329 +6180,346 @@ static const char* FriendlyAttrName(const std::string& attr) {
     return attr.c_str();
 }
 
-// Curated rune list (name + item_id + summary). IDs from GW2 API.
-struct RuneEntry { const char* name; uint32_t item_id; const char* bonus; };
+// Curated rune list (name + item_id (offline bootstrap only)). IDs from GW2 API.
+struct RuneEntry { const char* name; uint32_t item_id; };
 static const RuneEntry RUNE_LIST[] = {
-    {"Superior Rune of the Scholar",      91595, "+Power, +Ferocity, +10% dmg >90% HP"},
-    {"Superior Rune of the Eagle",        91433, "+Power, +Precision, +Ferocity, +10% dmg >80% HP"},
-    {"Superior Rune of Strength",         91423, "+Power, +Ferocity, +5% dmg on might"},
-    {"Superior Rune of the Dragonhunter", 91432, "+Power, +Ferocity, +7% vs burning foes"},
-    {"Superior Rune of the Berserker",    91397, "+Power, +Ferocity, +5% crit dmg"},
-    {"Superior Rune of the Thief",        91579, "+Power, +Precision, +10% dmg from stealth"},
-    {"Superior Rune of the Firebrand",    91538, "+Condi Dmg, +Expertise, +7% burning dmg"},
-    {"Superior Rune of Balthazar",        91513, "+Condi Dmg, +Burning duration"},
-    {"Superior Rune of the Trapper",      91508, "+Condi Dmg, +Expertise, +10% condi dur"},
-    {"Superior Rune of the Afflicted",    91460, "+Condi Dmg, +Expertise"},
-    {"Superior Rune of Tormenting",       91516, "+Condi Dmg, +Expertise, torment on hit"},
-    {"Superior Rune of the Tempest",      91583, "+Ferocity, +Precision, stun on crit"},
-    {"Superior Rune of Surging",          91591, "+Power, +Ferocity, swiftness on swap"},
-    {"Superior Rune of the Pack",         91592, "+Power, +Precision, might/fury/swiftness"},
-    {"Superior Rune of Vampirism",        91545, "+Power, +Ferocity, lifesteal"},
-    {"Superior Rune of the Monk",         91501, "+Healing, +Outgoing Heal, +Boon Duration"},
-    {"Superior Rune of the Water",        91518, "+Healing, +Boon Duration"},
-    {"Superior Rune of Durability",       91444, "+Toughness, +Vitality, +Boon Duration"},
-    {"Superior Rune of the Defender",     91404, "+Toughness, +Vitality"},
-    {"Superior Rune of the Traveler",     91485, "+All stats, +25% movement"},
-    {"Superior Rune of the Rebirth",      91627, "+Healing, +Boon Duration, auto-rez"},
-    {"Superior Rune of the Nightmare",    91410, "+Condi Dmg, +Condi Duration"},
-    {"Superior Rune of Thorns",           91381, "+Condi Dmg, +Expertise, +bleeding"},
-    {"Superior Rune of the Citadel",      91588, "+Power, +Ferocity, +might on kill"},
-    {"Superior Rune of Fireworks",        91482, "+Power, +Boon Duration"},
-    {"Superior Rune of the Grove",        91475, "+Condi Dmg, +Healing"},
-    {"Superior Rune of Sanctuary",        91605, "+Vitality, +Toughness, barrier on heal"},
-    {"Superior Rune of Snowfall",         91512, "+Power, +Precision, superspeed"},
-    {"Superior Rune of the Sunless",      91515, "+Condi Dmg, +Expertise, +torment"},
-    {"Superior Rune of Resistance",       91411, "+Vitality, +Toughness, Resistance"},
-    {"Superior Rune of the Weaver",       91451, "+Power, +Condi Dmg, +Ferocity"},
-    {"Superior Rune of Scavenging",       91553, "+MF, +Power, +Precision"},
-    {"Superior Rune of Antitoxin",        91641, "+Vitality, +Healing, condi cleanse"},
-    {"Superior Rune of the Aristocracy",  91602, "+Power, +Precision, +might dur"},
-    {"Superior Rune of Rage",             91503, "+Power, +Ferocity, fury on crit"},
+    {"Superior Rune of the Scholar",      91595},
+    {"Superior Rune of the Eagle",        91433},
+    {"Superior Rune of Strength",         91423},
+    {"Superior Rune of the Dragonhunter", 91432},
+    {"Superior Rune of the Berserker",    91397},
+    {"Superior Rune of the Thief",        91579},
+    {"Superior Rune of the Firebrand",    91538},
+    {"Superior Rune of Balthazar",        91513},
+    {"Superior Rune of the Trapper",      91508},
+    {"Superior Rune of the Afflicted",    91460},
+    {"Superior Rune of Tormenting",       91516},
+    {"Superior Rune of the Tempest",      91583},
+    {"Superior Rune of Surging",          91591},
+    {"Superior Rune of the Pack",         91592},
+    {"Superior Rune of Vampirism",        91545},
+    {"Superior Rune of the Monk",         91501},
+    {"Superior Rune of the Water",        91518},
+    {"Superior Rune of Durability",       91444},
+    {"Superior Rune of the Defender",     91404},
+    {"Superior Rune of the Traveler",     91485},
+    {"Superior Rune of the Rebirth",      91627},
+    {"Superior Rune of the Nightmare",    91410},
+    {"Superior Rune of Thorns",           91381},
+    {"Superior Rune of the Citadel",      91588},
+    {"Superior Rune of Fireworks",        91482},
+    {"Superior Rune of the Grove",        91475},
+    {"Superior Rune of Sanctuary",        91605},
+    {"Superior Rune of Snowfall",         91512},
+    {"Superior Rune of the Sunless",      91515},
+    {"Superior Rune of Resistance",       91411},
+    {"Superior Rune of the Weaver",       91451},
+    {"Superior Rune of Scavenging",       91553},
+    {"Superior Rune of Antitoxin",        91641},
+    {"Superior Rune of the Aristocracy",  91602},
+    {"Superior Rune of Rage",             91503},
     // --- Additional runes ---
-    {"Superior Rune of Melandru",         24771, "+Toughness, -Condition Duration on self"},
-    {"Superior Rune of the Chronomancer", 73399, "+Power, +Precision, +Boon Duration"},
-    {"Superior Rune of Hoelbrak",         24729, "+Power, +Might dur, +Condi dur, +Boon dur"},
-    {"Superior Rune of Divinity",         24732, "+All stats, +Crit damage"},
-    {"Superior Rune of Dwayna",           24768, "+Healing, +Regeneration, +Vitality"},
-    {"Superior Rune of the Undead",       24757, "+Condi Dmg, +Toughness"},
-    {"Superior Rune of the Ogre",         24756, "+Power, +Ferocity, +Vitality"},
-    {"Superior Rune of Altruism",         38206, "+Healing, +Boon Duration, +Vitality"},
-    {"Superior Rune of the Warrior",      24821, "+Vitality, +Power"},
-    {"Superior Rune of the Engineer",     24812, "+Toughness, +Condi Dmg"},
-    {"Superior Rune of Grenth",           24779, "+Condi Dmg, +Chill duration"},
-    {"Superior Rune of the Herald",       76100, "+Toughness, +Boon Duration"},
-    {"Superior Rune of the Dolyak",       24699, "+Toughness, +Vitality, stability"},
-    {"Superior Rune of the Ranger",       24815, "+Precision, +Ferocity"},
-    {"Superior Rune of Leadership",       70600, "+All stats, +Boon Duration"},
+    {"Superior Rune of Melandru",         24771},
+    {"Superior Rune of the Chronomancer", 73399},
+    {"Superior Rune of Hoelbrak",         24729},
+    {"Superior Rune of Divinity",         24732},
+    {"Superior Rune of Dwayna",           24768},
+    {"Superior Rune of the Undead",       24757},
+    {"Superior Rune of the Ogre",         24756},
+    {"Superior Rune of Altruism",         38206},
+    {"Superior Rune of the Warrior",      24821},
+    {"Superior Rune of the Engineer",     24812},
+    {"Superior Rune of Grenth",           24779},
+    {"Superior Rune of the Herald",       76100},
+    {"Superior Rune of the Dolyak",       24699},
+    {"Superior Rune of the Ranger",       24815},
+    {"Superior Rune of Leadership",       70600},
     // --- Remaining superior runes ---
-    {"Superior Rune of Evasion",          67344, "+Vitality, endurance refill on dodge"},
-    {"Superior Rune of Exuberance",       44951, "+Vitality, +Toughness, +Might dur"},
-    {"Superior Rune of Infiltration",     24703, "+Power, +Precision, stealth on skill"},
-    {"Superior Rune of Lyssa",            24776, "+Condi Dmg, all boons + cleanse on elite"},
-    {"Superior Rune of Mercy",            24708, "+Healing, +Vitality, faster revive"},
-    {"Superior Rune of Nature's Bounty",  81091, "+Condi Dmg, +Expertise, +Regen dur"},
-    {"Superior Rune of Orr",              24860, "+Condi Dmg, +Condi Duration"},
-    {"Superior Rune of Perplexity",       44957, "+Condi Dmg, confusion on interrupt"},
-    {"Superior Rune of Radiance",         67342, "+Power, +Ferocity, blind on swap"},
-    {"Superior Rune of Rata Sum",         24726, "+Precision, +Ferocity, golem at low HP"},
-    {"Superior Rune of Speed",            24720, "+Power, +Swiftness dur, +25% swiftness"},
-    {"Superior Rune of Svanir",           24794, "+Toughness, +Chill dur, frost armor"},
-    {"Superior Rune of the Adventurer",   24830, "+Power, +Precision, endurance on heal"},
-    {"Superior Rune of the Air",          24750, "+Precision, +Ferocity, lightning on hit"},
-    {"Superior Rune of the Baelfire",     24854, "+Condi Dmg, +Burn dur, condi remove"},
-    {"Superior Rune of the Brawler",      24833, "+Power, +Ferocity, might on heal"},
-    {"Superior Rune of the Cavalier",     83367, "+Toughness, +Ferocity, +25% movement"},
-    {"Superior Rune of the Centaur",      24788, "+Power, +Swiftness dur, swiftness on heal"},
-    {"Superior Rune of the Daredevil",    72852, "+Power, +Ferocity, daze on dodge"},
-    {"Superior Rune of the Deadeye",      82791, "+Precision, +Ferocity, fury on stealth"},
-    {"Superior Rune of the Druid",        70450, "+Healing, +Boon dur, heal on dodge"},
-    {"Superior Rune of the Earth",        24744, "+Toughness, +Bleed dur, bleed on hit"},
-    {"Superior Rune of the Elementalist", 24800, "+Power, +Ferocity, aura on swap"},
-    {"Superior Rune of the Fire",         24747, "+Power, +Burn dur, fire aura on hit"},
-    {"Superior Rune of the Flame Legion", 24797, "+Power, +Burn dur, burn on hit"},
-    {"Superior Rune of the Flock",        24696, "+Power, +Vitality, heal on hit"},
-    {"Superior Rune of the Forgeman",     24851, "+Toughness, +Burn dur, fire shield"},
-    {"Superior Rune of the Golemancer",   24785, "+Power, +Ferocity, mini golem at low HP"},
-    {"Superior Rune of the Guardian",     24824, "+Power, +Boon dur, aegis on hit"},
-    {"Superior Rune of the Holosmith",    82633, "+Power, +Ferocity, lightning on crit"},
-    {"Superior Rune of the Ice",          24753, "+Toughness, +Chill dur, chill on hit"},
-    {"Superior Rune of the Krait",        24762, "+Condi Dmg, +Bleed dur, torment on bleed"},
-    {"Superior Rune of the Lich",         24688, "+Condi Dmg, +Ferocity, lifesteal on crit"},
-    {"Superior Rune of the Mad King",     36044, "+Power, +Ferocity, plague at low HP"},
-    {"Superior Rune of the Mesmer",       24803, "+Condi Dmg, +Confusion dur"},
-    {"Superior Rune of the Mirage",       84127, "+Condi Dmg, +Expertise, mirror on dodge"},
-    {"Superior Rune of the Necromancer",  24806, "+Condi Dmg, +Vitality, life siphon"},
-    {"Superior Rune of the Privateer",    24782, "+Power, +Swiftness dur, might on kill"},
-    {"Superior Rune of the Reaper",       70829, "+Power, +Ferocity, chill on crit"},
-    {"Superior Rune of the Renegade",     83502, "+Condi Dmg, +Expertise, summon Razah"},
-    {"Superior Rune of the Revenant",     69370, "+All stats, +Boon Duration"},
-    {"Superior Rune of the Scourge",      83663, "+Condi Dmg, +Expertise, torment on hit"},
-    {"Superior Rune of the Scrapper",     71276, "+Toughness, +Vitality, barrier on hit"},
-    {"Superior Rune of the Soulbeast",    83964, "+Precision, +Ferocity, fury on swap"},
-    {"Superior Rune of the Spellbreaker", 84749, "+Power, +Precision, boon strip on hit"},
-    {"Superior Rune of the Stars",        85713, "+All stats, -Incoming Condi"},
-    {"Superior Rune of the Trooper",      24827, "+Toughness, +Boon dur, shouts cleanse"},
-    {"Superior Rune of the Wurm",         24791, "+Power, +Toughness, wurm at low HP"},
-    {"Superior Rune of the Zephyrite",    88118, "+All stats, swiftness on dodge"},
+    {"Superior Rune of Evasion",          67344},
+    {"Superior Rune of Exuberance",       44951},
+    {"Superior Rune of Infiltration",     24703},
+    {"Superior Rune of Lyssa",            24776},
+    {"Superior Rune of Mercy",            24708},
+    {"Superior Rune of Nature's Bounty",  81091},
+    {"Superior Rune of Orr",              24860},
+    {"Superior Rune of Perplexity",       44957},
+    {"Superior Rune of Radiance",         67342},
+    {"Superior Rune of Rata Sum",         24726},
+    {"Superior Rune of Speed",            24720},
+    {"Superior Rune of Svanir",           24794},
+    {"Superior Rune of the Adventurer",   24830},
+    {"Superior Rune of the Air",          24750},
+    {"Superior Rune of the Baelfire",     24854},
+    {"Superior Rune of the Brawler",      24833},
+    {"Superior Rune of the Cavalier",     83367},
+    {"Superior Rune of the Centaur",      24788},
+    {"Superior Rune of the Daredevil",    72852},
+    {"Superior Rune of the Deadeye",      82791},
+    {"Superior Rune of the Druid",        70450},
+    {"Superior Rune of the Earth",        24744},
+    {"Superior Rune of the Elementalist", 24800},
+    {"Superior Rune of the Fire",         24747},
+    {"Superior Rune of the Flame Legion", 24797},
+    {"Superior Rune of the Flock",        24696},
+    {"Superior Rune of the Forgeman",     24851},
+    {"Superior Rune of the Golemancer",   24785},
+    {"Superior Rune of the Guardian",     24824},
+    {"Superior Rune of the Holosmith",    82633},
+    {"Superior Rune of the Ice",          24753},
+    {"Superior Rune of the Krait",        24762},
+    {"Superior Rune of the Lich",         24688},
+    {"Superior Rune of the Mad King",     36044},
+    {"Superior Rune of the Mesmer",       24803},
+    {"Superior Rune of the Mirage",       84127},
+    {"Superior Rune of the Necromancer",  24806},
+    {"Superior Rune of the Privateer",    24782},
+    {"Superior Rune of the Reaper",       70829},
+    {"Superior Rune of the Renegade",     83502},
+    {"Superior Rune of the Revenant",     69370},
+    {"Superior Rune of the Scourge",      83663},
+    {"Superior Rune of the Scrapper",     71276},
+    {"Superior Rune of the Soulbeast",    83964},
+    {"Superior Rune of the Spellbreaker", 84749},
+    {"Superior Rune of the Stars",        85713},
+    {"Superior Rune of the Trooper",      24827},
+    {"Superior Rune of the Wurm",         24791},
+    {"Superior Rune of the Zephyrite",    88118},
 };
 static const int RUNE_COUNT = sizeof(RUNE_LIST) / sizeof(RUNE_LIST[0]);
 
-// Curated sigil list (name + item_id + summary). IDs from GW2 API.
-struct SigilEntry { const char* name; uint32_t item_id; const char* bonus; };
+// Curated sigil list (name + item_id (offline bootstrap only)). IDs from GW2 API.
+struct SigilEntry { const char* name; uint32_t item_id; };
 static const SigilEntry SIGIL_LIST[] = {
-    {"Superior Sigil of Force",           91439, "+5% damage"},
-    {"Superior Sigil of Impact",          91405, "+3% stun duration"},
-    {"Superior Sigil of Accuracy",        91607, "+7% crit chance"},
-    {"Superior Sigil of the Night",       91389, "+10% dmg at night"},
-    {"Superior Sigil of Undead Slaying",  91524, "+10% vs undead"},
-    {"Superior Sigil of Demon Slaying",   91431, "+10% vs demons"},
-    {"Superior Sigil of Air",             91520, "Lightning strike on crit"},
-    {"Superior Sigil of Fire",            91559, "AoE fire on crit"},
-    {"Superior Sigil of Earth",           91531, "Bleed on crit"},
-    {"Superior Sigil of Geomancy",        91552, "Bleed AoE on swap"},
-    {"Superior Sigil of Doom",            91480, "Poison on swap"},
-    {"Superior Sigil of Torment",         91412, "Torment on crit"},
-    {"Superior Sigil of Malice",          91478, "+10% condition duration"},
-    {"Superior Sigil of Smoldering",      91488, "+20% burning duration"},
-    {"Superior Sigil of Venom",           91532, "+20% poison duration"},
-    {"Superior Sigil of Agony",           91534, "+20% torment duration"},
-    {"Superior Sigil of Bursting",        91416, "+5% condition damage"},
-    {"Superior Sigil of Concentration",   91473, "+10% boon duration"},
-    {"Superior Sigil of Transference",    91448, "+10% outgoing heal"},
-    {"Superior Sigil of Renewal",         91400, "Heal on kill"},
-    {"Superior Sigil of Blood",           91604, "Lifesteal on crit"},
-    {"Superior Sigil of Strength",        91561, "Might on crit"},
-    {"Superior Sigil of Severance",       91499, "Quickness on cc"},
-    {"Superior Sigil of Energy",          91441, "Endurance on swap"},
-    {"Superior Sigil of Paralyzation",    91398, "+30% stun duration"},
-    {"Superior Sigil of Absorption",      91589, "Steal boon on hit"},
-    {"Superior Sigil of Cleansing",       91548, "Condi cleanse on swap"},
-    {"Superior Sigil of Draining",        91544, "Steal HP on swap"},
-    {"Superior Sigil of Demons",          91388, "+10% vs demons"},
-    {"Superior Sigil of Serpent Slaying", 91456, "+10% vs destroyers"},
+    {"Superior Sigil of Force",           91439},
+    {"Superior Sigil of Impact",          91405},
+    {"Superior Sigil of Accuracy",        91607},
+    {"Superior Sigil of the Night",       91389},
+    {"Superior Sigil of Undead Slaying",  91524},
+    {"Superior Sigil of Demon Slaying",   91431},
+    {"Superior Sigil of Air",             91520},
+    {"Superior Sigil of Fire",            91559},
+    {"Superior Sigil of Earth",           91531},
+    {"Superior Sigil of Geomancy",        91552},
+    {"Superior Sigil of Doom",            91480},
+    {"Superior Sigil of Torment",         91412},
+    {"Superior Sigil of Malice",          91478},
+    {"Superior Sigil of Smoldering",      91488},
+    {"Superior Sigil of Venom",           91532},
+    {"Superior Sigil of Agony",           91534},
+    {"Superior Sigil of Bursting",        91416},
+    {"Superior Sigil of Concentration",   91473},
+    {"Superior Sigil of Transference",    91448},
+    {"Superior Sigil of Renewal",         91400},
+    {"Superior Sigil of Blood",           91604},
+    {"Superior Sigil of Strength",        91561},
+    {"Superior Sigil of Severance",       91499},
+    {"Superior Sigil of Energy",          91441},
+    {"Superior Sigil of Paralyzation",    91398},
+    {"Superior Sigil of Absorption",      91589},
+    {"Superior Sigil of Cleansing",       91548},
+    {"Superior Sigil of Draining",        91544},
+    {"Superior Sigil of Demons",          91388},
+    {"Superior Sigil of Serpent Slaying", 91456},
     // --- Additional sigils ---
-    {"Superior Sigil of Battle",          24601, "Might on weapon swap"},
-    {"Superior Sigil of Vision",          24600, "Crit after weapon swap"},
-    {"Superior Sigil of Hydromancy",      24597, "Chill on weapon swap"},
-    {"Superior Sigil of Nullification",   24572, "Remove boon on hit"},
-    {"Superior Sigil of Bloodlust",       24575, "+Power stacks on kill"},
-    {"Superior Sigil of Corruption",      24578, "+Condi stacks on kill"},
-    {"Superior Sigil of Ice",             24555, "Chill on crit"},
-    {"Superior Sigil of Chilling",        24630, "Chill on hit"},
-    {"Superior Sigil of Leeching",        24599, "Steal HP on kill"},
-    {"Superior Sigil of Celerity",        24865, "Quickness on disable"},
+    {"Superior Sigil of Battle",          24601},
+    {"Superior Sigil of Vision",          24600},
+    {"Superior Sigil of Hydromancy",      24597},
+    {"Superior Sigil of Nullification",   24572},
+    {"Superior Sigil of Bloodlust",       24575},
+    {"Superior Sigil of Corruption",      24578},
+    {"Superior Sigil of Ice",             24555},
+    {"Superior Sigil of Chilling",        24630},
+    {"Superior Sigil of Leeching",        24599},
+    {"Superior Sigil of Celerity",        24865},
     // --- Remaining superior sigils ---
-    {"Superior Sigil of Agility",         72092, "Swiftness + quickness on swap"},
-    {"Superior Sigil of Benevolence",     24584, "Outgoing heal stacks on kill"},
-    {"Superior Sigil of Blight",          67913, "Poison AoE on crit"},
-    {"Superior Sigil of Bounty",          81045, "Concentration stacks on kill"},
-    {"Superior Sigil of Centaur Slaying", 24645, "+7% vs centaurs"},
-    {"Superior Sigil of Cruelty",         67341, "Ferocity stacks on kill"},
-    {"Superior Sigil of Debility",        24636, "+20% weakness duration"},
-    {"Superior Sigil of Destroyer Slaying",24654,"+7% vs destroyers"},
-    {"Superior Sigil of Dreams",          24681, "+7% vs Nightmare Court"},
-    {"Superior Sigil of Elemental Slaying",24661,"+7% vs elementals"},
-    {"Superior Sigil of Frailty",         24567, "Vuln on flank/behind/defiant"},
-    {"Superior Sigil of Frenzy",          82876, "-2s skill cooldown on kill"},
-    {"Superior Sigil of Generosity",      38294, "Transfer condi on crit"},
-    {"Superior Sigil of Ghost Slaying",   24809, "+7% vs ghosts"},
-    {"Superior Sigil of Grawl Slaying",   24648, "+7% vs grawl"},
-    {"Superior Sigil of Hobbling",        24627, "+20% cripple duration"},
-    {"Superior Sigil of Hologram Slaying",91339, "+17% vs holograms"},
-    {"Superior Sigil of Icebrood Slaying",24651, "+7% vs icebrood"},
-    {"Superior Sigil of Incapacitation",  67343, "Cripple on flank/defiant"},
-    {"Superior Sigil of Justice",         24678, "+7% vs outlaws"},
-    {"Superior Sigil of Karka Slaying",   37912, "+7% vs karka"},
-    {"Superior Sigil of Life",            24582, "Healing stacks on kill"},
-    {"Superior Sigil of Luck",            24591, "75% boon on kill"},
-    {"Superior Sigil of Mad Scientists",  24672, "+7% vs Inquest"},
-    {"Superior Sigil of Mischief",        68436, "Blinding snowballs on swap"},
-    {"Superior Sigil of Momentum",        49457, "Toughness stacks on kill"},
-    {"Superior Sigil of Ogre Slaying",    24655, "+7% vs ogres"},
-    {"Superior Sigil of Perception",      24580, "Precision stacks on kill"},
-    {"Superior Sigil of Peril",           24621, "+20% vuln duration"},
-    {"Superior Sigil of Purity",          24571, "Cleanse on flank/defiant"},
-    {"Superior Sigil of Rage",            24561, "Quickness on crit"},
-    {"Superior Sigil of Rending",         73532, "Vuln on interrupt"},
-    {"Superior Sigil of Restoration",     24594, "Heal on interrupt"},
-    {"Superior Sigil of Ruthlessness",    71130, "Might on interrupt"},
-    {"Superior Sigil of Smothering",      24675, "+7% vs Flame Legion"},
-    {"Superior Sigil of Sorrow",          24684, "+7% vs dredge"},
-    {"Superior Sigil of Speed",           24589, "Swiftness on kill"},
-    {"Superior Sigil of Stamina",         24592, "Endurance refill on kill"},
-    {"Superior Sigil of Water",           24551, "AoE heal on crit"},
-    {"Superior Sigil of Wrath",           24667, "+7% vs Sons of Svanir"},
-    {"Superior Sigil of the Stars",       86170, "All stats stacks on kill"},
+    {"Superior Sigil of Agility",         72092},
+    {"Superior Sigil of Benevolence",     24584},
+    {"Superior Sigil of Blight",          67913},
+    {"Superior Sigil of Bounty",          81045},
+    {"Superior Sigil of Centaur Slaying", 24645},
+    {"Superior Sigil of Cruelty",         67341},
+    {"Superior Sigil of Debility",        24636},
+    {"Superior Sigil of Destroyer Slaying",24654},
+    {"Superior Sigil of Dreams",          24681},
+    {"Superior Sigil of Elemental Slaying",24661},
+    {"Superior Sigil of Frailty",         24567},
+    {"Superior Sigil of Frenzy",          82876},
+    {"Superior Sigil of Generosity",      38294},
+    {"Superior Sigil of Ghost Slaying",   24809},
+    {"Superior Sigil of Grawl Slaying",   24648},
+    {"Superior Sigil of Hobbling",        24627},
+    {"Superior Sigil of Hologram Slaying",91339},
+    {"Superior Sigil of Icebrood Slaying",24651},
+    {"Superior Sigil of Incapacitation",  67343},
+    {"Superior Sigil of Justice",         24678},
+    {"Superior Sigil of Karka Slaying",   37912},
+    {"Superior Sigil of Life",            24582},
+    {"Superior Sigil of Luck",            24591},
+    {"Superior Sigil of Mad Scientists",  24672},
+    {"Superior Sigil of Mischief",        68436},
+    {"Superior Sigil of Momentum",        49457},
+    {"Superior Sigil of Ogre Slaying",    24655},
+    {"Superior Sigil of Perception",      24580},
+    {"Superior Sigil of Peril",           24621},
+    {"Superior Sigil of Purity",          24571},
+    {"Superior Sigil of Rage",            24561},
+    {"Superior Sigil of Rending",         73532},
+    {"Superior Sigil of Restoration",     24594},
+    {"Superior Sigil of Ruthlessness",    71130},
+    {"Superior Sigil of Smothering",      24675},
+    {"Superior Sigil of Sorrow",          24684},
+    {"Superior Sigil of Speed",           24589},
+    {"Superior Sigil of Stamina",         24592},
+    {"Superior Sigil of Water",           24551},
+    {"Superior Sigil of Wrath",           24667},
+    {"Superior Sigil of the Stars",       86170},
 };
 static const int SIGIL_COUNT = sizeof(SIGIL_LIST) / sizeof(SIGIL_LIST[0]);
 
 // Curated relic list with exotic item IDs from GW2 API
-struct RelicEntry { const char* name; uint32_t item_id; const char* bonus; };
+struct RelicEntry { const char* name; uint32_t item_id; };
 static const RelicEntry RELIC_LIST[] = {
-    {"Relic of the Eagle",          104241, "+10% dmg >80% HP"},
-    {"Relic of Fireworks",          100947, "Strike dmg on weapon skill"},
-    {"Relic of the Thief",          100976, "Weapon skill CDR, strike dmg"},
-    {"Relic of Cerus",              100074, "Elite skill +dmg, boon/condi"},
-    {"Relic of Isgarren",            99997, "+strike/condi dur after evade"},
-    {"Relic of the Brawler",        100527, "Strike dmg, protection, resolution"},
-    {"Relic of the Claw",           103574, "Strike dmg on disable"},
-    {"Relic of the Deadeye",        100924, "Strike dmg, cantrip bonus"},
-    {"Relic of the Dragonhunter",   100090, "Trap dmg + condi dur"},
-    {"Relic of Mount Balrior",      103872, "Elite skill +strike dmg"},
-    {"Relic of Peitha",             100177, "Torment/strike on shadowstep"},
-    {"Relic of Lyhr",               100461, "Heal + strike dmg"},
-    {"Relic of Fire",               104501, "Fire aura on heal skill"},
-    {"Relic of Dagda",              100942, "Elite skill condi transfer"},
-    {"Relic of the Fractal",        100153, "Bleed, burn, torment"},
-    {"Relic of Akeem",              100432, "Confusion + torment on disable"},
-    {"Relic of the Aristocracy",    100849, "Condi dur, weakness, vuln"},
-    {"Relic of the Afflicted",      100693, "Poison + bleed"},
-    {"Relic of the Nightmare",      100579, "Elite: fear + poison"},
-    {"Relic of the Krait",          100230, "Elite: conditions"},
-    {"Relic of the Sorcerer",       101863, "Vuln on cripple/chill/immob"},
-    {"Relic of the Mirage",         100158, "Torment on evade"},
-    {"Relic of Thorns",             104424, "Condition dmg, poison"},
-    {"Relic of the Blightbringer",  102199, "Poison + condi"},
-    {"Relic of Nourys",             101191, "Boon strip + dmg/heal"},
-    {"Relic of the Scourge",        100368, "Barrier + condi dur"},
-    {"Relic of the Demon Queen",    101166, "Poison on disable"},
-    {"Relic of Mosyn",              101801, "Condition on evade"},
-    {"Relic of the Biomancer",      106364, "Heal + bleed/poison"},
-    {"Relic of the First Revenant", 105585, "Condi dmg + resistance"},
-    {"Relic of Durability",         100562, "Protection/regen/resolution on heal"},
-    {"Relic of the Monk",           100031, "Healing + boon"},
-    {"Relic of the Flock",          100633, "Heal on healing skill"},
-    {"Relic of Castora",            105652, "Heal based on HP"},
-    {"Relic of the Water",          100659, "Condi cleanse on heal skill"},
-    {"Relic of the Defender",       100934, "Heal on block"},
-    {"Relic of Vampirism",          100676, "Lifesteal + heal on kill"},
-    {"Relic of Dwayna",             100442, "Regen"},
-    {"Relic of the Centaur",        100385, "Stability on heal skill"},
-    {"Relic of Mercy",              100429, "Revive speed + heal"},
-    {"Relic of Nayos",              101198, "Condi + heal"},
-    {"Relic of Karakosa",           101268, "Heal on blast finisher"},
-    {"Relic of the Nautical Beast", 106920, "Heal + water field"},
-    {"Relic of the Living City",    104938, "Titan Potential on field/disable/evade"},
-    {"Relic of Leadership",         100625, "Condi cleanse + boon"},
-    {"Relic of the Herald",         100219, "Concentration + boon"},
-    {"Relic of the Firebrand",      100453, "Mantra + boon dur"},
-    {"Relic of Rivers",             103015, "Alacrity + regen on dodge"},
-    {"Relic of the Chronomancer",   100450, "Quickness on well"},
-    {"Relic of the Pack",           100752, "Superspeed/might/fury on elite"},
-    {"Relic of Altruism",           104256, "Might + fury on heal skill"},
-    {"Relic of the Cavalier",       100542, "Aegis/quickness/swiftness on engage"},
-    {"Relic of the Twin Generals",  101767, "Might + weakness on heal"},
-    {"Relic of Mabon",              100115, "Might + Mabon's Strength"},
-    {"Relic of the Midnight King",  101139, "Might + fury on disable"},
-    {"Relic of Speed",              100148, "Movement speed + swiftness"},
-    {"Relic of the Wayfinder",      101943, "Movement speed + burst speed"},
-    {"Relic of Febe",               101116, "Heal skill + swiftness"},
-    {"Relic of the Adventurer",     100561, "Endurance on heal skill"},
-    {"Relic of Evasion",            100886, "Vigor + evade bonus"},
-    {"Relic of Fog",                107030, "Dodge: glancing blows"},
-    {"Relic of the Daredevil",      100345, "Dodge rolling bonuses"},
-    {"Relic of Geysers",            103763, "Endurance + vigor"},
-    {"Relic of Resistance",         100794, "Resistance on heal skill"},
-    {"Relic of Antitoxin",          100390, "Condi cleanse"},
-    {"Relic of the Trooper",        100411, "Condi cleanse on shout"},
-    {"Relic of the Astral Ward",    100388, "Signet + resistance"},
-    {"Relic of Reunification",      103984, "Frost/light aura on heal"},
-    {"Relic of Surging",            100063, "Shocking aura on elite"},
-    {"Relic of the Earth",          100435, "Protection + magnetic aura"},
-    {"Relic of the Warrior",        100299, "Weapon swap CDR"},
-    {"Relic of the Alliance",       107192, "Signet bonus"},
-    {"Relic of Shackles",           106916, "Immobilize"},
-    {"Relic of the Necromancer",    100580, "Fear"},
-    {"Relic of the Scoundrel",      106355, "Blind/weakness on crit"},
-    {"Relic of the Reaper",         100739, "Chill on shout"},
-    {"Relic of Atrocity",           102245, "Lifesteal"},
-    {"Relic of the Mist Stranger",  106206, "Siphon health"},
-    {"Relic of the Ogre",           100311, "Summon rock dog"},
-    {"Relic of the Lich",           100238, "Summon jagged horror"},
-    {"Relic of the Golemancer",     100403, "Summon golem"},
-    {"Relic of the Privateer",      100479, "Summon parrot"},
-    {"Relic of the Beehive",        103977, "Elite skill summon"},
-    {"Relic of Sorrow",             103424, "Elite: destroy projectiles"},
-    {"Relic of the Citadel",        100448, "Elite: stun"},
-    {"Relic of the Holosmith",      100908, "Elite skill bonus"},
-    {"Relic of the Ice",            100048, "Elite: chill"},
-    {"Relic of the Sunless",        100400, "Elite: poison/cripple"},
-    {"Relic of the Wizard's Tower", 100557, "Elite: reflect + pull"},
-    {"Relic of the Pirate Queen",   106221, "Quickness on disable"},
-    {"Relic of the Phenom",         104733, "Cantrip/meditation + protection"},
-    {"Relic of the Weaver",         100194, "Stance + strike dmg"},
-    {"Relic of Bava Nisos",         104848, "Stance bonus"},
-    {"Relic of the Zephyrite",      100893, "Protection + resolution"},
-    {"Relic of Bloodstone",         104800, "Bloodstone blast finisher"},
-    {"Relic of the Unseen Invasion",100694, "Superspeed + stealth"},
-    {"Relic of Mistburn",           104994, "WvW combat bonus"},
-    {"Relic of the Forest Dweller", 107124, "Nature bonus"},
-    {"Relic of the Founding",       101737, "Barrier on combo field"},
-    {"Relic of the Mists Tide",     103901, "Condi on combo finisher"},
-    {"Relic of the Stormsinger",    102595, "Movement skill bonus"},
-    {"Relic of the Steamshrieker",  104022, "Burn on water combo"},
-    {"Relic of Vass",               100775, "Heal + elixir + poison"},
-    {"Relic of Zakiros",            101955, "Fury + crit dmg + healing"},
-    {"Relic of the Coral Heart",    107061, "Underwater bonus"},
-    {"Relic of Agony",              104849, "Interrupt bonus"},
-    {"Relic of Galdra",             109264, "Elite: burning projectiles"},
-    {"Relic of the Cruel Overseer", 109664, "Condi stacks -> healing burst"},
-    {"Relic of the Director",       109351, "Vuln on heal + damage bonus"},
-    {"Relic of the Doyen",          109522, "Dmg reduction while resolution"},
-    {"Relic of the Sacred Grounds", 109267, "Protection on well/consecration"},
-    {"Relic of Watch",              109709, "Immob duration + weaken on immob"},
+    {"Relic of the Eagle",          104241},
+    {"Relic of Fireworks",          100947},
+    {"Relic of the Thief",          100976},
+    {"Relic of Cerus",              100074},
+    {"Relic of Isgarren",            99997},
+    {"Relic of the Brawler",        100527},
+    {"Relic of the Claw",           103574},
+    {"Relic of the Deadeye",        100924},
+    {"Relic of the Dragonhunter",   100090},
+    {"Relic of Mount Balrior",      103872},
+    {"Relic of Peitha",             100177},
+    {"Relic of Lyhr",               100461},
+    {"Relic of Fire",               104501},
+    {"Relic of Dagda",              100942},
+    {"Relic of the Fractal",        100153},
+    {"Relic of Akeem",              100432},
+    {"Relic of the Aristocracy",    100849},
+    {"Relic of the Afflicted",      100693},
+    {"Relic of the Nightmare",      100579},
+    {"Relic of the Krait",          100230},
+    {"Relic of the Sorcerer",       101863},
+    {"Relic of the Mirage",         100158},
+    {"Relic of Thorns",             104424},
+    {"Relic of the Blightbringer",  102199},
+    {"Relic of Nourys",             101191},
+    {"Relic of the Scourge",        100368},
+    {"Relic of the Demon Queen",    101166},
+    {"Relic of Mosyn",              101801},
+    {"Relic of the Biomancer",      106364},
+    {"Relic of the First Revenant", 105585},
+    {"Relic of Durability",         100562},
+    {"Relic of the Monk",           100031},
+    {"Relic of the Flock",          100633},
+    {"Relic of Castora",            105652},
+    {"Relic of the Water",          100659},
+    {"Relic of the Defender",       100934},
+    {"Relic of Vampirism",          100676},
+    {"Relic of Dwayna",             100442},
+    {"Relic of the Centaur",        100385},
+    {"Relic of Mercy",              100429},
+    {"Relic of Nayos",              101198},
+    {"Relic of Karakosa",           101268},
+    {"Relic of the Nautical Beast", 106920},
+    {"Relic of the Living City",    104938},
+    {"Relic of Leadership",         100625},
+    {"Relic of the Herald",         100219},
+    {"Relic of the Firebrand",      100453},
+    {"Relic of Rivers",             103015},
+    {"Relic of the Chronomancer",   100450},
+    {"Relic of the Pack",           100752},
+    {"Relic of Altruism",           104256},
+    {"Relic of the Cavalier",       100542},
+    {"Relic of the Twin Generals",  101767},
+    {"Relic of Mabon",              100115},
+    {"Relic of the Midnight King",  101139},
+    {"Relic of Speed",              100148},
+    {"Relic of the Wayfinder",      101943},
+    {"Relic of Febe",               101116},
+    {"Relic of the Adventurer",     100561},
+    {"Relic of Evasion",            100886},
+    {"Relic of Fog",                107030},
+    {"Relic of the Daredevil",      100345},
+    {"Relic of Geysers",            103763},
+    {"Relic of Resistance",         100794},
+    {"Relic of Antitoxin",          100390},
+    {"Relic of the Trooper",        100411},
+    {"Relic of the Astral Ward",    100388},
+    {"Relic of Reunification",      103984},
+    {"Relic of Surging",            100063},
+    {"Relic of the Earth",          100435},
+    {"Relic of the Warrior",        100299},
+    {"Relic of the Alliance",       107192},
+    {"Relic of Shackles",           106916},
+    {"Relic of the Necromancer",    100580},
+    {"Relic of the Scoundrel",      106355},
+    {"Relic of the Reaper",         100739},
+    {"Relic of Atrocity",           102245},
+    {"Relic of the Mist Stranger",  106206},
+    {"Relic of the Ogre",           100311},
+    {"Relic of the Lich",           100238},
+    {"Relic of the Golemancer",     100403},
+    {"Relic of the Privateer",      100479},
+    {"Relic of the Beehive",        103977},
+    {"Relic of Sorrow",             103424},
+    {"Relic of the Citadel",        100448},
+    {"Relic of the Holosmith",      100908},
+    {"Relic of the Ice",            100048},
+    {"Relic of the Sunless",        100400},
+    {"Relic of the Wizard's Tower", 100557},
+    {"Relic of the Pirate Queen",   106221},
+    {"Relic of the Phenom",         104733},
+    {"Relic of the Weaver",         100194},
+    {"Relic of Bava Nisos",         104848},
+    {"Relic of the Zephyrite",      100893},
+    {"Relic of Bloodstone",         104800},
+    {"Relic of the Unseen Invasion",100694},
+    {"Relic of Mistburn",           104994},
+    {"Relic of the Forest Dweller", 107124},
+    {"Relic of the Founding",       101737},
+    {"Relic of the Mists Tide",     103901},
+    {"Relic of the Stormsinger",    102595},
+    {"Relic of the Steamshrieker",  104022},
+    {"Relic of Vass",               100775},
+    {"Relic of Zakiros",            101955},
+    {"Relic of the Coral Heart",    107061},
+    {"Relic of Agony",              104849},
+    {"Relic of Galdra",             109264},
+    {"Relic of the Cruel Overseer", 109664},
+    {"Relic of the Director",       109351},
+    {"Relic of the Doyen",          109522},
+    {"Relic of the Sacred Grounds", 109267},
+    {"Relic of Watch",              109709},
 };
 static const int RELIC_COUNT = sizeof(RELIC_LIST) / sizeof(RELIC_LIST[0]);
 
 // Seed the persistent name→ID cache from the curated rune/sigil/relic tables.
 // Called once on startup so that even fresh installs can resolve names instantly.
+// Prefer validated public rows; legacy identities remain an offline bootstrap only.
+static std::vector<AlterEgo::PublicCatalog::Entry> GearCatalog(const std::string& kind) {
+    const auto snapshot=AlterEgo::PublicCatalog::Get();
+    std::vector<AlterEgo::PublicCatalog::Entry> rows;
+    for(const auto& e:snapshot->entries)if(e.kind==kind &&
+        ((kind!="Rune"&&kind!="Sigil")||e.rarity=="Exotic") &&
+        (kind!="Relic"||e.rarity=="Exotic"))rows.push_back(e);
+    if(snapshot->upgrades)return rows;
+    // Never present old hand-written effect summaries as current game data.
+    if(kind=="Rune")for(const auto& e:RUNE_LIST)rows.push_back({e.name,"Legacy entry (not refreshed)",kind,"",e.item_id});
+    if(kind=="Sigil")for(const auto& e:SIGIL_LIST)rows.push_back({e.name,"Legacy entry (not refreshed)",kind,"",e.item_id});
+    if(kind=="Relic")for(const auto& e:RELIC_LIST)rows.push_back({e.name,"Legacy entry (not refreshed)",kind,"",e.item_id});
+    return rows;
+}
 static void SeedItemNameCache() {
     for (int i = 0; i < RUNE_COUNT; i++)
-        AlterEgo::GW2API::CacheItemNameId(RUNE_LIST[i].name, RUNE_LIST[i].item_id);
+        if(!AlterEgo::GW2API::FindItemIdByName(RUNE_LIST[i].name))
+            AlterEgo::GW2API::CacheItemNameId(RUNE_LIST[i].name, RUNE_LIST[i].item_id);
     for (int i = 0; i < SIGIL_COUNT; i++)
-        AlterEgo::GW2API::CacheItemNameId(SIGIL_LIST[i].name, SIGIL_LIST[i].item_id);
+        if(!AlterEgo::GW2API::FindItemIdByName(SIGIL_LIST[i].name))
+            AlterEgo::GW2API::CacheItemNameId(SIGIL_LIST[i].name, SIGIL_LIST[i].item_id);
     for (int i = 0; i < RELIC_COUNT; i++)
-        AlterEgo::GW2API::CacheItemNameId(RELIC_LIST[i].name, RELIC_LIST[i].item_id);
+        if(!AlterEgo::GW2API::FindItemIdByName(RELIC_LIST[i].name))
+            AlterEgo::GW2API::CacheItemNameId(RELIC_LIST[i].name, RELIC_LIST[i].item_id);
 }
 
 // Slot display name for gear panel
@@ -6918,6 +6528,9 @@ static const char* GearSlotDisplayName(const std::string& slot) {
     if (slot == "WeaponA2") return "Off Hand A";
     if (slot == "WeaponB1") return "Main Hand B";
     if (slot == "WeaponB2") return "Off Hand B";
+    if (slot == "WeaponAquaticA") return "Aquatic A";
+    if (slot == "WeaponAquaticB") return "Aquatic B";
+    if (slot == "HelmAquatic") return "Aquatic Headgear";
     if (slot == "Accessory1") return "Accessory 1";
     if (slot == "Accessory2") return "Accessory 2";
     if (slot == "Ring1") return "Ring 1";
@@ -6927,10 +6540,10 @@ static const char* GearSlotDisplayName(const std::string& slot) {
 
 static bool IsArmorSlot(const std::string& s) {
     return s == "Helm" || s == "Shoulders" || s == "Coat" ||
-           s == "Gloves" || s == "Leggings" || s == "Boots";
+           s == "Gloves" || s == "Leggings" || s == "Boots" || s == "HelmAquatic";
 }
 static bool IsWeaponSlot(const std::string& s) {
-    return s == "WeaponA1" || s == "WeaponA2" || s == "WeaponB1" || s == "WeaponB2";
+    return s == "WeaponA1" || s == "WeaponA2" || s == "WeaponB1" || s == "WeaponB2" || AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(s);
 }
 static bool IsMainhandSlot(const std::string& s) {
     return s == "WeaponA1" || s == "WeaponB1";
@@ -6944,10 +6557,18 @@ static bool IsTrinketSlot(const std::string& s) {
 }
 static bool IsWeaponTwoHanded(const std::string& profession, const std::string& weaponType) {
     if (weaponType.empty()) return false;
-    const auto* profWeapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
-    if (!profWeapons) return false;
-    auto it = profWeapons->find(weaponType);
-    return it != profWeapons->end() && it->second.two_handed;
+    if(weaponType=="Harpoon"||weaponType=="Speargun"||weaponType=="Trident")return true;
+    const auto profWeapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
+    if (profWeapons) {
+        auto it = profWeapons->find(weaponType);
+        if (it != profWeapons->end()) return it->second.two_handed;
+    }
+    return weaponType == "Greatsword" || weaponType == "Hammer" ||
+           weaponType == "LongBow" || weaponType == "Longbow" ||
+           weaponType == "ShortBow" || weaponType == "Shortbow" ||
+           weaponType == "Rifle" || weaponType == "Staff" ||
+           weaponType == "Spear" || weaponType == "Harpoon" ||
+           weaponType == "Trident" || weaponType == "Speargun";
 }
 
 // Profession -> armor weight class
@@ -7006,6 +6627,11 @@ static uint32_t GetTrinketIconId(const std::string& slot) {
 
 // Get the representative item ID for a build gear slot icon
 static uint32_t GetGearSlotIconItemId(const AlterEgo::SavedBuild& build, const std::string& slot) {
+    if (slot=="HelmAquatic"||AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(slot)) {
+        const auto it=build.gear.find(slot);
+        if(it!=build.gear.end()&&it->second.item_id)return it->second.item_id;
+        return 0;
+    }
     if (IsArmorSlot(slot)) {
         int weight = GetArmorWeight(build.profession);
         int idx = -1;
@@ -7029,6 +6655,11 @@ static uint32_t GetGearSlotIconItemId(const AlterEgo::SavedBuild& build, const s
 // Open the gear customize dialog for a specific slot
 static void OpenGearDialog(const std::string& buildId, const std::string& slot,
                            const AlterEgo::BuildGearSlot& current) {
+    g_GearDialogFocus.Request();
+    if(g_GearDialogOpen)return; // Focus the existing draft; never silently replace it.
+    if(!g_LibEditMode||g_EditDraft.id!=buildId)return;
+    g_GearDialogDraft=g_EditDraft;
+    g_GearDialogDirty=false;
     g_GearDialogOpen = true;
     g_GearDialogSlot = slot;
     g_GearDialogBuildId = buildId;
@@ -7043,8 +6674,8 @@ static void OpenGearDialog(const std::string& buildId, const std::string& slot,
 }
 
 // Build a sorted list of stat combos for the selection panel
-static std::vector<const AlterEgo::ItemStatInfo*> GetSortedStatCombos(const char* filter) {
-    std::vector<const AlterEgo::ItemStatInfo*> result;
+static std::vector<std::shared_ptr<const AlterEgo::ItemStatInfo>> GetSortedStatCombos(const char* filter) {
+    std::vector<std::shared_ptr<const AlterEgo::ItemStatInfo>> result;
     const auto& allStats = AlterEgo::GW2API::GetAllItemStats();
     std::string filterLower;
     if (filter && filter[0]) {
@@ -7052,7 +6683,8 @@ static std::vector<const AlterEgo::ItemStatInfo*> GetSortedStatCombos(const char
         for (auto& c : filterLower) c = (char)tolower(c);
     }
     std::set<std::string> seenNames;
-    for (const auto& [id, info] : allStats) {
+    for (const auto& [id, row] : allStats) {
+        const auto& info=*row;
         if (info.name.empty() || info.attributes.empty()) continue;
         // Deduplicate: GW2 API has multiple stat IDs with the same name (different tiers)
         if (!seenNames.insert(info.name).second) continue;
@@ -7067,10 +6699,10 @@ static std::vector<const AlterEgo::ItemStatInfo*> GetSortedStatCombos(const char
             }
             if (nameLower.find(filterLower) == std::string::npos && !matchesAttr) continue;
         }
-        result.push_back(&info);
+        result.push_back(row);
     }
     std::sort(result.begin(), result.end(),
-        [](const AlterEgo::ItemStatInfo* a, const AlterEgo::ItemStatInfo* b) {
+        [](const auto& a, const auto& b) {
             return a->name < b->name;
         });
     return result;
@@ -7143,17 +6775,22 @@ static const char* kBuildProfessions[9] = {
     "Elementalist", "Mesmer", "Necromancer", "Revenant"
 };
 
-// Revenant legend byte codes (13..19) → display name. Codes confirmed against
-// /v2/legends swap-skill names (Legend1..Legend7 = byte 13..19).
-struct LegendOption { uint8_t code; const char* name; };
-static const LegendOption kRevLegends[7] = {
-    {13, "Dragon (Herald)"},  {14, "Assassin (Shiro)"}, {15, "Dwarf (Jalis)"},
-    {16, "Demon (Mallyx)"},   {17, "Renegade (Kalla)"}, {18, "Centaur (Ventari)"},
-    {19, "Alliance (Vindicator)"}
-};
-static const char* LegendNameForCode(uint8_t code) {
-    for (const auto& l : kRevLegends) if (l.code == code) return l.name;
-    return "Choose legend";
+// Public legend definitions replace the old name-keyword mapping. Known
+// protocol labels are retained only for offline display/selection.
+struct LegendOption { uint8_t code; std::string name; uint32_t swap=0; std::string icon; };
+static std::vector<LegendOption> LegendOptions() {
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    std::vector<LegendOption> out;
+    for(const auto& l:catalog->legends)out.push_back({l.code,l.name,l.swap,l.icon});
+    if(out.empty())out={{1,"Dragon (Herald)",0,{}},{2,"Assassin (Shiro)",0,{}},{3,"Dwarf (Jalis)",0,{}},
+        {4,"Demon (Mallyx)",0,{}},{5,"Renegade (Kalla)",0,{}},{6,"Centaur (Ventari)",0,{}},
+        {7,"Alliance (Vindicator)",0,{}},{8,"Entity (Conduit)",0,{}}};
+    return out;
+}
+static std::string LegendNameForCode(uint8_t code) {
+    code=AlterEgo::PublicCatalog::CanonicalLegendCode(code);
+    for (const auto& l : LegendOptions()) if (l.code == code) return l.name;
+    return code?"Unknown legend ("+std::to_string(code)+")":"Choose legend";
 }
 
 // Render the same GW2 profession image used in the Characters roster in
@@ -7168,10 +6805,7 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
                          itemMin.y + (itemHeight - iconSize) * 0.5f);
     const ImVec2 iconMax(iconMin.x + iconSize, iconMin.y + iconSize);
     const uint32_t iconId = GetProfessionIconId(profession);
-    const char* iconUrl = GetProfessionIconUrl(profession);
-    if (iconId && !iconUrl) {
-        AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
-    }
+    // Fixed class artwork is embedded. Opening a picker must not fetch metadata.
     if (iconId) {
         Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
         if (tex && tex->Resource) {
@@ -7179,9 +6813,9 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
             return;
         }
         // The DLL image and disk cache both work without metadata.
-        AlterEgo::IconManager::RequestIcon(iconId, iconUrl ? iconUrl : "");
+        AlterEgo::IconManager::RequestIcon(iconId, "");
     }
-    // Keep a readable fallback while profession artwork is still downloading.
+    // Keep a readable fallback if the embedded texture is not yet available.
     if (!profession.empty()) {
         const std::string initial = profession.substr(0, 1);
         dl->AddText(ImVec2(iconMin.x + 3.0f,
@@ -7193,7 +6827,7 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
 
 // Use the same icon and profession color for Characters, Compare and the New
 // Build profession choices. Optional prefixes stay neutral.
-static void DrawCompareProfessionCharacterEntry(ImDrawList* draw,
+static void DrawProfessionCharacterEntry(ImDrawList* draw,
     ImVec2 min, ImVec2 max, const std::string& profession,
     const std::string& name, const char* prefix = nullptr,
     bool preview = false) {
@@ -7212,16 +6846,81 @@ static void DrawCompareProfessionCharacterEntry(ImDrawList* draw,
     draw->PopClipRect();
 }
 
-// "+ New Build" dialog: pick a profession + game mode, create a blank build,
+// Shared selectable row for single-target and multi-target character pickers.
+// Keep the native ImGui control responsible for selection, hover and keyboard focus.
+static bool SelectProfessionCharacterEntry(const char* id, bool selected,
+    const std::string& profession, const std::string& name,
+    const char* prefix = nullptr, ImGuiSelectableFlags flags = ImGuiSelectableFlags_None) {
+    const ImVec2 size(0.0f, ImMax(24.0f, ImGui::GetTextLineHeightWithSpacing()+3.0f));
+    const bool clicked=ImGui::Selectable(id,selected,flags,size);
+    DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),
+        ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),profession,name,prefix);
+    if(ImGui::BeginPopupContextItem("##character_name")){
+        CopyNameMenuItem(name);ImGui::EndPopup();
+    }
+    return clicked;
+}
+
+bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selected,
+                                const std::set<std::string>& names) {
+    using namespace AlterEgo;
+    ImGui::PushID(label);
+    UI::FilterFieldLabel(label);
+    const auto chars=GW2API::GetCharacters();
+    std::map<std::string,std::string> professions;
+    std::vector<std::string> order;
+    std::set<std::string> remaining=names;
+    // Reuse the Characters/Compare order when available and append roster-only
+    // names so inventory remains filterable before detailed character retrieval.
+    auto add=[&](const Character& c){
+        if(names.count(c.name)&&!c.profession.empty())professions[c.name]=c.profession;
+        if(remaining.erase(c.name))order.push_back(c.name);
+    };
+    for(int idx:g_CharDisplayOrder)
+        if(idx>=0&&static_cast<size_t>(idx)<chars->size())add((*chars)[idx]);
+    for(const auto& c:*chars)add(c);
+    order.insert(order.end(),remaining.begin(),remaining.end());
+    const bool single=selected.size()==1;
+    const auto preview=selected.empty()?std::string("All"):
+        single?*selected.begin():std::to_string(selected.size())+" selected";
+    const auto profession=single&&professions.count(preview)?professions.at(preview):std::string{};
+    const bool decorated=!profession.empty();
+    const auto pos=ImGui::GetCursorScreenPos();
+    const float width=UI::FilterFieldWidth(),height=ImGui::GetFrameHeight();
+    auto* draw=ImGui::GetWindowDrawList();
+    bool changed=false;
+    if(UI::BeginCombo("##value",decorated?"":preview.c_str(),0,width)){
+        if(ImGui::Selectable("All",selected.empty(),ImGuiSelectableFlags_DontClosePopups)&&!selected.empty()){
+            selected.clear();changed=true;
+        }
+        for(const auto& name:order){
+            ImGui::PushID(name.c_str());
+            const bool on=selected.count(name)!=0;
+            const auto it=professions.find(name);
+            if(SelectProfessionCharacterEntry("##character",on,it==professions.end()?std::string{}:it->second,
+                name,nullptr,ImGuiSelectableFlags_DontClosePopups)){
+                if(on)selected.erase(name);else selected.insert(name);
+                changed=true;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    if(decorated)DrawProfessionCharacterEntry(draw,pos,ImVec2(pos.x+width,pos.y+height),profession,preview,nullptr,true);
+    ImGui::PopID();
+    return changed;
+}
+
+// "+ New Loadout" dialog: pick a profession + game mode, create a blank build,
 // and drop straight into edit mode.
 static void RenderNewBuildDialog() {
-    if (g_NewBuildDialogOpen && !ImGui::IsPopupOpen("New Build##newbuild"))
-        ImGui::OpenPopup("New Build##newbuild");
+    if (g_NewBuildDialogOpen && !ImGui::IsPopupOpen("New Loadout###newbuild"))
+        ImGui::OpenPopup("New Loadout###newbuild");
 
     const ImVec2 dispSize = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowPos(ImVec2(dispSize.x * 0.5f, dispSize.y * 0.5f),
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("New Build##newbuild", &g_NewBuildDialogOpen,
+    if (ImGui::BeginPopupModal("New Loadout###newbuild", &g_NewBuildDialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         constexpr float kGridWidth = 480.0f;
         ImGui::TextUnformatted("Game modes");
@@ -7241,7 +6940,7 @@ static void RenderNewBuildDialog() {
                 const float width = ImGui::GetContentRegionAvail().x;
                 const bool clicked = RenderActionButton("##newProfession",
                     ImVec2(width, ImMax(32.0f, ImGui::GetFrameHeight())));
-                DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
+                DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),
                     ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
                     profession, profession);
                 if (clicked) {
@@ -7293,7 +6992,7 @@ static void RenderSpecPickerDialog() {
             AlterEgo::GW2API::FetchProfessionInfoAsync(g_EditDraft.profession);
         } else {
             for (uint32_t sid : specIds) {
-                const auto* si = AlterEgo::GW2API::GetSpecInfo(sid);
+                const auto si = AlterEgo::GW2API::GetSpecInfo(sid);
                 if (!si) continue;
                 // Elite specs are only valid on the third spec line (slot index 2).
                 if (si->elite && g_SpecPickerSlot != 2) continue;
@@ -7328,7 +7027,7 @@ static void RenderSpecPickerDialog() {
                     if (si->elite)
                         for (int o = 0; o < 3; o++) {
                             if (o == g_SpecPickerSlot) continue;
-                            const auto* oi = AlterEgo::GW2API::GetSpecInfo(
+                            const auto oi = AlterEgo::GW2API::GetSpecInfo(
                                 g_EditDraft.specializations[o].spec_id);
                             if (oi && oi->elite)
                                 g_EditDraft.specializations[o] = AlterEgo::SpecLine{};
@@ -7353,6 +7052,36 @@ static void RenderSpecPickerDialog() {
         ImGui::EndPopup();
     }
     if (!open) g_SpecPickerSlot = -1; // closed via window X
+}
+
+// Shared eligibility policy for both the monolithic Loadout editor and the
+// v3 standalone Skills component editor. Keep the GW2 skill-type, profession
+// and selected elite-spec checks in ONE place.
+static std::vector<uint32_t> SelectableBuildSkillIds(
+    const std::string& profession, const char* type,
+    const std::vector<uint32_t>& specializationIds,
+    bool allowAllSpecializations = false) {
+    if (profession.empty()) return {};
+    const auto allIds = AlterEgo::GW2API::GetProfessionSkillIds(profession);
+    if (allIds.empty()) {
+        AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+        return {};
+    }
+    std::vector<uint32_t> missing;
+    std::vector<uint32_t> matches;
+    for (uint32_t id : allIds) {
+        const auto skill = AlterEgo::GW2API::GetSkillInfo(id);
+        if (!skill) { missing.push_back(id); continue; }
+        if (skill->type != type) continue;
+        if (!allowAllSpecializations && skill->specialization &&
+            std::find(specializationIds.begin(), specializationIds.end(),
+                      skill->specialization) == specializationIds.end()) continue;
+        const bool owned = std::find(skill->professions.begin(),
+            skill->professions.end(), profession) != skill->professions.end();
+        if (owned) matches.push_back(id);  // never include racial skills
+    }
+    if (!missing.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(missing);
+    return matches;
 }
 
 // Skill picker for the build editor. Lists the profession's slottable skills
@@ -7404,39 +7133,15 @@ static void RenderSkillPickerDialog() {
             g_SkillPickerSlot = -1;
             ImGui::CloseCurrentPopup();
         };
-        auto eliteGateOk = [&](uint32_t specGate) -> bool {
-            if (specGate == 0) return true;
-            for (int i = 0; i < 3; i++)
-                if (g_EditDraft.specializations[i].spec_id == specGate) return true;
-            return false;
-        };
-
-        auto skillIds = AlterEgo::GW2API::GetProfessionSkillIds(g_EditDraft.profession);
+        std::vector<uint32_t> selectedSpecIds;
+        for (const auto& spec : g_EditDraft.specializations)
+            if (spec.spec_id) selectedSpecIds.push_back(spec.spec_id);
+        const auto skillIds = SelectableBuildSkillIds(
+            g_EditDraft.profession, wantType, selectedSpecIds);
         if (skillIds.empty()) {
-            RenderSpinner("Loading skills...");
-            AlterEgo::GW2API::FetchProfessionPaletteAsync(g_EditDraft.profession);
+            RenderSpinner("Loading eligible skills...");
         } else {
-            std::vector<uint32_t> need;
-            for (uint32_t id : skillIds)
-                if (!AlterEgo::GW2API::GetSkillInfo(id)) need.push_back(id);
-            if (!need.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(need);
-
-            // Native-flyout-style grid: every skill of this type (elite-gated), 4 per row.
-            // Skills already slotted elsewhere are shown too — picking one swaps it.
-            std::vector<uint32_t> shownIds;
-            for (uint32_t id : skillIds) {
-                const auto* sk = AlterEgo::GW2API::GetSkillInfo(id);
-                if (!sk) continue;
-                if (sk->type != wantType) continue;
-                if (!eliteGateOk(sk->specialization)) continue;
-                // Exclude racial skills (and any non-profession skills): racial skills
-                // list no profession; profession skills list this profession.
-                bool forProf = false;
-                for (const auto& pr : sk->professions)
-                    if (pr == g_EditDraft.profession) { forProf = true; break; }
-                if (!forProf) continue;
-                shownIds.push_back(id);
-            }
+            const auto& shownIds = skillIds;
             const int COLS = 4;
             const float cell = 42.0f, pad = 4.0f;
             uint32_t equipped = (slot == 0) ? g_EditDraft.terrestrial_skills.heal
@@ -7457,7 +7162,7 @@ static void RenderSkillPickerDialog() {
             }
             if (shownIds.empty()) RenderSpinner("Loading skills...");
             ImGui::EndChild();
-            if (ImGui::Button("(None)")) applySkill(0);
+            if (AlterEgo::UI::Button("(None)", ImVec2(0,0), AlterEgo::UI::ButtonRole::Compact)) applySkill(0);
         }
         ImGui::EndPopup();
     } else {
@@ -7479,13 +7184,13 @@ static void RenderLegendPickerDialog() {
         const int slot = g_LegendPickerSlot; // 0 or 1
         const int other = slot == 0 ? 1 : 0;
         AlterEgo::GW2API::FetchLegendsAsync();
-        for (const auto& l : kRevLegends) {
-            bool usedOther = (g_EditDraft.legend_codes[other] == l.code);
+        for (const auto& l : LegendOptions()) {
+            bool usedOther = (AlterEgo::PublicCatalog::CanonicalLegendCode(g_EditDraft.legend_codes[other]) == l.code);
             ImGui::PushID((int)l.code);
 
             // Legend emblem icon (the swap skill's icon).
             const float legIconSz = 26.0f;
-            uint32_t swap = AlterEgo::GW2API::GetLegendSwapSkill(l.code);
+            uint32_t swap = l.swap;
             uint32_t ikey = swap + 5000000u;
             Texture_t* itex = swap ? AlterEgo::IconManager::GetIcon(ikey) : nullptr;
             if (itex && itex->Resource) {
@@ -7493,16 +7198,15 @@ static void RenderLegendPickerDialog() {
                              ImVec2(0, 0), ImVec2(1, 1),
                              usedOther ? ImVec4(1, 1, 1, 0.4f) : ImVec4(1, 1, 1, 1));
             } else {
-                const auto* sk = swap ? AlterEgo::GW2API::GetSkillInfo(swap) : nullptr;
-                if (sk && !sk->icon_url.empty()) AlterEgo::IconManager::RequestIcon(ikey, sk->icon_url);
+                if (swap && !l.icon.empty()) AlterEgo::IconManager::RequestIcon(ikey, l.icon);
                 ImGui::Dummy(ImVec2(legIconSz, legIconSz));
             }
             ImGui::SameLine(0, 8);
             ImGui::AlignTextToFramePadding();
 
             bool clicked = false;
-            if (usedOther) ImGui::TextDisabled("%s", l.name);
-            else clicked = ImGui::Selectable(l.name);
+            if (usedOther) ImGui::TextDisabled("%s", l.name.c_str());
+            else clicked = ImGui::Selectable(l.name.c_str());
             ImGui::PopID();
 
             if (clicked) {
@@ -7547,6 +7251,13 @@ static void RenderPetPickerDialog() {
             ImGui::BeginChild("##petlist", ImVec2(280, 360), true);
             for (const auto& p : pets) {
                 bool usedOther = (g_EditDraft.pets.terrestrial[other] == p.id);
+                ImGui::PushID(static_cast<int>(p.id));
+                const uint32_t iconId=9400000u+p.id;
+                auto* icon=AlterEgo::IconManager::GetIcon(iconId);
+                const float iconSize=32.0f;
+                if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(iconSize,iconSize),ImVec2(0,0),ImVec2(1,1),usedOther?ImVec4(1,1,1,0.4f):ImVec4(1,1,1,1));
+                else {ImGui::Dummy(ImVec2(iconSize,iconSize));if(!p.icon_url.empty())AlterEgo::IconManager::RequestIcon(iconId,p.icon_url);}
+                ImGui::SameLine();
                 if (usedOther) {
                     ImGui::TextDisabled("%s", p.name.c_str());
                 } else if (ImGui::Selectable(p.name.c_str())) {
@@ -7556,9 +7267,10 @@ static void RenderPetPickerDialog() {
                     g_PetPickerSlot = -1;
                     ImGui::CloseCurrentPopup();
                 }
+                ImGui::PopID();
             }
             ImGui::EndChild();
-            if (ImGui::Button("(None)")) {
+            if (AlterEgo::UI::Button("(None)", ImVec2(0,0), AlterEgo::UI::ButtonRole::Compact)) {
                 g_EditDraft.pets.terrestrial[slot] = 0;
                 g_EditDraft.pets.aquatic[slot] = 0;
                 MarkEditDirty();
@@ -7573,38 +7285,281 @@ static void RenderPetPickerDialog() {
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
 
+// Clipboard is typed and local to Alter Ego. Copying across slot types never
+// transfers an incompatible exact item ID or overwrites a weapon type.
+enum class GearCopyField { All, Stats, Upgrade, Infusions, Relic };
+struct GearClipboard {
+    bool valid = false;
+    GearCopyField field = GearCopyField::All;
+    std::string slot;
+    AlterEgo::BuildGearSlot data;
+    uint32_t relicId = 0;
+    std::string relicName;
+};
+static GearClipboard g_GearClipboard;
+static bool GearSlotBlocked(const AlterEgo::SavedBuild& b, const std::string& slot) {
+    if (!IsOffhandSlot(slot)) return false;
+    auto it = b.gear.find(slot == "WeaponA2" ? "WeaponA1" : "WeaponB1");
+    return it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
+}
+static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
+    auto it = b.gear.find(slot);
+    const bool two = it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
+    int capacity = AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
+    if (capacity && it != b.gear.end() && it->second.item_id) {
+        const auto info = AlterEgo::GW2API::GetItemInfo(it->second.item_id);
+        if (info && info->details.is_object() && info->details.contains("infusion_slots") &&
+            info->details["infusion_slots"].is_array())
+            capacity = std::min(capacity, static_cast<int>(info->details["infusion_slots"].size()));
+    }
+    return capacity;
+}
+static int GearSigilCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
+    if (!IsWeaponSlot(slot) || GearSlotBlocked(b,slot)) return 0;
+    auto it = b.gear.find(slot);
+    if (it == b.gear.end() || it->second.weapon_type.empty()) return 0;
+    return IsWeaponTwoHanded(b.profession,it->second.weapon_type) ? 2 : 1;
+}
+static bool GearSameGroup(const std::string& a,const std::string& b) {
+    return (IsArmorSlot(a) && IsArmorSlot(b)) ||
+           (IsWeaponSlot(a) && IsWeaponSlot(b)) ||
+           (IsTrinketSlot(a) && IsTrinketSlot(b));
+}
+static bool GearCanPaste(const AlterEgo::SavedBuild& b,const std::string& slot,const GearClipboard& c) {
+    if (!c.valid || GearSlotBlocked(b,slot)) return false;
+    if (c.field == GearCopyField::Relic) return slot == "Relic";
+    if (!IsArmorSlot(slot) && !IsTrinketSlot(slot) && !IsWeaponSlot(slot)) return false;
+    if (c.field == GearCopyField::Stats) return !IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0;
+    if (c.field == GearCopyField::Infusions) return GearInfusionCapacity(b,slot) > 0 &&
+        (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0);
+    if (c.field == GearCopyField::Upgrade)
+        return (IsArmorSlot(c.slot) && IsArmorSlot(slot)) ||
+            (IsWeaponSlot(c.slot) && GearSigilCapacity(b,slot) > 0);
+    if (!GearSameGroup(slot,c.slot)) return false;
+    if (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0) return true;
+    if (c.data.weapon_type.empty()) return false;
+    const auto weapons = AlterEgo::GW2API::GetProfessionWeapons(b.profession);
+    if (!weapons) return false;
+    const auto it = weapons->find(c.data.weapon_type);
+    return it != weapons->end() && AlterEgo::EquipmentChoice::WeaponTypeEligible(
+        slot,it->first,it->second.mainhand,it->second.offhand,it->second.two_handed);
+}
+static void ExpandSharedRune(AlterEgo::SavedBuild& b) {
+    if (!b.rune_id && b.rune_name.empty()) return;
+    bool explicitRunes = false;
+    for (const auto& entry : b.gear)
+        if (IsArmorSlot(entry.first) && (entry.second.rune_id || !entry.second.rune.empty()))
+            explicitRunes = true;
+    if (!explicitRunes) for (auto& entry : b.gear) if (IsArmorSlot(entry.first)) {
+        entry.second.rune = b.rune_name; entry.second.rune_id = b.rune_id;
+    }
+    b.rune_id = 0; b.rune_name.clear();
+}
+static void MarkGearEditDirty(const AlterEgo::SavedBuild& b) {
+    if(&b==&g_GearDialogDraft)g_GearDialogDirty=true;
+    else MarkEditDirty();
+}
+static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,const GearClipboard& c) {
+    if (!GearCanPaste(b,slot,c)) return;
+    if (c.field == GearCopyField::Relic) {
+        b.relic_id = c.relicId; b.relic_name = c.relicName;
+        auto it = b.gear.find("Relic");
+        if (it != b.gear.end()) it->second.item_id = c.relicId;
+        MarkGearEditDirty(b); return;
+    }
+    if ((c.field == GearCopyField::All || c.field == GearCopyField::Upgrade) && IsArmorSlot(slot))
+        ExpandSharedRune(b);
+    auto& dest = b.gear[slot]; dest.slot = slot;
+    if (c.field == GearCopyField::All && IsWeaponSlot(slot) && dest.weapon_type.empty()) {
+        dest.weapon_type = c.data.weapon_type;
+        dest.item_id = 0;
+        if (IsMainhandSlot(slot) && IsWeaponTwoHanded(b.profession,dest.weapon_type)) {
+            b.gear.erase(slot == "WeaponA1" ? "WeaponA2" : "WeaponB2");
+            InvalidateGearInfusionTotals(b);
+        }
+    }
+    if (c.field == GearCopyField::All || c.field == GearCopyField::Stats) {
+        dest.stat_id = c.data.stat_id; dest.stat_name = c.data.stat_name;
+    }
+    if (c.field == GearCopyField::All || c.field == GearCopyField::Upgrade) {
+        if (IsArmorSlot(slot)) { dest.rune = c.data.rune; dest.rune_id = c.data.rune_id; }
+        if (IsWeaponSlot(slot)) AlterEgo::GearEdit::CopySigils(dest,c.data,GearSigilCapacity(b,slot));
+    }
+    if (c.field == GearCopyField::All || c.field == GearCopyField::Infusions) {
+        if (GearInfusionCapacity(b,slot) > 0 &&
+            (c.field == GearCopyField::Infusions || !c.data.infusion_ids.empty() ||
+             !c.data.infusion_attributes.empty() || c.data.infusion_snapshot)) {
+            AlterEgo::GearEdit::CopyInfusions(dest,c.data,GearInfusionCapacity(b,slot));
+            InvalidateGearInfusionTotals(b);
+        }
+    }
+    MarkGearEditDirty(b);
+}
+static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCopyField field) {
+    if (slot == "Relic") { b.relic_id = 0; b.relic_name.clear(); b.gear.erase(slot); MarkGearEditDirty(b); return; }
+    if (IsArmorSlot(slot) && (field == GearCopyField::All || field == GearCopyField::Upgrade)) ExpandSharedRune(b);
+    auto it = b.gear.find(slot);
+    if (it == b.gear.end()) return;
+    if (field == GearCopyField::All) {
+        if (&b!=&g_GearDialogDraft && g_GearDialogOpen && g_GearDialogBuildId == b.id && g_GearDialogSlot == slot)
+            g_GearDialogOpen = false;
+        const bool hadInfusions = !it->second.infusion_ids.empty() ||
+            !it->second.infusion_attributes.empty() || it->second.infusion_snapshot;
+        b.gear.erase(it);
+        if (hadInfusions) InvalidateGearInfusionTotals(b);
+    } else {
+        auto& item = it->second;
+        if (field == GearCopyField::Stats) { item.stat_id = 0; item.stat_name.clear(); }
+        if (field == GearCopyField::Upgrade) {
+            item.rune_id = item.sigil_id = item.sigil2_id = 0;
+            item.rune.clear(); item.sigil.clear(); item.sigil2.clear();
+        }
+        if (field == GearCopyField::Infusions) {
+            item.infusion_ids.clear(); item.infusion_attributes.clear(); item.infusion.clear();
+            item.infusion_snapshot = true; InvalidateGearInfusionTotals(b);
+        }
+    }
+    MarkGearEditDirty(b);
+}
+static GearClipboard CaptureGearClipboard(const AlterEgo::SavedBuild& b,const std::string& slot,GearCopyField field) {
+    GearClipboard c; c.valid = true; c.slot = slot; c.field = field;
+    auto it = b.gear.find(slot); if (it != b.gear.end()) c.data = it->second;
+    if (IsArmorSlot(slot) && c.data.rune.empty() && !c.data.rune_id) {
+        bool any = false;
+        for (const auto& entry : b.gear) if (IsArmorSlot(entry.first) &&
+            (entry.second.rune_id || !entry.second.rune.empty())) any = true;
+        if (!any) { c.data.rune = b.rune_name; c.data.rune_id = b.rune_id; }
+    }
+    c.relicId = b.relic_id; c.relicName = b.relic_name;
+    return c;
+}
+static void CopyGearToGroup(AlterEgo::SavedBuild& b,const GearClipboard& c,const std::string& group) {
+    // Work against the canonical editable land slots. Stats/runes can
+    // populate planned armor; upgrades never invent equipment capacities.
+    std::vector<std::string> slots;
+    for (const char* raw : {"Helm","Shoulders","Coat","Gloves","Leggings","Boots",
+            "WeaponA1","WeaponA2","WeaponB1","WeaponB2","Backpack","Accessory1",
+            "Accessory2","Amulet","Ring1","Ring2"}) {
+        const std::string s(raw);
+        if ((c.field == GearCopyField::Infusions || IsWeaponSlot(s)) &&
+            !b.gear.count(s)) continue;
+        if (IsWeaponSlot(s) && GearSigilCapacity(b,s) == 0) continue;
+        if ((s != c.slot || c.field == GearCopyField::Infusions) &&
+            (group == "All" || (group == "Armor" && IsArmorSlot(s)) ||
+            (group == "Weapons" && IsWeaponSlot(s)) || (group == "Trinkets" && IsTrinketSlot(s))))
+            slots.push_back(s);
+    }
+    for (const auto& slot : slots) ApplyGearClipboard(b,slot,c);
+}
+static void CopyWeaponSetSigils(AlterEgo::SavedBuild& b,const std::string& source) {
+    if (!IsWeaponSlot(source)||AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(source)) return;
+    const std::string from = source.substr(0,7), to = from == "WeaponA" ? "WeaponB" : "WeaponA";
+    std::vector<std::pair<uint32_t,std::string>> pattern;
+    for (const auto& suffix : {"1","2"}) {
+        const auto slot = from + suffix;
+        auto it = b.gear.find(slot);
+        if (it == b.gear.end() || !GearSigilCapacity(b,slot)) continue;
+        const auto& s = it->second;
+        pattern.push_back({s.sigil_id,s.sigil});
+        if (GearSigilCapacity(b,slot) == 2) pattern.push_back({s.sigil2_id,s.sigil2});
+    }
+    if (pattern.empty()) return;
+    size_t index = 0;
+    for (const auto& suffix : {"1","2"}) {
+        const auto slot = to + suffix;
+        const int capacity = GearSigilCapacity(b,slot);
+        if (!capacity) continue;
+        auto& s = b.gear.at(slot);
+        auto first = pattern[index++ % pattern.size()];
+        s.sigil_id = first.first; s.sigil = first.second;
+        s.sigil2_id = 0; s.sigil2.clear();
+        if (capacity == 2) {
+            auto second = pattern[index++ % pattern.size()];
+            s.sigil2_id = second.first; s.sigil2 = second.second;
+        }
+    }
+    MarkGearEditDirty(b);
+}
+static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slot,bool& clearAfter) {
+    if (!ImGui::BeginPopupContextItem("##gear_edit_context")) return;
+    const bool relic = slot == "Relic";
+    const auto saved=b.gear.find(slot);
+    if(relic)CopyNameMenuItem(b.relic_name);
+    else if(saved!=b.gear.end()){
+        const auto& gear=saved->second;
+        const auto actual=gear.item_id?AlterEgo::GW2API::GetItemInfo(gear.item_id):nullptr;
+        const auto name=actual&&!actual->name.empty()?actual->name:gear.stat_name.empty()?std::string{}:gear.stat_name+" "+GearSlotDisplayName(slot);
+        CopyNameMenuItem(name);
+        CopyNameMenuItem(gear.rune,"Copy Rune Name");
+        CopyNameMenuItem(gear.sigil,"Copy Sigil Name");
+        CopyNameMenuItem(gear.sigil2,"Copy Second Sigil Name");
+        CopyCachedItemNamesMenu(gear.infusion_ids,"Copy Infusion Name");
+    }
+    auto capture = [&](GearCopyField field) { return CaptureGearClipboard(b,slot,field); };
+    if (ImGui::MenuItem("Edit")) {
+        auto c = capture(GearCopyField::All); c.data.slot = slot;
+        OpenGearDialog(b.id,slot,c.data);
+    }
+    if (ImGui::BeginMenu("Copy")) {
+        if (ImGui::MenuItem(relic ? "Relic" : "Configuration")) g_GearClipboard = capture(relic ? GearCopyField::Relic : GearCopyField::All);
+        if (!relic) {
+            if (ImGui::MenuItem("Stats")) g_GearClipboard = capture(GearCopyField::Stats);
+            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) g_GearClipboard = capture(GearCopyField::Upgrade);
+            if (GearInfusionCapacity(b,slot) && ImGui::MenuItem("Infusions")) g_GearClipboard = capture(GearCopyField::Infusions);
+        }
+        ImGui::EndMenu();
+    }
+    if (ImGui::MenuItem("Paste",nullptr,false,GearCanPaste(b,slot,g_GearClipboard)))
+        ApplyGearClipboard(b,slot,g_GearClipboard);
+    if (!relic) {
+        if (ImGui::BeginMenu("Copy to all slots")) {
+            const std::string group = IsArmorSlot(slot) ? "Armor" : IsWeaponSlot(slot) ? "Weapons" : "Trinkets";
+            if (ImGui::MenuItem("Configuration")) CopyGearToGroup(b,capture(GearCopyField::All),group);
+            if (ImGui::MenuItem("Stats")) CopyGearToGroup(b,capture(GearCopyField::Stats),group);
+            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) CopyGearToGroup(b,capture(GearCopyField::Upgrade),group);
+            if (GearInfusionCapacity(b,slot) && ImGui::BeginMenu("Infusions")) {
+                if (ImGui::MenuItem("This item (fill slots)")) ApplyGearClipboard(b,slot,capture(GearCopyField::Infusions));
+                for (const auto& target : {"Armor","Weapons","Trinkets","All"})
+                    if (ImGui::MenuItem(target)) CopyGearToGroup(b,capture(GearCopyField::Infusions),target);
+                ImGui::EndMenu();
+            }
+            if (IsWeaponSlot(slot) && !AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(slot) && ImGui::MenuItem("Sigils to other weapon set")) CopyWeaponSetSigils(b,slot);
+            ImGui::EndMenu();
+        }
+    }
+    if (ImGui::BeginMenu("Clear")) {
+        if (ImGui::MenuItem(relic ? "Relic" : "Entire slot")) clearAfter = true;
+        if (!relic) {
+            if (ImGui::MenuItem("Stats")) ClearGearSlot(b,slot,GearCopyField::Stats);
+            if ((IsArmorSlot(slot) || IsWeaponSlot(slot)) && ImGui::MenuItem("Rune / Sigils")) ClearGearSlot(b,slot,GearCopyField::Upgrade);
+            if (GearInfusionCapacity(b,slot) && ImGui::MenuItem("Infusions")) ClearGearSlot(b,slot,GearCopyField::Infusions);
+        }
+        ImGui::EndMenu();
+    }
+    ImGui::EndPopup();
+}
+
+
 static void RenderGearCustomizeDialog() {
     if (!g_GearDialogOpen) return;
+    if (!g_LibEditMode || g_GearDialogBuildId != g_EditDraft.id) {
+        g_GearDialogOpen = false;
+        return;
+    }
 
     ImGui::SetNextWindowSize(ImVec2(540, 440), ImGuiCond_FirstUseEver);
+    g_GearDialogFocus.ApplyBeforeBegin();
     if (!ImGui::Begin("Customize##GearDialog", &g_GearDialogOpen, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
 
-    // Find the build being edited. While editing in the library, gear changes go to
-    // the in-memory draft and persist only on Save (so Cancel reverts them); otherwise
-    // they edit the saved build directly and persist immediately.
-    AlterEgo::SavedBuild* editBuild = nullptr;
-    bool editingDraft = (g_LibEditMode && g_GearDialogBuildId == g_EditDraft.id);
-    if (editingDraft) {
-        editBuild = &g_EditDraft;
-    } else {
-        auto& builds = const_cast<std::vector<AlterEgo::SavedBuild>&>(
-            AlterEgo::GW2API::GetSavedBuilds());
-        for (auto& b : builds) {
-            if (b.id == g_GearDialogBuildId) { editBuild = &b; break; }
-        }
-    }
-    if (!editBuild) {
-        ImGui::Text("Build not found.");
-        ImGui::End();
-        return;
-    }
-    // Commit gear changes: dirty the draft when editing, else persist to disk now.
-    auto commitGear = [&]() {
-        if (editingDraft) MarkEditDirty();
-        else AlterEgo::GW2API::SaveBuildLibrary();
+    // The child owns a separate equipment draft; Cancel or the window close
+    // button cannot modify the parent Loadout draft.
+    AlterEgo::SavedBuild* editBuild=&g_GearDialogDraft;
+    auto commitGear = [&](bool infusionChanged = false) {
+        if (infusionChanged) InvalidateGearInfusionTotals(*editBuild);
+        MarkGearEditDirty(*editBuild);
     };
 
     auto& gs = editBuild->gear[g_GearDialogSlot];
@@ -7613,6 +7568,8 @@ static void RenderGearCustomizeDialog() {
     bool isWeapon = IsWeaponSlot(g_GearDialogSlot);
     bool isRelic = (g_GearDialogSlot == "Relic");
 
+    ImGui::TextDisabled("Save applies to the Loadout draft; save the Loadout to persist.");
+    ImGui::BeginChild("##gear_customize_body",ImVec2(0,-AlterEgo::UI::ActionButtonHeight()-ImGui::GetStyle().ItemSpacing.y*2),false);
     // Two-column layout: left = current item, right = selector
     if (ImGui::BeginTable("##custLayout", 2, ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("##custLeft", ImGuiTableColumnFlags_WidthFixed, 220.0f);
@@ -7667,14 +7624,17 @@ static void RenderGearCustomizeDialog() {
                 memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
             }
 
+            if(ImGui::BeginPopupContextItem("##relic_name")){
+                CopyNameMenuItem(editBuild->relic_name);ImGui::EndPopup();
+            }
             ImVec2 tp(p.x + 6, p.y + 3);
             if (!editBuild->relic_name.empty()) {
                 ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(200, 180, 255, 255), editBuild->relic_name.c_str());
                 // Show bonus text if we can find it in the list
-                for (int i = 0; i < RELIC_COUNT; i++) {
-                    if (editBuild->relic_name == RELIC_LIST[i].name) {
+                for (const auto& entry : GearCatalog("Relic")) {
+                    if (editBuild->relic_name == entry.name) {
                         tp.y += 14.0f;
-                        ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(150, 150, 150, 220), RELIC_LIST[i].bonus);
+                        ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(150, 150, 150, 220), entry.bonus.c_str());
                         break;
                     }
                 }
@@ -7689,7 +7649,7 @@ static void RenderGearCustomizeDialog() {
             // Dynamic height: stat name line + one line per attribute + padding
             int numAttrs = 0;
             if (gs.stat_id != 0) {
-                const auto* si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+                const auto si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                 if (si) numAttrs = (int)si->attributes.size();
             }
             float h = 6.0f + 16.0f + numAttrs * 13.0f;
@@ -7708,7 +7668,7 @@ static void RenderGearCustomizeDialog() {
             ImVec2 tp(p.x + 6, p.y + 3);
             if (gs.stat_id != 0 && !gs.stat_name.empty()) {
                 ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(255, 210, 80, 255), gs.stat_name.c_str());
-                const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+                const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                 if (statInfo) {
                     for (const auto& a : statInfo->attributes) {
                         tp.y += 13.0f;
@@ -7762,6 +7722,40 @@ static void RenderGearCustomizeDialog() {
                     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
                 }
 
+                if (ImGui::BeginPopupContextItem("##single_upgrade_edit")) {
+                    if(upgradeName)CopyNameMenuItem(*upgradeName);
+                    auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Upgrade);
+                    if (isWeapon) {
+                        if (sigilIdx == 1) {
+                            snapshot.data.sigil = gs.sigil2; snapshot.data.sigil_id = gs.sigil2_id;
+                        }
+                        snapshot.data.sigil2.clear(); snapshot.data.sigil2_id = 0;
+                    }
+                    if (ImGui::MenuItem("Copy")) g_GearClipboard = snapshot;
+                    const bool compatible = g_GearClipboard.valid &&
+                        g_GearClipboard.field == GearCopyField::Upgrade &&
+                        GearSameGroup(g_GearClipboard.slot,g_GearDialogSlot);
+                    if (ImGui::MenuItem("Paste",nullptr,false,compatible)) {
+                        if (isArmor) {
+                            ExpandSharedRune(*editBuild);
+                            gs.rune = g_GearClipboard.data.rune; gs.rune_id = g_GearClipboard.data.rune_id;
+                        } else if (sigilIdx == 1) {
+                            gs.sigil2 = g_GearClipboard.data.sigil; gs.sigil2_id = g_GearClipboard.data.sigil_id;
+                        } else {
+                            gs.sigil = g_GearClipboard.data.sigil; gs.sigil_id = g_GearClipboard.data.sigil_id;
+                        }
+                        commitGear();
+                    }
+                    if (ImGui::MenuItem("Copy to All Compatible Slots"))
+                        CopyGearToGroup(*editBuild,snapshot,isArmor ? "Armor" : "Weapons");
+                    if (ImGui::MenuItem("Clear")) {
+                        if (isArmor) { ExpandSharedRune(*editBuild); gs.rune.clear(); gs.rune_id = 0; }
+                        else if (sigilIdx == 1) { gs.sigil2.clear(); gs.sigil2_id = 0; }
+                        else { gs.sigil.clear(); gs.sigil_id = 0; }
+                        commitGear();
+                    }
+                    ImGui::EndPopup();
+                }
                 ImVec2 tp(p.x + 6, p.y + 3);
                 if (!upgradeName->empty()) {
                     char buf[256];
@@ -7790,7 +7784,7 @@ static void RenderGearCustomizeDialog() {
                 const std::string attr = i < gs.infusion_attributes.size()
                     ? gs.infusion_attributes[i] : std::string();
                 const uint32_t id = gs.infusion_ids[i];
-                const auto* item = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
+                const auto item = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
                 const std::string selected = !attr.empty()
                     ? std::string("Stat: ") + InfusionAttributeLabel(attr)
                     : (id ? (std::string("Exact: ") +
@@ -7798,33 +7792,64 @@ static void RenderGearCustomizeDialog() {
                           : "Exact: (choose item)");
                 const std::string label = "Slot " + std::to_string(i + 1) + ": " + selected;
                 ImGui::PushID(static_cast<int>(i));
+                // Selectable defaults to the full column width. Reserve a separate
+                // hit area for Remove; long infusion names must not cover it.
+                const float removeWidth=AlterEgo::UI::CompactButtonWidth("X");
+                const float rowWidth=ImGui::GetContentRegionAvail().x;
+                const float selectWidth=std::max(1.0f,rowWidth-removeWidth-ImGui::GetStyle().ItemSpacing.x);
                 if (ImGui::Selectable(label.c_str(),
-                    g_GearSelectorTab == 3 && g_GearEditingInfusionIndex == static_cast<int>(i))) {
+                    g_GearSelectorTab == 3 && g_GearEditingInfusionIndex == static_cast<int>(i),
+                    0,ImVec2(selectWidth,0))) {
                     g_GearSelectorTab = 3;
                     g_GearEditingInfusionIndex = static_cast<int>(i);
                     g_GearExactInfusionId = static_cast<int>(id);
                     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
                 }
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",label.c_str());
+                bool removeInfusion = false;
+                if (ImGui::BeginPopupContextItem("##single_infusion_edit")) {
+                    if(item)CopyNameMenuItem(item->name);
+                    auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Infusions);
+                    snapshot.data.infusion_ids = {id};
+                    snapshot.data.infusion_attributes = {attr};
+                    if (ImGui::MenuItem("Copy")) g_GearClipboard = snapshot;
+                    const bool compatible = g_GearClipboard.valid &&
+                        g_GearClipboard.field == GearCopyField::Infusions &&
+                        !g_GearClipboard.data.infusion_ids.empty();
+                    if (ImGui::MenuItem("Paste",nullptr,false,compatible)) {
+                        gs.infusion_ids[i] = g_GearClipboard.data.infusion_ids.front();
+                        gs.infusion_attributes.resize(gs.infusion_ids.size());
+                        gs.infusion_attributes[i] = g_GearClipboard.data.infusion_attributes.empty()
+                            ? "" : g_GearClipboard.data.infusion_attributes.front();
+                        gs.infusion_snapshot = true; commitGear(true);
+                    }
+                    if (ImGui::MenuItem("Fill This Item")) ApplyGearClipboard(*editBuild,g_GearDialogSlot,snapshot);
+                    if (ImGui::BeginMenu("Copy to All Slots")) {
+                        for (const auto& group : {"Armor","Weapons","Trinkets","All"})
+                            if (ImGui::MenuItem(group)) CopyGearToGroup(*editBuild,snapshot,group);
+                        ImGui::EndMenu();
+                    }
+                    if (ImGui::MenuItem("Clear")) removeInfusion = true;
+                    ImGui::EndPopup();
+                }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("X##removeInfusion")) {
-                    gs.infusion_ids.erase(gs.infusion_ids.begin() + i);
-                    if (i < gs.infusion_attributes.size())
-                        gs.infusion_attributes.erase(gs.infusion_attributes.begin() + i);
-                    gs.infusion_snapshot = true;
-                    if (g_GearEditingInfusionIndex >= static_cast<int>(gs.infusion_ids.size()))
-                        g_GearEditingInfusionIndex = gs.infusion_ids.empty()
-                            ? 0 : static_cast<int>(gs.infusion_ids.size() - 1);
-                    commitGear();
+                const bool clickedRemove=AlterEgo::UI::SmallButton("X##removeInfusion");
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Remove infusion");
+                if (clickedRemove || removeInfusion) {
+                    if(AlterEgo::GearEdit::RemoveInfusion(gs,i)){
+                        g_GearEditingInfusionIndex=AlterEgo::GearEdit::InfusionSelectionAfterRemoval(
+                            g_GearEditingInfusionIndex,i,gs.infusion_ids.size());
+                        g_GearExactInfusionId=g_GearEditingInfusionIndex>=0
+                            ?static_cast<int>(gs.infusion_ids[g_GearEditingInfusionIndex]):0;
+                        if(g_GearEditingInfusionIndex<0&&g_GearSelectorTab==3)g_GearSelectorTab=0;
+                        commitGear(true);
+                    }
                     ImGui::PopID();
                     break;
                 }
                 ImGui::PopID();
             }
-            int maxSlots = 1;
-            if (g_GearDialogSlot == "Ring1" || g_GearDialogSlot == "Ring2") maxSlots = 3;
-            else if (g_GearDialogSlot == "Backpack") maxSlots = 2;
-            else if (isWeapon && IsWeaponTwoHanded(editBuild->profession, gs.weapon_type))
-                maxSlots = 2;
+            const int maxSlots = GearInfusionCapacity(*editBuild,g_GearDialogSlot);
             if (gs.infusion_ids.size() < static_cast<size_t>(maxSlots) &&
                 RenderActionButton("+ Add infusion")) {
                 gs.infusion_ids.push_back(0);
@@ -7835,7 +7860,7 @@ static void RenderGearCustomizeDialog() {
                 g_GearExactInfusionId = 0;
                 g_GearSelectorTab = 3;
                 memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
-                commitGear();
+                commitGear(true);
             }
         }
 
@@ -7845,7 +7870,7 @@ static void RenderGearCustomizeDialog() {
 
         // Apply-to-all buttons
         if (IsArmorSlot(g_GearDialogSlot) && gs.stat_id != 0) {
-            if (ImGui::Button("Apply Stat to All Armor")) {
+            if (RenderActionButton("Apply Stat to All Armor")) {
                 const char* armorSlots[] = {"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
                 for (const char* s : armorSlots) {
                     auto& target = editBuild->gear[s];
@@ -7857,7 +7882,7 @@ static void RenderGearCustomizeDialog() {
             }
         }
         if (IsArmorSlot(g_GearDialogSlot) && !gs.rune.empty()) {
-            if (ImGui::Button("Apply Rune to All Armor")) {
+            if (RenderActionButton("Apply Rune to All Armor")) {
                 const char* armorSlots[] = {"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
                 for (const char* s : armorSlots) {
                     auto& target = editBuild->gear[s];
@@ -7871,7 +7896,7 @@ static void RenderGearCustomizeDialog() {
             }
         }
         if (IsTrinketSlot(g_GearDialogSlot) && gs.stat_id != 0) {
-            if (ImGui::Button("Apply Stat to All Trinkets")) {
+            if (RenderActionButton("Apply Stat to All Trinkets")) {
                 const char* trinketSlots[] = {"Backpack","Accessory1","Accessory2","Amulet","Ring1","Ring2"};
                 for (const char* s : trinketSlots) {
                     auto& target = editBuild->gear[s];
@@ -7887,8 +7912,7 @@ static void RenderGearCustomizeDialog() {
         ImGui::TableNextColumn();
 
         // Search bar (shared between tabs)
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##search", "Search...", g_GearStatSearch, sizeof(g_GearStatSearch));
+        AlterEgo::UI::SearchField("gear_catalog", "Search...", g_GearStatSearch);
 
         if (g_GearSelectorTab == 0 && isRelic) {
             // --- Relic selector ---
@@ -7899,39 +7923,19 @@ static void RenderGearCustomizeDialog() {
             }
 
             ImGui::BeginChild("##relicList", ImVec2(0, -30), true);
-            for (int i = 0; i < RELIC_COUNT; i++) {
-                if (!filterLower.empty()) {
-                    std::string nLow = RELIC_LIST[i].name;
-                    for (auto& c : nLow) c = (char)tolower(c);
-                    std::string bLow = RELIC_LIST[i].bonus;
-                    for (auto& c : bLow) c = (char)tolower(c);
-                    if (nLow.find(filterLower) == std::string::npos &&
-                        bLow.find(filterLower) == std::string::npos) continue;
-                }
+            for (const auto& entry : GearCatalog("Relic")) {
+                if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
 
-                ImGui::PushID(i);
-                bool isSel = (editBuild->relic_name == RELIC_LIST[i].name);
+                ImGui::PushID(static_cast<int>(entry.item_id));
+                bool isSel = editBuild->relic_id ? editBuild->relic_id==entry.item_id : editBuild->relic_name==entry.name;
 
-                ImVec2 cs = ImGui::GetCursorScreenPos();
-                float cw = ImGui::GetContentRegionAvail().x;
-                float ch = 32.0f;
-                ImU32 bg = isSel ? IM_COL32(60, 80, 100, 200) : IM_COL32(35, 35, 40, 180);
-                ImGui::GetWindowDrawList()->AddRectFilled(cs, ImVec2(cs.x+cw, cs.y+ch), bg, 3.0f);
-                ImGui::GetWindowDrawList()->AddRect(cs, ImVec2(cs.x+cw, cs.y+ch),
-                    isSel ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
-
-                ImGui::SetCursorScreenPos(cs);
-                if (ImGui::InvisibleButton("##relsel", ImVec2(cw, ch))) {
-                    editBuild->relic_name = RELIC_LIST[i].name;
-                    editBuild->relic_id = RELIC_LIST[i].item_id;
+                if (AlterEgo::UI::CatalogCard("##relsel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
+                    editBuild->relic_name = entry.name;
+                    editBuild->relic_id = entry.item_id;
                     commitGear();
                 }
 
-                ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(cs.x+6, cs.y+2), IM_COL32(200, 180, 255, 255), RELIC_LIST[i].name);
-                ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(cs.x+6, cs.y+16), IM_COL32(150, 150, 150, 220), RELIC_LIST[i].bonus);
-                ImGui::SetCursorScreenPos(ImVec2(cs.x, cs.y + ch + 2));
+                
 
                 ImGui::PopID();
             }
@@ -7940,7 +7944,7 @@ static void RenderGearCustomizeDialog() {
             // --- Stat combo selector ---
             ImGui::BeginChild("##statList", ImVec2(0, -30), true);
             auto combos = GetSortedStatCombos(g_GearStatSearch);
-            for (const auto* stat : combos) {
+            for (const auto& stat : combos) {
                 ImGui::PushID((int)stat->id);
                 bool isSelected = (g_GearSelectedStatId == stat->id);
 
@@ -7989,86 +7993,45 @@ static void RenderGearCustomizeDialog() {
             ImGui::BeginChild("##upgradeList", ImVec2(0, -30), true);
 
             if (isArmor) {
-                for (int i = 0; i < RUNE_COUNT; i++) {
-                    if (!filterLower.empty()) {
-                        std::string nLow = RUNE_LIST[i].name;
-                        for (auto& c : nLow) c = (char)tolower(c);
-                        std::string bLow = RUNE_LIST[i].bonus;
-                        for (auto& c : bLow) c = (char)tolower(c);
-                        if (nLow.find(filterLower) == std::string::npos &&
-                            bLow.find(filterLower) == std::string::npos) continue;
-                    }
+                for (const auto& entry : GearCatalog("Rune")) {
+                    if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
 
-                    ImGui::PushID(i);
-                    bool isSel = (gs.rune == RUNE_LIST[i].name);
+                    ImGui::PushID(static_cast<int>(entry.item_id));
+                    bool isSel = gs.rune_id ? gs.rune_id==entry.item_id : gs.rune==entry.name;
 
-                    ImVec2 cs = ImGui::GetCursorScreenPos();
-                    float cw = ImGui::GetContentRegionAvail().x;
-                    float ch = 32.0f;
-                    ImU32 bg = isSel ? IM_COL32(60, 80, 100, 200) : IM_COL32(35, 35, 40, 180);
-                    ImGui::GetWindowDrawList()->AddRectFilled(cs, ImVec2(cs.x+cw, cs.y+ch), bg, 3.0f);
-                    ImGui::GetWindowDrawList()->AddRect(cs, ImVec2(cs.x+cw, cs.y+ch),
-                        isSel ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
-
-                    ImGui::SetCursorScreenPos(cs);
-                    if (ImGui::InvisibleButton("##rsel", ImVec2(cw, ch))) {
-                        gs.rune = RUNE_LIST[i].name;
-                        gs.rune_id = AlterEgo::GW2API::FindItemIdByName(RUNE_LIST[i].name);
-                        if (editBuild) {
-                            editBuild->rune_id = gs.rune_id;
-                        }
+                    if (AlterEgo::UI::CatalogCard("##rsel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
+                        ExpandSharedRune(*editBuild);
+                        gs.rune = entry.name;
+                        gs.rune_id = entry.item_id;
                         commitGear();
                     }
 
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+2), IM_COL32(200, 180, 255, 255), RUNE_LIST[i].name);
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+16), IM_COL32(150, 150, 150, 220), RUNE_LIST[i].bonus);
-                    ImGui::SetCursorScreenPos(ImVec2(cs.x, cs.y + ch + 2));
+                    
 
                     ImGui::PopID();
                 }
             } else if (isWeapon) {
-                for (int i = 0; i < SIGIL_COUNT; i++) {
-                    if (!filterLower.empty()) {
-                        std::string nLow = SIGIL_LIST[i].name;
-                        for (auto& c : nLow) c = (char)tolower(c);
-                        std::string bLow = SIGIL_LIST[i].bonus;
-                        for (auto& c : bLow) c = (char)tolower(c);
-                        if (nLow.find(filterLower) == std::string::npos &&
-                            bLow.find(filterLower) == std::string::npos) continue;
-                    }
+                for (const auto& entry : GearCatalog("Sigil")) {
+                    if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
 
-                    ImGui::PushID(i);
+                    ImGui::PushID(static_cast<int>(entry.item_id));
                     const std::string& activeSigil = g_GearEditingSigil2 ? gs.sigil2 : gs.sigil;
-                    bool isSel = (activeSigil == SIGIL_LIST[i].name);
+                    const auto activeId=g_GearEditingSigil2?gs.sigil2_id:gs.sigil_id;
+                    bool isSel = activeId ? activeId==entry.item_id : activeSigil==entry.name;
 
-                    ImVec2 cs = ImGui::GetCursorScreenPos();
-                    float cw = ImGui::GetContentRegionAvail().x;
-                    float ch = 32.0f;
-                    ImU32 bg = isSel ? IM_COL32(60, 80, 100, 200) : IM_COL32(35, 35, 40, 180);
-                    ImGui::GetWindowDrawList()->AddRectFilled(cs, ImVec2(cs.x+cw, cs.y+ch), bg, 3.0f);
-                    ImGui::GetWindowDrawList()->AddRect(cs, ImVec2(cs.x+cw, cs.y+ch),
-                        isSel ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
-
-                    ImGui::SetCursorScreenPos(cs);
-                    if (ImGui::InvisibleButton("##ssel", ImVec2(cw, ch))) {
-                        uint32_t sid = AlterEgo::GW2API::FindItemIdByName(SIGIL_LIST[i].name);
+                    if (AlterEgo::UI::CatalogCard("##ssel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
+                        uint32_t sid = entry.item_id;
                         if (g_GearEditingSigil2) {
-                            gs.sigil2 = SIGIL_LIST[i].name;
+                            gs.sigil2 = entry.name;
                             gs.sigil2_id = sid;
                         } else {
-                            gs.sigil = SIGIL_LIST[i].name;
+                            gs.sigil = entry.name;
                             gs.sigil_id = sid;
                         }
                         commitGear();
                     }
 
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+2), IM_COL32(200, 180, 255, 255), SIGIL_LIST[i].name);
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+16), IM_COL32(150, 150, 150, 220), SIGIL_LIST[i].bonus);
-                    ImGui::SetCursorScreenPos(ImVec2(cs.x, cs.y + ch + 2));
+                    
 
                     ImGui::PopID();
                 }
@@ -8076,7 +8039,7 @@ static void RenderGearCustomizeDialog() {
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 2 && isWeapon) {
             // --- Weapon type selector ---
-            const auto* profWeapons = AlterEgo::GW2API::GetProfessionWeapons(editBuild->profession);
+            const auto profWeapons = AlterEgo::GW2API::GetProfessionWeapons(editBuild->profession);
             if (!profWeapons) {
                 AlterEgo::GW2API::FetchProfessionPaletteAsync(editBuild->profession);
                 RenderSpinner("Loading weapon data...");
@@ -8087,15 +8050,13 @@ static void RenderGearCustomizeDialog() {
                     for (auto& c : filterLower) c = (char)tolower(c);
                 }
 
-                bool isMH = IsMainhandSlot(g_GearDialogSlot);
-                bool isOH = IsOffhandSlot(g_GearDialogSlot);
-
                 ImGui::BeginChild("##weaponTypeList", ImVec2(0, -30), true);
                 int idx = 0;
                 for (const auto& [wname, wd] : *profWeapons) {
                     // Filter by mainhand/offhand/two-hand
-                    if (isMH && !wd.mainhand && !wd.two_handed) continue;
-                    if (isOH && !wd.offhand) continue;
+                    if (!AlterEgo::EquipmentChoice::WeaponTypeEligible(
+                            g_GearDialogSlot, wname, wd.mainhand, wd.offhand,
+                            wd.two_handed)) continue;
 
                     // Search filter
                     if (!filterLower.empty()) {
@@ -8114,7 +8075,7 @@ static void RenderGearCustomizeDialog() {
                     else if (wd.mainhand) desc = "Main Hand";
                     else if (wd.offhand) desc = "Off Hand";
                     if (wd.specialization != 0) {
-                        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(wd.specialization);
+                        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(wd.specialization);
                         if (specInfo) desc += " (" + specInfo->name + ")";
                     }
 
@@ -8129,6 +8090,14 @@ static void RenderGearCustomizeDialog() {
                     ImGui::SetCursorScreenPos(cs);
                     if (ImGui::InvisibleButton("##wsel", ImVec2(cw, ch))) {
                         gs.weapon_type = wname;
+                        gs.item_id = 0;
+                        if (!wd.two_handed && !AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(g_GearDialogSlot)) {
+                            gs.sigil2_id = 0; gs.sigil2.clear();
+                            if (gs.infusion_ids.size() > 1) gs.infusion_ids.resize(1);
+                            if (gs.infusion_attributes.size() > 1) gs.infusion_attributes.resize(1);
+                        } else if (IsMainhandSlot(g_GearDialogSlot)) {
+                            editBuild->gear.erase(g_GearDialogSlot == "WeaponA1" ? "WeaponA2" : "WeaponB2");
+                        }
                         // Fetch weapon skill details (including attunements and dual wield)
                         std::vector<uint32_t> skillIds;
                         for (int si = 0; si < 5; si++) {
@@ -8144,7 +8113,7 @@ static void RenderGearCustomizeDialog() {
                         uint32_t weapItemId = GetLegendaryWeaponId(wname);
                         if (weapItemId != 0)
                             AlterEgo::GW2API::FetchItemDetailsAsync({weapItemId});
-                        commitGear();
+                        commitGear(true);
                     }
 
                     ImGui::GetWindowDrawList()->AddText(
@@ -8174,7 +8143,7 @@ static void RenderGearCustomizeDialog() {
                 if (!byAttribute) {
                     attribute = "Power";
                     gs.infusion_snapshot = true;
-                    commitGear();
+                    commitGear(true);
                 }
             }
             ImGui::SameLine();
@@ -8183,7 +8152,7 @@ static void RenderGearCustomizeDialog() {
                     attribute.clear(); // Never discard the original captured ID.
                     g_GearExactInfusionId = static_cast<int>(gs.infusion_ids[index]);
                     gs.infusion_snapshot = true;
-                    commitGear();
+                    commitGear(true);
                 }
             }
             if (!attribute.empty()) {
@@ -8212,28 +8181,29 @@ static void RenderGearCustomizeDialog() {
                     if (ImGui::Selectable(choice.label, attribute == choice.key)) {
                         attribute = choice.key;
                         gs.infusion_snapshot = true;
-                        commitGear();
+                        commitGear(true);
                     }
                 }
                 ImGui::EndChild();
             } else {
                 const uint32_t exactId = gs.infusion_ids[index];
-                const auto* exactInfo = exactId
+                const auto exactInfo = exactId
                     ? AlterEgo::GW2API::GetItemInfo(exactId) : nullptr;
                 ImGui::TextWrapped("Exact ID: %u (%s)", exactId,
                     exactInfo ? exactInfo->name.c_str() : "name not cached");
                 ImGui::SetNextItemWidth(130.0f);
                 ImGui::InputInt("Item ID", &g_GearExactInfusionId, 0, 0);
-                if (g_GearExactInfusionId > 0 && ImGui::Button("Set exact ID")) {
+                if (g_GearExactInfusionId > 0 && RenderActionButton("Set exact ID")) {
                     gs.infusion_ids[index] = static_cast<uint32_t>(g_GearExactInfusionId);
                     gs.infusion_snapshot = true;
                     AlterEgo::GW2API::FetchItemDetailsAsync({gs.infusion_ids[index]});
-                    commitGear();
+                    commitGear(true);
                 }
-                ImGui::TextDisabled("Search infusions already found in the item cache:");
+                const bool enrichment=g_GearDialogSlot=="Amulet";
+                ImGui::TextDisabled(enrichment?"Search enrichment catalog:":"Search infusion catalog:");
                 if (g_GearStatSearch[0]) {
                     const auto entries = AlterEgo::GW2API::SearchKnownInfusions(
-                        g_GearStatSearch, 100);
+                        g_GearStatSearch, 100, enrichment);
                     ImGui::BeginChild("##knownInfusions", ImVec2(0, -30), true);
                     for (const auto& entry : entries) {
                         const std::string itemLabel = entry.first + " (ID " +
@@ -8244,145 +8214,343 @@ static void RenderGearCustomizeDialog() {
                             g_GearExactInfusionId = static_cast<int>(entry.second);
                             gs.infusion_snapshot = true;
                             AlterEgo::GW2API::FetchItemDetailsAsync({entry.second});
-                            commitGear();
+                            commitGear(true);
                         }
                     }
                     if (entries.empty())
                         ImGui::TextDisabled("No cached matches. Enter an item ID instead.");
                     ImGui::EndChild();
                 } else {
-                    ImGui::TextDisabled("Use Search above to filter known infusion names.");
+                    ImGui::TextDisabled("Use Search above to filter catalog names.");
                 }
             }
         }
 
-        // Accept / Cancel buttons
-        if (ImGui::Button("Accept", ImVec2(80, 0))) {
-            commitGear();
-            g_GearDialogOpen = false;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
-            g_GearDialogOpen = false;
-        }
-
         ImGui::EndTable();
     }
-
+    ImGui::EndChild();
+    const auto action=AlterEgo::UI::SaveCancel("gear_customize",g_GearDialogDirty);
+    if(action==AlterEgo::UI::EditAction::Save){
+        AlterEgo::GearEdit::ApplyEquipmentDraft(g_EditDraft,g_GearDialogDraft);
+        MarkEditDirty();
+        g_GearDialogOpen=false;
+    }else if(action==AlterEgo::UI::EditAction::Cancel)g_GearDialogOpen=false;
     ImGui::End();
 }
 
-// Save to Library dialog — lets user name the build, pick game mode, and optionally include equipment
+// Save to Library: destination and name precede the relevant source selectors.
 static void RenderSaveToLibraryDialog() {
     if (!g_SaveLibDialogOpen) return;
 
     ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
+    g_SaveLibDialogFocus.ApplyBeforeBegin();
     if (!ImGui::Begin("Save to Library##SaveLibDialog", &g_SaveLibDialogOpen,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
 
-    const auto* sourceChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
-    if (sourceChar) {
-        ImGui::Text("Character: %s (%s)", sourceChar->name.c_str(), sourceChar->profession.c_str());
-        auto nameForBuild = [](const AlterEgo::BuildTemplate& bt) {
-            return bt.name.empty() ? "Tab " + std::to_string(bt.tab) : bt.name;
-        };
-        auto currentBuild = std::find_if(sourceChar->build_tabs.begin(), sourceChar->build_tabs.end(),
-            [](const AlterEgo::BuildTemplate& bt){ return bt.tab == g_SaveLibBuildTab; });
-        const std::string selectedBuildName = currentBuild == sourceChar->build_tabs.end()
-            ? "(unavailable)" : nameForBuild(*currentBuild);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Build tab");
-        ImGui::SameLine(130);
-        if (RenderThemedCombo("##save_build_tab", selectedBuildName.c_str(),
-                             ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
-            for (const auto& bt : sourceChar->build_tabs) {
-                std::string label = nameForBuild(bt) + (bt.is_active ? " (Active)" : "");
-                if (ImGui::Selectable(label.c_str(), bt.tab == g_SaveLibBuildTab)) {
-                    g_SaveLibBuildTab = bt.tab;
-                    g_SaveLibProfession = bt.profession.empty() ? sourceChar->profession : bt.profession;
-                    g_SaveLibChatLink = AlterEgo::GW2API::HasPaletteData(g_SaveLibProfession)
-                        ? EncodeBuildTabChatLink(bt) : std::string();
-                    if (!g_SaveLibNameManuallyEdited) {
-                        auto newName = sourceChar->name + " - " + nameForBuild(bt);
-                        snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", newName.c_str());
-                    }
+    using namespace AlterEgo;
+    auto sourceChar=GW2API::GetCharacter(g_SaveLibCharName);
+    if(sourceChar&&sourceChar->account_name!=g_SaveLibAccount)sourceChar.reset();
+    ImGui::Text("Character: %s (%s)",g_SaveLibCharName.c_str(),
+        sourceChar?sourceChar->profession.c_str():"unavailable");
+    auto field=[](const char* label) {
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);ImGui::SameLine(130);
+    };
+    auto width=[](){return ImMax(1.0f,ImGui::GetContentRegionAvail().x);};
+    field("Save as");
+    const char* targets[]={"Complete Loadout","New component","Update existing component","Fashion"};
+    if(RenderThemedCombo("##save_target",targets[g_SaveLibTarget],width())) {
+        for(int i=0;i<IM_ARRAYSIZE(targets);++i)if(UI::SelectableOption(targets[i],g_SaveLibTarget==i)) {
+            if(g_SaveLibTarget!=i){g_SaveLibUpdateId.clear();g_SaveLibFashionError.clear();}
+            g_SaveLibTarget=i;
+            if(i==2&&g_SaveLibComponentKind==kSaveEntireEquipmentSet)g_SaveLibComponentKind=0;
+        }
+        ImGui::EndCombo();
+    }
+    static const char* kinds[]={"Base Build","Skills","Weapons","Sigils","Armor","Runes",
+        "Trinkets","Relic","Infusions","Equipment Set"};
+    static const char* keys[]={"base_build","skills","weapons","sigils","armor","runes",
+        "trinkets","relic","infusions"};
+    const bool fashion=g_SaveLibTarget==kSaveFashionTarget;
+    if(g_SaveLibTarget!=0&&!fashion) {
+        field("Component");
+        if(RenderThemedCombo("##save_component_type",kinds[g_SaveLibComponentKind],width())) {
+            auto option=[&](int i) {
+                if(UI::SelectableOption(kinds[i],g_SaveLibComponentKind==i)) {
+                    if(i!=g_SaveLibComponentKind)g_SaveLibUpdateId.clear();
+                    g_SaveLibComponentKind=i;
                 }
-            }
+            };
+            ImGui::TextDisabled("BUILD COMPONENTS");option(0);option(1);
+            ImGui::Separator();ImGui::TextDisabled("EQUIPMENT COMPONENTS");
+            if(g_SaveLibTarget==1)option(kSaveEntireEquipmentSet);
+            for(int i:{2,4,6,5,3,8,7})option(i);
             ImGui::EndCombo();
         }
-    } else ImGui::TextDisabled("Character data unavailable");
-
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Build name");
-    ImGui::SameLine(130);
-    ImGui::SetNextItemWidth(ImMax(140.0f, ImGui::GetContentRegionAvail().x));
-    if (ImGui::InputText("##savelib_name", g_SaveLibName, sizeof(g_SaveLibName)))
-        g_SaveLibNameManuallyEdited = true;
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Game modes");
-    RenderGameModeSelector("live-save-modes", g_SaveLibModes);
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Checkbox("Include equipment set", &g_SaveLibIncludeEquip);
-    if (sourceChar && g_SaveLibIncludeEquip) {
-        auto equipName = [&](int tab) {
-            auto it = sourceChar->equipment_tab_names.find(tab);
-            return it != sourceChar->equipment_tab_names.end() && !it->second.empty()
-                ? it->second : "Tab " + std::to_string(tab);
-        };
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Equipment tab");
-        ImGui::SameLine(130);
-        const std::string shown = equipName(g_SaveLibEquipTab);
-        if (RenderThemedCombo("##save_equip_tab", shown.c_str(),
-                             ImMax(140.0f, ImGui::GetContentRegionAvail().x))) {
-            for (int t = 1; t <= GetRetrievedEquipmentTabCount(*sourceChar); ++t) {
-                std::string label = equipName(t) +
-                    (t == sourceChar->active_equipment_tab ? " (Active)" : "");
-                if (ImGui::Selectable(label.c_str(), t == g_SaveLibEquipTab))
-                    g_SaveLibEquipTab = t;
+    }
+    const bool entireSet=g_SaveLibTarget==1&&g_SaveLibComponentKind==kSaveEntireEquipmentSet;
+    const bool needsBuild=!fashion&&(g_SaveLibTarget==0||g_SaveLibComponentKind<2);
+    const bool needsEquipment=fashion||g_SaveLibTarget==0||g_SaveLibComponentKind>=2;
+    auto nameForBuild=[](const BuildTemplate& bt) {
+        return bt.name.empty()?"Tab "+std::to_string(bt.tab):bt.name;
+    };
+    auto equipName=[&](int tab) {
+        if(sourceChar) {
+            const auto it=sourceChar->equipment_tab_names.find(tab);
+            if(it!=sourceChar->equipment_tab_names.end()&&!it->second.empty())return it->second;
+        }
+        return "Tab "+std::to_string(tab);
+    };
+    auto currentBuild=[&]() -> const BuildTemplate* {
+        if(sourceChar)for(const auto& bt:sourceChar->build_tabs)
+            if(bt.tab==g_SaveLibBuildTab)return &bt;
+        return nullptr;
+    };
+    auto hasEquipment=[&](int tab) {
+        return sourceChar&&std::any_of(sourceChar->equipment.begin(),sourceChar->equipment.end(),
+            [&](const auto& item){return item.id!=0&&IsEquipmentInCapturedBuild(item.slot,item.tab,tab);});
+    };
+    if(needsBuild&&sourceChar&&g_SaveLibBuildTab==0&&!sourceChar->build_tabs.empty())
+        g_SaveLibBuildTab=sourceChar->build_tabs[ActiveBuildIndex(*sourceChar)].tab;
+    // Explicitly distinguish creating an independent object from updating a
+    // shared one. Display reference usage before allowing replacement.
+    std::string existingComponentName;
+    int existingComponentUses = 0;
+    if (g_SaveLibTarget == 2) {
+        nlohmann::json snapshot;
+        if (AlterEgo::GW2API::GetComposableLoadouts(snapshot) &&
+            snapshot.contains("components") && snapshot["components"].is_object()) {
+            const std::string kind = keys[g_SaveLibComponentKind];
+            auto components = snapshot["components"].find(kind);
+            if (components != snapshot["components"].end() && components->is_array()) {
+                for (const auto& comp : *components)
+                    if (comp.is_object() &&
+                        comp.value("id", std::string()) == g_SaveLibUpdateId)
+                        existingComponentName = comp.value("name", std::string());
+                if (snapshot.contains("loadouts") && snapshot["loadouts"].is_array())
+                    for (const auto& loadout : snapshot["loadouts"])
+                        if (loadout.is_object() && loadout.contains("refs") &&
+                            loadout["refs"].is_object() &&
+                            loadout["refs"].value(kind, std::string()) == g_SaveLibUpdateId)
+                            ++existingComponentUses;
+                if(snapshot.contains("equipment_sets"))
+                    for(const auto& set:snapshot.at("equipment_sets"))
+                        if(!g_SaveLibUpdateId.empty()&&set.at("refs").value(kind,std::string())==g_SaveLibUpdateId)++existingComponentUses;
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Replace");
+                ImGui::SameLine(130);
+                ImGui::SetNextItemWidth(ImMax(140.f, ImGui::GetContentRegionAvail().x));
+                if (RenderThemedCombo("##replace_saved_component",
+                    existingComponentName.empty() ? "(select component)" :
+                    existingComponentName.c_str(),
+                    ImMax(140.f, ImGui::GetContentRegionAvail().x))) {
+                    for (const auto& component : *components) {
+                        if (!component.is_object()) continue;
+                        const std::string candidateId = component.value("id", std::string());
+                        const std::string candidateName = component.value("name", candidateId);
+                        bool compatible = true;
+                        const std::string profession = sourceChar ? sourceChar->profession : "";
+                        if (kind == "base_build" && component.contains("data") &&
+                            component["data"].is_object()) {
+                            const std::string prior = component["data"].value(
+                                "profession", std::string());
+                            if (!prior.empty() && !profession.empty() &&
+                                prior != profession) compatible = false;
+                        }
+                        if (kind == "skills" && !profession.empty() &&
+                            snapshot.contains("loadouts") && snapshot["loadouts"].is_array()) {
+                            for (const auto& loadout : snapshot["loadouts"]) {
+                                if (!loadout.is_object() ||
+                                    !loadout.contains("refs") ||
+                                    !loadout["refs"].is_object()) continue;
+                                const auto& refs = loadout["refs"];
+                                if (refs.value("skills", std::string()) != candidateId) continue;
+                                const auto base = snapshot["components"].find("base_build");
+                                if (base == snapshot["components"].end() || !base->is_array())
+                                    continue;
+                                for (const auto& item : *base)
+                                    if (item.is_object() &&
+                                        item.value("id", std::string()) ==
+                                            refs.value("base_build", std::string()) &&
+                                        item.contains("data") && item["data"].is_object()) {
+                                        const std::string prior = item["data"].value(
+                                            "profession", std::string());
+                                        if (!prior.empty() && prior != profession)
+                                            compatible = false;
+                                    }
+                            }
+                        }
+                        if (!compatible) continue;
+                        if (ImGui::Selectable((candidateName + "##" + candidateId).c_str(),
+                                               candidateId == g_SaveLibUpdateId)) {
+                            g_SaveLibUpdateId = candidateId;
+                            existingComponentName = candidateName;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+        }
+        ImGui::TextDisabled("Updates the stored fields without changing its existing name or ID.");
+        if (existingComponentUses > 0)
+            ImGui::TextColored(ImVec4(.95f,.78f,.40f,1),
+                "SHARED: affects %d referencing record%s.",
+                existingComponentUses, existingComponentUses == 1 ? "" : "s");
+    } else {
+        if(sourceChar&&!g_SaveLibNameManuallyEdited) {
+            const auto* bt=currentBuild();
+            const std::string source=needsBuild?(bt?nameForBuild(*bt):"Build"):equipName(g_SaveLibEquipTab);
+            std::string suggested=sourceChar->name+" - "+source;
+            if(g_SaveLibTarget==1)suggested+=" - "+std::string(entireSet?"Equipment Set":kinds[g_SaveLibComponentKind]);
+            else if(fashion)suggested+=" - Fashion";
+            snprintf(g_SaveLibName,sizeof(g_SaveLibName),"%s",suggested.c_str());
+        }
+        field("Name");
+        ImGui::SetNextItemWidth(width());
+        if(UI::InputText("##savelib_name",g_SaveLibName,sizeof(g_SaveLibName)))g_SaveLibNameManuallyEdited=true;
+    }
+    if(g_SaveLibTarget==0) {
+        ImGui::TextUnformatted("Game modes");RenderGameModeSelector("live-save-modes",g_SaveLibModes);
+    }
+    ImGui::Spacing();ImGui::Separator();
+    if(needsBuild) {
+        field("Build tab");
+        const auto* bt=currentBuild();
+        const std::string shown=bt?nameForBuild(*bt):"(unavailable)";
+        if(RenderThemedCombo("##save_build_tab",shown.c_str(),width())) {
+            if(sourceChar)for(const auto& candidate:sourceChar->build_tabs) {
+                const std::string label=nameForBuild(candidate)+(candidate.is_active?" (Active)":"")+
+                    "##build_"+std::to_string(candidate.tab);
+                if(UI::SelectableOption(label.c_str(),candidate.tab==g_SaveLibBuildTab))g_SaveLibBuildTab=candidate.tab;
             }
             ImGui::EndCombo();
         }
     }
-
+    if(needsEquipment) {
+        field("Equipment tab");
+        const std::string shown=equipName(g_SaveLibEquipTab);
+        if(RenderThemedCombo("##save_equip_tab",shown.c_str(),width())) {
+            if(sourceChar)for(int t=1;t<=GetRetrievedEquipmentTabCount(*sourceChar);++t) {
+                const std::string label=equipName(t)+(t==sourceChar->active_equipment_tab?" (Active)":"")+
+                    "##equip_"+std::to_string(t);
+                if(UI::SelectableOption(label.c_str(),t==g_SaveLibEquipTab))g_SaveLibEquipTab=t;
+            }
+            ImGui::EndCombo();
+        }
+    }
+    if(g_SaveLibTarget==0) {
+        field("Equipment storage");
+        const char* storageModes[]={"Offer matching set","Independent components","Create named set"};
+        if(RenderThemedCombo("##equipment_storage",storageModes[g_SaveLibEquipmentMode],width())) {
+            for(int i=0;i<3;++i)if(UI::SelectableOption(storageModes[i],g_SaveLibEquipmentMode==i))g_SaveLibEquipmentMode=i;
+            ImGui::EndCombo();
+        }
+        if(g_SaveLibEquipmentMode==2) {
+            if(g_SaveLibSetName.empty())g_SaveLibSetName=std::string(g_SaveLibName)+" - Equipment";
+            field("Set name");ImGui::SetNextItemWidth(width());UI::InputText("##new_set_name",g_SaveLibSetName);
+        }
+    }
+    if(entireSet||(g_SaveLibTarget==0&&g_SaveLibEquipmentMode==2)) {
+        ImGui::TextUnformatted("Included categories");
+        for(int i=2;i<9;++i) {
+            bool included=g_SaveLibSetKinds.count(keys[i])!=0;
+            if(ImGui::Checkbox(kinds[i],&included)){if(included)g_SaveLibSetKinds.insert(keys[i]);else g_SaveLibSetKinds.erase(keys[i]);}
+        }
+    }
+    auto finishLoadout=[&](SavedBuild capture,const std::string& setId,const std::string& newName) {
+        const int idx=GW2API::AddSavedBuild(std::move(capture),setId,newName,g_SaveLibSetKinds);
+        if(idx>=0){g_LibSelectedIdx=idx;g_LibDetailsFetched=false;NavigateToLibraryCollection(0);g_SaveLibDialogOpen=false;}
+        if(APIDefs)APIDefs->GUI_SendAlert(idx>=0?"Loadout saved to library!":"Could not save Loadout; review equipment selection.");
+        return idx>=0;
+    };
+    const bool ready=sourceChar&&(!needsBuild||currentBuild())&&(!needsEquipment||hasEquipment(g_SaveLibEquipTab))&&
+        (g_SaveLibTarget==2?!existingComponentName.empty():!Composable::ComponentNameKey(g_SaveLibName).empty())&&
+        (g_SaveLibTarget!=0||g_SaveLibEquipmentMode!=2||!Composable::ComponentNameKey(g_SaveLibSetName).empty())&&
+        (!(entireSet||(g_SaveLibTarget==0&&g_SaveLibEquipmentMode==2))||!g_SaveLibSetKinds.empty());
+    if(!sourceChar)ImGui::TextDisabled("Character snapshot unavailable.");
+    else if(needsBuild&&!currentBuild())ImGui::TextDisabled("Select a retrieved build tab.");
+    else if(needsEquipment&&!hasEquipment(g_SaveLibEquipTab))ImGui::TextDisabled("No retrieved equipment in this tab.");
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (RenderActionButton("Save##saveToLibrary", ImVec2(80, 0))) {
+    if(!ready) {
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.5f);
+    }
+    const bool saveClicked=RenderActionButton(g_SaveLibTarget==2?
+        "Review Update##saveToLibrary":"Save##saveToLibrary",ImVec2(g_SaveLibTarget==2?115:80,0));
+    if(!ready){ImGui::PopStyleVar();ImGui::PopItemFlag();}
+    if(saveClicked&&ready&&fashion) {
+        g_SaveLibFashionError.clear();
+        if(!CaptureLiveFashion(*sourceChar,g_SaveLibEquipTab,g_SaveLibName,g_SaveLibPendingFashion))
+            g_SaveLibFashionError="No loaded equipment skins for that tab. Refresh character data and try again.";
+        else if(g_FashionLibrary.FindExact(g_SaveLibPendingFashion.wardrobe_link)>=0)
+            ImGui::OpenPopup("Existing Fashion##save_library");
+        else if(SaveNewFashion(g_SaveLibPendingFashion))g_SaveLibDialogOpen=false;
+        else g_SaveLibFashionError="Could not save Fashion. Original library data is preserved.";
+    }
+    if(saveClicked&&ready&&!fashion) {
         std::string name = g_SaveLibName;
-        if (name.empty()) name = "Unnamed Build";
+        if (name.empty()) name = g_SaveLibTarget == 0 ? "Unnamed Loadout" : "Unnamed Component";
 
-        const auto* capturedChar = AlterEgo::GW2API::GetCharacter(g_SaveLibCharName);
-        const AlterEgo::BuildTemplate* capturedTab = nullptr;
-        if (capturedChar) {
-            for (const auto& bt : capturedChar->build_tabs) {
-                if (bt.tab == g_SaveLibBuildTab) { capturedTab = &bt; break; }
-            }
-        }
-        if (capturedTab) {
-            const std::string chatLink = !g_SaveLibChatLink.empty() ? g_SaveLibChatLink :
-                (AlterEgo::GW2API::HasPaletteData(capturedTab->profession)
-                    ? EncodeBuildTabChatLink(*capturedTab) : std::string());
-            AlterEgo::SavedBuild sb = CaptureRetrievedBuildSnapshot(*capturedChar, *capturedTab,
-                g_SaveLibEquipTab, g_SaveLibIncludeEquip, name,
-                g_SaveLibModes.front(), chatLink);
+        const auto* capturedTab=currentBuild();
+        const BuildTemplate emptyBuild{};
+        if(sourceChar&&(!needsBuild||capturedTab)) {
+            const std::string profession=capturedTab&&!capturedTab->profession.empty()?capturedTab->profession:sourceChar->profession;
+            const std::string chatLink=needsBuild&&capturedTab&&GW2API::HasPaletteData(profession)?
+                EncodeBuildTabChatLink(*capturedTab):std::string();
+            SavedBuild sb=CaptureRetrievedBuildSnapshot(*sourceChar,needsBuild?*capturedTab:emptyBuild,
+                g_SaveLibEquipTab,needsEquipment,name,g_SaveLibModes.front(),chatLink);
             sb.game_modes = g_SaveLibModes;
 
-            int idx = AlterEgo::GW2API::AddSavedBuild(std::move(sb));
-            if (idx >= 0) {
-                g_LibSelectedIdx = idx;
-                g_LibDetailsFetched = false;
-                if (APIDefs) APIDefs->GUI_SendAlert("Build saved to library!");
-                g_SaveLibDialogOpen = false;
-            } else if (APIDefs) {
-                APIDefs->GUI_SendAlert("Unable to persist build library - check file permissions.");
+            if (g_SaveLibTarget == 2) {
+                if (g_SaveLibUpdateId.empty()) {
+                    if (APIDefs) APIDefs->GUI_SendAlert("Select a component to update.");
+                } else {
+                    g_SaveLibPendingCapture = std::move(sb);
+                    g_SaveLibPendingKind = keys[g_SaveLibComponentKind];
+                    g_SaveLibPendingId = g_SaveLibUpdateId;
+                    g_SaveLibPendingName = existingComponentName;
+                    g_SaveLibUpdateConfirmPending = true;
+                }
+            } else if(entireSet) {
+                std::string savedId;
+                if(GW2API::SaveCapturedEquipmentSet(sb,name,&savedId,g_SaveLibSetKinds)) {
+                    g_EquipmentSetSelectedId=savedId;
+                    NavigateToLibraryCollection(3);
+                    g_SaveLibDialogOpen=false;
+                    if(APIDefs)APIDefs->GUI_SendAlert("Equipment set saved.");
+                } else if(APIDefs)APIDefs->GUI_SendAlert("Could not save equipment set.");
+            } else if (g_SaveLibTarget == 1) {
+                std::string savedId;
+                const bool saved = AlterEgo::GW2API::SaveCapturedLoadoutComponent(
+                    sb, keys[g_SaveLibComponentKind], name, &savedId,
+                    !g_SaveLibNameManuallyEdited);
+                if (saved) {
+                    g_ComponentPendingKind = g_SaveLibComponentKind;
+                    g_ComponentSelectIdPending = savedId;
+                    g_ComponentSelectNamePending.clear();
+                    NavigateToLibraryCollection(2);
+                    g_SaveLibDialogOpen = false;
+                    if (APIDefs) APIDefs->GUI_SendAlert("Component saved or existing identical component reused.");
+                } else if (APIDefs) {
+                    APIDefs->GUI_SendAlert("Could not save the selected component.");
+                }
+            } else {
+                if(g_SaveLibEquipmentMode==0) {
+                    g_SaveLibExactSets=GW2API::FindCapturedEquipmentSets(sb);
+                    if(g_SaveLibExactSets.empty()) {
+                        finishLoadout(std::move(sb),"","");
+                    } else {
+                        g_SaveLibPendingCapture=std::move(sb);
+                        g_SaveLibSelectedSet=g_SaveLibExactSets.front().first;
+                        ImGui::OpenPopup("Link matching equipment set");
+                    }
+                } else finishLoadout(std::move(sb),"",g_SaveLibEquipmentMode==2?g_SaveLibSetName:std::string());
+
             }
         } else {
             ImGui::OpenPopup("Live build unavailable##save");
@@ -8392,6 +8560,64 @@ static void RenderSaveToLibraryDialog() {
     if (RenderActionButton("Cancel##saveToLibrary", ImVec2(80, 0))) {
         g_SaveLibDialogOpen = false;
     }
+    if(ImGui::BeginPopupModal("Link matching equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+        for(const auto& set:g_SaveLibExactSets)
+            if(UI::SelectableOption((set.second+"##"+set.first).c_str(),set.first==g_SaveLibSelectedSet))g_SaveLibSelectedSet=set.first;
+        if(RenderActionButton("Link & Save")&&finishLoadout(g_SaveLibPendingCapture,g_SaveLibSelectedSet,""))ImGui::CloseCurrentPopup();
+        ImGui::SameLine();
+        if(RenderActionButton("Use independent components")&&finishLoadout(g_SaveLibPendingCapture,"",""))ImGui::CloseCurrentPopup();
+        ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if(ImGui::BeginPopupModal("Existing Fashion##save_library",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+        const int duplicate=g_FashionLibrary.FindExact(g_SaveLibPendingFashion.wardrobe_link);
+        if(duplicate>=0) {
+            ImGui::TextWrapped("Same appearance saved as '%s'.",g_FashionLibrary.looks[duplicate].name.c_str());
+            if(RenderActionButton("Select Existing")) {
+                if(SelectExistingFashion(duplicate,g_SaveLibPendingFashion.source_character))g_SaveLibDialogOpen=false;
+                else g_SaveLibFashionError="Could not save character association.";
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+        }
+        if(RenderActionButton("Save Separate Copy")) {
+            if(SaveNewFashion(g_SaveLibPendingFashion))g_SaveLibDialogOpen=false;
+            else g_SaveLibFashionError="Could not save Fashion.";
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();if(RenderActionButton("Cancel##fashion_duplicate"))ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if(fashion&&!g_SaveLibFashionError.empty())
+        ImGui::TextWrapped("%s",g_SaveLibFashionError.c_str());
+    if (g_SaveLibUpdateConfirmPending) {
+        ImGui::OpenPopup("Replace shared component?##save_component");
+        g_SaveLibUpdateConfirmPending = false;
+    }
+    if (ImGui::BeginPopupModal("Replace shared component?##save_component",
+                              nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Replace saved %s: %s",
+            g_SaveLibPendingKind.c_str(), g_SaveLibPendingName.c_str());
+        ImGui::TextWrapped("This replaces saved fields for ALL Loadouts and equipment sets using "
+                           "the component. It does not create a private copy.");
+        if (RenderActionButton("Confirm Update##component_replace")) {
+            const bool applied = AlterEgo::GW2API::ReplaceCapturedLoadoutComponent(
+                g_SaveLibPendingCapture, g_SaveLibPendingKind, g_SaveLibPendingId);
+            if (applied) {
+                g_ComponentPendingKind = g_SaveLibComponentKind;
+                g_ComponentSelectIdPending = g_SaveLibPendingId;
+                NavigateToLibraryCollection(2);
+                g_SaveLibDialogOpen = false;
+                if (APIDefs) APIDefs->GUI_SendAlert("Saved component replaced.");
+            } else if (APIDefs) {
+                APIDefs->GUI_SendAlert("Component update failed. Original data is preserved.");
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (RenderActionButton("Cancel##component_replace")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     if (ImGui::BeginPopup("Live build unavailable##save")) {
         ImGui::TextWrapped("The character's retrieved build tab is no longer available. Refresh character data and try again.");
         ImGui::EndPopup();
@@ -8400,8 +8626,9 @@ static void RenderSaveToLibraryDialog() {
     ImGui::End();
 }
 
+
 // Render a single gear slot with icon for the build gear panel
-static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
+static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bool editable) {
     // Check if off-hand is blocked by a two-handed main hand
     bool disabled = false;
     if (strcmp(slot, "WeaponA2") == 0 || strcmp(slot, "WeaponB2") == 0) {
@@ -8444,7 +8671,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
     uint32_t iconItemId = GetGearSlotIconItemId(build, slot);
     Texture_t* tex = nullptr;
     if (iconItemId != 0) {
-        const auto* itemInfo = AlterEgo::GW2API::GetItemInfo(iconItemId);
+        const auto itemInfo = AlterEgo::GW2API::GetItemInfo(iconItemId);
         if (itemInfo && !itemInfo->icon_url.empty()) {
             AlterEgo::IconManager::RequestIcon(iconItemId, itemInfo->icon_url);
             tex = AlterEgo::IconManager::GetIcon(iconItemId);
@@ -8487,6 +8714,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
         else if (strcmp(slot, "Amulet") == 0) initial = "Am";
         else if (strcmp(slot, "Ring1") == 0 || strcmp(slot, "Ring2") == 0) initial = "R";
         else if (strcmp(slot, "Relic") == 0) initial = "Re";
+        else if (strcmp(slot, "HelmAquatic") == 0) initial = "AH";
+        else if (strcmp(slot, "WeaponAquaticA") == 0) initial = "A";
+        else if (strcmp(slot, "WeaponAquaticB") == 0) initial = "B";
 
         ImVec2 textSz = ImGui::CalcTextSize(initial);
         ImU32 textCol = disabled ? IM_COL32(60, 60, 60, 120) : (hasData ? IM_COL32(255, 210, 80, 200) : IM_COL32(100, 100, 100, 180));
@@ -8512,7 +8742,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
 
     // Only editable in edit mode; read-only gear can still show tooltips.
     ImGui::SetCursorScreenPos(pos);
-    if (disabled || !g_LibEditMode) {
+    if (disabled || !editable) {
         ImGui::Dummy(ImVec2(iconSz, iconSz));
     } else if (ImGui::InvisibleButton("##icon", ImVec2(iconSz, iconSz))) {
         AlterEgo::BuildGearSlot current;
@@ -8521,13 +8751,18 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
         OpenGearDialog(build.id, slot, current);
     }
     bool hovered = !disabled && ImGui::IsItemHovered();
+    bool clearAfter = false;
+    if (editable && !disabled) RenderGearEditContext(build,slot,clearAfter);
+    // Apply only after the menu returns; iterators below must not refer to erased slots.
+    if (clearAfter) ClearGearSlot(build,slot,GearCopyField::All);
+    it = build.gear.find(slot);
+    gearSlot = it != build.gear.end() ? &it->second : nullptr;
+    hasStat = it != build.gear.end() && (it->second.stat_id || !it->second.stat_name.empty());
+    hasWeaponType = it != build.gear.end() && !it->second.weapon_type.empty();
 
-    // Name text next to icon — draw directly so lines fit within icon height
+    // Text is wrapped by the same responsive helper as live equipment.
     bool isRelicSlot = (strcmp(slot, "Relic") == 0);
-    float lineH = ImGui::GetTextLineHeight();
-    float textX = pos.x + iconSz + 4.0f;
-    float textY = pos.y;
-    auto* dl = ImGui::GetWindowDrawList();
+    AlterEgo::UI::EquipmentText text(pos,iconSz,ImGui::GetContentRegionAvail().x);
 
     // Line 1: stat/slot name
     char line1[256] = {};
@@ -8556,36 +8791,32 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
         snprintf(line1, sizeof(line1), "%s", GearSlotDisplayName(slot));
         line1Col = IM_COL32(128, 128, 128, 255);
     }
-    dl->AddText(ImVec2(textX, textY), line1Col, line1);
-    textY += lineH;
-
-    // Line 2: rune or sigil
-    if (!isRelicSlot && it != build.gear.end()) {
-        if (!it->second.rune.empty()) {
-            dl->AddText(ImVec2(textX, textY), IM_COL32(153, 153, 255, 255), it->second.rune.c_str());
-            textY += lineH;
+    if(!editable&&!disabled&&hasData&&ImGui::BeginPopupContextItem("##saved_gear_name")){
+        const auto actual=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
+        CopyNameMenuItem(actual&&!actual->name.empty()?actual->name:std::string(line1));
+        if(gearSlot){
+            CopyNameMenuItem(gearSlot->rune,"Copy Rune Name");
+            CopyNameMenuItem(gearSlot->sigil,"Copy Sigil Name");
+            CopyNameMenuItem(gearSlot->sigil2,"Copy Second Sigil Name");
+            CopyCachedItemNamesMenu(gearSlot->infusion_ids,"Copy Infusion Name");
         }
-        if (!it->second.sigil.empty()) {
-            dl->AddText(ImVec2(textX, textY), IM_COL32(153, 153, 255, 255), it->second.sigil.c_str());
-            textY += lineH;
-        }
-        // Line 3: second sigil (two-handed weapons)
-        if (!it->second.sigil2.empty()) {
-            dl->AddText(ImVec2(textX, textY), IM_COL32(153, 153, 255, 255), it->second.sigil2.c_str());
-            textY += lineH;
-        }
+        ImGui::EndPopup();
     }
-
-    // Advance cursor past the icon
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + iconSz + 2.0f));
+    text.Line(line1,line1Col);
+    if (!isRelicSlot && it != build.gear.end()) {
+        text.Line(it->second.rune,IM_COL32(153,153,255,255));
+        text.Line(it->second.sigil,IM_COL32(153,153,255,255));
+        text.Line(it->second.sigil2,IM_COL32(153,153,255,255));
+    }
+    text.Finish();
 
     // Tooltip
     if (hovered && isRelicSlot && !build.relic_name.empty()) {
         ImGui::BeginTooltip();
         ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.8f, 1.0f), "%s", build.relic_name.c_str());
-        for (int ri = 0; ri < RELIC_COUNT; ri++) {
-            if (build.relic_name == RELIC_LIST[ri].name) {
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", RELIC_LIST[ri].bonus);
+        for (const auto& entry : GearCatalog("Relic")) {
+            if (build.relic_name == entry.name) {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", entry.bonus.c_str());
                 break;
             }
         }
@@ -8598,7 +8829,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
         if (hasStat) {
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s %s",
                 it->second.stat_name.c_str(), GearSlotDisplayName(slot));
-            const auto* statInfo = AlterEgo::GW2API::GetItemStatInfo(it->second.stat_id);
+            const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(it->second.stat_id);
             if (statInfo) {
                 for (const auto& a : statInfo->attributes) {
                     ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "  +%s", FriendlyAttrName(a));
@@ -8616,7 +8847,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
                 if (!attribute.empty()) {
                     ImGui::BulletText("Any %s infusion", InfusionAttributeLabel(attribute));
                 } else if (id != 0) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(id);
                     if (info && !info->name.empty())
                         ImGui::BulletText("%s (exact)", info->name.c_str());
                     else
@@ -8629,7 +8860,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
         ImGui::BeginTooltip();
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
             "%s%s", GearSlotDisplayName(slot),
-            g_LibEditMode ? " (click to customize)" : "");
+            editable ? " (click to customize)" : "");
         ImGui::EndTooltip();
     }
 
@@ -8637,46 +8868,10 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot) {
 }
 
 // Render the full gear section for a saved build
-static void RenderBuildGearPanel(AlterEgo::SavedBuild& build) {
-    if (ImGui::BeginTable("##buildGear", 2, ImGuiTableFlags_None)) {
-        ImGui::TableSetupColumn("##gearLeft", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("##gearRight", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableNextRow();
-
-        // Left column: Armor
-        ImGui::TableNextColumn();
-        ImGui::Indent(2.0f);
-        RenderSectionHeader("Armor", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-        RenderBuildGearSlot(build, "Helm");
-        RenderBuildGearSlot(build, "Shoulders");
-        RenderBuildGearSlot(build, "Coat");
-        RenderBuildGearSlot(build, "Gloves");
-        RenderBuildGearSlot(build, "Leggings");
-        RenderBuildGearSlot(build, "Boots");
-
-        ImGui::Spacing();
-        RenderSectionHeader("Weapons", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-        RenderBuildGearSlot(build, "WeaponA1");
-        RenderBuildGearSlot(build, "WeaponA2");
-        RenderBuildGearSlot(build, "WeaponB1");
-        RenderBuildGearSlot(build, "WeaponB2");
-        ImGui::Unindent(2.0f);
-
-        // Right column: Trinkets + Relic + Rune
-        ImGui::TableNextColumn();
-        ImGui::Indent(2.0f);
-        RenderSectionHeader("Trinkets", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-        RenderBuildGearSlot(build, "Backpack");
-        RenderBuildGearSlot(build, "Accessory1");
-        RenderBuildGearSlot(build, "Accessory2");
-        RenderBuildGearSlot(build, "Amulet");
-        RenderBuildGearSlot(build, "Ring1");
-        RenderBuildGearSlot(build, "Ring2");
-        RenderBuildGearSlot(build, "Relic");
-        ImGui::Unindent(2.0f);
-
-        ImGui::EndTable();
-    }
+static void RenderBuildGearPanel(AlterEgo::SavedBuild& build,bool editable) {
+    AlterEgo::UI::EquipmentLayout("##saved_gear",g_LibEditMode||AlterEgo::GearEdit::HasRecordedAquaticGear(build.gear),
+        [&](const char* slot){RenderBuildGearSlot(build,slot,editable);},
+        [](const char* label,int){RenderSectionHeader(label,AlterEgo::UI::SectionGold);});
 }
 
 // Re-resolve item names (rune, relic, sigils, stats) for a saved build from
@@ -8690,7 +8885,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
 
     auto tryItem = [&](uint32_t id, std::string& name) {
         if (id == 0 || !name.empty()) return;
-        const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+        const auto info = AlterEgo::GW2API::GetItemInfo(id);
         if (info && !info->name.empty()) {
             name = info->name;
             changed = true;
@@ -8727,7 +8922,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
             changed = true;
         }
         if (gs.stat_id == 0 && gs.item_id != 0) {
-            const auto* item = AlterEgo::GW2API::GetItemInfo(gs.item_id);
+            const auto item = AlterEgo::GW2API::GetItemInfo(gs.item_id);
             if (!item) {
                 missingItems.push_back(gs.item_id);
             } else if (item->details.is_object() &&
@@ -8736,7 +8931,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
                        item->details["infix_upgrade"].contains("id") &&
                        item->details["infix_upgrade"]["id"].is_number_unsigned()) {
                 const uint32_t id = item->details["infix_upgrade"]["id"].get<uint32_t>();
-                const auto* info = AlterEgo::GW2API::GetItemStatInfo(id);
+                const auto info = AlterEgo::GW2API::GetItemStatInfo(id);
                 if (!info) missingStats.push_back(id);
                 // A fixed item's public stats verify the text prefix. If the
                 // source requested a different selected stat, do not silently
@@ -8750,7 +8945,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
             }
         }
         if (gs.stat_id != 0 && gs.stat_name.empty()) {
-            const auto* si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
+            const auto si = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
             if (si && !si->name.empty()) {
                 gs.stat_name = si->name;
                 changed = true;
@@ -8765,7 +8960,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
     if (!missingStats.empty())
         AlterEgo::GW2API::FetchItemStatDetailsAsync(missingStats);
 
-    if (changed) AlterEgo::GW2API::SaveBuildLibrary();
+    (void)changed; // display-only enrichment
 }
 
 // Resolve negative trait placeholders in a saved build once spec data is available
@@ -8773,7 +8968,7 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
     bool changed = false;
     for (int i = 0; i < 3; i++) {
         if (build.specializations[i].spec_id == 0) continue;
-        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
         if (!specInfo || specInfo->major_traits.size() < 9) continue;
         for (int tier = 0; tier < 3; tier++) {
             if (build.specializations[i].traits[tier] >= 0) continue;
@@ -8789,7 +8984,7 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
         // Correct partially specified Snow Crows lines using the canonical
         // specialization metadata once it has arrived from the GW2 API.
         for (int i = 0; i < 3; ++i) {
-            const auto* spec = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
+            const auto spec = AlterEgo::GW2API::GetSpecInfo(build.specializations[i].spec_id);
             if (!spec || spec->major_traits.size() < 9) continue;
             std::array<int, 3> arranged{};
             bool allKnown = true;
@@ -8812,7 +9007,7 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
         build.chat_link = AlterEgo::GW2API::EncodeSavedBuildToChatLink(build);
         changed = true;
     }
-    if (changed) AlterEgo::GW2API::SaveBuildLibrary();
+    (void)changed; // display-only enrichment
 }
 
 // Heal/Utility/Elite icon row for a build. When `editable`, each icon opens the skill
@@ -8822,9 +9017,21 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src, float sz, bool 
         if (editable) {
             ImGui::PushID(slot + 700);
             ImVec2 p = ImGui::GetCursorScreenPos();
-            if (RenderEditableSkillIcon(sid, sz)) {
+            if (RenderEditableSkillIcon(sid, sz,false)) {
                 g_SkillPickerSlot = slot;
                 g_SkillPickerAnchor = ImVec2(p.x, p.y + sz + 2.0f);
+            }
+            if (ImGui::BeginPopupContextItem("##skill_edit_context")) {
+                const auto skill=AlterEgo::GW2API::GetSkillInfo(sid);
+                if(skill)CopyNameMenuItem(skill->name);
+                if (ImGui::MenuItem("Clear Skill",nullptr,false,sid != 0)) {
+                    auto& bar = g_EditDraft.terrestrial_skills;
+                    if (slot == 0) bar.heal = 0;
+                    else if (slot == 4) bar.elite = 0;
+                    else bar.utilities[slot-1] = 0;
+                    MarkEditDirty();
+                }
+                ImGui::EndPopup();
             }
             if (ImGui::IsItemHovered())
                 ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + sz, p.y + sz),
@@ -8875,7 +9082,7 @@ static AlterEgo::SavedBuild SourcePageToSavedBuild(const AlterEgo::SnowCrows::Pa
     build.relic_name = page.relicName;
     for (int s = 0; s < 3; ++s) {
         build.specializations[s].spec_id = page.specs[s].id;
-        const auto* spec = GW2API::GetSpecInfo(page.specs[s].id);
+        const auto spec = GW2API::GetSpecInfo(page.specs[s].id);
         for (size_t t = 0; t < page.specs[s].traits.size(); ++t) {
             const uint32_t trait = page.specs[s].traits[t];
             int tier = -1;
@@ -8885,7 +9092,7 @@ static AlterEgo::SavedBuild SourcePageToSavedBuild(const AlterEgo::SnowCrows::Pa
                 for (int pos = 0; pos < 9; ++pos)
                     if (spec->major_traits[pos] == trait) tier = pos / 3;
             if (tier < 0) {
-                const auto* info = GW2API::GetTraitInfo(trait);
+                const auto info = GW2API::GetTraitInfo(trait);
                 if (info && info->tier >= 1 && info->tier <= 3)
                     tier = info->tier - 1;
             }
@@ -8928,7 +9135,7 @@ static void FetchBuildSource(const std::string& url, const std::string& refreshI
     g_BuildSourceRefreshError.clear();
     std::string normalized = AlterEgo::SnowCrows::NormalizeUrl(url);
     if (normalized.empty()) normalized = AlterEgo::MetaBattle::NormalizeUrl(url);
-    std::thread([normalized, refreshId]() {
+    AlterEgo::Background::Workers().Launch([normalized, refreshId]() {
         BuildSourceFetchResult result;
         result.refresh = !refreshId.empty();
         result.targetId = refreshId;
@@ -8955,7 +9162,7 @@ static void FetchBuildSource(const std::string& url, const std::string& refreshI
         result.ready = true;
         std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex);
         g_BuildSourceResult = std::move(result);
-    }).detach();
+    }, [refreshId] { BuildSourceFetchResult result; result.refresh = !refreshId.empty(); result.targetId = refreshId; result.error = "Build download interrupted."; result.ready = true; std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex); g_BuildSourceResult = std::move(result); });
 }
 
 static void PollBuildSource() {
@@ -9040,18 +9247,42 @@ static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
     g_LibCompareSavedManual = true;
     g_LibCompareChar = build.source_character;
     g_LibComparePreviousTarget = build.source_character;
+    MarkNavigation();
     g_SwitchToCompare = true;
 }
 
+namespace { static void CopyPortableLoadout(const std::string& loadoutId); }
+// Shared domain action wiring for header and context menu.
+enum class SavedLoadoutAction { Copy, Compare, Edit, Delete };
+static void ExecuteSavedLoadoutAction(SavedLoadoutAction action,
+                                      const AlterEgo::SavedBuild& build, int index) {
+    switch (action) {
+    case SavedLoadoutAction::Copy:
+        CopyPortableLoadout(build.id);
+        break;
+    case SavedLoadoutAction::Compare:
+        g_LibSelectedIdx = index;
+        ActivateSavedBuildCompare(build);
+        break;
+    case SavedLoadoutAction::Edit:
+        g_LibSelectedIdx = index;
+        g_LibEditBuildId = build.id;
+        EnterBuildEditMode(build);
+        break;
+    case SavedLoadoutAction::Delete:
+        g_LibCtxDeleteIdx = index;
+        break;
+    }
+}
 static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showEditButton = true) {
     ImVec4 profColor = GetProfessionColor(build.profession);
     {
         // Detect elite spec — use its icon and name in the header when present
-        const AlterEgo::SpecializationInfo* eliteSpec = nullptr;
+        std::shared_ptr<const AlterEgo::SpecializationInfo> eliteSpec;
         for (int s = 0; s < 3; s++) {
             uint32_t sid = build.specializations[s].spec_id;
             if (!sid) continue;
-            const auto* si = AlterEgo::GW2API::GetSpecInfo(sid);
+            const auto si = AlterEgo::GW2API::GetSpecInfo(sid);
             if (si && si->elite) { eliteSpec = si; break; }
         }
 
@@ -9080,7 +9311,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         // Underline
         dl->AddLine(
             ImVec2(pos.x + 4, pos.y + h),
-            ImVec2(pos.x + w * 0.55f, pos.y + h),
+            ImVec2(pos.x + w, pos.y + h),
             ImGui::ColorConvertFloat4ToU32(ImVec4(profColor.x, profColor.y, profColor.z, 0.35f)), 1.0f);
 
         // Class icon on the left — prefer elite-spec emblem, fall back to profession
@@ -9099,7 +9330,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             uint32_t profIconId = GetProfessionBigIconId(build.profession);
             iconTex = AlterEgo::IconManager::GetIcon(profIconId);
             if (!iconTex || !iconTex->Resource) {
-                const auto* prof = AlterEgo::GW2API::GetProfessionInfo(build.profession);
+                const auto prof = AlterEgo::GW2API::GetProfessionInfo(build.profession);
                 AlterEgo::IconManager::RequestIcon(profIconId,
                     prof ? prof->icon_big_url : "", /*priority=*/true);
             }
@@ -9131,7 +9362,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         if (g_LibEditMode) {
             ImGui::SetNextItemWidth(220.0f);
             ImGui::PushStyleColor(ImGuiCol_Text, profColor);
-            if (InputTextString("##edit_name", g_LibEditName)) MarkEditDirty();
+            if (AlterEgo::UI::InputText("##edit_name", g_LibEditName)) MarkEditDirty();
             ImGui::PopStyleColor();
 
             // "EDITING" badge with a drawn dot (Nexus's font atlas has no ● glyph).
@@ -9193,23 +9424,25 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 float startX = pos.x + w - (wSave + gap + wCancel) - 8.0f;
 
                 // ImGui 1.80 has no BeginDisabled — dim when clean and guard the click.
-                bool canSave = g_EditDirty;
+                bool canSave = g_EditDirty && g_EditRefsReady && !g_GearDialogOpen;
                 if (!canSave) ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
                                                   ImGui::GetStyle().Alpha * 0.5f);
                 ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
                 if (RenderActionButton("Save##hdr") && canSave) {
-                    AlterEgo::GW2API::UpdateSavedBuild(build.id, g_LibEditName.c_str(), g_LibEditNotes.c_str());
-                    AlterEgo::GW2API::SetSavedBuildGameModes(build.id,
-                        g_EditDraft.game_modes.empty() ? std::vector<AlterEgo::GameMode>{g_EditDraft.game_mode} : g_EditDraft.game_modes);
-                    AlterEgo::GW2API::ReplaceSavedBuildDefinition(build.id, g_EditDraft);
-                    g_EditDraftId.clear();   // force re-sync from the persisted build
-                    g_LibEditMode = false; g_EditDirty = false;
-                    g_EditIsNewBuild = false; // now a real, saved build
+                    g_EditDraft.name = g_LibEditName;
+                    g_EditDraft.notes = g_LibEditNotes;
+                    if (g_EditDraft.game_modes.empty())
+                        g_EditDraft.game_modes = {g_EditDraft.game_mode};
+                    g_EditDraft.game_mode = g_EditDraft.game_modes.front();
+                    // Defer commit until after the render pass: the transactional
+                    // component projection can invalidate saved-build references.
+                    g_EditReviewPending = true;
                 }
                 if (!canSave) ImGui::PopStyleVar();
 
                 ImGui::SetCursorScreenPos(ImVec2(startX + wSave + gap, btnY));
                 if (RenderActionButton("Cancel##hdr")) {
+                    g_GearDialogOpen=false; // Discard the unaccepted child draft too.
                     if (g_EditDirty) ImGui::OpenPopup("Discard changes?##editcancel");
                     else {
                         // Clean cancel: a brand-new build is discarded (deferred to
@@ -9220,26 +9453,29 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 }
                 ImGui::SetCursorScreenPos(prevCursor);
             } else {
+            const float wCopy = btnWidth("Copy");
             const float wCompare = btnWidth("Compare");
             const float wShare = btnWidth("Share");
             const float wEdit = btnWidth("Edit");
             const float wDel = btnWidth("Delete");
-            const float totalW = wCompare + wShare + wEdit + wDel + 3.0f * gap;
-            const float startX = pos.x + w - totalW - 8.0f;
+            const float totalW = wCopy + wCompare + wShare + wEdit + wDel + 4.0f * gap;
+            const float copyX = pos.x + w - totalW - 8.0f;
+            ImGui::SetCursorScreenPos(ImVec2(copyX, btnY));
+            if (RenderActionButton("Copy##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, build, g_LibSelectedIdx);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy Portable Loadout");
+            const float startX = copyX + wCopy + gap;
 
             ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
-            if (RenderActionButton("Compare##headerBuild")) ActivateSavedBuildCompare(build);
+            if (RenderActionButton("Compare##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, build, g_LibSelectedIdx);
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap, btnY));
             if (RenderActionButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap, btnY));
-            if (RenderActionButton("Edit##headerBuild")) EnterBuildEditMode(build);
+            if (RenderActionButton("Edit##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit, build, g_LibSelectedIdx);
 
             ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap + wEdit + gap, btnY));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-            if (RenderActionButton("Delete##headerBuild")) g_LibCtxDeleteIdx = g_LibSelectedIdx;
-            ImGui::PopStyleColor();
+            if (AlterEgo::UI::Button("Delete##headerBuild", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) ExecuteSavedLoadoutAction(SavedLoadoutAction::Delete, build, g_LibSelectedIdx);
 
             // Share menu: the three share actions that used to live in the
             // (now-removed) right-click context menu.
@@ -9256,14 +9492,14 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                                        ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::TextColored(ImVec4(0.85f, 0.8f, 0.7f, 1.0f), "Discard your unsaved changes?");
                 ImGui::Spacing();
-                if (ImGui::Button("Discard", ImVec2(110, 0))) {
+                if (AlterEgo::UI::Button("Discard", ImVec2(110, 0), AlterEgo::UI::ButtonRole::Destructive)) {
                     if (g_EditIsNewBuild) g_DiscardNewBuildId = build.id; // discard the blank build
                     g_LibEditMode = false; g_EditDirty = false; g_EditDraftId.clear();
                     g_EditIsNewBuild = false;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Keep editing", ImVec2(110, 0))) ImGui::CloseCurrentPopup();
+                if (RenderActionButton("Keep editing", ImVec2(110, 0))) ImGui::CloseCurrentPopup();
                 ImGui::EndPopup();
             }
         }
@@ -9273,13 +9509,17 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
 
 }
 
-static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
+namespace { static void RenderLoadoutComponentSelectors(const std::string& loadoutId); }
+static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
+    auto build=source;
     // Try to resolve any placeholder traits (negative values from import without spec cache)
     // Safe to cast: we only mutate trait values from negative to positive
-    ResolveBuildTraitPlaceholders(const_cast<AlterEgo::SavedBuild&>(build));
+    ResolveBuildTraitPlaceholders(build);
     // Re-resolve any item/stat names that weren't available at import time
     // (e.g. API rate-limited or offline). Queues async fetches for missing IDs.
-    ResolveBuildItemNames(const_cast<AlterEgo::SavedBuild&>(build));
+    ResolveBuildItemNames(build);
+    RenderLoadoutComponentSelectors(source.id);
+    ImGui::Spacing();
 
     // Specializations with trait grid (same logic as RenderBuildPanel)
     const float iconSz = TRAIT_ICON_SIZE;
@@ -9300,7 +9540,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
             continue;
         }
 
-        const auto* specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
         std::string specName = specInfo ? specInfo->name : ("Spec " + std::to_string(spec.spec_id));
         bool isElite = specInfo ? specInfo->elite : false;
         ImVec4 specColor = isElite ? ImVec4(1.0f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
@@ -9385,6 +9625,14 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
                 ImGui::InvisibleButton("##specname", hitSz);
                 if (g_LibEditMode) {
                     if (ImGui::IsItemClicked()) g_SpecPickerSlot = i;
+                    if (ImGui::BeginPopupContextItem("##spec_edit_context")) {
+                        CopyNameMenuItem(specName);
+                        if (ImGui::MenuItem("Clear Specialization")) {
+                            g_EditDraft.specializations[i] = {};
+                            MarkEditDirty();
+                        }
+                        ImGui::EndPopup();
+                    }
                     if (ImGui::IsItemHovered())
                         dl->AddRect(nameAnchor,
                             ImVec2(nameAnchor.x + hitSz.x, nameAnchor.y + hitSz.y),
@@ -9525,7 +9773,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
                                std::vector<uint32_t>& outSkills, std::string& outLabel) {
         outSkills.clear();
         outLabel.clear();
-        const auto* profWeapons = AlterEgo::GW2API::GetProfessionWeapons(gearSrc.profession);
+        const auto profWeapons = AlterEgo::GW2API::GetProfessionWeapons(gearSrc.profession);
         if (!profWeapons) return;
 
         auto mhIt = gearSrc.gear.find(mhSlot);
@@ -9686,7 +9934,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
         const uint8_t* legends = g_LibEditMode ? g_EditDraft.legend_codes : build.legend_codes;
         if (g_LibEditMode || legends[0] || legends[1]) {
             ImGui::Spacing();
-            RenderSectionHeader("Legends", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+            RenderSectionHeader("Legends", AlterEgo::UI::SectionGold);
             AlterEgo::GW2API::FetchLegendsAsync();
             for (int slot = 0; slot < 2; slot++) {
                 if (slot) ImGui::SameLine(0, 18);
@@ -9696,7 +9944,16 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
                 ImGui::BeginGroup();
                 if (g_LibEditMode) {
                     ImVec2 ip = ImGui::GetCursorScreenPos();
-                    if (RenderEditableSkillIcon(swap, 40.0f)) g_LegendPickerSlot = slot;
+                    if (RenderEditableSkillIcon(swap, 40.0f,false)) g_LegendPickerSlot = slot;
+                    if (ImGui::BeginPopupContextItem("##legend_edit_context")) {
+                        if(code)CopyNameMenuItem(LegendNameForCode(code));
+                        if (ImGui::MenuItem("Clear Legend",nullptr,false,code != 0)) {
+                            g_EditDraft.legend_codes[slot] = 0;
+                            g_EditDraft.legend_codes[slot+2] = 0;
+                            MarkEditDirty();
+                        }
+                        ImGui::EndPopup();
+                    }
                     if (ImGui::IsItemHovered())
                         ImGui::GetWindowDrawList()->AddRect(ip, ImVec2(ip.x + 40, ip.y + 40),
                             IM_COL32(227, 196, 122, 255), 0.0f, 0, 2.0f);
@@ -9705,7 +9962,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
                 }
                 ImGui::TextColored(code ? ImVec4(0.85f, 0.82f, 0.70f, 1.0f)
                                         : ImVec4(0.55f, 0.55f, 0.55f, 1.0f),
-                                   "%s", code ? LegendNameForCode(code) : "Choose legend");
+                                   "%s", LegendNameForCode(code).c_str());
                 ImGui::EndGroup();
                 ImGui::PopID();
             }
@@ -9713,8 +9970,8 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
     }
     if (g_LibEditMode && build.profession == "Ranger") {
         ImGui::Spacing();
-        RenderSectionHeader("Pets", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-        if (AlterEgo::GW2API::GetPets().empty()) AlterEgo::GW2API::FetchPetsAsync();
+        RenderSectionHeader("Pets", AlterEgo::UI::SectionGold);
+        AlterEgo::GW2API::FetchPetsAsync();
         auto pets = AlterEgo::GW2API::GetPets();
         auto petName = [&](uint32_t id) -> const char* {
             if (!id) return "Choose pet";
@@ -9727,6 +9984,17 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
             if (RenderChipButton(petName(g_EditDraft.pets.terrestrial[slot]),
                                  g_EditDraft.pets.terrestrial[slot] != 0))
                 g_PetPickerSlot = slot;
+            if (ImGui::BeginPopupContextItem("##pet_edit_context")) {
+                if(g_EditDraft.pets.terrestrial[slot]){
+                    for(const auto& pet:pets)if(pet.id==g_EditDraft.pets.terrestrial[slot])CopyNameMenuItem(pet.name);
+                }
+                if (ImGui::MenuItem("Clear Pet")) {
+                    g_EditDraft.pets.terrestrial[slot] = 0;
+                    g_EditDraft.pets.aquatic[slot] = 0;
+                    MarkEditDirty();
+                }
+                ImGui::EndPopup();
+            }
             ImGui::PopID();
         }
     }
@@ -9735,13 +10003,13 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
     ImGui::Spacing();
 
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
-    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft
-                                       : const_cast<AlterEgo::SavedBuild&>(build));
+    if(g_GearDialogOpen)ImGui::TextDisabled("Save or cancel the gear customization draft first.");
+    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen);
 
     // One shared footer for Saved and Edit; notes always follow infusion totals.
     const auto& snapshot = g_LibEditMode ? g_EditDraft : build;
     RenderInfusionTotals(GetSavedInfusionSummary(snapshot),
-        g_LibEditMode ? &g_EditDraft : nullptr);
+        g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen ? &g_EditDraft : nullptr);
     ImGui::Spacing();
     // Use the standard white, regular-size section label in both modes.
     // Editing previously used muted brown and the read-only view compressed
@@ -9750,7 +10018,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& build) {
         ImGui::TextUnformatted("Notes");
         if (g_LibEditMode) {
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-            if (InputTextMultilineString("##edit_notes", g_LibEditNotes, ImVec2(0, 50)))
+            if (AlterEgo::UI::InputTextMultiline("##edit_notes", g_LibEditNotes, ImVec2(0, 50)))
                 MarkEditDirty();
             if (ImGui::IsItemDeactivatedAfterEdit()) MarkEditDirty();
         } else {
@@ -9775,11 +10043,11 @@ static bool HasLiveSpecCacheMismatch(const AlterEgo::Character& ch) {
     if (!g_WarnStaleSpecialization) return false;
     const int index = GetActiveBuildIndex(ch);
     if (index < 0) return false;
-    return g_AutoRefreshTracker.LiveSpecializationDiffers(
-        ch.name, ch.build_tabs[index].specializations[2].spec_id);
+    const auto cached=ch.build_tabs[index].specializations[2].spec_id;
+    return ch.name==g_CurrentCharName&&g_LiveSpecialization!=0&&cached!=0&&g_LiveSpecialization!=cached;
 }
 static const char* GetSpecNameForWarning(uint32_t id) {
-    const auto* info = AlterEgo::GW2API::GetSpecInfo(id);
+    const auto info = AlterEgo::GW2API::GetSpecInfo(id);
     return info && !info->name.empty() ? info->name.c_str() : "Unknown";
 }
 static int GetActiveEquipmentTab(const AlterEgo::Character& ch) {
@@ -9810,7 +10078,7 @@ static AlterEgo::ObservedInfusion GetObservedInfusion(uint32_t itemId) {
     AlterEgo::ObservedInfusion observed;
     observed.itemId = itemId;
     if (!itemId) return observed;
-    const auto* info = AlterEgo::GW2API::GetItemInfo(itemId);
+    const auto info = AlterEgo::GW2API::GetItemInfo(itemId);
     if (!info || !info->details.is_object()) return observed;
     auto upgrade = info->details.find("infix_upgrade");
     if (upgrade == info->details.end() || !upgrade->is_object()) return observed;
@@ -9835,19 +10103,19 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     auto idKey = [](uint32_t id) { return std::to_string(id); };
     auto numberLabel = [](uint32_t id) { return id ? ("#" + std::to_string(id)) : "(empty)"; };
     auto specName = [&](uint32_t id) {
-        const auto* info = AlterEgo::GW2API::GetSpecInfo(id);
+        const auto info = AlterEgo::GW2API::GetSpecInfo(id);
         return info ? info->name : numberLabel(id);
     };
     auto traitName = [&](uint32_t id) {
-        const auto* info = AlterEgo::GW2API::GetTraitInfo(id);
+        const auto info = AlterEgo::GW2API::GetTraitInfo(id);
         return info ? info->name : numberLabel(id);
     };
     auto skillName = [&](uint32_t id) {
-        const auto* info = AlterEgo::GW2API::GetSkillInfo(id);
+        const auto info = AlterEgo::GW2API::GetSkillInfo(id);
         return info ? info->name : numberLabel(id);
     };
     auto itemName = [&](uint32_t id) {
-        const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+        const auto info = AlterEgo::GW2API::GetItemInfo(id);
         return info ? info->name : numberLabel(id);
     };
     auto addId = [&](const std::string& group, const std::string& field,
@@ -9857,7 +10125,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     auto traitId = [&](uint32_t spec, int tier, int id) -> uint32_t {
         if (id >= 0) return (uint32_t)id;
         // Negative values in older imports encode an unresolved trait choice.
-        const auto* info = AlterEgo::GW2API::GetSpecInfo(spec);
+        const auto info = AlterEgo::GW2API::GetSpecInfo(spec);
         int choice = -id;
         if (info && info->major_traits.size() >= 9 && choice >= 1 && choice <= 3)
             return info->major_traits[tier * 3 + choice - 1];
@@ -9879,11 +10147,22 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         }
     }
     auto compareSkills = [&](const char* group, const AlterEgo::SkillBar& a,
-                             const AlterEgo::SkillBar& b) {
+                              const AlterEgo::SkillBar& b) {
         addId(group, "Heal", a.heal, b.heal, skillName);
-        for (int i = 0; i < 3; ++i)
-            addId(group, "Utility " + std::to_string(i + 1),
-                  a.utilities[i], b.utilities[i], skillName);
+        // Utility order is a control-layout preference, not a combat
+        // configuration difference. Keep original order on disk/export.
+        auto sortedUtilities = [&](const AlterEgo::SkillBar& bar) {
+            const auto ids=AlterEgo::CanonicalUtilityIds({bar.utilities[0],bar.utilities[1],bar.utilities[2]});
+            std::string key, names;
+            for (uint32_t id : ids) {
+                if (!key.empty()) { key += ","; names += ", "; }
+                key += std::to_string(id);
+                names += skillName(id);
+            }
+            return std::make_pair(key, names);
+        };
+        const auto sa = sortedUtilities(a), sb = sortedUtilities(b);
+        result.Add(group, "Utilities", sa.first, sb.first, sa.second, sb.second);
         addId(group, "Elite", a.elite, b.elite, skillName);
     };
     compareSkills("Terrestrial skills", saved.terrestrial_skills, live.terrestrial_skills);
@@ -9936,7 +10215,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             }
             uint32_t liveStat = eq->stat_id;
             if (!liveStat && eq->id) {
-                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                 if (info && info->details.contains("infix_upgrade") &&
                     info->details["infix_upgrade"].contains("id") &&
                     info->details["infix_upgrade"]["id"].is_number_unsigned())
@@ -9948,23 +10227,23 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             // even if the library detail page has not yet been opened.
             uint32_t savedStat = gs.stat_id;
             if (!savedStat && gs.item_id) {
-                const auto* savedItem = AlterEgo::GW2API::GetItemInfo(gs.item_id);
+                const auto savedItem = AlterEgo::GW2API::GetItemInfo(gs.item_id);
                 if (savedItem && savedItem->details.is_object() &&
                     savedItem->details.contains("infix_upgrade") &&
                     savedItem->details["infix_upgrade"].is_object() &&
                     savedItem->details["infix_upgrade"].contains("id") &&
                     savedItem->details["infix_upgrade"]["id"].is_number_unsigned()) {
                     const uint32_t possible = savedItem->details["infix_upgrade"]["id"].get<uint32_t>();
-                    const auto* definition = AlterEgo::GW2API::GetItemStatInfo(possible);
+                    const auto definition = AlterEgo::GW2API::GetItemStatInfo(possible);
                     if (definition && (gs.stat_name.empty() ||
                         AlterEgo::NamedStats::SameCanonicalStat(gs.stat_name, definition->name)))
                         savedStat = possible;
                 }
             }
             if (savedStat || !gs.stat_name.empty()) {
-                const auto* savedInfo = savedStat
+                const auto savedInfo = savedStat
                     ? AlterEgo::GW2API::GetItemStatInfo(savedStat) : nullptr;
-                const auto* liveInfo = liveStat
+                const auto liveInfo = liveStat
                     ? AlterEgo::GW2API::GetItemStatInfo(liveStat) : nullptr;
                 const std::string savedName =
                     (savedInfo && !savedInfo->name.empty()) ? savedInfo->name
@@ -9993,31 +10272,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             }
             if (compareExactItems && gs.item_id)
                 addId("Exact item IDs", slot, gs.item_id, eq->id, itemName);
-            auto compareUpgrade = [&](const char* field, uint32_t savedId, const std::string& savedName,
-                                      size_t liveIndex) {
-                uint32_t liveId = eq->upgrades.size() > liveIndex ? eq->upgrades[liveIndex] : 0;
-                if (savedId) addId("Upgrades", slot + " " + field, savedId, liveId, itemName);
-                else if (!savedName.empty()) {
-                    const auto* liveInfo = AlterEgo::GW2API::GetItemInfo(liveId);
-                    if (liveInfo)
-                        result.Add("Upgrades", slot + " " + field,
-                                   savedName, liveInfo->name, savedName, liveInfo->name);
-                } else if (gs.item_id) {
-                    // A newly captured set explicitly had no upgrade here.
-                    addId("Upgrades", slot + " " + field, 0, liveId, itemName);
-                }
-            };
-            if (slot == "Helm" || slot == "Shoulders" || slot == "Coat" ||
-                slot == "Gloves" || slot == "Leggings" || slot == "Boots")
-                compareUpgrade("rune", gs.rune_id ? gs.rune_id : saved.rune_id,
-                               gs.rune.empty() ? saved.rune_name : gs.rune, 0);
+            // Rune and sigil placement is preserved in gear, but their
+            // functional comparison is aggregated by type and weapon set.
             if (slot.rfind("Weapon", 0) == 0) {
-                compareUpgrade("sigil", gs.sigil_id, gs.sigil, 0);
-                if (gs.sigil2_id || !gs.sigil2.empty() ||
-                    (gs.item_id && eq->upgrades.size() > 1))
-                    compareUpgrade("sigil 2", gs.sigil2_id, gs.sigil2, 1);
                 if (!gs.weapon_type.empty()) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                     if (info && info->details.contains("type") &&
                         info->details["type"].is_string()) {
                         auto liveType = info->details["type"].get<std::string>();
@@ -10026,53 +10285,176 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     }
                 }
             }
-            if (saved.infusion_totals.empty() && (gs.infusion_snapshot || !gs.infusion_ids.empty())) {
-                auto ids = [](std::vector<uint32_t> v) {
-                    std::sort(v.begin(), v.end());
-                    std::string out;
-                    for (auto id : v) { if (!out.empty()) out += ", "; out += std::to_string(id); }
-                    return out;
-                };
-                std::string a = ids(gs.infusion_ids), b = ids(eq->infusions);
-                const bool attributeMode = std::any_of(
-                    gs.infusion_attributes.begin(), gs.infusion_attributes.end(),
-                    [](const std::string& attr) { return !attr.empty(); });
-                if (!attributeMode) {
-                    // Unmodified legacy builds retain their original exact-ID
-                    // comparison, including order-independent matching.
-                    result.Add("Infusions", slot, a, b,
-                               a.empty() ? "(none)" : a, b.empty() ? "(none)" : b);
-                } else {
-                    std::vector<AlterEgo::InfusionRequirement> requirements;
-                    std::string savedLabel;
-                    for (size_t i = 0; i < gs.infusion_ids.size(); ++i) {
-                        const std::string attr = i < gs.infusion_attributes.size()
-                            ? gs.infusion_attributes[i] : std::string();
-                        requirements.push_back({gs.infusion_ids[i], attr});
-                        if (!savedLabel.empty()) savedLabel += ", ";
-                        savedLabel += attr.empty() ? ("#" + std::to_string(gs.infusion_ids[i]))
-                                                   : InfusionAttributeLabel(attr);
-                    }
-                    std::vector<AlterEgo::ObservedInfusion> observed;
-                    for (uint32_t id : eq->infusions)
-                        observed.push_back(GetObservedInfusion(id));
-                    const auto verdict = AlterEgo::CompareInfusionRequirements(requirements, observed);
-                    if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified) {
-                        result.AddUnverified("Infusions", slot, savedLabel,
-                            (b.empty() ? "(none)" : b) + " (metadata unavailable)");
-                    } else {
-                        const bool matches = verdict == AlterEgo::InfusionMatchVerdict::Matches;
-                        result.Add("Infusions", slot, "required",
-                            matches ? "required" : "different", savedLabel,
-                            b.empty() ? "(none)" : b);
-                    }
+        }
+        // Aggregate runes across the six armor slots. Per-slot rune placement
+        // is a physical detail; identical effects/counts are equivalent.
+        nlohmann::json savedRunes = {{"gear", nlohmann::json::object()}};
+        nlohmann::json liveRunes = {{"gear", nlohmann::json::object()}};
+        const char* armorSlots[] = {
+            "Helm","Shoulders","Coat","Gloves","Leggings","Boots"
+        };
+        int savedArmorPieces = 0;
+        bool runeRequired = saved.rune_id != 0 || !saved.rune_name.empty();
+        for (const char* slot : armorSlots) {
+            auto savedItem = saved.gear.find(slot);
+            if (savedItem != saved.gear.end()) {
+                ++savedArmorPieces;
+                const auto& gear = savedItem->second;
+                const uint32_t runeId = gear.rune_id ? gear.rune_id : saved.rune_id;
+                const std::string runeName = gear.rune.empty() ? saved.rune_name : gear.rune;
+                if (runeId) savedRunes["gear"][slot]["rune_id"] = runeId;
+                else if (!runeName.empty()) savedRunes["gear"][slot]["rune"] = runeName;
+                if (runeId || !runeName.empty()) runeRequired = true;
+            }
+            const auto* liveItem = getEquipped(slot);
+            if (liveItem && !liveItem->upgrades.empty() && liveItem->upgrades[0])
+                liveRunes["gear"][slot]["rune_id"] = liveItem->upgrades[0];
+        }
+        if (runeRequired) {
+            const auto expected = AlterEgo::Composable::Semantics::Runes(savedRunes);
+            const auto observed = AlterEgo::Composable::Semantics::Runes(liveRunes);
+            const auto verdict = AlterEgo::Composable::Semantics::Compare(expected, observed);
+            auto label = [](const AlterEgo::Composable::Semantics::Summary& summary) {
+                std::string str;
+                for (const auto& [id, count] : summary.counts) {
+                    if (!str.empty()) str += ", ";
+                    str += std::to_string(count) + " x " + id;
+                }
+                return str.empty() ? std::string("(none)") : str;
+            };
+            if (savedArmorPieces < 6 ||
+                verdict == AlterEgo::Composable::Semantics::Verdict::Unverified)
+                result.AddUnverified("Runes", "Types / counts",
+                    label(expected) + " (incomplete requirement)", label(observed));
+            else result.Add("Runes", "Types / counts", label(expected), label(observed),
+                            label(expected), label(observed));
+        }
+
+        // Sigils are interchangeable between hands in a weapon set, but
+        // weapon sets A and B remain distinct. Preserve item positions for
+        // inspection and original game-facing export.
+        nlohmann::json savedSigils = {{"gear", nlohmann::json::object()}};
+        nlohmann::json liveSigils = {{"gear", nlohmann::json::object()}};
+        const char* weaponSlots[] = {"WeaponA1","WeaponA2","WeaponB1","WeaponB2"};
+        std::set<std::string> comparedSets;
+        bool unknownSigilIdentity = false;
+        bool missingLiveSigilData = false;
+        for (const char* slot : weaponSlots) {
+            auto savedItem = saved.gear.find(slot);
+            if (savedItem == saved.gear.end()) continue;
+            const auto& gear = savedItem->second;
+            if (gear.sigil_id || gear.sigil2_id || !gear.sigil.empty() || !gear.sigil2.empty()) {
+                comparedSets.insert(AlterEgo::Composable::Semantics::WeaponSet(slot));
+                if (!gear.sigil.empty() && !gear.sigil_id) unknownSigilIdentity = true;
+                if (!gear.sigil2.empty() && !gear.sigil2_id) unknownSigilIdentity = true;
+                if (gear.sigil_id) savedSigils["gear"][slot]["sigil_id"] = gear.sigil_id;
+                else if (!gear.sigil.empty()) savedSigils["gear"][slot]["sigil"] = gear.sigil;
+                if (gear.sigil2_id) savedSigils["gear"][slot]["sigil2_id"] = gear.sigil2_id;
+                else if (!gear.sigil2.empty()) savedSigils["gear"][slot]["sigil2"] = gear.sigil2;
+            }
+        }
+        for (const char* slot : weaponSlots) {
+            if (!comparedSets.count(AlterEgo::Composable::Semantics::WeaponSet(slot))) continue;
+            const auto* equipped = getEquipped(slot);
+            if (!equipped) {
+                // Missing live equipment is not evidence that a saved sigil
+                // requirement was satisfied (or even definitely differs).
+                if (savedSigils["gear"].contains(slot))
+                    missingLiveSigilData = true;
+                continue;
+            }
+            if (!equipped->upgrades.empty() && equipped->upgrades[0])
+                liveSigils["gear"][slot]["sigil_id"] = equipped->upgrades[0];
+            if (equipped->upgrades.size() > 1 && equipped->upgrades[1])
+                liveSigils["gear"][slot]["sigil2_id"] = equipped->upgrades[1];
+        }
+        if (!comparedSets.empty()) {
+            const auto expected = AlterEgo::Composable::Semantics::Sigils(savedSigils);
+            const auto observed = AlterEgo::Composable::Semantics::Sigils(liveSigils);
+            auto label = [](const AlterEgo::Composable::Semantics::Summary& summary) {
+                std::string str;
+                for (const auto& [id, count] : summary.counts) {
+                    if (!str.empty()) str += ", ";
+                    str += std::to_string(count) + " x " + id;
+                }
+                return str.empty() ? std::string("(none)") : str;
+            };
+            const auto verdict = AlterEgo::Composable::Semantics::Compare(expected, observed);
+            if (unknownSigilIdentity || missingLiveSigilData ||
+                verdict == AlterEgo::Composable::Semantics::Verdict::Unverified)
+                result.AddUnverified("Sigils", "By weapon set", label(expected), label(observed));
+            else result.Add("Sigils", "By weapon set",
+                            label(expected), label(observed), label(expected), label(observed));
+        }
+
+        // All installed infusions form one pool, regardless of the equipment
+        // slot that physically contains them. Aggregate import requirements
+        // override per-slot snapshots to avoid counting the same ID twice.
+        std::vector<AlterEgo::InfusionRequirement> wanted;
+        bool hasInfusionRequirement = !saved.infusion_totals.empty();
+        if (!saved.infusion_totals.empty()) {
+            for (const auto& item : saved.infusion_totals)
+                for (int n = 0; n < item.count; ++n)
+                    wanted.push_back({item.item_id, item.attribute});
+        } else {
+            for (const auto& [slot, gear] : saved.gear) {
+                (void)slot;
+                if (gear.infusion_snapshot || !gear.infusion_ids.empty())
+                    hasInfusionRequirement = true;
+                for (size_t n = 0; n < gear.infusion_ids.size(); ++n) {
+                    const std::string attribute = n < gear.infusion_attributes.size()
+                        ? gear.infusion_attributes[n] : std::string();
+                    if (gear.infusion_ids[n] || !attribute.empty())
+                        wanted.push_back({gear.infusion_ids[n], attribute});
                 }
             }
         }
+        if (hasInfusionRequirement) {
+            std::vector<AlterEgo::ObservedInfusion> installed;
+            for (const auto& item : liveCharacter.equipment) {
+                if (!AlterEgo::IsEquipmentInCapturedBuild(item.slot, item.tab, equipmentTab))
+                    continue;
+                for (uint32_t id : item.infusions)
+                    if (id) installed.push_back(GetObservedInfusion(id));
+            }
+            const auto verdict = AlterEgo::CompareInfusionRequirements(wanted, installed);
+            auto wantedLabel = [&]() {
+                std::map<std::string, int> counts;
+                for (const auto& item : wanted) {
+                    const std::string key = item.attribute.empty()
+                        ? "#" + std::to_string(item.exactId)
+                        : InfusionAttributeLabel(item.attribute);
+                    ++counts[key];
+                }
+                std::string label;
+                for (const auto& [key, count] : counts) {
+                    if (!label.empty()) label += ", ";
+                    label += std::to_string(count) + " x " + key;
+                }
+                return label.empty() ? std::string("(none)") : label;
+            };
+            auto installedLabel = [&]() {
+                std::map<uint32_t, int> counts;
+                for (const auto& item : installed) ++counts[item.itemId];
+                std::string label;
+                for (const auto& [id, count] : counts) {
+                    if (!label.empty()) label += ", ";
+                    label += std::to_string(count) + " x #" + std::to_string(id);
+                }
+                return label.empty() ? std::string("(none)") : label;
+            };
+            if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified)
+                result.AddUnverified("Infusions", "Types / counts",
+                    wantedLabel(), installedLabel() + " (metadata pending)");
+            else result.Add("Infusions", "Types / counts",
+                "equivalent", verdict == AlterEgo::InfusionMatchVerdict::Matches
+                    ? "equivalent" : "different", wantedLabel(), installedLabel());
+        }
+
         if (saved.relic_id || !saved.relic_name.empty()) {
             const auto* eq = getEquipped("Relic");
             uint32_t id = eq ? eq->id : 0;
-            const auto* info = AlterEgo::GW2API::GetItemInfo(id);
+            const auto info = AlterEgo::GW2API::GetItemInfo(id);
             if (info && !saved.relic_name.empty())
                 result.Add("Relic", "Effect / item name", saved.relic_name, info->name,
                            saved.relic_name, info->name);
@@ -10112,6 +10494,13 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     return result;
 }
 
+// The component collection renderer is defined later in this translation unit
+// inside ComposableUI.h's anonymous namespace. Forward-declare in the same
+// namespace so this call resolves to that implementation at link time.
+namespace {
+static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id);
+}
+
 // Selection is character-first: empty means follow the active MumbleLink
 // character, even if the previously selected saved build came from another hero.
 static const AlterEgo::Character* ResolveComparisonCharacter(
@@ -10128,7 +10517,8 @@ static const AlterEgo::Character* ResolveComparisonCharacter(
 }
 
 static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
-    const auto& characters = AlterEgo::GW2API::GetCharacters();
+    const auto charactersSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& characters = *charactersSnapshot;
     std::vector<const AlterEgo::Character*> matches;
     for (const auto& ch : characters)
         if (!ch.build_tabs.empty())
@@ -10149,7 +10539,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     if (character->name == g_CurrentCharName &&
         HasLiveSpecCacheMismatch(*character)) {
         const int cachedIndex = GetActiveBuildIndex(*character);
-        const uint32_t currentId = g_AutoRefreshTracker.LiveSpecialization();
+        const uint32_t currentId = g_LiveSpecialization;
         const uint32_t cachedId =
             character->build_tabs[cachedIndex].specializations[2].spec_id;
         ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
@@ -10159,13 +10549,6 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                 GetSpecNameForWarning(currentId), currentId,
                 GetSpecNameForWarning(cachedId), cachedId);
     }
-    ImGui::Checkbox("Show matches##compare", &g_LibCompareShowMatches);
-    if (!saved.gear.empty()) {
-        ImGui::SameLine();
-        ImGui::Checkbox("Exact item IDs##compare", &g_LibCompareExactItems);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Require identical item IDs instead of matching equivalent equipment stats.");
-    }
 
     // A detailed comparison can perform many metadata lookups. Reuse its result
     // while the inputs are unchanged, rather than recomputing every render frame.
@@ -10173,6 +10556,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     // without changing the character or saved-build revision.
     struct ComparisonCache {
         AlterEgo::BuildComparison result;
+        nlohmann::json componentDoc = nlohmann::json::object();
         std::string savedBuildId;
         std::string characterName;
         uint64_t characterRevision = 0;
@@ -10198,6 +10582,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         now - cache.updated >= std::chrono::milliseconds(500)) {
         cache.result = CalculateSavedVsLiveComparison(
             saved, *character, live, equipmentTab, g_LibCompareExactItems);
+        cache.componentDoc = nlohmann::json::object();
+        AlterEgo::GW2API::GetComposableLoadouts(cache.componentDoc);
         cache.savedBuildId = saved.id;
         cache.characterName = character->name;
         cache.characterRevision = characterRevision;
@@ -10209,56 +10595,253 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     }
     const auto& result = cache.result;
 
-    const auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
-    const bool busy = fetchStatus == AlterEgo::FetchStatus::InProgress;
-    ImGui::Text("%zu differences", result.DifferenceCount());
-    ImGui::SameLine();
-    ImGui::TextDisabled("· %zu unverified · %zu fields",
-        result.UnverifiedCount(), result.Rows().size());
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Saved vs. retrieved Hoard & Seek character data.\n"
-                          "Unknown legacy fields are skipped rather than counted as matches.\n"
-                          "Unverified fields lack enough API data to determine a match.");
-    if (saved.gear.empty())
-        ImGui::TextDisabled("Saved build has no gear; equipment comparison skipped.");
-    else if (character->equipment.empty())
-        ImGui::TextDisabled("Retrieved character has no equipment data; gear comparison skipped.");
-    if (ImGui::BeginTable("##comparison", 3,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-        ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-        ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn("Retrieved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableHeadersRow();
-        std::string lastGroup;
-        for (const auto& row : result.Rows()) {
-            if (row.matches && !g_LibCompareShowMatches) continue;
-            if (row.group != lastGroup) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextColored(ImVec4(0.9f, 0.77f, 0.45f, 1), "%s", row.group.c_str());
-                lastGroup = row.group;
+    // One independently expandable section per v3 component; fields retain
+    // the same semantic comparison rules as the active-character matcher.
+    struct CompareSection {
+        std::string kind, label, sourceName, sourceId;
+        bool recorded = false;
+        std::vector<const AlterEgo::ComparisonRow*> rows;
+        size_t differences = 0, unverified = 0, matches = 0;
+    };
+    const struct { const char* kind; const char* label; } categories[] = {
+        {"base_build", "Base Build"}, {"skills", "Skills"},
+        {"weapons", "Weapons"}, {"armor", "Armor"},
+        {"trinkets", "Trinkets"}, {"runes", "Runes"},
+        {"sigils", "Sigils"}, {"infusions", "Infusions"}, {"relic", "Relic"}
+    };
+    std::vector<CompareSection> sections;
+    for (const auto& kind : categories)
+        sections.push_back({kind.kind, kind.label});
+
+    // Resolve names and whether a component has actual saved fields. An
+    // empty component is NOT evidence of a match, even if no rows differ.
+    if (cache.componentDoc.is_object() &&
+        cache.componentDoc.contains("loadouts") &&
+        cache.componentDoc["loadouts"].is_array() &&
+        cache.componentDoc.contains("components") &&
+        cache.componentDoc["components"].is_object()) {
+        for (const auto& loadout : cache.componentDoc["loadouts"]) {
+            if (!loadout.is_object() ||
+                loadout.value("id", std::string()) != saved.id ||
+                !loadout.contains("refs") || !loadout["refs"].is_object()) continue;
+            for (auto& section : sections) {
+                const std::string id = loadout["refs"].value(section.kind, std::string());
+                if (id.empty()) continue;
+                const auto group = cache.componentDoc["components"].find(section.kind);
+                if (group == cache.componentDoc["components"].end() ||
+                    !group->is_array()) continue;
+                for (const auto& part : *group) {
+                    if (!part.is_object() ||
+                        part.value("id", std::string()) != id) continue;
+                    section.sourceName = part.value("name", std::string());
+                    section.sourceId = id;
+                    section.recorded = part.contains("data") &&
+                        part["data"].is_object() && !part["data"].empty();
+                    break;
+                }
             }
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(row.field.c_str());
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextWrapped("%s", row.saved.c_str());
-            ImGui::TableSetColumnIndex(2);
-            if (!row.verified)
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.81f, 0.50f, 1));
-            else if (!row.matches)
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.58f, 0.50f, 1));
-            ImGui::TextWrapped("%s", row.current.c_str());
-            if (!row.verified || !row.matches) ImGui::PopStyleColor();
+            break;
         }
-        ImGui::EndTable();
     }
+
+    for (const auto& row : result.Rows()) {
+        const std::string kind =
+            AlterEgo::Composable::Semantics::ComparisonComponent(row.group, row.field);
+        auto found = std::find_if(sections.begin(), sections.end(),
+            [&](const CompareSection& value) { return value.kind == kind; });
+        if (found == sections.end()) {
+            found = std::find_if(sections.begin(), sections.end(),
+                [](const CompareSection& value) { return value.kind == "other"; });
+            if (found == sections.end()) {
+                sections.push_back({"other", "Other fields"});
+                found = sections.end() - 1;
+            }
+        }
+        found->rows.push_back(&row);
+        if (!row.verified) ++found->unverified;
+        else if (!row.matches) ++found->differences;
+        else ++found->matches;
+    }
+    size_t matchingComponents = 0, differentComponents = 0;
+    size_t unknownComponents = 0, actionableComponents = 0;
+    for (const auto& section : sections) {
+        if (section.differences) ++differentComponents;
+        else if ((section.kind != "other" && !section.recorded) ||
+                 section.unverified || section.rows.empty()) ++unknownComponents;
+        else ++matchingComponents;
+        if (section.differences || section.unverified) ++actionableComponents;
+    }
+    const size_t differences = result.DifferenceCount();
+    const size_t unverified = result.UnverifiedCount();
+    const ImVec4 warningColor = AlterEgo::UI::WarningText;
+    const ImVec4 differenceColor = AlterEgo::UI::DifferenceText;
+    if (differences)
+        ImGui::TextColored(differenceColor, "%zu difference%s",
+            differences, differences == 1 ? "" : "s");
+    else if (unknownComponents)
+        ImGui::TextColored(warningColor, "No verified differences");
+    else
+        ImGui::TextUnformatted("All compared components match");
+    if (unverified) {
+        ImGui::SameLine();
+        ImGui::TextColored(warningColor, "| %zu unverified", unverified);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Compared against retrieved character data. Unverified fields lack sufficient API data.");
+    ImGui::TextDisabled("%zu matching / %zu different / %zu not fully checked",
+        matchingComponents, differentComponents, unknownComponents);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Components with no saved data, no comparison rows, or unverified fields are not counted as matches.");
+    if (saved.gear.empty())
+        ImGui::TextDisabled("No saved equipment snapshot.");
+    else if (character->equipment.empty())
+        ImGui::TextDisabled("No retrieved equipment data.");
+    ImGui::Checkbox("Show all components##compare", &g_LibCompareShowMatches);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Include matching fields and components with no recorded data.");
+    ImGui::Separator();
+    if (!actionableComponents && !g_LibCompareShowMatches)
+        ImGui::TextDisabled("Nothing to change in the verified fields.");
+
+    // Separate exact-ID acquisition aid; never changes semantic comparison.
+    // Aggregate deficits across the selected tab before checking stock.
+    if(!saved.gear.empty()&&!character->equipment.empty()){
+        std::map<uint32_t,int> wanted,have;
+        std::map<uint32_t,int> upgradesWanted,upgradesHave;
+        for(const auto& [slot,gs]:saved.gear){
+            if(gs.item_id)++wanted[gs.item_id];
+            if(gs.rune_id)++upgradesWanted[gs.rune_id];
+            else if(saved.rune_id&&(slot=="Helm"||slot=="Shoulders"||slot=="Coat"||slot=="Gloves"||slot=="Leggings"||slot=="Boots"))++upgradesWanted[saved.rune_id];
+            if(gs.sigil_id)++upgradesWanted[gs.sigil_id];
+            if(gs.sigil2_id)++upgradesWanted[gs.sigil2_id];
+            if(saved.infusion_totals.empty())for(size_t n=0;n<gs.infusion_ids.size();++n)
+                if(gs.infusion_ids[n]&&(n>=gs.infusion_attributes.size()||gs.infusion_attributes[n].empty()))++upgradesWanted[gs.infusion_ids[n]];
+        }
+        for(const auto& req:saved.infusion_totals)if(req.item_id&&req.attribute.empty()&&req.count>0)upgradesWanted[req.item_id]+=req.count;
+        if(saved.relic_id&&std::none_of(saved.gear.begin(),saved.gear.end(),[](const auto& entry){return entry.first=="Relic"&&entry.second.item_id!=0;}))++wanted[saved.relic_id];
+        for(const auto& e:character->equipment)if(AlterEgo::IsEquipmentInCapturedBuild(e.slot,e.tab,equipmentTab)){
+            for(auto id:e.upgrades)if(id)++upgradesHave[id];
+            for(auto id:e.infusions)if(id)++upgradesHave[id];
+            if(e.slot=="Relic"&&!saved.gear.count("Relic")&&e.id)++have[e.id];
+        }
+        for(const auto& [slot,gs]:saved.gear){
+            (void)gs;const auto* eq=FindEquipment(*character,slot,equipmentTab);
+            if(eq&&eq->id)++have[eq->id];
+        }
+        std::vector<std::pair<uint32_t,int>> missing;
+        for(const auto& [id,count]:wanted)if(count>have[id])missing.emplace_back(id,count-have[id]);
+        for(const auto& [id,count]:upgradesWanted)if(count>upgradesHave[id])missing.emplace_back(id,count-upgradesHave[id]);
+        if(!missing.empty()&&ImGui::TreeNode("Exact saved item and upgrade locations")){
+            ImGui::TextWrapped("Exact gear and upgrade ID deficits only; equivalent gear or attribute-based infusions may already match. Verify stats, restrictions and template reuse before moving items.");
+            const auto owner=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character->name);
+            std::map<uint32_t,int> totals;
+            for(const auto& [id,count]:missing)totals[id]+=count;
+            for(const auto& [id,count]:totals){
+                ImGui::PushID(static_cast<int>(id));
+                const auto item = AlterEgo::GW2API::GetItemInfo(id);
+                std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count)+"###acquisition";
+                if(ImGui::TreeNode(label.c_str())){
+                    AlterEgo::NativeAccounts::RenderItemAvailability(id,owner,character->name);
+                    if(AlterEgo::UI::Button("Find in Inventory",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))OpenInventoryItem(id);
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    for (const auto& section : sections) {
+        if (!g_LibCompareShowMatches && !section.differences && !section.unverified)
+            continue;
+        ImGui::PushID(section.kind.c_str());
+        const std::string status =
+            section.differences
+                ? std::to_string(section.differences) + (section.differences == 1 ? " difference" : " differences")
+            : section.unverified
+                ? std::to_string(section.unverified) + " unverified"
+            : (section.kind != "other" && !section.recorded) ? "Not recorded"
+            : section.rows.empty()
+                ? "Not checked"
+                : "Matches";
+        const std::string title = section.label + "  -  " + status +
+            "###component_compare_section";
+        const ImGuiTreeNodeFlags flags = section.differences
+            ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+        const bool expanded = ImGui::CollapsingHeader(title.c_str(), flags);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%zu match%s, %zu difference%s, %zu unverified\nSaved component: %s\nRight-click the header for component actions.",
+                section.matches, section.matches == 1 ? "" : "es",
+                section.differences, section.differences == 1 ? "" : "s",
+                section.unverified,
+                section.sourceName.empty() ? "No saved component name" :
+                    section.sourceName.c_str());
+        if (!section.sourceId.empty() &&
+            ImGui::BeginPopupContextItem("##component_actions")) {
+            CopyNameMenuItem(section.sourceName);
+            if (ImGui::MenuItem("Open saved component"))
+                ComponentUIOpenLibrary(section.kind, section.sourceId);
+            ImGui::EndPopup();
+        }
+        if (expanded) {
+            if (g_LibCompareShowMatches && !section.sourceName.empty()) {
+                ImGui::TextDisabled("Saved: %s", section.sourceName.c_str());
+                if (!section.sourceId.empty()) {
+                    ImGui::SameLine();
+                    if (RenderActionButton("Open component##compare_source"))
+                        ComponentUIOpenLibrary(section.kind, section.sourceId);
+                }
+            }
+            if (section.kind != "other" && !section.recorded)
+                ImGui::TextDisabled("No component data recorded. Default field values cannot establish a match.");
+            if (section.rows.empty()) {
+                ImGui::TextDisabled(section.recorded
+                    ? "No verifiable fields in retrieved character data."
+                    : "No fields saved for this component.");
+            } else if (ImGui::BeginTable("##comparison_section", 3,
+                ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Resizable)) {
+                ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+                ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableSetupColumn("Live", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableHeadersRow();
+                size_t displayed = 0;
+                for (const auto* row : section.rows) {
+                    if (row->matches && !g_LibCompareShowMatches) continue;
+                    ++displayed;
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    if (row->group == section.label)
+                        ImGui::TextWrapped("%s", row->field.c_str());
+                    else
+                        ImGui::TextWrapped("%s / %s", row->group.c_str(),
+                                           row->field.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextWrapped("%s", row->saved.c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    if (!row->verified)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImVec4(0.92f, 0.81f, 0.50f, 1));
+                    else if (!row->matches)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImVec4(1, 0.58f, 0.50f, 1));
+                    ImGui::TextWrapped("%s", row->current.c_str());
+                    if (!row->verified || !row->matches) ImGui::PopStyleColor();
+                }
+                if (!displayed) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextDisabled("No differences in displayed fields.");
+                }
+                ImGui::EndTable();
+            }
+        }
+        ImGui::PopID();
+    }
+
 }
 
 // Only the logged-in character is compared against saved builds, and only
-// when the H&S character data or Build Library revision changes. We reuse
+// when the native API character data or Build Library revision changes. We reuse
 // the same comparison rules as the dedicated Compare tab.
 struct ActiveSavedBuildMatch {
     std::string name;
@@ -10284,7 +10867,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
     cachedLibraryRevision = libRevision;
     cached = {};
     if (g_CurrentCharName.empty()) return cached;
-    const auto* character = AlterEgo::GW2API::GetCharacter(g_CurrentCharName);
+    const auto character = AlterEgo::GW2API::GetCharacter(g_CurrentCharName);
     if (!character || character->build_tabs.empty()) return cached;
     const int activeIndex = GetActiveBuildIndex(*character);
     if (activeIndex < 0) return cached;
@@ -10335,7 +10918,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
             if (gs.stat_id != 0 || !gs.stat_name.empty()) {
                 uint32_t liveStat = eq->stat_id;
                 if (!liveStat && eq->id) {
-                    const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                    const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                     if (info && info->details.contains("infix_upgrade") &&
                         info->details["infix_upgrade"].contains("id") &&
                         info->details["infix_upgrade"]["id"].is_number_unsigned())
@@ -10344,12 +10927,12 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
                 if (!liveStat) requiredDataMissing = true;
             }
             if (!gs.weapon_type.empty()) {
-                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                 if (!info || !info->details.contains("type") ||
                     !info->details["type"].is_string()) requiredDataMissing = true;
             }
             if (slot == "Relic" && !saved.relic_name.empty() && saved.relic_id == 0) {
-                const auto* info = AlterEgo::GW2API::GetItemInfo(eq->id);
+                const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                 if (!info) requiredDataMissing = true;
             }
         }
@@ -10412,34 +10995,9 @@ static void RenderCompareTab() {
     // Custom, Name, Class, Level, Age, Birthday and Last Login, including the
     // ascending/descending toggle and multi-account grouping.
     // Active (auto) remains the first popup option regardless of sort mode.
-    const auto& compareRoster = AlterEgo::GW2API::GetCharacters();
-    static std::string s_compareAccount;
-    const std::string compareAccount = AlterEgo::GW2API::GetCurrentAccountName();
-    if (g_CharDisplayOrder.size() != compareRoster.size() ||
-        (g_CharSortMode == Sort_LastLogin && g_CharLastLoginSortDirty) ||
-        compareAccount != s_compareAccount) {
-        // Roster/last-login refresh may require a rebuild while Compare is
-        // active. Keep the Characters tab's highlighted hero selected by name.
-        std::string selectedName;
-        if (g_SelectedCharIdx >= 0 &&
-            g_SelectedCharIdx < static_cast<int>(g_CharDisplayOrder.size())) {
-            const int oldIdx = g_CharDisplayOrder[g_SelectedCharIdx];
-            if (oldIdx >= 0 && oldIdx < static_cast<int>(compareRoster.size()))
-                selectedName = compareRoster[oldIdx].name;
-        }
-        RebuildCharDisplayOrder();
-        s_compareAccount = compareAccount;
-        if (!selectedName.empty()) {
-            for (int i = 0; i < static_cast<int>(g_CharDisplayOrder.size()); ++i) {
-                if (compareRoster[g_CharDisplayOrder[i]].name == selectedName) {
-                    g_SelectedCharIdx = i;
-                    break;
-                }
-            }
-        }
-        if (g_CharSortMode == Sort_LastLogin)
-            g_CharLastLoginSortDirty = false;
-    }
+    const auto compareRosterSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& compareRoster = *compareRosterSnapshot;
+    EnsureCharDisplayOrder(compareRosterSnapshot);
 
     std::vector<const AlterEgo::Character*> compareMatches;
     compareMatches.reserve(compareRoster.size());
@@ -10515,92 +11073,93 @@ static void RenderCompareTab() {
                 saved = &b; break;
             }
     }
-    // Character stays first in the original three-column selector row.
     const AlterEgo::Character* character = target;
     if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
         g_LibCompareBuildTab = -1;
+    const int activeBuild = GetActiveBuildIndex(*character);
+    if (activeBuild < 0) return;
     const auto& live = character->build_tabs[g_LibCompareBuildTab < 0
-        ? GetActiveBuildIndex(*character) : g_LibCompareBuildTab];
-    if (ImGui::BeginTable("##compareSelectors", 3,
+        ? activeBuild : g_LibCompareBuildTab];
+    const ImVec4 compareLabelColor = ImGui::ColorConvertU32ToFloat4(
+        AlterEgo::CompletionTheme::kAvailableText);
+    if (ImGui::BeginTable("##compareSelectors", 2,
         ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
-        // Separate label and combo rows guarantee identical vertical baselines
-        // for Character, Build tab and Equipment regardless of font scaling.
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        const ImVec4 compareLabelColor = ImGui::ColorConvertU32ToFloat4(
-            AlterEgo::CompletionTheme::kAvailableText);
         ImGui::TextColored(compareLabelColor, "Character");
         ImGui::TableNextColumn();
-        ImGui::TextColored(compareLabelColor, "Build Tab");
-        ImGui::TableNextColumn();
-        ImGui::TextColored(compareLabelColor, "Equipment Tab");
+        ImGui::TextColored(compareLabelColor, "Saved Loadout");
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
-    // Keep native ImGui popup/keyboard behavior, but draw profession names in
-    // the same colors as the character list, including the closed preview.
-    const char* autoPrefix = "Active (auto) - ";
-    const ImVec2 previewMin = ImGui::GetCursorScreenPos();
-    const float previewWidth = ImGui::GetContentRegionAvail().x;
-    const float previewHeight = ImGui::GetFrameHeight();
-    ImDrawList* previewDraw = ImGui::GetWindowDrawList();
-    if (ImGui::BeginCombo("##compareCharacter", "")) {
-        const AlterEgo::Character* autoCharacter = character;
-        for (const auto* ch : compareMatches)
-            if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
-        const ImVec2 rowSize(0.0f, ImMax(24.0f, ImGui::GetTextLineHeightWithSpacing()+3.0f));
-        const bool autoClicked = ImGui::Selectable("##compareAutoCharacter",
-            g_LibCompareChar.empty(), ImGuiSelectableFlags_None, rowSize);
-        DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
-            ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-            autoCharacter->profession, autoCharacter->name, autoPrefix);
-        if (autoClicked) {
-            g_LibCompareChar.clear();
-            g_LibCompareSavedManual = false;
-        }
-        for (const auto* ch : compareMatches) {
-            ImGui::PushID(ch->name.c_str());
-            const bool selected = ch->name == g_LibCompareChar;
-            const bool clicked = ImGui::Selectable("##compareCharacterEntry",
-                selected, ImGuiSelectableFlags_None, rowSize);
-            DrawCompareProfessionCharacterEntry(ImGui::GetWindowDrawList(),
-                ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                ch->profession, ch->name);
-            if (clicked) {
-                g_LibCompareChar = ch->name;
+        // Keep native ImGui popup/keyboard behavior, but draw profession names in
+        // the same colors as the character list, including the closed preview.
+        const char* autoPrefix = "Active: ";
+        const ImVec2 previewMin = ImGui::GetCursorScreenPos();
+        const float previewWidth = ImGui::GetContentRegionAvail().x;
+        const float previewHeight = ImGui::GetFrameHeight();
+        ImDrawList* previewDraw = ImGui::GetWindowDrawList();
+        if (AlterEgo::UI::BeginCombo("##compareCharacter", "")) {
+            const AlterEgo::Character* autoCharacter = character;
+            for (const auto* ch : compareMatches)
+                if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
+            const bool autoClicked = SelectProfessionCharacterEntry("##compareAutoCharacter",
+                g_LibCompareChar.empty(),autoCharacter->profession,autoCharacter->name,autoPrefix);
+            if (autoClicked) {
+                MarkNavigation();g_LibCompareChar.clear();
                 g_LibCompareSavedManual = false;
-                g_LibCompareBuildTab = -1;
-                g_LibCompareEquipTab = 0;
             }
-            if (selected) ImGui::SetItemDefaultFocus();
-            ImGui::PopID();
+            for (const auto* ch : compareMatches) {
+                ImGui::PushID(ch->name.c_str());
+                const bool selected = ch->name == g_LibCompareChar;
+                const bool clicked = SelectProfessionCharacterEntry("##compareCharacterEntry",
+                    selected,ch->profession,ch->name);
+                if (clicked) {
+                    MarkNavigation();g_LibCompareChar = ch->name;
+                    g_LibCompareSavedManual = false;
+                    g_LibCompareBuildTab = -1;
+                    g_LibCompareEquipTab = 0;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
         }
-        ImGui::EndCombo();
+        DrawProfessionCharacterEntry(previewDraw, previewMin,
+            ImVec2(previewMin.x+previewWidth, previewMin.y+previewHeight),
+            character->profession, character->name,
+            g_LibCompareChar.empty() ? autoPrefix : nullptr, true);
+        ImGui::TableNextColumn();
+        const std::string chosenName = saved ?
+            (g_LibCompareSavedManual ? "" : "Auto: ") +
+                saved->name :
+            "Choose a saved loadout";
+        ImGui::SetNextItemWidth(-1.0f);
+        if (AlterEgo::UI::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
+            if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
+                MarkNavigation();
+                g_LibCompareSavedManual = false;
+                g_LibCompareBuildId.clear();
+            }
+            for (const auto& b : builds) {
+                if (b.profession != target->profession) continue;
+                const bool selected = saved && b.id == saved->id;
+                const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
+                if (AlterEgo::UI::SelectableOption((label + "##" + b.id).c_str(), selected)) {
+                    MarkNavigation();g_LibCompareBuildId = b.id;
+                    g_LibCompareSavedManual = true;
+                    saved = &b;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndTable();
     }
-    DrawCompareProfessionCharacterEntry(previewDraw, previewMin,
-        ImVec2(previewMin.x+previewWidth, previewMin.y+previewHeight),
-        character->profession, character->name,
-        g_LibCompareChar.empty() ? autoPrefix : nullptr, true);
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1.0f);
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
         return bt.name.empty() ? ("Tab " + std::to_string(bt.tab)) : bt.name;
     };
     std::string currentTabLabel = g_LibCompareBuildTab < 0
-        ? "Active (auto) - " + tabLabel(live) : tabLabel(live);
-    if (ImGui::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
-        if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0))
-            g_LibCompareBuildTab = -1;
-        for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
-            const auto& bt = character->build_tabs[i];
-            std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
-            if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab))
-                g_LibCompareBuildTab = i;
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1.0f);
+        ? "Active: " + tabLabel(live) : tabLabel(live);
     // The equipment selector belongs to retrieved character data, not the
     // saved library. It remains available when the character has no matching
     // saved build or when a saved build contains no equipment snapshot.
@@ -10619,46 +11178,55 @@ static void RenderCompareTab() {
     };
     std::string equipmentLabel = equipmentTabName(selectedEquipTab);
     if (g_LibCompareEquipTab == 0)
-        equipmentLabel = "Active (auto) - " + equipmentLabel;
-    if (ImGui::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
-        if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0))
-            g_LibCompareEquipTab = 0;
-        for (int tab = 1; tab <= maxTab; ++tab) {
-            std::string name = equipmentTabName(tab);
-            if (tab == character->active_equipment_tab) name += " (active)";
-            if (ImGui::Selectable(name.c_str(), tab == g_LibCompareEquipTab))
-                g_LibCompareEquipTab = tab;
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::EndTable();
-    }
-
+        equipmentLabel = "Active: " + equipmentLabel;
     ImGui::Spacing();
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(
-        AlterEgo::CompletionTheme::kAvailableText), "Saved Build");
-    const std::string chosenName = saved ?
-        (g_LibCompareSavedManual ? "" : "Auto-match - ") +
-            saved->name + " (" + saved->profession + ")" :
-        "No matching saved build - select manually";
-    ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::BeginCombo("##savedBuildCompare", chosenName.c_str())) {
-        if (ImGui::Selectable("Auto-match for selected character", !g_LibCompareSavedManual)) {
-            g_LibCompareSavedManual = false;
-            g_LibCompareBuildId.clear();
-        }
-        for (const auto& b : builds) {
-            if (b.profession != target->profession) continue;
-            const bool selected = saved && b.id == saved->id;
-            const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
-            if (ImGui::Selectable(label.c_str(), selected)) {
-                g_LibCompareBuildId = b.id;
-                g_LibCompareSavedManual = true;
-                saved = &b;
+    const bool customTabs = g_LibCompareBuildTab >= 0 || g_LibCompareEquipTab != 0;
+    const char* optionsLabel = customTabs || g_LibCompareExactItems
+        ? "Comparison options (custom)###compare_options"
+        : "Comparison options###compare_options";
+    const bool optionsOpen = ImGui::CollapsingHeader(optionsLabel);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Build: %s\nEquipment: %s\nItem matching: %s",
+            currentTabLabel.c_str(), equipmentLabel.c_str(),
+            g_LibCompareExactItems ? "Exact IDs" : "Equivalent stats");
+    if (optionsOpen) {
+        if (ImGui::BeginTable("##compareTabs", 2,
+            ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(compareLabelColor, "Build Tab");
+            ImGui::TableNextColumn();
+            ImGui::TextColored(compareLabelColor, "Equipment Tab");
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            if (AlterEgo::UI::BeginCombo("##compareBuildTab", currentTabLabel.c_str())) {
+                if (ImGui::Selectable("Active (auto)##build", g_LibCompareBuildTab < 0)) {MarkNavigation();g_LibCompareBuildTab = -1;}
+                for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
+                    const auto& bt = character->build_tabs[i];
+                    std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
+                    if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab)) {MarkNavigation();g_LibCompareBuildTab = i;}
+                }
+                ImGui::EndCombo();
             }
-            if (selected) ImGui::SetItemDefaultFocus();
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            if (AlterEgo::UI::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
+                if (ImGui::Selectable("Active (auto)##equipment", g_LibCompareEquipTab == 0)) {MarkNavigation();g_LibCompareEquipTab = 0;}
+                for (int tab = 1; tab <= maxTab; ++tab) {
+                    std::string name = equipmentTabName(tab);
+                    if (tab == character->active_equipment_tab) name += " (active)";
+                    if (ImGui::Selectable(name.c_str(), tab == g_LibCompareEquipTab)) {MarkNavigation();g_LibCompareEquipTab = tab;}
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::EndTable();
         }
-        ImGui::EndCombo();
+        if (saved && !saved->gear.empty()) {
+            ImGui::Checkbox("Exact item IDs##compare", &g_LibCompareExactItems);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Require identical item IDs instead of equivalent equipment stats.");
+        }
     }
     if (!saved) {
         if (builds.empty())
@@ -10668,9 +11236,6 @@ static void RenderCompareTab() {
                 target->name.c_str());
         return;
     }
-    if (saved->gear.empty()) {
-        ImGui::TextDisabled("This saved build has no equipment snapshot; only the saved skills/traits can be compared.");
-    }
     ImGui::Spacing();
     ImGui::BeginChild("##CompareResultScroll", ImVec2(0, 0), false);
     RenderSavedVsLiveComparison(*saved);
@@ -10678,6 +11243,12 @@ static void RenderCompareTab() {
 }
 
 #include "LibraryBackupUI.h"
+#include "CacheDiagnostics.h"
+#include "CacheMaintenance.h"
+static AlterEgo::Storage::MaintenanceResult g_StorageMaintenanceResult;
+static bool g_StorageMaintenancePending=false;
+static std::string g_StorageMaintenanceMessage;
+#include "ComposableUI.h"
 
 static void RenderLibraryImportDialog() {
     // Keep the import form and its asynchronous palette-data retry inside a
@@ -10693,7 +11264,7 @@ static void RenderLibraryImportDialog() {
                               ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Build, wardrobe chat link, or URL");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputTextMultiline("##import_link", g_LibImportBuf,
+        AlterEgo::UI::InputTextMultiline("##import_link", g_LibImportBuf,
             sizeof(g_LibImportBuf), ImVec2(-1.0f, 75.0f));
         if (g_LibImportBuf[0] == '\0') {
             // ImGui 1.80 has no InputTextMultilineWithHint. Draw the hint on
@@ -10706,13 +11277,13 @@ static void RenderLibraryImportDialog() {
             const ImVec2 pad = ImGui::GetStyle().FramePadding;
             dl->AddText(ImVec2(from.x + pad.x + 2.0f, from.y + pad.y + 1.0f),
                 ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                "GW2 build or wardrobe chat link, AE2 code\nSnow Crows or MetaBattle build URL");
+                AlterEgo::BuildRelay::ImportHint());
             dl->PopClipRect();
         }
 
-        ImGui::TextUnformatted("Name (optional for wardrobe / source URLs / AE2)");
+        ImGui::TextUnformatted(AlterEgo::BuildRelay::ImportNameLabel());
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
+        AlterEgo::UI::InputText("##import_name", g_LibImportName, sizeof(g_LibImportName));
         const std::string importInput(g_LibImportBuf);
         const bool sourceUrl = importInput.find("://") != std::string::npos;
         const bool wardrobe = AlterEgo::ChatLink::DetectType(importInput) == AlterEgo::LINK_WARDROBE_TMPL;
@@ -10740,7 +11311,7 @@ static void RenderLibraryImportDialog() {
             std::string input(g_LibImportBuf);
             std::string name(g_LibImportName);
             if (input.empty()) {
-                g_LibImportError = "Paste a GW2 build, wardrobe link, AE2 code, or source URL.";
+                g_LibImportError = AlterEgo::BuildRelay::EmptyImportError();
             } else if (input.find("://") != std::string::npos) {
                 std::string url = AlterEgo::SnowCrows::NormalizeUrl(input);
                 if (url.empty()) url = AlterEgo::MetaBattle::NormalizeUrl(input);
@@ -10866,26 +11437,32 @@ static void RenderBuildLibrary() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
     // Left panel: build list, Right panel: preview
-    float libAvailW = ImGui::GetContentRegionAvail().x;
-    g_LibListWidth = (g_LibListWidth < 120.0f) ? 120.0f : (g_LibListWidth > libAvailW - 200.0f) ? libAvailW - 200.0f : g_LibListWidth;
+    const AlterEgo::UI::SplitPanel split(g_LibListWidth,220.f);
 
     // Defer drag operations until neither pane holds a reference to a build.
     std::string pendingGroup, pendingGroupTarget;
     std::string pendingItemId, pendingItemTarget;
     bool pendingGroupAfter = false, pendingItemAfter = false;
-    ImGui::BeginChild("LibList", ImVec2(g_LibListWidth, 0), true);
+    ImGui::BeginChild("LibList", ImVec2(split.left, 0), true);
     {
-        // Match Characters: both controls live within the left list column,
-        // are full-width, and never take horizontal space from build details.
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::Combo("##lib_filter", &g_LibFilterMode, GameModeNames, IM_ARRAYSIZE(GameModeNames));
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputTextWithHint("##lib_search", "Search...", g_LibSearchBuf, sizeof(g_LibSearchBuf));
+        AlterEgo::UI::SearchToolbar("loadouts", "Search loadouts...", g_LibSearchBuf,
+            [&] {
+                AlterEgo::UI::FilterChips chips;
+                for(const auto& mode:g_LibFilterModes)
+                    chips.push_back({"mode:"+mode,mode,[mode]{g_LibFilterModes.erase(mode);SaveSession();}});
+                return chips;
+            },
+            [&] {
+                std::vector<std::pair<std::string,std::string>> options;
+                for(const auto& mode:AlterEgo::LibraryFilter::Modes())options.emplace_back(mode,mode);
+                if(AlterEgo::UI::MultiFilterChoice("Game mode",g_LibFilterModes,options))SaveSession();
+            },
+            [&] {g_LibFilterModes.clear();SaveSession();});
         ImGui::Separator();
 
         if (builds.empty()) {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-                "No saved builds.\nUse Library > New or\nImport from Link / URL\nto add one.");
+                "No saved Loadouts.\nUse Library > New or\nImport from Link / URL\nto add one.");
         }
         // Build one visual profession section for every distinct profession.
         // Existing JSON is still a flat array and retains the original order.
@@ -10913,7 +11490,7 @@ static void RenderBuildLibrary() {
             }
             LibraryGroup& group = groups[found->second];
             ++group.total;
-            if (!GameModeMatchesFilter(b, g_LibFilterMode)) continue;
+            if (!GameModeMatchesFilter(b, g_LibFilterModes)) continue;
             if (searching) {
                 std::string lowerName = b.name;
                 std::transform(lowerName.begin(), lowerName.end(),
@@ -10966,17 +11543,17 @@ static void RenderBuildLibrary() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Drag to reorder %s and all its builds. Right-click to create a build.",
                     profession.c_str());
-            if (ImGui::BeginPopupContextItem("##profession_actions")) {
-                if (ImGui::MenuItem("New Build")) g_NewBuildProfessionPending = profession;
+            if (!g_LibEditMode && ImGui::BeginPopupContextItem("##profession_actions")) {
+                if (ImGui::MenuItem("New Loadout")) g_NewBuildProfessionPending = profession;
                 ImGui::EndPopup();
             }
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+            if (!g_LibEditMode && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
                 ImGui::SetDragDropPayload("AE_BUILD_GROUP",
                     profession.c_str(), profession.size()+1);
                 ImGui::Text("Move %s (%d builds)", profession.c_str(), group.total);
                 ImGui::EndDragDropSource();
             }
-            if (ImGui::BeginDragDropTarget()) {
+            if (!g_LibEditMode && ImGui::BeginDragDropTarget()) {
                 const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
                     "AE_BUILD_GROUP", ImGuiDragDropFlags_AcceptBeforeDelivery |
                                       ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
@@ -11040,11 +11617,11 @@ static void RenderBuildLibrary() {
             // Determine elite spec for this build (if any). Search all three
             // specialization slots — elite isn't always in position 2.
             uint32_t eliteSpecId = 0;
-            const AlterEgo::SpecializationInfo* eliteSpec = nullptr;
+            std::shared_ptr<const AlterEgo::SpecializationInfo> eliteSpec;
             for (int s = 0; s < 3; s++) {
                 uint32_t sid = b.specializations[s].spec_id;
                 if (!sid) continue;
-                const auto* si = AlterEgo::GW2API::GetSpecInfo(sid);
+                const auto si = AlterEgo::GW2API::GetSpecInfo(sid);
                 if (si && si->elite) { eliteSpecId = sid; eliteSpec = si; break; }
             }
             // If we have a spec id but no info yet, kick off a fetch so we can
@@ -11076,7 +11653,7 @@ static void RenderBuildLibrary() {
                 uint32_t profIconId = GetProfessionBigIconId(b.profession);
                 iconTex = AlterEgo::IconManager::GetIcon(profIconId);
                 if (!iconTex || !iconTex->Resource) {
-                    const auto* prof = AlterEgo::GW2API::GetProfessionInfo(b.profession);
+                    const auto prof = AlterEgo::GW2API::GetProfessionInfo(b.profession);
                     AlterEgo::IconManager::RequestIcon(profIconId,
                         prof ? prof->icon_big_url : "", /*priority=*/true);
                 }
@@ -11171,39 +11748,32 @@ static void RenderBuildLibrary() {
                 }
             }
 
-            if (clicked) {
-                g_LibSelectedIdx = i;
+            if (clicked && !g_LibEditMode) {
+                MarkNavigation();g_LibSelectedIdx = i;
                 g_LibDetailsFetched = false;
             }
-            if (ImGui::BeginPopupContextItem("##build_actions")) {
-                if (ImGui::MenuItem("Compare")) {
-                    g_LibSelectedIdx = i;
-                    ActivateSavedBuildCompare(b);
-                }
+            if (!g_LibEditMode && ImGui::BeginPopupContextItem("##build_actions")) {
+                CopyNameMenuItem(b.name);
+                if (ImGui::MenuItem("Copy Portable Loadout")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, b, i);
+                if (ImGui::MenuItem("Compare")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, b, i);
                 if (ImGui::BeginMenu("Share")) {
                     RenderBuildShareMenuItems(b);
                     ImGui::EndMenu();
                 }
-                if (ImGui::MenuItem("Edit")) {
-                    g_LibSelectedIdx = i;
-                    g_LibEditBuildId = b.id;
-                    EnterBuildEditMode(b);
-                }
+                if (ImGui::MenuItem("Edit")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit, b, i);
                 ImGui::Separator();
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-                if (ImGui::MenuItem("Delete")) g_LibCtxDeleteIdx = i;
-                ImGui::PopStyleColor();
+                if (AlterEgo::UI::DestructiveMenuItem("Delete")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Delete, b, i);
                 ImGui::EndPopup();
             }
 
             // Drag an item within its own profession only. A completed drop
             // is applied after the preview pane finishes drawing.
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+            if (!g_LibEditMode && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
                 ImGui::SetDragDropPayload("AE_BUILD_ITEM", b.id.c_str(), b.id.size() + 1);
                 ImGui::Text("%s", b.name.c_str());
                 ImGui::EndDragDropSource();
             }
-            if (ImGui::BeginDragDropTarget()) {
+            if (!g_LibEditMode && ImGui::BeginDragDropTarget()) {
                 const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
                     "AE_BUILD_ITEM", ImGuiDragDropFlags_AcceptBeforeDelivery |
                                      ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
@@ -11232,6 +11802,15 @@ static void RenderBuildLibrary() {
             } // within the profession
             ImGui::PopID();
         } // profession groups
+        if (ImGui::BeginPopupContextWindow("##loadout_empty_actions",
+                ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+            if (ImGui::MenuItem("New")) {
+                g_NewBuildModes = {AlterEgo::GameMode::PvE};
+                g_NewBuildDialogOpen = true;
+            }
+            if (ImGui::MenuItem("Paste Portable Loadout")) PastePortableLoadout();
+            ImGui::EndPopup();
+        }
     }
 
     // Deferred delete confirmation from context menu
@@ -11244,7 +11823,7 @@ static void RenderBuildLibrary() {
             ImGui::Text("Delete \"%s\"?", builds[g_LibCtxDeleteIdx].name.c_str());
         }
         ImGui::Spacing();
-        if (ImGui::Button("Delete", ImVec2(80, 0))) {
+        if (AlterEgo::UI::Button("Delete", ImVec2(80, 0), AlterEgo::UI::ButtonRole::Destructive)) {
             if (g_LibCtxDeleteIdx >= 0 && g_LibCtxDeleteIdx < (int)builds.size()) {
                 AlterEgo::GW2API::RemoveSavedBuild(builds[g_LibCtxDeleteIdx].id);
                 if (g_LibSelectedIdx == g_LibCtxDeleteIdx) g_LibSelectedIdx = -1;
@@ -11254,7 +11833,7 @@ static void RenderBuildLibrary() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+        if (RenderActionButton("Cancel", ImVec2(80, 0))) {
             g_LibCtxDeleteIdx = -1;
             ImGui::CloseCurrentPopup();
         }
@@ -11263,36 +11842,7 @@ static void RenderBuildLibrary() {
 
     ImGui::EndChild();
 
-    // Draggable vertical splitter
-    ImGui::SameLine();
-    {
-        float splitterW = 6.0f;
-        float h = ImGui::GetContentRegionAvail().y;
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##liblist_splitter", ImVec2(splitterW, h));
-        bool hovered = ImGui::IsItemHovered();
-        bool active = ImGui::IsItemActive();
-        if (hovered || active)
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        if (active) {
-            float delta = ImGui::GetIO().MouseDelta.x;
-            if (delta != 0.0f) {
-                g_LibListWidth += delta;
-                g_LibListWidth = (g_LibListWidth < 120.0f) ? 120.0f : (g_LibListWidth > libAvailW - 200.0f) ? libAvailW - 200.0f : g_LibListWidth;
-            }
-        }
-        if (ImGui::IsItemDeactivated()) {
-            SaveSettings();
-        }
-        ImU32 lineCol = (hovered || active)
-            ? IM_COL32(180, 160, 80, 180)
-            : IM_COL32(80, 75, 60, 100);
-        float cx = pos.x + splitterW * 0.5f;
-        ImGui::GetWindowDrawList()->AddLine(
-            ImVec2(cx, pos.y + 4), ImVec2(cx, pos.y + h - 4),
-            lineCol, 2.0f);
-    }
-    ImGui::SameLine();
+    if(split.Divider("##liblist_splitter",g_LibListWidth))SaveSettings();
 
     // Right panel: preview
     ImGui::BeginChild("LibDetail", ImVec2(0, 0), true);
@@ -11415,7 +11965,7 @@ static void RenderBuildLibrary() {
             g_LibSelectedIdx = -1;
         }
     } else {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Select a build from the list.");
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Select a Loadout from the list.");
     }
     ImGui::EndChild();
 
@@ -11456,19 +12006,25 @@ static void RenderBuildLibrary() {
             SaveSession();
         }
     }
+    RenderComponentUIEditor();
+    ProcessComponentUICommand();
 }
 
 // Share relay progress/result popups must render regardless of the selected
 // main tab, because Share is now also available from Characters.
 static void RenderShareRelayPopups() {
+    if constexpr (!AlterEgo::BuildRelay::Enabled) return;
     // Relay code result popup (triggered by SendBuildToRelay)
-    if (g_RelaySending && g_RelayResultCode.empty() && g_RelayResultError.empty()) {
+    // The worker publishes strings before clearing the atomic busy flag.
+    // Do not read or mutate them while a worker owns the result.
+    const bool sending = g_RelaySending.load();
+    if (sending) {
         ImGui::OpenPopup("Sending to Mobile...##relay");
     }
-    if (!g_RelayResultCode.empty()) {
+    if (!sending && !g_RelayResultCode.empty()) {
         ImGui::OpenPopup("Build Sent##relay_ok");
     }
-    if (!g_RelayResultError.empty()) {
+    if (!sending && !g_RelayResultError.empty()) {
         ImGui::OpenPopup("Send Failed##relay_err");
     }
 
@@ -11476,10 +12032,11 @@ static void RenderShareRelayPopups() {
     if (ImGui::BeginPopupModal("Sending to Mobile...##relay", nullptr,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::Text("Uploading build to relay...");
-        if (!g_RelaySending) ImGui::CloseCurrentPopup(); // closes when done
+        if (!sending) ImGui::CloseCurrentPopup(); // closes when done
         ImGui::EndPopup();
     }
 
+    if (sending) return;
     // Success popup — show the code
     if (ImGui::BeginPopupModal("Build Sent##relay_ok", nullptr,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
@@ -11662,6 +12219,14 @@ static void BuildGW2Theme() {
 // --- Addon Lifecycle ---
 
 void AddonLoad(AddonAPI_t* aApi) {
+    const auto maintenanceRoot=AlterEgo::GW2API::GetDataDirectory();
+    g_StorageMaintenanceResult=AlterEgo::Storage::RunStartupMaintenance(maintenanceRoot);
+    g_StorageMaintenancePending=AlterEgo::Storage::MaintenancePending(maintenanceRoot);
+    g_StorageMaintenanceMessage.clear();
+    AlterEgo::Background::Workers().Open();
+    g_AchActiveEventNextCheck=0;
+    g_AchActiveEventFetching=false;
+    AlterEgo::Callbacks::Runtime().Open();
     APIDefs = aApi;
     ImGui::SetCurrentContext((ImGuiContext*)APIDefs->ImguiContext);
     ImGui::SetAllocatorFunctions((void* (*)(size_t, void*))APIDefs->ImguiMalloc,
@@ -11671,21 +12236,98 @@ void AddonLoad(AddonAPI_t* aApi) {
 
     // Initialize subsystems
     AlterEgo::GW2API::Initialize(APIDefs);
+    AlterEgo::NativeAccounts::Initialize(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::FontManager::Initialize(APIDefs);
     AlterEgo::IconManager::Initialize(APIDefs);
 
     // Load cached character data and build library from disk
     AlterEgo::GW2API::LoadCharacterData();
     AlterEgo::GW2API::LoadBuildLibrary();
-    g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory() + "/fashion_library.json");
+    g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::GW2API::LoadItemNameCache();
     AlterEgo::GW2API::LoadReferenceCaches();
-    SeedItemNameCache();
-    LoadLoginTimestamps();
-    AlterEgo::GW2API::FetchAllItemStatsAsync();
+    AlterEgo::PublicCatalog::Load(AlterEgo::GW2API::GetDataDirectory());
+    AlterEgo::WikiEvents::Load(AlterEgo::GW2API::GetDataDirectory());
+    if(!AlterEgo::PublicCatalog::Get()->upgrades)SeedItemNameCache();
+    LoadCharacterActivity();
+    LoadLegacyLoginHistory();
+    MigrateLegacyLoginHistory();
+    ImportPortableLoginHistory();
+    SyncLoginHistory();
     LoadCharSortConfig();
     RebuildCharDisplayOrder();
 
+    // Load icon textures from embedded PNG data
+    APIDefs->Textures_LoadFromMemory(TEX_ICON, (void*)ICON_NORMAL, ICON_NORMAL_size, nullptr);
+    APIDefs->Textures_LoadFromMemory(TEX_ICON_HOVER, (void*)ICON_HOVER, ICON_HOVER_size, nullptr);
+
+    // Load settings, session, and cached data
+    LoadSettings();
+    AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
+    LoadSession();
+    // Restore the selected account's achievement progress during addon startup.
+    // If native API has not revealed the single-account name yet, the global render
+    // poll loads it as soon as that identity becomes available.
+    const std::string startupAchAccount = GetAchievementCacheAccount();
+    if (!startupAchAccount.empty()) LoadAchProgress(startupAchAccount);
+    SyncCompletionAccountCaches();
+    LoadAchTrackerState();
+    LoadAchGroupCache();
+    LoadAchDefCache();
+    LoadAchNameIndex();
+
+    // Dye data loads independently. Profession metadata is now fetched lazily
+    // when a relevant view needs it: avoid a burst of nine background HTTP
+    // workers immediately during addon startup.
+    AlterEgo::GW2API::FetchAllItemStatsAsync();
+    AlterEgo::GW2API::FetchDyeColorsAsync();
+
+    // Ping native API to check availability
+
+    // Achievement definitions and progress are restored from disk above.
+    // Do not fetch pinned or selected-category definitions during startup;
+    // the Achievements tab and pinned popout load them when actually used.
+
+    // Initialize Skinventory subsystems
+    {
+        std::string dataDir = AlterEgo::GW2API::GetDataDirectory();
+        std::string skinDataDir = dataDir + "\\Skinventory";
+        try { std::filesystem::create_directories(skinDataDir); } catch (...) {}
+        std::string wikiCacheDir = AlterEgo::Storage::ResolveCache(dataDir, "Skinventory/wiki_cache", "wiki_images");
+
+        Skinventory::SkinCache::SetDataDirectory(skinDataDir);
+        Skinventory::Commerce::SetDataDirectory(skinDataDir);
+        Skinventory::OwnedSkins::SetDataDirectory(skinDataDir);
+        Skinventory::OwnedSkins::Initialize(APIDefs);
+        Skinventory::WikiImage::Initialize(APIDefs, wikiCacheDir);
+
+        if (Skinventory::SkinCache::LoadFromDisk()) {
+            // Refreshing cached API metadata obeys the global option;
+            // initial catalog creation is required to use Skinventory.
+            if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog))
+                Skinventory::SkinCache::UpdateCacheAsync();
+        } else {
+            Skinventory::SkinCache::FetchAllSkinsAsync();
+        }
+
+        if (!Skinventory::Commerce::LoadItemMap()) {
+            const auto catalog=AlterEgo::PublicCatalog::Get();
+            if(!catalog->upgradeAttempt || AlterEgo::PublicCatalog::Now()-catalog->upgradeAttempt>=AlterEgo::PublicCatalog::Retry)
+                Skinventory::Commerce::BuildItemMapAsync();
+        }
+        Skinventory::Commerce::LoadPriceCache();
+        Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
+        AlterEgo::PublicCatalog::RefreshVault(dataDir,false);
+        AlterEgo::WikiEvents::Refresh(dataDir);
+
+        // Ping native API so Skinventory's OwnedSkins receives the pong
+        // (must be after Initialize which subscribes to EV_HOARD_PONG)
+
+        g_SkinInitialized = true;
+    }
+
+    // Startup state, settings and subsystem caches are ready before exposing
+    // callback-driven refresh scheduling or rendering to the host.
     // Subscribe to MumbleLink identity for current character indicator
     APIDefs->Events_Subscribe("EV_MUMBLE_IDENTITY_UPDATED", OnMumbleIdentityUpdated);
 
@@ -11702,54 +12344,15 @@ void AddonLoad(AddonAPI_t* aApi) {
     APIDefs->Events_Subscribe(EV_ALTER_EGO_IMPORT_BUILD, OnPieImportBuild);
     APIDefs->Events_Subscribe(EV_PIE_UI_READY, OnPieUIReady);
 
-    // Subscribe to H&S events
-    APIDefs->Events_Subscribe(EV_HOARD_PONG, AlterEgo::GW2API::OnHoardPong);
-    APIDefs->Events_Subscribe(EV_HOARD_PONG, OnHoardPongForAch);
-    APIDefs->Events_Subscribe(EV_HOARD_DATA_UPDATED, AlterEgo::GW2API::OnHoardDataUpdated);
-    APIDefs->Events_Subscribe(EV_AE_CHAR_LIST_RESP, AlterEgo::GW2API::OnCharListResponse);
-    APIDefs->Events_Subscribe(EV_AE_CHAR_DATA_RESP, AlterEgo::GW2API::OnCharDataResponse);
-    APIDefs->Events_Subscribe(EV_AE_SKIN_UNLOCK_RESP, AlterEgo::GW2API::OnSkinUnlocksResponse);
-    APIDefs->Events_Subscribe(EV_AE_ITEM_LOC_RESP, AlterEgo::GW2API::OnItemLocationResponse);
-    APIDefs->Events_Subscribe(EV_AE_CLEARS_ACH_RESPONSE, OnClearsAchResponse);
-    APIDefs->Events_Subscribe(EV_AE_VAULT_RESPONSE, OnVaultResponse);
-    APIDefs->Events_Subscribe(EV_AE_VAULT_SEASON_RESP, OnVaultSeasonResponse);
-    APIDefs->Events_Subscribe(EV_AE_ACH_PROGRESS_RESPONSE, OnAchProgressResponse);
-    APIDefs->Events_Subscribe(EV_AE_ACCOUNTS_RESP, AlterEgo::GW2API::OnAccountsResponse);
-    APIDefs->Events_Subscribe(EV_HOARD_ACCOUNTS_CHANGED, AlterEgo::GW2API::OnAccountsChanged);
 
     // Pie UI bridge: announce AE (so an already-loaded Pie sees us) and probe for
     // an already-loaded Pie (which replies EV_PIE_UI_READY).
     APIDefs->Events_Raise(EV_ALTER_EGO_READY, nullptr);
     APIDefs->Events_Raise(EV_PIE_UI_PING, nullptr);
 
-    // Register render functions
-    APIDefs->GUI_Register(RT_Render, AddonRender);
-    APIDefs->GUI_Register(RT_OptionsRender, AddonOptions);
-
     // Register keybind
     APIDefs->InputBinds_RegisterWithString("KB_ALTER_EGO_TOGGLE", ProcessKeybind, "CTRL+SHIFT+E");
     APIDefs->InputBinds_RegisterWithString("KB_ALTER_EGO_TRACKER", ProcessKeybind, "(null)");
-
-    // Load icon textures from embedded PNG data
-    APIDefs->Textures_LoadFromMemory(TEX_ICON, (void*)ICON_NORMAL, ICON_NORMAL_size, nullptr);
-    APIDefs->Textures_LoadFromMemory(TEX_ICON_HOVER, (void*)ICON_HOVER, ICON_HOVER_size, nullptr);
-
-    // Load settings, session, and cached data
-    LoadSettings();
-    AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
-    LoadSession();
-    // Restore the selected account's achievement progress during addon startup.
-    // If H&S has not revealed the single-account name yet, the global render
-    // poll loads it as soon as that identity becomes available.
-    const std::string startupAchAccount = GetAchievementCacheAccount();
-    if (!startupAchAccount.empty()) LoadAchProgress(startupAchAccount);
-    SyncCompletionAccountCaches();
-    LoadAchTrackerState();
-    LoadAchGroupCache();
-    LoadAchDefCache();
-    LoadAchNameIndex();
-    LoadAchWaypoints();
-    LoadHeroChallenges();
 
     // Register quick access shortcut
     if (g_ShowQAIcon) {
@@ -11759,58 +12362,27 @@ void AddonLoad(AddonAPI_t* aApi) {
     // Register close-on-escape
     APIDefs->GUI_RegisterCloseOnEscape("Alter Ego", &g_WindowVisible);
 
-    // Dye data loads independently. Profession metadata is now fetched lazily
-    // when a relevant view needs it: avoid a burst of nine background HTTP
-    // workers immediately during addon startup.
-    AlterEgo::GW2API::FetchDyeColorsAsync();
-
-    // Ping H&S to check availability
-    AlterEgo::GW2API::PingHoard();
-
-    // Achievement definitions and progress are restored from disk above.
-    // Do not fetch pinned or selected-category definitions during startup;
-    // the Achievements tab and pinned popout load them when actually used.
-
-    // Initialize Skinventory subsystems
-    {
-        std::string dataDir = AlterEgo::GW2API::GetDataDirectory();
-        std::string skinDataDir = dataDir + "\\Skinventory";
-        try { std::filesystem::create_directories(skinDataDir); } catch (...) {}
-        std::string wikiCacheDir = skinDataDir + "\\wiki_cache";
-
-        Skinventory::SkinCache::SetDataDirectory(skinDataDir);
-        Skinventory::Commerce::SetDataDirectory(skinDataDir);
-        Skinventory::OwnedSkins::SetDataDirectory(skinDataDir);
-        Skinventory::OwnedSkins::Initialize(APIDefs);
-        Skinventory::WikiImage::Initialize(APIDefs, wikiCacheDir);
-        // Prefetch raid rotation icons used by the Clears tab.
-        Skinventory::WikiImage::DownloadCurrencyIcons("Emboldened,Call_of_the_Mists");
-
-        if (Skinventory::SkinCache::LoadFromDisk()) {
-            // Refreshing cached API metadata obeys the global option;
-            // initial catalog creation is required to use Skinventory.
-            if (AlterEgo::AutoRefreshPolicy::Enabled())
-                Skinventory::SkinCache::UpdateCacheAsync();
-        } else {
-            Skinventory::SkinCache::FetchAllSkinsAsync();
-        }
-
-        if (!Skinventory::Commerce::LoadItemMap()) {
-            Skinventory::Commerce::BuildItemMapAsync();
-        }
-        Skinventory::Commerce::LoadPriceCache();
-
-        // Ping H&S so Skinventory's OwnedSkins receives the pong
-        // (must be after Initialize which subscribes to EV_HOARD_PONG)
-        Skinventory::OwnedSkins::PingHoardAndSeek();
-
-        g_SkinInitialized = true;
-    }
+    // Register render functions
+    APIDefs->GUI_Register(RT_Render, AddonRender);
+    APIDefs->WndProc_Register(NavigationWndProc);
+    APIDefs->GUI_Register(RT_OptionsRender, AddonOptions);
 
     APIDefs->Log(LOGL_INFO, "AlterEgo", "Addon loaded successfully");
 }
 
 void AddonUnload() {
+    const auto shutdownAt=AlterEgo::CharacterActivity::Now();
+    AlterEgo::Callbacks::Runtime().Close();
+    AlterEgo::Background::Workers().RequestStop();
+    AlterEgo::IconManager::RequestStop();
+    Skinventory::WikiImage::RequestStop();
+    APIDefs->GUI_DeregisterCloseOnEscape("Alter Ego");
+    APIDefs->QuickAccess_Remove(QA_ID);
+    APIDefs->GUI_Deregister(AddonOptions);
+    APIDefs->GUI_Deregister(AddonRender);
+    APIDefs->WndProc_Deregister(NavigationWndProc);
+    APIDefs->InputBinds_Deregister("KB_ALTER_EGO_TOGGLE");
+    APIDefs->InputBinds_Deregister("KB_ALTER_EGO_TRACKER");
     // Unsubscribe MumbleLink identity
     APIDefs->Events_Unsubscribe("EV_MUMBLE_IDENTITY_UPDATED", OnMumbleIdentityUpdated);
 
@@ -11826,70 +12398,123 @@ void AddonUnload() {
     APIDefs->Events_Unsubscribe(EV_ALTER_EGO_IMPORT_BUILD, OnPieImportBuild);
     APIDefs->Events_Unsubscribe(EV_PIE_UI_READY, OnPieUIReady);
 
-    // Unsubscribe H&S events
-    APIDefs->Events_Unsubscribe(EV_HOARD_PONG, AlterEgo::GW2API::OnHoardPong);
-    APIDefs->Events_Unsubscribe(EV_HOARD_PONG, OnHoardPongForAch);
-    APIDefs->Events_Unsubscribe(EV_HOARD_DATA_UPDATED, AlterEgo::GW2API::OnHoardDataUpdated);
-    APIDefs->Events_Unsubscribe(EV_AE_CHAR_LIST_RESP, AlterEgo::GW2API::OnCharListResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_CHAR_DATA_RESP, AlterEgo::GW2API::OnCharDataResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_SKIN_UNLOCK_RESP, AlterEgo::GW2API::OnSkinUnlocksResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_ITEM_LOC_RESP, AlterEgo::GW2API::OnItemLocationResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_CLEARS_ACH_RESPONSE, OnClearsAchResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_VAULT_RESPONSE, OnVaultResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_VAULT_SEASON_RESP, OnVaultSeasonResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_ACH_PROGRESS_RESPONSE, OnAchProgressResponse);
-    APIDefs->Events_Unsubscribe(EV_AE_ACCOUNTS_RESP, AlterEgo::GW2API::OnAccountsResponse);
-    APIDefs->Events_Unsubscribe(EV_HOARD_ACCOUNTS_CHANGED, AlterEgo::GW2API::OnAccountsChanged);
+
+    // No new callback body can enter; drain admitted work before teardown.
+    // Do not hold a subsystem lock while waiting (events may reenter synchronously).
+    AlterEgo::Callbacks::Runtime().Drain();
+    // End observation at shutdown, not after a slow HTTP worker joins.
+    {std::lock_guard<std::mutex> lock(AlterEgo::CharacterActivity::Mutex());
+        AlterEgo::CharacterActivity::State().Finish(shutdownAt);}
+
+    // All one-shot jobs must finish before their state/API is destroyed.
+    AlterEgo::Background::Workers().JoinAll();
 
     // Persist achievement progress before shutting down the data subsystem,
     // including updates received while the Achievements tab was not visible.
     if (g_AchProgressDirty && !g_AchCachedAccount.empty())
         SaveAchProgress(g_AchCachedAccount);
 
+    SaveCharacterActivity(true);
+    AlterEgo::NativeProgress::Reset();
+    AlterEgo::RefreshEngine::ResetMetadata();
+
     // Shutdown Skinventory subsystems
     Skinventory::WikiImage::Shutdown();
     Skinventory::OwnedSkins::Shutdown();
 
     AlterEgo::IconManager::Shutdown();
+    AlterEgo::NativeAccounts::Shutdown();
     AlterEgo::GW2API::Shutdown();
-
-    APIDefs->GUI_DeregisterCloseOnEscape("Alter Ego");
-    APIDefs->QuickAccess_Remove(QA_ID);
-    APIDefs->GUI_Deregister(AddonOptions);
-    APIDefs->GUI_Deregister(AddonRender);
 
     SaveSession();
     SaveSettings();
     SaveAchTrackerState();
-    if (g_LoginTimestampsDirty) SaveLoginTimestamps();
     AlterEgo::GW2API::SaveItemNameCache();
     AlterEgo::FontManager::Shutdown();
+    AlterEgo::NativeLibrary::RuntimeStore().Close();
     APIDefs = nullptr;
 }
 
-static void SaveLoginTimestamps() {
-    std::string dir = AlterEgo::GW2API::GetDataDirectory();
-    std::filesystem::create_directories(dir);
-    std::string path = dir + "/login_times.json";
-    nlohmann::json j;
-    for (const auto& [name, ts] : g_LoginTimestamps)
-        j[name] = ts;
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump(2);
-    g_LoginTimestampsDirty = false;
+static void LoadCharacterActivity(){
+    namespace A=AlterEgo::CharacterActivity;
+    std::lock_guard<std::mutex> lock(A::Mutex());A::State()=A::Tracker{};
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_activity.json");
+    g_ActivityLoadValid=true;
+    try{std::ifstream f(path);if(f)A::State().Load(nlohmann::json::parse(f));}catch(...){g_ActivityLoadValid=false;}
+    g_LoginProjectionRevision=~uint64_t(0);
 }
-
-static void LoadLoginTimestamps() {
-    std::string path = AlterEgo::GW2API::GetDataDirectory() + "/login_times.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return;
-    try {
-        auto j = nlohmann::json::parse(file);
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            if (it.value().is_number())
-                g_LoginTimestamps[it.key()] = it.value().get<int64_t>();
+static bool SaveCharacterActivity(bool force){
+    namespace A=AlterEgo::CharacterActivity;
+    static std::mutex saveMutex;
+    std::lock_guard<std::mutex> saving(saveMutex);
+    static auto last=std::chrono::steady_clock::time_point{};
+    const auto now=std::chrono::steady_clock::now();
+    if(!force&&now-last<std::chrono::seconds(30))return false;
+    last=now;
+    nlohmann::json data;uint64_t revision=0;
+    {std::lock_guard<std::mutex> lock(A::Mutex());if(!A::State().DirtyState())return true;
+        data=A::State().Save();revision=A::State().Revision();}
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_activity.json");
+    if(WriteFileAtomic(path,data.dump())){
+        std::lock_guard<std::mutex> lock(A::Mutex());A::State().Saved(revision);return true;
+    }
+    return false;
+}
+static void LoadLegacyLoginHistory(){
+    g_LegacyLoginHistory.clear();g_LegacyLoginArchivePending=false;
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"login_times.json");
+    try{
+        std::ifstream f(path);if(!f)return;
+        const auto j=nlohmann::json::parse(f);if(!j.is_object())return;
+        bool valid=true;
+        for(auto it=j.begin();it!=j.end();++it){
+            if(!it.key().empty()&&it.value().is_number_integer()&&it.value().get<int64_t>()>0)
+                g_LegacyLoginHistory.emplace(it.key(),it.value().get<int64_t>());
+            else valid=false;
         }
-    } catch (...) {}
+        g_LegacyLoginArchivePending=valid&&g_ActivityLoadValid;
+    }catch(...){g_LegacyLoginArchivePending=false;}
+}
+static void MigrateLegacyLoginHistory(){
+    namespace A=AlterEgo::CharacterActivity;
+    if(!g_ActivityLoadValid)return;
+    for(auto it=g_LegacyLoginHistory.begin();it!=g_LegacyLoginHistory.end();){
+        const auto account=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(it->first);
+        if(account.empty()){++it;continue;} // retain original file until all identities resolve
+        {std::lock_guard<std::mutex> lock(A::Mutex());
+            A::State().ImportLogin({account,it->first},it->second);}
+        it=g_LegacyLoginHistory.erase(it);
+    }
+    if(g_LegacyLoginArchivePending&&g_LegacyLoginHistory.empty()&&SaveCharacterActivity(true)){
+        const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"login_times.json");
+        std::error_code ec;
+        const auto archive=path+".migrated";
+        if(!std::filesystem::exists(archive,ec)&&!ec)std::filesystem::rename(path,archive,ec);
+        // If archival fails, leave the original intact; the import is idempotent.
+        g_LegacyLoginArchivePending=false;
+    }
+}
+static void ImportPortableLoginHistory(){
+    namespace A=AlterEgo::CharacterActivity;
+    if(!g_ActivityLoadValid)return;
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_logins.json");
+    try{
+        std::map<A::Key,int64_t> logins;
+        {std::ifstream f(path);if(!f)return;logins=A::DecodeLoginHistory(nlohmann::json::parse(f));}
+        {std::lock_guard<std::mutex> lock(A::Mutex());
+            for(const auto& [key,stamp]:logins)A::State().ImportLogin(key,stamp);}
+        if(SaveCharacterActivity(true)){
+            std::error_code ec;std::filesystem::remove(std::filesystem::u8path(path),ec);
+        } // on a failed write, leave the staged file for the next startup
+    }catch(...){/* retain invalid input; do not overwrite activity */}
+}
+static void SyncLoginHistory(){
+    namespace A=AlterEgo::CharacterActivity;
+    std::lock_guard<std::mutex> lock(A::Mutex());
+    const auto revision=A::State().LoginRevision();
+    if(revision==g_LoginProjectionRevision)return;
+    g_LoginHistory=A::State().LoginTimes();g_LoginProjectionRevision=revision;
+    g_CharLastLoginSortDirty=true;
 }
 
 // Sanitize an account name to a filename-safe slug (account names contain '.').
@@ -11907,50 +12532,23 @@ static std::string SanitizeForFilename(const std::string& s) {
 // switching accounts doesn't clobber the previous account's cache.
 static void SaveAchProgress(const std::string& account) {
     if (account.empty()) return;
-    const std::string dir = AlterEgo::GW2API::GetDataDirectory() + "/cache";
-    const std::string path = dir + "/ach_progress_" + SanitizeForFilename(account) + ".json";
-
-    // Capture one consistent account snapshot; newer H&S updates must not be
-    // marked saved if they arrive while the disk write is in progress.
-    std::vector<std::pair<uint32_t, AchProgress>> snapshot;
-    int64_t fetchedAt = 0;
+    // Serialize capture and write so two saves of the same fetch timestamp
+    // cannot publish their generations in reverse order.
+    static std::mutex saveMutex;
+    std::lock_guard<std::mutex> saving(saveMutex);
+    AlterEgo::Cache::AchievementSnapshot snapshot;
     uint64_t generation = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         if (g_AchCachedAccount != account) return;
-        snapshot.reserve(g_AchProgress.size());
-        for (const auto& [id, p] : g_AchProgress) snapshot.emplace_back(id, p);
-        fetchedAt = g_AchProgressCacheSavedAt;
+        for (const auto& [id, p] : g_AchProgress) snapshot.entries.emplace(id, p);
+        snapshot.fetchedAt = g_AchProgressCacheSavedAt;
         generation = g_AchProgressGen;
     }
-
-    nlohmann::json j = nlohmann::json::object();
-    j["account"] = account;
-    j["saved_at"] = fetchedAt;
-    nlohmann::json entries = nlohmann::json::object();
-    for (const auto& [id, p] : snapshot) {
-        nlohmann::json e;
-        e["c"] = p.current;
-        e["m"] = p.max;
-        e["d"] = p.done;
-        e["r"] = p.repeated;
-        e["u"] = p.unlocked;
-        if (!p.completed_bits.empty()) {
-            nlohmann::json bits = nlohmann::json::array();
-            for (uint32_t b : p.completed_bits) bits.push_back(b);
-            e["b"] = std::move(bits);
-        }
-        entries[std::to_string(id)] = std::move(e);
-    }
-    j["entries"] = std::move(entries);
-
-    // Existing saved files use the same entries format and remain readable.
-    // Replace the file atomically so a partial write cannot destroy the cache.
     bool saved = false;
     try {
-        std::error_code ec;
-        std::filesystem::create_directories(dir, ec);
-        if (!ec) saved = WriteFileAtomic(path, j.dump());
+        saved = AlterEgo::Cache::WriteAchievements(
+            AlterEgo::GW2API::GetDataDirectory(), account, snapshot);
     } catch (...) {
         saved = false;
     }
@@ -11970,43 +12568,64 @@ static void SaveAchProgress(const std::string& account) {
 // so dependent UI caches (rail counts, popout) refresh.
 static void LoadAchProgress(const std::string& account) {
     if (account.empty()) return;
-    const std::string path = AlterEgo::GW2API::GetDataDirectory() +
-        "/cache/ach_progress_" + SanitizeForFilename(account) + ".json";
-
-    // Parse into a temporary map first: malformed/incomplete files never
-    // partially populate the live progress map.
+    const auto root = AlterEgo::GW2API::GetDataDirectory();
+    const auto path = root + "/cache/ach_progress_" + SanitizeForFilename(account) + ".json";
     std::unordered_map<uint32_t, AchProgress> restored;
     int64_t fetchedAt = 0;
     bool valid = false;
-    std::ifstream file(path, std::ios::binary);
-    if (file.is_open()) {
-        try {
-            const auto j = nlohmann::json::parse(file);
-            if (!j.is_object() || !j.contains("entries") || !j["entries"].is_object() ||
-                (j.contains("account") && j["account"].get<std::string>() != account))
-                throw std::runtime_error("Invalid achievement cache");
-            fetchedAt = j.value("saved_at", (int64_t)0);
-            for (auto it = j["entries"].begin(); it != j["entries"].end(); ++it) {
-                AchProgress p;
-                p.id = (uint32_t)std::stoul(it.key());
-                const auto& e = it.value();
-                p.current = e.value("c", 0);
-                p.max = e.value("m", 0);
-                p.done = e.value("d", false);
-                p.repeated = e.value("r", 0);
-                p.unlocked = e.value("u", true);
-                if (e.contains("b") && e["b"].is_array()) {
-                    for (const auto& b : e["b"])
-                        p.completed_bits.insert(b.get<uint32_t>());
+    try {
+        auto snapshot = AlterEgo::Cache::ReadAchievements(root, account);
+        if (!snapshot) {
+            // Legacy cache is disposable. Import only when the embedded
+            // identity proves this slug belongs to the requested account.
+            std::ifstream file(path, std::ios::binary);
+            if (file.is_open()) {
+                const auto j = nlohmann::json::parse(file);
+                file.close();
+                if (!j.is_object() || !j.contains("entries") || !j["entries"].is_object() ||
+                    !j.contains("account") || j["account"].get<std::string>() != account)
+                    throw std::runtime_error("Unverified legacy achievement cache identity");
+                AlterEgo::Cache::AchievementSnapshot legacy;
+                legacy.fetchedAt = j.value("saved_at", (int64_t)0);
+                for (auto it = j["entries"].begin(); it != j["entries"].end(); ++it) {
+                    AchProgress p;
+                    size_t consumed = 0;
+                    const auto id = std::stoull(it.key(), &consumed);
+                    if (consumed != it.key().size() || id > UINT32_MAX)
+                        throw std::runtime_error("Invalid achievement id");
+                    p.id = static_cast<uint32_t>(id);
+                    const auto& e = it.value();
+                    p.current = e.value("c", 0);
+                    p.max = e.value("m", 0);
+                    p.done = e.value("d", false);
+                    p.repeated = e.value("r", 0);
+                    p.unlocked = e.value("u", true);
+                    if (e.contains("b") && e["b"].is_array())
+                        for (const auto& bit : e["b"])
+                            p.completed_bits.insert(bit.get<uint32_t>());
+                    if (!legacy.entries.emplace(p.id, std::move(p)).second)
+                        throw std::runtime_error("Duplicate achievement id");
                 }
-                restored.emplace(p.id, std::move(p));
+                // Re-read the authoritative transaction before removing the
+                // old cache, including when a newer snapshot won the race.
+                AlterEgo::Cache::WriteAchievements(root, account, legacy);
+                snapshot = AlterEgo::Cache::ReadAchievements(root, account);
+                if (snapshot) {
+                    std::error_code ec;
+                    std::filesystem::remove(std::filesystem::u8path(path), ec);
+                }
             }
-            valid = true;
-        } catch (...) {
-            if (APIDefs)
-                APIDefs->Log(LOGL_WARNING, "AlterEgo",
-                             "Achievement progress cache is unreadable; retaining file");
         }
+        if (snapshot) {
+            fetchedAt = snapshot->fetchedAt;
+            restored.reserve(snapshot->entries.size());
+            for (auto& [id,p] : snapshot->entries) restored.emplace(id,std::move(p));
+            valid = true;
+        }
+    } catch (...) {
+        if (APIDefs)
+            APIDefs->Log(LOGL_WARNING, "AlterEgo",
+                         "Achievement progress cache is unreadable; retaining data for recovery");
     }
 
     {
@@ -12016,7 +12635,7 @@ static void LoadAchProgress(const std::string& account) {
         g_AchCachedAccount = account;
         g_AchProgressCacheSavedAt = valid ? fetchedAt : 0;
         g_AchProgressLoadedSnapshotAt = valid ? fetchedAt : 0;
-        g_AchNeedsInitialFullLoad = !valid || g_AchProgress.empty();
+        g_AchNeedsInitialFullLoad = !valid;
         g_AchManualInitialScan = false;
         g_AchCategoryRefreshAt.clear();
         g_AchProgressDirty = false;
@@ -12025,6 +12644,8 @@ static void LoadAchProgress(const std::string& account) {
 }
 
 void OnMumbleIdentityUpdated(void* eventArgs) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (!eventArgs) return;
     const MumbleIdentity* id = (const MumbleIdentity*)eventArgs;
     char buf[20] = {};
@@ -12035,23 +12656,15 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
         if (c == ' ' || c == '-' || isalpha(c) || c >= 0x80) continue;
         return; // invalid — likely garbage data from uninitialized MumbleLink
     }
-    const auto observed = g_AutoRefreshTracker.ObserveIdentity(
-        newName, id->Specialization,
-        AlterEgo::AutoRefreshTracker::Clock::now(),
-        AlterEgo::AutoRefreshPolicy::Enabled(),
-        g_AutoRefreshOnLogin, g_AutoRefreshOnSpecialization);
-    if (newName.empty()) return;
-    if (observed.login) {
-        g_LoginTimestamps[newName] = (int64_t)std::time(nullptr);
-        g_LoginTimestampsDirty = true;
-        g_CharLastLoginSortDirty = true;
-        g_CurrentCharName = newName;
-        // Resolve which account this character belongs to
-        AlterEgo::GW2API::SetCurrentAccountFromCharacter(newName);
-    }
+    if(newName.empty())return;
+    // The event publishes verified account context immediately for alert
+    // callbacks. Gameplay sampling is the sole owner of activity and UI state.
+    AlterEgo::GW2API::SetCurrentAccountFromCharacter(newName);
 }
 
 void ProcessKeybind(const char* aIdentifier, bool aIsRelease) {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     if (aIsRelease) return;
 
     if (strcmp(aIdentifier, "KB_ALTER_EGO_TOGGLE") == 0) {
@@ -12072,7 +12685,7 @@ void ProcessKeybind(const char* aIdentifier, bool aIsRelease) {
 // Skinventory UI
 // =========================================================================
 
-static ImVec4 GetSkinRarityColor(const std::string& rarity) {
+ImVec4 GetSkinRarityColor(const std::string& rarity) {
     if (rarity == "Junk")       return ImVec4(0.67f, 0.67f, 0.67f, 1.0f);
     if (rarity == "Basic")      return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
     if (rarity == "Fine")       return ImVec4(0.38f, 0.58f, 1.0f, 1.0f);
@@ -12100,20 +12713,20 @@ static void DrawCoinIcon(ImVec4 color, float radius) {
     ImGui::Dummy(ImVec2(radius * 2.0f + 1.0f, ImGui::GetTextLineHeight()));
 }
 
-static void RenderCoins(int copper) {
+void RenderCoins(int64_t copper) {
     if (copper <= 0) {
         ImGui::TextColored(COIN_COPPER, "0");
         ImGui::SameLine(0, 2);
         DrawCoinIcon(COIN_COPPER, 5.0f);
         return;
     }
-    int gold = copper / 10000;
-    int silver = (copper % 10000) / 100;
-    int cop = copper % 100;
+    const auto gold = copper / 10000;
+    const int silver = static_cast<int>((copper % 10000) / 100);
+    const int cop = static_cast<int>(copper % 100);
 
     bool needSame = false;
     if (gold > 0) {
-        ImGui::TextColored(COIN_GOLD, "%d", gold);
+        ImGui::TextColored(COIN_GOLD, "%lld", static_cast<long long>(gold));
         ImGui::SameLine(0, 1);
         DrawCoinIcon(COIN_GOLD, 5.0f);
         needSame = true;
@@ -12131,362 +12744,197 @@ static void RenderCoins(int copper) {
     DrawCoinIcon(COIN_COPPER, 5.0f);
 }
 
-// Cached owned/total counts per skin category — recomputed when the
-// OwnedSkins generation changes (i.e. after a Refresh).
-static std::pair<int,int> SkinCategoryCounts(const std::string& type,
-                                             const std::string& sub,
-                                             const std::string& wc) {
-    static std::unordered_map<std::string, std::pair<int,int>> s_cache;
-    static uint64_t s_gen = (uint64_t)-1;
-    uint64_t gen = Skinventory::OwnedSkins::GetGeneration();
-    if (gen != s_gen) { s_cache.clear(); s_gen = gen; }
-
-    std::string key = type + "|" + sub + "|" + wc;
-    auto it = s_cache.find(key);
-    if (it != s_cache.end()) return it->second;
-
-    auto skins = Skinventory::SkinCache::GetSkinsByCategory(type, sub, wc);
-    int owned = 0;
-    for (uint32_t id : skins) {
-        if (Skinventory::OwnedSkins::IsOwned(id)) owned++;
+// One cached catalog/ownership projection serves Browser and Shopping facets.
+struct SkinBrowserData {
+    uint64_t catalog=uint64_t(-1), ownership=uint64_t(-1);
+    bool hasOwnership=false;
+    std::vector<Skinventory::SkinInfo> rows;
+    std::unordered_set<uint32_t> owned;
+    Skinventory::SkinFacets facets;
+};
+static const SkinBrowserData& GetSkinBrowserData() {
+    static SkinBrowserData data;
+    const auto catalog=Skinventory::SkinCache::GetGeneration();
+    const auto owner=Skinventory::OwnedSkins::GetGeneration();
+    const bool has=Skinventory::OwnedSkins::HasData();
+    if(data.catalog!=catalog) {
+        data.rows=Skinventory::SkinCache::GetCatalogSnapshot();
+        std::sort(data.rows.begin(),data.rows.end(),[](const auto& a,const auto& b){
+            return a.name==b.name?a.id<b.id:a.name<b.name;
+        });
     }
-    auto result = std::make_pair(owned, (int)skins.size());
-    s_cache[key] = result;
-    return result;
+    if(data.ownership!=owner||data.hasOwnership!=has)
+        data.owned=Skinventory::OwnedSkins::GetOwnedSnapshot();
+    if(data.catalog!=catalog||data.ownership!=owner||data.hasOwnership!=has) {
+        data.facets=Skinventory::CountFacets(data.rows,data.owned,has);
+        data.catalog=catalog;data.ownership=owner;data.hasOwnership=has;
+    }
+    return data;
+}
+static AlterEgo::UI::FilterChips SkinFilterChips(Skinventory::SkinFilters& filters,
+    std::function<void()> changed) {
+    AlterEgo::UI::FilterChips chips;
+    auto add=[&](const char* group,Skinventory::Choices& values) {
+        for(const auto& value:values) {
+            auto* set=&values;
+            std::string label=value=="Weapon"?"Weapons":value;
+            chips.push_back({std::string(group)+":"+value,label,[set,value,&filters,changed] {
+                set->erase(value);filters.Prune();changed();
+            }});
+        }
+    };
+    add("category",filters.category);add("weight",filters.weight);add("slot",filters.slot);
+    add("weapon",filters.weapon);add("rarity",filters.rarity);
+    return chips;
+}
+static void DrawSkinFilters(Skinventory::SkinFilters& filters,const SkinBrowserData& data,
+                            const std::function<void()>& changed) {
+    const auto draw=[&](const char* label,Skinventory::Choices& selected,
+                        const std::map<std::string,Skinventory::SkinCounts>& counts,
+                        const std::vector<std::string>& order) {
+        std::vector<std::pair<std::string,std::string>> options;
+        auto append=[&](const std::string& value) {
+            if(value.empty())return;
+            std::string text=value=="Weapon"?"Weapons":value;
+            const auto it=counts.find(value);
+            if(it!=counts.end())text+=" ("+(data.hasOwnership?std::to_string(it->second.owned)+"/":"")+std::to_string(it->second.total)+")";
+            options.emplace_back(value,text);
+        };
+        for(const auto& v:order)append(v);
+        for(const auto& kv:counts)if(std::find(order.begin(),order.end(),kv.first)==order.end())append(kv.first);
+        if(AlterEgo::UI::MultiFilterChoice(label,selected,options)) {filters.Prune();changed();}
+    };
+    draw("Category",filters.category,data.facets.category,{"Armor","Weapon","Back","Gathering"});
+    if(Skinventory::Allows(filters.category,"Armor")) {
+        draw("Armor weight",filters.weight,data.facets.weight,{"Heavy","Medium","Light"});
+        draw("Armor slot",filters.slot,data.facets.slot,{"Helm","HelmAquatic","Shoulders","Coat","Gloves","Leggings","Boots"});
+    }
+    if(Skinventory::Allows(filters.category,"Weapon"))
+        draw("Weapon type",filters.weapon,data.facets.weapon,Skinventory::SkinCache::GetWeaponTypes());
+    draw("Rarity",filters.rarity,data.facets.rarity,{"Junk","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"});
+}
+static void RevealSkinInBrowser(uint32_t id) {
+    const auto skin=Skinventory::SkinCache::GetSkin(id);
+    if(skin && !g_SkinBrowserFilters.Matches(*skin)) g_SkinBrowserFilters={};
+    if(skin&&!Skinventory::Search::Matches(skin->name,Skinventory::Search::Words(g_SkinSearchFilter)))g_SkinSearchFilter[0]='\0';
+    if(Skinventory::OwnedSkins::HasData()) {
+        const bool owned=Skinventory::OwnedSkins::IsOwned(id);
+        if((owned&&!g_SkinShowOwned)||(!owned&&!g_SkinShowUnowned))g_SkinShowOwned=g_SkinShowUnowned=true;
+    }
+}
+// All Skinventory surfaces use this same menu, scoped to the actual row/skin.
+static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t stockItem=0) {
+    if (!ImGui::BeginPopupContextItem("##skin_actions")) return;
+    ImGui::TextDisabled("%s",skin.name.c_str());
+    ImGui::Separator();
+    CopyNameMenuItem(skin.name);
+    if(ImGui::MenuItem("Copy Skin Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeSkin(skin.id));
+    // Pie UI documents native skin-link preview through EV_PIEUI_OPEN_CHATLINK.
+    if(g_PieUIPresent.load() && ImGui::MenuItem("Preview in Game"))
+        PieUI_PreviewChatLink(AlterEgo::ChatLink::EncodeSkin(skin.id));
+    const auto price=Skinventory::Commerce::GetPrice(skin.id);
+    if(price && price->tradeable && price->item_id) {
+        const auto name=Skinventory::Commerce::GetItemName(price->item_id);
+        if(!name.empty()) {
+            CopyNameMenuItem(name,"Copy Trading Post Item Name");
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",name.c_str());
+        }
+        if(ImGui::MenuItem("Copy Item Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeItem(price->item_id));
+        if(!stockItem&&ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(price->item_id);
+    }
+    ImGui::Separator();
+
+    if(stockItem&&ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(stockItem);
+    const auto wiki=Skinventory::WikiImage::GetWikiData(skin.id);
+    if(!wiki.vendor_waypoint.empty() && ImGui::MenuItem("Copy Vendor Waypoint")) CopyToClipboard(wiki.vendor_waypoint);
+    if(ImGui::MenuItem("Open Wiki Page")) {
+        std::string url="https://wiki.guildwars2.com/wiki/"+skin.name;
+        std::replace(url.begin(),url.end(),' ','_');
+        ShellExecuteA(NULL,"open",url.c_str(),NULL,NULL,SW_SHOWNORMAL);
+    }
+    ImGui::EndPopup();
 }
 
-// Single nav row with optional owned/total count and active gold accent.
-static bool RenderSkinNavRow(const char* label, bool active,
-                             int owned, int total,
-                             ImVec4 dotColor, bool indent) {
-    ImGui::PushID(label);
-    ImVec2 startPos = ImGui::GetCursorScreenPos();
-    float availW = ImGui::GetContentRegionAvail().x;
-    float rowH = ImGui::GetTextLineHeight() + 4.0f;
-
-    if (indent) ImGui::Indent(8.0f);
-
-    // Active gold-bar background fill behind text
-    if (active) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 bgMin(startPos.x, startPos.y);
-        ImVec2 bgMax(startPos.x + availW, startPos.y + rowH);
-        dl->AddRectFilled(bgMin, bgMax, IM_COL32(80, 64, 28, 60), 2.0f);
-        dl->AddRectFilled(ImVec2(bgMin.x, bgMin.y + 2),
-                          ImVec2(bgMin.x + 2, bgMax.y - 2),
-                          IM_COL32(232, 196, 122, 230));
-    }
-
-    // Small coloured dot as a category accent
-    {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 p = ImGui::GetCursorScreenPos();
-        float cx = p.x + 4.0f;
-        float cy = p.y + ImGui::GetTextLineHeight() * 0.5f;
-        dl->AddCircleFilled(ImVec2(cx, cy), 3.5f, ImGui::GetColorU32(dotColor));
-        ImGui::Dummy(ImVec2(12.0f, ImGui::GetTextLineHeight()));
-        ImGui::SameLine(0, 2);
-    }
-
-    // Tag the count to the label so Selectable owns the full row width
-    char countBuf[32] = {0};
-    if (total > 0) {
-        if (owned >= 0) snprintf(countBuf, sizeof(countBuf), "  %d/%d", owned, total);
-        else            snprintf(countBuf, sizeof(countBuf), "  (%d)", total);
-    }
-
-    // Compute right-aligned count and use Selectable for hit-testing
-    ImVec4 textCol = active ? ImVec4(0.95f, 0.85f, 0.55f, 1.0f)
-                            : ImVec4(0.85f, 0.83f, 0.75f, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, textCol);
-    bool clicked = ImGui::Selectable(label, false, 0, ImVec2(0, 0));
-    ImGui::PopStyleColor();
-
-    // Right-align count (drawn on top of selectable)
-    if (countBuf[0]) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 cSize = ImGui::CalcTextSize(countBuf);
-        float cx = startPos.x + availW - cSize.x - 6.0f;
-        float cy = startPos.y + (rowH - cSize.y) * 0.5f - 2.0f;
-        ImU32 countCol = (owned >= 0 && total > 0 && owned == total)
-            ? IM_COL32(120, 200, 120, 220)
-            : active ? IM_COL32(232, 196, 122, 220) : IM_COL32(140, 132, 110, 220);
-        dl->AddText(ImVec2(cx, cy), countCol, countBuf);
-    }
-
-    if (indent) ImGui::Unindent(8.0f);
-    ImGui::PopID();
+// Shared Fast Load entry points. All UI actions enqueue exact account/name;
+// only execute after the active page and its popup have unwound.
+static std::pair<std::string,std::string> g_QueuedCharacterLoad;
+std::string CharacterLoadUnavailable(const std::string& character,const std::string& account){
+    using namespace AlterEgo;
+    if(!g_CurrentCharName.empty()&&character==g_CurrentCharName)return "Character already active.";
+    const auto active=NativeAccounts::VerifiedAccountForCharacter(g_CurrentCharName);
+    const auto target=NativeAccounts::VerifiedAccountForCharacter(character);
+    if(active.empty()||target.empty()||active!=target||(!account.empty()&&account!=target))
+        return "Character ownership is unknown or belongs to another linked account.";
+    return GameMemory::LoadUnavailableReason(g_CurrentCharName,character,GW2API::GetCurrentAccountName(),target);
+}
+bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account){
+    const auto reason=CharacterLoadUnavailable(character,account);
+    const bool clicked=ImGui::MenuItem(label,nullptr,false,reason.empty());
+    if(!reason.empty()&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",reason.c_str());
+    if(clicked)g_QueuedCharacterLoad={character,AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character)};
     return clicked;
 }
-
-static void RenderSkinCategoryNav() {
-    ImGui::BeginChild("CategoryNav", ImVec2(180, 0), true);
-
-    bool hasOwner = Skinventory::OwnedSkins::HasData();
-
-    // Compute aggregate count for a top-level type by summing its sub-categories
-    auto typeTotals = [&](const std::string& type) -> std::pair<int,int> {
-        int owned = 0, total = 0;
-        if (type == "Armor") {
-            for (const auto& wc : Skinventory::SkinCache::GetArmorWeights()) {
-                if (wc == "Clothing") continue;
-                for (const auto& slot : Skinventory::SkinCache::GetArmorSlots(wc)) {
-                    auto p = SkinCategoryCounts("Armor", slot, wc);
-                    owned += p.first; total += p.second;
-                }
-            }
-        } else if (type == "Weapon") {
-            for (const auto& wt : Skinventory::SkinCache::GetWeaponTypes()) {
-                auto p = SkinCategoryCounts("Weapon", wt, "");
-                owned += p.first; total += p.second;
-            }
-        } else if (type == "Back") {
-            auto p = SkinCategoryCounts("Back", "", "");
-            owned += p.first; total += p.second;
-        }
-        return {owned, total};
-    };
-
-    ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "CATEGORY");
-    ImGui::Separator();
-
-    {
-        auto p = typeTotals("Armor");
-        if (RenderSkinNavRow("Armor", g_SkinSelectedType == "Armor",
-                             hasOwner ? p.first : -1, p.second,
-                             ImVec4(0.45f, 0.65f, 0.85f, 1.0f), false)) {
-            g_SkinSelectedType = "Armor";
-            g_SkinSelectedWeightClass = "Heavy";
-            g_SkinSelectedSubtype = "Helm";
-            g_SkinSelectedId = 0;
-        }
-    }
-    {
-        auto p = typeTotals("Weapon");
-        if (RenderSkinNavRow("Weapons", g_SkinSelectedType == "Weapon",
-                             hasOwner ? p.first : -1, p.second,
-                             ImVec4(0.85f, 0.45f, 0.35f, 1.0f), false)) {
-            g_SkinSelectedType = "Weapon";
-            g_SkinSelectedWeightClass = "";
-            g_SkinSelectedSubtype = "Axe";
-            g_SkinSelectedId = 0;
-        }
-    }
-    {
-        auto p = typeTotals("Back");
-        if (RenderSkinNavRow("Back", g_SkinSelectedType == "Back",
-                             hasOwner ? p.first : -1, p.second,
-                             ImVec4(0.65f, 0.50f, 0.80f, 1.0f), false)) {
-            g_SkinSelectedType = "Back";
-            g_SkinSelectedWeightClass = "";
-            g_SkinSelectedSubtype = "";
-            g_SkinSelectedId = 0;
-        }
-    }
-
-    ImGui::Separator();
-
-    if (g_SkinSelectedType == "Armor") {
-        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "WEIGHT CLASS");
-        auto wcColor = [](const std::string& wc) -> ImVec4 {
-            if (wc == "Heavy")  return ImVec4(0.65f, 0.65f, 0.70f, 1.0f);
-            if (wc == "Medium") return ImVec4(0.65f, 0.50f, 0.30f, 1.0f);
-            if (wc == "Light")  return ImVec4(0.55f, 0.45f, 0.70f, 1.0f);
-            return ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
-        };
-        for (const auto& wc : Skinventory::SkinCache::GetArmorWeights()) {
-            if (wc == "Clothing") continue;
-            int owned = 0, total = 0;
-            for (const auto& slot : Skinventory::SkinCache::GetArmorSlots(wc)) {
-                auto p = SkinCategoryCounts("Armor", slot, wc);
-                owned += p.first; total += p.second;
-            }
-            if (RenderSkinNavRow(wc.c_str(), g_SkinSelectedWeightClass == wc,
-                                 hasOwner ? owned : -1, total,
-                                 wcColor(wc), false)) {
-                g_SkinSelectedWeightClass = wc;
-                g_SkinSelectedId = 0;
-            }
-        }
-
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "SLOT");
-        for (const auto& slot : Skinventory::SkinCache::GetArmorSlots(g_SkinSelectedWeightClass)) {
-            auto p = SkinCategoryCounts("Armor", slot, g_SkinSelectedWeightClass);
-            if (RenderSkinNavRow(slot.c_str(), g_SkinSelectedSubtype == slot,
-                                 hasOwner ? p.first : -1, p.second,
-                                 ImVec4(0.45f, 0.65f, 0.85f, 1.0f), true)) {
-                g_SkinSelectedSubtype = slot;
-                g_SkinSelectedId = 0;
-            }
-        }
-    } else if (g_SkinSelectedType == "Weapon") {
-        ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "WEAPON TYPE");
-        for (const auto& wt : Skinventory::SkinCache::GetWeaponTypes()) {
-            auto p = SkinCategoryCounts("Weapon", wt, "");
-            if (RenderSkinNavRow(wt.c_str(), g_SkinSelectedSubtype == wt,
-                                 hasOwner ? p.first : -1, p.second,
-                                 ImVec4(0.85f, 0.45f, 0.35f, 1.0f), false)) {
-                g_SkinSelectedSubtype = wt;
-                g_SkinSelectedId = 0;
-            }
-        }
-    }
-
-    ImGui::EndChild();
+static void TickCharacterLoad(){
+    const auto notice=AlterEgo::GameMemory::Tick(g_CurrentCharName);
+    if(!notice.empty()&&APIDefs)APIDefs->GUI_SendAlert(notice.c_str());
 }
+void ProcessCharacterLoad(){
+    auto request=std::move(g_QueuedCharacterLoad);g_QueuedCharacterLoad={};
+    if(request.first.empty())return;
+    auto reason=CharacterLoadUnavailable(request.first,request.second);
+    if(reason.empty())reason=AlterEgo::GameMemory::Load(g_CurrentCharName,request.first,AlterEgo::GW2API::GetCurrentAccountName(),request.second);
+    if(APIDefs)APIDefs->GUI_SendAlert(reason.c_str());
+}
+std::string PlainItemDescription(const std::string& text){return StripGW2Markup(text);}
 
-static void RenderSkinList() {
-    ImGui::BeginChild("SkinList", ImVec2(300, 0), true);
-
-    // Search input + view toggle on the same row
-    {
-        const char* opts[] = { "List", "Grid" };
-        float btnW = 44.0f;
-        float gap = 2.0f;
-        float toggleW = btnW * 2 + gap;
-        float spacing = ImGui::GetStyle().ItemSpacing.x;
-        float inputW = ImGui::GetContentRegionAvail().x - toggleW - spacing;
-        if (inputW < 60.0f) inputW = 60.0f;
-
-        ImGui::SetNextItemWidth(inputW);
-        ImGui::InputTextWithHint("##skinfilter", "Filter skins...", g_SkinSearchFilter, sizeof(g_SkinSearchFilter));
-
-        ImGui::SameLine();
-        for (int i = 0; i < 2; i++) {
-            bool active = (g_SkinViewMode == i);
-            if (active) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.40f, 0.18f, 0.80f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-            }
-            if (ImGui::Button(opts[i], ImVec2(btnW, 0))) {
-                g_SkinViewMode = i;
-                SaveSettings();
-            }
-            if (active) ImGui::PopStyleColor(4);
-            if (i == 0) ImGui::SameLine(0, gap);
-        }
+static void RenderSkinList(float width) {
+    ImGui::BeginChild("SkinList", ImVec2(width, 0), true);
+    const auto& data=GetSkinBrowserData();
+    const bool hasOwnerData=data.hasOwnership;
+    const auto changed=[] {SaveSession();};
+    AlterEgo::UI::SearchToolbar("skin_browser","Search all skins...",g_SkinSearchFilter,
+        [&] {
+            auto chips=SkinFilterChips(g_SkinBrowserFilters,changed);
+            if(hasOwnerData&&g_SkinShowOwned!=g_SkinShowUnowned)
+                chips.push_back({"ownership",g_SkinShowOwned?"Owned":"Unowned",[]{g_SkinShowOwned=g_SkinShowUnowned=true;SaveSession();}});
+            return chips;
+        },
+        [&] {
+            DrawSkinFilters(g_SkinBrowserFilters,data,changed);
+            int ownership=g_SkinShowOwned&&!g_SkinShowUnowned?1:!g_SkinShowOwned&&g_SkinShowUnowned?2:0;
+            const char* options[]={"All","Owned","Unowned"};
+            if(hasOwnerData) {
+                if(AlterEgo::UI::FilterChoice("Ownership",ownership,options,3)) {
+                    g_SkinShowOwned=ownership!=2;g_SkinShowUnowned=ownership!=1;changed();
+                }
+            } else ImGui::TextDisabled("Ownership data not loaded");
+        },[&]{g_SkinBrowserFilters={};g_SkinShowOwned=g_SkinShowUnowned=true;changed();});
+    struct SkinDisplayEntry {uint32_t id;bool owned;};
+    static std::vector<SkinDisplayEntry> displaySkins;
+    static Skinventory::FilterResult result;
+    static Skinventory::SkinFilters previous;
+    static uint64_t catalog=uint64_t(-1),owner=uint64_t(-1);
+    static bool has=false,showOwned=true,showUnowned=true;
+    static std::string query;
+    const std::string current=Skinventory::Search::Lower(g_SkinSearchFilter);
+    if(catalog!=data.catalog||owner!=data.ownership||has!=hasOwnerData||previous!=g_SkinBrowserFilters||
+       query!=current||showOwned!=g_SkinShowOwned||showUnowned!=g_SkinShowUnowned) {
+        catalog=data.catalog;owner=data.ownership;has=hasOwnerData;previous=g_SkinBrowserFilters;query=current;
+        showOwned=g_SkinShowOwned;showUnowned=g_SkinShowUnowned;
+        result=Skinventory::FilterSkins(data.rows,data.owned,previous,Skinventory::Search::Words(query),has,showOwned,showUnowned);
+        displaySkins.clear();displaySkins.reserve(result.displayed.size());
+        for(const auto& e:result.displayed)displaySkins.push_back({e.first,e.second});
     }
-
-    {
-        // Chip strip: All / Owned / Unowned (filters only take effect once owned data is loaded)
-        bool hasOwnerForFilter = Skinventory::OwnedSkins::HasData();
-        if (!hasOwnerForFilter) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.55f);
-        struct Chip { const char* lbl; bool sOwned; bool sUnowned; };
-        const Chip chips[] = {
-            { "All",     true,  true  },
-            { "Owned",   true,  false },
-            { "Unowned", false, true  },
-        };
-        for (int i = 0; i < 3; i++) {
-            bool active = (g_SkinShowOwned == chips[i].sOwned) &&
-                          (g_SkinShowUnowned == chips[i].sUnowned);
-            if (active) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.40f, 0.18f, 0.80f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-            }
-            if (RenderActionButton(chips[i].lbl)) {
-                g_SkinShowOwned = chips[i].sOwned;
-                g_SkinShowUnowned = chips[i].sUnowned;
-            }
-            if (active) ImGui::PopStyleColor(4);
-            if (i < 2) ImGui::SameLine(0, 4);
-        }
-        if (!hasOwnerForFilter) ImGui::PopStyleVar();
-    }
-
+    const int ownedCount=result.scope.owned,totalCount=result.scope.total;
+    ImGui::TextDisabled("%d matches / %d shown",result.searchMatches,(int)displaySkins.size());
     ImGui::Separator();
-
-    // Cached display list — only rebuild when inputs change
-    struct SkinDisplayEntry { uint32_t id; bool owned; };
-    static std::vector<SkinDisplayEntry> s_displaySkins;
-    static int s_ownedCount = 0;
-    static int s_totalCount = 0;
-    static std::string s_cacheType;
-    static std::string s_cacheSubtype;
-    static std::string s_cacheWeight;
-    static std::string s_cacheFilter;
-    static bool s_cacheShowOwned = true;
-    static bool s_cacheShowUnowned = true;
-    static bool s_cacheHasOwnerData = false;
-    static uint64_t s_cacheOwnedGen = 0;
-
-    std::string filterLower(g_SkinSearchFilter);
-    std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
-
-    bool hasOwnerData = Skinventory::OwnedSkins::HasData();
-    uint64_t ownedGen = Skinventory::OwnedSkins::GetGeneration();
-
-    bool needRebuild = (s_cacheType != g_SkinSelectedType) ||
-                       (s_cacheSubtype != g_SkinSelectedSubtype) ||
-                       (s_cacheWeight != g_SkinSelectedWeightClass) ||
-                       (s_cacheFilter != filterLower) ||
-                       (s_cacheShowOwned != g_SkinShowOwned) ||
-                       (s_cacheShowUnowned != g_SkinShowUnowned) ||
-                       (s_cacheHasOwnerData != hasOwnerData) ||
-                       (s_cacheOwnedGen != ownedGen);
-
-    if (needRebuild) {
-        s_cacheType = g_SkinSelectedType;
-        s_cacheSubtype = g_SkinSelectedSubtype;
-        s_cacheWeight = g_SkinSelectedWeightClass;
-        s_cacheFilter = filterLower;
-        s_cacheShowOwned = g_SkinShowOwned;
-        s_cacheShowUnowned = g_SkinShowUnowned;
-        s_cacheHasOwnerData = hasOwnerData;
-        s_cacheOwnedGen = ownedGen;
-
-        s_displaySkins.clear();
-        s_ownedCount = 0;
-        s_totalCount = 0;
-
-        std::vector<uint32_t> skins;
-        if (g_SkinSelectedType == "Armor") {
-            skins = Skinventory::SkinCache::GetSkinsByCategory("Armor", g_SkinSelectedSubtype, g_SkinSelectedWeightClass);
-        } else if (g_SkinSelectedType == "Weapon") {
-            skins = Skinventory::SkinCache::GetSkinsByCategory("Weapon", g_SkinSelectedSubtype, "");
-        } else if (g_SkinSelectedType == "Back") {
-            skins = Skinventory::SkinCache::GetSkinsByCategory("Back", "", "");
-        }
-
-        s_displaySkins.reserve(skins.size());
-        for (uint32_t skinId : skins) {
-            auto skinOpt = Skinventory::SkinCache::GetSkin(skinId);
-            if (!skinOpt || skinOpt->name.empty()) continue;
-
-            s_totalCount++;
-            bool owned = Skinventory::OwnedSkins::IsOwned(skinId);
-            if (owned) s_ownedCount++;
-
-            if (hasOwnerData) {
-                if (owned && !g_SkinShowOwned) continue;
-                if (!owned && !g_SkinShowUnowned) continue;
-            }
-
-            if (!filterLower.empty()) {
-                std::string nameLower = skinOpt->name;
-                std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-                if (nameLower.find(filterLower) == std::string::npos) continue;
-            }
-
-            s_displaySkins.push_back({skinId, owned});
-        }
-    }
-
-    int ownedCount = s_ownedCount;
-    int totalCount = s_totalCount;
-    const auto& displaySkins = s_displaySkins;
 
     bool showStatus = hasOwnerData;
     float statusHeight = showStatus ? (ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y) : 0;
     float scrollHeight = ImGui::GetContentRegionAvail().y - statusHeight;
 
     ImGui::BeginChild("SkinListScroll", ImVec2(0, scrollHeight));
-    if (g_SkinScrollToSkin) {
+    if (g_SkinScrollToSkin && g_SkinViewMode != 1) {
         for (int i = 0; i < (int)displaySkins.size(); i++) {
             if (displaySkins[i].id == g_SkinSelectedId) {
                 float itemHeight = ImGui::GetTextLineHeightWithSpacing();
@@ -12602,10 +13050,11 @@ static void RenderSkinList() {
                         ImGui::EndTooltip();
                     }
                     if (ImGui::IsItemClicked()) {
-                        g_SkinSelectedId = entry.id;
+                        MarkNavigation();g_SkinSelectedId = entry.id;
                         Skinventory::WikiImage::RequestImage(entry.id, skin.name, skin.weight_class);
                         Skinventory::Commerce::FetchPriceForSkin(entry.id);
                     }
+                    RenderSkinContextMenu(skin);
                     ImGui::PopID();
                 }
                 ImGui::Dummy(ImVec2(0, 0)); // newline
@@ -12613,128 +13062,26 @@ static void RenderSkinList() {
         }
     } else {
         // ===== Compact list view =====
-        const float rowH   = 22.0f;
-        const float iconSz = 16.0f;
-
-        // Scroll-to-selected for list mode
-        if (g_SkinScrollToSkin) {
-            for (int i = 0; i < (int)displaySkins.size(); i++) {
-                if (displaySkins[i].id == g_SkinSelectedId) {
-                    float winH = ImGui::GetWindowHeight();
-                    ImGui::SetScrollY(i * rowH - winH * 0.5f + rowH * 0.5f);
-                    g_SkinScrollToSkin = false;
-                    break;
-                }
+        const float rowH=AlterEgo::UI::CatalogRowHeight();
+        if(g_SkinScrollToSkin){
+            for(int i=0;i<(int)displaySkins.size();++i)if(displaySkins[i].id==g_SkinSelectedId){
+                ImGui::SetScrollY(i*rowH-ImGui::GetWindowHeight()*.5f+rowH*.5f);g_SkinScrollToSkin=false;break;
             }
         }
-
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImGuiListClipper clipper;
-        clipper.Begin((int)displaySkins.size(), rowH);
-        while (clipper.Step()) {
-            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++) {
-                const auto& entry = displaySkins[row];
-                auto skinOpt = Skinventory::SkinCache::GetSkin(entry.id);
-                if (!skinOpt) { ImGui::Dummy(ImVec2(0, rowH)); continue; }
-                const auto& skin = *skinOpt;
-
-                ImVec2 cmin = ImGui::GetCursorScreenPos();
-                float availW = ImGui::GetContentRegionAvail().x;
-                ImVec2 cmax(cmin.x + availW, cmin.y + rowH);
-
-                bool selected = (g_SkinSelectedId == entry.id);
-                bool dim = hasOwnerData && !entry.owned;
-                ImVec4 rc = GetSkinRarityColor(skin.rarity);
-
-                // Hit-test full row
-                ImGui::PushID((int)entry.id);
-                ImGui::InvisibleButton("##lrow", ImVec2(availW, rowH));
-                bool hovered = ImGui::IsItemHovered();
-                bool clicked = ImGui::IsItemClicked();
-                ImGui::PopID();
-
-                // Background
-                ImU32 bgCol;
-                if (selected)      bgCol = IM_COL32(80, 64, 28, 90);
-                else if (hovered)  bgCol = IM_COL32(60, 56, 40, 60);
-                else if (row & 1)  bgCol = IM_COL32(255, 255, 255, 10);
-                else               bgCol = IM_COL32(0, 0, 0, 0);
-                if ((bgCol & 0xFF000000) != 0)
-                    dl->AddRectFilled(cmin, cmax, bgCol, 2.0f);
-
-                // Selection / hover border
-                if (selected)
-                    dl->AddRect(cmin, cmax, IM_COL32(232, 196, 122, 220), 2.0f, 0, 1.0f);
-                else if (hovered)
-                    dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 110), 2.0f, 0, 1.0f);
-
-                // Rarity left accent
-                ImU32 accent = ImGui::ColorConvertFloat4ToU32(
-                    dim ? ImVec4(rc.x * 0.55f, rc.y * 0.55f, rc.z * 0.55f, 0.85f) : rc);
-                dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 2),
-                                  ImVec2(cmin.x + 3, cmax.y - 2), accent);
-
-                // Icon (lazy, priority-loaded)
-                float iconX = cmin.x + 8.0f;
-                float iconY = cmin.y + (rowH - iconSz) * 0.5f;
-                uint32_t displayId = entry.id + 5000000;
-                Texture_t* tex = AlterEgo::IconManager::GetIcon(displayId);
-                if (!tex || !tex->Resource) {
-                    if (!skin.icon_url.empty())
-                        AlterEgo::IconManager::RequestIcon(displayId, skin.icon_url, /*priority=*/true);
-                }
-                ImVec2 imin(iconX, iconY);
-                ImVec2 imax(iconX + iconSz, iconY + iconSz);
-                ImU32 iconBg = ImGui::ColorConvertFloat4ToU32(
-                    ImVec4(rc.x * 0.18f, rc.y * 0.18f, rc.z * 0.18f, 1.0f));
-                dl->AddRectFilled(imin, imax, iconBg, 1.5f);
-                if (tex && tex->Resource) {
-                    ImU32 tint = dim ? IM_COL32(170, 170, 170, 130) : IM_COL32(255, 255, 255, 255);
-                    dl->AddImage(tex->Resource, imin, imax, ImVec2(0,0), ImVec2(1,1), tint);
-                }
-
-                // Name (clipped between icon + status)
-                float textX = imax.x + 6.0f;
-                float textEndX = cmax.x - (hasOwnerData ? 22.0f : 6.0f);
-                ImU32 nameCol = dim
-                    ? ImGui::ColorConvertFloat4ToU32(ImVec4(rc.x * 0.65f, rc.y * 0.65f, rc.z * 0.65f, 0.85f))
-                    : ImGui::ColorConvertFloat4ToU32(rc);
-                ImVec2 nameSz = ImGui::CalcTextSize(skin.name.c_str());
-                float nameY = cmin.y + (rowH - nameSz.y) * 0.5f;
-                dl->PushClipRect(ImVec2(textX, cmin.y), ImVec2(textEndX, cmax.y), true);
-                dl->AddText(ImVec2(textX, nameY), nameCol, skin.name.c_str());
-                dl->PopClipRect();
-
-                // Status dot
-                if (hasOwnerData) {
-                    float dotX = cmax.x - 12.0f;
-                    float dotY = cmin.y + rowH * 0.5f;
-                    if (entry.owned) {
-                        dl->AddCircleFilled(ImVec2(dotX, dotY), 4.0f, IM_COL32(50, 110, 60, 220));
-                        dl->AddCircle(ImVec2(dotX, dotY), 4.0f, IM_COL32(111, 204, 122, 255), 14, 1.2f);
-                        dl->AddLine(ImVec2(dotX - 2, dotY + 0), ImVec2(dotX - 0.5f, dotY + 1.5f),
-                            IM_COL32(180, 240, 190, 255), 1.5f);
-                        dl->AddLine(ImVec2(dotX - 0.5f, dotY + 1.5f), ImVec2(dotX + 2.5f, dotY - 2),
-                            IM_COL32(180, 240, 190, 255), 1.5f);
-                    } else {
-                        dl->AddCircle(ImVec2(dotX, dotY), 3.5f, IM_COL32(120, 110, 90, 200), 14, 1.2f);
-                    }
-                }
-
-                // Hover tooltip (full name when clipped)
-                if (hovered && nameSz.x > (textEndX - textX)) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextColored(rc, "%s", skin.name.c_str());
-                    ImGui::EndTooltip();
-                }
-
-                if (clicked) {
-                    g_SkinSelectedId = entry.id;
-                    Skinventory::WikiImage::RequestImage(entry.id, skin.name, skin.weight_class);
-                    Skinventory::Commerce::FetchPriceForSkin(entry.id);
-                }
-            }
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(ImGui::GetStyle().ItemSpacing.x,0));
+        ImGuiListClipper clipper;clipper.Begin((int)displaySkins.size(),rowH);
+        while(clipper.Step())for(int row=clipper.DisplayStart;row<clipper.DisplayEnd;++row){
+            const auto& entry=displaySkins[row];auto skinOpt=Skinventory::SkinCache::GetSkin(entry.id);
+            if(!skinOpt){ImGui::Dummy(ImVec2(0,rowH));continue;}
+            const auto& skin=*skinOpt;
+            ImGui::PushID((int)entry.id);
+            const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,entry.id+5000000,skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1);
+            RenderSkinContextMenu(skin);ImGui::PopID();
+            if(hit.clicked){MarkNavigation();g_SkinSelectedId=entry.id;
+                Skinventory::WikiImage::RequestImage(entry.id,skin.name,skin.weight_class);
+                Skinventory::Commerce::FetchPriceForSkin(entry.id);}
         }
+        ImGui::PopStyleVar();
     }
     ImGui::EndChild();
 
@@ -12774,86 +13121,13 @@ static void RenderSkinDetailPanel() {
         ImGui::Separator();
     };
 
-    // ===== Rarity-coloured banner card =====
-    {
-        ImVec4 rc = GetSkinRarityColor(skin.rarity);
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        float pad = 10.0f;
-        ImVec2 cmin = ImGui::GetCursorScreenPos();
-        float w = ImGui::GetContentRegionAvail().x;
-
-        // Pre-measure so we can fit the wrapped name
-        ImGui::PushTextWrapPos(cmin.x + w - pad * 2);
-        ImVec2 nameSz = ImGui::CalcTextSize(skin.name.c_str(), nullptr, false, w - pad * 2 - 8.0f);
-        ImGui::PopTextWrapPos();
-        float nameH = nameSz.y;
-        float subH = ImGui::GetTextLineHeight();
-        float h = pad + nameH + 4.0f + subH + pad;
-
-        ImVec2 cmax(cmin.x + w, cmin.y + h);
-
-        // Background gradient tinted by rarity
-        ImU32 bgL = ImGui::ColorConvertFloat4ToU32(ImVec4(rc.x * 0.22f, rc.y * 0.22f, rc.z * 0.22f, 0.95f));
-        ImU32 bgR = IM_COL32(20, 20, 24, 250);
-        dl->AddRectFilledMultiColor(cmin, cmax, bgL, bgR, bgR, bgL);
-        dl->AddRect(cmin, cmax, IM_COL32(0, 0, 0, 200), 4.0f, 0, 1.0f);
-
-        // Left rarity bar
-        dl->AddRectFilled(ImVec2(cmin.x, cmin.y + 3),
-                          ImVec2(cmin.x + 3, cmax.y - 3),
-                          ImGui::ColorConvertFloat4ToU32(rc));
-
-        // Reserve the card area in ImGui layout and render the name + subtitle on top
-        ImGui::Dummy(ImVec2(w, h));
-        ImVec2 textStart(cmin.x + pad + 4.0f, cmin.y + pad);
-
-        // Name (rarity-coloured, wrapped, larger via no font change but bold-ish via colour)
-        ImGui::SetCursorScreenPos(textStart);
-        ImGui::PushStyleColor(ImGuiCol_Text, rc);
-        ImGui::PushTextWrapPos(textStart.x + w - pad * 2);
-        ImGui::TextUnformatted(skin.name.c_str());
-        ImGui::PopTextWrapPos();
-        ImGui::PopStyleColor();
-
-        // Subtitle: rarity · type · weight   [owned chip]
-        ImGui::SetCursorScreenPos(ImVec2(textStart.x, textStart.y + nameH + 4.0f));
-
-        std::string subtitle = skin.rarity;
-        if (!skin.type.empty())        { subtitle += "  ·  "; subtitle += skin.type; }
-        if (!skin.subtype.empty())     { subtitle += "  "; subtitle += skin.subtype; }
-        if (!skin.weight_class.empty()){ subtitle += "  ·  "; subtitle += skin.weight_class; }
-        ImGui::TextColored(ImVec4(rc.x * 0.85f, rc.y * 0.85f, rc.z * 0.85f, 0.95f),
-            "%s", subtitle.c_str());
-
-        // Owned/not-owned chip, right-aligned inside the banner
-        if (Skinventory::OwnedSkins::HasData()) {
-            bool owned = Skinventory::OwnedSkins::IsOwned(g_SkinSelectedId);
-            const char* chipText = owned ? "OWNED" : "NOT OWNED";
-            ImVec2 chipSz = ImGui::CalcTextSize(chipText);
-            float chipPadX = 8.0f, chipPadY = 3.0f;
-            ImVec2 chipMin(cmax.x - pad - chipSz.x - chipPadX * 2,
-                           cmin.y + pad - 2.0f);
-            ImVec2 chipMax(chipMin.x + chipSz.x + chipPadX * 2,
-                           chipMin.y + chipSz.y + chipPadY * 2);
-            ImU32 chipBg, chipBorder, chipFg;
-            if (owned) {
-                chipBg = IM_COL32(40, 78, 44, 220);
-                chipBorder = IM_COL32(120, 200, 130, 230);
-                chipFg = IM_COL32(180, 240, 190, 255);
-            } else {
-                chipBg = IM_COL32(60, 30, 30, 200);
-                chipBorder = IM_COL32(180, 90, 90, 200);
-                chipFg = IM_COL32(220, 150, 150, 255);
-            }
-            dl->AddRectFilled(chipMin, chipMax, chipBg, 3.0f);
-            dl->AddRect(chipMin, chipMax, chipBorder, 3.0f, 0, 1.2f);
-            dl->AddText(ImVec2(chipMin.x + chipPadX, chipMin.y + chipPadY), chipFg, chipText);
-        }
-        // The banner's text was drawn with SetCursorScreenPos, so its final
-        // layout cursor is inside the card. Restore it below the card before
-        // drawing the independent ID line (with deliberate vertical padding).
-        ImGui::SetCursorScreenPos(ImVec2(cmin.x, cmax.y + 6.0f));
-    }
+    std::string subtitle=skin.rarity;
+    if(!skin.type.empty())subtitle+="  /  "+skin.type;
+    if(!skin.subtype.empty())subtitle+=" "+Skinventory::SkinCategorySubtype(skin.type,skin.subtype);
+    if(!skin.weight_class.empty())subtitle+="  /  "+skin.weight_class;
+    AlterEgo::UI::CatalogBanner(skin.name,subtitle,skin.rarity,
+        Skinventory::OwnedSkins::HasData()?(Skinventory::OwnedSkins::IsOwned(g_SkinSelectedId)?"OWNED":"NOT OWNED"):"");
+    ImGui::PushID((int)skin.id);RenderSkinContextMenu(skin);ImGui::PopID();
     ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.45f, 1.0f), "ID: %u", skin.id);
 
     // Pricing (unowned only)
@@ -12861,7 +13135,7 @@ static void RenderSkinDetailPanel() {
                    Skinventory::OwnedSkins::IsOwned(g_SkinSelectedId);
     if (!isOwned) {
         int vendorPrice = Skinventory::Commerce::GetVendorPrice(g_SkinSelectedId);
-        const auto* price = Skinventory::Commerce::GetPrice(g_SkinSelectedId);
+        const auto price = Skinventory::Commerce::GetPrice(g_SkinSelectedId);
         bool hasPrice = (vendorPrice > 0) ||
                         (price && price->tradeable && (price->sell_price > 0 || price->buy_price > 0)) ||
                         (!price && vendorPrice == 0);
@@ -12877,7 +13151,12 @@ static void RenderSkinDetailPanel() {
 
             if (price) {
                 if (price->tradeable) {
-                    if (price->sell_price > 0) {
+                    const auto itemName = Skinventory::Commerce::GetItemName(price->item_id);
+                    if (!itemName.empty() && itemName != skin.name) {
+                        ImGui::TextDisabled("TP item:"); ImGui::SameLine();
+                        ImGui::TextWrapped("%s", itemName.c_str());
+                    }
+                    if (price->sell_price > 0 && price->sell_quantity > 0) {
                         ImGui::Text("TP Buy:");
                         ImGui::SameLine();
                         RenderCoins(price->sell_price);
@@ -12982,19 +13261,7 @@ static void RenderSkinDetailPanel() {
                 ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
                 if (RenderActionButton(wikiData.vendor_waypoint.c_str())) {
-                    if (OpenClipboard(NULL)) {
-                        EmptyClipboard();
-                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE,
-                            wikiData.vendor_waypoint.size() + 1);
-                        if (hMem) {
-                            char* pMem = (char*)GlobalLock(hMem);
-                            memcpy(pMem, wikiData.vendor_waypoint.c_str(),
-                                   wikiData.vendor_waypoint.size() + 1);
-                            GlobalUnlock(hMem);
-                            SetClipboardData(CF_TEXT, hMem);
-                        }
-                        CloseClipboard();
-                    }
+                    CopyToClipboard(wikiData.vendor_waypoint);
                     s_copiedTimer = 2.0f;
                     s_copiedSkinId = g_SkinSelectedId;
                 }
@@ -13035,7 +13302,7 @@ static void RenderSkinDetailPanel() {
 
     // Action buttons
     ImGui::Separator();
-    if (ImGui::Button("Open Wiki Page")) {
+    if (RenderActionButton("Open Wiki Page")) {
         std::string wikiUrl = "https://wiki.guildwars2.com/wiki/" + skin.name;
         std::replace(wikiUrl.begin(), wikiUrl.end(), ' ', '_');
         ShellExecuteA(NULL, "open", wikiUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
@@ -13044,9 +13311,13 @@ static void RenderSkinDetailPanel() {
     ImGui::EndChild();
 }
 
+static std::string g_ShopNavigationQuery;
+static Skinventory::SkinFilters g_ShopNavigationFilters;
+static int g_ShopNavigationSource=0,g_ShopNavigationMaxGold=0;
+static bool g_ShopNavigationFilterDirty=true;
 static void RenderSkinShoppingList() {
     if (!Skinventory::OwnedSkins::HasData()) {
-        ImGui::TextWrapped("Hoard & Seek data not yet loaded. Ensure Hoard & Seek is installed and has fetched account data.");
+        ImGui::TextWrapped("No ownership data. Link an API key and refresh.");
         return;
     }
 
@@ -13054,53 +13325,36 @@ static void RenderSkinShoppingList() {
         std::string fetchMsg = Skinventory::Commerce::GetFetchStatus();
         ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.0f, 1.0f), "%s", fetchMsg.c_str());
         ImGui::TextWrapped("Building the skin-to-item map from the GW2 API. This is a one-time operation and will be cached for future sessions.");
+        if(fetchMsg.find("failed")!=std::string::npos && RenderActionButton("Retry item map")) Skinventory::Commerce::BuildItemMapAsync();
         return;
     }
 
     static bool s_needsFetch = true;
-    static int shopTypeFilter = 0;
-    static int shopSourceFilter = 0;
-
-    // ===== Compact toolbar: Refresh + Category chips + Source chips =====
-    if (ImGui::Button("Refresh Prices") && !Skinventory::Commerce::IsFetching()) {
-        g_SkinShopListDirty = true;
-        s_needsFetch = true;
-    }
-
-    auto chipButton = [](const char* lbl, bool active) -> bool {
-        if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.40f, 0.18f, 0.80f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.58f, 0.46f, 0.22f, 0.90f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.55f, 1.0f));
-        }
-        bool clicked = RenderActionButton(lbl);
-        if (active) ImGui::PopStyleColor(4);
-        return clicked;
-    };
-
-    ImGui::SameLine(0, 16);
-    ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "Category:");
-    ImGui::SameLine();
-    const char* catLabels[]    = { "All##cat",   "Armor##cat",  "Weapons##cat" };
-    const char* catDisplay[]   = { "All",        "Armor",       "Weapons" };
-    for (int i = 0; i < 3; i++) {
-        if (chipButton(catLabels[i], shopTypeFilter == i)) {
-            if (shopTypeFilter != i) { shopTypeFilter = i; g_SkinShopListDirty = true; }
-        }
-        if (i < 2) ImGui::SameLine(0, 4);
-        (void)catDisplay;
-    }
-
-    ImGui::SameLine(0, 16);
-    ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f), "Source:");
-    ImGui::SameLine();
-    const char* srcLabels[] = { "All##src", "TP##src", "Vendor##src" };
-    for (int i = 0; i < 3; i++) {
-        if (chipButton(srcLabels[i], shopSourceFilter == i)) {
-            if (shopSourceFilter != i) { shopSourceFilter = i; g_SkinShopListDirty = true; }
-        }
-        if (i < 2) ImGui::SameLine(0, 4);
+    auto& query=g_ShopNavigationQuery;
+    auto& filters=g_ShopNavigationFilters;
+    auto& source=g_ShopNavigationSource;
+    auto& maxGold=g_ShopNavigationMaxGold;
+    const auto& data=GetSkinBrowserData();
+    auto& filterDirty=g_ShopNavigationFilterDirty;
+    const auto changed = [&] { filterDirty = true; };
+    bool refreshClicked = false;
+    if (AlterEgo::UI::SearchToolbar("shopping", "Search skins or TP items...", query,
+        [&] {
+            auto chips=SkinFilterChips(filters,changed);
+            if(source) chips.push_back({"source",source==1?"Trading Post":"Vendor",[&]{source=0;changed();}});
+            if(maxGold) chips.push_back({"price","Max "+std::to_string(maxGold)+"g",[&] {maxGold=0;changed();}});
+            return chips;
+        },
+        [&] {
+            const char* srcs[]={"All","Trading Post","Vendor"};
+            DrawSkinFilters(filters,data,changed);
+            if(AlterEgo::UI::FilterChoice("Source",source,srcs,3)) changed();
+            if(AlterEgo::UI::FilterInt("Max gold (0 = any)",maxGold)) {maxGold=std::max(0,maxGold);changed();}
+        },
+        [&] {source=maxGold=0;filters={};changed();},
+        "Refresh Prices", &refreshClicked)) changed();
+    if(refreshClicked && !Skinventory::Commerce::IsFetching()) {
+        g_SkinShopListDirty=true; s_needsFetch=true;
     }
 
     // Thin progress bar when fetching (replaces verbose status text)
@@ -13132,98 +13386,100 @@ static void RenderSkinShoppingList() {
     bool isFetching = Skinventory::Commerce::IsFetching();
     if (s_wasFetching && !isFetching) {
         g_SkinShopListDirty = true;
-        s_needsFetch = false;
     }
     s_wasFetching = isFetching;
+    if(!isFetching) {
+        const auto status=Skinventory::Commerce::GetFetchStatus();
+        if(status.find("Some prices could not be retrieved")==0)
+            ImGui::TextColored(AlterEgo::UI::WarningText,"%s",status.c_str());
+    }
 
-    // Amortized shopping list rebuild: collect IDs once, then process a batch per frame
-    static std::vector<uint32_t> s_shopQueue;
-    static bool s_shopBuilding = false;
-    static const int SHOP_BATCH_SIZE = 50;
-
-    if (g_SkinShopListDirty && !isFetching) {
-        g_SkinShopListDirty = false;
+    // Build the unfiltered acquisition list only on data changes. Local
+    // filters never request prices or restart the ownership/refresh lifecycle.
+    static uint64_t lastOwned=0,lastPrice=0,lastCatalog=0;
+    struct ShopCandidate { Skinventory::SkinInfo skin; std::string itemName; int tp, vendor; uint32_t ownedItem=0; };
+    static std::vector<ShopCandidate> candidates;
+    static bool needsInitial=true;
+    const auto owned=Skinventory::OwnedSkins::GetGeneration();
+    const auto priceGen=Skinventory::Commerce::GetPriceGeneration();
+    static uint64_t lastInventory=0;
+    static int64_t lastFreshnessBucket=-1;
+    static std::string lastShopAccount;
+    const auto inventoryGen=AlterEgo::NativeAccounts::InventoryGeneration();
+    const auto shopAccount=GetEffectiveAccountName();
+    const auto freshnessBucket=static_cast<int64_t>(std::time(nullptr))/30;
+    if(lastInventory!=inventoryGen||lastShopAccount!=shopAccount||lastFreshnessBucket!=freshnessBucket){lastInventory=inventoryGen;lastShopAccount=shopAccount;lastFreshnessBucket=freshnessBucket;g_SkinShopListDirty=true;}
+    if(lastOwned!=owned || lastPrice!=priceGen || lastCatalog!=data.catalog || needsInitial) {
+        lastOwned=owned; lastPrice=priceGen; lastCatalog=data.catalog; needsInitial=false;
+        g_SkinShopListDirty=true;
+    }
+    if(!isFetching&&g_SkinShopListDirty.exchange(false)) {
+        candidates.clear();
+        std::vector<uint32_t> priceIds;
+        const auto acquisitions=Skinventory::Commerce::UniqueSkinCandidates();
+        for(const auto& row:data.rows) {
+            const auto id=row.id;
+            if(data.owned.count(id)||!Skinventory::EligibleSkin(row))continue;
+            const auto* skin=&row;
+            if(s_needsFetch) priceIds.push_back(id);
+            const auto p=Skinventory::Commerce::GetPrice(id);
+            const int tp=p && p->tradeable && p->sell_quantity>0 ? p->sell_price : 0;
+            const int vendor=Skinventory::Commerce::GetVendorPrice(id);
+            uint32_t ownedItem=0;
+            const auto acq=acquisitions.find(id);
+            if(acq!=acquisitions.end())for(auto item:acq->second)
+                if(AlterEgo::NativeAccounts::LooseCount(item,shopAccount)>0){ownedItem=item;break;}
+            if(tp>0 || vendor>0 || ownedItem)
+                candidates.push_back({*skin,ownedItem?Skinventory::Commerce::GetItemName(ownedItem):p?Skinventory::Commerce::GetItemName(p->item_id):std::string(),tp,vendor,ownedItem});
+        }
+        if(s_needsFetch) {
+            s_needsFetch=false;
+            Skinventory::Commerce::FetchPricesForSkins(priceIds);
+        }
+        filterDirty=true;
+    }
+    static int sortCol=4;
+    static bool ascending=true;
+    auto sortRows=[&]() {
+        std::sort(g_SkinShopList.begin(),g_SkinShopList.end(),[&](const auto& a,const auto& b) {
+            int cmp=0;
+            if(sortCol==4) cmp=a.price<b.price?-1:a.price>b.price?1:0;
+            else if(sortCol==2) cmp=a.source-b.source;
+            else {
+                cmp=sortCol==0?a.name.compare(b.name):a.subtype.compare(b.subtype);
+            }
+            return cmp==0?a.skinId<b.skinId:(ascending?cmp<0:cmp>0);
+        });
+    };
+    if(filterDirty) {
+        filterDirty=false;
         g_SkinShopList.clear();
-        s_shopQueue.clear();
-
-        auto collectSkins = [&](const std::string& type, const std::string& subtype,
-                                 const std::string& weight) {
-            auto skins = Skinventory::SkinCache::GetSkinsByCategory(type, subtype, weight);
-            for (uint32_t id : skins) {
-                if (!Skinventory::OwnedSkins::IsOwned(id)) {
-                    s_shopQueue.push_back(id);
-                }
+        const auto tokens=Skinventory::Search::Words(query);
+        for(const auto& entry:candidates) {
+            const auto& skin=entry.skin;
+            if(!filters.Matches(skin))continue;
+            if(!tokens.empty() && !Skinventory::Search::Matches(skin.name+" "+entry.itemName,tokens)) continue;
+            const bool useVendor=source==2 || (source==0 && entry.vendor>0 && (entry.tp<=0 || entry.vendor<=entry.tp));
+            const int cost=useVendor?entry.vendor:entry.tp;
+            if(entry.ownedItem){
+                if(source==0||(source==1&&entry.tp>0)||(source==2&&entry.vendor>0))
+                    g_SkinShopList.push_back({skin.id,0,2,skin.name,Skinventory::SkinCategorySubtype(skin.type,skin.subtype),entry.ownedItem});
+                continue;
             }
-        };
-
-        if (shopTypeFilter == 0 || shopTypeFilter == 1) {
-            for (const auto& wc : Skinventory::SkinCache::GetArmorWeights()) {
-                for (const auto& slot : Skinventory::SkinCache::GetArmorSlots(wc)) {
-                    collectSkins("Armor", slot, wc);
-                }
-            }
+            if(cost<=0 || (maxGold>0 && int64_t(cost)>int64_t(maxGold)*10000)) continue;
+            g_SkinShopList.push_back({skin.id,cost,useVendor?1:0,skin.name,Skinventory::SkinCategorySubtype(skin.type,skin.subtype),0});
         }
-        if (shopTypeFilter == 0 || shopTypeFilter == 2) {
-            for (const auto& wt : Skinventory::SkinCache::GetWeaponTypes()) {
-                collectSkins("Weapon", wt, "");
-            }
-        }
-
-        if (s_needsFetch) {
-            Skinventory::Commerce::FetchPricesForSkins(s_shopQueue);
-        }
-
-        s_shopBuilding = !s_shopQueue.empty();
+        sortRows();
     }
 
-    // Process a batch of queued skins per frame
-    if (s_shopBuilding && !s_shopQueue.empty()) {
-        int count = std::min(SHOP_BATCH_SIZE, (int)s_shopQueue.size());
-        for (int i = 0; i < count; i++) {
-            uint32_t id = s_shopQueue.back();
-            s_shopQueue.pop_back();
-
-            int vendorPrice = Skinventory::Commerce::GetVendorPrice(id);
-            const auto* p = Skinventory::Commerce::GetPrice(id);
-            int tpPrice = (p && p->tradeable && p->sell_price > 0) ? p->sell_price : 0;
-
-            bool useVendor = false;
-            bool useTP = false;
-
-            if (vendorPrice > 0 && tpPrice > 0) {
-                if (vendorPrice <= tpPrice) useVendor = true;
-                else useTP = true;
-            } else if (vendorPrice > 0) {
-                useVendor = true;
-            } else if (tpPrice > 0) {
-                useTP = true;
-            }
-
-            if (useVendor && shopSourceFilter == 1) { useVendor = false; useTP = (tpPrice > 0); }
-            if (useTP && shopSourceFilter == 2) { useTP = false; useVendor = (vendorPrice > 0); }
-
-            if (useVendor) {
-                g_SkinShopList.push_back({id, vendorPrice, 1});
-            } else if (useTP) {
-                g_SkinShopList.push_back({id, tpPrice, 0});
-            }
-        }
-
-        if (s_shopQueue.empty()) {
-            s_shopBuilding = false;
-            std::sort(g_SkinShopList.begin(), g_SkinShopList.end(),
-                [](const auto& a, const auto& b) { return a.price < b.price; });
-        }
-    }
-
-    int tpCount = 0, vendorCount = 0;
+    int tpCount = 0, vendorCount = 0, stockCount=0;
     for (const auto& e : g_SkinShopList) {
         if (e.source == 0) tpCount++;
-        else vendorCount++;
+        else if(e.source==1)vendorCount++;else stockCount++;
     }
 
-    ImGui::Text("Cheapest unowned skins: %d TP, %d Vendor (%zu total)",
-                tpCount, vendorCount, g_SkinShopList.size());
+    ImGui::Text("Matching locked skins: %d TP, %d Vendor, %d in stock",tpCount,vendorCount,stockCount);
+    if(stockCount)ImGui::TextDisabled("Stock = cached loose acquisition item; confirm eligibility in game.");
     ImGui::Separator();
 
     float reserveHeight = ImGui::GetFrameHeightWithSpacing() * 2.0f;
@@ -13242,29 +13498,9 @@ static void RenderSkinShoppingList() {
         if (ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs()) {
             if (sortSpecs->SpecsDirty && sortSpecs->SpecsCount > 0) {
                 const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[0];
-                bool ascending = (spec.SortDirection == ImGuiSortDirection_Ascending);
-                int col = spec.ColumnUserID;
-
-                std::sort(g_SkinShopList.begin(), g_SkinShopList.end(),
-                    [col, ascending](const auto& a, const auto& b) {
-                        if (col == 4) {
-                            return ascending ? a.price < b.price : a.price > b.price;
-                        }
-                        if (col == 2) {
-                            return ascending ? a.source < b.source : a.source > b.source;
-                        }
-                        auto sa = Skinventory::SkinCache::GetSkin(a.skinId);
-                        auto sb = Skinventory::SkinCache::GetSkin(b.skinId);
-                        if (!sa || !sb) return false;
-
-                        int cmp = 0;
-                        if (col == 0) {
-                            cmp = sa->name.compare(sb->name);
-                        } else if (col == 1) {
-                            cmp = sa->subtype.compare(sb->subtype);
-                        }
-                        return ascending ? cmp < 0 : cmp > 0;
-                    });
+                ascending = (spec.SortDirection == ImGuiSortDirection_Ascending);
+                sortCol = spec.ColumnUserID;
+                sortRows();
                 sortSpecs->SpecsDirty = false;
             }
         }
@@ -13298,42 +13534,48 @@ static void RenderSkinShoppingList() {
                 ImGui::PushStyleColor(ImGuiCol_Text, GetSkinRarityColor(skin.rarity));
                 if (ImGui::Selectable(selectLabel.c_str(), g_SkinSelectedId == entry.skinId,
                     ImGuiSelectableFlags_SpanAllColumns)) {
-                    g_SkinSelectedId = entry.skinId;
+                    MarkNavigation();g_SkinSelectedId = entry.skinId;
                     Skinventory::WikiImage::RequestImage(entry.skinId, skin.name, skin.weight_class);
                     Skinventory::Commerce::FetchPriceForSkin(entry.skinId);
-                    g_SkinSelectedType = skin.type;
-                    if (skin.type == "Armor") {
-                        g_SkinSelectedWeightClass = skin.weight_class;
-                    }
-                    g_SkinSelectedSubtype = skin.subtype;
+                    RevealSkinInBrowser(entry.skinId);
                     g_SkinSwitchToBrowser = true;
                     g_SkinScrollToSkin = true;
                 }
                 ImGui::PopStyleColor();
+                ImGui::PushID((int)entry.skinId);
+                RenderSkinContextMenu(skin,entry.ownedItem);
+                ImGui::PopID();
 
                 ImGui::TableNextColumn();
-                ImGui::Text("%s", skin.subtype.c_str());
+                ImGui::Text("%s", skin.type=="Back" ? "Back" : Skinventory::SkinCategorySubtype(skin.type,skin.subtype).c_str());
+                if (ImGui::IsItemHovered() && skin.type=="Armor") ImGui::SetTooltip("%s",skin.weight_class.c_str());
 
                 ImGui::TableNextColumn();
-                if (entry.source == 1) {
+                if(entry.ownedItem){ImGui::TextUnformatted("Stock");if(ImGui::IsItemHovered())ImGui::SetTooltip("A fresh cached acquisition item is in personal loose stock. Right-click the row to find it in Inventory.");}
+                else if (entry.source == 1) {
                     ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Vendor");
                 } else {
                     ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.3f, 1.0f), "TP");
                 }
 
                 ImGui::TableNextColumn();
-                RenderCoins(entry.price);
+                RenderCoins(entry.ownedItem?0:entry.price);
+                if(entry.source==0 && ImGui::IsItemHovered()) {
+                    const auto p=Skinventory::Commerce::GetPrice(entry.skinId);
+                    if(p) { const auto name=Skinventory::Commerce::GetItemName(p->item_id); if(!name.empty()) ImGui::SetTooltip("%s",name.c_str()); }
+                }
             }
         }
 
         ImGui::EndTable();
     }
 
+    if (g_SkinShopList.empty() && !Skinventory::Commerce::IsFetching()) ImGui::TextDisabled("No matching purchasable skins in cached results.");
     if (!g_SkinShopList.empty()) {
-        int tpTotal = 0, vendorTotal = 0;
+        int64_t tpTotal = 0, vendorTotal = 0;
         for (const auto& e : g_SkinShopList) {
             if (e.source == 0) tpTotal += e.price;
-            else vendorTotal += e.price;
+            else if(e.source==1)vendorTotal += e.price;
         }
         ImGui::Separator();
         ImGui::Text("TP total:");
@@ -13349,6 +13591,10 @@ static void RenderSkinShoppingList() {
 }
 
 // Helper: draw a gradient-backed section header with colored accent underline
+// Shared indicator for the currently active character or in-game template.
+// Keep geometry and color identical; callers choose the center position.
+
+
 // Render a scrollable chip strip (used for equipment & build tab selectors).
 // Returns true if the user clicked a different chip (selectedIdx is updated in place).
 static bool RenderChipStrip(const std::vector<std::string>& labels,
@@ -13513,9 +13759,7 @@ static bool RenderChipStrip(const std::vector<std::string>& labels,
         dl->AddText(textPos, textCol, drawLabel.c_str());
 
         if (isActiveInGame) {
-            dl->AddCircleFilled(
-                ImVec2(cMax.x - 6, cMin.y + 6),
-                2.5f, IM_COL32(227, 196, 122, 255));
+            AlterEgo::UI::ActiveIndicator(dl, ImVec2(cMax.x - 6, cMin.y + 6));
         }
     }
     ImGui::PopID();
@@ -13555,7 +13799,7 @@ void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix) {
         barTop, barTop, barBot, barBot);
 
     // Accent underline
-    dl->AddLine(ImVec2(pos.x + 4.0f, pos.y + h), ImVec2(pos.x + w * 0.55f, pos.y + h),
+    dl->AddLine(ImVec2(pos.x + 4.0f, pos.y + h), ImVec2(pos.x + w, pos.y + h),
         ImGui::ColorConvertFloat4ToU32(ImVec4(color.x, color.y, color.z, 0.35f)), 1.0f);
 
     ImGui::SetCursorScreenPos(ImVec2(pos.x + 10.0f,
@@ -13570,9 +13814,7 @@ void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix) {
 
 // Standard action button: font-responsive height and centered label.
 bool RenderActionButton(const char* label, ImVec2 size) {
-    if (size.y <= 0.0f)
-        size.y = ImMax(kAlterEgoActionButtonHeight, ImGui::GetFrameHeight());
-    return ImGui::Button(label, size);
+    return AlterEgo::UI::Button(label, size);
 }
 
 // Gold-trimmed button — primary-action vocabulary matching RenderSectionHeader.
@@ -13619,7 +13861,7 @@ bool RenderChipButton(const char* label, bool active, ImVec4 accentColor, bool c
         // This single renderer serves New, Import, Save and Edit game modes.
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 2.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-        clicked = ImGui::Button(label, ImVec2(0.0f, CompactGameModeChipHeight()));
+        clicked = AlterEgo::UI::Button(label, ImVec2(0.0f, CompactGameModeChipHeight()), AlterEgo::UI::ButtonRole::Compact);
         ImGui::PopStyleVar(2);
     } else {
         clicked = RenderActionButton(label);
@@ -13644,18 +13886,7 @@ bool RenderChipButton(const char* label, bool active, ImVec4 accentColor, bool c
 // Returns true when the combo is open (same contract as ImGui::BeginCombo).
 // Caller is responsible for ImGui::EndCombo() when the function returns true.
 bool RenderThemedCombo(const char* id, const char* current, float width) {
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0.10f, 0.09f, 0.06f, 0.85f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.16f, 0.13f, 0.08f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  ImVec4(0.20f, 0.16f, 0.09f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_Border,         ImVec4(0.70f, 0.58f, 0.20f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_Text,           ImVec4(0.95f, 0.85f, 0.55f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_PopupBg,        ImVec4(0.08f, 0.07f, 0.05f, 0.98f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
-    if (width > 0.0f) ImGui::SetNextItemWidth(width);
-    bool open = ImGui::BeginCombo(id, current);
-    ImGui::PopStyleVar(1);
-    ImGui::PopStyleColor(6);
-    return open;
+    return AlterEgo::UI::BeginCombo(id, current, 0, width, AlterEgo::UI::ComboRole::Gold);
 }
 
 // Centered themed empty-state / first-run card.
@@ -13788,7 +14019,9 @@ static uint32_t FindAchIdByName(const std::string& name, const std::string& pare
 }
 
 // Navigate to a specific achievement: find its category, select it, fetch defs, expand it
+static uint32_t g_NavAchievementId=0;
 static void NavigateToAchievement(uint32_t achId) {
+    MarkNavigation();g_NavAchievementId=achId;
     // Find which category contains this achievement
     auto catIt = g_AchIdToCategory.find(achId);
     if (catIt != g_AchIdToCategory.end()) {
@@ -13839,6 +14072,17 @@ static void RenderAchProgressBar(float fraction, const ImVec4& color, float heig
     ImGui::Dummy(ImVec2(width, height));
 }
 
+static void AchievementNameContextMenu(const std::string& name){
+    if(ImGui::BeginPopupContextItem("##ach_name_actions")){
+        CopyNameMenuItem(name);
+        if(ImGui::MenuItem("Open in Wiki")){
+            std::string url="https://wiki.guildwars2.com/wiki/"+name;
+            std::replace(url.begin(),url.end(),' ','_');
+            ShellExecuteA(NULL,"open",url.c_str(),NULL,NULL,SW_SHOWNORMAL);
+        }
+        ImGui::EndPopup();
+    }
+}
 static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     auto defIt = g_AchDefs.find(achId);
     auto progIt = g_AchProgress.find(achId);
@@ -13880,39 +14124,15 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     AlterEgo::CompletionTheme::DrawCompleteMark(
         dl, ImVec2(cmin.x + 10.0f, cmin.y + rowH * 0.5f), done);
 
-    // Main row hit area (excluding the pin button + WP button on the right)
-    float pinReserve = showPinButton ? 22.0f : 0.0f;
-    float wpReserve = 0.0f;
-    bool hasAchWp = false;
-    std::string achWaypoint;
-    {
-        auto wpIt = g_AchWaypoints.find(achId);
-        if (wpIt != g_AchWaypoints.end()) {
-            auto wpBitIt = wpIt->second.find(-1);
-            if (wpBitIt != wpIt->second.end()) {
-                hasAchWp = true;
-                achWaypoint = wpBitIt->second;
-                wpReserve = 26.0f;
-            }
-        }
-    }
-    float rightReserve = pinReserve + wpReserve + 8.0f;
-
+    // Main row hit area excludes the pin button.
+    const float rightReserve = (showPinButton ? 22.0f : 0.0f) + 8.0f;
     ImGui::InvisibleButton("##achrow", ImVec2(availRowW - rightReserve, rowH));
     bool rowHovered = ImGui::IsItemHovered();
     bool rowClicked = ImGui::IsItemClicked();
 
     // Hover does not draw a gold outline; borders mean completed only.
 
-    // Right-click context (open wiki)
-    if (ImGui::BeginPopupContextItem("##ach_ctx")) {
-        if (ImGui::MenuItem("Open in Wiki")) {
-            std::string wikiUrl = "https://wiki.guildwars2.com/wiki/" + def.name;
-            std::replace(wikiUrl.begin(), wikiUrl.end(), ' ', '_');
-            ShellExecuteA(NULL, "open", wikiUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
-        }
-        ImGui::EndPopup();
-    }
+    AchievementNameContextMenu(def.name);
 
     if (rowClicked && hasBits) {
         if (expanded) g_AchExpandedInList.erase(achId);
@@ -14006,50 +14226,14 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
         ImGui::EndTooltip();
     }
 
-    // Position the right-side buttons (WP, Pin)
+    // Position the pin button
     float btnX = cmax.x - 4.0f;
     if (showPinButton) {
-        float pinW = 22.0f, pinH = 20.0f;
+        float pinW = 20.0f, pinH = 20.0f;
         btnX -= pinW;
         ImGui::SetCursorScreenPos(ImVec2(btnX, midY - pinH * 0.5f));
-        ImU32 pinBg = pinned ? IM_COL32(80, 64, 28, 200) : IM_COL32(0, 0, 0, 130);
-        ImU32 pinBorder = pinned ? IM_COL32(232, 196, 122, 230) : IM_COL32(140, 130, 110, 170);
-        ImU32 pinFg = pinned ? IM_COL32(245, 220, 150, 255) : IM_COL32(170, 158, 130, 230);
-        ImVec2 bMin = ImGui::GetCursorScreenPos();
-        ImVec2 bMax(bMin.x + pinW, bMin.y + pinH);
-        dl->AddRectFilled(bMin, bMax, pinBg, 3.0f);
-        dl->AddRect(bMin, bMax, pinBorder, 3.0f, 0, 1.0f);
-        const char* star = pinned ? "*" : "*";
-        ImVec2 sz = ImGui::CalcTextSize(star);
-        dl->AddText(ImVec2(bMin.x + (pinW - sz.x) * 0.5f, bMin.y + (pinH - sz.y) * 0.5f),
-            pinFg, star);
-        if (ImGui::InvisibleButton("##pinbtn", ImVec2(pinW, pinH))) {
+        if(AlterEgo::UI::PinButton("##pinbtn",pinned,"Pin to tracker","Unpin from tracker",pinH))
             ToggleAchPin(achId);
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(pinned ? "Unpin from tracker" : "Pin to tracker");
-        }
-        btnX -= 4.0f;
-    }
-
-    if (hasAchWp) {
-        float wpW = 22.0f, wpH = 20.0f;
-        btnX -= wpW;
-        ImGui::SetCursorScreenPos(ImVec2(btnX, midY - wpH * 0.5f));
-        ImVec2 bMin = ImGui::GetCursorScreenPos();
-        ImVec2 bMax(bMin.x + wpW, bMin.y + wpH);
-        dl->AddRectFilled(bMin, bMax, IM_COL32(0, 0, 0, 130), 3.0f);
-        dl->AddRect(bMin, bMax, IM_COL32(140, 130, 110, 170), 3.0f, 0, 1.0f);
-        const char* wp = "WP";
-        ImVec2 sz = ImGui::CalcTextSize(wp);
-        dl->AddText(ImVec2(bMin.x + (wpW - sz.x) * 0.5f, bMin.y + (wpH - sz.y) * 0.5f),
-            IM_COL32(180, 168, 130, 230), wp);
-        if (ImGui::InvisibleButton("##wpbtn", ImVec2(wpW, wpH))) {
-            ImGui::SetClipboardText(achWaypoint.c_str());
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Copy waypoint: %s", achWaypoint.c_str());
-        }
     }
 
     // Restore cursor to below the row
@@ -14057,7 +14241,6 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
 
     // Expanded bits (sub-objectives) — shown when clicked
     if (hasBits && expanded) {
-        auto wpIt = g_AchWaypoints.find(achId);
         ImGui::Indent(16.0f);
         for (size_t i = 0; i < def.bits.size(); i++) {
             bool bitDone = (progIt != g_AchProgress.end()) &&
@@ -14087,15 +14270,6 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                 label = bit.text.empty() ? ("Step " + std::to_string(i + 1)) : bit.text;
             }
 
-            // Check for per-bit waypoint
-            std::string bitWaypoint;
-            if (wpIt != g_AchWaypoints.end()) {
-                auto wpBitIt = wpIt->second.find((int)i);
-                if (wpBitIt != wpIt->second.end()) {
-                    bitWaypoint = wpBitIt->second;
-                }
-            }
-
             ImGui::PushID((int)i);
             if (bitDone) {
                 if (subAchId > 0) {
@@ -14123,19 +14297,15 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                 std::string selLabel = label + "###skinbit";
                 if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
                     g_SkinSelectedId = skinId;
-                    g_SkinSelectedType = skinInfo->type;
-                    if (skinInfo->type == "Armor") {
-                        g_SkinSelectedWeightClass = skinInfo->weight_class;
-                    }
-                    g_SkinSelectedSubtype = skinInfo->subtype;
+                    RevealSkinInBrowser(skinId);
                     g_SkinSwitchToBrowser = true;
                     g_SkinScrollToSkin = true;
-                    g_SwitchToSkinventory = true;
+                    MarkNavigation(); g_SwitchToSkinventory = true;
                     Skinventory::WikiImage::RequestImage(skinId, skinInfo->name, skinInfo->weight_class);
                     Skinventory::Commerce::FetchPriceForSkin(skinId);
                 }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Click to view in Skinventory");
+                    ImGui::SetTooltip("Click to view in Skins");
                 }
             } else if (subAchId > 0) {
                 // Clickable sub-achievement → navigate to it
@@ -14149,16 +14319,6 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
             } else {
                 ImGui::TextColored(AlterEgo::CompletionTheme::TextColor(false),
                                         "%s", label.c_str());
-            }
-            // Waypoint copy button for this bit
-            if (!bitWaypoint.empty()) {
-                ImGui::SameLine();
-                if (ImGui::SmallButton("WP")) {
-                    ImGui::SetClipboardText(bitWaypoint.c_str());
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Copy waypoint: %s", bitWaypoint.c_str());
-                }
             }
             ImGui::PopID();
         }
@@ -14194,13 +14354,13 @@ static void RenderAchievements() {
             FetchAchGroups();
         }
     }
-    if (!g_AchNameIndexReady && !g_AchNameIndexFetching) {
+    if (!g_AchNameIndexFetching && AlterEgo::AchievementNames::Due(
+            g_AchNameIndexVerifiedAt.load(), std::time(nullptr), g_AchNameIndexRetryAt.load(),
+            AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog))) {
         FetchAchNameIndex();
     }
-    if (!g_AchWaypointsReady && !g_AchWaypointsFetching) {
-        FetchAchWaypoints();
-    }
-    if (g_AchGroupsFetched && !g_AchActiveEventFetched && !g_AchActiveEventFetching) {
+    if (g_AchGroupsFetched && !g_AchActiveEventFetching &&
+        std::time(nullptr)>=g_AchActiveEventNextCheck.load()) {
         FetchActiveSpecialEvent();
     }
 
@@ -14213,7 +14373,7 @@ static void RenderAchievements() {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             pinnedCopy = g_AchPinned;
         }
-        if (AlterEgo::AutoRefreshPolicy::Enabled() && !pinnedCopy.empty()) {
+        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) && !pinnedCopy.empty()) {
             SendAchProgressQuery(pinnedCopy, true);
         }
         // The active category is handled by the 30-minute per-category timer
@@ -14226,7 +14386,7 @@ static void RenderAchievements() {
         const uint32_t pendingCat = g_AchCatProgressPending.exchange(0);
         if (pendingCat > 0) {
             const bool automatic = g_AchCatProgressAutomatic.exchange(false);
-            if (!automatic || AlterEgo::AutoRefreshPolicy::Enabled()) {
+            if (!automatic || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)) {
                 std::vector<uint32_t> ids;
                 {
                     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -14240,27 +14400,8 @@ static void RenderAchievements() {
         }
     }
 
-    // Refresh only the active category when due, not the entire cached account.
-    // When definitions are missing, fetch just this category and continue later.
-    if (AlterEgo::AutoRefreshPolicy::Enabled() && !g_AchNeedsInitialFullLoad &&
-        g_AchSelectedCatId > 0 && !g_AchProgressFetching && !g_AchCatFetching &&
-        g_AchCatProgressPending.load() == 0 && g_AchRetryAtMs.load() == 0 &&
-        IsAchCategoryRefreshDue(g_AchSelectedCatId)) {
-        std::vector<uint32_t> ids;
-        bool missingDefs = false;
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            const auto it = g_AchCategories.find(g_AchSelectedCatId);
-            if (it != g_AchCategories.end()) {
-                ids = it->second.achievements;
-                for (uint32_t id : ids) {
-                    if (!g_AchDefs.count(id)) { missingDefs = true; break; }
-                }
-            }
-        }
-        if (missingDefs) FetchAchCategoryDefs(g_AchSelectedCatId, true);
-        else if (!ids.empty()) SendAchProgressQuery(ids, true, g_AchSelectedCatId);
-    }
+    // Category selection fetches missing public definitions. The global
+    // objective tick owns periodic account-wide progress requests.
 
     // Fire a scheduled ach-progress query (boot query or BUSY backoff retry).
     if (g_AchRetryAtMs.load() != 0 && NowMs() >= g_AchRetryAtMs.load() && !g_AchProgressFetching) {
@@ -14278,70 +14419,26 @@ static void RenderAchievements() {
             }
         }
         if (!retryIds.empty() &&
-            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled())) {
+            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements))) {
             SendAchProgressQuery(retryIds, g_AchRetryAutomatic.load());
         }
     }
 
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##AchSearch", "Search achievements...",
-                            g_AchSearchBuf, sizeof(g_AchSearchBuf));
+    AlterEgo::UI::SearchField("achievements", "Search achievements...", g_AchSearchBuf);
 
     if (!g_AchGroupsFetched) return;
 
-    // Full account prefetch is ONLY for an account without an existing valid
-    // progress cache. A stale snapshot must not trigger 8,000 API requests.
-    // Drain initial batches slowly to avoid H&S / GW2 API rate limiting.
-    static std::vector<uint32_t> s_progressQueue;
-    static std::string s_prefetchedAccount;
-    static uint64_t s_prefetchedGroupsGeneration = 0;
-    {
-        std::string currentAccount = GetAchievementCacheAccount();
-        if (s_prefetchedAccount != currentAccount ||
-            s_prefetchedGroupsGeneration != g_AchGroupsGeneration) {
-            s_prefetchedAccount = currentAccount;
-            s_prefetchedGroupsGeneration = g_AchGroupsGeneration;
-            s_progressQueue.clear();
-            // Reuse any existing progress data, regardless of its age.
-            // Per-category and pinned timers manage ordinary refreshes.
-            if (!currentAccount.empty() && g_AchNeedsInitialFullLoad) {
-                std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                std::unordered_set<uint32_t> pinnedSet(g_AchPinned.begin(), g_AchPinned.end());
-                std::unordered_set<uint32_t> queued;
-                for (const auto& [catId, cat] : g_AchCategories) {
-                    if (g_AchHiddenCatIds.count(catId)) continue;
-                    for (uint32_t aid : cat.achievements) {
-                        if (pinnedSet.count(aid)) continue;
-                        if (g_AchProgress.count(aid)) continue;
-                        if (queued.insert(aid).second) s_progressQueue.push_back(aid);
-                    }
-                }
-                // Put pinned last: drained first; pinned also get periodic refresh.
-                for (uint32_t aid : g_AchPinned) {
-                    if (g_AchProgress.count(aid)) continue;
-                    if (queued.insert(aid).second) s_progressQueue.push_back(aid);
-                }
-            }
+    // A full native account snapshot needs one request, not one per category.
+    if(g_AchNeedsInitialFullLoad&&!g_AchProgressFetching&&!g_AchCatFetching&&
+       (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)||g_AchManualInitialScan)){
+        static auto lastAttempt=std::chrono::steady_clock::time_point{};
+        static std::string lastAccount;
+        const auto account=GetAchievementCacheAccount();
+        const auto now=std::chrono::steady_clock::now();
+        if(!account.empty()&&(lastAccount!=account||lastAttempt==std::chrono::steady_clock::time_point{}||
+            now-lastAttempt>=std::chrono::seconds(30))){
+            lastAccount=account;lastAttempt=now;SendAchProgressQuery({},!g_AchManualInitialScan);
         }
-    }
-    if ((AlterEgo::AutoRefreshPolicy::Enabled() || g_AchManualInitialScan) &&
-        !s_progressQueue.empty() && !g_AchProgressFetching) {
-        static auto s_lastBatchTime = std::chrono::steady_clock::time_point{};
-        auto now = std::chrono::steady_clock::now();
-        if (s_lastBatchTime == std::chrono::steady_clock::time_point{} ||
-            (now - s_lastBatchTime) >= std::chrono::milliseconds(750)) {
-            s_lastBatchTime = now;
-            constexpr size_t BATCH = 200;
-            size_t take = std::min(BATCH, s_progressQueue.size());
-            std::vector<uint32_t> batch(s_progressQueue.end() - take, s_progressQueue.end());
-            s_progressQueue.erase(s_progressQueue.end() - take, s_progressQueue.end());
-            SendAchProgressQuery(batch, !g_AchManualInitialScan);
-        }
-    }
-    if (g_AchNeedsInitialFullLoad && s_progressQueue.empty() && !g_AchProgressFetching &&
-        !g_AchCatFetching && !g_AchGroupsFetching) {
-        g_AchNeedsInitialFullLoad = false;
-        g_AchManualInitialScan = false;
     }
 
     // Search mode — cached results to avoid iterating 8000+ names every frame
@@ -14351,21 +14448,26 @@ static void RenderAchievements() {
         std::transform(query.begin(), query.end(), query.begin(), ::tolower);
 
         if (!g_AchNameIndexReady) {
-            RenderSpinner("Loading search index...");
+            if (g_AchNameIndexFetching) RenderSpinner("Loading search index...");
+            else ImGui::TextDisabled("Achievement names unavailable. Retry from the Achievements menu.");
             return;
         }
 
-        // Cache search results — only re-search when query changes
+        // Refresh local search results when names or category visibility change.
+        static uint64_t s_achSearchCatalogGen = 0, s_achSearchGroupsGen = 0;
         static std::string s_achSearchCache;
         static std::vector<uint32_t> s_achSearchResults;
         static bool s_achSearchTruncated = false;
 
-        if (s_achSearchCache != query) {
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            if (s_achSearchCache != query || s_achSearchCatalogGen != g_AchCatalogGeneration.load() || s_achSearchGroupsGen != g_AchGroupsGeneration) {
             s_achSearchCache = query;
+            s_achSearchCatalogGen = g_AchCatalogGeneration.load();
+            s_achSearchGroupsGen = g_AchGroupsGeneration;
             s_achSearchResults.clear();
             s_achSearchTruncated = false;
 
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             for (const auto& [id, name] : g_AchNameIndex) {
                 std::string lowerName = name;
                 std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
@@ -14379,6 +14481,7 @@ static void RenderAchievements() {
                         break;
                     }
                 }
+            }
             }
         }
 
@@ -14424,12 +14527,11 @@ static void RenderAchievements() {
     }
 
     // Main layout: left tree + splitter + right list
-    float availWidth = ImGui::GetContentRegionAvail().x;
-    float availHeight = ImGui::GetContentRegionAvail().y;
-    g_AchTreeWidth = (g_AchTreeWidth < 120.0f) ? 120.0f : (g_AchTreeWidth > availWidth - 200.0f) ? availWidth - 200.0f : g_AchTreeWidth;
+    const AlterEgo::UI::SplitPanel split(g_AchTreeWidth,220.f);
+    float availHeight=split.height;
 
     // Left panel: Group/Category tree
-    ImGui::BeginChild("AchTree", ImVec2(g_AchTreeWidth, availHeight), true);
+    ImGui::BeginChild("AchTree", ImVec2(split.left, availHeight), true);
 
     if (g_AchRestoreScroll) {
         ImGui::SetScrollY(g_AchTreeScrollY);
@@ -14519,6 +14621,7 @@ static void RenderAchievements() {
             }
 
             if (clicked && g_AchSelectedCatId != cat->id) {
+                MarkNavigation();g_NavAchievementId=0;
                 g_AchSelectedCatId = cat->id;
                 g_AchSelectedGroupId = groupId;
                 FetchAchCategoryDefs(cat->id, true);
@@ -14639,36 +14742,7 @@ static void RenderAchievements() {
     g_AchTreeScrollY = ImGui::GetScrollY();
     ImGui::EndChild();
 
-    // Draggable vertical splitter
-    ImGui::SameLine();
-    {
-        float splitterW = 6.0f;
-        float h = availHeight;
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##achtree_splitter", ImVec2(splitterW, h));
-        bool hovered = ImGui::IsItemHovered();
-        bool active = ImGui::IsItemActive();
-        if (hovered || active)
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        if (active) {
-            float delta = ImGui::GetIO().MouseDelta.x;
-            if (delta != 0.0f) {
-                g_AchTreeWidth += delta;
-                g_AchTreeWidth = (g_AchTreeWidth < 120.0f) ? 120.0f : (g_AchTreeWidth > availWidth - 200.0f) ? availWidth - 200.0f : g_AchTreeWidth;
-            }
-        }
-        if (ImGui::IsItemDeactivated()) {
-            SaveAchTrackerState();
-        }
-        ImU32 lineCol = (hovered || active)
-            ? IM_COL32(180, 160, 80, 180)
-            : IM_COL32(80, 75, 60, 100);
-        float cx = pos.x + splitterW * 0.5f;
-        ImGui::GetWindowDrawList()->AddLine(
-            ImVec2(cx, pos.y), ImVec2(cx, pos.y + h), lineCol, 2.0f);
-    }
-
-    ImGui::SameLine();
+    if(split.Divider("##achtree_splitter",g_AchTreeWidth))SaveAchTrackerState();
 
     // Right panel: split into category list (top) + pinned section (bottom)
     ImGui::BeginChild("##AchRight", ImVec2(0, availHeight), false);
@@ -14879,7 +14953,6 @@ struct PopoutBitDisplay {
     std::string skinWeightClass;
     std::string skinSubtype;
     std::string skinName;
-    std::string waypoint;
     bool done = false;
 };
 
@@ -14897,7 +14970,7 @@ struct PopoutAchDisplay {
 
 static std::vector<PopoutAchDisplay> s_popoutCache;
 static std::vector<uint32_t> s_popoutLastPinned;
-static uint64_t s_popoutLastProgressGen = 0;
+static uint64_t s_popoutLastProgressGen = 0, s_popoutLastCatalogGen = 0;
 static bool s_popoutCacheDirty = true;
 
 
@@ -14926,7 +14999,6 @@ static void RebuildPopoutCache() {
             disp.hasBits = !def.bits.empty() && !disp.done;
 
             if (disp.hasBits) {
-                auto wpIt = g_AchWaypoints.find(achId);
                 disp.bits.reserve(def.bits.size());
                 for (size_t i = 0; i < def.bits.size(); i++) {
                     PopoutBitDisplay bd;
@@ -14953,12 +15025,6 @@ static void RebuildPopoutCache() {
                         bd.label = bit.text.empty() ? ("Step " + std::to_string(i + 1)) : bit.text;
                     }
 
-                    if (wpIt != g_AchWaypoints.end()) {
-                        auto wpBitIt = wpIt->second.find((int)i);
-                        if (wpBitIt != wpIt->second.end()) {
-                            bd.waypoint = wpBitIt->second;
-                        }
-                    }
                     disp.bits.push_back(std::move(bd));
                 }
             }
@@ -14973,6 +15039,7 @@ static void RebuildPopoutCache() {
 
     s_popoutLastPinned = g_AchPinned;
     s_popoutLastProgressGen = g_AchProgressGen;
+    s_popoutLastCatalogGen = g_AchCatalogGeneration.load();
     s_popoutCacheDirty = false;
 }
 
@@ -14998,9 +15065,9 @@ static void RenderAchPopout() {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             pinnedCopy = g_AchPinned;
         }
-        if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) &&
             !pinnedCopy.empty() && !g_AchProgressFetching) {
-            g_LastAchProgressQuery = std::chrono::steady_clock::now();
+            {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);g_LastAchProgressQuery=std::chrono::steady_clock::now();}
             SendAchProgressQuery(pinnedCopy, true);
         }
     }
@@ -15016,7 +15083,7 @@ static void RenderAchPopout() {
             pinnedCopy = g_AchPinned;
         }
         if (!pinnedCopy.empty() &&
-            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled())) {
+            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements))) {
             SendAchProgressQuery(pinnedCopy, g_AchRetryAutomatic.load());
         }
     }
@@ -15025,7 +15092,7 @@ static void RenderAchPopout() {
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         if (s_popoutCacheDirty || g_AchPinned != s_popoutLastPinned ||
-            g_AchProgressGen != s_popoutLastProgressGen) {
+            g_AchProgressGen != s_popoutLastProgressGen || s_popoutLastCatalogGen != g_AchCatalogGeneration.load()) {
             RebuildPopoutCache();
         }
     }
@@ -15092,6 +15159,7 @@ static void RenderAchPopout() {
                 ImGui::InvisibleButton("##poprow", ImVec2(rowHitW, rowH));
                 bool rowHovered = ImGui::IsItemHovered();
                 bool rowClicked = ImGui::IsItemClicked();
+                AchievementNameContextMenu(disp.name);
                 if (rowHovered)
                     dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 130), 3.0f, 0, 1.0f);
                 if (rowClicked && disp.hasBits) {
@@ -15150,24 +15218,12 @@ static void RenderAchPopout() {
                         dl->AddRectFilled(sMin, ImVec2(fillEnd, sMax.y), stateCol, 1.0f);
                 }
 
-                // Unpin button (small ×)
+                // Shared tracker pin button
                 {
                     float btnH = 18.0f;
                     ImGui::SetCursorScreenPos(ImVec2(cmax.x - unpinW - 4.0f, midY - btnH * 0.5f));
-                    ImVec2 bMin = ImGui::GetCursorScreenPos();
-                    ImVec2 bMax(bMin.x + unpinW, bMin.y + btnH);
-                    dl->AddRectFilled(bMin, bMax, IM_COL32(0, 0, 0, 130), 3.0f);
-                    dl->AddRect(bMin, bMax, IM_COL32(140, 130, 110, 170), 3.0f, 0, 1.0f);
-                    const char* x = "x";
-                    ImVec2 sz = ImGui::CalcTextSize(x);
-                    dl->AddText(ImVec2(bMin.x + (unpinW - sz.x) * 0.5f, bMin.y + (btnH - sz.y) * 0.5f),
-                        IM_COL32(180, 168, 130, 230), x);
-                    if (ImGui::InvisibleButton("##popunpin", ImVec2(unpinW, btnH))) {
+                    if(AlterEgo::UI::PinButton("##popunpin",true,"Pin to tracker","Unpin from tracker",btnH))
                         ToggleAchPin(disp.achId);
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Unpin from tracker");
-                    }
                 }
 
                 ImGui::SetCursorScreenPos(ImVec2(cmin.x, cmax.y + 2.0f));
@@ -15193,19 +15249,15 @@ static void RenderAchPopout() {
                             std::string selLabel = "    [ ] " + bd.label + "###popskinbit";
                             if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
                                 g_SkinSelectedId = bd.skinId;
-                                g_SkinSelectedType = bd.skinType;
-                                if (bd.skinType == "Armor") {
-                                    g_SkinSelectedWeightClass = bd.skinWeightClass;
-                                }
-                                g_SkinSelectedSubtype = bd.skinSubtype;
+                                RevealSkinInBrowser(bd.skinId);
                                 g_SkinSwitchToBrowser = true;
                                 g_SkinScrollToSkin = true;
-                                g_SwitchToSkinventory = true;
+                                MarkNavigation(); g_SwitchToSkinventory = true;
                                 Skinventory::WikiImage::RequestImage(bd.skinId, bd.skinName, bd.skinWeightClass);
                                 Skinventory::Commerce::FetchPriceForSkin(bd.skinId);
                             }
                             if (ImGui::IsItemHovered()) {
-                                ImGui::SetTooltip("Click to view in Skinventory");
+                                ImGui::SetTooltip("Click to view in Skins");
                             }
                         } else if (bd.subAchId > 0) {
                             std::string selLabel = "    [ ] " + bd.label + "###popsubach";
@@ -15216,21 +15268,11 @@ static void RenderAchPopout() {
                                 ImGui::SetTooltip("Click to navigate to achievement");
                             }
                         } else {
-                            if (!bd.waypoint.empty()) {
-                                std::string selLabel = "    [ ] " + bd.label + "###popbit";
-                                if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
-                                    ImGui::SetClipboardText(bd.waypoint.c_str());
-                                }
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip("Click to copy: %s", bd.waypoint.c_str());
-                                }
-                            } else {
-                                ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "    [ ] %s", bd.label.c_str());
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip("Click to copy name");
-                                    if (ImGui::IsItemClicked()) {
-                                        ImGui::SetClipboardText(bd.label.c_str());
-                                    }
+                            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "    [ ] %s", bd.label.c_str());
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip("Click to copy name");
+                                if (ImGui::IsItemClicked()) {
+                                    CopyToClipboard(bd.label);
                                 }
                             }
                         }
@@ -15281,20 +15323,22 @@ static void RenderSkinventory() {
             g_SkinSwitchToBrowser = false;
         }
         if (ImGui::BeginTabItem("Browser", nullptr, browserFlags)) {
+            if(g_SkinActiveTab!=0)MarkNavigation();
             g_SkinActiveTab = 0;
-            // Give the three bordered panes breathing room below the sub-tab
-            // underline; otherwise their top borders crowd the tab header.
             ImGui::Spacing();
-            RenderSkinCategoryNav();
-            ImGui::SameLine();
-            RenderSkinList();
-            ImGui::SameLine();
+            const AlterEgo::UI::SplitPanel split(g_SkinListWidth,420.f,200.f,240.f);
+            RenderSkinList(split.left);
+            if(split.Divider("##skin_split",g_SkinListWidth))SaveSettings();
             RenderSkinDetailPanel();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Shopping List")) {
+        const auto shoppingFlags=g_SkinSwitchToShopping?ImGuiTabItemFlags_SetSelected:0;
+        g_SkinSwitchToShopping=false;
+        if (ImGui::BeginTabItem("Shopping List",nullptr,shoppingFlags)) {
+            if(g_SkinActiveTab!=1)MarkNavigation();
             g_SkinActiveTab = 1;
             ImGui::Spacing();
+            AlterEgo::NativeAccounts::PollItemDemand(GetEffectiveAccountName());
             RenderSkinShoppingList();
             ImGui::EndTabItem();
         }
@@ -15303,20 +15347,116 @@ static void RenderSkinventory() {
 }
 
 
+// Render-only projection of the activity scheduler. No independent timers,
+// disk access or requests are introduced by the footer.
+static void DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::CharacterScopes::Mask demand,
+    AlterEgo::RefreshUI::State& state,std::string& detail,std::string& label){
+    namespace A=AlterEgo::CharacterActivity;
+    namespace S=AlterEgo::CharacterScopes;
+    namespace R=AlterEgo::RefreshUI;
+    using W=A::WaitReason;
+    const auto now=A::Now();
+    const bool enabled=AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters);
+    const bool linked=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
+    const bool owner=!ch.account_name.empty()&&AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name)==ch.account_name;
+    std::array<A::Inspection,5> rows{};
+    {
+        std::lock_guard<std::mutex> lock(A::Mutex());
+        for(auto s:S::Ordered)if(demand&s)rows[S::Index(s)]=A::State().Inspect(
+            {ch.account_name,ch.name},S::Name(s),ch.scope_stamps[S::Index(s)],now,
+            g_AutoRefreshOnSpecialization&&S::SpecSensitive(s));
+    }
+    const auto duration=[](int64_t seconds){
+        seconds=std::max<int64_t>(0,seconds);
+        return std::to_string(seconds/60)+"m "+std::to_string(seconds%60)+"s";
+    };
+    const auto reason=[](W w)->const char*{
+        switch(w){
+        case W::Due:return "Refresh due";
+        case W::LoginGrace:return "Login propagation grace";
+        case W::ActiveInterval:return "Active refresh interval";
+        case W::Stagger:return "Staggered refresh";
+        case W::LogoutGrace:return "Logout propagation grace";
+        case W::SpecDebounce:return "Specialization change";
+        case W::Retry:return "Retry cooldown";
+        default:return "Current";
+        }
+    };
+    const auto scopeLabel=[](S::Scope s)->const char*{
+        switch(s){case S::Core:return "Character details";case S::Builds:return "Build tabs";
+        case S::Tabs:return "Equipment tabs";case S::Physical:return "Physical equipment";
+        default:return "Crafting";}
+    };
+    std::string summary=ch.name;
+    const auto& core=rows[S::Index(S::Core)];
+    summary+=" - "+std::string(core.active?"Active":"Not active");
+    if(core.lastSeen>0)summary+="\nLast observed: "+R::Age(static_cast<std::time_t>(core.lastSeen));
+    summary+="\nAutomatic character refresh: "+std::string(enabled?"Enabled":"Disabled");
+    if(!linked)summary+="\nNo ready API account";
+    else if(!owner)summary+="\nCharacter ownership not verified; manual refresh required";
+    bool stale=false,due=false;
+    int64_t next=0;W nextReason=W::Current;
+    for(auto s:S::Ordered)if(demand&s){
+        const auto ix=S::Index(s);const auto& row=rows[ix];const auto& e=row.eligibility;
+        summary+="\n"+std::string(scopeLabel(s))+": "+(row.fresh?"Current":"Stale");
+        const auto stamp=ch.scope_stamps[ix];
+        summary+=" (last success: "+std::string(stamp>0?R::Age(static_cast<std::time_t>(stamp)):"not verified")+")";
+        if(e.reason!=W::Current){
+            summary+="\n  "+std::string(reason(e.reason));
+            if(e.at>now)summary+=" - "+duration(e.at-now);
+        }
+        if(row.attempt>0)summary+="\n  Last attempt: "+R::Age(static_cast<std::time_t>(row.attempt));
+        if(!row.error.empty())summary+="\n  "+row.error;
+        if(!row.fresh){
+            stale=true;due=due||e.due;
+            if(e.at>now&&(!next||e.at<next)){next=e.at;nextReason=e.reason;}
+        }
+    }
+    if(stale&&state!=R::State::Working){
+        state=R::State::Ready;
+        if(!linked){state=R::State::Error;label="No API";}
+        else if(!owner){state=R::State::Error;label="Unverified";}
+        else if(!enabled){state=R::State::Waiting;label="Auto disabled";}
+        else if(due)label="Refresh due";
+        else if(nextReason==W::Retry){state=R::State::Waiting;label="Retry in "+std::to_string((next-now+59)/60)+"m";}
+        else if(nextReason==W::Stagger)label="Scheduled";
+        else if(nextReason==W::SpecDebounce)label="Spec change";
+        else if(nextReason==W::LoginGrace||nextReason==W::LogoutGrace)label="Awaiting sync";
+        else if(next)label="Scheduled";
+        else label="Stale";
+        if(enabled&&linked&&owner){
+            if(due)summary+="\nAutomatic refresh eligible now";
+            else if(next)summary+="\nNext eligible refresh: "+duration(next-now);
+        }
+    }
+    if(state!=R::State::Working&&linked)summary+="\nManual Refresh bypasses ordinary waiting periods.";
+    if(!detail.empty()&&detail!="Ready"&&detail.rfind("Ready - ",0)!=0)
+        summary+="\nRequest status: "+detail;
+    detail=std::move(summary);
+}
+
 static void RenderCharactersStatusRow() {
-    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& chars = *charsSnapshot;
     const AlterEgo::Character* selected = nullptr;
     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
         const int ri = g_CharDisplayOrder[g_SelectedCharIdx];
         if (ri >= 0 && ri < (int)chars.size()) selected = &chars[ri];
     }
-    const auto hoard = AlterEgo::GW2API::GetHoardStatus();
-    const bool hoardReady = hoard == AlterEgo::HoardStatus::Available ||
-                            hoard == AlterEgo::HoardStatus::Ready;
+    namespace S=AlterEgo::CharacterScopes;
+    const auto demand=S::Visible(g_SelectedTab);
+    if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
+    const auto active=AlterEgo::CharacterActivity::ActiveKey();
+    if(!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&(!selected||selected->name!=active.second)){
+        S::Stamps stamps{};for(const auto& ch:chars)if(ch.account_name==active.first&&ch.name==active.second){stamps=ch.scope_stamps;break;}
+        PollDemandCharacter(active.first,active.second,stamps,S::Core);
+    }
+    const auto hoard = AlterEgo::GW2API::GetAccountStatus();
+    const bool hoardReady = hoard == AlterEgo::AccountStatus::Ready;
     const auto fetch = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
     AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
-    std::string detail = hoardReady ? "Ready" : "Waiting for Hoard & Seek...";
+    std::string detail = hoardReady ? "Ready" : "Link an API key in Nexus options";
     if (busy) {
         g_FetchDoneTime = std::chrono::steady_clock::time_point{};
         state = AlterEgo::RefreshUI::State::Working;
@@ -15332,12 +15472,14 @@ static void RenderCharactersStatusRow() {
             detail = "Refresh complete";
         }
     }
+    std::string statusLabel;
+    if(selected)DescribeCharacterRefresh(*selected,demand,state,detail,statusLabel);
     bool more = false;
-    if (AlterEgo::RefreshUI::Row("characters", selected ? selected->data_refreshed : 0,
-          "selected character", state, detail, !hoardReady || busy, &more)) {
+    if (AlterEgo::RefreshUI::Row("characters", selected ? S::Oldest(selected->scope_stamps,demand) : 0,
+          "selected character", state, detail, !hoardReady || busy, &more,statusLabel.c_str(),true)) {
         if (selected) {
             const std::string name = selected->name;
-            AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+            AlterEgo::GW2API::RequestCharacterActivityRefresh(selected->account_name,name,demand,true);
             g_DetailsFetched = false;
         } else {
             g_RefreshListFetching = true;
@@ -15351,11 +15493,15 @@ static void RenderCharactersStatusRow() {
 }
 
 static void RenderCompareStatusRow() {
-    const auto& chars = AlterEgo::GW2API::GetCharacters();
+    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+    const auto& chars = *charsSnapshot;
     const AlterEgo::Character* target = nullptr;
     for (const auto& ch : chars) {
         if (ch.name == g_LibComparePreviousTarget) { target = &ch; break; }
     }
+    namespace S=AlterEgo::CharacterScopes;
+    if(target){PollDemandCharacter(target->account_name,target->name,target->scope_stamps,S::Compare);
+        AlterEgo::NativeAccounts::PollItemDemand(target->account_name);}
     const auto fetch = AlterEgo::GW2API::GetFetchStatus();
     const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
     if (g_LibCompareRefreshPending && !busy) {
@@ -15385,13 +15531,20 @@ static void RenderCompareStatusRow() {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete";
     }
-    if (AlterEgo::RefreshUI::Row("compare", target ? target->data_refreshed : 0,
-            "character build/equipment", state, detail, busy || !target)) {
+    std::string statusLabel;
+    if(target)DescribeCharacterRefresh(*target,S::Compare,state,detail,statusLabel);
+    else if(!busy){
+        if(AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready){
+            state=AlterEgo::RefreshUI::State::Error;statusLabel="No API";detail="Link or verify an API account in Nexus options.";
+        }else{state=AlterEgo::RefreshUI::State::Ready;statusLabel="No character";}
+    }
+    if (AlterEgo::RefreshUI::Row("compare", target ? S::Oldest(target->scope_stamps,S::Compare) : 0,
+            "character build/equipment", state, detail, busy || !target || AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready,nullptr,statusLabel.c_str(),true)) {
         const std::string name = target->name;
         g_LibCompareRefreshChar = name;
         g_LibCompareRefreshPending = true;
         g_LibCompareRefreshResult.clear();
-        AlterEgo::GW2API::RequestCharacterRefreshSelected({name});
+        AlterEgo::GW2API::RequestCharacterActivityRefresh(target->account_name,name,S::Compare,true);
     }
 }
 
@@ -15410,24 +15563,26 @@ static void RenderSkinventoryStatusRow() {
     }
     Skinventory::OwnedSkins::SetAccountName(visibleAccount);
     if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag() &&
-        AlterEgo::AutoRefreshPolicy::Enabled())
+        AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))
         g_SkinRefreshOwned = true;
     bool querying = Skinventory::OwnedSkins::IsQuerying();
-    bool canRefresh = Skinventory::OwnedSkins::IsHoardAndSeekAvailable() && !querying;
+    bool canRefresh = Skinventory::OwnedSkins::IsAccountAvailable() && !querying;
     {
         static std::string s_autoRefreshAccount;
+        static auto s_lastOwnershipAttempt=std::chrono::steady_clock::time_point{};
         const std::string currentAccount = GetEffectiveAccountName();
         const std::time_t lastSuccess = Skinventory::OwnedSkins::GetLastSuccessTime();
         const std::time_t now = std::time(nullptr);
         const bool stale = !Skinventory::OwnedSkins::HasData() ||
             lastSuccess <= 0 || (now > lastSuccess && now - lastSuccess > 15 * 60);
-        if (AlterEgo::AutoRefreshPolicy::Enabled() && canRefresh &&
+        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership) && canRefresh &&
             !currentAccount.empty() && stale &&
-            s_autoRefreshAccount != currentAccount) {
-            s_autoRefreshAccount = currentAccount;
+            (s_autoRefreshAccount != currentAccount||std::chrono::steady_clock::now()-s_lastOwnershipAttempt>=std::chrono::seconds(AlterEgo::RefreshEngine::FailureSeconds))) {
+            s_autoRefreshAccount = currentAccount;s_lastOwnershipAttempt=std::chrono::steady_clock::now();
             g_SkinRefreshOwned = true;
         }
     }
+    if(g_SkinRefreshOwned&&!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))g_SkinRefreshOwned=false;
     if (g_SkinRefreshOwned && canRefresh) {
         g_SkinRefreshOwned = false;
         s_refreshPending = true;
@@ -15456,8 +15611,8 @@ static void RenderSkinventoryStatusRow() {
     } else if (std::chrono::steady_clock::now() < s_successUntil) {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete - " + std::to_string(Skinventory::OwnedSkins::GetOwnedCount()) + " owned";
-    } else if (!Skinventory::OwnedSkins::IsHoardAndSeekAvailable()) {
-        detail = "Waiting for Hoard & Seek...";
+    } else if (!Skinventory::OwnedSkins::IsAccountAvailable()) {
+        detail = "Link an API key in Nexus options";
     }
     if (Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Updating) {
         state = AlterEgo::RefreshUI::State::Working;
@@ -15465,37 +15620,51 @@ static void RenderSkinventoryStatusRow() {
     }
     if (AlterEgo::RefreshUI::Row("skinventory", Skinventory::OwnedSkins::GetLastSuccessTime(),
              "owned skins", state, detail, !canRefresh))
-        g_SkinRefreshOwned = true;
+    {
+        g_SkinRefreshOwned=false;
+        s_refreshPending=true;s_refreshStartingGeneration=Skinventory::OwnedSkins::GetGeneration();
+        Skinventory::OwnedSkins::RequestOwnedSkinsViaApi();
+    }
 }
 
 static void RenderAchievementsStatusRow() {
-    const bool working = g_AchGroupsFetching || g_AchCatFetching ||
+    const bool namesWorking = g_AchNameIndexFetching.load();
+    const bool working = g_AchGroupsFetching || g_AchCatFetching || namesWorking ||
         g_AchProgressFetching || g_AchRetryAtMs.load() != 0;
-    std::string detail;
+    std::string detail, namesError, refreshError;
+    std::chrono::steady_clock::time_point successUntil;
+    int64_t verifiedAt=0;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        detail = g_AchStatusMsg;
+        detail = namesWorking ? g_AchNameIndexStatus : g_AchStatusMsg;
+        namesError = g_AchNameIndexError;
+        refreshError=g_AchRefreshError;successUntil=g_AchRefreshSuccessUntil;
+        verifiedAt=g_AchProgressCacheSavedAt.load();
     }
     AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
     if (working) {
         state = AlterEgo::RefreshUI::State::Working;
         if (detail.empty()) detail = "Querying achievement progress...";
-    } else if (!g_AchRefreshError.empty()) {
+    } else if (!refreshError.empty()) {
         state = AlterEgo::RefreshUI::State::Error;
-        detail = g_AchRefreshError;
-    } else if (std::chrono::steady_clock::now() < g_AchRefreshSuccessUntil) {
+        detail = refreshError;
+    } else if (!namesError.empty()) {
+        state = AlterEgo::RefreshUI::State::Error;
+        detail = namesError;
+    } else if (std::chrono::steady_clock::now() < successUntil) {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete";
     } else {
         detail = g_AchGroupsFetched ? "Ready" : "Loading achievement categories...";
     }
-    if (AlterEgo::RefreshUI::Row("achievements", (std::time_t)g_AchProgressCacheSavedAt,
+    if (AlterEgo::RefreshUI::Row("achievements", (std::time_t)verifiedAt,
             "achievement progress", state, detail)) {
-        g_AchRefreshError.clear();
-        g_AchProgressFetching = false; // allow manual retry of a lost response
-        g_AchProgressQueryStartMs = 0;
         {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchRefreshError.clear();
+            ++g_AchRequestGeneration;
+            g_AchProgressFetching = false; // invalidate a replaced request
+            g_AchProgressQueryStartMs = 0;
             g_AchStatusMsg.clear();
         }
         // A manual refresh targets the selected category, not every category.
@@ -15510,7 +15679,7 @@ static void RenderAchievementsStatusRow() {
                 std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
                 pinnedCopy = g_AchPinned;
             }
-            if (!pinnedCopy.empty()) SendAchProgressQuery(pinnedCopy);
+            SendAchProgressQuery(pinnedCopy);
         }
     }
 }
@@ -15518,12 +15687,16 @@ static void RenderAchievementsStatusRow() {
 
 static void PollAchievementCachePersistence() {
     const std::string account = GetAchievementCacheAccount();
-    if (!account.empty() && account != g_AchCachedAccount) {
+    if (account != g_AchCachedAccount) {
+        {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchSwitchingAccount=true;++g_AchRequestGeneration;}
         // Flush outgoing data before loading another account. Account switching
         // must never overwrite the previous account's progress file.
         if (g_AchProgressDirty && !g_AchCachedAccount.empty())
             SaveAchProgress(g_AchCachedAccount);
-        LoadAchProgress(account);
+        if(!account.empty())LoadAchProgress(account);
+        else {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);g_AchProgress.clear();g_AchOptimisticTime.clear();g_AchCachedAccount.clear();g_AchProgressCacheSavedAt=0;g_AchProgressLoadedSnapshotAt=0;g_AchProgressDirty=false;++g_AchProgressGen;}
+        {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);g_AchSwitchingAccount=false;}
 
         // Responses/retries issued for the old account must not update the new
         // cache. Fresh queries can be scheduled for the selected account.
@@ -15536,8 +15709,9 @@ static void PollAchievementCachePersistence() {
     // Runs even while the Achievements tab (or the whole addon window) is
     // closed, so API replies and alerts are persisted without opening the tab.
     if (g_AchProgressDirty && !g_AchCachedAccount.empty()) {
-        if (std::chrono::steady_clock::now() - g_AchLastSave >= std::chrono::seconds(30))
-            SaveAchProgress(g_AchCachedAccount);
+        bool due;
+        {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);due=std::chrono::steady_clock::now()-g_AchLastSave>=std::chrono::seconds(30);}
+        if(due)SaveAchProgress(g_AchCachedAccount);
     }
 }
 
@@ -15554,29 +15728,51 @@ struct DefaultFontScope {
     ~DefaultFontScope() { if (pushed) ImGui::PopFont(); }
 };
 
-// Never dispatch H&S requests inside a MumbleLink event callback. The
-// render-driven scheduler checks readiness, throttling, and existing activity.
-static void PollAutoCharacterRefresh() {
-    if (!AlterEgo::AutoRefreshPolicy::Enabled()) {
-        g_AutoRefreshTracker.CancelPending();
-        return;
+// Local gameplay observations run while the addon window is hidden. The
+// Nexus gameplay flag avoids treating an old identity as active at selection.
+static void ObserveCharacterActivity(){
+    namespace A=AlterEgo::CharacterActivity;
+    static auto last=std::chrono::steady_clock::time_point{};
+    const auto now=std::chrono::steady_clock::now();
+    if(now-last<std::chrono::seconds(1))return;
+    last=now;
+    const auto* nexus=APIDefs?static_cast<const NexusLinkData_t*>(APIDefs->DataLink_Get(DL_NEXUS_LINK)):nullptr;
+    if(!nexus)return; // no reliable gameplay signal; do not invent activity
+    const auto* identity=static_cast<const MumbleIdentity*>(APIDefs->DataLink_Get(DL_MUMBLE_LINK_IDENTITY));
+    std::string name;uint32_t spec=0;
+    if(identity){
+        char buf[20]={};memcpy(buf,identity->Name,19);name=buf;spec=identity->Specialization;
+        for(unsigned char c:name)if(c!=' '&&c!='-'&&!isalpha(c)&&c<0x80){name.clear();break;}
     }
-    if (g_AutoRefreshTracker.PendingCharacter().empty()) return;
-    const auto status = AlterEgo::GW2API::GetHoardStatus();
-    const bool ready = status == AlterEgo::HoardStatus::Available ||
-                       status == AlterEgo::HoardStatus::Ready;
-    const bool busy = AlterEgo::GW2API::GetFetchStatus() ==
-                      AlterEgo::FetchStatus::InProgress;
-    std::string name;
-    if (g_AutoRefreshTracker.TakeDueRequest(
-            AlterEgo::AutoRefreshTracker::Clock::now(),
-            AlterEgo::AutoRefreshPolicy::Enabled(), ready, busy, name)) {
-        // Login/spec-change refreshes need equipment and builds, not crafting
-        // professions that are already present in the persistent character cache.
-        AlterEgo::GW2API::RequestCharacterRefreshSelected({name}, false);
+    if(nexus->IsGameplay&&!name.empty())AlterEgo::GW2API::SetCurrentAccountFromCharacter(name);
+    const auto account=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name);
+    A::Observe(account,name,spec,nexus->IsGameplay);
+    const auto active=A::ActiveKey();
+    // The live identity remains useful without an API key, but unverified
+    // ownership must never create account-scoped login history.
+    static auto lastIdentity=std::chrono::steady_clock::time_point{};
+    if(nexus->IsGameplay&&!name.empty()){
+        if(g_CurrentCharName!=name){g_CurrentCharName=name;g_LiveSpecialization=spec;}
+        else if(spec)g_LiveSpecialization=spec;
+        lastIdentity=now;
+    }else if(active.first.empty()&&now-lastIdentity>=std::chrono::seconds(12)){
+        g_CurrentCharName.clear();g_LiveSpecialization=0;
     }
+    MigrateLegacyLoginHistory();
+    SyncLoginHistory();
+    SaveCharacterActivity();
 }
-
+static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand){
+    namespace A=AlterEgo::CharacterActivity;
+    if(account.empty()||name.empty()||!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters)||
+       AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready||
+       AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress)return;
+    if(AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name)!=account)return;
+    AlterEgo::CharacterScopes::Mask due=0;
+    {std::lock_guard<std::mutex> lock(A::Mutex());
+        due=AlterEgo::CharacterScopes::Due(A::State(),{account,name},stamps,demand,A::Now(),g_AutoRefreshOnSpecialization);}
+    if(due)AlterEgo::GW2API::RequestCharacterActivityRefresh(account,name,due);
+}
 
 struct TabDropdownState {
     bool pinned = false;
@@ -15610,6 +15806,7 @@ static void HandleTabDropdown(TabDropdownState& state, ImGuiTabBar* tabBar,
     draw->AddLine(ImVec2(arrow.x, arrow.y + 2.0f),
                   ImVec2(arrow.x + 4.0f, arrow.y - 2.0f), color, 1.6f);
 
+    if(g_LibEditMode){state.requestClose=state.popupOpen;return;}
     // IsItemHovered is blocked by active popups, especially for the active tab.
     state.headerHovered = ImGui::IsMouseHoveringRect(tabMin, tabMax, false);
     const bool clicked = state.headerHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -15683,59 +15880,59 @@ static void SyncTabDropdownOpen(TabDropdownState& state, const char* popup) {
     }
 }
 
+#include "NavigationUI.h"
+
 void AddonRender() {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
     DefaultFontScope _fontScope(g_FontConfig);
     // Process icon download queue every frame
     AlterEgo::IconManager::Tick();
     Skinventory::WikiImage::Tick();
     Skinventory::OwnedSkins::Tick();
-    AlterEgo::GW2API::PollRetries();   // fire any scheduled H&S BUSY backoff retry
-    PollAutoCharacterRefresh();     // MumbleLink-triggered requests (debounced, cooldown, no overlap)
+    // Normalize legacy saved account names to the registry GUID. The active
+    // character and the selected browsing account are independent.
+    if(AlterEgo::NativeAccounts::Ready()){
+        const auto accounts=AlterEgo::NativeAccounts::Linked();
+        if(accounts.size()<=1)g_SelectedAccountFilter.clear();
+        else{
+            for(const auto& a:accounts)if(g_SelectedAccountFilter==a.name){g_SelectedAccountFilter=a.id;break;}
+            if(!g_SelectedAccountFilter.empty()&&std::none_of(accounts.begin(),accounts.end(),[](const auto& a){return a.id==g_SelectedAccountFilter;}))g_SelectedAccountFilter.clear();
+            static size_t priorCount=0;
+            if(priorCount<2&&g_SelectedAccountFilter.empty())g_SelectedAccountFilter=AlterEgo::GW2API::GetCurrentAccountName();
+            priorCount=accounts.size();
+        }
+    }
+    ObserveCharacterActivity(); // local only, no character HTTP while hidden
     PollAchievementCachePersistence(); // load/save disk progress, even when window is hidden
     SyncCompletionAccountCaches(); // selected-account Clears/Vault snapshots, even with UI hidden
     Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
 
-    // H&S can drop a progress response (or an addon can be reloaded during a
+    // native API can drop a progress response (or an addon can be reloaded during a
     // query). Never leave the Achievements Refresh action stuck indefinitely.
     if (g_AchProgressFetching) {
         const long long started = g_AchProgressQueryStartMs.load();
-        if (started > 0 && NowMs() - started > 20000) {
-            g_AchProgressFetching = false;
-            g_AchProgressQueryStartMs = 0;
+        if (started > 0 && NowMs() - started > 120000) {
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchStatusMsg = "Achievement progress timed out. Click Refresh to retry.";
+            if(g_AchProgressFetching&&g_AchProgressQueryStartMs==started){
+                ++g_AchRequestGeneration;
+                g_AchProgressFetching = false;
+                g_AchProgressQueryStartMs = 0;
+                g_AchStatusMsg = "Achievement progress timed out. Click Refresh to retry.";
+            }
         }
     }
 
-    // Persist login timestamps when dirty (crash-safe)
-    if (g_LoginTimestampsDirty) SaveLoginTimestamps();
-
-    // Refresh pinned achievements on their 10-minute timer only while the
-    // Achievements tab or tracker popout is visible. No startup API burst.
+    // One account-wide objective tick for all achievement browser/popout consumers.
     {
-        static auto s_lastPinnedRefresh = std::chrono::steady_clock::time_point{};
-        auto hStatus = AlterEgo::GW2API::GetHoardStatus();
-        bool hReady = (hStatus == AlterEgo::HoardStatus::Available ||
-                       hStatus == AlterEgo::HoardStatus::Ready);
-        const bool achievementsInUse =
-            g_AchPopoutVisible || (g_WindowVisible && g_MainTab == 4);
-        if (achievementsInUse && hReady && !g_AchProgressFetching) {
-            auto now = std::chrono::steady_clock::now();
-            bool firstRun = (s_lastPinnedRefresh == std::chrono::steady_clock::time_point{});
-            bool expired  = !firstRun &&
-                (now - s_lastPinnedRefresh) >= std::chrono::minutes(10);
-            if (AlterEgo::AutoRefreshPolicy::Enabled() && (firstRun || expired)) {
-                std::vector<uint32_t> pinnedCopy;
-                {
-                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                    pinnedCopy = g_AchPinned;
-                }
-                if (!pinnedCopy.empty()) {
-                    s_lastPinnedRefresh = now;
-                    g_LastAchProgressQuery = now;
-                    SendAchProgressQuery(pinnedCopy, true);
-                }
-            }
+        static auto lastCheck=std::chrono::steady_clock::time_point{};
+        const auto now=std::chrono::steady_clock::now();
+        if((g_AchPopoutVisible||(g_WindowVisible&&g_MainTab==4))&&
+           AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)&&
+           !g_AchProgressFetching&&AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready&&
+           now-lastCheck>=std::chrono::seconds(2)){
+            lastCheck=now;
+            if(IsAchCategoryRefreshDue(g_AchSelectedCatId))SendAchProgressQuery({},true);
         }
     }
 
@@ -15757,7 +15954,8 @@ void AddonRender() {
     // Achievement tracker popout (independent of main window)
     RenderAchPopout();
 
-    if (!g_WindowVisible) { return; }
+    g_NavInputMask.store(0);
+    if (!g_WindowVisible) { g_NavRequest.store(0); return; }
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Alter Ego", &g_WindowVisible,
@@ -15767,67 +15965,87 @@ void AddonRender() {
         return;
     }
 
-    // H&S status
-    auto hoardStatus = AlterEgo::GW2API::GetHoardStatus();
+    // native API status
+    auto hoardStatus = AlterEgo::GW2API::GetAccountStatus();
     auto fetchStatus = AlterEgo::GW2API::GetFetchStatus();
     bool scanning = (fetchStatus == AlterEgo::FetchStatus::InProgress);
-    bool hoardReady = (hoardStatus == AlterEgo::HoardStatus::Available ||
-                       hoardStatus == AlterEgo::HoardStatus::Ready);
+    bool hoardReady = (hoardStatus == AlterEgo::AccountStatus::Ready);
 
-    // H&S connection warnings (shown globally, above tab bar)
-    if (hoardStatus == AlterEgo::HoardStatus::Unknown) {
-        RenderSpinner("Checking for Hoard & Seek...");
-        static auto lastPing = std::chrono::steady_clock::time_point{};
-        auto now = std::chrono::steady_clock::now();
-        if (now - lastPing > std::chrono::seconds(5)) {
-            lastPing = now;
-            AlterEgo::GW2API::PingHoard();
-        }
-    } else if (hoardStatus == AlterEgo::HoardStatus::Unavailable) {
-        RenderEmptyCard(
-            APIDefs ? APIDefs->Textures_Get(TEX_ICON) : nullptr,
-            "Hoard & Seek is required",
-            "Alter Ego reads your characters, equipment, and inventory through the Hoard & Seek companion addon. Install it from the Nexus addon library to get started.",
-            "Retry Detection", []() { AlterEgo::GW2API::PingHoard(); },
-            "Copy Library URL", []() {
-                CopyToClipboard(std::string("https://raidcore.gg/Nexus"));
-                if (APIDefs) APIDefs->GUI_SendAlert("Nexus library URL copied!");
-            }
-        );
-        return;
-    } else if (hoardStatus == AlterEgo::HoardStatus::PermDenied) {
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "H&S permission denied. Enable in H&S settings.");
-    }
+    // No separate addon is needed for character and inventory retrieval.
+    if(!AlterEgo::NativeAccounts::Ready())RenderSpinner("Loading linked accounts...");
+    else if(!AlterEgo::NativeAccounts::HasLinkedAccounts())
+        ImGui::TextWrapped("Link your GW2 API key in Nexus > Alter Ego options. Saved Library data remains available.");
 
-    // Auto-query accounts when H&S becomes available (multi-account)
-    {
-        static bool s_accountsQuerySent = false;
-        if (hoardReady && AlterEgo::AutoRefreshPolicy::Enabled() && !s_accountsQuerySent) {
-            s_accountsQuerySent = true;
-            AlterEgo::GW2API::QueryAccounts();
-        }
-    }
-
-    // Account selector (only when multi-account) — rendered on the same row as
-    // the tab bar (right-aligned) to save vertical space.
+    // Global account scope, shown only for multiple linked accounts.
     static bool g_ForceCharactersTab = false;
-    float tabRowY = ImGui::GetCursorPosY();
+    static bool accountFallbackNavigation=false;
+    RenderNavigationControls();
+    BeginNavigationFrame();
+        // Account selector shares the navigation header, never overlays main tabs.
+        if (AlterEgo::GW2API::IsMultiAccount()) {
+            const auto& accounts = AlterEgo::GW2API::GetAccounts();
+            std::string currentLabel = "All Accounts";
+            for (const auto& acct : accounts) {
+                if (acct.name == g_SelectedAccountFilter) {
+                    currentLabel = acct.display_name;
+                    break;
+                }
+            }
+            const float available=ImGui::GetContentRegionAvail().x;
+            if(available<ImGui::GetFontSize()*9.f)ImGui::NewLine();
+            const float comboWidth=std::min(180.f,std::max(1.f,ImGui::GetContentRegionAvail().x));
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),ImGui::GetWindowContentRegionMax().x-comboWidth));
+            if (RenderThemedCombo("##AccountSelect", currentLabel.c_str(), comboWidth)) {
+                std::string prevFilter = g_SelectedAccountFilter;
+                if (AlterEgo::UI::SelectableOption("All Accounts", g_SelectedAccountFilter.empty())) {
+                    g_SelectedAccountFilter.clear();
+                    if ((g_MainTab >= 2 && g_MainTab <= 4) || g_MainTab == 6) {
+                        g_ForceCharactersTab = true;accountFallbackNavigation=true;
+                    }
+                }
+                for (const auto& acct : accounts) {
+                    bool selected = (g_SelectedAccountFilter == acct.name);
+                    ImGui::PushID(acct.name.c_str());
+                    if (AlterEgo::UI::SelectableOption(acct.display_name.c_str(), selected)) g_SelectedAccountFilter = acct.name;
+                    ImGui::PopID();
+                }
+                if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
+                    Skinventory::OwnedSkins::SetAccountName(g_SelectedAccountFilter);
+                    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))
+                        g_SkinRefreshOwned = true;
+                    g_ClearsNeedRequery = true;
+                    g_VaultNeedRequery = true;
+                    g_AchNeedRequery = true;
+                }
+                ImGui::EndCombo();
+            }
+        }
+
 
     // Top-level tab bar: Characters | Build Library
     PollBuildSource();
-    if (ImGui::BeginTabBar("##main_tabs")) {
-        static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu;
+    // The main tab layout is calculated by the first submitted tab. Add
+    // six pixels to its gaps (three on either side of each group divider).
+    const auto mainInnerSpacing=ImGui::GetStyle().ItemInnerSpacing;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,ImVec2(mainInnerSpacing.x+6.f,mainInnerSpacing.y));
+    const bool mainTabBarOpen=ImGui::BeginTabBar("##main_tabs");
+    if(!mainTabBarOpen)ImGui::PopStyleVar();
+    if (mainTabBarOpen) {
+        static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu, skinMenu, inventoryMenu;
 
-        ImGuiTabItemFlags charTabFlags = 0;
+        ImGuiTabItemFlags charTabFlags = NavigationTabFlags(0);
         if (g_ForceCharactersTab) {
             charTabFlags = ImGuiTabItemFlags_SetSelected;
             g_ForceCharactersTab = false;
         }
         const bool charactersTabVisible = ImGui::BeginTabItem("Characters", nullptr, charTabFlags);
+        ImGui::PopStyleVar(); // content and nested tabs keep their existing spacing
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Live and cached character data from your GW2 account");
         if (charactersTabVisible) {
             g_MainTab = 0;
+            const std::string memoryAccount=AlterEgo::GW2API::GetCurrentAccountName();
+            TickCharacterLoad();
             ImGui::BeginChild("##characters_page",
                 ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
 
@@ -15840,13 +16058,14 @@ void AddonRender() {
                 lastFetchStatus = fetchStatus;
             }
 
-            const auto& characters = AlterEgo::GW2API::GetCharacters();
+            const auto charactersSnapshot = AlterEgo::GW2API::GetCharacters();
+            const auto& characters = *charactersSnapshot;
             // Also check pending names from a list-only fetch (new user, no full data yet)
             const auto& pendingNames = AlterEgo::GW2API::GetPendingCharNames();
 
-            // Auto-fetch character list when H&S first becomes ready and we have no data
+            // Auto-fetch character list when native API first becomes ready and we have no data
             // Wait for accounts data so we get characters from ALL accounts
-            if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+            if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters) &&
                 !g_AutoCharListRequested && hoardReady && !scanning &&
                 characters.empty() && pendingNames.empty() &&
                 AlterEgo::GW2API::HasAccountsData()) {
@@ -15855,34 +16074,7 @@ void AddonRender() {
             }
 
             if (!characters.empty()) {
-                // Rebuild when the roster, account, or Mumble-observed last
-                // login changes. Preserve the selected character by NAME so
-                // auto-resorting does not silently select another character.
-                static std::string s_lastCurrentAcct;
-                const std::string& curAcct = AlterEgo::GW2API::GetCurrentAccountName();
-                const bool recencyChanged = g_CharSortMode == Sort_LastLogin &&
-                                            g_CharLastLoginSortDirty;
-                if (characters.size() != g_LastCharCount ||
-                    curAcct != s_lastCurrentAcct || recencyChanged) {
-                    std::string selectedName;
-                    if (g_SelectedCharIdx >= 0 &&
-                        g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
-                        const int currentIndex = g_CharDisplayOrder[g_SelectedCharIdx];
-                        if (currentIndex >= 0 && currentIndex < (int)characters.size())
-                            selectedName = characters[currentIndex].name;
-                    }
-                    s_lastCurrentAcct = curAcct;
-                    RebuildCharDisplayOrder();
-                    if (!selectedName.empty()) {
-                        for (int i = 0; i < (int)g_CharDisplayOrder.size(); ++i) {
-                            if (characters[g_CharDisplayOrder[i]].name == selectedName) {
-                                g_SelectedCharIdx = i;
-                                break;
-                            }
-                        }
-                    }
-                    if (recencyChanged) g_CharLastLoginSortDirty = false;
-                }
+                EnsureCharDisplayOrder(charactersSnapshot);
 
                 // Auto-select first character if none selected, or restore session
                 if (g_SelectedCharIdx < 0 || g_SelectedCharIdx >= (int)g_CharDisplayOrder.size()) {
@@ -15907,10 +16099,9 @@ void AddonRender() {
 
                 // Character list (left) + Detail panel (right)
                 // Clamp width to reasonable bounds
-                float availW = ImGui::GetContentRegionAvail().x;
-                g_CharListWidth = (g_CharListWidth < 120.0f) ? 120.0f : (g_CharListWidth > availW - 200.0f) ? availW - 200.0f : g_CharListWidth;
+                const AlterEgo::UI::SplitPanel split(g_CharListWidth,200.f);
 
-                ImGui::BeginChild("CharList", ImVec2(g_CharListWidth, 0), true);
+                ImGui::BeginChild("CharList", ImVec2(split.left, 0), true);
 
                 // Sort mode selector + direction toggle (inside the list child)
                 {
@@ -15919,14 +16110,14 @@ void AddonRender() {
                     float comboWidth = avail - arrowBtnWidth - (arrowBtnWidth > 0 ? 4.0f : 0.0f);
                     ImGui::SetNextItemWidth(comboWidth);
                     const char* sortLabels[] = { "Custom", "Name", "Class", "Level", "Age", "Birthday", "Last Login" };
-                    if (ImGui::Combo("##sort", &g_CharSortMode, sortLabels, IM_ARRAYSIZE(sortLabels))) {
+                    if (AlterEgo::UI::Combo("##sort", &g_CharSortMode, sortLabels, IM_ARRAYSIZE(sortLabels))) {
                         g_CharSortAscending = true; // reset direction on mode change
                         std::string selName;
                         if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
                             int ri = g_CharDisplayOrder[g_SelectedCharIdx];
                             if (ri >= 0 && ri < (int)characters.size()) selName = characters[ri].name;
                         }
-                        RebuildCharDisplayOrder();
+                        RebuildCharDisplayOrder(charactersSnapshot);
                         g_SelectedCharIdx = 0;
                         for (int di = 0; di < (int)g_CharDisplayOrder.size(); di++) {
                             if (characters[g_CharDisplayOrder[di]].name == selName) {
@@ -15938,14 +16129,13 @@ void AddonRender() {
                     }
                     if (g_CharSortMode != Sort_Custom) {
                         ImGui::SameLine();
-                        if (ImGui::Button("##sortdir", ImVec2(arrowBtnWidth, 0))) {
-                            g_CharSortAscending = !g_CharSortAscending;
+                        if (AlterEgo::UI::SortDirectionButton("##sortdir",g_CharSortAscending,arrowBtnWidth)) {
                             std::string selName;
                             if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
                                 int ri = g_CharDisplayOrder[g_SelectedCharIdx];
                                 if (ri >= 0 && ri < (int)characters.size()) selName = characters[ri].name;
                             }
-                            RebuildCharDisplayOrder();
+                            RebuildCharDisplayOrder(charactersSnapshot);
                             g_SelectedCharIdx = 0;
                             for (int di = 0; di < (int)g_CharDisplayOrder.size(); di++) {
                                 if (characters[g_CharDisplayOrder[di]].name == selName) {
@@ -15955,31 +16145,14 @@ void AddonRender() {
                             }
                             SaveCharSortConfig();
                         }
-                        // Draw triangle arrow on the button
-                        ImVec2 btnMin = ImGui::GetItemRectMin();
-                        ImVec2 btnMax = ImGui::GetItemRectMax();
-                        float cx = (btnMin.x + btnMax.x) * 0.5f;
-                        float cy = (btnMin.y + btnMax.y) * 0.5f;
-                        float sz = 5.0f;
-                        ImDrawList* dl = ImGui::GetWindowDrawList();
-                        ImU32 col = IM_COL32(220, 220, 220, 255);
-                        if (g_CharSortAscending) {
-                            // Up arrow
-                            dl->AddTriangleFilled(
-                                ImVec2(cx, cy - sz), ImVec2(cx - sz, cy + sz), ImVec2(cx + sz, cy + sz), col);
-                        } else {
-                            // Down arrow
-                            dl->AddTriangleFilled(
-                                ImVec2(cx - sz, cy - sz), ImVec2(cx + sz, cy - sz), ImVec2(cx, cy + sz), col);
-                        }
+
                     }
                     ImGui::Separator();
                 }
 
                 // Character search bar
                 {
-                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-                    ImGui::InputTextWithHint("##charsearch", "Search...", g_CharSearchBuf, sizeof(g_CharSearchBuf));
+                    AlterEgo::UI::SearchField("characters", "Search characters...", g_CharSearchBuf);
                 }
 
                 // Collect item rects for insertion-line drag-and-drop
@@ -16006,6 +16179,7 @@ void AddonRender() {
                         acctDisplayNames[acct.name] = acct.display_name;
                 }
                 std::string lastAcctHeader;
+                bool seenKnownLogin=false,shownUnknownLogin=false;
 
                 for (int di = 0; di < (int)g_CharDisplayOrder.size(); di++) {
                     int realIdx = g_CharDisplayOrder[di];
@@ -16030,6 +16204,7 @@ void AddonRender() {
                     // Account group header
                     if (showAcctHeaders && ch.account_name != lastAcctHeader) {
                         lastAcctHeader = ch.account_name;
+                        seenKnownLogin=false;shownUnknownLogin=false;
                         auto it = acctDisplayNames.find(ch.account_name);
                         const char* label = it != acctDisplayNames.end() ? it->second.c_str() : ch.account_name.c_str();
                         if (di > 0) ImGui::Spacing();
@@ -16037,6 +16212,14 @@ void AddonRender() {
                         ImGui::Separator();
                     }
 
+                    const auto lastLogin=CharacterLastLogin(ch);
+                    if(g_CharSortMode==Sort_LastLogin){
+                        if(lastLogin>0)seenKnownLogin=true;
+                        else if(seenKnownLogin&&!shownUnknownLogin){
+                            ImGui::Spacing();ImGui::Separator();ImGui::TextDisabled("No recorded login");
+                            shownUnknownLogin=true;
+                        }
+                    }
                     ImGui::PushID(di);
 
                     bool selected = (g_SelectedCharIdx == di);
@@ -16049,7 +16232,7 @@ void AddonRender() {
                         if (g_ShowCraftingIcons && !ch.crafting.empty()) extraLines++;
                         if (g_ShowAge && !ch.created.empty()) extraLines++;
                         if (g_ShowPlaytime && ch.age > 0) extraLines++;
-                        if (g_ShowLastLogin && g_LoginTimestamps.count(ch.name)) extraLines++;
+                        if (g_ShowLastLogin && lastLogin>0) extraLines++;
                         if (g_BirthdayMode != 2) {
                             int bdays = DaysUntilBirthday(ch.created);
                             bool showBday = (g_BirthdayMode == 0 && bdays >= 0) ||
@@ -16082,6 +16265,7 @@ void AddonRender() {
 
                     // Character entry
                     if (ImGui::Selectable("##char", selected, 0, ImVec2(0, rowHeight))) {
+                        MarkNavigation();
                         g_SelectedCharIdx = di;
                         g_DetailsFetched = false;
                         g_SelectedEquipTab = 0;
@@ -16093,15 +16277,19 @@ void AddonRender() {
 
                     // Context actions resolve against the right-clicked character, not
                     // the character whose details happen to be selected.
+                    const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
+                        CopyNameMenuItem(ch.name);
+                        RenderCharacterLoadMenu("Load",ch.name,ch.account_name);
                         const int activeBuild = ActiveBuildIndex(ch);
                         const int activeEquip = ActiveEquipmentTab(ch);
                         if (ImGui::MenuItem("Refresh")) {
                             AlterEgo::GW2API::RequestCharacterRefreshSelected({ch.name});
                             if (g_SelectedCharIdx == di) g_DetailsFetched = false;
                         }
-                        if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild >= 0))
-                            OpenSaveLiveBuildDialog(ch, ch.build_tabs[activeBuild]);
+                        if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild>=0||!ch.equipment.empty()))
+                            OpenSaveLiveBuildDialog(ch,activeBuild>=0?ch.build_tabs[activeBuild]:AlterEgo::BuildTemplate{},
+                                activeEquip,activeBuild>=0?-1:kSaveEntireEquipmentSet);
                         if (ImGui::BeginMenu("Share", activeBuild >= 0)) {
                             static AlterEgo::SavedBuild contextSnapshot;
                             static std::string contextKey;
@@ -16114,9 +16302,12 @@ void AddonRender() {
                             RenderBuildShareMenuItems(contextSnapshot, &ch);
                             ImGui::EndMenu();
                         }
-                        if (ImGui::MenuItem("Save Active Fashion..."))
-                            StartLiveFashionSave(ch, activeEquip);
                         ImGui::EndPopup();
+                    }
+
+                    if (characterHovered) {
+                        const std::string location=AlterEgo::GameMemory::Location(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
+                        if (!location.empty()) ImGui::SetTooltip("Location: %s",location.c_str());
                     }
 
                     // Draw profession-colored left accent bar (non-compact only)
@@ -16199,9 +16390,8 @@ void AddonRender() {
                         ImGui::SameLine();
                         float dotY = ImGui::GetCursorScreenPos().y - 3.0f + ImGui::GetTextLineHeight() * 0.5f;
                         float dotX = ImGui::GetCursorScreenPos().x;
-                        ImGui::GetWindowDrawList()->AddCircleFilled(
-                            ImVec2(dotX + 3.0f, dotY), 3.0f,
-                            IM_COL32(60, 200, 80, 255));
+                        AlterEgo::UI::ActiveIndicator(ImGui::GetWindowDrawList(),
+                            ImVec2(dotX + AlterEgo::UI::ActiveRadius, dotY));
                         ImGui::Dummy(ImVec2(8, 0));
                     }
                     // Spinning refresh icon for the character currently being fetched
@@ -16251,7 +16441,7 @@ void AddonRender() {
                                 "Live spec differs - refresh");
                             if (ImGui::IsItemHovered())
                                 ImGui::SetTooltip("MumbleLink reports %s, cached active build reports %s.",
-                                    GetSpecNameForWarning(g_AutoRefreshTracker.LiveSpecialization()),
+                                    GetSpecNameForWarning(g_LiveSpecialization),
                                     GetSpecNameForWarning(ch.build_tabs[GetActiveBuildIndex(ch)].specializations[2].spec_id));
                         }
                         const auto& match = GetLoggedInSavedBuildMatch();
@@ -16274,15 +16464,15 @@ void AddonRender() {
                             ImGui::TextColored(buildColor, "%s", shortLabel.c_str());
                             if (ImGui::IsItemHovered()) {
                                 if (match.checkUtilities)
-                                    ImGui::SetTooltip("%s - Check Utilities\n%s\n(cached H&S data)",
+                                    ImGui::SetTooltip("%s - Check Utilities\n%s\n(cached API data)",
                                         label.c_str(), match.skillDifferences.c_str());
                                 else
-                                    ImGui::SetTooltip("%s (cached H&S data)", label.c_str());
+                                    ImGui::SetTooltip("%s (cached API data)", label.c_str());
                             }
                             if (match.checkUtilities) {
                                 ImGui::TextColored(buildColor, "Check Utilities");
                                 if (ImGui::IsItemHovered())
-                                    ImGui::SetTooltip("Saved vs retrieved skills:\n%s\n(cached H&S data)",
+                                    ImGui::SetTooltip("Saved vs retrieved skills:\n%s\n(cached API data)",
                                         match.skillDifferences.c_str());
                             }
 
@@ -16307,7 +16497,7 @@ void AddonRender() {
                                     : std::string();
                             ImGui::TextColored(gearColor, "%s", shownGearText.c_str());
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s (last retrieved H&S data)", gearText);
+                                ImGui::SetTooltip("%s (last retrieved API data)", gearText);
                             if (!match.infusionWarning.empty()) {
                                 ImGui::TextColored(ImVec4(0.90f, 0.75f, 0.48f, 1.0f),
                                     "Infusions: check totals");
@@ -16407,12 +16597,11 @@ void AddonRender() {
                                 ImGui::TextColored(dimCol, "%dh", hours);
                         }
 
-                        // 5. Last Login (from local MumbleLink tracking):
+                        // 5. Last Login (from the shared gameplay activity history):
                         if (g_ShowLastLogin) {
-                            auto tsIt = g_LoginTimestamps.find(ch.name);
-                            if (tsIt != g_LoginTimestamps.end()) {
+                            if (lastLogin>0) {
                                 time_t now_t = std::time(nullptr);
-                                int elapsed = (int)difftime(now_t, (time_t)tsIt->second);
+                                int elapsed = (int)difftime(now_t, (time_t)lastLogin);
                                 std::string ago;
                                 if (elapsed < 60) ago = "Just Now";
                                 else if (elapsed < 3600) ago = std::to_string(elapsed / 60) + "m ago";
@@ -16524,37 +16713,7 @@ void AddonRender() {
 
                 ImGui::EndChild();
 
-                // Draggable vertical splitter
-                ImGui::SameLine();
-                {
-                    float splitterW = 6.0f;
-                    float h = ImGui::GetContentRegionAvail().y;
-                    ImVec2 pos = ImGui::GetCursorScreenPos();
-                    ImGui::InvisibleButton("##charlist_splitter", ImVec2(splitterW, h));
-                    bool hovered = ImGui::IsItemHovered();
-                    bool active = ImGui::IsItemActive();
-                    if (hovered || active)
-                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-                    if (active) {
-                        float delta = ImGui::GetIO().MouseDelta.x;
-                        if (delta != 0.0f) {
-                            g_CharListWidth += delta;
-                            g_CharListWidth = (g_CharListWidth < 120.0f) ? 120.0f : (g_CharListWidth > availW - 200.0f) ? availW - 200.0f : g_CharListWidth;
-                        }
-                    }
-                    if (ImGui::IsItemDeactivated()) {
-                        SaveSettings();
-                    }
-                    // Visual: draw a subtle line
-                    ImU32 lineCol = (hovered || active)
-                        ? IM_COL32(180, 160, 80, 180)
-                        : IM_COL32(80, 75, 60, 100);
-                    float cx = pos.x + splitterW * 0.5f;
-                    ImGui::GetWindowDrawList()->AddLine(
-                        ImVec2(cx, pos.y + 4), ImVec2(cx, pos.y + h - 4),
-                        lineCol, 2.0f);
-                }
-                ImGui::SameLine();
+                if(split.Divider("##charlist_splitter",g_CharListWidth))SaveSettings();
 
                 // Detail panel — resolve through display order
                 int selRealIdx = -1;
@@ -16578,7 +16737,7 @@ void AddonRender() {
                         const ImVec2 headerStart = ImGui::GetCursorScreenPos();
                         const float startY = ImGui::GetCursorPosY();
                         const float availW = ImGui::GetContentRegionAvail().x;
-                        const float actionWidth = ImGui::CalcTextSize("Save Active Fashion").x +
+                        const float actionWidth = ImMax(ImGui::CalcTextSize("Save").x,ImGui::CalcTextSize("Share").x) +
                             2.0f * ImGui::GetStyle().FramePadding.x + 12.0f;
                         const bool actionsOnRight = availW >= avatarSize + actionWidth + 205.0f;
 
@@ -16629,30 +16788,29 @@ void AddonRender() {
                     ImGui::Spacing();
                     ImGui::Separator();
 
-                    // Tab bar: Equipment | Build
+                    // Tab bar: Equipment | Build | Tools
                     if (ImGui::BeginTabBar("##detail_tabs")) {
-                        if (ImGui::BeginTabItem("Equipment")) {
-                            g_SelectedTab = 0;
+                        if (ImGui::BeginTabItem("Equipment",nullptr,NavigationDetailFlags(0))) {
+                            if(g_SelectedTab!=0)MarkNavigation();g_SelectedTab = 0;
                             ImGui::BeginChild("EquipScroll", ImVec2(0, 0), false);
                             RenderEquipmentPanel(ch);
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
-                        if (ImGui::BeginTabItem("Build")) {
-                            g_SelectedTab = 1;
+                        if (ImGui::BeginTabItem("Build",nullptr,NavigationDetailFlags(1))) {
+                            if(g_SelectedTab!=1)MarkNavigation();g_SelectedTab = 1;
                             ImGui::BeginChild("BuildScroll", ImVec2(0, 0), false);
                             RenderBuildPanel(ch);
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
-                        // Hero Challenges tab hidden — GW2 API /heropoints returns [] for all characters (upstream bug)
-                        // if (ImGui::BeginTabItem("Hero Challenges")) {
-                        //     g_SelectedTab = 2;
-                        //     ImGui::BeginChild("HeroChallengeScroll", ImVec2(0, 0), false);
-                        //     RenderHeroChallengesPanel(ch);
-                        //     ImGui::EndChild();
-                        //     ImGui::EndTabItem();
-                        // }
+                        if (ImGui::BeginTabItem("Tools",nullptr,NavigationDetailFlags(2))) {
+                            if(g_SelectedTab!=2)MarkNavigation();g_SelectedTab=2;
+                            ImGui::BeginChild("ToolsScroll", ImVec2(0, 0), false);
+                            RenderCharacterToolsPanel(ch);
+                            ImGui::EndChild();
+                            ImGui::EndTabItem();
+                        }
                         ImGui::EndTabBar();
                     }
                 } else {
@@ -16662,10 +16820,9 @@ void AddonRender() {
             } else {
                 // Empty state: no cached character data yet (new user)
                 // Use same width as normal character list panel
-                float availW = ImGui::GetContentRegionAvail().x;
-                g_CharListWidth = (g_CharListWidth < 120.0f) ? 120.0f : (g_CharListWidth > availW - 200.0f) ? availW - 200.0f : g_CharListWidth;
+                const AlterEgo::UI::SplitPanel split(g_CharListWidth,200.f);
 
-                ImGui::BeginChild("CharListEmpty", ImVec2(g_CharListWidth, 0), true);
+                ImGui::BeginChild("CharListEmpty", ImVec2(split.left, 0), true);
 
                 // Show pending character names grouped by account
                 if (!pendingNames.empty() && AlterEgo::GW2API::IsMultiAccount()) {
@@ -16707,7 +16864,7 @@ void AddonRender() {
                 ImGui::EndChild();
 
                 // Detail panel placeholder (right side)
-                ImGui::SameLine();
+                if(split.Divider("##charlist_empty_splitter",g_CharListWidth))SaveSettings();
                 ImGui::BeginChild("CharDetailEmpty", ImVec2(0, 0), true);
                 if (!pendingNames.empty()) {
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
@@ -16728,8 +16885,6 @@ void AddonRender() {
                 // Prune any cached characters deleted in-game now that we have a
                 // fresh, authoritative roster. Only on success — an errored fetch
                 // must not wipe the cache.
-                if (AlterEgo::GW2API::GetFetchStatus() == AlterEgo::FetchStatus::Success)
-                    AlterEgo::GW2API::ReconcileCharactersWithRoster();
                 const auto& names = AlterEgo::GW2API::GetPendingCharNames();
                 if (!names.empty()) {
                     // Filter by selected account if applicable
@@ -16743,7 +16898,8 @@ void AddonRender() {
                         g_RefreshNames = names;
                     }
                     g_RefreshSelection.assign(g_RefreshNames.size(), false);
-                    const auto& chars = AlterEgo::GW2API::GetCharacters();
+                    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+                    const auto& chars = *charsSnapshot;
                     std::string currentName;
                     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
                         int ri = g_CharDisplayOrder[g_SelectedCharIdx];
@@ -16778,7 +16934,8 @@ void AddonRender() {
                 }
                 ImGui::SameLine();
                 if (RenderActionButton("Lv80")) {
-                    const auto& cachedChars = AlterEgo::GW2API::GetCharacters();
+                    const auto cachedCharsSnapshot = AlterEgo::GW2API::GetCharacters();
+                    const auto& cachedChars = *cachedCharsSnapshot;
                     for (size_t i = 0; i < g_RefreshNames.size(); i++) {
                         g_RefreshSelection[i] = false;
                         for (const auto& cc : cachedChars) {
@@ -16793,7 +16950,8 @@ void AddonRender() {
                 ImGui::Separator();
 
                 ImGui::BeginChild("##charCheckList", ImVec2(280, 300), true);
-                const auto& cachedChars = AlterEgo::GW2API::GetCharacters();
+                const auto cachedCharsSnapshot = AlterEgo::GW2API::GetCharacters();
+                const auto& cachedChars = *cachedCharsSnapshot;
                 for (size_t i = 0; i < g_RefreshNames.size(); i++) {
                     ImGui::PushID((int)i);
                     bool checked = g_RefreshSelection[i];
@@ -16825,9 +16983,10 @@ void AddonRender() {
                 snprintf(btnLabel, sizeof(btnLabel), "Refresh Selected (%d)", selCount);
                 bool canRefresh = (selCount > 0);
                 if (!canRefresh) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-                if (ImGui::Button(btnLabel) && canRefresh) {
+                if (RenderActionButton(btnLabel) && canRefresh) {
                     std::vector<std::string> selected;
-                    const auto& chars = AlterEgo::GW2API::GetCharacters();
+                    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
+                    const auto& chars = *charsSnapshot;
                     std::string currentName;
                     if (g_SelectedCharIdx >= 0 && g_SelectedCharIdx < (int)g_CharDisplayOrder.size()) {
                         int ri = g_CharDisplayOrder[g_SelectedCharIdx];
@@ -16852,7 +17011,7 @@ void AddonRender() {
                 }
                 if (!canRefresh) ImGui::PopStyleVar();
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel")) {
+                if (RenderActionButton("Cancel")) {
                     g_RefreshPopupOpen = false;
                     ImGui::CloseCurrentPopup();
                 }
@@ -16861,13 +17020,15 @@ void AddonRender() {
             }
 
             ImGui::EndTabItem();
+            ProcessCharacterLoad();
         }
 
 
         // Library, Vault, Clears and Achievements share the same tab dropdown.
         ImGuiTabBar* libraryTabBar = GImGui->CurrentTabBar;
         const ImGuiID previousSelectedTab = libraryTabBar ? libraryTabBar->SelectedTabId : 0;
-        ImGuiTabItemFlags libraryFlags = 0;
+        ImGuiTabItemFlags libraryFlags = NavigationTabFlags(1);
+        if(g_LibEditMode)libraryFlags|=ImGuiTabItemFlags_SetSelected;
         if (g_SwitchToLibrary) {
             libraryFlags |= ImGuiTabItemFlags_SetSelected;
             g_SwitchToLibrary = false;
@@ -16883,10 +17044,12 @@ void AddonRender() {
         if (libraryVisible) {
             g_MainTab = 1;
             if (g_LibraryCollection == 0) RenderBuildLibrary();
-            else RenderFashionLibrary();
+            else if (g_LibraryCollection == 1) RenderFashionLibrary();
+            else if(g_LibraryCollection==2) { RenderComponentLibrary(); ProcessComponentUICommand(); }
+            else { RenderEquipmentSetLibrary(); ProcessComponentUICommand(); }
             ImGui::EndTabItem();
         }
-        ImGuiTabItemFlags compareTabFlags = 0;
+        ImGuiTabItemFlags compareTabFlags = NavigationTabFlags(5);
         if (g_SwitchToCompare) {
             compareTabFlags = ImGuiTabItemFlags_SetSelected;
             g_SwitchToCompare = false;
@@ -16900,33 +17063,61 @@ void AddonRender() {
             ImGui::EndTabItem();
         }
 
+        auto inventoryFlags=NavigationTabFlags(7);
+        if(g_SwitchToInventory){inventoryFlags|=ImGuiTabItemFlags_SetSelected;g_SwitchToInventory=false;}
+        ImGuiTabBar* inventoryBar=GImGui->CurrentTabBar;
+        const ImGuiID beforeInventory=inventoryBar?inventoryBar->SelectedTabId:0;
+        const bool inventoryVisible=ImGui::BeginTabItem("Inventory    ##ae_inventory_dropdown",nullptr,inventoryFlags);
+        const ImGuiID inventoryId=inventoryBar&&inventoryBar->LastTabItemIdx>=0?inventoryBar->Tabs[inventoryBar->LastTabItemIdx].ID:0;
+        HandleTabDropdown(inventoryMenu,inventoryBar,beforeInventory,inventoryId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+        if(inventoryMenu.labelClicked){
+            MarkNavigation();AlterEgo::NativeAccounts::SetInventorySubview(0);g_SwitchToInventory=true;
+        }
+        if(inventoryVisible){
+            g_MainTab=7;
+            ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
+            TickCharacterLoad();
+            AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings,g_InventoryListWidth);
+            ImGui::EndChild();
+            AlterEgo::NativeAccounts::RenderInventoryStatusRow(g_SelectedAccountFilter);
+            ImGui::EndTabItem();
+            ProcessCharacterLoad();
+        }
+
         // Disable account-scoped tabs when viewing "All Accounts"
         bool acctTabsDisabled = AlterEgo::GW2API::IsMultiAccount() && g_SelectedAccountFilter.empty();
         const char* acctTabTooltip = "Select a specific account to use this tab.";
 
-        ImGuiTabItemFlags skinTabFlags = 0;
+        ImGuiTabItemFlags skinTabFlags = NavigationTabFlags(2);
         if (g_SwitchToSkinventory && !acctTabsDisabled) {
             skinTabFlags = ImGuiTabItemFlags_SetSelected;
             g_SwitchToSkinventory = false;
         }
         if (acctTabsDisabled) {
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.4f);
-            ImGui::TabItemButton("Skinventory", ImGuiTabItemFlags_NoReorder);
+            ImGui::TabItemButton("Skins", ImGuiTabItemFlags_NoReorder);
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", acctTabTooltip);
-        } else if (g_SkinInitialized && ImGui::BeginTabItem("Skinventory", nullptr, skinTabFlags)) {
+        } else if (g_SkinInitialized) {
+            ImGuiTabBar* skinBar=GImGui->CurrentTabBar;
+            ImGuiID beforeSkin=skinBar?skinBar->SelectedTabId:0;
+            const bool skinVisible=ImGui::BeginTabItem("Skins    ##ae_skin_dropdown",nullptr,skinTabFlags);
+            const ImGuiID skinId=skinBar&&skinBar->LastTabItemIdx>=0?skinBar->Tabs[skinBar->LastTabItemIdx].ID:0;
+            HandleTabDropdown(skinMenu,skinBar,beforeSkin,skinId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+            if(skinVisible) {
             g_MainTab = 2;
             ImGui::BeginChild("##skinventory_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderSkinventory();
             ImGui::EndChild();
             RenderSkinventoryStatusRow();
             ImGui::EndTabItem();
+            }
         }
 
         if (acctTabsDisabled) {
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.4f);
-            ImGui::TabItemButton("Vault", ImGuiTabItemFlags_NoReorder);
+            ImGui::TabItemButton("Wizard's Vault", ImGuiTabItemFlags_NoReorder);
             ImGui::TabItemButton("Clears", ImGuiTabItemFlags_NoReorder);
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
@@ -16934,7 +17125,7 @@ void AddonRender() {
         } else {
             ImGuiTabBar* accountTabBar = GImGui->CurrentTabBar;
             ImGuiID beforeVault = accountTabBar ? accountTabBar->SelectedTabId : 0;
-            const bool vaultVisible = ImGui::BeginTabItem("Vault    ##ae_vault_dropdown");
+            const bool vaultVisible = ImGui::BeginTabItem("Wizard's Vault    ##ae_vault_dropdown",nullptr,NavigationTabFlags(3));
             const ImGuiID vaultId = accountTabBar && accountTabBar->LastTabItemIdx >= 0
                 ? accountTabBar->Tabs[accountTabBar->LastTabItemIdx].ID : 0;
             HandleTabDropdown(vaultMenu, accountTabBar, beforeVault, vaultId,
@@ -16948,7 +17139,7 @@ void AddonRender() {
                 ImGui::EndTabItem();
             }
             ImGuiID beforeClears = accountTabBar ? accountTabBar->SelectedTabId : 0;
-            const bool clearsVisible = ImGui::BeginTabItem("Clears    ##ae_clears_dropdown");
+            const bool clearsVisible = ImGui::BeginTabItem("Clears    ##ae_clears_dropdown",nullptr,NavigationTabFlags(6));
             const ImGuiID clearsId = accountTabBar && accountTabBar->LastTabItemIdx >= 0
                 ? accountTabBar->Tabs[accountTabBar->LastTabItemIdx].ID : 0;
             HandleTabDropdown(clearsMenu, accountTabBar, beforeClears, clearsId,
@@ -16972,7 +17163,7 @@ void AddonRender() {
         } else {
             ImGuiTabBar* achTabBar = GImGui->CurrentTabBar;
             const ImGuiID beforeAchievements = achTabBar ? achTabBar->SelectedTabId : 0;
-            const bool achievementsVisible = ImGui::BeginTabItem("Achievements    ##ae_achievements_dropdown");
+            const bool achievementsVisible = ImGui::BeginTabItem("Achievements    ##ae_achievements_dropdown",nullptr,NavigationTabFlags(4));
             const ImGuiID achievementsId = achTabBar && achTabBar->LastTabItemIdx >= 0
                 ? achTabBar->Tabs[achTabBar->LastTabItemIdx].ID : 0;
             HandleTabDropdown(achievementsMenu, achTabBar, beforeAchievements,
@@ -16987,59 +17178,36 @@ void AddonRender() {
             }
         }
 
-        // Right-aligned account selector on the same row as the tab strip.
-        // Drawn after tab items so it overlays the empty right-hand portion of
-        // the tab bar row (which has no clickable items there).
-        if (AlterEgo::GW2API::IsMultiAccount()) {
-            const auto& accounts = AlterEgo::GW2API::GetAccounts();
-            std::string currentLabel = "All Accounts";
-            for (const auto& acct : accounts) {
-                if (acct.name == g_SelectedAccountFilter) {
-                    currentLabel = acct.display_name;
-                    break;
-                }
-            }
-            const float comboWidth = 180.0f;
-            float afterY = ImGui::GetCursorPosY();
-            ImGui::SetCursorPos(ImVec2(
-                ImGui::GetContentRegionMax().x - comboWidth - ImGui::GetStyle().ItemSpacing.x,
-                tabRowY - 3.0f));
-            if (RenderThemedCombo("##AccountSelect", currentLabel.c_str(), comboWidth)) {
-                std::string prevFilter = g_SelectedAccountFilter;
-                if (ImGui::Selectable("All Accounts", g_SelectedAccountFilter.empty())) {
-                    g_SelectedAccountFilter.clear();
-                    if ((g_MainTab >= 2 && g_MainTab <= 4) || g_MainTab == 6)
-                        g_ForceCharactersTab = true;
-                }
-                for (const auto& acct : accounts) {
-                    bool selected = (g_SelectedAccountFilter == acct.name);
-                    if (ImGui::Selectable(acct.display_name.c_str(), selected)) {
-                        g_SelectedAccountFilter = acct.name;
-                    }
-                }
-                if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
-                    Skinventory::OwnedSkins::SetAccountName(g_SelectedAccountFilter);
-                    if (AlterEgo::AutoRefreshPolicy::Enabled())
-                        g_SkinRefreshOwned = true;
-                    g_ClearsNeedRequery = true;
-                    g_VaultNeedRequery = true;
-                    g_AchNeedRequery = true;
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetCursorPosY(afterY);
-        }
+        // Group boundaries are drawn in existing tab gaps, never as tabs.
+        // The Vault ID differs in All Accounts mode (nonselecting tab button).
+        const ImGuiID vaultGroupId=ImGui::GetID(acctTabsDisabled?"Wizard's Vault":"Wizard's Vault    ##ae_vault_dropdown");
+        AlterEgo::UI::TabGroupDividerBefore(GImGui->CurrentTabBar,inventoryId);
+        AlterEgo::UI::TabGroupDividerBefore(GImGui->CurrentTabBar,vaultGroupId);
 
         // ImGui restores the last selected main tab across sessions. Track
         // actual navigation instead of comparing against the saved tab ID.
         // Trigger after rendering so reset and account-switch checks run first.
         static int s_previousVisibleMainTab = -1;
         if (g_MainTab != s_previousVisibleMainTab) {
+            if(s_previousVisibleMainTab>=0&&!g_NavRestore&&!accountFallbackNavigation)MarkNavigation();
+            if(g_MainTab==0)accountFallbackNavigation=false;
             if (g_MainTab == 3) RefreshVaultOnEntry();
             else if (g_MainTab == 6) RefreshClearsOnEntry();
             s_previousVisibleMainTab = g_MainTab;
         }
         ImGui::EndTabBar();
+
+        if(inventoryMenu.requestOpen)ImGui::OpenPopup("Inventory menu##ae_main");
+        ImGui::SetNextWindowPos(inventoryMenu.anchor,ImGuiCond_Appearing);
+        if(ImGui::BeginPopup("Inventory menu##ae_main")){
+            bool chosen=false;const bool hovered=TabDropdownMenuHovered();
+            const char* labels[]={"Items","Wallet","Guild Bank"};
+            for(int i=0;i<3;++i)if(ImGui::MenuItem(labels[i],nullptr,g_MainTab==7&&AlterEgo::NativeAccounts::InventorySubview()==i)){
+                MarkNavigation();AlterEgo::NativeAccounts::SetInventorySubview(i);g_SwitchToInventory=true;chosen=true;
+            }
+            FinishTabDropdown(inventoryMenu,chosen,hovered);ImGui::EndPopup();
+        }
+        SyncTabDropdownOpen(inventoryMenu,"Inventory menu##ae_main");
 
         // Render OpenPopup and BeginPopup together in the stable main-window
         // scope, *after* EndTabBar. This works when Library itself is selected.
@@ -17058,13 +17226,14 @@ void AddonRender() {
             // this dropdown from another tab does not select either collection.
             const bool onBuilds = g_MainTab == 1 && g_LibraryCollection == 0;
             const bool onFashion = g_MainTab == 1 && g_LibraryCollection == 1;
+            const bool onComponents = g_MainTab == 1 && g_LibraryCollection == 2;
 
             // The Builds label is a navigation target; its separate, right-
             // hand arrow opens a collection-specific flyout. Do not turn the
             // entire row into a submenu, or direct navigation stops working.
             const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
             const float buildsLabelWidth = 190.0f;
-            const bool buildsClicked = ImGui::Selectable("Builds##ae_library_collection",
+            const bool buildsClicked = ImGui::Selectable("Loadouts##ae_library_collection",
                 onBuilds, ImGuiSelectableFlags_DontClosePopups,
                 ImVec2(buildsLabelWidth, rowHeight));
             const ImVec2 buildsMin = ImGui::GetItemRectMin();
@@ -17126,6 +17295,16 @@ void AddonRender() {
                 }
                 ImGui::EndPopup();
             }
+            if (ImGui::MenuItem("Components", nullptr, onComponents)) {
+                libraryActionSelected = true;
+                NavigateToLibraryCollection(2);
+                if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
+            }
+            if(ImGui::MenuItem("Equipment Sets",nullptr,g_MainTab==1&&g_LibraryCollection==3)) {
+                libraryActionSelected=true;
+                NavigateToLibraryCollection(3);
+                if(libraryTabBar)libraryTabBar->NextSelectedTabId=libraryTabId;
+            }
             if (ImGui::MenuItem("Fashion", nullptr, onFashion)) {
                 libraryActionSelected = true;
                 NavigateToLibraryCollection(1);
@@ -17145,7 +17324,7 @@ void AddonRender() {
                 g_LibImportPendingProfession.clear();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("GW2 build or wardrobe chat link, AE2 code, Snow Crows or MetaBattle URL");
+                ImGui::SetTooltip("%s", AlterEgo::BuildRelay::ImportTooltip());
 
             ImGui::Separator();
             ImGui::TextDisabled("LIBRARIES");
@@ -17164,6 +17343,20 @@ void AddonRender() {
         SyncTabDropdownOpen(libraryMenu, "Library menu##ae_main");
 
         if (!acctTabsDisabled) {
+            if(g_SkinInitialized) {
+                if(skinMenu.requestOpen)ImGui::OpenPopup("Skinventory menu##ae_main");
+                ImGui::SetNextWindowPos(skinMenu.anchor,ImGuiCond_Appearing);
+                if(ImGui::BeginPopup("Skinventory menu##ae_main")) {
+                    bool chosen=false;
+                    const bool hovered=TabDropdownMenuHovered();
+                    if(ImGui::MenuItem("View as Grid",nullptr,g_SkinViewMode==1)) {
+                        g_SkinViewMode=g_SkinViewMode==1?0:1;SaveSession();chosen=true;
+                    }
+                    FinishTabDropdown(skinMenu,chosen,hovered);
+                    ImGui::EndPopup();
+                }
+                SyncTabDropdownOpen(skinMenu,"Skinventory menu##ae_main");
+            }
             if (vaultMenu.requestOpen) ImGui::OpenPopup("Vault menu##ae_main");
             ImGui::SetNextWindowPos(vaultMenu.anchor, ImGuiCond_Appearing);
             if (ImGui::BeginPopup("Vault menu##ae_main")) {
@@ -17171,6 +17364,10 @@ void AddonRender() {
                 const bool hovered = TabDropdownMenuHovered();
                 if (ImGui::MenuItem("Hide Complete", nullptr, VaultHideComplete())) {
                     ToggleVaultHideComplete();
+                    chosen = true;
+                }
+                if (ImGui::MenuItem("Show Objective Assistance", nullptr, ShowVaultAssistance())) {
+                    ToggleVaultAssistance();
                     chosen = true;
                 }
                 FinishTabDropdown(vaultMenu, chosen, hovered);
@@ -17185,6 +17382,10 @@ void AddonRender() {
                 const bool hovered = TabDropdownMenuHovered();
                 if (ImGui::MenuItem("Hide Complete", nullptr, ClearsHideComplete())) {
                     ToggleClearsHideComplete();
+                    chosen = true;
+                }
+                if (ImGui::MenuItem("Show Fractal Next Resets", nullptr, ShowFractalNextResets())) {
+                    ToggleFractalNextResets();
                     chosen = true;
                 }
                 FinishTabDropdown(clearsMenu, chosen, hovered);
@@ -17207,6 +17408,11 @@ void AddonRender() {
                     SaveAchTrackerState();
                     chosen = true;
                 }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Refresh Achievement Names", nullptr, false, !g_AchNameIndexFetching.load())) {
+                    FetchAchNameIndex(true);
+                    chosen = true;
+                }
                 FinishTabDropdown(achievementsMenu, chosen, hovered);
                 ImGui::EndPopup();
             }
@@ -17217,9 +17423,24 @@ void AddonRender() {
     // Import/export dialogs are available from every top-level tab.
     RenderLibraryImportDialog();
     RenderLibraryBackupUI();
-    RenderShareRelayPopups();
+    if constexpr (AlterEgo::BuildRelay::Enabled) RenderShareRelayPopups();
+    RenderReferenceEditor();
+    RenderLoadoutSaveReview();
+    ProcessComponentUICommand();
+    EndNavigationFrame();
 
     ImGui::End();
+    if (g_EditSavePending) {
+        g_EditSavePending = false;
+        if (g_LibEditMode && g_EditRefsReady && AlterEgo::GW2API::SaveUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditSharedKinds,g_EditDraftRevision)) {
+            g_EditDraftId.clear();
+            g_LibEditMode = false; g_EditDirty = false;
+            g_EditIsNewBuild = false;
+            g_GearDialogOpen = false;
+        } else if (APIDefs) {
+            APIDefs->GUI_SendAlert("Could not save Loadout. Check the library revision or component compatibility. Draft retained.");
+        }
+    }
 }
 
 // --- Options/Settings Render ---
@@ -17243,69 +17464,177 @@ static std::vector<std::string> ScanFontFolder(std::string& outDir) {
     return out;
 }
 
-void AddonOptions() {
-    ThemeGuard themeGuard;
-    // Header with links
-    ImGui::Text("Alter Ego");
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
-    ImGui::SameLine();
-    if (RenderChipButton("Homepage", false)) {
-        ShellExecuteA(NULL, "open", "https://pie.rocks.cc/projects/alter-ego/", NULL, NULL, SW_SHOWNORMAL);
+static void RenderStorageDiagnostics() {
+    using namespace AlterEgo;
+    static Storage::CacheDiagnostics snapshot;
+    static bool inspected=false;
+    RenderSectionHeader("Storage & Cache", UI::SectionGold);
+    if (RenderActionButton("Inspect Storage##ae_cache_diagnostics")) {
+        snapshot=Storage::InspectStorage(GW2API::GetDataDirectory());
+        inspected=true;
     }
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
-    ImGui::SameLine();
-    if (RenderChipButton("Buy me a coffee!", false)) {
-        ShellExecuteA(NULL, "open", "https://ko-fi.com/pieorcake", NULL, NULL, SW_SHOWNORMAL);
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        UI::TooltipText("Inspect Storage",
+            "Inspect local storage without making API requests. Saved Loadouts and preferences are separate from rebuildable cache data.");
+        ImGui::EndTooltip();
     }
-
-    // H&S connection status
-    RenderSectionHeader("Data Source: Hoard & Seek", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
-    auto hoardStatus = AlterEgo::GW2API::GetHoardStatus();
-    switch (hoardStatus) {
-        case AlterEgo::HoardStatus::Unknown:
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Status: Checking...");
-            break;
-        case AlterEgo::HoardStatus::Unavailable:
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Status: Not detected");
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                "Hoard & Seek is required. Install it from the Nexus addon library.");
-            break;
-        case AlterEgo::HoardStatus::Available:
-            ImGui::TextColored(ImVec4(0.35f, 0.82f, 0.35f, 1.0f), "Status: Connected");
-            break;
-        case AlterEgo::HoardStatus::PermDenied:
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Status: Permission denied");
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                "Re-enable in H&S settings under Permissions.");
-            if (RenderGoldButton("Retry Connection")) {
-                AlterEgo::GW2API::PingHoard();
+    if(g_StorageMaintenanceResult.attempted)
+        ImGui::TextWrapped("%s",g_StorageMaintenanceResult.message.c_str());
+    if(!g_StorageMaintenanceMessage.empty())
+        ImGui::TextWrapped("%s",g_StorageMaintenanceMessage.c_str());
+    if(g_StorageMaintenancePending) {
+        ImGui::TextDisabled("Cache maintenance scheduled for next addon startup.");
+    } else {
+        static int selected=0;
+        const char* labels[]={"Rebuild all cache (quarantine)","Clear downloaded artwork",
+            "Rebuild characters","Rebuild account progress","Rebuild achievement catalog",
+            "Rebuild public catalogs and prices"};
+        const char* rebuildLabel="Rebuild##ae_cache_operation";
+        const float avail=std::max(1.0f,ImGui::GetContentRegionAvail().x);
+        const float reserve=UI::CompactButtonWidth(rebuildLabel)+ImGui::GetStyle().ItemSpacing.x;
+        const bool sameRow=avail>=reserve+ImGui::GetFontSize()*6.0f;
+        ImVec2 pad=ImGui::GetStyle().FramePadding;
+        pad.y=std::max(pad.y,(UI::ActionButtonHeight()-ImGui::GetFontSize())*0.5f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,pad);
+        const bool comboOpen=UI::BeginCombo("##ae_cache_operation",labels[selected],0,
+            sameRow?avail-reserve:avail);
+        ImGui::PopStyleVar();
+        if(comboOpen) {
+            for(int i=0;i<6;++i)
+                if(UI::SelectableOption(labels[i],selected==i))selected=i;
+            ImGui::EndCombo();
+        }
+        if(sameRow)ImGui::SameLine();
+        if(RenderActionButton(rebuildLabel))
+            ImGui::OpenPopup("Confirm cache maintenance##ae_cache_confirm");
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Rebuild the selected cache at next addon startup.");
+        if(ImGui::BeginPopupModal("Confirm cache maintenance##ae_cache_confirm",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s",labels[selected]);
+            ImGui::TextWrapped("Runs at next addon startup, before cache readers and workers. Saved library, settings, pins, login history and backups are untouched.");
+            ImGui::TextWrapped("Moved files are quarantined, not deleted. Missing data is rebuilt by normal refreshes.");
+            if(UI::Button("Schedule",ImVec2(0,0),UI::ButtonRole::Destructive)) {
+                std::string error;
+                g_StorageMaintenancePending=Storage::ScheduleMaintenance(GW2API::GetDataDirectory(),
+                    Storage::kCacheOperations[static_cast<size_t>(selected)],error);
+                g_StorageMaintenanceMessage=g_StorageMaintenancePending?
+                    "Scheduled. Restart the game to apply.":error;
+                ImGui::CloseCurrentPopup();
             }
-            break;
-        case AlterEgo::HoardStatus::Ready:
-            ImGui::TextColored(ImVec4(0.35f, 0.82f, 0.35f, 1.0f), "Status: Ready");
-            break;
+            ImGui::SameLine();
+            if(RenderActionButton("Cancel##ae_cache_confirm"))ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
     }
+    if(ImGui::TreeNode("API Activity##ae_api_activity")) {
+        using namespace ApiActivity;
+        static Snapshot activity;
+        static int64_t sampled=-1;
+        static size_t apiWaiting=0,wikiWaiting=0;
+        const auto now=Now();
+        if(sampled!=now){
+            activity=Session().Read(now);sampled=now;
+            apiWaiting=ArenaNet::Waiting();wikiWaiting=Skinventory::HttpClient::WikiWaiting();
+        }
+        const char* sources[]={"ArenaNet API","Wiki","ArenaNet artwork"};
+        for(size_t source=0;source<SourceCount;++source){
+            Totals totals;
+            for(size_t i=0;i<Count;++i)if(Source(static_cast<Endpoint>(i))==source){
+                const auto& t=activity.endpoints[i];
+                totals.started+=t.started;totals.success+=t.success;totals.failed+=t.failed;
+                totals.limited+=t.limited;totals.active+=t.active;
+            }
+            ImGui::Text("%s: %llu / %llu / %llu",sources[source],
+                (unsigned long long)activity.last10[source],(unsigned long long)activity.last60[source],
+                (unsigned long long)totals.started);
+            ImGui::TextWrapped("  OK %llu | failed %llu (429: %llu) | active %llu | waiting %llu | peak %llu/s",
+                (unsigned long long)totals.success,(unsigned long long)totals.failed,
+                (unsigned long long)totals.limited,(unsigned long long)totals.active,
+                (unsigned long long)(source==0?apiWaiting:source==1?wikiWaiting:0),(unsigned long long)activity.peak[source]);
+            const auto& reasons=activity.reasons[source];
+            ImGui::TextDisabled("  Manual %llu | objective %llu | visible %llu | background %llu | other %llu",
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Manual)],
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Objective)],
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Visible)],
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Background)],
+                (unsigned long long)reasons[static_cast<size_t>(Reason::Unclassified)]);
+        }
+        ImGui::TextDisabled("Requests: last 10 min / hour / session");
+        ImGui::Text("Achievement broker: %llu cache hits, %llu coalesced",
+            (unsigned long long)activity.sharedHits,(unsigned long long)activity.sharedCoalesced);
+        ImGui::TextWrapped("Metadata IDs: %llu claimed (%llu manual), %llu coalesced, %llu cooldown suppressed",
+            (unsigned long long)activity.metadataOwned,(unsigned long long)activity.metadataManual,
+            (unsigned long long)activity.metadataCoalesced,(unsigned long long)activity.metadataCooldown);
+        if(ImGui::TreeNode("Endpoint groups##ae_api_endpoints")){
+            for(size_t i=0;i<Count;++i){
+                const auto& t=activity.endpoints[i];if(!t.started)continue;
+                ImGui::TextWrapped("%s: %llu requests, %llu OK, %llu failed (%llu 429)",
+                    Labels[i],(unsigned long long)t.started,(unsigned long long)t.success,
+                    (unsigned long long)t.failed,(unsigned long long)t.limited);
+            }
+            ImGui::TreePop();
+        }
+        ImGui::TextDisabled("Local session only; HTTP success is not dataset validation.");
+        ImGui::TreePop();
+    }
+    if(!inspected)return;
+    auto database=[](const char* label,const Storage::DatabaseDiagnostic& info) {
+        ImGui::Text("%s: %.2f MiB | schema %lld",label,
+            static_cast<double>(info.bytes)/(1024.0*1024.0),static_cast<long long>(info.schema));
+        ImGui::TextWrapped("%s",info.status.c_str());
+    };
+    database("Saved library",snapshot.library);
+    database("Cache database",snapshot.cache);
+    ImGui::Text("Downloaded artwork: %.2f MiB%s",
+        static_cast<double>(snapshot.artworkBytes)/(1024.0*1024.0),
+        snapshot.artworkComplete?"":" (partial)");
+    if(ImGui::TreeNode("Dataset details##ae_cache_datasets")) {
+        for(const auto& data:snapshot.datasets) {
+            ImGui::Text("%s: %lld",data.label.c_str(),static_cast<long long>(data.records));
+            if(data.refreshedAt>0) {
+                const auto age=std::max<int64_t>(0,snapshot.inspectedAt-data.refreshedAt);
+                ImGui::SameLine();
+                if(age<3600)ImGui::TextDisabled("%lldm ago",static_cast<long long>(age/60));
+                else if(age<86400)ImGui::TextDisabled("%lldh ago",static_cast<long long>(age/3600));
+                else ImGui::TextDisabled("%lldd ago",static_cast<long long>(age/86400));
+            }
+        }
+        ImGui::TreePop();
+    }
+    ImGui::TextDisabled("Snapshot as of last inspection; counts cover all cached accounts.");
+    ImGui::TextDisabled("Quarantined files remain under backups/cache-quarantine until removed manually.");
+}
 
+void AddonOptions() {
+    AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
+    if (!callbackLease) return;
+    ThemeGuard themeGuard;
+    ImGui::Text("Alter Ego");
+
+    AlterEgo::NativeAccounts::RenderOptions();
     ImGui::Spacing();
-    RenderSectionHeader("Automatic API Refresh", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    ImGui::Spacing();
+    RenderSectionHeader("Automatic API Refresh", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Automatically refresh API data##ae_auto", &g_AutoRefreshEnabled)) {
         AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
         if (!g_AutoRefreshEnabled) {
-            g_AutoRefreshTracker.CancelPending();
             g_SkinRefreshOwned = false;
             // Discard deferred boot refreshes; manually initiated requests
             // and the retry phases of ongoing requests remain available.
             // Only cancel an automatic pending achievement query. A manually
-            // started H&S request and its busy-backoff retry must continue.
+            // started native API request and its busy-backoff retry must continue.
             if (g_AchRetryAutomatic.load()) g_AchRetryAtMs = 0;
         } else {
             // Refresh a stale visible section immediately when re-enabled.
             if (g_MainTab == 3) RefreshVaultOnEntry();
             else if (g_MainTab == 6) RefreshClearsOnEntry();
-            if (g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
+            if (AlterEgo::AutoRefreshPolicy::Included(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog) && g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
                 Skinventory::SkinCache::UpdateCacheAsync();
+            AlterEgo::GW2API::FetchAllItemStatsAsync();
+            AlterEgo::GW2API::FetchDyeColorsAsync();
+            Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
+            AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
+                    AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
             if ((!g_AchPinned.empty() || g_AchSelectedCatId > 0) &&
                 g_AchRetryAtMs.load() == 0) {
                 g_AchRetryAutomatic = true;
@@ -17319,23 +17648,89 @@ void AddonOptions() {
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
-    if (ImGui::Checkbox("When a character logs in##ae_auto_login", &g_AutoRefreshOnLogin))
-        SaveSettings();
-    if (ImGui::Checkbox("When specialization changes##ae_auto_spec", &g_AutoRefreshOnSpecialization))
-        SaveSettings();
+    ImGui::TextDisabled("Characters: 10 minutes while relevant views are open; login alone does not fetch.");
+    if (ImGui::Checkbox("When specialization changes##ae_auto_spec", &g_AutoRefreshOnSpecialization)){
+        AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;SaveSettings();
+    }
+    int objectiveMinutes=AlterEgo::RefreshEngine::ObjectiveMinutes();
+    ImGui::SetNextItemWidth(100.0f);
+    if(ImGui::InputInt("Objective tracking (minutes)##ae_objective_interval",&objectiveMinutes,1,5)){
+        AlterEgo::RefreshEngine::SetObjectiveMinutes(objectiveMinutes);SaveSettings();
+    }
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Pinned achievements, Clears and daily/weekly Wizard\'s Vault. General browsing and Special: 30 minutes.");
     if (!g_AutoRefreshEnabled) {
         ImGui::PopStyleVar();
         ImGui::PopItemFlag();
     }
     ImGui::Unindent(16.0f);
+    if(ImGui::TreeNode("Automatic refresh datasets")){
+        using namespace AlterEgo::AutoRefreshPolicy;
+        ImGui::TextDisabled("Excluded datasets can still be refreshed manually.");
+        for(uint32_t i=0;i<static_cast<uint32_t>(Dataset::Count);++i){
+            const auto dataset=static_cast<Dataset>(i);
+            if(i==0||i==1||i==3||i==4||i==6){
+                ImGui::Spacing();ImGui::TextDisabled("%s",i==0?"Character data":i==1?"Account ownership and achievements":i==3?"Public catalogs":i==4?"Completion trackers":"Inventory");
+            }
+            bool included=Included(dataset);
+            if(ImGui::Checkbox(Labels[i],&included)){
+                SetIncluded(dataset,included);
+                if(included&&dataset==Dataset::PublicCatalog){
+                    Skinventory::SkinCache::UpdateCacheAsync();
+                    AlterEgo::GW2API::FetchAllItemStatsAsync();
+                    AlterEgo::GW2API::FetchDyeColorsAsync();
+                    Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
+                    AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
+                    AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
+                }
+                if(!included&&dataset==Dataset::SkinOwnership)g_SkinRefreshOwned=false;
+                if(!included&&dataset==Dataset::Achievements&&g_AchRetryAutomatic.load())g_AchRetryAtMs=0;
+                SaveSettings();
+            }
+        }
+        ImGui::TreePop();
+    }
     if (ImGui::Checkbox("Warn when live specialization differs from retrieved build##ae_warn_spec",
                         &g_WarnStaleSpecialization))
         SaveSettings();
-    ImGui::TextDisabled("Applies to automatic H&S API refreshes across all tabs.");
-    ImGui::TextDisabled("Manual Refresh still works; login/spec changes use MumbleLink (8s/90s).");
+    ImGui::TextDisabled("Applies to automatic API refreshes across all tabs.");
+    ImGui::TextDisabled("Manual Refresh bypasses ordinary freshness/cooldown; offline automatic refresh waits 10 minutes.");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
+    RenderSectionHeader("Public reference catalogs", AlterEgo::UI::SectionGold);
+    ImGui::TextDisabled("Items/skins/Wizard's Vault: 7 days. Other reference catalogs: 30 days. Retry: 24h.");
+    const auto publicData=AlterEgo::PublicCatalog::Get();
+    ImGui::Text("Equipment upgrades: %zu",publicData->entries.size());
+    if(publicData->upgrades)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->upgrades)/86400));
+    if(RenderActionButton("Refresh equipment catalogs")) Skinventory::Commerce::RefreshUpgradeCatalogAsync(true);
+    ImGui::TextDisabled("%s",Skinventory::Commerce::GetFetchStatus().c_str());
+    ImGui::Text("Wizard's Vault objective definitions: %zu",publicData->objectives.size());
+    if(publicData->vault)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->vault)/86400));
+    if(RenderActionButton("Refresh Wizard's Vault definitions")) AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),true);
+    ImGui::TextDisabled("%s",AlterEgo::PublicCatalog::VaultStatus().c_str());
+    auto referenceAction=[&](const char* label,const char* dataset,auto refresh){
+        auto it=publicData->freshness.find(dataset);
+        if(it!=publicData->freshness.end()&&it->second.first)
+            ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-it->second.first)/86400));
+        if(RenderActionButton(label))refresh();
+        const auto status=AlterEgo::PublicCatalog::DatasetStatus(dataset);
+        if(!status.empty())ImGui::TextDisabled("%s",status.c_str());
+    };
+    referenceAction("Discover new items","public_item_discovery",[]{Skinventory::Commerce::RefreshUpgradeCatalogAsync(true,true);});
+    referenceAction("Refresh skin catalog","public_skins",[]{Skinventory::SkinCache::UpdateCacheAsync(true);});
+    referenceAction("Refresh item stats","public_stats",[]{AlterEgo::GW2API::FetchAllItemStatsAsync(true);});
+    referenceAction("Refresh dyes","public_dyes",[]{AlterEgo::GW2API::FetchDyeColorsAsync(true);});
+    referenceAction("Refresh ranger pets","public_pets",[]{AlterEgo::PublicCatalog::RefreshPets(AlterEgo::GW2API::GetDataDirectory(),true);});
+    referenceAction("Refresh revenant legends","public_legends",[]{AlterEgo::PublicCatalog::RefreshLegends(AlterEgo::GW2API::GetDataDirectory(),true);});
     ImGui::Spacing();
-    RenderSectionHeader("UI Settings", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("Wiki reference schedules", AlterEgo::UI::SectionGold);
+    ImGui::TextDisabled("Build assets: 24 hours. Runtime event timers: 30 days; retry: 24h.");
+    const auto wikiTimers=AlterEgo::WikiEvents::Get();
+    ImGui::Text("Event timer phases: %zu (%s)",wikiTimers->timers.size(),wikiTimers->embedded?"embedded baseline":"runtime cache");
+    ImGui::TextDisabled("Last verified: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-wikiTimers->verified)/86400));
+    if(RenderActionButton("Refresh Wiki event timers")) AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory(),true);
+    const auto wikiStatus=AlterEgo::WikiEvents::Status();
+    if(!wikiStatus.empty())ImGui::TextDisabled("%s",wikiStatus.c_str());
+    ImGui::Spacing();
+    RenderSectionHeader("UI Settings", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Show Quick Access icon", &g_ShowQAIcon)) {
         if (g_ShowQAIcon) {
             APIDefs->QuickAccess_Add(QA_ID, TEX_ICON, TEX_ICON_HOVER, "KB_ALTER_EGO_TOGGLE", "Alter Ego");
@@ -17345,7 +17740,7 @@ void AddonOptions() {
         SaveSettings();
     }
     ImGui::Spacing();
-    RenderSectionHeader("Chat Build Detection", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("Chat Build Detection", AlterEgo::UI::SectionGold);
     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Requires 'Events: Chat' addon from the Nexus library.");
     if (ImGui::Checkbox("Detect build links in chat", &g_ChatBuildDetection)) {
         SaveSettings();
@@ -17363,7 +17758,7 @@ void AddonOptions() {
         ImGui::Unindent(16.0f);
     }
     ImGui::Spacing();
-    RenderSectionHeader("Character List", ImVec4(0.70f, 0.58f, 0.20f, 1.0f));
+    RenderSectionHeader("Character List", AlterEgo::UI::SectionGold);
     bool expanded = !g_CompactCharList;
     if (ImGui::Checkbox("Expanded mode", &expanded)) {
         g_CompactCharList = !expanded;
@@ -17427,7 +17822,7 @@ void AddonOptions() {
     }
 
     ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::BeginCombo("##fontface", current.c_str())) {
+    if (AlterEgo::UI::BeginCombo("##fontface", current.c_str())) {
         if (ImGui::Selectable("Nexus default", g_FontConfig.face == AlterEgo::Font::Face::NexusDefault)) {
             g_FontConfig.face = AlterEgo::Font::Face::NexusDefault;
             g_FontConfig.customPath.clear();
@@ -17459,6 +17854,8 @@ void AddonOptions() {
 
     ImGui::TextColored(ImVec4(0.55f, 0.53f, 0.45f, 1.0f),
                        "Drop your own .ttf files in: %s", fontsDir.c_str());
+    ImGui::Spacing();
+    RenderStorageDiagnostics();
 }
 
 // --- Export: GetAddonDef ---
@@ -17472,7 +17869,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef() {
     AddonDef.Version.Build = V_BUILD;
     AddonDef.Version.Revision = V_REVISION;
     AddonDef.Author = "PieOrCake.7635";
-    AddonDef.Description = "Manage characters, builds, skins, clears, achievements. Requires Hoard & Seek addon for account data retrieval. Optional - Events:Chat and Events:Alerts";
+    AddonDef.Description = "Manage characters, builds, skins, clears, achievements. Native account API key required for authenticated data. Optional - Events:Chat and Events:Alerts";
     AddonDef.Load = AddonLoad;
     AddonDef.Unload = AddonUnload;
     AddonDef.Flags = AF_None;

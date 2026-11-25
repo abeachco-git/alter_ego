@@ -1,3 +1,6 @@
+#include "AccountIdentity.h"
+#include "CallbackLifetime.h"
+#include "BackgroundWorkers.h"
 #include <windows.h>
 #include <string>
 #include <vector>
@@ -19,7 +22,8 @@
 #include "imgui_internal.h"
 #include <nlohmann/json.hpp>
 #include "GW2API.h"
-#include "HoardAndSeekAPI.h"
+#include "NativeProgress.h"
+#include "ArenaNetTransport.h"
 #include "HttpClient.h"
 #include "AddonShared.h"
 #include "Clears.h"
@@ -30,10 +34,16 @@
 #include "SectionRefresh.h"
 #include "AutoRefreshPolicy.h"
 #include "FractalScales.h"
+#include "FractalCardLayout.h"
 #include "CompletionTheme.h"
 #include "RaidChipWidths.h"
 #include "RefreshUI.h"
-#include "WikiImage.h"
+#include "IconManager.h"
+#include "VaultAssistance.h"
+#include "WikiEventRuntime.h"
+#include "PublicCatalog.h"
+#include "StoragePaths.h"
+#include "CompletionCache.h"
 
 // =========================================================================
 // Clears - Data types and module-private state
@@ -77,42 +87,28 @@ static bool g_ClearsDailyRolloverPending = false;
 static int g_ClearsDailyRolloverRetries = 0;
 static std::atomic<long long> g_ClearsDailyRolloverRetryAtMs{0};
 static std::time_t g_ClearsLastSuccessTime = 0;
+static std::map<std::string,int64_t> g_ClearsDefinitionAttempt;
 static std::chrono::steady_clock::time_point g_ClearsSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 static std::atomic<long long> g_ClearsRetryAtMs{0};
 // A completion query can be outstanding even though category fetching is done.
-// Track it separately so navigating between tabs cannot double-query H&S.
+// Track it separately so navigating between tabs cannot duplicate API queries.
+static uint64_t g_ClearsGeneration=0,g_VaultGeneration=0;
 static std::atomic<bool> g_ClearsCompletionInFlight{false};
 static std::atomic<long long> g_ClearsQueryStartedAtMs{0};
 static bool g_ClearsRetrySelective = false;
-static constexpr long long CLEARS_QUERY_TIMEOUT_MS = 45000;
+static constexpr long long CLEARS_QUERY_TIMEOUT_MS = 120000;
 
 // Public globals — declared extern in Clears.h, accessed from dllmain.cpp
-bool g_ClearsFetched = false;
-bool g_ClearsFetching = false;
-bool g_ClearsNeedRequery = false;
+std::atomic<bool> g_ClearsFetched{false};
+std::atomic<bool> g_ClearsFetching{false};
+std::atomic<bool> g_ClearsNeedRequery{false};
 std::atomic<bool> g_ClearsQueryPending{false};
 std::atomic<bool> g_ClearsAutoBootPending{false};
 
 // ---- Wizard's Vault state ----
-struct VaultObjective {
-    uint32_t id = 0;
-    std::string title;
-    std::string track;  // "PvE", "PvP", "WvW"
-    int32_t acclaim = 0;
-    int32_t progress_current = 0;
-    int32_t progress_complete = 0;
-    bool claimed = false;
-    bool isDone() const { return progress_complete > 0 && progress_current >= progress_complete; }
-};
-
-struct VaultPeriod {
-    int32_t meta_progress_current = 0;
-    int32_t meta_progress_complete = 0;
-    int32_t meta_reward_astral = 0;
-    bool meta_reward_claimed = false;
-    std::vector<VaultObjective> objectives;
-};
+using VaultObjective=AlterEgo::NativeProgress::Objective;
+using VaultPeriod=AlterEgo::NativeProgress::Period;
 
 static VaultPeriod g_VaultDaily;
 static VaultPeriod g_VaultWeekly;
@@ -121,14 +117,22 @@ static std::atomic<bool> g_VaultFetched{false};
 static std::atomic<bool> g_VaultFetching{false};
 static bool g_VaultInitialAttempted = false;
 static bool g_VaultResponsesOK[3] = {};
-static VaultPeriod g_VaultPending[3];
+static std::array<std::time_t,3> g_VaultSectionSuccess{};
+static std::map<std::string,std::array<int64_t,3>> g_VaultSectionAttempt;
+static bool g_VaultTerminal[3]={};
+static bool g_VaultBatchFailed=false,g_VaultPermissionDenied=false;
 static std::time_t g_VaultLastSuccessTime = 0;
+// Protected by g_ClearsMutex; complete only when all periods are verified.
+static void UpdateVaultFreshness(){
+    g_VaultLastSuccessTime=*std::min_element(g_VaultSectionSuccess.begin(),g_VaultSectionSuccess.end());
+    g_VaultFetched=g_VaultLastSuccessTime>0;
+}
 static std::string g_VaultStatusMessage;
 static bool g_VaultLastAttemptFailed = false;
 static std::chrono::steady_clock::time_point g_VaultSuccessUntil{};
 // steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
 // These per-type retry states and the staged responses are protected by
-// g_ClearsMutex: H&S delivers Vault responses from a worker thread.
+// g_ClearsMutex: the API worker delivers Vault responses from a worker thread.
 static long long g_VaultRetryAtMs = 0;
 static bool g_VaultRetryNeeded[3] = {};
 static int g_VaultRetryAttempts[3] = {};
@@ -140,59 +144,25 @@ static bool g_VaultDailyRolloverPending = false;
 // but their progress and claimed status reset independently.
 static VaultPeriod g_VaultPriorWeekly;
 static bool g_VaultWeeklyRolloverPending = false;
-// Shared rollover retry/backoff for the atomic daily+weekly Vault batch.
+// Shared rollover retry/backoff; each section publishes independently.
 static int g_VaultRolloverRetries = 0;
 static long long g_VaultRolloverRetryAtMs = 0;
 static std::string g_VaultRequestAccount;
-static constexpr long long VAULT_TIMEOUT_MS = 45000;
-bool g_VaultNeedRequery = false;
+static constexpr long long VAULT_TIMEOUT_MS = 120000;
+std::atomic<bool> g_VaultNeedRequery{false};
 
 static std::string g_ClearsCacheAccount; // the account represented by current Clears data
 static std::string g_VaultCacheAccount;  // the account represented by current Vault data
 
-static std::string AccountCacheFile(const char* stem, const std::string& account) {
-    std::string slug;
-    slug.reserve(account.size());
-    for (unsigned char c : account)
-        slug.push_back(std::isalnum(c) || c == '-' || c == '_' ? (char)c : '_');
-    return AlterEgo::GW2API::GetDataDirectory() + "/" + stem + "_" + slug + ".json";
-}
+// Serialize capture and disk publication per completion dataset. Keep all
+// cache SQL outside g_ClearsMutex and all Nexus calls outside both locks.
+static std::mutex g_ClearsSaveMutex;
+static std::mutex g_VaultSaveMutex;
 
-static bool SaveCacheAtomic(const std::string& path, const nlohmann::json& j) {
-    const std::string tmp = path + ".tmp";
-    try {
-        std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-        {
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            if (!out.is_open()) return false;
-            const std::string payload = j.dump(2);
-            out.write(payload.data(), (std::streamsize)payload.size());
-            out.flush();
-            if (!out.good()) return false;
-        }
-        return MoveFileExA(tmp.c_str(), path.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-    } catch (...) {
-        return false;
-    }
-}
-static std::ifstream OpenAccountCache(const char* stem, const std::string& account,
-                                      bool& fromLegacy) {
-    fromLegacy = false;
-    if (account.empty()) return std::ifstream{};
-    std::ifstream file(AccountCacheFile(stem, account), std::ios::binary);
-    if (!file.is_open() && AlterEgo::GW2API::HasAccountsData() &&
-        AlterEgo::GW2API::GetAccountCount() == 1) {
-        // Unscoped legacy files cannot safely be assigned to a multi-account
-        // user. Import them only when H&S confirms exactly one configured account.
-        file.open(AlterEgo::GW2API::GetDataDirectory() + "/" + stem + ".json");
-        fromLegacy = file.is_open();
-    }
-    return file;
-}
-
+static bool g_ShowVaultAssistance = true;
 static bool g_VaultHideComplete = false;   // hide claimed vault objectives
 static bool g_ClearsHideComplete = false;  // hide completed clear encounters
+static bool g_ShowFractalNextResets = true; // show upcoming daily fractal forecast
 static bool g_VaultOpen[3] = {true, true, true}; // Daily, Weekly, Special
 static void LoadClearUiSettings();
 static void SaveClearUiSettings();
@@ -203,16 +173,20 @@ static bool RenderVaultSectionToggle(int index, const char* title,
 static std::chrono::system_clock::time_point g_VaultLastDailyReset{};
 static std::chrono::system_clock::time_point g_VaultLastWeeklyReset{};
 static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
+static std::chrono::system_clock::time_point g_PublicVaultSeasonEnd{};
+static int64_t g_PublicVaultSeasonSuccess=0,g_PublicVaultSeasonAttempt=0;
+static bool g_PublicVaultSeasonPending=false;
 
 // =========================================================================
-// Clears - Backend (reset calculations, fetch, H&S response)
+// Clears - Backend (reset calculations, fetch, API response)
 // =========================================================================
 
 // Forward declarations of private helpers
 static void SaveClearsCache();
 static std::string ShortenFractalName(const std::string& name);
-static void FetchClears();
-static void SendClearsAchQuery(bool skipCompletedSections = false);
+static void FetchClears(bool manual=false);
+static void SendClearsAchQuery(bool skipCompletedSections = false,bool manual=false);
+static std::atomic<bool> g_ClearsPendingManual{false};
 static void FetchVaultData(bool skipClaimedSections = false);
 // Sorted IDs are used for a conservative post-reset freshness check.
 static std::vector<uint32_t> DailyIds(const std::vector<ClearEntry>& entries) {
@@ -231,7 +205,7 @@ static int64_t ResetEpoch(std::chrono::system_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::seconds>(
         t.time_since_epoch()).count();
 }
-static void RequestVaultSection(uint8_t type, const std::string& account);
+static void RequestVaultSection(uint8_t type, const std::string& account,bool manual=false);
 static void SaveVaultCache();
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr);
 static void RenderVaultPeriodSection(int sectionIndex, const char* title, const char* resetLabel,
@@ -340,11 +314,14 @@ static long long NowMs() {
 
 // Query incomplete sections only when opportunistically refreshing.
 // Manual Refresh and reset fetching continue querying every achievement.
-static void SendClearsAchQuery(bool skipCompletedSections) {
+static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
     if (!APIDefs || g_ClearsCompletionInFlight.load()) return;
+    const std::string acctName=GetEffectiveAccountName();
     std::vector<uint32_t> allIds;
+    uint64_t generation=0;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if(acctName.empty() || acctName!=g_ClearsCacheAccount||g_ClearsCompletionInFlight||g_ClearsFetching)return;
         const bool needFractals = !skipCompletedSections ||
             !AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals);
         const bool needBounties = !skipCompletedSections ||
@@ -364,171 +341,170 @@ static void SendClearsAchQuery(bool skipCompletedSections) {
         if (allIds.empty()) return; // every known section is done
         g_ClearsRetrySelective = skipCompletedSections;
         g_ClearsCompletionInFlight = true;
+        generation=++g_ClearsGeneration;
         g_ClearsQueryStartedAtMs = NowMs();
         g_ClearsStatusMsg = skipCompletedSections
             ? "Refreshing incomplete sections..." : "Querying completion...";
     }
 
-    std::string acctName = GetEffectiveAccountName();
-    HoardQueryAchievementRequest req{};
-    req.api_version = HOARD_API_VERSION;
-    strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
-    strncpy(req.response_event, EV_AE_CLEARS_ACH_RESPONSE, sizeof(req.response_event) - 1);
-    if (!acctName.empty())
-        strncpy(req.account_name, acctName.c_str(), sizeof(req.account_name) - 1);
-    req.id_count = (uint32_t)std::min(allIds.size(), (size_t)200);
-    for (uint32_t i = 0; i < req.id_count; i++) {
-        req.ids[i] = allIds[i];
-    }
-    APIDefs->Events_Raise(EV_HOARD_QUERY_ACHIEVEMENT, &req);
-}
-
-// H&S achievement response handler for all clears
-void OnClearsAchResponse(void* eventArgs) {
-    if (!eventArgs) return;
-    auto* resp = (HoardQueryAchievementResponse*)eventArgs;
-    std::unique_ptr<HoardQueryAchievementResponse> respGuard(resp); // caller owns the response
-    if (resp->api_version < 2 || g_ClearsCacheAccount.empty()) return;
-    if (resp->api_version >= 3) {
-        const std::string echoed(resp->account_name,
-            strnlen(resp->account_name, sizeof(resp->account_name)));
-        if (echoed != g_ClearsCacheAccount) return;
-    }
-
-    if (resp->status != HOARD_STATUS_OK) {
-        std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        g_ClearsCompletionInFlight = false;
-        g_ClearsQueryStartedAtMs = 0;
-        if (resp->status == HOARD_STATUS_BUSY) {
-            g_ClearsStatusMsg = "Hoard & Seek busy, retrying shortly...";
-            // Schedule a single backoff retry (Events_Raise must be on render thread)
-            g_ClearsRetryAtMs = NowMs() + (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
-        } else {
-            if (resp->status == HOARD_STATUS_DENIED)
-                g_ClearsStatusMsg = "H&S permission denied";
-            else
-                g_ClearsStatusMsg = "H&S error";
-            g_ClearsFetching = false;
-        }
-        return;
-    }
-
-    // Build lookup maps from response
-    struct AchData {
-        bool done;
-        int32_t current;
-        int32_t max;
-        std::set<uint32_t> bits;
-    };
-    std::unordered_map<uint32_t, AchData> achMap;
-    for (uint32_t i = 0; i < resp->entry_count; i++) {
-        auto& e = resp->entries[i];
-        AchData ad;
-        ad.done = e.done;
-        ad.current = e.current;
-        ad.max = e.max;
-        for (uint32_t b = 0; b < e.bit_count && b < 64; b++) {
-            ad.bits.insert(e.bits[b]);
-        }
-        achMap[e.id] = std::move(ad);
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (g_ClearsCacheAccount.empty() ||
-            (resp->api_version >= 3 &&
-             std::string(resp->account_name,
-                strnlen(resp->account_name, sizeof(resp->account_name))) != g_ClearsCacheAccount))
-            return;
-
-        // Apply to all tracked entries
-        auto applyTo = [&](ClearEntry& ce) {
-            auto it = achMap.find(ce.id);
-            if (it != achMap.end()) {
-                ce.done = it->second.done;
-                ce.current = it->second.current;
-                ce.max = it->second.max;
-                // API clears bits when achievement is fully completed;
-                // detect this and mark all encounters done
-                if (it->second.done && ce.max > 0 && ce.current >= ce.max) {
-                    ce.bitDone.assign(ce.bitNames.size(), true);
-                } else {
-                    ce.bitDone.assign(ce.bitNames.size(), false);
-                    for (uint32_t bitIdx : it->second.bits) {
-                        if (bitIdx < ce.bitDone.size()) {
-                            ce.bitDone[bitIdx] = true;
-                        }
-                    }
-                }
+    const auto now=std::chrono::system_clock::now();
+    const auto daily=CalcLastDailyReset(now);
+    const auto weekly=CalcLastWeeklyReset(now);
+    const auto minimumEpoch=std::chrono::system_clock::to_time_t(std::max(daily,weekly));
+    AlterEgo::Background::Workers().Launch([acctName,allIds,generation,manual,minimumEpoch]{
+        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),acctName,manual,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimumEpoch);
+        AlterEgo::Background::Checkpoint();
+        bool save=false;
+        {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||!g_ClearsCompletionInFlight||acctName!=g_ClearsCacheAccount)return;
+            g_ClearsCompletionInFlight=false;g_ClearsQueryStartedAtMs=0;g_ClearsFetching=false;
+            if(!result.snapshot){
+                g_ClearsStatusMsg=result.error;
+                // Shared account progress broker owns ordinary failure cooldowns.
+                return;
             }
-        };
-
-        for (auto& e : g_DailyFractals)  applyTo(e);
-        for (auto& e : g_DailyBounties)  applyTo(e);
-        for (auto& e : g_WeeklyWings)    applyTo(e);
-        applyTo(g_WeeklyStrikes);
-
-        g_ClearsFetched = true;
-        g_ClearsFetching = false;
-        g_ClearsCompletionInFlight = false;
-        g_ClearsQueryStartedAtMs = 0;
-        g_ClearsStatusMsg = "";
-        g_ClearsLastSuccessTime = std::time(nullptr);
-        g_ClearsSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
-        g_LastClearsCompletionQuery = std::chrono::steady_clock::now();
-    }
-
-    // Persist to disk
-    SaveClearsCache();
+            const std::set<uint32_t> requested(allIds.begin(),allIds.end());
+            auto apply=[&](ClearEntry& e){
+                if(!requested.count(e.id))return;
+                auto it=result.snapshot->entries.find(e.id);
+                e.bitDone.assign(e.bitNames.size(),false);
+                if(it==result.snapshot->entries.end()){e.done=false;e.current=0;return;}
+                const auto& p=it->second;e.done=p.done;e.current=p.current;if(p.max>0)e.max=p.max;
+                if(p.done&&e.max>0&&e.current>=e.max)e.bitDone.assign(e.bitNames.size(),true);
+                else for(auto bit:p.completed_bits)if(bit<e.bitDone.size())e.bitDone[bit]=true;
+            };
+            for(auto& e:g_DailyFractals)apply(e);for(auto& e:g_DailyBounties)apply(e);
+            for(auto& e:g_WeeklyWings)apply(e);apply(g_WeeklyStrikes);
+            g_ClearsFetched=true;g_ClearsStatusMsg.clear();g_ClearsLastSuccessTime=result.snapshot->fetchedAt;
+            g_LastClearsCompletionQuery=std::chrono::steady_clock::now();g_ClearsSuccessUntil=g_LastClearsCompletionQuery+std::chrono::seconds(4);save=true;
+        }
+        if(save)SaveClearsCache();
+    },[generation]{std::lock_guard<std::mutex> lock(g_ClearsMutex);if(generation==g_ClearsGeneration){g_ClearsCompletionInFlight=false;g_ClearsQueryStartedAtMs=0;g_ClearsStatusMsg="Completion refresh cancelled";}});
 }
 
 // =========================================================================
 // Clears - Wizard's Vault fetch and response
 // =========================================================================
-
 static const char* VaultSectionName(uint8_t type) {
     static const char* names[] = {"daily", "weekly", "special"};
     return type < 3 ? names[type] : "unknown";
 }
-
-// Called only from the render thread. Never hold g_ClearsMutex around
-// Events_Raise: H&S may also respond synchronously for cached data.
-static void RequestVaultSection(uint8_t type, const std::string& account) {
-    HoardQueryWizardsVaultRequest req{};
-    req.api_version = HOARD_API_VERSION;
-    strncpy(req.requester, "Alter Ego", sizeof(req.requester) - 1);
-    strncpy(req.response_event, EV_AE_VAULT_RESPONSE, sizeof(req.response_event) - 1);
-    req.type = type;
-    if (!account.empty())
-        strncpy(req.account_name, account.c_str(), sizeof(req.account_name) - 1);
-    APIDefs->Events_Raise(EV_HOARD_QUERY_WIZARDSVAULT, &req);
+static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t generation,int status,VaultPeriod period);
+static void RequestVaultSection(uint8_t type,const std::string& account,bool manual){
+    uint64_t generation;
+    {std::lock_guard<std::mutex> lock(g_ClearsMutex);generation=g_VaultGeneration;}
+    AlterEgo::Background::Workers().Launch([type,account,generation,manual]{
+        AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
+        auto r=AlterEgo::NativeAccounts::Request(account,std::string("/v2/account/wizardsvault/")+VaultSectionName(type),{"progression"});
+        VaultPeriod period;
+        if(r){try{period=AlterEgo::NativeProgress::ParseVault(r.data,type==2);}catch(...){r.status=0;}}
+        ApplyVaultSection(type,account,generation,r.status,std::move(period));
+    },[type,account,generation]{ApplyVaultSection(type,account,generation,0,{});});
 }
 
 // Start one asynchronous batch; each response is delivered separately later.
 // Previous successful data and its timestamp remain valid while refreshing.
+static void RefreshVaultSeason(bool manual){
+    // Public season metadata is independent from account objective progress.
+    bool fetchSeason=false;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        const auto now=static_cast<int64_t>(std::time(nullptr));
+        const auto end=std::chrono::system_clock::to_time_t(g_PublicVaultSeasonEnd);
+        if(g_PublicVaultSeasonEnd!=std::chrono::system_clock::time_point{})g_VaultSeasonEnd=g_PublicVaultSeasonEnd;
+        fetchSeason=!g_PublicVaultSeasonPending&&AlterEgo::RefreshEngine::Due(
+            g_PublicVaultSeasonSuccess,g_PublicVaultSeasonAttempt,now,AlterEgo::RefreshEngine::SeasonSeconds,
+            manual,end>0&&now>=end?end:0);
+        if(fetchSeason){g_PublicVaultSeasonPending=true;g_PublicVaultSeasonAttempt=now;}
+    }
+    if(fetchSeason)AlterEgo::Background::Workers().Launch([manual]{
+        AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
+        const auto root=AlterEgo::GW2API::GetDataDirectory();
+        const auto apply=[](const AlterEgo::Cache::VaultSeasonSnapshot& season){
+            const auto tp=std::chrono::system_clock::from_time_t(static_cast<std::time_t>(season.end));
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(season.verifiedAt<g_PublicVaultSeasonSuccess)return;
+            const auto previous=g_VaultSeasonEnd;
+            if(previous!=std::chrono::system_clock::time_point{}&&previous<=std::chrono::system_clock::now()&&previous!=tp){
+                g_VaultSpecial={};g_VaultSectionSuccess[2]=0;
+                g_VaultSectionAttempt[g_VaultCacheAccount][2]=0;UpdateVaultFreshness();
+            }
+            g_PublicVaultSeasonEnd=tp;g_PublicVaultSeasonSuccess=season.verifiedAt;
+            g_VaultSeasonEnd=tp;
+        };
+        const auto finish=[](bool success){
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            g_PublicVaultSeasonPending=false;
+            if(success)g_PublicVaultSeasonAttempt=0;
+        };
+        // Disk work stays on the owned worker. The account Vault projection
+        // is not proof of the public season's verification time.
+        try{
+            const auto cached=AlterEgo::Cache::ReadVaultSeason(root);
+            const auto now=static_cast<int64_t>(std::time(nullptr));
+            if(cached&&cached->verifiedAt<=now&&cached->end>now){
+                apply(*cached);
+                if(!manual&&!AlterEgo::RefreshEngine::Due(cached->verifiedAt,0,now,AlterEgo::RefreshEngine::SeasonSeconds)){
+                    finish(true);SaveVaultCache();return;
+                }
+            }
+        }catch(...){/* Preserve in-memory metadata; attempt a verified refresh. */}
+        auto r=AlterEgo::ArenaNet::Get("/v2/wizardsvault");
+        AlterEgo::Background::Checkpoint();
+        std::chrono::system_clock::time_point tp{};
+        if(r.status_code==200)try{tp=ParseISO8601(nlohmann::json::parse(r.body).at("end").get<std::string>());}catch(...){}
+        const AlterEgo::Cache::VaultSeasonSnapshot next{
+            static_cast<int64_t>(std::time(nullptr)),
+            static_cast<int64_t>(std::chrono::system_clock::to_time_t(tp))};
+        bool saved=false;
+        try{saved=AlterEgo::Cache::WriteVaultSeason(root,next);}catch(...){}
+        if(!saved){finish(false);return;}
+        apply(next);finish(true);SaveVaultCache();
+    },[]{std::lock_guard<std::mutex> lock(g_ClearsMutex);g_PublicVaultSeasonPending=false;
+        if(AlterEgo::Background::Workers().Stopping())g_PublicVaultSeasonAttempt=0;});
+}
+
 static void FetchVaultData(bool skipClaimedSections) {
+    RefreshVaultSeason(!skipClaimedSections);
     if (!APIDefs || g_VaultFetching.load()) return;
     const std::string account = GetEffectiveAccountName();
     std::array<bool, 3> request = {true, true, true};
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (g_VaultFetching.load()) return;
+        if (g_VaultFetching.load() || account.empty() || account!=g_VaultCacheAccount) return;
         // A section is skippable only when all awards are CLAIMED, and the
         // current period hasn't been invalidated by a reset. Never use an
         // unknown/expired season end to suppress a new Special season.
-        if (skipClaimedSections && g_VaultFetched.load()) {
-            request[0] = g_VaultDailyRolloverPending ||
-                !AlterEgo::SectionRefresh::VaultClaimed(g_VaultDaily);
-            request[1] = g_VaultWeeklyRolloverPending ||
-                !AlterEgo::SectionRefresh::VaultClaimed(g_VaultWeekly);
-            request[2] = !AlterEgo::SectionRefresh::VaultClaimed(g_VaultSpecial) ||
-                g_VaultSeasonEnd == std::chrono::system_clock::time_point{} ||
-                std::chrono::system_clock::now() >= g_VaultSeasonEnd;
+        if (skipClaimedSections) {
+            const auto now=std::time(nullptr);
+            auto& attempt=g_VaultSectionAttempt[account];
+            const auto due=[&](uint8_t type,int64_t interval,int64_t minimum=0){
+                return AlterEgo::RefreshEngine::Due(g_VaultSectionSuccess[type],attempt[type],now,interval,false,minimum,
+                    AlterEgo::RefreshEngine::Offset(account+"/vault/"+std::to_string(type)));
+            };
+            request[0] = g_VaultDailyRolloverPending ?
+                ((g_VaultRolloverRetryAtMs!=0&&NowMs()>=g_VaultRolloverRetryAtMs)||
+                 (g_VaultRolloverRetryAtMs==0&&due(0,0))) :
+                (!AlterEgo::SectionRefresh::VaultClaimed(g_VaultDaily)&&due(0,AlterEgo::RefreshEngine::ObjectiveSeconds()));
+            request[1] = g_VaultWeeklyRolloverPending ?
+                ((g_VaultRolloverRetryAtMs!=0&&NowMs()>=g_VaultRolloverRetryAtMs)||
+                 (g_VaultRolloverRetryAtMs==0&&due(1,0))) :
+                (!AlterEgo::SectionRefresh::VaultClaimed(g_VaultWeekly)&&due(1,AlterEgo::RefreshEngine::ObjectiveSeconds()));
+            const bool unknownSeason=g_VaultSeasonEnd==std::chrono::system_clock::time_point{};
+            const auto seasonEnd=std::chrono::system_clock::to_time_t(g_VaultSeasonEnd);
+            const bool expired=!unknownSeason&&now>=seasonEnd;
+            request[2] = (!expired||!g_PublicVaultSeasonPending)&&
+                (unknownSeason||expired||!AlterEgo::SectionRefresh::VaultClaimed(g_VaultSpecial))&&
+                due(2,AlterEgo::RefreshEngine::BrowseSeconds,expired?seasonEnd:0);
         }
         if (!request[0] && !request[1] && !request[2]) return;
+        for(uint8_t i=0;i<3;++i)if(request[i])g_VaultSectionAttempt[account][i]=std::time(nullptr);
+        ++g_VaultGeneration;
         g_VaultFetching = true;
         g_VaultInitialAttempted = true;
         g_VaultLastAttemptFailed = false;
+        g_VaultBatchFailed=false;g_VaultPermissionDenied=false;
         g_VaultStatusMessage = skipClaimedSections
             ? "Refreshing unclaimed Vault sections..." : "Fetching Vault objectives (0/3)...";
         g_VaultRequestStartMs = NowMs();
@@ -536,12 +512,8 @@ static void FetchVaultData(bool skipClaimedSections) {
         g_VaultRetryAtMs = 0;
         g_VaultRolloverRetryAtMs = 0;
         for (int i = 0; i < 3; ++i) {
-            // Completed sections are carried into the pending batch, so
-            // the existing all-three atomic commit/retry code is unchanged.
             g_VaultResponsesOK[i] = !request[i];
-            g_VaultPending[i] = !request[i]
-                ? (i == 0 ? g_VaultDaily : i == 1 ? g_VaultWeekly : g_VaultSpecial)
-                : VaultPeriod{};
+            g_VaultTerminal[i]=!request[i];
             g_VaultRetryNeeded[i] = false;
             g_VaultRetryAttempts[i] = 0;
         }
@@ -549,220 +521,96 @@ static void FetchVaultData(bool skipClaimedSections) {
 
     for (uint8_t type = 0; type < 3; ++type) {
         if (!g_VaultFetching.load()) break;
-        if (request[type]) RequestVaultSection(type, account);
+        if (request[type]) RequestVaultSection(type, account,!skipClaimedSections);
     }
 
-    // Season metadata is independent; skip it only if Special was already
-    // fully claimed in a known, still-current season.
-    if (skipClaimedSections && !request[2]) return;
-    HoardQueryApiRequest season{};
-    season.api_version = HOARD_API_VERSION;
-    strncpy(season.requester, "Alter Ego", sizeof(season.requester) - 1);
-    strncpy(season.endpoint, "/v2/wizardsvault", sizeof(season.endpoint) - 1);
-    strncpy(season.response_event, EV_AE_VAULT_SEASON_RESP, sizeof(season.response_event) - 1);
-    if (!account.empty())
-        strncpy(season.account_name, account.c_str(), sizeof(season.account_name) - 1);
-    APIDefs->Events_Raise(EV_HOARD_QUERY_API, &season);
+
 }
 
-void OnVaultSeasonResponse(void* eventArgs) {
-    if (!eventArgs) return;
-    auto* resp = static_cast<HoardQueryApiResponse*>(eventArgs);
-    std::unique_ptr<HoardQueryApiResponse> respGuard(resp); // caller owns the response
-    if (g_VaultCacheAccount.empty() || resp->api_version < 3 ||
-        std::string(resp->account_name,
-            strnlen(resp->account_name, sizeof(resp->account_name))) != g_VaultCacheAccount)
-        return;
-    if (resp->status == HOARD_STATUS_BUSY) {
-        // Optional season metadata: don't restart otherwise successful objectives.
-        return;
-    }
-    if (resp->status != HOARD_STATUS_OK || resp->json_length == 0) return;
-    try {
-        auto j = nlohmann::json::parse(resp->json);
-        std::string endStr = j.value("end", "");
-        if (!endStr.empty()) {
-            auto tp = ParseISO8601(endStr);
-            if (tp != std::chrono::system_clock::time_point{}) {
-                {
-                    std::lock_guard<std::mutex> lock(g_ClearsMutex);
-                    const std::string responseAccount(resp->account_name,
-                        strnlen(resp->account_name, sizeof(resp->account_name)));
-                    if (responseAccount != g_VaultCacheAccount) return;
-                    g_VaultSeasonEnd = tp;
-                }
-                // Save the asynchronously delivered timestamp so a restart
-                // can retain the countdown without another successful fetch.
-                SaveVaultCache();
-            }
-        }
-    } catch (...) {}
-}
-
-void OnVaultResponse(void* eventArgs) {
-    if (!eventArgs) return;
-    auto* resp = (HoardQueryWizardsVaultResponse*)eventArgs;
-    std::unique_ptr<HoardQueryWizardsVaultResponse> respGuard(resp);
-    if (resp->api_version < 2 || resp->type > 2 || g_VaultCacheAccount.empty()) return;
-    if (resp->api_version >= 3 &&
-        std::string(resp->account_name,
-            strnlen(resp->account_name, sizeof(resp->account_name))) != g_VaultCacheAccount)
-        return;
-
-    // Parse into local memory first; publish only under the shared mutex.
-    VaultPeriod period;
-    if (resp->status == HOARD_STATUS_OK) {
-        period.meta_progress_current  = resp->meta_progress_current;
-        period.meta_progress_complete = resp->meta_progress_complete;
-        period.meta_reward_astral     = resp->meta_reward_astral;
-        period.meta_reward_claimed    = resp->meta_reward_claimed != 0;
-        for (uint32_t i = 0; i < resp->objective_count && i < 16; ++i) {
-            const auto& o = resp->objectives[i];
-            VaultObjective obj;
-            obj.id = o.id;
-            obj.title = o.title;
-            obj.track = o.track;
-            obj.acclaim = o.acclaim;
-            obj.progress_current = o.progress_current;
-            obj.progress_complete = o.progress_complete;
-            obj.claimed = o.claimed != 0;
-            period.objectives.push_back(std::move(obj));
-        }
-    }
-
-    bool save = false;
+static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t generation,int status,VaultPeriod period){
+    bool save=false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (!g_VaultFetching.load() || g_VaultCacheAccount.empty()) return;
-        if (resp->api_version >= 3 &&
-            std::string(resp->account_name,
-                strnlen(resp->account_name, sizeof(resp->account_name))) != g_VaultCacheAccount)
+        if(type>2||generation!=g_VaultGeneration||!g_VaultFetching.load()||
+            account!=g_VaultRequestAccount||account!=g_VaultCacheAccount||g_VaultTerminal[type])return;
+        if(AlterEgo::Background::Workers().Stopping()){
+            g_VaultSectionAttempt[account][type]=0;g_VaultTerminal[type]=true;g_VaultRetryNeeded[type]=false;
+            if(std::all_of(std::begin(g_VaultTerminal),std::end(g_VaultTerminal),[](bool x){return x;}))g_VaultFetching=false;
             return;
-
-        // Reject delayed responses for an account that is no longer being queried.
-        const std::string echoedAccount(resp->account_name,
-            strnlen(resp->account_name, sizeof(resp->account_name)));
-        if (!g_VaultRequestAccount.empty() && !echoedAccount.empty() &&
-            echoedAccount != g_VaultRequestAccount) return;
-
-        const int type = resp->type;
-        if (g_VaultResponsesOK[type]) return; // duplicate response
-        if (resp->status == HOARD_STATUS_BUSY) {
-            if (++g_VaultRetryAttempts[type] <= 3) {
-                g_VaultRetryNeeded[type] = true;
-                const long long next = NowMs() +
-                    (resp->retry_after_ms ? (long long)resp->retry_after_ms : 1000LL);
-                // Wait for the latest required backoff before re-sending pending sections.
-                g_VaultRetryAtMs = std::max(g_VaultRetryAtMs, next);
-                g_VaultStatusMessage = std::string("Hoard & Seek busy - retrying ") +
-                    VaultSectionName((uint8_t)type) + " objectives...";
-            } else {
-                g_VaultFetching = false;
-                g_VaultLastAttemptFailed = true;
-                g_VaultRetryAtMs = 0;
-                g_VaultStatusMessage = std::string("Refresh failed - H&S busy after retries (") +
-                    VaultSectionName((uint8_t)type) + ")";
-                if (g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending) {
-                    const int64_t delay = ClearsReset::RetryDelaySeconds(
-                        ++g_VaultRolloverRetries);
-                    g_VaultRolloverRetryAtMs = NowMs() + delay * 1000;
-                    g_VaultStatusMessage += "; retrying in " + std::to_string(delay) + "s";
-                    g_VaultLastAttemptFailed = false;
-                }
+        }
+        if(status==429&&++g_VaultRetryAttempts[type]<=3){
+            g_VaultRetryNeeded[type]=true;
+            g_VaultRetryAtMs=std::max(g_VaultRetryAtMs,NowMs()+5000LL);
+            g_VaultStatusMessage=std::string("ArenaNet rate limited - retrying ")+VaultSectionName(type);
+            return;
+        }
+        g_VaultTerminal[type]=true;g_VaultRetryNeeded[type]=false;
+        const bool held=status==200&&(
+            (type==0&&g_VaultDailyRolloverPending&&ClearsReset::LooksUnrotated(g_VaultPriorDailyIds,DailyIds(period)))||
+            (type==1&&g_VaultWeeklyRolloverPending&&ClearsReset::LooksUnrotatedVaultWeek(g_VaultPriorWeekly,period)));
+        if(status==200&&!held){
+            if(type==0){g_VaultDaily=std::move(period);g_VaultDailyRolloverPending=false;g_VaultPriorDailyIds.clear();}
+            else if(type==1){g_VaultWeekly=std::move(period);g_VaultWeeklyRolloverPending=false;g_VaultPriorWeekly={};}
+            else g_VaultSpecial=std::move(period);
+            g_VaultSectionSuccess[type]=std::time(nullptr);
+            g_VaultSectionAttempt[account][type]=0;
+            g_VaultResponsesOK[type]=true;UpdateVaultFreshness();save=true;
+        }else{
+            g_VaultBatchFailed=true;
+            if(status==401||status==403)g_VaultPermissionDenied=true;
+            g_VaultStatusMessage=std::string(held?"Waiting for new ":status==401||status==403?"Permission denied: ":"Refresh failed: ")+VaultSectionName(type);
+        }
+        int terminal=0;for(bool done:g_VaultTerminal)if(done)++terminal;
+        if(terminal==3){
+            g_VaultFetching=false;g_VaultRetryAtMs=0;
+            const bool rollover=g_VaultDailyRolloverPending||g_VaultWeeklyRolloverPending;
+            g_VaultLastAttemptFailed=g_VaultBatchFailed;
+            if(rollover&&!g_VaultPermissionDenied){
+                const auto wait=ClearsReset::RetryDelaySeconds(++g_VaultRolloverRetries);
+                g_VaultRolloverRetryAtMs=NowMs()+wait*1000;
+                g_VaultStatusMessage="Waiting for current Vault period; retrying in "+std::to_string(wait)+"s";
+                g_VaultLastAttemptFailed=false;
+            }else if(!rollover){
+                g_VaultRolloverRetryAtMs=0;g_VaultRolloverRetries=0;
             }
-        } else if (resp->status != HOARD_STATUS_OK) {
-            g_VaultFetching = false;
-            g_VaultLastAttemptFailed = true;
-            g_VaultRetryAtMs = 0;
-            if (resp->status == HOARD_STATUS_DENIED)
-                g_VaultStatusMessage = std::string("Hoard & Seek permission denied (") +
-                    VaultSectionName((uint8_t)type) + ")";
-            else {
-                g_VaultStatusMessage = std::string("Vault ") + VaultSectionName((uint8_t)type) +
-                    " request failed (status " + std::to_string((int)resp->status) + ")";
-                if (g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending) {
-                    const int attempt = ++g_VaultRolloverRetries;
-                    const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
-                    g_VaultRolloverRetryAtMs = NowMs() + delay * 1000;
-                    g_VaultStatusMessage += "; retrying in " + std::to_string(delay) + "s";
-                    g_VaultLastAttemptFailed = false;
+            if(!g_VaultBatchFailed){
+                g_VaultStatusMessage="Refresh complete";
+                g_VaultSuccessUntil=std::chrono::steady_clock::now()+std::chrono::seconds(4);
+            }else if(!rollover||g_VaultPermissionDenied){
+                std::string failed;
+                for(uint8_t i=0;i<3;++i)if(!g_VaultResponsesOK[i]){
+                    if(!failed.empty())failed+=", ";failed+=VaultSectionName(i);
                 }
+                g_VaultStatusMessage=std::string(g_VaultPermissionDenied?"Permission denied; incomplete sections: ":"Partial refresh; failed sections: ")+failed;
             }
-        } else {
-            g_VaultPending[type] = std::move(period);
-            g_VaultResponsesOK[type] = true;
-            g_VaultRetryNeeded[type] = false;
-            int received = 0;
-            for (bool ok : g_VaultResponsesOK) if (ok) ++received;
-            if (received == 3) {
-                // A successful response is not proof that its objectives
-                // belong to the new reset period. In particular H&S may
-                // return the previous week's *claimed* objectives briefly.
-                const bool dailyHeld = g_VaultDailyRolloverPending &&
-                    ClearsReset::LooksUnrotated(
-                        g_VaultPriorDailyIds, DailyIds(g_VaultPending[0]));
-                const bool weeklyHeld = g_VaultWeeklyRolloverPending &&
-                    ClearsReset::LooksUnrotatedVaultWeek(
-                        g_VaultPriorWeekly, g_VaultPending[1]);
-                if (dailyHeld || weeklyHeld) {
-                    const int64_t waitSeconds = ClearsReset::RetryDelaySeconds(
-                        ++g_VaultRolloverRetries);
-                    g_VaultRolloverRetryAtMs = NowMs() + waitSeconds * 1000;
-                    g_VaultFetching = false;
-                    g_VaultLastAttemptFailed = false;
-                    g_VaultStatusMessage = std::string("Waiting for new ") +
-                        (dailyHeld && weeklyHeld ? "daily and weekly" :
-                         dailyHeld ? "daily" : "weekly") +
-                        " Vault objectives; retrying in " +
-                        std::to_string(waitSeconds) + "s";
-                } else {
-                    // Commit only when all three sections are valid and both
-                    // reset periods have passed freshness validation.
-                    g_VaultDaily   = std::move(g_VaultPending[0]);
-                    g_VaultWeekly  = std::move(g_VaultPending[1]);
-                    g_VaultSpecial = std::move(g_VaultPending[2]);
-                    g_VaultDailyRolloverPending = false;
-                    g_VaultWeeklyRolloverPending = false;
-                    g_VaultPriorDailyIds.clear();
-                    g_VaultPriorWeekly = {};
-                    g_VaultRolloverRetryAtMs = 0;
-                    g_VaultRolloverRetries = 0;
-                    g_VaultLastSuccessTime = std::time(nullptr);
-                    g_VaultFetched = true;
-                    g_VaultFetching = false;
-                    g_VaultRetryAtMs = 0;
-                    g_VaultLastAttemptFailed = false;
-                    g_VaultStatusMessage = "Refresh complete";
-                    g_VaultSuccessUntil = std::chrono::steady_clock::now() +
-                        std::chrono::seconds(4);
-                    save = true;
-                }
-            } else if (g_VaultRetryAtMs == 0) {
-                g_VaultStatusMessage = "Fetching Vault objectives (" +
-                    std::to_string(received) + "/3)...";
-            }
+        }else if(!g_VaultBatchFailed&&g_VaultRetryAtMs==0){
+            g_VaultStatusMessage="Fetching Vault objectives ("+std::to_string(terminal)+"/3)...";
         }
     }
-    // Persist after releasing the callback mutex; SaveVaultCache takes it again.
-    if (save) SaveVaultCache();
+    if(save)SaveVaultCache();
 }
 
-// Helper: fetch a category's achievement IDs from public API
-static std::vector<uint32_t> FetchCategoryIds(uint32_t catId, int64_t requestToken) {
-    // The GW2 API advertises private,max-age=3600 for category responses.
-    // A unique query token bypasses pre-reset cached IDs on each retry.
-    std::string url = ClearsReset::FreshCategoryUrl(catId, requestToken);
-    std::string json = Skinventory::HttpClient::Get(url);
-    std::vector<uint32_t> ids;
+// Read public categories with HTTP status and schema/identity validation.
+static std::vector<uint32_t> ReadCategoryIds(const std::string& url,uint32_t catId) {
+    const auto response=Skinventory::HttpClient::GetEx(url,
+        "Cache-Control: no-cache\r\nPragma: no-cache\r\n");
+    if(response.status_code!=200 && response.status_code!=206)return {};
     try {
-        auto j = nlohmann::json::parse(json);
-        if (j.contains("achievements") && j["achievements"].is_array()) {
-            for (const auto& id : j["achievements"]) {
-                ids.push_back(id.get<uint32_t>());
-            }
-        }
-    } catch (...) {}
-    return ids;
+        return ClearsReset::CategoryIds(nlohmann::json::parse(response.body),catId);
+    } catch (...) {return {};}
+}
+
+static std::vector<uint32_t> FetchCategoryIds(uint32_t catId,int64_t requestToken,
+                                            const std::vector<uint32_t>& prior) {
+    auto ids=ReadCategoryIds(ClearsReset::FreshCategoryUrl(catId,requestToken),catId);
+    if(!ClearsReset::LooksUnrotated(prior,ids))return ids;
+    // The alternate documented bulk endpoint uses an explicit schema and
+    // language. It may avoid stale representation caches; never promote an
+    // unchanged result just because it came from another URL.
+    AlterEgo::Background::Checkpoint();
+    auto alternate=ReadCategoryIds(ClearsReset::AlternateCategoryUrl(catId,requestToken),catId);
+    if(!ClearsReset::LooksUnrotated(prior,alternate))return alternate;
+    return ids.empty()?alternate:ids;
 }
 
 // Helper: fetch achievement details (name, bits) from public API
@@ -811,64 +659,112 @@ static std::vector<ClearEntry> FetchAchievementDetails(const std::vector<uint32_
 }
 
 // Fetch all clears data (runs on background thread)
-static void FetchClears() {
-    if (g_ClearsFetching) return;
-    g_ClearsFetching = true;
+static void FetchClears(bool manual) {
+    if (g_ClearsFetching||g_ClearsCompletionInFlight.load()||g_ClearsQueryPending.load()) return;
+    const auto account=GetEffectiveAccountName();
+    if(account.empty())return;
+    uint64_t generation=0;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if(account!=g_ClearsCacheAccount||g_ClearsFetching||g_ClearsCompletionInFlight||g_ClearsQueryPending)return;
+        generation=++g_ClearsGeneration;
+        const auto now=static_cast<int64_t>(std::time(nullptr));
+        auto& attempt=g_ClearsDefinitionAttempt[account];
+        if(!manual&&!g_ClearsDailyRolloverPending&&!AlterEgo::RefreshEngine::Due(0,attempt,now,0))return;
+        attempt=now;g_ClearsFetching=true;
         g_ClearsStatusMsg = "Fetching achievement data...";
         // Keep successfully cached data displayed during a refresh.
     }
 
-    std::thread([]() {
-        // Step 1: Fetch all category achievement IDs
+    AlterEgo::Background::Workers().Launch([manual,account,generation]() {
+        AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
+        // Reuse still-current weekly/daily definitions unless explicitly refreshing.
         const int64_t requestToken = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
-        auto fractalIds = FetchCategoryIds(CAT_DAILY_FRACTALS, requestToken);
-        auto bountyIds  = FetchCategoryIds(CAT_DAILY_BOUNTIES, requestToken);
-        auto weeklyIds  = FetchCategoryIds(CAT_WEEKLY_RAIDS, requestToken);
+        std::vector<uint32_t> priorFractals,priorBounties;
+        std::vector<ClearEntry> cachedFractals,cachedBounties,cachedWeekly;
+        {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
+            if(g_ClearsDailyRolloverPending){
+                priorFractals=g_ClearsPriorDailyFractalIds;
+                priorBounties=g_ClearsPriorDailyBountyIds;
+            }
+            if(!manual&&!g_ClearsDailyRolloverPending){
+                cachedFractals=g_DailyFractals;cachedBounties=g_DailyBounties;
+            }
+            if(!manual&&!g_WeeklyWings.empty()&&g_WeeklyStrikes.id){
+                cachedWeekly=g_WeeklyWings;cachedWeekly.push_back(g_WeeklyStrikes);
+            }
+        }
+        AlterEgo::Background::Checkpoint();
+        auto fractalIds = cachedFractals.empty()?FetchCategoryIds(CAT_DAILY_FRACTALS,requestToken,priorFractals):DailyIds(cachedFractals);
+        auto bountyIds = cachedBounties.empty()?FetchCategoryIds(CAT_DAILY_BOUNTIES,requestToken,priorBounties):DailyIds(cachedBounties);
+        auto weeklyIds = cachedWeekly.empty()?FetchCategoryIds(CAT_WEEKLY_RAIDS,requestToken,{}):DailyIds(cachedWeekly);
 
+        AlterEgo::Background::Checkpoint();
         // A partial HTTP failure must never replace one of the sections with
         // an empty definition list just because another category succeeded.
         if (fractalIds.empty() || bountyIds.empty() || weeklyIds.empty()) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             g_ClearsStatusMsg = "Failed to fetch all achievement categories; cached data preserved";
             if (g_ClearsDailyRolloverPending) {
                 const int attempt = ++g_ClearsDailyRolloverRetries;
                 const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
                 g_ClearsDailyRolloverRetryAtMs = NowMs() + delay * 1000;
-                g_ClearsStatusMsg += "; retrying in " + std::to_string(delay) + "s";
+
             }
             g_ClearsFetching = false;
             return;
         }
 
+        // If both daily categories still have yesterday's IDs, downloading
+        // their immutable definitions cannot make them current. Keep the
+        // prior verified weekly data and retry using the existing cadence.
+        {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
+            if(g_ClearsDailyRolloverPending &&
+               ClearsReset::LooksUnrotated(g_ClearsPriorDailyFractalIds,fractalIds) &&
+               ClearsReset::LooksUnrotated(g_ClearsPriorDailyBountyIds,bountyIds)){
+                const auto wait=ClearsReset::RetryDelaySeconds(++g_ClearsDailyRolloverRetries);
+                g_ClearsDailyRolloverRetryAtMs=NowMs()+wait*1000;
+                g_ClearsStatusMsg="Daily Fractals and Raid Bounties still return prior IDs via both API routes";
+                g_ClearsFetching=false;
+                return;
+            }
+        }
+
         // Step 2: Fetch all achievement details
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             g_ClearsStatusMsg = "Fetching achievement details...";
         }
 
-        auto fractalEntries = FetchAchievementDetails(fractalIds);
+        auto fractalEntries = cachedFractals.empty()?FetchAchievementDetails(fractalIds):std::move(cachedFractals);
         for (auto& e : fractalEntries) {
             e.tier = ParseFractalTier(e.name);
         }
 
-        auto bountyEntries = FetchAchievementDetails(bountyIds);
-        auto weeklyEntries = FetchAchievementDetails(weeklyIds);
+        auto bountyEntries = cachedBounties.empty()?FetchAchievementDetails(bountyIds):std::move(cachedBounties);
+        auto weeklyEntries = cachedWeekly.empty()?FetchAchievementDetails(weeklyIds):std::move(cachedWeekly);
+        AlterEgo::Background::Checkpoint();
 
         // Category lookup succeeding does not imply that detail fetches succeeded.
         // Do not replace valid cached sections with empty vectors on HTTP/API errors.
-        if ((!fractalIds.empty() && fractalEntries.empty()) ||
-            (!bountyIds.empty() && bountyEntries.empty()) ||
-            (!weeklyIds.empty() && weeklyEntries.empty())) {
+        if (!AlterEgo::Identity::ExactIds(fractalIds,DailyIds(fractalEntries)) ||
+            !AlterEgo::Identity::ExactIds(bountyIds,DailyIds(bountyEntries)) ||
+            !AlterEgo::Identity::ExactIds(weeklyIds,DailyIds(weeklyEntries))) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            g_ClearsStatusMsg = "Failed to fetch achievement details; existing data preserved";
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
+            g_ClearsStatusMsg = "Incomplete achievement details; existing data preserved";
             if (g_ClearsDailyRolloverPending) {
                 const int attempt = ++g_ClearsDailyRolloverRetries;
                 const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
                 g_ClearsDailyRolloverRetryAtMs = NowMs() + delay * 1000;
-                g_ClearsStatusMsg += "; retrying in " + std::to_string(delay) + "s";
+
             }
             g_ClearsFetching = false;
             return;
@@ -908,6 +804,7 @@ static void FetchClears() {
 
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
             const bool fractalsHeld = ClearsReset::LooksUnrotated(
                 g_ClearsPriorDailyFractalIds, DailyIds(fractalEntries));
             const bool bountiesHeld = ClearsReset::LooksUnrotated(
@@ -924,12 +821,12 @@ static void FetchClears() {
                 const char* section = fractalsHeld && bountiesHeld
                     ? "Fractals and Raid Bounties" :
                     fractalsHeld ? "Fractals" : "Raid Bounties";
-                g_ClearsStatusMsg = std::string("Waiting for new daily ") +
-                    section + " API data; retrying in " +
-                    std::to_string(waitSeconds) + "s";
+                g_ClearsStatusMsg = std::string("Waiting for rotated daily ") +
+                    section + " API IDs (both routes checked)";
                 g_ClearsFetching = false;
                 return;
             }
+            g_ClearsDefinitionAttempt[account]=std::time(nullptr);
             g_DailyFractals = std::move(fractalEntries);
             g_DailyBounties = std::move(bountyEntries);
             g_WeeklyWings = std::move(wingEntries);
@@ -941,12 +838,16 @@ static void FetchClears() {
             g_ClearsDailyRolloverRetries = 0;
             g_ClearsDailyRolloverRetryAtMs = 0;
             g_ClearsStatusMsg = "Querying completion...";
+            g_ClearsPendingManual=manual;
+            g_ClearsQueryPending=true;
+            g_ClearsFetching=false;
         }
-
-        // Background fetch done — allow render thread to send H&S completion query
-        g_ClearsFetching = false;
-        g_ClearsQueryPending = true;
-    }).detach();
+    }, [account,generation] {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
+        g_ClearsFetching=false;
+        if(AlterEgo::Background::Workers().Stopping())g_ClearsDefinitionAttempt[account]=0;
+    });
 }
 
 // =========================================================================
@@ -954,14 +855,11 @@ static void FetchClears() {
 // =========================================================================
 
 static void SaveClearsCache() {
-    if (g_ClearsCacheAccount.empty()) return;
-    const std::string account = g_ClearsCacheAccount;
-    const std::string path = AccountCacheFile("clears_cache", account);
+    std::lock_guard<std::mutex> saveLock(g_ClearsSaveMutex);
+    std::string account;
 
     nlohmann::json j;
     // Store fetch timestamp as seconds since epoch
-    j["account"] = account;
-
     auto serializeEntry = [](const ClearEntry& e) -> nlohmann::json {
         nlohmann::json ej;
         ej["id"] = e.id;
@@ -980,7 +878,9 @@ static void SaveClearsCache() {
     // Snapshot data under lock to prevent concurrent modification
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (!g_ClearsFetched || g_ClearsCacheAccount != account) return;
+        account=g_ClearsCacheAccount;
+        if (!g_ClearsFetched || account.empty()) return;
+        j["account"]=account;
         j["fetch_time"] = (int64_t)g_ClearsLastSuccessTime;
 
         nlohmann::json fractals = nlohmann::json::array();
@@ -998,17 +898,22 @@ static void SaveClearsCache() {
         j["weeklyStrikes"] = serializeEntry(g_WeeklyStrikes);
     }
 
-    if (!SaveCacheAtomic(path, j) && APIDefs)
+    if (!AlterEgo::Cache::WriteCompletion(AlterEgo::GW2API::GetDataDirectory(),
+            AlterEgo::Cache::CompletionDataset::Clears,account,j) && APIDefs)
         APIDefs->Log(LOGL_WARNING, "AlterEgo", "Unable to persist Clears account cache");
 }
 
 void LoadClearsCache() {
     const std::string account = GetEffectiveAccountName();
     if (account.empty()) return;
-    g_ClearsCacheAccount = account;
-    bool legacy = false;
-    std::ifstream file = OpenAccountCache("clears_cache", account, legacy);
-    if (!file.is_open()) return;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        g_ClearsCacheAccount=account;
+    }
+    const auto snapshot=AlterEgo::Cache::ReadCompletion(AlterEgo::GW2API::GetDataDirectory(),
+        AlterEgo::Cache::CompletionDataset::Clears,account,
+        false);
+    if(!snapshot)return;
 
     auto deserializeEntry = [](const nlohmann::json& ej) -> ClearEntry {
         ClearEntry e;
@@ -1028,14 +933,10 @@ void LoadClearsCache() {
     };
 
     try {
-        auto j = nlohmann::json::parse(file);
-        if (j.contains("account") && j["account"].get<std::string>() != account)
-            return; // Never load another account's snapshot.
+        const auto& j=*snapshot;
 
         int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
         auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
-        g_ClearsLastSuccessTime = (std::time_t)fetchEpoch;
-
         // Check if a reset has occurred since the cached data was fetched
         // Add 60s buffer so we don't treat cache as stale before the API has updated
         auto now = std::chrono::system_clock::now();
@@ -1047,6 +948,8 @@ void LoadClearsCache() {
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
 
+            if(g_ClearsCacheAccount!=account)return;
+            g_ClearsLastSuccessTime=static_cast<std::time_t>(fetchEpoch);
             // Clear vectors before loading to prevent accumulation
             g_DailyFractals.clear();
             g_DailyBounties.clear();
@@ -1153,8 +1056,7 @@ void LoadClearsCache() {
                     - std::chrono::seconds(60);
         }
 
-        // Copy an old unscoped snapshot into its account-specific file once.
-        if (legacy) SaveClearsCache();
+        // Legacy input has already been persisted before reset filtering.
         // Restore the account's disk cache only. Do not launch the HTTP
         // refresh from startup or account-cache synchronization; entering
         // the actual Clears tab (or pressing Refresh) owns that request.
@@ -1166,9 +1068,8 @@ void LoadClearsCache() {
 // =========================================================================
 
 static void SaveVaultCache() {
-    if (g_VaultCacheAccount.empty()) return;
-    const std::string account = g_VaultCacheAccount;
-    const std::string path = AccountCacheFile("vault_cache", account);
+    std::lock_guard<std::mutex> saveLock(g_VaultSaveMutex);
+    std::string account;
 
     auto serializePeriod = [](const VaultPeriod& p) -> nlohmann::json {
         nlohmann::json j;
@@ -1192,33 +1093,36 @@ static void SaveVaultCache() {
         return j;
     };
 
-    auto epochSecs = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-
     nlohmann::json j;
-    j["account"] = account;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (!g_VaultFetched.load() || g_VaultCacheAccount != account) return;
-        j["fetch_time"] = (int64_t)g_VaultLastSuccessTime;
-        j["daily"]      = serializePeriod(g_VaultDaily);
-        j["weekly"]     = serializePeriod(g_VaultWeekly);
-        j["special"]    = serializePeriod(g_VaultSpecial);
+        account=g_VaultCacheAccount;
+        if(account.empty())return;
+        j["account"]=account;
+        const VaultPeriod* periods[]={&g_VaultDaily,&g_VaultWeekly,&g_VaultSpecial};
+        for(uint8_t i=0;i<3;++i)if(g_VaultSectionSuccess[i]>0){
+            auto row=serializePeriod(*periods[i]);row["fetched_at"]=static_cast<int64_t>(g_VaultSectionSuccess[i]);
+            j[VaultSectionName(i)]=std::move(row);
+        }
         j["season_end"] = std::chrono::duration_cast<std::chrono::seconds>(
             g_VaultSeasonEnd.time_since_epoch()).count();
     }
 
-    if (!SaveCacheAtomic(path, j) && APIDefs)
+    if (!AlterEgo::Cache::WriteVaultPeriods(AlterEgo::GW2API::GetDataDirectory(),account,j) && APIDefs)
         APIDefs->Log(LOGL_WARNING, "AlterEgo", "Unable to persist Vault account cache");
 }
 
 void LoadVaultCache() {
     const std::string account = GetEffectiveAccountName();
     if (account.empty()) return;
-    g_VaultCacheAccount = account;
-    bool legacy = false;
-    std::ifstream file = OpenAccountCache("vault_cache", account, legacy);
-    if (!file.is_open()) return;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        g_VaultCacheAccount=account;
+    }
+    const auto snapshot=AlterEgo::Cache::ReadCompletion(AlterEgo::GW2API::GetDataDirectory(),
+        AlterEgo::Cache::CompletionDataset::Vault,account,
+        false);
+    if(!snapshot)return;
 
     auto deserializePeriod = [](const nlohmann::json& j) -> VaultPeriod {
         VaultPeriod p;
@@ -1243,21 +1147,21 @@ void LoadVaultCache() {
     };
 
     try {
-        auto j = nlohmann::json::parse(file);
-        if (j.contains("account") && j["account"].get<std::string>() != account)
-            return;
-        int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
-        auto fetchTime = std::chrono::system_clock::from_time_t((time_t)fetchEpoch);
-        g_VaultLastSuccessTime = (std::time_t)fetchEpoch;
-
+        const auto& j=*snapshot;
+        std::array<std::time_t,3> stamps{};
+        for(uint8_t i=0;i<3;++i)if(j.contains(VaultSectionName(i)))stamps[i]=static_cast<std::time_t>(j.at(VaultSectionName(i)).value("fetched_at",int64_t{0}));
+        auto dailyTime=std::chrono::system_clock::from_time_t(stamps[0]);
+        auto weeklyTime=std::chrono::system_clock::from_time_t(stamps[1]);
         auto now         = std::chrono::system_clock::now();
         auto dailyReset  = CalcLastDailyReset(now)  + std::chrono::seconds(60);
         auto weeklyReset = CalcLastWeeklyReset(now) + std::chrono::seconds(60);
-        bool dailyStale  = fetchTime < dailyReset  && now >= dailyReset;
-        bool weeklyStale = fetchTime < weeklyReset && now >= weeklyReset;
+        bool dailyStale  = dailyTime < dailyReset  && now >= dailyReset;
+        bool weeklyStale = weeklyTime < weeklyReset && now >= weeklyReset;
 
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(g_VaultCacheAccount!=account)return;
+            g_VaultSectionSuccess=stamps;
             // Keep a fingerprint of the previous day's objectives for the
             // post-reset API freshness check. Never display stale daily rows.
             if (dailyStale && j.contains("daily")) {
@@ -1266,16 +1170,16 @@ void LoadVaultCache() {
                 g_VaultRolloverRetries = 0;
                 g_VaultRolloverRetryAtMs = 0;
             }
-            if (weeklyStale) {
+            if (weeklyStale && j.contains("weekly")) {
                 g_VaultPriorWeekly = j.contains("weekly")
                     ? deserializePeriod(j["weekly"]) : VaultPeriod{};
                 g_VaultWeeklyRolloverPending = true;
                 g_VaultRolloverRetries = 0;
                 g_VaultRolloverRetryAtMs = 0;
             }
-            if (fetchEpoch > 0) {
-                g_VaultLastDailyReset = CalcLastDailyReset(fetchTime);
-                g_VaultLastWeeklyReset = CalcLastWeeklyReset(fetchTime);
+            if (stamps[0]>0||stamps[1]>0) {
+                g_VaultLastDailyReset = CalcLastDailyReset(dailyTime);
+                g_VaultLastWeeklyReset = CalcLastWeeklyReset(weeklyTime);
                 if (now < dailyReset)
                     g_VaultLastDailyReset = dailyReset
                         - std::chrono::hours(24) - std::chrono::seconds(60);
@@ -1290,14 +1194,11 @@ void LoadVaultCache() {
             if (seasonEndEpoch > 0)
                 g_VaultSeasonEnd = std::chrono::system_clock::from_time_t((time_t)seasonEndEpoch);
 
-            if (!g_VaultDaily.objectives.empty() || !g_VaultWeekly.objectives.empty())
-                g_VaultFetched = true;
+            if(dailyStale)g_VaultSectionSuccess[0]=0;
+            if(weeklyStale)g_VaultSectionSuccess[1]=0;
+            if(seasonEndEpoch>0&&now>=g_VaultSeasonEnd){g_VaultSpecial={};g_VaultSectionSuccess[2]=0;}
+            UpdateVaultFreshness();
         }
-
-        // Stale data will be re-fetched on first render of the vault tab
-        if (dailyStale || weeklyStale)
-            g_VaultFetched = false;
-        if (legacy) SaveVaultCache();
 
     } catch (...) {}
 }
@@ -1677,9 +1578,8 @@ static void DrawEncounterChip(ImDrawList* dl, const WingEncChip& chip,
 }
 
 
-// All four cells are one-line entries, arranged as two columns by two rows
-// at normal addon widths. A single-column fallback prevents overlap in small
-// windows. The last cell shows the T1/T2/T3 Recommended SCALE numbers.
+// Pack visible daily cards by measured content width; Rec has fixed width.
+// Preserve the exact recommended scales and original card IDs.
 struct DailyFractalCard {
     std::string title;
     std::array<const ClearEntry*, 4> entries{};
@@ -1715,59 +1615,70 @@ static bool FractalCardComplete(const DailyFractalCard& card, bool fetched) {
 static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
                                     bool fetched, bool hideComplete) {
     if (cards.empty()) return;
-    bool anythingVisible = false;
-    for (const auto& card : cards)
-        if (!hideComplete || !FractalCardComplete(card, fetched))
-            anythingVisible = true;
-    if (!anythingVisible) {
-        ImGui::TextDisabled("  All daily fractals and recommendations completed.");
-        return;
-    }
-
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    const float pad = 7.0f, xgap = 6.0f, ygap = 5.0f, cardHeight = 27.0f;
-    const float chipWidth = 39.0f, chipGap = 3.0f, chipHeight = 20.0f;
-    const float chipsWidth = 4.0f * chipWidth + 3.0f * chipGap;
-    // Two columns need enough room for the longest daily name plus chips.
-    const int columns = width >= 680.0f ? 2 : 1;
-    const int rows = (static_cast<int>(cards.size()) + columns - 1) / columns;
-    const float cardWidth = (width - 2.0f * pad - (columns - 1) * xgap) / columns;
-    const float height = 2.0f * pad + rows * cardHeight + (rows - 1) * ygap;
+    const float scale = ImGui::GetFontSize() / 13.0f;
+    const float pad = 7.0f * scale, xgap = 6.0f * scale, ygap = 5.0f * scale;
+    const float cardHeight = 27.0f * scale, chipGap = 3.0f * scale;
+    const float chipHeight = 20.0f * scale;
+    const float chipWidth = std::max(ImGui::CalcTextSize("T4").x,
+                                     ImGui::CalcTextSize("100").x) + 19.0f * scale;
+    std::vector<FractalCardLayout::Card> measures;
+    for (size_t i = 0; i < cards.size(); ++i) {
+        const auto& card = cards[i];
+        const int slots = card.recommended ? 3 : 4;
+        const char* label = card.recommended ? "Rec" : card.title.c_str();
+        const float minimum = ImGui::CalcTextSize(label).x + 23.0f * scale
+            + slots * chipWidth + (slots - 1) * chipGap;
+        measures.push_back({i, minimum, card.recommended,
+            !hideComplete || !FractalCardComplete(card, fetched)});
+    }
+    const auto layout = FractalCardLayout::Pack(measures, width - 2.0f * pad, xgap);
+    if (layout.cards.empty()) {
+        if (std::none_of(measures.begin(), measures.end(), [](const auto& c) { return c.visible; }))
+            ImGui::TextDisabled("  All daily fractals and recommendations completed.");
+        return;
+    }
+    const float height = 2.0f * pad + layout.rows * cardHeight + (layout.rows - 1) * ygap;
     AlterEgo::CompletionTheme::DrawGroup(
         draw, origin, ImVec2(origin.x + width, origin.y + height));
 
-    for (size_t i = 0; i < cards.size(); ++i) {
+    for (const auto& placement : layout.cards) {
+        const size_t i = placement.index;
         const auto& card = cards[i];
         const bool complete = FractalCardComplete(card, fetched);
-        // Hide Complete does not reorder other cards. An empty slot remains
-        // where a completed card was, so the two-column grid never jumps.
-        if (hideComplete && complete) continue;
-        const int col = static_cast<int>(i) % columns;
-        const int row = static_cast<int>(i) / columns;
-        const ImVec2 cmin(origin.x + pad + col * (cardWidth + xgap),
-                          origin.y + pad + row * (cardHeight + ygap));
-        const ImVec2 cmax(cmin.x + cardWidth, cmin.y + cardHeight);
+        const ImVec2 cmin(origin.x + pad + placement.x,
+                          origin.y + pad + placement.row * (cardHeight + ygap));
+        const ImVec2 cmax(cmin.x + placement.width, cmin.y + cardHeight);
         AlterEgo::CompletionTheme::DrawRow(draw, cmin, cmax, complete);
 
-        const float chipStart = cmax.x - 6.0f - chipsWidth;
+        const int slots = card.recommended ? 3 : 4;
+        // Exceptionally narrow windows may require clipping the name;
+        // keep status hitboxes inside their card and retain full tooltips.
+        const float edge = std::min(6.0f * scale, placement.width * 0.1f);
+        const float actualGap = std::min(chipGap, placement.width / (slots * 4.0f));
+        const float actualWidth = std::max(0.0f, std::min(chipWidth,
+            (placement.width - 2.0f * edge - (slots - 1) * actualGap) / slots));
+        const float chipsWidth = slots * actualWidth + (slots - 1) * actualGap;
+        const float chipStart = cmax.x - edge - chipsWidth;
         const float centerY = (cmin.y + cmax.y) * 0.5f;
         const float lineH = ImGui::GetTextLineHeight();
         // Entire card title dims when all constituent tiers are complete.
-        draw->PushClipRect(ImVec2(cmin.x + 7.0f, cmin.y),
-                           ImVec2(chipStart - 6.0f, cmax.y), true);
-        draw->AddText(ImVec2(cmin.x + 7.0f, centerY - lineH * 0.5f),
-                      AlterEgo::CompletionTheme::Text(complete),
-                      card.title.c_str());
-        draw->PopClipRect();
+        if (chipStart - 6.0f * scale > cmin.x + 7.0f * scale) {
+            draw->PushClipRect(ImVec2(cmin.x + 7.0f * scale, cmin.y),
+                               ImVec2(chipStart - 6.0f * scale, cmax.y), true);
+            draw->AddText(ImVec2(cmin.x + 7.0f * scale, centerY - lineH * 0.5f),
+                          AlterEgo::CompletionTheme::Text(complete),
+                          card.recommended ? "Rec" : card.title.c_str());
+            draw->PopClipRect();
+        }
 
-        const int slots = card.recommended ? 3 : 4;
         ImGui::PushID(static_cast<int>(i));
         // The card title is a hover target as well as its individual chips.
         // Keep this hit box entirely to the left of the first tier chip.
-        ImGui::SetCursorScreenPos(ImVec2(cmin.x + 5.0f, cmin.y));
-        const float titleWidth = chipStart - cmin.x - 12.0f;
+        ImGui::SetCursorScreenPos(ImVec2(cmin.x + 5.0f * scale, cmin.y));
+        const float titleWidth = chipStart - cmin.x - 12.0f * scale;
         if (titleWidth > 1.0f) {
             ImGui::InvisibleButton("##fractalCardTitle",
                 ImVec2(titleWidth, cardHeight));
@@ -1795,28 +1706,30 @@ static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
         for (int tier = 0; tier < slots; ++tier) {
             const ClearEntry* entry = card.entries[tier];
             const bool done = fetched && entry && entry->done;
-            const float x = chipStart + tier * (chipWidth + chipGap);
+            const float x = chipStart + tier * (actualWidth + actualGap);
             const ImVec2 slotMin(x, centerY - chipHeight * 0.5f);
-            const ImVec2 slotMax(x + chipWidth, centerY + chipHeight * 0.5f);
+            const ImVec2 slotMax(x + actualWidth, centerY + chipHeight * 0.5f);
+            if (actualWidth <= 0.0f) continue;
             draw->AddRectFilled(slotMin, slotMax,
                 done ? AlterEgo::CompletionTheme::kCompletedIndicator
                      : AlterEgo::CompletionTheme::kAvailableIndicator, 2.0f);
             // Each slot reserves exactly the same space for its check,
             // whether it is completed or not. Labels never shift.
             AlterEgo::CompletionTheme::DrawCompleteMark(
-                draw, ImVec2(x + 7.0f, centerY), done, 3.0f);
+                draw, ImVec2(x + std::min(7.0f * scale, actualWidth * 0.5f), centerY), done,
+                std::min(3.0f * scale, actualWidth * 0.4f));
             const std::string& text = card.labels[tier];
             const ImU32 ink = !entry ? AlterEgo::CompletionTheme::kUnknownText
                 : !fetched ? AlterEgo::CompletionTheme::kUnknownText
                 : AlterEgo::CompletionTheme::Text(done);
             draw->PushClipRect(slotMin, slotMax, true);
-            draw->AddText(ImVec2(x + 15.0f, centerY - lineH * 0.5f),
+            draw->AddText(ImVec2(x + 15.0f * scale, centerY - lineH * 0.5f),
                           ink, text.empty() ? "?" : text.c_str());
             draw->PopClipRect();
 
             ImGui::SetCursorScreenPos(slotMin);
             ImGui::PushID(tier);
-            ImGui::InvisibleButton("##fractalStatus", ImVec2(chipWidth, chipHeight));
+            ImGui::InvisibleButton("##fractalStatus", ImVec2(actualWidth, chipHeight));
             if (ImGui::IsItemHovered()) {
                 // Daily: the map name and every qualifying tier scale.
                 // Recommended: only the exact numbered scale grants credit.
@@ -2042,11 +1955,11 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
         const float iconY = topY + (ImGui::GetTextLineHeight() - iconSz) * 0.5f;
         float iconX = cmin.x + padX + wsSz.x + 10.0f + nameSz.x + 10.0f;
         const float rightLimit = cmax.x - padX - pSz.x - 10.0f;
-        auto drawModifierIcon = [&](const char* key, const char* tooltip) {
+        auto drawModifierIcon = [&](uint32_t iconId, const char* tooltip) {
             if (iconX + iconSz > rightLimit) return;
             const ImVec2 min(iconX, iconY);
             const ImVec2 max(iconX + iconSz, iconY + iconSz);
-            Texture_t* tex = Skinventory::WikiImage::GetCurrencyIcon(key);
+            Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
             if (tex && tex->Resource) {
                 dl->AddImage(tex->Resource, min, max);
             } else {
@@ -2054,7 +1967,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             }
             const ImVec2 previous = ImGui::GetCursorScreenPos();
             ImGui::SetCursorScreenPos(min);
-            ImGui::PushID(key);
+            ImGui::PushID(static_cast<int>(iconId));
             ImGui::InvisibleButton("##weeklyModifier", ImVec2(iconSz, iconSz));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
             ImGui::PopID();
@@ -2062,10 +1975,10 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             iconX += iconSz + 6.0f;
         };
         if (isCallOfTheMists)
-            drawModifierIcon("Call_of_the_Mists",
+            drawModifierIcon(AlterEgo::kCallOfTheMistsIcon,
                 "Call of the Mists - boss gold and XP are doubled this week.");
         if (isEmboldened)
-            drawModifierIcon("Emboldened",
+            drawModifierIcon(AlterEgo::kEmboldenedIcon,
                 "Emboldened Mode - stacking buff for easier clears this week.");
     }
 
@@ -2140,24 +2053,24 @@ static void RenderCompactWingBanner(const std::string& wingShortName,
 
     // Keep both weekly modifier icons beside the abbreviated wing label.
     float iconX = min.x + 40.0f;
-    auto modifier = [&](bool enabled, const char* key, const char* tip) {
+    auto modifier = [&](bool enabled, uint32_t iconId, const char* tip) {
         if (!enabled) return;
         const float iconSize = 16.0f;
         const ImVec2 iMin(iconX, min.y + (height - iconSize) * 0.5f);
         const ImVec2 iMax(iMin.x + iconSize, iMin.y + iconSize);
-        Texture_t* tex = Skinventory::WikiImage::GetCurrencyIcon(key);
+        Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
         if (tex && tex->Resource) dl->AddImage(tex->Resource, iMin, iMax);
         else dl->AddText(iMin, AlterEgo::CompletionTheme::kUnknownText, "?");
         ImGui::SetCursorScreenPos(iMin);
-        ImGui::PushID(key);
+        ImGui::PushID(static_cast<int>(iconId));
         ImGui::InvisibleButton("##wingModifier", ImVec2(iconSize, iconSize));
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
         ImGui::PopID();
         iconX += iconSize + 3.0f;
     };
-    modifier(isCallOfTheMists, "Call_of_the_Mists",
+    modifier(isCallOfTheMists, AlterEgo::kCallOfTheMistsIcon,
              "Call of the Mists - boss gold and XP are doubled this week.");
-    modifier(isEmboldened, "Emboldened",
+    modifier(isEmboldened, AlterEgo::kEmboldenedIcon,
              "Emboldened Mode - stacking buff for easier clears this week.");
 
     char fraction[32];
@@ -2222,6 +2135,102 @@ static ImU32 VaultTrackColor(const std::string& track) {
     if (track == "PvP") return IM_COL32(204, 84, 84, 255);   // red
     if (track == "WvW") return IM_COL32(84, 135, 204, 255);  // blue
     return IM_COL32(84, 186, 84, 255);                       // PvE green
+}
+
+// Assistance is contextual and never changes completion state or starts a query.
+static AlterEgo::VaultAssist::Options VaultOptions(const VaultObjective& obj) {
+    if (!g_ShowVaultAssistance || obj.claimed || obj.isDone()) return {};
+    // The account response remains authoritative for current objective and progress.
+    // Resolve the public definition by exact ID; do not apply stale conflicting definitions.
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    auto it=catalog->objectives.find(obj.id);
+    if(it!=catalog->objectives.end() &&
+       AlterEgo::VaultAssist::Normalize(it->second.title)==AlterEgo::VaultAssist::Normalize(obj.title) &&
+       AlterEgo::VaultAssist::Normalize(it->second.track)==AlterEgo::VaultAssist::Normalize(obj.track))
+        return AlterEgo::VaultAssist::Match(it->second.title,it->second.track);
+    return AlterEgo::VaultAssist::Match(obj.title,obj.track);
+}
+static void RenderVaultAssistance(AlterEgo::VaultAssist::Options options, float width, int64_t utc) {
+    using namespace AlterEgo::VaultAssist;
+    if (options.empty()) return;
+    Sort(options,utc);
+    const auto& first = options.front();
+    const int next = NextSeconds(first,utc);
+    const ImU32 color = next >= 0 && next <= 300 ? IM_COL32(125,210,150,255) :
+        next >= 0 && next <= 1800 ? IM_COL32(224,190,119,255) : IM_COL32(157,175,194,255);
+    const std::string hint = next >= 0 ? first.label + " - " + Countdown(next) : first.label;
+    const float lineH = ImGui::GetTextLineHeight() + 8.0f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    auto* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p,ImVec2(p.x+width,p.y+lineH),IM_COL32(35,38,44,175),2.0f);
+    const float actionW = 23.0f;
+    const bool hasLink = !first.link.empty() && width >= 90.0f;
+    const float hintW = ImMax(1.0f,width - actionW * (hasLink ? 2 : 1));
+    ImGui::SetCursorScreenPos(p);
+    const bool open = ImGui::InvisibleButton("##assist_hint",ImVec2(hintW,lineH));
+    const bool hintHovered = ImGui::IsItemHovered();
+    dl->PushClipRect(ImVec2(p.x+6,p.y),ImVec2(p.x+hintW-2,p.y+lineH),true);
+    dl->AddText(ImVec2(p.x+8,p.y+4),color,hint.c_str());
+    dl->PopClipRect();
+    if (hintHovered) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(first.label.c_str());
+        if (!first.map.empty()) ImGui::TextDisabled("%s",first.map.c_str());
+        ImGui::PushTextWrapPos(340.0f);
+        ImGui::TextUnformatted(first.note.c_str());
+        ImGui::PopTextWrapPos();
+        if (next >= 0) ImGui::TextDisabled("Scheduled start; actual map progress can vary.");
+        ImGui::TextDisabled("Click for all suggested locations.");
+        ImGui::EndTooltip();
+    }
+    if (hasLink) {
+        ImGui::SetCursorScreenPos(ImVec2(p.x+width-actionW*2,p.y));
+        if (ImGui::InvisibleButton("##assist_copy",ImVec2(actionW,lineH))) {
+            ImGui::SetClipboardText(first.link.c_str());
+            if (APIDefs) APIDefs->GUI_SendAlert("Location chat link copied.");
+        }
+        const ImVec2 q(p.x+width-actionW*1.5f,p.y+lineH*0.5f);
+        const ImU32 icon = IM_COL32(161,184,208,255);
+        dl->AddRect(ImVec2(q.x-5,q.y-3),ImVec2(q.x+1,q.y+5),icon,1.0f);
+        dl->AddRect(ImVec2(q.x-2,q.y-6),ImVec2(q.x+4,q.y+2),icon,1.0f);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy location chat link: %s",first.link.c_str());
+    }
+    ImGui::SetCursorScreenPos(ImVec2(p.x+width-actionW,p.y));
+    const bool arrow = ImGui::InvisibleButton("##assist_more",ImVec2(actionW,lineH));
+    const ImVec2 center(p.x+width-actionW*0.5f,p.y+lineH*0.5f);
+    dl->AddTriangleFilled(ImVec2(center.x-4,center.y-2),ImVec2(center.x+4,center.y-2),
+        ImVec2(center.x,center.y+3),IM_COL32(175,175,185,255));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Objective assistance");
+    if (open || arrow) ImGui::OpenPopup("##vault_assist_options");
+    if (ImGui::BeginPopup("##vault_assist_options")) {
+        ImGui::TextColored(ImVec4(0.91f,0.77f,0.48f,1.0f),"Objective Assistance");
+        ImGui::TextDisabled("Suggested locations / scheduled starts");
+        ImGui::Separator();
+        for (size_t i = 0; i < options.size(); ++i) {
+            const auto& option = options[i];
+            ImGui::PushID(static_cast<int>(i));
+            const int time = NextSeconds(option,utc);
+            if (!option.link.empty()) {
+                if (ImGui::Selectable(option.label.c_str())) {
+                    ImGui::SetClipboardText(option.link.c_str());
+                    if (APIDefs) APIDefs->GUI_SendAlert("Location chat link copied.");
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy %s",option.link.c_str());
+            } else ImGui::TextUnformatted(option.label.c_str());
+            if (!option.map.empty()) ImGui::TextDisabled("%s",option.map.c_str());
+            if (time >= 0) ImGui::TextColored(ImVec4(0.86f,0.74f,0.46f,1.0f),
+                "%s%s",time == 0 ? "" : "Scheduled ",Countdown(time).c_str());
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+320.0f);
+            ImGui::TextWrapped("%s",option.note.c_str());
+            ImGui::PopTextWrapPos();
+            if (i+1 < options.size()) ImGui::Separator();
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Copy a location, paste into in-game chat.");
+        ImGui::EndPopup();
+    }
+    ImGui::SetCursorScreenPos(ImVec2(p.x,p.y+lineH));
 }
 
 // Slim two-column row for a single vault objective.
@@ -2375,26 +2384,36 @@ static void RenderVaultPeriodSection(int sectionIndex, const char* title,
         return;
     }
 
-    // Two-column grid of objective rows
-    float availW = ImGui::GetContentRegionAvail().x - 4.0f;
-    float gap = 6.0f;
-    float halfW = (availW - gap) * 0.5f;
-
-    size_t shown = 0;
-    for (size_t i = 0; i < period.objectives.size(); i++) {
-        const auto& obj = period.objectives[i];
-        if (g_VaultHideComplete && obj.claimed) continue;
-        ImGui::PushID((int)i);
-        ImVec2 startPos = ImGui::GetCursorScreenPos();
-        RenderVaultObjectiveRow(obj, halfW);
-        ImGui::PopID();
-
-        ++shown;
-        if (shown % 2 == 1 && shown < visibleCount) {
-            ImGui::SetCursorScreenPos(ImVec2(startPos.x + halfW + gap, startPos.y));
-        } else {
-            ImGui::Dummy(ImVec2(0, 2));
+    // Keep the two-column grid aligned even when only one objective in
+    // a pair has a second line. Narrow windows use one column.
+    const float availW = ImGui::GetContentRegionAvail().x - 4.0f;
+    const float gap = 6.0f;
+    const int columns = availW >= 340.0f ? 2 : 1;
+    const float cellW = ImMax(1.0f,(availW - gap * (columns-1)) / columns);
+    const int64_t utc = static_cast<int64_t>(std::time(nullptr));
+    std::vector<size_t> visible;
+    for (size_t i = 0; i < period.objectives.size(); ++i)
+        if (!g_VaultHideComplete || !period.objectives[i].claimed) visible.push_back(i);
+    for (size_t i = 0; i < visible.size(); i += columns) {
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        float bottom = origin.y;
+        for (int column = 0; column < columns && i + column < visible.size(); ++column) {
+            const size_t index = visible[i+column];
+            const auto& obj = period.objectives[index];
+            ImGui::SetCursorScreenPos(ImVec2(origin.x+column*(cellW+gap),origin.y));
+            ImGui::PushID(static_cast<int>(index));
+            RenderVaultObjectiveRow(obj,cellW);
+            auto options = VaultOptions(obj);
+            if (!options.empty()) {
+                ImGui::SetCursorScreenPos(ImVec2(origin.x+column*(cellW+gap),
+                    ImGui::GetCursorScreenPos().y));
+                RenderVaultAssistance(std::move(options),cellW,utc);
+            }
+            bottom = ImMax(bottom,ImGui::GetCursorScreenPos().y);
+            ImGui::PopID();
         }
+        ImGui::SetCursorScreenPos(ImVec2(origin.x,bottom));
+        ImGui::Dummy(ImVec2(0,2));
     }
 
     ImGui::Unindent(4.0f);
@@ -2429,12 +2448,16 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
                 g_VaultRetryAtMs = 0;
                 std::string missing;
                 for (int i = 0; i < 3; ++i) {
-                    if (!g_VaultResponsesOK[i]) {
+                    if (!g_VaultTerminal[i]) {
                         if (!missing.empty()) missing += ", ";
                         missing += VaultSectionName((uint8_t)i);
                     }
                 }
                 g_VaultStatusMessage = "Vault refresh timed out waiting for: " + missing;
+                if(g_VaultDailyRolloverPending||g_VaultWeeklyRolloverPending){
+                    const auto delay=ClearsReset::RetryDelaySeconds(++g_VaultRolloverRetries);
+                    g_VaultRolloverRetryAtMs=NowMs()+delay*1000;
+                }
             } else if (g_VaultRetryAtMs != 0 && now >= g_VaultRetryAtMs) {
                 for (uint8_t i = 0; i < 3; ++i) {
                     if (g_VaultRetryNeeded[i] && !g_VaultResponsesOK[i]) {
@@ -2461,7 +2484,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         g_VaultRetryAtMs = 0;
         g_VaultDaily = {}; g_VaultWeekly = {}; g_VaultSpecial = {};
         g_VaultFetched = false;
-        g_VaultLastSuccessTime = 0;
+        g_VaultSectionSuccess={};UpdateVaultFreshness();
         g_VaultInitialAttempted = false;
         g_VaultLastAttemptFailed = false;
         g_VaultDailyRolloverPending = false;
@@ -2473,9 +2496,14 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
         g_VaultStatusMessage.clear();
     }
 
-    if (AlterEgo::AutoRefreshPolicy::Enabled() &&
-        !g_VaultFetched.load() && !g_VaultFetching.load() && !g_VaultInitialAttempted)
-        FetchVaultData();
+    {
+        static auto lastCheck=std::chrono::steady_clock::time_point{};
+        const auto now=std::chrono::steady_clock::now();
+        if(AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)&&
+            !g_VaultFetching.load()&&now-lastCheck>=std::chrono::seconds(2)){
+            lastCheck=now;FetchVaultData(true);
+        }
+    }
 
     LoadClearUiSettings();
 
@@ -2525,11 +2553,14 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
 static bool g_ClearOpen[4] = {true, true, true, true};
 static bool g_ClearUiLoaded = false;
 static std::string ClearUiSettingsPath() {
-    return AlterEgo::GW2API::GetDataDirectory() + "/clears_ui.json";
+    return AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "clears_ui.json");
 }
 static void LoadClearUiSettings() {
     if (g_ClearUiLoaded) return;
     g_ClearUiLoaded = true;
+    // Older backups and missing settings keep the original visible default.
+    g_ShowFractalNextResets = true;
+    g_ShowVaultAssistance = true;
     try {
         std::ifstream f(ClearUiSettingsPath());
         if (!f.good()) return;
@@ -2544,7 +2575,11 @@ static void LoadClearUiSettings() {
                 if (v[i].is_boolean()) g_VaultOpen[i] = v[i].get<bool>();
         }
         g_VaultHideComplete = j.value("hide_vault_complete", false);
+        if (j.contains("show_vault_assistance") && j["show_vault_assistance"].is_boolean())
+            g_ShowVaultAssistance = j["show_vault_assistance"].get<bool>();
         g_ClearsHideComplete = j.value("hide_clears_complete", false);
+        if (j.contains("show_fractal_next_resets") && j["show_fractal_next_resets"].is_boolean())
+            g_ShowFractalNextResets = j["show_fractal_next_resets"].get<bool>();
     } catch (...) {}
 }
 void ReloadClearUiSettings() {
@@ -2560,7 +2595,9 @@ static void SaveClearUiSettings() {
         j["expanded"] = {g_ClearOpen[0], g_ClearOpen[1], g_ClearOpen[2], g_ClearOpen[3]};
         j["vault_expanded"] = {g_VaultOpen[0], g_VaultOpen[1], g_VaultOpen[2]};
         j["hide_vault_complete"] = g_VaultHideComplete;
+        j["show_vault_assistance"] = g_ShowVaultAssistance;
         j["hide_clears_complete"] = g_ClearsHideComplete;
+        j["show_fractal_next_resets"] = g_ShowFractalNextResets;
         std::ofstream f(path, std::ios::trunc);
         if (f.good()) f << j.dump(2);
     } catch (...) {}
@@ -2688,7 +2725,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     } else {
         ImGui::Indent(4.0f);
         // Build three daily map cards, then a fourth Recommended card.
-        // Status comes from the existing H&S achievement completion data.
+        // Status comes from the existing native achievement completion data.
         std::vector<DailyFractalCard> cards;
         for (const auto& e : g_DailyFractals) {
             int tier = -1;
@@ -2754,7 +2791,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         }
         ImGui::Unindent(4.0f);
     }
-    if (g_ClearsFetched) {
+    if (g_ClearsFetched && g_ShowFractalNextResets) {
         std::vector<std::string> todaysT4;
         for (const auto& e : g_DailyFractals)
             if (e.tier == "T4")
@@ -3132,6 +3169,7 @@ static void RenderClearsShared(bool showVault) {
     bool resetTriggered = false;
     if (ClearsReset::Due(ResetEpoch(g_LastDailyReset), dailyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        ++g_ClearsGeneration;g_ClearsFetching=false;g_ClearsPendingManual=false;
         if (!g_ClearsDailyRolloverPending) {
             g_ClearsPriorDailyFractalIds = DailyIds(g_DailyFractals);
             g_ClearsPriorDailyBountyIds = DailyIds(g_DailyBounties);
@@ -3150,7 +3188,7 @@ static void RenderClearsShared(bool showVault) {
         g_ClearsQueryPending = false;
         g_ClearsCompletionInFlight = false;
         g_ClearsQueryStartedAtMs = 0;
-        g_ClearsStatusMsg = AlterEgo::AutoRefreshPolicy::Enabled()
+        g_ClearsStatusMsg = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)
             ? "New daily reset detected; fetching current objectives..."
             : "Daily reset detected - click Refresh for current objectives";
         g_LastDailyReset = dailyReset;
@@ -3158,8 +3196,10 @@ static void RenderClearsShared(bool showVault) {
     }
     if (ClearsReset::Due(ResetEpoch(g_LastWeeklyReset), weeklyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        ++g_ClearsGeneration;g_ClearsFetching=false;g_ClearsPendingManual=false;
         g_WeeklyWings.clear();
         g_WeeklyStrikes = ClearEntry{};
+        g_ClearsDefinitionAttempt[g_ClearsCacheAccount]=0;
         g_ClearsFetched = !g_DailyFractals.empty() || !g_DailyBounties.empty();
         g_ClearsQueryPending = false;
         g_ClearsCompletionInFlight = false;
@@ -3167,7 +3207,7 @@ static void RenderClearsShared(bool showVault) {
         g_LastWeeklyReset = weeklyReset;
         resetTriggered = true;
     }
-    if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
         resetTriggered && !g_ClearsFetching)
         FetchClears();
 
@@ -3186,11 +3226,12 @@ static void RenderClearsShared(bool showVault) {
             g_VaultPriorDailyIds = DailyIds(g_VaultDaily);
             if (!g_VaultWeeklyRolloverPending) g_VaultRolloverRetries = 0;
         }
+        ++g_VaultGeneration;g_VaultFetching=false;g_VaultRetryAtMs=0;
         g_VaultDailyRolloverPending = true;
         g_VaultDaily = {};  // do not display previous-day daily objectives
-        g_VaultFetched = false;
+        g_VaultSectionSuccess[0]=0;UpdateVaultFreshness();
         g_VaultInitialAttempted = true; // explicit FetchVaultData/retry owns this batch
-        g_VaultStatusMessage = AlterEgo::AutoRefreshPolicy::Enabled()
+        g_VaultStatusMessage = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)
             ? "New daily reset detected; fetching current Vault..."
             : "Daily reset detected - click Refresh for current Vault";
         g_VaultLastDailyReset = dailyReset;
@@ -3202,26 +3243,27 @@ static void RenderClearsShared(bool showVault) {
             g_VaultPriorWeekly = g_VaultWeekly;
             if (!g_VaultDailyRolloverPending) g_VaultRolloverRetries = 0;
         }
+        ++g_VaultGeneration;g_VaultFetching=false;g_VaultRetryAtMs=0;
         g_VaultWeeklyRolloverPending = true;
         g_VaultWeekly = {};  // never display the previous week's claimed objectives
-        g_VaultFetched = false;
+        g_VaultSectionSuccess[1]=0;UpdateVaultFreshness();
         g_VaultInitialAttempted = true; // explicit FetchVaultData/retry owns this batch
-        g_VaultStatusMessage = AlterEgo::AutoRefreshPolicy::Enabled()
+        g_VaultStatusMessage = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)
             ? "New weekly reset detected; fetching current Vault..."
             : "Weekly reset detected - click Refresh for current Vault";
         g_VaultLastWeeklyReset = weeklyReset;
         vaultResetTriggered = true;
     }
     // Do not refresh Vault while showing Clears or on unrelated tab visits.
-    if (showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if (showVault && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault) &&
         vaultResetTriggered && !g_VaultFetching.load())
-        FetchVaultData();
+        FetchVaultData(true);
 
     // Delayed retries run on the render thread (the only thread allowed to
     // submit Nexus events), and never overlap with an in-flight fetch.
     if (!g_ClearsFetching && !g_ClearsQueryPending.load()) {
         const long long due = g_ClearsDailyRolloverRetryAtMs.load();
-        if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+        if (!showVault && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
             due != 0 && NowMs() >= due) {
             g_ClearsDailyRolloverRetryAtMs = 0;
             FetchClears();
@@ -3230,23 +3272,23 @@ static void RenderClearsShared(bool showVault) {
     bool retryVaultRollover = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        if (showVault && AlterEgo::AutoRefreshPolicy::Enabled() &&
+        if (showVault && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault) &&
             (g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending) &&
             !g_VaultFetching.load() && g_VaultRolloverRetryAtMs != 0 &&
             NowMs() >= g_VaultRolloverRetryAtMs) {
-            g_VaultRolloverRetryAtMs = 0;
             retryVaultRollover = true;
         }
     }
-    if (showVault && retryVaultRollover && AlterEgo::AutoRefreshPolicy::Enabled())
-        FetchVaultData();
+    if (showVault && retryVaultRollover && AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault))
+        FetchVaultData(true);
 
-    // A missing H&S response must not permanently suppress manual or
+    // A missing API response must not permanently suppress manual or
     // automatic refreshes. An expired query can be replaced after 45s.
     if (g_ClearsCompletionInFlight.load()) {
         const long long started = g_ClearsQueryStartedAtMs.load();
         if (started != 0 && NowMs() - started >= CLEARS_QUERY_TIMEOUT_MS) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            ++g_ClearsGeneration;
             g_ClearsCompletionInFlight = false;
             g_ClearsQueryStartedAtMs = 0;
             g_ClearsStatusMsg = "Completion query timed out; retry Refresh.";
@@ -3258,6 +3300,7 @@ static void RenderClearsShared(bool showVault) {
         g_ClearsNeedRequery = false;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            ++g_ClearsGeneration;g_ClearsQueryPending=false;g_ClearsPendingManual=false;
             g_ClearsCompletionInFlight = false;
             g_ClearsQueryStartedAtMs = 0;
             g_ClearsRetryAtMs = 0;
@@ -3269,46 +3312,54 @@ static void RenderClearsShared(bool showVault) {
             // Never display completion counts from the previous account,
             // even if the global automatic API refresh option is disabled.
             g_ClearsLastSuccessTime = 0;
-            g_ClearsStatusMsg = AlterEgo::AutoRefreshPolicy::Enabled()
+            g_ClearsStatusMsg = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)
                 ? "Refreshing completion for new account..."
                 : "Account changed - click Refresh to update completions";
         }
-        if (AlterEgo::AutoRefreshPolicy::Enabled()) {
+        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)) {
             if (g_ClearsFetched) SendClearsAchQuery();
             else FetchClears();
         }
     }
     // Boot synchronization is automatic. Manual FetchClears follow-through
     // uses g_ClearsQueryPending and must run regardless of the policy setting.
-    // Boot-time H&S pong only confirms availability. Never query Clears
+    // Boot-time account registry only confirms availability. Never query Clears
     // before this tab is opened, even when a cached account is selected.
     if (!showVault) g_ClearsAutoBootPending = false;
-    if (!showVault && g_ClearsQueryPending.exchange(false) && !g_ClearsFetching)
-        SendClearsAchQuery();
+    if (!showVault && !g_ClearsFetching && g_ClearsQueryPending.exchange(false))
+        SendClearsAchQuery(false,g_ClearsPendingManual.exchange(false));
     // Fire a scheduled BUSY backoff retry once its delay has elapsed.
     {
         long long retryAt = g_ClearsRetryAtMs.load();
         if (!showVault && retryAt != 0 && NowMs() >= retryAt &&
             !g_ClearsFetching) {
             g_ClearsRetryAtMs = 0;
-            SendClearsAchQuery(g_ClearsRetrySelective);
+            bool selective;
+            {std::lock_guard<std::mutex> lock(g_ClearsMutex);selective=g_ClearsRetrySelective;}
+            SendClearsAchQuery(selective);
         }
     }
 
     auto steadyNow = std::chrono::steady_clock::now();
-    if (AlterEgo::AutoRefreshPolicy::Enabled() &&
+    if(!showVault&&AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)&&
+        !g_ClearsFetching&&!g_ClearsQueryPending.load()&&!g_ClearsCompletionInFlight.load()){
+        bool missing=false;
+        {std::lock_guard<std::mutex> lock(g_ClearsMutex);missing=!g_ClearsDailyRolloverPending&&
+            (g_DailyFractals.empty()||g_DailyBounties.empty()||g_WeeklyWings.empty()||!g_WeeklyStrikes.id);}
+        if(missing)FetchClears(); // recover a missed/failed weekly reset without requiring navigation
+    }
+    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
         !showVault && g_ClearsFetched && !g_ClearsFetching &&
-        !g_ClearsDailyRolloverPending &&
         !g_ClearsCompletionInFlight.load() && !g_ClearsQueryPending.load() &&
         g_ClearsRetryAtMs.load() == 0 &&
-        g_LastClearsCompletionQuery != std::chrono::steady_clock::time_point{} &&
-        (steadyNow - g_LastClearsCompletionQuery) >= std::chrono::minutes(15) &&
         ([&]() {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            return AlterEgo::SectionRefresh::Stale(
-                g_ClearsLastSuccessTime, std::time(nullptr));
+            if(g_ClearsDailyRolloverPending||
+               (g_LastClearsCompletionQuery!=std::chrono::steady_clock::time_point{}&&steadyNow-g_LastClearsCompletionQuery<std::chrono::seconds(2)))return false;
+            const auto minimum=std::chrono::system_clock::to_time_t(std::max(dailyReset,weeklyReset));
+            return AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,g_ClearsLastSuccessTime,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimum);
         })()) {
-        g_LastClearsCompletionQuery = steadyNow;
+        {std::lock_guard<std::mutex> lock(g_ClearsMutex);g_LastClearsCompletionQuery=steadyNow;}
         SendClearsAchQuery(true);
     }
 
@@ -3329,7 +3380,7 @@ void SyncCompletionAccountCaches() {
     const std::string account = GetEffectiveAccountName();
     if (account == g_ClearsCacheAccount && account == g_VaultCacheAccount) {
         // At cold startup the active account name can become known before
-        // H&S confirms there is exactly one configured account. Retry legacy
+        // account registry confirms there is exactly one configured account. Retry legacy
         // migration once after that confirmation rather than losing the old
         // disk snapshot until the next successful network refresh.
         static std::string legacyCheckedAccount;
@@ -3337,15 +3388,17 @@ void SyncCompletionAccountCaches() {
             AlterEgo::GW2API::GetAccountCount() == 1 &&
             legacyCheckedAccount != account) {
             legacyCheckedAccount = account;
-            if (!std::filesystem::exists(AccountCacheFile("clears_cache", account)))
+            const auto root=AlterEgo::GW2API::GetDataDirectory();
+            if (!AlterEgo::Cache::HasCompletion(root,AlterEgo::Cache::CompletionDataset::Clears,account))
                 LoadClearsCache();
-            if (!std::filesystem::exists(AccountCacheFile("vault_cache", account)))
+            if (!AlterEgo::Cache::HasCompletion(root,AlterEgo::Cache::CompletionDataset::Vault,account))
                 LoadVaultCache();
         }
         return;
     }
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        ++g_ClearsGeneration;++g_VaultGeneration;
         g_ClearsCacheAccount = account;
         g_VaultCacheAccount = account;
         g_ClearsNeedRequery = false;
@@ -3383,13 +3436,13 @@ void SyncCompletionAccountCaches() {
         g_VaultWeeklyRolloverPending = false;
         g_VaultRolloverRetryAtMs = 0;
         g_VaultLastAttemptFailed = false;
-        g_VaultLastSuccessTime = 0;
+        g_VaultSectionSuccess={};UpdateVaultFreshness();
         g_VaultSuccessUntil = {};
         g_VaultResponsesOK[0] = g_VaultResponsesOK[1] = g_VaultResponsesOK[2] = false;
         g_VaultDaily = {};
         g_VaultWeekly = {};
         g_VaultSpecial = {};
-        g_VaultPending[0] = g_VaultPending[1] = g_VaultPending[2] = {};
+        g_VaultTerminal[0]=g_VaultTerminal[1]=g_VaultTerminal[2]=false;g_VaultBatchFailed=false;
         g_VaultSeasonEnd = {};
         g_VaultPriorDailyIds.clear();
         g_VaultPriorWeekly = {};
@@ -3407,8 +3460,20 @@ void SyncCompletionAccountCaches() {
 }
 
 
+bool ShowVaultAssistance() { LoadClearUiSettings(); return g_ShowVaultAssistance; }
+void ToggleVaultAssistance() {
+    LoadClearUiSettings();
+    g_ShowVaultAssistance = !g_ShowVaultAssistance;
+    SaveClearUiSettings();
+}
 bool VaultHideComplete() { LoadClearUiSettings(); return g_VaultHideComplete; }
 bool ClearsHideComplete() { LoadClearUiSettings(); return g_ClearsHideComplete; }
+bool ShowFractalNextResets() { LoadClearUiSettings(); return g_ShowFractalNextResets; }
+void ToggleFractalNextResets() {
+    LoadClearUiSettings();
+    g_ShowFractalNextResets = !g_ShowFractalNextResets;
+    SaveClearUiSettings();
+}
 void ToggleVaultHideComplete() {
     LoadClearUiSettings();
     g_VaultHideComplete = !g_VaultHideComplete;
@@ -3430,17 +3495,18 @@ void RenderVaultStatusRow() {
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         updated = g_VaultLastSuccessTime;
-        showingData = g_VaultFetched.load();
+        showingData = std::any_of(g_VaultSectionSuccess.begin(),g_VaultSectionSuccess.end(),[](auto stamp){return stamp>0;});
         failed = g_VaultLastAttemptFailed;
         pending = g_VaultFetching.load();
-        waitingForRollover = AlterEgo::AutoRefreshPolicy::Enabled() &&
+        waitingForRollover = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault) &&
             (g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending) &&
             g_VaultRolloverRetryAtMs != 0;
         status = g_VaultStatusMessage;
+        for(uint8_t i=0;i<3;++i){status+="\n"+std::string(VaultSectionName(i))+": "+AlterEgo::RefreshUI::Age(g_VaultSectionSuccess[i]);}
         successUntil = g_VaultSuccessUntil;
     }
     AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
-    std::string detail = showingData ? "Ready" : "No Vault data available - click Refresh";
+    std::string detail = status.empty()?(showingData ? "Ready" : "No Vault data available - click Refresh"):status;
     if (pending) {
         state = AlterEgo::RefreshUI::State::Working;
         detail = status.empty() ? "Fetching Vault objectives..." : status;
@@ -3452,7 +3518,7 @@ void RenderVaultStatusRow() {
         detail = status.empty() ? "Waiting for updated Vault objectives..." : status;
     } else if (std::chrono::steady_clock::now() < successUntil) {
         state = AlterEgo::RefreshUI::State::Success;
-        detail = "Refresh complete";
+        detail = status;
     }
     if (AlterEgo::RefreshUI::Row("vault", updated, "Vault", state, detail, pending))
         FetchVaultData();
@@ -3481,10 +3547,11 @@ void RenderClearsStatusRow() {
         state = AlterEgo::RefreshUI::State::Working;
         detail = status.empty() ? "Querying completion..." : status;
     } else if (waitingForDailyRollover) {
-        // Scheduled API retries are not a hung request. Keep manual Refresh
-        // enabled, show an informative waiting state without a busy indicator.
+        // Normal daily reset propagation is scheduled, not a failed retrieval.
         state = AlterEgo::RefreshUI::State::Ready;
-        detail = status.empty() ? "Daily API delayed; will retry automatically" : status;
+        const auto remaining=std::max<long long>(0,g_ClearsDailyRolloverRetryAtMs.load()-NowMs());
+        detail = (status.empty() ? "Daily API delayed" : status) +
+            "; retry in " + std::to_string((remaining+999)/1000) + "s";
     } else if (!status.empty()) {
         state = AlterEgo::RefreshUI::State::Error;
         detail = status;
@@ -3492,31 +3559,33 @@ void RenderClearsStatusRow() {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete";
     }
-    if (AlterEgo::RefreshUI::Row("clears", updated, "Clears", state, detail, fetching))
-        FetchClears();
+    if (AlterEgo::RefreshUI::Row("clears", updated, "Clears", state, detail, fetching,nullptr,
+            !fetching&&waitingForDailyRollover?"Awaiting sync":nullptr,true))
+        FetchClears(true);
 }
 
 // Called AFTER tab rendering: account changes and UTC reset invalidation
 // have already run. Navigation itself is the trigger; manual Refresh
 // intentionally continues to force a full request.
 void RefreshVaultOnEntry() {
-    if (!AlterEgo::AutoRefreshPolicy::Enabled()) return;
+    AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
+    if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault)) return;
     if (g_VaultNeedRequery || g_VaultFetching.load()) return;
     bool stale = false;
-    bool haveData = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         stale = AlterEgo::SectionRefresh::Stale(
             g_VaultLastSuccessTime, std::time(nullptr)) ||
-            g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending;
-        haveData = g_VaultFetched.load();
+            g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending ||
+            g_VaultSeasonEnd==std::chrono::system_clock::time_point{} ||
+            std::chrono::system_clock::now()>=g_VaultSeasonEnd;
     }
     if (!stale) return;
-    FetchVaultData(haveData);
+    FetchVaultData(true);
 }
 
 void RefreshClearsOnEntry() {
-    if (!AlterEgo::AutoRefreshPolicy::Enabled()) return;
+    if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)) return;
     if (g_ClearsNeedRequery || g_ClearsFetching ||
         g_ClearsCompletionInFlight.load() ||
         g_ClearsQueryPending.load() || g_ClearsRetryAtMs.load() != 0 ||
@@ -3525,16 +3594,17 @@ void RefreshClearsOnEntry() {
     bool haveData = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        stale = AlterEgo::SectionRefresh::Stale(
-            g_ClearsLastSuccessTime, std::time(nullptr)) ||
+        stale = AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,g_ClearsLastSuccessTime,AlterEgo::RefreshEngine::ObjectiveSeconds()) ||
             g_ClearsDailyRolloverPending;
-        haveData = g_ClearsFetched && !g_ClearsDailyRolloverPending;
+        haveData = g_ClearsFetched && !g_ClearsDailyRolloverPending&&
+            !g_DailyFractals.empty()&&!g_DailyBounties.empty()&&!g_WeeklyWings.empty()&&g_WeeklyStrikes.id;
+        stale=stale||!haveData;
     }
     if (!stale) return;
     if (!haveData) {
         FetchClears(); // no usable IDs yet: retrieve category definitions
     } else {
-        g_LastClearsCompletionQuery = std::chrono::steady_clock::now();
+        {std::lock_guard<std::mutex> lock(g_ClearsMutex);g_LastClearsCompletionQuery=std::chrono::steady_clock::now();}
         SendClearsAchQuery(true);
     }
 }

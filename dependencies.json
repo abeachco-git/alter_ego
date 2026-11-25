@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "scope": "Vendored addon dependencies and embedded font; not a complete binary/toolchain SBOM. GitHub Actions are tracked separately by Dependabot.",
+  "components": [
+    {
+      "id": "imgui",
+      "name": "Dear ImGui",
+      "version": "1.80",
+      "type": "library",
+      "source": "https://github.com/ocornut/imgui",
+      "purl": "pkg:github/ocornut/imgui@v1.80",
+      "license": "MIT",
+      "paths": [
+        {
+          "path": "lib/imgui",
+          "git_object": "6f2bc850ca67cb780ded94dd2d70e5eb30bb8af2"
+        }
+      ],
+      "upstream_commit": "58075c4414b985b352d10718b02a8c43f25efd7c",
+      "policy": "abi-locked",
+      "notes": "Nexus requires ImGui 1.80. Local copy and modified stb headers; upstream commit is the release baseline, not a claim of byte identity.",
+      "depends_on": [
+        "stb-rect-pack",
+        "stb-textedit",
+        "stb-truetype"
+      ]
+    },
+    {
+      "id": "sqlite",
+      "name": "SQLite",
+      "version": "3.54.1",
+      "type": "library",
+      "source": "https://github.com/sqlite/sqlite",
+      "purl": "pkg:github/sqlite/sqlite@version-3.54.1",
+      "license": "Public domain",
+      "paths": [
+        {
+          "path": "lib/sqlite",
+          "git_object": "0d32a1a3ef3e1e41b820c62e7669c9a63c28bee1"
+        }
+      ],
+      "upstream_commit": "57520227c95396ce39ba6ecaac8d475b78dd3964",
+      "policy": "manual",
+      "notes": "Official amalgamation and archive hash documented in lib/sqlite/README.md; Git mirror release baseline.",
+      "depends_on": []
+    },
+    {
+      "id": "json",
+      "name": "nlohmann/json",
+      "version": "3.12.0",
+      "type": "library",
+      "source": "https://github.com/nlohmann/json",
+      "purl": "pkg:github/nlohmann/json@v3.12.0",
+      "license": "MIT AND Apache-2.0 AND CC0-1.0",
+      "paths": [
+        {
+          "path": "lib/nlohmann",
+          "git_object": "1bbde8549abf804b01534a099d4efb8257b94843"
+        },
+        {
+          "path": "lib/nlohmann_json.hpp",
+          "git_object": "ed51cd544748c4b8ebabbd5bf32fd0bb1ef89738"
+        }
+      ],
+      "upstream_commit": "55f93686c01528224f448c19128836e7df245f72",
+      "policy": "manual",
+      "notes": "Upstream release baseline; included third-party portions retain their own licenses.",
+      "depends_on": []
+    },
+    {
+      "id": "nexus-api",
+      "name": "Raidcore Nexus API",
+      "version": "6",
+      "type": "library",
+      "source": "https://github.com/RaidcoreGG/Nexus-API",
+      "purl": "pkg:generic/raidcore-nexus-api@6",
+      "license": "MIT",
+      "paths": [
+        {
+          "path": "include/nexus/Nexus.h",
+          "git_object": "ec02850f6b368c6cd05388f81319f9c7b0f99bca"
+        }
+      ],
+      "upstream_commit": null,
+      "policy": "abi-locked",
+      "notes": "6 is an API/ABI level, not a verified upstream release. Exact local header fingerprint; no verified OSV commit.",
+      "depends_on": []
+    },
+    {
+      "id": "inter",
+      "name": "Inter",
+      "version": "4.001",
+      "type": "library",
+      "source": "https://github.com/rsms/inter",
+      "purl": "pkg:github/rsms/inter@9221beed3e5b521ce94050ca542f568755c17c22",
+      "license": "OFL-1.1",
+      "paths": [
+        {
+          "path": "assets/inter_regular.ttf",
+          "git_object": "b7aaca8de1fe458399e17311d35d543a1fa2f984"
+        },
+        {
+          "path": "assets/OFL.txt",
+          "git_object": "9b2ca37b3ffc77391d8b2ebef4a974ef32bf46ea"
+        }
+      ],
+      "upstream_commit": "9221beed3e5b521ce94050ca542f568755c17c22",
+      "policy": "manual",
+      "notes": "Font name table: Version 4.001;git-9221beed3. Embedded unmodified font asset.",
+      "depends_on": []
+    },
+    {
+      "id": "stb-rect-pack",
+      "name": "stb_rect_pack",
+      "version": "1.00",
+      "type": "library",
+      "source": "https://github.com/nothings/stb",
+      "purl": "pkg:generic/stb_rect_pack@1.00",
+      "license": "MIT",
+      "paths": [
+        {
+          "path": "lib/imgui/imstb_rectpack.h",
+          "git_object": "ff2a85df42bc63c41a2bf910b3c0061f5854a28f"
+        }
+      ],
+      "upstream_commit": null,
+      "policy": "abi-locked",
+      "notes": "Modified ImGui copy; exact upstream commit not established.",
+      "depends_on": []
+    },
+    {
+      "id": "stb-textedit",
+      "name": "stb_textedit",
+      "version": "1.13",
+      "type": "library",
+      "source": "https://github.com/nothings/stb",
+      "purl": "pkg:generic/stb_textedit@1.13",
+      "license": "MIT",
+      "paths": [
+        {
+          "path": "lib/imgui/imstb_textedit.h",
+          "git_object": "7644670975c9afb25aba3d5f78f1322842593147"
+        }
+      ],
+      "upstream_commit": null,
+      "policy": "abi-locked",
+      "notes": "Modified ImGui copy; exact upstream commit not established.",
+      "depends_on": []
+    },
+    {
+      "id": "stb-truetype",
+      "name": "stb_truetype",
+      "version": "1.20",
+      "type": "library",
+      "source": "https://github.com/nothings/stb",
+      "purl": "pkg:generic/stb_truetype@1.20",
+      "license": "MIT",
+      "paths": [
+        {
+          "path": "lib/imgui/imstb_truetype.h",
+          "git_object": "b4bdbd869430a636955148b7af27695cd6a8f9d2"
+        }
+      ],
+      "upstream_commit": null,
+      "policy": "abi-locked",
+      "notes": "Modified ImGui copy; exact upstream commit not established.",
+      "depends_on": []
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstddef>
 #include <vector>
 
 namespace Skinventory {
@@ -12,6 +13,8 @@ namespace Skinventory {
 
     class HttpClient {
     public:
+        static std::size_t WikiWaiting();
+
         // Simple GET returning body only (empty on failure)
         static std::string Get(const std::string& url);
 

@@ -1,6 +1,10 @@
+#include "BackgroundWorkers.h"
 #include "Commerce.h"
 #include "HttpClient.h"
 #include "SkinCache.h"
+#include "CommerceCache.h"
+#include "PublicCatalog.h"
+#include "SkinDataCache.h"
 
 #include <nlohmann/json.hpp>
 #include <thread>
@@ -9,11 +13,10 @@
 #include <algorithm>
 #include <filesystem>
 #include <chrono>
+#include <unordered_set>
+#include <stdexcept>
 
 using json = nlohmann::json;
-
-// Defined in dllmain.cpp; atomic write-temp-then-rename.
-extern bool WriteFileAtomic(const std::string& finalPath, const std::string& content);
 
 namespace Skinventory {
 
@@ -26,7 +29,9 @@ namespace Skinventory {
     std::string Commerce::s_data_dir;
     std::mutex Commerce::s_mutex;
     std::unordered_map<uint32_t, PriceInfo> Commerce::s_prices;
-    std::unordered_map<uint32_t, uint32_t> Commerce::s_skin_to_item;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> Commerce::s_skin_to_item;
+    std::unordered_map<uint32_t, std::string> Commerce::s_item_names;
+    std::atomic<uint64_t> Commerce::s_price_generation{0};
     std::unordered_map<uint32_t, int> Commerce::s_vendor_prices;
     std::atomic<bool> Commerce::s_fetching{false};
     std::string Commerce::s_fetch_status;
@@ -51,11 +56,11 @@ namespace Skinventory {
         s_data_dir = dir;
     }
 
-    const PriceInfo* Commerce::GetPrice(uint32_t skin_id) {
+    std::optional<PriceInfo> Commerce::GetPrice(uint32_t skin_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_prices.find(skin_id);
-        if (it != s_prices.end()) return &it->second;
-        return nullptr;
+        if (it != s_prices.end()) return it->second;
+        return std::nullopt;
     }
 
     int Commerce::GetVendorPrice(uint32_t skin_id) {
@@ -117,150 +122,117 @@ namespace Skinventory {
     }
 
     uint32_t Commerce::GetItemIdForSkin(uint32_t skin_id) {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        auto it = s_skin_to_item.find(skin_id);
-        if (it != s_skin_to_item.end()) return it->second;
-        return 0;
+        const auto price = GetPrice(skin_id);
+        return price && price->tradeable ? price->item_id : 0;
     }
+    std::unordered_map<uint32_t,std::vector<uint32_t>> Commerce::UniqueSkinCandidates(){
+        std::lock_guard<std::mutex> lock(s_mutex);
+        std::unordered_map<uint32_t,unsigned> uses;
+        for(const auto& [skin,items]:s_skin_to_item)for(auto item:items)++uses[item];
+        std::unordered_map<uint32_t,std::vector<uint32_t>> out;
+        for(const auto& [skin,items]:s_skin_to_item)for(auto item:items)if(uses[item]==1)out[skin].push_back(item);
+        return out;
+    }
+    std::string Commerce::GetItemName(uint32_t item_id) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        const auto it=s_item_names.find(item_id);
+        return it==s_item_names.end()?std::string():it->second;
+    }
+    uint64_t Commerce::GetPriceGeneration() { return s_price_generation.load(); }
 
     void Commerce::FetchPriceForSkin(uint32_t skin_id) {
-        if (!s_item_map_ready) return;
-
-        uint32_t item_id = GetItemIdForSkin(skin_id);
-        if (item_id == 0) {
-            // No tradeable item for this skin
-            std::lock_guard<std::mutex> lock(s_mutex);
-            PriceInfo info;
-            info.item_id = 0;
-            info.tradeable = false;
-            info.fetched_at_unix = NowUnix();
-            s_prices[skin_id] = info;
-            return;
-        }
-
-        // Check cache freshness
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            auto it = s_prices.find(skin_id);
-            if (it != s_prices.end()) {
-                int64_t age = NowUnix() - it->second.fetched_at_unix;
-                if (age >= 0 && age < PRICE_TTL_SEC) return; // Still fresh
-            }
-        }
-
-        std::unordered_map<uint32_t, uint32_t> item_to_skin;
-        item_to_skin[item_id] = skin_id;
-        std::vector<uint32_t> items = {item_id};
-
-        std::thread(FetchPriceWorker, items, item_to_skin).detach();
+        FetchPricesForSkins({skin_id});
     }
 
     void Commerce::FetchPricesForSkins(const std::vector<uint32_t>& skin_ids) {
-        if (!s_item_map_ready || s_fetching) return;
-
+        if (!s_item_map_ready || s_fetching.exchange(true)) return;
         std::vector<uint32_t> item_ids;
-        std::unordered_map<uint32_t, uint32_t> item_to_skin;
-
+        std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             for (uint32_t skin_id : skin_ids) {
-                auto it = s_skin_to_item.find(skin_id);
-                if (it == s_skin_to_item.end() || it->second == 0) {
-                    // Mark as non-tradeable
-                    PriceInfo info;
-                    info.tradeable = false;
-                    info.fetched_at_unix = NowUnix();
-                    s_prices[skin_id] = info;
+                const auto it=s_skin_to_item.find(skin_id);
+                const auto pit=s_prices.find(skin_id);
+                if(pit!=s_prices.end()) {
+                    const auto age=NowUnix()-pit->second.fetched_at_unix;
+                    if(age>=0 && age<PRICE_TTL_SEC) continue;
+                }
+                if(it==s_skin_to_item.end() || it->second.empty()) {
+                    PriceInfo info; info.fetched_at_unix=NowUnix();
+                    s_prices[skin_id]=info;
                     continue;
                 }
-
-                // Check cache freshness
-                auto pit = s_prices.find(skin_id);
-                if (pit != s_prices.end()) {
-                    int64_t age = NowUnix() - pit->second.fetched_at_unix;
-                    if (age >= 0 && age < PRICE_TTL_SEC) continue;
+                for(uint32_t item:it->second) {
+                    auto& skins=item_to_skin[item];
+                    if(skins.empty()) item_ids.push_back(item);
+                    skins.push_back(skin_id);
                 }
-
-                item_ids.push_back(it->second);
-                item_to_skin[it->second] = skin_id;
             }
         }
-
-        if (item_ids.empty()) return;
-
-        s_fetching = true;
-        std::thread(FetchPriceWorker, item_ids, item_to_skin).detach();
+        if(item_ids.empty()) { s_fetching=false; return; }
+        AlterEgo::Background::Workers().Launch([ids = std::move(item_ids), mapping = std::move(item_to_skin)]() mutable { AlterEgo::ApiActivity::ReasonScope reason(AlterEgo::ApiActivity::Reason::Visible);FetchPriceWorker(std::move(ids), std::move(mapping)); }, [] { s_fetching = false; });
     }
 
     void Commerce::FetchPriceWorker(std::vector<uint32_t> item_ids,
-                                     std::unordered_map<uint32_t, uint32_t> item_to_skin) {
-        const size_t BATCH_SIZE = 200;
-        size_t total = item_ids.size();
-
-        for (size_t i = 0; i < total; i += BATCH_SIZE) {
-            size_t end = std::min(i + BATCH_SIZE, total);
+                     std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin) {
+        std::unordered_map<uint32_t, PriceInfo> best;
+        std::unordered_set<uint32_t> failed;
+        for(const auto& kv:item_to_skin) for(auto skin:kv.second) best.try_emplace(skin);
+        constexpr size_t BATCH_SIZE=200;
+        for(size_t i=0;i<item_ids.size();i+=BATCH_SIZE) {
+            AlterEgo::Background::Checkpoint();
+            const size_t end=std::min(i+BATCH_SIZE,item_ids.size());
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                s_fetch_status = "Fetching prices " + std::to_string(i) + "/" + std::to_string(total);
+                s_fetch_status="Fetching prices "+std::to_string(i)+"/"+std::to_string(item_ids.size());
             }
-
-            std::string ids_param;
-            for (size_t j = i; j < end; j++) {
-                if (!ids_param.empty()) ids_param += ",";
-                ids_param += std::to_string(item_ids[j]);
-            }
-
-            std::string url = "https://api.guildwars2.com/v2/commerce/prices?ids=" + ids_param;
-            std::string response = HttpClient::Get(url);
-            if (response.empty()) continue;
-
+            std::string ids;
+            for(size_t j=i;j<end;++j) { if(!ids.empty()) ids+=","; ids+=std::to_string(item_ids[j]); }
+            bool ok=false;
             try {
-                json batch = json::parse(response);
-                if (!batch.is_array()) continue;
-
-                std::lock_guard<std::mutex> lock(s_mutex);
-                for (const auto& entry : batch) {
-                    uint32_t item_id = entry.value("id", (uint32_t)0);
-                    auto skin_it = item_to_skin.find(item_id);
-                    if (skin_it == item_to_skin.end()) continue;
-
-                    PriceInfo info;
-                    info.item_id = item_id;
-                    info.tradeable = true;
-                    info.fetched_at_unix = NowUnix();
-
-                    if (entry.contains("buys") && entry["buys"].is_object()) {
-                        info.buy_price = entry["buys"].value("unit_price", 0);
-                        info.buy_quantity = entry["buys"].value("quantity", 0);
+                const auto batch=json::parse(HttpClient::Get("https://api.guildwars2.com/v2/commerce/prices?ids="+ids));
+                if(batch.is_array()) {
+                    for(const auto& entry:batch) {
+                        const auto item=entry.value("id",uint32_t(0));
+                        const auto it=item_to_skin.find(item);
+                        if(it==item_to_skin.end()) continue;
+                        PriceInfo info; info.item_id=item; info.tradeable=true;
+                        if(entry.contains("buys") && entry["buys"].is_object()) {
+                            info.buy_price=entry["buys"].value("unit_price",0);
+                            info.buy_quantity=entry["buys"].value("quantity",0);
+                        }
+                        if(entry.contains("sells") && entry["sells"].is_object()) {
+                            info.sell_price=entry["sells"].value("unit_price",0);
+                            info.sell_quantity=entry["sells"].value("quantity",0);
+                        }
+                        for(auto skin:it->second) if(BetterPrice(info,best[skin])) best[skin]=info;
                     }
-                    if (entry.contains("sells") && entry["sells"].is_object()) {
-                        info.sell_price = entry["sells"].value("unit_price", 0);
-                        info.sell_quantity = entry["sells"].value("quantity", 0);
-                    }
-
-                    s_prices[skin_it->second] = info;
+                    ok=true;
                 }
-            } catch (...) {
-                continue;
-            }
-
+            } catch(...) {}
+            if(!ok) for(size_t j=i;j<end;++j) for(auto skin:item_to_skin[item_ids[j]]) failed.insert(skin);
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
-
+        AlterEgo::Background::Checkpoint();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_fetch_status = "";
+            for(auto& kv:best) {
+                // Never present a partially queried candidate set as cheapest.
+                if(failed.count(kv.first)) continue;
+                kv.second.fetched_at_unix=NowUnix();
+                s_prices[kv.first]=kv.second;
+            }
+            s_fetch_status=failed.empty()?"":"Some prices could not be retrieved; previous prices retained.";
+            ++s_price_generation;
         }
-        s_fetching = false;
-
         SavePriceCache();
+        s_fetching=false;
     }
 
     bool Commerce::SavePriceCache() {
         if (s_data_dir.empty()) return false;
         try { std::filesystem::create_directories(s_data_dir); } catch (...) { return false; }
 
-        std::string path = s_data_dir + "/price_cache.json";
         json j = json::object();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -276,24 +248,22 @@ namespace Skinventory {
                 j[std::to_string(skin_id)] = e;
             }
         }
-        return WriteFileAtomic(path, j.dump());
+        return AlterEgo::Cache::WriteCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),AlterEgo::Cache::CommerceDataset::Prices,j);
     }
 
     bool Commerce::LoadPriceCache() {
         if (s_data_dir.empty()) return false;
-        std::string path = s_data_dir + "/price_cache.json";
+        std::string path = s_data_dir + "/price_cache_v2.json";
         try {
-            std::ifstream f(path);
-            if (!f.is_open()) return false;
-            json j;
-            f >> j;
-            if (!j.is_object()) return false;
-            int64_t now = NowUnix();
+            auto snapshot=AlterEgo::Cache::ReadCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+                AlterEgo::Cache::CommerceDataset::Prices,std::filesystem::u8path(path));
+            if(!snapshot || !snapshot->is_object())return false;
+            auto& j=*snapshot;
             std::lock_guard<std::mutex> lock(s_mutex);
             for (auto& [key, e] : j.items()) {
                 if (!e.is_object()) continue;
                 int64_t ts = e.value("ts", (int64_t)0);
-                if (now - ts >= PRICE_TTL_SEC) continue; // stale, skip
+                // Retain the last successful observation; the existing TTL controls refresh.
                 uint32_t skin_id = (uint32_t)std::stoul(key);
                 PriceInfo info;
                 info.item_id = e.value("item_id", (uint32_t)0);
@@ -309,142 +279,96 @@ namespace Skinventory {
         return true;
     }
 
-    // --- Item Map: skin_id -> item_id ---
-
+    // Versioned derived cache: legacy one-item/rarity maps must be rebuilt.
     bool Commerce::SaveItemMap() {
-        if (s_data_dir.empty()) return false;
-        try { std::filesystem::create_directories(s_data_dir); } catch (...) { return false; }
-
-        std::string path = s_data_dir + "/item_map.json";
-        json j = json::object();
+        if(s_data_dir.empty()) return false;
+        try { std::filesystem::create_directories(s_data_dir); } catch(...) { return false; }
+        json skins=json::object(), names=json::object(), vendors=json::object();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            for (const auto& [skin_id, item_id] : s_skin_to_item) {
-                j[std::to_string(skin_id)] = item_id;
-            }
+            for(const auto& kv:s_skin_to_item) skins[std::to_string(kv.first)]=kv.second;
+            for(const auto& kv:s_item_names) names[std::to_string(kv.first)]=kv.second;
+            for(const auto& kv:s_vendor_prices) vendors[std::to_string(kv.first)]=kv.second;
         }
-
-        std::ofstream file(path);
-        if (!file.is_open()) return false;
-        file << j.dump();
-
-        // Save vendor prices
-        std::string vpPath = s_data_dir + "/vendor_prices.json";
-        json vj = json::object();
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (const auto& [skin_id, price] : s_vendor_prices) {
-                vj[std::to_string(skin_id)] = price;
-            }
-        }
-        std::ofstream vpFile(vpPath);
-        if (vpFile.is_open()) vpFile << vj.dump();
-
-        return true;
+        return AlterEgo::Cache::WriteCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+            AlterEgo::Cache::CommerceDataset::Mapping,json{{"version",2},{"skins",skins},{"names",names},{"vendors",vendors}});
     }
 
     bool Commerce::LoadItemMap() {
-        std::string path = s_data_dir + "/item_map.json";
-        std::ifstream file(path);
-        if (!file.is_open()) return false;
-
         try {
-            json j;
-            file >> j;
-            if (!j.is_object() || j.empty()) return false;
-
+            auto snapshot=AlterEgo::Cache::ReadCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+                AlterEgo::Cache::CommerceDataset::Mapping,std::filesystem::u8path(s_data_dir)/"item_map_v2.json");
+            if(!snapshot)return false;
+            auto& j=*snapshot;
+            if(j.value("version",0)!=2 || !j.at("skins").is_object() || j.at("skins").empty()) return false;
+            std::unordered_map<uint32_t,std::vector<uint32_t>> skins;
+            std::unordered_map<uint32_t,std::string> names;
+            std::unordered_map<uint32_t,int> vendors;
+            for(auto& kv:j.at("skins").items()) skins[std::stoul(kv.key())]=kv.value().get<std::vector<uint32_t>>();
+            for(auto& kv:j.at("names").items()) names[std::stoul(kv.key())]=kv.value().get<std::string>();
+            for(auto& kv:j.at("vendors").items()) vendors[std::stoul(kv.key())]=kv.value().get<int>();
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_skin_to_item.clear();
-            for (auto it = j.begin(); it != j.end(); ++it) {
-                uint32_t skin_id = std::stoul(it.key());
-                uint32_t item_id = it.value().get<uint32_t>();
-                s_skin_to_item[skin_id] = item_id;
-            }
-            s_item_map_ready = true;
-        } catch (...) {
-            return false;
-        }
-
-        // Load vendor prices
-        std::string vpPath = s_data_dir + "/vendor_prices.json";
-        std::ifstream vpFile(vpPath);
-        if (vpFile.is_open()) {
-            try {
-                json vj;
-                vpFile >> vj;
-                std::lock_guard<std::mutex> lock(s_mutex);
-                for (auto it = vj.begin(); it != vj.end(); ++it) {
-                    uint32_t skin_id = std::stoul(it.key());
-                    int price = it.value().get<int>();
-                    s_vendor_prices[skin_id] = price;
-                }
-            } catch (...) {}
-        }
-
-        // If vendor prices are empty, the item map was built before vendor detection.
-        // Force a rebuild.
-        if (s_vendor_prices.empty()) {
-            s_item_map_ready = false;
-            return false;
-        }
-
-        return true;
+            s_skin_to_item=std::move(skins); s_item_names=std::move(names); s_vendor_prices=std::move(vendors);
+            s_item_map_ready=true;
+            return true;
+        } catch(...) { return false; }
     }
 
     void Commerce::BuildItemMapAsync() {
-        if (s_item_map_building || s_item_map_ready) return;
-        s_item_map_building = true;
+        if (s_item_map_ready || s_item_map_building.exchange(true)) return;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_fetch_status = "Building item map...";
         }
-        std::thread(ItemMapWorker).detach();
+        AlterEgo::Background::Workers().Launch([] { AlterEgo::ApiActivity::ReasonScope reason(AlterEgo::ApiActivity::Reason::Background);ItemMapWorker(); }, [] { s_item_map_building = false; });
     }
 
-    void Commerce::ItemMapWorker() {
+    void Commerce::RefreshUpgradeCatalogAsync(bool manual,bool itemsOnly) {
+        using namespace AlterEgo;
+        if(!AutoRefreshPolicy::AllowRequest(manual,AutoRefreshPolicy::Dataset::PublicCatalog))return;
+        auto current=PublicCatalog::Get();
+        const auto now=PublicCatalog::Now();
+        const bool discover=PublicCatalog::DatasetDue(*current,"public_item_discovery",now,manual&&itemsOnly);
+        const bool refresh=PublicCatalog::Due(current->upgrades,current->upgradeAttempt,now,manual&&!itemsOnly,PublicCatalog::Month);
+        if((!discover&&!refresh)||s_item_map_building.exchange(true))return;
+        {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Refreshing public item catalogs...";}
+        Background::Workers().Launch([discover,refresh,manual]{
+            ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
+            if(!s_item_map_ready || PublicCatalog::Get()->index.empty()){ItemMapWorker();return;}
+            ItemMapWorker(true,discover,refresh);
+        },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Item catalog refresh failed; cache retained";s_item_map_building=false;});
+    }
+
+    void Commerce::ItemMapWorker(bool incremental,bool discover,bool refresh) {
+        using namespace AlterEgo;
         try {
-            // Step 1: Get all item IDs from the GW2 API
-            {
+            const auto root=Cache::RootFromLegacySkinDirectory(s_data_dir);
+            const auto old=PublicCatalog::Get();
+            if(discover)PublicCatalog::Attempt(root,"public_item_discovery");
+            if(refresh)PublicCatalog::Attempt(root,"public_upgrades");
+            const auto index=discover?PublicCatalog::Index(PublicCatalog::Fetch("/v2/items")):old->index;
+            if(index.empty()||(!old->index.empty()&&index.size()<old->index.size()*9/10))
+                throw std::runtime_error("Incomplete item index");
+            const auto planned=incremental?PublicCatalog::PlanItems(index,old->index,old->upgradeIds,discover,refresh):index;
+            std::vector<uint32_t> ids(planned.begin(),planned.end());
+            json upgrades=json::array(),observations=json::array();
+            const size_t BATCH_SIZE=200,total=ids.size();
+            std::unordered_map<uint32_t,std::vector<uint32_t>> skin_map;
+            std::unordered_map<uint32_t,std::string> item_names;
+            std::unordered_map<uint32_t,int> vendor_map;
+            if(incremental&&discover){
                 std::lock_guard<std::mutex> lock(s_mutex);
-                s_fetch_status = "Building item map (one-time, cached after)...";
+                skin_map=s_skin_to_item;item_names=s_item_names;vendor_map=s_vendor_prices;
             }
-            std::string response = HttpClient::Get("https://api.guildwars2.com/v2/items");
-            if (response.empty()) {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_fetch_status = "Item map failed: could not reach GW2 API";
-                s_item_map_building = false;
-                return;
+            std::unordered_set<uint32_t> tradeable;
+            const bool newItems=discover&&(!incremental||std::any_of(ids.begin(),ids.end(),[&](uint32_t id){return !old->index.count(id);}));
+            if(newItems){
+                const auto market=PublicCatalog::Index(PublicCatalog::Fetch("/v2/commerce/prices"));
+                tradeable.insert(market.begin(),market.end());
             }
-
-            json all_ids;
-            try {
-                all_ids = json::parse(response);
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_fetch_status = "Item map failed: invalid response";
-                s_item_map_building = false;
-                return;
-            }
-
-            if (!all_ids.is_array()) {
-                s_item_map_building = false;
-                return;
-            }
-
-            std::vector<uint32_t> ids;
-            ids.reserve(all_ids.size());
-            for (const auto& id : all_ids) {
-                ids.push_back(id.get<uint32_t>());
-            }
-
-            // Step 2: Fetch items in batches, extract default_skin for Armor/Weapon types
-            const size_t BATCH_SIZE = 200;
-            size_t total = ids.size();
-            std::unordered_map<uint32_t, uint32_t> skin_map;
-            std::unordered_map<uint32_t, std::string> skin_map_rarity; // rarity of stored item
-            std::unordered_map<uint32_t, int> vendor_map;
 
             for (size_t i = 0; i < total; i += BATCH_SIZE) {
+            AlterEgo::Background::Checkpoint();
                 size_t end = std::min(i + BATCH_SIZE, total);
                 int pct = (int)((i * 100) / total);
                 {
@@ -461,41 +385,38 @@ namespace Skinventory {
 
                 std::string url = "https://api.guildwars2.com/v2/items?ids=" + ids_param;
                 std::string batch_response = HttpClient::Get(url);
-                if (batch_response.empty()) continue;
+                if (batch_response.empty()) throw std::runtime_error("Item metadata batch unavailable");
 
                 try {
                     json batch = json::parse(batch_response);
-                    if (!batch.is_array()) continue;
+                    AlterEgo::PublicCatalog::ValidateBatch(batch,std::set<uint32_t>(ids.begin()+i,ids.begin()+end));
 
                     for (const auto& item : batch) {
                         std::string type = item.value("type", "");
-                        if (type != "Armor" && type != "Weapon") continue;
-
-                        uint32_t default_skin = item.value("default_skin", (uint32_t)0);
-                        if (default_skin == 0) continue;
-
-                        uint32_t item_id = item.value("id", (uint32_t)0);
-                        if (item_id == 0) continue;
-
-                        // Prefer item whose rarity matches the skin's rarity
-                        std::string itemRarity = item.value("rarity", "");
-                        auto existing = skin_map.find(default_skin);
-                        if (existing == skin_map.end()) {
-                            skin_map[default_skin] = item_id;
-                            skin_map_rarity[default_skin] = itemRarity;
-                        } else {
-                            // Replace only if new item is a better rarity match
-                            auto skinOpt = SkinCache::GetSkin(default_skin);
-                            if (skinOpt && !skinOpt->rarity.empty()) {
-                                const std::string& oldRarity = skin_map_rarity[default_skin];
-                                bool oldMatches = (oldRarity == skinOpt->rarity);
-                                bool newMatches = (itemRarity == skinOpt->rarity);
-                                if (newMatches && !oldMatches) {
-                                    skin_map[default_skin] = item_id;
-                                    skin_map_rarity[default_skin] = itemRarity;
-                                }
+                        const uint32_t item_id=item.value("id",uint32_t(0));
+                        if(!item_id) continue;
+                        if(incremental)observations.push_back(item);
+                        else if(!PublicCatalog::Kind(item).empty())upgrades.push_back(item);
+                        if(incremental&&(!discover||old->index.count(item_id)))continue;
+                        const uint32_t default_skin=item.value("default_skin",uint32_t(0));
+                        const bool equipment=type=="Armor" || type=="Weapon" || type=="Back";
+                        if(tradeable.count(item_id)) {
+                            auto add=[&](uint32_t skin) {
+                                if(!skin) return;
+                                auto& ids=skin_map[skin];
+                                if(std::find(ids.begin(),ids.end(),item_id)==ids.end()) ids.push_back(item_id);
+                                item_names[item_id]=item.value("name",std::string());
+                            };
+                            if(equipment) add(default_skin);
+                            // Deterministic skin-unlock consumables, not random wardrobe unlocks.
+                            if(type=="Consumable" && item.contains("details") && item["details"].is_object()) {
+                                const auto& details=item["details"];
+                                const auto kind=details.value("type",std::string());
+                                if((kind=="Unlock" || kind=="Transmutation") && details.contains("skins") && details["skins"].is_array())
+                                    for(const auto& id:details["skins"]) if(id.is_number_unsigned()) add(id.get<uint32_t>());
                             }
                         }
+                        if(!equipment || !default_skin) continue;
 
                         // Detect cultural armor: Armor with race restrictions
                         if (type == "Armor" && item.contains("restrictions") &&
@@ -517,13 +438,14 @@ namespace Skinventory {
                                 }
                                 int vendorPrice = GetCulturalArmorPrice(level, slot);
                                 if (vendorPrice > 0) {
-                                    vendor_map[default_skin] = vendorPrice;
+                                    auto old=vendor_map.find(default_skin);
+                                    if(old==vendor_map.end() || vendorPrice<old->second) vendor_map[default_skin]=vendorPrice;
                                 }
                             }
                         }
                     }
                 } catch (...) {
-                    continue;
+                    throw;
                 }
 
                 // Stay well under the 600 req/min GW2 API limit
@@ -531,20 +453,33 @@ namespace Skinventory {
             }
 
             // Step 3: Store
+            AlterEgo::Background::Checkpoint();
+            // Persist derived mappings before marking the ID check complete.
+            // Repeating a failed discovery is idempotent.
+            if(newItems){
+                json skins=json::object(),names=json::object(),vendors=json::object();
+                for(const auto& kv:skin_map)skins[std::to_string(kv.first)]=kv.second;
+                for(const auto& kv:item_names)names[std::to_string(kv.first)]=kv.second;
+                for(const auto& kv:vendor_map)vendors[std::to_string(kv.first)]=kv.second;
+                if(!Cache::WriteCommerce(root,Cache::CommerceDataset::Mapping,
+                    json{{"version",2},{"skins",skins},{"names",names},{"vendors",vendors}}))
+                    throw std::runtime_error("Item mapping persistence failed");
+            }
+            if(incremental)PublicCatalog::CommitIncrementalItems(root,index,observations,discover,refresh);
+            else PublicCatalog::CommitUpgrades(root,index,upgrades);
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                s_skin_to_item = std::move(skin_map);
-                s_vendor_prices = std::move(vendor_map);
-                s_fetch_status = "Item map ready (" + std::to_string(s_skin_to_item.size()) + " skin-to-item mappings, "
-                               + std::to_string(s_vendor_prices.size()) + " vendor skins)";
+                if(newItems){
+                    s_skin_to_item=std::move(skin_map);s_item_names=std::move(item_names);s_vendor_prices=std::move(vendor_map);
+                }
+                s_fetch_status="Public item catalogs up to date";
             }
             s_item_map_ready = true;
             s_item_map_building = false;
 
-            // Save to disk for future loads
-            SaveItemMap();
-
         } catch (...) {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_fetch_status = "Item map failed: incomplete API data.";
             s_item_map_building = false;
         }
     }

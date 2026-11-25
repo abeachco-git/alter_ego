@@ -2,7 +2,7 @@
 #include <cassert>
 #include <cstdio>
 #include <string>
-int main() {
+int case_fashion_library(int, char**) {
     using namespace AlterEgo;
     using namespace AlterEgo::Fashion;
     DecodedWardrobeLink original{};
@@ -32,6 +32,15 @@ int main() {
     assert(!DecodeValid("[&Dw==]", decoded));
     assert(!DecodeValid("[&D1gD***]", decoded));
     assert(CanonicalLink(std::string("Link: ") + link) == link);
+    Look captured;
+    assert(MakeLiveLook(link,"Alt outfit","Character One",3,captured));
+    assert(captured.name=="Alt outfit"&&captured.source_tab==3&&captured.source_character=="Character One");
+    assert(captured.origin=="live_equipment"&&!captured.complete&&captured.characters.size()==1);
+    assert(captured.wardrobe_link==link);
+    assert(!MakeLiveLook(link,"Alt outfit","Character One",0,captured));
+    DecodedWardrobeLink empty{};
+    assert(!MakeLiveLook(ChatLink::EncodeWardrobe(empty),"Empty","Character One",2,captured));
+    assert(captured.source_tab==3);
     Look look;
     look.name = "Test Wardrobe";
     look.weight = "Heavy";
@@ -49,7 +58,8 @@ int main() {
     assert(FromJson(nlohmann::json::object({{"id","abc"}, {"name","Test Wardrobe"},
         {"wardrobe_link",link}, {"characters",look.characters}}), restored));
     assert(restored.characters.size() == 2);
-    const std::string file = "/tmp/alter_ego_fashion_regression.json";
+    const std::string file=(std::filesystem::temp_directory_path()/"alter_ego_fashion_regression_db").u8string();
+    std::filesystem::remove_all(file);
     Library lib;
     assert(lib.Load(file));
     int first = lib.Add(look);
@@ -60,6 +70,18 @@ int main() {
     assert(reloaded.looks.size() == 1);
     assert(reloaded.looks[0].characters.size() == 2);
     assert(reloaded.looks[0].wardrobe_link == link);
-    assert(reloaded.Remove(0));
-    std::remove(file.c_str());
+    const auto baseline=reloaded.looks[0];
+    auto edited=baseline;edited.notes="Saved draft";
+    auto abandoned=baseline;abandoned.notes="Cancelled";
+    assert(reloaded.looks[0].notes!=abandoned.notes);
+    assert(reloaded.UpdateDraft(baseline,edited));
+    assert(reloaded.looks[0].id==baseline.id&&reloaded.looks[0].notes=="Saved draft");
+    // Stale Fashion drafts cannot overwrite the already committed edit.
+    assert(!lib.UpdateDraft(baseline,abandoned));
+    Library verified;assert(verified.Load(file));
+    assert(verified.looks[0].notes=="Saved draft");
+    assert(verified.Remove(0));
+    NativeLibrary::RuntimeStore().Close();
+    std::filesystem::remove_all(file);
+    return 0;
 }

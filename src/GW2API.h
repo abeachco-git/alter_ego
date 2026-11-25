@@ -1,3 +1,4 @@
+#include <set>
 #pragma once
 
 #include <string>
@@ -7,10 +8,16 @@
 #include <unordered_set>
 #include <mutex>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <nlohmann/json.hpp>
 #include "nexus/Nexus.h"
+#include "CharacterScopes.h"
 
 namespace AlterEgo {
+
+    namespace Composable { struct Document; }
+    namespace RefreshEngine { struct IdBatch; }
 
     enum class FetchStatus {
         Idle,
@@ -19,14 +26,8 @@ namespace AlterEgo {
         Error
     };
 
-    // H&S connection state
-    enum class HoardStatus {
-        Unknown,        // Haven't pinged yet
-        Unavailable,    // Ping sent, no pong received
-        Available,      // Pong received, H&S is running
-        PermDenied,     // User denied this addon in H&S settings
-        Ready           // Data flowing
-    };
+    // Native account configuration status
+    enum class AccountStatus { Unknown, Unavailable, Ready };
 
     // Equipment slot on a character
     struct EquipmentItem {
@@ -38,9 +39,13 @@ namespace AlterEgo {
         std::vector<int> dyes;      // Dye color IDs (up to 4)
         std::string binding;        // "Character" or "Account"
         std::string bound_to;       // Character name if character-bound
+        bool binding_known = false;
+        bool bound_to_known = false;
         int tab = 0;                // Equipment tab number
         uint32_t stat_id = 0;       // Selected itemstat ID (for legendary/ascended)
         std::map<std::string, int> attributes; // e.g. {"Power": 251, "Precision": 179}
+        int64_t charges = -1; // absent/unknown, distinct from zero remaining
+        bool physical_supplement=false; // fallback provenance, not an equipment-tab row
     };
 
     // Cached itemstat info from /v2/itemstats (public, no auth)
@@ -119,6 +124,9 @@ namespace AlterEgo {
         RangerPets pets;
         RevenantLegends legends;
         std::vector<uint32_t> weapons; // Weapon type IDs
+        bool pets_known = false;
+        bool legends_known = false;
+        bool weapons_known = false;
     };
 
     // Cached info about an item from /v2/items (public, no auth)
@@ -220,7 +228,8 @@ namespace AlterEgo {
         int age = 0;                // Seconds played
         std::string created;        // ISO date
         std::string last_modified;  // ISO date — last login/modification
-        time_t data_refreshed = 0; // Last successful character snapshot from H&S
+        time_t data_refreshed = 0; // Latest committed scope (not proof of complete freshness)
+        CharacterScopes::Stamps scope_stamps{};
         int deaths = 0;
         std::vector<std::string> crafting;      // Crafting disciplines (active first)
         std::vector<int> crafting_levels;
@@ -231,11 +240,10 @@ namespace AlterEgo {
         std::map<int, std::string> equipment_tab_names; // tab number -> name
         int active_build_tab = 0;
         int active_equipment_tab = 0;
-        std::vector<std::string> heropoints;    // Completed hero challenge IDs (e.g. "0-29")
-        std::string account_name;              // Which H&S account owns this character
+            std::string account_name;              // Native account GUID; legacy name/unknown rows remain readable
     };
 
-    // Item location result from H&S cache query
+    // Item location result from native API cache query
     struct ItemLocationEntry {
         std::string location;       // e.g. "Bank", character name
         std::string sublocation;    // e.g. "Bag", "Equipped"
@@ -243,9 +251,9 @@ namespace AlterEgo {
         std::string account_name;   // Which account this location belongs to
     };
 
-    // Account info from H&S v3
+    // Native account projection
     struct AccountInfo {
-        std::string name;           // GW2 account name (e.g. "PieOrCake.7635")
+        std::string name;           // Stable native account GUID
         std::string label;          // User-assigned friendly name (e.g. "Main")
         std::string display_name;   // label if non-empty, else name
         int64_t last_updated = 0;
@@ -316,13 +324,6 @@ namespace AlterEgo {
         std::string ae2_code;
     };
 
-    // Response event names for H&S queries
-    #define EV_AE_CHAR_LIST_RESP   "EV_ALTER_EGO_CHAR_LIST"
-    #define EV_AE_CHAR_DATA_RESP   "EV_ALTER_EGO_CHAR_DATA"
-    #define EV_AE_SKIN_UNLOCK_RESP "EV_ALTER_EGO_SKIN_UNLOCKS"
-    #define EV_AE_ITEM_LOC_RESP    "EV_ALTER_EGO_ITEM_LOC"
-    #define EV_AE_ACCOUNTS_RESP    "EV_ALTER_EGO_ACCOUNTS"
-
     class GW2API {
     public:
         // --- Nexus integration ---
@@ -332,34 +333,22 @@ namespace AlterEgo {
         // Data path helper
         static std::string GetDataDirectory();
 
-        // --- H&S integration ---
-        static HoardStatus GetHoardStatus();
-        static void PingHoard();                    // Check if H&S is available
-        static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via H&S
+        // --- native API integration ---
+        static AccountStatus GetAccountStatus();
+        static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via native API
         static void RequestCharacterList();              // Fetch just the character name list
         static void RequestCharacterRefreshSelected(
-            const std::vector<std::string>& names, bool refreshCrafting = true); // Manual=true; auto=false
-        static void PollRetries();                       // Per-frame: fire a scheduled HOARD_STATUS_BUSY backoff retry
+            const std::vector<std::string>& names, bool refreshCrafting = true);
+        static void RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual=false);
 
-        // H&S cached queries (synchronous, from H&S in-memory cache)
+        // native API cached queries (synchronous, from native API in-memory cache)
         static void QuerySkinUnlocks(const std::vector<uint32_t>& skin_ids);
         static void QueryItemLocation(uint32_t item_id);
 
-        // H&S event handlers (registered via Events_Subscribe)
-        static void OnHoardPong(void* eventArgs);
-        static void OnHoardDataUpdated(void* eventArgs);
-        static void OnCharListResponse(void* eventArgs);
-        static void OnCharDataResponse(void* eventArgs);
-        static void OnSkinUnlocksResponse(void* eventArgs);
-        static void OnItemLocationResponse(void* eventArgs);
-        static void OnAccountsResponse(void* eventArgs);
-        static void OnAccountsChanged(void* eventArgs);
-
         // --- Multi-account ---
-        static void QueryAccounts();                     // Fetch account list from H&S
         static uint32_t GetAccountCount();               // Number of configured accounts (0 = unknown)
-        static const std::vector<AccountInfo>& GetAccounts();
-        static const std::string& GetCurrentAccountName(); // Account for the logged-in character
+        static std::vector<AccountInfo> GetAccounts();
+        static std::string GetCurrentAccountName(); // Account for the logged-in character
         static void SetCurrentAccountFromCharacter(const std::string& charName); // Map character to account
         static bool IsMultiAccount();                    // account_count > 1
         static bool HasAccountsData();                   // true if accounts have been queried
@@ -368,7 +357,7 @@ namespace AlterEgo {
 
         // --- Fetch state ---
         static FetchStatus GetFetchStatus();
-        static const std::string& GetFetchStatusMessage();
+        static std::string GetFetchStatusMessage();
         static std::string GetCurrentFetchCharName();
 
         // --- Query ---
@@ -378,41 +367,42 @@ namespace AlterEgo {
         static uint64_t GetBuildLibraryRevision();
 
         // Character access
-        static const std::vector<Character>& GetCharacters();
-        static const Character* GetCharacter(const std::string& name);
-        static const std::vector<std::string>& GetPendingCharNames();
+        static std::shared_ptr<const std::vector<Character>> GetCharacters();
+        static std::optional<Character> GetCharacter(const std::string& name);
+        static std::vector<std::string> GetPendingCharNames();
         // Remove cached characters that are no longer in the current roster
         // (s_pending_char_names). Call after a full character-list fetch succeeds
         // so characters deleted in-game stop appearing in the list.
         static void ReconcileCharactersWithRoster();
 
-        // Skin unlock status (from H&S cache)
+        // Skin unlock status (from native API cache)
         static bool IsSkinUnlocked(uint32_t skin_id);  // true if unlocked, false if unknown/locked
         static bool HasSkinUnlockData(uint32_t skin_id); // true if we've queried this skin
         static void MarkSkinUnlocked(uint32_t skin_id);  // mark a skin as unlocked (e.g. from Events: Alerts)
 
-        // Item location (from H&S cache)
+        // Item location (from native API cache)
         static const ItemLocationResult* GetItemLocation(uint32_t item_id);
 
         // Item/Skin/Spec/Trait/Skill/Color caches (public endpoints, fetched directly)
-        static const ItemInfo* GetItemInfo(uint32_t item_id);
+        static std::shared_ptr<const ItemInfo> GetItemInfo(uint32_t item_id);
         static uint32_t FindItemIdByName(const std::string& name); // searches item cache + name cache
         static std::vector<std::pair<std::string, uint32_t>> SearchKnownInfusions(
-            const std::string& query, size_t maxResults = 100); // cached names only
+            const std::string& query, size_t maxResults = 100, bool enrichment = false);
         static void CacheItemNameId(const std::string& name, uint32_t id); // add to persistent name→ID cache
         static bool LoadItemNameCache();
         static bool SaveItemNameCache();
-        static const SkinInfo* GetSkinInfo(uint32_t skin_id);
-        static const SpecializationInfo* GetSpecInfo(uint32_t spec_id);
-        static const TraitInfo* GetTraitInfo(uint32_t trait_id);
-        static const SkillInfo* GetSkillInfo(uint32_t skill_id);
-        static const DyeColor* GetDyeColor(int color_id);
-        static const ItemStatInfo* GetItemStatInfo(uint32_t stat_id);
-        static const std::unordered_map<uint32_t, ItemStatInfo>& GetAllItemStats();
-        static void FetchAllItemStatsAsync();
-        static const ProfessionInfo* GetProfessionInfo(const std::string& profession);
+        static std::shared_ptr<const SkinInfo> GetSkinInfo(uint32_t skin_id);
+        static std::shared_ptr<const SpecializationInfo> GetSpecInfo(uint32_t spec_id);
+        static std::shared_ptr<const TraitInfo> GetTraitInfo(uint32_t trait_id);
+        static std::shared_ptr<const SkillInfo> GetSkillInfo(uint32_t skill_id);
+        static std::shared_ptr<const DyeColor> GetDyeColor(int color_id);
+        static std::shared_ptr<const ItemStatInfo> GetItemStatInfo(uint32_t stat_id);
+        static std::unordered_map<uint32_t, std::shared_ptr<const ItemStatInfo>> GetAllItemStats();
+        static void FetchAllItemStatsAsync(bool manual=false);
+        static void AdoptPublicItems(const nlohmann::json& rows);
+        static std::shared_ptr<const ProfessionInfo> GetProfessionInfo(const std::string& profession);
         static void FetchProfessionInfoAsync(const std::string& profession);
-        static const std::map<std::string, ProfessionWeaponData>* GetProfessionWeapons(const std::string& profession);
+        static std::shared_ptr<const std::map<std::string, ProfessionWeaponData>> GetProfessionWeapons(const std::string& profession);
 
         // Fetch detail data on-demand (direct HTTP — no auth needed)
         static void FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch = false); // synchronous
@@ -422,11 +412,12 @@ namespace AlterEgo {
         static void FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids);
         static void FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids);
         static void FetchItemStatDetailsAsync(const std::vector<uint32_t>& stat_ids);
-        static void FetchDyeColorsAsync();
+        static void FetchDyeColorsAsync(bool manual=false);
 
         // Persistence
         static bool LoadCharacterData();
-        static bool SaveCharacterData();
+        static bool SaveCharacterData(const std::string& account = {}, const std::string& name = {},
+            const Character* replacement=nullptr,const std::string& legacyAccount={},const std::function<bool()>& current={});
 
         // Reference-data caches (items, skins, specs, traits, skills,
         // itemstats, dye colors). Persisted to disk so a refreshed character's
@@ -447,7 +438,7 @@ namespace AlterEgo {
         // imported builds appear under their profession's existing section
         // instead of being appended as a new one. Returns the insertion index,
         // or -1 if persistence failed.
-        static int AddSavedBuild(SavedBuild build);
+        static int AddSavedBuild(SavedBuild build,const std::string& setId={},const std::string& newSetName={},const std::set<std::string>& kinds={});
         // Atomically replace the source-derived fields without changing the
         // saved build identity, custom name, notes, or creation timestamp.
         static bool RefreshSavedBuildFromSource(const std::string& id, const SavedBuild& updated);
@@ -464,7 +455,73 @@ namespace AlterEgo {
                                              const std::string& targetId,
                                              bool after);
         static bool LoadBuildLibrary();
-        static bool SaveBuildLibrary();
+        // Native component commands. SavedBuild is a resolved presentation/edit value.
+        // Kinds: base_build, skills, weapons, armor, trinkets, runes,
+        // sigils, infusions, relic. IDs are stable and names are independent.
+        static bool GetComposableLoadouts(nlohmann::json& snapshot);
+        static bool AssignLoadoutComponent(const std::string& loadoutId,
+                                           const std::string& kind,
+                                           const std::string& componentId);
+        static bool CopyLoadoutComponent(const std::string& loadoutId,
+                                         const std::string& kind,
+                                         const std::string& newComponentName);
+    static bool CopyEditedLoadoutComponent(const std::string& loadoutId,
+        const std::string& kind, const std::string& sourceComponentId,
+        const std::string& name, const nlohmann::json& data,uint64_t expectedRevision=0);
+        static bool ReuseEditedLoadoutComponent(const std::string& loadoutId,
+            const std::string& kind, const std::string& sourceId,
+            const std::string& candidateId, const nlohmann::json& draft,
+            uint64_t expectedRevision);
+        static bool EditSharedLoadoutComponent(const std::string& kind,
+                                                const std::string& componentId,
+                                                const nlohmann::json& data);
+    static bool EditAndRenameLoadoutComponent(const std::string& kind,
+        const std::string& componentId, const std::string& name,
+        const nlohmann::json& data,uint64_t expectedRevision=0);
+        static bool SetLoadoutFashion(const std::string& loadoutId,
+                                      const std::string& fashionId);
+        static bool CreateLoadoutComponent(const std::string& kind,
+                                           const std::string& name,
+                                           const nlohmann::json& data,
+                                           std::string* savedId = nullptr,
+                                           bool reuseExact = false, const std::string& profession = {});
+        static bool DuplicateLoadoutComponent(const std::string& kind,
+                                              const std::string& componentId,
+                                              const std::string& name);
+        static bool RenameLoadoutComponent(const std::string& kind,
+                                           const std::string& componentId,
+                                           const std::string& name);
+        static bool DeleteUnusedLoadoutComponent(const std::string& kind,
+                                                 const std::string& componentId);
+        // Capture an independent component from live or imported SavedBuild
+        // data, without creating a new Loadout or mutating existing ones.
+        static std::string SuggestLibraryComponentName(const std::string& kind,
+                                                         const nlohmann::json& data,bool requestMissing=false);
+        static std::string SuggestCapturedComponentName(const SavedBuild& capture,
+                                                        const std::string& kind);
+        static bool SaveCapturedLoadoutComponent(const SavedBuild& capture,
+                                                  const std::string& kind,
+                                                  const std::string& name,
+                                                  std::string* savedId = nullptr,
+                                                  bool reuseExact = true);
+    static bool SaveCapturedEquipmentSet(const SavedBuild& capture,const std::string& name,std::string* savedId,const std::set<std::string>& kinds={});
+    static bool ApplyEquipmentSet(const std::string& loadoutId,const std::string& setId);
+    static bool DetachEquipmentSet(const std::string& loadoutId);
+    static bool SaveLoadoutAsEquipmentSet(const std::string& loadoutId,const std::string& name,std::string* savedId,const std::set<std::string>& kinds={});
+    static bool DuplicateEquipmentSet(const std::string& setId,const std::string& name,std::string* savedId);
+    static bool CreateEquipmentSet(const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision,std::string* savedId);
+        static bool SaveEquipmentSetDraft(const std::string& id,const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision);
+    static bool SaveLoadoutReferenceDraft(const std::string& id,const std::string& setId,const std::string& fashionId,const std::map<std::string,std::string>& refs,uint64_t revision);
+    static bool AssignEquipmentSetComponent(const std::string& setId,const std::string& kind,const std::string& componentId,uint64_t revision);
+    static std::vector<std::pair<std::string,std::string>> FindCapturedEquipmentSets(const SavedBuild& capture);
+    static bool RenameEquipmentSet(const std::string& setId,const std::string& name);
+    static bool RemoveEquipmentSet(const std::string& setId);
+    static bool ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
+        const std::string& kind, const std::string& componentId);
+    static bool ImportPortableLoadout(const nlohmann::json& packet);
+
+
+
         // --- Build editor support ---
         // Encode a SavedBuild's definition (traits/skills/pets/legends/weapons) to a GW2 chat link.
         static std::string EncodeSavedBuildToChatLink(const SavedBuild& b);
@@ -484,6 +541,15 @@ namespace AlterEgo {
         static SavedBuild CreateBlankBuild(const std::string& profession, GameMode mode);
         // Overwrite a saved build's definition fields (specs/skills/pets/legends/weapons/
         // profession) and regenerate its chat_link, leaving name/notes/gear intact, then save.
+        static bool SaveEditedLoadout(const SavedBuild& draft, uint64_t expectedRevision = 0);
+        static bool RebaseLoadoutDraft(SavedBuild& draft,const std::string& oldSet,const std::string& oldFashion,
+            const std::map<std::string,std::string>& oldRefs,const std::string& newSet,const std::string& newFashion,
+            const std::map<std::string,std::string>& newRefs,uint64_t revision,std::string& error);
+        static bool ReviewUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
+            const std::map<std::string,std::string>& refs,uint64_t revision,nlohmann::json& review,std::string& error);
+        static bool SaveUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
+            const std::map<std::string,std::string>& refs,const std::set<std::string>& sharedKinds,uint64_t revision);
+        static bool ConsolidateLoadoutComponent(const std::string& kind, const std::string& source, const std::string& survivor, uint64_t expectedRevision);
         static bool ReplaceSavedBuildDefinition(const std::string& id, const SavedBuild& def);
         // Write the whole library to an arbitrary path as JSON.
         static bool ExportBuildLibraryToFile(const std::string& path);
@@ -502,17 +568,14 @@ namespace AlterEgo {
         static void FetchProfessionPaletteAsync(const std::string& profession);
 
     private:
+        static bool CommitComposableEdit(
+            const std::function<bool(Composable::Document&, std::string&)>& edit);
         static AddonAPI_t* s_api;
-        static HoardStatus s_hoard_status;
         static FetchStatus s_fetch_status;
         static std::string s_fetch_message;
 
         // Multi-account state
-        static uint32_t s_account_count;                 // from pong/data_updated
-        static std::vector<AccountInfo> s_accounts;      // from QueryAccounts
-        static std::string s_current_account_name;       // resolved from MumbleLink char
-        static std::unordered_map<std::string, std::string> s_char_to_account; // char name -> account_name
-        static bool s_accounts_queried;                  // have we queried accounts at least once
+        static std::string s_active_character;
 
         static std::vector<Character> s_characters;
         static bool s_has_character_data;
@@ -522,43 +585,25 @@ namespace AlterEgo {
         static std::vector<std::string> s_pending_char_names;
         static int s_chars_fetched;
         static int s_chars_total;
-        static std::string s_priority_char_name;
-        static int s_pending_char_idx; // index into s_pending_char_names for next char to fetch
-        static bool s_list_only_mode;  // true = just fetch name list, don't start char data fetch
-        static int s_multi_acct_list_idx;  // index into s_accounts for multi-account char list fetch (-1 = not active)
-
-        // Sub-endpoint fetch state
-        // Phase 0: /core
-        // Phase 1: /equipmenttabs (just IDs)
-        // Phase 2: /equipmenttabs/:N (one per tab)
-        // Phase 3: /buildtabs?tabs=all
         static Character s_current_char;
-        static int s_fetch_phase;
-        static std::vector<int> s_equip_tab_ids;
-        static int s_equip_tab_idx;
 
-        // H&S cached data
-        static std::unordered_map<uint32_t, bool> s_skin_unlocks;  // skin_id -> unlocked
-        static std::unordered_map<uint32_t, ItemLocationResult> s_item_locations;
+        // native API cached data
 
         // Caches (public endpoint data)
-        static std::unordered_map<uint32_t, ItemInfo> s_item_cache;
-        static std::unordered_map<uint32_t, SkinInfo> s_skin_cache;
-        static std::unordered_map<uint32_t, SpecializationInfo> s_spec_cache;
-        static std::unordered_map<uint32_t, TraitInfo> s_trait_cache;
-        static std::unordered_map<uint32_t, SkillInfo> s_skill_cache;
-        static std::unordered_map<int, DyeColor> s_dye_cache;
-        static std::unordered_map<uint32_t, ItemStatInfo> s_itemstat_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const ItemInfo>> s_item_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const SkinInfo>> s_skin_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const SpecializationInfo>> s_spec_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const TraitInfo>> s_trait_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const SkillInfo>> s_skill_cache;
+        static std::unordered_map<int, std::shared_ptr<const DyeColor>> s_dye_cache;
+        static std::unordered_map<uint32_t, std::shared_ptr<const ItemStatInfo>> s_itemstat_cache;
 
         // Profession info cache
-        static std::unordered_map<std::string, ProfessionInfo> s_profession_cache;
-        static std::unordered_map<std::string, std::map<std::string, ProfessionWeaponData>> s_profession_weapons;
+        static std::unordered_map<std::string, std::shared_ptr<const ProfessionInfo>> s_profession_cache;
+        static std::unordered_map<std::string, std::shared_ptr<const std::map<std::string, ProfessionWeaponData>>> s_profession_weapons;
 
         // Ranger pets cache (build editor)
-        static std::vector<PetInfo> s_pets;
-        static std::atomic<bool> s_petsFetching;
-        static std::map<uint8_t, uint32_t> s_legend_swap; // legend byte code -> swap skill id
-        static std::atomic<bool> s_legendsFetching;
+
 
         // Build library
         static std::vector<SavedBuild> s_saved_builds;
@@ -579,8 +624,9 @@ namespace AlterEgo {
         static bool EnsureDataDirectory();
 
         // Batch fetch helpers (public endpoints, synchronous)
-        static void FetchSkinDetails(const std::vector<uint32_t>& skin_ids);
-        static void FetchTraitDetails(const std::vector<uint32_t>& trait_ids);
+        static void FetchItemDetailsClaimed(RefreshEngine::IdBatch& claim, bool forceRefetch);
+        static void FetchSkinDetails(RefreshEngine::IdBatch& claim);
+        static void FetchTraitDetails(RefreshEngine::IdBatch& claim);
 
         // Parse helpers
         static Character ParseCharacterJson(const nlohmann::json& cj);
@@ -588,7 +634,7 @@ namespace AlterEgo {
         static BuildTemplate ParseBuildTemplate(const nlohmann::json& tab_json);
 
         // Sub-endpoint fetch for current character (phase 0/1/2)
-        static void FetchCharacterPhase();
+        static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly={},CharacterScopes::Mask demand=CharacterScopes::All,bool manual=true);
     };
 
 }

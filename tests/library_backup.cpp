@@ -17,7 +17,7 @@ static std::string Get(const std::string& path) {
     assert(BackupZip::ReadBytes(path, text, error));
     return text;
 }
-int main() {
+int case_library_backup(int, char**) {
     fs::path base = fs::temp_directory_path() / "alter_ego_backup_regression";
     fs::remove_all(base);
     fs::create_directories(base / "source");
@@ -41,6 +41,11 @@ int main() {
     Put(FilePath(src,"fashion_library.json"),fashion.dump());
     Put(FilePath(src,"settings.json"),R"({"show_age":true})");
     Put(FilePath(src,"ach_tracked.json"),R"({"pinned":[1,3,5]})");
+    CharacterActivity::Tracker history;
+    const CharacterActivity::Key hero{"account-a","Hero"};
+    history.Observe(hero.first,hero.second,34,true,2000);
+    history.Begin(hero,"Bags",2010);
+    Put(FilePath(src,"character_activity.json"),history.Save().dump());
     const std::string portrait("\x89PNG\r\n\0test", 11);
     Put(FilePath(src,"portraits/a.png"),portrait);
     std::string err;
@@ -52,6 +57,11 @@ int main() {
     assert(full.buildCount == 1 && full.fashionCount == 1);
     assert(full.files.at("portraits/a.png") == portrait);
     assert(full.files.count("settings.json") == 1);
+    assert(!full.files.count("character_activity.json"));
+    const auto portable=nlohmann::json::parse(full.files.at("character_logins.json"));
+    assert(CharacterActivity::DecodeLoginHistory(portable).at(hero)==2000);
+    assert(!portable.at("entries")[0].contains("scopes"));
+    assert(!portable.at("entries")[0].contains("last_seen"));
 
     // Single-collection export produces a directly importable JSON file.
     const std::string onlyBuilds = (base / "legacy-export.json").u8string();
@@ -76,23 +86,29 @@ int main() {
     std::string recovery;
     assert(Apply(dst, plan, recovery, err));
     assert(Exists(recovery));
-    const auto merged = nlohmann::json::parse(Get(FilePath(dst,"build_library.json")));
+    NativeLibrary::Snapshot native;
+    assert(NativeLibrary::RuntimeStore().Read(native,err));
+    nlohmann::json merged;assert(Composable::ToLegacy(native.loadouts,merged,err));
     assert(merged["builds"].size() == 2);
     assert(merged["builds"][0]["name"] == "Local version");
-    assert(nlohmann::json::parse(Get(FilePath(dst,"fashion_library.json")))["looks"].size() == 1);
+    assert(native.fashion.size()==1);
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":false})");
     assert(Get(FilePath(dst,"portraits/a.png")) == portrait);
+    assert(!Exists(FilePath(dst,"character_activity.json")));
+    assert(CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at(hero)==2000);
+    Put(FilePath(dst,"character_logins.json"),CharacterActivity::EncodeLoginHistory({{hero,3000}}).dump());
 
     // Replace a selected collection, never touch unchecked collections.
     assert(Prepare(dst, full, AlterEgo::Backup::Fashion, true, plan, err));
-    assert(plan.writeFiles.size() == 1);
+    assert(plan.libraryChanged&&plan.writeFiles.empty());
     assert(Apply(dst, plan, recovery, err));
-    assert(nlohmann::json::parse(Get(FilePath(dst,"build_library.json")))["builds"].size() == 2);
+    assert(NativeLibrary::RuntimeStore().Read(native,err)&&native.loadouts.loadouts.size()==2);
 
     // Restore "Other" only, preserving builds and fashion.
     assert(Prepare(dst, full, Other, true, plan, err));
     assert(Apply(dst, plan, recovery, err));
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":true})");
+    assert(CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at(hero)==3000);
 
     // Empty collection files are valid backups and may clear a selected collection.
     Put((base/"empty.json").u8string(), R"({"builds":[]})");
@@ -100,7 +116,8 @@ int main() {
     assert(ReadPackage((base/"empty.json").u8string(), empty, err));
     assert(Prepare(dst, empty, Builds, true, plan, err));
     assert(Apply(dst, plan, recovery, err));
-    assert(nlohmann::json::parse(Get(FilePath(dst,"build_library.json")))["builds"].empty());
+    assert(NativeLibrary::RuntimeStore().Read(native,err)&&native.loadouts.loadouts.empty());
+    assert(!Exists(FilePath(dst,"build_library.json")));
     assert(!Prepare(dst, empty, AlterEgo::Backup::Fashion, true, plan, err));
 
     // Corrupt CRC and archive traversal must fail before touching any files.
@@ -123,5 +140,7 @@ int main() {
     assert(ReadPackage(renamed, individual, err));
     assert(individual.available == Other);
     assert(individual.files.count("settings.json") == 1);
+    NativeLibrary::RuntimeStore().Close();
     fs::remove_all(base);
+    return 0;
 }

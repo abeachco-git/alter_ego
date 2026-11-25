@@ -1,0 +1,16 @@
+#include <iostream>
+#include <string_view>
+#ifdef NDEBUG
+#error Regression assertions must remain enabled.
+#endif
+@declarations@
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "Specify a regression case name\n";
+        return 2;
+    }
+    const std::string_view name(argv[1]);
+@dispatch@
+    std::cerr << "Unknown regression case: " << name << '\n';
+    return 2;
+}

@@ -1,0 +1,865 @@
+{
+  "schema": 1,
+  "datasets": {
+    "raid_bounties": {
+      "last_success": 1795620600,
+      "last_attempt": 1795620600,
+      "source": "GW2 Wiki MediaWiki wikitext; verified Debian bootstrap 2026-11-25",
+      "data": [
+        [
+          "Shiverpeaks Pass",
+          "Voice and Claw of the Fallen",
+          "Fraenir of Jormag",
+          "Gorseval",
+          "Cairn",
+          "Mursaat Overseer",
+          "Shiverpeaks Pass",
+          "Voice and Claw of the Fallen",
+          "Fraenir of Jormag",
+          "Gorseval",
+          "Cairn",
+          "Mursaat Overseer"
+        ],
+        [
+          "Aetherblade Hideout",
+          "Cardinal Sabir",
+          "Whisper of Jormag",
+          "Vale Guardian",
+          "Cosmic Observatory",
+          "Cold War",
+          "Boneskinner",
+          "Sabetha",
+          "Xunlai Jade Junkyard",
+          "Temple of Febe",
+          "Keep Construct",
+          "Kela"
+        ],
+        [
+          "Slothasor",
+          "Matthias",
+          "Xera",
+          "Samarog",
+          "Conjured Amalgamate",
+          "Twin Largos",
+          "Decima",
+          "Cardinal Adina",
+          "Old Lion's Court",
+          "Ura",
+          "Kaineng Overlook",
+          "Deimos"
+        ],
+        [
+          "Qadim",
+          "Qadim the Peerless",
+          "Soulless Horror",
+          "Harvest Temple",
+          "Dhuum",
+          "Greer",
+          "Qadim",
+          "Qadim the Peerless",
+          "Soulless Horror",
+          "Harvest Temple",
+          "Dhuum",
+          "Greer"
+        ]
+      ]
+    },
+    "fractals": {
+      "last_success": 1795620600,
+      "last_attempt": 1795620600,
+      "source": "GW2 Wiki MediaWiki wikitext; verified Debian bootstrap 2026-11-25",
+      "data": {
+        "sets": [
+          {
+            "daily": [
+              "Nightmare",
+              "Snowblind",
+              "Volcanic"
+            ],
+            "recommended": [
+              [
+                2,
+                "Uncategorized"
+              ],
+              [
+                37,
+                "Siren's Reef"
+              ],
+              [
+                53,
+                "Underground Facility"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Aetherblade",
+              "Thaumanova Reactor",
+              "Uncategorized"
+            ],
+            "recommended": [
+              [
+                6,
+                "Cliffside"
+              ],
+              [
+                28,
+                "Volcanic"
+              ],
+              [
+                61,
+                "Aquatic Ruins"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Chaos",
+              "Cliffside",
+              "Twilight Oasis"
+            ],
+            "recommended": [
+              [
+                10,
+                "Molten Boss"
+              ],
+              [
+                32,
+                "Swampland"
+              ],
+              [
+                65,
+                "Aetherblade"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Captain Mai Trin Boss",
+              "Deepstone",
+              "Silent Surf"
+            ],
+            "recommended": [
+              [
+                14,
+                "Aetherblade"
+              ],
+              [
+                34,
+                "Thaumanova Reactor"
+              ],
+              [
+                74,
+                "Sunqua Peak"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Nightmare",
+              "Solitary Throne",
+              "Solid Ocean"
+            ],
+            "recommended": [
+              [
+                1,
+                "Volcanic"
+              ],
+              [
+                50,
+                "Lonely Tower"
+              ],
+              [
+                70,
+                "Kinfall"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Chaos",
+              "Uncategorized",
+              "Urban Battleground"
+            ],
+            "recommended": [
+              [
+                15,
+                "Thaumanova Reactor"
+              ],
+              [
+                48,
+                "Shattered Observatory"
+              ],
+              [
+                60,
+                "Solid Ocean"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Deepstone",
+              "Molten Furnace",
+              "Siren's Reef"
+            ],
+            "recommended": [
+              [
+                24,
+                "Sunqua Peak"
+              ],
+              [
+                35,
+                "Solid Ocean"
+              ],
+              [
+                66,
+                "Silent Surf"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Molten Boss",
+              "Twilight Oasis",
+              "Underground Facility"
+            ],
+            "recommended": [
+              [
+                21,
+                "Silent Surf"
+              ],
+              [
+                36,
+                "Uncategorized"
+              ],
+              [
+                75,
+                "Lonely Tower"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Silent Surf",
+              "Swampland",
+              "Volcanic"
+            ],
+            "recommended": [
+              [
+                7,
+                "Aquatic Ruins"
+              ],
+              [
+                40,
+                "Molten Boss"
+              ],
+              [
+                67,
+                "Deepstone"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Aquatic Ruins",
+              "Lonely Tower",
+              "Thaumanova Reactor"
+            ],
+            "recommended": [
+              [
+                8,
+                "Underground Facility"
+              ],
+              [
+                31,
+                "Urban Battleground"
+              ],
+              [
+                54,
+                "Siren's Reef"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Sunqua Peak",
+              "Underground Facility",
+              "Urban Battleground"
+            ],
+            "recommended": [
+              [
+                11,
+                "Deepstone"
+              ],
+              [
+                39,
+                "Molten Furnace"
+              ],
+              [
+                59,
+                "Twilight Oasis"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Aetherblade",
+              "Chaos",
+              "Nightmare"
+            ],
+            "recommended": [
+              [
+                18,
+                "Captain Mai Trin Boss"
+              ],
+              [
+                27,
+                "Snowblind"
+              ],
+              [
+                64,
+                "Solitary Throne"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Cliffside",
+              "Lonely Tower",
+              "Kinfall"
+            ],
+            "recommended": [
+              [
+                4,
+                "Urban Battleground"
+              ],
+              [
+                30,
+                "Chaos"
+              ],
+              [
+                58,
+                "Molten Furnace"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Deepstone",
+              "Solid Ocean",
+              "Swampland"
+            ],
+            "recommended": [
+              [
+                16,
+                "Twilight Oasis"
+              ],
+              [
+                42,
+                "Captain Mai Trin Boss"
+              ],
+              [
+                62,
+                "Uncategorized"
+              ]
+            ]
+          },
+          {
+            "daily": [
+              "Captain Mai Trin Boss",
+              "Molten Boss",
+              "Shattered Observatory"
+            ],
+            "recommended": [
+              [
+                5,
+                "Swampland"
+              ],
+              [
+                47,
+                "Nightmare"
+              ],
+              [
+                68,
+                "Cliffside"
+              ]
+            ]
+          }
+        ],
+        "scales": [
+          "Volcanic",
+          "Uncategorized",
+          "Snowblind",
+          "Urban Battleground",
+          "Swampland",
+          "Cliffside",
+          "Aquatic Ruins",
+          "Underground Facility",
+          "Molten Furnace",
+          "Molten Boss",
+          "Deepstone",
+          "Siren's Reef",
+          "Chaos",
+          "Aetherblade",
+          "Thaumanova Reactor",
+          "Twilight Oasis",
+          "Kinfall",
+          "Captain Mai Trin Boss",
+          "Solitary Throne",
+          "Solid Ocean",
+          "Silent Surf",
+          "Nightmare",
+          "Shattered Observatory",
+          "Sunqua Peak",
+          "Lonely Tower",
+          "Aquatic Ruins",
+          "Snowblind",
+          "Volcanic",
+          "Underground Facility",
+          "Chaos",
+          "Urban Battleground",
+          "Swampland",
+          "Deepstone",
+          "Thaumanova Reactor",
+          "Solid Ocean",
+          "Uncategorized",
+          "Siren's Reef",
+          "Kinfall",
+          "Molten Furnace",
+          "Molten Boss",
+          "Twilight Oasis",
+          "Captain Mai Trin Boss",
+          "Silent Surf",
+          "Solitary Throne",
+          "Aetherblade",
+          "Cliffside",
+          "Nightmare",
+          "Shattered Observatory",
+          "Sunqua Peak",
+          "Lonely Tower",
+          "Snowblind",
+          "Volcanic",
+          "Underground Facility",
+          "Siren's Reef",
+          "Thaumanova Reactor",
+          "Swampland",
+          "Urban Battleground",
+          "Molten Furnace",
+          "Twilight Oasis",
+          "Solid Ocean",
+          "Aquatic Ruins",
+          "Uncategorized",
+          "Chaos",
+          "Solitary Throne",
+          "Aetherblade",
+          "Silent Surf",
+          "Deepstone",
+          "Cliffside",
+          "Molten Boss",
+          "Kinfall",
+          "Captain Mai Trin Boss",
+          "Nightmare",
+          "Shattered Observatory",
+          "Sunqua Peak",
+          "Lonely Tower",
+          "Aquatic Ruins",
+          "Swampland",
+          "Siren's Reef",
+          "Uncategorized",
+          "Solid Ocean",
+          "Underground Facility",
+          "Thaumanova Reactor",
+          "Molten Furnace",
+          "Deepstone",
+          "Urban Battleground",
+          "Snowblind",
+          "Twilight Oasis",
+          "Chaos",
+          "Molten Boss",
+          "Captain Mai Trin Boss",
+          "Volcanic",
+          "Aetherblade",
+          "Cliffside",
+          "Solitary Throne",
+          "Kinfall",
+          "Nightmare",
+          "Shattered Observatory",
+          "Sunqua Peak",
+          "Silent Surf",
+          "Lonely Tower"
+        ]
+      }
+    },
+    "event_timers": {
+      "last_success": 1795620600,
+      "last_attempt": 1795620600,
+      "source": "https://wiki.guildwars2.com/wiki/Widget:Event_timer/data.json (v5.4, Debian bootstrap 2026-11-25)",
+      "data": {
+        "Svanir Shaman Chief": [
+          15,
+          135,
+          255,
+          375,
+          495,
+          615,
+          735,
+          855,
+          975,
+          1095,
+          1215,
+          1335
+        ],
+        "Megadestroyer": [
+          30,
+          210,
+          390,
+          570,
+          750,
+          930,
+          1110,
+          1290
+        ],
+        "Fire Elemental": [
+          45,
+          165,
+          285,
+          405,
+          525,
+          645,
+          765,
+          885,
+          1005,
+          1125,
+          1245,
+          1365
+        ],
+        "The Shatterer": [
+          60,
+          240,
+          420,
+          600,
+          780,
+          960,
+          1140,
+          1320
+        ],
+        "Great Jungle Wurm": [
+          75,
+          195,
+          315,
+          435,
+          555,
+          675,
+          795,
+          915,
+          1035,
+          1155,
+          1275,
+          1395
+        ],
+        "Shadow Behemoth": [
+          105,
+          225,
+          345,
+          465,
+          585,
+          705,
+          825,
+          945,
+          1065,
+          1185,
+          1305,
+          1425
+        ],
+        "Claw of Jormag": [
+          150,
+          330,
+          510,
+          690,
+          870,
+          1050,
+          1230,
+          1410
+        ],
+        "Inquest Golem Mark II": [
+          120,
+          300,
+          480,
+          660,
+          840,
+          1020,
+          1200,
+          1380
+        ],
+        "Tequatl the Sunless": [
+          0,
+          180,
+          420,
+          690,
+          960,
+          1140
+        ],
+        "Battle in Tarir": [
+          60,
+          180,
+          300,
+          420,
+          540,
+          660,
+          780,
+          900,
+          1020,
+          1140,
+          1260,
+          1380
+        ],
+        "King of the Jungle": [
+          30,
+          150,
+          270,
+          390,
+          510,
+          630,
+          750,
+          870,
+          990,
+          1110,
+          1230,
+          1350
+        ],
+        "Dragon's Stand": [
+          90,
+          210,
+          330,
+          450,
+          570,
+          690,
+          810,
+          930,
+          1050,
+          1170,
+          1290,
+          1410
+        ],
+        "Path to Ascension": [
+          90,
+          210,
+          330,
+          450,
+          570,
+          690,
+          810,
+          930,
+          1050,
+          1170,
+          1290,
+          1410
+        ],
+        "Maws of Torment": [
+          60,
+          180,
+          300,
+          420,
+          540,
+          660,
+          780,
+          900,
+          1020,
+          1140,
+          1260,
+          1380
+        ],
+        "Forged with Fire": [
+          0,
+          60,
+          120,
+          180,
+          240,
+          300,
+          360,
+          420,
+          480,
+          540,
+          600,
+          660,
+          720,
+          780,
+          840,
+          900,
+          960,
+          1020,
+          1080,
+          1140,
+          1200,
+          1260,
+          1320,
+          1380
+        ],
+        "Aetherblade Assault": [
+          90,
+          210,
+          330,
+          450,
+          570,
+          690,
+          810,
+          930,
+          1050,
+          1170,
+          1290,
+          1410
+        ],
+        "Kaineng Blackout": [
+          0,
+          120,
+          240,
+          360,
+          480,
+          600,
+          720,
+          840,
+          960,
+          1080,
+          1200,
+          1320
+        ],
+        "Gang War of Echovald": [
+          30,
+          150,
+          270,
+          390,
+          510,
+          630,
+          750,
+          870,
+          990,
+          1110,
+          1230,
+          1350
+        ],
+        "Battle for the Jade Sea": [
+          60,
+          180,
+          300,
+          420,
+          540,
+          660,
+          780,
+          900,
+          1020,
+          1140,
+          1260,
+          1380
+        ],
+        "Wizard's Tower": [
+          60,
+          180,
+          300,
+          420,
+          540,
+          660,
+          780,
+          900,
+          1020,
+          1140,
+          1260,
+          1380
+        ],
+        "Defense of Amnytas": [
+          0,
+          120,
+          240,
+          360,
+          480,
+          600,
+          720,
+          840,
+          960,
+          1080,
+          1200,
+          1320
+        ],
+        "Of Mists and Monsters": [
+          30,
+          150,
+          270,
+          390,
+          510,
+          630,
+          750,
+          870,
+          990,
+          1110,
+          1230,
+          1350
+        ],
+        "A Titanic Voyage": [
+          80,
+          200,
+          320,
+          440,
+          560,
+          680,
+          800,
+          920,
+          1040,
+          1160,
+          1280,
+          1400
+        ],
+        "Hammerhart Rumble!": [
+          40,
+          160,
+          280,
+          400,
+          520,
+          640,
+          760,
+          880,
+          1000,
+          1120,
+          1240,
+          1360
+        ],
+        "Secrets of the Weald": [
+          100,
+          220,
+          340,
+          460,
+          580,
+          700,
+          820,
+          940,
+          1060,
+          1180,
+          1300,
+          1420
+        ],
+        "Shackles of the Ancients": [
+          75,
+          195,
+          315,
+          435,
+          555,
+          675,
+          795,
+          915,
+          1035,
+          1155,
+          1275,
+          1395
+        ],
+        "Depths of Cruelty": [
+          120,
+          300,
+          480,
+          660,
+          840,
+          1020,
+          1200,
+          1380
+        ]
+      }
+    }
+  }
+}

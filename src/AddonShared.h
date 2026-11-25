@@ -4,21 +4,41 @@
 
 #include <string>
 #include <functional>
+#include <cstdint>
+#include <set>
 #include "nexus/Nexus.h"
 #include "imgui.h"
+#include "UIControls.h"
+
+// A non-modal window can remain open behind its launcher. Request focus at
+// the launch site and consume it immediately before that window's Begin(),
+// which may occur on the next frame. Never steal focus every render frame.
+struct AddonWindowFocusRequest {
+    bool pending = false;
+    void Request() { pending = true; }
+    void ApplyBeforeBegin() {
+        if (!pending) return;
+        pending = false;
+        ImGui::SetNextWindowFocus();
+    }
+};
 
 // The Nexus API handle — defined as a non-static global in dllmain.cpp
 extern AddonAPI_t* APIDefs;
 
 // Copy text to the Windows clipboard
 void CopyToClipboard(const std::string& text);
+// Copy plain names without IDs, formatting or chat-link encoding.
+inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Name"){
+    if(!name.empty()&&ImGui::MenuItem(label))CopyToClipboard(name);
+}
 
 // Draw a gradient-backed section header with a colored accent underline.
 // Used by equipment panel, clears, and other tabs.
 void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix = nullptr);
 
 // Shared height for ordinary actions. Dense completion chips/icon hit targets stay compact.
-inline constexpr float kAlterEgoActionButtonHeight = 30.0f;
+inline constexpr float kAlterEgoActionButtonHeight = AlterEgo::UI::ActionHeight;
 // Neutral full-height button with a font-responsive minimum. Optional fixed width.
 bool RenderActionButton(const char* label, ImVec2 size = ImVec2(0, 0));
 
@@ -47,7 +67,21 @@ void RenderEmptyCard(Texture_t* iconTex,
 // Inline animated loading spinner: rotating arc + label.
 void RenderSpinner(const char* label, ImVec4 color = ImVec4(0.7f, 0.85f, 0.95f, 1.0f));
 
-// Returns the account name to use for per-account H&S queries.
+// Character filter shares Compare's profession rows; empty means All.
+// Names are limited to the caller's verified roster; unknown class stays selectable.
+bool RenderCharacterMultiFilter(const char* label, std::set<std::string>& selected,
+                                const std::set<std::string>& names);
+
+// Common item presentation and actions, shared by Skinventory and native Inventory.
+ImVec4 GetSkinRarityColor(const std::string& rarity);
+void RenderCoins(int64_t copper);
+void MarkInventoryNavigation();
+std::string CharacterLoadUnavailable(const std::string& character,const std::string& account);
+bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account);
+void ProcessCharacterLoad();
+std::string PlainItemDescription(const std::string& text);
+
+// Returns the account GUID to use for per-account API queries.
 // Returns an empty string when "All Accounts" is selected.
 std::string GetEffectiveAccountName();
 

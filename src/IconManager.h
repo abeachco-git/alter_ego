@@ -14,9 +14,13 @@
 
 namespace AlterEgo {
 
+inline constexpr uint32_t kEmboldenedIcon=9300001;
+inline constexpr uint32_t kCallOfTheMistsIcon=9300002;
+
 class IconManager {
 public:
     static void Initialize(AddonAPI_t* api);
+    static void RequestStop();
     static void Shutdown();
 
     // Get icon texture for a given identifier (returns nullptr if not loaded yet)
@@ -42,6 +46,8 @@ private:
     static std::string GetIconFilePath(uint32_t id);
     static bool DownloadToFile(const std::string& url, const std::string& filePath);
     static bool LoadIconFromDisk(uint32_t id);
+    static void LoadNetworkFailures();
+    static void SaveNetworkFailures();
 
     static AddonAPI_t* s_API;
     static std::unordered_map<uint32_t, Texture_t*> s_IconCache;
@@ -49,6 +55,10 @@ private:
     static std::unordered_set<uint32_t> s_DiskCheckedMissing;
     static std::unordered_map<uint32_t, bool> s_LoadingIcons;
     static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> s_FailedIcons;
+    // Texture publication has a short session cooldown; failed HTTP artwork
+    // has a separate durable seven-day retry policy.
+    static std::unordered_map<uint32_t,int64_t> s_NetworkFailures;
+    static constexpr int64_t NETWORK_RETRY_SECONDS=7LL*86400;
     static const int RETRY_COOLDOWN_SEC = 300;
     static std::mutex s_Mutex;
     static std::string s_IconsDir;

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <atomic>
 #include <optional>
+#include <cstdint>
 
 namespace Skinventory {
 
@@ -40,7 +41,7 @@ namespace Skinventory {
         static void FetchAllSkinsAsync();
 
         // Incremental update: fetch only new skins since last cache
-        static void UpdateCacheAsync();
+        static void UpdateCacheAsync(bool manual=false);
 
         // Current status
         static CacheStatus GetStatus();
@@ -62,6 +63,8 @@ namespace Skinventory {
         // Total skin counts
         static size_t GetTotalSkinCount();
         static std::vector<uint32_t> GetAllSkinIds();
+        static uint64_t GetGeneration();
+        static std::vector<SkinInfo> GetCatalogSnapshot();
         static size_t GetCategorySkinCount(const std::string& type,
                                            const std::string& subtype,
                                            const std::string& weight_class);
@@ -79,6 +82,7 @@ namespace Skinventory {
         static std::atomic<CacheStatus> s_status;
         static std::string s_status_message;
         static std::mutex s_mutex;
+        static std::atomic<uint64_t> s_generation;
 
         // All skins indexed by ID
         static std::unordered_map<uint32_t, SkinInfo> s_skins;

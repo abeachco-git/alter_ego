@@ -29,20 +29,7 @@ inline int BountySet(int64_t utcSeconds) {
 }
 inline const char* BountyName(int set, int column) {
     static const char* kBosses[4][12] = {
-        {"Shiverpeaks Pass","Voice and Claw of the Fallen","Fraenir of Jormag",
-         "Gorseval","Cairn","Mursaat Overseer","Shiverpeaks Pass",
-         "Voice and Claw of the Fallen","Fraenir of Jormag","Gorseval",
-         "Cairn","Mursaat Overseer"},
-        {"Aetherblade Hideout","Cardinal Sabir","Whisper of Jormag",
-         "Vale Guardian","Cosmic Observatory","Cold War","Boneskinner",
-         "Sabetha","Xunlai Jade Junkyard","Temple of Febe",
-         "Keep Construct","Kela"},
-        {"Slothasor","Matthias","Xera","Samarog",
-         "Conjured Amalgamate","Twin Largos","Decima","Cardinal Adina",
-         "Old Lion's Court","Ura","Kaineng Overlook","Deimos"},
-        {"Qadim","Qadim the Peerless","Soulless Horror","Harvest Temple",
-         "Dhuum","Greer","Qadim","Qadim the Peerless",
-         "Soulless Horror","Harvest Temple","Dhuum","Greer"}
+#include "WikiRaidBounties.inc"
     };
     if (set < 0 || set >= 12 || column < 0 || column >= 4) return "";
     return kBosses[column][set];
@@ -128,21 +115,7 @@ struct FractalSet {
 };
 inline const FractalSet& Fractals(int index) {
     static const FractalSet kSets[15] = {
-        {{{"Nightmare","Snowblind","Volcanic"}}, {{2,37,53}}, {{"Uncategorized","Siren's Reef","Underground Facility"}}},
-        {{{"Aetherblade","Thaumanova Reactor","Uncategorized"}}, {{6,28,61}}, {{"Cliffside","Volcanic","Aquatic Ruins"}}},
-        {{{"Chaos","Cliffside","Twilight Oasis"}}, {{10,32,65}}, {{"Molten Boss","Swampland","Aetherblade"}}},
-        {{{"Captain Mai Trin Boss","Deepstone","Silent Surf"}}, {{14,34,74}}, {{"Aetherblade","Thaumanova Reactor","Sunqua Peak"}}},
-        {{{"Nightmare","Solitary Throne","Solid Ocean"}}, {{1,50,70}}, {{"Volcanic","Lonely Tower","Kinfall"}}},
-        {{{"Chaos","Uncategorized","Urban Battleground"}}, {{15,48,60}}, {{"Thaumanova Reactor","Shattered Observatory","Solid Ocean"}}},
-        {{{"Deepstone","Molten Furnace","Siren's Reef"}}, {{24,35,66}}, {{"Sunqua Peak","Solid Ocean","Silent Surf"}}},
-        {{{"Molten Boss","Twilight Oasis","Underground Facility"}}, {{21,36,75}}, {{"Silent Surf","Uncategorized","Lonely Tower"}}},
-        {{{"Silent Surf","Swampland","Volcanic"}}, {{7,40,67}}, {{"Aquatic Ruins","Molten Boss","Deepstone"}}},
-        {{{"Aquatic Ruins","Lonely Tower","Thaumanova Reactor"}}, {{8,31,54}}, {{"Underground Facility","Urban Battleground","Siren's Reef"}}},
-        {{{"Sunqua Peak","Underground Facility","Urban Battleground"}}, {{11,39,59}}, {{"Deepstone","Molten Furnace","Twilight Oasis"}}},
-        {{{"Aetherblade","Chaos","Nightmare"}}, {{18,27,64}}, {{"Captain Mai Trin Boss","Snowblind","Solitary Throne"}}},
-        {{{"Cliffside","Lonely Tower","Kinfall"}}, {{4,30,58}}, {{"Urban Battleground","Chaos","Molten Furnace"}}},
-        {{{"Deepstone","Solid Ocean","Swampland"}}, {{16,42,62}}, {{"Twilight Oasis","Captain Mai Trin Boss","Uncategorized"}}},
-        {{{"Captain Mai Trin Boss","Molten Boss","Shattered Observatory"}}, {{5,47,68}}, {{"Swampland","Nightmare","Cliffside"}}},
+#include "WikiFractalSets.inc"
     };
     return kSets[Mod(index, 15)];
 }

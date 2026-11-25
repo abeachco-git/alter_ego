@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "build_interval_days": 1,
+  "resources": {
+    "raid_bounties": {
+      "enabled": true,
+      "source": "Template:Daily Raid Bounties",
+      "format": "MediaWiki wikitext with rendered table fallback"
+    },
+    "fractals": {
+      "enabled": true,
+      "source": [
+        "Template:Daily Fractal Schedule",
+        "Template:Daily Recommended Fractal Schedule",
+        "Template:Fractal info"
+      ],
+      "format": "MediaWiki wikitext with rendered table fallback"
+    },
+    "event_timers": {
+      "enabled": true,
+      "source": "Widget:Event timer/data.json",
+      "format": "JSON in MediaWiki wikitext, direct raw JSON fallback",
+      "runtime_interval_days": 30,
+      "runtime_enabled": true
+    },
+    "skin_acquisition": {
+      "enabled": false,
+      "source": "Semantic MediaWiki",
+      "reason": "Validate bounded bulk coverage and skin ID mapping first"
+    },
+    "currency_acquisition": {
+      "enabled": false,
+      "source": "Semantic MediaWiki",
+      "reason": "Validate bounded bulk coverage and identity first"
+    },
+    "weekly_raid_rotations": {
+      "enabled": false,
+      "reason": "Validate source and anchor first"
+    },
+    "specialization_descriptions": {
+      "enabled": false,
+      "reason": "Review source licensing and coverage first"
+    },
+    "festival_reference": {
+      "enabled": false,
+      "reason": "Validate mappings first"
+    }
+  },
+  "runtime": {
+    "special_events_hours": 6,
+    "arena_new_items_skins_vault_days": 7,
+    "arena_stable_definitions_days": 30,
+    "wiki_skin_currency_on_demand_days": 30,
+    "wiki_event_timers_days": 30,
+    "failed_reference_retry_hours": 24
+  }
+}

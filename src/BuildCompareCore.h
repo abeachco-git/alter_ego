@@ -5,11 +5,14 @@
 #include <cstddef>
 #include <algorithm>
 #include <cstdint>
+#include <array>
 #include "AscendedStatNames.h"
 
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
 // labels are resolved names and may differ when cache lookups are incomplete.
 namespace AlterEgo {
+inline std::array<uint32_t,3> CanonicalUtilityIds(std::array<uint32_t,3> ids){std::sort(ids.begin(),ids.end());return ids;}
+
 // Relics can be shared across equipment tabs (tab 0) in Hoard & Seek's
 // /equipment response, while regular gear belongs to one specific tab.
 // Do not accidentally save other shared slots, such as gathering tools.
@@ -155,7 +158,8 @@ enum class TemplateMatchStatus { Different, SkillsDiffer, Exact };
 
 inline bool IsGearComparisonGroup(const std::string& group) {
     return group == "Equipment" || group == "Equipment stats" ||
-           group == "Upgrades" || group == "Weapon types" ||
+           group == "Upgrades" || group == "Runes" || group == "Sigils" ||
+           group == "Weapon types" ||
            group == "Infusions" || group == "Infusion totals" || group == "Relic" ||
            group == "Exact item IDs";
 }
@@ -163,8 +167,7 @@ inline bool IsGearComparisonGroup(const std::string& group) {
 // positions. Source-wide total requirements are included by the caller,
 // which recognizes the "Infusions" group's "Total" fields.
 inline bool IsCharacterEquipmentMatchGroup(const std::string& group) {
-    return IsGearComparisonGroup(group) && group != "Infusions" &&
-           group != "Infusion totals";
+    return IsGearComparisonGroup(group) && group != "Infusion totals";
 }
 inline bool IsSkillComparisonGroup(const std::string& group) {
     return group == "Terrestrial skills" || group == "Aquatic skills";
@@ -176,7 +179,7 @@ inline TemplateMatchStatus ClassifyTemplateMatch(const BuildComparison& comparis
         if (!row.verified) return TemplateMatchStatus::Different;
         if (row.matches) continue;
         const bool isSkillSlot = row.field == "Heal" || row.field == "Elite" ||
-                                 row.field.rfind("Utility ", 0) == 0;
+                                 row.field.rfind("Utility ", 0) == 0 || row.field == "Utilities";
         // Unknown/empty skill data is not a confirmed skill change.
         if (!IsSkillComparisonGroup(row.group) || !isSkillSlot ||
             row.saved == "(empty)" || row.current == "(empty)")

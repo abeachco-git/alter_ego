@@ -68,14 +68,14 @@ static bool LibraryBackupFilePicker(bool save, bool zip, char (&path)[MAX_PATH])
 static void LibraryBackupRestoreCurrentState(unsigned selected) {
     // Updating the in-memory state is essential: otherwise normal addon unload
     // can overwrite restored settings, pinned achievements, or login dates.
-    if (selected & AlterEgo::Backup::Builds) {
+    if (selected & (AlterEgo::Backup::Builds|AlterEgo::Backup::Fashion)) {
         AlterEgo::GW2API::LoadBuildLibrary();
         g_LibSelectedIdx = -1;
         g_EditDraftId.clear();
         g_LibDetailsFetched = false;
     }
-    if (selected & AlterEgo::Backup::Fashion) {
-        g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory() + "/fashion_library.json");
+    if (selected & (AlterEgo::Backup::Builds|AlterEgo::Backup::Fashion)) {
+        g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory());
         g_FashionSelected = -1;
         g_FashionDialog = false;
     }
@@ -83,9 +83,10 @@ static void LibraryBackupRestoreCurrentState(unsigned selected) {
         LoadSettings();
         AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
         LoadAchTrackerState();
-        g_LoginTimestamps.clear();
-        LoadLoginTimestamps();
-        g_LoginTimestampsDirty = false;
+        LoadLegacyLoginHistory();
+        MigrateLegacyLoginHistory();
+        ImportPortableLoginHistory();
+        SyncLoginHistory();
         LoadCharSortConfig();
         RebuildCharDisplayOrder();
         LoadSession();
@@ -112,10 +113,10 @@ static bool LibraryBackupApplyImport() {
     LibraryBackupRestoreCurrentState(selected);
     char summary[280] = {};
     snprintf(summary, sizeof(summary),
-        "%s: %zu builds, %zu fashion, %zu other files (%zu skipped).",
+        "%s: %zu loadouts, %zu equipment sets, %zu fashion, %zu other files (%zu skipped).",
         ui.replace ? "Restore complete" : "Merge complete",
-        plan.buildAdded, plan.fashionAdded, plan.otherWritten,
-        plan.buildSkipped + plan.fashionSkipped + plan.otherSkipped);
+        plan.buildAdded, plan.equipmentSetAdded, plan.fashionAdded, plan.otherWritten,
+        plan.buildSkipped + plan.equipmentSetSkipped + plan.fashionSkipped + plan.otherSkipped);
     LibraryBackupNotify(summary);
     if (selected & AlterEgo::Backup::Other)
         LibraryBackupNotify("Preferences restored. Restart Alter Ego to reload custom fonts.");
@@ -166,7 +167,7 @@ static void RenderLibraryBackupUI() {
         ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Include in export");
         ImGui::Separator();
-        ImGui::Checkbox("Build Library (builds, gear and notes)", &ui.exportBuilds);
+        ImGui::Checkbox("Loadout Library (loadouts, equipment sets and components)", &ui.exportBuilds);
         ImGui::Checkbox("Fashion Library (skins, dyes and characters)", &ui.exportFashion);
         ImGui::Checkbox("Other data (preferences, pins and custom assets)", &ui.exportOther);
         const unsigned mask = LibraryBackupExportMask();
@@ -175,7 +176,7 @@ static void RenderLibraryBackupUI() {
         ImGui::Spacing();
         ImGui::TextUnformatted("Export format");
         if (single) {
-            if (ImGui::RadioButton("Individual JSON", !ui.exportZip)) ui.exportZip = false;
+            if (ImGui::RadioButton("Portable JSON", !ui.exportZip)) ui.exportZip = false;
             ImGui::SameLine();
             if (ImGui::RadioButton("ZIP archive", ui.exportZip)) ui.exportZip = true;
         } else {
@@ -188,8 +189,7 @@ static void RenderLibraryBackupUI() {
             char filename[MAX_PATH] = {};
             if (!zip) {
                 std::snprintf(filename, sizeof(filename), "%s",
-                    mask == AlterEgo::Backup::Builds ?
-                        "build_library.json" : "fashion_library.json");
+                    "alter_ego_library.json");
             } else {
                 const std::time_t now = std::time(nullptr);
                 std::tm local = *std::localtime(&now);
@@ -206,10 +206,11 @@ static void RenderLibraryBackupUI() {
                     SaveSession();
                     SaveAchTrackerState();
                     SaveCharSortConfig();
-                    SaveLoginTimestamps();
                 }
                 ui.error.clear();
-                if (AlterEgo::Backup::Export(
+                if ((mask & AlterEgo::Backup::Other) && !SaveCharacterActivity(true)) {
+                    ui.error = "Could not save current login history.";
+                } else if (AlterEgo::Backup::Export(
                         AlterEgo::GW2API::GetDataDirectory(), mask, filename, zip, ui.error)) {
                     LibraryBackupNotify(zip ? "Alter Ego ZIP backup exported." :
                                                "Library JSON exported.");
@@ -234,11 +235,11 @@ static void RenderLibraryBackupUI() {
         ImGui::Separator();
         ImGui::TextUnformatted("Select collections to restore");
         if (ui.package.available & AlterEgo::Backup::Builds) {
-            if (ImGui::Checkbox("Build Library##backup_restore", &ui.importBuilds)) {
+            if (ImGui::Checkbox("Loadout Library##backup_restore", &ui.importBuilds)) {
                 ui.previewDirty = true; ui.replaceAcknowledged = false;
             }
             ImGui::SameLine();
-            ImGui::TextDisabled("(%zu builds)", ui.package.buildCount);
+            ImGui::TextDisabled("(%zu loadouts, %zu equipment sets)",ui.package.buildCount,ui.package.equipmentSetCount);
         }
         if (ui.package.available & AlterEgo::Backup::Fashion) {
             if (ImGui::Checkbox("Fashion Library##backup_restore", &ui.importFashion)) {
@@ -272,7 +273,8 @@ static void RenderLibraryBackupUI() {
         }
         if (selected && ui.error.empty()) {
             ImGui::Separator();
-            ImGui::Text("Builds: %zu import, %zu skip", ui.preview.buildAdded, ui.preview.buildSkipped);
+            ImGui::Text("Loadouts: %zu import, %zu skip", ui.preview.buildAdded, ui.preview.buildSkipped);
+            ImGui::Text("Equipment sets: %zu import, %zu skip",ui.preview.equipmentSetAdded,ui.preview.equipmentSetSkipped);
             ImGui::Text("Fashion: %zu import, %zu skip", ui.preview.fashionAdded, ui.preview.fashionSkipped);
             ImGui::Text("Other files: %zu import, %zu skip", ui.preview.otherWritten, ui.preview.otherSkipped);
             if (ui.preview.fashionSimilar)
@@ -282,10 +284,10 @@ static void RenderLibraryBackupUI() {
         if (!ui.replace)
             ImGui::TextWrapped("Merge keeps existing entries with matching IDs. For other data, existing local files are kept.");
         else {
-            ImGui::TextWrapped("Replace overwrites only selected collections and files present in this backup. Unchecked collections are never changed.");
+            ImGui::TextWrapped("Replace overwrites only selected collections and files present in this backup. Linked Fashion dependencies are preserved or included. Login history always keeps newer observations.");
             ImGui::Checkbox("I understand the selected data will be replaced", &ui.replaceAcknowledged);
         }
-        ImGui::TextDisabled("A recovery ZIP is saved in Alter Ego's backups folder before changes.");
+        ImGui::TextDisabled("Recovery snapshots are saved in Alter Ego's backups/recovery folder.");
         ImGui::Spacing();
         if ((selected & AlterEgo::Backup::Builds) && g_EditDirty)
             ImGui::TextWrapped("Save or cancel unsaved build edits before restoring Builds.");

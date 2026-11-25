@@ -34,6 +34,42 @@ inline std::string FreshCategoryUrl(uint32_t categoryId, int64_t requestToken) {
     return url;
 }
 
+// Explicit modern schema (including object-shaped achievement IDs) on the
+// alternate bulk endpoint. Do not assume an arbitrary cache-buster changes
+// the upstream cache key. Both responses must still pass rollover validation.
+inline std::string AlternateCategoryUrl(uint32_t categoryId,int64_t requestToken) {
+    return "https://api.guildwars2.com/v2/achievements/categories?ids="+
+        std::to_string(categoryId)+"&v=2022-03-23T19%3A00%3A00.000Z&lang=en&ae_refresh="+
+        std::to_string(requestToken);
+}
+
+// Accept only a complete, unambiguous category response. The old schema
+// returns numbers; the modern schema returns objects with an id field.
+template<class Json>
+std::vector<uint32_t> CategoryIds(const Json& response,uint32_t expectedCategory) {
+    const Json* obj=&response;
+    if(response.is_array()){
+        if(response.size()!=1)return {};
+        obj=&response[0];
+    }
+    if(!obj->is_object() || !obj->contains("id") ||
+       !(*obj)["id"].is_number_integer() ||
+       (*obj)["id"].template get<int64_t>()!=expectedCategory ||
+       !obj->contains("achievements") || !(*obj)["achievements"].is_array())
+        return {};
+    std::vector<uint32_t> ids;
+    for(const auto& item:(*obj)["achievements"]){
+        const auto& value=item.is_object()&&item.contains("id")?item["id"]:item;
+        if(!value.is_number_integer())return {};
+        const auto id=value.template get<int64_t>();
+        if(id<=0 || id>UINT32_MAX)return {};
+        // Access variants can repeat an achievement ID.
+        const auto n=static_cast<uint32_t>(id);
+        if(std::find(ids.begin(),ids.end(),n)==ids.end())ids.push_back(n);
+    }
+    return ids;
+}
+
 inline std::vector<uint32_t> SortedIds(std::vector<uint32_t> ids) {
     std::sort(ids.begin(), ids.end());
     return ids;
