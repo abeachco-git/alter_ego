@@ -44,7 +44,7 @@ The following are **additions or changes relative to the original [PieOrCake Alt
 | **Offline UI assets** | Frequently used profession/specialization, crafting, UI, and other fixed icons, plus the bundled Inter font, are embedded in the DLL for offline-first rendering. Unused raid/strike banner payloads and their loader were removed. |
 | **Unified UI and editing** | Fixed bottom refresh/status bars on the major tabs, right-aligned **Updated** timestamps, standardized actions/dialogs, improved clipping/padding and button sizing, responsive build/raid layouts, and native right-click **Cut / Copy / Paste / Select All** menus in text inputs. |
 
-**What hasn't changed:** This is still Alter Ego, using [Raidcore Nexus](https://raidcore.gg/Nexus) and [Hoard & Seek](https://github.com/PieOrCake/hoard_and_seek). The fork does not introduce a separate GW2 API credential store or live memory-based gear reads. It keeps the original build-library data and upstream attribution.
+**What hasn't changed:** This is still Alter Ego, using [Raidcore Nexus](https://raidcore.gg/Nexus). The experimental branch now retrieves account data directly using a GW2 API key stored in Windows Credential Manager; it does not read live gear memory. It keeps the original build-library data and upstream attribution.
 
 **Fashion capture limitation:** The GW2 character-equipment API exposes equipped skin/dye data but not all saved in-game Fashion Template slots or outfit/visibility states. Equipment-derived captures are flagged partial. Import a complete in-game Wardrobe Template chat link for full fidelity. Travel Templates and an in-addon dye editor are intentionally not included. Fashion snapshots are stored in the native library alongside optional Loadout associations.
 
@@ -103,7 +103,7 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 - **Shared status bar** — The fixed bottom row shows **Refresh**, compact status feedback, and a right-aligned last-update timestamp across Characters, Compare, Skinventory, Vault, Clears, and Achievements. Scrollable content no longer moves this row.
 - **Offline-first UI resources** — Embedded frequently used icons and the licensed Inter font avoid first-render URL dependencies for fixed assets; other catalog data and images may still require GW2 API/network access.
 - **Text editing** — Right-click in ImGui text inputs for **Cut**, **Copy**, **Paste**, and **Select All**.
-- **Hoard & Seek Integration** — GW2 account, character, and completion API data continues to come through [Hoard & Seek](https://github.com/PieOrCake/hoard_and_seek). Build-page importing also reads user-selected Snow Crows/MetaBattle source URLs.
+- **Native account API and Inventory** — Link an ArenaNet key in Nexus > Alter Ego options. Character data, completion, wardrobe ownership, item inventory, wallet and guild bank are retrieved natively; Hoard & Seek is no longer required by the experimental branch.
 
 ## Cache and refresh behavior
 
@@ -128,7 +128,7 @@ Custom portraits are currently shown through Alter Ego's shared character-avatar
 ## Requirements
 
 - [Raidcore Nexus](https://raidcore.gg/Nexus) (API v6)
-- [Hoard & Seek](https://github.com/PieOrCake/hoard_and_seek) addon (provides character data via GW2 API)
+- [GW2 API key](https://account.guildwars2.com/applications) — account, characters, inventories, builds, progression, unlocks, wallet, guilds, tradingpost; enter in Nexus addon options.
 - [Events: Chat](https://raidcore.gg/Nexus) addon (optional — enables chat build detection)
 - [Events: Alerts](https://raidcore.gg/Nexus) addon (optional — enables real-time skin unlock and achievement completion detection)
 
@@ -172,11 +172,11 @@ MIT
 
 In **Characters**, select a character. **Save**, **Share**, and **Save Active Fashion** are in the character-header action area, so they do not disappear when switching between the **Equipment** and **Build** sub-tabs. **Save** opens *Save Current Build + Gear to Library*; select a build tab, equipment tab, name, and supported game-mode tags. **Share** exports the retrieved build/equipment directly without changing the saved library. **Save Active Fashion** captures the character's active appearance regardless of which equipment tab is currently being viewed. A build tab also offers **Save to Library** by right-click.
 
-Open **Compare** to check a saved build against the latest Hoard & Seek snapshot. **Character**, **Build Tab**, and **Equipment Tab** default to **Active (auto)**, with **Saved Build** below. Manually choosing a character, tab, or saved build overrides that dimension. Compare normally displays differences; **Show matches** adds matching values, and **Exact item IDs** checks identity rather than just functionally equivalent gear. Saved builds can also launch Compare from their shared header/context action.
+Open **Compare** to check a saved build against the latest native API snapshot. **Character**, **Build Tab**, and **Equipment Tab** default to **Active (auto)**, with **Saved Build** below. Manually choosing a character, tab, or saved build overrides that dimension. Compare normally displays differences; **Show matches** adds matching values, and **Exact item IDs** checks identity rather than just functionally equivalent gear. Saved builds can also launch Compare from their shared header/context action.
 
 For the logged-in character, the Characters roster shows which saved build is the best matching candidate, preferring confirmed equipment matches. Equipment is clearly labeled **MATCHES**, **DOES NOT MATCH**, **MISSING ITEM**, **DATA MISSING**, or **NOT SAVED**. A mismatch of only utilities is reported separately from a matching build/gear setup. Source-wide infusion requirements are evaluated per active weapon set; total AR uses the lower of the saved recommendation or **150** as its comparison threshold. Missing or unverified metadata is never silently treated as a match.
 
-Compare does **not** equip anything or read live gear memory. It uses the latest retrieved data, so a stale Hoard & Seek result may lag in-game changes. Older saved entries may not include every field; new snapshots preserve item IDs and infusion lists for optional detailed comparison. Shared relics from the supplemental equipment endpoint are handled with the selected numbered equipment set.
+Compare does **not** equip anything or read live gear memory. It uses the latest retrieved data, so a stale native API result may lag in-game changes. Older saved entries may not include every field; new snapshots preserve item IDs and infusion lists for optional detailed comparison. Shared relics from the supplemental equipment endpoint are handled with the selected numbered equipment set.
 
 ## Character sorting: Last Login
 
@@ -184,9 +184,9 @@ The Characters sort dropdown includes **Last Login** (newest first). It uses loc
 
 ## Optional live specialization warning and automatic refresh
 
-Nexus options > **Data Source: Hoard & Seek** now has an **Automatic Character Refresh** subsection. Automatic refresh is **off by default** (explicit opt-in). When enabled, the independent **When a character logs in** and **When specialization changes** options schedule a refresh for the currently played character only. Both use Nexus's existing MumbleLink identity event; **RTAPI is not required**. Rapid events are coalesced with an 8-second debounce, and only one automatic request per character is dispatched within a 90-second cooldown. Requests wait for Hoard & Seek to be ready and an in-flight fetch to finish; selected-character refreshes also refuse to overwrite an active fetch.
+Nexus options now has an **Automatic Character Refresh** subsection. Automatic refresh is **off by default** (explicit opt-in). When enabled, the independent **When a character logs in** and **When specialization changes** options schedule a refresh for the currently played character only. Both use Nexus's existing MumbleLink identity event; **RTAPI is not required**. Rapid events are coalesced with an 8-second debounce, and only one automatic request per character is dispatched within a 90-second cooldown. Requests wait for a linked native account and an in-flight fetch to finish; selected-character refreshes also refuse to overwrite an active fetch.
 
-The separately configurable **Warn when live specialization differs from retrieved build** option is on by default and compares MumbleLink's third specialization ID against the cached active build's third specialization. When both values are known but differ, a warning appears for the logged-in character in the roster and on Compare. Unknown/zero values do not trigger a warning. The warning does **not** imply that full gear details are available from live memory: both equipment and build templates still come from the GW2 API through Hoard & Seek, and the API may return stale cached data. Automatic refresh does not detect two builds that share the same third specialization or equipment-only switches.
+The separately configurable **Warn when live specialization differs from retrieved build** option is on by default and compares MumbleLink's third specialization ID against the cached active build's third specialization. When both values are known but differ, a warning appears for the logged-in character in the roster and on Compare. Unknown/zero values do not trigger a warning. The warning does **not** imply that full gear details are available from live memory: both equipment and build templates still come from the GW2 API directly, and the API may return stale cached data. Automatic refresh does not detect two builds that share the same third specialization or equipment-only switches.
 
 
 ### Developer UI conventions

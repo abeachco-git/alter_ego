@@ -167,7 +167,7 @@ inline bool UsableLoose(const Slot& s,const std::string& account,const std::stri
                        const ItemFlags& f,bool fresh,int64_t requestedStat=-1){
     if(!fresh||account.empty()||s.account!=account)return false;
     if(s.scope!="Bank"&&s.scope!="Shared inventory"&&s.scope!="Bags"&&s.scope!="Materials")return false;
-    if(requestedStat>0&&s.stat>0&&requestedStat!=s.stat)return false;
+    if(requestedStat>0&&requestedStat!=s.stat)return false;
     if(s.binding==Binding::Character)return !character.empty()&&s.boundTo==character;
     if(s.binding==Binding::Unknown)return f.known&&!f.soulbound&&s.scope=="Materials";
     if(f.known&&f.soulbound&&s.binding==Binding::Unbound)return false;

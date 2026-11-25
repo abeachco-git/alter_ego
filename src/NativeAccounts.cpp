@@ -442,13 +442,13 @@ void RenderInventory(const std::string& activeCharacter){
             if(subview==1)due=ScopeDue(*v,a.id,"Wallet");
             else if(subview==2)due=ScopeDue(*v,a.id,"Guild access");
             else{
-                for(const auto* s:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box","Roster"})if((scope.empty()||scope==s)&&ScopeDue(*v,a.id,s))due=true;
+                for(const auto* s:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box","Roster"})if(ScopeDue(*v,a.id,s))due=true;
                 auto roster=v->inventory.rosters.find(a.id);
-                if(roster!=v->inventory.rosters.end())for(const auto& ch:roster->second)for(const auto* s:{"Bags","Equipment"})if((scope.empty()||scope==s)&&ScopeDue(*v,a.id,s,ch))due=true;
+                if(roster!=v->inventory.rosters.end())for(const auto& ch:roster->second)for(const auto* s:{"Bags","Equipment"})if(ScopeDue(*v,a.id,s,ch))due=true;
                 if((scope=="Bags"||scope=="Equipment")&&ScopeDue(*v,a.id,"Roster"))due=true;
             }
         }
-        if(due)Refresh(accounts,subview==0?(scope.empty()?"Items":scope):autoScope,true);
+        if(due)Refresh(accounts,subview==0?"Items":autoScope,true);
     }
     if(subview!=0){
         static std::string walletQuery,guildQuery;auto& q=subview==1?walletQuery:guildQuery;

@@ -11,7 +11,8 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 - [x] Wallet balances and currency metadata, guild leader access and guild GUID-deduplicated stash/coins; implementation pending CI/live validation.
 - [x] Per-storage TTLs, failed-attempt cooldown, visible selected-account opt-in inventory refresh; broader dataset policies and independently committing Vault/Clears periods still outstanding.
 - [x] Inventory fuzzy search, rarity/type filters and name/quantity sort.
-- [ ] Inventory-aware Compare, Shopping List ownership, navigation and detailed eligibility.
+- [x] Exact-ID Compare acquisition aid and binding/freshness-aware location display; Inventory navigation from equipment and Shopping List; cached unique acquisition candidates subtract personal loose stock from remaining shopping cost (CI/live validation pending).
+- [ ] Extend Compare to semantic stat/upgrade/infusion alternatives, quantities across all required components, and full eligibility; broaden Shopping candidate coverage beyond known TP item map.
 - [ ] Wallet favorites/categories, additional filters, refresh exclusions and fair bounded queue.
 - [ ] Full independent character/progress dataset freshness; per-section Clears/Vault commit; no startup burst.
 - [ ] Authenticated single/multi-account tests, installed glyph field verification, benchmark and documentation cleanup.

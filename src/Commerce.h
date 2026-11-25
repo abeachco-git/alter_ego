@@ -40,6 +40,7 @@ namespace Skinventory {
         static void BuildItemMapAsync();
         static bool IsItemMapReady();
         static uint32_t GetItemIdForSkin(uint32_t skin_id);
+        static std::unordered_map<uint32_t,std::vector<uint32_t>> UniqueSkinCandidates();
         static std::string GetItemName(uint32_t item_id);
         static uint64_t GetPriceGeneration();
 

@@ -124,6 +124,14 @@ namespace Skinventory {
         const auto price = GetPrice(skin_id);
         return price && price->tradeable ? price->item_id : 0;
     }
+    std::unordered_map<uint32_t,std::vector<uint32_t>> Commerce::UniqueSkinCandidates(){
+        std::lock_guard<std::mutex> lock(s_mutex);
+        std::unordered_map<uint32_t,unsigned> uses;
+        for(const auto& [skin,items]:s_skin_to_item)for(auto item:items)++uses[item];
+        std::unordered_map<uint32_t,std::vector<uint32_t>> out;
+        for(const auto& [skin,items]:s_skin_to_item)for(auto item:items)if(uses[item]==1)out[skin].push_back(item);
+        return out;
+    }
     std::string Commerce::GetItemName(uint32_t item_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         const auto it=s_item_names.find(item_id);

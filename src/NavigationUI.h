@@ -167,7 +167,7 @@ static void MoveNavigation(int direction){
     if(const auto* s=g_Navigation.Move(direction)){
         g_NavRestore=*s;g_NavRestoreFrames=6;g_NavIntentFrames=0;
         RestoreNavigation(*s);
-        g_SwitchToLibrary=false;g_SwitchToCompare=false;g_SwitchToSkinventory=false;
+        g_SwitchToLibrary=false;g_SwitchToCompare=false;g_SwitchToSkinventory=false;g_SwitchToInventory=false;
     }
 }
 static UINT NavigationWndProc(HWND,UINT msg,WPARAM wParam,LPARAM){
@@ -218,7 +218,7 @@ static void EndNavigationFrame(){
             g_NavRestore.reset();g_NavIntentFrames=0;
             // Re-snapshot on the next frame after scroll targets are applied.
         }else if(--g_NavRestoreFrames<=0){g_NavRestore.reset();g_NavIntentFrames=0;}
-    }else if(!g_SwitchToLibrary&&!g_SwitchToCompare&&!g_SwitchToSkinventory){
+    }else if(!g_SwitchToLibrary&&!g_SwitchToCompare&&!g_SwitchToSkinventory&&!g_SwitchToInventory){
         auto current=CaptureNavigation();
         const auto* old=g_Navigation.Current();
         const bool changed=old&&!old->SameDestination(current);

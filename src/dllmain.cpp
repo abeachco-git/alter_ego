@@ -433,6 +433,8 @@ static bool g_SkinShowUnowned = true;
 static int  g_SkinViewMode = 0; // 0 = List, 1 = Grid
 static bool g_SkinRefreshOwned = false;
 static bool g_SkinInitialized = false;
+static bool g_SwitchToInventory = false;
+static void OpenInventoryItem(uint32_t id){if(id){MarkNavigation();AlterEgo::NativeAccounts::RevealItem(id);g_SwitchToInventory=true;}}
 static bool g_SwitchToSkinventory = false; // set by achievements tab to navigate to Skinventory
 static bool g_SwitchToCompare = false;     // set by Build Library to open Compare with its selected build
 
@@ -457,6 +459,7 @@ struct SkinShopEntry {
     int price;      // in copper
     int source;     // 0 = TP, 1 = Vendor
     std::string name, subtype; // cached sort keys
+    uint32_t ownedItem=0;
 };
 static std::vector<SkinShopEntry> g_SkinShopList;
 static bool g_SkinShopListDirty = true;
@@ -3390,29 +3393,10 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
                 }
             }
             ImGui::Separator();
-            // Show item locations from native API cache
-            if (item_info) {
-                const auto* loc = AlterEgo::GW2API::GetItemLocation(eq->id);
-                if (loc) {
-                    if (ImGui::BeginMenu("Item Locations")) {
-                        ImGui::Text("Total: %d", loc->total_count);
-                        ImGui::Separator();
-                        for (const auto& entry : loc->locations) {
-                            ImGui::Text("%s", entry.location.c_str());
-                            ImGui::SameLine(150);
-                            if (!entry.sublocation.empty()) {
-                                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", entry.sublocation.c_str());
-                                ImGui::SameLine(280);
-                            }
-                            ImGui::Text("x%d", entry.count);
-                        }
-                        ImGui::EndMenu();
-                    }
-                } else {
-                    if (ImGui::MenuItem("Query Item Locations")) {
-                        AlterEgo::GW2API::QueryItemLocation(eq->id);
-                    }
-                }
+            if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(eq->id);
+            if(ImGui::BeginMenu("Item Locations")){
+                AlterEgo::NativeAccounts::RenderItemAvailability(eq->id,AlterEgo::GW2API::GetCurrentAccountName(),g_CurrentCharName);
+                ImGui::EndMenu();
             }
             ImGui::EndPopup();
         }
@@ -10971,6 +10955,35 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     if (!actionableComponents && !g_LibCompareShowMatches)
         ImGui::TextDisabled("Nothing to change in the verified fields.");
 
+    // Separate exact-ID acquisition aid; never changes semantic comparison.
+    // Aggregate deficits across the selected tab before checking stock.
+    if(!saved.gear.empty()&&!character->equipment.empty()){
+        std::map<uint32_t,int> wanted,have;
+        for(const auto& [slot,gs]:saved.gear)if(gs.item_id)++wanted[gs.item_id];
+        for(const auto& [slot,gs]:saved.gear){
+            (void)gs;const auto* eq=FindEquipment(*character,slot,equipmentTab);
+            if(eq&&eq->id)++have[eq->id];
+        }
+        std::vector<std::pair<uint32_t,int>> missing;
+        for(const auto& [id,count]:wanted)if(count>have[id])missing.emplace_back(id,count-have[id]);
+        if(!missing.empty()&&ImGui::TreeNode("Exact saved item locations")){
+            ImGui::TextWrapped("Exact IDs only; equivalent gear may already match. Verify stats, upgrades, restrictions and template reuse before moving equipment.");
+            const auto owner=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character->name);
+            for(const auto& [id,count]:missing){
+                ImGui::PushID(static_cast<int>(id));
+                const auto* item=AlterEgo::GW2API::GetItemInfo(id);
+                std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count);
+                if(ImGui::TreeNode(label.c_str())){
+                    AlterEgo::NativeAccounts::RenderItemAvailability(id,owner,character->name);
+                    if(RenderActionButton("Find in Inventory"))OpenInventoryItem(id);
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+    }
+
     for (const auto& section : sections) {
         if (!g_LibCompareShowMatches && !section.differences && !section.unverified)
             continue;
@@ -13026,6 +13039,7 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",name.c_str());
         }
         if(ImGui::MenuItem("Copy Item Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeItem(price->item_id));
+        if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(price->item_id);
     }
     ImGui::Separator();
 
@@ -13728,11 +13742,18 @@ static void RenderSkinShoppingList() {
     // Build the unfiltered acquisition list only on data changes. Local
     // filters never request prices or restart the ownership/refresh lifecycle.
     static uint64_t lastOwned=0,lastPrice=0,lastCatalog=0;
-    struct ShopCandidate { Skinventory::SkinInfo skin; std::string itemName; int tp, vendor; };
+    struct ShopCandidate { Skinventory::SkinInfo skin; std::string itemName; int tp, vendor; uint32_t ownedItem=0; };
     static std::vector<ShopCandidate> candidates;
     static bool needsInitial=true;
     const auto owned=Skinventory::OwnedSkins::GetGeneration();
     const auto priceGen=Skinventory::Commerce::GetPriceGeneration();
+    static uint64_t lastInventory=0;
+    static int64_t lastFreshnessBucket=-1;
+    static std::string lastShopAccount;
+    const auto inventoryGen=AlterEgo::NativeAccounts::InventoryGeneration();
+    const auto shopAccount=GetEffectiveAccountName();
+    const auto freshnessBucket=static_cast<int64_t>(std::time(nullptr))/30;
+    if(lastInventory!=inventoryGen||lastShopAccount!=shopAccount||lastFreshnessBucket!=freshnessBucket){lastInventory=inventoryGen;lastShopAccount=shopAccount;lastFreshnessBucket=freshnessBucket;g_SkinShopListDirty=true;}
     if(lastOwned!=owned || lastPrice!=priceGen || lastCatalog!=data.catalog || needsInitial) {
         lastOwned=owned; lastPrice=priceGen; lastCatalog=data.catalog; needsInitial=false;
         g_SkinShopListDirty=true;
@@ -13741,6 +13762,7 @@ static void RenderSkinShoppingList() {
         g_SkinShopListDirty=false;
         candidates.clear();
         std::vector<uint32_t> priceIds;
+        const auto acquisitions=Skinventory::Commerce::UniqueSkinCandidates();
         for(const auto& row:data.rows) {
             const auto id=row.id;
             if(data.owned.count(id)||!Skinventory::EligibleSkin(row))continue;
@@ -13749,8 +13771,12 @@ static void RenderSkinShoppingList() {
             const auto p=Skinventory::Commerce::GetPrice(id);
             const int tp=p && p->tradeable && p->sell_quantity>0 ? p->sell_price : 0;
             const int vendor=Skinventory::Commerce::GetVendorPrice(id);
-            if(tp>0 || vendor>0)
-                candidates.push_back({*skin,p?Skinventory::Commerce::GetItemName(p->item_id):std::string(),tp,vendor});
+            uint32_t ownedItem=0;
+            const auto acq=acquisitions.find(id);
+            if(acq!=acquisitions.end())for(auto item:acq->second)
+                if(AlterEgo::NativeAccounts::LooseCount(item,shopAccount)>0){ownedItem=item;break;}
+            if(tp>0 || vendor>0 || ownedItem)
+                candidates.push_back({*skin,ownedItem?Skinventory::Commerce::GetItemName(ownedItem):p?Skinventory::Commerce::GetItemName(p->item_id):std::string(),tp,vendor,ownedItem});
         }
         if(s_needsFetch) {
             s_needsFetch=false;
@@ -13781,20 +13807,25 @@ static void RenderSkinShoppingList() {
             if(!tokens.empty() && !Skinventory::Search::Matches(skin.name+" "+entry.itemName,tokens)) continue;
             const bool useVendor=source==2 || (source==0 && entry.vendor>0 && (entry.tp<=0 || entry.vendor<=entry.tp));
             const int cost=useVendor?entry.vendor:entry.tp;
+            if(entry.ownedItem){
+                if(source==0||(source==1&&entry.tp>0)||(source==2&&entry.vendor>0))
+                    g_SkinShopList.push_back({skin.id,0,2,skin.name,Skinventory::SkinCategorySubtype(skin.type,skin.subtype),entry.ownedItem});
+                continue;
+            }
             if(cost<=0 || (maxGold>0 && int64_t(cost)>int64_t(maxGold)*10000)) continue;
-            g_SkinShopList.push_back({skin.id,cost,useVendor?1:0,skin.name,Skinventory::SkinCategorySubtype(skin.type,skin.subtype)});
+            g_SkinShopList.push_back({skin.id,cost,useVendor?1:0,skin.name,Skinventory::SkinCategorySubtype(skin.type,skin.subtype),0});
         }
         sortRows();
     }
 
-    int tpCount = 0, vendorCount = 0;
+    int tpCount = 0, vendorCount = 0, stockCount=0;
     for (const auto& e : g_SkinShopList) {
         if (e.source == 0) tpCount++;
-        else vendorCount++;
+        else if(e.source==1)vendorCount++;else stockCount++;
     }
 
-    ImGui::Text("Matching unowned skins: %d TP, %d Vendor (%zu total)",
-                tpCount, vendorCount, g_SkinShopList.size());
+    ImGui::Text("Matching locked skins: %d TP, %d Vendor, %d in stock",tpCount,vendorCount,stockCount);
+    if(stockCount)ImGui::TextDisabled("Stock = cached loose acquisition item; confirm eligibility in game.");
     ImGui::Separator();
 
     float reserveHeight = ImGui::GetFrameHeightWithSpacing() * 2.0f;
@@ -13866,14 +13897,19 @@ static void RenderSkinShoppingList() {
                 if (ImGui::IsItemHovered() && skin.type=="Armor") ImGui::SetTooltip("%s",skin.weight_class.c_str());
 
                 ImGui::TableNextColumn();
-                if (entry.source == 1) {
+                if(entry.ownedItem){ImGui::TextUnformatted("Stock");if(ImGui::IsItemHovered())ImGui::SetTooltip("A fresh cached acquisition item is in personal loose stock.");}
+                else if (entry.source == 1) {
                     ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Vendor");
                 } else {
                     ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.3f, 1.0f), "TP");
                 }
 
                 ImGui::TableNextColumn();
-                RenderCoins(entry.price);
+                if(entry.ownedItem){
+                    ImGui::PushID(static_cast<int>(entry.skinId));
+                    if(ImGui::SmallButton("Locate"))OpenInventoryItem(entry.ownedItem);
+                    ImGui::PopID();
+                }else RenderCoins(entry.price);
                 if(entry.source==0 && ImGui::IsItemHovered()) {
                     const auto p=Skinventory::Commerce::GetPrice(entry.skinId);
                     if(p) { const auto name=Skinventory::Commerce::GetItemName(p->item_id); if(!name.empty()) ImGui::SetTooltip("%s",name.c_str()); }
@@ -13889,7 +13925,7 @@ static void RenderSkinShoppingList() {
         int64_t tpTotal = 0, vendorTotal = 0;
         for (const auto& e : g_SkinShopList) {
             if (e.source == 0) tpTotal += e.price;
-            else vendorTotal += e.price;
+            else if(e.source==1)vendorTotal += e.price;
         }
         ImGui::Separator();
         ImGui::Text("TP total:");
@@ -17464,7 +17500,9 @@ void AddonRender() {
             }
         }
 
-        if (ImGui::BeginTabItem("Inventory",nullptr,NavigationTabFlags(7))) {
+        auto inventoryFlags=NavigationTabFlags(7);
+        if(g_SwitchToInventory){inventoryFlags|=ImGuiTabItemFlags_SetSelected;g_SwitchToInventory=false;}
+        if (ImGui::BeginTabItem("Inventory",nullptr,inventoryFlags)) {
             g_MainTab=7;
             AlterEgo::NativeAccounts::RenderInventory(g_CurrentCharName);
             ImGui::EndTabItem();
