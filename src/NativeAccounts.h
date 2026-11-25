@@ -39,5 +39,17 @@ void RenderItemAvailability(uint32_t id,const std::string& account,const std::st
 void RevealItem(uint32_t id);
 std::set<uint32_t> WalletFavorites();
 void SetWalletFavorites(const std::set<uint32_t>& ids);
-void RenderInventory(const std::string& activeCharacter,const std::function<void()>& saveSettings);
+struct InventoryNavigation {
+    int subview=0,sort=0,walletSort=0,freshness=0,minQuantity=0,transfer=0,favoriteFilter=0,balanceFilter=0;
+    uint32_t item=0;
+    std::string query,walletQuery,guildQuery,scope;
+    std::set<std::string> binding,rarity,type,characters;
+};
+InventoryNavigation CaptureInventoryNavigation();
+void RestoreInventoryNavigation(const InventoryNavigation& state);
+int InventorySubview();
+void SetInventorySubview(int value);
+std::string RevealAccount(uint32_t id,const std::string& selectedAccount);
+void RenderInventory(const std::string& selectedAccount,const std::function<void()>& saveSettings);
+void RenderInventoryStatusRow(const std::string& selectedAccount);
 }

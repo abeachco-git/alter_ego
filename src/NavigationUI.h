@@ -12,6 +12,7 @@ struct NavigationSnapshot {
     bool first=false,other=false,manual=false;
     std::set<std::string> modes;
     Skinventory::SkinFilters skins;
+    AlterEgo::NativeAccounts::InventoryNavigation inventory;
     std::map<ImGuiID,float> scroll;
     bool SameDestination(const NavigationSnapshot& o) const {
         return std::tie(page,collection,sub,buildTab,equipTab,id,kind,second,record,achievement)==
@@ -64,6 +65,7 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
             break;
         case 4:s.id=g_AchSelectedGroupId;s.record=g_AchSelectedCatId;s.achievement=g_NavAchievementId;
             s.search=g_AchSearchBuf;s.first=g_AchHideEmptyCats;s.other=g_AchHideCompletedCats;break;
+        case 7:s.inventory=AlterEgo::NativeAccounts::CaptureInventoryNavigation();s.sub=s.inventory.subview;s.record=s.inventory.item;break;
         case 5:s.id=g_LibCompareChar;s.manual=g_LibCompareSavedManual;
             if(s.manual)s.second=g_LibCompareBuildId;
             s.compareTarget=g_LibComparePreviousTarget;s.buildTab=g_LibCompareBuildTab;s.equipTab=g_LibCompareEquipTab;
@@ -143,6 +145,7 @@ static void RestoreNavigation(const NavigationSnapshot& s){
             if(changed&&s.record)FetchAchCategoryDefs(s.record,true);
             break;
         }
+        case 7:AlterEgo::NativeAccounts::RestoreInventoryNavigation(s.inventory);break;
         case 5:g_LibCompareChar=s.id;g_LibCompareBuildId=s.second;
             g_LibCompareSavedManual=s.manual;g_LibComparePreviousTarget=s.compareTarget;
             g_LibCompareBuildTab=s.buildTab;g_LibCompareEquipTab=s.equipTab;

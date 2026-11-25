@@ -434,7 +434,7 @@ static int  g_SkinViewMode = 0; // 0 = List, 1 = Grid
 static bool g_SkinRefreshOwned = false;
 static bool g_SkinInitialized = false;
 static bool g_SwitchToInventory = false;
-static void OpenInventoryItem(uint32_t id){if(id){MarkNavigation();AlterEgo::NativeAccounts::RevealItem(id);g_SwitchToInventory=true;}}
+static void OpenInventoryItem(uint32_t id);
 static bool g_SwitchToSkinventory = false; // set by achievements tab to navigate to Skinventory
 static bool g_SwitchToCompare = false;     // set by Build Library to open Compare with its selected build
 
@@ -1272,7 +1272,8 @@ static std::vector<std::string> g_RefreshNames; // all character names from API
 static std::vector<bool> g_RefreshSelection;    // parallel checkbox state
 
 // Multi-account selector state
-static std::string g_SelectedAccountFilter;    // empty = "All Accounts", else specific account_name
+static std::string g_SelectedAccountFilter;    // empty = "All Accounts", else specific account GUID
+static void OpenInventoryItem(uint32_t id){if(id){MarkNavigation();g_SelectedAccountFilter=AlterEgo::NativeAccounts::RevealAccount(id,g_SelectedAccountFilter);AlterEgo::NativeAccounts::RevealItem(id);g_SwitchToInventory=true;}}
 
 // Returns the account name to use for per-account queries (dropdown selection only)
 std::string GetEffectiveAccountName() {
@@ -10994,14 +10995,15 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         if(!missing.empty()&&ImGui::TreeNode("Exact saved item and upgrade locations")){
             ImGui::TextWrapped("Exact gear and upgrade ID deficits only; equivalent gear or attribute-based infusions may already match. Verify stats, restrictions and template reuse before moving items.");
             const auto owner=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character->name);
-            int acquisitionRow=0;
-            for(const auto& [id,count]:missing){
-                ImGui::PushID(acquisitionRow++);
+            std::map<uint32_t,int> totals;
+            for(const auto& [id,count]:missing)totals[id]+=count;
+            for(const auto& [id,count]:totals){
+                ImGui::PushID(static_cast<int>(id));
                 const auto* item=AlterEgo::GW2API::GetItemInfo(id);
                 std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count);
                 if(ImGui::TreeNode(label.c_str())){
                     AlterEgo::NativeAccounts::RenderItemAvailability(id,owner,character->name);
-                    if(RenderActionButton("Find in Inventory"))OpenInventoryItem(id);
+                    if(AlterEgo::UI::Button("Find in Inventory",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))OpenInventoryItem(id);
                     ImGui::TreePop();
                 }
                 ImGui::PopID();
@@ -12910,7 +12912,7 @@ void ProcessKeybind(const char* aIdentifier, bool aIsRelease) {
 // Skinventory UI
 // =========================================================================
 
-static ImVec4 GetSkinRarityColor(const std::string& rarity) {
+ImVec4 GetSkinRarityColor(const std::string& rarity) {
     if (rarity == "Junk")       return ImVec4(0.67f, 0.67f, 0.67f, 1.0f);
     if (rarity == "Basic")      return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
     if (rarity == "Fine")       return ImVec4(0.38f, 0.58f, 1.0f, 1.0f);
@@ -12938,7 +12940,7 @@ static void DrawCoinIcon(ImVec4 color, float radius) {
     ImGui::Dummy(ImVec2(radius * 2.0f + 1.0f, ImGui::GetTextLineHeight()));
 }
 
-static void RenderCoins(int64_t copper) {
+void RenderCoins(int64_t copper) {
     if (copper <= 0) {
         ImGui::TextColored(COIN_COPPER, "0");
         ImGui::SameLine(0, 2);
@@ -13048,7 +13050,7 @@ static void RevealSkinInBrowser(uint32_t id) {
     }
 }
 // All Skinventory surfaces use this same menu, scoped to the actual row/skin.
-static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
+static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t stockItem=0) {
     if (!ImGui::BeginPopupContextItem("##skin_actions")) return;
     ImGui::TextDisabled("%s",skin.name.c_str());
     ImGui::Separator();
@@ -13065,10 +13067,11 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin) {
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",name.c_str());
         }
         if(ImGui::MenuItem("Copy Item Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeItem(price->item_id));
-        if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(price->item_id);
+        if(!stockItem&&ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(price->item_id);
     }
     ImGui::Separator();
 
+    if(stockItem&&ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(stockItem);
     const auto wiki=Skinventory::WikiImage::GetWikiData(skin.id);
     if(!wiki.vendor_waypoint.empty() && ImGui::MenuItem("Copy Vendor Waypoint")) CopyToClipboard(wiki.vendor_waypoint);
     if(ImGui::MenuItem("Open Wiki Page")) {
@@ -13915,7 +13918,7 @@ static void RenderSkinShoppingList() {
                 }
                 ImGui::PopStyleColor();
                 ImGui::PushID((int)entry.skinId);
-                RenderSkinContextMenu(skin);
+                RenderSkinContextMenu(skin,entry.ownedItem);
                 ImGui::PopID();
 
                 ImGui::TableNextColumn();
@@ -13923,7 +13926,7 @@ static void RenderSkinShoppingList() {
                 if (ImGui::IsItemHovered() && skin.type=="Armor") ImGui::SetTooltip("%s",skin.weight_class.c_str());
 
                 ImGui::TableNextColumn();
-                if(entry.ownedItem){ImGui::TextUnformatted("Stock");if(ImGui::IsItemHovered())ImGui::SetTooltip("A fresh cached acquisition item is in personal loose stock.");}
+                if(entry.ownedItem){ImGui::TextUnformatted("Stock");if(ImGui::IsItemHovered())ImGui::SetTooltip("A fresh cached acquisition item is in personal loose stock. Right-click the row to find it in Inventory.");}
                 else if (entry.source == 1) {
                     ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Vendor");
                 } else {
@@ -13931,11 +13934,7 @@ static void RenderSkinShoppingList() {
                 }
 
                 ImGui::TableNextColumn();
-                if(entry.ownedItem){
-                    ImGui::PushID(static_cast<int>(entry.skinId));
-                    if(ImGui::SmallButton("Locate"))OpenInventoryItem(entry.ownedItem);
-                    ImGui::PopID();
-                }else RenderCoins(entry.price);
+                RenderCoins(entry.ownedItem?0:entry.price);
                 if(entry.source==0 && ImGui::IsItemHovered()) {
                     const auto p=Skinventory::Commerce::GetPrice(entry.skinId);
                     if(p) { const auto name=Skinventory::Commerce::GetItemName(p->item_id); if(!name.empty()) ImGui::SetTooltip("%s",name.c_str()); }
@@ -16345,7 +16344,7 @@ void AddonRender() {
     // Top-level tab bar: Characters | Build Library
     PollBuildSource();
     if (ImGui::BeginTabBar("##main_tabs")) {
-        static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu, skinMenu;
+        static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu, skinMenu, inventoryMenu;
 
         ImGuiTabItemFlags charTabFlags = NavigationTabFlags(0);
         if (g_ForceCharactersTab) {
@@ -17534,9 +17533,17 @@ void AddonRender() {
 
         auto inventoryFlags=NavigationTabFlags(7);
         if(g_SwitchToInventory){inventoryFlags|=ImGuiTabItemFlags_SetSelected;g_SwitchToInventory=false;}
-        if (ImGui::BeginTabItem("Inventory",nullptr,inventoryFlags)) {
+        ImGuiTabBar* inventoryBar=GImGui->CurrentTabBar;
+        const ImGuiID beforeInventory=inventoryBar?inventoryBar->SelectedTabId:0;
+        const bool inventoryVisible=ImGui::BeginTabItem("Inventory    ##ae_inventory_dropdown",nullptr,inventoryFlags);
+        const ImGuiID inventoryId=inventoryBar&&inventoryBar->LastTabItemIdx>=0?inventoryBar->Tabs[inventoryBar->LastTabItemIdx].ID:0;
+        HandleTabDropdown(inventoryMenu,inventoryBar,beforeInventory,inventoryId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+        if(inventoryVisible){
             g_MainTab=7;
-            AlterEgo::NativeAccounts::RenderInventory(g_CurrentCharName,SaveSettings);
+            ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
+            AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings);
+            ImGui::EndChild();
+            AlterEgo::NativeAccounts::RenderInventoryStatusRow(g_SelectedAccountFilter);
             ImGui::EndTabItem();
         }
 
@@ -17559,7 +17566,7 @@ void AddonRender() {
                 tabRowY - 3.0f));
             if (RenderThemedCombo("##AccountSelect", currentLabel.c_str(), comboWidth)) {
                 std::string prevFilter = g_SelectedAccountFilter;
-                if (ImGui::Selectable("All Accounts", g_SelectedAccountFilter.empty())) {
+                if (AlterEgo::UI::SelectableOption("All Accounts", g_SelectedAccountFilter.empty())) {
                     g_SelectedAccountFilter.clear();
                     if ((g_MainTab >= 2 && g_MainTab <= 4) || g_MainTab == 6) {
                         g_ForceCharactersTab = true;accountFallbackNavigation=true;
@@ -17567,9 +17574,9 @@ void AddonRender() {
                 }
                 for (const auto& acct : accounts) {
                     bool selected = (g_SelectedAccountFilter == acct.name);
-                    if (ImGui::Selectable(acct.display_name.c_str(), selected)) {
-                        g_SelectedAccountFilter = acct.name;
-                    }
+                    ImGui::PushID(acct.name.c_str());
+                    if (AlterEgo::UI::SelectableOption(acct.display_name.c_str(), selected)) g_SelectedAccountFilter = acct.name;
+                    ImGui::PopID();
                 }
                 if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
                     Skinventory::OwnedSkins::SetAccountName(g_SelectedAccountFilter);
@@ -17596,6 +17603,18 @@ void AddonRender() {
             s_previousVisibleMainTab = g_MainTab;
         }
         ImGui::EndTabBar();
+
+        if(inventoryMenu.requestOpen)ImGui::OpenPopup("Inventory menu##ae_main");
+        ImGui::SetNextWindowPos(inventoryMenu.anchor,ImGuiCond_Appearing);
+        if(ImGui::BeginPopup("Inventory menu##ae_main")){
+            bool chosen=false;const bool hovered=TabDropdownMenuHovered();
+            const char* labels[]={"Items","Wallet","Guild Bank"};
+            for(int i=0;i<3;++i)if(ImGui::MenuItem(labels[i],nullptr,g_MainTab==7&&AlterEgo::NativeAccounts::InventorySubview()==i)){
+                MarkNavigation();AlterEgo::NativeAccounts::SetInventorySubview(i);g_SwitchToInventory=true;chosen=true;
+            }
+            FinishTabDropdown(inventoryMenu,chosen,hovered);ImGui::EndPopup();
+        }
+        SyncTabDropdownOpen(inventoryMenu,"Inventory menu##ae_main");
 
         // Render OpenPopup and BeginPopup together in the stable main-window
         // scope, *after* EndTabBar. This works when Library itself is selected.
@@ -17989,6 +18008,9 @@ void AddonOptions() {
         ImGui::TextDisabled("Excluded datasets can still be refreshed manually.");
         for(uint32_t i=0;i<static_cast<uint32_t>(Dataset::Count);++i){
             const auto dataset=static_cast<Dataset>(i);
+            if(i==0||i==1||i==3||i==4||i==6){
+                ImGui::Spacing();ImGui::TextDisabled("%s",i==0?"Character data":i==1?"Account ownership and achievements":i==3?"Public catalogs":i==4?"Completion trackers":"Inventory");
+            }
             bool included=Included(dataset);
             if(ImGui::Checkbox(Labels[i],&included)){
                 SetIncluded(dataset,included);

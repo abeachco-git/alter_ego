@@ -23,16 +23,18 @@ Status: implementation authorized on experiment/composable-loadouts; native acco
 
 ## UI consistency audit — outstanding corrections
 
-Source audit at 57d47f9 (not an in-game visual test). Apply the existing UI guide; do not introduce separate per-page UI primitives or alter refresh scheduling as part of UI polish.
+Source audit at 57d47f9 (not an in-game visual test). Checked items below are implemented in source; CI and live validation pending. Apply the existing UI guide; do not introduce separate per-page UI primitives or alter refresh scheduling as part of UI polish.
 
-- [ ] High: unify Inventory's duplicate local account selector with the main account selection model; preserve active-account versus browsing-account semantics, single-account concealment, and explicit All Accounts browsing. Use stable account IDs in dropdowns.
-- [ ] High: use the existing RefreshUI::Row bottom footer for Items, Wallet and Guild bank, with a reserved scrollable content child, disabled refresh during active work, scoped last-success timestamps and meaningful stale/partial/failure details. Do not present a batch completion as proof all datasets succeeded; retain scope-specific storage diagnostics.
-- [ ] High: capture/restore Inventory subview, search, filters, sort, target item ID and account context in NavigationUI; use MarkNavigation for explicit destinations and avoid new history entries on filtering. Reveal a target by clearing conflicting filters, preserving compatible account scope when possible.
-- [ ] Use existing tab dropdown conventions for Inventory subviews where appropriate; share existing menu hover/click behavior and avoid overflowing the primary tab row/account selector at narrow widths.
-- [ ] Use canonical multi-select facets with independently removable chips for applicable Inventory type/rarity/binding/character choices; preserve single storage refresh scope unless explicitly decoupled. Keep wallet filtering canonical.
-- [ ] Use common rarity and coin presentation, consistent compact result rows and stable item IDs. Share item copy/chat-link/wiki/location actions with Guild bank and equipment; use existing compact UI buttons and context menus. Verify large-list scrolling and Shopping clipper row geometry for Stock versus price rows.
-- [ ] Account options: canonical UI::InputText with password flags, shared action/confirmation styles, visually disabled actions while busy, clear validation and error status, destructive unlink styling. Group refresh preferences and explain master/child state without changing policy.
-- [ ] Compare location hints: use stable item IDs (not array position), concise location labels and shared Find in Inventory action; keep acquisition hints distinct from semantic matches.
+- [x] High: unify Inventory's duplicate local account selector with the main account selection model; preserve active-account versus browsing-account semantics, single-account concealment, and explicit All Accounts browsing. Use stable account IDs in dropdowns.
+- [x] High: use the existing RefreshUI::Row bottom footer for Items, Wallet and Guild bank, with a reserved scrollable content child, disabled refresh during active work, scoped last-success timestamps and meaningful stale/partial/failure details. Do not present a batch completion as proof all datasets succeeded; retain scope-specific storage diagnostics.
+- [x] High: capture/restore Inventory subview, search, filters, sort, target item ID and account context in NavigationUI; use MarkNavigation for explicit destinations and avoid new history entries on filtering. Reveal a target by clearing conflicting filters, preserving compatible account scope when possible.
+- [x] Use existing tab dropdown conventions for Inventory subviews where appropriate; share existing menu hover/click behavior and avoid overflowing the primary tab row/account selector at narrow widths.
+- [x] Use canonical multi-select facets with independently removable chips for applicable Inventory type/rarity/binding/character choices; preserve single storage refresh scope unless explicitly decoupled. Keep wallet filtering canonical.
+- [x] Shared rarity and coin presentation, Items/Guild Bank context menus, Stock navigation via shared skin context menu and consistent price row geometry.
+- [ ] Verify large-list scrolling, narrow layout, common equipment location presentation and Shopping row geometry in game.
+- [x] Account options canonical password inputs, disabled actions, destructive unlink styling, grouped refresh preferences.
+- [ ] Further polish account validation feedback and master/child explanation; verify in game.
+- [x] Compare location hints: use stable item IDs (not array position), concise location labels and shared Find in Inventory action; keep acquisition hints distinct from semantic matches.
 - [ ] Verify no-account/not-retrieved/empty/filter-no-match/permission-denied/failed states, conditional account labels, narrow window layouts, multiple font sizes, keyboard focus, clipboard and Back/Forward in game.
 
 ## Goal and architecture

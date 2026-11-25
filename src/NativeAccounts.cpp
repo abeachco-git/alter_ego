@@ -4,6 +4,8 @@
 #include "BackgroundWorkers.h"
 #include "AddonShared.h"
 #include "AutoRefreshPolicy.h"
+#include "RefreshUI.h"
+#include "ChatLink.h"
 #include <windows.h>
 #include <wincred.h>
 #include <shellapi.h>
@@ -25,6 +27,7 @@ struct View {
 };
 std::atomic<uint64_t> inventoryGeneration{0};
 uint32_t revealItem=0;
+InventoryNavigation navigation;
 // Render-thread preferences, persisted in the ordinary settings file.
 std::set<uint32_t> walletFavorites;
 std::string root;
@@ -399,16 +402,50 @@ void Initialize(const std::string& directory){
 void Shutdown(){registryReady=false;++registryGeneration;std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();}
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
 std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}
+namespace {
+bool EnabledAction(const char* label,bool enabled,UI::ButtonRole role=UI::ButtonRole::Standard){
+    if(!enabled){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.5f);}
+    const bool clicked=UI::Button(label,ImVec2(0,0),role)&&enabled;
+    if(!enabled){ImGui::PopStyleVar();ImGui::PopItemFlag();}
+    return clicked;
+}
+std::vector<Account> SelectedAccounts(const View& v,const std::string& account){
+    std::vector<Account> out;
+    for(const auto& a:v.accounts)if(account.empty()||v.accounts.size()==1||a.id==account)out.push_back(a);
+    return out;
+}
+void ItemMenu(uint32_t id,const std::string& name,const std::string& chat){
+    if(!ImGui::BeginPopupContextItem("##inventory_item_actions"))return;
+    ImGui::TextDisabled("%s",name.c_str());ImGui::Separator();
+    if(ImGui::MenuItem("Copy Item Name"))CopyToClipboard(name);
+    if(ImGui::MenuItem("Copy Item Chat Link"))CopyToClipboard(chat.empty()?AlterEgo::ChatLink::EncodeItem(id):chat);
+    if(ImGui::MenuItem("Open Wiki Page")){
+        auto url="https://wiki.guildwars2.com/wiki/Special:Search/"+Encode(name);
+        ShellExecuteA(nullptr,"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+    }
+    ImGui::EndPopup();
+}
+void AddFacetChips(UI::FilterChips& chips,const std::string& key,std::set<std::string>& values){
+    auto* target=&values;
+    for(const auto& value:values)chips.push_back({key+"/"+value,value,[target,value]{target->erase(value);}});
+}
+std::vector<std::pair<std::string,std::string>> Choices(const std::set<std::string>& values){
+    std::vector<std::pair<std::string,std::string>> out;
+    for(const auto& value:values)out.emplace_back(value,value);
+    return out;
+}
+bool MatchesFacet(const std::set<std::string>& facet,const std::string& value){return facet.empty()||facet.count(value)!=0;}
+}
 void RenderOptions(){
     auto v=Snapshot();
-    RenderSectionHeader("Native Account Management",UI::SectionGold);
+    RenderSectionHeader("Account Management",UI::SectionGold);
     ImGui::TextWrapped("Create a GW2 API key with: Account, Characters, Inventories, Builds, Progression, Unlocks, Wallet, Guilds, Trading Post. PvP is not needed.");
     if(RenderActionButton("Create API key"))ShellExecuteA(nullptr,"open","https://account.guildwars2.com/applications",nullptr,nullptr,SW_SHOWNORMAL);
     static char key[256]{},label[128]{};static std::string editing,removing;
     if(!editing.empty())ImGui::TextUnformatted("Editing linked account");
-    ImGui::InputText("Label (optional)##native_label",label,sizeof(label));
-    ImGui::InputText("API key##native_key",key,sizeof(key),ImGuiInputTextFlags_Password);
-    if(RenderActionButton(editing.empty()?"Validate & link":"Validate & replace key")&&!busy.load()&&key[0]){
+    UI::InputText("Label (optional)##native_label",label,sizeof(label));
+    UI::InputText("API key##native_key",key,sizeof(key),ImGuiInputTextFlags_Password);
+    if(EnabledAction(editing.empty()?"Validate & link":"Validate & replace key",!busy.load()&&key[0])){
         auto secret=std::make_shared<Secret>(std::string(key));SecureZeroMemory(key,sizeof(key));
         Link(secret,label,editing);editing.clear();label[0]=0;
     }
@@ -419,50 +456,56 @@ void RenderOptions(){
         std::string missing;for(const auto& p:recommended)if(!a.permissions.count(p)){if(!missing.empty())missing+=", ";missing+=p;}
         if(missing.empty())ImGui::TextUnformatted("All recommended permissions granted");
         else ImGui::TextWrapped("Missing: %s",missing.c_str());
-        if(RenderActionButton("Edit")&&!busy.load()){editing=a.id;snprintf(label,sizeof(label),"%s",a.label.c_str());SecureZeroMemory(key,sizeof(key));}
-        ImGui::SameLine();if(RenderActionButton("Unlink")&&!busy.load()){removing=a.id;ImGui::OpenPopup("Unlink account?");}
+        if(EnabledAction("Edit",!busy.load())){editing=a.id;snprintf(label,sizeof(label),"%s",a.label.c_str());SecureZeroMemory(key,sizeof(key));}
+        ImGui::SameLine();if(EnabledAction("Unlink",!busy.load(),UI::ButtonRole::Destructive)){removing=a.id;ImGui::OpenPopup("Unlink account?");}
         if(ImGui::BeginPopupModal("Unlink account?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
             ImGui::TextWrapped("Remove the linked account and its stored credential? Saved Library data is unaffected.");
-            if(RenderActionButton("Unlink account")&&!busy.load()){Remove(removing);ImGui::CloseCurrentPopup();}
+            if(EnabledAction("Unlink account",!busy.load(),UI::ButtonRole::Destructive)){Remove(removing);ImGui::CloseCurrentPopup();}
             ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
         ImGui::PopID();
     }
-    const auto status=Status();if(!status.empty())ImGui::TextWrapped("%s",status.c_str());
+    const auto status=Status();if(busy.load())RenderSpinner("Working...");else if(!status.empty())ImGui::TextWrapped("%s",status.c_str());
     ImGui::TextDisabled("Keys are stored in Windows Credential Manager, not exported with the Library.");
 }
 std::set<uint32_t> WalletFavorites(){return walletFavorites;}
 void SetWalletFavorites(const std::set<uint32_t>& ids){walletFavorites=ids;}
-void RenderInventory(const std::string& activeCharacter,const std::function<void()>& saveSettings){
-    auto v=Snapshot();if(v->accounts.empty()){ImGui::TextWrapped("Link an account in Nexus > Alter Ego options to browse native inventory.");return;}
-    static std::string query,selected,scope,binding;
-    static bool all=false,initialized=false;
-    static int subview=0,sort=0;
-    static std::string rarity,type,characterFilter;
-    static int freshness=0,minQuantity=0,transfer=0;
-    bool reveal=revealItem!=0;
-    if(reveal){query=std::to_string(revealItem);revealItem=0;scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;subview=0;}
-    const bool multi=v->accounts.size()>1;
-    if(!multi){selected=v->accounts.front().id;all=false;initialized=false;}
-    else{
-        const auto active=Active(*v,activeCharacter);
-        if(!initialized){selected=active;all=false;initialized=true;}
-        if(reveal){all=true;}
-        if(!all&&std::none_of(v->accounts.begin(),v->accounts.end(),[&](const Account& a){return a.id==selected;}))selected=active;
-        std::string title=all?"All accounts":"Select account";
-        for(const auto& a:v->accounts)if(a.id==selected&&!all)title=Display(a);
-        if(RenderThemedCombo("##native_inventory_account",title.c_str())){
-            if(ImGui::Selectable("All accounts",all))all=true;
-            for(const auto& a:v->accounts)if(ImGui::Selectable(Display(a).c_str(),!all&&a.id==selected)){selected=a.id;all=false;}
-            ImGui::EndCombo();
-        }
+InventoryNavigation CaptureInventoryNavigation(){return navigation;}
+void RestoreInventoryNavigation(const InventoryNavigation& state){navigation=state;revealItem=0;}
+int InventorySubview(){return navigation.subview;}
+void SetInventorySubview(int value){if(value>=0&&value<=2)navigation.subview=value;}
+std::string RevealAccount(uint32_t id,const std::string& selectedAccount){
+    auto v=Snapshot();if(v->accounts.size()<2||selectedAccount.empty())return selectedAccount;
+    auto it=v->index.find(id);if(it==v->index.end())return selectedAccount;
+    bool selectedHas=false,otherHas=false;
+    for(auto n:it->second){
+        const auto& owner=v->inventory.rows[n].slot.account;
+        if(owner==selectedAccount)selectedHas=true;
+        else if(std::any_of(v->accounts.begin(),v->accounts.end(),[&](const Account& a){return a.id==owner;}))otherHas=true;
     }
-    std::vector<Account> accounts;for(const auto& a:v->accounts)if(all||a.id==selected)accounts.push_back(a);
+    return !selectedHas&&otherHas?std::string{}:selectedAccount;
+}
+void RenderInventory(const std::string& selectedAccount,const std::function<void()>& saveSettings){
+    auto v=Snapshot();
+    if(!Ready()){RenderSpinner("Loading linked accounts...");return;}
+    if(v->accounts.empty()){ImGui::TextDisabled("Link an account in Nexus > Alter Ego options to browse Inventory.");return;}
+    auto& nav=navigation;
+    auto& query=nav.query;auto& scope=nav.scope;auto& binding=nav.binding;
+    auto& rarity=nav.rarity;auto& type=nav.type;auto& characterFilter=nav.characters;
+    auto& subview=nav.subview;auto& sort=nav.sort;auto& freshness=nav.freshness;
+    auto& minQuantity=nav.minQuantity;auto& transfer=nav.transfer;
+    if(revealItem){
+        nav.item=revealItem;query=std::to_string(revealItem);revealItem=0;
+        scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();
+        freshness=minQuantity=transfer=0;subview=0;
+    }
+    const bool multi=v->accounts.size()>1,all=multi&&selectedAccount.empty();
+    const auto accounts=SelectedAccounts(*v,selectedAccount);
     const auto allowed=[&](const std::string& id){return std::any_of(accounts.begin(),accounts.end(),[&](const Account& a){return a.id==id;});};
-    if(RenderChipButton("Items",subview==0)){subview=0;}ImGui::SameLine();
-    if(RenderChipButton("Wallet",subview==1)){subview=1;}ImGui::SameLine();
-    if(RenderChipButton("Guild bank",subview==2)){subview=2;}
+    if(accounts.empty()){ImGui::TextDisabled("Select a linked account to browse.");return;}
+    const char* names[]={"Items","Wallet","Guild Bank"};
+    RenderSectionHeader(names[subview],UI::SectionGold);
     const auto autoScope=subview==1?"Wallet":subview==2?"Guild bank":"";
     // No automatic all-account startup sweep. Only the visible selected
     // account and stale storage scopes are eligible, after global opt-in.
@@ -484,9 +527,8 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
         if(due)Refresh(accounts,subview==0?"Items":autoScope,true);
     }
     if(subview!=0){
-        static std::string walletQuery,guildQuery;auto& q=subview==1?walletQuery:guildQuery;
-        static int favoriteFilter=0,balanceFilter=0,walletSort=0;
-        bool refresh=false;
+        auto& q=subview==1?nav.walletQuery:nav.guildQuery;
+        auto& favoriteFilter=nav.favoriteFilter;auto& balanceFilter=nav.balanceFilter;auto& walletSort=nav.walletSort;
         if(subview==1){
             UI::SearchToolbar("native_wallet","Search currencies or ID",q,
                 [&]{
@@ -501,14 +543,11 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
                     UI::FilterChoice("Favorites",favoriteFilter,favoriteOptions,2);
                     UI::FilterChoice("Balance",balanceFilter,balanceOptions,2);
                 },
-                [&]{favoriteFilter=balanceFilter=0;},"Refresh",&refresh);
+                [&]{favoriteFilter=balanceFilter=0;});
         }else{
             // Plain searchable list, no filter popup: same SearchField used by Characters.
             UI::SearchField("guild_search","Search items or ID",q);
-            refresh=RenderActionButton("Refresh");
         }
-        if(refresh&&!busy.load()&&!accounts.empty())Refresh(accounts,autoScope);
-        if(busy.load())ImGui::TextDisabled("Working...");
         if(subview==1){
             const char* walletSorts[]={"Game order","Name","Quantity"};
             ImGui::SetNextItemWidth(150);UI::Combo("##wallet_sort",&walletSort,walletSorts,3);
@@ -537,11 +576,12 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
                     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s favorite",favorite?"Remove":"Add");
                     ImGui::SameLine();
                     std::string label=w.name.empty()?"Currency #"+std::to_string(w.id):w.name;
-                    if(w.id==1)ImGui::Text("%s: %lldg %llds %lldc",label.c_str(),static_cast<long long>(w.value/10000),static_cast<long long>((w.value/100)%100),static_cast<long long>(w.value%100));
+                    if(w.id==1){ImGui::Text("%s:",label.c_str());ImGui::SameLine();RenderCoins(w.value);}
                     else ImGui::Text("%s: %lld",label.c_str(),static_cast<long long>(w.value));
                     if(!w.description.empty()&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",w.description.c_str());
                     ImGui::PopID();
                 }
+                if(visible.empty())ImGui::TextDisabled("No matching cached currencies.");
                 ImGui::PopID();
             }
         }else{
@@ -557,12 +597,19 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
                 auto it=v->inventory.guilds.find(id);if(it==v->inventory.guilds.end())continue;
                 const auto& g=it->second;ImGui::PushID(id.c_str());
                 auto title=(g.name.empty()?id:g.name)+" ["+g.tag+"]";
-                if(ImGui::TreeNode(title.c_str())){
+                if(ImGui::TreeNode((title+"###guild").c_str())){
                     ImGui::TextDisabled("%s%s",g.status.c_str(),Due("Guild bank",0,g.success,Now())?" (stale)":"");
-                    ImGui::Text("Shared coins: %lldg %llds %lldc",static_cast<long long>(g.coins/10000),static_cast<long long>((g.coins/100)%100),static_cast<long long>(g.coins%100));
-                    std::map<uint32_t,std::pair<std::string,int64_t>> groups;
-                    for(const auto& r:g.rows)if(Match(r.name,r.slot.id,q)){auto& x=groups[r.slot.id];x.first=r.name;x.second+=r.slot.count;}
-                    for(const auto& [item,x]:groups)ImGui::Text("%s x%lld",x.first.empty()?("Item #"+std::to_string(item)).c_str():x.first.c_str(),static_cast<long long>(x.second));
+                    ImGui::TextUnformatted("Shared coins:");ImGui::SameLine();RenderCoins(g.coins);
+                    std::map<uint32_t,std::pair<const Row*,int64_t>> groups;
+                    for(const auto& r:g.rows)if(Match(r.name,r.slot.id,q)){auto& x=groups[r.slot.id];x.first=&r;x.second+=r.slot.count;}
+                    for(const auto& [item,x]:groups){
+                        ImGui::PushID(static_cast<int>(item));
+                        const auto& row=*x.first;
+                        const auto name=row.name.empty()?"Item #"+std::to_string(item):row.name;
+                        ImGui::TextColored(GetSkinRarityColor(row.rarity),"%s x%lld",name.c_str(),static_cast<long long>(x.second));
+                        ItemMenu(item,name,row.chat);ImGui::PopID();
+                    }
+                    if(groups.empty())ImGui::TextDisabled("No matching cached items.");
                     ImGui::TreePop();
                 }ImGui::PopID();
             }
@@ -570,36 +617,37 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
         }
         return;
     }
-    bool refresh=false;
-    UI::SearchToolbar("native_inventory","Search item or ID",query,
-        [&]{UI::FilterChips c;if(!scope.empty())c.push_back({"scope",scope,[&]{scope.clear();}});
-            if(!binding.empty())c.push_back({"binding",binding,[&]{binding.clear();}});if(!rarity.empty())c.push_back({"rarity",rarity,[&]{rarity.clear();}});if(!type.empty())c.push_back({"type",type,[&]{type.clear();}});if(!characterFilter.empty())c.push_back({"character",characterFilter,[&]{characterFilter.clear();}});if(freshness)c.push_back({"freshness",freshness==1?"Fresh":"Stale / failed",[&]{freshness=0;}});if(minQuantity)c.push_back({"quantity","Min "+std::to_string(minQuantity),[&]{minQuantity=0;}});if(transfer)c.push_back({"transfer","Potentially transferable",[&]{transfer=0;}});return c;},
+    UI::SearchToolbar("native_inventory","Search items or ID",query,
+        [&]{
+            UI::FilterChips c;
+            if(!scope.empty())c.push_back({"scope",scope,[&]{scope.clear();}});
+            AddFacetChips(c,"binding",binding);AddFacetChips(c,"rarity",rarity);
+            AddFacetChips(c,"type",type);AddFacetChips(c,"character",characterFilter);
+            if(freshness)c.push_back({"freshness",freshness==1?"Fresh":"Stale / failed",[&]{freshness=0;}});
+            if(minQuantity)c.push_back({"quantity","Min "+std::to_string(minQuantity),[&]{minQuantity=0;}});
+            if(transfer)c.push_back({"transfer","Potentially transferable",[&]{transfer=0;}});
+            return c;
+        },
         [&]{
             UI::FilterChoice("Storage",scope,{"Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"});
-            UI::FilterChoice("Binding",binding,{"Unknown","Unbound","Account bound","Character bound"});
-            UI::FilterChoice("Rarity",rarity,{"Junk","Basic","Fine","Masterwork","Rare","Exotic","Ascended","Legendary"});
-            std::set<std::string> types,names;
+            UI::MultiFilterChoice("Binding",binding,Choices({"Unknown","Unbound","Account bound","Character bound"}));
+            UI::MultiFilterChoice("Rarity",rarity,{{"Junk","Junk"},{"Basic","Basic"},{"Fine","Fine"},{"Masterwork","Masterwork"},{"Rare","Rare"},{"Exotic","Exotic"},{"Ascended","Ascended"},{"Legendary","Legendary"}});
+            std::set<std::string> types=type,names=characterFilter;
             for(const auto& r:v->inventory.rows)if(allowed(r.slot.account)&&!r.type.empty())types.insert(r.type);
             for(const auto& a:accounts){
                 auto it=v->inventory.rosters.find(a.id);
                 if(it!=v->inventory.rosters.end())names.insert(it->second.begin(),it->second.end());
             }
-            // Keep an active selection removable even if its last matching row disappeared.
-            if(!type.empty())types.insert(type);
-            if(!characterFilter.empty())names.insert(characterFilter);
-            UI::FilterChoice("Type",type,std::vector<std::string>(types.begin(),types.end()));
-            UI::FilterChoice("Character",characterFilter,std::vector<std::string>(names.begin(),names.end()));
+            UI::MultiFilterChoice("Type",type,Choices(types));
+            UI::MultiFilterChoice("Character",characterFilter,Choices(names));
             const char* freshOptions[]={"All","Fresh","Stale / failed"};
             UI::FilterChoice("Freshness",freshness,freshOptions,3);
             UI::FilterInt("Min quantity",minQuantity);if(minQuantity<0)minQuantity=0;
             const char* transferOptions[]={"All","Potentially transferable"};
             UI::FilterChoice("Transferability",transfer,transferOptions,2);
         },
-        [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;},"Refresh",&refresh);
-    if(refresh&&!busy.load()&&!accounts.empty())Refresh(accounts,scope.empty()?"Items":scope);
-    const char* sorts[]={"Name","Quantity"};ImGui::SetNextItemWidth(120);ImGui::Combo("##inventory_sort",&sort,sorts,2);
-    const auto status=Status();if(!status.empty())ImGui::TextWrapped("%s",status.c_str());
-    if(accounts.empty()){ImGui::TextUnformatted("Select an account to browse.");return;}
+        [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;});
+    const char* sorts[]={"Name","Quantity"};ImGui::SetNextItemWidth(120);UI::Combo("##inventory_sort",&sort,sorts,2);
     if(ImGui::TreeNode("Storage status")){
         for(const auto& a:accounts){
             for(const auto* storage:{"Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box"}){
@@ -617,13 +665,13 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
     // Cache the filtered aggregate: rebuild only on a new projection or changed controls.
     struct Group{uint32_t id;int64_t count=0;std::string name;std::vector<const Row*> locations;};
     static std::shared_ptr<const View> previous;static std::string prevKey;static std::vector<Group> groups;
-    const std::string filterKey=selected+"\n"+(all?"all":"one")+"\n"+query+"\n"+scope+"\n"+binding+"\n"+rarity+"\n"+type+"\n"+std::to_string(sort)+"\n"+characterFilter+"\n"+std::to_string(freshness)+"\n"+std::to_string(minQuantity)+"\n"+std::to_string(transfer)+"\n"+std::to_string(freshness?Now()/10:0);
+    const auto filterKey=Json::array({selectedAccount,query,scope,binding,rarity,type,sort,characterFilter,freshness,minQuantity,transfer,(freshness||transfer)?Now()/10:0}).dump();
     if(previous!=v||prevKey!=filterKey){
         previous=v;prevKey=filterKey;groups.clear();std::map<uint32_t,size_t> index;
         for(const auto& row:v->inventory.rows){
             const auto& s=row.slot;
-            if(!allowed(s.account)||(!scope.empty()&&scope!=s.scope)||(!binding.empty()&&binding!=BindingName(s.binding))||(!rarity.empty()&&row.rarity!=rarity)||(!type.empty()&&row.type!=type)||!Match(row.name,s.id,query))continue;
-            if(!characterFilter.empty()&&s.character!=characterFilter)continue;
+            if(!allowed(s.account)||(!scope.empty()&&scope!=s.scope)||!MatchesFacet(binding,BindingName(s.binding))||!MatchesFacet(rarity,row.rarity)||!MatchesFacet(type,row.type)||!Match(row.name,s.id,query))continue;
+            if(!MatchesFacet(characterFilter,s.character))continue;
             const bool fresh=Fresh(*v,row);
             if((freshness==1&&!fresh)||(freshness==2&&fresh))continue;
             if(transfer){auto f=v->inventory.flags.find(s.id);if(!fresh||s.binding!=Binding::Unbound||f==v->inventory.flags.end()||f->second.accountBound||f->second.soulbound||s.scope=="Equipment"||s.scope=="Delivery box")continue;}
@@ -634,17 +682,15 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
         std::sort(groups.begin(),groups.end(),[&](const Group& a,const Group& b){if(sort==1&&a.count!=b.count)return a.count>b.count;return a.name==b.name?a.id<b.id:a.name<b.name;});
     }
     ImGui::Text("%zu matching items",groups.size());ImGui::Separator();
+    if(groups.empty())ImGui::TextDisabled("No matching cached items. Check storage status to see which scopes have been retrieved.");
     for(const auto& group:groups){
         ImGui::PushID(static_cast<int>(group.id));
         const std::string name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
         const std::string header=name+" x"+std::to_string(group.count)+"###item";
+        ImGui::PushStyleColor(ImGuiCol_Text,GetSkinRarityColor(group.locations.front()->rarity));
         const bool opened=ImGui::TreeNode(header.c_str());
-        if(ImGui::BeginPopupContextItem()){
-            if(ImGui::MenuItem("Copy item name"))CopyToClipboard(name);
-            if(!group.locations.front()->chat.empty()&&ImGui::MenuItem("Copy chat link"))CopyToClipboard(group.locations.front()->chat);
-            if(ImGui::MenuItem("Open wiki")){const auto url="https://wiki.guildwars2.com/wiki/Special:Search/"+Encode(name);ShellExecuteA(nullptr,"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);}
-            ImGui::EndPopup();
-        }
+        ImGui::PopStyleColor();
+        ItemMenu(group.id,name,group.locations.front()->chat);
         if(opened){
             for(const auto* row:group.locations){
                 const auto& s=row->slot;std::string location=s.scope;
@@ -666,4 +712,61 @@ void RenderInventory(const std::string& activeCharacter,const std::function<void
         ImGui::PopID();
     }
 }
+void RenderInventoryStatusRow(const std::string& selectedAccount){
+    auto v=Snapshot();const auto accounts=SelectedAccounts(*v,selectedAccount);
+    const auto& nav=navigation;
+    const auto scope=nav.subview==1?std::string("Wallet"):nav.subview==2?std::string("Guild bank"):nav.scope.empty()?std::string("Items"):nav.scope;
+    bool missing=false,failed=false,stale=false;
+    std::time_t oldest=0;unsigned count=0;
+    std::string detail;
+    const auto note=[&](const std::string& name,int64_t success,const std::string& status,const std::string& ttlScope){
+        if(!detail.empty())detail+="\n";
+        detail+=name+": "+status;
+        if(success<=0)missing=true;
+        else{
+            if(!oldest||success<oldest)oldest=static_cast<std::time_t>(success);
+            if(Now()-success>=FreshSeconds(ttlScope)){stale=true;detail+=" (stale)";}
+            detail+="; "+RefreshUI::Age(static_cast<std::time_t>(success));
+        }
+        if(status!="Ready"&&status!="Not retrieved")failed=true;
+        ++count;
+    };
+    const auto mark=[&](const Account& a,const std::string& dataset,const std::string& ch={}){
+        auto it=v->scopes.find({a.id,dataset,ch});
+        auto name=(accounts.size()>1?Display(a)+" / ":"")+dataset+(ch.empty()?"":" / "+ch);
+        note(name,it==v->scopes.end()?0:it->second.success,it==v->scopes.end()?"Not retrieved":it->second.status,dataset);
+    };
+    std::set<std::string> guilds;
+    for(const auto& a:accounts){
+        if(scope=="Wallet"){mark(a,"Wallet");continue;}
+        if(scope=="Guild bank"){
+            mark(a,"Guild access");auto access=v->inventory.guildAccess.find(a.id);
+            if(access!=v->inventory.guildAccess.end())guilds.insert(access->second.begin(),access->second.end());
+            continue;
+        }
+        for(const auto* dataset:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box"})
+            if(scope=="Items"||scope==dataset)mark(a,dataset);
+        if(scope=="Items"||scope=="Bags"||scope=="Equipment"){
+            mark(a,"Roster");auto roster=v->inventory.rosters.find(a.id);
+            if(roster!=v->inventory.rosters.end())for(const auto& ch:roster->second)
+                for(const auto* dataset:{"Bags","Equipment"})if(scope=="Items"||scope==dataset)mark(a,dataset,ch);
+        }
+    }
+    for(const auto& id:guilds){
+        auto it=v->inventory.guilds.find(id);
+        if(it==v->inventory.guilds.end())note(id,0,"Not retrieved","Guild bank");
+        else note(it->second.name.empty()?id:it->second.name,it->second.success,it->second.status,"Guild bank");
+    }
+    // A scoped aggregate is only fully retrieved when every expected dataset
+    // has succeeded. Use the oldest successful timestamp, never a failure time.
+    if(missing||!count)oldest=0;
+    auto state=RefreshUI::State::Ready;
+    if(busy.load()){state=RefreshUI::State::Working;detail="Working...\n"+detail;}
+    else if(failed)state=RefreshUI::State::Error;
+    else if(missing||stale||!count)state=RefreshUI::State::Waiting;
+    if(accounts.empty())detail="Link or select an account.";
+    if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty()))
+        Refresh(accounts,scope);
+}
+
 }

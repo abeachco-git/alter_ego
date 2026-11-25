@@ -4,6 +4,7 @@
 
 #include <string>
 #include <functional>
+#include <cstdint>
 #include "nexus/Nexus.h"
 #include "imgui.h"
 #include "UIControls.h"
@@ -61,7 +62,11 @@ void RenderEmptyCard(Texture_t* iconTex,
 // Inline animated loading spinner: rotating arc + label.
 void RenderSpinner(const char* label, ImVec4 color = ImVec4(0.7f, 0.85f, 0.95f, 1.0f));
 
-// Returns the account name to use for per-account H&S queries.
+// Common item presentation and actions, shared by Skinventory and native Inventory.
+ImVec4 GetSkinRarityColor(const std::string& rarity);
+void RenderCoins(int64_t copper);
+
+// Returns the account GUID to use for per-account API queries.
 // Returns an empty string when "All Accounts" is selected.
 std::string GetEffectiveAccountName();
 
