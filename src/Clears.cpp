@@ -713,22 +713,27 @@ void OnVaultResponse(void* eventArgs) {
     if (save) SaveVaultCache();
 }
 
-// Helper: fetch a category's achievement IDs from public API
-static std::vector<uint32_t> FetchCategoryIds(uint32_t catId, int64_t requestToken) {
-    // The GW2 API advertises private,max-age=3600 for category responses.
-    // A unique query token bypasses pre-reset cached IDs on each retry.
-    std::string url = ClearsReset::FreshCategoryUrl(catId, requestToken);
-    std::string json = Skinventory::HttpClient::Get(url);
-    std::vector<uint32_t> ids;
+// Read public categories with HTTP status and schema/identity validation.
+static std::vector<uint32_t> ReadCategoryIds(const std::string& url,uint32_t catId) {
+    const auto response=Skinventory::HttpClient::GetEx(url,
+        "Cache-Control: no-cache\r\nPragma: no-cache\r\n");
+    if(response.status_code!=200 && response.status_code!=206)return {};
     try {
-        auto j = nlohmann::json::parse(json);
-        if (j.contains("achievements") && j["achievements"].is_array()) {
-            for (const auto& id : j["achievements"]) {
-                ids.push_back(id.get<uint32_t>());
-            }
-        }
-    } catch (...) {}
-    return ids;
+        return ClearsReset::CategoryIds(nlohmann::json::parse(response.body),catId);
+    } catch (...) {return {};}
+}
+
+static std::vector<uint32_t> FetchCategoryIds(uint32_t catId,int64_t requestToken,
+                                            const std::vector<uint32_t>& prior) {
+    auto ids=ReadCategoryIds(ClearsReset::FreshCategoryUrl(catId,requestToken),catId);
+    if(!ClearsReset::LooksUnrotated(prior,ids))return ids;
+    // The alternate documented bulk endpoint uses an explicit schema and
+    // language. It may avoid stale representation caches; never promote an
+    // unchanged result just because it came from another URL.
+    AlterEgo::Background::Checkpoint();
+    auto alternate=ReadCategoryIds(ClearsReset::AlternateCategoryUrl(catId,requestToken),catId);
+    if(!ClearsReset::LooksUnrotated(prior,alternate))return alternate;
+    return ids.empty()?alternate:ids;
 }
 
 // Helper: fetch achievement details (name, bits) from public API
@@ -790,10 +795,18 @@ static void FetchClears() {
         // Step 1: Fetch all category achievement IDs
         const int64_t requestToken = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+        std::vector<uint32_t> priorFractals,priorBounties;
+        {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(g_ClearsDailyRolloverPending){
+                priorFractals=g_ClearsPriorDailyFractalIds;
+                priorBounties=g_ClearsPriorDailyBountyIds;
+            }
+        }
         AlterEgo::Background::Checkpoint();
-        auto fractalIds = FetchCategoryIds(CAT_DAILY_FRACTALS, requestToken);
-        auto bountyIds  = FetchCategoryIds(CAT_DAILY_BOUNTIES, requestToken);
-        auto weeklyIds  = FetchCategoryIds(CAT_WEEKLY_RAIDS, requestToken);
+        auto fractalIds = FetchCategoryIds(CAT_DAILY_FRACTALS, requestToken,priorFractals);
+        auto bountyIds  = FetchCategoryIds(CAT_DAILY_BOUNTIES, requestToken,priorBounties);
+        auto weeklyIds  = FetchCategoryIds(CAT_WEEKLY_RAIDS, requestToken,{});
 
         // A partial HTTP failure must never replace one of the sections with
         // an empty definition list just because another category succeeded.
@@ -804,10 +817,26 @@ static void FetchClears() {
                 const int attempt = ++g_ClearsDailyRolloverRetries;
                 const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
                 g_ClearsDailyRolloverRetryAtMs = NowMs() + delay * 1000;
-                g_ClearsStatusMsg += "; retrying in " + std::to_string(delay) + "s";
+
             }
             g_ClearsFetching = false;
             return;
+        }
+
+        // If both daily categories still have yesterday's IDs, downloading
+        // their immutable definitions cannot make them current. Keep the
+        // prior verified weekly data and retry using the existing cadence.
+        {
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(g_ClearsDailyRolloverPending &&
+               ClearsReset::LooksUnrotated(g_ClearsPriorDailyFractalIds,fractalIds) &&
+               ClearsReset::LooksUnrotated(g_ClearsPriorDailyBountyIds,bountyIds)){
+                const auto wait=ClearsReset::RetryDelaySeconds(++g_ClearsDailyRolloverRetries);
+                g_ClearsDailyRolloverRetryAtMs=NowMs()+wait*1000;
+                g_ClearsStatusMsg="Daily Fractals and Raid Bounties still return prior IDs via both API routes";
+                g_ClearsFetching=false;
+                return;
+            }
         }
 
         // Step 2: Fetch all achievement details
@@ -827,16 +856,16 @@ static void FetchClears() {
 
         // Category lookup succeeding does not imply that detail fetches succeeded.
         // Do not replace valid cached sections with empty vectors on HTTP/API errors.
-        if ((!fractalIds.empty() && fractalEntries.empty()) ||
-            (!bountyIds.empty() && bountyEntries.empty()) ||
-            (!weeklyIds.empty() && weeklyEntries.empty())) {
+        if (!AlterEgo::Identity::ExactIds(fractalIds,DailyIds(fractalEntries)) ||
+            !AlterEgo::Identity::ExactIds(bountyIds,DailyIds(bountyEntries)) ||
+            !AlterEgo::Identity::ExactIds(weeklyIds,DailyIds(weeklyEntries))) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            g_ClearsStatusMsg = "Failed to fetch achievement details; existing data preserved";
+            g_ClearsStatusMsg = "Incomplete achievement details; existing data preserved";
             if (g_ClearsDailyRolloverPending) {
                 const int attempt = ++g_ClearsDailyRolloverRetries;
                 const int64_t delay = ClearsReset::RetryDelaySeconds(attempt);
                 g_ClearsDailyRolloverRetryAtMs = NowMs() + delay * 1000;
-                g_ClearsStatusMsg += "; retrying in " + std::to_string(delay) + "s";
+
             }
             g_ClearsFetching = false;
             return;
@@ -892,9 +921,8 @@ static void FetchClears() {
                 const char* section = fractalsHeld && bountiesHeld
                     ? "Fractals and Raid Bounties" :
                     fractalsHeld ? "Fractals" : "Raid Bounties";
-                g_ClearsStatusMsg = std::string("Waiting for new daily ") +
-                    section + " API data; retrying in " +
-                    std::to_string(waitSeconds) + "s";
+                g_ClearsStatusMsg = std::string("Waiting for rotated daily ") +
+                    section + " API IDs (both routes checked)";
                 g_ClearsFetching = false;
                 return;
             }
@@ -3581,8 +3609,10 @@ void RenderClearsStatusRow() {
     } else if (waitingForDailyRollover) {
         // Scheduled API retries are not a hung request. Keep manual Refresh
         // enabled, show an informative waiting state without a busy indicator.
-        state = AlterEgo::RefreshUI::State::Ready;
-        detail = status.empty() ? "Daily API delayed; will retry automatically" : status;
+        state = AlterEgo::RefreshUI::State::Waiting;
+        const auto remaining=std::max<long long>(0,g_ClearsDailyRolloverRetryAtMs.load()-NowMs());
+        detail = (status.empty() ? "Daily API delayed" : status) +
+            "; retry in " + std::to_string((remaining+999)/1000) + "s";
     } else if (!status.empty()) {
         state = AlterEgo::RefreshUI::State::Error;
         detail = status;

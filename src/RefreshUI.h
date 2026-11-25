@@ -9,7 +9,7 @@
 // Compact, consistent refresh/status presentation for Alter Ego tabs.
 namespace AlterEgo::RefreshUI {
 
-enum class State { Ready, Working, Success, Error };
+enum class State { Ready, Working, Success, Error, Waiting };
 
 inline std::string Age(std::time_t stamp) {
     if (stamp <= 0) return "not available";
@@ -54,6 +54,8 @@ inline void Status(State state, const std::string& message) {
         constexpr char chars[] = "|/-\\";
         const int i = (int)(ImGui::GetTime() * 8.0) % 4;
         ImGui::TextColored(warn, "%c  %s", chars[i], message.c_str());
+    } else if (state == State::Waiting) {
+        ImGui::TextColored(warn, "%s", message.c_str());
     } else if (state == State::Error) {
         ImGui::TextColored(bad, "!  %s", message.c_str());
     } else if (state == State::Success) {
@@ -100,12 +102,13 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     const float maxStatus = std::max(0.0f, stampX - statusX - 8.0f);
     const char* shortStatus = state == State::Working ? "Refreshing" :
                               state == State::Success ? "Complete" :
-                              state == State::Error ? "Failed" : "Ready";
+                              state == State::Error ? "Failed" :
+                              state == State::Waiting ? "Waiting for API" : "Ready";
     std::string statusText(shortStatus);
     while (!statusText.empty() &&
            ImGui::CalcTextSize(statusText.c_str()).x > maxStatus)
         statusText.pop_back();
-    const ImVec4 statusColor = state == State::Working ? ImVec4(0.98f, 0.80f, 0.34f, 1.0f) :
+    const ImVec4 statusColor = (state == State::Working || state == State::Waiting) ? ImVec4(0.98f, 0.80f, 0.34f, 1.0f) :
         state == State::Success ? ImVec4(0.48f, 0.82f, 0.52f, 1.0f) :
         state == State::Error ? ImVec4(0.98f, 0.42f, 0.40f, 1.0f) :
         ImVec4(0.58f, 0.58f, 0.58f, 1.0f);

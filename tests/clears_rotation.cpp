@@ -3,6 +3,7 @@
 #include "../src/FractalScales.h"
 #include "../src/FractalCardLayout.h"
 #include <cassert>
+#include <nlohmann/json.hpp>
 #include <string>
 int case_clears_rotation(int, char**) {
     using namespace ClearsRotation;
@@ -79,6 +80,20 @@ int case_clears_rotation(int, char**) {
            std::to_string(reset + 61000));
     assert(FreshCategoryUrl(475, reset + 61001) !=
            FreshCategoryUrl(475, reset + 61000));
+    assert(AlternateCategoryUrl(88,1234)==
+           "https://api.guildwars2.com/v2/achievements/categories?ids=88&v=2022-03-23T19%3A00%3A00.000Z&lang=en&ae_refresh=1234");
+    using nlohmann::json;
+    const auto oldCategory=json::parse(R"({"id":88,"achievements":[101,102]})");
+    const auto newCategory=json::parse(R"([{"id":88,"achievements":[{"id":101},{"id":103},{"id":103}]}])");
+    assert(CategoryIds(oldCategory,88)==std::vector<uint32_t>({101,102}));
+    assert(CategoryIds(newCategory,88)==std::vector<uint32_t>({101,103}));
+    assert(LooksUnrotated({101,102},CategoryIds(oldCategory,88)));
+    assert(!LooksUnrotated({101,102},CategoryIds(newCategory,88)));
+    assert(CategoryIds(oldCategory,475).empty());
+    assert(CategoryIds(json::parse(R"({"id":88,"achievements":[101,"bad"]})"),88).empty());
+    assert(CategoryIds(json::parse(R"({"id":88,"achievements":[0,1]})"),88).empty());
+    assert(CategoryIds(json::parse(R"({"id":88,"achievements":[-1]})"),88).empty());
+    assert(CategoryIds(json::parse(R"([{"id":88,"achievements":[1]},{"id":88,"achievements":[2]}])"),88).empty());
     assert(RetryDelaySeconds(1) == 30 && RetryDelaySeconds(2) == 60);
     assert(RetryDelaySeconds(3) == 120 && RetryDelaySeconds(6) == 300);
     constexpr int64_t nov21 = 1795219200;
