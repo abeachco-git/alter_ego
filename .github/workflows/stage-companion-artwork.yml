@@ -1,0 +1,25 @@
+name: Stage companion artwork for review
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/composable-loadouts]
+    paths: ['.github/workflows/stage-companion-artwork.yml']
+permissions:
+  contents: write
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install image tooling
+        run: sudo apt-get update && sudo apt-get install -y python3-pil
+      - name: Stage verified artwork as immutable blobs (no branch writes)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: /usr/bin/python3 tools/stage_companion_icons.py companion-artwork --stage-blobs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: companion-artwork-review
+          path: companion-artwork
+          if-no-files-found: error
