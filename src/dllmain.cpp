@@ -863,7 +863,7 @@ static float g_LibListWidth = 220.0f; // Resizable build list column width
 static int g_LibraryCollection = 0; // 0 Loadouts, 1 Fashion, 2 Components, 3 Equipment Sets
 static bool g_SwitchToLibrary = false; // select Library after creation/import/navigation
 static int g_LibSelectedIdx = -1;
-// Build editor: "+ New Build" dialog state
+// Build editor: "+ New Loadout" dialog state
 static bool g_NewBuildDialogOpen = false;
 static std::string g_NewBuildProfessionPending;
 static std::vector<AlterEgo::GameMode> g_NewBuildModes{AlterEgo::GameMode::PvE};
@@ -6882,16 +6882,16 @@ bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selecte
     return changed;
 }
 
-// "+ New Build" dialog: pick a profession + game mode, create a blank build,
+// "+ New Loadout" dialog: pick a profession + game mode, create a blank build,
 // and drop straight into edit mode.
 static void RenderNewBuildDialog() {
-    if (g_NewBuildDialogOpen && !ImGui::IsPopupOpen("New Build##newbuild"))
-        ImGui::OpenPopup("New Build##newbuild");
+    if (g_NewBuildDialogOpen && !ImGui::IsPopupOpen("New Loadout###newbuild"))
+        ImGui::OpenPopup("New Loadout###newbuild");
 
     const ImVec2 dispSize = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowPos(ImVec2(dispSize.x * 0.5f, dispSize.y * 0.5f),
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("New Build##newbuild", &g_NewBuildDialogOpen,
+    if (ImGui::BeginPopupModal("New Loadout###newbuild", &g_NewBuildDialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         constexpr float kGridWidth = 480.0f;
         ImGui::TextUnformatted("Game modes");
@@ -7763,13 +7763,20 @@ static void RenderGearCustomizeDialog() {
                           : "Exact: (choose item)");
                 const std::string label = "Slot " + std::to_string(i + 1) + ": " + selected;
                 ImGui::PushID(static_cast<int>(i));
+                // Selectable defaults to the full column width. Reserve a separate
+                // hit area for Remove; long infusion names must not cover it.
+                const float removeWidth=AlterEgo::UI::CompactButtonWidth("X");
+                const float rowWidth=ImGui::GetContentRegionAvail().x;
+                const float selectWidth=std::max(1.0f,rowWidth-removeWidth-ImGui::GetStyle().ItemSpacing.x);
                 if (ImGui::Selectable(label.c_str(),
-                    g_GearSelectorTab == 3 && g_GearEditingInfusionIndex == static_cast<int>(i))) {
+                    g_GearSelectorTab == 3 && g_GearEditingInfusionIndex == static_cast<int>(i),
+                    0,ImVec2(selectWidth,0))) {
                     g_GearSelectorTab = 3;
                     g_GearEditingInfusionIndex = static_cast<int>(i);
                     g_GearExactInfusionId = static_cast<int>(id);
                     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
                 }
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",label.c_str());
                 bool removeInfusion = false;
                 if (ImGui::BeginPopupContextItem("##single_infusion_edit")) {
                     if(item)CopyNameMenuItem(item->name);
@@ -7797,16 +7804,17 @@ static void RenderGearCustomizeDialog() {
                     ImGui::EndPopup();
                 }
                 ImGui::SameLine();
-                if (AlterEgo::UI::SmallButton("X##removeInfusion") || removeInfusion) {
-                    if (i >= gs.infusion_ids.size()) { ImGui::PopID(); break; }
-                    gs.infusion_ids.erase(gs.infusion_ids.begin() + i);
-                    if (i < gs.infusion_attributes.size())
-                        gs.infusion_attributes.erase(gs.infusion_attributes.begin() + i);
-                    gs.infusion_snapshot = true;
-                    if (g_GearEditingInfusionIndex >= static_cast<int>(gs.infusion_ids.size()))
-                        g_GearEditingInfusionIndex = gs.infusion_ids.empty()
-                            ? 0 : static_cast<int>(gs.infusion_ids.size() - 1);
-                    commitGear(true);
+                const bool clickedRemove=AlterEgo::UI::SmallButton("X##removeInfusion");
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Remove infusion");
+                if (clickedRemove || removeInfusion) {
+                    if(AlterEgo::GearEdit::RemoveInfusion(gs,i)){
+                        g_GearEditingInfusionIndex=AlterEgo::GearEdit::InfusionSelectionAfterRemoval(
+                            g_GearEditingInfusionIndex,i,gs.infusion_ids.size());
+                        g_GearExactInfusionId=g_GearEditingInfusionIndex>=0
+                            ?static_cast<int>(gs.infusion_ids[g_GearEditingInfusionIndex]):0;
+                        if(g_GearEditingInfusionIndex<0&&g_GearSelectorTab==3)g_GearSelectorTab=0;
+                        commitGear(true);
+                    }
                     ImGui::PopID();
                     break;
                 }
@@ -11533,7 +11541,7 @@ static void RenderBuildLibrary() {
                 ImGui::SetTooltip("Drag to reorder %s and all its builds. Right-click to create a build.",
                     profession.c_str());
             if (!g_LibEditMode && ImGui::BeginPopupContextItem("##profession_actions")) {
-                if (ImGui::MenuItem("New Build")) g_NewBuildProfessionPending = profession;
+                if (ImGui::MenuItem("New Loadout")) g_NewBuildProfessionPending = profession;
                 ImGui::EndPopup();
             }
             if (!g_LibEditMode && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {

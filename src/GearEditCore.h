@@ -43,6 +43,25 @@ template<class T> std::vector<T> FillPattern(const std::vector<T>& pattern, int 
         result.push_back(pattern[static_cast<size_t>(i) % pattern.size()]);
     return result;
 }
+// Removal is an explicit recorded empty snapshot, not unknown data.
+template<class Slot> bool RemoveInfusion(Slot& slot, size_t index) {
+    if(index>=slot.infusion_ids.size())return false;
+    slot.infusion_ids.erase(slot.infusion_ids.begin()+index);
+    if(index<slot.infusion_attributes.size())
+        slot.infusion_attributes.erase(slot.infusion_attributes.begin()+index);
+    if(!slot.infusion_attributes.empty())
+        slot.infusion_attributes.resize(slot.infusion_ids.size());
+    slot.infusion_snapshot=true;
+    slot.infusion.clear();
+    return true;
+}
+// Keep selection on the same surviving requirement where possible.
+inline int InfusionSelectionAfterRemoval(int selected,size_t removed,size_t remaining) {
+    if(!remaining)return -1;
+    if(selected<0)return -1;
+    if(static_cast<size_t>(selected)>removed)--selected;
+    return std::min(selected,static_cast<int>(remaining-1));
+}
 template<class Slot> void CopyInfusions(Slot& dest, const Slot& source, int capacity) {
     using Id = typename decltype(source.infusion_ids)::value_type;
     std::vector<Id> ids;

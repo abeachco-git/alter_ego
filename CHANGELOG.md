@@ -50,3 +50,5 @@ See the [roadmap](docs/roadmap.md) for internal work and the [release checklist]
 - Restore aquatic equipment in saved Loadouts, simplify Components context menus and slot disclosures, and allow standalone Equipment Set creation.
 
 - Rename visible Skins and Wizard's Vault tabs; add achievement Copy Name; use host clipboard callbacks; compact Loadout references with inline editing and shared popup fields; improve automatic component naming and utility comparison regression coverage.
+
+- Fix the infusion removal control in Gear Customize and use New Loadout consistently for creation.
