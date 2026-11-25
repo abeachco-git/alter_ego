@@ -1402,7 +1402,7 @@ namespace AlterEgo {
             Background::Checkpoint();
             PublicCatalog::WithDb(root,[&](auto& db){
                 Database::Transaction tx(db);
-                auto previous=Cache::ReadReferenceRows(db,Cache::ReferenceDataset::Dyes);
+                const json previous=Cache::ReadReferenceRows(db,Cache::ReferenceDataset::Dyes);
                 if(rows.size()<previous.size()*9/10)throw std::runtime_error("Truncated dye catalog");
                 for(const auto& r:previous)if(!staged.count(r.at("id").get<int>()))rows.push_back(r);
                 Cache::StoreReferenceSnapshot(db,Cache::ReferenceDataset::Dyes,rows,Cache::ReferenceSnapshotTime());
