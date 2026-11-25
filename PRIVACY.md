@@ -30,3 +30,5 @@ Library exports exclude API credentials and rebuildable caches. Depending on you
 Use **Storage & Cache** in Nexus options to rebuild disposable data. Rebuilds can quarantine previous files under `backups/`; they are not secure deletion. To remove local data, unload the addon, preserve anything you want to keep, and remove the relevant addon files and remaining credentials. Revocation and deletion are separate actions.
 
 For vulnerability reports, see [Security](SECURITY.md).
+
+Public Wiki event timers may be refreshed automatically at startup or Vault entry when the Public catalogs automatic option is enabled and the selected timer snapshot is at least 30 days old. A manual refresh is available. Requests contain only fixed public Wiki page URLs, not account data or API credentials; the normalized public schedule and freshness are stored locally in the rebuildable cache. Builds may refresh public Wiki references daily when eligible.

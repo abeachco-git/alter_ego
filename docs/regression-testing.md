@@ -146,3 +146,5 @@ Public catalog tests cover v17 pet/legend persistence, exact protocol code resol
 Public catalog cadence tests verify independent weekly discovery and monthly definition refresh, manual override, combined fetch planning, canonical new item persistence and independent success timestamps. In-game verify fresh checks skip network, new item/skin discovery, and failure retaining prior success ages.
 
 Wiki resources have offline Python validation tests and existing C++ rotation tests. Normal build compiles validated normalized tables; live probes are not evidence of complete acquisition catalogs. Verify first-run logs separately.
+
+Hybrid Wiki tests cover shared generated phase identities, wrapped/raw JSON parsing, malformed sequence rejection, midnight alignment, runtime projection into Vault, embedded/cache selection, transactional persistence and rollback, and independent 30-day runtime freshness versus daily build eligibility. In-game check Nexus origin and age, force refresh with network available, then simulate offline failure and verify cached timer use through restart and reset. No live requests during offline tests.

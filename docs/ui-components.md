@@ -153,3 +153,5 @@ Main tabs use UI::TabGroupDividerBefore for purely decorative, muted one-pixel s
 The Achievements dropdown offers Refresh Achievement Names as a separate public-catalog full revalidation action. Keep the regular Refresh footer scoped to account progress. The shared footer reports catalog work/failure; its timestamp remains the last successful account progress retrieval. Search remains a local operation and invalidates when catalog/category generations change.
 
 Legacy achievement-specific WP buttons have been retired from rows and the popout. Preserve pin actions, name copying, normal achievement/Skinventory navigation and Wiki access. Vault objective assistance and vendor waypoint actions are independent features.
+
+Nexus Wiki reference schedules uses the standard section header and action button; show event phase count, source (embedded baseline/runtime cache), last verified age and refresh status. The displayed state is an immutable snapshot; rendering does not perform SQL or network requests.
