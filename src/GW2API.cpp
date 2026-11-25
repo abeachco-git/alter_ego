@@ -10,6 +10,7 @@
 #include "CharacterCache.h"
 #include "AutoRefreshPolicy.h"
 #include "NativeAccounts.h"
+#include "RefreshProgress.h"
 #include "OwnedSkins.h"
 #include "HttpClient.h"
 #include "ChatLink.h"
@@ -261,9 +262,11 @@ namespace AlterEgo {
             bool partial=false;
             // A manual roster fetch verifies every configured account; selective
             // refresh reuses known ownership and never falls back to a random key.
+            size_t rosterOrdinal=0;
             for(const auto& a:accounts){
-                Background::Checkpoint();std::set<std::string> names=a.characters;
+                Background::Checkpoint();++rosterOrdinal;std::set<std::string> names=a.characters;
                 if(listOnly||selected.empty()||!a.rosterKnown){
+                    {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_message="Checking roster "+std::to_string(rosterOrdinal)+"/"+std::to_string(accounts.size())+(accounts.size()>1?" - "+a.name:"");}
                     if(!NativeAccounts::RefreshRoster(a,names)){partial=true;continue;}
                     roster[a.id]=names;
                 }
@@ -286,23 +289,29 @@ namespace AlterEgo {
                 // Reconcile on the owned worker, not on the render thread.
                 ReconcileCharactersWithRoster();return;
             }
+            size_t ordinal=0;
             for(const auto& [a,name]:targets){
-                Background::Checkpoint();
+                Background::Checkpoint();++ordinal;
                 if(!NativeAccounts::Current(a)){partial=true;break;}
                 {
                     std::lock_guard<std::mutex> lock(s_mutex);s_current_char.name=name;
-                    s_fetch_message=name+": retrieving character, equipment and builds...";
+                    s_fetch_message=RefreshProgress::Character(ordinal,targets.size(),name,"Starting refresh");
                 }
                 try{
                     const std::string path="/v2/characters/"+UrlEncode(name);
-                    const auto require=[&](const std::string& endpoint,const std::vector<std::string>& perms){
+                    const auto stage=[&](const std::string& label){
+                        std::lock_guard<std::mutex> lock(s_mutex);
+                        s_fetch_message=RefreshProgress::Character(ordinal,targets.size(),name,label);
+                    };
+                    const auto require=[&](const std::string& endpoint,const std::vector<std::string>& perms,const char* label){
+                        stage(label);
                         auto r=NativeAccounts::Request(a,endpoint,perms);
                         if(!r)throw std::runtime_error(r.error);return std::move(r.data);
                     };
-                    auto core=require(path+"/core",{"characters"});
+                    auto core=require(path+"/core",{"characters"},"Character details");
                     if(!core.is_object()||core.value("name",std::string{})!=name)throw std::runtime_error("Invalid character identity");
                     Character ch=ParseCharacterJson(core);ch.account_name=a.id;ch.last_modified=SafeStr(core,"last_modified");
-                    const auto eq=require(path+"/equipmenttabs?tabs=all&v=2024-04-01T00:00:00.000Z",{"characters","builds"});
+                    const auto eq=require(path+"/equipmenttabs?tabs=all&v=2024-04-01T00:00:00.000Z",{"characters","builds"},"Equipment tabs");
                     if(!eq.is_array()||eq.empty())throw std::runtime_error("Invalid equipment tabs");
                     ch.equipment.clear();std::set<int> tabs;int activeEquipment=0;
                     for(const auto& tab:eq){
@@ -313,7 +322,7 @@ namespace AlterEgo {
                     }
                     if(!activeEquipment)throw std::runtime_error("Missing active equipment tab");
                     ch.active_equipment_tab=activeEquipment;
-                    auto supplement=require(path+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"});
+                    auto supplement=require(path+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"},"Additional equipment");
                     if(!supplement.at("equipment").is_array())throw std::runtime_error("Invalid supplemental equipment");
                     const std::set<std::string> slots={"Relic","PowerCore","Sickle","Axe","Pick","FishingRod","FishingBait","FishingLure","SensoryArray","ServiceChip"};
                     for(const auto& raw:supplement.at("equipment")){
@@ -325,7 +334,7 @@ namespace AlterEgo {
                             for(const auto& t:raw.at("tabs"))if(!t.is_null()&&tabs.count(t.get<int>()))add(t.get<int>());
                         }else add(0);
                     }
-                    auto builds=require(path+"/buildtabs?tabs=all&v=2021-07-15T13:00:00.000Z",{"characters","builds"});
+                    auto builds=require(path+"/buildtabs?tabs=all&v=2021-07-15T13:00:00.000Z",{"characters","builds"},"Build tabs");
                     if(!builds.is_array()||builds.empty())throw std::runtime_error("Invalid build tabs");
                     ch.build_tabs.clear();std::set<int> buildIds;int activeBuild=0;
                     for(const auto& row:builds){auto b=ParseBuildTemplate(row);if(b.tab<=0||!buildIds.insert(b.tab).second)throw std::runtime_error("Invalid build tab");
@@ -337,12 +346,13 @@ namespace AlterEgo {
                     if(!refreshCrafting&&old&&old->crafting_cached){
                         ch.crafting=old->crafting;ch.crafting_levels=old->crafting_levels;ch.crafting_active=old->crafting_active;ch.crafting_cached=true;
                     }else{
-                        auto craft=require(path+"/crafting",{"characters"});
+                        auto craft=require(path+"/crafting",{"characters"},"Crafting");
                         if(craft.is_object())craft=craft.at("crafting").get<json>();
                         if(!craft.is_array())throw std::runtime_error("Invalid crafting");
                         auto c=ParseCharacterJson(json{{"crafting",craft}});
                         ch.crafting=std::move(c.crafting);ch.crafting_levels=std::move(c.crafting_levels);ch.crafting_active=std::move(c.crafting_active);ch.crafting_cached=true;
                     }
+                    stage("Hero points");
                     auto hp=NativeAccounts::Request(a,path+"/heropoints",{"characters","progression"});
                     if(hp&&hp.data.is_array()){
                         for(const auto& p:hp.data){if(!p.is_string())throw std::runtime_error("Invalid hero challenge");ch.heropoints.push_back(p.get<std::string>());}
@@ -361,6 +371,7 @@ namespace AlterEgo {
                         if(it==s_characters.end())s_characters.push_back(std::move(ch));else *it=std::move(ch);
                         s_has_character_data=true;s_last_updated=std::time(nullptr);++g_characterDataRevision;++s_chars_fetched;
                     }
+                    stage("Saving character");
                     if(!SaveCharacterData(remapped?std::string{}:a.id,remapped?std::string{}:name))partial=true;
                 }catch(...){partial=true;}
             }

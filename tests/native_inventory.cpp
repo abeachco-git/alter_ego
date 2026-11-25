@@ -1,12 +1,17 @@
 #include "../src/NativeInventoryStore.h"
 #include "../src/NativeProgressCore.h"
 #include "../src/CompletionCache.h"
+#include "../src/RefreshProgress.h"
 #include <cassert>
 #include <filesystem>
 #include <chrono>
 using namespace AlterEgo;
 using namespace AlterEgo::NativeInventory;
 int case_native_inventory(int,char**){
+    RefreshProgress::Counts progress;
+    progress.Add("Ready",true);progress.Add("Refreshing",true);progress.Add("Missing permissions",true);progress.Add("Not retrieved",false);
+    assert(progress.total==4&&progress.ready==1&&progress.working==1&&progress.failed==1&&progress.missing==1);
+    assert(RefreshProgress::Character(2,5,"Test","Equipment tabs").find("2/5")!=std::string::npos);
     const auto root=(std::filesystem::temp_directory_path()/("ae-native-inventory-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))).string();
     auto rows=ParseArray(Json::parse(R"([null,{"id":10,"count":2},{"id":11,"count":1,"binding":"Account"},{"id":12,"count":1,"binding":"Character","bound_to":"A"}])"),"account-a","Bank");
     assert(rows.size()==3&&rows[0].position=="1"&&rows[0].binding==Binding::Unbound);

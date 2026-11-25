@@ -5,6 +5,7 @@
 #include "AddonShared.h"
 #include "AutoRefreshPolicy.h"
 #include "RefreshUI.h"
+#include "RefreshProgress.h"
 #include "ChatLink.h"
 #include <windows.h>
 #include <wincred.h>
@@ -39,6 +40,32 @@ std::shared_ptr<const View> view=std::make_shared<View>();
 std::atomic<bool> busy{false};
 std::string message;
 RefreshUI::State messageState=RefreshUI::State::Ready;
+using ScopeKey=std::tuple<std::string,std::string,std::string>;
+// Session-only progress overlay; no database reads or inventory index rebuilds on render.
+std::map<ScopeKey,ScopeState> liveScopes;
+unsigned processedScopes=0;
+std::string activeScope;
+void BeginScope(const ScopeState& state,const std::string& label){
+    std::lock_guard<std::mutex> lock(viewMutex);
+    auto current=state;current.status="Refreshing";
+    auto prior=view->scopes.find({state.account,state.scope,state.character});
+    if(prior!=view->scopes.end())current.success=prior->second.success;
+    liveScopes[{state.account,state.scope,state.character}]=std::move(current);
+    activeScope=label;
+}
+void EndScope(ScopeState state){
+    std::lock_guard<std::mutex> lock(viewMutex);
+    auto key=ScopeKey{state.account,state.scope,state.character};
+    auto prior=liveScopes.find(key);
+    if(state.status!="Ready"&&prior!=liveScopes.end())state.success=prior->second.success;
+    liveScopes[key]=std::move(state);++processedScopes;activeScope.clear();
+}
+void SetActiveScope(const std::string& label){
+    std::lock_guard<std::mutex> lock(viewMutex);activeScope=label;
+}
+void ClearProgress(){
+    std::lock_guard<std::mutex> lock(viewMutex);liveScopes.clear();processedScopes=0;activeScope.clear();
+}
 const std::vector<std::string> recommended={"account","characters","inventories","builds","progression","unlocks","wallet","guilds","tradingpost"};
 std::string Target(const std::string& id){return "AlterEgo/GW2/"+id;}
 bool ValidGuid(const std::string& s){
@@ -94,11 +121,12 @@ void Message(const std::string& msg,RefreshUI::State state=RefreshUI::State::Err
 std::string Status(){std::lock_guard<std::mutex> lock(viewMutex);return message;}
 template<class Job> void Launch(Job job){
     if(busy.exchange(true))return;
+    ClearProgress();
     Message("Working...",RefreshUI::State::Working);
     Background::Workers().Launch([job=std::move(job)]{
         try{job();}catch(...){Message("Operation failed; previous verified data retained.");}
-        busy=false;
-    },[]{Message("Operation cancelled.");busy=false;});
+        ClearProgress();busy=false;
+    },[]{Message("Operation cancelled.");ClearProgress();busy=false;});
 }
 int64_t Now(){return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();}
 std::string Error(int code){
@@ -200,6 +228,15 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
         const auto previous=Snapshot();
         std::set<uint32_t> ids;std::set<std::string> fetchedGuilds;
         bool currencyMetadataNeeded=false;
+        auto lastPublish=std::chrono::steady_clock::time_point{};
+        // Scope completion is immediate in the tooltip; full projections are
+        // coalesced on the worker to avoid rebuilding the item index per request.
+        auto publishProgress=[&](bool force=false){
+            const auto now=std::chrono::steady_clock::now();
+            if(force||now-lastPublish>=std::chrono::seconds(5)){
+                Publish("",false);lastPublish=std::chrono::steady_clock::now();
+            }
+        };
         for(const auto& a:accounts){
             Background::Checkpoint();Secret key(Key(a.id));
             if(key.value.empty()){Message("Stored credential unavailable. Replace it in Account Management.");continue;}
@@ -208,12 +245,13 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                 if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
                 Background::Checkpoint();
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
+                BeginScope(state,(accounts.size()>1?a.name+" / ":"")+name+(character.empty()?"":" / "+character));
                 const bool characterScope=bags||name=="Equipment";
                 const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
                     a.permissions.count("inventories")&&(!characterScope||a.permissions.count("characters"))&&
                     (name!="Legendary Armory"||a.permissions.count("unlocks"));
                 if(!permitted){
-                    state.status="Missing permissions";Record(root,state);return;
+                    state.status="Missing permissions";Record(root,state);EndScope(state);publishProgress();return;
                 }
                 try{
                     auto j=Fetch(path,key.value);std::vector<Slot> slots;
@@ -233,16 +271,20 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     state.status=what.rfind("HTTP ",0)==0||what=="Invalid key or missing permission"||what=="Transport failed or cancelled"||what=="Rate limited; retry later"?what:"Invalid or incomplete response";
                     Record(root,state);
                 }
+                EndScope(state);publishProgress();
             };
             if((onlyScope.empty()||onlyScope=="Wallet")&&(!automatic||ScopeDue(*previous,a.id,"Wallet"))){
                 ScopeState state{a.id,"Wallet","","Ready",Now(),0};
+                BeginScope(state,"Wallet");
                 try{
                     if(!a.permissions.count("wallet"))throw std::runtime_error("Missing wallet permission");
                     auto rows=ParseWallet(Fetch("/v2/account/wallet",key.value));state.success=Now();
                     RecordWallet(root,state,&rows);currencyMetadataNeeded=true;
                 }catch(...){state.status=a.permissions.count("wallet")?"Wallet request failed":"Missing permissions";RecordWallet(root,state);}
+                EndScope(state);publishProgress();
             }
             if((onlyScope.empty()||onlyScope=="Guild bank")&&(!automatic||ScopeDue(*previous,a.id,"Guild access"))){
+                SetActiveScope("Guild access");
                 try{
                     if(!a.permissions.count("guilds"))throw std::runtime_error("Missing guilds permission");
                     auto identity=Fetch("/v2/account",key.value);
@@ -255,6 +297,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                         auto old=previous->inventory.guilds.find(id);
                         if(automatic&&old!=previous->inventory.guilds.end()&&!Due("Guild bank",old->second.attempted,old->second.success,Now()))continue;
                         GuildRow g;g.id=id;g.attempted=Now();
+                        SetActiveScope("Guild bank / "+(old!=previous->inventory.guilds.end()&&!old->second.name.empty()?old->second.name:id));
                         try{
                             auto meta=Fetch("/v2/guild/"+id,{});g.name=meta.at("name").get<std::string>();g.tag=meta.value("tag",std::string{});
                         }catch(...){}
@@ -264,10 +307,12 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                             for(const auto& s:stock.slots)ids.insert(s.id);
                             fetchedGuilds.insert(id);
                         }catch(...){g.status="Guild stash unavailable";RecordGuild(root,g);}
+                        publishProgress(true);
                     }
                 }catch(...){
                     ScopeState state{a.id,"Guild access","",a.permissions.count("guilds")?"Guild access request failed":"Missing permissions",Now(),0};Record(root,state);
                 }
+                SetActiveScope("");publishProgress(true);
             }
             scope("Bank",{},"/v2/account/bank",false);
             scope("Shared inventory",{},"/v2/account/inventory",false);
@@ -276,28 +321,31 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             scope("Delivery box",{},"/v2/commerce/delivery",false);
             if((onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment")&&(!automatic||AutoScope("Roster"))){
                 if(!a.permissions.count("characters")){
-                    ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};Record(root,failed);
+                    ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};BeginScope(failed,"Roster");Record(root,failed);EndScope(failed);publishProgress(true);
                 }else try{
                     std::set<std::string> names;
                     auto cached=previous->inventory.rosters.find(a.id);
                     if(automatic&&cached!=previous->inventory.rosters.end()&&!ScopeDue(*previous,a.id,"Roster"))names=cached->second;
-                    else{names=Roster(a,key.value);Record(root,{a.id,"Roster","","Ready",Now(),Now()});}
+                    else{ScopeState state{a.id,"Roster","","Ready",Now(),0};BeginScope(state,"Roster");names=Roster(a,key.value);state.success=Now();Record(root,state);EndScope(state);publishProgress(true);}
                     for(const auto& ch:names){
                         const auto path="/v2/characters/"+Encode(ch);
                         scope("Bags",ch,path+"/inventory",true);
                         scope("Equipment",ch,path+"/equipment?v=latest",false);
                     }
-                }catch(...){ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};Record(root,failed);}
+                }catch(...){ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};Record(root,failed);EndScope(failed);publishProgress(true);}
             }
         }
         // Resolve names in bounded batches. Missing metadata cannot discard verified slots.
+        SetActiveScope("Resolving item and currency metadata");
+        publishProgress(true);
         auto cached=Read(root);
         for(const auto& row:cached.rows)if(!row.name.empty()&&cached.flags.count(row.slot.id))ids.erase(row.slot.id);
         for(const auto& [id,g]:cached.guilds)for(const auto& row:g.rows)if(!row.name.empty()&&cached.flags.count(row.slot.id))ids.erase(row.slot.id);
         if(currencyMetadataNeeded&&std::any_of(cached.wallet.begin(),cached.wallet.end(),[](const WalletRow& w){return w.name.empty();}))
             try{StoreCurrencies(root,Fetch("/v2/currencies?ids=all",{}));}catch(...){} 
         std::string batch;unsigned count=0;
-        auto flush=[&]{if(batch.empty())return;try{StoreNames(root,Fetch("/v2/items?ids="+batch,{}));}catch(...){}batch.clear();count=0;};
+        unsigned metadataDone=0;const auto metadataTotal=ids.size();
+        auto flush=[&]{if(batch.empty())return;SetActiveScope("Item metadata "+std::to_string(metadataDone)+"/"+std::to_string(metadataTotal));try{StoreNames(root,Fetch("/v2/items?ids="+batch,{}));}catch(...){}metadataDone+=count;batch.clear();count=0;publishProgress();};
         for(auto id:ids){Background::Checkpoint();if(count==100)flush();if(count++)batch+=",";batch+=std::to_string(id);}flush();
         Publish("Refresh finished. Check individual storage status for failures or stale data.");
     });
@@ -700,7 +748,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         std::sort(groups.begin(),groups.end(),[&](const Group& a,const Group& b){if(sort==1&&a.count!=b.count)return a.count>b.count;return a.name==b.name?a.id<b.id:a.name<b.name;});
     }
     ImGui::Text("%zu matching items",groups.size());ImGui::Separator();
-    if(groups.empty())ImGui::TextDisabled("No matching cached items. Check storage status to see which scopes have been retrieved.");
+    if(groups.empty())ImGui::TextDisabled("%s",busy.load()?"Refreshing inventory; verified items will appear as available.":"No matching cached items. Check storage status to see which scopes have been retrieved.");
     for(const auto& group:groups){
         ImGui::PushID(static_cast<int>(group.id));
         const std::string name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
@@ -731,24 +779,29 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     const auto& nav=navigation;
     const auto scope=nav.subview==1?std::string("Wallet"):nav.subview==2?std::string("Guild bank"):nav.scope.empty()?std::string("Items"):nav.scope;
     bool missing=false,failed=false,stale=false;
+    std::map<ScopeKey,ScopeState> progress;std::string current;unsigned processed=0;
+    {std::lock_guard<std::mutex> lock(viewMutex);progress=liveScopes;current=activeScope;processed=processedScopes;}
     std::time_t oldest=0;unsigned count=0;
     std::string detail;
-    const auto note=[&](const std::string& name,int64_t success,const std::string& status,const std::string& ttlScope){
-        if(!detail.empty())detail+="\n";
-        detail+=name+": "+status;
+    const auto note=[&](const std::string& name,int64_t success,const std::string& status,const std::string& ttlScope,bool show=true){
+        if(show){if(!detail.empty())detail+="\n";detail+=name+": "+status;}
         if(success<=0)missing=true;
         else{
             if(!oldest||success<oldest)oldest=static_cast<std::time_t>(success);
-            if(Now()-success>=FreshSeconds(ttlScope)){stale=true;detail+=" (stale)";}
-            detail+="; "+RefreshUI::Age(static_cast<std::time_t>(success));
+            if(Now()-success>=FreshSeconds(ttlScope)){stale=true;if(show)detail+=" (stale)";}
+            if(show)detail+="; "+RefreshUI::Age(static_cast<std::time_t>(success));
         }
-        if(status!="Ready"&&status!="Not retrieved")failed=true;
+        if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing")failed=true;
         ++count;
     };
-    const auto mark=[&](const Account& a,const std::string& dataset,const std::string& ch={}){
-        auto it=v->scopes.find({a.id,dataset,ch});
+    const auto mark=[&](const Account& a,const std::string& dataset,const std::string& ch={},RefreshProgress::Counts* group=nullptr){
+        const ScopeKey key{a.id,dataset,ch};
+        auto it=v->scopes.find(key);auto live=progress.find(key);
+        const auto* s=live!=progress.end()?&live->second:it!=v->scopes.end()?&it->second:nullptr;
         auto name=(accounts.size()>1?Display(a)+" / ":"")+dataset+(ch.empty()?"":" / "+ch);
-        note(name,it==v->scopes.end()?0:it->second.success,it==v->scopes.end()?"Not retrieved":it->second.status,dataset);
+        const auto status=s?s->status:"Not retrieved";const auto success=s?s->success:0;
+        note(name,success,status,dataset,group==nullptr);
+        if(group)group->Add(status,success>0);
     };
     std::set<std::string> guilds;
     for(const auto& a:accounts){
@@ -762,8 +815,13 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
             if(scope=="Items"||scope==dataset)mark(a,dataset);
         if(scope=="Items"||scope=="Bags"||scope=="Equipment"){
             mark(a,"Roster");auto roster=v->inventory.rosters.find(a.id);
-            if(roster!=v->inventory.rosters.end())for(const auto& ch:roster->second)
-                for(const auto* dataset:{"Bags","Equipment"})if(scope=="Items"||scope==dataset)mark(a,dataset,ch);
+            if(roster!=v->inventory.rosters.end())for(const auto* dataset:{"Bags","Equipment"}){
+                if(scope!="Items"&&scope!=dataset)continue;
+                RefreshProgress::Counts group;
+                for(const auto& ch:roster->second)mark(a,dataset,ch,&group);
+                if(!detail.empty())detail+="\n";
+                detail+=(accounts.size()>1?Display(a)+" / ":"")+dataset+": "+group.Summary();
+            }
         }
     }
     for(const auto& id:guilds){
@@ -775,7 +833,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     // has succeeded. Use the oldest successful timestamp, never a failure time.
     if(missing||!count)oldest=0;
     auto state=RefreshUI::State::Ready;
-    if(busy.load()){state=RefreshUI::State::Working;detail="Working...\n"+detail;}
+    if(busy.load()){state=RefreshUI::State::Working;detail=std::to_string(processed)+" storage scopes processed"+(current.empty()?"":"\nCurrent: "+current)+"\n\n"+detail;}
     else if(failed)state=RefreshUI::State::Error;
     else if(missing||stale||!count)state=RefreshUI::State::Waiting;
     if(accounts.empty())detail="Link or select an account.";
