@@ -38,7 +38,7 @@ namespace Skinventory {
         // Item map: skin_id -> candidate item IDs and actual TP item names
         // Must be built once from /v2/items
         static void BuildItemMapAsync();
-        static void RefreshUpgradeCatalogAsync(bool manual);
+        static void RefreshUpgradeCatalogAsync(bool manual, bool itemsOnly=false);
         static bool IsItemMapReady();
         static uint32_t GetItemIdForSkin(uint32_t skin_id);
         static std::unordered_map<uint32_t,std::vector<uint32_t>> UniqueSkinCandidates();
@@ -56,7 +56,7 @@ namespace Skinventory {
     private:
         static void FetchPriceWorker(std::vector<uint32_t> item_ids,
                                       std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin);
-        static void ItemMapWorker();
+        static void ItemMapWorker(bool incremental=false,bool discover=true,bool refresh=true);
 
         static std::string s_data_dir;
         static std::mutex s_mutex;

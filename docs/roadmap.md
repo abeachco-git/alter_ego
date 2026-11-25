@@ -83,3 +83,5 @@ Unit/regression coverage for account switching, late responses, permission failu
 - First pass: shared equipment discovery, SQLite public upgrade and Vault definitions, seven-day refresh and Nexus manual actions.
 - Remaining: verify live catalog completeness and duplicate identity handling, remove legacy static upgrade identities after a validated replacement, finish skills/traits/profession and specialization per-record freshness, and implement Wiki-only schedules separately.
 - Second pass: public pet/legend SQLite catalogs, exact schema-versioned legend codes, seven-day complete checks for item stats and dyes, Nexus manual refresh, legacy effect text removed. Preserve old saved values; live validation outstanding.
+
+- Third pass: split seven-day item/skin discovery from 30-day upgrade, pet, legend, dye and stat definition refresh; shared incremental item mapping, verified skin checks, manual discovery actions. In-game full discovery and lifecycle validation still outstanding.

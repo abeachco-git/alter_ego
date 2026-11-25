@@ -53,6 +53,12 @@ int case_database_core(int, char**) {
     assert(!Due(0,100,101,false));
     assert(Due(100,100,101,true));
     assert(Due(100,100,100+Week,false));
+    assert(!Due(100,100,100+Week,false,Month));
+    assert(Due(100,100,100+Month,false,Month));
+    assert(Due(100,100,101,true,Month));
+    assert((PlanItems({1,2,3},{1,2},{1},true,false)==std::set<uint32_t>{3}));
+    assert((PlanItems({1,2,3},{1,2},{1},true,true)==std::set<uint32_t>{1,3}));
+    assert((PlanItems({1,2},{1,2},{1},false,true)==std::set<uint32_t>{1}));
     const auto vaultDefs=ParseObjectives(Json::parse(R"([{"id":20,"title":"Perform 3 Combo Skills in Combat","track":"PvE","acclaim":10}])"));
     assert(vaultDefs.at(20).acclaim==10);
     assert(Kind(Json::parse(R"({"type":"UpgradeComponent","details":{"type":"Default","infusion_upgrade_flags":["Infusion"]}})"))=="Infusion");
@@ -94,7 +100,25 @@ int case_database_core(int, char**) {
         assert(!P::DatasetDue(saved,"public_pets",101,false));
         assert(saved.upgrades==100&&saved.vault==100&&saved.index.size()==6&&saved.entries.size()==5);
         assert(saved.objectives.at(20).title=="Combo");
-        assert(db.Scalar("SELECT count(*) FROM reference_items WHERE complete=1")==5);
+        assert(!P::DatasetDue(saved,"public_pets",100+P::Week,false));
+        assert(P::DatasetDue(saved,"public_pets",100+P::Month,false));
+        {
+            DB::Transaction tx(db);
+            P::StoreIncrementalItems(db,{1,2,3,4,5,6,7},
+                P::Json::parse(R"([{"id":7,"name":"New ordinary item","type":"CraftingMaterial"}])"),true,false,200);
+            tx.Commit();
+        }
+        auto discovered=P::Read(db);
+        assert(discovered.index.size()==7&&discovered.upgrades==100);
+        assert(discovered.freshness.at("public_item_discovery").first==200);
+        assert(db.Scalar("SELECT count(*) FROM reference_items WHERE id=7 AND complete=1")==1);
+        {
+            DB::Transaction tx(db);
+            P::StoreIncrementalItems(db,{1,2,3,4,5,6,7},rows,false,true,300);
+            tx.Commit();
+        }
+        assert(P::Read(db).upgrades==300&&P::Read(db).freshness.at("public_item_discovery").first==200);
+        assert(db.Scalar("SELECT count(*) FROM reference_items WHERE complete=1")==6);
         bool failed=false;
         try{
             DB::Transaction tx(db);
@@ -102,7 +126,7 @@ int case_database_core(int, char**) {
             P::StoreUpgrades(db,{1,2,3,4,5,6},partial,200);
             tx.Commit();
         }catch(...){failed=true;}
-        assert(failed&&P::Read(db).upgrades==100&&P::Read(db).entries.size()==5);
+        assert(failed&&P::Read(db).upgrades==300&&P::Read(db).entries.size()==5);
         failed=false;
         try{DB::Transaction tx(db);P::StoreObjectives(db,{},200);tx.Commit();}catch(...){failed=true;}
         assert(failed&&P::Read(db).objectives.size()==1);

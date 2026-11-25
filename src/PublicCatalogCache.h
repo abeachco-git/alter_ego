@@ -5,13 +5,13 @@
 
 namespace AlterEgo::PublicCatalog {
 using Json = nlohmann::json;
-inline constexpr int64_t Week = 7 * 86400, Retry = 86400;
+inline constexpr int64_t Week = 7 * 86400, Month = 30 * 86400, Retry = 86400;
 inline int64_t Now() {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
-inline bool Due(int64_t success,int64_t attempt,int64_t now,bool manual) {
-    return manual || ((!success || now-success>=Week) && (!attempt || now-attempt>=Retry));
+inline bool Due(int64_t success,int64_t attempt,int64_t now,bool manual,int64_t interval=Week) {
+    return manual || ((!success || now-success>=interval) && (!attempt || now-attempt>=Retry));
 }
 inline uint32_t Id(const Json& v) {
     if(!v.is_number_integer())throw std::runtime_error("Invalid public ID");
@@ -79,6 +79,44 @@ inline void StoreUpgrades(Database::Connection& db,const std::set<uint32_t>& ids
     auto index=db.Prepare("INSERT INTO public_item_index VALUES(?)");
     for(auto id:ids){index.Bind(1,id);index.Execute();index.Reset();}
     Mark(db,"public_upgrades",stamp);
+    Mark(db,"public_item_discovery",stamp);
+}
+inline std::set<uint32_t> PlanItems(const std::set<uint32_t>& index,const std::set<uint32_t>& previous,
+                                    const std::set<uint32_t>& upgrades,bool discover,bool refresh) {
+    std::set<uint32_t> result;
+    for(auto id:index)if((discover&&!previous.count(id))||(refresh&&upgrades.count(id)))result.insert(id);
+    return result;
+}
+inline void StoreIncrementalItems(Database::Connection& db,const std::set<uint32_t>& index,
+                                  const Json& rows,bool discover,bool refresh,int64_t stamp) {
+    std::set<uint32_t> previous,known;
+    auto old=db.Prepare("SELECT id FROM public_item_index");
+    while(old.Step())previous.insert(static_cast<uint32_t>(old.Integer(0)));
+    auto up=db.Prepare("SELECT id FROM public_upgrade_items");
+    while(up.Step())known.insert(static_cast<uint32_t>(up.Integer(0)));
+    if(previous.empty()||index.empty()||index.size()<previous.size()*9/10)
+        throw std::runtime_error("Incomplete public item index");
+    if((discover&&stamp<Fresh(db,"public_item_discovery"))||(refresh&&stamp<Fresh(db,"public_upgrades")))
+        throw std::runtime_error("Older item refresh");
+    ValidateBatch(rows,PlanItems(index,previous,known,discover,refresh));
+    if(!rows.empty())Cache::StoreItemSnapshot(db,Cache::ItemDataset::Details,rows,Cache::ReferenceSnapshotTime());
+    auto put=db.Prepare("INSERT INTO public_upgrade_items VALUES(?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind");
+    auto remove=db.Prepare("DELETE FROM public_upgrade_items WHERE id=?");
+    for(const auto& row:rows){
+        const auto id=Id(row.at("id"));const auto kind=Kind(row);
+        if(kind.empty()){remove.Bind(1,id);remove.Execute();remove.Reset();}
+        else{put.Bind(1,id);put.Bind(2,kind);put.Execute();put.Reset();}
+    }
+    if(discover){
+        db.Exec("DELETE FROM public_item_index");
+        auto add=db.Prepare("INSERT INTO public_item_index VALUES(?)");
+        for(auto id:index){add.Bind(1,id);add.Execute();add.Reset();}
+        db.Exec("DELETE FROM public_upgrade_items WHERE id NOT IN (SELECT id FROM public_item_index)");
+        Mark(db,"public_item_discovery",stamp);
+    }
+    if(db.Scalar("SELECT count(DISTINCT kind) FROM public_upgrade_items")!=5)
+        throw std::runtime_error("Incomplete upgrade categories");
+    if(refresh)Mark(db,"public_upgrades",stamp);
 }
 struct Objective {std::string title,track;int64_t acclaim=0;};
 inline std::map<uint32_t,Objective> ParseObjectives(const Json& rows) {
@@ -201,12 +239,13 @@ inline Snapshot Read(Database::Connection& db) {
     while(pets.Step())out.pets.push_back({static_cast<uint32_t>(pets.Integer(0)),pets.Text(1),pets.Text(2)});
     auto legends=db.Prepare("SELECT code,api_id,name,icon,swap_skill FROM public_legends ORDER BY code");
     while(legends.Step())out.legends.push_back({static_cast<uint8_t>(legends.Integer(0)),legends.Text(1),legends.Text(2),legends.Text(3),static_cast<uint32_t>(legends.Integer(4))});
-    for(const char* name:{"public_pets","public_legends","public_stats","public_dyes"})
+    for(const char* name:{"public_pets","public_legends","public_stats","public_dyes","public_item_discovery","public_skins"})
         out.freshness.emplace(name,std::make_pair(Fresh(db,name),Fresh(db,std::string(name)+"_attempt")));
     return out;
 }
 inline bool DatasetDue(const Snapshot& s,const std::string& name,int64_t now,bool manual) {
     auto it=s.freshness.find(name);
-    return it==s.freshness.end()||Due(it->second.first,it->second.second,now,manual);
+    const auto interval=(name=="public_pets"||name=="public_legends"||name=="public_stats"||name=="public_dyes")?Month:Week;
+    return it==s.freshness.end()||Due(it->second.first,it->second.second,now,manual,interval);
 }
 } // namespace AlterEgo::PublicCatalog

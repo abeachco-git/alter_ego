@@ -323,66 +323,48 @@ namespace Skinventory {
         AlterEgo::Background::Workers().Launch([] { ItemMapWorker(); }, [] { s_item_map_building = false; });
     }
 
-    void Commerce::RefreshUpgradeCatalogAsync(bool manual) {
+    void Commerce::RefreshUpgradeCatalogAsync(bool manual,bool itemsOnly) {
         using namespace AlterEgo;
         if(!AutoRefreshPolicy::AllowRequest(manual,AutoRefreshPolicy::Dataset::PublicCatalog))return;
         auto current=PublicCatalog::Get();
-        if(!PublicCatalog::Due(current->upgrades,current->upgradeAttempt,PublicCatalog::Now(),manual) ||
-           s_item_map_building.exchange(true))return;
-        const auto root=Cache::RootFromLegacySkinDirectory(s_data_dir);
-        {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Refreshing equipment catalogs...";}
-        Background::Workers().Launch([root]{
+        const auto now=PublicCatalog::Now();
+        const bool discover=PublicCatalog::DatasetDue(*current,"public_item_discovery",now,manual&&itemsOnly);
+        const bool refresh=PublicCatalog::Due(current->upgrades,current->upgradeAttempt,now,manual&&!itemsOnly,PublicCatalog::Month);
+        if((!discover&&!refresh)||s_item_map_building.exchange(true))return;
+        {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Refreshing public item catalogs...";}
+        Background::Workers().Launch([discover,refresh]{
             if(!s_item_map_ready || PublicCatalog::Get()->index.empty()){ItemMapWorker();return;}
-            PublicCatalog::RefreshUpgrades(root);
-            {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Equipment catalogs up to date";}
-            s_item_map_building=false;
-        },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Equipment catalog refresh failed; cache retained";s_item_map_building=false;});
+            ItemMapWorker(true,discover,refresh);
+        },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Item catalog refresh failed; cache retained";s_item_map_building=false;});
     }
 
-    void Commerce::ItemMapWorker() {
+    void Commerce::ItemMapWorker(bool incremental,bool discover,bool refresh) {
+        using namespace AlterEgo;
         try {
-            const auto root=AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir);
-            AlterEgo::PublicCatalog::Attempt(root,"public_upgrades");
-            // Step 1: Get all item IDs from the GW2 API
-            {
+            const auto root=Cache::RootFromLegacySkinDirectory(s_data_dir);
+            const auto old=PublicCatalog::Get();
+            if(discover)PublicCatalog::Attempt(root,"public_item_discovery");
+            if(refresh)PublicCatalog::Attempt(root,"public_upgrades");
+            const auto index=discover?PublicCatalog::Index(PublicCatalog::Fetch("/v2/items")):old->index;
+            if(index.empty()||(!old->index.empty()&&index.size()<old->index.size()*9/10))
+                throw std::runtime_error("Incomplete item index");
+            const auto planned=incremental?PublicCatalog::PlanItems(index,old->index,old->upgradeIds,discover,refresh):index;
+            std::vector<uint32_t> ids(planned.begin(),planned.end());
+            json upgrades=json::array(),observations=json::array();
+            const size_t BATCH_SIZE=200,total=ids.size();
+            std::unordered_map<uint32_t,std::vector<uint32_t>> skin_map;
+            std::unordered_map<uint32_t,std::string> item_names;
+            std::unordered_map<uint32_t,int> vendor_map;
+            if(incremental&&discover){
                 std::lock_guard<std::mutex> lock(s_mutex);
-                s_fetch_status = "Building item map (one-time, cached after)...";
+                skin_map=s_skin_to_item;item_names=s_item_names;vendor_map=s_vendor_prices;
             }
-            std::string response = HttpClient::Get("https://api.guildwars2.com/v2/items");
-            if (response.empty()) {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_fetch_status = "Item map failed: could not reach GW2 API";
-                s_item_map_building = false;
-                return;
-            }
-
-            json all_ids;
-            try {
-                all_ids = json::parse(response);
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_fetch_status = "Item map failed: invalid response";
-                s_item_map_building = false;
-                return;
-            }
-
-            if (!all_ids.is_array() || all_ids.empty()) throw std::runtime_error("Invalid item index");
-
-            const auto index=AlterEgo::PublicCatalog::Index(all_ids);
-            std::vector<uint32_t> ids(index.begin(),index.end());
-            json upgrades=json::array();
-
-            // Step 2: Fetch items in batches, extract default_skin for Armor/Weapon types
-            const size_t BATCH_SIZE = 200;
-            size_t total = ids.size();
-            std::unordered_map<uint32_t, std::vector<uint32_t>> skin_map;
-            std::unordered_map<uint32_t, std::string> item_names;
-            // The commerce index is authoritative for tradeable candidates, not skin rarity.
-            const auto market=json::parse(HttpClient::Get("https://api.guildwars2.com/v2/commerce/prices"));
-            if(!market.is_array() || market.empty()) throw std::runtime_error("Trading Post index unavailable");
             std::unordered_set<uint32_t> tradeable;
-            for(const auto& id:market) tradeable.insert(id.get<uint32_t>());
-            std::unordered_map<uint32_t, int> vendor_map;
+            const bool newItems=discover&&(!incremental||std::any_of(ids.begin(),ids.end(),[&](uint32_t id){return !old->index.count(id);}));
+            if(newItems){
+                const auto market=PublicCatalog::Index(PublicCatalog::Fetch("/v2/commerce/prices"));
+                tradeable.insert(market.begin(),market.end());
+            }
 
             for (size_t i = 0; i < total; i += BATCH_SIZE) {
             AlterEgo::Background::Checkpoint();
@@ -412,7 +394,9 @@ namespace Skinventory {
                         std::string type = item.value("type", "");
                         const uint32_t item_id=item.value("id",uint32_t(0));
                         if(!item_id) continue;
-                        if(!AlterEgo::PublicCatalog::Kind(item).empty())upgrades.push_back(item);
+                        if(incremental)observations.push_back(item);
+                        else if(!PublicCatalog::Kind(item).empty())upgrades.push_back(item);
+                        if(incremental&&(!discover||old->index.count(item_id)))continue;
                         const uint32_t default_skin=item.value("default_skin",uint32_t(0));
                         const bool equipment=type=="Armor" || type=="Weapon" || type=="Back";
                         if(tradeable.count(item_id)) {
@@ -469,17 +453,26 @@ namespace Skinventory {
 
             // Step 3: Store
             AlterEgo::Background::Checkpoint();
-            AlterEgo::PublicCatalog::CommitUpgrades(root,index,upgrades);
+            // Persist derived mappings before marking the ID check complete.
+            // Repeating a failed discovery is idempotent.
+            if(newItems){
+                json skins=json::object(),names=json::object(),vendors=json::object();
+                for(const auto& kv:skin_map)skins[std::to_string(kv.first)]=kv.second;
+                for(const auto& kv:item_names)names[std::to_string(kv.first)]=kv.second;
+                for(const auto& kv:vendor_map)vendors[std::to_string(kv.first)]=kv.second;
+                if(!Cache::WriteCommerce(root,Cache::CommerceDataset::Mapping,
+                    json{{"version",2},{"skins",skins},{"names",names},{"vendors",vendors}}))
+                    throw std::runtime_error("Item mapping persistence failed");
+            }
+            if(incremental)PublicCatalog::CommitIncrementalItems(root,index,observations,discover,refresh);
+            else PublicCatalog::CommitUpgrades(root,index,upgrades);
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                s_skin_to_item = std::move(skin_map);
-                s_item_names = std::move(item_names);
-                s_vendor_prices = std::move(vendor_map);
-                s_fetch_status = "Item map ready (" + std::to_string(s_skin_to_item.size()) + " skin-to-item mappings, "
-                               + std::to_string(s_vendor_prices.size()) + " vendor skins)";
+                if(newItems){
+                    s_skin_to_item=std::move(skin_map);s_item_names=std::move(item_names);s_vendor_prices=std::move(vendor_map);
+                }
+                s_fetch_status="Public item catalogs up to date";
             }
-            // Save the completed derived map before exposing it to price requests.
-            SaveItemMap();
             s_item_map_ready = true;
             s_item_map_building = false;
 

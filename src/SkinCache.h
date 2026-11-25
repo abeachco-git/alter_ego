@@ -41,7 +41,7 @@ namespace Skinventory {
         static void FetchAllSkinsAsync();
 
         // Incremental update: fetch only new skins since last cache
-        static void UpdateCacheAsync();
+        static void UpdateCacheAsync(bool manual=false);
 
         // Current status
         static CacheStatus GetStatus();

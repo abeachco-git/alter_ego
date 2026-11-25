@@ -142,3 +142,5 @@ Waypoint retirement smoke test: expand Lighting the Echovald Wilds in Achievemen
 Public catalog coverage in database_core checks seven-day freshness, failure backoff/manual override, typed upgrade classification, Vault definition parsing and rejection of incomplete batches. Live API samples are an optional diagnostic, not an offline regression gate.
 
 Public catalog tests cover v17 pet/legend persistence, exact protocol code resolution and historical picker display normalization. Live probes are bounded samples, not a full catalog scan or in-game validation.
+
+Public catalog cadence tests verify independent weekly discovery and monthly definition refresh, manual override, combined fetch planning, canonical new item persistence and independent success timestamps. In-game verify fresh checks skip network, new item/skin discovery, and failure retaining prior success ages.

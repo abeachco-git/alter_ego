@@ -44,23 +44,13 @@ inline void CommitUpgrades(const std::string& root,const std::set<uint32_t>& ids
     WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreUpgrades(db,ids,rows,Now());tx.Commit();Publish(db);});
     GW2API::AdoptPublicItems(rows);
 }
-inline void RefreshUpgrades(const std::string& root) {
-    const auto old=Get();
-    Attempt(root,"public_upgrades");
-    const auto index=Index(Fetch("/v2/items"));
-    std::vector<uint32_t> todo;
-    for(auto id:index)if(!old->index.count(id)||old->upgradeIds.count(id))todo.push_back(id);
-    Json rows=Json::array();
-    for(size_t start=0;start<todo.size();start+=200) {
-        std::set<uint32_t> expected;std::string query;
-        for(size_t i=start;i<std::min(todo.size(),start+200);++i){
-            if(!query.empty())query+=',';
-            query+=std::to_string(todo[i]);expected.insert(todo[i]);
-        }
-        auto batch=Fetch("/v2/items?ids="+query);ValidateBatch(batch,expected);
-        for(const auto& item:batch)if(!Kind(item).empty())rows.push_back(item);
-    }
-    Background::Checkpoint();CommitUpgrades(root,index,rows);
+inline void CommitIncrementalItems(const std::string& root,const std::set<uint32_t>& index,
+                                   const Json& rows,bool discover,bool refresh) {
+    WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreIncrementalItems(db,index,rows,discover,refresh,Now());tx.Commit();Publish(db);});
+    GW2API::AdoptPublicItems(rows);
+}
+inline void CompleteCheck(const std::string& root,const std::string& dataset) {
+    WithDb(root,[&](auto& db){Mark(db,dataset,Now());Publish(db);});
 }
 inline void RefreshVault(const std::string& root,bool manual) {
     if(!AutoRefreshPolicy::AllowRequest(manual,AutoRefreshPolicy::Dataset::PublicCatalog))return;

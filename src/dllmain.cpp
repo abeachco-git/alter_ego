@@ -17644,6 +17644,7 @@ void AddonOptions() {
             if(ImGui::Checkbox(Labels[i],&included)){
                 SetIncluded(dataset,included);
                 if(included&&dataset==Dataset::PublicCatalog){
+                    Skinventory::SkinCache::UpdateCacheAsync();
                     AlterEgo::GW2API::FetchAllItemStatsAsync();
                     AlterEgo::GW2API::FetchDyeColorsAsync();
                     Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
@@ -17664,7 +17665,7 @@ void AddonOptions() {
     ImGui::TextDisabled("Manual Refresh still works; login/spec changes use MumbleLink (8s/90s).");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     RenderSectionHeader("Public reference catalogs", AlterEgo::UI::SectionGold);
-    ImGui::TextDisabled("Automatic refresh: 7 days; failed attempts: 24h. Shared across accounts.");
+    ImGui::TextDisabled("Items/skins/Vault: 7 days. Other reference catalogs: 30 days. Retry: 24h.");
     const auto publicData=AlterEgo::PublicCatalog::Get();
     ImGui::Text("Equipment upgrades: %zu",publicData->entries.size());
     if(publicData->upgrades)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->upgrades)/86400));
@@ -17682,6 +17683,8 @@ void AddonOptions() {
         const auto status=AlterEgo::PublicCatalog::DatasetStatus(dataset);
         if(!status.empty())ImGui::TextDisabled("%s",status.c_str());
     };
+    referenceAction("Discover new items","public_item_discovery",[]{Skinventory::Commerce::RefreshUpgradeCatalogAsync(true,true);});
+    referenceAction("Refresh skin catalog","public_skins",[]{Skinventory::SkinCache::UpdateCacheAsync(true);});
     referenceAction("Refresh item stats","public_stats",[]{AlterEgo::GW2API::FetchAllItemStatsAsync(true);});
     referenceAction("Refresh dyes","public_dyes",[]{AlterEgo::GW2API::FetchDyeColorsAsync(true);});
     referenceAction("Refresh ranger pets","public_pets",[]{AlterEgo::PublicCatalog::RefreshPets(AlterEgo::GW2API::GetDataDirectory(),true);});
