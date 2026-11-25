@@ -8,9 +8,9 @@
 using namespace AlterEgo;
 using namespace AlterEgo::NativeInventory;
 int case_native_inventory(int,char**){
-    RefreshProgress::Counts progress;
-    progress.Add("Ready",true);progress.Add("Refreshing",true);progress.Add("Missing permissions",true);progress.Add("Not retrieved",false);
-    assert(progress.total==4&&progress.ready==1&&progress.working==1&&progress.failed==1&&progress.missing==1);
+    RefreshProgress::Counts scopeProgress;
+    scopeProgress.Add("Ready",true);scopeProgress.Add("Refreshing",true);scopeProgress.Add("Missing permissions",true);scopeProgress.Add("Not retrieved",false);
+    assert(scopeProgress.total==4&&scopeProgress.ready==1&&scopeProgress.working==1&&scopeProgress.failed==1&&scopeProgress.missing==1);
     assert(RefreshProgress::Character(2,5,"Test","Equipment tabs").find("2/5")!=std::string::npos);
     const auto root=(std::filesystem::temp_directory_path()/("ae-native-inventory-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))).string();
     auto rows=ParseArray(Json::parse(R"([null,{"id":10,"count":2},{"id":11,"count":1,"binding":"Account"},{"id":12,"count":1,"binding":"Character","bound_to":"A"}])"),"account-a","Bank");

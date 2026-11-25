@@ -75,7 +75,7 @@ inline float RowHeight() {
 // The optional ellipsis reuses the Characters multi-character picker.
 inline bool Row(const char* id, std::time_t stamp, const char* source,
                 State state, const std::string& detail, bool disabled = false,
-                bool* moreClicked = nullptr) {
+                bool* moreClicked = nullptr, const char* statusOverride = nullptr) {
     ImGui::PushID(id);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
@@ -104,6 +104,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
                               state == State::Success ? "Complete" :
                               state == State::Error ? "Failed" :
                               state == State::Waiting ? "Waiting for API" : "Ready";
+    if(statusOverride&&*statusOverride)shortStatus=statusOverride;
     std::string statusText(shortStatus);
     while (!statusText.empty() &&
            ImGui::CalcTextSize(statusText.c_str()).x > maxStatus)

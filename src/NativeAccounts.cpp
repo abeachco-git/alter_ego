@@ -836,8 +836,9 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     if(busy.load()){state=RefreshUI::State::Working;detail=std::to_string(processed)+" storage scopes processed"+(current.empty()?"":"\nCurrent: "+current)+"\n\n"+detail;}
     else if(failed)state=RefreshUI::State::Error;
     else if(missing||stale||!count)state=RefreshUI::State::Waiting;
+    const char* idleLabel=state==RefreshUI::State::Waiting?(missing||!count?"Not retrieved":"Stale data"):nullptr;
     if(accounts.empty())detail="Link or select an account.";
-    if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty()))
+    if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty(),nullptr,idleLabel))
         Refresh(accounts,scope);
 }
 
