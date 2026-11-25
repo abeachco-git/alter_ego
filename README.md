@@ -121,4 +121,6 @@ Thanks to Raidcore for Nexus, ArenaNet for the Guild Wars 2 API, and the communi
 
 ## License
 
-MIT. Third-party components retain their respective licenses and attribution.
+Addon code is licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.txt) for bundled libraries, fonts and game-content attribution. Guild Wars 2 artwork and data are not relicensed under MIT.
+
+This is an unofficial fan project and is not endorsed by ArenaNet, NCSOFT or Raidcore.

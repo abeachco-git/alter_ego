@@ -45,6 +45,6 @@ Discussion-only and documentation-only requests do not require a new DLL unless 
 ## Repository hygiene
 
 - Keep durable guidance in the relevant existing reference, not duplicated instructions or dated plans. Update docs only when behavior or conventions change.
-- Preserve useful vendored libraries, licenses, compatibility code and reference tools. Remove confirmed obsolete artifacts, not working code merely to save space. Git history is the archive.
+- Preserve useful vendored libraries, licenses, compatibility code and reference tools. Keep `LICENSE` and `THIRD_PARTY_NOTICES.txt` with source and binary distributions; update notices when adding or updating dependencies or artwork. For standalone DLL delivery, include the accompanying notices with the download; verify notice availability for catalog distribution. Remove confirmed obsolete artifacts, not working code merely to save space. Git history is the archive.
 - Keep the public README concise and organized around current user-facing features, setup, usage, storage, development, credits and license. Keep internal detail in the linked references; acknowledge original authorship in Credits, not feature-by-feature comparisons. Update screenshot links when current images are available; remove superseded unreferenced screenshots at that time.
 - Remove temporary diagnostics, scratch artifacts and experimental scaffolding when their purpose ends; retain useful failure diagnostics and tests.

@@ -12,6 +12,8 @@ on:
       - 'lib/**'
       - 'CMakeLists.txt'
       - 'AlterEgo.def'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.txt'
       - '.github/workflows/windows-dll.yml'
 
 jobs:
@@ -77,6 +79,11 @@ jobs:
       - name: Report compiler cache statistics
         if: always()
         run: ccache --show-stats
+      - name: Verify distribution notices
+        run: |
+          test -s LICENSE
+          test -s THIRD_PARTY_NOTICES.txt
+          grep -Fq 'SIL OPEN FONT LICENSE Version 1.1' THIRD_PARTY_NOTICES.txt
       - name: Upload DLL
         uses: actions/upload-artifact@v7.0.2
         with:
@@ -85,6 +92,8 @@ jobs:
             build/AlterEgo.dll
             build/AlterEgo.map
             sqlite-benchmark.json
+            LICENSE
+            THIRD_PARTY_NOTICES.txt
           if-no-files-found: error
       - name: Save compiler cache
         uses: actions/cache/save@v5
