@@ -1173,7 +1173,7 @@ static int g_CharSortMode = Sort_Custom;
 static bool g_CharSortAscending = true;            // true = default direction, false = reversed
 static std::vector<int> g_CharDisplayOrder;        // indices into GetCharacters()
 static std::vector<std::string> g_CustomCharOrder;  // saved custom name order
-static int g_CharDragIdx = -1;                      // drag-and-drop source index in display order
+static std::pair<std::string,std::string> g_CharDragKey;
 static std::shared_ptr<const std::vector<AlterEgo::Character>> g_CharOrderRoster;
 static std::vector<std::string> g_CharOrderAccounts;
 static int g_CharOrderBirthdayDay=-1;
@@ -1245,12 +1245,17 @@ static int CharacterOrderCalendarDay(){
     const auto* day=std::localtime(&now);
     return day?day->tm_year*366+day->tm_yday:-1;
 }
-static int SelectedCharacterDisplayIndex(){
-    if(!g_CharOrderRoster||g_SelectedCharKey.second.empty())return -1;
-    return AlterEgo::RecordSelection::IndexOf(g_CharDisplayOrder,g_SelectedCharKey,[](int i){
+static int CharacterDisplayIndex(const std::pair<std::string,std::string>& key){
+    if(!g_CharOrderRoster||key.second.empty())return -1;
+    return AlterEgo::RecordSelection::IndexOf(g_CharDisplayOrder,key,[](int i){
         if(i<0||i>=(int)g_CharOrderRoster->size())return std::pair<std::string,std::string>{};
         const auto& ch=(*g_CharOrderRoster)[i];return std::make_pair(ch.account_name,ch.name);
     });
+}
+static int SelectedCharacterDisplayIndex(){return CharacterDisplayIndex(g_SelectedCharKey);}
+static int SelectedCharacterIndex(const std::vector<AlterEgo::Character>& chars){
+    if(g_SelectedCharKey.second.empty())return -1;
+    return AlterEgo::RecordSelection::IndexOf(chars,g_SelectedCharKey,[](const auto& ch){return std::make_pair(ch.account_name,ch.name);});
 }
 static void SelectCharacterAt(int displayIndex){
     g_SelectedCharKey={};
@@ -4797,7 +4802,7 @@ static float CompactGameModeChipHeight() {
     return ImMax(22.0f, ImGui::GetTextLineHeight() + 4.0f);
 }
 
-static bool RenderGameModeSelector(const char* id, std::vector<AlterEgo::GameMode>& chosen) {
+static bool RenderGameModeSelector(const char* id, std::vector<AlterEgo::GameMode>& chosen, bool wrap=false) {
     static const AlterEgo::GameMode modes[] = {
         AlterEgo::GameMode::PvE, AlterEgo::GameMode::WvW,
         AlterEgo::GameMode::PvP, AlterEgo::GameMode::Raid,
@@ -4807,8 +4812,8 @@ static bool RenderGameModeSelector(const char* id, std::vector<AlterEgo::GameMod
     bool changed = false;
     ImGui::PushID(id);
     for (int i = 0; i < IM_ARRAYSIZE(modes); ++i) {
-        if (i) ImGui::SameLine(0.0f, 4.0f);
         const auto mode = modes[i];
+        if(i){if(wrap)AlterEgo::UI::SameLineIfActionFits(GameModeLabel(mode));else ImGui::SameLine(0.0f,4.0f);}
         const bool active = std::find(chosen.begin(), chosen.end(), mode) != chosen.end();
         if (RenderChipButton(GameModeLabel(mode), active, ImVec4(0,0,0,0), true)) {
             if (active) {
@@ -9372,7 +9377,8 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         // profession + mode (mode becomes clickable chips bound to the draft).
         ImGui::SetCursorScreenPos(ImVec2(textX, textTop));
         if (g_LibEditMode) {
-            ImGui::SetNextItemWidth(220.0f);
+            const float nameWidth=std::max(1.f,std::min(220.f,ImGui::GetContentRegionAvail().x));
+            ImGui::SetNextItemWidth(nameWidth);
             ImGui::PushStyleColor(ImGuiCol_Text, profColor);
             if (AlterEgo::UI::InputText("##edit_name", g_LibEditName)) MarkEditDirty();
             ImGui::PopStyleColor();
@@ -9381,16 +9387,19 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             const char* badge = "EDITING";
             ImVec2 ts = ImGui::CalcTextSize(badge);
             float dotR = ts.y * 0.26f;
-            float bx = textX + 230.0f, by = textTop + 1.0f;
+            float bx = textX + nameWidth + 10.0f, by = textTop + 1.0f;
             float gap = dotR * 2.0f + 6.0f;
+            if(bx+gap+ts.x+5<=pos.x+w){
             dl->AddRectFilled(ImVec2(bx - 5, by - 2),
                               ImVec2(bx + gap + ts.x + 5, by + ts.y + 2),
                               IM_COL32(120, 90, 30, 230), 3.0f);
             dl->AddCircleFilled(ImVec2(bx + dotR, by + ts.y * 0.5f), dotR,
                                 IM_COL32(240, 120, 120, 255));
             dl->AddText(ImVec2(bx + gap, by), IM_COL32(245, 210, 120, 255), badge);
+            }
         } else {
             ImGui::TextColored(profColor, "%s", build.name.c_str());
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",build.name.c_str());
         }
 
         ImGui::SetCursorScreenPos(ImVec2(textX, textTop + titleRowH + headerTextGap));
@@ -9401,45 +9410,27 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         // in a compact high-contrast badge; editing keeps its existing chips.
         ImGui::TextColored(ImVec4(0.87f, 0.86f, 0.79f, 1.0f),
             "%s", sub.c_str());
-        // Center every game-mode chip on the subtitle's actual text line.
-        // SameLine alone aligns item baselines, not differently padded button centers.
-        float modeX = ImGui::GetItemRectMax().x + 8.0f;
-        const float subtitleMidY = (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f;
-        if (!g_LibEditMode) {
-            const auto displayModes = build.game_modes.empty() ? std::vector<AlterEgo::GameMode>{build.game_mode} : build.game_modes;
-            for (size_t m = 0; m < displayModes.size(); ++m) {
-                const float badgeH = ImGui::GetTextLineHeight() + 4.0f;
-                ImGui::SetCursorScreenPos(ImVec2(modeX, subtitleMidY - badgeH * 0.5f));
+        ImGui::SetCursorScreenPos(ImVec2(pos.x,pos.y+h+4));
+        if(!g_LibEditMode){
+            const auto displayModes=build.game_modes.empty()?std::vector<AlterEgo::GameMode>{build.game_mode}:build.game_modes;
+            for(size_t m=0;m<displayModes.size();++m){
+                if(m)AlterEgo::UI::SameLineIfActionFits(GameModeLabel(displayModes[m]));
                 RenderBuildModeBadge(GameModeLabel(displayModes[m]));
-                modeX = ImGui::GetItemRectMax().x + 3.0f;
             }
-        } else {
-            ImGui::SetCursorScreenPos(ImVec2(modeX, subtitleMidY -
-                CompactGameModeChipHeight() * 0.5f));
-            if (g_EditDraft.game_modes.empty()) g_EditDraft.game_modes = {g_EditDraft.game_mode};
-            if (RenderGameModeSelector("saved-build-edit", g_EditDraft.game_modes)) {
-                g_EditDraft.game_mode = g_EditDraft.game_modes.front();
-                MarkEditDirty();
+        }else{
+            if(g_EditDraft.game_modes.empty())g_EditDraft.game_modes={g_EditDraft.game_mode};
+            if(RenderGameModeSelector("saved-build-edit",g_EditDraft.game_modes,true)){
+                g_EditDraft.game_mode=g_EditDraft.game_modes.front();MarkEditDirty();
             }
         }
 
         // Top-right header buttons. Editing: Save / Cancel. Otherwise: Share / Edit / Delete.
         if (showEditButton) {
-            ImVec2 prevCursor = ImGui::GetCursorScreenPos();
-            ImGuiStyle& style = ImGui::GetStyle();
-            auto btnWidth = [&](const char* t){ return ImGui::CalcTextSize(t).x + style.FramePadding.x * 2.0f; };
-            const float gap = 4.0f;
-            float btnY   = pos.y + 6.0f;
-
             if (g_LibEditMode) {
-                float wSave = btnWidth("Save"), wCancel = btnWidth("Cancel");
-                float startX = pos.x + w - (wSave + gap + wCancel) - 8.0f;
-
                 // ImGui 1.80 has no BeginDisabled — dim when clean and guard the click.
                 bool canSave = g_EditDirty && g_EditRefsReady && !g_GearDialogOpen;
                 if (!canSave) ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
                                                   ImGui::GetStyle().Alpha * 0.5f);
-                ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
                 if (RenderActionButton("Save##hdr") && canSave) {
                     g_EditDraft.name = g_LibEditName;
                     g_EditDraft.notes = g_LibEditNotes;
@@ -9452,7 +9443,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 }
                 if (!canSave) ImGui::PopStyleVar();
 
-                ImGui::SetCursorScreenPos(ImVec2(startX + wSave + gap, btnY));
+                AlterEgo::UI::SameLineIfActionFits("Cancel");
                 if (RenderActionButton("Cancel##hdr")) {
                     g_GearDialogOpen=false; // Discard the unaccepted child draft too.
                     if (g_EditDirty) ImGui::OpenPopup("Discard changes?##editcancel");
@@ -9463,30 +9454,19 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                         g_LibEditMode = false; g_EditIsNewBuild = false;
                     }
                 }
-                ImGui::SetCursorScreenPos(prevCursor);
             } else {
-            const float wCopy = btnWidth("Copy");
-            const float wCompare = btnWidth("Compare");
-            const float wShare = btnWidth("Share");
-            const float wEdit = btnWidth("Edit");
-            const float wDel = btnWidth("Delete");
-            const float totalW = wCopy + wCompare + wShare + wEdit + wDel + 4.0f * gap;
-            const float copyX = pos.x + w - totalW - 8.0f;
-            ImGui::SetCursorScreenPos(ImVec2(copyX, btnY));
             if (RenderActionButton("Copy##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, build);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy Portable Loadout");
-            const float startX = copyX + wCopy + gap;
-
-            ImGui::SetCursorScreenPos(ImVec2(startX, btnY));
+            AlterEgo::UI::SameLineIfActionFits("Compare");
             if (RenderActionButton("Compare##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, build);
 
-            ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap, btnY));
+            AlterEgo::UI::SameLineIfActionFits("Share");
             if (RenderActionButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
 
-            ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap, btnY));
+            AlterEgo::UI::SameLineIfActionFits("Edit");
             if (RenderActionButton("Edit##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit, build);
 
-            ImGui::SetCursorScreenPos(ImVec2(startX + wCompare + gap + wShare + gap + wEdit + gap, btnY));
+            AlterEgo::UI::SameLineIfActionFits("Delete");
             if (AlterEgo::UI::Button("Delete##headerBuild", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) ExecuteSavedLoadoutAction(SavedLoadoutAction::Delete, build);
 
             // Share menu: the three share actions that used to live in the
@@ -9496,7 +9476,6 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                 ImGui::EndPopup();
             }
 
-            ImGui::SetCursorScreenPos(prevCursor);
             } // end else (non-edit Share / Edit / Delete cluster)
 
             // Cancel-with-unsaved-changes confirmation (paired with the Cancel button).
@@ -9516,7 +9495,7 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
             }
         }
 
-        ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h + 4));
+        // Native layout continues after the mode and action rows.
     }
 
 }
@@ -11456,6 +11435,7 @@ static void RenderBuildLibrary() {
     std::string pendingGroup, pendingGroupTarget;
     std::string pendingItemId, pendingItemTarget;
     bool pendingGroupAfter = false, pendingItemAfter = false;
+    bool selectedMatches=false;
     ImGui::BeginChild("LibList", ImVec2(split.left, 0), true);
     {
         AlterEgo::UI::SearchToolbar("loadouts", "Search loadouts...", g_LibSearchBuf,
@@ -11511,6 +11491,7 @@ static void RenderBuildLibrary() {
                 if (lowerName.find(searchText) == std::string::npos) continue;
             }
             group.visible.push_back(i);
+            if(b.id==g_LibSelectedId)selectedMatches=true;
         }
 
         bool anyGroupDrawn = false;
@@ -11762,7 +11743,7 @@ static void RenderBuildLibrary() {
             }
 
             if (clicked && !g_LibEditMode) {
-                MarkNavigation();g_LibSelectedId=b.id;
+                MarkNavigation();g_LibSelectedId=b.id;selectedMatches=true;
                 g_LibDetailsFetched = false;
             }
             if (!g_LibEditMode && ImGui::BeginPopupContextItem("##build_actions")) {
@@ -11836,6 +11817,9 @@ static void RenderBuildLibrary() {
     if(selectedIndex>=0){
         const auto& build=builds[selectedIndex];
 
+        // A change of record identity invalidates the existing detail demand.
+        static std::string detailsForId;
+        if(detailsForId!=build.id){detailsForId=build.id;g_LibDetailsFetched=false;}
         // Fetch details on-demand
         if (!g_LibDetailsFetched) {
             FetchDetailsForSavedBuild(build);
@@ -11876,6 +11860,7 @@ static void RenderBuildLibrary() {
 
         // Build identity and actions never scroll away. Only the detail
         // section below has a scroll bar.
+        if(!selectedMatches)ImGui::TextDisabled("Selected Loadout is outside current filters.");
         RenderSavedBuildHeader(build, /*showEditButton=*/true);
         if (!g_LibEditMode && !build.import_warning.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.76f, 0.38f, 1.0f));
@@ -11887,7 +11872,7 @@ static void RenderBuildLibrary() {
             ImGui::TextWrapped("Source: %s", build.source_url.c_str());
             if (RenderActionButton("Open Source##snow"))
                 ShellExecuteA(NULL, "open", build.source_url.c_str(), NULL, NULL, SW_SHOWNORMAL);
-            ImGui::SameLine();
+            AlterEgo::UI::SameLineIfActionFits("Refresh Source");
             if (RenderActionButton("Refresh Source##snow") && !g_BuildSourceBusy)
                 FetchBuildSource(build.source_url, build.id);
             if (g_BuildSourceBusy) {
@@ -15504,10 +15489,8 @@ static void RenderCharactersStatusRow() {
     const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
     const auto& chars = *charsSnapshot;
     const AlterEgo::Character* selected = nullptr;
-    if (SelectedCharacterDisplayIndex() >= 0 && SelectedCharacterDisplayIndex() < (int)g_CharDisplayOrder.size()) {
-        const int ri = g_CharDisplayOrder[SelectedCharacterDisplayIndex()];
-        if (ri >= 0 && ri < (int)chars.size()) selected = &chars[ri];
-    }
+    const int selectedIndex=SelectedCharacterIndex(chars);
+    if(selectedIndex>=0)selected=&chars[selectedIndex];
     namespace S=AlterEgo::CharacterScopes;
     const auto demand=S::Visible(g_SelectedTab);
     if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
@@ -16263,9 +16246,10 @@ void AddonRender() {
                             shownUnknownLogin=true;
                         }
                     }
-                    ImGui::PushID(di);
+                    const auto rowIdentity=ch.account_name+"\x1f"+ch.name;
+                    ImGui::PushID(rowIdentity.c_str());
 
-                    bool selected = (SelectedCharacterDisplayIndex() == di);
+                    bool selected=(g_SelectedCharKey==std::make_pair(ch.account_name,ch.name));
                     bool isLoggedIn = (!g_CurrentCharName.empty() && ch.name == g_CurrentCharName);
                     ImVec4 profColor = GetProfessionColor(ch.profession);
 
@@ -16328,7 +16312,7 @@ void AddonRender() {
                         const int activeEquip = ActiveEquipmentTab(ch);
                         if (ImGui::MenuItem("Refresh")) {
                             AlterEgo::GW2API::RequestCharacterRefreshSelected({ch.name});
-                            if (SelectedCharacterDisplayIndex() == di) g_DetailsFetched = false;
+                            if (g_SelectedCharKey==std::make_pair(ch.account_name,ch.name)) g_DetailsFetched = false;
                         }
                         if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild>=0||!ch.equipment.empty()))
                             OpenSaveLiveBuildDialog(ch,activeBuild>=0?ch.build_tabs[activeBuild]:AlterEgo::BuildTemplate{},
@@ -16385,8 +16369,8 @@ void AddonRender() {
                     // Drag source for Custom sort mode
                     if (g_CharSortMode == Sort_Custom) {
                         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
-                            g_CharDragIdx = di;
-                            ImGui::SetDragDropPayload("CHAR_REORDER", &di, sizeof(int));
+                            g_CharDragKey={ch.account_name,ch.name};
+                            ImGui::SetDragDropPayload("CHAR_REORDER",rowIdentity.c_str(),rowIdentity.size()+1);
                             RenderProfessionCharacterName(ch.name, ch.profession);
                             ImGui::EndDragDropSource();
                         }
@@ -16671,16 +16655,10 @@ void AddonRender() {
                 }
 
                 // Custom sort: draw insertion line and handle drop
-                if (g_CharSortMode == Sort_Custom && g_CharDragIdx >= 0 &&
-                    ImGui::GetDragDropPayload() != nullptr) {
-                    // Find source account for constraining drops
-                    std::string srcAcct;
-                    {
-                        int srcReal = (g_CharDragIdx >= 0 && g_CharDragIdx < (int)g_CharDisplayOrder.size())
-                            ? g_CharDisplayOrder[g_CharDragIdx] : -1;
-                        if (srcReal >= 0 && srcReal < (int)characters.size())
-                            srcAcct = characters[srcReal].account_name;
-                    }
+                const int dragIndex=CharacterDisplayIndex(g_CharDragKey);
+                if(g_CharSortMode==Sort_Custom&&dragIndex>=0&&ImGui::GetDragDropPayload()!=nullptr&&
+                    ImGui::GetDragDropPayload()->IsDataType("CHAR_REORDER")){
+                    const std::string& srcAcct=g_CharDragKey.first;
 
                     // Find the range of itemRects indices belonging to the same account
                     int acctFirst = -1, acctLast = -1;
@@ -16723,7 +16701,7 @@ void AddonRender() {
                     if (ImGui::IsMouseReleased(0)) {
                         if (insertIdx >= 0) {
                             // Map itemRects indices back to display-order indices
-                            int srcDi = g_CharDragIdx;
+                            int srcDi=dragIndex;
                             int dstDi = (insertIdx < (int)itemRects.size()) ? itemRects[insertIdx].di
                                 : (itemRects[acctLast].di + 1);
 
@@ -16742,10 +16720,10 @@ void AddonRender() {
                                 SaveCharSortConfig();
                             }
                         }
-                        g_CharDragIdx = -1;
+                        g_CharDragKey={};
                     }
                 } else if (ImGui::IsMouseReleased(0)) {
-                    g_CharDragIdx = -1;
+                    g_CharDragKey={};
                 }
 
                 ImGui::EndChild();
@@ -16753,9 +16731,7 @@ void AddonRender() {
                 if(split.Divider("##charlist_splitter",g_CharListWidth))SaveSettings();
 
                 // Detail panel — resolve through display order
-                int selRealIdx = -1;
-                if (SelectedCharacterDisplayIndex() >= 0 && SelectedCharacterDisplayIndex() < (int)g_CharDisplayOrder.size())
-                    selRealIdx = g_CharDisplayOrder[SelectedCharacterDisplayIndex()];
+                const int selRealIdx=SelectedCharacterIndex(characters);
 
                 ImGui::BeginChild("CharDetail", ImVec2(0, 0), true);
                 if (selRealIdx >= 0 && selRealIdx < (int)characters.size()) {
@@ -16939,10 +16915,8 @@ void AddonRender() {
                     const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
                     const auto& chars = *charsSnapshot;
                     std::string currentName;
-                    if (SelectedCharacterDisplayIndex() >= 0 && SelectedCharacterDisplayIndex() < (int)g_CharDisplayOrder.size()) {
-                        int ri = g_CharDisplayOrder[SelectedCharacterDisplayIndex()];
-                        if (ri >= 0 && ri < (int)chars.size()) currentName = chars[ri].name;
-                    }
+                    const int ri=SelectedCharacterIndex(chars);
+                    if(ri>=0)currentName=chars[ri].name;
                     for (size_t i = 0; i < g_RefreshNames.size(); i++) {
                         if (g_RefreshNames[i] == currentName)
                             g_RefreshSelection[i] = true;
@@ -17026,10 +17000,8 @@ void AddonRender() {
                     const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
                     const auto& chars = *charsSnapshot;
                     std::string currentName;
-                    if (SelectedCharacterDisplayIndex() >= 0 && SelectedCharacterDisplayIndex() < (int)g_CharDisplayOrder.size()) {
-                        int ri = g_CharDisplayOrder[SelectedCharacterDisplayIndex()];
-                        if (ri >= 0 && ri < (int)chars.size()) currentName = chars[ri].name;
-                    }
+                    const int ri=SelectedCharacterIndex(chars);
+                    if(ri>=0)currentName=chars[ri].name;
 
                     for (size_t i = 0; i < g_RefreshNames.size(); i++) {
                         if (g_RefreshSelection[i] && g_RefreshNames[i] == currentName) {

@@ -70,13 +70,13 @@ static void LibraryBackupRestoreCurrentState(unsigned selected) {
     // can overwrite restored settings, pinned achievements, or login dates.
     if (selected & (AlterEgo::Backup::Builds|AlterEgo::Backup::Fashion)) {
         AlterEgo::GW2API::LoadBuildLibrary();
-        g_LibSelectedId.clear();
+        if(AlterEgo::RecordSelection::ById(AlterEgo::GW2API::GetSavedBuilds(),g_LibSelectedId)<0)g_LibSelectedId.clear();
         g_EditDraftId.clear();
         g_LibDetailsFetched = false;
     }
     if (selected & (AlterEgo::Backup::Builds|AlterEgo::Backup::Fashion)) {
         g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory());
-        g_FashionSelectedId.clear();
+        if(AlterEgo::RecordSelection::ById(g_FashionLibrary.looks,g_FashionSelectedId)<0)g_FashionSelectedId.clear();
         g_FashionDialog = false;
     }
     if (selected & AlterEgo::Backup::Other) {

@@ -82,7 +82,8 @@ int case_fashion_library(int, char**) {
     assert(verified.looks[0].notes=="Saved draft");
     assert(!verified.RemoveDraft(baseline));
     const auto current=verified.looks[0];
-    Look unrelated=look;unrelated.name="Other";assert(verified.Add(unrelated)==1);
+    Look unrelated=look;unrelated.name="Other";assert(lib.Add(unrelated)==1); // stale projection cannot overwrite edited row
+    assert(lib.looks[0].notes=="Saved draft");
     assert(verified.RemoveDraft(current));assert(verified.looks.size()==1&&verified.looks[0].name=="Other");
     assert(!verified.RemoveDraft(current));assert(verified.Remove(0));
     NativeLibrary::RuntimeStore().Close();

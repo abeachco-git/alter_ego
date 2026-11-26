@@ -1160,6 +1160,9 @@ static void RenderComponentLibrary() {
         });
         count+=g.items.size();groups.push_back(std::move(g));
     }
+    bool selectedMatches=false;
+    for(const auto& group:groups)if(group.kind==g_ComponentSelectedKind)for(const auto& entry:group.items)
+        if(entry.item->value("id",std::string())==g_ComponentSelectedId)selectedMatches=true;
     ImGui::TextDisabled("%zu matching component%s",count,count==1?"":"s");
     bool first=true;
     for(const auto& g:groups){
@@ -1187,7 +1190,7 @@ static void RenderComponentLibrary() {
             const bool selected=g_ComponentSelectedKind==kind&&g_ComponentSelectedId==id;
             const bool clicked=ImGui::Selectable(shown.c_str(),selected);
             if((clicked||ImGui::IsItemClicked(ImGuiMouseButton_Right))&&!selected){
-                MarkNavigation();g_ComponentSelectedKind=kind;g_ComponentSelectedId=id;
+                MarkNavigation();g_ComponentSelectedKind=kind;g_ComponentSelectedId=id;selectedMatches=true;
             }
             if(ImGui::IsItemHovered())ImGui::SetTooltip("%d direct reference%s; %d affected Loadout(s)",users,users==1?"":"s",ComponentUIEffectiveLoadoutCount(kind,id));
             if(ImGui::BeginPopupContextItem("##component_actions")){ComponentRowMenu(doc,kind,*item);ImGui::EndPopup();}
@@ -1204,10 +1207,11 @@ static void RenderComponentLibrary() {
     const std::string kind=g_ComponentSelectedKind;
     const auto* item=ComponentUIFind(doc,kind,g_ComponentSelectedId);
     const auto group=doc["components"].find(kind);
-    if(!item)ImGui::TextDisabled("Choose a saved component to view or edit.");
+    if(!item){g_ComponentSelectedKind.clear();g_ComponentSelectedId.clear();ImGui::TextDisabled("Choose a saved component to view or edit.");}
     else{
         const auto id=item->value("id",std::string()),name=item->value("name",id);
         const int usage=ComponentUIUsage(doc,kind,id);
+        if(!selectedMatches)ImGui::TextDisabled("Selected component is outside current filters.");
         ImGui::TextWrapped("%s",name.c_str());
         ImGui::TextDisabled("%s | %d reference%s | %d affected Loadout(s)",ComponentLabel(kind),usage,usage==1?"":"s",ComponentUIEffectiveLoadoutCount(kind,id));
         ImGui::TextWrapped("%s",ComponentUIShortDescription(kind,item->at("data")).c_str());
@@ -1225,6 +1229,8 @@ static void RenderComponentLibrary() {
             if(UI::Button("Delete Unused",ImVec2(0,0),UI::ButtonRole::CompactDestructive))
                 RunComponentAction(ComponentAction::Delete,kind,*item);
         }else ImGui::TextDisabled("Referenced components cannot be deleted.");
+        ImGui::Separator();
+        ImGui::BeginChild("##component_detail_scroll",ImVec2(0,0),false);
         if (ImGui::CollapsingHeader("Exact duplicates##component_duplicates")) {
             static uint64_t duplicateRevision=0;
             static std::string duplicateKind,duplicateId;
@@ -1364,7 +1370,7 @@ static void RenderComponentLibrary() {
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Create a detached copy for one Loadout and edit it immediately.");
-
+        ImGui::EndChild();
     }
     ImGui::EndChild();
     RenderComponentDeleteConfirm(doc);
@@ -1420,8 +1426,6 @@ static void RenderEquipmentSetLibrary() {
     int users=0;
     for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==id)++users;
     ImGui::TextDisabled("Used by %d Loadout(s)",users);
-    for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==id)
-        ImGui::BulletText("%s",l.at("metadata").value("name",l.value("id",std::string())).c_str());
     if(RenderActionButton("Edit##equipment_set"))BeginReferenceEditor(*selected,true);
     UI::SameLineIfActionFits("Duplicate");
     if(RenderActionButton("Duplicate##equipment_set")){
@@ -1434,6 +1438,9 @@ static void RenderEquipmentSetLibrary() {
         }
     }else ImGui::TextDisabled("Referenced sets cannot be deleted.");
     ImGui::Separator();
+    ImGui::BeginChild("##equipment_set_detail_scroll",ImVec2(0,0),false);
+    for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==id)
+        ImGui::BulletText("%s",l.at("metadata").value("name",l.value("id",std::string())).c_str());
     if(ImGui::BeginTable("##equipment_set_refs",2,ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,110.f);
         ImGui::TableSetupColumn("Selection",ImGuiTableColumnFlags_WidthStretch);
@@ -1454,6 +1461,7 @@ static void RenderEquipmentSetLibrary() {
         }
         ImGui::EndCombo();
     }
+    ImGui::EndChild();
     }
     auto findSet=[&](const std::string& key){return std::find_if(sets.begin(),sets.end(),[&](const auto& set){return set.value("id",std::string())==key;});};
     if(ImGui::BeginPopupModal("Duplicate equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){

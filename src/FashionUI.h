@@ -2,6 +2,7 @@
 // Fashion collection UI; included by dllmain.cpp after BuildWardrobeLink() so
 // the same live-equipment snapshot and shared button/theme helpers are reused.
 #include "FashionLibrary.h"
+#include <optional>
 
 static AlterEgo::Fashion::Library g_FashionLibrary;
 static std::string g_FashionSelectedId;
@@ -332,7 +333,7 @@ static void RenderFashionLibrary() {
                 if (resolved != "Unknown") look.weight = resolved;
             }
         }
-        ImGui::TextUnformatted(look.name.c_str());
+        ImGui::TextWrapped("%s",look.name.c_str());
         ImGui::TextDisabled("%s | %s", look.weight.c_str(),
             look.complete ? "Wardrobe Template" : "Equipment-derived (partial)");
         if (RenderActionButton("Copy Wardrobe Link"))
@@ -344,7 +345,9 @@ static void RenderFashionLibrary() {
         AlterEgo::UI::SameLineIfActionFits("Edit");
         if(RenderActionButton("Edit##fashion"))StartFashionEdit(look,selectedIndex);
         AlterEgo::UI::SameLineIfActionFits("Delete");
-        if(AlterEgo::UI::Button("Delete##fashion",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive))RequestFashionDelete(look);
+        if(AlterEgo::UI::Button("Delete##fashion",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive))RequestFashionDelete(g_FashionLibrary.looks[selectedIndex]);
+        ImGui::Separator();
+        ImGui::BeginChild("##fashion_appearance",ImVec2(0,0),false);
         if (!look.notes.empty()) { ImGui::Spacing(); ImGui::TextWrapped("%s", look.notes.c_str()); }
         const std::string assocLabel = "Associated characters (" + std::to_string(look.characters.size()) + ")";
         if (ImGui::TreeNode(assocLabel.c_str())) {
@@ -356,7 +359,6 @@ static void RenderFashionLibrary() {
         }
         ImGui::Separator();
         if (decoded) {
-            ImGui::BeginChild("##fashion_appearance", ImVec2(0, 0), false);
             ImGui::TextDisabled("Armor, back and outfit");
             RenderFashionSlot("Head", w.helm_skin, w.helm_dyes);
             RenderFashionSlot("Shoulders", w.shoulders_skin, w.shoulders_dyes);
@@ -398,8 +400,8 @@ static void RenderFashionLibrary() {
                 ImGui::Text("Visibility: 0x%04X", w.visibility_flags);
                 ImGui::TreePop();
             }
-            ImGui::EndChild();
         }
+        ImGui::EndChild();
     }
     ImGui::EndChild();
     if(g_FashionDeletePending){g_FashionDeletePending=false;ImGui::OpenPopup("Delete appearance##fashion");}
