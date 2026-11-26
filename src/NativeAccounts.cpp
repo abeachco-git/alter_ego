@@ -305,7 +305,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 const auto scopeCommit=[&](const auto& write){
                     try{commit(write);}
                     catch(const Background::Cancelled&){
-                        if(ActivityScope(name))CharacterActivity::Cancel({a.id,character},name,ticket);
+                        if(ticket.serial)CharacterActivity::Cancel({a.id,character},name,ticket);
                         throw;
                     }
                 };
@@ -340,7 +340,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     });
                     for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
                 }catch(const Background::Cancelled&){
-                    if(ActivityScope(name))CharacterActivity::Cancel({a.id,character},name,ticket);
+                    if(ticket.serial)CharacterActivity::Cancel({a.id,character},name,ticket);
                     throw;
                 }catch(const std::exception& e){
                     Background::Checkpoint();
@@ -515,17 +515,25 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
     if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};
     CharacterActivity::CancelOnShutdown attempts(k);
     const auto ticket=attempts.BeginScope("Equipment");
+    const auto cancel=[&](const char* reason){
+        CharacterActivity::Cancel(k,"Equipment",ticket);
+        return PhysicalEquipmentResult{{0,{},reason},0,0};
+    };
     auto r=Request(a,"/v2/characters/"+Encode(character)+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"});
     PhysicalEquipmentResult result{std::move(r),ticket.started,Now()};
-    if(!result.response)return result;
+    if(!result.response){
+        if(Background::Workers().Stopping())return cancel("Cancelled");
+        if(!Current(a))return cancel("Account changed");
+        return result;
+    }
     // Character tabs and physical inventory have different validation needs.
     // Only a complete physical projection can advance Inventory freshness.
     try{
         auto slots=ParseEquipment(result.response.data,a.id,character);
         {
             std::lock_guard<std::mutex> credentialLock(credentialMutex);
-            if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};
-            if(!Current(a))return {{0,{},"Account changed"},0,0};
+            if(Background::Workers().Stopping())return cancel("Cancelled");
+            if(!Current(a))return cancel("Account changed");
             ScopeState state{a.id,"Equipment",character,"Ready",ticket.started,result.success};
             Record(root,state,&slots);
             CharacterActivity::Success(k,"Equipment",ticket,result.success);
@@ -536,6 +544,10 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
         }
     }catch(...){
         // Preserve character consumer's raw response; Inventory validates it separately.
+    }
+    if(!result.inventoryCommitted){
+        if(Background::Workers().Stopping())return cancel("Cancelled");
+        if(!Current(a))return cancel("Account changed");
     }
     e={a.generation,result,Clock::now()};return result;
 }

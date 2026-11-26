@@ -52,6 +52,16 @@ target_sources(ae_persistence PRIVATE ../src/NativeLibrary.cpp ../src/NativeLibr
 find_package(Threads REQUIRED)
 ae_suite(refresh CASES auto_refresh_policy section_refresh auto_refresh_tracker background_workers character_request callback_lifetime achievement_names)
 target_link_libraries(ae_refresh PRIVATE Threads::Threads)
+# Opt-in native Linux concurrency instrumentation. Keep production DLL and
+# the existing required sanitizer/Windows gates unchanged.
+option(AE_THREAD_SANITIZER "Instrument native refresh/concurrency regressions with TSan" OFF)
+if(AE_THREAD_SANITIZER)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "AE_THREAD_SANITIZER requires native Linux GCC or Clang")
+    endif()
+    target_compile_options(ae_refresh PRIVATE -g -O1 -fno-omit-frame-pointer -fsanitize=thread -fno-pie)
+    target_link_options(ae_refresh PRIVATE -fsanitize=thread -no-pie)
+endif()
 ae_suite(vault_clears CASES clears_rotation strike_display_name vault_assistance)
 ae_suite(skinventory CASES skin_search)
 ae_suite(imports CASES snowcrows_import build_relay_policy)

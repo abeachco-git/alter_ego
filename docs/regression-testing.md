@@ -236,3 +236,13 @@ Focused Linux ThreadSanitizer verification: compile the existing `background_wor
 Inventory credential regression: character_request verifies that both success and failed-attempt writes are rejected for a superseded epoch, while a new epoch can commit. In game replace or unlink while queued/in-flight across Bank, Wallet, Bags, Equipment, guild stash and roster; verify no obsolete retry timestamp, no cross-account rows and no unnecessary HTTP. Same-generation concurrent roster ordering and live host behavior still require validation.
 
 Achievement snapshot regression: background_workers exercises a 10,000-entry catalog with 1,000 unchanged captures (one build), revision replacement while an old reader retains the snapshot, sharing unchanged definition payloads, and failed-build retry. Live: browse categories/search/pins and popout while names/definitions/progress refresh; unpin in the middle of the pinned list, reorder, expand nested achievements, restore scroll, switch A→B→A, verify group counts after new groups and optimistic progress, and inspect frame time during revision changes. This host-side test checks construction counts, not Windows render latency.
+
+Native Linux ThreadSanitizer development workflow (opt-in; does not replace any required test gate):
+
+```sh
+cmake -S tests -B build-tsan -DAE_THREAD_SANITIZER=ON
+cmake --build build-tsan --target ae_refresh -j2
+TSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-tsan -R 'refresh\.(background_workers|callback_lifetime|character_request|section_refresh)$' --repeat until-fail:30 --output-on-failure
+```
+
+The existing section_refresh same-second ticket assertions verify that stale cancellation cannot clear a replacement ticket, and cancellation after success preserves verification. Native equipment now uses this cancellation path on obsolete credentials. The opt-in configuration fails explicitly on unsupported platforms; TSan failures must be investigated, not suppressed. Runner-wide default CI integration is not enabled until reliability is established.
