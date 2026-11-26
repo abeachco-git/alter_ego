@@ -5,6 +5,9 @@ Living implementation tracker for the experimental branch. Checked items indicat
 ## Development build identification
 - [x] Generate Windows file version from product version and CI run number; embed commit, attempt and run ID in PE resources and a small independent C++ compilation unit. Nexus options show build information. Existing upstream Nexus provider/version unchanged; no release publication. CI and in-game verification pending.
 
+## Physical inventory locations
+- [x] Shared one-based bank tab/slot, character bag/slot and shared inventory slot labels; sort the published per-item index numerically within account/storage/character, preserve stack quantities and existing context actions. No schema or API changes. Offline coverage added; Windows CI and in-game verification pending.
+
 ## Trading Post item pricing
 - [x] Separate instant-sale estimates for all eligible locations in the selected account scope and the eligible subset matching current filters; show quantities and omit duplicate estimates. Reuse current cached buy price, eligibility rules and fee calculation, no additional HTTP or schema change. Mystic Coin fixture (25 vs 1) added; in-game validation pending. User confirmed price retrieval works in the combined rollback build.
 - [ ] Discuss order-depth-aware estimates separately; no market listing requests or fee-policy changes approved.

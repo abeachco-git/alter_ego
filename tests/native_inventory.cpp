@@ -16,6 +16,46 @@ int case_native_inventory(int,char**){
     const auto root=(std::filesystem::temp_directory_path()/("ae-native-inventory-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))).string();
     auto rows=ParseArray(Json::parse(R"([null,{"id":10,"count":2},{"id":11,"count":1,"binding":"Account"},{"id":12,"count":1,"binding":"Character","bound_to":"A"}])"),"account-a","Bank");
     assert(rows.size()==3&&rows[0].position=="1"&&rows[0].binding==Binding::Unbound);
+    assert(LocationLabel(rows[0])=="Bank / Tab 1 / Slot 2");
+    // Sparse positions and multiple stacks of one item survive cache persistence.
+    Json sparse=Json::array();
+    for(int i=0;i<301;++i)sparse.push_back(nullptr);
+    for(auto index:{0,9,29,30,120,122,140,270,300})
+        sparse[index]=Json{{"id",10},{"count",index==120?3:1}};
+    auto stacks=ParseArray(sparse,"location-test","Bank");
+    assert(stacks.size()==9&&LocationLabel(stacks[2])=="Bank / Tab 1 / Slot 30");
+    assert(LocationLabel(stacks[3])=="Bank / Tab 2 / Slot 1");
+    assert(LocationLabel(stacks[4])=="Bank / Tab 5 / Slot 1");
+    assert(LocationLabel(stacks[7])=="Bank / Tab 10 / Slot 1");
+    assert(LocationLabel(stacks[8])=="Bank / Tab 11 / Slot 1");
+    const auto locationRoot=root+"-positions";
+    Record(locationRoot,{"location-test","Bank","","Ready",100,100},&stacks);
+    auto cached=Read(locationRoot).rows;
+    std::sort(cached.begin(),cached.end(),[](const Row& a,const Row& b){return LocationLess(a.slot,b.slot);});
+    assert(cached.size()==stacks.size());
+    for(size_t i=0;i<stacks.size();++i){
+        assert(cached[i].slot.position==stacks[i].position&&cached[i].slot.count==stacks[i].count);
+        assert(LocationLabel(cached[i].slot)==LocationLabel(stacks[i]));
+    }
+    std::filesystem::remove_all(locationRoot);
+    auto bag=ParseArray(Json::parse(R"([null,{"id":10,"count":2}])"),"account-a","Bags","A","2/");
+    assert(LocationLabel(bag[0])=="Bags / A / Bag 3 / Slot 2");
+    auto laterBag=bag[0];laterBag.position="10/0";assert(LocationLess(bag[0],laterBag));
+    laterBag.position="2/10";assert(LocationLess(bag[0],laterBag));
+    auto shared=rows[0];shared.scope="Shared inventory";shared.position="7";
+    assert(LocationLabel(shared)=="Shared inventory / Slot 8");
+    auto malformed=rows[0];malformed.position="30/0";
+    assert(LocationLabel(malformed)=="Bank"&&LocationLess(rows[0],malformed));
+    for(auto bad:{"","-1","4294967295","99999999999999","1x"," 1"}){
+        malformed.position=bad;assert(LocationLabel(malformed)=="Bank");
+    }
+    malformed=bag[0];malformed.position="2/";assert(LocationLabel(malformed)=="Bags / A");
+    auto equipment=bag[0];equipment.scope="Equipment";equipment.position="3/WeaponA1";
+    assert(LocationLabel(equipment)=="Equipment / A / WeaponA1");
+    auto materialLocation=rows[0];materialLocation.scope="Materials";
+    assert(LocationLabel(materialLocation)=="Materials");
+    auto armoryLocation=rows[0];armoryLocation.scope="Legendary Armory";
+    assert(LocationLabel(armoryLocation)=="Legendary Armory (unlocked count)");
     assert(Accessibility(rows[0],"account-b","B",false)==Access::Unknown);
     assert(Accessibility(rows[0],"account-b","B",true)==Access::Transferable);
     assert(Accessibility(rows[1],"account-b","B",true)==Access::Restricted);

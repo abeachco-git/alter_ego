@@ -128,6 +128,10 @@ void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State st
     std::lock_guard<std::mutex> serial(publishMutex);
     auto next=std::make_shared<View>();next->credentialEpoch=registryGeneration.load();next->accounts=Accounts();next->inventory=Read(root);
     for(size_t i=0;i<next->inventory.rows.size();++i)next->index[next->inventory.rows[i].slot.id].push_back(i);
+    // All location consumers share this order; do not reorder row identities.
+    for(auto& entry:next->index)std::sort(entry.second.begin(),entry.second.end(),[&](size_t a,size_t b){
+        return LocationLess(next->inventory.rows[a].slot,next->inventory.rows[b].slot);
+    });
     for(const auto& s:next->inventory.states)next->scopes[{s.account,s.scope,s.character}]=s;
     std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);++inventoryGeneration;if(replaceMessage){message=msg;messageState=state;}registryReady=true;
 }
@@ -514,14 +518,6 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
     });
 }
 std::string Display(const Account& a){return a.label.empty()?a.name:a.label;}
-std::string LocationLabel(const Slot& s){
-    std::string label=s.scope;
-    if(!s.character.empty())label+=" / "+s.character;
-    if(s.scope=="Equipment"){const auto slash=s.position.find('/');if(slash!=std::string::npos)label+=" / "+s.position.substr(slash+1);}
-    if(s.scope=="Legendary Armory")label+=" (unlocked count)";
-    if(s.scope=="Delivery box")label+=" (not collected)";
-    return label;
-}
 std::string Active(const View& v,const std::string& ch){
     if(ch.empty())return {};std::string result;
     for(const auto& a:v.accounts){auto it=v.inventory.rosters.find(a.id);

@@ -10,6 +10,9 @@
 #include <cctype>
 #include <set>
 #include <map>
+#include <tuple>
+#include <string_view>
+#include <charconv>
 #include "SkinSearchCore.h"
 
 namespace AlterEgo::NativeInventory {
@@ -24,6 +27,54 @@ struct Slot {
     int64_t stat=-1, charges=-1;
     std::vector<uint32_t> upgrades, infusions;
 };
+// Physical positions are zero-based API indices, including empty entries.
+inline constexpr uint32_t BankSlotsPerTab=30;
+inline std::optional<uint32_t> PositionIndex(std::string_view value){
+    if(value.empty())return std::nullopt;
+    uint32_t index=0;
+    const auto result=std::from_chars(value.data(),value.data()+value.size(),index);
+    // Leave room for one-based display; malformed cached values stay unknown.
+    if(result.ec!=std::errc{}||result.ptr!=value.data()+value.size()||
+       index==std::numeric_limits<uint32_t>::max())return std::nullopt;
+    return index;
+}
+using PhysicalPosition=std::pair<uint32_t,uint32_t>;
+inline std::optional<PhysicalPosition> DecodePhysicalPosition(const Slot& s){
+    const std::string_view position=s.position;
+    if(s.scope=="Bank"||s.scope=="Shared inventory"){
+        auto index=PositionIndex(position);if(!index)return std::nullopt;
+        if(s.scope=="Bank")return PhysicalPosition{*index/BankSlotsPerTab+1,*index%BankSlotsPerTab+1};
+        return PhysicalPosition{0,*index+1};
+    }
+    if(s.scope=="Bags"){
+        const auto slash=position.find('/');
+        if(slash==std::string_view::npos)return std::nullopt;
+        const auto bag=PositionIndex(position.substr(0,slash)),slot=PositionIndex(position.substr(slash+1));
+        if(bag&&slot)return PhysicalPosition{*bag+1,*slot+1};
+    }
+    return std::nullopt;
+}
+inline std::string LocationLabel(const Slot& s){
+    std::string label=s.scope;
+    if(!s.character.empty())label+=" / "+s.character;
+    if(const auto p=DecodePhysicalPosition(s)){
+        if(s.scope=="Bank")label+=" / Tab "+std::to_string(p->first);
+        else if(s.scope=="Bags")label+=" / Bag "+std::to_string(p->first);
+        label+=" / Slot "+std::to_string(p->second);
+    }
+    if(s.scope=="Equipment"){const auto slash=s.position.find('/');if(slash!=std::string::npos)label+=" / "+s.position.substr(slash+1);}
+    if(s.scope=="Legendary Armory")label+=" (unlocked count)";
+    if(s.scope=="Delivery box")label+=" (not collected)";
+    return label;
+}
+inline bool LocationLess(const Slot& a,const Slot& b){
+    const auto groupA=std::tie(a.account,a.scope,a.character),groupB=std::tie(b.account,b.scope,b.character);
+    if(groupA!=groupB)return groupA<groupB;
+    const auto pa=DecodePhysicalPosition(a),pb=DecodePhysicalPosition(b);
+    if(pa.has_value()!=pb.has_value())return pa.has_value();
+    if(pa&&pb&&*pa!=*pb)return *pa<*pb;
+    return a.position<b.position;
+}
 inline uint32_t ItemId(const Json& j) {
     if(!j.is_number_integer()) throw std::runtime_error("Invalid item ID");
     const auto n=j.get<int64_t>();
