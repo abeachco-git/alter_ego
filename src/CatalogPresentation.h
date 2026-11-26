@@ -1,11 +1,12 @@
 #pragma once
 #include "AddonShared.h"
 #include "IconManager.h"
+#include "CatalogRowCore.h"
 #include <algorithm>
 namespace AlterEgo::UI {
 // A fixed-height list row; caller owns stable ID, selection, context menu,
 // and domain-specific trailing content. No catalog requests from this helper.
-inline float CatalogRowHeight(){return ImMax(22.f,ImGui::GetTextLineHeight()+6.f);}
+inline float CatalogRowHeight(){return CatalogRowPitch(ImGui::GetTextLineHeight());}
 // Shared striping for selectable catalog rows and ordinary wallet rows.
 inline void CatalogRowBackground(int row,ImVec2 p,ImVec2 end,bool selected=false,bool hovered=false){
     const ImU32 bg=selected?IM_COL32(80,64,28,90):hovered?IM_COL32(60,56,40,60):row&1?IM_COL32(255,255,255,10):0;
@@ -37,8 +38,10 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const ImVec2 p=ImGui::GetCursorScreenPos();
     const float w=ImMax(1.f,ImGui::GetContentRegionAvail().x);
     const ImVec2 end(p.x+w,p.y+height);
-    ImGui::InvisibleButton("##catalog_row",ImVec2(w,height));
-    const bool hovered=ImGui::IsItemHovered(),clicked=ImGui::IsItemClicked();
+    // Respect native button ownership and activation (click/release or
+    // keyboard navigation); do not independently poll the mouse-down event.
+    const bool clicked=ImGui::InvisibleButton("##catalog_row",ImVec2(w,height));
+    const bool hovered=ImGui::IsItemHovered();
     auto* dl=ImGui::GetWindowDrawList();
     const auto rc=GetSkinRarityColor(rarity);
     CatalogRowBackground(row,p,end,selected,hovered);

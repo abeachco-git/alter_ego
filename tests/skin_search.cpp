@@ -4,6 +4,7 @@
 #include "../src/WikiFreshness.h"
 #include "../src/SkinFilters.h"
 #include "../src/SplitPanelCore.h"
+#include "../src/CatalogRowCore.h"
 #include "../src/LibraryModeFilter.h"
 #include <cassert>
 int case_skin_search(int, char**) {
@@ -36,6 +37,17 @@ int case_skin_search(int, char**) {
  filters.weapon={"Short Bow"};assert(filters.Matches(bow)&&!filters.Matches(heavy));
  filters.weight={"Heavy"};assert(filters.Matches(bow)&&filters.Matches(heavy)&&!filters.Matches(light));
  filters.category={"Armor"};filters.Prune();assert(filters.weapon.empty());
+ // A fractional font size must not introduce cumulative clipper/cursor drift.
+ assert(AlterEgo::UI::CatalogRowPitch(13.f)==22.f);
+ assert(AlterEgo::UI::CatalogRowPitch(16.f)==22.f);
+ assert(AlterEgo::UI::CatalogRowPitch(16.25f)==23.f);
+ assert(AlterEgo::UI::CatalogRowPitch(23.75f)==30.f);
+ for(float font:{13.f,16.25f,23.75f}){
+     const auto pitch=AlterEgo::UI::CatalogRowPitch(font);
+     float y=17.f;
+     for(int i=0;i<1000;++i)y=std::floor(y+pitch);
+     assert(y==17.f+1000*pitch);
+ }
  assert(AlterEgo::UI::FitSplitWidth(420,1000,24,200,240)==420);
  assert(AlterEgo::UI::FitSplitWidth(420,300,24,200,240)==138);
  assert(AlterEgo::UI::FitSplitWidth(420,1000,24,200,240)==420);

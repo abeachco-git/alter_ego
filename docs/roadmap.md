@@ -15,6 +15,10 @@ Living implementation tracker for the experimental branch. Checked items indicat
 - [x] Revert later preview diagnostic/HTTP consolidation commit 434ad4f after user confirmed uploaded DLL is byte-identical to 1feaa73 and previews work. Preserve working preview recovery and independent Trading Post dispatch fix.
 - [ ] Verify restored preview behavior and Trading Post price retrieval in the combined DLL, including armor variants and cache persistence. Initial artwork failure cause not established; user confirms previews work at 1feaa73.
 
+## Catalog row selection
+- [x] Use native button activation and integral shared catalog row pitch; offline pitch regression coverage. No context-menu or transport changes. User reported intermittent unclickable Inventory rows that recovered after navigation; exact root cause is unconfirmed.
+- [ ] In-game verify Inventory filtered and scrolled lists (including Nul Sul/Mystic Coin), search, repeated selection, right-click menus, navigation away/back and Skinventory list. Confirm intermittent failure no longer occurs before closing.
+
 ## Implementation tracker (living)
 
 - [x] Native registry, explicit API key setup, permission reporting, Windows Credential Manager.
