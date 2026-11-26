@@ -149,6 +149,10 @@ jobs:
           cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build-tests --parallel 2
           ctest --test-dir build-tests --output-on-failure
+      - name: Exercise untrusted parsers under ASan and UBSan
+        run: |
+          g++ -std=c++17 -O1 -g -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined -fno-sanitize-recover=all -Ilib tests/untrusted_fuzz.cpp src/ChatLink.cpp -o build-tests/untrusted-fuzz
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 build-tests/untrusted-fuzz
       - name: Run reproducible SQLite benchmark
         run: python3 tools/benchmark_sqlite.py --output sqlite-benchmark.json
       - name: Configure Windows release build

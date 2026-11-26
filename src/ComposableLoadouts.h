@@ -1,4 +1,5 @@
 #pragma once
+#include "UntrustedInput.h"
 // Alter Ego v3 composable Loadout model.
 //
 // This is a pure, platform-independent data layer. Build templates, physical
@@ -661,14 +662,14 @@ inline bool ValidPortableGearField(const std::string& field, const Json& value) 
     if (field == "infusion_snapshot") return value.is_boolean();
     if (field == "stat_name" || field == "rune" || field == "sigil" ||
         field == "sigil2" || field == "infusion" || field == "weapon_type")
-        return value.is_string();
+        return value.is_string() && Untrusted::DisplayText(value.get_ref<const std::string&>());
     if (field == "infusion_ids") {
-        if (!value.is_array()) return false;
+        if (!value.is_array() || value.size()>256) return false;
         for (const auto& id : value) if (!NonNegativeInteger(id)) return false;
     }
     if (field == "infusion_attributes") {
-        if (!value.is_array()) return false;
-        for (const auto& name : value) if (!name.is_string()) return false;
+        if (!value.is_array() || value.size()>256) return false;
+        for (const auto& name : value) if (!name.is_string() || !Untrusted::DisplayText(name.get_ref<const std::string&>())) return false;
     }
     return true;
 }
@@ -680,17 +681,17 @@ inline bool ValidatePortablePayload(const std::string& kind,
         const auto& field = it.key();
         const auto& value = it.value();
         if (field == "gear") {
-            if (!value.is_object()) return Fail(error, "Gear must be a slot object.");
+            if (!value.is_object() || value.size()>256) return Fail(error, "Gear must be a bounded slot object.");
             for (auto slot = value.begin(); slot != value.end(); ++slot) {
-                if (!slot.value().is_object())
-                    return Fail(error, "Gear slot payload must be an object.");
+                if (!slot.value().is_object() || !Untrusted::DisplayText(slot.key()))
+                    return Fail(error, "Invalid gear slot payload.");
                 for (auto part = slot.value().begin(); part != slot.value().end(); ++part)
                     if (!ValidPortableGearField(part.key(), part.value()))
                         return Fail(error, "Invalid gear field: " + part.key());
             }
         } else if (field == "profession" || field == "rune_name" ||
                    field == "relic_name") {
-            if (!value.is_string()) return Fail(error, "Invalid text field: " + field);
+            if (!value.is_string() || !Untrusted::DisplayText(value.get_ref<const std::string&>())) return Fail(error, "Invalid text field: " + field);
         } else if (field == "rune_id" || field == "relic_id" ||
                    field == "infusion_ar_total") {
             if (!NonNegativeInteger(value))
@@ -700,20 +701,20 @@ inline bool ValidatePortablePayload(const std::string& kind,
                 return Fail(error, "Invalid infusion-summary flag.");
         } else if (field == "weapons" || field == "pets" ||
                    field == "legend_codes") {
-            if (!value.is_array())
+            if (!value.is_array() || value.size()>256)
                 return Fail(error, "Invalid build array: " + field);
             for (const auto& number : value)
                 if (!NonNegativeInteger(number))
                     return Fail(error, "Invalid build array entry: " + field);
         } else if (field == "specializations") {
-            if (!value.is_array())
-                return Fail(error, "Specializations must be an array.");
+            if (!value.is_array() || value.size()>16)
+                return Fail(error, "Invalid specialization array.");
             for (const auto& spec : value) {
                 if (!spec.is_object()) return Fail(error, "Invalid specialization.");
                 if (spec.contains("id") && !NonNegativeInteger(spec["id"]))
                     return Fail(error, "Invalid specialization ID.");
                 if (spec.contains("traits")) {
-                    if (!spec["traits"].is_array())
+                    if (!spec["traits"].is_array() || spec["traits"].size()>16)
                         return Fail(error, "Traits must be an array.");
                     for (const auto& trait : spec["traits"])
                         if (!trait.is_number_integer())
@@ -726,19 +727,19 @@ inline bool ValidatePortablePayload(const std::string& kind,
                 if (value.contains(skillType) && !NonNegativeInteger(value[skillType]))
                     return Fail(error, "Invalid skill ID.");
             if (value.contains("utilities")) {
-                if (!value["utilities"].is_array())
+                if (!value["utilities"].is_array() || value["utilities"].size()>32)
                     return Fail(error, "Utilities must be an array.");
                 for (const auto& skill : value["utilities"])
                     if (!NonNegativeInteger(skill))
                         return Fail(error, "Invalid utility skill ID.");
             }
         } else if (field == "infusion_totals") {
-            if (!value.is_array()) return Fail(error, "Infusion totals must be an array.");
+            if (!value.is_array() || value.size()>256) return Fail(error, "Invalid infusion totals array.");
             for (const auto& req : value) {
                 if (!req.is_object()) return Fail(error, "Invalid infusion requirement.");
                 if (req.contains("item_id") && !NonNegativeInteger(req["item_id"]))
                     return Fail(error, "Invalid infusion requirement ID.");
-                if (req.contains("count") && !NonNegativeInteger(req["count"]))
+                if (req.contains("count") && (!NonNegativeInteger(req["count"]) || req["count"].get<uint64_t>()>1024))
                     return Fail(error, "Invalid infusion count.");
                 if (req.contains("attribute") && !req["attribute"].is_string())
                     return Fail(error, "Invalid infusion attribute.");
@@ -766,7 +767,8 @@ inline bool ImportComponent(const Json& input, std::string& kind,
         !input.contains("data") || !input.at("data").is_object())
         return Fail(error, "Not a supported component export.");
     const std::string parsedKind = input.at("kind").get<std::string>();
-    if (!IsKind(parsedKind) || input.at("name").get<std::string>().empty())
+    if (!IsKind(parsedKind) || input.at("name").get<std::string>().empty() ||
+        !Untrusted::DisplayText(input.at("name").get_ref<const std::string&>()))
         return Fail(error, "Invalid component type or name.");
     const Json& data = input.at("data");
     // A v3 component owns only its root fields. This makes exported pieces
@@ -854,6 +856,8 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
         !packet.contains("components") || !packet["components"].is_object() ||
         newId.empty())
         return Fail(error, "Unsupported or incomplete portable Loadout.");
+    if(!Untrusted::LoadoutMetadata(packet.at("metadata")))
+        return Fail(error,"Invalid portable Loadout metadata.");
     // Parse completely before transaction. A malformed component must leave
     // both references and source library untouched.
     std::map<std::string, Component> imported;
@@ -905,7 +909,8 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
             loadout.refs[kind] = componentId;
         }
         if(packet.contains("equipment_set_name")) {
-            if(!packet.at("equipment_set_name").is_string()||packet.at("equipment_set_name").get<std::string>().empty())
+            if(!packet.at("equipment_set_name").is_string()||packet.at("equipment_set_name").get<std::string>().empty()||
+               !Untrusted::DisplayText(packet.at("equipment_set_name").get_ref<const std::string&>()))
                 return Fail(err,"Invalid portable equipment set name.");
             EquipmentSet set{"equipment-set:"+newId,packet.at("equipment_set_name").get<std::string>(),{}};
             for(unsigned n=1;FindEquipmentSet(next,set.id);++n)set.id="equipment-set:"+newId+":"+std::to_string(n);

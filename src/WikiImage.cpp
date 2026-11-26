@@ -1014,7 +1014,7 @@ namespace Skinventory {
         std::istringstream iss(keys);
         std::string k;
         while (std::getline(iss, k, ',')) {
-            if (!k.empty()) keyList.push_back(k);
+            if (AlterEgo::ExternalResource::SafeCacheKey(k)) keyList.push_back(k);
         }
 
         // Phase 1: filter to keys that need network lookup.
@@ -1114,7 +1114,6 @@ namespace Skinventory {
                 failedDirty = true;
                 continue;
             }
-            if(!AlterEgo::ExternalResource::SafeCacheKey(key))continue;
             if(!AlterEgo::ExternalResource::SafeCacheKey(key))continue;
             std::string path = CurrencyIconCachePath(key);
             if (HttpClient::DownloadToFile(imageUrl, path)) {

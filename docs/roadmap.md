@@ -196,3 +196,5 @@ Character propagation evidence: the [GW2 API client endpoint documentation](http
 - [x] Reject malformed Base64 and mismatched AE2 envelope lengths before metadata requests; preserve v2/v3 and unpadded legacy chat links. Prepared SQL rejects trailing statements.
 - [x] Runtime approved HTTPS origins, bounded redirects, per-resource size caps, image headers/dimensions and safe currency cache keys; build Wiki redirect restriction and C++ literal escaping. SQL parameter completeness and insert shape allowlist. CI and live verification pending.
 - [ ] Further field/schema validation (including settings, legacy imports and imported assets), remaining SQL raw execution guard, complete image-decoder safety, and parser fuzzing with sanitizers. Preserve original import compatibility.
+
+- [x] Known visible field/control validation in clipboard portable imports, bounded component arrays and infusion counts, local custom font path rebasing, currency key validation before lookup, 12,000-case sanitizer corpus. CI and in-game verification pending. Legacy migration retains its previous 64 MiB file budget; opaque extension data preserved within parser budgets.

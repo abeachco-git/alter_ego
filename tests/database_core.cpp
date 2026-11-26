@@ -222,6 +222,8 @@ int case_database_core(int, char**) {
         png[11]=13;png.replace(12,4,"IHDR");png[19]=32;png[23]=32;
         assert(R::ImageHeader(png));png[16]=1;assert(!R::ImageHeader(png));
         assert(!R::ImageHeader("not an image"));
+        assert(!AlterEgo::Untrusted::DisplayText(std::string("visible")+char(0)+"hidden"));
+        assert(AlterEgo::Untrusted::DisplayText("one\ntwo",true));
         DB::Connection db(temp.path("sql-security.db"),DB::Connection::OpenMode::Create);
         bool rejected=false;
         try{auto q=db.Prepare("SELECT 1; SELECT 2");}catch(const DB::Error&){rejected=true;}

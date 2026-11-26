@@ -1714,8 +1714,13 @@ static void LoadSettings() {
             int face = f["face"].get<int>();
             if (face >= 0 && face <= 2) g_FontConfig.face = (AlterEgo::Font::Face)face;
         }
-        if (f.contains("path") && f["path"].is_string()) g_FontConfig.customPath = f["path"].get<std::string>();
-        if (f.contains("px")   && f["px"].is_number())    g_FontConfig.px = f["px"].get<float>();
+        if (f.contains("path") && f["path"].is_string())
+            g_FontConfig.customPath = AlterEgo::Font::LocalCustomPath(AlterEgo::GW2API::GetDataDirectory(),f["path"].get<std::string>());
+        if(g_FontConfig.face==AlterEgo::Font::Face::Custom && g_FontConfig.customPath.empty())g_FontConfig.face=AlterEgo::Font::Face::NexusDefault;
+        if (f.contains("px") && f["px"].is_number()) {
+            const auto size=f["px"].get<double>();
+            if(std::isfinite(size))g_FontConfig.px=static_cast<float>(std::max(10.0,std::min(32.0,size)));
+        }
     }
 }
 

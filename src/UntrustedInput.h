@@ -42,6 +42,29 @@ inline Json Parse(std::string_view input, Limits limits) {
     };
     return Json::parse(input.begin(),input.end(),callback);
 }
+// Validate known visible fields without rewriting opaque extension data.
+inline bool DisplayText(std::string_view value,bool multiline=false,std::size_t maxBytes=4096) {
+    if(value.size()>maxBytes)return false;
+    for(unsigned char c:value)
+        if((c<32 && !(multiline&&(c=='\n'||c=='\r'||c=='\t'))) || c==127)return false;
+    return true;
+}
+inline bool TextField(const Json& obj,const char* key,bool multiline=false,std::size_t maxBytes=4096){
+    auto it=obj.find(key);
+    return it==obj.end() || (it->is_string() && DisplayText(it->get_ref<const std::string&>(),multiline,maxBytes));
+}
+inline bool LoadoutMetadata(const Json& obj){
+    if(!obj.is_object())return false;
+    for(const auto* key:{"id","name","source_character","source_url","chat_link","ae2_code","game_mode"})
+        if(!TextField(obj,key))return false;
+    if(!TextField(obj,"notes",true,256u*1024u)||!TextField(obj,"import_warning",true,256u*1024u))return false;
+    if(obj.contains("game_modes")){
+        const auto& modes=obj.at("game_modes");
+        if(!modes.is_array()||modes.size()>32)return false;
+        for(const auto& mode:modes)if(!mode.is_string()||!DisplayText(mode.get_ref<const std::string&>()))return false;
+    }
+    return true;
+}
 inline Json ParseClipboard(const char* text) {
     if(!text) throw std::runtime_error("Clipboard is empty");
     std::size_t size=0;

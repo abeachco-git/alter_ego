@@ -385,6 +385,8 @@ int case_composable_loadouts(int, char**) {
     Json extension = exported;
     extension["data"]["future_extension"] = Json{{"strange", Json::array({true,"any",13})}};
     assert(ImportComponent(extension, importedKind, portable, error));
+    auto hiddenName=extension;hiddenName["name"]=std::string("valid")+char(0)+"hidden";
+    assert(!ImportComponent(hiddenName, importedKind, portable, error));
     assert(portable.data["future_extension"]["strange"].size() == 3);
 
 

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
+#include "ExternalResourceSafety.h"
 
 namespace AlterEgo { namespace Font {
 
@@ -16,6 +17,16 @@ namespace AlterEgo { namespace Font {
         float       px   = 16.0f; // requested pixel size for TTF faces
     };
 
+    // Rebase saved paths by filename; the supported UI selects local fonts.
+    inline std::string LocalCustomPath(const std::string& root,const std::string& saved) {
+        const auto pos=saved.find_last_of("/\\");
+        const auto name=saved.substr(pos==std::string::npos?0:pos+1);
+        if(!ExternalResource::SafeCacheKey(name)||name.size()<5)return {};
+        auto suffix=name.substr(name.size()-4);
+        for(char& c:suffix)if(c>='A'&&c<='Z')c=static_cast<char>(c-'A'+'a');
+        if(suffix!=".ttf"&&suffix!=".otf")return {};
+        return root+"/fonts/"+name;
+    }
     inline bool IsDefault(const Config& c) { return c.face == Face::NexusDefault; }
 
     // 32-bit FNV-1a hash of a string (stable, for custom-path identifiers).
