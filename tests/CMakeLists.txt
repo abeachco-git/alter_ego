@@ -44,7 +44,7 @@ function(ae_suite name)
 endfunction()
 
 ae_suite(loadouts CASES composable_loadouts build_group_order)
-ae_suite(equipment CASES gear_edit_core equipment_choice_core equipment_tab_core)
+ae_suite(equipment CASES gear_edit_core equipment_choice_core equipment_tab_core skill_edit_core)
 ae_suite(comparison CASES build_compare_core infusion_match_core infusion_totals ascended_stat_names)
 ae_suite(persistence CHATLINK CASES library_backup composable_backup fashion_library database_core native_library native_migration native_editing native_portable native_inventory)
 target_link_libraries(ae_persistence PRIVATE ae_sqlite)

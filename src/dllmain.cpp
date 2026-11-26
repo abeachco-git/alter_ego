@@ -70,6 +70,7 @@
 #include "EquipmentTabCore.h"
 #include "EquipmentChoiceCore.h"
 #include "GearEditCore.h"
+#include "SkillEditCore.h"
 #include "RefreshUI.h"
 #include "CacheDatabase.h"
 #include "AchievementCatalogCache.h"
@@ -887,8 +888,6 @@ static uint64_t g_DiscardNewBuildRevision=0;
 static bool g_EditIsNewBuild = false;      // true while editing a freshly-created build (cancel discards it)
 static std::string g_DiscardNewBuildId;    // deferred: id of a new build to delete after the render pass
 static int g_SpecPickerSlot = -1;          // 0..2 while spec picker open, else -1
-static int g_SkillPickerSlot = -1;         // 0=heal,1-3=util,4=elite while open, else -1
-static ImVec2 g_SkillPickerAnchor;         // screen pos of the clicked skill icon (flyout anchor)
 static int g_LegendPickerSlot = -1;        // 0..1 (Revenant) while open, else -1
 static int g_PetPickerSlot = -1;           // 0..1 (Ranger) while open, else -1
 static std::set<std::string> g_LibFilterModes; // empty = All; selected modes are ORed
@@ -7150,90 +7149,41 @@ static std::vector<uint32_t> SelectableBuildSkillIds(
     return matches;
 }
 
-// Skill picker for the build editor. Lists the profession's slottable skills
-// of the slot's type (Heal / Utility / Elite), gated by slotted elite specs,
-// and prevents duplicate utilities.
-static void RenderSkillPickerDialog() {
-    const char* POPUP = "##skillpick";
-    // Latch the open: OpenPopup ONCE per (re)request, not every frame — otherwise a
-    // click-away closes the popup and the next frame immediately reopens it.
-    static int s_openForSlot = -1;
-    static ImVec2 s_anchor;
-    if (g_SkillPickerSlot < 0) { s_openForSlot = -1; return; }
-
-    if (g_SkillPickerSlot != s_openForSlot) {
-        // Newly requested (or switched to a different slot) — (re)open at the anchor.
-        ImVec2 disp = ImGui::GetIO().DisplaySize;
-        s_anchor = g_SkillPickerAnchor;
-        if (s_anchor.x + 200.0f > disp.x) s_anchor.x = disp.x - 200.0f;
-        if (s_anchor.x < 0.0f) s_anchor.x = 0.0f;
-        if (s_anchor.y + 390.0f > disp.y) s_anchor.y = disp.y - 390.0f;
-        if (s_anchor.y < 0.0f) s_anchor.y = 0.0f;
-        ImGui::OpenPopup(POPUP);
-        s_openForSlot = g_SkillPickerSlot;
-    }
-    ImGui::SetNextWindowPos(s_anchor, ImGuiCond_Always);
-
-    if (ImGui::BeginPopup(POPUP)) {
-        const int slot = g_SkillPickerSlot;
-        const char* wantType = (slot == 0) ? "Heal" : (slot == 4) ? "Elite" : "Utility";
-
-        auto applySkill = [&](uint32_t id) {
-            if (slot == 0) { g_EditDraft.terrestrial_skills.heal = id; g_EditDraft.aquatic_skills.heal = id; }
-            else if (slot == 4) { g_EditDraft.terrestrial_skills.elite = id; g_EditDraft.aquatic_skills.elite = id; }
-            else {
-                int uidx = slot - 1;
-                uint32_t prev = g_EditDraft.terrestrial_skills.utilities[uidx];
-                // Native behaviour: picking a skill already in another utility slot
-                // swaps the two rather than refusing.
-                if (id != 0)
-                    for (int u = 0; u < 3; u++)
-                        if (u != uidx && g_EditDraft.terrestrial_skills.utilities[u] == id) {
-                            g_EditDraft.terrestrial_skills.utilities[u] = prev;
-                            g_EditDraft.aquatic_skills.utilities[u] = prev;
-                        }
-                g_EditDraft.terrestrial_skills.utilities[uidx] = id;
-                g_EditDraft.aquatic_skills.utilities[uidx] = id;
-            }
-            MarkEditDirty();
-            g_SkillPickerSlot = -1;
-            ImGui::CloseCurrentPopup();
-        };
-        std::vector<uint32_t> selectedSpecIds;
-        for (const auto& spec : g_EditDraft.specializations)
-            if (spec.spec_id) selectedSpecIds.push_back(spec.spec_id);
-        const auto skillIds = SelectableBuildSkillIds(
-            g_EditDraft.profession, wantType, selectedSpecIds);
-        if (skillIds.empty()) {
-            RenderSpinner("Loading eligible skills...");
-        } else {
-            const auto& shownIds = skillIds;
-            const int COLS = 4;
-            const float cell = 42.0f, pad = 4.0f;
-            uint32_t equipped = (slot == 0) ? g_EditDraft.terrestrial_skills.heal
-                              : (slot == 4) ? g_EditDraft.terrestrial_skills.elite
-                              : g_EditDraft.terrestrial_skills.utilities[slot - 1];
-            // Widen by the scrollbar + a little padding so the rightmost column isn't clipped.
-            float gridW = COLS * (cell + pad) + pad * 2.0f + ImGui::GetStyle().ScrollbarSize;
-            ImGui::BeginChild("##skillgrid", ImVec2(gridW, 360), true);
-            for (size_t k = 0; k < shownIds.size(); k++) {
-                if (k % COLS) ImGui::SameLine(0, pad);
-                ImGui::PushID((int)shownIds[k]);
-                ImVec2 p = ImGui::GetCursorScreenPos();
-                if (RenderEditableSkillIcon(shownIds[k], cell)) applySkill(shownIds[k]);
-                if (shownIds[k] == equipped)  // currently-slotted: thick white border
-                    ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + cell, p.y + cell),
-                        IM_COL32(255, 255, 255, 255), 0.0f, 0, 3.0f);
+// Both editors use a native field-scoped popup; click-away and Escape are
+// handled by ImGui instead of a global reopen latch.
+static bool RenderSkillPickerPopup(const char* popup,const std::string& profession,
+        const char* role,const std::vector<uint32_t>& specs,bool allowAnySpec,
+        uint32_t current,uint32_t& next) {
+    if(!ImGui::BeginPopup(popup))return false;
+    bool selected=false;
+    ImGui::TextDisabled("%s - %s",profession.empty()?"Choose a profession":profession.c_str(),role);
+    const auto choices=SelectableBuildSkillIds(profession,role,specs,allowAnySpec);
+    if(choices.empty())ImGui::TextDisabled(profession.empty()?"Select a profession first.":
+        "No eligible skills available (metadata may be loading).");
+    else {
+        constexpr int columns=4;
+        constexpr float cell=42.0f,gap=4.0f;
+        const float width=columns*(cell+gap)+gap*2+ImGui::GetStyle().ScrollbarSize;
+        const float height=ImMin(360.0f,ImMax(80.0f,ImGui::GetIO().DisplaySize.y-100.0f));
+        if(ImGui::BeginChild("##skill_grid",ImVec2(width,height),true)) {
+            for(size_t i=0;i<choices.size();++i) {
+                if(i%columns)ImGui::SameLine(0,gap);
+                ImGui::PushID(static_cast<int>(choices[i]));
+                const auto pos=ImGui::GetCursorScreenPos();
+                if(RenderEditableSkillIcon(choices[i],cell)){next=choices[i];selected=true;}
+                if(choices[i]==current)ImGui::GetWindowDrawList()->AddRect(pos,
+                    ImVec2(pos.x+cell,pos.y+cell),IM_COL32(255,255,255,255),0,0,3.0f);
                 ImGui::PopID();
             }
-            if (shownIds.empty()) RenderSpinner("Loading skills...");
-            ImGui::EndChild();
-            if (AlterEgo::UI::Button("(None)", ImVec2(0,0), AlterEgo::UI::ButtonRole::Compact)) applySkill(0);
         }
-        ImGui::EndPopup();
-    } else {
-        g_SkillPickerSlot = -1; // closed by clicking away
+        ImGui::EndChild();
     }
+    if(AlterEgo::UI::Button("Clear slot",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact)){
+        next=0;selected=true;
+    }
+    if(selected)ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    return selected;
 }
 
 // Revenant legend picker (active legend slot 0/1). Prevents the same legend
@@ -9075,39 +9025,37 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
 
 // Heal/Utility/Elite icon row for a build. When `editable`, each icon opens the skill
 // picker for its slot (0=heal, 1-3=util, 4=elite) and draws a gold hover outline.
-static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src, float sz, bool editable) {
-    auto cell = [&](uint32_t sid, int slot) {
-        if (editable) {
-            ImGui::PushID(slot + 700);
-            ImVec2 p = ImGui::GetCursorScreenPos();
-            if (RenderEditableSkillIcon(sid, sz,false)) {
-                g_SkillPickerSlot = slot;
-                g_SkillPickerAnchor = ImVec2(p.x, p.y + sz + 2.0f);
-            }
-            if (ImGui::BeginPopupContextItem("##skill_edit_context")) {
-                const auto skill=AlterEgo::GW2API::GetSkillInfo(sid);
-                if(skill)CopyNameMenuItem(skill->name);
-                if (ImGui::MenuItem("Clear Skill",nullptr,false,sid != 0)) {
-                    auto& bar = g_EditDraft.terrestrial_skills;
-                    if (slot == 0) bar.heal = 0;
-                    else if (slot == 4) bar.elite = 0;
-                    else bar.utilities[slot-1] = 0;
-                    MarkEditDirty();
-                }
-                ImGui::EndPopup();
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + sz, p.y + sz),
-                    IM_COL32(227, 196, 122, 255), 0.0f, 0, 2.0f);
-            ImGui::PopID();
-        } else {
-            RenderSkillIcon(sid, sz);
+static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src,float sz,bool editable,bool aquatic=false) {
+    const auto& bar=aquatic?src.aquatic_skills:src.terrestrial_skills;
+    std::vector<uint32_t> specs;
+    if(editable)for(const auto& spec:src.specializations)if(spec.spec_id)specs.push_back(spec.spec_id);
+    ImGui::PushID(aquatic?"aquatic_bar":"terrestrial_bar");
+    auto cell=[&](uint32_t sid,int slot){
+        if(!editable){RenderSkillIcon(sid,sz);return;}
+        ImGui::PushID(slot+700);
+        const auto p=ImGui::GetCursorScreenPos();
+        if(RenderEditableSkillIcon(sid,sz,false))ImGui::OpenPopup("##skill_picker");
+        const bool hovered=ImGui::IsItemHovered();
+        auto apply=[&](uint32_t id){
+            auto& draft=aquatic?g_EditDraft.aquatic_skills:g_EditDraft.terrestrial_skills;
+            if(AlterEgo::SkillEdit::SetSlot(draft,slot,id))MarkEditDirty();
+        };
+        if(ImGui::BeginPopupContextItem("##skill_edit_context")){
+            const auto skill=AlterEgo::GW2API::GetSkillInfo(sid);
+            if(skill)CopyNameMenuItem(skill->name);
+            if(ImGui::MenuItem("Clear Skill",nullptr,false,sid!=0))apply(0);
+            ImGui::EndPopup();
         }
+        if(hovered)ImGui::GetWindowDrawList()->AddRect(p,ImVec2(p.x+sz,p.y+sz),
+            IM_COL32(227,196,122,255),0,0,2.0f);
+        uint32_t next=sid;
+        if(RenderSkillPickerPopup("##skill_picker",src.profession,
+            slot==0?"Heal":slot==4?"Elite":"Utility",specs,false,sid,next))apply(next);
+        ImGui::PopID();
     };
-    cell(src.terrestrial_skills.heal, 0);
-    ImGui::SameLine();
-    for (int i = 0; i < 3; i++) { cell(src.terrestrial_skills.utilities[i], 1 + i); ImGui::SameLine(); }
-    cell(src.terrestrial_skills.elite, 4);
+    cell(bar.heal,0);ImGui::SameLine();
+    for(int i=0;i<3;++i){cell(bar.utilities[i],i+1);ImGui::SameLine();}
+    cell(bar.elite,4);ImGui::PopID();
 }
 
 // The saved-build game mode should be legible against both dark and bright
@@ -9956,6 +9904,12 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
         }
     }
 
+    const auto& aquaticBar=skillSrc.aquatic_skills;
+    const bool recordedAquatic=aquaticBar.heal||aquaticBar.elite||
+        aquaticBar.utilities[0]||aquaticBar.utilities[1]||aquaticBar.utilities[2];
+    if((g_LibEditMode||recordedAquatic)&&ImGui::TreeNode("Aquatic skills##loadout")){
+        RenderBuildSkillRow(skillSrc,skillSz,skillEditable,true);ImGui::TreePop();
+    }
     // Editing: Revenant legends / Ranger pets (not part of the heal/util/elite row).
     if (build.profession == "Revenant") {
         const uint8_t* legends = g_LibEditMode ? g_EditDraft.legend_codes : build.legend_codes;
@@ -16071,7 +16025,6 @@ void AddonRender() {
     RenderGearCustomizeDialog();
     RenderNewBuildDialog();
     RenderSpecPickerDialog();
-    RenderSkillPickerDialog();
     RenderLegendPickerDialog();
     RenderPetPickerDialog();
     RenderSaveToLibraryDialog();

@@ -111,71 +111,27 @@ static std::pair<std::vector<uint32_t>, bool> ComponentNativeSkillSpecs(
     return {common, found};
 }
 
-static bool ComponentNativeSkill(ComponentJson& parent, const char* key,
-                                 const char* label, const char* role,
-                                 const std::string& profession,
-                                 const std::vector<uint32_t>& specs,
-                                 bool allowAnySpec) {
+static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const char* label,
+        const char* role,const std::string& profession,const std::vector<uint32_t>& specs,bool allowAnySpec){
     ImGui::PushID(key);
-    const uint32_t id = parent.contains(key) && parent[key].is_number_integer()
-        ? parent[key].get<uint32_t>() : 0;
-    bool changed = false;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine(140.0f);
-    // Uses the exact same skill icon/tooltip widget as the Loadout editor.
-    if (RenderEditableSkillIcon(id, 38.0f))
-        ImGui::OpenPopup("##component_skill_palette");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", ComponentNativeSkillName(id).c_str());
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("GW2 skill #%u. Click the icon to change.", id);
-    if (ImGui::BeginPopup("##component_skill_palette")) {
-        ImGui::TextDisabled("%s - %s", profession.empty() ? "Choose a profession" :
-            profession.c_str(), role);
-        const auto choices = SelectableBuildSkillIds(
-            profession, role, specs, allowAnySpec);
-        if (choices.empty())
-            ImGui::TextDisabled(profession.empty()
-                ? "Select a profession first." : "Loading eligible skills...");
-        const float cell = 40.0f, gap = 4.0f;
-        if (ImGui::BeginChild("##skill_grid", ImVec2(212, 270), true)) {
-            for (size_t index = 0; index < choices.size(); ++index) {
-                if (index % 4 != 0) ImGui::SameLine(0, gap);
-                ImGui::PushID(static_cast<int>(choices[index]));
-                ImVec2 position = ImGui::GetCursorScreenPos();
-                if (RenderEditableSkillIcon(choices[index], cell)) {
-                    parent[key] = choices[index];
-                    changed = true;
-                    ImGui::CloseCurrentPopup();
-                }
-                if (choices[index] == id)
-                    ImGui::GetWindowDrawList()->AddRect(
-                        position, ImVec2(position.x + cell, position.y + cell),
-                        IM_COL32(255, 255, 255, 255), 0, 0, 2.0f);
-                ImGui::PopID();
-            }
-        }
-        ImGui::EndChild();
-        if (RenderActionButton("Clear slot##component_skill")) {
-            parent[key] = 0;
-            changed = true;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-    if (ImGui::BeginPopupContextItem("##component_skill_id")) {
+    const uint32_t id=parent.contains(key)&&parent[key].is_number_integer()?parent[key].get<uint32_t>():0;
+    bool changed=false;
+    ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);ImGui::SameLine(140.0f);
+    if(RenderEditableSkillIcon(id,38.0f,false))ImGui::OpenPopup("##component_skill_palette");
+    auto apply=[&](uint32_t next){if(next!=id){parent[key]=next;changed=true;}};
+    if(ImGui::BeginPopupContextItem("##component_skill_id")){
         const auto skill=AlterEgo::GW2API::GetSkillInfo(id);
         if(skill)CopyNameMenuItem(skill->name);
-        if (ImGui::MenuItem("Clear Skill")) { parent[key] = 0; changed = true; }
+        if(ImGui::MenuItem("Clear Skill",nullptr,false,id!=0))apply(0);
         ImGui::TextDisabled("Advanced: exact skill ID");
-        ComponentNativeNumber(parent, key, "Skill ID");
-        if (parent.contains(key) && parent[key].is_number_integer() &&
-            parent[key].get<uint32_t>() != id) changed = true;
+        ComponentNativeNumber(parent,key,"Skill ID");
+        if(parent.contains(key)&&parent[key].is_number_integer()&&parent[key].get<uint32_t>()!=id)changed=true;
         ImGui::EndPopup();
     }
-    ImGui::PopID();
-    return changed;
+    uint32_t next=id;
+    if(RenderSkillPickerPopup("##component_skill_palette",profession,role,specs,allowAnySpec,id,next))apply(next);
+    ImGui::SameLine();ImGui::TextDisabled("%s",ComponentNativeSkillName(id).c_str());
+    ImGui::PopID();return changed;
 }
 
 static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
@@ -210,15 +166,8 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
         if (ComponentNativeSkill(field, "skill",
                 (std::string("Utility ") + std::to_string(i+1)).c_str(),
                 "Utility", profession, specs, allowAnySpec)) {
-            const ComponentJson old = utilities[i], next = field["skill"];
-            // Match the normal editor: choosing a utility already used in a
-            // different slot swaps those two IDs instead of duplicating it.
-            if (next.is_number_integer() && next.get<uint32_t>() != 0)
-                for (int slot = 0; slot < 3; ++slot)
-                    if (slot != i && utilities[slot] == next)
-                        utilities[slot] = old;
-            utilities[i] = next;
-            bar["utilities"] = utilities;
+            if(AlterEgo::SkillEdit::SetUtility(utilities,i,field["skill"].get<uint32_t>()))
+                bar["utilities"]=utilities;
         }
         ImGui::PopID();
     }
