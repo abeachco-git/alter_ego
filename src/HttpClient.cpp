@@ -52,30 +52,27 @@ namespace Skinventory {
         if(R::Classify(url)==R::Origin::SnowCrows||R::Classify(url)==R::Origin::MetaBattle)return 3u*1024u*1024u;
         return 64u*1024u*1024u;
     }
-    HINTERNET OpenChecked(HINTERNET session,const std::string& initial,const char* headers,DWORD headerSize,DWORD flags,AlterEgo::HttpSafety::Deadline deadline,std::string* failure=nullptr) {
-        using AlterEgo::HttpSafety::Failure;
-        if(R::Classify(initial)==R::Origin::Unknown){Failure(failure,"URL rejected");return nullptr;}
+    HINTERNET OpenChecked(HINTERNET session,const std::string& initial,const char* headers,DWORD headerSize,DWORD flags,AlterEgo::HttpSafety::Deadline deadline) {
+        if(R::Classify(initial)==R::Origin::Unknown)return nullptr;
         auto url=initial;
         for(unsigned hop=0;hop<=4;++hop){
-            if(!AlterEgo::HttpSafety::Ready(deadline)){Failure(failure,"request cancelled or deadline");return nullptr;}
+            if(!AlterEgo::HttpSafety::Ready(deadline))return nullptr;
             AlterEgo::HttpSafety::Handle h(InternetOpenUrlA(session,url.c_str(),headers,headerSize,flags|INTERNET_FLAG_NO_AUTO_REDIRECT,0));
-            if(!h){const auto code=GetLastError();Failure(failure,"open HTTP URL",code);return nullptr;}
-            if(!AlterEgo::HttpSafety::Ready(deadline)){Failure(failure,"request cancelled or deadline");return nullptr;}
+            if(!h||!AlterEgo::HttpSafety::Ready(deadline))return nullptr;
             const int status=StatusCode(h);
             if(status!=301&&status!=302&&status!=303&&status!=307&&status!=308)return h.Release();
             char location[16385]{};DWORD count=sizeof(location);
             const bool got=HttpQueryInfoA(h,HTTP_QUERY_LOCATION,location,&count,nullptr)!=FALSE;
-            if(!got){const auto code=GetLastError();Failure(failure,"read redirect",code);return nullptr;}
-            if(!count||count>=sizeof(location)||hop==4){Failure(failure,"invalid redirect or hop limit");return nullptr;}
+            if(!got||!count||count>=sizeof(location)||hop==4)return nullptr;
             std::string_view raw(location,count);
-            if(raw.find('\0')!=std::string_view::npos){Failure(failure,"invalid redirect location");return nullptr;}
-            for(unsigned char c:raw)if(c<=32||c==127||c=='\\'){Failure(failure,"invalid redirect location");return nullptr;}
+            if(raw.find('\0')!=std::string_view::npos)return nullptr;
+            for(unsigned char c:raw)if(c<=32||c==127||c=='\\')return nullptr;
             char combined[16385]{};DWORD length=sizeof(combined);
-            if(!InternetCombineUrlA(url.c_str(),location,combined,&length,0)){const auto code=GetLastError();Failure(failure,"combine redirect",code);return nullptr;}
+            if(!InternetCombineUrlA(url.c_str(),location,combined,&length,0))return nullptr;
             std::string next(combined);
-            if(!R::SafeRedirect(url,next)){Failure(failure,"redirect rejected by URL policy");return nullptr;}
+            if(!R::SafeRedirect(url,next))return nullptr;
             // Never forward custom headers to a changed host.
-            if(headers&&url.substr(0,url.find('/',8))!=next.substr(0,next.find('/',8))){Failure(failure,"redirect rejected for custom headers");return nullptr;}
+            if(headers&&url.substr(0,url.find('/',8))!=next.substr(0,next.find('/',8)))return nullptr;
             url=std::move(next);
         }
         return nullptr;
@@ -84,42 +81,77 @@ namespace Skinventory {
     std::size_t HttpClient::WikiWaiting(){return wikiGate.Waiting();}
 
     std::string HttpClient::Get(const std::string& url) {
-        auto r=GetEx(url);
-        return r.status_code>=200&&r.status_code<300?std::move(r.body):std::string{};
+        if (AlterEgo::ArenaNet::IsApiUrl(url)) {
+            auto r=AlterEgo::ArenaNet::Get(url.substr(std::strlen(AlterEgo::ArenaNet::Origin)));
+            return r.status_code>=200&&r.status_code<300?std::move(r.body):std::string{};
+        }
+        if (AlterEgo::Background::Workers().Stopping()) return {};
+        WikiLease wiki(url);
+        if(!wiki.Ready())return {};
+        const auto deadline=AlterEgo::HttpSafety::BeginRequest();
+        AlterEgo::HttpSafety::Handle hInternet(InternetOpenA("Skinventory/1.0",
+            INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0));
+        if (!hInternet) return "";
+        AlterEgo::HttpSafety::Configure(hInternet);
+
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
+                      INTERNET_FLAG_SECURE;
+
+        if (!AlterEgo::HttpSafety::Ready(deadline)) {
+            return {};
+        }
+        wiki.Starting();
+        AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
+        AlterEgo::HttpSafety::Handle hUrl(OpenChecked(hInternet, url, NULL, 0, flags,deadline));
+        if (!hUrl || !AlterEgo::HttpSafety::Ready(deadline)) {
+            return "";
+        }
+
+        const int status=StatusCode(hUrl);
+        activity.Status(status);wiki.Status(status);
+        std::string result;
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.append(data, count); },LimitFor(url),deadline);
+
+        if(complete)activity.Complete();
+        return complete && status>=200 && status<300 ? result : std::string{};
     }
 
     HttpResponse HttpClient::GetEx(const std::string& url) {
         if(AlterEgo::ArenaNet::IsApiUrl(url))return AlterEgo::ArenaNet::Get(url.substr(std::strlen(AlterEgo::ArenaNet::Origin)));
         HttpResponse result;
-        using namespace AlterEgo::HttpSafety;
-        const auto fail=[&](const char* stage,DWORD code=0){
-            Failure(&result.failure,stage,code);return std::move(result);
-        };
-        if(AlterEgo::Background::Workers().Stopping())return fail("cancelled");
+        if (AlterEgo::Background::Workers().Stopping()) return {};
         WikiLease wiki(url);
-        if(!wiki.Ready())return fail("Wiki admission cancelled or queue timeout");
-        const auto deadline=BeginRequest();
-        Handle hInternet(InternetOpenA("Skinventory/1.0",INTERNET_OPEN_TYPE_PRECONFIG,NULL,NULL,0));
-        if(!hInternet){const auto code=GetLastError();return fail("open WinINet session",code);}
-        Configure(hInternet);
-        const DWORD flags=INTERNET_FLAG_RELOAD|INTERNET_FLAG_NO_CACHE_WRITE|INTERNET_FLAG_SECURE;
-        if(!Ready(deadline))return fail("request cancelled or deadline");
+        if(!wiki.Ready())return {};
+        const auto deadline=AlterEgo::HttpSafety::BeginRequest();
+        AlterEgo::HttpSafety::Handle hInternet(InternetOpenA("Skinventory/1.0",
+            INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0));
+        if (!hInternet) return result;
+        AlterEgo::HttpSafety::Configure(hInternet);
+
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
+                      INTERNET_FLAG_SECURE;
+
+        if (!AlterEgo::HttpSafety::Ready(deadline)) {
+            return {};
+        }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
-        result.attempted=true;
-        Handle hUrl(OpenChecked(hInternet,url,NULL,0,flags,deadline,&result.failure));
-        if(!hUrl){if(result.failure.empty())result.failure="open HTTP URL";return result;}
-        if(!Ready(deadline))return fail("request cancelled or deadline");
-        DWORD statusCode=0,statusSize=sizeof(statusCode);
-        if(!HttpQueryInfoA(hUrl,HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER,&statusCode,&statusSize,NULL)){
-            const auto code=GetLastError();return fail("read HTTP status",code);
+        AlterEgo::HttpSafety::Handle hUrl(OpenChecked(hInternet, url, NULL, 0, flags,deadline));
+        if (!hUrl || !AlterEgo::HttpSafety::Ready(deadline)) {
+            return result;
         }
-        result.status_code=static_cast<int>(statusCode);
+
+        DWORD statusCode = 0;
+        DWORD statusSize = sizeof(statusCode);
+        HttpQueryInfoA(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                       &statusCode, &statusSize, NULL);
+        result.status_code = (int)statusCode;
         activity.Status(result.status_code);wiki.Status(result.status_code);
-        const bool complete=ReadBody(hUrl,[&](const char* data,DWORD count){result.body.append(data,count);},LimitFor(url),deadline,&result.failure);
+
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.body.append(data, count); },LimitFor(url),deadline);
+
         if(complete)activity.Complete();
-        else{result.body.clear();result.status_code=0;}
-        return result;
+        return complete ? result : HttpResponse{};
     }
 
     HttpResponse HttpClient::GetEx(const std::string& url, const std::string& headers) {
@@ -214,33 +246,45 @@ namespace Skinventory {
         return complete ? result : HttpResponse{};
     }
 
-    bool HttpClient::DownloadToFile(const std::string& url,const std::string& filePath,std::string* failure) {
-        // Share the same GET implementation, admission, deadline and response
-        // diagnostics instead of maintaining a second network pipeline.
-        using AlterEgo::HttpSafety::Failure;
-        if(failure)failure->clear();
-        if(!R::ArtworkUrl(url)){Failure(failure,"artwork URL rejected");return false;}
-        const auto response=GetEx(url);
-        if(!response.failure.empty()){if(failure)*failure=response.failure;return false;}
-        if(response.status_code<200||response.status_code>=300){
-            if(failure)*failure="artwork HTTP "+std::to_string(response.status_code);return false;
+    bool HttpClient::DownloadToFile(const std::string& url, const std::string& filePath) {
+        if(!R::ArtworkUrl(url))return false;
+        if (AlterEgo::Background::Workers().Stopping()) return {};
+        WikiLease wiki(url);
+        if(!wiki.Ready())return {};
+        const auto deadline=AlterEgo::HttpSafety::BeginRequest();
+        AlterEgo::HttpSafety::Handle hInternet(InternetOpenA("Skinventory/1.0",
+            INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0));
+        if (!hInternet) return false;
+        AlterEgo::HttpSafety::Configure(hInternet);
+
+        if (!AlterEgo::HttpSafety::Ready(deadline)) {
+            return {};
         }
-        if(AlterEgo::Background::Workers().Stopping()){Failure(failure,"cancelled");return false;}
-        if(response.body.empty()){Failure(failure,"empty image response");return false;}
-        if(!R::ImageHeader(response.body)){
-            if(failure)*failure="image header or dimensions rejected ("+std::to_string(response.body.size())+" bytes)";return false;
+        wiki.Starting();
+        AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
+        AlterEgo::HttpSafety::Handle hUrl(OpenChecked(hInternet, url, NULL, 0,
+            INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE,deadline));
+        if (!hUrl || !AlterEgo::HttpSafety::Ready(deadline)) {
+            return false;
         }
+
+        const int status=StatusCode(hUrl);
+        activity.Status(status);wiki.Status(status);
+        std::vector<char> buffer;
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { buffer.insert(buffer.end(), data, data + count); },R::ArtworkBytes,deadline);
+
+        if(complete)activity.Complete();
+
+        if (!complete || AlterEgo::Background::Workers().Stopping() || status<200 || status>=300 || buffer.empty()) return false;
+
+        if(!R::ImageHeader(std::string_view(buffer.data(),buffer.size())))return false;
         const auto temporary=filePath+".part";
-        std::ofstream file(temporary,std::ios::binary|std::ios::trunc);
-        if(!file.is_open()){Failure(failure,"open cache temporary file");return false;}
-        file.write(response.body.data(),static_cast<std::streamsize>(response.body.size()));
+        std::ofstream file(temporary, std::ios::binary|std::ios::trunc);
+        if (!file.is_open()) return false;
+        file.write(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         file.close();
-        if(!file.good()){DeleteFileA(temporary.c_str());Failure(failure,"write cache temporary file");return false;}
-        if(AlterEgo::Background::Workers().Stopping()){
-            DeleteFileA(temporary.c_str());Failure(failure,"cancelled");return false;
-        }
-        if(!MoveFileExA(temporary.c_str(),filePath.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
-            const auto code=GetLastError();DeleteFileA(temporary.c_str());Failure(failure,"publish cache file",code);return false;
+        if(!file.good()||AlterEgo::Background::Workers().Stopping()||!MoveFileExA(temporary.c_str(),filePath.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
+            DeleteFileA(temporary.c_str());return false;
         }
         return true;
     }

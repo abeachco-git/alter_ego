@@ -12,8 +12,8 @@ Living implementation tracker for the experimental branch. Checked items indicat
 
 ## Wiki preview recovery
 - [x] Cache-first preview lookup, one-time removal of ambiguous legacy skin failure records, verified exact-filename fast path and combined page lookup, transient 15m session retry vs verified missing 7d, explicit Retry preview and visible failure status. Existing shared HTTP admission, validation and acquisition caching retained; offline/build/live verification pending.
-- [x] Add precise local WinINet/HTTP/read/validation/cache-publication diagnostics to the existing transport; consolidate Wiki binary GET with common GET and exercise actual Abaddon Pistol imageinfo fixture. Build and live validation pending.
-- [ ] Verify live Wiki API access, previously cached previews, Abaddon Pistol/Mace, armor variants and failure recovery in Nexus. User curl verified API and JPEG HTTP 200; exact original addon failure stage not yet confirmed.
+- [x] Revert later preview diagnostic/HTTP consolidation commit 434ad4f after user confirmed uploaded DLL is byte-identical to 1feaa73 and previews work. Preserve working preview recovery and independent Trading Post dispatch fix.
+- [ ] Verify restored preview behavior and Trading Post price retrieval in the combined DLL, including armor variants and cache persistence. Initial artwork failure cause not established; user confirms previews work at 1feaa73.
 
 ## Implementation tracker (living)
 

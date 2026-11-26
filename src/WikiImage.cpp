@@ -660,7 +660,7 @@ namespace Skinventory {
             const bool missing=persistent!=s_failedPersistent.end()&&AlterEgo::WikiFreshness::ArtworkRemaining(persistent->second,now,true)>0;
             if(s_stopWorker||(!manual&&(cooling||missing)))s_loading.erase(skinId);
             else{
-                try{s_requestQueue.push_back({skinId,skinName,weightClass,false,manual});s_imageErrors[skinId]="Queued for Wiki preview...";}
+                try{s_requestQueue.push_back({skinId,skinName,weightClass,false,manual});}
                 catch(...){s_loading.erase(skinId);}
             }
         }
@@ -714,8 +714,8 @@ namespace Skinventory {
     std::string WikiImage::ImageStatus(uint32_t skinId){
         std::lock_guard<std::mutex> lock(s_mutex);
         if(s_texturePending.count(skinId))return "Loading cached preview...";
+        if(s_loading.count(skinId))return "Loading wiki image...";
         auto reason=s_imageErrors.find(skinId);
-        if(s_loading.count(skinId))return reason==s_imageErrors.end()?"Loading wiki image...":reason->second;
         std::string message=reason==s_imageErrors.end()?"Preview not retrieved":reason->second;
         const auto p=s_failedPersistent.find(skinId);
         const auto f=s_failed.find(skinId);
@@ -784,10 +784,8 @@ namespace Skinventory {
         return encoded;
     }
 
-    struct ArtworkTransportFailure{std::string detail;};
     static json ArtworkQuery(const std::string& params){
         auto r=HttpClient::GetEx("https://wiki.guildwars2.com/api.php?action=query&format=json&"+params);
-        if(!r.failure.empty())throw ArtworkTransportFailure{"Wiki lookup: "+r.failure};
         return AlterEgo::WikiArtwork::Query(r.status_code,r.body);
     }
 
@@ -1165,7 +1163,6 @@ namespace Skinventory {
                 continue;
             }
             try {
-            {std::lock_guard<std::mutex> lock(s_mutex);s_imageErrors[req.skinId]="Looking up Wiki artwork...";}
             // Scrape wiki for image URL only
             std::string matchedPage;
             std::string imageUrl = ScrapeWikiImageUrl(req.skinName, req.weightClass, matchedPage);
@@ -1177,18 +1174,15 @@ namespace Skinventory {
             }
 
             // Download to disk
-            {std::lock_guard<std::mutex> lock(s_mutex);s_imageErrors[req.skinId]="Downloading Wiki artwork...";}
-            std::string filePath = GetCacheFilePath(req.skinId),failure;
-            if (HttpClient::DownloadToFile(imageUrl, filePath,&failure)) {
+            std::string filePath = GetCacheFilePath(req.skinId);
+            if (HttpClient::DownloadToFile(imageUrl, filePath)) {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 if(s_stopWorker)return;
-                s_readyQueue.push_back(req.skinId);s_imageErrors[req.skinId]="Preview saved; awaiting texture...";
+                s_readyQueue.push_back(req.skinId);
             } else {
-                RecordFailure(req.skinId,false,"Wiki download: "+(failure.empty()?std::string("unknown failure"):failure));
+                RecordFailure(req.skinId,false,"Wiki image download failed");
             }
 
-            } catch(const ArtworkTransportFailure& e) {
-                try{RecordFailure(req.skinId,false,e.detail);}catch(...){std::lock_guard<std::mutex> lock(s_mutex);s_loading.erase(req.skinId);}
             } catch(const std::exception& e) {
                 // Report bounded, fixed diagnostics (never raw remote data).
                 const std::string what=e.what();

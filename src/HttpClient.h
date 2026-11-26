@@ -11,8 +11,6 @@ namespace Skinventory {
         std::string body;
         // ArenaNet transport entered HttpSendRequest; local admission rejection is not an attempt.
         bool attempted=false;
-        // Local fixed-stage diagnostics only, never URL, credentials or response text.
-        std::string failure;
     };
 
     class HttpClient {
@@ -32,7 +30,7 @@ namespace Skinventory {
         static HttpResponse PostJson(const std::string& url, const std::string& jsonBody, const std::string& headers);
 
         // Download a URL to a file on disk. Returns true on success.
-        static bool DownloadToFile(const std::string& url, const std::string& filePath,std::string* failure=nullptr);
+        static bool DownloadToFile(const std::string& url, const std::string& filePath);
     };
 
 }
