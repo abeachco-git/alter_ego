@@ -355,7 +355,7 @@ static void RenderFashionLibrary() {
         if (!look.notes.empty()) { ImGui::Spacing(); ImGui::TextWrapped("%s", look.notes.c_str()); }
         const std::string assocLabel = "Associated characters (" + std::to_string(look.characters.size()) + ")";
         if (ImGui::TreeNode(assocLabel.c_str())) {
-            for (const auto& ch : look.characters) ImGui::BulletText("%s", ch.c_str());
+            for (const auto& ch : OrderedCharacterNames(std::vector<std::string>(look.characters.begin(),look.characters.end()))) ImGui::BulletText("%s", ch.c_str());
             if (look.characters.empty()) ImGui::TextDisabled("(none)");
             if (!look.source_character.empty()) ImGui::TextDisabled("Original: %s, equipment %d",
                 look.source_character.c_str(), look.source_tab);

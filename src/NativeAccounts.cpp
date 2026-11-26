@@ -3,6 +3,7 @@
 #include "AccountCommitGate.h"
 #include "NativeInventoryStore.h"
 #include "InventoryGroupCore.h"
+#include "CharacterOrderCore.h"
 #include "ArenaNetTransport.h"
 #include "BackgroundWorkers.h"
 #include "AddonShared.h"
@@ -649,10 +650,30 @@ bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names){
     if(!result.accepted||result.state.status!="Ready")return false;
     names=std::move(result.names);return true;
 }
+// Keep the published index immutable. Order only the requested presentation
+// subset, with numeric stack order retained inside each storage group.
+static std::vector<size_t> OrderedLocationRows(const View& v,const std::vector<size_t>& indices){
+    std::set<CharacterOrder::Key> keys;
+    for(auto i:indices){const auto& s=v.inventory.rows[i].slot;if(!s.character.empty())keys.emplace(s.account,s.character);}
+    const auto ranks=CharacterOrder::Ranks(OrderedCharacterKeys(keys));
+    std::map<std::string,size_t> accounts;
+    for(const auto& id:OrderedCharacterAccounts())accounts.emplace(id,accounts.size());
+    for(const auto& a:v.accounts)accounts.emplace(a.id,accounts.size());
+    auto rank=[&](const std::string& id){auto it=accounts.find(id);return it==accounts.end()?accounts.size():it->second;};
+    auto out=indices;
+    std::stable_sort(out.begin(),out.end(),[&](size_t i,size_t j){
+        const auto& a=v.inventory.rows[i].slot;const auto& b=v.inventory.rows[j].slot;
+        if(a.account!=b.account){auto ar=rank(a.account),br=rank(b.account);return ar!=br?ar<br:a.account<b.account;}
+        if(a.character.empty()!=b.character.empty())return a.character.empty();
+        if(a.character!=b.character)return ranks.at({a.account,a.character})<ranks.at({b.account,b.character});
+        return LocationLess(a,b);
+    });
+    return out;
+}
 std::vector<Location> Locations(uint32_t id){
     auto v=Snapshot();std::vector<Location> out;
     const auto it=v->index.find(id);if(it==v->index.end())return out;
-    for(auto n:it->second){const auto& row=v->inventory.rows[n];
+    for(auto n:OrderedLocationRows(*v,it->second)){const auto& row=v->inventory.rows[n];
         const auto& s=row.slot;
         for(const auto& a:v->accounts)if(a.id==s.account){
             out.push_back({a.id,s.scope,s.character,s.position,BindingName(s.binding),s.count});break;
@@ -674,7 +695,7 @@ void RenderItemAvailability(uint32_t id,const std::string& account,const std::st
     auto v=Snapshot();if(account.empty()){ImGui::TextDisabled("Target account not verified");return;}
     const auto it=v->index.find(id);if(it==v->index.end()){ImGui::TextDisabled("No cached locations (not proof of absence)");return;}
     const auto f=v->inventory.flags.count(id)?v->inventory.flags.at(id):ItemFlags{};
-    for(auto i:it->second){
+    for(auto i:OrderedLocationRows(*v,it->second)){
         const auto& r=v->inventory.rows[i];const auto& s=r.slot;
         const auto a=std::find_if(v->accounts.begin(),v->accounts.end(),[&](const Account& a){return a.id==s.account;});
         if(a==v->accounts.end())continue;
@@ -729,7 +750,10 @@ void ItemMenu(uint32_t id,const std::string& name,const std::string& chat,const 
             const auto& [key,count]=*targets.begin();(void)count;
             RenderCharacterLoadMenu(("Load Character - "+key.second).c_str(),key.second,key.first);
         }else if(ImGui::BeginMenu("Load Character")){
-            for(const auto& [key,count]:targets){
+            std::set<CharacterOrder::Key> keys;
+            for(const auto& target:targets)keys.insert(target.first);
+            for(const auto& key:OrderedCharacterKeys(keys)){
+                const auto count=targets.at(key);
                 ImGui::PushID(key.first.c_str());ImGui::PushID(key.second.c_str());
                 RenderCharacterLoadMenu((key.second+" x"+std::to_string(count)).c_str(),key.second,key.first);
                 ImGui::PopID();ImGui::PopID();
@@ -1076,9 +1100,13 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     if(selected==groups.end()){nav.item=0;nav.currency=false;nav.group.clear();groupRevealPending=false;}
 
     // Derive group buckets from the same filtered aggregate, not a second scan
-    // or filter implementation. Rebuild only on a projection/login-order change.
+    // or filter implementation. Rebuild only on a projection/character-order change.
     static GroupTree tree;
-    static uint64_t treeProjection=0,treeLoginRevision=0,treeRevision=0;
+    static uint64_t treeProjection=0,treeRevision=0;
+    static std::vector<CharacterOrder::Key> treeCharacterOrder;
+    static std::vector<std::string> treeAccountOrder;
+    static uint64_t candidateProjection=0;
+    static std::set<CharacterOrder::Key> candidateCharacters;
     static std::map<std::pair<size_t,std::string>,int64_t> groupCounts;
     static std::map<size_t,std::string> firstGroup;
     static std::vector<GroupLine> visibleLines;
@@ -1087,16 +1115,15 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     static bool visibleForced=false;
     const bool forceExpand=!tokens.empty();
     if(nav.grouped){
-        uint64_t loginRevision=0;
-        std::map<CharacterActivity::Key,int64_t> logins;
-        {
-            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
-            loginRevision=CharacterActivity::State().LoginRevision();
-            if(treeProjection!=projectionRevision||treeLoginRevision!=loginRevision)
-                logins=CharacterActivity::State().LoginTimes();
+        if(candidateProjection!=projectionRevision){
+            candidateProjection=projectionRevision;candidateCharacters.clear();
+            for(const auto& g:groups)for(const auto* r:g.locations)
+                if(!r->slot.character.empty())candidateCharacters.emplace(r->slot.account,r->slot.character);
         }
-        if(treeProjection!=projectionRevision||treeLoginRevision!=loginRevision){
-            treeProjection=projectionRevision;treeLoginRevision=loginRevision;++treeRevision;
+        const auto characterOrder=OrderedCharacterKeys(candidateCharacters);
+        const auto accountOrderKeys=OrderedCharacterAccounts();
+        if(treeProjection!=projectionRevision||treeCharacterOrder!=characterOrder||treeAccountOrder!=accountOrderKeys){
+            treeProjection=projectionRevision;treeCharacterOrder=characterOrder;treeAccountOrder=accountOrderKeys;++treeRevision;
             tree.Clear();groupCounts.clear();firstGroup.clear();visibleLines.clear();
             std::map<GroupPath,std::vector<GroupLeaf>> buckets;
             for(size_t i=0;i<groups.size();++i){
@@ -1107,16 +1134,16 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             }
             std::map<std::string,size_t> accountOrder;
             std::map<std::string,std::string> accountLabels;
-            for(size_t i=0;i<accounts.size();++i){accountOrder[accounts[i].id]=i;accountLabels[accounts[i].id]=Display(accounts[i]);}
+            for(const auto& id:accountOrderKeys)accountOrder.emplace(id,accountOrder.size());
+            for(const auto& a:accounts){accountOrder.emplace(a.id,accountOrder.size());accountLabels[a.id]=Display(a);}
+            const auto characterRank=CharacterOrder::Ranks(characterOrder);
             std::vector<GroupPath> paths;
             for(const auto& [path,leaves]:buckets)paths.push_back(path);
-            const auto login=[&](const GroupPath& p){auto it=logins.find({p.account,p.character});return it==logins.end()?int64_t(0):it->second;};
             std::sort(paths.begin(),paths.end(),[&](const GroupPath& a,const GroupPath& b){
                 if(a.account!=b.account)return accountOrder.at(a.account)<accountOrder.at(b.account);
                 if(a.character.empty()!=b.character.empty())return a.character.empty();
                 if(a.character!=b.character){
-                    const auto x=login(a),y=login(b);
-                    return x!=y?CharacterActivity::LoginBefore(x,y,true):a.character<b.character;
+                    return characterRank.at({a.account,a.character})<characterRank.at({b.account,b.character});
                 }
                 const auto ar=StorageRank(a.storage),br=StorageRank(b.storage);
                 return ar!=br?ar<br:a.storage<b.storage;
@@ -1254,7 +1281,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     if(total!=group.count)ImGui::TextDisabled("Matching filters: %lld",static_cast<long long>(group.count));
     if(groupQuantity!=groupCounts.end())ImGui::TextDisabled("Selected group: %lld",static_cast<long long>(groupQuantity->second));
     RenderSectionHeader("Locations",UI::SectionGold);
-    if(locations!=v->index.end())for(auto idx:locations->second){
+    if(locations!=v->index.end())for(auto idx:OrderedLocationRows(*v,locations->second)){
         const auto& row=v->inventory.rows[idx];const auto& slot=row.slot;if(!allowed(slot.account))continue;
         ImGui::PushID(static_cast<int>(idx));
         auto label=LocationLabel(slot);if(multi)for(const auto& a:v->accounts)if(a.id==slot.account){label=Display(a)+" / "+label;break;}

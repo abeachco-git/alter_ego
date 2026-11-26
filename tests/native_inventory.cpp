@@ -1,5 +1,6 @@
 #include "../src/NativeInventoryStore.h"
 #include "../src/InventoryGroupCore.h"
+#include "../src/CharacterOrderCore.h"
 #include "../src/NativeProgressCore.h"
 #include "../src/CompletionCache.h"
 #include "../src/RefreshProgress.h"
@@ -29,6 +30,31 @@ int case_native_inventory(int,char**){
         assert(!tree.Expand("unknown",expanded)&&expanded.size()==3);
         tree.Clear();tree.Add(bank,"Account A",false,{{0,20}});
         auto single=tree.Flatten({},true);assert(single.size()==2&&single[0].node->label=="Bank"&&single[1].depth==1);
+    }
+    {
+        namespace O=AlterEgo::CharacterOrder;
+        const std::vector<O::Entry> rows={
+            {{"a","Zed"},"Guardian","2020",80,10,200},
+            {{"a","Alpha"},"Necromancer","2022",60,2,100},
+            {{"a","Beta"},"","",0,-1,0},
+            {{"b","Aardvark"},"Engineer","2019",80,1,300}};
+        const std::vector<std::string> accounts={"a","b"},custom={"Beta","Zed","Alpha"};
+        auto order=[&](int mode,bool asc){return O::Indices(rows,mode,asc,custom,accounts);};
+        assert((order(O::Custom,true)==std::vector<int>{2,0,1,3}));
+        assert((order(O::Name,true)==std::vector<int>{1,2,0,3}));
+        assert((order(O::Name,false)==std::vector<int>{0,2,1,3}));
+        assert((order(O::Profession,false)==std::vector<int>{1,0,2,3}));
+        assert((order(O::Level,true)==std::vector<int>{0,1,2,3}));
+        assert((order(O::Level,false)==std::vector<int>{1,0,2,3}));
+        assert((order(O::Age,false)==std::vector<int>{1,0,2,3}));
+        assert((order(O::Birthday,true)==std::vector<int>{1,0,2,3}));
+        assert((order(O::LastLogin,true)==std::vector<int>{0,1,2,3}));
+        assert((order(O::LastLogin,false)==std::vector<int>{1,0,2,3}));
+        assert((O::Indices(rows,O::Name,true,custom,{"b","a"})==std::vector<int>{3,1,2,0}));
+        // A filtered subset must preserve its relative order, including roster-only names.
+        const std::vector<O::Entry> subset={rows[0],rows[2]};
+        assert((O::Indices(subset,O::Custom,true,custom,accounts)==std::vector<int>{1,0}));
+        assert((O::Indices(subset,O::Name,false,custom,accounts)==std::vector<int>{0,1}));
     }
     RefreshProgress::Counts scopeProgress;
     scopeProgress.Add("Ready",true);scopeProgress.Add("Refreshing",true);scopeProgress.Add("Missing permissions",true);scopeProgress.Add("Not retrieved",false);

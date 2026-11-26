@@ -39,6 +39,7 @@
 #include "MetaBattleImport.h"
 #include "BuildRelayPolicy.h"
 #include "CharacterActivity.h"
+#include "CharacterOrderCore.h"
 #include "AutoRefreshPolicy.h"
 #include "FontResolve.h"
 #include "FontManager.h"
@@ -1164,7 +1165,7 @@ struct ThemeGuard {
 
 // Character list sorting
 // Append new modes to preserve values already stored in char_sort.json.
-enum CharSortMode { Sort_Custom = 0, Sort_Name, Sort_Profession, Sort_Level, Sort_Age, Sort_Birthday, Sort_LastLogin };
+enum CharSortMode { Sort_Custom = AlterEgo::CharacterOrder::Custom, Sort_Name, Sort_Profession, Sort_Level, Sort_Age, Sort_Birthday, Sort_LastLogin };
 static int g_CharSortMode = Sort_Custom;
 static bool g_CharSortAscending = true;            // true = default direction, false = reversed
 static std::vector<int> g_CharDisplayOrder;        // indices into GetCharacters()
@@ -1178,115 +1179,66 @@ static bool SaveCharSortConfig();
 static void LoadCharSortConfig();
 static int DaysUntilBirthday(const std::string& created);
 
+// Canonical sorter shared by the main roster and every character list.
+std::vector<std::string> OrderedCharacterAccounts(){
+    std::vector<std::string> out;
+    const auto current=AlterEgo::GW2API::GetCurrentAccountName();
+    if(!current.empty())out.push_back(current);
+    for(const auto& acct:AlterEgo::GW2API::GetAccounts())
+        if(acct.name!=current)out.push_back(acct.name);
+    return out;
+}
+static AlterEgo::CharacterOrder::Entry CharacterOrderEntry(const AlterEgo::Character& ch){
+    return {{ch.account_name,ch.name},ch.profession,ch.created,ch.level,
+        g_CharSortMode==Sort_Birthday?DaysUntilBirthday(ch.created):-1,CharacterLastLogin(ch)};
+}
+static std::vector<int> SortCharacterEntries(const std::vector<AlterEgo::CharacterOrder::Entry>& entries){
+    return AlterEgo::CharacterOrder::Indices(entries,g_CharSortMode,g_CharSortAscending,g_CustomCharOrder,
+        AlterEgo::GW2API::IsMultiAccount()?OrderedCharacterAccounts():std::vector<std::string>{});
+}
+std::vector<std::pair<std::string,std::string>> OrderedCharacterKeys(
+    const std::set<std::pair<std::string,std::string>>& requested){
+    using namespace AlterEgo;
+    auto remaining=requested;
+    std::vector<CharacterOrder::Entry> entries;
+    const auto chars=GW2API::GetCharacters();
+    for(const auto& ch:*chars){
+        const CharacterOrder::Key key{ch.account_name,ch.name};
+        if(remaining.erase(key))entries.push_back(CharacterOrderEntry(ch));
+    }
+    // Roster-only identities can still use Name, Custom and Last Login.
+    // For metadata-dependent modes they sort after fully retrieved characters.
+    for(const auto& key:remaining){
+        CharacterOrder::Entry entry;entry.key=key;
+        auto login=g_LoginHistory.find(key);if(login!=g_LoginHistory.end())entry.login=login->second;
+        entries.push_back(std::move(entry));
+    }
+    std::vector<CharacterOrder::Key> out;
+    for(int i:SortCharacterEntries(entries))out.push_back(entries[i].key);
+    return out;
+}
+std::vector<std::string> OrderedCharacterNames(const std::vector<std::string>& names){
+    using namespace AlterEgo;
+    std::set<CharacterOrder::Key> keys;
+    const auto chars=GW2API::GetCharacters();
+    for(const auto& name:names){
+        auto owner=GW2API::GetAccountForCharacter(name);
+        if(owner.empty()){
+            // Legacy/name-only UI records may not have a verified roster yet.
+            // Use a unique cached identity for presentation only.
+            for(const auto& ch:*chars)if(ch.name==name){owner=ch.account_name;break;}
+        }
+        keys.emplace(owner,name);
+    }
+    std::vector<std::string> out;
+    for(const auto& key:OrderedCharacterKeys(keys))out.push_back(key.second);
+    return out;
+}
 static void RebuildCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& charsSnapshot = AlterEgo::GW2API::GetCharacters()) {
-    const auto& chars = *charsSnapshot;
-    int n = (int)chars.size();
-    g_CharDisplayOrder.resize(n);
-    for (int i = 0; i < n; i++) g_CharDisplayOrder[i] = i;
-
-    bool asc = g_CharSortAscending;
-    switch (g_CharSortMode) {
-        case Sort_Name:
-            std::sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
-                [&](int a, int b) {
-                    return asc ? chars[a].name < chars[b].name
-                               : chars[a].name > chars[b].name;
-                });
-            break;
-        case Sort_Profession:
-            std::sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
-                [&](int a, int b) {
-                    if (chars[a].profession != chars[b].profession)
-                        return asc ? chars[a].profession < chars[b].profession
-                                   : chars[a].profession > chars[b].profession;
-                    return chars[a].name < chars[b].name;
-                });
-            break;
-        case Sort_Level:
-            std::sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
-                [&](int a, int b) {
-                    if (chars[a].level != chars[b].level)
-                        return asc ? chars[a].level > chars[b].level   // asc = highest first
-                                   : chars[a].level < chars[b].level;
-                    return chars[a].name < chars[b].name;
-                });
-            break;
-        case Sort_Age:
-            std::sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
-                [&](int a, int b) {
-                    return asc ? chars[a].created < chars[b].created   // asc = oldest first
-                               : chars[a].created > chars[b].created;
-                });
-            break;
-        case Sort_Birthday:
-            std::sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
-                [&](int a, int b) {
-                    int da = DaysUntilBirthday(chars[a].created);
-                    int db = DaysUntilBirthday(chars[b].created);
-                    if (da < 0) da = 999; // unparseable dates go to end
-                    if (db < 0) db = 999;
-                    if (da != db)
-                        return asc ? da < db : da > db;  // asc = soonest first
-                    return chars[a].name < chars[b].name;
-                });
-            break;
-        case Sort_LastLogin:
-            // Local MumbleLink login timestamps: newest first by default.
-            // Unknown characters go last in either direction. stable_sort
-            // preserves incoming order when timestamps tie or are unavailable.
-            std::stable_sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
-                [&](int a, int b) {
-                    return AlterEgo::CharacterActivity::LoginBefore(
-                        CharacterLastLogin(chars[a]),CharacterLastLogin(chars[b]),asc);
-                });
-            break;
-        case Sort_Custom:
-        default: {
-            // Order by g_CustomCharOrder, unknowns appended at end
-            std::unordered_map<std::string, int> nameToIdx;
-            for (int i = 0; i < n; i++) nameToIdx[chars[i].name] = i;
-
-            g_CharDisplayOrder.clear();
-            // First: characters in custom order
-            for (const auto& name : g_CustomCharOrder) {
-                auto it = nameToIdx.find(name);
-                if (it != nameToIdx.end()) {
-                    g_CharDisplayOrder.push_back(it->second);
-                    nameToIdx.erase(it);
-                }
-            }
-            // Then: any new characters not yet in custom order
-            for (int i = 0; i < n; i++) {
-                if (nameToIdx.find(chars[i].name) != nameToIdx.end()) {
-                    g_CharDisplayOrder.push_back(i);
-                }
-            }
-            break;
-        }
-    }
-    // Multi-account: group by account (current account first), preserve sort within each group
-    if (AlterEgo::GW2API::IsMultiAccount()) {
-        const std::string& currentAcct = AlterEgo::GW2API::GetCurrentAccountName();
-        // Build ordered account list: current account first, then others in encounter order
-        std::vector<std::string> acctOrder;
-        if (!currentAcct.empty()) acctOrder.push_back(currentAcct);
-        for (const auto& acct : AlterEgo::GW2API::GetAccounts()) {
-            if (acct.name != currentAcct)
-                acctOrder.push_back(acct.name);
-        }
-        // Stable sort by account group — preserves the per-sort-key ordering within each group
-        std::unordered_map<std::string, int> acctRank;
-        for (int i = 0; i < (int)acctOrder.size(); i++) acctRank[acctOrder[i]] = i;
-        std::stable_sort(g_CharDisplayOrder.begin(), g_CharDisplayOrder.end(),
-            [&](int a, int b) {
-                const std::string& aa = chars[a].account_name;
-                const std::string& ba = chars[b].account_name;
-                if (aa == ba) return false; // preserve existing sort within same account
-                int ra = acctRank.count(aa) ? acctRank[aa] : 999;
-                int rb = acctRank.count(ba) ? acctRank[ba] : 999;
-                return ra < rb;
-            });
-    }
+    std::vector<AlterEgo::CharacterOrder::Entry> entries;
+    entries.reserve(charsSnapshot->size());
+    for(const auto& ch:*charsSnapshot)entries.push_back(CharacterOrderEntry(ch));
+    g_CharDisplayOrder=SortCharacterEntries(entries);
     g_CharOrderRoster=charsSnapshot;
     g_CharOrderAccount=AlterEgo::GW2API::GetCurrentAccountName();
     if(g_CharSortMode==Sort_LastLogin)g_CharLastLoginSortDirty=false;
@@ -6933,18 +6885,8 @@ bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selecte
     UI::FilterFieldLabel(label);
     const auto chars=GW2API::GetCharacters();
     std::map<std::string,std::string> professions;
-    std::vector<std::string> order;
-    std::set<std::string> remaining=names;
-    // Reuse the Characters/Compare order when available and append roster-only
-    // names so inventory remains filterable before detailed character retrieval.
-    auto add=[&](const Character& c){
-        if(names.count(c.name)&&!c.profession.empty())professions[c.name]=c.profession;
-        if(remaining.erase(c.name))order.push_back(c.name);
-    };
-    for(int idx:g_CharDisplayOrder)
-        if(idx>=0&&static_cast<size_t>(idx)<chars->size())add((*chars)[idx]);
-    for(const auto& c:*chars)add(c);
-    order.insert(order.end(),remaining.begin(),remaining.end());
+    for(const auto& c:*chars)if(names.count(c.name)&&!c.profession.empty())professions[c.name]=c.profession;
+    const auto order=OrderedCharacterNames(std::vector<std::string>(names.begin(),names.end()));
     const bool single=selected.size()==1;
     const auto preview=selected.empty()?std::string("All"):
         single?*selected.begin():std::to_string(selected.size())+" selected";
@@ -10585,9 +10527,10 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     const auto charactersSnapshot = AlterEgo::GW2API::GetCharacters();
     const auto& characters = *charactersSnapshot;
     std::vector<const AlterEgo::Character*> matches;
-    for (const auto& ch : characters)
-        if (!ch.build_tabs.empty())
-            matches.push_back(&ch);
+    EnsureCharDisplayOrder(charactersSnapshot);
+    for(int i:g_CharDisplayOrder){
+        const auto& ch=characters[i];if(!ch.build_tabs.empty())matches.push_back(&ch);
+    }
     if (matches.empty()) {
         ImGui::TextWrapped("No retrieved characters with this profession. Refresh character data in the Characters tab.");
         return;
@@ -16208,7 +16151,7 @@ void AddonRender() {
             const auto charactersSnapshot = AlterEgo::GW2API::GetCharacters();
             const auto& characters = *charactersSnapshot;
             // Also check pending names from a list-only fetch (new user, no full data yet)
-            const auto& pendingNames = AlterEgo::GW2API::GetPendingCharNames();
+            const auto pendingNames = characters.empty()?OrderedCharacterNames(AlterEgo::GW2API::GetPendingCharNames()):AlterEgo::GW2API::GetPendingCharNames();
 
             // Auto-fetch character list when native API first becomes ready and we have no data
             // Wait for accounts data so we get characters from ALL accounts
@@ -17044,6 +16987,7 @@ void AddonRender() {
                     } else {
                         g_RefreshNames = names;
                     }
+                    g_RefreshNames=OrderedCharacterNames(g_RefreshNames);
                     g_RefreshSelection.assign(g_RefreshNames.size(), false);
                     const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
                     const auto& chars = *charsSnapshot;

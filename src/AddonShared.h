@@ -6,6 +6,8 @@
 #include <functional>
 #include <cstdint>
 #include <set>
+#include <vector>
+#include <utility>
 #include "nexus/Nexus.h"
 #include "imgui.h"
 #include "UIControls.h"
@@ -66,6 +68,12 @@ void RenderEmptyCard(Texture_t* iconTex,
 
 // Inline animated loading spinner: rotating arc + label.
 void RenderSpinner(const char* label, ImVec4 color = ImVec4(0.7f, 0.85f, 0.95f, 1.0f));
+
+// Canonical Characters sort preference for presentation-only subsets.
+std::vector<std::string> OrderedCharacterAccounts();
+std::vector<std::pair<std::string,std::string>> OrderedCharacterKeys(
+    const std::set<std::pair<std::string,std::string>>& requested);
+std::vector<std::string> OrderedCharacterNames(const std::vector<std::string>& names);
 
 // Character filter shares Compare's profession rows; empty means All.
 // Names are limited to the caller's verified roster; unknown class stays selectable.
