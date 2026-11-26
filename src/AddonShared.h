@@ -69,7 +69,7 @@ void RenderEmptyCard(Texture_t* iconTex,
 // Inline animated loading spinner: rotating arc + label.
 void RenderSpinner(const char* label, ImVec4 color = ImVec4(0.7f, 0.85f, 0.95f, 1.0f));
 
-// Canonical Characters sort preference for presentation-only subsets.
+// Canonical Characters sort preference for render-thread-only presentation subsets.
 std::vector<std::string> OrderedCharacterAccounts();
 std::vector<std::pair<std::string,std::string>> OrderedCharacterKeys(
     const std::set<std::pair<std::string,std::string>>& requested);

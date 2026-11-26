@@ -1172,7 +1172,8 @@ static std::vector<int> g_CharDisplayOrder;        // indices into GetCharacters
 static std::vector<std::string> g_CustomCharOrder;  // saved custom name order
 static int g_CharDragIdx = -1;                      // drag-and-drop source index in display order
 static std::shared_ptr<const std::vector<AlterEgo::Character>> g_CharOrderRoster;
-static std::string g_CharOrderAccount;
+static std::vector<std::string> g_CharOrderAccounts;
+static int g_CharOrderBirthdayDay=-1;
 static bool g_CharLastLoginSortDirty = false;        // rebuild recency sort after Mumble character change
 
 static bool SaveCharSortConfig();
@@ -1226,7 +1227,9 @@ std::vector<std::string> OrderedCharacterNames(const std::vector<std::string>& n
         if(owner.empty()){
             // Legacy/name-only UI records may not have a verified roster yet.
             // Use a unique cached identity for presentation only.
-            for(const auto& ch:*chars)if(ch.name==name){owner=ch.account_name;break;}
+            std::set<std::string> candidates;
+            for(const auto& ch:*chars)if(ch.name==name&&!ch.account_name.empty())candidates.insert(ch.account_name);
+            if(candidates.size()==1)owner=*candidates.begin();
         }
         keys.emplace(owner,name);
     }
@@ -1234,13 +1237,19 @@ std::vector<std::string> OrderedCharacterNames(const std::vector<std::string>& n
     for(const auto& key:OrderedCharacterKeys(keys))out.push_back(key.second);
     return out;
 }
+static int CharacterOrderCalendarDay(){
+    const auto now=std::time(nullptr);
+    const auto* day=std::localtime(&now);
+    return day?day->tm_year*366+day->tm_yday:-1;
+}
 static void RebuildCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& charsSnapshot = AlterEgo::GW2API::GetCharacters()) {
     std::vector<AlterEgo::CharacterOrder::Entry> entries;
     entries.reserve(charsSnapshot->size());
     for(const auto& ch:*charsSnapshot)entries.push_back(CharacterOrderEntry(ch));
     g_CharDisplayOrder=SortCharacterEntries(entries);
     g_CharOrderRoster=charsSnapshot;
-    g_CharOrderAccount=AlterEgo::GW2API::GetCurrentAccountName();
+    g_CharOrderAccounts=OrderedCharacterAccounts();
+    g_CharOrderBirthdayDay=g_CharSortMode==Sort_Birthday?CharacterOrderCalendarDay():-1;
     if(g_CharSortMode==Sort_LastLogin)g_CharLastLoginSortDirty=false;
 }
 
@@ -1248,7 +1257,8 @@ static void RebuildCharDisplayOrder(const std::shared_ptr<const std::vector<Alte
 // refresh with unchanged identities/sort keys does not require a re-sort.
 static void EnsureCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& roster){
     bool changed=!g_CharOrderRoster||g_CharOrderRoster->size()!=roster->size()||
-        g_CharOrderAccount!=AlterEgo::GW2API::GetCurrentAccountName()||
+        g_CharOrderAccounts!=OrderedCharacterAccounts()||
+        (g_CharSortMode==Sort_Birthday&&g_CharOrderBirthdayDay!=CharacterOrderCalendarDay())||
         (g_CharSortMode==Sort_LastLogin&&g_CharLastLoginSortDirty);
     if(!changed&&g_CharOrderRoster!=roster){
         for(size_t i=0;i<roster->size();++i){

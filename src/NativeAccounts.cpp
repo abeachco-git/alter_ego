@@ -673,7 +673,9 @@ static std::vector<size_t> OrderedLocationRows(const View& v,const std::vector<s
 std::vector<Location> Locations(uint32_t id){
     auto v=Snapshot();std::vector<Location> out;
     const auto it=v->index.find(id);if(it==v->index.end())return out;
-    for(auto n:OrderedLocationRows(*v,it->second)){const auto& row=v->inventory.rows[n];
+    // Raw snapshot accessor can also be called off the render thread.
+    // Only UI presentation reads the character-sort preferences.
+    for(auto n:it->second){const auto& row=v->inventory.rows[n];
         const auto& s=row.slot;
         for(const auto& a:v->accounts)if(a.id==s.account){
             out.push_back({a.id,s.scope,s.character,s.position,BindingName(s.binding),s.count});break;
@@ -1478,9 +1480,14 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
             for(const auto* dataset:{"Bags","Equipment"}){
                 if(scope!="Items"&&scope!=dataset)continue;
                 RefreshProgress::Counts group;
-                for(const auto& ch:roster->second)
-                    if(MatchesStorageView(scope,characters,dataset,ch))
-                        mark(a,dataset,ch,characterFiltered?nullptr:&group);
+                if(characterFiltered){
+                    std::set<CharacterOrder::Key> keys;
+                    for(const auto& ch:roster->second)if(MatchesStorageView(scope,characters,dataset,ch))keys.emplace(a.id,ch);
+                    for(const auto& key:OrderedCharacterKeys(keys))mark(a,dataset,key.second);
+                }else{
+                    for(const auto& ch:roster->second)
+                        if(MatchesStorageView(scope,characters,dataset,ch))mark(a,dataset,ch,&group);
+                }
                 if(!characterFiltered){
                     if(!detail.empty())detail+="\n";
                     detail+=(accounts.size()>1?Display(a)+" / ":"")+dataset+": "+group.Summary();
