@@ -55,11 +55,15 @@ namespace Skinventory {
 
     private:
         static void FetchPriceWorker(std::vector<uint32_t> item_ids,
-                                      std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin);
+                                      std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin,uint64_t mappingGeneration);
         static void ItemMapWorker(bool incremental=false,bool discover=true,bool refresh=true);
 
         static std::string s_data_dir;
         static std::mutex s_mutex;
+        // Serialize durable mapping/price publication; never acquire from getters.
+        static std::mutex s_publication_mutex;
+        static uint64_t s_mapping_generation; // guarded by s_mutex
+        static void AdoptMapping(CommerceCandidates skins,std::unordered_map<uint32_t,std::string> names,std::unordered_map<uint32_t,int> vendors);
 
         // skin_id -> PriceInfo
         static std::unordered_map<uint32_t, PriceInfo> s_prices;

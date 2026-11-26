@@ -509,6 +509,17 @@ int case_database_core(int, char**) {
         J stale=observation;stale["ts"]=99;stale["sell"]=1;
         assert(Cache::WriteCommerce(root,D::Prices,J{{"1",stale}}));
         assert(Cache::ReadCommerce(root,D::Prices,absent)==prices);
+        // Reordering is not a new candidate set; adding/removing candidates
+        // invalidates only affected choices, including formerly empty choices.
+        auto reordered=mapping;reordered["skins"]["1"]=J::array({12,11});
+        assert(Cache::WriteCommerce(root,D::Mapping,reordered));
+        assert(Cache::ReadCommerce(root,D::Prices,absent)==prices);
+        auto changed=reordered;changed["skins"]["1"]=J::array({12});
+        assert(Cache::WriteCommerce(root,D::Mapping,changed));
+        assert(Cache::ReadCommerce(root,D::Prices,absent)==J({{"2",observation}}));
+        changed["skins"].erase("2");
+        assert(Cache::WriteCommerce(root,D::Mapping,changed));
+        assert(Cache::ReadCommerce(root,D::Prices,absent)->empty());
         auto paths=AlterEgo::Storage::Paths(root);
         AlterEgo::Storage::WriteMigrationBytes(paths.base/"item_cache.json","[]");
         auto moved=AlterEgo::Storage::ResolveCache(root,"item_cache.json");

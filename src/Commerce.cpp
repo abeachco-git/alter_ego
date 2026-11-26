@@ -28,6 +28,8 @@ namespace Skinventory {
 
     std::string Commerce::s_data_dir;
     std::mutex Commerce::s_mutex;
+    std::mutex Commerce::s_publication_mutex;
+    uint64_t Commerce::s_mapping_generation=0;
     std::unordered_map<uint32_t, PriceInfo> Commerce::s_prices;
     std::unordered_map<uint32_t, std::vector<uint32_t>> Commerce::s_skin_to_item;
     std::unordered_map<uint32_t, std::string> Commerce::s_item_names;
@@ -144,12 +146,26 @@ namespace Skinventory {
         FetchPricesForSkins({skin_id});
     }
 
+    // Caller owns publication mutex; no DB or network operations under s_mutex.
+    void Commerce::AdoptMapping(CommerceCandidates skins,std::unordered_map<uint32_t,std::string> names,std::unordered_map<uint32_t,int> vendors) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        const auto changed=ChangedCommerceCandidates(s_skin_to_item,skins);
+        if(!changed.empty()){
+            ++s_mapping_generation;
+            for(auto skin:changed)s_prices.erase(skin);
+            ++s_price_generation;
+        }
+        s_skin_to_item=std::move(skins);s_item_names=std::move(names);s_vendor_prices=std::move(vendors);
+    }
+
     void Commerce::FetchPricesForSkins(const std::vector<uint32_t>& skin_ids) {
         if (!s_item_map_ready || s_fetching.exchange(true)) return;
         std::vector<uint32_t> item_ids;
         std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin;
+        uint64_t mappingGeneration=0;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            mappingGeneration=s_mapping_generation;
             for (uint32_t skin_id : skin_ids) {
                 const auto it=s_skin_to_item.find(skin_id);
                 const auto pit=s_prices.find(skin_id);
@@ -170,11 +186,11 @@ namespace Skinventory {
             }
         }
         if(item_ids.empty()) { s_fetching=false; return; }
-        AlterEgo::Background::Workers().Launch([ids = std::move(item_ids), mapping = std::move(item_to_skin)]() mutable { AlterEgo::ApiActivity::ReasonScope reason(AlterEgo::ApiActivity::Reason::Visible);FetchPriceWorker(std::move(ids), std::move(mapping)); }, [] { s_fetching = false; });
+        AlterEgo::Background::Workers().Launch([ids = std::move(item_ids), mapping = std::move(item_to_skin),mappingGeneration]() mutable { AlterEgo::ApiActivity::ReasonScope reason(AlterEgo::ApiActivity::Reason::Visible);FetchPriceWorker(std::move(ids), std::move(mapping),mappingGeneration); }, [] { s_fetching = false; });
     }
 
     void Commerce::FetchPriceWorker(std::vector<uint32_t> item_ids,
-                     std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin) {
+                     std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin,uint64_t mappingGeneration) {
         std::unordered_map<uint32_t, PriceInfo> best;
         std::unordered_set<uint32_t> failed;
         for(const auto& kv:item_to_skin) for(auto skin:kv.second) best.try_emplace(skin);
@@ -211,27 +227,45 @@ namespace Skinventory {
                     }
                     ok=true;
                 }
-            } catch(...) {}
+            } catch(const AlterEgo::Background::Cancelled&) {throw;} catch(...) {}
             if(!ok) for(size_t j=i;j<end;++j) for(auto skin:item_to_skin[item_ids[j]]) failed.insert(skin);
             AlterEgo::Background::Pause(std::chrono::milliseconds(200));
         }
+        std::lock_guard<std::mutex> publication(s_publication_mutex);
         AlterEgo::Background::Checkpoint();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            for(auto& kv:best) {
-                // Never present a partially queried candidate set as cheapest.
-                if(failed.count(kv.first)) continue;
-                kv.second.fetched_at_unix=NowUnix();
-                s_prices[kv.first]=kv.second;
+            if(mappingGeneration!=s_mapping_generation){
+                s_fetch_status="Item mappings changed; prices will be retried.";
+                s_fetching=false;return;
             }
-            s_fetch_status=failed.empty()?"":"Some prices could not be retrieved; previous prices retained.";
-            ++s_price_generation;
         }
-        SavePriceCache();
+        // Commit only this worker's accepted observations, then adopt them.
+        // A failed database write must not publish successful freshness.
+        json rows=json::object();
+        for(auto& [skin,info]:best){
+            if(failed.count(skin))continue;
+            info.fetched_at_unix=NowUnix();
+            rows[std::to_string(skin)]={{"item_id",info.item_id},{"buy",info.buy_price},{"sell",info.sell_price},
+                {"buy_q",info.buy_quantity},{"sell_q",info.sell_quantity},{"tradeable",info.tradeable},{"ts",info.fetched_at_unix}};
+        }
+        AlterEgo::Background::Checkpoint();
+        const bool saved=rows.empty()||AlterEgo::Cache::WriteCommerce(
+            AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),AlterEgo::Cache::CommerceDataset::Prices,rows);
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if(saved){
+                for(auto& [skin,info]:best)if(!failed.count(skin))s_prices[skin]=info;
+                if(!rows.empty())++s_price_generation;
+            }
+            s_fetch_status=!saved?"Price persistence failed; previous prices retained.":
+                failed.empty()?"":"Some prices could not be retrieved; previous prices retained.";
+        }
         s_fetching=false;
     }
 
     bool Commerce::SavePriceCache() {
+        std::lock_guard<std::mutex> publication(s_publication_mutex);
         if (s_data_dir.empty()) return false;
         try { std::filesystem::create_directories(s_data_dir); } catch (...) { return false; }
 
@@ -254,6 +288,7 @@ namespace Skinventory {
     }
 
     bool Commerce::LoadPriceCache() {
+        std::lock_guard<std::mutex> publication(s_publication_mutex);
         if (s_data_dir.empty()) return false;
         std::string path = s_data_dir + "/price_cache_v2.json";
         try {
@@ -283,6 +318,7 @@ namespace Skinventory {
 
     // Versioned derived cache: legacy one-item/rarity maps must be rebuilt.
     bool Commerce::SaveItemMap() {
+        std::lock_guard<std::mutex> publication(s_publication_mutex);
         if(s_data_dir.empty()) return false;
         try { std::filesystem::create_directories(s_data_dir); } catch(...) { return false; }
         json skins=json::object(), names=json::object(), vendors=json::object();
@@ -297,6 +333,7 @@ namespace Skinventory {
     }
 
     bool Commerce::LoadItemMap() {
+        std::lock_guard<std::mutex> publication(s_publication_mutex);
         try {
             auto snapshot=AlterEgo::Cache::ReadCommerce(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
                 AlterEgo::Cache::CommerceDataset::Mapping,std::filesystem::u8path(s_data_dir)/"item_map_v2.json");
@@ -309,8 +346,7 @@ namespace Skinventory {
             for(auto& kv:j.at("skins").items()) skins[std::stoul(kv.key())]=kv.value().get<std::vector<uint32_t>>();
             for(auto& kv:j.at("names").items()) names[std::stoul(kv.key())]=kv.value().get<std::string>();
             for(auto& kv:j.at("vendors").items()) vendors[std::stoul(kv.key())]=kv.value().get<int>();
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_skin_to_item=std::move(skins); s_item_names=std::move(names); s_vendor_prices=std::move(vendors);
+            AdoptMapping(std::move(skins),std::move(names),std::move(vendors));
             s_item_map_ready=true;
             return true;
         } catch(...) { return false; }
@@ -457,7 +493,8 @@ namespace Skinventory {
                 AlterEgo::Background::Pause(std::chrono::milliseconds(200));
             }
 
-            // Step 3: Store
+            // Step 3: Store. A price worker cannot commit against an obsolete mapping.
+            std::lock_guard<std::mutex> publication(s_publication_mutex);
             AlterEgo::Background::Checkpoint();
             // Persist derived mappings before marking the ID check complete.
             // Repeating a failed discovery is idempotent.
@@ -469,15 +506,14 @@ namespace Skinventory {
                 if(!Cache::WriteCommerce(root,Cache::CommerceDataset::Mapping,
                     json{{"version",2},{"skins",skins},{"names",names},{"vendors",vendors}}))
                     throw std::runtime_error("Item mapping persistence failed");
+                AdoptMapping(std::move(skin_map),std::move(item_names),std::move(vendor_map));
+                s_item_map_ready=true;
             }
             if(incremental)PublicCatalog::CommitIncrementalItems(root,index,observations,discover,refresh,itemStamps);
             else PublicCatalog::CommitUpgrades(root,index,upgrades,itemStamps);
             discovery.Finish();upgradesAttempt.Finish();
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                if(newItems){
-                    s_skin_to_item=std::move(skin_map);s_item_names=std::move(item_names);s_vendor_prices=std::move(vendor_map);
-                }
                 s_fetch_status="Public item catalogs up to date";
             }
             s_item_map_ready = true;

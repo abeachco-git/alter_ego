@@ -85,7 +85,7 @@ inline void RefreshVault(const std::string& root,bool manual) {
         DatasetAttempt attempt(root,"public_vault");
         auto rows=ParseObjectives(Fetch("/v2/wizardsvault/objectives?ids=all"));
         Background::Checkpoint();
-        WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreObjectives(db,rows,Now());tx.Commit();Publish(db);});
+        WithDb(root,[&](auto& db){Background::Checkpoint();Database::Transaction tx(db);StoreObjectives(db,rows,Now());tx.Commit();Publish(db);});
         attempt.Finish();
         {std::lock_guard<std::mutex> lock(stateMutex);vaultStatus="Up to date";}
         vaultBusy=false;
@@ -113,7 +113,7 @@ inline void RefreshPets(const std::string& root,bool manual=false,bool initialRe
         DatasetAttempt attempt(root,"public_pets");
         auto rows=ParsePets(Fetch("/v2/pets?ids=all"));
         Background::Checkpoint();
-        WithDb(root,[&](auto& db){Database::Transaction tx(db);StorePets(db,rows,Now());tx.Commit();Publish(db);});
+        WithDb(root,[&](auto& db){Background::Checkpoint();Database::Transaction tx(db);StorePets(db,rows,Now());tx.Commit();Publish(db);});
         attempt.Finish();
         EndDataset("public_pets",true);
     },[]{EndDataset("public_pets",false);});
@@ -132,7 +132,7 @@ inline void RefreshLegends(const std::string& root,bool manual=false,bool initia
         auto skills=Fetch("/v2/skills?ids="+query);
         auto rows=ParseLegends(raw,skills);
         Background::Checkpoint();
-        WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreLegends(db,rows,Now());tx.Commit();Publish(db);});
+        WithDb(root,[&](auto& db){Background::Checkpoint();Database::Transaction tx(db);StoreLegends(db,rows,Now());tx.Commit();Publish(db);});
         // Swap skills use the existing icon/skill cache owner; no repeat
         // lookup is needed to display the legend icon itself.
         attempt.Finish();

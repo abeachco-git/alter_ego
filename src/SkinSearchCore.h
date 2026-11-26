@@ -5,6 +5,8 @@
 #include <string>
 #include <sstream>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
 namespace Skinventory {
 // Normalize category identities for the UI only. Preserve raw API metadata on disk.
 inline std::string SkinCategorySubtype(const std::string& type, const std::string& subtype) {
@@ -62,6 +64,18 @@ inline bool Matches(const std::string& text, const std::vector<std::string>& que
 }
 }
 namespace Skinventory {
+using CommerceCandidates=std::unordered_map<uint32_t,std::vector<uint32_t>>;
+// Price choices describe the complete candidate set, not just the winner.
+inline std::unordered_set<uint32_t> ChangedCommerceCandidates(const CommerceCandidates& before,const CommerceCandidates& after) {
+    std::unordered_set<uint32_t> changed;
+    for(const auto& [skin,ids]:before) {
+        auto it=after.find(skin);
+        if(it==after.end()){if(!ids.empty())changed.insert(skin);}
+        else if(!std::is_permutation(ids.begin(),ids.end(),it->second.begin(),it->second.end()))changed.insert(skin);
+    }
+    for(const auto& [skin,ids]:after)if(!ids.empty()&&!before.count(skin))changed.insert(skin);
+    return changed;
+}
 struct PriceInfo {
     uint32_t item_id=0;
     int buy_price=0, sell_price=0, buy_quantity=0, sell_quantity=0;

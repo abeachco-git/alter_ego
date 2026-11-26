@@ -1,6 +1,7 @@
 #pragma once
 #include "AchievementCatalogCache.h"
 #include "ItemMetadataCache.h"
+#include "SkinSearchCore.h"
 
 namespace AlterEgo::Cache {
 enum class CommerceDataset { Mapping, Prices };
@@ -19,6 +20,20 @@ inline bool WriteCommerce(const std::string& root,CommerceDataset d,const Json& 
         if(d==CommerceDataset::Mapping) {
             if(data.value("version",0)!=2||!data.at("skins").is_object()||data.at("skins").empty()||
                !data.at("names").is_object()||!data.at("vendors").is_object())return false;
+            // Invalidate only choices whose complete candidate set changed.
+            // This is part of the same transaction as the mapping replacement.
+            Skinventory::CommerceCandidates before,after;
+            auto old=db.Prepare("SELECT skin_id,item_id FROM commerce_skin_items");
+            while(old.Step())before[static_cast<uint32_t>(old.Integer(0))].push_back(static_cast<uint32_t>(old.Integer(1)));
+            for(const auto& [key,ids]:data.at("skins").items()){
+                if(!ids.is_array())throw std::runtime_error("Invalid skin item mapping");
+                after[CatalogId(key)]=ids.get<std::vector<uint32_t>>();
+            }
+            auto invalidate=db.Prepare("DELETE FROM commerce_skin_price_choices WHERE skin_id=?");
+            for(auto id:Skinventory::ChangedCommerceCandidates(before,after)){
+                invalidate.Bind(1,id);invalidate.Execute();invalidate.Reset();
+            }
+            db.Exec("DELETE FROM commerce_item_prices WHERE NOT EXISTS (SELECT 1 FROM commerce_skin_price_choices c WHERE c.item_id=commerce_item_prices.item_id AND c.fetched_at=commerce_item_prices.fetched_at)");
             db.Exec("DELETE FROM commerce_skin_items; DELETE FROM commerce_item_name_ids; DELETE FROM commerce_vendor_prices;");
             auto skin=db.Prepare("INSERT INTO commerce_skin_items VALUES(?,?,?)");
             auto name=db.Prepare("INSERT INTO commerce_item_name_ids VALUES(?)");
