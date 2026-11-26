@@ -188,7 +188,8 @@ inline bool ValidSource(const Source& s){
 inline Source ReadSource(const Json& j){
     Source s{j.at("file").get<std::string>(),j.at("url").get<std::string>(),j.at("page").get<std::string>(),
         j.at("revision").get<std::string>(),j.at("verified").get<int64_t>(),j.at("version").get<int>()};
-    if(!ValidSource(s))throw std::runtime_error("Invalid preview provenance");return s;
+    if(!ValidSource(s))throw std::runtime_error("Invalid preview provenance");
+    return s;
 }
 inline Json SourceJson(const Source& s){
     return {{"file",s.file},{"url",s.url},{"page",s.page},{"revision",s.revision},{"verified",s.verified},{"version",s.version}};
