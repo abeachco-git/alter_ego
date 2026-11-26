@@ -126,18 +126,28 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
     else std::copy(utilities.begin(),utilities.end(),bar.utilities);
     const bool runePatch=p.rune||std::any_of(p.gear.begin(),p.gear.end(),[](const auto& e){return e.second.rune.has_value();});
     if(runePatch&&(b.rune_id||!b.rune_name.empty())){
-        bool explicitRunes=false;
-        for(const auto& e:b.gear)if((Armor(e.first)||e.first=="HelmAquatic")&&(e.second.rune_id||!e.second.rune.empty()))explicitRunes=true;
-        if(!explicitRunes)for(auto& e:b.gear)if(Armor(e.first)||e.first=="HelmAquatic"){
+        // The legacy global rune is a terrestrial fallback. Keep every
+        // recorded per-slot override, and do not materialize an aquatic rune
+        // the guide never supplied.
+        for(auto& e:b.gear)if(Armor(e.first)&&!e.second.rune_id&&e.second.rune.empty()){
             e.second.rune_id=b.rune_id;e.second.rune=b.rune_name;
         }
         b.rune_id=0;b.rune_name.clear();
     }
     auto upgrade=[](uint32_t& id,std::string& name,const Field<uint32_t>& v){
-        if(v&&id!=*v){id=*v;name.clear();}
+        if(v&&(id!=*v||!*v)){id=*v;name.clear();}
     };
     for(const auto& [slot,g]:p.gear){
         if(!LandGear(slot))continue;
+        if(slot=="WeaponA2"||slot=="WeaponB2"){
+            const std::string main=slot=="WeaponA2"?"WeaponA1":"WeaponB1";
+            const auto supplied=p.gear.find(main);
+            const auto local=b.gear.find(main);
+            if((supplied==p.gear.end()||!supplied->second.type)&&local!=b.gear.end()&&twoHanded(local->second.weapon_type)){
+                report.notes.push_back(slot+": omitted main-hand type leaves local two-handed weapon intact; offhand proposal skipped.");
+                continue;
+            }
+        }
         auto& s=b.gear[slot];s.slot=slot;
         const bool changedType=g.type&&!s.weapon_type.empty()&&WeaponKey(s.weapon_type)!=*g.type;
         const bool statSame=g.statName&&!s.stat_name.empty()&&NamedStats::SameCanonicalStat(*g.statName,s.stat_name);
