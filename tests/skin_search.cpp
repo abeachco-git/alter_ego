@@ -83,6 +83,10 @@ int case_skin_search(int, char**) {
         assert(W::ImageUrl(missing).empty()&&W::BestFile(missing,"Missing").empty());
         const auto img=W::Query(200,R"({"query":{"pages":{"7":{"pageid":7,"imageinfo":[{"url":"https://wiki.guildwars2.com/images/a/ab/Abaddon_Pistol.jpg"}]}}}})");
         assert(!W::ImageUrl(img).empty());
+        // Actual successful response supplied by a Windows user; the image
+        // history continuation must not invalidate the current image URL.
+        const auto live=W::Query(200,R"({"continue":{"iistart":"2017-07-25T17:32:34Z","continue":"||"},"query":{"normalized":[{"from":"File:Abaddon_Pistol.jpg","to":"File:Abaddon Pistol.jpg"}],"pages":{"206949":{"pageid":206949,"ns":6,"title":"File:Abaddon Pistol.jpg","imagerepository":"local","imageinfo":[{"url":"https://wiki.guildwars2.com/images/4/40/Abaddon_Pistol.jpg","descriptionurl":"https://wiki.guildwars2.com/wiki/File:Abaddon_Pistol.jpg","descriptionshorturl":"https://wiki.guildwars2.com/index.php?curid=206949"}]}}}})");
+        assert(W::ImageUrl(live)=="https://wiki.guildwars2.com/images/4/40/Abaddon_Pistol.jpg");
         for(int status:{0,403,429,503}){bool failed=false;try{W::Query(status,"{}");}catch(...){failed=true;}assert(failed);}
         bool failed=false;try{W::Query(200,R"({"error":{"code":"maxlag"}})");}catch(...){failed=true;}assert(failed);
         failed=false;try{W::BestFile(W::Query(200,R"({"continue":{"imcontinue":"more"},"query":{"pages":{"7":{"pageid":7}}}})"),"Missing");}catch(...){failed=true;}assert(failed);

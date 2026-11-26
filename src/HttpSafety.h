@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <algorithm>
+#include <string>
 
 namespace AlterEgo::HttpSafety {
 using Clock = std::chrono::steady_clock;
@@ -25,6 +26,9 @@ public:
     operator HINTERNET() const noexcept { return handle_; }
     HINTERNET Release() noexcept { auto h=handle_;handle_=nullptr;return h; }
 };
+inline void Failure(std::string* out,const char* stage,DWORD code=0){
+    if(out)*out=std::string(stage)+(code?" (Windows "+std::to_string(code)+")":"");
+}
 inline void Configure(HINTERNET session) {
     DWORD timeout = 12000;
     DWORD retries = 1;
@@ -36,19 +40,22 @@ inline void Configure(HINTERNET session) {
 // Do not return a successful partial body after a read failure or shutdown.
 template<class Append>
 bool ReadBody(HINTERNET request, Append append, std::size_t maxBody=64u*1024u*1024u,
-              Deadline overall=Deadline::max()) {
+              Deadline overall=Deadline::max(),std::string* failure=nullptr) {
     char buffer[8192];
     const auto deadline = std::min(overall,Clock::now() + std::chrono::seconds(30));
     std::size_t total = 0;
     while (Ready(deadline)) {
         DWORD count = 0;
-        if (!InternetReadFile(request, buffer, sizeof(buffer), &count)) return false;
-        if (!Ready(deadline)) return false;
+        if (!InternetReadFile(request, buffer, sizeof(buffer), &count)){
+            const auto code=GetLastError();Failure(failure,"read response",code);return false;
+        }
+        if (!Ready(deadline)){Failure(failure,Background::Workers().Stopping()?"cancelled":"response deadline");return false;}
         if (!count) return true;
-        if (count > maxBody - total) return false;
+        if (count > maxBody - total){Failure(failure,"response size limit");return false;}
         total += count;
         append(buffer, count);
     }
+    Failure(failure,Background::Workers().Stopping()?"cancelled":"response deadline");
     return false;
 }
 }
