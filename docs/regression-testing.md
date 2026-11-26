@@ -260,10 +260,12 @@ Verification (2026-11-26 UTC): implementation `75203d0f7fa9bc883692133dafdb6967e
 
 Skin metadata ordering regression covers delayed catalog vs Fashion, equal replay, older dye response, independent flags clearing, canonical cross-projection fields and duplicate-row transaction rollback. Live testing remains deferred.
 
-Reference observation regression covers delayed disjoint/same-ID batches, equal replay, transactional malformed-child rollback and watermark reuse after rejection. Offline and Windows verification pending; no live tests or discretionary benchmark work.
+Reference observation regression covers delayed disjoint/same-ID batches, equal replay, transactional malformed-child rollback and watermark reuse after rejection. Offline and Windows verification passed; no live tests or discretionary benchmark work.
 
-Cancellation finalizer regression verifies finish-once, no persistence on stop, ordinary failure during unwinding, and explicit dismissal after success. Offline/Windows CI pending; no live testing.
+Cancellation finalizer regression verifies finish-once, no persistence on stop, ordinary failure during unwinding, and explicit dismissal after success. Offline/Windows CI passed; no live testing.
 
-API diagnostics regression distinguishes cancelled vs failed/active counts; metadata transport carries an actual-send marker. Offline/Windows CI pending.
+API diagnostics regression distinguishes cancelled vs failed/active counts; metadata transport carries an actual-send marker. Offline/Windows CI passed.
 
-Native Inventory regression covers native vs delayed direct item observations, flag freshness across producers, and stale currency definition rejection. Offline/Windows verification pending.
+Native Inventory regression covers native vs delayed direct item observations, flag freshness across producers, and stale currency definition rejection. Offline/Windows verification passed.
+
+Verification (2026-11-26 UTC): implementation `c970271b7b6c30874204b43dabc522f92ed2fbd0` passed 36/36 required offline regressions, parser ASan/UBSan, existing CI SQLite check, Windows x64 UCRT compilation, embedded resources and distribution notice checks (45736188557); dependency inventory 45736188562 passed. Artifact 15078644218 retrieved, archive integrity and GitHub ZIP SHA-256 `0e8e24fa7507c179e38f48985738a28b04c801cc920410d764801166227a8b55` verified; extracted PE32+ x64 DLL imports ucrtbase.dll, not MSVCRT (SHA-256 `206f8b4f3424495b359995d1d1a3a2300c6caa879d3a23dd74442081730bc6a3`). No discretionary benchmarks, full TSan or live Nexus/in-game verification performed in this pass.

@@ -88,12 +88,14 @@ Verification: implementation commits `d7bb44f` and `a8961e3` passed required off
 
 Verification (2026-11-26 UTC): implementation `75203d0f7fa9bc883692133dafdb6967e1592379` passed all 36 required offline regressions, parser ASan/UBSan, the existing CI SQLite check, Windows x64 UCRT build and distribution verification (workflow 45734849005); dependency inventory 45734849121 passed. Artifact 15078252828 was retrieved, ZIP SHA-256 matched GitHub (`65fcfd33a938297fe5d8fc2133462b3faaed2d39a7620663d6baea3d3e4c85d8`), archive integrity passed, and the extracted DLL imports UCRT, not MSVCRT. Earlier attempts caught a shared test-fixture isolation issue and a migration SQL formatting mismatch in the existing benchmark schema extractor; both corrected without disabling checks. Discretionary benchmarks, full TSan configuration and live Nexus/in-game testing remain unperformed for this pass.
 
-- Skin catalog/Fashion request ordering implemented with cache schema v24; no aggregate writes, canonical cross-projection adoption, bounded shared observation parsing and independent field groups. Offline/Windows verification pending.
+- Skin catalog/Fashion request ordering implemented with cache schema v24; no aggregate writes, canonical cross-projection adoption, bounded shared observation parsing and independent field groups. Offline/Windows verification passed.
 
-- Reference v25 per-record ordered writes and commit-before-adoption for spec/trait/skill/stat/dye, palette admission cleanup and bounded native/Commerce parsing implemented. CI pending.
+- Reference v25 per-record ordered writes and commit-before-adoption for spec/trait/skill/stat/dye, palette admission cleanup and bounded native/Commerce parsing implemented. CI passed.
 
-- Cancellation-state hardening implemented; durable retry markers now finalize only for non-cancelled catalog/Wiki outcomes. CI pending; asynchronous transport remains open.
+- Cancellation-state hardening implemented; durable retry markers now finalize only for non-cancelled catalog/Wiki outcomes. CI passed; asynchronous transport remains open.
 
-- Metadata cooldown now requires actual transport send; cancelled HTTP diagnostics, relay and Clears bounded parsing implemented. CI pending.
+- Metadata cooldown now requires actual transport send; cancelled HTTP diagnostics, relay and Clears bounded parsing implemented. CI passed.
 
-- Native item/currency metadata ownership unified with request watermarks and shared publication. CI pending.
+- Native item/currency metadata ownership unified with request watermarks and shared publication. CI passed.
+
+Verification (2026-11-26 UTC): implementation `c970271b7b6c30874204b43dabc522f92ed2fbd0` passed 36/36 required offline regressions, parser ASan/UBSan, existing CI SQLite check, Windows x64 UCRT compilation, embedded resources and distribution notice checks (45736188557); dependency inventory 45736188562 passed. Artifact 15078644218 retrieved, archive integrity and GitHub ZIP SHA-256 `0e8e24fa7507c179e38f48985738a28b04c801cc920410d764801166227a8b55` verified; extracted PE32+ x64 DLL imports ucrtbase.dll, not MSVCRT (SHA-256 `206f8b4f3424495b359995d1d1a3a2300c6caa879d3a23dd74442081730bc6a3`). No discretionary benchmarks, full TSan or live Nexus/in-game verification performed in this pass.
