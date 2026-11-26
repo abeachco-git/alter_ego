@@ -5,6 +5,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <cstdint>
 
 namespace AlterEgo {
 struct InfusionSummary {
@@ -13,6 +14,50 @@ struct InfusionSummary {
     int agonyResistance = 0;
     std::map<std::string, int> stats;
 };
+// The existing typed fields encode the two modes without a schema rewrite.
+ // A mixed legacy projection must be resolved explicitly, never silently
+ // prefer one side or compare both. Empty recorded slots are meaningful.
+enum class InfusionMode { Slots, Totals, Conflict };
+template<class Slot> bool HasSlotInfusionData(const Slot& s) {
+    return s.infusion_snapshot || !s.infusion.empty() ||
+        std::any_of(s.infusion_ids.begin(),s.infusion_ids.end(),[](auto id){return id!=0;}) ||
+        std::any_of(s.infusion_attributes.begin(),s.infusion_attributes.end(),[](const auto& a){return !a.empty();});
+}
+template<class Build> InfusionMode GetInfusionMode(const Build& b) {
+    const bool totals=b.infusion_summary_present || !b.infusion_totals.empty();
+    if(!totals)return InfusionMode::Slots;
+    for(const auto& entry:b.gear)if(HasSlotInfusionData(entry.second))return InfusionMode::Conflict;
+    return InfusionMode::Totals;
+}
+template<class Build> void ForgetAggregateInfusions(Build& b) {
+    b.infusion_summary_present=false;b.infusion_ar_total=0;
+    b.infusion_stat_totals.clear();b.infusion_totals.clear();
+}
+template<class Build> void ForgetSlotInfusions(Build& b) {
+    for(auto& entry:b.gear){
+        auto& s=entry.second;s.infusion_ids.clear();s.infusion_attributes.clear();
+        s.infusion_snapshot=false;s.infusion.clear();
+    }
+}
+template<class Build> bool SetNumericInfusionTotals(Build& b,const InfusionSummary& total) {
+    if(!total.complete)return false;
+    ForgetSlotInfusions(b);ForgetAggregateInfusions(b);
+    b.infusion_summary_present=true;b.infusion_ar_total=total.agonyResistance;
+    b.infusion_stat_totals=total.stats;return true;
+}
+// Restore only infusion fields, not gear identities, stats or other edits.
+// A removed gear slot is not recreated by toggling an unsaved mode.
+template<class Build> void RestoreSlotInfusions(Build& b,const Build& previous) {
+    ForgetSlotInfusions(b);ForgetAggregateInfusions(b);
+    for(auto& entry:b.gear) {
+        const auto old=previous.gear.find(entry.first);
+        if(old==previous.gear.end()||old->second.item_id!=entry.second.item_id||
+            old->second.weapon_type!=entry.second.weapon_type)continue;
+        auto& s=entry.second;const auto& v=old->second;
+        s.infusion_ids=v.infusion_ids;s.infusion_attributes=v.infusion_attributes;
+        s.infusion_snapshot=v.infusion_snapshot;s.infusion=v.infusion;
+    }
+}
 inline int AgonyRequirement(int savedTotal) {
     return std::min(150, std::max(0, savedTotal));
 }

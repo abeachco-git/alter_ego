@@ -930,7 +930,10 @@ static std::string g_LibEditNotes;
 // Seed the editing draft + name/notes buffers from a build and clear the dirty flag.
 // The on-disk build is itself the pre-edit snapshot (nothing persists until Save), so
 // Cancel just discards the draft. Defined here (before the pickers/New-Build call sites).
+// Alternate infusion mode values are session-only and reset with the owner draft.
+static std::optional<AlterEgo::SavedBuild> g_InfusionSlotDraft, g_InfusionTotalsDraft;
 static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
+    g_InfusionSlotDraft.reset();g_InfusionTotalsDraft.reset();
     g_EditDraft = build;
     g_EditDraftId = build.id;
     g_EditDraftRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
@@ -7328,7 +7331,7 @@ static bool GearCanPaste(const AlterEgo::SavedBuild& b,const std::string& slot,c
     if (c.field == GearCopyField::Relic) return slot == "Relic";
     if (!IsArmorSlot(slot) && !IsTrinketSlot(slot) && !IsWeaponSlot(slot)) return false;
     if (c.field == GearCopyField::Stats) return !IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0;
-    if (c.field == GearCopyField::Infusions) return GearInfusionCapacity(b,slot) > 0 &&
+    if (c.field == GearCopyField::Infusions) return AlterEgo::GetInfusionMode(b)==AlterEgo::InfusionMode::Slots && GearInfusionCapacity(b,slot) > 0 &&
         (!IsWeaponSlot(slot) || GearSigilCapacity(b,slot) > 0);
     if (c.field == GearCopyField::Upgrade)
         return (IsArmorSlot(c.slot) && IsArmorSlot(slot)) ||
@@ -7383,7 +7386,8 @@ static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,c
         if (IsArmorSlot(slot)) AlterEgo::GearEdit::CopyRune(dest,c.data);
         if (IsWeaponSlot(slot)) AlterEgo::GearEdit::CopySigils(dest,c.data,GearSigilCapacity(b,slot));
     }
-    if (c.field == GearCopyField::All || c.field == GearCopyField::Infusions) {
+    if ((c.field == GearCopyField::All || c.field == GearCopyField::Infusions) &&
+        AlterEgo::GetInfusionMode(b)==AlterEgo::InfusionMode::Slots) {
         bool capacityVerified=false;
         const int capacity=GearInfusionCapacity(b,slot,&capacityVerified);
         if(capacity>0&&AlterEgo::GearEdit::CopyInfusions(dest,c.data,capacity,capacityVerified))
@@ -7410,7 +7414,7 @@ static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCo
             item.rune_id = item.sigil_id = item.sigil2_id = 0;
             item.rune.clear(); item.sigil.clear(); item.sigil2.clear();
         }
-        if (field == GearCopyField::Infusions) {
+        if (field == GearCopyField::Infusions && AlterEgo::GetInfusionMode(b)==AlterEgo::InfusionMode::Slots) {
             AlterEgo::GearEdit::ClearInfusions(item); InvalidateGearInfusionTotals(b);
         }
     }
@@ -7774,7 +7778,8 @@ static void RenderGearCustomizeDialog() {
         // Infusion requirements are per physical equipment slot. Captured
         // infusions remain exact by default; newly added requirements default
         // to a stat and leave the exact ID empty.
-        if (!isRelic && g_GearDialogSlot != "Amulet") {
+        if (!isRelic && g_GearDialogSlot != "Amulet" &&
+            AlterEgo::GetInfusionMode(*editBuild)==AlterEgo::InfusionMode::Slots) {
             ImGui::Spacing();
             ImGui::TextUnformatted("Infusions");
             if (!gs.infusion_attributes.empty() &&
@@ -9829,7 +9834,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
 
     // One shared footer for Saved and Edit; notes always follow infusion totals.
     const auto& snapshot = g_LibEditMode ? g_EditDraft : build;
-    RenderInfusionTotals(GetSavedInfusionSummary(snapshot),
+    RenderSavedInfusionMode(snapshot,
         g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen ? &g_EditDraft : nullptr);
     ImGui::Spacing();
     // Use the standard white, regular-size section label in both modes.
@@ -10208,68 +10213,41 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                             label(expected), label(observed), label(expected), label(observed));
         }
 
-        // All installed infusions form one pool, regardless of the equipment
-        // slot that physically contains them. Aggregate import requirements
-        // override per-slot snapshots to avoid counting the same ID twice.
-        std::vector<AlterEgo::InfusionRequirement> wanted;
-        bool hasInfusionRequirement = !saved.infusion_totals.empty();
-        if (!saved.infusion_totals.empty()) {
-            for (const auto& item : saved.infusion_totals)
-                for (int n = 0; n < item.count; ++n)
-                    wanted.push_back({item.item_id, item.attribute});
-        } else {
-            for (const auto& [slot, gear] : saved.gear) {
-                (void)slot;
-                if (gear.infusion_snapshot || !gear.infusion_ids.empty())
-                    hasInfusionRequirement = true;
-                for (size_t n = 0; n < gear.infusion_ids.size(); ++n) {
-                    const std::string attribute = n < gear.infusion_attributes.size()
-                        ? gear.infusion_attributes[n] : std::string();
-                    if (gear.infusion_ids[n] || !attribute.empty())
-                        wanted.push_back({gear.infusion_ids[n], attribute});
+        // Slot mode is authoritative: compare only recorded physical requirements.
+        if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Slots) {
+            for(const auto& [slot,gear]:saved.gear){
+                if(!AlterEgo::HasSlotInfusionData(gear))continue;
+                if(slot=="Amulet"||slot=="Relic")continue;
+                std::vector<AlterEgo::InfusionRequirement> wanted;
+                for(size_t n=0;n<std::max(gear.infusion_ids.size(),gear.infusion_attributes.size());++n){
+                    const uint32_t id=n<gear.infusion_ids.size()?gear.infusion_ids[n]:0;
+                    const std::string attr=n<gear.infusion_attributes.size()?gear.infusion_attributes[n]:"";
+                    if(id||!attr.empty())wanted.push_back({id,attr});
                 }
-            }
-        }
-        if (hasInfusionRequirement) {
-            std::vector<AlterEgo::ObservedInfusion> installed;
-            for (const auto& item : liveCharacter.equipment) {
-                if (!AlterEgo::IsEquipmentInCapturedBuild(item.slot, item.tab, equipmentTab))
+                const auto* eq=getEquipped(slot=="AquaticA"?"WeaponAquaticA":slot=="AquaticB"?"WeaponAquaticB":slot.c_str());
+                if(!eq||(!gear.infusion.empty()&&wanted.empty()&&!gear.infusion_snapshot)){
+                    result.AddUnverified("Infusions",GearSlotDisplayName(slot),"Recorded requirements","Equipment or exact metadata unavailable");
                     continue;
-                for (uint32_t id : item.infusions)
-                    if (id) installed.push_back(GetObservedInfusion(id));
+                }
+                std::vector<AlterEgo::ObservedInfusion> installed;
+                for(auto id:eq->infusions)if(id)installed.push_back(GetObservedInfusion(id));
+                const auto verdict=AlterEgo::CompareInfusionRequirements(wanted,installed);
+                std::string expected,actual;
+                for(const auto& item:wanted){
+                    if(!expected.empty())expected+=", ";
+                    expected+=item.attribute.empty()?"#"+std::to_string(item.exactId):InfusionAttributeLabel(item.attribute);
+                }
+                for(const auto& item:installed){
+                    if(!actual.empty())actual+=", ";
+                    actual+="#"+std::to_string(item.itemId);
+                }
+                if(expected.empty())expected="(none)";
+                if(actual.empty())actual="(none)";
+                if(verdict==AlterEgo::InfusionMatchVerdict::NotVerified)
+                    result.AddUnverified("Infusions",GearSlotDisplayName(slot),expected,actual+" (metadata pending)");
+                else result.Add("Infusions",GearSlotDisplayName(slot),"equivalent",
+                    verdict==AlterEgo::InfusionMatchVerdict::Matches?"equivalent":"different",expected,actual);
             }
-            const auto verdict = AlterEgo::CompareInfusionRequirements(wanted, installed);
-            auto wantedLabel = [&]() {
-                std::map<std::string, int> counts;
-                for (const auto& item : wanted) {
-                    const std::string key = item.attribute.empty()
-                        ? "#" + std::to_string(item.exactId)
-                        : InfusionAttributeLabel(item.attribute);
-                    ++counts[key];
-                }
-                std::string label;
-                for (const auto& [key, count] : counts) {
-                    if (!label.empty()) label += ", ";
-                    label += std::to_string(count) + " x " + key;
-                }
-                return label.empty() ? std::string("(none)") : label;
-            };
-            auto installedLabel = [&]() {
-                std::map<uint32_t, int> counts;
-                for (const auto& item : installed) ++counts[item.itemId];
-                std::string label;
-                for (const auto& [id, count] : counts) {
-                    if (!label.empty()) label += ", ";
-                    label += std::to_string(count) + " x #" + std::to_string(id);
-                }
-                return label.empty() ? std::string("(none)") : label;
-            };
-            if (verdict == AlterEgo::InfusionMatchVerdict::NotVerified)
-                result.AddUnverified("Infusions", "Types / counts",
-                    wantedLabel(), installedLabel() + " (metadata pending)");
-            else result.Add("Infusions", "Types / counts",
-                "equivalent", verdict == AlterEgo::InfusionMatchVerdict::Matches
-                    ? "equivalent" : "different", wantedLabel(), installedLabel());
         }
 
         if (saved.relic_id || !saved.relic_name.empty()) {
@@ -10289,7 +10267,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     // calculator; unknown metadata is never reported as a mismatch.
     const auto requiredTotals = GetSavedInfusionSummary(saved);
     const auto liveTotals = GetLiveInfusionSummary(liveCharacter, equipmentTab);
-    if (requiredTotals.present) {
+    if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Conflict) {
+        result.AddUnverified("Infusions", "Mode", "Mixed legacy requirements", "Resolve in Loadout Edit");
+    } else if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Totals && requiredTotals.present) {
         if (!requiredTotals.complete || !liveTotals.complete ||
             liveCharacter.equipment.empty()) {
             result.AddUnverified("Infusion totals", "Totals", "Unknown", "Metadata unavailable");
@@ -10536,10 +10516,9 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
             else if(saved.rune_id&&(slot=="Helm"||slot=="Shoulders"||slot=="Coat"||slot=="Gloves"||slot=="Leggings"||slot=="Boots"))++upgradesWanted[saved.rune_id];
             if(gs.sigil_id)++upgradesWanted[gs.sigil_id];
             if(gs.sigil2_id)++upgradesWanted[gs.sigil2_id];
-            if(saved.infusion_totals.empty())for(size_t n=0;n<gs.infusion_ids.size();++n)
+            if(AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Slots)for(size_t n=0;n<gs.infusion_ids.size();++n)
                 if(gs.infusion_ids[n]&&(n>=gs.infusion_attributes.size()||gs.infusion_attributes[n].empty()))++upgradesWanted[gs.infusion_ids[n]];
         }
-        for(const auto& req:saved.infusion_totals)if(req.item_id&&req.attribute.empty()&&req.count>0)upgradesWanted[req.item_id]+=req.count;
         if(saved.relic_id&&std::none_of(saved.gear.begin(),saved.gear.end(),[](const auto& entry){return entry.first=="Relic"&&entry.second.item_id!=0;}))++wanted[saved.relic_id];
         for(const auto& e:character->equipment)if(AlterEgo::IsEquipmentInCapturedBuild(e.slot,e.tab,equipmentTab)){
             for(auto id:e.upgrades)if(id)++upgradesHave[id];

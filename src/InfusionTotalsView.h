@@ -102,14 +102,8 @@ static AlterEgo::InfusionSummary ComputeInfusionsFromIds(const std::vector<uint3
     for (uint32_t id : ids) if (id) counted.push_back({id, 1});
     return ComputeInfusionSummary(counted);
 }
-// Slot edits switch to calculated totals. Imported/manual aggregate-only
-// requirements remain intact until the user explicitly changes infusions.
-static void InvalidateGearInfusionTotals(AlterEgo::SavedBuild& b) {
-    b.infusion_summary_present = false;
-    b.infusion_ar_total = 0;
-    b.infusion_stat_totals.clear();
-    b.infusion_totals.clear();
-}
+// Ordinary gear changes must never implicitly switch the infusion mode.
+static void InvalidateGearInfusionTotals(AlterEgo::SavedBuild&) {}
 static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::SavedBuild& b) {
     auto ids = GetSavedGearInfusions(b);
     std::map<std::string,int> flexible;
@@ -148,12 +142,19 @@ static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::Saved
     return cached;
 }
 static AlterEgo::InfusionSummary GetSavedInfusionSummary(const AlterEgo::SavedBuild& b) {
+    if (AlterEgo::GetInfusionMode(b)==AlterEgo::InfusionMode::Conflict)
+        return {true,false,0,{}};
     if (b.infusion_summary_present)
         return {true, true, b.infusion_ar_total, b.infusion_stat_totals};
     if (!b.infusion_totals.empty()) {
         std::vector<std::pair<uint32_t, int>> items;
-        for (const auto& i : b.infusion_totals) items.push_back({i.item_id, i.count});
-        return ComputeInfusionSummary(items);
+        bool complete=true;
+        for (const auto& i : b.infusion_totals) {
+            if(!i.attribute.empty()||!i.item_id){if(i.count>0)complete=false;continue;}
+            items.push_back({i.item_id, i.count});
+        }
+        auto result=ComputeInfusionSummary(items);
+        result.present=true;result.complete=result.complete&&complete;return result;
     }
     return ComputeSavedSlotInfusions(b);
 }
@@ -162,10 +163,7 @@ static AlterEgo::InfusionSummary GetLiveInfusionSummary(const AlterEgo::Characte
 }
 static void UpdateInfusionEditDraft(AlterEgo::SavedBuild& edit,
                                     const AlterEgo::InfusionSummary& summary) {
-    edit.infusion_summary_present = true;
-    edit.infusion_ar_total = summary.agonyResistance;
-    edit.infusion_stat_totals = summary.stats;
-    MarkEditDirty();
+    if(AlterEgo::SetNumericInfusionTotals(edit,summary))MarkEditDirty();
 }
 static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
                                  AlterEgo::SavedBuild* edit = nullptr,
@@ -223,20 +221,64 @@ static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
         }
         ImGui::EndTable();
     }
-    if (edit && !GetSavedGearInfusions(*edit).empty()) {
-        if (RenderActionButton("Calculate##infusion_totals")) {
-            const auto ids = GetSavedGearInfusions(*edit);
-            const auto computed = ComputeSavedSlotInfusions(*edit);
-            if (computed.complete)
-                UpdateInfusionEditDraft(*edit, computed);
-            else {
-                std::vector<uint32_t> missing;
-                for (uint32_t id : ids)
-                    if (!AlterEgo::GW2API::GetItemInfo(id)) missing.push_back(id);
-                if (!missing.empty()) AlterEgo::GW2API::FetchItemDetailsAsync(missing);
-            }
+
+}
+
+ // Existing aggregate counts remain a supported import representation. Editing
+ // numerical totals explicitly converts them, never retains both as targets.
+static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::SavedBuild* edit) {
+    using namespace AlterEgo;
+    const auto mode=GetInfusionMode(build);
+    ImGui::Spacing();
+    ImGui::TextUnformatted(mode==InfusionMode::Slots?"Infusions: By Equipment Slot":
+        mode==InfusionMode::Totals?"Infusions: By Totals":"Infusions: Mixed legacy requirements");
+    if(mode==InfusionMode::Conflict)
+        ImGui::TextWrapped("Both slot and aggregate requirements are stored. Neither is authoritative until you select a mode. Existing data is preserved.");
+    const auto summary=GetSavedInfusionSummary(build);
+    if(edit){
+        if(mode!=InfusionMode::Slots&&RenderActionButton("Use equipment slots..."))
+            ImGui::OpenPopup("##confirm_slot_mode");
+        if(mode!=InfusionMode::Totals){
+            if(mode==InfusionMode::Conflict)ImGui::SameLine();
+            const auto computed=ComputeSavedSlotInfusions(build);
+            if(mode==InfusionMode::Conflict||g_InfusionTotalsDraft||computed.complete){
+                if(RenderActionButton("Use totals..."))ImGui::OpenPopup("##confirm_total_mode");
+            }else ImGui::TextDisabled("Resolve missing metadata or flexible requirements before converting to totals.");
         }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Calculate stat bonuses and Agony Resistance from infusions in gear. Replaces manual totals when metadata is available.");
+        if(ImGui::BeginPopup("##confirm_slot_mode")){
+            ImGui::TextWrapped("Aggregate targets will be removed on Save. Configure individual equipment slots; no automatic distribution.");
+            if(RenderActionButton("Switch to slots")){
+                g_InfusionTotalsDraft=*edit;
+                if(g_InfusionSlotDraft)RestoreSlotInfusions(*edit,*g_InfusionSlotDraft);
+                else ForgetAggregateInfusions(*edit);
+                MarkEditDirty();ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if(ImGui::BeginPopup("##confirm_total_mode")){
+            ImGui::TextWrapped("Individual infusion identities and placement will be removed on Save. You can switch back before saving.");
+            if(RenderActionButton("Switch to totals")){
+                g_InfusionSlotDraft=*edit;
+                if(mode==InfusionMode::Conflict){
+                    ForgetSlotInfusions(*edit);
+                }else if(g_InfusionTotalsDraft){
+                    ForgetSlotInfusions(*edit);
+                    const auto& old=*g_InfusionTotalsDraft;
+                    edit->infusion_totals=old.infusion_totals;
+                    edit->infusion_summary_present=old.infusion_summary_present;
+                    edit->infusion_ar_total=old.infusion_ar_total;
+                    edit->infusion_stat_totals=old.infusion_stat_totals;
+                }else SetNumericInfusionTotals(*edit,ComputeSavedSlotInfusions(*edit));
+                MarkEditDirty();ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if(mode==InfusionMode::Slots&&g_InfusionTotalsDraft){
+            const auto& old=*g_InfusionTotalsDraft;
+            if(old.infusion_summary_present)
+                ImGui::TextDisabled("Previous target: %d AR (restore with Use totals).",old.infusion_ar_total);
+        }
     }
+    if(mode!=InfusionMode::Conflict)
+        RenderInfusionTotals(summary,edit&&mode==InfusionMode::Totals&&summary.complete?edit:nullptr);
 }
