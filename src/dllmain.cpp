@@ -1396,7 +1396,7 @@ static AddonWindowFocusRequest g_SaveLibDialogFocus;
 static char g_SaveLibName[128] = "";
 static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
 static bool g_SaveLibNameManuallyEdited = false;
-static constexpr int kSaveEntireEquipmentSet = 9;
+static constexpr int kSaveEntireEquipmentSet = 10;
 static std::string g_EquipmentSetSelectedId, g_SaveLibAccount;
 static constexpr int kSaveFashionTarget=3;
 static int g_SaveLibEquipmentMode=0; // offer exact match, independent, new named set
@@ -4140,7 +4140,7 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     snprintf(g_SaveLibName, sizeof(g_SaveLibName), "%s", defaultName.c_str());
     g_SaveLibModes = {AlterEgo::GameMode::PvE};
     g_SaveLibNameManuallyEdited = false;
-    g_SaveLibEquipmentMode=0;g_SaveLibSetName.clear();g_SaveLibSetKinds={"weapons","armor","trinkets","runes","sigils","infusions","relic"};g_SaveLibExactSets.clear();g_SaveLibSelectedSet.clear();
+    g_SaveLibEquipmentMode=0;g_SaveLibSetName.clear();g_SaveLibSetKinds={"weapons","armor","trinkets","runes","sigils","infusions","relic","aquatic"};g_SaveLibExactSets.clear();g_SaveLibSelectedSet.clear();
     g_SaveLibTarget = componentKind >= 0 ? 1 : 0;
     g_SaveLibComponentKind = componentKind >= 0 ? componentKind : 0;
     g_SaveLibUpdateId.clear();
@@ -6597,8 +6597,8 @@ static const char* GearSlotDisplayName(const std::string& slot) {
     if (slot == "WeaponA2") return "Off Hand A";
     if (slot == "WeaponB1") return "Main Hand B";
     if (slot == "WeaponB2") return "Off Hand B";
-    if (slot == "WeaponAquaticA") return "Aquatic A";
-    if (slot == "WeaponAquaticB") return "Aquatic B";
+    if (slot == "WeaponAquaticA" || slot=="AquaticA") return "Aquatic A";
+    if (slot == "WeaponAquaticB" || slot=="AquaticB") return "Aquatic B";
     if (slot == "HelmAquatic") return "Aquatic Headgear";
     if (slot == "Accessory1") return "Accessory 1";
     if (slot == "Accessory2") return "Accessory 2";
@@ -7450,13 +7450,10 @@ static GearClipboard CaptureGearClipboard(const AlterEgo::SavedBuild& b,const st
     return c;
 }
 static void CopyGearToGroup(AlterEgo::SavedBuild& b,const GearClipboard& c,const std::string& group) {
-    // Work against the canonical editable land slots. Stats/runes can
-    // populate planned armor; upgrades never invent equipment capacities.
+    // Terrestrial planning may populate armor/trinkets; optional aquatic
+    // slots participate only when they already have recorded equipment.
     std::vector<std::string> slots;
-    for (const char* raw : {"Helm","Shoulders","Coat","Gloves","Leggings","Boots",
-            "WeaponA1","WeaponA2","WeaponB1","WeaponB2","Backpack","Accessory1",
-            "Accessory2","Amulet","Ring1","Ring2"}) {
-        const std::string s(raw);
+    for (const auto& s : AlterEgo::GearEdit::BulkSlots(b.gear)) {
         if ((c.field == GearCopyField::Infusions || IsWeaponSlot(s)) &&
             !b.gear.count(s)) continue;
         if (IsWeaponSlot(s) && GearSigilCapacity(b,s) == 0) continue;
@@ -7885,45 +7882,16 @@ static void RenderGearCustomizeDialog() {
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Apply-to-all buttons
-        if (IsArmorSlot(g_GearDialogSlot) && gs.stat_id != 0) {
-            if (RenderActionButton("Apply Stat to All Armor")) {
-                const char* armorSlots[] = {"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
-                for (const char* s : armorSlots) {
-                    auto& target = editBuild->gear[s];
-                    target.slot = s;
-                    target.stat_id = gs.stat_id;
-                    target.stat_name = gs.stat_name;
-                }
-                commitGear();
-            }
-        }
-        if (IsArmorSlot(g_GearDialogSlot) && !gs.rune.empty()) {
-            if (RenderActionButton("Apply Rune to All Armor")) {
-                const char* armorSlots[] = {"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
-                for (const char* s : armorSlots) {
-                    auto& target = editBuild->gear[s];
-                    target.slot = s;
-                    target.rune = gs.rune;
-                    target.rune_id = gs.rune_id;
-                }
-                editBuild->rune_name = gs.rune;
-                editBuild->rune_id = gs.rune_id;
-                commitGear();
-            }
-        }
-        if (IsTrinketSlot(g_GearDialogSlot) && gs.stat_id != 0) {
-            if (RenderActionButton("Apply Stat to All Trinkets")) {
-                const char* trinketSlots[] = {"Backpack","Accessory1","Accessory2","Amulet","Ring1","Ring2"};
-                for (const char* s : trinketSlots) {
-                    auto& target = editBuild->gear[s];
-                    target.slot = s;
-                    target.stat_id = gs.stat_id;
-                    target.stat_name = gs.stat_name;
-                }
-                commitGear();
-            }
-        }
+        // Visible bulk buttons and context menus share the same operations.
+        if (gs.stat_id != 0 && IsArmorSlot(g_GearDialogSlot) &&
+            RenderActionButton("Apply Stat to All Armor"))
+            CopyGearToGroup(*editBuild,CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Stats),"Armor");
+        if (IsArmorSlot(g_GearDialogSlot) && (!gs.rune.empty()||gs.rune_id) &&
+            RenderActionButton("Apply Rune to All Armor"))
+            CopyGearToGroup(*editBuild,CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Upgrade),"Armor");
+        if (gs.stat_id != 0 && IsTrinketSlot(g_GearDialogSlot) &&
+            RenderActionButton("Apply Stat to All Trinkets"))
+            CopyGearToGroup(*editBuild,CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Stats),"Trinkets");
 
         // === RIGHT: Selector panel ===
         ImGui::TableNextColumn();
@@ -8291,9 +8259,9 @@ static void RenderSaveToLibraryDialog() {
         ImGui::EndCombo();
     }
     static const char* kinds[]={"Base Build","Skills","Weapons","Sigils","Armor","Runes",
-        "Trinkets","Relic","Infusions","Equipment Set"};
+        "Trinkets","Relic","Infusions","Aquatic","Equipment Set"};
     static const char* keys[]={"base_build","skills","weapons","sigils","armor","runes",
-        "trinkets","relic","infusions"};
+        "trinkets","relic","infusions","aquatic"};
     const bool fashion=g_SaveLibTarget==kSaveFashionTarget;
     if(g_SaveLibTarget!=0&&!fashion) {
         field("Component");
@@ -8307,7 +8275,7 @@ static void RenderSaveToLibraryDialog() {
             ImGui::TextDisabled("BUILD COMPONENTS");option(0);option(1);
             ImGui::Separator();ImGui::TextDisabled("EQUIPMENT COMPONENTS");
             if(g_SaveLibTarget==1)option(kSaveEntireEquipmentSet);
-            for(int i:{2,4,6,5,3,8,7})option(i);
+            for(int i:{2,4,6,5,3,8,7,9})option(i);
             ImGui::EndCombo();
         }
     }
@@ -8475,7 +8443,7 @@ static void RenderSaveToLibraryDialog() {
     }
     if(entireSet||(g_SaveLibTarget==0&&g_SaveLibEquipmentMode==2)) {
         ImGui::TextUnformatted("Included categories");
-        for(int i=2;i<9;++i) {
+        for(int i=2;i<10;++i) {
             bool included=g_SaveLibSetKinds.count(keys[i])!=0;
             if(ImGui::Checkbox(kinds[i],&included)){if(included)g_SaveLibSetKinds.insert(keys[i]);else g_SaveLibSetKinds.erase(keys[i]);}
         }
@@ -8883,7 +8851,14 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
 // Render the full gear section for a saved build
 static void RenderBuildGearPanel(AlterEgo::SavedBuild& build,bool editable) {
     AlterEgo::UI::EquipmentLayout("##saved_gear",g_LibEditMode||AlterEgo::GearEdit::HasRecordedAquaticGear(build.gear),
-        [&](const char* slot){RenderBuildGearSlot(build,slot,editable);},
+        [&](const char* slot){
+            // Keep exact historical slot keys until a deliberate data edit.
+            if(!build.gear.count(slot)&&std::strcmp(slot,"WeaponAquaticA")==0&&build.gear.count("AquaticA"))
+                RenderBuildGearSlot(build,"AquaticA",editable);
+            else if(!build.gear.count(slot)&&std::strcmp(slot,"WeaponAquaticB")==0&&build.gear.count("AquaticB"))
+                RenderBuildGearSlot(build,"AquaticB",editable);
+            else RenderBuildGearSlot(build,slot,editable);
+        },
         [](const char* label,int){RenderSectionHeader(label,AlterEgo::UI::SectionGold);});
 }
 
@@ -10589,7 +10564,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         {"base_build", "Base Build"}, {"skills", "Skills"},
         {"weapons", "Weapons"}, {"armor", "Armor"},
         {"trinkets", "Trinkets"}, {"runes", "Runes"},
-        {"sigils", "Sigils"}, {"infusions", "Infusions"}, {"relic", "Relic"}
+        {"sigils", "Sigils"}, {"infusions", "Infusions"}, {"relic", "Relic"}, {"aquatic", "Aquatic"}
     };
     std::vector<CompareSection> sections;
     for (const auto& kind : categories)

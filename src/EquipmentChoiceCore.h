@@ -6,6 +6,9 @@ namespace AlterEgo { namespace EquipmentChoice {
 inline bool IsAquaticWeaponSlot(const std::string& slot) {
     return slot=="WeaponAquaticA"||slot=="WeaponAquaticB"||slot=="AquaticA"||slot=="AquaticB";
 }
+inline bool IsAquaticGearSlot(const std::string& slot) {
+    return slot=="HelmAquatic"||IsAquaticWeaponSlot(slot);
+}
 inline bool WeaponEligible(const std::string& slot, bool mainhand,
                            bool offhand, bool twoHanded) {
     if (slot == "WeaponA1" || slot == "WeaponB1")

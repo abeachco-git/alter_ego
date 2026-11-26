@@ -29,7 +29,8 @@ class Repository {
 public:
     using Fingerprint = std::function<std::string(const Composable::Json&)>;
     explicit Repository(const std::string& utf8Path, Database::Connection::OpenMode mode,
-                        Fingerprint fingerprint = ExactFingerprint, bool verify = true);
+                        Fingerprint fingerprint = ExactFingerprint, bool verify = true,
+                        std::int64_t backedUpV4Revision = -1);
     Repository(const Repository&) = delete;
     Repository& operator=(const Repository&) = delete;
 
@@ -44,6 +45,8 @@ private:
     Database::Connection db_;
     Fingerprint fingerprint_;
     Snapshot ReadUnlocked();
+    std::int64_t CommitUnlocked(const Snapshot& before,const Snapshot& after);
+    void UpgradeBackedUpV4(std::int64_t expectedRevision);
 };
 
 } // namespace AlterEgo::NativeLibrary

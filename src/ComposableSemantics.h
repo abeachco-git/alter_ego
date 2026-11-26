@@ -147,7 +147,7 @@ inline std::string ComparisonComponent(const std::string& group,
     if (group == "Sigils") return "sigils";
     if (group == "Infusions" || group == "Infusion totals") return "infusions";
     if (group == "Relic") return "relic";
-    if (group == "Weapon types") return "weapons";
+    if (group == "Weapon types") return EquipmentChoice::IsAquaticWeaponSlot(field)?"aquatic":"weapons";
     if (group == "Exact item IDs" && field == "Relic") return "relic";
     if (group == "Equipment" || group == "Equipment stats" ||
         group == "Exact item IDs") {

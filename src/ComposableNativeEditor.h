@@ -342,19 +342,19 @@ static void ComponentNativeIntegerArray(ComponentJson& data, const char* key,
 static const char* kNativeGearSlots[] = {
     "Helm","Shoulders","Coat","Gloves","Leggings","Boots",
     "WeaponA1","WeaponA2","WeaponB1","WeaponB2",
-    "AquaticA","AquaticB",
-    "Backpack","Accessory1","Accessory2","Amulet","Ring1","Ring2","Relic"
+    "Backpack","Accessory1","Accessory2","Amulet","Ring1","Ring2","Relic",
+    "HelmAquatic","WeaponAquaticA","WeaponAquaticB"
 };
 
 static bool ComponentNativeSlotAllowed(const std::string& kind,
                                        const std::string& slot) {
     if (kind == "runes") return AlterEgo::Composable::SlotKind(slot) == "armor";
     if (kind == "sigils") return AlterEgo::Composable::SlotKind(slot) == "weapons";
-    if (kind == "infusions") return true;
+    if (kind == "infusions") return !AlterEgo::EquipmentChoice::IsAquaticGearSlot(slot)&&slot!="Amulet"&&slot!="Relic";
     return AlterEgo::Composable::SlotKind(slot) == kind;
 }
 
-static void ComponentNativeInfusionSlots(ComponentJson& part) {
+static void ComponentNativeInfusionSlots(ComponentJson& part,const std::string& slot) {
     // Preserve unfamiliar imported formats instead of converting them merely
     // because the user opened the graphical editor.
     if ((part.contains("infusion_ids") && !part["infusion_ids"].is_array()) ||
@@ -394,12 +394,26 @@ static void ComponentNativeInfusionSlots(ComponentJson& part) {
         part["infusion_ids"] = ids;
         if (part.contains("infusion_attributes") || !attrs.empty())
             part["infusion_attributes"] = attrs;
+        part["infusion_snapshot"]=true;part.erase("infusion");
     }
-    if (RenderActionButton("Add infusion##component")) {
+    // A standalone upgrade component may not know the weapon or exact item.
+    // Enforce the physical upper bound; keep imported over-capacity values
+    // visible and do not trim them merely by opening the editor.
+    int capacity=AlterEgo::GearEdit::InfusionCapacity(slot,true);
+    const auto exact=part.value("item_id",uint32_t(0));
+    if(exact){
+        const auto info=AlterEgo::GW2API::GetItemInfo(exact);
+        if(info&&info->details.is_object()&&info->details.contains("infusion_slots")&&
+           info->details["infusion_slots"].is_array())
+            capacity=std::min(capacity,static_cast<int>(info->details["infusion_slots"].size()));
+    }
+    if(static_cast<int>(ids.size())>capacity)ImGui::TextDisabled("Imported requirements exceed known capacity; preserved.");
+    if (static_cast<int>(ids.size())<capacity && RenderActionButton("Add infusion##component")) {
         ids.push_back(0);
         attrs.push_back("");
         part["infusion_ids"] = ids;
         part["infusion_attributes"] = attrs;
+        part["infusion_snapshot"]=true;part.erase("infusion");
     }
     bool snapshot = part.value("infusion_snapshot", false);
     if (ImGui::Checkbox("Recorded equipment snapshot", &snapshot))
@@ -505,14 +519,18 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,
     const std::string current = item.value("weapon_type", std::string());
     if (AlterEgo::UI::BeginCombo("Weapon type##native_weapon", current.empty()
                          ? "(choose type)" : WeaponDisplayName(current))) {
-        if (ImGui::Selectable("(none)", current.empty())) item.erase("weapon_type");
+        if (ImGui::Selectable("(none)", current.empty())&&!current.empty()) {
+            item.erase("weapon_type");item.erase("item_id");item.erase("item_name");
+        }
         for (const auto& [name, definition] : *weapons) {
             // Match the hand-eligibility policy of the original gear picker.
-            if (!AlterEgo::EquipmentChoice::WeaponEligible(
-                    slot, definition.mainhand, definition.offhand,
+            if (!AlterEgo::EquipmentChoice::WeaponTypeEligible(
+                    slot, name, definition.mainhand, definition.offhand,
                     definition.two_handed)) continue;
-            if (ImGui::Selectable(WeaponDisplayName(name), name == current))
+            if (ImGui::Selectable(WeaponDisplayName(name), name == current)&&name!=current){
                 item["weapon_type"] = name;
+                item.erase("item_id");item.erase("item_name");
+            }
         }
         ImGui::EndCombo();
     }
@@ -668,7 +686,9 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         ImGui::TextDisabled("Unknown imported slot representation; retained as-is.");
     } else {
         auto& item = data["gear"][slot];
-        if (kind == "armor" || kind == "weapons" || kind == "trinkets") {
+        const bool water=kind=="aquatic";
+        const bool weapon=kind=="weapons"||(water&&AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(slot));
+        if (kind == "armor" || kind == "weapons" || kind == "trinkets" || water) {
             const uint32_t id = item.value("item_id", uint32_t(0));
             const auto info = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
             if (info && !info->icon_url.empty()) {
@@ -689,16 +709,17 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             }
             ImGui::TextUnformatted("Stats");
             ComponentNativeStatChoice(item);
-            if (kind == "weapons")
+            if (weapon)
                 ComponentNativeWeaponChoice(item, profession, slot);
             if (ImGui::TreeNode("##advanced_gear_ids", "Advanced: exact stats and weapon type")) {
                 ComponentNativeNumber(item, "stat_id", "Stat ID");
                 ComponentNativeText(item, "stat_name", "Stat name");
-                if (kind == "weapons")
+                if (weapon)
                     ComponentNativeText(item, "weapon_type", "Weapon type");
                 ImGui::TreePop();
             }
-        } else if (kind == "runes") {
+        }
+        if (kind == "runes" || (water&&slot=="HelmAquatic")) {
             ImGui::TextUnformatted("Rune");
             ComponentNativeCatalogChoice(item, "rune_id", "rune", "runes");
             if (ImGui::TreeNode("##advanced_rune", "Advanced rune ID and name")) {
@@ -706,7 +727,8 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                 ComponentNativeText(item, "rune", "Rune name");
                 ImGui::TreePop();
             }
-        } else if (kind == "sigils") {
+        }
+        if (kind == "sigils" || (water&&weapon)) {
             ImGui::TextUnformatted("Sigil 1");
             ComponentNativeCatalogChoice(item, "sigil_id", "sigil", "sigils");
             ImGui::TextUnformatted("Sigil 2 (two-handed weapons)");
@@ -718,8 +740,9 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                 ComponentNativeText(item, "sigil2", "Sigil 2 name");
                 ImGui::TreePop();
             }
-        } else if (kind == "infusions") {
-            ComponentNativeInfusionSlots(item);
+        }
+        if (kind == "infusions" || water) {
+            ComponentNativeInfusionSlots(item,slot);
             ComponentNativeText(item, "infusion", "Legacy infusion label");
         }
         if (ImGui::TreeNode("##slot_exact", "Exact stored slot fields (read only)")) {

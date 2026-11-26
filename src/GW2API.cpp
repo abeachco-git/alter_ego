@@ -2829,7 +2829,7 @@ namespace AlterEgo {
         if (!Composable::IsKind(kind) || name.empty()) return false;
         const auto fields = Composable::Split(SerializeSavedBuild(capture));
         auto selected = fields.find(kind);
-        if (selected == fields.end()) return false;
+        if (selected == fields.end()||(kind=="aquatic"&&selected->second.empty())) return false;
         return CreateLoadoutComponent(kind, name, selected->second, savedId, reuseExact, capture.profession);
     }
 

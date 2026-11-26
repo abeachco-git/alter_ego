@@ -185,6 +185,7 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
     for(const auto& [kind,data]:parts) {
         if(Composable::SetOwns(doc,next,kind))continue;
         const auto ref=next.refs.find(kind);
+        if(kind=="aquatic"&&data.empty()&&ref==next.refs.end())continue;
         auto* previous=ref==next.refs.end()?nullptr:Composable::Find(doc,kind,ref->second);
         if(existing&&oldParts.count(kind)&&ExactContent(oldParts.at(kind),data)) {
             if(previous)for(auto it=previous->data.begin();it!=previous->data.end();++it)
@@ -223,6 +224,7 @@ inline bool PutEquipmentSet(Composable::Document& doc,const std::string& id,
     const EditIndex index(doc);
     for(const auto& [kind,data]:parts) {
         if(!Composable::IsEquipmentKind(kind)||(!kinds.empty()&&!kinds.count(kind)))continue;
+        if(kind=="aquatic"&&data.empty())continue;
         const auto matches=index.Matches(kind,data);
         if(!matches.empty()) {set.refs[kind]=matches.front().id;continue;}
         std::string componentId=kind+":"+id;

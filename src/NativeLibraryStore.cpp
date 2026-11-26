@@ -101,7 +101,18 @@ void VerifySnapshot(const Snapshot& actual,const Snapshot& expected) {
 Snapshot OpenOrMigrate(const Paths& paths) {
     const auto target=paths.Library();
     if(Exists(target)) {
-        Repository db(target.u8string(),Mode::Existing);
+        std::int64_t backupRevision=-1;
+        {
+            Database::Connection source(target.u8string(),Mode::ReadOnly);
+            if(source.Scalar("PRAGMA application_id")==kApplicationId&&
+               source.Scalar("PRAGMA user_version")==4) {
+                const auto backup=CreateUniqueDirectory(paths.Migration(),"sqlite-v4-")/"library.db";
+                Database::Connection out(backup.u8string(),Mode::Create);
+                source.BackupTo(out);
+                backupRevision=out.Scalar("SELECT revision FROM library_state WHERE singleton=1");
+            }
+        }
+        Repository db(target.u8string(),Mode::Existing,ExactFingerprint,true,backupRevision);
         return db.Read();
     }
     // Experimental storage cannot be mistaken for the user's original library.

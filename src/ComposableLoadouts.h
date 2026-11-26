@@ -1,5 +1,6 @@
 #pragma once
 #include "UntrustedInput.h"
+#include "EquipmentChoiceCore.h"
 // Alter Ego v3 composable Loadout model.
 //
 // This is a pure, platform-independent data layer. Build templates, physical
@@ -24,10 +25,10 @@ using Json = nlohmann::json;
 constexpr int kVersion = 2;
 constexpr const char* kFormat = "alter_ego_component_graph";
 
-inline const std::array<std::string, 9>& Kinds() {
-    static const std::array<std::string, 9> values = {{
+inline const std::array<std::string, 10>& Kinds() {
+    static const std::array<std::string, 10> values = {{
         "base_build", "skills", "weapons", "sigils", "armor",
-        "runes", "trinkets", "relic", "infusions"
+        "runes", "trinkets", "relic", "infusions", "aquatic"
     }};
     return values;
 }
@@ -184,6 +185,7 @@ inline bool Validate(const Document& doc, std::string& error) {
 // Slot groups are based on current SavedBuild serialization, not player
 // preferences. Unknown future slots remain in trinkets for round-trip safety.
 inline std::string SlotKind(const std::string& slot) {
+    if(EquipmentChoice::IsAquaticGearSlot(slot)) return "aquatic";
     if (slot.rfind("Weapon", 0) == 0 || slot.rfind("Aquatic", 0) == 0 ||
         slot.rfind("BreatherWeapon", 0) == 0) return "weapons";
     if (slot == "Helm" || slot == "Shoulders" || slot == "Coat" ||
@@ -227,6 +229,11 @@ inline std::map<std::string, Json> Split(const Json& old) {
         for (auto it = old["gear"].begin(); it != old["gear"].end(); ++it) {
             const auto& slot = it.key();
             const Json& item = it.value();
+            // Aquatic owns all underwater per-slot fields, including upgrades.
+            if (EquipmentChoice::IsAquaticGearSlot(slot)) {
+                parts["aquatic"]["gear"][slot] = item;
+                continue;
+            }
             if (!item.is_object()) {
                 parts[SlotKind(slot)]["gear"][slot] = item;
                 continue;
@@ -288,9 +295,9 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
     if (kind == "relic") add(field(data, "relic_name", "relic_id"));
     if (data.contains("gear") && data["gear"].is_object()) {
         for (const auto& slot : data["gear"]) {
-            if (kind == "armor" || kind == "trinkets" || kind == "weapons") {
+            if (kind == "armor" || kind == "trinkets" || kind == "weapons" || kind == "aquatic") {
                 std::string stat = field(slot, "stat_name", "stat_id", "stat");
-                std::string weapon = kind == "weapons" ? field(slot, "weapon_type") : "";
+                std::string weapon = kind == "weapons" || kind == "aquatic" ? field(slot, "weapon_type") : "";
                 add(stat.empty() ? weapon : weapon.empty() ? stat : stat + " " + weapon);
             } else if (kind == "runes") add(field(slot, "rune", "rune_id"));
             else if (kind == "sigils") {
@@ -348,6 +355,7 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
     }
     if (!name.empty()) return finish(name);
     if(incomplete){std::string label=kind;label[0]=static_cast<char>(std::toupper(static_cast<unsigned char>(label[0])));return finish(label);}
+    if (kind == "aquatic") return "Aquatic";
     if (kind == "armor") return "Armor (unspecified)";
     if (kind == "trinkets") return "Trinkets (unspecified)";
     if (kind == "weapons") return "Weapons (unspecified)";
@@ -524,6 +532,7 @@ inline bool SplitLegacy(const Json& legacy, Document& output, std::string& error
         loadout.metadata = Metadata(old);
         const auto parts = Split(old);
         for (const auto& [kind, data] : parts) {
+            if(kind=="aquatic"&&data.empty())continue;
             Component part;
             part.id = kind + ":" + loadout.id;
             part.name = UniqueComponentName(next, kind, SuggestComponentName(kind, data));
@@ -579,6 +588,97 @@ inline bool Resolve(const Document& doc, const Loadout& loadout,
     if (hadGear) result["gear"] = std::move(gear);
     legacy = std::move(result);
     return true;
+}
+// Preserve resolved projections, original terrestrial IDs and independent
+// source identities. Mixed partial sets retain aquatic data directly on
+// their Loadouts; unused aquatic fragments remain available in the library.
+inline bool NormalizeAquatic(Document& doc,std::string& error) {
+    using Key=std::pair<std::string,std::string>;
+    using Keys=std::vector<Key>;
+    std::map<Key,Json> fragments;
+    for(const auto& [kind,list]:doc.components) {
+        if(kind=="aquatic")continue;
+        for(const auto& part:list) {
+            const auto gear=part.data.find("gear");
+            if(gear==part.data.end()||!gear->is_object())continue;
+            Json water=Json::object();
+            for(auto s=gear->begin();s!=gear->end();++s)
+                if(EquipmentChoice::IsAquaticGearSlot(s.key()))water[s.key()]=s.value();
+            if(!water.empty())fragments[{kind,part.id}]=std::move(water);
+        }
+    }
+    if(fragments.empty())return true;
+    Document next=doc;
+    for(const auto& [key,water]:fragments) {
+        auto* part=Find(next,key.first,key.second);
+        if(!part)return Fail(error,"Missing legacy aquatic source.");
+        auto& gear=part->data["gear"];
+        for(auto s=water.begin();s!=water.end();++s)gear.erase(s.key());
+        if(gear.empty())part->data.erase("gear");
+    }
+    std::map<Keys,std::string> combined;
+    std::set<Key> used;
+    auto keysFor=[&](const std::map<std::string,std::string>& refs){
+        Keys keys;for(const auto& [kind,id]:refs)if(fragments.count({kind,id}))keys.push_back({kind,id});
+        return keys;
+    };
+    auto make=[&](const Keys& keys,std::string& id)->bool{
+        id.clear();
+        if(keys.empty())return true;
+        if(auto it=combined.find(keys);it!=combined.end()){id=it->second;return true;}
+        Json water=Json::object();
+        for(const auto& key:keys) {
+            used.insert(key);
+            const auto& slots=fragments.at(key);
+            for(auto s=slots.begin();s!=slots.end();++s) {
+                if(!water.contains(s.key())){water[s.key()]=s.value();continue;}
+                auto& dest=water[s.key()];
+                if(!dest.is_object()||!s.value().is_object()){
+                    if(dest==Json::object())dest=s.value();
+                    else if(dest!=s.value())return Fail(error,"Conflicting imported aquatic slot.");
+                    continue;
+                }
+                for(auto field=s.value().begin();field!=s.value().end();++field){
+                    if(dest.contains(field.key()))return Fail(error,"Duplicate imported aquatic field.");
+                    dest[field.key()]=field.value();
+                }
+            }
+        }
+        Json data={{"gear",std::move(water)}};
+        unsigned n=1;do{id="aquatic:migrated:"+std::to_string(n++);}while(Find(next,"aquatic",id));
+        next.components["aquatic"].push_back({id,UniqueComponentName(next,"aquatic",
+            SuggestComponentName("aquatic",data)),std::move(data)});
+        combined.emplace(keys,id);return true;
+    };
+    for(auto& set:next.equipment_sets) {
+        const auto keys=keysFor(set.refs);
+        if(keys.empty())continue;
+        if(set.refs.count("aquatic"))return Fail(error,"Mixed old and new aquatic set fields.");
+        std::string id;if(!make(keys,id))return false;
+        bool mixed=false;
+        for(const auto& l:doc.loadouts)
+            if(l.equipment_set_id==set.id&&(!keysFor(l.refs).empty()||l.refs.count("aquatic"))){mixed=true;break;}
+        if(!mixed)set.refs["aquatic"]=id;
+    }
+    for(auto& l:next.loadouts) {
+        const auto* old=FindLoadout(doc,l.id);
+        if(!old)return Fail(error,"Missing legacy Loadout.");
+        const auto keys=keysFor(EffectiveRefs(doc,*old));
+        if(keys.empty()||SetOwns(next,l,"aquatic"))continue;
+        if(EffectiveRefs(doc,*old).count("aquatic"))return Fail(error,"Mixed old and new aquatic Loadout fields.");
+        std::string id;if(!make(keys,id))return false;
+        l.refs["aquatic"]=id;
+    }
+    for(const auto& [key,water]:fragments)if(!used.count(key)){
+        std::string id;if(!make(Keys{key},id))return false;
+    }
+    if(!Validate(next,error))return false;
+    for(size_t i=0;i<doc.loadouts.size();++i){
+        Json before,after;
+        if(!Resolve(doc,doc.loadouts[i],before,error)||!Resolve(next,next.loadouts[i],after,error)||
+            before.dump()!=after.dump())return Fail(error,"Aquatic migration would change a Loadout projection.");
+    }
+    doc=std::move(next);return true;
 }
 inline bool ToLegacy(const Document& doc, Json& legacy, std::string& error) {
     if (!Validate(doc, error)) return false;
@@ -653,7 +753,7 @@ inline bool FromJson(const Json& input, Document& output, std::string& error) {
     } catch (const std::exception& e) {
         return Fail(error, std::string("Invalid Loadout fields: ") + e.what());
     }
-    if (!Validate(next, error)) return false;
+    if (!Validate(next, error)||!NormalizeAquatic(next,error)) return false;
     output = std::move(next);
     return true;
 }
@@ -780,7 +880,7 @@ inline bool ValidatePortablePayload(const std::string& kind,
 }
 
 inline bool ImportComponent(const Json& input, std::string& kind,
-                            Component& component, std::string& error) {
+                            Component& component, std::string& error, bool allowLegacyAquatic=false) {
     error.clear();
     if (!input.is_object() || !input.contains("format") ||
         !input.at("format").is_string() ||
@@ -803,7 +903,10 @@ inline bool ImportComponent(const Json& input, std::string& kind,
             if (!it.value().is_object())
                 return Fail(error, "Gear fields must form a slot object.");
             for (auto slot = it.value().begin(); slot != it.value().end(); ++slot) {
-                if (parsedKind != "runes" && parsedKind != "sigils" &&
+                const bool water=EquipmentChoice::IsAquaticGearSlot(slot.key());
+                if(water&&parsedKind!="aquatic"&&!allowLegacyAquatic)
+                    return Fail(error,"Legacy aquatic fields require importing the complete Loadout or library.");
+                if (!(water&&allowLegacyAquatic&&parsedKind!="aquatic") && parsedKind != "runes" && parsedKind != "sigils" &&
                     parsedKind != "infusions" && SlotKind(slot.key()) != parsedKind)
                     return Fail(error, "Equipment slot belongs to another component.");
                 if (!slot.value().is_object())
@@ -814,7 +917,7 @@ inline bool ImportComponent(const Json& input, std::string& kind,
                         if (parsedKind == "runes" || parsedKind == "sigils" ||
                             parsedKind == "infusions")
                             return Fail(error, "Physical equipment field in upgrade component.");
-                    } else if (upgrade != parsedKind)
+                    } else if (upgrade != parsedKind && parsedKind!="aquatic")
                         return Fail(error, "Upgrade field belongs to another component.");
                 }
             }
@@ -899,7 +1002,7 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
             {"version", kComponentVersion},
             {"kind", it.key()},
             {"name", it.value()["name"]},
-            {"data", it.value()["data"]}}, kind, part, error))
+            {"data", it.value()["data"]}}, kind, part, error, true))
             return false;
         imported[kind] = std::move(part);
     }
@@ -952,7 +1055,7 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
             next.equipment_sets.push_back(std::move(set));
         }
         next.loadouts.push_back(std::move(loadout));
-        return true;
+        return NormalizeAquatic(next,err);
     }, error);
 }
 
@@ -1284,6 +1387,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
             created.metadata = Metadata(item);
             const auto parts = Split(item);
             for (const auto& [kind, data] : parts) {
+                if(kind=="aquatic"&&data.empty())continue;
                 std::string componentId = kind + ":" + id;
                 unsigned sequence = 1;
                 while (Find(next, kind, componentId))
@@ -1318,6 +1422,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
             if(SetOwns(next,updated,kind))continue;
             const auto oldRef = updated.refs.find(kind);
             if (oldRef == updated.refs.end()) {
+                if(kind=="aquatic"&&data.empty())continue;
                 if (const auto* match = ReusableForLoadout(next, kind, data,
                         item.value("profession", std::string()))) {
                     updated.refs[kind] = match->id;

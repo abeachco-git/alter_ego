@@ -56,7 +56,7 @@ These are review rules for changes, not a claim that every existing path has alr
 
 A Loadout is an ordered composition of reusable component records, with an optional Fashion ID referencing the existing Fashion library.
 
-Nine component categories:
+Ten component categories:
 
 | Component | Fields | Semantic comparison |
 | --- | --- | --- |
@@ -69,13 +69,14 @@ Nine component categories:
 | sigils | Physical sigil data from weapon slots | Aggregate per active weapon set, not per hand |
 | infusions | Installed IDs/locations, aggregate requirements, AR/stat totals | Aggregate totals/requirements, not slot |
 | relic | Relic identity and effect | Independent relic comparison |
+| aquatic | Optional underwater headgear and weapon slots, including their stats, runes, sigils and infusions | Existing equipment comparison rules; no inferred data |
 
-Equipment remains a logical *view* of its components, never a second monolithic saved object. Build is the combination of base_build and skills. Named Equipment Sets own any nonempty subset of seven equipment categories. A linked Loadout stores one set ID and direct references for every category not included in the set, plus Base Build and Skills. A category has exactly one owner when present. Removing membership transfers its existing reference to each linked Loadout; adding membership replaces direct references after confirmation. EffectiveRefs is the canonical expansion used by Resolve and projection invalidation. Set membership edits propagate to linked Loadouts. Detach transfers existing references without duplicating payloads; Copy & Edit Set creates a separate named set with the same component references. Shared component payload edits still propagate to their owners. A referenced set cannot be deleted.
+Equipment remains a logical *view* of its components, never a second monolithic saved object. Build is the combination of base_build and skills. Named Equipment Sets own any nonempty subset of eight equipment categories. A linked Loadout stores one set ID and direct references for every category not included in the set, plus Base Build and Skills. A category has exactly one owner when present. Removing membership transfers its existing reference to each linked Loadout; adding membership replaces direct references after confirmation. EffectiveRefs is the canonical expansion used by Resolve and projection invalidation. Set membership edits propagate to linked Loadouts. Detach transfers existing references without duplicating payloads; Copy & Edit Set creates a separate named set with the same component references. Shared component payload edits still propagate to their owners. A referenced set cannot be deleted.
 
 ## Storage invariants and native repository
 
-- Durable library: `library/library.db`, native SQLite schema version 4. Fresh schema only; archive experimental SQLite versions 1–3 before migrating the original v2 library. Foreign keys and triggers prevent mixed direct/linked equipment ownership. No monolithic disk mirror.
-- Nine independent categories, stable category-scoped IDs and ordered loadouts with optional Fashion foreign keys.
+- Durable library: `library/library.db`, native SQLite schema version 5. Existing v4 is backed up and rebuilt atomically, preserving effective Loadout projections, terrestrial IDs and unused aquatic fragments; archive experimental SQLite versions 1–3 before migrating the original v2 library. Foreign keys and triggers prevent mixed direct/linked equipment ownership. No monolithic disk mirror.
+- Ten independent categories, stable category-scoped IDs and ordered loadouts with optional Fashion foreign keys.
 - Typed relational rows store known fields. Child tables retain physical equipment slots, utility and infusion ordering, exact IDs, mode associations, skins and dyes. Nullable columns and presence flags distinguish absent and empty; JSON extensions preserve unknown external fields.
 - Nonunique indexed fingerprints shortlist exact candidates. Verify complete normalized content before reuse; functional Compare rules are not storage identity.
 - Ordinary edits reuse matching components, update unshared records, and copy shared records privately. Explicit shared edits and deliberate independent copies remain available. Never automatically remove unused components.

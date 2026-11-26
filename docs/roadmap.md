@@ -38,7 +38,7 @@ Acceptance discussion: regression fixtures for equivalent and different builds, 
 - Before implementing any package, present evidence, exact proposed changes, deliberate exceptions, unresolved behavior decisions, dependencies, risk and regression checks. Ask for approval of that package only. Update this tracker as work is approved; prune completed items after required automated verification and retain remaining validation in development-status.md. Do not mark discussion as implementation.
 - After an approved implementation, follow AGENTS.md definition of done, including exact-commit Windows build and verified DLL delivery. Live/in-game validation is separate and must be reported honestly.
 
-**Part 2 approved:** first-class optional Aquatic equipment component owns its headgear, weapons and upgrades; preserve existing libraries and exact imported fields. Loadout bulk operations include compatible configured aquatic slots, without creating unconfigured aquatic equipment. Skills, pets and legends edit terrestrial and aquatic independently. All Part 2 proposals are approved; Parts 3 and 4 remain discussion only. Keep pending implementation and verification tracked until delivery.
+**Part 2 approved (implementation in progress):** first-class optional Aquatic equipment component owns its headgear, weapons and upgrades; preserve existing libraries and exact imported fields. Loadout bulk operations include compatible configured aquatic slots, without creating unconfigured aquatic equipment. Skills, pets and legends edit terrestrial and aquatic independently. All Part 2 proposals are approved; Parts 3 and 4 remain discussion only. Keep pending implementation and verification tracked until delivery.
 
 ## Remaining Library work
 

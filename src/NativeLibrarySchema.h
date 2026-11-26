@@ -4,13 +4,13 @@
 namespace AlterEgo::NativeLibrary {
 
 constexpr int kApplicationId = 0x41454c42; // AELB
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 
 inline void UpgradeSchema(Database::Connection& db, int version) {
-    // Only a fresh database reaches this callback. Old experimental
-    // SQLite schemas are not migration sources.
-    if(version>=1&&version<4)return;
-    if(version!=4)throw Database::Error(SQLITE_ERROR,"Unknown library schema");
+    // Existing v4 is rebuilt transactionally after a verified backup.
+    // Earlier experimental schemas remain unsupported.
+    if(version>=1&&version<5)return;
+    if(version!=5)throw Database::Error(SQLITE_ERROR,"Unknown library schema");
     // Category is part of each component FK. IDs are stable within a kind.
     // Fingerprints are deliberately nonunique; independent identical records
     // are valid. Ordinals preserve user ordering, not record identity.
@@ -22,7 +22,7 @@ CREATE TABLE library_state(
 INSERT INTO library_state VALUES(1,0);
 CREATE TABLE components(
     kind TEXT NOT NULL CHECK(kind IN ('base_build','skills','weapons','armor',
-        'trinkets','runes','sigils','infusions','relic')),
+        'trinkets','runes','sigils','infusions','relic','aquatic')),
     id TEXT NOT NULL CHECK(length(id)>0),
     name TEXT NOT NULL,
     ordinal INTEGER NOT NULL CHECK(ordinal>=0),
@@ -79,7 +79,7 @@ CREATE TABLE utility_skills(
         ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE gear_slots(
-    kind TEXT NOT NULL CHECK(kind IN ('weapons','armor','trinkets','runes','sigils','infusions')),
+    kind TEXT NOT NULL CHECK(kind IN ('weapons','armor','trinkets','runes','sigils','infusions','aquatic')),
     component_id TEXT NOT NULL, slot TEXT NOT NULL, flags INTEGER NOT NULL,
     item_id INTEGER, stat_id INTEGER, stat_name TEXT, weapon_type TEXT,
     rune_name TEXT, rune_id INTEGER, sigil_name TEXT, sigil_id INTEGER,
@@ -90,14 +90,14 @@ CREATE TABLE gear_slots(
         ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE gear_infusion_ids(
-    kind TEXT NOT NULL CHECK(kind='infusions'), component_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('infusions','aquatic')), component_id TEXT NOT NULL,
     slot TEXT NOT NULL, ordinal INTEGER NOT NULL CHECK(ordinal>=0), item_id INTEGER NOT NULL,
     PRIMARY KEY(kind,component_id,slot,ordinal),
     FOREIGN KEY(kind,component_id,slot) REFERENCES gear_slots(kind,component_id,slot)
         ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE gear_infusion_attributes(
-    kind TEXT NOT NULL CHECK(kind='infusions'), component_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('infusions','aquatic')), component_id TEXT NOT NULL,
     slot TEXT NOT NULL, ordinal INTEGER NOT NULL CHECK(ordinal>=0), attribute TEXT NOT NULL,
     PRIMARY KEY(kind,component_id,slot,ordinal),
     FOREIGN KEY(kind,component_id,slot) REFERENCES gear_slots(kind,component_id,slot)
@@ -151,7 +151,7 @@ CREATE TABLE equipment_sets(
 ) STRICT;
 CREATE TABLE equipment_set_components(
     set_id TEXT NOT NULL REFERENCES equipment_sets(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK(kind IN ('weapons','armor','trinkets','runes','sigils','infusions','relic')),
+    kind TEXT NOT NULL CHECK(kind IN ('weapons','armor','trinkets','runes','sigils','infusions','relic','aquatic')),
     component_id TEXT NOT NULL,
     PRIMARY KEY(set_id,kind),
     FOREIGN KEY(kind,component_id) REFERENCES components(kind,id) ON DELETE RESTRICT

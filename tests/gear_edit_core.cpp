@@ -62,6 +62,13 @@ int case_gear_edit_core(int, char**) {
     assert(HasRecordedAquaticGear(parent.gear));
     parent.gear.erase("WeaponAquaticA");parent.gear["WeaponAquaticB"].infusion_ids={42};
     assert(HasRecordedAquaticGear(parent.gear));
+    auto bulk=BulkSlots(parent.gear);
+    assert(std::find(bulk.begin(),bulk.end(),"WeaponAquaticB")!=bulk.end());
+    assert(std::find(bulk.begin(),bulk.end(),"HelmAquatic")==bulk.end());
+    parent.gear["HelmAquatic"].rune_id=9;
+    bulk=BulkSlots(parent.gear);
+    assert(std::find(bulk.begin(),bulk.end(),"HelmAquatic")!=bulk.end());
+    assert(InfusionCapacity("AquaticA",true)==2);
     parent.name="Loadout";parent.notes="Original";parent.gear["Helm"].infusion_ids={42};
     auto removedChild=parent;
     assert(RemoveInfusion(removedChild.gear.at("Helm"),0));

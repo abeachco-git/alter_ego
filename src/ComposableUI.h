@@ -29,7 +29,8 @@ static const struct { const char* kind; const char* label; } kComponentKinds[] =
     {"runes", "Runes"},
     {"trinkets", "Trinkets"},
     {"relic", "Relics"},
-    {"infusions", "Infusions"}
+    {"infusions", "Infusions"},
+    {"aquatic", "Aquatic"}
 };
 
 static const char* ComponentLabel(const std::string& kind) {
@@ -787,7 +788,7 @@ static std::string ComponentUIFashionName(const std::string& id){
     for(const auto& look:g_FashionLibrary.looks)if(look.id==id)return look.name;
     return "(missing saved appearance)";
 }
-static constexpr int kEquipmentReferenceOrder[]={2,4,6,5,3,8,7};
+static constexpr int kEquipmentReferenceOrder[]={2,4,6,5,3,8,7,9};
 static constexpr int kBuildReferenceOrder[]={0,1};
 static void ReferenceTableColumns(){
     ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,116.f);
@@ -1110,7 +1111,7 @@ static void ImportComponentClipboard(){
         else g_ComponentCommand={ComponentUICommand::Create,"",kind,"",imported.name,imported.data};
     }catch(const std::exception& e){g_ComponentStatus="Invalid or oversized component clipboard.";}
 }
-static constexpr int kComponentGroupOrder[]={0,1,4,2,6,5,3,8,7};
+static constexpr int kComponentGroupOrder[]={0,1,4,2,6,5,3,8,7,9};
 static void ComponentCreationMenu(const std::string& category={}){
     using namespace AlterEgo::UI;
     if(category.empty()){

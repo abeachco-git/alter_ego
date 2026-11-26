@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include "EquipmentChoiceCore.h"
 
 namespace AlterEgo { namespace GearEdit {
 // A child gear editor works on a private draft. Applying it updates only
@@ -16,24 +17,32 @@ template<class Build> void ApplyEquipmentDraft(Build& parent,const Build& draft)
     parent.rune_name=draft.rune_name;parent.rune_id=draft.rune_id;
     parent.relic_name=draft.relic_name;parent.relic_id=draft.relic_id;
 }
-// Empty placeholders do not count as recorded aquatic gear.
+// Empty placeholders do not count as configured aquatic gear.
+template<class Slot> bool HasRecordedGear(const Slot& s) {
+    return s.item_id||s.stat_id||s.rune_id||s.sigil_id||s.sigil2_id||
+        !s.stat_name.empty()||!s.rune.empty()||!s.sigil.empty()||!s.sigil2.empty()||
+        !s.weapon_type.empty()||!s.infusion.empty()||
+        std::any_of(s.infusion_ids.begin(),s.infusion_ids.end(),[](auto id){return id!=0;})||
+        std::any_of(s.infusion_attributes.begin(),s.infusion_attributes.end(),[](const auto& a){return !a.empty();});
+}
 template<class Gear> bool HasRecordedAquaticGear(const Gear& gear) {
-    for (const char* slot : {"HelmAquatic","WeaponAquaticA","WeaponAquaticB"}) {
-        const auto it=gear.find(slot);if(it==gear.end())continue;
-        const auto& s=it->second;
-        if(s.item_id||s.stat_id||s.rune_id||s.sigil_id||s.sigil2_id||
-           !s.stat_name.empty()||!s.rune.empty()||!s.sigil.empty()||!s.sigil2.empty()||
-           !s.weapon_type.empty()||!s.infusion.empty()||
-           std::any_of(s.infusion_ids.begin(),s.infusion_ids.end(),[](auto id){return id!=0;})||
-           std::any_of(s.infusion_attributes.begin(),s.infusion_attributes.end(),[](const auto& a){return !a.empty();}))return true;
-    }
+    for(const auto& [slot,value]:gear)
+        if(EquipmentChoice::IsAquaticGearSlot(slot)&&HasRecordedGear(value))return true;
     return false;
+}
+template<class Gear> std::vector<std::string> BulkSlots(const Gear& gear) {
+    std::vector<std::string> slots={"Helm","Shoulders","Coat","Gloves","Leggings","Boots",
+        "WeaponA1","WeaponA2","WeaponB1","WeaponB2","Backpack","Accessory1",
+        "Accessory2","Amulet","Ring1","Ring2"};
+    for(const auto& [slot,value]:gear)
+        if(EquipmentChoice::IsAquaticGearSlot(slot)&&HasRecordedGear(value))slots.push_back(slot);
+    return slots;
 }
 inline int InfusionCapacity(const std::string& slot, bool twoHanded, bool blocked = false) {
     if (blocked || slot == "Amulet" || slot == "Relic") return 0;
     if (slot == "Ring1" || slot == "Ring2") return 3;
     if (slot == "Backpack") return 2;
-    if (slot.rfind("Weapon",0) == 0) return twoHanded ? 2 : 1;
+    if (slot.rfind("Weapon",0) == 0 || EquipmentChoice::IsAquaticWeaponSlot(slot)) return twoHanded ? 2 : 1;
     return 1;
 }
 template<class T> std::vector<T> FillPattern(const std::vector<T>& pattern, int capacity) {

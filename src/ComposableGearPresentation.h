@@ -10,12 +10,12 @@
 
 namespace AlterEgo { namespace Composable { namespace Presentation {
 
-inline const std::array<const char*, 19>& StandardGearSlots() {
-    static const std::array<const char*, 19> slots = {{
+inline const std::array<const char*, 22>& StandardGearSlots() {
+    static const std::array<const char*, 22> slots = {{
         "Helm", "Shoulders", "Coat", "Gloves", "Leggings", "Boots",
         "WeaponA1", "WeaponA2", "WeaponB1", "WeaponB2",
-        "AquaticA", "AquaticB", "Backpack", "Accessory1", "Accessory2",
-        "Amulet", "Ring1", "Ring2", "Relic"
+        "Backpack", "Accessory1", "Accessory2", "Amulet", "Ring1", "Ring2", "Relic",
+        "HelmAquatic", "WeaponAquaticA", "WeaponAquaticB", "AquaticA", "AquaticB"
     }};
     return slots;
 }
@@ -52,19 +52,19 @@ inline std::string GearSlotSummary(const std::string& kind, const Json& slot) {
     auto add = [&](const std::string& label, const std::string& value) {
         if (!value.empty()) pieces.push_back(label + value);
     };
-    if (kind == "armor" || kind == "weapons" || kind == "trinkets") {
+    if (kind == "armor" || kind == "weapons" || kind == "trinkets" || kind=="aquatic") {
         add("Item ", SafeNameOrId(slot, "item_name", "item_id"));
         add("Stats ", SafeNameOrId(slot, "stat_name", "stat_id"));
         const auto weapon = slot.find("weapon_type");
         if (weapon != slot.end() && weapon->is_string() && !weapon->get<std::string>().empty())
             pieces.push_back(weapon->get<std::string>());
     }
-    if (kind == "runes") add("Rune ", SafeNameOrId(slot, "rune", "rune_id"));
-    if (kind == "sigils") {
+    if (kind == "runes" || kind=="aquatic") add("Rune ", SafeNameOrId(slot, "rune", "rune_id"));
+    if (kind == "sigils" || kind=="aquatic") {
         add("Sigil ", SafeNameOrId(slot, "sigil", "sigil_id"));
         add("Sigil 2 ", SafeNameOrId(slot, "sigil2", "sigil2_id"));
     }
-    if (kind == "infusions") {
+    if (kind == "infusions" || kind=="aquatic") {
         const auto ids = slot.find("infusion_ids");
         if (ids != slot.end() && ids->is_array())
             pieces.push_back(std::to_string(ids->size()) + " infusion positions");

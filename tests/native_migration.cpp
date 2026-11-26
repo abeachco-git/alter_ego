@@ -76,6 +76,45 @@ int case_native_migration(int,char**) {
     Native::Repository recovery(backup.u8string(),DB::Connection::OpenMode::Existing);
     assert(recovery.Read().loadouts.loadouts.empty());store.Close();
 
+    // Existing v4 graph split aquatic fields across physical and upgrade components.
+    const auto v4root=scratch.dir/"v4";Native::Paths v4paths(v4root.u8string());
+    fs::create_directories(v4paths.Library().parent_path());
+    Native::Snapshot old;assert(Native::SplitLegacyExact(legacy,old.loadouts,error));
+    const auto refs=old.loadouts.loadouts.front().refs;
+    C::Find(old.loadouts,"trinkets",refs.at("trinkets"))->data["gear"]["HelmAquatic"]={{"stat_id",1},{"future","retain"}};
+    C::Find(old.loadouts,"runes",refs.at("runes"))->data["gear"]["HelmAquatic"]={{"rune_id",9}};
+    C::Find(old.loadouts,"weapons",refs.at("weapons"))->data["gear"]["WeaponAquaticA"]={{"weapon_type","Trident"},{"stat_id",1}};
+    C::Find(old.loadouts,"sigils",refs.at("sigils"))->data["gear"]["WeaponAquaticA"]={{"sigil_id",10},{"sigil2_id",11}};
+    C::Find(old.loadouts,"infusions",refs.at("infusions"))->data["gear"]["WeaponAquaticA"]={{"infusion_ids",{42,43}},{"infusion_attributes",{"Power",""}},{"infusion_snapshot",true}};
+    old.loadouts.equipment_sets.push_back({"mixed","Mixed",{{"trinkets",refs.at("trinkets")},{"runes",refs.at("runes")}}});
+    for(auto& l:old.loadouts.loadouts){l.equipment_set_id="mixed";l.refs.erase("trinkets");l.refs.erase("runes");}
+    old.loadouts.components["armor"].push_back({"unused","Unused",Json{{"gear",Json{{"HelmAquatic",Json{{"item_id",99}}}}}}});
+    Json beforeWater;assert(C::ToLegacy(old.loadouts,beforeWater,error));
+    {
+        Native::Repository repo(v4paths.Library().u8string(),DB::Connection::OpenMode::Create);
+        old.revision=repo.Commit(repo.Read(),old);
+    }
+    {DB::Connection db(v4paths.Library().u8string(),DB::Connection::OpenMode::Existing);db.Exec("PRAGMA user_version=4");}
+    assert(store.Open(v4root.u8string(),error));Native::Snapshot migrated;assert(store.Read(migrated,error));
+    Json afterWater;assert(C::ToLegacy(migrated.loadouts,afterWater,error)&&beforeWater==afterWater);
+    assert(migrated.revision==old.revision+1);
+    assert(migrated.loadouts.loadouts[0].refs.at("aquatic")==migrated.loadouts.loadouts[1].refs.at("aquatic"));
+    assert(!migrated.loadouts.equipment_sets.front().refs.count("aquatic"));
+    assert(migrated.loadouts.components.at("aquatic").size()==3);
+    assert(migrated.loadouts.loadouts[0].refs.at("weapons")==refs.at("weapons"));
+    assert(!C::Find(migrated.loadouts,"weapons",refs.at("weapons"))->data.contains("gear"));
+    bool backupFound=false;for(const auto& entry:fs::directory_iterator(v4paths.Migration())){
+        DB::Connection backup((entry.path()/"library.db").u8string(),DB::Connection::OpenMode::ReadOnly);
+        assert(backup.Scalar("PRAGMA user_version")==4);backupFound=true;
+    }
+    assert(backupFound);store.Close();
+    assert(store.Open(v4root.u8string(),error));assert(store.Read(snapshot,error));
+    assert(snapshot.revision==migrated.revision);store.Close();
+    const auto freshParts=C::Split(beforeWater.at("builds")[0]);
+    assert(freshParts.at("aquatic").at("gear").at("HelmAquatic").at("rune_id")==9);
+    assert(freshParts.at("aquatic").at("gear").at("WeaponAquaticA").at("infusion_ids")==Json::array({42,43}));
+    assert(C::Split(first).at("aquatic").empty());
+
     const auto corrupt=scratch.dir/"corrupt";Native::Paths corruptPaths(corrupt.u8string());
     Write(corruptPaths.Library(),"");Write(corrupt/"build_library.json",legacyBytes);
     assert(!store.Open(corrupt.u8string(),error));
