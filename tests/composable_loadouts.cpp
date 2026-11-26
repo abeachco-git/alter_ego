@@ -103,7 +103,12 @@ int case_composable_loadouts(int, char**) {
     assert(SplitLegacy(kExample, document, error));
     assert(document.loadouts.size() == 2);
     assert(document.components.size() == 9);
-    for (const auto& kind : Kinds()) assert(document.components[kind].size() == 2);
+    for (const auto& kind : Kinds()) {
+        if(kind=="aquatic") {
+            assert(!document.components.count(kind));
+            for(const auto& l:document.loadouts)assert(!l.refs.count(kind));
+        } else assert(document.components.at(kind).size()==2);
+    }
     Json reconstructed;
     assert(ToLegacy(document, reconstructed, error));
     assert(reconstructed["builds"] == kExample["builds"]);
