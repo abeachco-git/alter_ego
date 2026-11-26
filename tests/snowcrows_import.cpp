@@ -117,6 +117,14 @@ int case_snowcrows_import(int, char**) {
     assert(SR::Apply(old,partial,merged,report,error,two));
     assert(!merged.terrestrial_skills.heal&&merged.terrestrial_skills.elite==99&&!merged.relic_id);
     assert(merged.gear.count("WeaponA2")&&merged.gear.at("Ring1").infusion_attributes[0]=="Power");
+    old.terrestrial_skills.utilities[0]=10;old.terrestrial_skills.utilities[1]=20;
+    partial.skills[1]=20; // omission of utility 2 is not permission to swap it
+    assert(SR::Apply(old,partial,merged,report,error,two)&&merged.terrestrial_skills.utilities[0]==10&&merged.terrestrial_skills.utilities[1]==20);
+    partial.gear["Helm"].statName="Berserker";partial.gear["Helm"].item=555;
+    assert(SR::Apply(old,partial,merged,report,error,two,[](const auto&,const auto&){return SR::ItemCompatibility::Compatible;}));
+    assert(merged.gear["Helm"].item_id==999);
+    assert(SR::Apply(old,partial,merged,report,error,two,[](const auto&,const auto&){return SR::ItemCompatibility::Incompatible;}));
+    assert(merged.gear["Helm"].item_id==555);
     partial.profession="Engineer";assert(!SR::Apply(old,partial,merged,report,error,two));
     assert(PositionalIds("1,0,3,4,5")==std::vector<uint32_t>({1,0,3,4,5}));
     assert(PositionalIds("1,,3").empty());

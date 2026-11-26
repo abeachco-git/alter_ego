@@ -114,6 +114,24 @@ int case_native_library(int,char**) {
         auto invalid=next.loadouts;invalid.loadouts.front().refs["sigils"]=refs.at("sigils");
         assert(!C::Validate(invalid,error));
         invalid=next.loadouts;invalid.equipment_sets.clear();assert(!C::Validate(invalid,error));
+        // Source review uses the same projection transaction: private edits
+        // fork linked sets, shared consent changes the original, untouched
+        // categories and both original owners remain intact until commit.
+        {
+            auto draftDoc=next.loadouts;Json original;assert(C::Resolve(draftDoc,draftDoc.loadouts.front(),original,error));
+            auto staged=original;staged["gear"]["WeaponA1"]["sigil_id"]=987654;
+            const auto beforeGraph=C::ToJson(draftDoc);
+            auto review=Native::UnifiedChanges(draftDoc,draftDoc.loadouts.front(),original,staged);
+            assert(!review.empty()&&C::ToJson(draftDoc)==beforeGraph);
+            auto sharedDraft=draftDoc;
+            assert(Native::PutUnifiedLoadout(draftDoc,staged,{},error));
+            Json first,second;assert(C::Resolve(draftDoc,draftDoc.loadouts[0],first,error)&&C::Resolve(draftDoc,draftDoc.loadouts[1],second,error));
+            assert(first["gear"]["WeaponA1"]["sigil_id"]==987654&&second["gear"]["WeaponA1"]["sigil_id"]!=987654);
+            assert(draftDoc.loadouts[0].equipment_set_id!=draftDoc.loadouts[1].equipment_set_id);
+            assert(Native::PutUnifiedLoadout(sharedDraft,staged,{"sigils"},error));
+            assert(C::Resolve(sharedDraft,sharedDraft.loadouts[1],second,error)&&second["gear"]["WeaponA1"]["sigil_id"]==987654);
+            assert(sharedDraft.loadouts[0].equipment_set_id==sharedDraft.loadouts[1].equipment_set_id);
+        }
         auto privateEdit=next.loadouts;
         Json edited;assert(C::Resolve(privateEdit,privateEdit.loadouts.front(),edited,error));
         edited["gear"]["WeaponA1"]["sigil_id"]=999;

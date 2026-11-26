@@ -168,7 +168,7 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     size_t specIndex = 0;
     for (std::sregex_iterator i(skillsHtml.begin(), skillsHtml.end(), specsRe), end; i != end && specIndex < 3; ++i) {
         parsed.specs[specIndex].id = Unsigned((*i)[1].str());
-        parsed.specs[specIndex].traits = Ids((*i)[2].str());
+        parsed.specs[specIndex].traits = PositionalIds((*i)[2].str());
         ++specIndex;
     }
 

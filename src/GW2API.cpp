@@ -2580,7 +2580,7 @@ namespace AlterEgo {
     }
 
     bool GW2API::ReviewUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
-        const std::map<std::string,std::string>& refs,uint64_t revision,json& review,std::string& error){
+        const std::map<std::string,std::string>& refs,uint64_t revision,json& review,std::string& error,bool includeAll){
         json snapshot;Composable::Document doc;
         review=json::array();
         if(revision!=GetBuildLibraryRevision()||!GetComposableLoadouts(snapshot)||
@@ -2597,7 +2597,7 @@ namespace AlterEgo {
         const auto edited=NativeLibrary::PatchDraft(raw,SerializeSavedBuild(baseline),SerializeSavedBuild(draft));
         for(const auto& change:NativeLibrary::UnifiedChanges(doc,*l,raw,edited)){
             const bool shared=!change.oldId.empty()&&(change.owners>1||change.loadouts>1||change.setUsers>1);
-            if(!shared&&change.matches.empty())continue;
+            if(!includeAll&&!shared&&change.matches.empty())continue;
             std::string reuse;
             if(!change.matches.empty())reuse=change.matches.front().name;
             review.push_back({{"kind",change.kind},{"name",change.name},{"shared",shared},

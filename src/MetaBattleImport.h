@@ -137,7 +137,7 @@ inline bool Parse(const std::string& url, const std::string& html,
     for (std::sregex_iterator i(specializationSection.begin(), specializationSection.end(), specsRe), end;
          i != end && countSpecs < page.specs.size(); ++i) {
         page.specs[countSpecs].id = SnowCrows::Unsigned((*i)[1].str());
-        page.specs[countSpecs].traits = SnowCrows::Ids((*i)[2].str());
+        page.specs[countSpecs].traits = SnowCrows::PositionalIds((*i)[2].str());
         ++countSpecs;
     }
     if (countSpecs != 3) {

@@ -8888,70 +8888,51 @@ static void RenderBuildModeBadge(const char* mode) {
 
 // Render the build preview panel for a saved build (reuses spec/trait rendering logic)
 // Fixed build identity and actions; kept outside the scrolling detail child.
-// Import exactly the loadout represented by the source's canonical GW2 IDs.
-static AlterEgo::SavedBuild SourcePageToSavedBuild(const AlterEgo::SnowCrows::Page& page) {
+// One provider-neutral patch for initial import and later refresh. Initial
+// imports can keep unresolved trait IDs in their published order (there is
+// no local choice to overwrite); refreshes require known tiers for partial lines.
+static int SourceTraitTier(uint32_t specId,uint32_t trait){
     using namespace AlterEgo;
-    GameMode mode = page.gameMode == "Raid" ? GameMode::Raid :
-        page.gameMode == "Fractal" ? GameMode::Fractal :
-        page.gameMode == "WvW" ? GameMode::WvW :
-        page.gameMode == "PvP" ? GameMode::PvP : GameMode::PvE;
-    auto build = GW2API::CreateBlankBuild(page.profession, mode);
-    build.name = page.name;
-    build.source_url = page.sourceUrl;
-    build.import_warning = page.importWarning;
-    build.chat_link = page.templateCode;
-    build.rune_id = page.runeId;
-    build.relic_id = page.relicId;
-    build.relic_name = page.relicName;
-    for (int s = 0; s < 3; ++s) {
-        build.specializations[s].spec_id = page.specs[s].id;
-        const auto spec = GW2API::GetSpecInfo(page.specs[s].id);
-        for (size_t t = 0; t < page.specs[s].traits.size(); ++t) {
-            const uint32_t trait = page.specs[s].traits[t];
-            int tier = -1;
-            // Some Snow Crows trait lists deliberately omit one tier, so do
-            // not assume that two listed traits are the first two tiers.
-            if (spec && spec->major_traits.size() >= 9)
-                for (int pos = 0; pos < 9; ++pos)
-                    if (spec->major_traits[pos] == trait) tier = pos / 3;
-            if (tier < 0) {
-                const auto info = GW2API::GetTraitInfo(trait);
-                if (info && info->tier >= 1 && info->tier <= 3)
-                    tier = info->tier - 1;
-            }
-            if (tier < 0 && t < 3) tier = static_cast<int>(t); // corrected when metadata loads
-            if (tier >= 0 && tier < 3)
-                build.specializations[s].traits[tier] = static_cast<int>(trait);
-        }
+    const auto spec=GW2API::GetSpecInfo(specId);
+    if(spec&&spec->major_traits.size()>=9){
+        const auto pos=std::find(spec->major_traits.begin(),spec->major_traits.end(),trait);
+        return pos==spec->major_traits.end()?-2:static_cast<int>((pos-spec->major_traits.begin())/3);
     }
-    build.terrestrial_skills.heal = page.skills[0];
-    for (int i = 0; i < 3; ++i)
-        build.terrestrial_skills.utilities[i] = page.skills[i + 1];
-    build.terrestrial_skills.elite = page.skills[4];
-    for (const auto& [slot, item] : page.gear) {
-        BuildGearSlot gs;
-        gs.slot = slot;
-        gs.item_id = item.itemId;
-        gs.stat_id = item.statId;
-        gs.stat_name = item.statName;
-        gs.weapon_type = item.weaponType;
-        const bool armor = slot == "Helm" || slot == "Shoulders" ||
-            slot == "Coat" || slot == "Gloves" ||
-            slot == "Leggings" || slot == "Boots";
-        if (armor && !item.upgrades.empty()) gs.rune_id = item.upgrades.front();
-        if (slot.compare(0, 6, "Weapon") == 0) {
-            if (!item.upgrades.empty()) gs.sigil_id = item.upgrades[0];
-            if (item.upgrades.size() > 1) gs.sigil2_id = item.upgrades[1];
-        }
-        // The Snow Crows page defines global infusion counts. Per-slot infusion
-        // snapshots are deliberately absent; they are for captured live gear.
-        build.gear[slot] = std::move(gs);
-    }
-    for (const auto& inf : page.infusions)
-        build.infusion_totals.push_back({inf.itemId, inf.count, ""});
-    return build;
+    const auto info=GW2API::GetTraitInfo(trait);
+    return info&&info->tier>=1&&info->tier<=3?info->tier-1:-1;
 }
-
+static AlterEgo::SourceRefresh::ItemCompatibility SourceItemCompatibility(const AlterEgo::BuildGearSlot& old,const AlterEgo::SourceRefresh::GearPatch& next){
+    using namespace AlterEgo;
+    using C=SourceRefresh::ItemCompatibility;
+    const auto item=GW2API::GetItemInfo(old.item_id);
+    if(!item||!item->details.is_object())return C::Unknown;
+    const auto& details=item->details;
+    const auto choices=details.find("stat_choices");
+    if(choices!=details.end()&&choices->is_array()&&!choices->empty()){
+        if(next.stat&&std::find(choices->begin(),choices->end(),nlohmann::json(*next.stat))!=choices->end())return C::Compatible;
+        return C::Unknown; // alternate itemstat IDs may represent the same family
+    }
+    const auto fixed=details.find("infix_upgrade");
+    if(fixed==details.end()||!fixed->is_object()||!fixed->contains("id")||!fixed->at("id").is_number_unsigned())return C::Unknown;
+    const uint32_t id=fixed->at("id").get<uint32_t>();
+    if(next.stat&&id==*next.stat)return C::Compatible;
+    const auto info=GW2API::GetItemStatInfo(id);
+    const auto target=next.stat?GW2API::GetItemStatInfo(*next.stat):nullptr;
+    const auto name=next.statName.value_or(target?target->name:std::string{});
+    if(info&&!name.empty()&&!NamedStats::CanonicalStatName(info->name).empty()&&!NamedStats::CanonicalStatName(name).empty())
+        return NamedStats::SameCanonicalStat(info->name,name)?C::Compatible:C::Incompatible;
+    return C::Unknown;
+}
+static bool SourcePageToSavedBuild(const AlterEgo::SnowCrows::Page& page,AlterEgo::SavedBuild& result,std::string& error){
+    using namespace AlterEgo;
+    GameMode mode=page.gameMode=="Raid"?GameMode::Raid:page.gameMode=="Fractal"?GameMode::Fractal:
+        page.gameMode=="WvW"?GameMode::WvW:page.gameMode=="PvP"?GameMode::PvP:GameMode::PvE;
+    auto blank=GW2API::CreateBlankBuild(page.profession,mode);
+    blank.name=page.name;blank.source_url=page.sourceUrl;blank.chat_link=page.templateCode;
+    SourceRefresh::Report report;
+    return SourceRefresh::Apply(blank,SourceRefresh::FromPage(page,SourceTraitTier,true),result,report,error,
+        [&](const auto& type){return IsWeaponTwoHanded(page.profession,type);},SourceItemCompatibility,true);
+}
 static void FetchBuildSource(const std::string& url, const std::string& refreshId = "") {
     if (g_BuildSourceBusy) return;
     if(!refreshId.empty()&&LibraryDraftOpen()){g_BuildSourceRefreshError="Finish the current Library editor first.";return;}
@@ -9005,7 +8986,12 @@ static void PollBuildSource() {
         else g_LibImportError = received.error;
         return;
     }
-    auto build = SourcePageToSavedBuild(received.page);
+    AlterEgo::SavedBuild build;
+    std::string projectionError;
+    if(!SourcePageToSavedBuild(received.page,build,projectionError)){
+        if(received.refresh)g_BuildSourceRefreshError=projectionError;else g_LibImportError=projectionError;
+        return;
+    }
     // Opportunistic name/icon resolution; public API calls run asynchronously.
     std::vector<uint32_t> items, stats, traits, specs, skills;
     for (const auto& [slot, gs] : build.gear) {
@@ -9041,17 +9027,9 @@ static void PollBuildSource() {
         const auto it=std::find_if(builds.begin(),builds.end(),[&](const auto& b){return b.id==received.targetId;});
         if(it==builds.end()){reject("The source Loadout no longer exists.");return;}
         const auto old=*it;
-        const auto patch=SourceRefresh::FromPage(received.page,[](uint32_t specId,uint32_t trait){
-            const auto spec=GW2API::GetSpecInfo(specId);
-            if(spec&&spec->major_traits.size()>=9){
-                const auto pos=std::find(spec->major_traits.begin(),spec->major_traits.end(),trait);
-                if(pos!=spec->major_traits.end())return static_cast<int>((pos-spec->major_traits.begin())/3);
-            }
-            const auto info=GW2API::GetTraitInfo(trait);
-            return info&&info->tier>=1&&info->tier<=3?info->tier-1:-1;
-        });
+        const auto patch=SourceRefresh::FromPage(received.page,SourceTraitTier);
         SavedBuild merged;SourceRefresh::Report report;std::string error;
-        if(!SourceRefresh::Apply(old,patch,merged,report,error,[&](const auto& type){return IsWeaponTwoHanded(old.profession,type);})){
+        if(!SourceRefresh::Apply(old,patch,merged,report,error,[&](const auto& type){return IsWeaponTwoHanded(old.profession,type);},SourceItemCompatibility)){
             reject(error);return;
         }
         if(received.revision!=GW2API::GetBuildLibraryRevision()){
@@ -11680,7 +11658,7 @@ static void RenderBuildLibrary() {
         if(g_LibEditMode&&g_SourceRefreshDraft){
             ImGui::TextWrapped("Source refresh: proposed changes only. Review this draft before Save.");
             if(ImGui::CollapsingHeader("Source refresh details"))for(const auto& note:g_SourceRefreshNotes)ImGui::BulletText("%s",note.c_str());
-            if(g_SourceInfusionOffer&&RenderActionButton("Use guide infusion totals..."))ImGui::OpenPopup("##source_infusion_offer");
+            if(g_SourceInfusionOffer&&!g_GearDialogOpen&&RenderActionButton("Use guide infusion totals..."))ImGui::OpenPopup("##source_infusion_offer");
             if(ImGui::BeginPopup("##source_infusion_offer")){
                 ImGui::TextWrapped("Replace local infusion requirements with these guide-wide terrestrial targets? Slot placement, including aquatic infusions, is removed only on Save.");
                 if(g_SourceInfusionOffer)for(const auto& inf:*g_SourceInfusionOffer){
@@ -11688,8 +11666,10 @@ static void RenderBuildLibrary() {
                     ImGui::BulletText("%d x %s (#%u)",inf.count,item?item->name.c_str():"Metadata pending",inf.itemId);
                 }
                 if(g_SourceInfusionOffer&&RenderActionButton("Adopt guide totals")){
-                    g_InfusionSlotDraft=g_EditDraft;g_InfusionTotalsDraft=g_EditDraft;
+                    if(AlterEgo::SourceRefresh::HasLocalInfusions(g_EditDraft)&&AlterEgo::GetInfusionMode(g_EditDraft)!=AlterEgo::InfusionMode::Totals)
+                        g_InfusionSlotDraft=g_EditDraft;
                     AlterEgo::SourceRefresh::AdoptInfusions(g_EditDraft,*g_SourceInfusionOffer);
+                    g_InfusionTotalsDraft=g_EditDraft;
                     g_SourceInfusionOffer.reset();g_SourceRefreshNotes.push_back("Guide infusion targets explicitly selected.");MarkEditDirty();ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();

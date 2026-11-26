@@ -39,7 +39,7 @@ inline std::string WeaponKey(std::string s){
 }
 // A partial specialization line has no reliable positional identity unless
 // all three lines are present or the existing specialization ID matches.
-template<class Tier> Patch FromPage(const SnowCrows::Page& page,Tier tier){
+template<class Tier> Patch FromPage(const SnowCrows::Page& page,Tier tier,bool initial=false){
     Patch p;p.profession=page.profession;p.sourceUrl=page.sourceUrl;p.warning=page.importWarning;
     std::set<uint32_t> ids;
     p.completeSpecs=std::all_of(page.specs.begin(),page.specs.end(),[&](const auto& s){return s.id&&ids.insert(s.id).second;});
@@ -50,8 +50,8 @@ template<class Tier> Patch FromPage(const SnowCrows::Page& page,Tier tier){
             const auto id=s.traits[j];if(!id||id>INT32_MAX)continue;
             int t=tier(s.id,id);
             // A complete list is published in tier order. A partial list is not.
-            if(t<0&&s.traits.size()==3)t=static_cast<int>(j);
-            if(t>=0&&t<3)p.specs[i].traits[t]=static_cast<int>(id);
+            if(t==-1&&(s.traits.size()==3||initial))t=static_cast<int>(j);
+            if(t>=0&&t<3&&!p.specs[i].traits[t])p.specs[i].traits[t]=static_cast<int>(id);
             else p.warning+=" A trait tier was unresolved and retained locally.";
         }
     }
@@ -85,8 +85,12 @@ template<class Build> void AdoptInfusions(Build& b,const std::vector<SnowCrows::
     ForgetSlotInfusions(b);ForgetAggregateInfusions(b);
     for(const auto& i:v)if(i.itemId&&i.count>0)b.infusion_totals.push_back({i.itemId,i.count,""});
 }
+enum class ItemCompatibility { Compatible, Incompatible, Unknown };
+struct UnknownCompatibility {
+    template<class Slot> ItemCompatibility operator()(const Slot&,const GearPatch&)const{return ItemCompatibility::Unknown;}
+};
 struct Report { std::vector<std::string> notes; bool offerInfusions=false; };
-template<class Build,class TwoHanded> bool Apply(const Build& before,const Patch& p,Build& result,Report& report,std::string& error,TwoHanded twoHanded){
+template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> bool Apply(const Build& before,const Patch& p,Build& result,Report& report,std::string& error,TwoHanded twoHanded,Compatibility compatibility={},bool initial=false){
     report={};error.clear();
     if(before.profession!=p.profession||before.source_url.empty()||before.source_url!=p.sourceUrl){
         error="The guide no longer matches the Loadout profession or source URL.";return false;
@@ -99,7 +103,7 @@ template<class Build,class TwoHanded> bool Apply(const Build& before,const Patch
     for(size_t i=0;i<3;++i){
         const auto& spec=p.specs[i];if(!spec.id)continue;
         size_t target=i;
-        if(!p.completeSpecs){
+        if(!p.completeSpecs&&!initial){
             target=3;for(size_t j=0;j<3;++j)if(before.specializations[j].spec_id==*spec.id)target=j;
             if(target==3){report.notes.push_back("Partial specialization layout: unmatched line retained for manual review.");continue;}
         }
@@ -112,7 +116,14 @@ template<class Build,class TwoHanded> bool Apply(const Build& before,const Patch
         b.specializations[target]=line;
     }
     auto& bar=b.terrestrial_skills;
-    for(size_t i=0;i<5;++i)if(p.skills[i])SkillEdit::SetSlot(bar,static_cast<int>(i),*p.skills[i]);
+    if(p.skills[0])bar.heal=*p.skills[0];
+    if(p.skills[4])bar.elite=*p.skills[4];
+    std::array<uint32_t,3> utilities{};
+    for(size_t i=0;i<3;++i)utilities[i]=p.skills[i+1].value_or(bar.utilities[i]);
+    std::set<uint32_t> unique;bool ambiguous=false;
+    for(auto id:utilities)if(id&&!unique.insert(id).second)ambiguous=true;
+    if(ambiguous)report.notes.push_back("Utility changes conflict with a retained slot; utility bar left unchanged for review.");
+    else std::copy(utilities.begin(),utilities.end(),bar.utilities);
     const bool runePatch=p.rune||std::any_of(p.gear.begin(),p.gear.end(),[](const auto& e){return e.second.rune.has_value();});
     if(runePatch&&(b.rune_id||!b.rune_name.empty())){
         bool explicitRunes=false;
@@ -128,14 +139,21 @@ template<class Build,class TwoHanded> bool Apply(const Build& before,const Patch
     for(const auto& [slot,g]:p.gear){
         if(!LandGear(slot))continue;
         auto& s=b.gear[slot];s.slot=slot;
-        const bool changedType=g.type&&WeaponKey(s.weapon_type)!=*g.type;
+        const bool changedType=g.type&&!s.weapon_type.empty()&&WeaponKey(s.weapon_type)!=*g.type;
         const bool statSame=g.statName&&!s.stat_name.empty()&&NamedStats::SameCanonicalStat(*g.statName,s.stat_name);
         const bool changedStat=(g.stat&&s.stat_id&&*g.stat!=s.stat_id&&!statSame)||
             (g.statName&&!s.stat_name.empty()&&!statSame&&NamedStats::NormalizeKey(*g.statName)!=NamedStats::NormalizeKey(s.stat_name));
-        if(changedType||changedStat){
-            s.item_id=g.item.value_or(0);
-            report.notes.push_back(slot+": equipment type/stat changed; exact item reviewed.");
-        }else if(g.item&&(!s.item_id||*g.item==0))s.item_id=*g.item;
+        if(g.item&&!*g.item)s.item_id=0; // positively identified removal
+        else if(changedType){s.item_id=g.item.value_or(0);}
+        else if(changedStat&&s.item_id){
+            const auto match=compatibility(s,g);
+            if(match==ItemCompatibility::Incompatible){
+                s.item_id=g.item.value_or(0);
+                report.notes.push_back(slot+": incompatible fixed-stat item replaced or cleared.");
+            }else if(match==ItemCompatibility::Unknown){
+                report.notes.push_back(slot+": exact item retained; compatibility with new stats is unverified.");
+            }
+        }else if(g.item&&!s.item_id)s.item_id=*g.item;
         // Guide item IDs are examples, not an instruction to replace a local
         // legendary or other exact item with the same recommended stats/type.
         if(g.type)s.weapon_type=*g.type;
@@ -143,7 +161,7 @@ template<class Build,class TwoHanded> bool Apply(const Build& before,const Patch
         else if(changedStat)s.stat_id=0;
         if(g.statName)s.stat_name=*g.statName;
         upgrade(s.rune_id,s.rune,g.rune);upgrade(s.sigil_id,s.sigil,g.sigil);upgrade(s.sigil2_id,s.sigil2,g.sigil2);
-        if(changedType&&LandWeapon(slot)&&!s.weapon_type.empty()&&!twoHanded(s.weapon_type)){
+        if(g.type&&LandWeapon(slot)&&!s.weapon_type.empty()&&!twoHanded(s.weapon_type)){
             if(s.sigil2_id||!s.sigil2.empty()||GearEdit::InfusionPositionCount(s)>1)
                 report.notes.push_back(slot+": second sigil/infusion incompatible with one-handed weapon; removed in draft.");
             s.sigil2_id=0;s.sigil2.clear();
@@ -169,7 +187,7 @@ template<class Build,class TwoHanded> bool Apply(const Build& before,const Patch
             report.notes.push_back("Local infusion configuration retained. Guide totals can be adopted explicitly.");
         }else AdoptInfusions(b,*p.infusions);
     }
-    report.notes.push_back("Omitted fields, aquatic skills/equipment, companion choices and local metadata retained.");
+    if(!initial)report.notes.push_back("Omitted fields, aquatic skills and companion choices are retained. Local aquatic equipment is retained unless you explicitly adopt guide-wide infusion totals.");
     result=std::move(b);return true;
 }
 }

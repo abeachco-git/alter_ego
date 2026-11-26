@@ -1028,16 +1028,35 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     ImGui::PopID();
 }
 
+static void SourceReviewChanges(const ComponentJson& before,const ComponentJson& after,
+    const std::string& path,std::vector<std::array<std::string,3>>& rows){
+    if(before==after)return;
+    if(before.is_object()&&after.is_object()){
+        std::set<std::string> keys;
+        for(auto it=before.begin();it!=before.end();++it)keys.insert(it.key());
+        for(auto it=after.begin();it!=after.end();++it)keys.insert(it.key());
+        for(const auto& key:keys){
+            if(key=="chat_link"||key=="ae2_code")continue;
+            SourceReviewChanges(before.contains(key)?before.at(key):ComponentJson(),
+                after.contains(key)?after.at(key):ComponentJson(),path.empty()?key:path+" / "+key,rows);
+        }
+        return;
+    }
+    auto value=[](const ComponentJson& v){return v.is_null()?std::string("(not recorded)"):v.is_string()?v.get<std::string>():v.dump();};
+    rows.push_back({path,value(before),value(after)});
+}
 static void RenderLoadoutSaveReview(){
     using namespace AlterEgo;
     static ComponentJson review=ComponentJson::array();
     static std::string error;
+    static std::vector<std::array<std::string,3>> sourceChanges;
     if(g_EditReviewPending){
         g_EditReviewPending=false;
-        error.clear();
+        error.clear();sourceChanges.clear();
+        if(g_SourceRefreshDraft)SourceReviewChanges(g_EditBaseline,GW2API::EditorBuildSnapshot(g_EditDraft),"",sourceChanges);
         g_EditSharedKinds.clear(); // no implicit consent from an earlier attempt
         if(!g_LibEditMode||!g_EditRefsReady||g_GearDialogOpen)return;
-        if(!GW2API::ReviewUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditDraftRevision,review,error)){
+        if(!GW2API::ReviewUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditDraftRevision,review,error,g_SourceRefreshDraft)){
             if(error.empty())error="Could not review the Loadout draft.";
             ImGui::OpenPopup("Review Loadout changes##ae_unified_review");
         }else if(review.empty()&&!g_SourceRefreshDraft)g_EditSavePending=true;
@@ -1051,7 +1070,16 @@ static void RenderLoadoutSaveReview(){
     else{
         if(g_SourceRefreshDraft){
             ImGui::TextWrapped("Confirm the staged source refresh. Omitted fields are retained; no data has been saved yet.");
-            for(const auto& note:g_SourceRefreshNotes)ImGui::BulletText("%s",note.c_str());
+            ImGui::Text("%zu changed fields",sourceChanges.size());
+            if(ImGui::BeginChild("##source_review_diff",ImVec2(520,180),true)){
+                for(const auto& row:sourceChanges){
+                    ImGui::TextWrapped("%s",row[0].c_str());
+                    ImGui::TextDisabled("Before: %s",row[1].c_str());ImGui::TextWrapped("After: %s",row[2].c_str());
+                    ImGui::Separator();
+                }
+                for(const auto& note:g_SourceRefreshNotes)ImGui::BulletText("%s",note.c_str());
+            }
+            ImGui::EndChild();
         }
         ImGui::TextWrapped("Private changes affect only this Loadout. Choose shared editing only if every listed owner should change.");
         for(const auto& row:review){
