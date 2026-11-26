@@ -101,14 +101,14 @@ static void RestoreNavigation(const NavigationSnapshot& s){
         case 1:{
             g_LibraryCollection=s.collection;
             if(s.collection==0){
-                g_LibSelectedId=s.id;
+                g_LibSelectedId=s.id;g_LibRevealId.clear();
                 g_LibDetailsFetched=false;g_LibFilterModes=s.modes;
                 snprintf(g_LibSearchBuf,sizeof(g_LibSearchBuf),"%s",s.search.c_str());
             }else if(s.collection==1){
                 g_FashionSelectedId=s.id;
                 g_FashionFilter=s.category;snprintf(g_FashionSearch,sizeof(g_FashionSearch),"%s",s.search.c_str());
             }else if(s.collection==2){
-                g_ComponentSelectedId=s.id;g_ComponentSelectedKind=s.kind;g_ComponentKindFilters=s.componentKinds;
+                g_ComponentSelectedId=s.id;g_ComponentRevealId.clear();g_ComponentSelectedKind=s.kind;g_ComponentKindFilters=s.componentKinds;
                 g_ComponentSearch=s.search;g_ComponentSort=s.sort;g_ComponentUnusedOnly=s.first;g_ComponentSortAscending=s.other;
                 g_ComponentSelectIdPending.clear();g_ComponentSelectNamePending.clear();g_ComponentPendingKind=-1;
             }else{g_EquipmentSetSelectedId=s.id;g_EquipmentSetSearch=s.search;}

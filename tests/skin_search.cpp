@@ -84,6 +84,9 @@ int case_skin_search(int, char**) {
  assert(AlterEgo::Search::MatchesFields(Search::Words("  NECRO  fractal "),{"Fractal Power","Necromancer"}));
  assert(!AlterEgo::Search::MatchesFields(Search::Words("necro raid"),{"Fractal Power","Necromancer"}));
  assert(Search::Matches("Superior Scholar Rune",Search::Words("schloar rune")));
+ assert(!Search::Matches("Superior Scholar Rune",Search::Words("schloar rune"),false));
+ assert(Search::Matches("Éclair",Search::Words("Éclair")));
+ assert(!Search::Matches("Éclair",Search::Words("Écliar")));
  PriceInfo a,b;
  a.item_id=5;a.tradeable=true;a.sell_price=100;a.sell_quantity=2;
  b.item_id=4;b.tradeable=true;b.sell_price=50;b.sell_quantity=0;

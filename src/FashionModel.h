@@ -55,18 +55,17 @@ inline std::string CanonicalLink(const std::string& input) {
     return ChatLink::EncodeWardrobe(decoded);
 }
 
-inline bool ContainsIgnoreCase(std::string haystack, std::string needle) {
-    std::transform(haystack.begin(), haystack.end(), haystack.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    std::transform(needle.begin(), needle.end(), needle.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return haystack.find(needle) != std::string::npos;
+inline bool ContainsIgnoreCase(std::string haystack,std::string needle){
+    return AlterEgo::Search::LiteralContains(haystack,needle);
 }
-
-inline bool MatchesSearch(const Look& look, const std::string& query) {
+inline bool MatchesSearch(const Look& look,const std::vector<std::string>& query){
+    if(query.empty())return true;
     std::vector<std::string> fields{look.name,look.notes,look.weight,look.source_character};
     fields.insert(fields.end(),look.characters.begin(),look.characters.end());
-    return AlterEgo::Search::MatchesFields(AlterEgo::Search::Words(query),fields);
+    return AlterEgo::Search::MatchesFields(query,fields);
+}
+inline bool MatchesSearch(const Look& look,const std::string& query){
+    return MatchesSearch(look,AlterEgo::Search::Words(query));
 }
 
 inline void Associate(Look& look, const std::string& character) {

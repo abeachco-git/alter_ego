@@ -868,7 +868,7 @@ static void PollDemandCharacter(const std::string& account,const std::string& na
 static float g_LibListWidth = 220.0f; // Resizable build list column width
 static int g_LibraryCollection = 0; // 0 Loadouts, 1 Fashion, 2 Components, 3 Equipment Sets
 static bool g_SwitchToLibrary = false; // select Library after creation/import/navigation
-static std::string g_LibSelectedId;
+static std::string g_LibSelectedId,g_LibRevealId;
 static void SelectLoadoutAt(int index);
 // Build editor: "+ New Loadout" dialog state
 static bool g_NewBuildDialogOpen = false;
@@ -904,6 +904,7 @@ static void SelectLoadoutAt(int index){
     if(g_LibEditMode)return;
     const auto& builds=AlterEgo::GW2API::GetSavedBuilds();
     g_LibSelectedId=index>=0&&index<(int)builds.size()?builds[index].id:std::string{};
+    g_LibRevealId=g_LibSelectedId;
 }
 static std::vector<AlterEgo::GameMode> g_LibImportModes{AlterEgo::GameMode::PvE};
 static bool g_LibShowImport = false;
@@ -6605,8 +6606,9 @@ static std::vector<AlterEgo::PublicCatalog::Entry> GearCatalog(const std::string
 template<class OnChoose>
 static void RenderGearCatalogChoices(const std::string& family,const std::string& filter,
     uint32_t currentId,const std::string& currentName,bool cards,OnChoose choose){
+    const auto searchWords=AlterEgo::Search::Words(filter);
     for(const auto& e:GearCatalog(family)){
-        if(!AlterEgo::UI::CatalogMatches(e.name.c_str(),e.bonus.c_str(),filter))continue;
+        if(!AlterEgo::Search::MatchesFields(searchWords,{e.name,e.bonus}))continue;
         ImGui::PushID(static_cast<int>(e.item_id));
         const bool selected=currentId?currentId==e.item_id:currentName==e.name;
         bool clicked=cards?AlterEgo::UI::CatalogCard("##gear_option",e.name.c_str(),e.bonus.c_str(),selected):
@@ -6682,6 +6684,7 @@ static void RenderWeaponTypeChoices(const std::string& profession,const std::str
     const std::string& current,const std::string& filter,bool cards,OnChoose choose){
     const auto weapons=AlterEgo::GW2API::GetProfessionWeapons(profession);
     if(!weapons)return;
+    const auto searchWords=AlterEgo::Search::Words(filter);
     for(const auto& [name,wd]:*weapons){
         if(!AlterEgo::EquipmentChoice::WeaponTypeEligible(slot,name,wd.mainhand,wd.offhand,wd.two_handed))continue;
         std::string desc=wd.two_handed?"Two-Handed":wd.mainhand&&wd.offhand?"Main / Off Hand":wd.mainhand?"Main Hand":"Off Hand";
@@ -6690,8 +6693,7 @@ static void RenderWeaponTypeChoices(const std::string& profession,const std::str
             desc+=" ("+(spec?spec->name:"Specialization #"+std::to_string(wd.specialization))+")";
         }
         const auto label=WeaponDisplayName(name);
-        if(!AlterEgo::UI::CatalogMatches(label,desc.c_str(),filter)&&
-           !AlterEgo::UI::CatalogMatches(name.c_str(),desc.c_str(),filter))continue;
+        if(!AlterEgo::Search::MatchesFields(searchWords,{label,name,desc}))continue;
         ImGui::PushID(name.c_str());
         const bool selected=current==name;
         const bool clicked=cards?AlterEgo::UI::CatalogCard("##weapon_option",label,desc.c_str(),selected):
@@ -7353,9 +7355,10 @@ static void RenderInfusionPositionPicker(AlterEgo::GearEdit::InfusionPosition re
     if(!requirement.attribute.empty()){
         ImGui::TextWrapped("Matches any positive amount of this attribute. Agony resistance and cosmetic appearance are ignored.");
         ImGui::BeginChild("##infusionAttributes",ImVec2(0,resultsHeight),true);
+        const auto searchWords=AlterEgo::Search::Words(query?query:"");
         for(const auto* key:kInfusionStatNames){
             const auto* label=InfusionAttributeLabel(key);
-            if(!AlterEgo::UI::CatalogMatches(label,"",query?query:""))continue;
+            if(!AlterEgo::Search::Matches(label,searchWords))continue;
             if(ImGui::Selectable(label,requirement.attribute==key)){requirement.attribute=key;apply(requirement);}
         }
         ImGui::EndChild();
@@ -11249,7 +11252,29 @@ static void RenderBuildLibrary() {
         };
         std::vector<LibraryGroup> groups;
         std::unordered_map<std::string, size_t> groupLookup;
-        const auto searchWords=AlterEgo::Search::Words(g_LibSearchBuf);
+        auto searchWords=AlterEgo::Search::Words(g_LibSearchBuf);
+        const auto matchesSearch=[&](const auto& b){
+            if(searchWords.empty())return true;
+            std::vector<std::string> fields{b.name,b.profession};
+            for(const auto& specialization:b.specializations){
+                const auto info=AlterEgo::GW2API::GetSpecInfo(specialization.spec_id);
+                if(info)fields.push_back(info->name);
+            }
+            return AlterEgo::Search::MatchesFields(searchWords,fields);
+        };
+        // Explicit open/create/duplicate reveals the selected record, but
+        // Back/Forward restores the captured scroll and filters instead.
+        const auto revealId=g_LibRevealId;
+        if(!revealId.empty()&&revealId==g_LibSelectedId){
+            const auto index=AlterEgo::RecordSelection::ById(builds,revealId);
+            if(index>=0){
+                const auto& target=builds[index];
+                bool changed=AlterEgo::GroupBrowse::Reveal(g_LibCollapsedProfessions,target.profession,true);
+                if(!GameModeMatchesFilter(target,g_LibFilterModes)){g_LibFilterModes.clear();changed=true;}
+                if(!matchesSearch(target)){g_LibSearchBuf[0]='\0';searchWords.clear();}
+                if(changed)SaveSession();
+            }
+        }
         const bool searching=!searchWords.empty();
         for (int i = 0; i < static_cast<int>(builds.size()); ++i) {
             const auto& b = builds[i];
@@ -11262,14 +11287,7 @@ static void RenderBuildLibrary() {
             LibraryGroup& group = groups[found->second];
             ++group.total;
             if (!GameModeMatchesFilter(b, g_LibFilterModes)) continue;
-            if (searching) {
-                std::vector<std::string> fields{b.name,b.profession};
-                for(const auto& specialization:b.specializations) {
-                    const auto info=AlterEgo::GW2API::GetSpecInfo(specialization.spec_id);
-                    if(info)fields.push_back(info->name);
-                }
-                if(!AlterEgo::Search::MatchesFields(searchWords,fields))continue;
-            }
+            if(!matchesSearch(b))continue;
             group.visible.push_back(i);
             if(b.id==g_LibSelectedId)selectedMatches=true;
         }
@@ -11356,6 +11374,7 @@ static void RenderBuildLibrary() {
             ImVec2 cmax(cmin.x + availW, cmin.y + rowH);
 
             ImGui::InvisibleButton("##buildrow", ImVec2(availW, rowH));
+            if(selected&&AlterEgo::GroupBrowse::ConsumeReveal(g_LibRevealId,b.id))ImGui::SetScrollHereY(.5f);
             bool hovered = ImGui::IsItemHovered();
             bool clicked = ImGui::IsItemClicked()||ImGui::IsItemClicked(ImGuiMouseButton_Right);
 
@@ -11571,6 +11590,7 @@ static void RenderBuildLibrary() {
             } // within the profession
             ImGui::PopID();
         } // profession groups
+        if(g_LibRevealId==revealId)g_LibRevealId.clear();
         if (!g_LibEditMode&&ImGui::BeginPopupContextWindow("##loadout_empty_actions",
                 ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
             LoadoutCreationMenu();ImGui::EndPopup();
@@ -11744,7 +11764,7 @@ static void RenderBuildLibrary() {
                 const bool ok=duplicate?API::DuplicateSavedLoadout(g_LibNameTarget.id,name,g_LibNameTarget.revision,&savedId):
                     API::RenameSavedLoadout(g_LibNameTarget.id,name,g_LibNameTarget.revision);
                 if(ok){
-                    if(duplicate){g_LibSelectedId=savedId;MarkNavigation();}
+                    if(duplicate){g_LibSelectedId=savedId;g_LibRevealId=savedId;MarkNavigation();}
                     g_LibDetailsFetched=false;g_EditDraftId.clear();g_LibNameTarget={};
                 }
                 return ok;

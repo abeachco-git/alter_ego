@@ -62,7 +62,7 @@ static std::string g_ComponentSearch;
 static bool g_ComponentUnusedOnly = false;
 static int g_ComponentSort = 0; // Name, Usage
 static bool g_ComponentSortAscending=true;
-static std::string g_ComponentSelectedId;
+static std::string g_ComponentSelectedId,g_ComponentRevealId;
 static std::string g_ComponentSelectedKind;
 static std::string g_ComponentEditorId;
 static std::string g_ComponentEditorKind;
@@ -620,6 +620,7 @@ static void ComponentUIOpenLibrary(const std::string& kind, const std::string& i
     g_ComponentPendingKind=-1;
     g_ComponentSelectedKind = kind;
     g_ComponentSelectedId = id;
+    g_ComponentRevealId=AlterEgo::GroupBrowse::PathKey({kind,id});
     g_ComponentSearch.clear();g_ComponentUnusedOnly=false;
     g_LibraryCollection = 2;
 }
@@ -1269,6 +1270,7 @@ static void RenderComponentLibrary() {
         if(entry.item->value("id",std::string())==g_ComponentSelectedId)selectedMatches=true;
     ImGui::TextDisabled("%zu matching component%s",count,count==1?"":"s");
     bool first=true;
+    const auto revealId=g_ComponentRevealId;
     for(const auto& g:groups){
         const auto& kind=g.kind;ImGui::PushID(kind.c_str());
         if(!first)ImGui::Spacing();
@@ -1291,6 +1293,7 @@ static void RenderComponentLibrary() {
             const std::string shown=name+"  ["+std::to_string(users)+"]###row";
             const bool selected=g_ComponentSelectedKind==kind&&g_ComponentSelectedId==id;
             const bool clicked=ImGui::Selectable(shown.c_str(),selected);
+            if(selected&&AlterEgo::GroupBrowse::ConsumeReveal(g_ComponentRevealId,AlterEgo::GroupBrowse::PathKey({kind,id})))ImGui::SetScrollHereY(.5f);
             if((clicked||ImGui::IsItemClicked(ImGuiMouseButton_Right))&&!selected){
                 MarkNavigation();g_ComponentSelectedKind=kind;g_ComponentSelectedId=id;selectedMatches=true;
             }
@@ -1300,6 +1303,7 @@ static void RenderComponentLibrary() {
         }
         ImGui::PopID();
     }
+    if(g_ComponentRevealId==revealId)g_ComponentRevealId.clear();
     if(ImGui::BeginPopupContextWindow("##component_empty_actions",ImGuiPopupFlags_MouseButtonRight|ImGuiPopupFlags_NoOpenOverItems)){
         ComponentCreationMenu();ImGui::EndPopup();
     }

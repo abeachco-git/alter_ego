@@ -18,6 +18,10 @@ bool Toggle(Set& overrides,const std::string& key,bool search=false) {
     if(overrides.size()>=4096)return false;
     overrides.insert(key);return true;
 }
+inline bool ConsumeReveal(std::string& pending,const std::string& identity){
+    if(pending.empty()||pending!=identity)return false;
+    pending.clear();return true;
+}
 template<class Set>
 bool Reveal(Set& overrides,const std::string& key,bool defaultOpen) {
     if(defaultOpen)return overrides.erase(key)!=0;

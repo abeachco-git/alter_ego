@@ -39,16 +39,32 @@ inline bool HasMinimumQuery(const std::vector<std::string>& query,size_t minimum
     for(const auto& token:query){count+=token.size();if(count>=minimum)return true;}
     return minimum==0;
 }
-inline bool Matches(const std::string& text, const std::vector<std::string>& query) {
-    const auto hay=Lower(text);
-    for (const auto& q:query) {
-        if(hay.find(q)!=std::string::npos) continue;
-        // Numeric IDs are literal; do not turn a mistyped ID into a different item.
-        if(std::any_of(q.begin(),q.end(),[](unsigned char c){return std::isdigit(c)!=0;}))return false;
-        bool found=false;
-        for(const auto& word:Words(hay)) if(NearWord(q,word)) {found=true;break;}
-        if(!found) return false;
+inline bool LiteralContains(const std::string& text,const std::string& query){
+    return Lower(text).find(Lower(query))!=std::string::npos;
+}
+// Normalize a field once and only tokenize it when a fuzzy check needs words.
+class PreparedField {
+    std::string lower_;
+    std::vector<std::string> words_;
+    bool tokenized_=false;
+public:
+    explicit PreparedField(const std::string& text):lower_(Lower(text)){}
+    bool Match(const std::string& q,bool fuzzy=true){
+        if(lower_.find(q)!=std::string::npos)return true;
+        if(!fuzzy||q.size()<5||std::any_of(q.begin(),q.end(),[](unsigned char c){return c>=128||(c>='0'&&c<='9');}))return false;
+        if(!tokenized_){
+            tokenized_=true;
+            std::istringstream in(lower_);
+            for(std::string word;in>>word;)words_.push_back(word);
+        }
+        for(const auto& word:words_)if(NearWord(q,word))return true;
+        return false;
     }
+};
+inline bool Matches(const std::string& text,const std::vector<std::string>& query,bool fuzzy=true){
+    if(query.empty())return true;
+    PreparedField field(text);
+    for(const auto& q:query)if(!field.Match(q,fuzzy))return false;
     return true;
 }
 
@@ -57,17 +73,23 @@ inline bool Numeric(const std::string& s) {
 }
 // IDs are distinct from labels: never match a partial ID.
 inline bool MatchesId(const std::string& name,uint32_t id,const std::vector<std::string>& query) {
+    if(query.empty())return true;
     const auto exact=std::to_string(id);
+    PreparedField field(name);
     for(const auto& q:query) {
         if(Numeric(q)&&q==exact)continue;
-        if(!Matches(name,{q}))return false;
+        if(!field.Match(q))return false;
     }
     return true;
 }
-inline bool MatchesFields(const std::vector<std::string>& query,const std::vector<std::string>& fields) {
+inline bool MatchesFields(const std::vector<std::string>& query,const std::vector<std::string>& fields,bool fuzzy=true) {
+    if(query.empty())return true;
+    std::vector<PreparedField> prepared;
+    prepared.reserve(fields.size());
+    for(const auto& field:fields)prepared.emplace_back(field);
     for(const auto& q:query) {
         bool found=false;
-        for(const auto& field:fields) if(Matches(field,{q})){found=true;break;}
+        for(auto& field:prepared)if(field.Match(q,fuzzy)){found=true;break;}
         if(!found)return false;
     }
     return true;

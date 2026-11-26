@@ -371,9 +371,10 @@ static void RenderFashionLibrary() {
     bool selectedVisible=false;
     if (g_FashionLibrary.looks.empty())
         ImGui::TextWrapped("No saved fashion. Capture an Equipment tab or import a Wardrobe Template.");
+    const auto searchWords=AlterEgo::Search::Words(g_FashionSearch);
     for (int i = 0; i < (int)g_FashionLibrary.looks.size(); ++i) {
         const auto& look = g_FashionLibrary.looks[i];
-        if (!AlterEgo::Fashion::MatchesSearch(look, g_FashionSearch)) continue;
+        if (!AlterEgo::Fashion::MatchesSearch(look,searchWords)) continue;
         if (g_FashionFilter && look.weight != filters[g_FashionFilter]) continue;
         ImGui::PushID(look.id.c_str());
         const auto label=look.name+"###fashion_row";
