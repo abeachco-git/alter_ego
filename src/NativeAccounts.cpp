@@ -1,4 +1,5 @@
 #include "NativeAccounts.h"
+#include "AccountCommitGate.h"
 #include "NativeInventoryStore.h"
 #include "ArenaNetTransport.h"
 #include "BackgroundWorkers.h"
@@ -169,18 +170,26 @@ void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std:
             if(!ValidGuid(a.id)||a.name.empty()||!a.permissions.count("account"))throw std::runtime_error("Invalid account identity");
             if(!expected.empty()&&expected!=a.id){Message("Key belongs to a different account.");return;}
             for(const auto& old:Accounts())if(old.id==a.id&&expected.empty()){Message("Account already linked. Select Edit to replace its key.");return;}
+            // Lock order: credential gate before registry database transaction.
+            std::unique_lock<std::mutex> credentialLock(credentialMutex);
             std::filesystem::create_directories(AccountPath().parent_path());
             Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Create);InitAccounts(db);
             Database::Transaction tx(db);
             auto q=db.Prepare("INSERT INTO accounts VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,label=excluded.label,permissions=excluded.permissions");
             q.Bind(1,a.id);q.Bind(2,a.name);q.Bind(3,a.label);q.Bind(4,Json(a.permissions).dump());q.Execute();
-            std::unique_lock<std::mutex> credentialLock(credentialMutex);
             Secret previous(Key(a.id));
             if(!SaveKey(a.id,key->value)){Message("Windows Credential Manager rejected the key.");return;}
             try{tx.Commit();}catch(...){if(previous.value.empty())CredDeleteA(Target(a.id).c_str(),CRED_TYPE_GENERIC,0);else SaveKey(a.id,previous.value);throw;}
             ++registryGeneration;
-            if(a.permissions.count("characters")){try{Roster(a,key->value);}catch(...){}}
             Publish("Account linked. Inventory can now be refreshed.",true,RefreshUI::State::Success);
+            credentialLock.unlock();
+            // Network admission never runs under the credential gate.
+            // RefreshRoster rechecks the newly published epoch before committing.
+            if(a.permissions.count("characters")){
+                for(const auto& linked:Linked())if(linked.id==a.id){
+                    std::set<std::string> names;(void)RefreshRoster(linked,names);break;
+                }
+            }
         }catch(const std::exception& e){
             // Never show arbitrary JSON exception text or HTTP response bodies.
             const std::string s=e.what();
@@ -421,6 +430,15 @@ bool Current(const LinkedAccount& a){
     auto v=Snapshot();
     return v->credentialEpoch==a.generation&&std::any_of(v->accounts.begin(),v->accounts.end(),[&](const Account& b){return b.id==a.id;});
 }
+bool CommitIfCurrent(const LinkedAccount& a,const std::function<bool()>& commit){
+    return AccountCommit::Run(credentialMutex,[&]{return !Background::Workers().Stopping()&&Current(a);},commit);
+}
+bool CommitIfCurrent(const std::vector<LinkedAccount>& accounts,const std::function<bool()>& commit){
+    return AccountCommit::Run(credentialMutex,[&]{
+        return !Background::Workers().Stopping()&&!accounts.empty()&&
+            std::all_of(accounts.begin(),accounts.end(),[](const auto& a){return Current(a);});
+    },commit);
+}
 Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions){
     if(!Current(a))return {0,{},"Account changed"};
     for(const auto& p:permissions)if(!a.permissions.count(p))return {403,{},"Missing API permission: "+p};
@@ -432,7 +450,12 @@ Result Request(const LinkedAccount& a,const std::string& path,const std::vector<
     if(Background::Workers().Stopping())return {0,{},"Cancelled"};
     if(!Current(a))return {0,{},"Account changed"};
     if(r.status_code!=200)return {r.status_code,{},Error(r.status_code)};
-    try{return {200,Json::parse(r.body),{}};}catch(...){return {0,{},"Invalid API response"};}
+    try{
+        auto parsed=Json::parse(r.body);
+        if(Background::Workers().Stopping())return {0,{},"Cancelled"};
+        if(!Current(a))return {0,{},"Account changed"};
+        return {200,std::move(parsed),{}};
+    }catch(...){return {0,{},"Invalid API response"};}
 }
 Result Request(const std::string& id,const std::string& path,const std::vector<std::string>& permissions){
     for(const auto& a:Linked())if(a.id==id)return Request(a,path,permissions);

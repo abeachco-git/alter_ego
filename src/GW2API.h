@@ -370,10 +370,9 @@ namespace AlterEgo {
         static std::shared_ptr<const std::vector<Character>> GetCharacters();
         static std::optional<Character> GetCharacter(const std::string& name);
         static std::vector<std::string> GetPendingCharNames();
-        // Remove cached characters that are no longer in the current roster
-        // (s_pending_char_names). Call after a full character-list fetch succeeds
-        // so characters deleted in-game stop appearing in the list.
-        static void ReconcileCharactersWithRoster();
+        // Worker-only reconciliation from its own verified roster, before
+        // releasing refresh ownership; caller holds the account commit gate.
+        static bool ReconcileCharactersWithRoster(const std::map<std::string,std::set<std::string>>& roster);
 
         // Skin unlock status (from native API cache)
         static bool IsSkinUnlocked(uint32_t skin_id);  // true if unlocked, false if unknown/locked

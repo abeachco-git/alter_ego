@@ -84,12 +84,17 @@ inline AchievementResult FetchAchievements(const std::string& root,const std::st
     if(!r)return fail(r.status,r.error);
     try{
         auto snapshot=std::make_shared<const Cache::AchievementSnapshot>(ParseAchievements(r.data,std::time(nullptr)));
-        if(!NativeAccounts::Current(a))return {0,"Account changed",{}};
-        if(Background::Workers().Stopping())return {0,"Cancelled",{}};
-        if(!Cache::WriteAchievements(root,account,*snapshot,Cache::AchievementSnapshotKind::Verified))
+        bool entered=false;
+        const bool committed=NativeAccounts::CommitIfCurrent(a,[&]{
+            entered=true;
+            if(!Cache::WriteAchievements(root,account,*snapshot,Cache::AchievementSnapshotKind::Verified))return false;
+            e.snapshot=snapshot;e.finished=Clock::now();e.failedAt=0;e.error.clear();e.errorStatus=0;
+            return true;
+        });
+        if(!committed){
+            if(!entered)return {0,Background::Workers().Stopping()?"Cancelled":"Account changed",{}};
             return fail(0,"Could not commit verified achievement snapshot");
-        if(!NativeAccounts::Current(a))return {0,"Account changed",{}};
-        e.snapshot=snapshot;e.finished=Clock::now();e.failedAt=0;e.error.clear();e.errorStatus=0;
+        }
         return {200,{},snapshot};
     }catch(...){return fail(0,"Invalid account achievement response or cache write failed");}
 }

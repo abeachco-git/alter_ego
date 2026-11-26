@@ -1,3 +1,6 @@
+#include "../src/AccountCommitGate.h"
+#include <thread>
+#include <future>
 #include "../src/AccountIdentity.h"
 #include "../src/CharacterRequest.h"
 #include "../src/GameMemoryCore.h"
@@ -57,5 +60,20 @@ int case_character_request(int,char**) {
     assert(!EligibleTarget(true,false,false,true,"Hero","Other","A.B","A.B"));
     assert(!EligibleTarget(true,false,true,false,"Hero","Other","A.B","A.B"));
     assert(!EligibleTarget(true,false,true,true,"Hero","Hero","A.B","A.B"));
+    // Replacing a credential cannot interleave between identity check and commit.
+    std::mutex credential;
+    unsigned epoch=1;
+    std::promise<void> entered,release,changing;
+    auto released=release.get_future();
+    std::thread writer([&]{
+        assert(AlterEgo::AccountCommit::Run(credential,[&]{return epoch==1;},[&]{
+            entered.set_value();released.wait();assert(epoch==1);return true;
+        }));
+    });
+    entered.get_future().wait();
+    std::thread replacement([&]{changing.set_value();std::lock_guard<std::mutex> lock(credential);++epoch;});
+    changing.get_future().wait();release.set_value();writer.join();replacement.join();
+    assert(!AlterEgo::AccountCommit::Run(credential,[&]{return epoch==1;},[]{assert(false);return true;}));
+    assert(AlterEgo::AccountCommit::Run(credential,[&]{return epoch==2;},[]{return true;}));
     return 0;
 }

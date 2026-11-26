@@ -59,8 +59,6 @@ namespace AlterEgo {
         // A manual character refresh also refreshes crafting; a debounced
         // automatic equipment/spec refresh reuses persisted crafting details.
         // Access only while s_mutex is held.
-        CharacterRequest::Roster g_roster;
-        bool g_rosterReady=false;
         std::shared_ptr<const std::vector<Character>> g_charProjection;
         uint64_t g_projectionRevision=0;
     }
@@ -268,7 +266,7 @@ namespace AlterEgo {
             if(s_fetch_status==FetchStatus::InProgress)return;
             if(accounts.empty()){s_fetch_status=FetchStatus::Error;s_fetch_message="Link an account in Nexus options";return;}
             s_fetch_status=FetchStatus::InProgress;s_fetch_message="Checking character roster...";
-            s_current_char={};g_rosterReady=false;s_chars_fetched=0;s_chars_total=0;
+            s_current_char={};s_chars_fetched=0;s_chars_total=0;
         }
         Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
@@ -298,13 +296,21 @@ namespace AlterEgo {
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 s_pending_char_names.clear();for(const auto& x:targets)s_pending_char_names.push_back(x.second);
-                g_roster=std::move(roster);g_rosterReady=!partial&&!g_roster.empty();
                 s_chars_total=static_cast<int>(targets.size());
             }
+            // Reconcile the roster owned by this request, before releasing
+            // the busy flag. No stale worker can consume a replacement roster.
+            auto reconcile=[&]{
+                if(partial||roster.empty())return;
+                if(!NativeAccounts::CommitIfCurrent(accounts,[&]{return ReconcileCharactersWithRoster(roster);})){
+                    partial=true;
+                    if(s_api&&!Background::Workers().Stopping())s_api->Log(LOGL_WARNING,"AlterEgo","Character roster changed or could not be persisted; previous cache retained.");
+                }
+            };
             if(listOnly){
-                {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;s_fetch_message=partial?"Some rosters could not be verified":"Character list received";}
-                // Reconcile on the owned worker, not on the render thread.
-                ReconcileCharactersWithRoster();return;
+                reconcile();
+                {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;s_fetch_message=partial?"Some rosters could not be verified or saved":"Character list received";}
+                return;
             }
             size_t ordinal=0;
             for(const auto& [a,name]:targets){
@@ -491,21 +497,24 @@ namespace AlterEgo {
                 if(verified.empty()||!identityVerified||!NativeAccounts::Current(a)){partial=true;continue;}
                 ch.data_refreshed=std::time(nullptr);
                 stage("Saving verified scopes");
-                if(!SaveCharacterData(a.id,name,&ch,a.name,[&]{return NativeAccounts::Current(a);})){ 
+                if(!NativeAccounts::CommitIfCurrent(a,[&]{
+                    if(!SaveCharacterData(a.id,name,&ch,a.name))return false;
+                    for(const auto& v:verified)CharacterActivity::Success(key,S::Name(v.scope),v.ticket,v.stamp,v.specVerified);
+                    return true;
+                })){ 
                     partial=true;
                     std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
                     for(const auto& v:verified)CharacterActivity::State().Failure(key,S::Name(v.scope),v.ticket,"Could not save verified data");
                     continue;
                 }
-                for(const auto& v:verified)CharacterActivity::Success(key,S::Name(v.scope),v.ticket,v.stamp,v.specVerified);
                 {std::lock_guard<std::mutex> lock(s_mutex);++s_chars_fetched;}
             }
+            reconcile();
             {
                 std::lock_guard<std::mutex> lock(s_mutex);s_current_char={};
                 s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;
                 s_fetch_message=std::to_string(s_chars_fetched)+"/"+std::to_string(s_chars_total)+(partial?" characters refreshed; failed data retained":" characters refreshed");
             }
-            if(!partial&&!Background::Workers().Stopping())ReconcileCharactersWithRoster();
         },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message="Character refresh cancelled";s_current_char={};});
     }
 
@@ -778,34 +787,28 @@ namespace AlterEgo {
         return s_pending_char_names;
     }
 
-    void GW2API::ReconcileCharactersWithRoster() {
-        bool changed = false, failed = false;
+    bool GW2API::ReconcileCharactersWithRoster(const CharacterRequest::Roster& roster) {
+        // Worker owns immutable roster; credential gate excludes replacement
+        // credentials through commit. Keep SQL outside the render data mutex.
+        std::lock_guard<std::mutex> saveLock(g_characterSaveMutex);
+        const auto absent=[&](const Character& c) {
+            return CharacterRequest::VerifiedAbsent(roster,c.account_name,c.name);
+        };
+        std::vector<Character> candidate;
         {
-            // Same lock order as snapshot persistence. Keep publication and
-            // deletion serialized; do not call Nexus while either lock is held.
-            std::lock_guard<std::mutex> saveLock(g_characterSaveMutex);
             std::lock_guard<std::mutex> lock(s_mutex);
-            if(!g_rosterReady || s_fetch_status!=FetchStatus::Success)return;
-            g_rosterReady=false;
-            const auto absent=[](const Character& c) {
-                return CharacterRequest::VerifiedAbsent(g_roster,c.account_name,c.name);
-            };
-            if(std::none_of(s_characters.begin(),s_characters.end(),absent))return;
-            // Commit first. Failure retains the previous in-memory and disk
-            // snapshots. A future successful roster fetch can retry.
-            if(!Cache::DeleteAbsentCharacters(GetDataDirectory(),g_roster))failed=true;
-            else {
-                s_characters.erase(std::remove_if(s_characters.begin(),s_characters.end(),absent),
-                    s_characters.end());
-                s_has_character_data = !s_characters.empty();
-                g_characterDataRevision.fetch_add(1);
-                changed=true;
-            }
+            if(std::none_of(s_characters.begin(),s_characters.end(),absent))return true;
+            candidate=s_characters;
         }
-        if (s_api && failed) s_api->Log(LOGL_WARNING,"AlterEgo",
-            "Character roster reconciliation could not be persisted; retaining the previous cache.");
-        if (s_api && changed) s_api->Log(LOGL_INFO,"AlterEgo",
-            "Reconciled character cache with verified roster (removed deleted characters).");
+        candidate.erase(std::remove_if(candidate.begin(),candidate.end(),absent),candidate.end());
+        if(!Cache::DeleteAbsentCharacters(GetDataDirectory(),roster))return false;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_characters=std::move(candidate);
+            s_has_character_data=!s_characters.empty();
+            ++g_characterDataRevision;
+        }
+        return true;
     }
 
     // =========================================================================
