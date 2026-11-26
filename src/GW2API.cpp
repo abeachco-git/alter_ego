@@ -2377,7 +2377,9 @@ namespace AlterEgo {
                     for (const auto& attr : it.value()["infusion_attributes"])
                         gs.infusion_attributes.push_back(attr.is_string() ? attr.get<std::string>() : "");
                     // Never trust mismatched lengths in hand-edited or older JSON.
-                    gs.infusion_attributes.resize(gs.infusion_ids.size());
+                    // Attribute-only requirements are valid; pad the shorter array, never truncate.
+                    const auto positions=std::max(gs.infusion_ids.size(),gs.infusion_attributes.size());
+                    gs.infusion_ids.resize(positions);gs.infusion_attributes.resize(positions);
                 }
                 gs.stat_id = it.value().value("stat_id", (uint32_t)0);
                 gs.stat_name = it.value().value("stat_name", "");
@@ -2399,7 +2401,7 @@ namespace AlterEgo {
                 requirement.item_id = inf.value("item_id", (uint32_t)0);
                 requirement.count = inf.value("count", 0);
                 requirement.attribute = inf.value("attribute", "");
-                if (requirement.item_id != 0 && requirement.count > 0 && requirement.count <= 25)
+                if ((requirement.item_id != 0 || !requirement.attribute.empty()) && requirement.count > 0 && requirement.count <= 25)
                     b.infusion_totals.push_back(std::move(requirement));
             }
         }

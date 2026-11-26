@@ -829,54 +829,101 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
     ImGui::EndChild();
 }
 
-static void ComponentNativeInfusionRequirements(ComponentJson& data) {
-    if (!ImGui::TreeNodeEx("##infusion_reqs", ImGuiTreeNodeFlags_DefaultOpen,
-                            "Aggregate infusion requirements")) return;
-    if (data.contains("infusion_totals") && !data["infusion_totals"].is_array()) {
-        ImGui::TextDisabled("Unknown aggregate format; preserved.");
-    } else {
-        ComponentJson none = ComponentJson::array();
-        ComponentJson& totals = data.contains("infusion_totals")
-            ? data["infusion_totals"] : none;
-        int remove = -1;
-        for (size_t i = 0; i < totals.size(); ++i) {
-            ImGui::PushID(static_cast<int>(i));
-            if (!totals[i].is_object()) {
-                ImGui::TextDisabled("Unrecognized requirement; preserved.");
-                ImGui::PopID();
-                continue;
-            }
-            ComponentNativeNumber(totals[i], "item_id", "Item ID");
-            ComponentNativeNumber(totals[i], "count", "Quantity", 25);
-            ComponentNativeText(totals[i], "attribute", "Attribute");
-            if (RenderActionButton("Remove requirement##native"))
-                remove = static_cast<int>(i);
-            ImGui::Separator();
-            ImGui::PopID();
+static bool ComponentInfusionProjection(const ComponentJson& data,AlterEgo::SavedBuild& b) {
+    try{
+        b.infusion_summary_present=data.value("infusion_summary_present",false);
+        b.infusion_ar_total=data.value("infusion_ar_total",0);
+        if(data.contains("infusion_stat_totals"))b.infusion_stat_totals=data.at("infusion_stat_totals").get<std::map<std::string,int>>();
+        if(data.contains("infusion_totals")){
+            if(!data.at("infusion_totals").is_array())return false;
+            for(const auto& entry:data.at("infusion_totals"))
+                b.infusion_totals.push_back({entry.value("item_id",0u),entry.value("count",0),entry.value("attribute",std::string())});
         }
-        if (remove >= 0) data["infusion_totals"].erase(remove);
-        if (RenderActionButton("Add requirement##native"))
-            data["infusion_totals"].push_back(
-                {{"item_id", 0}, {"count", 1}, {"attribute", ""}});
-    }
-    bool present = data.value("infusion_summary_present", false);
-    if (ImGui::Checkbox("Saved aggregate totals available", &present))
-        data["infusion_summary_present"] = present;
-    if (present) {
-        ComponentNativeNumber(data, "infusion_ar_total", "Agony resistance");
-        if (data.contains("infusion_stat_totals") &&
-            data["infusion_stat_totals"].is_object()) {
-            for (auto it = data["infusion_stat_totals"].begin();
-                 it != data["infusion_stat_totals"].end(); ++it) {
-                ImGui::PushID(it.key().c_str());
-                ComponentJson value = {{"amount", it.value()}};
-                ComponentNativeNumber(value, "amount", it.key().c_str());
-                if (value["amount"] != it.value()) it.value() = value["amount"];
-                ImGui::PopID();
+        if(data.contains("gear")){
+            if(!data.at("gear").is_object())return false;
+            for(auto it=data.at("gear").begin();it!=data.at("gear").end();++it){
+                AlterEgo::BuildGearSlot slot;
+                if(!AlterEgo::GearEdit::ReadComponentField(it.value(),AlterEgo::GearEdit::CopyField::Infusions,false,slot,false))return false;
+                b.gear.emplace(it.key(),std::move(slot));
             }
         }
+        return true;
+    }catch(...){return false;}
+}
+static bool ComponentNativeInfusionRequirements(ComponentJson& data) {
+    using namespace AlterEgo;
+    SavedBuild projection;
+    if(!ComponentInfusionProjection(data,projection)){
+        ImGui::TextDisabled("Unsupported imported infusion fields; preserved. Inspect exact stored fields.");
+        return false;
     }
-    ImGui::TreePop();
+    const auto mode=GetInfusionMode(projection);
+    ImGui::TextUnformatted(mode==InfusionMode::Slots?"Infusions: By Equipment Slot":
+        mode==InfusionMode::Totals?"Infusions: By Totals":"Infusions: Mixed legacy requirements");
+    if(mode==InfusionMode::Conflict)
+        ImGui::TextWrapped("Choose which existing requirements are authoritative; neither is discarded until Save.");
+    if(mode!=InfusionMode::Slots&&RenderActionButton("Use equipment slots...##component"))
+        ImGui::OpenPopup("##component_slot_mode");
+    if(mode!=InfusionMode::Totals){
+        if(mode==InfusionMode::Conflict)ImGui::SameLine();
+        if(RenderActionButton("Use totals...##component"))ImGui::OpenPopup("##component_total_mode");
+    }
+    if(ImGui::BeginPopup("##component_slot_mode")){
+        ImGui::TextWrapped("Aggregate targets will be removed on Save. No automatic slot assignment.");
+        if(RenderActionButton("Switch to slots")){
+            g_ComponentInfusionTotalsDraft=data;
+            GearEdit::ClearComponentInfusionTotals(data);
+            if(g_ComponentInfusionSlotDraft&&g_ComponentInfusionSlotDraft->contains("gear"))
+                data["gear"]=g_ComponentInfusionSlotDraft->at("gear");
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if(ImGui::BeginPopup("##component_total_mode")){
+        ImGui::TextWrapped("Individual terrestrial infusion requirements will be removed on Save. A linked Aquatic component is not modified here.");
+        const auto configs=SavedInfusionConfigurations(projection);
+        static int selected=-1;
+        if(ImGui::IsWindowAppearing())selected=configs.size()==1?static_cast<int>(configs.front()):-1;
+        const bool restore=mode==InfusionMode::Conflict||g_ComponentInfusionTotalsDraft.has_value();
+        if(!restore){
+            for(auto config:configs)
+                if(ImGui::RadioButton(InfusionConfigurationLabel(config),selected==static_cast<int>(config)))selected=static_cast<int>(config);
+        }
+        const bool picked=std::any_of(configs.begin(),configs.end(),[&](auto c){return static_cast<int>(c)==selected;});
+        auto total=picked?ComputeSavedSlotInfusions(projection,static_cast<InfusionConfig>(selected)):InfusionSummary{false,false,0,{}};
+        if(!restore&&picked&&!total.complete)ImGui::TextDisabled("Exact amounts or metadata are incomplete.");
+        if((restore||(picked&&total.complete))&&RenderActionButton("Switch to totals")){
+            g_ComponentInfusionSlotDraft=data;
+            GearEdit::ClearComponentInfusionSlots(data);
+            if(mode!=InfusionMode::Conflict){
+                GearEdit::ClearComponentInfusionTotals(data);
+                if(g_ComponentInfusionTotalsDraft){
+                    for(const char* key:{"infusion_totals","infusion_summary_present","infusion_ar_total","infusion_stat_totals"})
+                        if(g_ComponentInfusionTotalsDraft->contains(key))data[key]=g_ComponentInfusionTotalsDraft->at(key);
+                }else{
+                    data["infusion_summary_present"]=true;data["infusion_ar_total"]=total.agonyResistance;
+                    data["infusion_stat_totals"]=total.stats;
+                }
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if(mode==InfusionMode::Slots){
+        ImGui::TextDisabled("Calculated from this terrestrial component only; aquatic upgrades belong to Aquatic.");
+        RenderSlotInfusionSummaries(projection);
+    }else if(mode==InfusionMode::Totals){
+        const auto total=GetSavedInfusionSummary(projection);
+        std::function<void(const InfusionSummary&)> update;
+        if(total.complete)update=[&](const InfusionSummary& next){
+            GearEdit::ClearComponentInfusionTotals(data);
+            data["infusion_summary_present"]=true;data["infusion_ar_total"]=next.agonyResistance;
+            data["infusion_stat_totals"]=next.stats;
+        };
+        RenderInfusionTotals(total,update);
+        if(!projection.infusion_totals.empty())ImGui::TextDisabled("Imported aggregate recommendations; editing converts to numeric targets.");
+    }
+    return mode==InfusionMode::Slots;
 }
 
 static void RenderComponentNativeEditor(const std::string& kind,
@@ -978,18 +1025,8 @@ static void RenderComponentNativeEditor(const std::string& kind,
             }
             ImGui::TextDisabled("An unspecified shared rune count is unverified in Compare.");
         }
-        if (kind == "infusions") ComponentNativeInfusionRequirements(data);
-        const auto oldGear = kind == "infusions" ? data.value("gear", ComponentJson::object()) :
-            ComponentJson::object();
-        ComponentNativeGear(data, kind, profession);
-        if (kind == "infusions" && oldGear != data.value("gear",ComponentJson::object())) {
-            // A slot edit supersedes cached aggregate requirements. Resolve
-            // the calculated totals from the assembled loadout's gear.
-            data.erase("infusion_totals");
-            data.erase("infusion_summary_present");
-            data.erase("infusion_ar_total");
-            data.erase("infusion_stat_totals");
-        }
+        if(kind!="infusions"||ComponentNativeInfusionRequirements(data))
+            ComponentNativeGear(data,kind,profession);
     }
     if (ImGui::CollapsingHeader("Advanced: exact stored fields (read only)")) {
         ImGui::BeginChild("##component_native_json", ImVec2(0, 130), true);

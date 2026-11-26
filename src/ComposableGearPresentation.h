@@ -66,8 +66,10 @@ inline std::string GearSlotSummary(const std::string& kind, const Json& slot) {
     }
     if (kind == "infusions" || kind=="aquatic") {
         const auto ids = slot.find("infusion_ids");
-        if (ids != slot.end() && ids->is_array())
-            pieces.push_back(std::to_string(ids->size()) + " infusion positions");
+        const auto attrs=slot.find("infusion_attributes");
+        const size_t positions=std::max(ids!=slot.end()&&ids->is_array()?ids->size():size_t(0),
+            attrs!=slot.end()&&attrs->is_array()?attrs->size():size_t(0));
+        if(positions)pieces.push_back(std::to_string(positions)+" infusion positions");
         const auto snapshot = slot.find("infusion_snapshot");
         if (snapshot != slot.end() && snapshot->is_boolean() && *snapshot)
             pieces.push_back("captured snapshot");

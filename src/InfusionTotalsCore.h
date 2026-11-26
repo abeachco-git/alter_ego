@@ -18,6 +18,41 @@ struct InfusionSummary {
  // A mixed legacy projection must be resolved explicitly, never silently
  // prefer one side or compare both. Empty recorded slots are meaningful.
 enum class InfusionMode { Slots, Totals, Conflict };
+enum class InfusionConfiguration { LandA, LandB, WaterA, WaterB };
+inline bool InfusionSlotEligible(const std::string& slot) {
+    return slot!="Amulet"&&slot!="Relic";
+}
+inline const char* InfusionConfigurationLabel(InfusionConfiguration c) {
+    switch(c){
+    case InfusionConfiguration::LandA:return "Terrestrial Set I";
+    case InfusionConfiguration::LandB:return "Terrestrial Set II";
+    case InfusionConfiguration::WaterA:return "Aquatic Set I";
+    case InfusionConfiguration::WaterB:return "Aquatic Set II";
+    }
+    return "Unknown configuration";
+}
+inline bool InfusionSlotInConfiguration(const std::string& slot,InfusionConfiguration c) {
+    const bool water=c==InfusionConfiguration::WaterA||c==InfusionConfiguration::WaterB;
+    if(slot=="Helm")return !water;
+    if(slot=="HelmAquatic"||slot=="Breather")return water;
+    if(slot=="WeaponA1"||slot=="WeaponA2")return c==InfusionConfiguration::LandA;
+    if(slot=="WeaponB1"||slot=="WeaponB2")return c==InfusionConfiguration::LandB;
+    if(slot=="WeaponAquaticA"||slot=="AquaticA")return c==InfusionConfiguration::WaterA;
+    if(slot=="WeaponAquaticB"||slot=="AquaticB")return c==InfusionConfiguration::WaterB;
+    return slot=="Shoulders"||slot=="Coat"||slot=="Gloves"||slot=="Leggings"||slot=="Boots"||
+        slot=="Backpack"||slot=="Accessory1"||slot=="Accessory2"||slot=="Ring1"||slot=="Ring2";
+}
+template<class HasSlot> std::vector<InfusionConfiguration> InfusionConfigurations(HasSlot has) {
+    using C=InfusionConfiguration;
+    const bool a=has("WeaponA1")||has("WeaponA2"),b=has("WeaponB1")||has("WeaponB2");
+    const bool wa=has("WeaponAquaticA")||has("AquaticA"),wb=has("WeaponAquaticB")||has("AquaticB");
+    std::vector<C> configs;
+    if(a||!b)configs.push_back(C::LandA);
+    if(b)configs.push_back(C::LandB);
+    if(wa||(!wb&&(has("HelmAquatic")||has("Breather"))))configs.push_back(C::WaterA);
+    if(wb)configs.push_back(C::WaterB);
+    return configs;
+}
 template<class Slot> bool HasSlotInfusionData(const Slot& s) {
     return s.infusion_snapshot || !s.infusion.empty() ||
         std::any_of(s.infusion_ids.begin(),s.infusion_ids.end(),[](auto id){return id!=0;}) ||
@@ -26,7 +61,7 @@ template<class Slot> bool HasSlotInfusionData(const Slot& s) {
 template<class Build> InfusionMode GetInfusionMode(const Build& b) {
     const bool totals=b.infusion_summary_present || !b.infusion_totals.empty();
     if(!totals)return InfusionMode::Slots;
-    for(const auto& entry:b.gear)if(HasSlotInfusionData(entry.second))return InfusionMode::Conflict;
+    for(const auto& entry:b.gear)if(InfusionSlotEligible(entry.first)&&HasSlotInfusionData(entry.second))return InfusionMode::Conflict;
     return InfusionMode::Totals;
 }
 template<class Build> void ForgetAggregateInfusions(Build& b) {
@@ -35,6 +70,7 @@ template<class Build> void ForgetAggregateInfusions(Build& b) {
 }
 template<class Build> void ForgetSlotInfusions(Build& b) {
     for(auto& entry:b.gear){
+        if(!InfusionSlotEligible(entry.first))continue;
         auto& s=entry.second;s.infusion_ids.clear();s.infusion_attributes.clear();
         s.infusion_snapshot=false;s.infusion.clear();
     }
@@ -50,6 +86,7 @@ template<class Build> bool SetNumericInfusionTotals(Build& b,const InfusionSumma
 template<class Build> void RestoreSlotInfusions(Build& b,const Build& previous) {
     ForgetSlotInfusions(b);ForgetAggregateInfusions(b);
     for(auto& entry:b.gear) {
+        if(!InfusionSlotEligible(entry.first))continue;
         const auto old=previous.gear.find(entry.first);
         if(old==previous.gear.end()||old->second.item_id!=entry.second.item_id||
             old->second.weapon_type!=entry.second.weapon_type)continue;

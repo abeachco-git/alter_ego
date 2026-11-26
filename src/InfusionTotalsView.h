@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <array>
 // Included by dllmain.cpp after FindEquipment and the edit-mode helpers.
 // One summary calculator and one UI renderer for Live, Saved and Edit.
 static const char* InfusionAttributeLabel(const std::string& attribute);
@@ -9,46 +10,55 @@ static const char* const kInfusionStatNames[] = {
 };
 
 static bool IsWeaponTwoHanded(const std::string& profession, const std::string& weaponType);
-static bool CountSavedInfusionSlot(const AlterEgo::SavedBuild& b,const std::string& slot) {
-    if (slot.find("Aquatic") != std::string::npos || slot == "Amulet" || slot == "Relic" ||
-        slot == "Breather") return false;
-    auto a = b.gear.find("WeaponA1"), a2 = b.gear.find("WeaponA2");
-    const bool hasA = (a != b.gear.end() && !a->second.weapon_type.empty()) ||
-                      (a2 != b.gear.end() && !a2->second.weapon_type.empty());
-    if (hasA && slot.rfind("WeaponB",0) == 0) return false;
+using InfusionConfig=AlterEgo::InfusionConfiguration;
+static std::vector<InfusionConfig> SavedInfusionConfigurations(const AlterEgo::SavedBuild& b) {
+    return AlterEgo::InfusionConfigurations([&](const char* slot){
+        const auto it=b.gear.find(slot);
+        return it!=b.gear.end()&&(it->second.item_id||!it->second.weapon_type.empty()||
+            AlterEgo::HasSlotInfusionData(it->second));
+    });
+}
+static std::vector<InfusionConfig> LiveInfusionConfigurations(const AlterEgo::Character& ch,int tab) {
+    return AlterEgo::InfusionConfigurations([&](const char* slot){
+        const auto* eq=FindEquipment(ch,slot,tab);return eq&&eq->id;
+    });
+}
+static bool CountSavedInfusionSlot(const AlterEgo::SavedBuild& b,const std::string& slot,InfusionConfig config) {
+    if(!AlterEgo::InfusionSlotInConfiguration(slot,config))return false;
+    if(slot=="AquaticA"&&b.gear.count("WeaponAquaticA"))return false;
+    if(slot=="AquaticB"&&b.gear.count("WeaponAquaticB"))return false;
+    if(slot=="Breather"&&b.gear.count("HelmAquatic"))return false;
     if (slot == "WeaponA2" || slot == "WeaponB2") {
         auto main = b.gear.find(slot == "WeaponA2" ? "WeaponA1" : "WeaponB1");
         if (main != b.gear.end() && IsWeaponTwoHanded(b.profession, main->second.weapon_type)) return false;
     }
     return true;
 }
-static std::vector<uint32_t> GetSavedGearInfusions(const AlterEgo::SavedBuild& b) {
+static std::vector<uint32_t> GetSavedGearInfusions(const AlterEgo::SavedBuild& b,InfusionConfig config) {
     std::vector<uint32_t> ids;
     for (const auto& [slot, gear] : b.gear) {
-        if (!CountSavedInfusionSlot(b,slot)) continue;
+        if (!CountSavedInfusionSlot(b,slot,config)) continue;
         for (size_t i = 0; i < gear.infusion_ids.size(); ++i)
             if (gear.infusion_ids[i] && (i >= gear.infusion_attributes.size() ||
                 gear.infusion_attributes[i].empty())) ids.push_back(gear.infusion_ids[i]);
     }
     return ids;
 }
-static std::vector<uint32_t> GetLiveGearInfusions(const AlterEgo::Character& ch, int tab) {
+static std::vector<uint32_t> GetLiveGearInfusions(const AlterEgo::Character& ch, int tab,InfusionConfig config) {
     std::vector<uint32_t> ids;
-    const auto* a1 = FindEquipment(ch, "WeaponA1", tab);
-    const auto* a2 = FindEquipment(ch, "WeaponA2", tab);
-    const bool hasA = (a1 && a1->id) || (a2 && a2->id);
     static const char* slots[] = {
         "Helm", "Shoulders", "Coat", "Gloves", "Leggings", "Boots",
         "Backpack", "Accessory1", "Accessory2", "Ring1", "Ring2",
-        "WeaponA1", "WeaponA2", "WeaponB1", "WeaponB2"
+        "WeaponA1", "WeaponA2", "WeaponB1", "WeaponB2",
+        "HelmAquatic","WeaponAquaticA","WeaponAquaticB"
     };
     for (const char* slot : slots) {
-        const std::string key(slot);
-        if (hasA && key.rfind("WeaponB", 0) == 0) continue;
-        if (!hasA && key.rfind("WeaponA", 0) == 0) continue;
-        const auto* gear = FindEquipment(ch, key, tab);
-        if (gear)
-            for (uint32_t id : gear->infusions) if (id) ids.push_back(id);
+        if(!AlterEgo::InfusionSlotInConfiguration(slot,config))continue;
+        const auto* gear=FindEquipment(ch,slot,tab);
+        if(!gear&&std::string(slot)=="WeaponAquaticA")gear=FindEquipment(ch,"AquaticA",tab);
+        if(!gear&&std::string(slot)=="WeaponAquaticB")gear=FindEquipment(ch,"AquaticB",tab);
+        if(!gear&&std::string(slot)=="HelmAquatic")gear=FindEquipment(ch,"Breather",tab);
+        if (gear) for (uint32_t id : gear->infusions) if (id) ids.push_back(id);
     }
     return ids;
 }
@@ -102,44 +112,47 @@ static AlterEgo::InfusionSummary ComputeInfusionsFromIds(const std::vector<uint3
     for (uint32_t id : ids) if (id) counted.push_back({id, 1});
     return ComputeInfusionSummary(counted);
 }
-// Ordinary gear changes must never implicitly switch the infusion mode.
-static void InvalidateGearInfusionTotals(AlterEgo::SavedBuild&) {}
-static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::SavedBuild& b) {
-    auto ids = GetSavedGearInfusions(b);
+static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::SavedBuild& b,InfusionConfig config) {
+    auto ids=GetSavedGearInfusions(b,config);
     std::map<std::string,int> flexible;
-    bool recorded = false;
-    for (const auto& entry : b.gear) {
-        if (!CountSavedInfusionSlot(b,entry.first)) continue;
-        const auto& gear = entry.second;
-        recorded = recorded || gear.infusion_snapshot;
-        for (const auto& attr : gear.infusion_attributes)
-            if (!attr.empty()) ++flexible[attr];
+    bool recorded=false,unknown=false;
+    for(const auto& entry:b.gear){
+        if(!CountSavedInfusionSlot(b,entry.first,config))continue;
+        const auto& gear=entry.second;
+        recorded=recorded||gear.infusion_snapshot;
+        if(!gear.infusion.empty()&&gear.infusion_ids.empty()&&gear.infusion_attributes.empty())unknown=true;
+        for(const auto& attr:gear.infusion_attributes)if(!attr.empty())++flexible[attr];
     }
-    // Cache by actual inputs; only retry when a missing item has arrived.
-    static std::vector<uint32_t> lastIds;
-    static std::map<std::string,int> lastFlexible;
-    static bool lastRecorded = false, initialized = false;
-    static AlterEgo::InfusionSummary cached;
-    static std::vector<uint32_t> pending;
-    const bool arrived = std::any_of(pending.begin(),pending.end(),[](uint32_t id) {
-        const auto item = AlterEgo::GW2API::GetItemInfo(id);
-        return item && item->details.is_object();
+    // Independent cache per simultaneous equipment configuration. Metadata
+    // arrives through the existing request handler; local display issues no
+    // new requests unless the set of input IDs changes or a missing row arrives.
+    struct Cache {
+        std::vector<uint32_t> ids,pending;
+        std::map<std::string,int> flexible;
+        bool recorded=false,unknown=false,initialized=false;
+        AlterEgo::InfusionSummary summary;
+    };
+    static std::array<Cache,4> caches;
+    auto& cache=caches[static_cast<size_t>(config)];
+    const bool arrived=std::any_of(cache.pending.begin(),cache.pending.end(),[](uint32_t id){
+        const auto item=AlterEgo::GW2API::GetItemInfo(id);return item&&item->details.is_object();
     });
-    if (!initialized || ids != lastIds || flexible != lastFlexible || recorded != lastRecorded || arrived) {
-        initialized = true; lastIds = ids; lastFlexible = flexible; lastRecorded = recorded;
-        cached = ComputeInfusionsFromIds(ids);
-        cached.present = cached.present || recorded || !flexible.empty();
-        // Flexible requirements match any positive stat value; do not invent
-        // +5 or AR for a requirement whose amount is not specified.
-        if (!flexible.empty()) cached.complete = false;
-        pending.clear();
-        for (uint32_t id : ids) {
-            const auto item = AlterEgo::GW2API::GetItemInfo(id);
-            if (!item || !item->details.is_object()) pending.push_back(id);
+    if(!cache.initialized||ids!=cache.ids||flexible!=cache.flexible||recorded!=cache.recorded||unknown!=cache.unknown||arrived){
+        cache.initialized=true;cache.ids=ids;cache.flexible=flexible;cache.recorded=recorded;cache.unknown=unknown;
+        cache.summary=ComputeInfusionsFromIds(ids);
+        cache.summary.present=cache.summary.present||recorded||unknown||!flexible.empty();
+        if(unknown||!flexible.empty())cache.summary.complete=false;
+        cache.pending.clear();
+        for(auto id:ids){
+            const auto item=AlterEgo::GW2API::GetItemInfo(id);
+            if(!item||!item->details.is_object())cache.pending.push_back(id);
         }
-        if (!pending.empty()) AlterEgo::GW2API::FetchItemDetailsAsync(pending);
+        if(!cache.pending.empty())AlterEgo::GW2API::FetchItemDetailsAsync(cache.pending);
     }
-    return cached;
+    return cache.summary;
+}
+static AlterEgo::InfusionSummary ComputeSavedSlotInfusions(const AlterEgo::SavedBuild& b) {
+    return ComputeSavedSlotInfusions(b,SavedInfusionConfigurations(b).front());
 }
 static AlterEgo::InfusionSummary GetSavedInfusionSummary(const AlterEgo::SavedBuild& b) {
     if (AlterEgo::GetInfusionMode(b)==AlterEgo::InfusionMode::Conflict)
@@ -158,31 +171,27 @@ static AlterEgo::InfusionSummary GetSavedInfusionSummary(const AlterEgo::SavedBu
     }
     return ComputeSavedSlotInfusions(b);
 }
-static AlterEgo::InfusionSummary GetLiveInfusionSummary(const AlterEgo::Character& ch, int tab) {
-    return ComputeInfusionsFromIds(GetLiveGearInfusions(ch, tab));
+static AlterEgo::InfusionSummary GetLiveInfusionSummary(const AlterEgo::Character& ch,int tab,InfusionConfig config) {
+    return ComputeInfusionsFromIds(GetLiveGearInfusions(ch,tab,config));
+}
+static AlterEgo::InfusionSummary GetLiveInfusionSummary(const AlterEgo::Character& ch,int tab) {
+    return GetLiveInfusionSummary(ch,tab,LiveInfusionConfigurations(ch,tab).front());
 }
 static void UpdateInfusionEditDraft(AlterEgo::SavedBuild& edit,
                                     const AlterEgo::InfusionSummary& summary) {
     if(AlterEgo::SetNumericInfusionTotals(edit,summary))MarkEditDirty();
 }
 static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
-                                 AlterEgo::SavedBuild* edit = nullptr,
-                                 const std::function<void()>& headerAction = {}) {
+                                 const std::function<void(const AlterEgo::InfusionSummary&)>& update = {},
+                                 const std::function<void()>& headerAction = {},
+                                 const char* title="Infusion Totals") {
+    const bool edit=static_cast<bool>(update);
     ImGui::Spacing();
     ImGui::Separator();
-    ImGui::TextColored(ImVec4(0.70f, 0.58f, 0.20f, 1.0f), "Infusion Totals");
+    ImGui::TextColored(ImVec4(0.70f, 0.58f, 0.20f, 1.0f), "%s",title);
     if (headerAction) headerAction();
     if (!total.complete)
         ImGui::TextDisabled("Totals are partial: missing item metadata or flexible stat requirements.");
-    if (edit && !edit->infusion_summary_present && edit->infusion_totals.empty()) {
-        std::map<std::string,int> flexible;
-        for (const auto& entry : edit->gear) if (CountSavedInfusionSlot(*edit,entry.first))
-            for (const auto& attribute : entry.second.infusion_attributes)
-                if (!attribute.empty()) ++flexible[attribute];
-        for (const auto& entry : flexible)
-            ImGui::TextDisabled("%s: %d flexible infusion slot%s",
-                InfusionAttributeLabel(entry.first), entry.second,entry.second == 1 ? "" : "s");
-    }
     if (!total.present && !edit)
         ImGui::TextDisabled("No infusion totals specified");
     if (ImGui::BeginTable("##infusion_totals", 2, ImGuiTableFlags_SizingStretchSame)) {
@@ -194,7 +203,7 @@ static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
             if (ImGui::InputInt("AR##saved_ar", &ar, 0, 0)) {
                 auto updated = total;
                 updated.agonyResistance = std::max(0, ar);
-                UpdateInfusionEditDraft(*edit, updated);
+                update(updated);
             }
         } else if (total.present) {
             ImGui::Text("Agony Resistance: %d", total.agonyResistance);
@@ -212,7 +221,7 @@ static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
                 if (ImGui::InputInt(InfusionAttributeLabel(stat), &value, 0, 0)) {
                     auto updated = total;
                     updated.stats[stat] = std::max(0, value);
-                    UpdateInfusionEditDraft(*edit, updated);
+                    update(updated);
                 }
             } else {
                 ImGui::Text("%s: +%d", InfusionAttributeLabel(stat), current);
@@ -226,6 +235,22 @@ static void RenderInfusionTotals(const AlterEgo::InfusionSummary& total,
 
  // Existing aggregate counts remain a supported import representation. Editing
  // numerical totals explicitly converts them, never retains both as targets.
+static void RenderSlotInfusionSummaries(const AlterEgo::SavedBuild& b) {
+    for(auto config:SavedInfusionConfigurations(b)){
+        ImGui::PushID(static_cast<int>(config));
+        RenderInfusionTotals(ComputeSavedSlotInfusions(b,config),{}, {},AlterEgo::InfusionConfigurationLabel(config));
+        ImGui::PopID();
+    }
+}
+static void RenderLiveInfusionTotals(const AlterEgo::Character& ch,int tab,const std::function<void()>& headerAction={}) {
+    bool first=true;
+    for(auto config:LiveInfusionConfigurations(ch,tab)){
+        ImGui::PushID(static_cast<int>(config));
+        RenderInfusionTotals(GetLiveInfusionSummary(ch,tab,config),{},first?headerAction:std::function<void()>{},
+            AlterEgo::InfusionConfigurationLabel(config));
+        ImGui::PopID();first=false;
+    }
+}
 static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::SavedBuild* edit) {
     using namespace AlterEgo;
     const auto mode=GetInfusionMode(build);
@@ -240,10 +265,7 @@ static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::
             ImGui::OpenPopup("##confirm_slot_mode");
         if(mode!=InfusionMode::Totals){
             if(mode==InfusionMode::Conflict)ImGui::SameLine();
-            const auto computed=ComputeSavedSlotInfusions(build);
-            if(mode==InfusionMode::Conflict||g_InfusionTotalsDraft||computed.complete){
-                if(RenderActionButton("Use totals..."))ImGui::OpenPopup("##confirm_total_mode");
-            }else ImGui::TextDisabled("Resolve missing metadata or flexible requirements before converting to totals.");
+            if(RenderActionButton("Use totals..."))ImGui::OpenPopup("##confirm_total_mode");
         }
         if(ImGui::BeginPopup("##confirm_slot_mode")){
             ImGui::TextWrapped("Aggregate targets will be removed on Save. Configure individual equipment slots; no automatic distribution.");
@@ -257,7 +279,19 @@ static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::
         }
         if(ImGui::BeginPopup("##confirm_total_mode")){
             ImGui::TextWrapped("Individual infusion identities and placement will be removed on Save. You can switch back before saving.");
-            if(RenderActionButton("Switch to totals")){
+            const auto configs=SavedInfusionConfigurations(build);
+            static int chosen=-1;
+            if(ImGui::IsWindowAppearing())chosen=configs.size()==1?static_cast<int>(configs.front()):-1;
+            const bool reuse=mode==InfusionMode::Conflict||g_InfusionTotalsDraft.has_value();
+            if(!reuse){
+                ImGui::TextUnformatted("Choose the configuration to calculate:");
+                for(auto config:configs)
+                    if(ImGui::RadioButton(InfusionConfigurationLabel(config),chosen==static_cast<int>(config)))chosen=static_cast<int>(config);
+            }
+            const bool selected=std::any_of(configs.begin(),configs.end(),[&](auto c){return static_cast<int>(c)==chosen;});
+            const auto calculated=selected?ComputeSavedSlotInfusions(build,static_cast<InfusionConfig>(chosen)):InfusionSummary{false,false,0,{}};
+            if(!reuse&&selected&&!calculated.complete)ImGui::TextDisabled("Metadata or exact amounts are incomplete; cannot convert.");
+            if((reuse||(selected&&calculated.complete))&&RenderActionButton("Switch to totals")){
                 g_InfusionSlotDraft=*edit;
                 if(mode==InfusionMode::Conflict){
                     ForgetSlotInfusions(*edit);
@@ -268,7 +302,7 @@ static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::
                     edit->infusion_summary_present=old.infusion_summary_present;
                     edit->infusion_ar_total=old.infusion_ar_total;
                     edit->infusion_stat_totals=old.infusion_stat_totals;
-                }else SetNumericInfusionTotals(*edit,ComputeSavedSlotInfusions(*edit));
+                }else SetNumericInfusionTotals(*edit,calculated);
                 MarkEditDirty();ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -279,6 +313,11 @@ static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::
                 ImGui::TextDisabled("Previous target: %d AR (restore with Use totals).",old.infusion_ar_total);
         }
     }
-    if(mode!=InfusionMode::Conflict)
-        RenderInfusionTotals(summary,edit&&mode==InfusionMode::Totals&&summary.complete?edit:nullptr);
+    if(mode==InfusionMode::Slots)RenderSlotInfusionSummaries(build);
+    if(mode==InfusionMode::Totals){
+        std::function<void(const InfusionSummary&)> update;
+        if(edit&&summary.complete)update=[&](const InfusionSummary& next){UpdateInfusionEditDraft(*edit,next);};
+        if(!build.infusion_totals.empty())ImGui::TextDisabled("Imported aggregate recommendations; editing converts to numeric targets.");
+        RenderInfusionTotals(summary,update);
+    }
 }

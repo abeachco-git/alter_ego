@@ -50,5 +50,25 @@ int case_infusion_totals(int, char**) {
     assert(b.gear["Helm"].infusion_ids.empty()&&!b.gear.count("HelmAquatic"));
     b.infusion_totals={1};b.gear["Helm"].infusion_snapshot=true;
     assert(GetInfusionMode(b)==InfusionMode::Conflict);
+    using C=InfusionConfiguration;
+    assert(InfusionSlotInConfiguration("Helm",C::LandA));
+    assert(!InfusionSlotInConfiguration("Helm",C::WaterA));
+    assert(InfusionSlotInConfiguration("HelmAquatic",C::WaterA));
+    assert(!InfusionSlotInConfiguration("HelmAquatic",C::LandB));
+    assert(InfusionSlotInConfiguration("Ring1",C::WaterB));
+    assert(!InfusionSlotInConfiguration("WeaponA1",C::LandB));
+    assert(!InfusionSlotInConfiguration("WeaponAquaticA",C::WaterB));
+    assert(InfusionSlotInConfiguration("AquaticB",C::WaterB));
+    assert(!InfusionSlotInConfiguration("Amulet",C::LandA));
+    auto configurations=InfusionConfigurations([](const std::string& slot){
+        return slot=="WeaponB1"||slot=="WeaponAquaticB";
+    });
+    assert((configurations==std::vector<C>{C::LandB,C::WaterB}));
+    Build onlyEnrichment;
+    onlyEnrichment.gear["Amulet"].infusion_ids={100};
+    onlyEnrichment.infusion_summary_present=true;
+    assert(GetInfusionMode(onlyEnrichment)==InfusionMode::Totals);
+    ForgetSlotInfusions(onlyEnrichment);
+    assert(onlyEnrichment.gear["Amulet"].infusion_ids[0]==100);
     return 0;
 }

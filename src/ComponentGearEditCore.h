@@ -5,6 +5,19 @@
 #include <limits>
 namespace AlterEgo::GearEdit {
 using GearJson=nlohmann::json;
+// Preserve unknown slot fields on explicit mode changes. The standalone
+// Infusions component owns only terrestrial infusion fields, not aquatic gear.
+inline void ClearComponentInfusionSlots(GearJson& data) {
+    if(!data.contains("gear")||!data["gear"].is_object())return;
+    for(auto& slot:data["gear"])if(slot.is_object())
+        for(const char* key:{"infusion_ids","infusion_attributes","infusion_snapshot","infusion"})slot.erase(key);
+    auto& gear=data["gear"];
+    for(auto it=gear.begin();it!=gear.end();)if(it.value().is_object()&&it.value().empty())it=gear.erase(it);else ++it;
+    if(gear.empty())data.erase("gear");
+}
+inline void ClearComponentInfusionTotals(GearJson& data) {
+    for(const char* key:{"infusion_totals","infusion_summary_present","infusion_ar_total","infusion_stat_totals"})data.erase(key);
+}
 inline bool ComponentOwnsField(const std::string& kind,const std::string& slot,CopyField field){
     const bool water=kind=="aquatic"&&EquipmentChoice::IsAquaticGearSlot(slot);
     if(field==CopyField::Stats)return water||kind=="armor"||kind=="trinkets"||kind=="weapons";

@@ -73,6 +73,7 @@ static ComponentJson g_ComponentNameRequestedDraft;
 static bool g_ComponentNameRequested=false;
 static std::string g_ComponentSkillProfessionHint; // UI-only skill picker filter
 static ComponentJson g_ComponentEditorDraft = ComponentJson::object();
+static std::optional<ComponentJson> g_ComponentInfusionSlotDraft,g_ComponentInfusionTotalsDraft;
 static std::string g_ComponentEditorError;
 static bool g_ComponentEditorOpen = false;
 static bool g_ComponentCloseRequested=false;
@@ -319,6 +320,7 @@ static bool ComponentUIStartEditor(const std::string& mode,
     g_ComponentStatSearch.clear();
     g_ComponentGearSelectedSlot.clear();
     g_ComponentGearRemovalPending.clear();
+    g_ComponentInfusionSlotDraft.reset();g_ComponentInfusionTotalsDraft.reset();
     g_ComponentEditorSaveQueued = false;
     g_ComponentEditorName = component
         ? component->value("name", std::string()) : std::string("New ") + ComponentLabel(kind);
@@ -862,6 +864,7 @@ static bool ApplyParentReferenceDraft(ReferenceEditorDraft& e){
     }
     if(!AlterEgo::GW2API::RebaseLoadoutDraft(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,e.setId,e.fashionId,e.refs,e.revision,e.error))return false;
     g_EditRefs=e.refs;g_EditSetId=e.setId;g_EditFashionId=e.fashionId;
+    g_InfusionSlotDraft.reset();g_InfusionTotalsDraft.reset();
     g_EditSharedKinds.clear();g_LibDetailsFetched=false;MarkEditDirty();return true;
 }
 static void RenderReferenceEditor(){

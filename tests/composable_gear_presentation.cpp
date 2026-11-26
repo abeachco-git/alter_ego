@@ -32,6 +32,7 @@ int case_composable_gear_presentation(int, char**) {
     const auto infusions = Presentation::GearSlotSummary("infusions", captured);
     assert(infusions.find("2") != std::string::npos);
     assert(infusions != Presentation::GearSlotSummary("infusions", uncaptured));
+    assert(Presentation::GearSlotSummary("infusions",Json{{"infusion_attributes",Json::array({"Power","Precision"})}}).find("2 infusion positions")!=std::string::npos);
     assert(Presentation::GearSlotSummary("weapons", Json("unexpected")).find("preserved") != std::string::npos);
     assert(Presentation::GearSlotSummary("armor", Json("unexpected")) != empty);
     assert(gear == before);

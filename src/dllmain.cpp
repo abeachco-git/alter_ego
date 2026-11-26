@@ -3861,7 +3861,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
             RenderSectionHeader(label,AlterEgo::UI::SectionGold);
             if(kind>=0){ImGui::PushID(label);RenderLiveComponentSaveMenu(ch,tab,kind,"##save_live_section");ImGui::PopID();}
         });
-    RenderInfusionTotals(GetLiveInfusionSummary(ch, tab), nullptr, [&]() {
+    RenderLiveInfusionTotals(ch, tab, [&]() {
         RenderLiveComponentSaveMenu(ch, tab, 8, "##save_live_infusions");
     });
 }
@@ -4810,9 +4810,9 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
     }
 
     ImGui::Unindent(4.0f);
-    RenderInfusionTotals(GetLiveInfusionSummary(ch,
+    RenderLiveInfusionTotals(ch,
         g_SelectedEquipTab > 0 ? g_SelectedEquipTab :
-        (ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1)));
+        (ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1));
 }
 
 // --- Build Library helpers ---
@@ -7302,6 +7302,7 @@ static bool GearSlotBlocked(const AlterEgo::SavedBuild& b, const std::string& sl
 static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot,
     bool* capacityVerified=nullptr) {
     if(capacityVerified)*capacityVerified=false;
+    if(AlterEgo::GetInfusionMode(b)!=AlterEgo::InfusionMode::Slots)return 0;
     auto it = b.gear.find(slot);
     const bool two = it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
     int capacity = AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
@@ -7376,7 +7377,6 @@ static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,c
         dest.item_id = 0;
         if (IsMainhandSlot(slot) && IsWeaponTwoHanded(b.profession,dest.weapon_type)) {
             b.gear.erase(slot == "WeaponA1" ? "WeaponA2" : "WeaponB2");
-            InvalidateGearInfusionTotals(b);
         }
     }
     if (c.field == GearCopyField::All || c.field == GearCopyField::Stats) {
@@ -7390,8 +7390,7 @@ static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,c
         AlterEgo::GetInfusionMode(b)==AlterEgo::InfusionMode::Slots) {
         bool capacityVerified=false;
         const int capacity=GearInfusionCapacity(b,slot,&capacityVerified);
-        if(capacity>0&&AlterEgo::GearEdit::CopyInfusions(dest,c.data,capacity,capacityVerified))
-            InvalidateGearInfusionTotals(b);
+        if(capacity>0)AlterEgo::GearEdit::CopyInfusions(dest,c.data,capacity,capacityVerified);
     }
     MarkGearEditDirty(b);
 }
@@ -7403,10 +7402,7 @@ static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCo
     if (field == GearCopyField::All) {
         // Do not invalidate a pending child draft through an outside clear.
         if (&b!=&g_GearDialogDraft && g_GearDialogOpen && g_GearDialogBuildId == b.id)return;
-        const bool hadInfusions = !it->second.infusion_ids.empty() ||
-            !it->second.infusion_attributes.empty() || it->second.infusion_snapshot;
         b.gear.erase(it);
-        if (hadInfusions) InvalidateGearInfusionTotals(b);
     } else {
         auto& item = it->second;
         if (field == GearCopyField::Stats) { item.stat_id = 0; item.stat_name.clear(); }
@@ -7415,7 +7411,7 @@ static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCo
             item.rune.clear(); item.sigil.clear(); item.sigil2.clear();
         }
         if (field == GearCopyField::Infusions && AlterEgo::GetInfusionMode(b)==AlterEgo::InfusionMode::Slots) {
-            AlterEgo::GearEdit::ClearInfusions(item); InvalidateGearInfusionTotals(b);
+            AlterEgo::GearEdit::ClearInfusions(item);
         }
     }
     MarkGearEditDirty(b);
@@ -7559,10 +7555,7 @@ static void RenderGearCustomizeDialog() {
     // The child owns a separate equipment draft; Cancel or the window close
     // button cannot modify the parent Loadout draft.
     AlterEgo::SavedBuild* editBuild=&g_GearDialogDraft;
-    auto commitGear = [&](bool infusionChanged = false) {
-        if (infusionChanged) InvalidateGearInfusionTotals(*editBuild);
-        MarkGearEditDirty(*editBuild);
-    };
+    auto commitGear = [&]() { MarkGearEditDirty(*editBuild); };
 
     auto& gs = editBuild->gear[g_GearDialogSlot];
     gs.slot = g_GearDialogSlot;
@@ -7829,7 +7822,7 @@ static void RenderGearCustomizeDialog() {
                         gs.infusion_attributes.resize(gs.infusion_ids.size());
                         gs.infusion_attributes[i] = g_GearClipboard.data.infusion_attributes.empty()
                             ? "" : g_GearClipboard.data.infusion_attributes.front();
-                        gs.infusion_snapshot = true; commitGear(true);
+                        gs.infusion_snapshot = true; commitGear();
                     }
                     if (AlterEgo::UI::MenuAction("Fill This Item",AlterEgo::UI::MenuIcon::Copy,snapshot.valid))
                         ApplyGearClipboard(*editBuild,g_GearDialogSlot,snapshot);
@@ -7852,7 +7845,7 @@ static void RenderGearCustomizeDialog() {
                         g_GearExactInfusionId=g_GearEditingInfusionIndex>=0
                             ?static_cast<int>(gs.infusion_ids[g_GearEditingInfusionIndex]):0;
                         if(g_GearEditingInfusionIndex<0&&g_GearSelectorTab==3)g_GearSelectorTab=0;
-                        commitGear(true);
+                        commitGear();
                     }
                     ImGui::PopID();
                     break;
@@ -7870,7 +7863,7 @@ static void RenderGearCustomizeDialog() {
                 g_GearExactInfusionId = 0;
                 g_GearSelectorTab = 3;
                 memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
-                commitGear(true);
+                commitGear();
             }
         }
 
@@ -7990,7 +7983,7 @@ static void RenderGearCustomizeDialog() {
                         uint32_t weapItemId = GetLegendaryWeaponId(wname);
                         if (weapItemId != 0)
                             AlterEgo::GW2API::FetchItemDetailsAsync({weapItemId});
-                        commitGear(true);
+                        commitGear();
                     }
 
                     ImGui::GetWindowDrawList()->AddText(
@@ -8020,7 +8013,7 @@ static void RenderGearCustomizeDialog() {
                 if (!byAttribute) {
                     attribute = "Power";
                     gs.infusion_snapshot = true;
-                    commitGear(true);
+                    commitGear();
                 }
             }
             ImGui::SameLine();
@@ -8029,7 +8022,7 @@ static void RenderGearCustomizeDialog() {
                     attribute.clear(); // Never discard the original captured ID.
                     g_GearExactInfusionId = static_cast<int>(gs.infusion_ids[index]);
                     gs.infusion_snapshot = true;
-                    commitGear(true);
+                    commitGear();
                 }
             }
             if (!attribute.empty()) {
@@ -8058,7 +8051,7 @@ static void RenderGearCustomizeDialog() {
                     if (ImGui::Selectable(choice.label, attribute == choice.key)) {
                         attribute = choice.key;
                         gs.infusion_snapshot = true;
-                        commitGear(true);
+                        commitGear();
                     }
                 }
                 ImGui::EndChild();
@@ -8074,7 +8067,7 @@ static void RenderGearCustomizeDialog() {
                     gs.infusion_ids[index] = static_cast<uint32_t>(g_GearExactInfusionId);
                     gs.infusion_snapshot = true;
                     AlterEgo::GW2API::FetchItemDetailsAsync({gs.infusion_ids[index]});
-                    commitGear(true);
+                    commitGear();
                 }
                 const bool enrichment=g_GearDialogSlot=="Amulet";
                 ImGui::TextDisabled(enrichment?"Search enrichment catalog:":"Search infusion catalog:");
@@ -8091,7 +8084,7 @@ static void RenderGearCustomizeDialog() {
                             g_GearExactInfusionId = static_cast<int>(entry.second);
                             gs.infusion_snapshot = true;
                             AlterEgo::GW2API::FetchItemDetailsAsync({entry.second});
-                            commitGear(true);
+                            commitGear();
                         }
                     }
                     if (entries.empty())
@@ -9830,7 +9823,8 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
 
     // Gear slots are already grouped as Armor, Weapons, and Trinkets.
     if(g_GearDialogOpen)ImGui::TextDisabled("Save or cancel the gear customization draft first.");
-    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen);
+    RenderBuildGearPanel(g_LibEditMode ? g_EditDraft : build,g_LibEditMode&&g_EditRefsReady&&!g_GearDialogOpen&&
+        AlterEgo::GetInfusionMode(g_EditDraft)!=AlterEgo::InfusionMode::Conflict);
 
     // One shared footer for Saved and Edit; notes always follow infusion totals.
     const auto& snapshot = g_LibEditMode ? g_EditDraft : build;
@@ -10266,17 +10260,25 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     // Source-wide imported infusion counts and per-slot snapshots use the same
     // calculator; unknown metadata is never reported as a mismatch.
     const auto requiredTotals = GetSavedInfusionSummary(saved);
-    const auto liveTotals = GetLiveInfusionSummary(liveCharacter, equipmentTab);
     if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Conflict) {
         result.AddUnverified("Infusions", "Mode", "Mixed legacy requirements", "Resolve in Loadout Edit");
     } else if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Totals && requiredTotals.present) {
+        // Aggregate guide targets are terrestrial. Compare each configured land
+        // weapon set independently; never add the alternate set or aquatic gear.
+        auto configs=LiveInfusionConfigurations(liveCharacter,equipmentTab);
+        configs.erase(std::remove_if(configs.begin(),configs.end(),[](auto c){
+            return c==InfusionConfig::WaterA||c==InfusionConfig::WaterB;
+        }),configs.end());
+        for(auto config:configs){
+        const auto liveTotals=GetLiveInfusionSummary(liveCharacter,equipmentTab,config);
+        const std::string prefix=configs.size()>1?std::string(AlterEgo::InfusionConfigurationLabel(config))+" / ":"";
         if (!requiredTotals.complete || !liveTotals.complete ||
             liveCharacter.equipment.empty()) {
-            result.AddUnverified("Infusion totals", "Totals", "Unknown", "Metadata unavailable");
+            result.AddUnverified("Infusion totals", prefix+"Totals", "Unknown", "Metadata unavailable");
         } else {
             const int minAR = AlterEgo::AgonyRequirement(requiredTotals.agonyResistance);
             if (minAR > 0) {
-                result.Add("Infusion totals", "Agony Resistance",
+                result.Add("Infusion totals", prefix+"Agony Resistance",
                     "sufficient", liveTotals.agonyResistance >= minAR ? "sufficient" : "low",
                     std::to_string(requiredTotals.agonyResistance) +
                         " (minimum " + std::to_string(minAR) + ")",
@@ -10286,10 +10288,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 if (target <= 0) continue;
                 auto it = liveTotals.stats.find(attr);
                 const int current = it == liveTotals.stats.end() ? 0 : it->second;
-                result.Add("Infusion totals", InfusionAttributeLabel(attr),
+                result.Add("Infusion totals", prefix+InfusionAttributeLabel(attr),
                     "sufficient", current >= target ? "sufficient" : "low",
                     "+" + std::to_string(target), "+" + std::to_string(current));
             }
+        }
         }
     }
     return result;
