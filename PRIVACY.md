@@ -25,7 +25,7 @@ Remote services may receive normal request metadata such as IP addresses and req
 
 Automatic API refresh is opt-in and configurable by dataset; manual retrieval is available independently. Unlinking an account removes its registry entry and attempts to remove its credential, but does not erase saved library records or all previously cached data. If credential deletion fails, remove the remaining entry in Windows Credential Manager. Revoke keys at [ArenaNet account management](https://account.guildwars2.com/applications) when they are no longer needed.
 
-Library exports exclude API credentials and rebuildable caches. Depending on your selected collections they can include personal build names, notes, character associations, login timestamps, settings and custom portraits or fonts. Treat exported files and recovery backups as private unless you have reviewed their contents.
+Library exports exclude API credentials, account registry links and rebuildable caches. Relink accounts after restoring to a new installation. Depending on your selected collections they can include personal build names, notes, character associations, login timestamps, settings and custom portraits or fonts. Treat exported files and recovery backups as private unless you have reviewed their contents.
 
 Use **Storage & Cache** in Nexus options to rebuild disposable data. Rebuilds can quarantine previous files under `backups/`; they are not secure deletion. To remove local data, unload the addon, preserve anything you want to keep, and remove the relevant addon files and remaining credentials. Revocation and deletion are separate actions.
 

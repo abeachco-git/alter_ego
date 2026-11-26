@@ -6,7 +6,7 @@
 #include <algorithm>
 
 namespace AlterEgo::Storage {
-enum class CacheOperation { All, Artwork, Characters, AccountProgress, AchievementCatalog, PublicCatalog };
+enum class CacheOperation { All, Artwork, Characters, AccountProgress, AchievementCatalog, PublicCatalog, Inventory };
 inline const char* OperationName(CacheOperation op) {
     switch(op) {
     case CacheOperation::All: return "all";
@@ -15,12 +15,13 @@ inline const char* OperationName(CacheOperation op) {
     case CacheOperation::AccountProgress: return "account-progress";
     case CacheOperation::AchievementCatalog: return "achievement-catalog";
     case CacheOperation::PublicCatalog: return "public-catalog";
+    case CacheOperation::Inventory: return "inventory";
     }
     throw std::runtime_error("Unknown cache operation");
 }
-inline constexpr std::array<CacheOperation,6> kCacheOperations={
+inline constexpr std::array<CacheOperation,7> kCacheOperations={
     CacheOperation::All,CacheOperation::Artwork,CacheOperation::Characters,
-    CacheOperation::AccountProgress,CacheOperation::AchievementCatalog,CacheOperation::PublicCatalog
+    CacheOperation::AccountProgress,CacheOperation::AchievementCatalog,CacheOperation::PublicCatalog,CacheOperation::Inventory
 };
 inline std::optional<CacheOperation> ParseCacheOperation(const std::string& name) {
     for(auto op:kCacheOperations)if(name==OperationName(op))return op;
@@ -151,12 +152,18 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
         throw std::runtime_error("Unsupported cache database; use Rebuild all cache to quarantine it");
     // Upgrade known older schemas before selective operations.
     Cache::Initialize(db);
+    db.Verify();
     Database::Transaction tx(db);
     switch(op) {
     case CacheOperation::Artwork:
         db.Exec("DELETE FROM wiki_skin_failures; DELETE FROM wiki_currency_failures; UPDATE wiki_skin_freshness SET attempt=0; INSERT OR IGNORE INTO wiki_cache_state VALUES('failures');");break;
     case CacheOperation::Characters:
-        db.Exec("DELETE FROM character_rows; DELETE FROM character_snapshot;");break;
+        db.Exec("DELETE FROM character_rows; DELETE FROM character_snapshot;"
+                "DELETE FROM native_inventory_scopes WHERE scope IN ('Roster','Bags','Equipment'); DELETE FROM native_roster_state;");break;
+    case CacheOperation::Inventory:
+        // Retain the roster, independent character projections and public catalogs.
+        db.Exec("DELETE FROM native_inventory_scopes WHERE scope<>'Roster'; DELETE FROM native_wallet;"
+                "DELETE FROM native_guild_access; DELETE FROM native_guilds;");break;
     case CacheOperation::AccountProgress:
         db.Exec("DELETE FROM achievement_snapshots; DELETE FROM verified_achievement_snapshots; DELETE FROM ownership_snapshots; DELETE FROM clears_snapshots; DELETE FROM vault_snapshots;");break;
     case CacheOperation::AchievementCatalog:

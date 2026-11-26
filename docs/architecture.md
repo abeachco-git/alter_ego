@@ -308,3 +308,20 @@ Objective rollover consolidation: ClearsReset owns cache-busting tokens, no-cach
 - Final rollover guard: enforce propagation grace on actual daily/weekly requests, request fresh account progress for reset-sensitive consumers, reject an unchanged nonzero previous-week raid/strike completion fingerprint, and retry only that section's progress while other sections retain successful data. All-zero identical weekly progress is safe to display as incomplete, not evidence of a reset ID. Existing shared account broker and ordinary failure cooldown retained. CI passed; live validation pending.
 
 Verification (2026-11-26 UTC): exact implementation `a000b9a21e937c58b8de454f64e032ae095f2c5d` passed required offline regressions, parser ASan/UBSan, existing CI SQLite check, Windows x64 UCRT build, resource and distribution verification (45737705423); dependency inventory 45737705461 passed. Artifact 15080235875 retrieved; ZIP SHA-256 `c6e8b3e1a998b0781a07d040832328de44d3553ceef4c0553a1d8eb54844a8dd` matched GitHub, archive integrity passed; DLL PE32+ x64 imports UCRT (SHA-256 `86293476894db455800d5efbfd04bc77ccd8b94ebcdc9d83c256112b04f19fb4`). An earlier partial-cache regression caught legacy stamp promotion; fixed without weakening tests. Live Vault/Fractal/raid reset testing remains pending; authenticated endpoints expose no authoritative period identifier, so unchanged prior claimed/progressed snapshots are conservatively held. Discretionary benchmarks and full TSan remain deferred.
+
+### Storage ownership audit (2026-11-26 UTC)
+
+| Location | Owner / purpose | Recovery policy |
+| --- | --- | --- |
+| `library/library.db` | Authoritative Loadouts, components, equipment sets, Fashion | Portable export; verified SQLite backup before restore; never cache-reset |
+| `config/accounts.db` | Account GUID, display name, label and permissions (not API keys) | Cold copy while unloaded; portable restore intentionally relinks accounts |
+| Windows Credential Manager `AlterEgo/GW2/<account GUID>` | API keys | Never exported; re-enter keys after moving machines |
+| `config/settings.json`, `session.json`, `char_sort.json`, `clears_ui.json` | Preferences, wallet pins, UI state | Portable Other group, atomic staged writes |
+| `config/character_activity.json` | Durable activity and login history; per-scope verification/attempt state | Preserve on cache reset; only login history projection exported; unreadable originals retained |
+| `library/ach_tracked.json`, `login_times.json`, `character_logins.json` | Achievement pins and staged/legacy login history | Portable Other group; newer login observations win |
+| `portraits/`, `fonts/` | User-managed local assets | Portable Other group |
+| `cache/cache.db` | Rebuildable relational account, inventory, wallet, guild, character, progress and public catalog snapshots | Startup-only selective invalidation or full quarantine |
+| `cache/textures/`, `cache/wiki_images/` | Downloaded artwork and remaining legacy cache inputs | Artwork or full cache rebuild |
+| `backups/migration/`, `backups/recovery/`, `backups/cache-quarantine/` | Migration originals, pre-restore ZIP/DB, moved cache files | Preserve; manual review/removal with addon unloaded |
+
+Portable exports and preference/restore writes use a shared exclusive same-volume staging directory and checked close before replacement. Export destinations inside live addon folders and protected recovery subfolders are rejected; use a separate folder or ordinary `backups/`. Selective character rebuild clears correlated roster/bag/equipment scopes; Inventory rebuild clears inventory, wallet and guild observations while retaining roster, independent character projections and public catalog data. Storage inspection includes the account registry, auxiliary durable file sizes, backup sizes and inventory dataset counts. A full machine backup should be taken with the addon unloaded and include the complete data folder; credentials remain separate. Live migration/restore and Windows interrupted-write behavior still need testing.

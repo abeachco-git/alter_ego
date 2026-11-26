@@ -3,6 +3,7 @@
 // Archives produced here are standard ZIP files recognized by Windows Explorer.
 // The reader deliberately rejects encrypted, compressed, ZIP64, unsafe paths,
 // duplicate filenames, corrupt CRCs, and excessively large archives.
+#include "AtomicFile.h"
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -119,13 +120,7 @@ inline bool WriteStored(const Entries& entries, const std::string& path, std::st
     Put32(local, static_cast<uint32_t>(central.size()));
     Put32(local, static_cast<uint32_t>(centralOffset));
     Put16(local, 0);
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out || !out.write(local.data(), static_cast<std::streamsize>(local.size()))) {
-        error = "Could not write ZIP archive."; return false;
-    }
-    out.flush();
-    if (!out.good()) { error = "ZIP write failed."; return false; }
-    return true;
+    return Storage::ReplaceFile(std::filesystem::u8path(path),local,error);
 }
 
 inline bool ReadStored(const std::string& bytes, Entries& entries, std::string& error) {

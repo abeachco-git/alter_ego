@@ -688,6 +688,13 @@ int case_database_core(int, char**) {
         assert(Cache::WriteCharacters(root,J{{"last_updated",100},{"characters",J::array({{{"name","Hero"},{"account_name","A"}}})}}));
         Cache::AchievementSnapshot progress;progress.fetchedAt=100;
         assert(Cache::WriteAchievements(root,"A",progress));
+        {
+            DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
+            db.Exec("INSERT INTO native_roster_state VALUES('A',100); INSERT INTO native_rosters VALUES('A','Hero');"
+                "INSERT INTO native_inventory_scopes VALUES('A','Roster','','Ready',100,100),('A','Bags','Hero','Ready',100,100),('A','Bank','','Ready',100,100),('A','Wallet','','Ready',100,100);"
+                "INSERT INTO native_wallet VALUES('A',1,100); INSERT INTO native_guild_access VALUES('A','guild');"
+                "INSERT INTO native_guilds VALUES('guild','Guild','G','Ready',100,100); INSERT INTO native_guild_coins VALUES('guild','one',10);");
+        }
         using WikiKind=Cache::Wiki::Kind;
         const auto wikiLegacy=paths.CacheDirectory()/"wiki_images"/"legacy_metadata.json";
         const J wikiData={{"42",{{"acquisition","Dungeon"},{"vendor","Vendor"}}}};
@@ -708,6 +715,26 @@ int case_database_core(int, char**) {
         auto result=Storage::RunStartupMaintenance(root);
         assert(result.attempted&&result.success&&!Storage::MaintenancePending(root));
         assert(!Cache::ReadCharacters(root).has_value());
+        assert(Cache::ReadAchievements(root,"A").has_value());
+        {
+            DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
+            assert(db.Scalar("SELECT count(*) FROM native_rosters")==0);
+            assert(db.Scalar("SELECT count(*) FROM native_inventory_scopes WHERE scope='Bags'")==0);
+            assert(db.Scalar("SELECT count(*) FROM native_inventory_scopes WHERE scope='Bank'")==1);
+            assert(db.Scalar("SELECT count(*) FROM native_wallet")==1);
+            db.Exec("INSERT INTO native_roster_state VALUES('A',101); INSERT INTO native_rosters VALUES('A','Hero');"
+                "INSERT INTO native_inventory_scopes VALUES('A','Roster','','Ready',101,101)");
+        }
+        assert(Storage::ScheduleMaintenance(root,Storage::CacheOperation::Inventory,error));
+        assert(Storage::RunStartupMaintenance(root).success);
+        {
+            DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
+            assert(db.Scalar("SELECT count(*) FROM native_inventory_scopes")==1);
+            assert(db.Scalar("SELECT count(*) FROM native_rosters")==1);
+            assert(db.Scalar("SELECT count(*) FROM native_wallet")==0);
+            assert(db.Scalar("SELECT count(*) FROM native_guild_access")==0);
+            assert(db.Scalar("SELECT count(*) FROM native_guild_coins")==0);
+        }
         assert(Cache::ReadAchievements(root,"A").has_value());
         assert(!std::filesystem::exists(paths.base/"characters.json"));
         assert(Storage::ScheduleMaintenance(root,Storage::CacheOperation::Artwork,error));

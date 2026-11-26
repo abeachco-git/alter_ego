@@ -182,7 +182,7 @@ static void RenderLibraryBackupUI() {
         } else {
             ImGui::TextDisabled("ZIP archive (multiple files)");
         }
-        ImGui::TextDisabled("GW2 API caches are excluded; custom portraits and fonts are included.");
+        ImGui::TextDisabled("API caches, account links and keys are excluded; custom portraits and fonts are included.");
         ImGui::Spacing();
         if (mask && RenderActionButton("Export##ae_backup_export")) {
             const bool zip = !single || ui.exportZip;
@@ -201,15 +201,13 @@ static void RenderLibraryBackupUI() {
                 // Only local preferences need flushing; saved builds and
                 // fashion were persisted on every edit. Never overwrite a
                 // possibly damaged library file merely to export it.
-                if (mask & AlterEgo::Backup::Other) {
-                    SaveSettings();
-                    SaveSession();
-                    SaveAchTrackerState();
-                    SaveCharSortConfig();
-                }
                 ui.error.clear();
-                if ((mask & AlterEgo::Backup::Other) && !SaveCharacterActivity(true)) {
-                    ui.error = "Could not save current login history.";
+                const bool preferencesSaved=!(mask&AlterEgo::Backup::Other)||
+                    (SaveSettings()&&SaveSession()&&SaveAchTrackerState()&&SaveCharSortConfig());
+                if(!preferencesSaved){
+                    ui.error="Could not save current preferences; export cancelled.";
+                } else if ((mask & AlterEgo::Backup::Other) && !SaveCharacterActivity(true)) {
+                    ui.error = "Could not save current login history; original history retained.";
                 } else if (AlterEgo::Backup::Export(
                         AlterEgo::GW2API::GetDataDirectory(), mask, filename, zip, ui.error)) {
                     LibraryBackupNotify(zip ? "Alter Ego ZIP backup exported." :

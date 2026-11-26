@@ -1,4 +1,5 @@
 #pragma once
+#include "AtomicFile.h"
 #include <filesystem>
 #include <fstream>
 #include <chrono>
@@ -7,12 +8,15 @@
 #include <nlohmann/json.hpp>
 
 namespace AlterEgo::Storage {
+inline constexpr int kAccountRegistryApplicationId=0x41454143;
+inline constexpr int kAccountRegistrySchemaVersion=1;
 struct Paths {
     explicit Paths(const std::string& root) : base(std::filesystem::u8path(root)) {}
     std::filesystem::path base;
     std::filesystem::path ConfigDirectory() const { return base/"config"; }
     std::filesystem::path LibraryDirectory() const { return base/"library"; }
     std::filesystem::path CacheDirectory() const { return base/"cache"; }
+    std::filesystem::path Accounts() const { return ConfigDirectory()/"accounts.db"; }
     std::filesystem::path Library() const { return LibraryDirectory()/"library.db"; }
     std::filesystem::path Cache() const { return CacheDirectory()/"cache.db"; }
     std::filesystem::path Migration() const { return base/"backups"/"migration"; }
@@ -56,7 +60,7 @@ inline void WriteMigrationBytes(const std::filesystem::path& path, const std::st
 // Existing canonical files always win. A valid legacy document is archived
 // and published without replacing a destination. If staging fails, keep the
 // old path active for this attempt instead of silently discarding preferences.
-// Only these six explicitly classified filenames are migrated.
+// Only explicitly classified configuration and durable filenames are migrated.
 inline std::string Resolve(const std::string& root, const std::string& name) {
     const Paths paths(root);
     const auto dest=Destination(paths,name);

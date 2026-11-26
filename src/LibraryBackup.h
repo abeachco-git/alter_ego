@@ -211,8 +211,34 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
     }
     return true;
 }
+// Exports cannot overwrite live files or protected recovery snapshots.
+inline bool ExportDestination(const std::string& dir,const std::string& destination,std::string& error) {
+    namespace fs=std::filesystem;
+    try{
+        const auto base=fs::weakly_canonical(fs::u8path(dir));
+        const auto target=fs::weakly_canonical(fs::u8path(destination));
+        auto equal=[](const fs::path& a,const fs::path& b){
+#ifdef _WIN32
+            return CompareStringOrdinal(a.c_str(),-1,b.c_str(),-1,TRUE)==CSTR_EQUAL;
+#else
+            return a==b;
+#endif
+        };
+        auto a=base.begin(),b=target.begin();
+        while(a!=base.end()&&b!=target.end()&&equal(*a,*b)){++a;++b;}
+        if(a==base.end()){
+            if(b==target.end()||!equal(*b,"backups"))
+                throw std::runtime_error("Choose an export outside the addon data folder or inside backups.");
+            ++b;
+            if(b==target.end()||equal(*b,"migration")||equal(*b,"recovery")||equal(*b,"cache-quarantine"))
+                throw std::runtime_error("Do not overwrite protected recovery or migration backups.");
+        }
+        return true;
+    }catch(const std::exception& e){error=e.what();return false;}
+}
 inline bool Export(const std::string& dir, unsigned selected,
                    const std::string& destination, bool asZip, std::string& error) {
+    if(!ExportDestination(dir,destination,error))return false;
     FileMap files;
     if (!Collect(dir, selected, files, error)) return false;
     if (!asZip) {
@@ -221,12 +247,7 @@ inline bool Export(const std::string& dir, unsigned selected,
             error = "Individual JSON export requires Builds or Fashion only."; return false;
         }
         const auto& bytes = files.begin()->second;
-        std::ofstream out(destination, std::ios::binary | std::ios::trunc);
-        if (!out || !out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()))) {
-            error = "Could not export JSON file."; return false;
-        }
-        out.flush();
-        return out.good();
+        return Storage::ReplaceFile(std::filesystem::u8path(destination),bytes,error);
     }
     files["manifest.json"] = Manifest(files, selected).dump(2);
     return BackupZip::WriteStored(files, destination, error);
@@ -384,37 +405,8 @@ inline bool Prepare(const std::string& dir, const Package& package,
     return true;
 }
 
-inline bool WriteAtomic(const std::string& path, const std::string& bytes, std::string& error) {
-    const auto file = std::filesystem::u8path(path);
-    std::error_code ec;
-    std::filesystem::create_directories(file.parent_path(), ec);
-    if (ec) { error = "Could not create backup destination directory."; return false; }
-    const std::string tmp = path + ".ae_restore_tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out || !out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()))) {
-            error = "Could not stage restored file: " + file.filename().u8string();
-            std::filesystem::remove(std::filesystem::u8path(tmp), ec);
-            return false;
-        }
-        out.flush();
-        if (!out.good()) { error = "Could not flush restored file."; return false; }
-    }
-#ifdef _WIN32
-    if (!MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        error = "Could not replace file: " + file.filename().u8string();
-        std::filesystem::remove(std::filesystem::u8path(tmp), ec);
-        return false;
-    }
-#else
-    std::filesystem::rename(std::filesystem::u8path(tmp), file, ec);
-    if (ec) {
-        error = "Could not replace file: " + file.filename().u8string();
-        std::filesystem::remove(std::filesystem::u8path(tmp), ec);
-        return false;
-    }
-#endif
-    return true;
+inline bool WriteAtomic(const std::string& path,const std::string& bytes,std::string& error) {
+    return Storage::ReplaceFile(std::filesystem::u8path(path),bytes,error);
 }
 
 inline bool Apply(const std::string& dir, const Plan& plan,

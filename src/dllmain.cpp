@@ -807,7 +807,7 @@ static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_Ach
 
 // Persistence & caching
 static std::chrono::steady_clock::time_point g_LastAchProgressQuery{};
-static void SaveAchTrackerState();
+static bool SaveAchTrackerState();
 static void LoadAchTrackerState();
 static void SaveAchGroupCache();
 static void LoadAchGroupCache();
@@ -1173,7 +1173,7 @@ static std::shared_ptr<const std::vector<AlterEgo::Character>> g_CharOrderRoster
 static std::string g_CharOrderAccount;
 static bool g_CharLastLoginSortDirty = false;        // rebuild recency sort after Mumble character change
 
-static void SaveCharSortConfig();
+static bool SaveCharSortConfig();
 static void LoadCharSortConfig();
 static int DaysUntilBirthday(const std::string& created);
 
@@ -1365,30 +1365,15 @@ static std::string GetAchievementCacheAccount() {
     return {};
 }
 
-bool WriteFileAtomic(const std::string& finalPath, const std::string& content) {
-    std::string tmp = finalPath + ".tmp";
-    try {
-        {
-            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-            if (!f.is_open()) return false;
-            f.write(content.data(), (std::streamsize)content.size());
-            f.flush();
-            if (!f.good()) return false;
-        }
-        // MoveFileExA with MOVEFILE_REPLACE_EXISTING is atomic on NTFS for
-        // same-volume renames (the temp file lives next to the final path).
-        if (!MoveFileExA(tmp.c_str(), finalPath.c_str(),
-                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            std::error_code ec;
-            std::filesystem::remove(tmp, ec);
-            return false;
-        }
-        return true;
-    } catch (...) {
-        std::error_code ec;
-        std::filesystem::remove(tmp, ec);
-        return false;
-    }
+bool WriteFileAtomic(const std::string& finalPath,const std::string& content) {
+    std::string error;
+    return AlterEgo::Storage::ReplaceFile(std::filesystem::u8path(finalPath),content,error);
+}
+static bool SavePreferenceFile(const std::string& path,const nlohmann::json& data) {
+    std::string error;
+    if(AlterEgo::Storage::ReplaceFile(std::filesystem::u8path(path),data.dump(2),error))return true;
+    if(APIDefs)APIDefs->Log(LOGL_WARNING,"AlterEgo","Could not save preferences; previous file retained.");
+    return false;
 }
 
 // Gear customization dialog state
@@ -1631,7 +1616,7 @@ void CopyToClipboard(const std::string& text) {
 }
 
 // Settings persistence
-static void SaveSettings() {
+static bool SaveSettings() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "settings.json");
     nlohmann::json j;
     j["show_qa_icon"] = g_ShowQAIcon;
@@ -1662,8 +1647,7 @@ static void SaveSettings() {
         {"path", g_FontConfig.customPath},
         {"px",   g_FontConfig.px},
     };
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump(2);
+    return SavePreferenceFile(path,j);
 }
 
 static void LoadSettings() {
@@ -1734,14 +1718,13 @@ static void LoadSettings() {
 }
 
 // Character sort persistence
-static void SaveCharSortConfig() {
+static bool SaveCharSortConfig() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "char_sort.json");
     nlohmann::json j;
     j["sort_mode"] = g_CharSortMode;
     j["sort_ascending"] = g_CharSortAscending;
     j["custom_order"] = g_CustomCharOrder;
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump(2);
+    return SavePreferenceFile(path,j);
 }
 
 static void LoadCharSortConfig() {
@@ -1763,7 +1746,7 @@ static void LoadCharSortConfig() {
 // Session restore persistence
 static std::string g_SessionSelectedCharName; // deferred: resolve to index after chars load
 
-static void SaveSession() {
+static bool SaveSession() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "session.json");
 
     nlohmann::json j;
@@ -1801,8 +1784,7 @@ static void SaveSession() {
     j["skin_show_unowned"] = g_SkinShowUnowned;
     j["skin_view_mode"] = g_SkinViewMode;
 
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump(2);
+    return SavePreferenceFile(path,j);
 }
 
 static void LoadSession() {
@@ -1876,7 +1858,7 @@ static void LoadSession() {
 // Achievement Tracker — Persistence
 // =========================================================================
 
-static void SaveAchTrackerState() {
+static bool SaveAchTrackerState() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "ach_tracked.json");
 
     nlohmann::json j;
@@ -1901,8 +1883,7 @@ static void SaveAchTrackerState() {
         j["expanded_in_popout"] = expanded;
     }
 
-    std::ofstream file(path);
-    if (file.is_open()) file << j.dump(2);
+    return SavePreferenceFile(path,j);
 }
 
 static void LoadAchTrackerState() {
@@ -12509,11 +12490,21 @@ static void LoadCharacterActivity(){
     std::lock_guard<std::mutex> lock(A::Mutex());A::State()=A::Tracker{};
     const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_activity.json");
     g_ActivityLoadValid=true;
-    try{std::ifstream f(path);if(f)A::State().Load(nlohmann::json::parse(f));}catch(...){g_ActivityLoadValid=false;}
+    try{
+        std::error_code ec;
+        const bool exists=std::filesystem::exists(std::filesystem::u8path(path),ec);
+        if(ec)throw std::runtime_error("Cannot inspect login history");
+        if(exists){
+            const auto bytes=AlterEgo::Storage::ReadMigrationBytes(std::filesystem::u8path(path));
+            A::State().Load(AlterEgo::Untrusted::Parse(bytes,AlterEgo::Untrusted::Library));
+        }
+    }catch(...){g_ActivityLoadValid=false;}
     g_LoginProjectionRevision=~uint64_t(0);
 }
 static bool SaveCharacterActivity(bool force){
     namespace A=AlterEgo::CharacterActivity;
+    // Preserve an unreadable ledger for explicit recovery.
+    if(!g_ActivityLoadValid)return false;
     static std::mutex saveMutex;
     std::lock_guard<std::mutex> saving(saveMutex);
     static auto last=std::chrono::steady_clock::time_point{};
@@ -17605,6 +17596,8 @@ static void RenderStorageDiagnostics() {
             "Inspect local storage without making API requests. Saved Loadouts and preferences are separate from rebuildable cache data.");
         ImGui::EndTooltip();
     }
+    if(!g_ActivityLoadValid)
+        ImGui::TextWrapped("Login history could not be loaded. Its original file is preserved; recover it with the addon unloaded.");
     if(g_StorageMaintenanceResult.attempted)
         ImGui::TextWrapped("%s",g_StorageMaintenanceResult.message.c_str());
     if(!g_StorageMaintenanceMessage.empty())
@@ -17615,7 +17608,7 @@ static void RenderStorageDiagnostics() {
         static int selected=0;
         const char* labels[]={"Rebuild all cache (quarantine)","Clear downloaded artwork",
             "Rebuild characters","Rebuild account progress","Rebuild achievement catalog",
-            "Rebuild public catalogs and prices"};
+            "Rebuild public catalogs and prices","Rebuild inventory, wallet and guild bank"};
         const char* rebuildLabel="Rebuild##ae_cache_operation";
         const float avail=std::max(1.0f,ImGui::GetContentRegionAvail().x);
         const float reserve=UI::CompactButtonWidth(rebuildLabel)+ImGui::GetStyle().ItemSpacing.x;
@@ -17627,8 +17620,8 @@ static void RenderStorageDiagnostics() {
             sameRow?avail-reserve:avail);
         ImGui::PopStyleVar();
         if(comboOpen) {
-            for(int i=0;i<6;++i)
-                if(UI::SelectableOption(labels[i],selected==i))selected=i;
+            for(size_t i=0;i<Storage::kCacheOperations.size();++i)
+                if(UI::SelectableOption(labels[i],selected==static_cast<int>(i)))selected=static_cast<int>(i);
             ImGui::EndCombo();
         }
         if(sameRow)ImGui::SameLine();
@@ -17710,7 +17703,12 @@ static void RenderStorageDiagnostics() {
         ImGui::TextWrapped("%s",info.status.c_str());
     };
     database("Saved library",snapshot.library);
+    database("Account registry",snapshot.accounts);
     database("Cache database",snapshot.cache);
+    ImGui::Text("Preferences, library auxiliary files and custom assets: %.2f MiB%s",
+        static_cast<double>(snapshot.durableFileBytes)/(1024.0*1024.0),snapshot.durableFilesComplete?"":" (partial)");
+    ImGui::Text("Migration, recovery and other backups: %.2f MiB%s",
+        static_cast<double>(snapshot.backupBytes)/(1024.0*1024.0),snapshot.backupsComplete?"":" (partial)");
     ImGui::Text("Downloaded artwork: %.2f MiB%s",
         static_cast<double>(snapshot.artworkBytes)/(1024.0*1024.0),
         snapshot.artworkComplete?"":" (partial)");

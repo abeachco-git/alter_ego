@@ -19,7 +19,9 @@ struct DatabaseDiagnostic {
     bool healthy=false;
 };
 struct CacheDiagnostics {
-    DatabaseDiagnostic library,cache;
+    DatabaseDiagnostic library,cache,accounts;
+    uintmax_t durableFileBytes=0,backupBytes=0;
+    bool durableFilesComplete=true,backupsComplete=true;
     uintmax_t artworkBytes=0;
     bool artworkComplete=true;
     int64_t inspectedAt=0;
@@ -100,6 +102,14 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                 {"Item stats","SELECT count(*) FROM reference_itemstats","itemstat_cache"},
                 {"Dyes","SELECT count(*) FROM reference_dyes","dye_cache"},
                 {"Characters","SELECT count(*) FROM character_rows",nullptr},
+                {"Native roster characters","SELECT count(*) FROM native_rosters",nullptr},
+                {"Inventory scopes","SELECT count(*) FROM native_inventory_scopes",nullptr},
+                {"Inventory item locations","SELECT count(*) FROM native_inventory_slots",nullptr},
+                {"Inventory sockets","SELECT count(*) FROM native_inventory_sockets",nullptr},
+                {"Wallet balances","SELECT count(*) FROM native_wallet",nullptr},
+                {"Currency definitions","SELECT count(*) FROM native_currencies",nullptr},
+                {"Guild banks","SELECT count(*) FROM native_guilds",nullptr},
+                {"Guild bank locations","SELECT count(*) FROM native_guild_slots",nullptr},
                 {"Clears entries","SELECT count(*) FROM clears_entries",nullptr},
                 {"Vault objectives","SELECT count(*) FROM vault_objectives",nullptr},
                 {"Wiki event timer starts","SELECT count(*) FROM wiki_event_starts","wiki_event_timers"},
@@ -143,6 +153,13 @@ inline CacheDiagnostics InspectStorage(const std::string& root) {
     if(root.empty())return out;
     const Paths paths(root);
     out.library=InspectDatabase(paths.Library(),NativeLibrary::kApplicationId,NativeLibrary::kSchemaVersion,false,out.datasets);
+    out.accounts=InspectDatabase(paths.Accounts(),kAccountRegistryApplicationId,kAccountRegistrySchemaVersion,false,out.datasets);
+    for(const auto& dir:{paths.ConfigDirectory(),paths.LibraryDirectory(),paths.Portraits(),paths.Fonts()})
+        out.durableFileBytes+=ArtworkSize(dir,out.durableFilesComplete);
+    const auto primaryBytes=out.library.bytes+out.accounts.bytes;
+    if(out.durableFileBytes>=primaryBytes)out.durableFileBytes-=primaryBytes;
+    else out.durableFilesComplete=false;
+    out.backupBytes=ArtworkSize(paths.base/"backups",out.backupsComplete);
     {
         std::lock_guard<std::mutex> lock(Cache::Mutex());
         out.cache=InspectDatabase(paths.Cache(),Cache::kApplicationId,Cache::kSchemaVersion,true,out.datasets);

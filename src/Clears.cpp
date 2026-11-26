@@ -2536,8 +2536,8 @@ static void SaveClearUiSettings() {
         j["show_vault_assistance"] = g_ShowVaultAssistance;
         j["hide_clears_complete"] = g_ClearsHideComplete;
         j["show_fractal_next_resets"] = g_ShowFractalNextResets;
-        std::ofstream f(path, std::ios::trunc);
-        if (f.good()) f << j.dump(2);
+        std::string error;
+        AlterEgo::Storage::ReplaceFile(std::filesystem::u8path(path),j.dump(2),error);
     } catch (...) {}
 }
 static bool RenderVaultSectionToggle(int index, const char* title,

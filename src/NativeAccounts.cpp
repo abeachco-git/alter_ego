@@ -105,9 +105,9 @@ bool SaveKey(const std::string& id,const std::string& key){
     cred.CredentialBlobSize=static_cast<DWORD>(key.size());cred.CredentialBlob=reinterpret_cast<LPBYTE>(const_cast<char*>(key.data()));
     cred.Persist=CRED_PERSIST_LOCAL_MACHINE;return CredWriteA(&cred,0)!=FALSE;
 }
-std::filesystem::path AccountPath(){return Storage::Paths(root).ConfigDirectory()/"accounts.db";}
+std::filesystem::path AccountPath(){return Storage::Paths(root).Accounts();}
 void InitAccounts(Database::Connection& db){
-    Database::Migrate(db,0x41454143,1,[](Database::Connection& c,int){
+    Database::Migrate(db,Storage::kAccountRegistryApplicationId,Storage::kAccountRegistrySchemaVersion,[](Database::Connection& c,int){
         c.Exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,label TEXT NOT NULL,permissions TEXT NOT NULL) STRICT");
     });
 }
