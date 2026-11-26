@@ -864,6 +864,21 @@ int case_database_core(int, char**) {
         assert(!Cache::WriteCompletion(root,D::Vault,"A_B",vault));
         DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);db.Verify();
         assert(db.Scalar("SELECT count(*) FROM clears_snapshots")==2);
+        // A partial current-day commit must not relabel a failed prior section.
+        J partial={{"account","A.B"},{"dailyFractals",J::array({clear})},{"section_stamps",{{"dailyFractals",300}}}};
+        assert(Cache::WriteClearsSections(root,"A.B",partial));
+        auto merged=Cache::ReadCompletion(root,D::Clears,"A.B");
+        assert(merged&&merged->at("section_stamps").at("dailyFractals")==300&&merged->at("section_stamps").at("weeklyStrikes")==100);
+        J independent={{"account","A.B"},{"weeklyStrikes",clear},{"section_stamps",{{"weeklyStrikes",250}}}};
+        assert(Cache::WriteClearsSections(root,"A.B",independent));
+        auto both=Cache::ReadCompletion(root,D::Clears,"A.B");
+        assert(both->at("fetch_time")==300&&both->at("section_stamps").at("weeklyStrikes")==250);
+        independent["section_stamps"]["weeklyStrikes"]=249;independent["weeklyStrikes"]["name"]="stale";
+        assert(Cache::WriteClearsSections(root,"A.B",independent));
+        assert(Cache::ReadCompletion(root,D::Clears,"A.B")==both);
+        partial["section_stamps"]["dailyFractals"]=301;partial["dailyFractals"]=J::array();
+        assert(!Cache::WriteClearsSections(root,"A.B",partial));
+        assert(Cache::ReadCompletion(root,D::Clears,"A.B")==both);
         assert(db.Scalar("SELECT count(*) FROM vault_snapshots")==1);
     }
     return 0;

@@ -57,7 +57,7 @@ inline void Store(Database::Connection& db,CompletionDataset d,const std::string
         mark.Bind(1,account);mark.Bind(2,stamp);mark.Execute();
         auto remove=db.Prepare("DELETE FROM clears_sections WHERE account=?");
         remove.Bind(1,account);remove.Execute();
-        auto section=db.Prepare("INSERT INTO clears_sections VALUES(?,?)");
+        auto section=db.Prepare("INSERT INTO clears_sections(account,section,fetched_at) VALUES(?,?,?)");
         auto entry=db.Prepare("INSERT INTO clears_entries VALUES(?,?,?,?,?,?,?,?,?)");
         auto names=db.Prepare("INSERT INTO clears_bit_names VALUES(?,?,?,?,?)");
         auto done=db.Prepare("INSERT INTO clears_bit_done VALUES(?,?,?,?,?)");
@@ -65,7 +65,9 @@ inline void Store(Database::Connection& db,CompletionDataset d,const std::string
             if(!data.contains(key))continue;
             const std::string kind=key;
             const auto rows=kind=="weeklyStrikes"?Json::array({data.at(key)}):Array(data,key);
-            section.Bind(1,account);section.Bind(2,kind);section.Execute();section.Reset();
+            const auto sectionStamp=data.contains("section_stamps")?Number(data.at("section_stamps"),key):0;
+            if(sectionStamp<0||sectionStamp>stamp)throw std::runtime_error("Invalid Clears section stamp");
+            section.Bind(1,account);section.Bind(2,kind);section.Bind(3,sectionStamp);section.Execute();section.Reset();
             int64_t ordinal=0;
             for(const auto& row:rows) {
                 if(!row.is_object())throw std::runtime_error("Invalid Clears entry");
@@ -115,12 +117,13 @@ inline std::optional<Json> Read(Database::Connection& db,CompletionDataset d,con
     if(!Exists(db,d,account,&stamp))return std::nullopt;
     Json out={{"account",account},{"fetch_time",stamp}};
     if(d==CompletionDataset::Clears) {
-        auto sections=db.Prepare("SELECT section FROM clears_sections WHERE account=?");sections.Bind(1,account);
+        auto sections=db.Prepare("SELECT section,fetched_at FROM clears_sections WHERE account=?");sections.Bind(1,account);
         auto entries=db.Prepare("SELECT ordinal,id,name,tier,done,current_count,max_count FROM clears_entries WHERE account=? AND section=? ORDER BY ordinal");
         auto names=db.Prepare("SELECT name FROM clears_bit_names WHERE account=? AND section=? AND entry_ordinal=? ORDER BY ordinal");
         auto done=db.Prepare("SELECT done FROM clears_bit_done WHERE account=? AND section=? AND entry_ordinal=? ORDER BY ordinal");
         while(sections.Step()) {
             auto kind=sections.Text(0);Json rows=Json::array();
+            if(sections.Integer(1)>0)out["section_stamps"][kind]=sections.Integer(1);
             entries.Bind(1,account);entries.Bind(2,kind);
             while(entries.Step()) {
                 Json row={{"id",entries.Integer(1)},{"name",entries.Text(2)},{"tier",entries.Text(3)},
@@ -186,6 +189,38 @@ inline bool WriteCompletion(const std::string& root,CompletionDataset d,const st
 }
 // Merge verified periods transactionally; omitted sections retain their own
 // timestamps and previous reset fingerprints.
+// Clears definitions/progress are independently verified; preserve prior reset
+// fingerprints for absent or failed sections rather than marking them current.
+inline bool WriteClearsSections(const std::string& root,const std::string& account,const CompletionRows::Json& patch) {
+    using namespace CompletionRows;
+    if(root.empty()||account.empty()||!patch.is_object()||Text(patch,"account")!=account)return false;
+    try{
+        std::lock_guard<std::mutex> lock(Mutex());
+        const auto path=Storage::Paths(root).Cache();
+        std::filesystem::create_directories(path.parent_path());
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+        Initialize(db);Database::Transaction tx(db);
+        auto prior=Read(db,CompletionDataset::Clears,account);
+        Json merged=prior.value_or(Json{{"account",account},{"fetch_time",0}});
+        int64_t newest=Number(merged,"fetch_time");
+        // Convert the legacy aggregate timestamp into section stamps before
+        // moving the aggregate forward. Omitted sections keep their old age.
+        for(const char* key:{"dailyFractals","dailyBounties","weeklyWings","weeklyStrikes"}){
+            if(merged.contains(key)&&(!merged.contains("section_stamps")||!merged["section_stamps"].contains(key)))
+                merged["section_stamps"][key]=newest;
+            if(!patch.contains(key))continue;
+            const auto stamp=Number(patch.at("section_stamps"),key);
+            if(stamp<=0)throw std::runtime_error("Unverified Clears section");
+            if(merged.contains(key)&&stamp<Number(merged.at("section_stamps"),key))continue;
+            const auto& row=patch.at(key);
+            if(std::string(key)=="weeklyStrikes"?(!row.is_object()||Number(row,"id")<=0):(!row.is_array()||row.empty()))
+                throw std::runtime_error("Empty Clears section");
+            merged[key]=row;merged["section_stamps"][key]=stamp;newest=std::max(newest,stamp);
+        }
+        merged["fetch_time"]=newest;
+        Store(db,CompletionDataset::Clears,account,merged);tx.Commit();return true;
+    }catch(...){return false;}
+}
 inline bool WriteVaultPeriods(const std::string& root,const std::string& account,const CompletionRows::Json& patch) {
     using namespace CompletionRows;
     if(root.empty()||account.empty()||!patch.is_object()||Text(patch,"account")!=account)return false;

@@ -84,7 +84,7 @@ int case_clears_rotation(int, char**) {
     first.Reset();assert(first.Ready(0)&&first.reason.empty());
     assert(FreshPath("/v2/account/wizardsvault/daily",42)=="/v2/account/wizardsvault/daily?ae_refresh=42");
     assert(FreshPath("/v2/test?ids=all",43)=="/v2/test?ids=all&ae_refresh=43");
-    assert(RequestToken()<RequestToken());
+    const auto token1=RequestToken(),token2=RequestToken();assert(token1<token2);
     // Retry URLs must change even on the same day, otherwise an initially
     // stale max-age=3600 result could be cached for a full hour.
     assert(FreshCategoryUrl(88, 0) ==
