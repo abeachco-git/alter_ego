@@ -83,6 +83,14 @@ int case_gear_edit_core(int, char**) {
     CopySigils(dst,src,2); assert(dst.sigil2_id == 2);
     CopySigils(dst,src,1); assert(dst.sigil2_id == 0);
     assert(InfusionCapacity("WeaponB2",false,true) == 0);
+    Slot weapon;
+    weapon.weapon_type="Sword";weapon.item_id=42;weapon.sigil2_id=77;weapon.infusion_ids={1,2};
+    auto same=AlterEgo::EquipmentChoice::PlanWeaponChange("WeaponA1","Sword","Sword",false);
+    ApplyWeaponChange(weapon,"Sword",same);
+    assert(weapon.item_id==42&&weapon.sigil2_id==77&&weapon.infusion_ids.size()==2);
+    auto changed=AlterEgo::EquipmentChoice::PlanWeaponChange("WeaponA1","Sword","Axe",false);
+    ApplyWeaponChange(weapon,"Axe",changed);
+    assert(weapon.item_id==0&&weapon.weapon_type=="Axe"&&weapon.sigil2_id==0&&weapon.infusion_ids.size()==1);
     Build parent;
     assert(!HasRecordedAquaticGear(parent.gear));
     parent.gear["HelmAquatic"].infusion_snapshot=true;

@@ -415,6 +415,10 @@ int case_composable_loadouts(int, char**) {
            ["future_stat"]["source"] == "third-party");
     assert(!portablePacket["components"]["weapons"].contains("id"));
     const Json beforePortable = ToJson(document);
+    auto oldWaterPacket=portablePacket;
+    oldWaterPacket["components"]["armor"]["data"]["gear"]["HelmAquatic"]={{"stat_id",1130}};
+    assert(!ImportPortableLoadout(document,oldWaterPacket,"old-water",error));
+    assert(!FindLoadout(document,"old-water"));
     assert(ImportPortableLoadout(document, portablePacket, "imported-one", error));
     assert(document.loadouts.size() == 3);
     auto* importedLoadout = FindLoadout(document, "imported-one");

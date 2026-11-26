@@ -714,6 +714,17 @@ inline Json ToJson(const Document& doc) {
     }
     return output;
 }
+// Portable graphs are current-format interchange, not database migrations.
+inline bool ValidateCurrentAquaticOwnership(const Document& doc,std::string& error) {
+    for(const auto& [kind,parts]:doc.components)for(const auto& part:parts){
+        const auto gear=part.data.find("gear");
+        if(gear==part.data.end()||!gear->is_object())continue;
+        for(auto slot=gear->begin();slot!=gear->end();++slot)
+            if(EquipmentChoice::IsAquaticGearSlot(slot.key())!=(kind=="aquatic"))
+                return Fail(error,"Equipment slot belongs to another component.");
+    }
+    return true;
+}
 inline bool FromJson(const Json& input, Document& output, std::string& error) {
     error.clear();
     if (!input.is_object() || !input.contains("format") ||
@@ -753,7 +764,7 @@ inline bool FromJson(const Json& input, Document& output, std::string& error) {
     } catch (const std::exception& e) {
         return Fail(error, std::string("Invalid Loadout fields: ") + e.what());
     }
-    if (!Validate(next, error)||!NormalizeAquatic(next,error)) return false;
+    if (!Validate(next, error)||!ValidateCurrentAquaticOwnership(next,error)) return false;
     output = std::move(next);
     return true;
 }
@@ -880,7 +891,7 @@ inline bool ValidatePortablePayload(const std::string& kind,
 }
 
 inline bool ImportComponent(const Json& input, std::string& kind,
-                            Component& component, std::string& error, bool allowLegacyAquatic=false) {
+                            Component& component, std::string& error) {
     error.clear();
     if (!input.is_object() || !input.contains("format") ||
         !input.at("format").is_string() ||
@@ -904,9 +915,9 @@ inline bool ImportComponent(const Json& input, std::string& kind,
                 return Fail(error, "Gear fields must form a slot object.");
             for (auto slot = it.value().begin(); slot != it.value().end(); ++slot) {
                 const bool water=EquipmentChoice::IsAquaticGearSlot(slot.key());
-                if(water&&parsedKind!="aquatic"&&!allowLegacyAquatic)
-                    return Fail(error,"Legacy aquatic fields require importing the complete Loadout or library.");
-                if (!(water&&allowLegacyAquatic&&parsedKind!="aquatic") && parsedKind != "runes" && parsedKind != "sigils" &&
+                if(water!=(parsedKind=="aquatic"))
+                    return Fail(error,"Equipment slot belongs to another component.");
+                if (parsedKind != "runes" && parsedKind != "sigils" &&
                     parsedKind != "infusions" && SlotKind(slot.key()) != parsedKind)
                     return Fail(error, "Equipment slot belongs to another component.");
                 if (!slot.value().is_object())
@@ -1002,7 +1013,7 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
             {"version", kComponentVersion},
             {"kind", it.key()},
             {"name", it.value()["name"]},
-            {"data", it.value()["data"]}}, kind, part, error, true))
+            {"data", it.value()["data"]}}, kind, part, error))
             return false;
         imported[kind] = std::move(part);
     }
@@ -1055,7 +1066,7 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
             next.equipment_sets.push_back(std::move(set));
         }
         next.loadouts.push_back(std::move(loadout));
-        return NormalizeAquatic(next,err);
+        return true;
     }, error);
 }
 

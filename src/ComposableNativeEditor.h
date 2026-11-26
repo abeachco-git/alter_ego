@@ -519,7 +519,7 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
     ImGui::PopID();
 }
 
-static void ComponentNativeWeaponChoice(ComponentJson& item,
+static void ComponentNativeWeaponChoice(ComponentJson& item,ComponentJson& gear,
                                         const std::string& profession,
                                         const std::string& slot) {
     if (profession.empty()) {
@@ -534,20 +534,25 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,
         return;
     }
     const std::string current = item.value("weapon_type", std::string());
+    auto apply=[&](const std::string& next,bool twoHanded){
+        const auto plan=AlterEgo::EquipmentChoice::PlanWeaponChange(slot,current,next,twoHanded);
+        if(!plan.changed)return;
+        if(next.empty())item.erase("weapon_type");else item["weapon_type"]=next;
+        item.erase("item_id");item.erase("item_name");
+        // A Weapons component owns physical weapon slots only. Never edit
+        // separately linked Sigils or Infusions components from this draft.
+        if(!plan.displacedOffhand.empty())gear.erase(plan.displacedOffhand);
+    };
     if (AlterEgo::UI::BeginCombo("Weapon type##native_weapon", current.empty()
                          ? "(choose type)" : WeaponDisplayName(current))) {
-        if (ImGui::Selectable("(none)", current.empty())&&!current.empty()) {
-            item.erase("weapon_type");item.erase("item_id");item.erase("item_name");
-        }
+        if (ImGui::Selectable("(none)", current.empty())&&!current.empty())apply("",false);
         for (const auto& [name, definition] : *weapons) {
             // Match the hand-eligibility policy of the original gear picker.
             if (!AlterEgo::EquipmentChoice::WeaponTypeEligible(
                     slot, name, definition.mainhand, definition.offhand,
                     definition.two_handed)) continue;
-            if (ImGui::Selectable(WeaponDisplayName(name), name == current)&&name!=current){
-                item["weapon_type"] = name;
-                item.erase("item_id");item.erase("item_name");
-            }
+            if (ImGui::Selectable(WeaponDisplayName(name), name == current)&&name!=current)
+                apply(name,definition.two_handed);
         }
         ImGui::EndCombo();
     }
@@ -683,6 +688,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         }
         if (ImGui::BeginPopupContextItem("##native_slot_context")) {
             ComponentStoredNameActions(data["gear"].at(slot));
+            ImGui::Separator();
             auto capture=[&](GearCopyField field){return ComponentGearCapture(data["gear"].at(slot),kind,slot,field);};
             if(AlterEgo::UI::BeginActionMenu("Copy",AlterEgo::UI::MenuIcon::Copy)){
                 if(ImGui::MenuItem("Exact slot")){
@@ -762,7 +768,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             ImGui::TextUnformatted("Stats");
             ComponentNativeStatChoice(item);
             if (weapon)
-                ComponentNativeWeaponChoice(item, profession, slot);
+                ComponentNativeWeaponChoice(item,data["gear"],profession,slot);
             if (ImGui::TreeNode("##advanced_gear_ids", "Advanced: exact stats and weapon type")) {
                 ComponentNativeNumber(item, "stat_id", "Stat ID");
                 ComponentNativeText(item, "stat_name", "Stat name");

@@ -39,6 +39,16 @@ template<class Gear> std::vector<std::string> BulkSlots(const Gear& gear) {
         if(EquipmentChoice::IsAquaticGearSlot(slot)&&HasRecordedGear(value))slots.push_back(slot);
     return slots;
 }
+template<class Slot> void ApplyWeaponChange(Slot& value,const std::string& next,
+    const EquipmentChoice::WeaponChange& plan) {
+    if(!plan.changed)return;
+    value.weapon_type=next;value.item_id=0;
+    if(plan.trimToOne){
+        value.sigil2_id=0;value.sigil2.clear();
+        if(value.infusion_ids.size()>1)value.infusion_ids.resize(1);
+        if(value.infusion_attributes.size()>1)value.infusion_attributes.resize(1);
+    }
+}
 inline int InfusionCapacity(const std::string& slot, bool twoHanded, bool blocked = false) {
     if (blocked || slot == "Amulet" || slot == "Relic") return 0;
     if (slot == "Ring1" || slot == "Ring2") return 3;

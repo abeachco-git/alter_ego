@@ -12,6 +12,11 @@ int case_native_portable(int,char**) {
     Fashion::Look look;look.id="f";look.name="Look";look.wardrobe_link=ChatLink::EncodeWardrobe(w);
     s.fashion.push_back(look);s.loadouts.loadouts[0].fashion_id="f";
     auto packet=ExportPortableLibrary(s,true,false);
+    auto oldGraph=packet;
+    for(auto& part:oldGraph["loadouts"]["components"]["armor"])
+        if(part["id"]=="unused")part["data"]["gear"]["HelmAquatic"]={{"stat_id",1130}};
+    PortableLibrary rejected;
+    assert(!ParsePortableLibrary(oldGraph,rejected,error));
     PortableLibrary in;assert(ParsePortableLibrary(packet,in,error));
     assert(in.loadouts&&!in.fashion&&in.data.fashion.size()==1);
     assert(Composable::Find(in.data.loadouts,"armor","unused"));

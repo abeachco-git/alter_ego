@@ -25,4 +25,24 @@ inline bool WeaponTypeEligible(const std::string& slot,const std::string& type,
     if(waterOnly)return false;
     return WeaponEligible(slot,mainhand,offhand,twoHanded);
 }
+// A deliberate weapon type change invalidates the old exact physical item.
+// Aquatic weapons never remove a terrestrial offhand. A repeated selection
+// must not discard captured IDs, upgrades or other recorded fields.
+struct WeaponChange {
+    bool changed=false;
+    bool trimToOne=false;
+    std::string displacedOffhand;
+};
+inline WeaponChange PlanWeaponChange(const std::string& slot,const std::string& current,
+    const std::string& next,bool twoHanded) {
+    WeaponChange plan;
+    if(current==next)return plan;
+    plan.changed=true;
+    if(next.empty())return plan;
+    if(IsAquaticWeaponSlot(slot))return plan;
+    plan.trimToOne=!twoHanded;
+    if(twoHanded&&slot=="WeaponA1")plan.displacedOffhand="WeaponA2";
+    if(twoHanded&&slot=="WeaponB1")plan.displacedOffhand="WeaponB2";
+    return plan;
+}
 } }

@@ -7729,11 +7729,12 @@ static void RenderGearCustomizeDialog() {
                         }
                         snapshot.data.sigil2.clear(); snapshot.data.sigil2_id = 0;
                     }
-                    if (ImGui::MenuItem("Copy")) g_GearClipboard = snapshot;
+                    ImGui::Separator();
+                    if (AlterEgo::UI::MenuAction("Copy",AlterEgo::UI::MenuIcon::Copy)) g_GearClipboard = snapshot;
                     const bool compatible = g_GearClipboard.valid &&
                         g_GearClipboard.field == GearCopyField::Upgrade &&
                         GearSameGroup(g_GearClipboard.slot,g_GearDialogSlot);
-                    if (ImGui::MenuItem("Paste",nullptr,false,compatible)) {
+                    if (AlterEgo::UI::MenuAction("Paste",AlterEgo::UI::MenuIcon::Paste,compatible)) {
                         if (isArmor) {
                             ExpandSharedRune(*editBuild);
                             gs.rune = g_GearClipboard.data.rune; gs.rune_id = g_GearClipboard.data.rune_id;
@@ -7744,9 +7745,10 @@ static void RenderGearCustomizeDialog() {
                         }
                         commitGear();
                     }
-                    if (ImGui::MenuItem("Copy to All Compatible Slots"))
+                    if (AlterEgo::UI::MenuAction("Copy to All Compatible Slots",AlterEgo::UI::MenuIcon::Copy))
                         CopyGearToGroup(*editBuild,snapshot,isArmor ? "Armor" : "Weapons");
-                    if (ImGui::MenuItem("Clear")) {
+                    ImGui::Separator();
+                    if (AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete)) {
                         if (isArmor) { ExpandSharedRune(*editBuild); gs.rune.clear(); gs.rune_id = 0; }
                         else if (sigilIdx == 1) { gs.sigil2.clear(); gs.sigil2_id = 0; }
                         else { gs.sigil.clear(); gs.sigil_id = 0; }
@@ -7810,24 +7812,29 @@ static void RenderGearCustomizeDialog() {
                     auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Infusions);
                     snapshot.data.infusion_ids = {id};
                     snapshot.data.infusion_attributes = {attr};
-                    if (ImGui::MenuItem("Copy")) g_GearClipboard = snapshot;
+                    snapshot.valid=id||!attr.empty();
+                    if(item)ImGui::Separator();
+                    if (AlterEgo::UI::MenuAction("Copy",AlterEgo::UI::MenuIcon::Copy,snapshot.valid))
+                        g_GearClipboard = snapshot;
                     const bool compatible = g_GearClipboard.valid &&
                         g_GearClipboard.field == GearCopyField::Infusions &&
                         !g_GearClipboard.data.infusion_ids.empty();
-                    if (ImGui::MenuItem("Paste",nullptr,false,compatible)) {
+                    if (AlterEgo::UI::MenuAction("Paste",AlterEgo::UI::MenuIcon::Paste,compatible)) {
                         gs.infusion_ids[i] = g_GearClipboard.data.infusion_ids.front();
                         gs.infusion_attributes.resize(gs.infusion_ids.size());
                         gs.infusion_attributes[i] = g_GearClipboard.data.infusion_attributes.empty()
                             ? "" : g_GearClipboard.data.infusion_attributes.front();
                         gs.infusion_snapshot = true; commitGear(true);
                     }
-                    if (ImGui::MenuItem("Fill This Item")) ApplyGearClipboard(*editBuild,g_GearDialogSlot,snapshot);
-                    if (ImGui::BeginMenu("Copy to All Slots")) {
+                    if (AlterEgo::UI::MenuAction("Fill This Item",AlterEgo::UI::MenuIcon::Copy,snapshot.valid))
+                        ApplyGearClipboard(*editBuild,g_GearDialogSlot,snapshot);
+                    if (AlterEgo::UI::BeginActionMenu("Copy to All Slots",AlterEgo::UI::MenuIcon::Copy,snapshot.valid)) {
                         for (const auto& group : {"Armor","Weapons","Trinkets","All"})
                             if (ImGui::MenuItem(group)) CopyGearToGroup(*editBuild,snapshot,group);
                         ImGui::EndMenu();
                     }
-                    if (ImGui::MenuItem("Clear")) removeInfusion = true;
+                    ImGui::Separator();
+                    if (AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete)) removeInfusion = true;
                     ImGui::EndPopup();
                 }
                 ImGui::SameLine();
@@ -7957,16 +7964,12 @@ static void RenderGearCustomizeDialog() {
                         isSel ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
 
                     ImGui::SetCursorScreenPos(cs);
-                    if (ImGui::InvisibleButton("##wsel", ImVec2(cw, ch))) {
-                        gs.weapon_type = wname;
-                        gs.item_id = 0;
-                        if (!wd.two_handed && !AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(g_GearDialogSlot)) {
-                            gs.sigil2_id = 0; gs.sigil2.clear();
-                            if (gs.infusion_ids.size() > 1) gs.infusion_ids.resize(1);
-                            if (gs.infusion_attributes.size() > 1) gs.infusion_attributes.resize(1);
-                        } else if (IsMainhandSlot(g_GearDialogSlot)) {
-                            editBuild->gear.erase(g_GearDialogSlot == "WeaponA1" ? "WeaponA2" : "WeaponB2");
-                        }
+                    if (ImGui::InvisibleButton("##wsel", ImVec2(cw, ch)) && !isSel) {
+                        const auto plan=AlterEgo::EquipmentChoice::PlanWeaponChange(
+                            g_GearDialogSlot,gs.weapon_type,wname,wd.two_handed);
+                        AlterEgo::GearEdit::ApplyWeaponChange(gs,wname,plan);
+                        if(!plan.displacedOffhand.empty())
+                            editBuild->gear.erase(plan.displacedOffhand);
                         // Fetch weapon skill details (including attunements and dual wield)
                         std::vector<uint32_t> skillIds;
                         for (int si = 0; si < 5; si++) {
