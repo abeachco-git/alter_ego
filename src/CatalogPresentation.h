@@ -31,6 +31,30 @@ inline bool PinButton(const char* id,bool pinned,const char* pinTip,const char* 
     return clicked;
 }
 struct CatalogRowResult {bool clicked=false,hovered=false;};
+// Both catalog rows and tiles use the same native activation and hover
+// target. Caller supplies its stable ID scope and immediately owns the
+// context menu for this item.
+inline CatalogRowResult CatalogHitTarget(const char* id,ImVec2 size){
+    const bool clicked=ImGui::InvisibleButton(id,size);
+    return {clicked,ImGui::IsItemHovered()};
+}
+// The fixed-height clipper must use exactly the vertical advance made by
+// each submitted line, including explicit spacing. One shared loop prevents
+// individual pages from drifting or inheriting a different style.
+template<class RenderLine>
+inline void CatalogLines(int count,float pitch,float gap,RenderLine render){
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(ImGui::GetStyle().ItemSpacing.x,gap));
+    ImGuiListClipper clipper;clipper.Begin(count,pitch);
+    while(clipper.Step())for(int row=clipper.DisplayStart;row<clipper.DisplayEnd;++row)render(row);
+    ImGui::PopStyleVar();
+}
+template<class RenderRow>
+inline void CatalogRows(int count,RenderRow render){
+    CatalogLines(count,CatalogRowHeight(),0.f,render);
+}
+inline void CatalogScrollToRow(int row,float pitch){
+    ImGui::SetScrollY(CatalogCenteredScroll(row,pitch,ImGui::GetWindowHeight()));
+}
 inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const std::string& url,const std::string& name,const std::string& rarity,
     const std::string& trailing={},bool dim=false,int ownership=-1) {
@@ -40,8 +64,8 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const ImVec2 end(p.x+w,p.y+height);
     // Respect native button ownership and activation (click/release or
     // keyboard navigation); do not independently poll the mouse-down event.
-    const bool clicked=ImGui::InvisibleButton("##catalog_row",ImVec2(w,height));
-    const bool hovered=ImGui::IsItemHovered();
+    const auto hit=CatalogHitTarget("##catalog_row",ImVec2(w,height));
+    const bool hovered=hit.hovered;
     auto* dl=ImGui::GetWindowDrawList();
     const auto rc=GetSkinRarityColor(rarity);
     CatalogRowBackground(row,p,end,selected,hovered);
@@ -67,7 +91,7 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
             dl->AddLine(ImVec2(dot.x-.5f,dot.y+1.5f),ImVec2(dot.x+2.5f,dot.y-2),IM_COL32(180,240,190,255),1.5f);}
         else dl->AddCircle(dot,3.5f,IM_COL32(120,110,90,200),14,1.2f);}
     if(hovered&&ImGui::CalcTextSize(name.c_str()).x>right-left)ImGui::SetTooltip("%s",name.c_str());
-    return {clicked,hovered};
+    return hit;
 }
 inline void CatalogBanner(const std::string& name,const std::string& subtitle,
                           const std::string& rarity,const std::string& badge={}) {

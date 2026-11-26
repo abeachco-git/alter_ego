@@ -12990,22 +12990,17 @@ static void RenderSkinList(float width) {
     float scrollHeight = ImGui::GetContentRegionAvail().y - statusHeight;
 
     ImGui::BeginChild("SkinListScroll", ImVec2(0, scrollHeight));
-    if (g_SkinScrollToSkin && g_SkinViewMode != 1) {
-        for (int i = 0; i < (int)displaySkins.size(); i++) {
-            if (displaySkins[i].id == g_SkinSelectedId) {
-                float itemHeight = ImGui::GetTextLineHeightWithSpacing();
-                float targetY = i * itemHeight;
-                float windowHeight = ImGui::GetWindowHeight();
-                ImGui::SetScrollY(targetY - windowHeight * 0.5f + itemHeight * 0.5f);
-                g_SkinScrollToSkin = false;
-                break;
-            }
-        }
-    }
+    // Grid and compact list share stable activation semantics and domain action.
+    const auto selectSkin=[&](const Skinventory::SkinInfo& skin){
+        MarkNavigation();g_SkinSelectedId=skin.id;
+        Skinventory::WikiImage::RequestImage(skin.id,skin.name,skin.weight_class);
+        Skinventory::Commerce::FetchPriceForSkin(skin.id);
+    };
     if (g_SkinViewMode == 1) {
         // ===== Grid view =====
         const float tileSize = 36.0f;
         const float tileGap  = 3.0f;
+        const float pitch=AlterEgo::UI::CatalogGridPitch(tileSize,tileGap);
         float availW = ImGui::GetContentRegionAvail().x;
         int cols = std::max(1, (int)((availW + tileGap) / (tileSize + tileGap)));
         int rows = ((int)displaySkins.size() + cols - 1) / cols;
@@ -13014,31 +13009,25 @@ static void RenderSkinList(float width) {
         if (g_SkinScrollToSkin) {
             for (int i = 0; i < (int)displaySkins.size(); i++) {
                 if (displaySkins[i].id == g_SkinSelectedId) {
-                    float rowH = tileSize + tileGap;
-                    int r = i / cols;
-                    float targetY = r * rowH;
-                    float winH = ImGui::GetWindowHeight();
-                    ImGui::SetScrollY(targetY - winH * 0.5f + rowH * 0.5f);
+                    AlterEgo::UI::CatalogScrollToRow(i/cols,pitch);
                     g_SkinScrollToSkin = false;
                     break;
                 }
             }
         }
 
-        ImGuiListClipper clipper;
-        clipper.Begin(rows, tileSize + tileGap);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        while (clipper.Step()) {
-            for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; r++) {
+        AlterEgo::UI::CatalogLines(rows,pitch,tileGap,[&](int r){
                 for (int c = 0; c < cols; c++) {
                     int idx = r * cols + c;
                     if (idx >= (int)displaySkins.size()) break;
                     const auto& entry = displaySkins[idx];
                     auto skinOpt = Skinventory::SkinCache::GetSkin(entry.id);
-                    if (!skinOpt) continue;
-                    const auto& skin = *skinOpt;
-
                     if (c > 0) ImGui::SameLine(0, tileGap);
+                    // Preserve the tile slot even if metadata is temporarily
+                    // unavailable. Every grid line advances exactly pitch.
+                    if (!skinOpt){ImGui::Dummy(ImVec2(tileSize,tileSize));continue;}
+                    const auto& skin = *skinOpt;
 
                     bool selected = (g_SkinSelectedId == entry.id);
                     bool dim = hasOwnerData && !entry.owned;
@@ -13091,8 +13080,8 @@ static void RenderSkinList(float width) {
                     }
 
                     ImGui::PushID((int)entry.id);
-                    ImGui::InvisibleButton("##tile", ImVec2(tileSize, tileSize));
-                    bool hovered = ImGui::IsItemHovered();
+                    const auto hit=AlterEgo::UI::CatalogHitTarget("##tile",ImVec2(tileSize,tileSize));
+                    const bool hovered=hit.hovered;
                     if (hovered) {
                         dl->AddRect(tmin, tmax, IM_COL32(232, 196, 122, 180), 2.0f, 0, 1.5f);
                         ImGui::BeginTooltip();
@@ -13105,39 +13094,30 @@ static void RenderSkinList(float width) {
                         }
                         ImGui::EndTooltip();
                     }
-                    if (ImGui::IsItemClicked()) {
-                        MarkNavigation();g_SkinSelectedId = entry.id;
-                        Skinventory::WikiImage::RequestImage(entry.id, skin.name, skin.weight_class);
-                        Skinventory::Commerce::FetchPriceForSkin(entry.id);
-                    }
                     RenderSkinContextMenu(skin);
                     ImGui::PopID();
+                    if(hit.clicked)selectSkin(skin);
                 }
-                ImGui::Dummy(ImVec2(0, 0)); // newline
-            }
-        }
+                // The last tile already advances to the next line. An extra
+                // Dummy here would add spacing not represented in the clipper.
+        });
     } else {
         // ===== Compact list view =====
         const float rowH=AlterEgo::UI::CatalogRowHeight();
         if(g_SkinScrollToSkin){
             for(int i=0;i<(int)displaySkins.size();++i)if(displaySkins[i].id==g_SkinSelectedId){
-                ImGui::SetScrollY(i*rowH-ImGui::GetWindowHeight()*.5f+rowH*.5f);g_SkinScrollToSkin=false;break;
+                AlterEgo::UI::CatalogScrollToRow(i,rowH);g_SkinScrollToSkin=false;break;
             }
         }
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(ImGui::GetStyle().ItemSpacing.x,0));
-        ImGuiListClipper clipper;clipper.Begin((int)displaySkins.size(),rowH);
-        while(clipper.Step())for(int row=clipper.DisplayStart;row<clipper.DisplayEnd;++row){
+        AlterEgo::UI::CatalogRows(static_cast<int>(displaySkins.size()),[&](int row){
             const auto& entry=displaySkins[row];auto skinOpt=Skinventory::SkinCache::GetSkin(entry.id);
-            if(!skinOpt){ImGui::Dummy(ImVec2(0,rowH));continue;}
+            if(!skinOpt){ImGui::Dummy(ImVec2(0,rowH));return;}
             const auto& skin=*skinOpt;
             ImGui::PushID((int)entry.id);
             const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,entry.id+5000000,skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1);
             RenderSkinContextMenu(skin);ImGui::PopID();
-            if(hit.clicked){MarkNavigation();g_SkinSelectedId=entry.id;
-                Skinventory::WikiImage::RequestImage(entry.id,skin.name,skin.weight_class);
-                Skinventory::Commerce::FetchPriceForSkin(entry.id);}
-        }
-        ImGui::PopStyleVar();
+            if(hit.clicked)selectSkin(skin);
+        });
     }
     ImGui::EndChild();
 

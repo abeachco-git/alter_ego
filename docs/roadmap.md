@@ -20,6 +20,7 @@ Living implementation tracker for the experimental branch. Checked items indicat
 - [ ] Verify restored preview behavior and Trading Post price retrieval in the combined DLL, including armor variants and cache persistence. Initial artwork failure cause not established; user confirms previews work at 1feaa73.
 
 ## Catalog row selection
+- [x] Consolidate Inventory and Skinventory compact-list clipper/spacing in CatalogRows/CatalogLines; Skinventory grid also uses the shared hit target and native release activation, fixed tile pitch without extra dummy line, reserved missing-metadata tile slots, and correct selected-row reveal. Removed obsolete pre-clipper scroll calculation. Both Skinventory views reuse the selection action. Concrete grid pitch/reveal defects corrected; live intermittent compact-list click reproduction remains open.
 - [x] Use native button activation and integral shared catalog row pitch; offline pitch regression coverage. No context-menu or transport changes. User reported intermittent unclickable Inventory rows that recovered after navigation; exact root cause is unconfirmed.
 - [ ] In-game verify Inventory filtered and scrolled lists (including Nul Sul/Mystic Coin), search, repeated selection, right-click menus, navigation away/back and Skinventory list. Confirm intermittent failure no longer occurs before closing.
 

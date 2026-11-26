@@ -48,6 +48,22 @@ int case_skin_search(int, char**) {
      for(int i=0;i<1000;++i)y=std::floor(y+pitch);
      assert(y==17.f+1000*pitch);
  }
+ // Grid line has one 36px tile line and exactly 3px spacing;
+ // no extra dummy/newline. Verify alignment after long scroll seeks.
+ const auto gridPitch=AlterEgo::UI::CatalogGridPitch(36.f,3.f);
+ assert(gridPitch==39.f);
+ for(int cols:{1,2,5,10}){
+     float y=17.f;
+     for(int row=0;row<1000;++row){
+         // SameLine restores the preceding tile's Y for every column.
+         for(int col=0;col<cols;++col)assert(std::floor(y+36.f+3.f)==y+gridPitch);
+         y=std::floor(y+36.f+3.f);
+     }
+     assert(y==17.f+1000*gridPitch);
+ }
+ assert(AlterEgo::UI::CatalogCenteredScroll(0,39.f,400.f)==0.f);
+ assert(AlterEgo::UI::CatalogCenteredScroll(100,39.f,400.f)==3719.5f);
+ assert(AlterEgo::UI::CatalogCenteredScroll(100,23.f,400.f)==2111.5f);
  assert(AlterEgo::UI::FitSplitWidth(420,1000,24,200,240)==420);
  assert(AlterEgo::UI::FitSplitWidth(420,300,24,200,240)==138);
  assert(AlterEgo::UI::FitSplitWidth(420,1000,24,200,240)==420);

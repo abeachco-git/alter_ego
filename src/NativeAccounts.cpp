@@ -1065,9 +1065,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     }
     if(std::none_of(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item&&x.currency==nav.currency;})){nav.item=0;nav.currency=false;}
     ImGui::BeginChild("InventoryListScroll",ImVec2(0,0),false);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(ImGui::GetStyle().ItemSpacing.x,0));
-    ImGuiListClipper clipper;clipper.Begin(static_cast<int>(groups.size()),UI::CatalogRowHeight());
-    while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i){
+    UI::CatalogRows(static_cast<int>(groups.size()),[&](int i){
         const auto& group=groups[i];
         if(group.currency){
             const auto& w=*group.balances.front();
@@ -1075,7 +1073,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             auto hit=UI::CatalogRow(i,nav.currency&&nav.item==group.id,0x40000000u|group.id,w.icon,group.name,"",quantityText(group.id,true,group.count));
             if(hit.clicked&&(!nav.currency||nav.item!=group.id)){MarkInventoryNavigation();nav.item=group.id;nav.currency=true;}
             ItemMenu(group.id,group.name,{}, {},true);
-            ImGui::PopID();ImGui::PopID();continue;
+            ImGui::PopID();ImGui::PopID();return;
         }
         const auto& row=*group.locations.front();
         const auto name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
@@ -1087,8 +1085,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         const bool popup=ImGui::IsPopupOpen("##inventory_item_actions")||ImGui::IsItemClicked(ImGuiMouseButton_Right);
         ItemMenu(group.id,name,row.chat,popup?loadTargets(group.id):std::map<std::pair<std::string,std::string>,int64_t>{});
         ImGui::PopID();
-    }
-    ImGui::PopStyleVar();ImGui::EndChild();ImGui::EndChild();
+    });
+    ImGui::EndChild();ImGui::EndChild();
     if(split.Divider("##inventory_split",listWidth))saveSettings();
     ImGui::BeginChild("InventoryDetailPanel",ImVec2(0,0),true);
     auto selected=std::find_if(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item&&x.currency==nav.currency;});
