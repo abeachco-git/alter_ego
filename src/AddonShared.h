@@ -72,6 +72,9 @@ void RenderSpinner(const char* label, ImVec4 color = ImVec4(0.7f, 0.85f, 0.95f, 
 bool RenderCharacterMultiFilter(const char* label, std::set<std::string>& selected,
                                 const std::set<std::string>& names);
 
+// Shared profession artwork/name for clipped character branch headers.
+void DrawInventoryCharacterLabel(ImDrawList* draw,ImVec2 min,ImVec2 max,const std::string& profession,const std::string& name);
+
 // Common item presentation and actions, shared by Skinventory and native Inventory.
 ImVec4 GetSkinRarityColor(const std::string& rarity);
 void RenderCoins(int64_t copper);

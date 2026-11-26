@@ -55,6 +55,29 @@ inline bool DestructiveMenuItem(const char* label, bool enabled = true) {
     ImGui::PopStyleColor();
     return clicked;
 }
+// Shared split dropdown row: primary label navigates, independent side
+// chevron opens a flyout. Caller owns popup contents and close policy.
+struct TabFlyoutResult {bool clicked=false;ImVec2 anchor;};
+inline TabFlyoutResult TabFlyoutRow(const char* label,bool selected,const char* arrowId,const char* popup,float labelWidth=190.f){
+    const float h=ImGui::GetTextLineHeightWithSpacing();
+    const bool clicked=ImGui::Selectable(label,selected,ImGuiSelectableFlags_DontClosePopups,ImVec2(labelWidth,h));
+    const auto min=ImGui::GetItemRectMin(),max=ImGui::GetItemRectMax();
+    const auto color=ImGui::GetColorU32(ImGuiCol_Text);
+    auto* draw=ImGui::GetWindowDrawList();
+    if(selected){
+        const ImVec2 check(max.x-17.f,(min.y+max.y)*.5f);
+        draw->AddLine(ImVec2(check.x-4,check.y),ImVec2(check.x-1,check.y+3),color,1.7f);
+        draw->AddLine(ImVec2(check.x-1,check.y+3),ImVec2(check.x+5,check.y-4),color,1.7f);
+    }
+    ImGui::SameLine(0.f,0.f);
+    const auto p=ImGui::GetCursorScreenPos();
+    const ImVec2 size(27.f,h);
+    if(ImGui::InvisibleButton(arrowId,size)||(ImGui::IsItemHovered()&&!ImGui::IsPopupOpen(popup)))ImGui::OpenPopup(popup);
+    const ImVec2 c(p.x+size.x*.5f,p.y+size.y*.5f);
+    draw->AddLine(ImVec2(c.x-2,c.y-4),ImVec2(c.x+2,c.y),color,1.6f);
+    draw->AddLine(ImVec2(c.x+2,c.y),ImVec2(c.x-2,c.y+4),color,1.6f);
+    return {clicked,ImVec2(p.x+size.x,min.y)};
+}
 enum class ComboRole { Native, Gold };
 inline bool BeginCombo(const char* id, const char* preview,
                        ImGuiComboFlags flags = 0, float width = -1.0f,

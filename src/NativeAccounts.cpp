@@ -2,6 +2,7 @@
 #include "UntrustedInput.h"
 #include "AccountCommitGate.h"
 #include "NativeInventoryStore.h"
+#include "InventoryGroupCore.h"
 #include "ArenaNetTransport.h"
 #include "BackgroundWorkers.h"
 #include "AddonShared.h"
@@ -37,6 +38,8 @@ struct View {
 std::atomic<uint64_t> inventoryGeneration{0};
 uint32_t revealItem=0;
 InventoryNavigation navigation;
+std::set<std::string> expandedInventoryGroups;
+bool groupRevealPending=false;
 // Render-thread preferences, persisted in the ordinary settings file.
 std::set<uint32_t> walletPins;
 std::string root;
@@ -790,9 +793,18 @@ void RenderOptions(){
 std::set<uint32_t> WalletPins(){return walletPins;}
 void SetWalletPins(const std::set<uint32_t>& ids){walletPins=ids;}
 InventoryNavigation CaptureInventoryNavigation(){return navigation;}
-void RestoreInventoryNavigation(const InventoryNavigation& state){navigation=state;revealItem=0;}
+void RestoreInventoryNavigation(const InventoryNavigation& state){navigation=state;revealItem=0;groupRevealPending=state.grouped&&state.item!=0;}
 int InventorySubview(){return navigation.subview;}
 void SetInventorySubview(int value){if(value>=0&&value<=2)navigation.subview=value;}
+bool InventoryGrouped(){return navigation.grouped;}
+void SetInventoryGrouped(bool value){
+    if(navigation.grouped!=value){navigation.grouped=value;navigation.group.clear();groupRevealPending=value&&navigation.item!=0;}
+}
+std::set<std::string> InventoryExpandedGroups(){return expandedInventoryGroups;}
+void SetInventoryExpandedGroups(const std::set<std::string>& value){
+    expandedInventoryGroups.clear();
+    for(const auto& key:value)if(!key.empty()&&key.size()<=1024&&expandedInventoryGroups.size()<4096)expandedInventoryGroups.insert(key);
+}
 std::string RevealAccount(uint32_t id,const std::string& selectedAccount){
     auto v=Snapshot();if(v->accounts.size()<2||selectedAccount.empty())return selectedAccount;
     auto it=v->index.find(id);if(it==v->index.end())return selectedAccount;
@@ -856,7 +868,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     auto& subview=nav.subview;auto& sort=nav.sort;auto& freshness=nav.freshness;
     auto& minQuantity=nav.minQuantity;auto& transfer=nav.transfer;
     if(revealItem){
-        nav.item=revealItem;nav.currency=false;query=std::to_string(revealItem);revealItem=0;
+        nav.item=revealItem;nav.currency=false;nav.group.clear();groupRevealPending=nav.grouped;query=std::to_string(revealItem);revealItem=0;
         scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();
         freshness=minQuantity=transfer=0;subview=0;
     }
@@ -1000,7 +1012,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             UI::FilterChoice("Transferability",transfer,transferOptions,2);
         },
         [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;});
-    if(query!=previousQuery){nav.item=0;nav.currency=false;}
+    if(query!=previousQuery){nav.item=0;nav.currency=false;nav.group.clear();groupRevealPending=false;}
     const char* sorts[]={"Name","Quantity"};ImGui::SetNextItemWidth(120);UI::Combo("##inventory_sort",&sort,sorts,2);
     auto tokens=Skinventory::Search::Words(query);
     // Explicit Find in Inventory navigation can reveal even an unusually short ID.
@@ -1009,10 +1021,10 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     const bool canBrowse=CanBrowseItems(!characterFilter.empty(),!scope.empty(),
         !binding.empty(),!rarity.empty(),!type.empty(),freshness!=0,minQuantity>0,transfer!=0);
     const bool walletEligible=WalletMatchesFacets(scope,characterFilter,binding,rarity,type,transfer!=0);
-    const bool showResults=canSearch||canBrowse;
+    const bool showResults=nav.grouped||canSearch||canBrowse;
     if(!showResults)ImGui::TextWrapped("Enter at least 3 characters or select a filter to browse inventory.");
     if(!canSearch){
-        if(showResults&&!tokens.empty())ImGui::TextDisabled("Enter 3 characters to narrow these filtered results.");
+        if(showResults&&!tokens.empty())ImGui::TextDisabled("Enter 3 characters to narrow these results.");
         tokens.clear();
     }
     // Cache the filtered aggregate: rebuild only on a new projection or changed controls.
@@ -1021,9 +1033,10 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     const auto currencyName=[](const WalletRow& w){return w.name.empty()?"Currency #"+std::to_string(w.id):w.name;};
     const auto quantityText=[](uint32_t id,bool currency,int64_t count){if(currency&&id==1)return std::to_string(count/10000)+"g "+std::to_string(count/100%100)+"s "+std::to_string(count%100)+"c";return std::to_string(count);};
     static std::shared_ptr<const View> previous;static std::string prevKey;static std::vector<Group> groups;
+    static uint64_t projectionRevision=0;
     const auto filterKey=Json::array({showResults,selectedAccount,tokens,scope,binding,rarity,type,sort,characterFilter,freshness,minQuantity,transfer,(freshness||transfer)?Now()/10:0}).dump();
     if(previous!=v||prevKey!=filterKey){
-        previous=v;prevKey=filterKey;groups.clear();std::map<SearchIdentity,size_t> index;
+        previous=v;prevKey=filterKey;groups.clear();++projectionRevision;std::map<SearchIdentity,size_t> index;
         if(showResults)for(const auto& row:v->inventory.rows){
             const auto& s=row.slot;
             if(!allowed(s.account)||(!scope.empty()&&scope!=s.scope)||!MatchesFacet(binding,BindingName(s.binding))||!MatchesFacet(rarity,row.rarity)||!MatchesFacet(type,row.type)||!Match(row.name,s.id,tokens))continue;
@@ -1059,35 +1072,147 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         ImGui::Text("%zu matching results",groups.size());ImGui::Separator();
         if(groups.empty())ImGui::TextDisabled("%s",busy.load()?"Refreshing inventory...":"No matching cached items or currencies.");
     }
-    if(std::none_of(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item&&x.currency==nav.currency;})){nav.item=0;nav.currency=false;}
+    auto selected=std::find_if(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item&&x.currency==nav.currency;});
+    if(selected==groups.end()){nav.item=0;nav.currency=false;nav.group.clear();groupRevealPending=false;}
+
+    // Derive group buckets from the same filtered aggregate, not a second scan
+    // or filter implementation. Rebuild only on a projection/login-order change.
+    static GroupTree tree;
+    static uint64_t treeProjection=0,treeLoginRevision=0,treeRevision=0;
+    static std::map<std::pair<size_t,std::string>,int64_t> groupCounts;
+    static std::map<size_t,std::string> firstGroup;
+    static std::vector<GroupLine> visibleLines;
+    static uint64_t visibleRevision=0;
+    static std::set<std::string> visibleExpansion;
+    static bool visibleForced=false;
+    const bool forceExpand=!tokens.empty();
+    if(nav.grouped){
+        uint64_t loginRevision=0;
+        std::map<CharacterActivity::Key,int64_t> logins;
+        {
+            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+            loginRevision=CharacterActivity::State().LoginRevision();
+            if(treeProjection!=projectionRevision||treeLoginRevision!=loginRevision)
+                logins=CharacterActivity::State().LoginTimes();
+        }
+        if(treeProjection!=projectionRevision||treeLoginRevision!=loginRevision){
+            treeProjection=projectionRevision;treeLoginRevision=loginRevision;++treeRevision;
+            tree.Clear();groupCounts.clear();firstGroup.clear();visibleLines.clear();
+            std::map<GroupPath,std::vector<GroupLeaf>> buckets;
+            for(size_t i=0;i<groups.size();++i){
+                const auto& g=groups[i];std::map<GroupPath,int64_t> counts;
+                for(const auto* r:g.locations){const auto& s=r->slot;counts[{s.account,s.character,s.scope}]+=s.count;}
+                for(const auto* w:g.balances)counts[{w->account,{},"Wallet"}]+=w->value;
+                for(const auto& [path,count]:counts)buckets[path].push_back({i,count});
+            }
+            std::map<std::string,size_t> accountOrder;
+            std::map<std::string,std::string> accountLabels;
+            for(size_t i=0;i<accounts.size();++i){accountOrder[accounts[i].id]=i;accountLabels[accounts[i].id]=Display(accounts[i]);}
+            std::vector<GroupPath> paths;
+            for(const auto& [path,leaves]:buckets)paths.push_back(path);
+            const auto login=[&](const GroupPath& p){auto it=logins.find({p.account,p.character});return it==logins.end()?int64_t(0):it->second;};
+            std::sort(paths.begin(),paths.end(),[&](const GroupPath& a,const GroupPath& b){
+                if(a.account!=b.account)return accountOrder.at(a.account)<accountOrder.at(b.account);
+                if(a.character.empty()!=b.character.empty())return a.character.empty();
+                if(a.character!=b.character){
+                    const auto x=login(a),y=login(b);
+                    return x!=y?CharacterActivity::LoginBefore(x,y,true):a.character<b.character;
+                }
+                const auto ar=StorageRank(a.storage),br=StorageRank(b.storage);
+                return ar!=br?ar<br:a.storage<b.storage;
+            });
+            for(const auto& path:paths){
+                auto& leaves=buckets.at(path);
+                std::sort(leaves.begin(),leaves.end(),[&](const GroupLeaf& a,const GroupLeaf& b){
+                    if(sort==1&&a.count!=b.count)return a.count>b.count;
+                    const auto& x=groups[a.item];const auto& y=groups[b.item];
+                    return x.name!=y.name?x.name<y.name:SearchIdentity{x.currency,x.id}<SearchIdentity{y.currency,y.id};
+                });
+                const auto key=GroupKey(path);
+                for(const auto& leaf:leaves){groupCounts[{leaf.item,key}]=leaf.count;firstGroup.emplace(leaf.item,key);}
+                tree.Add(path,accountLabels.at(path.account),all,std::move(leaves));
+            }
+        }
+        if(nav.item){
+            const size_t i=static_cast<size_t>(selected-groups.begin());
+            if(!groupCounts.count({i,nav.group})){
+                const auto it=firstGroup.find(i);nav.group=it==firstGroup.end()?std::string{}:it->second;
+            }
+            // A search reveals matching branches without changing saved expansion.
+            if(groupRevealPending&&!forceExpand&&!nav.group.empty())tree.Expand(nav.group,expandedInventoryGroups);
+        }
+        if(visibleRevision!=treeRevision||visibleExpansion!=expandedInventoryGroups||visibleForced!=forceExpand){
+            visibleRevision=treeRevision;visibleExpansion=expandedInventoryGroups;visibleForced=forceExpand;
+            visibleLines=tree.Flatten(expandedInventoryGroups,forceExpand);
+        }
+    }
     ImGui::BeginChild("InventoryListScroll",ImVec2(0,0),false);
-    UI::CatalogRows(static_cast<int>(groups.size()),[&](int i){
-        const auto& group=groups[i];
+    if(nav.grouped&&groupRevealPending&&nav.item){
+        const size_t i=static_cast<size_t>(selected-groups.begin());
+        for(size_t n=0;n<visibleLines.size();++n){
+            const auto& line=visibleLines[n];
+            if(line.leaf&&line.leaf->item==i&&line.node->key==nav.group){UI::CatalogScrollToRow(static_cast<int>(n),UI::CatalogRowHeight());break;}
+        }
+    }
+    groupRevealPending=false;
+    const auto renderItem=[&](int rowIndex,const Group& group,int64_t count,const std::string& path){
+        const bool on=nav.currency==group.currency&&nav.item==group.id&&(!nav.grouped||nav.group==path);
+        const auto select=[&](bool clicked){
+            if(clicked&&!on){MarkInventoryNavigation();nav.item=group.id;nav.currency=group.currency;nav.group=path;}
+        };
         if(group.currency){
             const auto& w=*group.balances.front();
             ImGui::PushID("currency");ImGui::PushID(static_cast<int>(group.id));
-            auto hit=UI::CatalogRow(i,nav.currency&&nav.item==group.id,0x40000000u|group.id,w.icon,group.name,"",quantityText(group.id,true,group.count));
-            if(hit.clicked&&(!nav.currency||nav.item!=group.id)){MarkInventoryNavigation();nav.item=group.id;nav.currency=true;}
-            ItemMenu(group.id,group.name,{}, {},true);
+            auto hit=UI::CatalogRow(rowIndex,on,0x40000000u|group.id,w.icon,group.name,"",quantityText(group.id,true,count));
+            select(hit.clicked);ItemMenu(group.id,group.name,{}, {},true);
             ImGui::PopID();ImGui::PopID();return;
         }
         const auto& row=*group.locations.front();
         const auto name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
         const auto* meta=metaFor(group.id);
         ImGui::PushID(static_cast<int>(group.id));
-        auto hit=UI::CatalogRow(i,!nav.currency&&nav.item==group.id,group.id,meta?meta->icon:"",name,row.rarity,std::to_string(group.count));
-        if(hit.clicked&&(nav.currency||nav.item!=group.id)){MarkInventoryNavigation();nav.item=group.id;nav.currency=false;}
-        // Build targets only while this row's popup is open, not for every visible item.
+        auto hit=UI::CatalogRow(rowIndex,on,group.id,meta?meta->icon:"",name,row.rarity,std::to_string(count));
+        select(hit.clicked);
         const bool popup=ImGui::IsPopupOpen("##inventory_item_actions")||ImGui::IsItemClicked(ImGuiMouseButton_Right);
         ItemMenu(group.id,name,row.chat,popup?loadTargets(group.id):std::map<std::pair<std::string,std::string>,int64_t>{});
         ImGui::PopID();
-    });
+    };
+    if(!nav.grouped){
+        UI::CatalogRows(static_cast<int>(groups.size()),[&](int i){renderItem(i,groups[i],groups[i].count,{});});
+    }else{
+        const auto characters=GW2API::GetCharacters();
+        bool expansionChanged=false;
+        UI::CatalogRows(static_cast<int>(visibleLines.size()),[&](int i){
+            const auto& line=visibleLines[i];const auto& node=*line.node;
+            const float indent=static_cast<float>(line.depth)*14.f;
+            if(indent>0)ImGui::Indent(indent);
+            ImGui::PushID(node.key.c_str());
+            if(line.leaf)renderItem(i,groups[line.leaf->item],line.leaf->count,node.key);
+            else{
+                std::string profession;
+                if(!node.character.empty())for(const auto& c:*characters)
+                    if(c.account_name==node.account&&c.name==node.character){profession=c.profession;break;}
+                std::function<void(ImDrawList*,ImVec2,ImVec2)> decorate;
+                if(!profession.empty())decorate=[&](ImDrawList* d,ImVec2 a,ImVec2 b){DrawInventoryCharacterLabel(d,a,b,profession,node.label);};
+                const bool open=forceExpand||expandedInventoryGroups.count(node.key)!=0;
+                if(UI::CatalogBranchRow(i,open,node.label,decorate)&&!forceExpand){
+                    if(open)expandedInventoryGroups.erase(node.key);
+                    else if(expandedInventoryGroups.size()<4096)expandedInventoryGroups.insert(node.key);
+                    expansionChanged=true;
+                }
+            }
+            ImGui::PopID();
+            if(indent>0)ImGui::Unindent(indent);
+        });
+        if(expansionChanged)saveSettings();
+    }
     ImGui::EndChild();ImGui::EndChild();
     if(split.Divider("##inventory_split",listWidth))saveSettings();
     ImGui::BeginChild("InventoryDetailPanel",ImVec2(0,0),true);
-    auto selected=std::find_if(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item&&x.currency==nav.currency;});
+    selected=std::find_if(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item&&x.currency==nav.currency;});
     if(selected==groups.end()){ImGui::TextWrapped("Select an item or currency to view details.");ImGui::EndChild();return;}
     const auto& group=*selected;
+    const auto groupQuantity=nav.grouped?groupCounts.find({static_cast<size_t>(selected-groups.begin()),nav.group}):groupCounts.end();
     if(group.currency){
         const auto& w=*group.balances.front();
         UI::CatalogBanner(group.name,"Currency","");
@@ -1099,6 +1224,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         ImGui::Text("Total in account scope:");ImGui::SameLine();
         if(group.id==1)RenderCoins(total);else ImGui::Text("%lld",static_cast<long long>(total));
         if(total!=group.count)ImGui::TextDisabled("Matching filters: %s",quantityText(group.id,true,group.count).c_str());
+        if(groupQuantity!=groupCounts.end())ImGui::TextDisabled("Selected group: %s",quantityText(group.id,true,groupQuantity->second).c_str());
         RenderSectionHeader("Locations",UI::SectionGold);
         for(const auto& balance:v->inventory.wallet){
             if(balance.id!=group.id||!allowed(balance.account)||balance.value<=0)continue;
@@ -1126,6 +1252,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     if(locations!=v->index.end())for(auto idx:locations->second)if(allowed(v->inventory.rows[idx].slot.account))total+=v->inventory.rows[idx].slot.count;
     ImGui::Text("Total in account scope: %lld",static_cast<long long>(total));
     if(total!=group.count)ImGui::TextDisabled("Matching filters: %lld",static_cast<long long>(group.count));
+    if(groupQuantity!=groupCounts.end())ImGui::TextDisabled("Selected group: %lld",static_cast<long long>(groupQuantity->second));
     RenderSectionHeader("Locations",UI::SectionGold);
     if(locations!=v->index.end())for(auto idx:locations->second){
         const auto& row=v->inventory.rows[idx];const auto& slot=row.slot;if(!allowed(slot.account))continue;

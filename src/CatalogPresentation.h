@@ -93,6 +93,36 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     if(hovered&&ImGui::CalcTextSize(name.c_str()).x>right-left)ImGui::SetTooltip("%s",name.c_str());
     return hit;
 }
+// Fixed-pitch collapsible header for hierarchical catalogs. Native hit target
+// and clipper geometry are the same as ordinary catalog rows.
+inline bool CatalogBranchRow(int row,bool expanded,const std::string& name,
+    const std::function<void(ImDrawList*,ImVec2,ImVec2)>& decorated={}){
+    const auto p=ImGui::GetCursorScreenPos();
+    const float h=CatalogRowHeight(),w=ImMax(1.f,ImGui::GetContentRegionAvail().x);
+    const ImVec2 end(p.x+w,p.y+h);
+    const auto hit=CatalogHitTarget("##catalog_branch",ImVec2(w,h));
+    CatalogRowBackground(row,p,end,false,hit.hovered);
+    auto* draw=ImGui::GetWindowDrawList();
+    const auto color=ImGui::GetColorU32(ImGuiCol_Text);
+    const ImVec2 c(p.x+8.f,p.y+h*.5f);
+    if(expanded){
+        draw->AddLine(ImVec2(c.x-4,c.y-2),ImVec2(c.x,c.y+2),color,1.5f);
+        draw->AddLine(ImVec2(c.x,c.y+2),ImVec2(c.x+4,c.y-2),color,1.5f);
+    }else{
+        draw->AddLine(ImVec2(c.x-2,c.y-4),ImVec2(c.x+2,c.y),color,1.5f);
+        draw->AddLine(ImVec2(c.x+2,c.y),ImVec2(c.x-2,c.y+4),color,1.5f);
+    }
+    const ImVec2 left(p.x+18.f,p.y);
+    if(end.x>left.x){
+        draw->PushClipRect(left,end,true);
+        if(decorated)decorated(draw,left,end);
+        else draw->AddText(ImVec2(left.x,p.y+(h-ImGui::GetTextLineHeight())*.5f),color,name.c_str());
+        draw->PopClipRect();
+    }
+    if(hit.hovered&&ImGui::CalcTextSize(name.c_str()).x+(decorated?32.f:0.f)>end.x-left.x)
+        ImGui::SetTooltip("%s",name.c_str());
+    return hit.clicked;
+}
 inline void CatalogBanner(const std::string& name,const std::string& subtitle,
                           const std::string& rarity,const std::string& badge={}) {
     const auto p=ImGui::GetCursorScreenPos();const float w=ImMax(1.f,ImGui::GetContentRegionAvail().x);

@@ -14,6 +14,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 - Direct account linking with Windows Credential Manager, account-scoped inventory, wallet and guild bank views.
 - Item-location navigation from character equipment, Compare and Skinventory shopping.
 - Exact bank tab and slot, character bag and slot, and shared inventory slot labels, with separate stacks in numeric order.
+- Inventory Items List or Groups view with browse-first hierarchical account/storage/character groups, shared filters and item details.
 - Inventory search includes owned wallet currencies, with shared filters and account-wallet location details.
 - Character gathering, fishing and Jade Bot details; explicit right-click character loading.
 - Portable library import/export, recovery backups and Storage & Cache maintenance controls.

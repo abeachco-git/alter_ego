@@ -5,6 +5,9 @@ Living implementation tracker for the experimental branch. Checked items indicat
 ## Development build identification
 - [x] Generate Windows file version from product version and CI run number; embed commit, attempt and run ID in PE resources and a small independent C++ compilation unit. Nexus options show build information. Existing upstream Nexus provider/version unchanged; no release publication. CI and in-game verification pending.
 
+## Inventory grouped browsing
+- [x] Items List/Groups preference under shared side-chevron flyout; cached hierarchical buckets, independent expansion, search expansion/reveal, typed selection and shared details/context actions. Account-wide groups precede characters ordered by last login; Equipment then Bags. Shared catalog branch geometry and Library flyout extracted; no cache schema or refresh change. CI and live validation pending.
+
 ## Account storage freshness
 - [x] Bank, Shared inventory and Materials now use the shared 10-minute active policy, including the same freshness predicate for display/availability and eligibility, per-scope 0–45 second staggering and existing demand, offline reconciliation, manual override and 15-minute retry semantics. Armory stays at 30 minutes. Regression coverage added; CI/live validation pending.
 

@@ -1,4 +1,5 @@
 #include "../src/NativeInventoryStore.h"
+#include "../src/InventoryGroupCore.h"
 #include "../src/NativeProgressCore.h"
 #include "../src/CompletionCache.h"
 #include "../src/RefreshProgress.h"
@@ -9,6 +10,26 @@
 using namespace AlterEgo;
 using namespace AlterEgo::NativeInventory;
 int case_native_inventory(int,char**){
+    // Distinct group keys, hierarchy, selected leaf reveal and transient search expansion.
+    {
+        GroupTree tree;
+        const GroupPath bank{"a","","Bank"},bags{"a","Hero","Bags"},equipment{"a","Hero","Equipment"},wallet{"b","","Wallet"};
+        assert(GroupKey({"a","b:c","d"})!=GroupKey({"a:b","c","d"}));
+        assert(StorageRank("Bank")<StorageRank("Bags")&&StorageRank("Equipment")<StorageRank("Bags"));
+        tree.Add(bank,"Account A",true,{{0,20},{1,1}});
+        tree.Add(equipment,"Account A",true,{{2,1}});
+        tree.Add(bags,"Account A",true,{{0,3}});
+        tree.Add(wallet,"Account B",true,{{3,5}});
+        std::set<std::string> expanded;
+        auto collapsed=tree.Flatten(expanded);assert(collapsed.size()==2&&collapsed[0].node->label=="Account A");
+        auto full=tree.Flatten(expanded,true);assert(full.size()==12&&expanded.empty());
+        assert(tree.Expand(GroupKey(bags),expanded)&&expanded.size()==3);
+        auto shown=tree.Flatten(expanded);
+        assert(shown.size()==7&&shown[5].leaf&&shown[5].leaf->item==0&&shown[5].leaf->count==3);
+        assert(!tree.Expand("unknown",expanded)&&expanded.size()==3);
+        tree.Clear();tree.Add(bank,"Account A",false,{{0,20}});
+        auto single=tree.Flatten({},true);assert(single.size()==2&&single[0].node->label=="Bank"&&single[1].depth==1);
+    }
     RefreshProgress::Counts scopeProgress;
     scopeProgress.Add("Ready",true);scopeProgress.Add("Refreshing",true);scopeProgress.Add("Missing permissions",true);scopeProgress.Add("Not retrieved",false);
     assert(scopeProgress.total==4&&scopeProgress.ready==1&&scopeProgress.working==1&&scopeProgress.failed==1&&scopeProgress.missing==1);

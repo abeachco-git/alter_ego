@@ -65,7 +65,8 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
             break;
         case 4:s.id=g_AchSelectedGroupId;s.record=g_AchSelectedCatId;s.achievement=g_NavAchievementId;
             s.search=g_AchSearchBuf;s.first=g_AchHideEmptyCats;s.other=g_AchHideCompletedCats;break;
-        case 7:s.inventory=AlterEgo::NativeAccounts::CaptureInventoryNavigation();s.sub=s.inventory.subview;s.record=s.inventory.item;s.kind=s.inventory.currency?"currency":"item";break;
+        case 7:s.inventory=AlterEgo::NativeAccounts::CaptureInventoryNavigation();s.sub=s.inventory.subview;s.record=s.inventory.item;s.kind=s.inventory.currency?"currency":"item";
+            if(s.sub==0){s.id=s.inventory.grouped?"groups":"list";s.second=s.inventory.grouped?s.inventory.group:std::string{};}break;
         case 5:s.id=g_LibCompareChar;s.manual=g_LibCompareSavedManual;
             if(s.manual)s.second=g_LibCompareBuildId;
             s.compareTarget=g_LibComparePreviousTarget;s.buildTab=g_LibCompareBuildTab;s.equipTab=g_LibCompareEquipTab;

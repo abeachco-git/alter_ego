@@ -1631,6 +1631,8 @@ static bool SaveSettings() {
     j["auto_refresh_dataset_count"] = static_cast<uint32_t>(AlterEgo::AutoRefreshPolicy::Dataset::Count);
     j["objective_tracking_minutes"] = AlterEgo::RefreshEngine::ObjectiveMinutes();
     j["wallet_pins"] = AlterEgo::NativeAccounts::WalletPins();
+    j["inventory_grouped"]=AlterEgo::NativeAccounts::InventoryGrouped();
+    j["inventory_expanded_groups"]=AlterEgo::NativeAccounts::InventoryExpandedGroups();
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
     j["warn_stale_specialization"] = g_WarnStaleSpecialization;
     j["birthday_mode"] = g_BirthdayMode;
@@ -1690,6 +1692,11 @@ static void LoadSettings() {
     const char* walletPinKey=j.contains("wallet_pins")?"wallet_pins":"wallet_favorites";
     if(j.contains(walletPinKey)&&j[walletPinKey].is_array()){
         try{AlterEgo::NativeAccounts::SetWalletPins(j[walletPinKey].get<std::set<uint32_t>>());}catch(...){}
+    }
+    bool inventoryGrouped=false;getBool("inventory_grouped",inventoryGrouped);
+    AlterEgo::NativeAccounts::SetInventoryGrouped(inventoryGrouped);
+    if(j.contains("inventory_expanded_groups")&&j["inventory_expanded_groups"].is_array()&&j["inventory_expanded_groups"].size()<=4096){
+        try{AlterEgo::NativeAccounts::SetInventoryExpandedGroups(j["inventory_expanded_groups"].get<std::set<std::string>>());}catch(...){}
     }
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
     AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;
@@ -6898,6 +6905,10 @@ static void DrawProfessionCharacterEntry(ImDrawList* draw,
     }
     DrawProfessionCharacterName(draw, ImVec2(x,y), name, profession);
     draw->PopClipRect();
+}
+
+void DrawInventoryCharacterLabel(ImDrawList* draw,ImVec2 min,ImVec2 max,const std::string& profession,const std::string& name){
+    DrawProfessionCharacterEntry(draw,min,max,profession,name);
 }
 
 // Shared selectable row for single-target and multi-target character pickers.
@@ -17336,12 +17347,26 @@ void AddonRender() {
         if(inventoryMenu.requestOpen)ImGui::OpenPopup("Inventory menu##ae_main");
         ImGui::SetNextWindowPos(inventoryMenu.anchor,ImGuiCond_Appearing);
         if(ImGui::BeginPopup("Inventory menu##ae_main")){
-            bool chosen=false;const bool hovered=TabDropdownMenuHovered();
-            const char* labels[]={"Items","Wallet","Guild Bank"};
-            for(int i=0;i<3;++i)if(ImGui::MenuItem(labels[i],nullptr,g_MainTab==7&&AlterEgo::NativeAccounts::InventorySubview()==i)){
-                MarkNavigation();AlterEgo::NativeAccounts::SetInventorySubview(i);g_SwitchToInventory=true;chosen=true;
+            bool chosen=false,subHovered=false;const bool hovered=TabDropdownMenuHovered();
+            namespace Inventory=AlterEgo::NativeAccounts;
+            const auto select=[&](int sub){MarkNavigation();Inventory::SetInventorySubview(sub);g_SwitchToInventory=true;chosen=true;};
+            const auto flyout=AlterEgo::UI::TabFlyoutRow("Items##ae_inventory_items",
+                g_MainTab==7&&Inventory::InventorySubview()==0,"##ae_inventory_view_arrow","Inventory view##ae_main");
+            if(flyout.clicked){select(0);ImGui::CloseCurrentPopup();}
+            ImGui::SetNextWindowPos(flyout.anchor,ImGuiCond_Appearing);
+            if(ImGui::BeginPopup("Inventory view##ae_main")){
+                subHovered=TabDropdownMenuHovered();
+                if(ImGui::MenuItem("View as List",nullptr,!Inventory::InventoryGrouped())){
+                    select(0);Inventory::SetInventoryGrouped(false);SaveSettings();ImGui::CloseCurrentPopup();
+                }
+                if(ImGui::MenuItem("View as Groups",nullptr,Inventory::InventoryGrouped())){
+                    select(0);Inventory::SetInventoryGrouped(true);SaveSettings();ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
-            FinishTabDropdown(inventoryMenu,chosen,hovered);ImGui::EndPopup();
+            if(ImGui::MenuItem("Wallet",nullptr,g_MainTab==7&&Inventory::InventorySubview()==1))select(1);
+            if(ImGui::MenuItem("Guild Bank",nullptr,g_MainTab==7&&Inventory::InventorySubview()==2))select(2);
+            FinishTabDropdown(inventoryMenu,chosen,hovered,subHovered);ImGui::EndPopup();
         }
         SyncTabDropdownOpen(inventoryMenu,"Inventory menu##ae_main");
 
@@ -17367,47 +17392,9 @@ void AddonRender() {
             // The Builds label is a navigation target; its separate, right-
             // hand arrow opens a collection-specific flyout. Do not turn the
             // entire row into a submenu, or direct navigation stops working.
-            const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
-            const float buildsLabelWidth = 190.0f;
-            const bool buildsClicked = ImGui::Selectable("Loadouts##ae_library_collection",
-                onBuilds, ImGuiSelectableFlags_DontClosePopups,
-                ImVec2(buildsLabelWidth, rowHeight));
-            const ImVec2 buildsMin = ImGui::GetItemRectMin();
-            const ImVec2 buildsMax = ImGui::GetItemRectMax();
-            if (onBuilds) {
-                // Draw a checkmark aligned near the row's right edge, leaving
-                // a dedicated click target for the adjacent flyout arrow.
-                const ImVec2 check(buildsMax.x - 17.0f,
-                                   (buildsMin.y + buildsMax.y) * 0.5f);
-                const ImU32 checkColor = ImGui::GetColorU32(ImGuiCol_Text);
-                ImDrawList* draw = ImGui::GetWindowDrawList();
-                draw->AddLine(ImVec2(check.x - 4.0f, check.y),
-                              ImVec2(check.x - 1.0f, check.y + 3.0f),
-                              checkColor, 1.7f);
-                draw->AddLine(ImVec2(check.x - 1.0f, check.y + 3.0f),
-                              ImVec2(check.x + 5.0f, check.y - 4.0f),
-                              checkColor, 1.7f);
-            }
-            ImGui::SameLine(0.0f, 0.0f);
-            const ImVec2 flyoutButtonMin = ImGui::GetCursorScreenPos();
-            const ImVec2 flyoutButtonSize(27.0f, rowHeight);
-            if (ImGui::InvisibleButton("##ae_builds_actions", flyoutButtonSize))
-                ImGui::OpenPopup("Builds actions##ae_library");
-            const bool hoverFlyout = ImGui::IsItemHovered();
-            if (hoverFlyout && !ImGui::IsPopupOpen("Builds actions##ae_library"))
-                ImGui::OpenPopup("Builds actions##ae_library");
-            const ImVec2 flyoutButtonMax(flyoutButtonMin.x + flyoutButtonSize.x,
-                                          flyoutButtonMin.y + flyoutButtonSize.y);
-            const ImVec2 chevronCenter((flyoutButtonMin.x + flyoutButtonMax.x) * 0.5f,
-                                        (flyoutButtonMin.y + flyoutButtonMax.y) * 0.5f);
-            const ImU32 flyoutColor = ImGui::GetColorU32(ImGuiCol_Text);
-            ImDrawList* flyoutDraw = ImGui::GetWindowDrawList();
-            flyoutDraw->AddLine(ImVec2(chevronCenter.x - 2.0f, chevronCenter.y - 4.0f),
-                                ImVec2(chevronCenter.x + 2.0f, chevronCenter.y),
-                                flyoutColor, 1.6f);
-            flyoutDraw->AddLine(ImVec2(chevronCenter.x + 2.0f, chevronCenter.y),
-                                ImVec2(chevronCenter.x - 2.0f, chevronCenter.y + 4.0f),
-                                flyoutColor, 1.6f);
+            const auto buildsFlyout=AlterEgo::UI::TabFlyoutRow("Loadouts##ae_library_collection",
+                onBuilds,"##ae_builds_actions","Builds actions##ae_library");
+            const bool buildsClicked=buildsFlyout.clicked;
             if (buildsClicked) {
                 libraryActionSelected = true;
                 NavigateToLibraryCollection(0);
@@ -17415,8 +17402,7 @@ void AddonRender() {
                 ImGui::CloseCurrentPopup();
             }
 
-            ImGui::SetNextWindowPos(ImVec2(flyoutButtonMax.x, buildsMin.y),
-                                    ImGuiCond_Appearing);
+            ImGui::SetNextWindowPos(buildsFlyout.anchor,ImGuiCond_Appearing);
             if (ImGui::BeginPopup("Builds actions##ae_library")) {
                 const ImVec2 subPos = ImGui::GetWindowPos();
                 libraryMouseOverSubmenu = ImGui::IsMouseHoveringRect(subPos,
