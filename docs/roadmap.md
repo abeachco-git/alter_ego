@@ -189,3 +189,9 @@ Character propagation evidence: the [GW2 API client endpoint documentation](http
 - [x] Consolidate Last Login presentation into the account-scoped activity tracker, migrate verified legacy history without altering freshness, preserve unknown-last sorting and add an unknown-history divider; share roster-snapshot-aware invalidation between Characters and Compare. Regression assertions added; Windows CI and in-game validation pending.
 
 - [x] Extend Library backup/restore for consolidated login history: portable account-scoped history, no freshness state, legacy import compatibility, preserve newer observations and stage until saved. Initial compilation identified retired backup UI references; corrected and added backup regressions. Final build pending.
+
+## Untrusted input security hardening
+
+- [x] Shared bounded JSON parser for clipboard, backup/library imports and runtime Wiki JSON; reject duplicate keys, depth/size/event excess and raw NUL. Regression cases added; CI and live import verification pending.
+- [x] Reject malformed Base64 and mismatched AE2 envelope lengths before metadata requests; preserve v2/v3 and unpadded legacy chat links. Prepared SQL rejects trailing statements.
+- [ ] Validate remote destination and redirects, image signatures/dimensions and build-time Wiki generation; further field/schema validation, SQL identifier restrictions and parser fuzzing with sanitizers. Preserve original import compatibility.

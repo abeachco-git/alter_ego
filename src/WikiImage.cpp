@@ -1,4 +1,5 @@
 #include "WikiImage.h"
+#include "UntrustedInput.h"
 #include "WikiMetadataCache.h"
 #include "GW2API.h"
 #include "HttpClient.h"
@@ -751,7 +752,7 @@ namespace Skinventory {
     static std::string UrlEncode(const std::string& str) {
         std::string encoded;
         for (char c : str) {
-            if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            if (isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
                 encoded += c;
             } else if (c == ' ') {
                 encoded += '+';
@@ -773,7 +774,7 @@ namespace Skinventory {
         if (catResp.empty()) return false;
 
         try {
-            json j = json::parse(catResp);
+            json j = AlterEgo::Untrusted::Parse(catResp,AlterEgo::Untrusted::Wiki);
             if (j.contains("query") && j["query"].contains("pages")) {
                 for (auto& [pageId, page] : j["query"]["pages"].items()) {
                     if (!page.contains("categories") || !page["categories"].is_array()) continue;
@@ -781,7 +782,7 @@ namespace Skinventory {
                         std::string catTitle = cat.value("title", "");
                         // Lowercase for comparison
                         std::string catLower = catTitle;
-                        std::transform(catLower.begin(), catLower.end(), catLower.begin(), ::tolower);
+                        std::transform(catLower.begin(), catLower.end(), catLower.begin(), [](unsigned char c){return static_cast<char>(std::tolower(c));});
                         if (catLower.find("disambig") != std::string::npos) return true;
                         if (catLower.find("container") != std::string::npos) return true;
                         if (catLower.find("choice") != std::string::npos) return true;
@@ -800,7 +801,7 @@ namespace Skinventory {
         std::string resp = HttpClient::Get(url);
         if (resp.empty()) return false;
         try {
-            json j = json::parse(resp);
+            json j = AlterEgo::Untrusted::Parse(resp,AlterEgo::Untrusted::Wiki);
             if (j.contains("query") && j["query"].contains("pages")) {
                 for (auto& [pageId, page] : j["query"]["pages"].items()) {
                     // Missing pages have a negative page ID or "missing" key
@@ -821,7 +822,7 @@ namespace Skinventory {
         if (searchResp.empty()) return "";
 
         try {
-            json j = json::parse(searchResp);
+            json j = AlterEgo::Untrusted::Parse(searchResp,AlterEgo::Untrusted::Wiki);
             if (j.contains("query") && j["query"].contains("search") &&
                 j["query"]["search"].is_array() && !j["query"]["search"].empty()) {
                 return j["query"]["search"][0].value("title", "");
@@ -841,7 +842,7 @@ namespace Skinventory {
 
         std::string bestFile;
         try {
-            json j = json::parse(imagesResp);
+            json j = AlterEgo::Untrusted::Parse(imagesResp,AlterEgo::Untrusted::Wiki);
             if (j.contains("query") && j["query"].contains("pages")) {
                 for (auto& [pageId, page] : j["query"]["pages"].items()) {
                     if (!page.contains("images") || !page["images"].is_array()) continue;
@@ -876,7 +877,7 @@ namespace Skinventory {
         if (fileResp.empty()) return "";
 
         try {
-            json j = json::parse(fileResp);
+            json j = AlterEgo::Untrusted::Parse(fileResp,AlterEgo::Untrusted::Wiki);
             if (j.contains("query") && j["query"].contains("pages")) {
                 for (auto& [pageId, page] : j["query"]["pages"].items()) {
                     if (page.contains("imageinfo") && page["imageinfo"].is_array() &&
@@ -897,7 +898,7 @@ namespace Skinventory {
         if (resp.empty()) return {};
 
         try {
-            json j = json::parse(resp);
+            json j = AlterEgo::Untrusted::Parse(resp,AlterEgo::Untrusted::Wiki);
             if (j.contains("parse") && j["parse"].contains("wikitext")) {
                 std::string wikitext = j["parse"]["wikitext"].value("*", "");
                 std::string lower=wikitext;
@@ -918,7 +919,7 @@ namespace Skinventory {
         // These are the most reliable for armor skins (e.g. "Adventurer's Spectacles (heavy skin)")
         if (!weightClass.empty()) {
             std::string wcLower = weightClass;
-            std::transform(wcLower.begin(), wcLower.end(), wcLower.begin(), ::tolower);
+            std::transform(wcLower.begin(), wcLower.end(), wcLower.begin(), [](unsigned char c){return static_cast<char>(std::tolower(c));});
 
             // Try "(weight skin)" page first — dedicated skin pages
             std::string skinPageTitle = skinName + " (" + wcLower + " skin)";
@@ -1060,7 +1061,7 @@ namespace Skinventory {
             std::string resp = HttpClient::Get(url);
             if (resp.empty()) continue;
             try {
-                json j = json::parse(resp);
+                json j = AlterEgo::Untrusted::Parse(resp,AlterEgo::Untrusted::Wiki);
                 if (!j.contains("query") || !j["query"].contains("pages")) continue;
                 // Wiki may normalise titles (e.g. spaces vs underscores). Build a
                 // normalised->original map so we can match pages back to keys.
@@ -1165,7 +1166,7 @@ namespace Skinventory {
             if(s_stopWorker)return;
             auto response=HttpClient::GetEx("https://wiki.guildwars2.com/api.php?action=parse&page="+UrlEncode(data.set_name)+"&prop=wikitext&format=json");
             if(response.status_code!=200)return;
-            auto parsed=json::parse(response.body);
+            auto parsed=AlterEgo::Untrusted::Parse(response.body,AlterEgo::Untrusted::Wiki);
             auto body=parsed.at("parse").at("wikitext").at("*").get<std::string>();
             if(body.empty())return;
             ParseSetPageVendors(body,data.vendor_name,data.vendor_location,data.vendor_waypoint,data.vendor_cost,data.vendor_cost_keys);

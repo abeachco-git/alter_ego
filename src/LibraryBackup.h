@@ -5,6 +5,7 @@
 // only files actually present in selected import collections.
 // Nothing is written until all selected entries have passed validation.
 #include "BackupZip.h"
+#include "UntrustedInput.h"
 #include "FashionModel.h"
 #include "NativeLibraryPortable.h"
 #include "ComposableLoadouts.h"
@@ -93,7 +94,7 @@ inline bool ValidateCollection(const std::string& name, const std::string& bytes
     count = 0;
     if (!IsJsonName(name)) return UserAsset(name);
     nlohmann::json j;
-    try { j = nlohmann::json::parse(bytes); }
+    try { j = Untrusted::Parse(bytes,Untrusted::Library); }
     catch (const std::exception& e) {
         error = name + ": invalid JSON: " + e.what(); return false;
     }
@@ -262,7 +263,7 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
         if (!BackupZip::ReadStored(raw, package.files, error)) return false;
     } else {
         nlohmann::json j;
-        try { j = nlohmann::json::parse(raw); }
+        try { j = Untrusted::Parse(raw,Untrusted::Library); }
         catch (...) { error = "Not a ZIP archive or valid JSON file."; return false; }
         if (!j.is_object()) { error = "JSON import must contain an object."; return false; }
         std::string name;
@@ -283,7 +284,7 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
     if (package.files.empty()) { error = "Backup contains no files."; return false; }
     if (package.files.count("manifest.json")) {
         try {
-            const auto m = nlohmann::json::parse(package.files.at("manifest.json"));
+            const auto m = Untrusted::Parse(package.files.at("manifest.json"),Untrusted::Clipboard);
             if (!m.is_object() || m.value("format", std::string()) != "alter_ego_backup" ||
                 m.value("version", 0) != 1) {
                 error = "Unsupported backup manifest."; return false;
@@ -307,7 +308,7 @@ inline bool ReadPackage(const std::string& source, Package& package, std::string
         if (!ValidateCollection(name, bytes, count, error)) return false;
         if(name=="library.json") {
             NativeLibrary::PortableLibrary data;
-            if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(bytes),data,error))return false;
+            if(!NativeLibrary::ParsePortableLibrary(Untrusted::Parse(bytes,Untrusted::Library),data,error))return false;
             if(data.loadouts){
                 package.available|=Builds;package.buildCount=data.data.loadouts.loadouts.size();
                 package.equipmentSetCount=data.data.loadouts.equipment_sets.size();
@@ -347,13 +348,13 @@ inline bool Prepare(const std::string& dir, const Package& package,
         if(!store.Open(dir,error)||!store.Read(plan.before,error))return false;
         NativeLibrary::PortableLibrary input;
         if(package.files.count("library.json")) {
-            if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(package.files.at("library.json")),input,error))return false;
+            if(!NativeLibrary::ParsePortableLibrary(Untrusted::Parse(package.files.at("library.json"),Untrusted::Library),input,error))return false;
         } else {
             if(selected&Builds)
-                if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(package.files.at("build_library.json")),input,error))return false;
+                if(!NativeLibrary::ParsePortableLibrary(Untrusted::Parse(package.files.at("build_library.json"),Untrusted::Library),input,error))return false;
             if(selected&Fashion) {
                 NativeLibrary::PortableLibrary f;
-                if(!NativeLibrary::ParsePortableLibrary(nlohmann::json::parse(package.files.at("fashion_library.json")),f,error))return false;
+                if(!NativeLibrary::ParsePortableLibrary(Untrusted::Parse(package.files.at("fashion_library.json"),Untrusted::Library),f,error))return false;
                 input.fashion=true;input.data.fashion=std::move(f.data.fashion);
             }
         }
@@ -370,7 +371,7 @@ inline bool Prepare(const std::string& dir, const Package& package,
             // Preserve even pending history if another restore is applied before
             // its durable activity-ledger write succeeds.
             try{
-                auto logins=CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(bytes));
+                auto logins=CharacterActivity::DecodeLoginHistory(Untrusted::Parse(bytes,Untrusted::Library));
                 std::string pending;if(!ReadExisting(dir,name,pending,error))return false;
                 if(!pending.empty())CharacterActivity::MergeLoginHistory(logins,CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(pending)));
                 plan.writeFiles[name]=CharacterActivity::EncodeLoginHistory(logins).dump(2);++plan.otherWritten;

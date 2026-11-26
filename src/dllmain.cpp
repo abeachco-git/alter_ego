@@ -5089,7 +5089,7 @@ static std::string ExportBuildToAE2(const AlterEgo::SavedBuild& build) {
 }
 
 static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild& out, std::string& error) {
-    if (ae2code.size() < 5 || ae2code.substr(0, 4) != "AE2:") {
+    if (ae2code.size() < 5 || ae2code.size()>4096 || ae2code.substr(0, 4) != "AE2:") {
         error = "Not an AE2 code.";
         return false;
     }
@@ -5109,6 +5109,21 @@ static bool ImportBuildFromAE2(const std::string& ae2code, AlterEgo::SavedBuild&
 
     uint8_t linkLen = data[pos++];
     if (pos + linkLen > data.size()) { error = "AE2 build link truncated."; return false; }
+
+    // Validate the complete AE2 envelope before any metadata lookup or fetch.
+    if (gameMode>5 || (flags&0xC0) || linkLen<2) { error="Invalid AE2 flags or build length."; return false; }
+    size_t expected=pos+linkLen;
+    if(hasGear){
+        if(expected+2>data.size()){error="AE2 gear data truncated.";return false;}
+        const auto mask=ReadU16LE(&data[expected]);expected+=2;
+        for(int i=0;i<16;++i)if(mask&(1u<<i)){
+            expected+=2;
+            if(i>=AE2_SLOT_WeaponA1&&i<=AE2_SLOT_WeaponB2)expected+=version>=3?10:6;
+        }
+    }
+    if(hasRune)expected+=4;
+    if(hasRelic)expected+=4;
+    if(expected!=data.size()){error="AE2 payload length does not match its fields.";return false;}
 
     // Reconstruct chat link from raw bytes
     std::vector<uint8_t> linkBytes(data.begin() + pos, data.begin() + pos + linkLen);

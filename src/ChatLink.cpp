@@ -34,8 +34,18 @@ static int B64_DECODE_CHAR(char c) {
 
 std::vector<uint8_t> ChatLink::Base64Decode(const std::string& encoded) {
     std::vector<uint8_t> out;
-    if (encoded.empty()) return out;
-    out.reserve((encoded.size() / 4) * 3);
+    // All supported links are small; accept historical unpadded base64 but
+    // reject illegal characters, interior padding and impossible lengths.
+    if (encoded.empty() || encoded.size()>4096 || encoded.size()%4==1) return out;
+    const auto pad=encoded.find('=');
+    if(pad!=std::string::npos) {
+        const auto count=encoded.size()-pad;
+        if(encoded.size()%4 || count>2 || encoded.find_first_not_of('=',pad)!=std::string::npos ||
+           (count==1 && pad%4!=3) || (count==2 && pad%4!=2)) return out;
+    }
+    for(size_t i=0;i<(pad==std::string::npos?encoded.size():pad);++i)
+        if(B64_DECODE_CHAR(encoded[i])<0)return out;
+    out.reserve(((encoded.size()+3) / 4) * 3);
 
     for (size_t i = 0; i < encoded.size(); i += 4) {
         int a = (i < encoded.size()) ? B64_DECODE_CHAR(encoded[i]) : 0;

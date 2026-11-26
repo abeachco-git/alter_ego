@@ -48,6 +48,18 @@ void Upgrade(DB::Connection& db, int version) {
 
 int case_database_core(int, char**) {
     {
+        namespace U=AlterEgo::Untrusted;
+        assert(U::Parse(R"({"name":"O'Brien; --","nested":[{"x":1},{"x":2}]})",U::Clipboard).at("name")=="O'Brien; --");
+        const U::Limits small{100,30,10,3};
+        for(const std::string bad:{R"({"a":1,"a":2})",R"({"a":{"x":1,"x":2}})",R"([[[[[[0]]]]]])",R"({"a":"01234567890"})"}){
+            bool rejected=false;try{U::Parse(bad,small);}catch(...){rejected=true;}assert(rejected);
+        }
+        bool rejected=false;
+        try{U::Parse(std::string("{}")+char(0)+"{}",small);}catch(...){rejected=true;}
+        assert(rejected);
+        assert(U::Parse(R"({"a":"\u0000"})",small).at("a").get<std::string>().size()==1);
+    }
+    {
         namespace F=AlterEgo::WikiFreshness;
         namespace W=AlterEgo::Cache::Wiki;
         using namespace AlterEgo;

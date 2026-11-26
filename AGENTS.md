@@ -29,6 +29,8 @@ This is the authoritative agent instruction file; `CLAUDE.md` delegates here. Do
 - SQLite is authoritative for Loadouts and Fashion. Use repository transactions, preserve exact content and referenced identities, and keep SQL off render paths. Never recreate legacy mirrors or silently replace damaged databases. Rebuildable achievement and Skinventory data belong in the independent cache database; use StoragePaths.h for classified filesystem paths and the existing repositories for relational data. Do not place user-created information in the disposable cache.
 - Extend existing regression cases and suites. Keep assertions enabled; do not weaken tests or skip binary checks to obtain a green build. MetaBattle is excluded from automated regression testing by explicit user request; retain the runtime importer. Skill icon research is manual-only.
 
+- Treat clipboard, imports, chat codes, API/Wiki responses and remote artwork as untrusted. Bound JSON before and during parsing via `UntrustedInput.h`; use typed validation, bound SQL values and trusted identifiers, and retain prior verified data on rejection. Preserve valid historical formats and unknown extension data within resource budgets.
+
 ## Definition of done — implementation and DLL delivery
 
 An approved implementation request is not complete until the verified DLL has been delivered, or a genuine blocker requiring the user's involvement has been explained.

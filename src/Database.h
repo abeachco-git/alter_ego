@@ -4,6 +4,7 @@
 // Statements and transactions must be destroyed before their connection.
 #include <sqlite3.h>
 #include <cstdint>
+#include <cctype>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -29,12 +30,15 @@ class Statement {
     sqlite3_stmt* stmt_ = nullptr;
 public:
     Statement(sqlite3* db, const char* sql) : db_(db) {
-        const int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt_, nullptr);
+        const char* tail=nullptr;
+        const int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt_, &tail);
         if (rc != SQLITE_OK) {
             if (stmt_) sqlite3_finalize(stmt_);
             Check(db_, rc, "prepare");
         }
         if (!stmt_) throw Error(SQLITE_MISUSE, "Empty SQL statement");
+        while(tail && *tail && std::isspace(static_cast<unsigned char>(*tail)))++tail;
+        if(tail && *tail){sqlite3_finalize(stmt_);stmt_=nullptr;throw Error(SQLITE_MISUSE,"Unexpected trailing SQL");}
     }
     ~Statement() { sqlite3_finalize(stmt_); }
     Statement(const Statement&) = delete;

@@ -1,4 +1,5 @@
 #pragma once
+#include "UntrustedInput.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -92,13 +93,13 @@ inline Timers Parse(const Json& raw) {
 }
 inline Timers ParseResponse(const std::string& body,bool wrapped) {
     if(body.empty()||body.size()>4*1024*1024)throw std::runtime_error("Invalid event payload size");
-    auto data=Json::parse(body);
+    auto data=Untrusted::Parse(body,Untrusted::Wiki);
     if(wrapped){
         if(data.contains("error"))throw std::runtime_error("Wiki API error");
         const auto& parse=data.at("parse");
         if(parse.at("title").get<std::string>()!="Widget:Event timer/data.json")
             throw std::runtime_error("Unexpected Wiki page");
-        data=Json::parse(parse.at("wikitext").at("*").get<std::string>());
+        data=Untrusted::Parse(parse.at("wikitext").at("*").get<std::string>(),Untrusted::Wiki);
     }
     return Parse(data);
 }

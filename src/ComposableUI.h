@@ -5,6 +5,7 @@
 // All mutations are queued and applied after the visible panes finish
 // rendering: SavedBuild references remain stable for the whole frame.
 #include "ComposableSemantics.h"
+#include "UntrustedInput.h"
 #include "NativeLibraryEditing.h"
 #include "ComposableGearPresentation.h"
 #include "ComponentBrowseCore.h"
@@ -589,7 +590,7 @@ static void PastePortableLoadout() {
             if (APIDefs) APIDefs->GUI_SendAlert("Clipboard is empty.");
         } else {
             try {
-                const ComponentJson incoming = ComponentJson::parse(clipboard);
+                const ComponentJson incoming = AlterEgo::Untrusted::ParseClipboard(clipboard);
                 if (!incoming.is_object() ||
                     incoming.value("format", std::string()) !=
                         AlterEgo::Composable::kPortableLoadoutFormat) {
@@ -1038,11 +1039,11 @@ static void ImportComponentClipboard(){
     g_ComponentStatus.clear();
     if(!clipboard||!*clipboard){g_ComponentStatus="Clipboard is empty.";return;}
     try{
-        const auto packet=ComponentJson::parse(clipboard);
+        const auto packet=AlterEgo::Untrusted::ParseClipboard(clipboard);
         std::string kind,error;AlterEgo::Composable::Component imported;
         if(!AlterEgo::Composable::ImportComponent(packet,kind,imported,error))g_ComponentStatus=error;
         else g_ComponentCommand={ComponentUICommand::Create,"",kind,"",imported.name,imported.data};
-    }catch(const std::exception& e){g_ComponentStatus=std::string("Invalid component clipboard: ")+e.what();}
+    }catch(const std::exception& e){g_ComponentStatus="Invalid or oversized component clipboard.";}
 }
 static constexpr int kComponentGroupOrder[]={0,1,4,2,6,5,3,8,7};
 static void ComponentCreationMenu(const std::string& category={}){

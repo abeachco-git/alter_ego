@@ -1,4 +1,5 @@
 #include "NativeLibraryStore.h"
+#include "UntrustedInput.h"
 #include "NativeLibrarySchema.h"
 #include <atomic>
 #include <chrono>
@@ -78,7 +79,7 @@ Json FashionJson(const std::vector<Fashion::Look>& looks) {
     return rows;
 }
 std::vector<Fashion::Look> ParseFashion(const std::string& bytes) {
-    auto value=Json::parse(bytes);
+    auto value=Untrusted::Parse(bytes,Untrusted::Library);
     if(!value.is_object()||!value.contains("looks")||!value.at("looks").is_array())
         throw std::runtime_error("Legacy Fashion library requires a looks array");
     std::vector<Fashion::Look> looks;
@@ -112,7 +113,7 @@ Snapshot OpenOrMigrate(const Paths& paths) {
         if(Exists(paths.base/name)) originals.emplace(name,ReadBytes(paths.base/name));
     Snapshot proposed;
     if(originals.count("build_library.json")) {
-        std::string error; const auto legacy=Json::parse(originals.at("build_library.json"));
+        std::string error; const auto legacy=Untrusted::Parse(originals.at("build_library.json"),Untrusted::Library);
         if(!SplitLegacyExact(legacy,proposed.loadouts,error)) throw std::runtime_error(error);
         Json rebuilt;
         if(!Composable::ToLegacy(proposed.loadouts,rebuilt,error)||
