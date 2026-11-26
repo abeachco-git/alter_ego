@@ -24,7 +24,56 @@ namespace Skinventory {
         return std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
     }
-    static const int64_t PRICE_TTL_SEC = 15 * 60; // 15 minutes
+    static const int64_t PRICE_TTL_SEC = Commerce::PriceTTL;
+    // One coordinator for both item and skin consumers. The request mutex is
+    // never held during HTTP, SQLite or UI callbacks.
+    namespace {
+    std::mutex itemPriceMutex;
+    std::unordered_map<uint32_t,PriceInfo> itemPrices;
+    std::unordered_map<uint32_t,int64_t> priceRetry;
+    std::unordered_set<uint32_t> pricePending;
+    std::map<uint32_t,bool> priceQueue;
+    bool priceWorkerRunning=false;
+    bool FreshPrice(const PriceInfo& p,int64_t now){return p.fetched_at_unix>0&&now>=p.fetched_at_unix&&now-p.fetched_at_unix<Commerce::PriceTTL;}
+    int PriceField(const json& j,const char* key){
+        const auto& v=j.at(key);
+        if(!v.is_number_integer())throw std::runtime_error("Invalid commerce integer");
+        const auto n=v.get<int64_t>();if(n<0||n>2147483647LL)throw std::runtime_error("Invalid commerce range");
+        return static_cast<int>(n);
+    }
+    // Called only by owned workers. Missing IDs are not inferred to be
+    // nontradeable unless the API explicitly reports a partial/not-found result.
+    std::unordered_map<uint32_t,PriceInfo> FetchItemBatch(const std::vector<uint32_t>& ids){
+        std::unordered_map<uint32_t,PriceInfo> out;
+        if(ids.empty())return out;
+        std::string query;std::unordered_set<uint32_t> expected(ids.begin(),ids.end());
+        for(auto id:ids){if(!query.empty())query+=",";query+=std::to_string(id);}
+        auto response=HttpClient::GetEx("https://api.guildwars2.com/v2/commerce/prices?ids="+query);
+        AlterEgo::Background::Checkpoint();
+        if(response.status_code!=200&&response.status_code!=206&&response.status_code!=404)return {};
+        try{
+            auto body=AlterEgo::Untrusted::Parse(response.body,AlterEgo::Untrusted::PublicApi);
+            if(response.status_code==404){
+                if(!body.is_object()||body.value("text",std::string())!="all ids provided are invalid")return {};
+            }else{
+                if(!body.is_array())return {};
+                for(const auto& e:body){
+                    const auto& raw=e.at("id");if(!raw.is_number_integer())return {};
+                    const auto n=raw.get<int64_t>();if(n<=0||n>4294967295LL)return {};
+                    auto id=static_cast<uint32_t>(n);if(!expected.count(id)||out.count(id))return {};
+                    PriceInfo p;p.item_id=id;p.tradeable=true;p.fetched_at_unix=NowUnix();
+                    p.buy_price=PriceField(e.at("buys"),"unit_price");p.buy_quantity=PriceField(e.at("buys"),"quantity");
+                    p.sell_price=PriceField(e.at("sells"),"unit_price");p.sell_quantity=PriceField(e.at("sells"),"quantity");
+                    out.emplace(id,p);
+                }
+            }
+            if(response.status_code==200&&out.size()!=expected.size())return {};
+            if(response.status_code!=200)for(auto id:ids)if(!out.count(id)){PriceInfo p;p.item_id=id;p.fetched_at_unix=NowUnix();out.emplace(id,p);}
+            return out;
+        }catch(const AlterEgo::Background::Cancelled&){throw;}catch(...){return {};}
+    }
+    }
+
 
     std::string Commerce::s_data_dir;
     std::mutex Commerce::s_mutex;
@@ -56,6 +105,60 @@ namespace Skinventory {
 
     void Commerce::SetDataDirectory(const std::string& dir) {
         s_data_dir = dir;
+        try {auto rows=AlterEgo::Cache::ReadItemPrices(AlterEgo::Cache::RootFromLegacySkinDirectory(dir));std::lock_guard<std::mutex> lock(itemPriceMutex);itemPrices=std::move(rows);}catch(...){}
+    }
+
+    ItemPriceStatus Commerce::GetItemPriceStatus(uint32_t id){
+        std::lock_guard<std::mutex> lock(itemPriceMutex);
+        ItemPriceStatus s;auto it=itemPrices.find(id);if(it!=itemPrices.end())s.price=it->second;
+        s.pending=pricePending.count(id)!=0;auto r=priceRetry.find(id);if(r!=priceRetry.end())s.retry_at=r->second;
+        return s;
+    }
+    void Commerce::RequestItemPrices(const std::vector<uint32_t>& ids,bool manual){
+        if(!AlterEgo::AutoRefreshPolicy::AllowRequest(manual,AlterEgo::AutoRefreshPolicy::Dataset::TradingPrices))return;
+        {
+            std::lock_guard<std::mutex> lock(itemPriceMutex);const auto now=NowUnix();
+            for(auto id:ids){
+                if(!id)continue;
+                if(pricePending.count(id)){auto q=priceQueue.find(id);if(manual&&q!=priceQueue.end())q->second=true;continue;}
+                auto p=itemPrices.find(id);auto r=priceRetry.find(id);
+                if(!manual&&((p!=itemPrices.end()&&FreshPrice(p->second,now))||(r!=priceRetry.end()&&r->second>now)))continue;
+                if(pricePending.size()>=10000)break;
+                pricePending.insert(id);priceQueue.emplace(id,manual);
+            }
+            if(priceWorkerRunning||priceQueue.empty())return;
+            priceWorkerRunning=true;
+        }
+        AlterEgo::Background::Workers().Launch([]{
+            for(;;){
+                AlterEgo::Background::Checkpoint();
+                std::vector<uint32_t> batch;bool manual=false;
+                {
+                    std::lock_guard<std::mutex> lock(itemPriceMutex);
+                    if(priceQueue.empty()){priceWorkerRunning=false;return;}
+                    for(int pass=0;pass<2;++pass)for(auto it=priceQueue.begin();it!=priceQueue.end()&&batch.size()<200;){
+                        if(it->second!=(pass==0)){++it;continue;}
+                        if(!it->second&&!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::TradingPrices)){pricePending.erase(it->first);it=priceQueue.erase(it);continue;}
+                        manual=manual||it->second;batch.push_back(it->first);it=priceQueue.erase(it);
+                    }
+                }
+                if(batch.empty())continue;
+                AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Visible);
+                auto rows=FetchItemBatch(batch);
+                const bool saved=AlterEgo::Cache::WriteItemPrices(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),rows);
+                {
+                    std::lock_guard<std::mutex> lock(itemPriceMutex);
+                    for(auto id:batch){
+                        auto it=rows.find(id);
+                        if(saved&&it!=rows.end()){itemPrices[id]=it->second;priceRetry.erase(id);}
+                        else priceRetry[id]=NowUnix()+900;
+                        pricePending.erase(id);
+                    }
+                    if(saved&&!rows.empty())++s_price_generation;
+                }
+                AlterEgo::Background::Pause(std::chrono::milliseconds(200));
+            }
+        },[]{std::lock_guard<std::mutex> lock(itemPriceMutex);priceWorkerRunning=false;priceQueue.clear();pricePending.clear();});
     }
 
     std::optional<PriceInfo> Commerce::GetPrice(uint32_t skin_id) {
@@ -204,31 +307,34 @@ namespace Skinventory {
             }
             std::string ids;
             for(size_t j=i;j<end;++j) { if(!ids.empty()) ids+=","; ids+=std::to_string(item_ids[j]); }
-            bool ok=false;
-            try {
-                const auto body=HttpClient::Get("https://api.guildwars2.com/v2/commerce/prices?ids="+ids);
-                AlterEgo::Background::Checkpoint();
-                const auto batch=AlterEgo::Untrusted::Parse(body,AlterEgo::Untrusted::PublicApi);
-                if(batch.is_array()) {
-                    for(const auto& entry:batch) {
-                        const auto item=entry.value("id",uint32_t(0));
-                        const auto it=item_to_skin.find(item);
-                        if(it==item_to_skin.end()) continue;
-                        PriceInfo info; info.item_id=item; info.tradeable=true;
-                        if(entry.contains("buys") && entry["buys"].is_object()) {
-                            info.buy_price=entry["buys"].value("unit_price",0);
-                            info.buy_quantity=entry["buys"].value("quantity",0);
-                        }
-                        if(entry.contains("sells") && entry["sells"].is_object()) {
-                            info.sell_price=entry["sells"].value("unit_price",0);
-                            info.sell_quantity=entry["sells"].value("quantity",0);
-                        }
-                        for(auto skin:it->second) if(BetterPrice(info,best[skin])) best[skin]=info;
+            std::vector<uint32_t> needed;
+            std::unordered_map<uint32_t,PriceInfo> observations;
+            {
+                std::lock_guard<std::mutex> lock(itemPriceMutex);
+                for(size_t j=i;j<end;++j){
+                    auto id=item_ids[j];auto it=itemPrices.find(id);auto retry=priceRetry.find(id);
+                    if(it!=itemPrices.end()&&FreshPrice(it->second,NowUnix()))observations.emplace(id,it->second);
+                    else if(!pricePending.count(id)&&(retry==priceRetry.end()||retry->second<=NowUnix())){
+                        pricePending.insert(id);needed.push_back(id);
                     }
-                    ok=true;
                 }
-            } catch(const AlterEgo::Background::Cancelled&) {throw;} catch(...) {}
-            if(!ok) for(size_t j=i;j<end;++j) for(auto skin:item_to_skin[item_ids[j]]) failed.insert(skin);
+            }
+            if(!needed.empty()){
+                // Guard claims even on cancellation and exceptions.
+                struct Claims{const std::vector<uint32_t>& ids;~Claims(){std::lock_guard<std::mutex> lock(itemPriceMutex);for(auto id:ids)pricePending.erase(id);}} claims{needed};
+                auto rows=FetchItemBatch(needed);
+                const bool saved=AlterEgo::Cache::WriteItemPrices(AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),rows);
+                std::lock_guard<std::mutex> lock(itemPriceMutex);
+                for(auto id:needed){auto it=rows.find(id);if(saved&&it!=rows.end()){
+                    itemPrices[id]=it->second;observations[id]=it->second;priceRetry.erase(id);
+                }else priceRetry[id]=NowUnix()+900;}
+                if(saved&&!rows.empty())++s_price_generation;
+            }
+            for(size_t j=i;j<end;++j){
+                auto id=item_ids[j];auto it=observations.find(id);
+                if(it==observations.end()){for(auto skin:item_to_skin[id])failed.insert(skin);continue;}
+                for(auto skin:item_to_skin[id])if(BetterPrice(it->second,best[skin]))best[skin]=it->second;
+            }
             AlterEgo::Background::Pause(std::chrono::milliseconds(200));
         }
         std::lock_guard<std::mutex> publication(s_publication_mutex);
@@ -245,7 +351,7 @@ namespace Skinventory {
         json rows=json::object();
         for(auto& [skin,info]:best){
             if(failed.count(skin))continue;
-            info.fetched_at_unix=NowUnix();
+            if(!info.fetched_at_unix)info.fetched_at_unix=NowUnix();
             rows[std::to_string(skin)]={{"item_id",info.item_id},{"buy",info.buy_price},{"sell",info.sell_price},
                 {"buy_q",info.buy_quantity},{"sell_q",info.sell_quantity},{"tradeable",info.tradeable},{"ts",info.fetched_at_unix}};
         }

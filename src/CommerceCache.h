@@ -4,6 +4,36 @@
 #include "SkinSearchCore.h"
 
 namespace AlterEgo::Cache {
+// Shared public item observations; independent of skin candidate lifetimes.
+inline std::unordered_map<uint32_t,Skinventory::PriceInfo> ReadItemPrices(const std::string& root) {
+    std::unordered_map<uint32_t,Skinventory::PriceInfo> out;
+    std::lock_guard<std::mutex> lock(Mutex());
+    const auto path=Storage::Paths(root).Cache();
+    if(!std::filesystem::exists(path))return out;
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
+    Initialize(db);
+    auto q=db.Prepare("SELECT item_id,fetched_at,buy,sell,buy_quantity,sell_quantity,tradeable FROM commerce_latest_prices");
+    while(q.Step()){
+        Skinventory::PriceInfo p;p.item_id=static_cast<uint32_t>(q.Integer(0));p.fetched_at_unix=q.Integer(1);
+        p.buy_price=static_cast<int>(q.Integer(2));p.sell_price=static_cast<int>(q.Integer(3));
+        p.buy_quantity=static_cast<int>(q.Integer(4));p.sell_quantity=static_cast<int>(q.Integer(5));p.tradeable=q.Integer(6)!=0;
+        out.emplace(p.item_id,p);
+    }
+    return out;
+}
+inline bool WriteItemPrices(const std::string& root,const std::unordered_map<uint32_t,Skinventory::PriceInfo>& rows){
+    if(root.empty())return false;
+    if(rows.empty())return true;
+    try{
+        std::lock_guard<std::mutex> lock(Mutex());
+        auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);Initialize(db);
+        Database::Transaction tx(db);
+        auto q=db.Prepare("INSERT INTO commerce_latest_prices VALUES(?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET fetched_at=excluded.fetched_at,buy=excluded.buy,sell=excluded.sell,buy_quantity=excluded.buy_quantity,sell_quantity=excluded.sell_quantity,tradeable=excluded.tradeable WHERE excluded.fetched_at>=commerce_latest_prices.fetched_at");
+        for(const auto& [id,p]:rows){q.Bind(1,id);q.Bind(2,p.fetched_at_unix);q.Bind(3,p.buy_price);q.Bind(4,p.sell_price);q.Bind(5,p.buy_quantity);q.Bind(6,p.sell_quantity);q.Bind(7,p.tradeable?1:0);q.Execute();q.Reset();}
+        tx.Commit();return true;
+    }catch(...){return false;}
+}
 enum class CommerceDataset { Mapping, Prices };
 inline const char* CommerceName(CommerceDataset d) {
     return d==CommerceDataset::Mapping?"commerce_item_map":"commerce_prices";

@@ -2,6 +2,11 @@
 
 Living implementation tracker for the experimental branch. Checked items indicate implementation, not necessarily in-game validation. See [development status](development-status.md) for broader stabilization work.
 
+## Trading Post item pricing
+- [x] Initial shared item-ID observations, one-hour TTL, bounded batched requests, shared cache lock, per-item pending claims and retry cooldown; selected inventory detail and independent price refresh/status tooltip. Build and runtime validation pending.
+- [ ] Consolidate remaining skin-choice scheduling and publication into a single coordinator; test partial responses, cancellation, migration and cache retention.
+- [ ] Optional visible-row batching and price sorting; no automatic full-result fetching.
+
 ## Implementation tracker (living)
 
 - [x] Native registry, explicit API key setup, permission reporting, Windows Credential Manager.

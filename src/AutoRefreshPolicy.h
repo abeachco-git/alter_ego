@@ -19,11 +19,11 @@ inline bool Enabled() {
     return Switch().load(std::memory_order_acquire);
 }
 enum class Dataset : uint32_t { Characters, Achievements, SkinOwnership, PublicCatalog, Clears, Vault,
-    Bank, SharedInventory, Materials, Bags, Equipment, Armory, Delivery, Wallet, Guild, Count };
+    Bank, SharedInventory, Materials, Bags, Equipment, Armory, Delivery, Wallet, Guild, TradingPrices, Count };
 inline constexpr std::array<const char*,static_cast<size_t>(Dataset::Count)> Labels{
     "Characters","Achievements","Skin ownership","Public catalogs","Clears","Wizard's Vault",
     "Bank","Shared inventory","Material storage","Character bags","Equipment","Legendary Armory",
-    "Trading Post delivery","Wallet","Guild bank"};
+    "Trading Post delivery","Wallet","Guild bank","Trading Post prices"};
 inline constexpr uint32_t AllMask=(1u<<static_cast<uint32_t>(Dataset::Count))-1;
 inline std::atomic<uint32_t>& Mask(){static std::atomic<uint32_t> value{AllMask};return value;}
 inline uint32_t GetMask(){return Mask().load(std::memory_order_acquire);}

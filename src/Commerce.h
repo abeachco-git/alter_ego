@@ -14,6 +14,11 @@ namespace Skinventory {
     // Format copper value as gold/silver/copper string
     std::string FormatCoins(int copper);
 
+    struct ItemPriceStatus {
+        std::optional<PriceInfo> price;
+        bool pending=false;
+        int64_t retry_at=0;
+    };
     class Commerce {
     public:
         // Set data directory for item map cache
@@ -21,6 +26,9 @@ namespace Skinventory {
 
         // Fetch TP price for a single skin (async, on-demand)
         static void FetchPriceForSkin(uint32_t skin_id);
+        static constexpr int64_t PriceTTL=3600;
+        static ItemPriceStatus GetItemPriceStatus(uint32_t id);
+        static void RequestItemPrices(const std::vector<uint32_t>& ids,bool manual=false);
 
         // Batch fetch prices for multiple skins (for shopping list)
         static void FetchPricesForSkins(const std::vector<uint32_t>& skin_ids);

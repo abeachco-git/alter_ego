@@ -10,6 +10,7 @@
 #include "AutoRefreshPolicy.h"
 #include "CharacterActivity.h"
 #include "RefreshUI.h"
+#include "Commerce.h"
 #include "RefreshProgress.h"
 #include "ChatLink.h"
 #include <windows.h>
@@ -1155,6 +1156,46 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         for(auto id:slot.infusions){const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("Infusion: %s",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
         ImGui::Separator();ImGui::PopID();
     }
+    RenderSectionHeader("Trading Post",UI::SectionGold);
+    {
+        using Skinventory::Commerce;
+        const auto status=Commerce::GetItemPriceStatus(group.id);
+        const auto now=Now();
+        // A selected-item demand is independent of the inventory search and
+        // inventory storage refresh. No result-list or per-row price requests.
+        Commerce::RequestItemPrices({group.id});
+        const auto coin=[](int64_t c){
+            return std::to_string(c/10000)+"g "+std::to_string(c/100%100)+"s "+std::to_string(c%100)+"c";
+        };
+        if(status.price&&status.price->tradeable){
+            const auto& p=*status.price;
+            const auto buy=p.buy_quantity>0&&p.buy_price>0?coin(p.buy_price):std::string("No buy orders");
+            const auto sell=p.sell_quantity>0&&p.sell_price>0?coin(p.sell_price):std::string("No sell listings");
+            ImGui::Text("Buy order: %s",buy.c_str());ImGui::Text("Sell listing: %s",sell.c_str());
+            int64_t eligible=0;auto f=v->inventory.flags.find(group.id);
+            if(locations!=v->index.end())for(auto idx:locations->second){
+                const auto& row=v->inventory.rows[idx];const auto& slot=row.slot;
+                if(allowed(slot.account)&&Fresh(*v,row)&&slot.binding==Binding::Unbound&&
+                    f!=v->inventory.flags.end()&&f->second.known&&!f->second.accountBound&&!f->second.soulbound&&
+                    (slot.scope=="Bank"||slot.scope=="Shared inventory"||slot.scope=="Bags"||slot.scope=="Materials"))
+                    eligible+=slot.count;
+            }
+            if(eligible>0&&p.buy_price>0&&p.buy_quantity>0){
+                // Bound arithmetic: aggregate quantity can exceed a single stack.
+                const auto count=std::min<int64_t>(eligible,9223372036854775807LL/std::max(1,p.buy_price)/100);
+                const auto gross=count*p.buy_price;
+                const auto net=gross-(gross*5+99)/100-(gross*10+99)/100;
+                ImGui::Text("Estimated instant sale after fees: %s",coin(net).c_str());
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Estimate for %lld verified unbound items at the current best buy price. Order depth and actual fees may differ.",static_cast<long long>(eligible));
+            }else ImGui::TextDisabled("No verified sellable owned quantity");
+        }else if(status.price)ImGui::TextDisabled("Not tradeable");
+        else ImGui::TextDisabled("Price not retrieved");
+        if(status.pending)ImGui::TextDisabled("Price request queued or refreshing");
+        else if(status.retry_at>now)ImGui::TextDisabled("Price refresh failed; retry in %lldm",static_cast<long long>((status.retry_at-now+59)/60));
+        else if(status.price&&(now<status.price->fetched_at_unix||now-status.price->fetched_at_unix>=Commerce::PriceTTL))ImGui::TextDisabled("Price stale");
+        if(UI::Button("Refresh price")&&!status.pending)Commerce::RequestItemPrices({group.id},true);
+        RefreshUI::Timestamp(status.price?static_cast<std::time_t>(status.price->fetched_at_unix):0,"Trading Post price");
+    }
     RenderSectionHeader("Item Information",UI::SectionGold);
     auto flags=v->inventory.flags.find(group.id);
     if(flags!=v->inventory.flags.end()){
@@ -1284,6 +1325,18 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
         state==RefreshUI::State::Ready&&(missing||stale||!count)?(count?"Scheduled":"No scopes"):nullptr;
     if(!count&&characterFiltered)detail="No verified storage scopes match the selected characters and storage filter.";
     if(characterFiltered&&count)detail+="\n\nTimestamp and manual Refresh cover matching character storage only.";
+    if(itemView&&nav.item&&!nav.currency){
+        const auto p=Skinventory::Commerce::GetItemPriceStatus(nav.item);const auto now=Now();
+        detail+="\n\nTrading Post price (selected item): ";
+        if(p.pending)detail+="queued or refreshing";
+        else if(p.retry_at>now)detail+="retry cooldown "+std::to_string((p.retry_at-now+59)/60)+"m";
+        else if(!p.price)detail+="not retrieved";
+        else if(now<p.price->fetched_at_unix||now-p.price->fetched_at_unix>=Skinventory::Commerce::PriceTTL)detail+="stale; refresh due";
+        else detail+="fresh; next eligible in "+std::to_string((Skinventory::Commerce::PriceTTL-(now-p.price->fetched_at_unix)+59)/60)+"m";
+        if(p.price)detail+="; updated "+RefreshUI::Age(static_cast<std::time_t>(p.price->fetched_at_unix));
+        if(!AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::TradingPrices))detail+="; automatic refresh disabled";
+        detail+="\nPrice refresh is independent of inventory storage.";
+    }
     if(accounts.empty())detail="Link or select an account.";
     const bool incompatible=(characterFiltered&&scope!="Items"&&scope!="Bags"&&scope!="Equipment")||(itemView&&scope=="Wallet"&&!includeWallet);
     if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty()||incompatible,nullptr,idleLabel,true))

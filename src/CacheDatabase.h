@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 26;
+constexpr int kSchemaVersion = 27;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -33,6 +33,18 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 }
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if(version==27){
+        db.Exec(R"SQL(
+CREATE TABLE commerce_latest_prices(item_id INTEGER PRIMARY KEY CHECK(item_id BETWEEN 1 AND 4294967295),
+    fetched_at INTEGER NOT NULL CHECK(fetched_at>0), buy INTEGER NOT NULL CHECK(buy>=0),
+    sell INTEGER NOT NULL CHECK(sell>=0), buy_quantity INTEGER NOT NULL CHECK(buy_quantity>=0),
+    sell_quantity INTEGER NOT NULL CHECK(sell_quantity>=0), tradeable INTEGER NOT NULL CHECK(tradeable IN (0,1))) STRICT;
+INSERT INTO commerce_latest_prices SELECT p.item_id,p.fetched_at,p.buy,p.sell,p.buy_quantity,p.sell_quantity,p.tradeable
+FROM commerce_item_prices p WHERE p.fetched_at>0 AND p.buy>=0 AND p.sell>=0 AND p.buy_quantity>=0 AND p.sell_quantity>=0
+AND p.fetched_at=(SELECT MAX(q.fetched_at) FROM commerce_item_prices q WHERE q.item_id=p.item_id);
+)SQL");
+        return;
+    }
     if(version==26){
         db.Exec(R"SQL(
 ALTER TABLE clears_sections ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0 CHECK(fetched_at>=0);
