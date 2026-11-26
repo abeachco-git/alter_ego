@@ -1,0 +1,7 @@
+# CI-only toolchain. No addon code, credentials or build outputs in this image.
+FROM debian:trixie
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    cmake make file python3 python3-pil ca-certificates ccache g++ \
+    g++-mingw-w64-ucrt64 gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64 git zstd \
+ && rm -rf /var/lib/apt/lists/*

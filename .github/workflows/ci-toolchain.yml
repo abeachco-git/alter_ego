@@ -1,0 +1,61 @@
+name: Refresh UCRT build toolchain
+
+on:
+  push:
+    branches: [main, experiment/composable-loadouts]
+    paths:
+      - '.github/ci/Dockerfile.ucrt'
+      - '.github/workflows/ci-toolchain.yml'
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ucrt-toolchain-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/alter-ego-ucrt-toolchain
+      # Experimental branches must not replace the default branch toolchain.
+      TAG: ${{ github.ref_name == 'main' && 'trixie-v1' || 'trixie-exp-v1' }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build fresh Debian toolchain
+        run: |
+          docker build --pull --no-cache \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -f .github/ci/Dockerfile.ucrt -t "$IMAGE:$TAG" .github/ci
+      - name: Verify native and Windows UCRT toolchains
+        run: |
+          docker run --rm "$IMAGE:$TAG" sh -ec '
+            cmake --version
+            ccache --version
+            g++ --version
+            x86_64-w64-mingw32ucrt-g++ --version
+            printf "int main(){return 0;}\n" >/tmp/check.cpp
+            g++ -fsanitize=address,undefined -fno-pie -no-pie /tmp/check.cpp -o /tmp/check
+            /tmp/check
+            x86_64-w64-mingw32ucrt-g++ -mcrtdll=ucrtbase /tmp/check.cpp -o /tmp/check.exe
+            file /tmp/check.exe
+            x86_64-w64-mingw32ucrt-objdump -p /tmp/check.exe >/tmp/imports
+            grep -Ei "DLL Name: (ucrtbase.dll|api-ms-win-crt-)" /tmp/imports
+            ! grep -qi "DLL Name: msvcrt.dll" /tmp/imports
+          '
+      - name: Publish tested image to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE:$TAG"
+          docker logout ghcr.io
