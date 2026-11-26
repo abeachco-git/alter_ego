@@ -75,5 +75,20 @@ int case_character_request(int,char**) {
     changing.get_future().wait();release.set_value();writer.join();replacement.join();
     assert(!AlterEgo::AccountCommit::Run(credential,[&]{return epoch==1;},[]{assert(false);return true;}));
     assert(AlterEgo::AccountCommit::Run(credential,[&]{return epoch==2;},[]{return true;}));
+    // A queued request must retain its admitted generation, even if the
+    // same account is unlinked and linked again before the worker starts.
+    const auto queuedEpoch=epoch;
+    {std::lock_guard<std::mutex> lock(credential);++epoch;}
+    assert(!AlterEgo::AccountCommit::Run(credential,[&]{return queuedEpoch==epoch;},[]{assert(false);return true;}));
+    // Snapshot identity is captured together with its contents. A subsequent
+    // selection change cannot redirect an admitted persistence operation.
+    std::string selected="A.B";
+    std::map<std::string,std::set<int>> persisted;
+    std::set<int> owned{42,43};
+    const auto captured=std::make_pair(selected,owned);
+    selected="A_B";owned={99};
+    persisted[captured.first]=captured.second;
+    assert(persisted.at("A.B")==std::set<int>({42,43}));
+    assert(!persisted.count("A_B"));
     return 0;
 }

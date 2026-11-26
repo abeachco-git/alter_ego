@@ -424,6 +424,10 @@ std::vector<LinkedAccount> Linked(){
     }
     return out;
 }
+LinkedAccount FindLinked(const std::string& id){
+    for(auto& a:Linked())if(a.id==id)return std::move(a);
+    return {};
+}
 bool Ready(){return registryReady.load();}
 bool Current(const LinkedAccount& a){
     if(a.id.empty()||a.generation!=registryGeneration.load())return false;

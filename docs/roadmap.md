@@ -206,3 +206,5 @@ Character propagation evidence: the [GW2 API client endpoint documentation](http
 - [ ] Continue legacy render/event state, API/catalog persistence ownership and generation/correlation audit. Verify host escape bool, callbacks, texture/atlas resource lifetime and unload under real Nexus; do not claim host quiescence from local tests.
 
 - [x] Account credential/commit fencing: serialize character and verified achievement commits with credential replacement, recheck after JSON parsing, keep roster reconciliation request-owned and busy until durable publication, move initial linked roster HTTP outside credential lock, enforce registry lock order. Concurrency regression added; exact-commit CI/live verification pending.
+
+- [x] Complete credential admission fencing for Clears, Vault (including batch retries), achievement UI projection and skin ownership API responses; serialize account projection capture and disk persistence with cache loads, retain outgoing account snapshots, recheck Clears watchdog ownership. Offline/Windows verification pending; season rollover correlation, remaining UI render locking and host callback lifetime still open.

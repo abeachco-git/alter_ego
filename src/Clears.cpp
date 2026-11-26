@@ -148,6 +148,7 @@ static bool g_VaultWeeklyRolloverPending = false;
 static int g_VaultRolloverRetries = 0;
 static long long g_VaultRolloverRetryAtMs = 0;
 static std::string g_VaultRequestAccount;
+static AlterEgo::NativeAccounts::LinkedAccount g_VaultRequestCredential;
 static constexpr long long VAULT_TIMEOUT_MS = 120000;
 std::atomic<bool> g_VaultNeedRequery{false};
 
@@ -182,7 +183,8 @@ static bool g_PublicVaultSeasonPending=false;
 // =========================================================================
 
 // Forward declarations of private helpers
-static void SaveClearsCache();
+static nlohmann::json CaptureClearsCacheLocked();
+static bool PersistClearsCache(const std::string& account,const nlohmann::json& snapshot);
 static std::string ShortenFractalName(const std::string& name);
 static void FetchClears(bool manual=false);
 static void SendClearsAchQuery(bool skipCompletedSections = false,bool manual=false);
@@ -205,8 +207,9 @@ static int64_t ResetEpoch(std::chrono::system_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::seconds>(
         t.time_since_epoch()).count();
 }
-static void RequestVaultSection(uint8_t type, const std::string& account,bool manual=false);
-static void SaveVaultCache();
+static void RequestVaultSection(uint8_t type,const std::string& account,const AlterEgo::NativeAccounts::LinkedAccount& credential,uint64_t generation,bool manual=false);
+static nlohmann::json CaptureVaultCacheLocked();
+static bool PersistVaultCache(const std::string& account,const nlohmann::json& snapshot);
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr);
 static void RenderVaultPeriodSection(int sectionIndex, const char* title, const char* resetLabel,
                                      ImVec4 color, const VaultPeriod& period);
@@ -317,6 +320,7 @@ static long long NowMs() {
 static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
     if (!APIDefs || g_ClearsCompletionInFlight.load()) return;
     const std::string acctName=GetEffectiveAccountName();
+    const auto credential=AlterEgo::NativeAccounts::FindLinked(acctName);
     std::vector<uint32_t> allIds;
     uint64_t generation=0;
     {
@@ -351,18 +355,20 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
     const auto daily=CalcLastDailyReset(now);
     const auto weekly=CalcLastWeeklyReset(now);
     const auto minimumEpoch=std::chrono::system_clock::to_time_t(std::max(daily,weekly));
-    AlterEgo::Background::Workers().Launch([acctName,allIds,generation,manual,minimumEpoch]{
-        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),acctName,manual,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimumEpoch);
+    AlterEgo::Background::Workers().Launch([acctName,credential,allIds,generation,manual,minimumEpoch]{
+        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),credential,manual,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimumEpoch);
         AlterEgo::Background::Checkpoint();
-        bool save=false;
+        const bool accepted=AlterEgo::NativeAccounts::CommitIfCurrent(credential,[&]{
+        std::lock_guard<std::mutex> saving(g_ClearsSaveMutex);
+        nlohmann::json snapshot;
         {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            if(generation!=g_ClearsGeneration||!g_ClearsCompletionInFlight||acctName!=g_ClearsCacheAccount)return;
+            if(generation!=g_ClearsGeneration||!g_ClearsCompletionInFlight||acctName!=g_ClearsCacheAccount)return true;
             g_ClearsCompletionInFlight=false;g_ClearsQueryStartedAtMs=0;g_ClearsFetching=false;
             if(!result.snapshot){
                 g_ClearsStatusMsg=result.error;
                 // Shared account progress broker owns ordinary failure cooldowns.
-                return;
+                return true;
             }
             const std::set<uint32_t> requested(allIds.begin(),allIds.end());
             auto apply=[&](ClearEntry& e){
@@ -377,9 +383,19 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
             for(auto& e:g_DailyFractals)apply(e);for(auto& e:g_DailyBounties)apply(e);
             for(auto& e:g_WeeklyWings)apply(e);apply(g_WeeklyStrikes);
             g_ClearsFetched=true;g_ClearsStatusMsg.clear();g_ClearsLastSuccessTime=result.snapshot->fetchedAt;
-            g_LastClearsCompletionQuery=std::chrono::steady_clock::now();g_ClearsSuccessUntil=g_LastClearsCompletionQuery+std::chrono::seconds(4);save=true;
+            g_LastClearsCompletionQuery=std::chrono::steady_clock::now();g_ClearsSuccessUntil=g_LastClearsCompletionQuery+std::chrono::seconds(4);
+            snapshot=CaptureClearsCacheLocked();
         }
-        if(save)SaveClearsCache();
+        if(!PersistClearsCache(acctName,snapshot)){
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation==g_ClearsGeneration&&acctName==g_ClearsCacheAccount)g_ClearsStatusMsg="Completion retrieved; cache write failed.";
+        }
+        return true;
+        });
+        if(!accepted){
+            std::lock_guard<std::mutex> lock(g_ClearsMutex);
+            if(generation==g_ClearsGeneration&&acctName==g_ClearsCacheAccount){g_ClearsCompletionInFlight=false;g_ClearsQueryStartedAtMs=0;g_ClearsStatusMsg="Account changed; refresh again.";}
+        }
     },[generation]{std::lock_guard<std::mutex> lock(g_ClearsMutex);if(generation==g_ClearsGeneration){g_ClearsCompletionInFlight=false;g_ClearsQueryStartedAtMs=0;g_ClearsStatusMsg="Completion refresh cancelled";}});
 }
 
@@ -391,15 +407,15 @@ static const char* VaultSectionName(uint8_t type) {
     return type < 3 ? names[type] : "unknown";
 }
 static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t generation,int status,VaultPeriod period);
-static void RequestVaultSection(uint8_t type,const std::string& account,bool manual){
-    uint64_t generation;
-    {std::lock_guard<std::mutex> lock(g_ClearsMutex);generation=g_VaultGeneration;}
-    AlterEgo::Background::Workers().Launch([type,account,generation,manual]{
+static void RequestVaultSection(uint8_t type,const std::string& account,const AlterEgo::NativeAccounts::LinkedAccount& credential,uint64_t generation,bool manual){
+    AlterEgo::Background::Workers().Launch([type,account,credential,generation,manual]{
         AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
-        auto r=AlterEgo::NativeAccounts::Request(account,std::string("/v2/account/wizardsvault/")+VaultSectionName(type),{"progression"});
+        auto r=AlterEgo::NativeAccounts::Request(credential,std::string("/v2/account/wizardsvault/")+VaultSectionName(type),{"progression"});
         VaultPeriod period;
         if(r){try{period=AlterEgo::NativeProgress::ParseVault(r.data,type==2);}catch(...){r.status=0;}}
-        ApplyVaultSection(type,account,generation,r.status,std::move(period));
+        if(!AlterEgo::NativeAccounts::CommitIfCurrent(credential,[&]{
+            ApplyVaultSection(type,account,generation,r.status,std::move(period));return true;
+        }))ApplyVaultSection(type,account,generation,0,{});
     },[type,account,generation]{ApplyVaultSection(type,account,generation,0,{});});
 }
 
@@ -423,6 +439,10 @@ static void RefreshVaultSeason(bool manual){
         const auto root=AlterEgo::GW2API::GetDataDirectory();
         const auto apply=[](const AlterEgo::Cache::VaultSeasonSnapshot& season){
             const auto tp=std::chrono::system_clock::from_time_t(static_cast<std::time_t>(season.end));
+            std::lock_guard<std::mutex> saving(g_VaultSaveMutex);
+            std::string account;
+            nlohmann::json snapshot;
+            {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
             if(season.verifiedAt<g_PublicVaultSeasonSuccess)return;
             const auto previous=g_VaultSeasonEnd;
@@ -432,6 +452,10 @@ static void RefreshVaultSeason(bool manual){
             }
             g_PublicVaultSeasonEnd=tp;g_PublicVaultSeasonSuccess=season.verifiedAt;
             g_VaultSeasonEnd=tp;
+            account=g_VaultCacheAccount;
+            snapshot=CaptureVaultCacheLocked();
+            }
+            if(!account.empty())(void)PersistVaultCache(account,snapshot);
         };
         const auto finish=[](bool success){
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
@@ -446,7 +470,7 @@ static void RefreshVaultSeason(bool manual){
             if(cached&&cached->verifiedAt<=now&&cached->end>now){
                 apply(*cached);
                 if(!manual&&!AlterEgo::RefreshEngine::Due(cached->verifiedAt,0,now,AlterEgo::RefreshEngine::SeasonSeconds)){
-                    finish(true);SaveVaultCache();return;
+                    finish(true);return;
                 }
             }
         }catch(...){/* Preserve in-memory metadata; attempt a verified refresh. */}
@@ -460,7 +484,7 @@ static void RefreshVaultSeason(bool manual){
         bool saved=false;
         try{saved=AlterEgo::Cache::WriteVaultSeason(root,next);}catch(...){}
         if(!saved){finish(false);return;}
-        apply(next);finish(true);SaveVaultCache();
+        apply(next);finish(true);
     },[]{std::lock_guard<std::mutex> lock(g_ClearsMutex);g_PublicVaultSeasonPending=false;
         if(AlterEgo::Background::Workers().Stopping())g_PublicVaultSeasonAttempt=0;});
 }
@@ -469,6 +493,8 @@ static void FetchVaultData(bool skipClaimedSections) {
     RefreshVaultSeason(!skipClaimedSections);
     if (!APIDefs || g_VaultFetching.load()) return;
     const std::string account = GetEffectiveAccountName();
+    const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
+    uint64_t generation=0;
     std::array<bool, 3> request = {true, true, true};
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
@@ -500,7 +526,8 @@ static void FetchVaultData(bool skipClaimedSections) {
         }
         if (!request[0] && !request[1] && !request[2]) return;
         for(uint8_t i=0;i<3;++i)if(request[i])g_VaultSectionAttempt[account][i]=std::time(nullptr);
-        ++g_VaultGeneration;
+        generation=++g_VaultGeneration;
+        g_VaultRequestCredential=credential;
         g_VaultFetching = true;
         g_VaultInitialAttempted = true;
         g_VaultLastAttemptFailed = false;
@@ -521,13 +548,15 @@ static void FetchVaultData(bool skipClaimedSections) {
 
     for (uint8_t type = 0; type < 3; ++type) {
         if (!g_VaultFetching.load()) break;
-        if (request[type]) RequestVaultSection(type, account,!skipClaimedSections);
+        if (request[type]) RequestVaultSection(type,account,credential,generation,!skipClaimedSections);
     }
 
 
 }
 
 static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t generation,int status,VaultPeriod period){
+    std::lock_guard<std::mutex> saving(g_VaultSaveMutex);
+    nlohmann::json snapshot;
     bool save=false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
@@ -586,8 +615,12 @@ static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t g
         }else if(!g_VaultBatchFailed&&g_VaultRetryAtMs==0){
             g_VaultStatusMessage="Fetching Vault objectives ("+std::to_string(terminal)+"/3)...";
         }
+        if(save)snapshot=CaptureVaultCacheLocked();
     }
-    if(save)SaveVaultCache();
+    if(save&&!PersistVaultCache(account,snapshot)){
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        if(generation==g_VaultGeneration&&account==g_VaultCacheAccount)g_VaultStatusMessage="Objectives retrieved; cache write failed.";
+    }
 }
 
 // Read public categories with HTTP status and schema/identity validation.
@@ -854,9 +887,8 @@ static void FetchClears(bool manual) {
 // Clears - Persistence
 // =========================================================================
 
-static void SaveClearsCache() {
-    std::lock_guard<std::mutex> saveLock(g_ClearsSaveMutex);
-    std::string account;
+// Caller owns g_ClearsMutex and the dataset save lock.
+static nlohmann::json CaptureClearsCacheLocked() {
 
     nlohmann::json j;
     // Store fetch timestamp as seconds since epoch
@@ -875,12 +907,8 @@ static void SaveClearsCache() {
         return ej;
     };
 
-    // Snapshot data under lock to prevent concurrent modification
     {
-        std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        account=g_ClearsCacheAccount;
-        if (!g_ClearsFetched || account.empty()) return;
-        j["account"]=account;
+        j["account"]=g_ClearsCacheAccount;
         j["fetch_time"] = (int64_t)g_ClearsLastSuccessTime;
 
         nlohmann::json fractals = nlohmann::json::array();
@@ -898,14 +926,17 @@ static void SaveClearsCache() {
         j["weeklyStrikes"] = serializeEntry(g_WeeklyStrikes);
     }
 
-    if (!AlterEgo::Cache::WriteCompletion(AlterEgo::GW2API::GetDataDirectory(),
-            AlterEgo::Cache::CompletionDataset::Clears,account,j) && APIDefs)
-        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Unable to persist Clears account cache");
+    return j;
+}
+static bool PersistClearsCache(const std::string& account,const nlohmann::json& snapshot){
+    return AlterEgo::Cache::WriteCompletion(AlterEgo::GW2API::GetDataDirectory(),
+        AlterEgo::Cache::CompletionDataset::Clears,account,snapshot);
 }
 
 void LoadClearsCache() {
     const std::string account = GetEffectiveAccountName();
     if (account.empty()) return;
+    std::lock_guard<std::mutex> saving(g_ClearsSaveMutex);
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_ClearsCacheAccount=account;
@@ -1067,9 +1098,8 @@ void LoadClearsCache() {
 // Clears - Wizard's Vault persistence
 // =========================================================================
 
-static void SaveVaultCache() {
-    std::lock_guard<std::mutex> saveLock(g_VaultSaveMutex);
-    std::string account;
+// Caller owns g_ClearsMutex and the dataset save lock.
+static nlohmann::json CaptureVaultCacheLocked() {
 
     auto serializePeriod = [](const VaultPeriod& p) -> nlohmann::json {
         nlohmann::json j;
@@ -1095,10 +1125,7 @@ static void SaveVaultCache() {
 
     nlohmann::json j;
     {
-        std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        account=g_VaultCacheAccount;
-        if(account.empty())return;
-        j["account"]=account;
+        j["account"]=g_VaultCacheAccount;
         const VaultPeriod* periods[]={&g_VaultDaily,&g_VaultWeekly,&g_VaultSpecial};
         for(uint8_t i=0;i<3;++i)if(g_VaultSectionSuccess[i]>0){
             auto row=serializePeriod(*periods[i]);row["fetched_at"]=static_cast<int64_t>(g_VaultSectionSuccess[i]);
@@ -1108,13 +1135,16 @@ static void SaveVaultCache() {
             g_VaultSeasonEnd.time_since_epoch()).count();
     }
 
-    if (!AlterEgo::Cache::WriteVaultPeriods(AlterEgo::GW2API::GetDataDirectory(),account,j) && APIDefs)
-        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Unable to persist Vault account cache");
+    return j;
+}
+static bool PersistVaultCache(const std::string& account,const nlohmann::json& snapshot){
+    return AlterEgo::Cache::WriteVaultPeriods(AlterEgo::GW2API::GetDataDirectory(),account,snapshot);
 }
 
 void LoadVaultCache() {
     const std::string account = GetEffectiveAccountName();
     if (account.empty()) return;
+    std::lock_guard<std::mutex> saving(g_VaultSaveMutex);
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         g_VaultCacheAccount=account;
@@ -2437,6 +2467,8 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
     // Handle retry/timeout on the render thread; callbacks never call Events_Raise.
     std::vector<uint8_t> dueRetryTypes;
     std::string retryAccount;
+    AlterEgo::NativeAccounts::LinkedAccount retryCredential;
+    uint64_t retryGeneration=0;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         if (g_VaultFetching.load()) {
@@ -2466,6 +2498,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
                     }
                 }
                 retryAccount = g_VaultRequestAccount;
+                retryCredential=g_VaultRequestCredential;retryGeneration=g_VaultGeneration;
                 g_VaultRetryAtMs = 0;
                 g_VaultStatusMessage = "Retrying Vault objectives...";
             }
@@ -2473,7 +2506,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
     }
     for (uint8_t type : dueRetryTypes) {
         if (!g_VaultFetching.load()) break;
-        RequestVaultSection(type, retryAccount);
+        RequestVaultSection(type,retryAccount,retryCredential,retryGeneration);
     }
 
     // Account switches invalidate the old snapshot and cancel pending retries.
@@ -3288,10 +3321,12 @@ static void RenderClearsShared(bool showVault) {
         const long long started = g_ClearsQueryStartedAtMs.load();
         if (started != 0 && NowMs() - started >= CLEARS_QUERY_TIMEOUT_MS) {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            ++g_ClearsGeneration;
-            g_ClearsCompletionInFlight = false;
-            g_ClearsQueryStartedAtMs = 0;
-            g_ClearsStatusMsg = "Completion query timed out; retry Refresh.";
+            if(g_ClearsCompletionInFlight&&g_ClearsQueryStartedAtMs==started){
+                ++g_ClearsGeneration;
+                g_ClearsCompletionInFlight = false;
+                g_ClearsQueryStartedAtMs = 0;
+                g_ClearsStatusMsg = "Completion query timed out; retry Refresh.";
+            }
         }
     }
 
@@ -3429,7 +3464,7 @@ void SyncCompletionAccountCaches() {
         g_VaultFetching = false;
         g_VaultFetched = false;
         g_VaultInitialAttempted = false;
-        g_VaultRequestAccount.clear();
+        g_VaultRequestAccount.clear();g_VaultRequestCredential={};
         g_VaultRetryAtMs = 0;
         g_VaultRequestStartMs = 0;
         g_VaultDailyRolloverPending = false;

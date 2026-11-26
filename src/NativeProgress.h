@@ -44,7 +44,7 @@ inline bool AchievementDue(const std::string& account,int64_t localSuccess,int64
     }
     return RefreshEngine::Due(localSuccess,0,now,interval,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements"));
 }
-inline AchievementResult FetchAchievements(const std::string& root,const std::string& account,bool force=false,
+inline AchievementResult FetchAchievements(const std::string& root,const NativeAccounts::LinkedAccount& a,bool force=false,
         int64_t maxAge=RefreshEngine::BrowseSeconds,int64_t minimumEpoch=0){
     ApiActivity::ReasonScope reason(force?ApiActivity::Reason::Manual:ApiActivity::Reason::Objective);
     using Clock=std::chrono::steady_clock;
@@ -55,9 +55,8 @@ inline AchievementResult FetchAchievements(const std::string& root,const std::st
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
     if(Background::Workers().Stopping())return {0,"Cancelled",{}};
-    NativeAccounts::LinkedAccount a;
-    for(const auto& linked:NativeAccounts::Linked())if(linked.id==account){a=linked;break;}
-    if(!NativeAccounts::Current(a))return {401,"No linked account",{}};
+    const auto& account=a.id;
+    if(!NativeAccounts::Current(a))return {401,"Account changed or no linked account",{}};
     if(!a.permissions.count("progression"))return {403,"Missing progression permission",{}};
     auto& e=AchievementEntries()[account];
     if(e.epoch!=a.generation){e={};e.epoch=a.generation;}
@@ -81,6 +80,7 @@ inline AchievementResult FetchAchievements(const std::string& root,const std::st
     };
     auto r=NativeAccounts::Request(a,"/v2/account/achievements",{"progression"});
     if(Background::Workers().Stopping())return {0,"Cancelled",{}};
+    if(!NativeAccounts::Current(a))return {0,"Account changed",{}};
     if(!r)return fail(r.status,r.error);
     try{
         auto snapshot=std::make_shared<const Cache::AchievementSnapshot>(ParseAchievements(r.data,std::time(nullptr)));

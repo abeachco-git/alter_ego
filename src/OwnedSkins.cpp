@@ -87,8 +87,9 @@ namespace Skinventory {
             if(s_querying||s_account_name.empty())return;
             account=s_account_name;epoch=++accountEpoch;s_querying=true;s_status_message="Retrieving skin ownership...";
         }
-        AlterEgo::Background::Workers().Launch([account,epoch]{
-            auto result=AlterEgo::NativeAccounts::Request(account,"/v2/account/skins",{"unlocks"});
+        const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
+        AlterEgo::Background::Workers().Launch([account,epoch,credential]{
+            auto result=AlterEgo::NativeAccounts::Request(credential,"/v2/account/skins",{"unlocks"});
             AlterEgo::Background::Checkpoint();
             std::unordered_set<uint32_t> parsed;bool valid=false;
             try{
@@ -99,20 +100,27 @@ namespace Skinventory {
                     }valid=true;
                 }
             }catch(...){}
+            const bool accepted=AlterEgo::NativeAccounts::CommitIfCurrent(credential,[&]{
             std::lock_guard<std::mutex> saving(ownershipSaveMutex);
             AlterEgo::Cache::OwnershipSnapshot snapshot;
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                if(accountEpoch!=epoch||s_account_name!=account||AlterEgo::Background::Workers().Stopping())return;
+                if(accountEpoch!=epoch||s_account_name!=account||AlterEgo::Background::Workers().Stopping())return true;
                 s_querying=false;
-                if(!valid){s_status_message=result.error.empty()?"Invalid skin ownership response":result.error;return;}
+                if(!valid){s_status_message=result.error.empty()?"Invalid skin ownership response":result.error;return true;}
                 parsed.insert(s_locally_marked.begin(),s_locally_marked.end());s_owned_skins=std::move(parsed);
                 s_has_data=true;s_last_success_time=std::time(nullptr);++s_generation;
                 s_status_message="Owned: "+std::to_string(s_owned_skins.size());
                 snapshot.fetchedAt=static_cast<int64_t>(s_last_success_time);
                 snapshot.ids.insert(s_owned_skins.begin(),s_owned_skins.end());
             }
-            PersistOwnership(s_data_dir,account,snapshot);
+            if(!PersistOwnership(s_data_dir,account,snapshot)){
+                std::lock_guard<std::mutex> lock(s_mutex);
+                if(accountEpoch==epoch&&s_account_name==account)s_status_message="Ownership retrieved; cache write failed.";
+            }
+            return true;
+            });
+            if(!accepted){std::lock_guard<std::mutex> lock(s_mutex);if(accountEpoch==epoch&&s_account_name==account){s_querying=false;s_status_message="Account changed; refresh again.";}}
         },[epoch]{std::lock_guard<std::mutex> lock(s_mutex);if(accountEpoch==epoch){s_querying=false;s_status_message="Ownership refresh cancelled";}});
     }
     void OwnedSkins::RequestOwnedSkins(const std::vector<uint32_t>&){RequestOwnedSkinsViaApi();}

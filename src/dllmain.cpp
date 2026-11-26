@@ -2504,6 +2504,7 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
     if(!APIDefs||(automatic&&!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)))return;
     const std::string account=GetEffectiveAccountName();
     if(account.empty())return;
+    const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
     uint64_t generation;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
@@ -2514,16 +2515,17 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
         if(categoryId)g_AchCategoryRefreshAt[categoryId]=std::chrono::steady_clock::now();
     }
     const auto interval=AchievementRefreshInterval();
-    AlterEgo::Background::Workers().Launch([account,generation,automatic,ids,interval]{
-        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),account,!automatic,interval);
+    AlterEgo::Background::Workers().Launch([account,credential,generation,automatic,ids,interval]{
+        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),credential,!automatic,interval);
+        const bool accepted=AlterEgo::NativeAccounts::CommitIfCurrent(credential,[&]{
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account)return;
+        if(generation!=g_AchRequestGeneration||g_AchCachedAccount!=account)return true;
         g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;
-        if(AlterEgo::Background::Workers().Stopping())return;
+        if(AlterEgo::Background::Workers().Stopping())return true;
         if(!result.snapshot){
             g_AchRefreshError=result.error;
             // Shared broker records failed attempts; the next automatic check respects its cooldown.
-            return;
+            return true;
         }
         std::unordered_map<uint32_t,AchProgress> next;
         for(const auto& [id,source]:result.snapshot->entries){
@@ -2556,6 +2558,9 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
         g_LastAchProgressQuery=std::chrono::steady_clock::now();
         g_AchRefreshSuccessUntil=g_LastAchProgressQuery+std::chrono::seconds(4);
         g_AchRefreshError.clear();++g_AchProgressGen;g_AchProgressDirty=true;
+        return true;
+        });
+        if(!accepted){std::lock_guard<std::recursive_mutex> lock(g_AchMutex);if(generation==g_AchRequestGeneration&&g_AchCachedAccount==account){g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;g_AchRefreshError="Account changed; refresh again.";}}
     },[generation]{std::lock_guard<std::recursive_mutex> lock(g_AchMutex);if(generation==g_AchRequestGeneration){g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;g_AchRefreshError="Achievement refresh cancelled";}});
 }
 
