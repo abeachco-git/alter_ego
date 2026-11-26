@@ -14,7 +14,9 @@ class Gate {
 public:
     void Open() {
         std::lock_guard<std::mutex> lock(mutex_);
-        open_ = true;
+        // Reopening a retired session before its admitted callbacks drain
+        // would mix two lifetimes. Only the lifecycle owner may reopen.
+        if (active_ == 0) open_ = true;
     }
     void Close() {
         std::lock_guard<std::mutex> lock(mutex_);

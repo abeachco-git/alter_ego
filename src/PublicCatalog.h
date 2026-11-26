@@ -1,5 +1,6 @@
 #pragma once
 #include "PublicCatalogCache.h"
+#include "UntrustedInput.h"
 #include "ArenaNetTransport.h"
 #include "BackgroundWorkers.h"
 #include "AutoRefreshPolicy.h"
@@ -37,8 +38,9 @@ inline void Attempt(const std::string& root,const std::string& dataset) {
 inline Json Fetch(const std::string& path) {
     Background::Checkpoint();
     auto r=ArenaNet::Get(path);
+    Background::Checkpoint();
     if(r.status_code!=200)throw std::runtime_error("Public API HTTP "+std::to_string(r.status_code));
-    return Json::parse(r.body);
+    return Untrusted::Parse(r.body,Untrusted::PublicApi);
 }
 inline void CommitUpgrades(const std::string& root,const std::set<uint32_t>& ids,const Json& rows) {
     WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreUpgrades(db,ids,rows,Now());tx.Commit();Publish(db);});

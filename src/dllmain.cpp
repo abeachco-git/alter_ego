@@ -12292,7 +12292,6 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::Background::Workers().Open();
     g_AchActiveEventNextCheck=0;
     g_AchActiveEventFetching=false;
-    AlterEgo::Callbacks::Runtime().Open();
     APIDefs = aApi;
     ImGui::SetCurrentContext((ImGuiContext*)APIDefs->ImguiContext);
     ImGui::SetAllocatorFunctions((void* (*)(size_t, void*))APIDefs->ImguiMalloc,
@@ -12394,6 +12393,7 @@ void AddonLoad(AddonAPI_t* aApi) {
 
     // Startup state, settings and subsystem caches are ready before exposing
     // callback-driven refresh scheduling or rendering to the host.
+    AlterEgo::Callbacks::Runtime().Open();
     // Subscribe to MumbleLink identity for current character indicator
     APIDefs->Events_Subscribe("EV_MUMBLE_IDENTITY_UPDATED", OnMumbleIdentityUpdated);
 
@@ -12477,6 +12477,9 @@ void AddonUnload() {
 
     // All one-shot jobs must finish before their state/API is destroyed.
     AlterEgo::Background::Workers().JoinAll();
+    // Dedicated artwork workers also finish before shared cache/state reset.
+    Skinventory::WikiImage::Shutdown();
+    AlterEgo::IconManager::Shutdown();
 
     // Persist achievement progress before shutting down the data subsystem,
     // including updates received while the Achievements tab was not visible.
@@ -12488,10 +12491,7 @@ void AddonUnload() {
     AlterEgo::RefreshEngine::ResetMetadata();
 
     // Shutdown Skinventory subsystems
-    Skinventory::WikiImage::Shutdown();
     Skinventory::OwnedSkins::Shutdown();
-
-    AlterEgo::IconManager::Shutdown();
     AlterEgo::NativeAccounts::Shutdown();
     AlterEgo::GW2API::Shutdown();
 

@@ -1,6 +1,7 @@
 #include "AccountIdentity.h"
 #include "CallbackLifetime.h"
 #include "HttpSafety.h"
+#include "UntrustedInput.h"
 #include "BackgroundWorkers.h"
 #include "GW2API.h"
 #include "CharacterRequest.h"
@@ -1038,7 +1039,7 @@ namespace AlterEgo {
                     const std::string url = "https://api.guildwars2.com/v2/professions/" + prof;
                     const std::string response = HttpGet(url);
                     if (!response.empty()) {
-                        json j = json::parse(response);
+                        json j = Untrusted::Parse(response,Untrusted::PublicApi);
                         ProfessionInfo info;
                         info.name = j.value("name", prof);
                         info.icon_url = j.value("icon", "");
@@ -1149,7 +1150,7 @@ namespace AlterEgo {
             if (response.empty()) continue;
 
             try {
-                json j = json::parse(response);
+                json j = Untrusted::Parse(response,Untrusted::PublicApi);
                 if (j.is_array()) {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     for (const auto& item : j) {
@@ -1177,7 +1178,7 @@ namespace AlterEgo {
                 }
             } catch (...) {}
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
         }
         SaveItemCache();
     }
@@ -1222,7 +1223,7 @@ namespace AlterEgo {
             if (response.empty()) continue;
 
             try {
-                json j = json::parse(response);
+                json j = Untrusted::Parse(response,Untrusted::PublicApi);
                 if (j.is_array()) {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     for (const auto& skin : j) {
@@ -1258,7 +1259,7 @@ namespace AlterEgo {
                 }
             } catch (...) {}
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
         }
         SaveSkinCache();
     }
@@ -1317,7 +1318,7 @@ namespace AlterEgo {
             if (response.empty()) return;
 
             try {
-                json j = json::parse(response);
+                json j = Untrusted::Parse(response,Untrusted::PublicApi);
                 if (j.is_array()) {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     for (const auto& spec : j) {
@@ -1396,7 +1397,7 @@ namespace AlterEgo {
             if (response.empty()) continue;
 
             try {
-                json j = json::parse(response);
+                json j = Untrusted::Parse(response,Untrusted::PublicApi);
                 if (j.is_array()) {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     for (const auto& trait : j) {
@@ -1418,7 +1419,7 @@ namespace AlterEgo {
                 }
             } catch (...) {}
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
         }
         SaveTraitCache();
     }
@@ -1469,7 +1470,7 @@ namespace AlterEgo {
                 if (response.empty()) continue;
 
                 try {
-                    json j = json::parse(response);
+                    json j = Untrusted::Parse(response,Untrusted::PublicApi);
                     if (j.is_array()) {
                         std::lock_guard<std::mutex> lock(s_mutex);
                         for (const auto& skill : j) {
@@ -1493,7 +1494,7 @@ namespace AlterEgo {
                     }
                 } catch (...) {}
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
             }
             SaveSkillCache();
         });
@@ -1537,7 +1538,7 @@ namespace AlterEgo {
                 if (response.empty()) continue;
 
                 try {
-                    json j = json::parse(response);
+                    json j = Untrusted::Parse(response,Untrusted::PublicApi);
                     if (j.is_array()) {
                         std::lock_guard<std::mutex> lock(s_mutex);
                         for (const auto& stat : j) {
@@ -1558,7 +1559,7 @@ namespace AlterEgo {
                     }
                 } catch (...) {}
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
             }
             SaveItemStatCache();
         });
@@ -3352,7 +3353,7 @@ namespace AlterEgo {
             }
 
             try {
-                json j = json::parse(response);
+                json j = Untrusted::Parse(response,Untrusted::PublicApi);
                 if (j.contains("skills_by_palette") && j["skills_by_palette"].is_array()) {
                     std::unordered_map<uint16_t, uint32_t> p2s;
                     std::unordered_map<uint32_t, uint16_t> s2p;

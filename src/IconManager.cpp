@@ -174,7 +174,7 @@ bool IconManager::DownloadToFile(const std::string& url, const std::string& file
     if (!file.is_open()) return false;
     file.write(buffer.data(), static_cast<std::streamsize>(buffer.size()));
     file.close();
-    if(!file.good()||!MoveFileExA(temporary.c_str(),actualPath.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
+    if(!file.good()||s_StopWorker||Background::Workers().Stopping()||!MoveFileExA(temporary.c_str(),actualPath.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
         DeleteFileA(temporary.c_str());return false;
     }
     return true;

@@ -1,6 +1,7 @@
 #pragma once
 #include "CacheDatabase.h"
 #include <chrono>
+#include <atomic>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -19,8 +20,16 @@ inline const char* ReferenceName(ReferenceDataset d) {
     throw std::runtime_error("Unknown reference dataset");
 }
 inline int64_t ReferenceSnapshotTime() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
+    // Snapshot capture order is strictly increasing within this process,
+    // including identical clock readings and backward wall-clock adjustments.
+    static std::atomic<int64_t> last{0};
+    const auto wall=std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+    auto previous=last.load(std::memory_order_relaxed);
+    for(;;){
+        const int64_t next=wall>previous?wall:previous+1;
+        if(last.compare_exchange_weak(previous,next,std::memory_order_relaxed))return next;
+    }
 }
 inline uint32_t ReferenceId(const ReferenceJson& value) {
     if(!value.is_number_integer()) throw std::runtime_error("Invalid metadata ID");

@@ -20,6 +20,8 @@ int case_callback_lifetime(int,char**) {
     entered.get_future().wait();
     gate.Close();
     assert(!Gate::Lease(gate));
+    gate.Open(); // a retired session cannot reopen while a lease is active
+    assert(!Gate::Lease(gate));
     auto draining=std::async(std::launch::async,[&] { gate.Drain(); });
     assert(draining.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout);
     release.set_value();

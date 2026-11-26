@@ -16,6 +16,8 @@ struct Limits {
 };
 inline constexpr Limits Clipboard{4u*1024u*1024u, 250000, 1024u*1024u, 48};
 inline constexpr Limits Library{48u*1024u*1024u, 4000000, 4u*1024u*1024u, 64};
+// Public catalog batches and full catalogs share the transport's 64 MiB ceiling.
+inline constexpr Limits PublicApi{64u*1024u*1024u, 6000000, 4u*1024u*1024u, 64};
 inline constexpr Limits Wiki{4u*1024u*1024u, 500000, 4u*1024u*1024u, 48};
 
 inline Json Parse(std::string_view input, Limits limits) {
