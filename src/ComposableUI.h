@@ -1040,7 +1040,7 @@ static void RenderLoadoutSaveReview(){
         if(!GW2API::ReviewUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditDraftRevision,review,error)){
             if(error.empty())error="Could not review the Loadout draft.";
             ImGui::OpenPopup("Review Loadout changes##ae_unified_review");
-        }else if(review.empty())g_EditSavePending=true;
+        }else if(review.empty()&&!g_SourceRefreshDraft)g_EditSavePending=true;
         else ImGui::OpenPopup("Review Loadout changes##ae_unified_review");
     }
     if(!ImGui::BeginPopupModal("Review Loadout changes##ae_unified_review",nullptr,ImGuiWindowFlags_AlwaysAutoResize))return;
@@ -1049,6 +1049,10 @@ static void RenderLoadoutSaveReview(){
     if(!error.empty())ImGui::TextWrapped("%s",error.c_str());
     else if(!valid)ImGui::TextWrapped("Library changed. Cancel this review and reopen the Loadout editor.");
     else{
+        if(g_SourceRefreshDraft){
+            ImGui::TextWrapped("Confirm the staged source refresh. Omitted fields are retained; no data has been saved yet.");
+            for(const auto& note:g_SourceRefreshNotes)ImGui::BulletText("%s",note.c_str());
+        }
         ImGui::TextWrapped("Private changes affect only this Loadout. Choose shared editing only if every listed owner should change.");
         for(const auto& row:review){
             const auto kind=row.value("kind",std::string()),name=row.value("name",std::string()),reuse=row.value("reuse",std::string());

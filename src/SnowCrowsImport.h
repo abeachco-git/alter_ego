@@ -43,6 +43,7 @@ struct Page {
     uint32_t relicId = 0;
     std::string relicName;
     uint32_t runeId = 0;
+    bool uniformRunePublished=false; // true only for an explicit global rune recommendation
     std::vector<InfusionTotal> infusions;
 };
 
@@ -110,6 +111,22 @@ inline std::vector<uint32_t> Ids(const std::string& csv) {
     }
     return result;
 }
+// Keep positional zero placeholders; compressed lists cannot identify skill slots.
+inline std::vector<uint32_t> PositionalIds(const std::string& csv) {
+    if(csv.empty())return {};
+    std::vector<uint32_t> result;
+    size_t begin=0;
+    for(;;){
+        const auto end=csv.find(',',begin);
+        const auto token=csv.substr(begin,end==std::string::npos?end:end-begin);
+        if(token.empty()||token.find_first_not_of("0123456789")!=std::string::npos)return {};
+        auto id=Unsigned(token);if(!id&&token!="0")return {};
+        result.push_back(id);
+        if(end==std::string::npos)break;
+        begin=end+1;
+    }
+    return result;
+}
 inline bool Parse(const std::string& url, const std::string& html, Page& out, std::string& error) {
     error.clear();
     const std::string normalized = NormalizeUrl(url);
@@ -143,7 +160,7 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     const std::string gearHtml = html.substr(gearAt, skillsAt - gearAt);
     const std::string skillsHtml = html.substr(skillsAt);
     parsed.skills = {};
-    auto skillIds = Ids(Match(skillsHtml, R"SC(data-armory-embed="skills"\s+data-armory-ids="([0-9,]+)")SC"));
+    auto skillIds = PositionalIds(Match(skillsHtml, R"SC(data-armory-embed="skills"\s+data-armory-ids="([0-9,]+)")SC"));
     if (skillIds.size() == 5)
         std::copy(skillIds.begin(), skillIds.end(), parsed.skills.begin());
 
@@ -227,7 +244,7 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     int totalInfusions = 0;
     for (const auto& inf : parsed.infusions) totalInfusions += inf.count;
     if (parsed.name.empty() || parsed.gear.size() < 12 || parsed.relicId == 0 ||
-        specIndex != 3 || skillIds.size() != 5 || totalInfusions == 0 || totalInfusions > 25) {
+        specIndex != 3 || skillIds.size() != 5 || std::any_of(skillIds.begin(),skillIds.end(),[](auto id){return !id;}) || totalInfusions == 0 || totalInfusions > 25) {
         error = "Incomplete Snow Crows build: expected equipment, relic, skills, and three trait lines.";
         return false;
     }

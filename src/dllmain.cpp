@@ -72,6 +72,7 @@
 #include "GearEditCore.h"
 #include "ComponentGearEditCore.h"
 #include "SkillEditCore.h"
+#include "SourceRefreshCore.h"
 #include "RefreshUI.h"
 #include "CacheDatabase.h"
 #include "AchievementCatalogCache.h"
@@ -913,6 +914,7 @@ struct BuildSourceFetchResult {
     bool ready = false;
     bool refresh = false;
     std::string targetId;
+    uint64_t revision=0;
     AlterEgo::SnowCrows::Page page;
     std::string error;
 };
@@ -920,6 +922,9 @@ static bool g_BuildSourceBusy = false; // Main thread only
 static std::mutex g_BuildSourceResultMutex;
 static BuildSourceFetchResult g_BuildSourceResult;
 static std::string g_BuildSourceRefreshError;
+static bool g_SourceRefreshDraft=false;
+static std::vector<std::string> g_SourceRefreshNotes;
+static std::optional<std::vector<AlterEgo::SnowCrows::InfusionTotal>> g_SourceInfusionOffer;
 static bool g_LibDetailsFetched = false;
 static std::unordered_set<std::string> g_LibCollapsedProfessions; // session-persisted
 // Inline edit buffers — std::string + ImGui resize callback so long names
@@ -934,6 +939,7 @@ static std::string g_LibEditNotes;
 static std::optional<AlterEgo::SavedBuild> g_InfusionSlotDraft, g_InfusionTotalsDraft;
 static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
     g_InfusionSlotDraft.reset();g_InfusionTotalsDraft.reset();
+    g_SourceRefreshDraft=false;g_SourceRefreshNotes.clear();g_SourceInfusionOffer.reset();
     g_EditDraft = build;
     g_EditDraftId = build.id;
     g_EditDraftRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
@@ -8948,14 +8954,16 @@ static AlterEgo::SavedBuild SourcePageToSavedBuild(const AlterEgo::SnowCrows::Pa
 
 static void FetchBuildSource(const std::string& url, const std::string& refreshId = "") {
     if (g_BuildSourceBusy) return;
+    if(!refreshId.empty()&&LibraryDraftOpen()){g_BuildSourceRefreshError="Finish the current Library editor first.";return;}
+    const uint64_t revision=AlterEgo::GW2API::GetBuildLibraryRevision();
     g_BuildSourceBusy = true;
     g_BuildSourceRefreshError.clear();
     std::string normalized = AlterEgo::SnowCrows::NormalizeUrl(url);
     if (normalized.empty()) normalized = AlterEgo::MetaBattle::NormalizeUrl(url);
-    AlterEgo::Background::Workers().Launch([normalized, refreshId]() {
+    AlterEgo::Background::Workers().Launch([normalized, refreshId,revision]() {
         BuildSourceFetchResult result;
         result.refresh = !refreshId.empty();
-        result.targetId = refreshId;
+        result.targetId = refreshId;result.revision=revision;
         if (normalized.empty()) {
             result.error = "Unsupported build URL. Use Snow Crows or MetaBattle.";
         } else {
@@ -8979,7 +8987,7 @@ static void FetchBuildSource(const std::string& url, const std::string& refreshI
         result.ready = true;
         std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex);
         g_BuildSourceResult = std::move(result);
-    }, [refreshId] { BuildSourceFetchResult result; result.refresh = !refreshId.empty(); result.targetId = refreshId; result.error = "Build download interrupted."; result.ready = true; std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex); g_BuildSourceResult = std::move(result); });
+    }, [refreshId,revision] { BuildSourceFetchResult result; result.revision=revision; result.refresh = !refreshId.empty(); result.targetId = refreshId; result.error = "Build download interrupted."; result.ready = true; std::lock_guard<std::mutex> lock(g_BuildSourceResultMutex); g_BuildSourceResult = std::move(result); });
 }
 
 static void PollBuildSource() {
@@ -9024,16 +9032,43 @@ static void PollBuildSource() {
     if (build.chat_link.empty() && AlterEgo::GW2API::HasPaletteData(build.profession))
         build.chat_link = AlterEgo::GW2API::EncodeSavedBuildToChatLink(build);
     if (received.refresh) {
-        std::string refreshReason;
-        if (AlterEgo::GW2API::RefreshSavedBuildFromSource(received.targetId, build,&refreshReason)) {
-            g_LibDetailsFetched = false;
-            g_EditDraftId.clear();
-            if (APIDefs) APIDefs->GUI_SendAlert(
-                received.page.sourceUrl.find("metabattle.com") != std::string::npos
-                    ? "MetaBattle build refreshed." : "Snow Crows build refreshed.");
-        } else {
-            g_BuildSourceRefreshError = refreshReason.empty()?"Could not update the original saved build.":refreshReason;
+        using namespace AlterEgo;
+        auto reject=[&](const std::string& why){g_BuildSourceRefreshError=why;if(APIDefs)APIDefs->GUI_SendAlert(why.c_str());};
+        if(received.revision!=GW2API::GetBuildLibraryRevision()||LibraryDraftOpen()){
+            reject("Library changed or another editor opened during download. Refresh Source again.");return;
         }
+        const auto& builds=GW2API::GetSavedBuilds();
+        const auto it=std::find_if(builds.begin(),builds.end(),[&](const auto& b){return b.id==received.targetId;});
+        if(it==builds.end()){reject("The source Loadout no longer exists.");return;}
+        const auto old=*it;
+        const auto patch=SourceRefresh::FromPage(received.page,[](uint32_t specId,uint32_t trait){
+            const auto spec=GW2API::GetSpecInfo(specId);
+            if(spec&&spec->major_traits.size()>=9){
+                const auto pos=std::find(spec->major_traits.begin(),spec->major_traits.end(),trait);
+                if(pos!=spec->major_traits.end())return static_cast<int>((pos-spec->major_traits.begin())/3);
+            }
+            const auto info=GW2API::GetTraitInfo(trait);
+            return info&&info->tier>=1&&info->tier<=3?info->tier-1:-1;
+        });
+        SavedBuild merged;SourceRefresh::Report report;std::string error;
+        if(!SourceRefresh::Apply(old,patch,merged,report,error,[&](const auto& type){return IsWeaponTwoHanded(old.profession,type);})){
+            reject(error);return;
+        }
+        if(received.revision!=GW2API::GetBuildLibraryRevision()){
+            reject("Library changed during source review. Refresh Source again.");return;
+        }
+        if(GW2API::EditorBuildSnapshot(old)==GW2API::EditorBuildSnapshot(merged)&&!report.offerInfusions){
+            if(APIDefs)APIDefs->GUI_SendAlert("No supplied source fields changed this Loadout.");return;
+        }
+        g_LibSelectedId=old.id;g_LibEditBuildId=old.id;g_EditIsNewBuild=false;
+        EnterBuildEditMode(old);
+        if(!g_EditRefsReady||g_EditDraftRevision!=received.revision){
+            g_LibEditMode=false;g_EditDraftId.clear();reject("Source review could not open at the original revision.");return;
+        }
+        g_EditDraft=std::move(merged);g_SourceRefreshDraft=true;g_SourceRefreshNotes=std::move(report.notes);
+        if(report.offerInfusions)g_SourceInfusionOffer=patch.infusions;
+        MarkEditDirty();g_LibDetailsFetched=false;NavigateToLibraryCollection(0);
+        if(APIDefs)APIDefs->GUI_SendAlert("Source changes staged. Review the Loadout and Save or Cancel.");
     } else {
         // Optional user-provided import name overrides the page's full title.
         if (g_LibImportName[0]) build.name = g_LibImportName;
@@ -11642,6 +11677,24 @@ static void RenderBuildLibrary() {
         // section below has a scroll bar.
         if(!selectedMatches)ImGui::TextDisabled("Selected Loadout is outside current filters.");
         RenderSavedBuildHeader(build, /*showEditButton=*/true);
+        if(g_LibEditMode&&g_SourceRefreshDraft){
+            ImGui::TextWrapped("Source refresh: proposed changes only. Review this draft before Save.");
+            if(ImGui::CollapsingHeader("Source refresh details"))for(const auto& note:g_SourceRefreshNotes)ImGui::BulletText("%s",note.c_str());
+            if(g_SourceInfusionOffer&&RenderActionButton("Use guide infusion totals..."))ImGui::OpenPopup("##source_infusion_offer");
+            if(ImGui::BeginPopup("##source_infusion_offer")){
+                ImGui::TextWrapped("Replace local infusion requirements with these guide-wide terrestrial targets? Slot placement, including aquatic infusions, is removed only on Save.");
+                if(g_SourceInfusionOffer)for(const auto& inf:*g_SourceInfusionOffer){
+                    const auto item=AlterEgo::GW2API::GetItemInfo(inf.itemId);
+                    ImGui::BulletText("%d x %s (#%u)",inf.count,item?item->name.c_str():"Metadata pending",inf.itemId);
+                }
+                if(g_SourceInfusionOffer&&RenderActionButton("Adopt guide totals")){
+                    g_InfusionSlotDraft=g_EditDraft;g_InfusionTotalsDraft=g_EditDraft;
+                    AlterEgo::SourceRefresh::AdoptInfusions(g_EditDraft,*g_SourceInfusionOffer);
+                    g_SourceInfusionOffer.reset();g_SourceRefreshNotes.push_back("Guide infusion targets explicitly selected.");MarkEditDirty();ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+        }
         if (!g_LibEditMode && !build.import_warning.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.76f, 0.38f, 1.0f));
             ImGui::TextWrapped("Import needs review: %s", build.import_warning.c_str());

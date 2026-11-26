@@ -70,14 +70,5 @@ int case_infusion_totals(int, char**) {
     assert(GetInfusionMode(onlyEnrichment)==InfusionMode::Totals);
     ForgetSlotInfusions(onlyEnrichment);
     assert(onlyEnrichment.gear["Amulet"].infusion_ids[0]==100);
-    Build updated;
-    updated.infusion_totals={9};
-    assert(!PreserveInfusionModeOnSourceRefresh(before,updated)); // exact local requirements
-    assert(!PreserveInfusionModeOnSourceRefresh(b,updated)); // mixed legacy
-    Build manual;manual.infusion_summary_present=true;manual.infusion_ar_total=150;
-    assert(PreserveInfusionModeOnSourceRefresh(manual,updated));
-    assert(updated.infusion_summary_present&&updated.infusion_ar_total==150&&updated.infusion_totals.empty());
-    Build imported;imported.infusion_totals={1,2};Build omitted;
-    assert(PreserveInfusionModeOnSourceRefresh(imported,omitted)&&omitted.infusion_totals==imported.infusion_totals);
     return 0;
 }

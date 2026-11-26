@@ -434,9 +434,6 @@ namespace AlterEgo {
         // instead of being appended as a new one. Returns the insertion index,
         // or -1 if persistence failed.
         static int AddSavedBuild(SavedBuild build,const std::string& setId={},const std::string& newSetName={},const std::set<std::string>& kinds={});
-        // Atomically replace the source-derived fields without changing the
-        // saved build identity, custom name, notes, or creation timestamp.
-        static bool RefreshSavedBuildFromSource(const std::string& id, const SavedBuild& updated, std::string* reason=nullptr);
         static bool RemoveSavedBuild(const std::string& id,uint64_t expectedRevision=0);
         static bool UpdateSavedBuild(const std::string& id, const std::string& name, const std::string& notes);
         static bool RenameSavedLoadout(const std::string& id,const std::string& name,uint64_t expectedRevision);

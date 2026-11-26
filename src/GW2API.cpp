@@ -1993,21 +1993,6 @@ namespace AlterEgo {
         });
         return ok?position:-1;
     }
-    bool GW2API::RefreshSavedBuildFromSource(const std::string& id,const SavedBuild& updated,std::string* reason) {
-        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
-            auto* l=Composable::FindLoadout(doc,id);json raw;SavedBuild old;
-            if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,old)||
-               old.source_url.empty()||old.source_url!=updated.source_url)return false;
-            auto merged=updated;merged.id=old.id;merged.name=old.name;merged.notes=old.notes;
-            merged.game_mode=old.game_mode;merged.game_modes=old.game_modes;
-            merged.created=old.created;merged.source_character=old.source_character;
-            if(!PreserveInfusionModeOnSourceRefresh(old,merged)){
-                if(reason)*reason="Refresh would replace local infusion requirements. Keep the current Loadout until source-change review is available.";
-                return Composable::Fail(error,"Source refresh would replace local infusion requirements.");
-            }
-            return NativeLibrary::PutLoadout(doc,NativeLibrary::PatchDraft(raw,SerializeSavedBuild(old),SerializeSavedBuild(merged)),error,LookupComponentDisplayName);
-        });
-    }
     bool GW2API::RemoveSavedBuild(const std::string& id,uint64_t expectedRevision) {
         return CommitComposableEdit([&](Composable::Document& doc,std::string& error){if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");return Composable::RemoveLoadout(doc,id,error);});
     }

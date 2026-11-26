@@ -1,4 +1,5 @@
 #include "../src/SnowCrowsImport.h"
+#include "../src/SourceRefreshCore.h"
 #include <cassert>
 #include <string>
 using namespace AlterEgo::SnowCrows;
@@ -81,5 +82,43 @@ int case_snowcrows_import(int, char**) {
     const std::string previousName = out.name;
     assert(!Parse(url, "<html>error</html>", out, error));
     assert(out.name == previousName); // invalid refresh cannot destroy existing data
+    using namespace AlterEgo;
+    namespace SR=AlterEgo::SourceRefresh;
+    struct Slot { uint32_t item_id=0,stat_id=0,rune_id=0,sigil_id=0,sigil2_id=0;
+        std::string slot,stat_name,weapon_type,rune,sigil,sigil2,infusion;
+        bool infusion_snapshot=false;
+        std::vector<uint32_t> infusion_ids;std::vector<std::string> infusion_attributes; };
+    struct SpecLine {uint32_t spec_id=0;int traits[3]={};};
+    struct Bar {uint32_t heal=0,utilities[3]={},elite=0;};
+    struct Requirement {uint32_t item_id;int count;std::string attribute;};
+    struct Build {std::string profession,source_url,import_warning,name,notes,chat_link,rune_name,relic_name;
+        uint32_t rune_id=0,relic_id=0;SpecLine specializations[3];Bar terrestrial_skills,aquatic_skills;
+        std::map<std::string,Slot> gear;std::vector<Requirement> infusion_totals;
+        bool infusion_summary_present=false;int infusion_ar_total=0;std::map<std::string,int> infusion_stat_totals;};
+    Build old;old.profession="Mesmer";old.source_url=url;old.name="Local";old.notes="Keep";
+    old.specializations[2]={40,{1995,999,1913}};old.aquatic_skills.heal=123;
+    old.gear["Helm"].item_id=999;old.gear["Helm"].stat_id=1268;old.gear["Helm"].stat_name="Viper";
+    old.gear["HelmAquatic"].item_id=77;old.gear["HelmAquatic"].infusion_ids={88};
+    old.gear["WeaponA2"].item_id=222;old.gear["WeaponA1"].weapon_type="Sword";
+    old.gear["Ring1"].infusion_attributes={"Power"};old.relic_id=12;
+    auto patch=SR::FromPage(out,[](uint32_t,uint32_t id){return id==1995?0:id==1913?2:-1;});
+    Build merged;SR::Report report;
+    auto two=[](const auto& s){return s=="Staff"||s=="Spear"||s=="Greatsword";};
+    assert(SR::Apply(old,patch,merged,report,error,two));
+    assert(merged.name=="Local"&&merged.notes=="Keep"&&merged.aquatic_skills.heal==123);
+    assert(merged.gear.at("Helm").item_id==999&&merged.gear.at("HelmAquatic").infusion_ids[0]==88);
+    assert(merged.specializations[2].traits[1]==999&&!merged.gear.count("WeaponA2"));
+    assert(report.offerInfusions&&merged.infusion_totals.empty()&&merged.gear.at("Ring1").infusion_attributes[0]=="Power");
+    SR::AdoptInfusions(merged,*patch.infusions);
+    assert(GetInfusionMode(merged)==InfusionMode::Totals&&merged.gear.at("HelmAquatic").infusion_ids.empty());
+    SR::Patch partial;partial.profession=old.profession;partial.sourceUrl=url;
+    partial.skills[0]=0;partial.relic=0;partial.gear["Ring1"].statName="Berserker";
+    old.terrestrial_skills.heal=1;old.terrestrial_skills.elite=99;
+    assert(SR::Apply(old,partial,merged,report,error,two));
+    assert(!merged.terrestrial_skills.heal&&merged.terrestrial_skills.elite==99&&!merged.relic_id);
+    assert(merged.gear.count("WeaponA2")&&merged.gear.at("Ring1").infusion_attributes[0]=="Power");
+    partial.profession="Engineer";assert(!SR::Apply(old,partial,merged,report,error,two));
+    assert(PositionalIds("1,0,3,4,5")==std::vector<uint32_t>({1,0,3,4,5}));
+    assert(PositionalIds("1,,3").empty());
     return 0;
 }

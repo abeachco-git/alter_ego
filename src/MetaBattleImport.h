@@ -122,12 +122,12 @@ inline bool Parse(const std::string& url, const std::string& html,
         return false;
     }
     const std::string utilitySection = skillSection.substr(utilityAt);
-    const auto skillIds = SnowCrows::Ids(SnowCrows::Match(
+    const auto skillIds = SnowCrows::PositionalIds(SnowCrows::Match(
         utilitySection,
         R"MB(data-armory-embed="skills"[^>]*data-armory-ids="([0-9,]+)")MB"));
-    if (skillIds.size() != 5)
+    if(skillIds.size()!=5||std::any_of(skillIds.begin(),skillIds.end(),[](auto id){return !id;}))
         page.importWarning = "Primary skills incomplete; review heal, utilities and elite.";
-    std::copy_n(skillIds.begin(), std::min(skillIds.size(), page.skills.size()), page.skills.begin());
+    if(skillIds.size()==5)std::copy(skillIds.begin(),skillIds.end(),page.skills.begin());
 
     const std::string specializationSection = html.substr(specAt, gearAt - specAt);
     const std::regex specsRe(
@@ -209,7 +209,7 @@ inline bool Parse(const std::string& url, const std::string& html,
         const std::string stat = split == std::string::npos
             ? "" : FirstText(label.substr(split + 1));
         if (kind == "Relic") { page.relicId = id; continue; }
-        if (kind == "Rune") { page.runeId = id; continue; }
+        if (kind == "Rune") { page.runeId = id; page.uniformRunePublished=true; continue; }
         if (kind == "Infusion") {
             const int amount = static_cast<int>(SnowCrows::Unsigned(
                 SnowCrows::Match(stat, R"(x([0-9]+))")));
