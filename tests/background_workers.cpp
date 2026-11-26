@@ -1,4 +1,8 @@
 #include "../src/BackgroundWorkers.h"
+#include "../src/RevisionSnapshot.h"
+#include <unordered_map>
+#include <vector>
+#include <future>
 #include <cassert>
 #include <condition_variable>
 #include <mutex>
@@ -52,5 +56,34 @@ int case_background_workers(int, char**) {
     for(int i=0;i<32;++i)assert(group.Launch([&] { ++completed; }));
     group.JoinAll();
     assert(group.ActiveCount()==0 && completed==34);
+    // A large catalog is not copied/rebuilt on steady-state render frames.
+    using Catalog=std::unordered_map<unsigned,std::shared_ptr<const std::vector<unsigned>>>;
+    Catalog canonical;
+    for(unsigned id=1;id<=10000;++id)canonical.emplace(id,std::make_shared<const std::vector<unsigned>>(20,id));
+    AlterEgo::RevisionSnapshot<Catalog> snapshots;
+    unsigned builds=0;
+    auto capture=[&](uint64_t revision){
+        return snapshots.Acquire(revision,[&]{++builds;return canonical;});
+    };
+    const auto first=capture(1);
+    for(int i=0;i<1000;++i)assert(capture(1)==first);
+    assert(builds==1&&first->at(2)==canonical.at(2));
+    // A reader may retain old immutable payloads while a revision is replaced.
+    std::promise<void> reading,updated;
+    auto read=reading.get_future(),update=updated.get_future();
+    std::thread reader([&]{
+        reading.set_value();update.wait();
+        assert(first->at(1)->front()==1&&first->at(2)->size()==20);
+    });
+    read.wait();
+    canonical[1]=std::make_shared<const std::vector<unsigned>>(20,99);
+    const auto second=capture(2);
+    assert(builds==2&&second!=first&&second->at(1)->front()==99);
+    assert(second->at(2)==first->at(2)); // unchanged definition payload shared
+    updated.set_value();reader.join();
+    try{snapshots.Acquire(3,[]()->Catalog{throw std::runtime_error("snapshot");});assert(false);}
+    catch(const std::runtime_error&){}
+    assert(capture(2)==second&&builds==2);
+    assert(capture(3)!=second&&builds==3);
     return 0;
 }

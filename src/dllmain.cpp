@@ -72,6 +72,7 @@
 #include "CacheDatabase.h"
 #include "AchievementCatalogCache.h"
 #include "AchievementNamesCore.h"
+#include "RevisionSnapshot.h"
 #include "WikiFreshness.h"
 #include "StoragePaths.h"
 #include "GameMemory.h"
@@ -524,7 +525,7 @@ using AchProgress = AlterEgo::Cache::AchievementProgress;
 // Achievement tracker state
 static std::vector<AchGroupDef> g_AchGroups;
 static std::unordered_map<uint32_t, AchCategoryDef> g_AchCategories;
-static std::unordered_map<uint32_t, AchDef> g_AchDefs;           // cached definitions
+static std::unordered_map<uint32_t, std::shared_ptr<const AchDef>> g_AchDefs;           // cached definitions
 static std::unordered_map<uint32_t, AchProgress> g_AchProgress;  // account progress
 static std::vector<uint32_t> g_AchPinned;                        // pinned achievement IDs
 static std::unordered_map<uint32_t, std::string> g_AchNameIndex; // id -> name (for search)
@@ -533,13 +534,13 @@ static std::unordered_set<uint32_t> g_AchHiddenCatIds;          // categories to
 
 static std::recursive_mutex g_AchMutex;
 static std::atomic<bool> g_AchGroupsFetched{false};
-static int64_t g_AchGroupsCacheFetchedAt = 0; // last successful groups/categories snapshot
+static std::atomic<int64_t> g_AchGroupsCacheFetchedAt{0}; // last successful groups/categories snapshot
 static uint64_t g_AchGroupsGeneration = 0;   // changes after cache load / network refresh
 static std::atomic<bool> g_AchGroupsFetching{false};
 static std::atomic<bool> g_AchNameIndexReady{false};
 static std::atomic<int64_t> g_AchNameIndexVerifiedAt{0}, g_AchNameIndexRetryAt{0};
 static std::atomic<uint64_t> g_AchCatalogGeneration{0};
-static std::mutex g_AchNamePersistMutex, g_AchDefPersistMutex;
+static std::mutex g_AchNamePersistMutex, g_AchDefPersistMutex, g_AchGroupPersistMutex;
 static std::string g_AchNameIndexStatus, g_AchNameIndexError; // guarded by g_AchMutex
 static std::atomic<bool> g_AchNameIndexFetching{false};
 static std::string g_AchStatusMsg;
@@ -1066,7 +1067,7 @@ static void OnEvAlertAchievementCompleted(void* eventArgs) {
                     bool isRepeatable = false;
                     bool isDailyOrWeekly = false;
                     if (defIt != g_AchDefs.end()) {
-                        for (const auto& f : defIt->second.flags) {
+                        for (const auto& f : defIt->second->flags) {
                             if (f == "Repeatable") isRepeatable = true;
                             if (f == "Daily" || f == "Weekly") isDailyOrWeekly = true;
                         }
@@ -1936,6 +1937,13 @@ static void LoadAchTrackerState() {
 }
 
 static void SaveAchGroupCache() {
+    std::lock_guard<std::mutex> persist(g_AchGroupPersistMutex);
+    decltype(g_AchGroups) groupsCopy;
+    decltype(g_AchCategories) catsCopy;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        groupsCopy=g_AchGroups;catsCopy=g_AchCategories;
+    }
 
     nlohmann::json j;
     auto epochSecs = std::chrono::duration_cast<std::chrono::seconds>(
@@ -1943,10 +1951,8 @@ static void SaveAchGroupCache() {
     j["fetch_time"] = epochSecs;
 
     {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-
         nlohmann::json groups = nlohmann::json::array();
-        for (const auto& g : g_AchGroups) {
+        for (const auto& g : groupsCopy) {
             nlohmann::json gj;
             gj["id"] = g.id;
             gj["name"] = g.name;
@@ -1958,7 +1964,7 @@ static void SaveAchGroupCache() {
         j["groups"] = groups;
 
         nlohmann::json cats = nlohmann::json::object();
-        for (const auto& [id, c] : g_AchCategories) {
+        for (const auto& [id, c] : catsCopy) {
             nlohmann::json cj;
             cj["id"] = c.id;
             cj["name"] = c.name;
@@ -1990,6 +1996,7 @@ static void LoadAchGroupCache() {
         // background without blanking the navigation on every launch.
         const int64_t fetchEpoch = j.value("fetch_time", (int64_t)0);
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        ++g_AchGroupsGeneration;
 
         if (j.contains("groups") && j["groups"].is_array()) {
             g_AchGroups.clear();
@@ -2023,6 +2030,7 @@ static void LoadAchGroupCache() {
         }
 
         // Build reverse lookup
+        g_AchIdToCategory.clear();
         for (const auto& [catId, cat] : g_AchCategories) {
             for (uint32_t achId : cat.achievements) {
                 g_AchIdToCategory[achId] = catId;
@@ -2043,7 +2051,6 @@ static void LoadAchGroupCache() {
         if (!g_AchGroups.empty() && !g_AchCategories.empty()) {
             g_AchGroupsFetched = true;
             g_AchGroupsCacheFetchedAt = fetchEpoch;
-            ++g_AchGroupsGeneration;
         }
     } catch (...) {}
 }
@@ -2052,10 +2059,15 @@ static bool SaveAchDefCache(int64_t verifiedAt) {
     // Serialize capture + persistence across the category, pinned and name workers.
     std::lock_guard<std::mutex> saveLock(g_AchDefPersistMutex);
 
-    nlohmann::json j;
+    decltype(g_AchDefs) definitions;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        for (const auto& [id, d] : g_AchDefs) {
+        definitions=g_AchDefs;
+    }
+    nlohmann::json j;
+    {
+        for (const auto& [id, definition] : definitions) {
+            const auto& d=*definition;
             nlohmann::json dj;
             dj["id"] = d.id;
             dj["name"] = d.name;
@@ -2093,6 +2105,7 @@ static void LoadAchDefCache() {
         if (!snapshot) return;
         auto& j = *snapshot;
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        ++g_AchCatalogGeneration;
         for (auto& [key, dj] : j.items()) {
             AchDef d;
             d.id = dj.value("id", 0u);
@@ -2118,7 +2131,7 @@ static void LoadAchDefCache() {
                     d.bits.push_back(std::move(b));
                 }
             }
-            if (d.id > 0) g_AchDefs[d.id] = std::move(d);
+            if (d.id > 0) g_AchDefs[d.id] = std::make_shared<const AchDef>(std::move(d));
         }
     } catch (...) {}
 }
@@ -2126,13 +2139,13 @@ static void LoadAchDefCache() {
 static bool SaveAchNameIndex(int64_t verifiedAt) {
     std::lock_guard<std::mutex> saveLock(g_AchNamePersistMutex);
 
-    nlohmann::json j;
+    decltype(g_AchNameIndex) names;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        for (const auto& [id, name] : g_AchNameIndex) {
-            j[std::to_string(id)] = name;
-        }
+        names=g_AchNameIndex;
     }
+    nlohmann::json j;
+    for (const auto& [id, name] : names) j[std::to_string(id)] = name;
 
     const bool saved = AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Names, j, verifiedAt);
     if (saved && verifiedAt > 0) g_AchNameIndexVerifiedAt = std::max(g_AchNameIndexVerifiedAt.load(), verifiedAt);
@@ -2153,13 +2166,14 @@ static void LoadAchNameIndex() {
             }
             std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             g_AchNameIndex = std::move(loaded);
+            ++g_AchCatalogGeneration;
         }
         g_AchNameIndexVerifiedAt = AlterEgo::Cache::ReadNameIndexVerification(AlterEgo::GW2API::GetDataDirectory());
     } catch (...) {}
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         for (const auto& [id, def] : g_AchDefs) {
-            if (id && !def.name.empty()) g_AchNameIndex.emplace(id, def.name);
+            if (id && !def->name.empty()) g_AchNameIndex.emplace(id, def->name);
         }
         g_AchNameIndexReady = !g_AchNameIndex.empty();
         ++g_AchCatalogGeneration;
@@ -2174,7 +2188,7 @@ static void PublishAchDefinition(AchDef def) {
         g_AchNameIndex[def.id] = def.name;
         g_AchNameIndexReady = true;
     }
-    g_AchDefs[def.id] = std::move(def);
+    g_AchDefs[def.id] = std::make_shared<const AchDef>(std::move(def));
     ++g_AchCatalogGeneration;
 }
 
@@ -2533,7 +2547,7 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
             if(p.done&&p.max>0&&p.current<p.max){
                 auto def=g_AchDefs.find(id);
                 if(def!=g_AchDefs.end()){
-                    const auto& flags=def->second.flags;
+                    const auto& flags=def->second->flags;
                     if(std::find(flags.begin(),flags.end(),"Repeatable")!=flags.end()&&
                        std::find(flags.begin(),flags.end(),"Daily")==flags.end()&&
                        std::find(flags.begin(),flags.end(),"Weekly")==flags.end())p.done=false;
@@ -14046,35 +14060,79 @@ void RenderSpinner(const char* label, ImVec4 color) {
 // Achievement Tracker — UI
 // =========================================================================
 
-// Find achievement ID by name match (reverse lookup on g_AchNameIndex)
-// Tries: exact match, then parentName + ": " + name
-static uint32_t FindAchIdByName(const std::string& name, const std::string& parentName = "") {
-    // Exact match
-    for (const auto& [id, n] : g_AchNameIndex) {
-        if (n == name) return id;
-    }
-    // Try parentName + ": " + name (common meta-achievement pattern)
-    if (!parentName.empty()) {
-        std::string qualified = parentName + ": " + name;
-        for (const auto& [id, n] : g_AchNameIndex) {
-            if (n == qualified) return id;
-        }
+// Immutable presentation ownership. Definition payloads are shared with the
+// canonical catalog; the pointer/name index, group tree and account progress
+// are independently revision cached, captured together under the domain lock.
+// No renderer keeps a reference to a mutable map or holds the mutex over UI.
+struct AchCatalogFrame {
+    decltype(g_AchDefs) defs;
+    decltype(g_AchNameIndex) names;
+    std::unordered_map<std::string,uint32_t> reverseNames;
+};
+struct AchGroupsFrame {
+    decltype(g_AchGroups) groups;
+    decltype(g_AchCategories) categories;
+    decltype(g_AchIdToCategory) idToCategory;
+    decltype(g_AchHiddenCatIds) hiddenCats;
+};
+struct AchFrame {
+    std::shared_ptr<const AchCatalogFrame> catalog;
+    std::shared_ptr<const AchGroupsFrame> groups;
+    std::shared_ptr<const decltype(g_AchProgress)> progress;
+    uint64_t catalogRevision=0,groupsRevision=0,progressRevision=0;
+    std::vector<uint32_t> pinned,activeMain,activeDaily;
+    std::string activeEvent;
+};
+static AchFrame CaptureAchFrame() {
+    static AlterEgo::RevisionSnapshot<AchCatalogFrame> catalog;
+    static AlterEgo::RevisionSnapshot<AchGroupsFrame> groups;
+    static AlterEgo::RevisionSnapshot<decltype(g_AchProgress)> progress;
+    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+    AchFrame frame;
+    frame.catalogRevision=g_AchCatalogGeneration.load();
+    frame.groupsRevision=g_AchGroupsGeneration;
+    frame.progressRevision=g_AchProgressGen.load();
+    frame.catalog=catalog.Acquire(frame.catalogRevision,[]{
+        AchCatalogFrame next{g_AchDefs,g_AchNameIndex,{}};
+        next.reverseNames.reserve(g_AchNameIndex.size());
+        // Match the original first-in-iteration exact-name precedence.
+        for(const auto& [id,name]:g_AchNameIndex)next.reverseNames.emplace(name,id);
+        return next;
+    });
+    frame.groups=groups.Acquire(frame.groupsRevision,[]{
+        return AchGroupsFrame{g_AchGroups,g_AchCategories,g_AchIdToCategory,g_AchHiddenCatIds};
+    });
+    frame.progress=progress.Acquire(frame.progressRevision,[]{return g_AchProgress;});
+    frame.pinned=g_AchPinned;
+    frame.activeMain=g_AchActiveMainCatIds;
+    frame.activeDaily=g_AchActiveDailyCatIds;
+    frame.activeEvent=g_AchActiveEventName;
+    return frame;
+}
+
+static uint32_t FindAchIdByName(const AchFrame& frame,const std::string& name,const std::string& parentName = "") {
+    const auto& names=frame.catalog->reverseNames;
+    auto it=names.find(name);
+    if(it!=names.end())return it->second;
+    if(!parentName.empty()){
+        it=names.find(parentName+": "+name);
+        if(it!=names.end())return it->second;
     }
     return 0;
 }
 
 // Navigate to a specific achievement: find its category, select it, fetch defs, expand it
 static uint32_t g_NavAchievementId=0;
-static void NavigateToAchievement(uint32_t achId) {
+static void NavigateToAchievement(const AchFrame& frame,uint32_t achId) {
     MarkNavigation();g_NavAchievementId=achId;
     // Find which category contains this achievement
-    auto catIt = g_AchIdToCategory.find(achId);
-    if (catIt != g_AchIdToCategory.end()) {
+    auto catIt = frame.groups->idToCategory.find(achId);
+    if (catIt != frame.groups->idToCategory.end()) {
         uint32_t catId = catIt->second;
         if (g_AchSelectedCatId != catId) {
             g_AchSelectedCatId = catId;
             // Find which group owns this category
-            for (const auto& group : g_AchGroups) {
+            for (const auto& group : frame.groups->groups) {
                 for (uint32_t gCatId : group.categories) {
                     if (gCatId == catId) {
                         g_AchSelectedGroupId = group.id;
@@ -14091,15 +14149,27 @@ static void NavigateToAchievement(uint32_t achId) {
 }
 
 static bool IsAchPinned(uint32_t id) {
+    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
     return std::find(g_AchPinned.begin(), g_AchPinned.end(), id) != g_AchPinned.end();
 }
 
 static void ToggleAchPin(uint32_t id) {
-    auto it = std::find(g_AchPinned.begin(), g_AchPinned.end(), id);
-    if (it != g_AchPinned.end()) {
-        g_AchPinned.erase(it);
-    } else {
-        if (g_AchPinned.size() < 20) g_AchPinned.push_back(id);
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        auto it = std::find(g_AchPinned.begin(), g_AchPinned.end(), id);
+        if (it != g_AchPinned.end()) g_AchPinned.erase(it);
+        else if (g_AchPinned.size() < 20) g_AchPinned.push_back(id);
+    }
+    SaveAchTrackerState();
+}
+
+static void MoveAchPin(uint32_t from,uint32_t to) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+        auto a=std::find(g_AchPinned.begin(),g_AchPinned.end(),from);
+        auto b=std::find(g_AchPinned.begin(),g_AchPinned.end(),to);
+        if(a==g_AchPinned.end()||b==g_AchPinned.end()||a==b)return;
+        std::iter_swap(a,b);
     }
     SaveAchTrackerState();
 }
@@ -14128,15 +14198,15 @@ static void AchievementNameContextMenu(const std::string& name){
         ImGui::EndPopup();
     }
 }
-static void RenderAchEntry(uint32_t achId, bool showPinButton) {
-    auto defIt = g_AchDefs.find(achId);
-    auto progIt = g_AchProgress.find(achId);
+static void RenderAchEntry(const AchFrame& frame,uint32_t achId, bool showPinButton) {
+    auto defIt = frame.catalog->defs.find(achId);
+    auto progIt = (*frame.progress).find(achId);
 
     // If no definition yet, show ID and loading indicator
-    if (defIt == g_AchDefs.end()) {
+    if (defIt == frame.catalog->defs.end()) {
         // Check name index for at least a name
-        auto nameIt = g_AchNameIndex.find(achId);
-        if (nameIt != g_AchNameIndex.end()) {
+        auto nameIt = frame.catalog->names.find(achId);
+        if (nameIt != frame.catalog->names.end()) {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s (loading...)", nameIt->second.c_str());
         } else {
             ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "Achievement %u (loading...)", achId);
@@ -14144,10 +14214,10 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
         return;
     }
 
-    const AchDef& def = defIt->second;
-    bool done = progIt != g_AchProgress.end() && progIt->second.done;
-    int current = (progIt != g_AchProgress.end()) ? progIt->second.current : 0;
-    int max = def.max_count > 0 ? def.max_count : ((progIt != g_AchProgress.end()) ? progIt->second.max : 0);
+    const AchDef& def = *defIt->second;
+    bool done = progIt != (*frame.progress).end() && progIt->second.done;
+    int current = (progIt != (*frame.progress).end()) ? progIt->second.current : 0;
+    int max = def.max_count > 0 ? def.max_count : ((progIt != (*frame.progress).end()) ? progIt->second.max : 0);
 
     ImGui::PushID((int)achId);
 
@@ -14288,7 +14358,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
     if (hasBits && expanded) {
         ImGui::Indent(16.0f);
         for (size_t i = 0; i < def.bits.size(); i++) {
-            bool bitDone = (progIt != g_AchProgress.end()) &&
+            bool bitDone = (progIt != (*frame.progress).end()) &&
                 progIt->second.completed_bits.count((uint32_t)i) > 0;
             const AchBitDef& bit = def.bits[i];
 
@@ -14310,7 +14380,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
             } else if (bit.type == "Text" && !bit.text.empty()) {
                 label = bit.text;
                 // Check if this text matches an achievement name (sub-achievement in meta)
-                subAchId = FindAchIdByName(bit.text, def.name);
+                subAchId = FindAchIdByName(frame,bit.text,def.name);
             } else {
                 label = bit.text.empty() ? ("Step " + std::to_string(i + 1)) : bit.text;
             }
@@ -14325,7 +14395,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                     std::string selLabel = label + "###subach";
                     ImGui::PushStyleColor(ImGuiCol_Text, AlterEgo::CompletionTheme::TextColor(true));
                     if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
-                        NavigateToAchievement(subAchId);
+                        NavigateToAchievement(frame,subAchId);
                     }
                     ImGui::PopStyleColor();
                     if (ImGui::IsItemHovered()) {
@@ -14356,7 +14426,7 @@ static void RenderAchEntry(uint32_t achId, bool showPinButton) {
                 // Clickable sub-achievement → navigate to it
                 std::string selLabel = label + "###subach";
                 if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
-                    NavigateToAchievement(subAchId);
+                    NavigateToAchievement(frame,subAchId);
                 }
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("Click to navigate to achievement");
@@ -14486,6 +14556,8 @@ static void RenderAchievements() {
         }
     }
 
+    const auto frame=CaptureAchFrame();
+
     // Search mode — cached results to avoid iterating 8000+ names every frame
     bool searchActive = g_AchSearchBuf[0] != '\0';
     if (searchActive) {
@@ -14505,21 +14577,20 @@ static void RenderAchievements() {
         static bool s_achSearchTruncated = false;
 
         {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            if (s_achSearchCache != query || s_achSearchCatalogGen != g_AchCatalogGeneration.load() || s_achSearchGroupsGen != g_AchGroupsGeneration) {
+            if (s_achSearchCache != query || s_achSearchCatalogGen != frame.catalogRevision || s_achSearchGroupsGen != frame.groupsRevision) {
             s_achSearchCache = query;
-            s_achSearchCatalogGen = g_AchCatalogGeneration.load();
-            s_achSearchGroupsGen = g_AchGroupsGeneration;
+            s_achSearchCatalogGen = frame.catalogRevision;
+            s_achSearchGroupsGen = frame.groupsRevision;
             s_achSearchResults.clear();
             s_achSearchTruncated = false;
 
-            for (const auto& [id, name] : g_AchNameIndex) {
+            for (const auto& [id, name] : frame.catalog->names) {
                 std::string lowerName = name;
                 std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
                 if (lowerName.find(query) != std::string::npos) {
                     // Skip achievements from hidden groups (e.g. Character Adventure Guide)
-                    auto catIt = g_AchIdToCategory.find(id);
-                    if (catIt != g_AchIdToCategory.end() && g_AchHiddenCatIds.count(catIt->second)) continue;
+                    auto catIt = frame.groups->idToCategory.find(id);
+                    if (catIt != frame.groups->idToCategory.end() && frame.groups->hiddenCats.count(catIt->second)) continue;
                     s_achSearchResults.push_back(id);
                     if (s_achSearchResults.size() >= 50) {
                         s_achSearchTruncated = true;
@@ -14531,24 +14602,23 @@ static void RenderAchievements() {
         }
 
         ImGui::BeginChild("AchSearchResults", ImVec2(0, 0), true);
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         for (uint32_t id : s_achSearchResults) {
             // Show category hint
-            auto catIt = g_AchIdToCategory.find(id);
-            if (catIt != g_AchIdToCategory.end()) {
-                auto catDefIt = g_AchCategories.find(catIt->second);
-                if (catDefIt != g_AchCategories.end()) {
+            auto catIt = frame.groups->idToCategory.find(id);
+            if (catIt != frame.groups->idToCategory.end()) {
+                auto catDefIt = frame.groups->categories.find(catIt->second);
+                if (catDefIt != frame.groups->categories.end()) {
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "[%s]", catDefIt->second.name.c_str());
                     ImGui::SameLine();
                 }
             }
 
             // If we have the full def, render it
-            if (g_AchDefs.count(id)) {
-                RenderAchEntry(id, true);
+            if (frame.catalog->defs.count(id)) {
+                RenderAchEntry(frame,id,true);
             } else {
-                auto nameIt = g_AchNameIndex.find(id);
-                ImGui::Text("%s", nameIt != g_AchNameIndex.end() ? nameIt->second.c_str() : "?");
+                auto nameIt = frame.catalog->names.find(id);
+                ImGui::Text("%s", nameIt != frame.catalog->names.end() ? nameIt->second.c_str() : "?");
                 ImGui::SameLine(ImGui::GetContentRegionAvail().x - 30.0f);
                 ImGui::PushID((int)id);
                 bool pinned = IsAchPinned(id);
@@ -14582,26 +14652,26 @@ static void RenderAchievements() {
         ImGui::SetScrollY(g_AchTreeScrollY);
     }
     {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
 
         // Compute (done, total, hasAny) for a category — cached per progress generation
         struct CatStats { int done; int total; bool hasAny; };
         static std::unordered_map<uint32_t, CatStats> s_catStats;
-        static uint64_t s_catStatsGen = (uint64_t)-1;
-        if (s_catStatsGen != g_AchProgressGen) {
+        static uint64_t s_catStatsGen = (uint64_t)-1, s_catGroupsGen = (uint64_t)-1;
+        if (s_catStatsGen != frame.progressRevision || s_catGroupsGen != frame.groupsRevision) {
             s_catStats.clear();
-            s_catStatsGen = g_AchProgressGen;
+            s_catStatsGen = frame.progressRevision;
+            s_catGroupsGen = frame.groupsRevision;
         }
         auto getCatStats = [&](uint32_t catId) -> CatStats {
             auto it = s_catStats.find(catId);
             if (it != s_catStats.end()) return it->second;
             CatStats st{0, 0, false};
-            auto catIt = g_AchCategories.find(catId);
-            if (catIt != g_AchCategories.end()) {
+            auto catIt = frame.groups->categories.find(catId);
+            if (catIt != frame.groups->categories.end()) {
                 st.total = (int)catIt->second.achievements.size();
                 for (uint32_t aid : catIt->second.achievements) {
-                    auto pit = g_AchProgress.find(aid);
-                    if (pit != g_AchProgress.end()) {
+                    auto pit = (*frame.progress).find(aid);
+                    if (pit != (*frame.progress).end()) {
                         st.hasAny = true;
                         if (pit->second.done) st.done++;
                     }
@@ -14676,24 +14746,24 @@ static void RenderAchievements() {
         };
 
         // Active event — shown at top of tree when a bonus event or festival is active
-        if (!g_AchActiveMainCatIds.empty() || !g_AchActiveEventName.empty()) {
+        if (!frame.activeMain.empty() || !frame.activeEvent.empty()) {
             static const std::string kEventGroupId = "__active_event__";
             bool forceOpenEvent = g_AchRestoreScroll && (g_AchSelectedGroupId == kEventGroupId);
             if (forceOpenEvent) ImGui::SetNextItemOpen(true);
             else if (!g_AchRestoreScroll) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
 
-            std::string eventLabel = g_AchActiveEventName.empty() ? "Current Event" : g_AchActiveEventName;
+            std::string eventLabel = frame.activeEvent.empty() ? "Current Event" : frame.activeEvent;
             if (ImGui::TreeNode(eventLabel.c_str())) {
-                if (g_AchActiveMainCatIds.empty()) {
+                if (frame.activeMain.empty()) {
                     // Recognised event with no tracked achievement category (e.g. a
                     // pure reward-boost event, or one whose category isn't live yet).
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
                     ImGui::TextWrapped("Bonus rewards event - no tracked achievements.");
                     ImGui::PopStyleColor();
                 }
-                for (uint32_t catId : g_AchActiveMainCatIds) {
-                    auto it = g_AchCategories.find(catId);
-                    if (it == g_AchCategories.end() || it->second.name.empty() ||
+                for (uint32_t catId : frame.activeMain) {
+                    auto it = frame.groups->categories.find(catId);
+                    if (it == frame.groups->categories.end() || it->second.name.empty() ||
                         hideCompletedCategory(catId)) continue;
                     renderCatRow(&it->second, kEventGroupId, g_AchSelectedCatId == catId);
                 }
@@ -14702,9 +14772,9 @@ static void RenderAchievements() {
         }
 
         // Build set of active daily cat IDs for quick lookup
-        std::unordered_set<uint32_t> activeDailySet(g_AchActiveDailyCatIds.begin(), g_AchActiveDailyCatIds.end());
+        std::unordered_set<uint32_t> activeDailySet(frame.activeDaily.begin(), frame.activeDaily.end());
 
-        for (const auto& group : g_AchGroups) {
+        for (const auto& group : frame.groups->groups) {
             if (group.name.empty()) continue;
             if (group.name == "Character Adventure Guide") continue;
 
@@ -14715,9 +14785,9 @@ static void RenderAchievements() {
             int grpDone = 0, grpTotal = 0;
             bool grpHasAny = false;
             for (uint32_t catId : group.categories) {
-                if (g_AchHiddenCatIds.count(catId)) continue;
-                auto it = g_AchCategories.find(catId);
-                if (it != g_AchCategories.end() && !it->second.name.empty() &&
+                if (frame.groups->hiddenCats.count(catId)) continue;
+                auto it = frame.groups->categories.find(catId);
+                if (it != frame.groups->categories.end() && !it->second.name.empty() &&
                     !hideCompletedCategory(catId)) {
                     sortedCats.push_back(&it->second);
                     CatStats st = getCatStats(catId);
@@ -14729,9 +14799,9 @@ static void RenderAchievements() {
             // filter is enabled. Keep Daily active-event categories in mind.
             bool hasVisibleActiveDaily = false;
             if (isDaily) {
-                for (uint32_t activeId : g_AchActiveDailyCatIds) {
-                    auto activeIt = g_AchCategories.find(activeId);
-                    if (activeIt != g_AchCategories.end() &&
+                for (uint32_t activeId : frame.activeDaily) {
+                    auto activeIt = frame.groups->categories.find(activeId);
+                    if (activeIt != frame.groups->categories.end() &&
                         !activeIt->second.name.empty() &&
                         !hideCompletedCategory(activeId)) {
                         hasVisibleActiveDaily = true;
@@ -14767,10 +14837,10 @@ static void RenderAchievements() {
             if (groupComplete) ImGui::PopStyleColor();
             if (groupOpen) {
                 // For Daily group: show active event dailies first
-                if (isDaily && !g_AchActiveDailyCatIds.empty()) {
-                    for (uint32_t catId : g_AchActiveDailyCatIds) {
-                        auto it = g_AchCategories.find(catId);
-                        if (it == g_AchCategories.end() || it->second.name.empty() ||
+                if (isDaily && !frame.activeDaily.empty()) {
+                    for (uint32_t catId : frame.activeDaily) {
+                        auto it = frame.groups->categories.find(catId);
+                        if (it == frame.groups->categories.end() || it->second.name.empty() ||
                             hideCompletedCategory(catId)) continue;
                         renderCatRow(&it->second, group.id, g_AchSelectedCatId == catId);
                     }
@@ -14793,7 +14863,7 @@ static void RenderAchievements() {
     ImGui::BeginChild("##AchRight", ImVec2(0, availHeight), false);
     {
         float rightWidth = ImGui::GetContentRegionAvail().x;
-        bool hasPinned = !g_AchPinned.empty();
+        bool hasPinned = !frame.pinned.empty();
         float splitterH = hasPinned ? 6.0f : 0.0f;
 
         // Clamp pinned height
@@ -14810,10 +14880,9 @@ static void RenderAchievements() {
         // Top: Fixed category heading + scrollable list
         float catHeaderH = 0.0f;
         {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
             if (g_AchSelectedCatId > 0) {
-                auto catIt = g_AchCategories.find(g_AchSelectedCatId);
-                if (catIt != g_AchCategories.end()) {
+                auto catIt = frame.groups->categories.find(g_AchSelectedCatId);
+                if (catIt != frame.groups->categories.end()) {
                     float startY = ImGui::GetCursorPosY();
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.25f, 1.0f), "%s", catIt->second.name.c_str());
@@ -14847,11 +14916,10 @@ static void RenderAchievements() {
             g_AchRestoreScroll = false;
         }
         {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
 
             if (g_AchSelectedCatId > 0) {
-                auto catIt = g_AchCategories.find(g_AchSelectedCatId);
-                if (catIt != g_AchCategories.end()) {
+                auto catIt = frame.groups->categories.find(g_AchSelectedCatId);
+                if (catIt != frame.groups->categories.end()) {
                     if (g_AchCatFetching) {
                         RenderSpinner("Loading...", ImVec4(1.0f, 0.85f, 0.0f, 1.0f));
                     }
@@ -14859,11 +14927,11 @@ static void RenderAchievements() {
                     int visibleAchievements = 0;
                     for (uint32_t achId : catIt->second.achievements) {
                         if (g_AchHideCompletedCats) {
-                            auto pit = g_AchProgress.find(achId);
-                            if (pit != g_AchProgress.end() && pit->second.done) continue;
+                            auto pit = (*frame.progress).find(achId);
+                            if (pit != (*frame.progress).end() && pit->second.done) continue;
                         }
                         ++visibleAchievements;
-                        RenderAchEntry(achId, true);
+                        RenderAchEntry(frame,achId,true);
                     }
                     if (g_AchHideCompletedCats && visibleAchievements == 0)
                         ImGui::TextDisabled("All achievements in this category completed.");
@@ -14909,17 +14977,16 @@ static void RenderAchievements() {
             float pinnedHeaderH = 0.0f;
             {
                 float startY = ImGui::GetCursorPosY();
-                ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.25f, 1.0f), "Pinned (%d)", (int)g_AchPinned.size());
+                ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.25f, 1.0f), "Pinned (%d)", (int)frame.pinned.size());
                 ImGui::Separator();
                 pinnedHeaderH = ImGui::GetCursorPosY() - startY;
             }
             ImGui::BeginChild("AchPinned", ImVec2(rightWidth, g_AchPinnedHeight - pinnedHeaderH), true);
             {
-                std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                int pinnedCount = (int)g_AchPinned.size();
+                int pinnedCount = (int)frame.pinned.size();
                 int moveFrom = -1, moveTo = -1;
                 for (int idx = 0; idx < pinnedCount; idx++) {
-                    uint32_t id = g_AchPinned[idx];
+                    uint32_t id = frame.pinned[idx];
                     ImGui::PushID(idx + 90000);
 
                     // Up/down arrow buttons (drawn triangles)
@@ -14969,14 +15036,13 @@ static void RenderAchievements() {
 
                     ImGui::SameLine(0, 4);
 
-                    RenderAchEntry(id, true);
+                    RenderAchEntry(frame,id,true);
 
                     ImGui::PopID();
                 }
                 // Apply move after loop
                 if (moveFrom >= 0 && moveTo >= 0 && moveFrom != moveTo) {
-                    std::swap(g_AchPinned[moveFrom], g_AchPinned[moveTo]);
-                    SaveAchTrackerState();
+                    MoveAchPin(frame.pinned[moveFrom],frame.pinned[moveTo]);
                 }
             }
             ImGui::EndChild();
@@ -15021,33 +15087,33 @@ static bool s_popoutCacheDirty = true;
 
 static void InvalidatePopoutCache() { s_popoutCacheDirty = true; }
 
-static void RebuildPopoutCache() {
-    // Called under g_AchMutex or after snapshot
+static void RebuildPopoutCache(const AchFrame& frame) {
+    // Resolve skin labels and sub-achievements after releasing the domain lock.
     s_popoutCache.clear();
-    s_popoutCache.reserve(g_AchPinned.size());
+    s_popoutCache.reserve(frame.pinned.size());
 
-    for (uint32_t achId : g_AchPinned) {
+    for (uint32_t achId : frame.pinned) {
         PopoutAchDisplay disp;
         disp.achId = achId;
 
-        auto defIt = g_AchDefs.find(achId);
-        auto progIt = g_AchProgress.find(achId);
+        auto defIt = frame.catalog->defs.find(achId);
+        auto progIt = (*frame.progress).find(achId);
 
-        disp.done = (progIt != g_AchProgress.end()) && progIt->second.done;
-        disp.current = (progIt != g_AchProgress.end()) ? progIt->second.current : 0;
+        disp.done = (progIt != (*frame.progress).end()) && progIt->second.done;
+        disp.current = (progIt != (*frame.progress).end()) ? progIt->second.current : 0;
 
-        if (defIt != g_AchDefs.end()) {
-            const AchDef& def = defIt->second;
+        if (defIt != frame.catalog->defs.end()) {
+            const AchDef& def = *defIt->second;
             disp.hasDef = true;
             disp.name = def.name;
-            disp.max = def.max_count > 0 ? def.max_count : ((progIt != g_AchProgress.end()) ? progIt->second.max : 0);
+            disp.max = def.max_count > 0 ? def.max_count : ((progIt != (*frame.progress).end()) ? progIt->second.max : 0);
             disp.hasBits = !def.bits.empty() && !disp.done;
 
             if (disp.hasBits) {
                 disp.bits.reserve(def.bits.size());
                 for (size_t i = 0; i < def.bits.size(); i++) {
                     PopoutBitDisplay bd;
-                    bd.done = (progIt != g_AchProgress.end()) &&
+                    bd.done = (progIt != (*frame.progress).end()) &&
                         progIt->second.completed_bits.count((uint32_t)i) > 0;
 
                     const AchBitDef& bit = def.bits[i];
@@ -15065,7 +15131,7 @@ static void RebuildPopoutCache() {
                         }
                     } else if (bit.type == "Text" && !bit.text.empty()) {
                         bd.label = bit.text;
-                        bd.subAchId = FindAchIdByName(bit.text, def.name);
+                        bd.subAchId = FindAchIdByName(frame,bit.text,def.name);
                     } else {
                         bd.label = bit.text.empty() ? ("Step " + std::to_string(i + 1)) : bit.text;
                     }
@@ -15075,16 +15141,16 @@ static void RebuildPopoutCache() {
             }
         } else {
             disp.hasDef = false;
-            auto nameIt = g_AchNameIndex.find(achId);
-            disp.loadingName = (nameIt != g_AchNameIndex.end()) ? nameIt->second : "";
+            auto nameIt = frame.catalog->names.find(achId);
+            disp.loadingName = (nameIt != frame.catalog->names.end()) ? nameIt->second : "";
         }
 
         s_popoutCache.push_back(std::move(disp));
     }
 
-    s_popoutLastPinned = g_AchPinned;
-    s_popoutLastProgressGen = g_AchProgressGen;
-    s_popoutLastCatalogGen = g_AchCatalogGeneration.load();
+    s_popoutLastPinned = frame.pinned;
+    s_popoutLastProgressGen = frame.progressRevision;
+    s_popoutLastCatalogGen = frame.catalogRevision;
     s_popoutCacheDirty = false;
 }
 
@@ -15133,13 +15199,10 @@ static void RenderAchPopout() {
         }
     }
 
-    // Rebuild cache if dirty (brief lock, then release)
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        if (s_popoutCacheDirty || g_AchPinned != s_popoutLastPinned ||
-            g_AchProgressGen != s_popoutLastProgressGen || s_popoutLastCatalogGen != g_AchCatalogGeneration.load()) {
-            RebuildPopoutCache();
-        }
+    const auto frame=CaptureAchFrame();
+    if (s_popoutCacheDirty || frame.pinned != s_popoutLastPinned ||
+        frame.progressRevision != s_popoutLastProgressGen || s_popoutLastCatalogGen != frame.catalogRevision) {
+        RebuildPopoutCache(frame);
     }
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(250, 100), ImVec2(500, 800));
@@ -15284,7 +15347,7 @@ static void RenderAchPopout() {
                                 std::string selLabel = "    [x] " + bd.label + "###popsubach";
                                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.82f, 0.35f, 0.6f));
                                 if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
-                                    NavigateToAchievement(bd.subAchId);
+                                    NavigateToAchievement(frame,bd.subAchId);
                                 }
                                 ImGui::PopStyleColor();
                             } else {
@@ -15307,7 +15370,7 @@ static void RenderAchPopout() {
                         } else if (bd.subAchId > 0) {
                             std::string selLabel = "    [ ] " + bd.label + "###popsubach";
                             if (ImGui::Selectable(selLabel.c_str(), false, ImGuiSelectableFlags_AllowItemOverlap)) {
-                                NavigateToAchievement(bd.subAchId);
+                                NavigateToAchievement(frame,bd.subAchId);
                             }
                             if (ImGui::IsItemHovered()) {
                                 ImGui::SetTooltip("Click to navigate to achievement");
