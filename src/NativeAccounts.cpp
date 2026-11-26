@@ -1186,20 +1186,37 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             if(p.buy_quantity>0&&p.buy_price>0)RenderCoins(p.buy_price);else ImGui::TextDisabled("No buy orders");
             ImGui::TextUnformatted("Sell listing:");ImGui::SameLine();
             if(p.sell_quantity>0&&p.sell_price>0)RenderCoins(p.sell_price);else ImGui::TextDisabled("No sell listings");
-            int64_t eligible=0;auto f=v->inventory.flags.find(group.id);
-            if(locations!=v->index.end())for(auto idx:locations->second){
-                const auto& row=v->inventory.rows[idx];const auto& slot=row.slot;
-                if(allowed(slot.account)&&f!=v->inventory.flags.end()&&PotentiallySellable(slot,f->second,Fresh(*v,row))){
-                    if(slot.count>0&&eligible<=9223372036854775807LL-slot.count)eligible+=slot.count;
-                    else {eligible=0;break;}
-                }
+            SellableQuantity all,matching;
+            const auto f=v->inventory.flags.find(group.id);
+            if(f!=v->inventory.flags.end()){
+                const auto add=[&](SellableQuantity& quantity,const Row& row){
+                    quantity.Add(row.slot,f->second,Fresh(*v,row),allowed(row.slot.account));
+                };
+                if(locations!=v->index.end())for(auto idx:locations->second)
+                    add(all,v->inventory.rows[idx]);
+                // Reuse the exact rows already selected by the local filter
+                // projection; do not reimplement its predicates or use its
+                // unqualified total (which can include unsellable stock).
+                for(const auto* row:group.locations)add(matching,*row);
             }
-            const auto net=Skinventory::EstimateInstantSale(eligible,p.buy_price);
-            if(net&&p.buy_quantity>0){
-                ImGui::TextUnformatted("Estimated instant sale after fees:");ImGui::SameLine();RenderCoins(*net);
-                if(ImGui::IsItemHovered())ImGui::SetTooltip("Estimate for %lld potentially sellable items in fresh storage at the best buy price. Order depth and actual fees may differ.",static_cast<long long>(eligible));
-            }else if(eligible>0)ImGui::TextDisabled("No available instant-sale estimate");
-            else ImGui::TextDisabled("No verified sellable owned quantity");
+            ImGui::TextUnformatted("Estimated instant sale after fees:");
+            const auto renderEstimate=[&](const char* label,const SellableQuantity& quantity){
+                ImGui::BeginGroup();
+                if(quantity.count){
+                    const auto count=*quantity.count;
+                    ImGui::Text("%s (%lld):",label,static_cast<long long>(count));ImGui::SameLine();
+                    const auto net=Skinventory::EstimateInstantSale(count,p.buy_price);
+                    if(count==0)ImGui::TextDisabled("No verified sellable quantity");
+                    else if(net&&p.buy_quantity>0)RenderCoins(*net);
+                    else ImGui::TextDisabled("Estimate unavailable");
+                }else{
+                    ImGui::Text("%s:",label);ImGui::SameLine();ImGui::TextDisabled("Estimate unavailable");
+                }
+                ImGui::EndGroup();
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Potentially sellable items in fresh storage at the best cached buy price. Bound and unverified stock excluded. Order depth and actual fees may differ.");
+            };
+            renderEstimate("All locations",all);
+            if(all.count!=matching.count)renderEstimate("Matching filters",matching);
         }else if(status.price)ImGui::TextDisabled("Not tradeable");
         else ImGui::TextDisabled("Price not retrieved");
         if(status.pending)ImGui::TextDisabled("Price request queued or refreshing");

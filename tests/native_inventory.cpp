@@ -2,6 +2,7 @@
 #include "../src/NativeProgressCore.h"
 #include "../src/CompletionCache.h"
 #include "../src/RefreshProgress.h"
+#include "../src/CommercePriceCore.h"
 #include <cassert>
 #include <filesystem>
 #include <chrono>
@@ -192,6 +193,41 @@ int case_native_inventory(int,char**){
         slot.binding=Binding::Unbound;assert(PotentiallySellable(slot,flags,true));
         slot.binding=Binding::Account;assert(!PotentiallySellable(slot,flags,true));
         slot.binding=Binding::Unbound;flags.accountBound=true;assert(!PotentiallySellable(slot,flags,true));
+    }
+    {
+        // User's Mystic Coin example: 1 in a character bag and 24 in
+        // material storage. The character facet selects only the bag.
+        Slot bag;bag.id=19976;bag.account="a";bag.scope="Bags";bag.character="Nul Sul";
+        bag.binding=Binding::Unbound;bag.count=1;
+        Slot materials=bag;materials.scope="Materials";materials.character.clear();
+        materials.binding=Binding::Unknown;materials.count=24;
+        ItemFlags flags;flags.known=true;
+        SellableQuantity all,matching;
+        for(const auto& slot:{bag,materials}){
+            all.Add(slot,flags,true,true);
+            if(MatchesStorageView("",{"Nul Sul"},slot.scope,slot.character))
+                matching.Add(slot,flags,true,true);
+        }
+        assert(all.count==25&&matching.count==1);
+        assert(Skinventory::EstimateInstantSale(*all.count,20537)==436410);
+        assert(Skinventory::EstimateInstantSale(*matching.count,20537)==17456);
+        // Stale, restricted, unknown non-material binding, excluded account,
+        // and unverified metadata must contribute to neither quantity.
+        all.Add(bag,flags,false,true);
+        all.Add(bag,flags,true,false);
+        auto restricted=bag;restricted.binding=Binding::Account;
+        all.Add(restricted,flags,true,true);
+        restricted.binding=Binding::Character;all.Add(restricted,flags,true,true);
+        restricted.binding=Binding::Unknown;all.Add(restricted,flags,true,true);
+        auto unknown=flags;unknown.known=false;all.Add(bag,unknown,true,true);
+        auto bound=flags;bound.accountBound=true;all.Add(bag,bound,true,true);
+        assert(all.count==25);
+        SellableQuantity empty;empty.Add(bag,flags,false,true);assert(empty.count==0);
+        SellableQuantity same;same.Add(bag,flags,true,true);same.Add(materials,flags,true,true);
+        assert(same.count==all.count);
+        SellableQuantity overflow;auto huge=bag;huge.count=std::numeric_limits<int64_t>::max();
+        overflow.Add(huge,flags,true,true);overflow.Add(bag,flags,true,true);
+        assert(!overflow.count);overflow.Add(bag,flags,true,true);assert(!overflow.count);
     }
     return 0;
 }

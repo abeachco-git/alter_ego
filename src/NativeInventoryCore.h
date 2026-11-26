@@ -1,6 +1,8 @@
 #pragma once
 #include <nlohmann/json.hpp>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -176,6 +178,18 @@ inline bool PotentiallySellable(const Slot& s,const ItemFlags& f,bool fresh){
     if(s.binding!=Binding::Unbound&&!(s.scope=="Materials"&&s.binding==Binding::Unknown))return false;
     return UsableLoose(s,s.account,{},f,fresh);
 }
+// Count only eligible physical stock; unknown denotes arithmetic overflow,
+// not an empty inventory. Use this same accumulator for both UI scopes.
+struct SellableQuantity {
+    std::optional<int64_t> count{0};
+    void Add(const Slot& slot,const ItemFlags& flags,bool fresh,bool accountAllowed){
+        if(!count||!accountAllowed||!PotentiallySellable(slot,flags,fresh))return;
+        if(slot.count<=0||slot.count>std::numeric_limits<int64_t>::max()-*count){
+            count.reset();return;
+        }
+        *count+=slot.count;
+    }
+};
 inline std::string Lower(std::string s){for(auto& c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;}
 // Character is one facet, regardless of the number of selected names.
 // Account scope is a navigation context, not an additional item filter.

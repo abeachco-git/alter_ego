@@ -3,6 +3,8 @@
 Living implementation tracker for the experimental branch. Checked items indicate implementation, not necessarily in-game validation. See [development status](development-status.md) for broader stabilization work.
 
 ## Trading Post item pricing
+- [x] Separate instant-sale estimates for all eligible locations in the selected account scope and the eligible subset matching current filters; show quantities and omit duplicate estimates. Reuse current cached buy price, eligibility rules and fee calculation, no additional HTTP or schema change. Mystic Coin fixture (25 vs 1) added; in-game validation pending. User confirmed price retrieval works in the combined rollback build.
+- [ ] Discuss order-depth-aware estimates separately; no market listing requests or fee-policy changes approved.
 - [x] Correct confirmed post-claim batch regression: the worker iterated the empty output vector rather than the claimed batch, so no HTTP request was sent. Reuse one tested batch selector before/after claim, count cache-satisfied IDs as successful skips, and preserve cooldown semantics. Windows CI/live validation pending.
 - [x] Initial shared item-ID observations, one-hour TTL, bounded batched requests, shared cache lock, per-item pending claims and retry cooldown; selected inventory detail and independent price refresh/status tooltip. Build and runtime validation pending.
 - [x] Consolidate Inventory/Skinventory price requests using RefreshEngine ID claims and existing HTTP admission; derive cheapest skin choices from shared item observations, preserve legacy fallback, integrate cache maintenance, settings migration and diagnostics. Added offline coverage; CI/live validation pending.
