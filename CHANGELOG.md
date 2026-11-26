@@ -1,5 +1,7 @@
 # Changelog
 
+- Development DLL file version, CI run/attempt and Git commit embedded in Windows properties and Nexus addon options; upstream updater unchanged.
+
 User-facing changes are grouped by release. This file begins with the independent fork; earlier development history remains in Git.
 
 ## Unreleased — first independent release

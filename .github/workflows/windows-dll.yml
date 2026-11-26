@@ -226,6 +226,8 @@ jobs:
           test "$(grep -c '^AE_' build/embedded_icons.rc)" -ge 80
           test "$(grep -c '^AE_15' build/embedded_icons.rc)" -ge 27
           test "$(grep -c '^AE_20' build/embedded_icons.rc)" -ge 27
+      - name: Verify embedded Windows build version
+        run: python3 tools/verify_build_version.py build/AlterEgo.dll
       - name: Verify Windows x64 UCRT DLL
         run: |
           test -s build/AlterEgo.dll

@@ -77,6 +77,7 @@
 #include "StoragePaths.h"
 #include "GameMemory.h"
 #include "NativeAccounts.h"
+#include "BuildInfo.h"
 
 // Version constants
 #define V_MAJOR 1
@@ -17751,6 +17752,15 @@ void AddonOptions() {
     if (!callbackLease) return;
     ThemeGuard themeGuard;
     ImGui::Text("Alter Ego");
+    ImGui::TextDisabled("%s | File version %s", AlterEgo::BuildInfo::Channel(), AlterEgo::BuildInfo::FileVersion());
+    if (ImGui::TreeNode("Build information##ae_build_info")) {
+        ImGui::Text("Product version: %s", AlterEgo::BuildInfo::ProductVersion());
+        ImGui::TextWrapped("Commit: %s", AlterEgo::BuildInfo::Commit());
+        ImGui::TextWrapped("CI build: %s | Attempt: %s | Run: %s",
+            AlterEgo::BuildInfo::RunNumber(), AlterEgo::BuildInfo::RunAttempt(), AlterEgo::BuildInfo::RunId());
+        ImGui::TextDisabled("CI values of 0 indicate a local build.");
+        ImGui::TreePop();
+    }
 
     AlterEgo::NativeAccounts::RenderOptions();
     ImGui::Spacing();

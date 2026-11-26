@@ -6,7 +6,7 @@ from pathlib import Path
 from generate_embedded_icons import read_icons
 
 
-def resources(blob):
+def resources(blob, kind_filter=10, name_filter=lambda name: isinstance(name, str) and name.startswith("AE_")):
     u16 = lambda o: struct.unpack_from("<H", blob, o)[0]
     u32 = lambda o: struct.unpack_from("<I", blob, o)[0]
     pe = u32(0x3c)
@@ -36,10 +36,10 @@ def resources(blob):
             yield name, child & 0x7fffffff
     images = {}
     for kind, directory in entries(0):
-        if kind != 10:
+        if kind != kind_filter:
             continue
         for name, languages in entries(directory):
-            if not isinstance(name, str) or not name.startswith("AE_"):
+            if not name_filter(name):
                 continue
             lang_entries = list(entries(languages))
             if len(lang_entries) != 1 or name in images:

@@ -1,0 +1,11 @@
+#include "BuildInfo.h"
+
+namespace AlterEgo::BuildInfo {
+const char* FileVersion() noexcept { return "@AE_FILE_VERSION@"; }
+const char* ProductVersion() noexcept { return "@AE_PRODUCT_VERSION@"; }
+const char* Commit() noexcept { return "@AE_BUILD_COMMIT@"; }
+const char* Channel() noexcept { return "@AE_BUILD_CHANNEL@"; }
+const char* RunNumber() noexcept { return "@AE_BUILD_NUMBER@"; }
+const char* RunAttempt() noexcept { return "@AE_BUILD_ATTEMPT@"; }
+const char* RunId() noexcept { return "@AE_BUILD_RUN_ID@"; }
+}

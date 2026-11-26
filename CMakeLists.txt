@@ -8,8 +8,56 @@ set(CMAKE_C_COMPILER x86_64-w64-mingw32ucrt-gcc)
 set(CMAKE_CXX_COMPILER x86_64-w64-mingw32ucrt-g++)
 set(CMAKE_RC_COMPILER x86_64-w64-mingw32ucrt-windres)
 
-project(AlterEgo)
+project(AlterEgo VERSION 1.1.2)
 enable_language(RC)
+
+# File/product metadata is separate from the upstream Nexus update version.
+set(AE_BUILD_NUMBER 0)
+set(AE_BUILD_ATTEMPT 0)
+set(AE_BUILD_RUN_ID 0)
+set(AE_BUILD_COMMIT "unknown")
+set(AE_BUILD_CHANNEL "Development")
+if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+    set(AE_BUILD_NUMBER "$ENV{GITHUB_RUN_NUMBER}")
+    set(AE_BUILD_ATTEMPT "$ENV{GITHUB_RUN_ATTEMPT}")
+    set(AE_BUILD_RUN_ID "$ENV{GITHUB_RUN_ID}")
+    set(AE_BUILD_COMMIT "$ENV{GITHUB_SHA}")
+    foreach(field AE_BUILD_NUMBER AE_BUILD_ATTEMPT AE_BUILD_RUN_ID)
+        if(NOT "${${field}}" MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "Invalid CI build identity: ${field}")
+        endif()
+    endforeach()
+    string(LENGTH "${AE_BUILD_COMMIT}" AE_COMMIT_LENGTH)
+    if(NOT AE_BUILD_COMMIT MATCHES "^[0-9a-f]+$" OR NOT AE_COMMIT_LENGTH EQUAL 40)
+        message(FATAL_ERROR "Invalid CI commit SHA")
+    endif()
+else()
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" RESULT_VARIABLE AE_GIT_RESULT
+            OUTPUT_VARIABLE AE_LOCAL_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        string(LENGTH "${AE_LOCAL_SHA}" AE_COMMIT_LENGTH)
+        if(AE_GIT_RESULT EQUAL 0 AND AE_LOCAL_SHA MATCHES "^[0-9a-f]+$" AND AE_COMMIT_LENGTH EQUAL 40)
+            set(AE_BUILD_COMMIT "${AE_LOCAL_SHA}")
+            execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" RESULT_VARIABLE AE_STATUS_RESULT
+                OUTPUT_VARIABLE AE_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            if(NOT AE_STATUS_RESULT EQUAL 0 OR NOT AE_GIT_STATUS STREQUAL "")
+                set(AE_BUILD_COMMIT "${AE_LOCAL_SHA} (local changes or status unknown)")
+            endif()
+        endif()
+    endif()
+endif()
+# Each fixed Windows version component is an unsigned 16-bit integer.
+if(AE_BUILD_NUMBER GREATER 65535)
+    message(FATAL_ERROR "CI build number exceeds the Windows version field; revise version policy")
+endif()
+set(AE_FILE_VERSION "${PROJECT_VERSION}.${AE_BUILD_NUMBER}")
+set(AE_PRODUCT_VERSION "${PROJECT_VERSION}-dev")
+configure_file(src/BuildInfo.cpp.in "${CMAKE_BINARY_DIR}/BuildInfo.cpp" @ONLY)
+configure_file(src/BuildVersion.rc.in "${CMAKE_BINARY_DIR}/BuildVersion.rc" @ONLY)
+message(STATUS "Alter Ego file version: ${AE_FILE_VERSION}; commit: ${AE_BUILD_COMMIT}; attempt: ${AE_BUILD_ATTEMPT}")
 include(cmake/SQLite.cmake)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -64,6 +112,8 @@ add_custom_command(
 # Source files
 set(SOURCES
     src/dllmain.cpp
+    "${CMAKE_BINARY_DIR}/BuildInfo.cpp"
+    "${CMAKE_BINARY_DIR}/BuildVersion.rc"
     "${EMBEDDED_ICONS_RC}"
     src/Clears.cpp
     src/GW2API.cpp
