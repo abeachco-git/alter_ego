@@ -33,9 +33,6 @@ namespace Skinventory {
     std::unordered_map<uint32_t,PriceInfo> itemPrices;
     std::string priceStatus;
     unsigned priceTotal=0,priceDone=0,priceFailed=0;
-    bool FreshPrice(const PriceInfo& p,int64_t now){
-        return !AlterEgo::RefreshEngine::Due(p.fetched_at_unix,0,now,Commerce::PriceTTL);
-    }
     std::unordered_map<uint32_t,PriceInfo> FetchItemBatch(const std::vector<uint32_t>& ids,bool& attempted){
         if(ids.empty())return {};
         std::string query;
@@ -93,8 +90,8 @@ namespace Skinventory {
         if(!AutoRefreshPolicy::AllowRequest(explicitDemand,AutoRefreshPolicy::Dataset::TradingPrices)||s_data_dir.empty())return;
         std::vector<uint32_t> due;
         {
-            std::lock_guard<std::mutex> lock(s_mutex);const auto now=NowUnix();
-            for(auto id:ids){auto it=itemPrices.find(id);if(id&&(manual||it==itemPrices.end()||!FreshPrice(it->second,now)))due.push_back(id);}
+            std::lock_guard<std::mutex> lock(s_mutex);
+            due=SelectPriceRequests(ids,itemPrices,manual,NowUnix(),PriceTTL);
         }
         if(due.empty())return;
         auto claim=RefreshEngine::ClaimIds(PriceDataset,due,manual);
@@ -118,15 +115,17 @@ namespace Skinventory {
                 const auto end=std::min(i+200,claim->ids.size());
                 std::vector<uint32_t> batch(claim->ids.begin()+i,claim->ids.begin()+end),needed;
                 // Recheck after acquiring ownership to close the read/claim race.
-                {std::lock_guard<std::mutex> lock(s_mutex);const auto now=NowUnix();
-                    for(auto id:needed){auto it=itemPrices.find(id);if(manual||it==itemPrices.end()||!FreshPrice(it->second,now))needed.push_back(id);}
+                {std::lock_guard<std::mutex> lock(s_mutex);
+                    needed=SelectPriceRequests(batch,itemPrices,manual,NowUnix(),PriceTTL);
                 }
                 bool attempted=false;auto rows=FetchItemBatch(needed,attempted);
                 Background::Checkpoint();
                 const bool saved=Cache::WriteItemPrices(Cache::RootFromLegacySkinDirectory(s_data_dir),rows);
                 {
                     std::lock_guard<std::mutex> lock(s_mutex);
-                    for(auto id:batch){
+                    // IDs satisfied by the cache during the ownership race are
+                    // successful skips, not failed HTTP requests.
+                    for(auto id:needed){
                         auto it=rows.find(id);
                         if(saved&&it!=rows.end()){
                             auto prev=itemPrices.find(id);
@@ -137,7 +136,12 @@ namespace Skinventory {
                     priceDone+=static_cast<unsigned>(batch.size());
                     priceStatus="Fetching prices "+std::to_string(priceDone)+"/"+std::to_string(priceTotal);
                 }
-                claim->ReleaseIds(batch.begin(),batch.end(),attempted||needed.empty());
+                // Clear any old cooldown on cache-satisfied IDs, even when
+                // a different ID in this batch never reached the transport.
+                for(auto id:batch)
+                    if(std::find(needed.begin(),needed.end(),id)==needed.end())
+                        claim->ReleaseIds(&id,&id+1,true);
+                claim->ReleaseIds(needed.begin(),needed.end(),attempted);
                 if(!needed.empty())Background::Pause(std::chrono::milliseconds(200));
             }
             finish(false);

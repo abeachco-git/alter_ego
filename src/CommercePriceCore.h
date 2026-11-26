@@ -4,6 +4,20 @@
 #include <limits>
 #include <stdexcept>
 namespace Skinventory {
+// Used both before claiming IDs and after acquisition of the shared broker.
+// Select from the input batch, never the initially empty output vector.
+inline std::vector<uint32_t> SelectPriceRequests(const std::vector<uint32_t>& candidates,
+    const std::unordered_map<uint32_t,PriceInfo>& cached,bool manual,int64_t now,int64_t ttl){
+    std::vector<uint32_t> needed;needed.reserve(candidates.size());
+    for(auto id:candidates){
+        if(!id)continue;
+        const auto it=cached.find(id);
+        if(manual||it==cached.end()||it->second.fetched_at_unix<=0||
+           it->second.fetched_at_unix>now||now-it->second.fetched_at_unix>=ttl)
+            needed.push_back(id);
+    }
+    return needed;
+}
 inline int CommercePriceField(const nlohmann::json& j,const char* key){
     const auto& v=j.at(key);if(!v.is_number_integer())throw std::runtime_error("Invalid commerce integer");
     const auto n=v.get<int64_t>();

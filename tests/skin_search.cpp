@@ -59,6 +59,28 @@ int case_skin_search(int, char**) {
  assert(BetterPrice(a,b));assert(!BetterPrice(b,a));
  b.sell_quantity=1;assert(BetterPrice(b,a));assert(!BetterPrice(a,b));
  a.sell_price=50;assert(BetterPrice(b,a));
+ // Exercise the same batch-selection function used at both dispatch and
+ // post-claim recheck. Empty output previously caused every fetch to vanish.
+ {
+     const int64_t now=7200,ttl=3600;
+     std::unordered_map<uint32_t,PriceInfo> cache;
+     const std::vector<uint32_t> batch{1,2,3,4,5,0};
+     assert((SelectPriceRequests(batch,cache,false,now,ttl)==std::vector<uint32_t>{1,2,3,4,5}));
+     assert((SelectPriceRequests({1},cache,true,now,ttl)==std::vector<uint32_t>{1}));
+     cache[1].fetched_at_unix=now;cache[2].fetched_at_unix=now-ttl;
+     cache[3].fetched_at_unix=now+1;cache[4].fetched_at_unix=0;
+     cache[5].fetched_at_unix=now-ttl+1;
+     assert((SelectPriceRequests(batch,cache,false,now,ttl)==std::vector<uint32_t>{2,3,4}));
+     assert((SelectPriceRequests(batch,cache,true,now,ttl)==std::vector<uint32_t>{1,2,3,4,5}));
+     assert(SelectPriceRequests({1,5},cache,false,now,ttl).empty());
+     const auto planned=SelectPriceRequests({2},cache,false,now,ttl);
+     assert((planned==std::vector<uint32_t>{2}));
+     cache[2].fetched_at_unix=now; // another owner publishes before claim
+     assert(SelectPriceRequests(planned,cache,false,now,ttl).empty());
+     assert((SelectPriceRequests(planned,cache,true,now,ttl)==std::vector<uint32_t>{2}));
+     std::vector<uint32_t> bulk;for(uint32_t id=100;id<300;++id)bulk.push_back(id);
+     assert(SelectPriceRequests(bulk,cache,false,now,ttl)==bulk);
+ }
  const std::string record=R"({"id":1,"buys":{"unit_price":100,"quantity":20},"sells":{"unit_price":120,"quantity":3}})";
  auto prices=ParseCommercePrices(200,"["+record+"]",{1},100);
  assert(prices.size()==1&&prices.at(1).buy_price==100&&prices.at(1).sell_price==120);
