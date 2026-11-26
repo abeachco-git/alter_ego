@@ -116,6 +116,7 @@ int case_skin_search(int, char**) {
         const auto armor=W::Query(200,R"({"query":{"pages":{"7":{"pageid":7,"images":[{"title":"File:Condition Damage.png"},{"title":"File:Accursed Leggings.png"},{"title":"File:Accursed armor human female front.jpg"},{"title":"File:Accursed armor human female back.jpg"}]}}}})");
         const auto g=W::ReadGallery("{{Armor infobox\n| set = [[Accursed armor]]\n}}\n<gallery>\nFile:Accursed armor human female front.jpg|Front\n</gallery>");
         assert(g.set=="Accursed armor"&&g.files.size()==1);
+        assert(W::ReadGallery("{{Armor gallery|set=Accursed armor}}").set=="Accursed armor");
         auto files=W::RankedFiles(armor,"Accursed Leggings",g);
         assert(files.front()=="File:Accursed armor human female front.jpg");
         assert(std::find(files.begin(),files.end(),"File:Condition Damage.png")==files.end());

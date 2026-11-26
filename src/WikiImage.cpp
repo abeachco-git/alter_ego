@@ -672,12 +672,12 @@ namespace Skinventory {
             std::lock_guard<std::mutex> lock(s_mutex);
             load=!s_imageCache.count(id)&&!s_texturePending.count(id)&&!s_loading.count(id);
         }
-        if(load)LoadFromDisk(id);
+        const bool missingFile=load&&!LoadFromDisk(id);
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             const auto now=static_cast<int64_t>(std::time(nullptr));
             const auto it=s_sources.find(id);
-            const bool due=it==s_sources.end()||AlterEgo::WikiArtwork::Due(it->second,now);
+            const bool due=missingFile||it==s_sources.end()||AlterEgo::WikiArtwork::Due(it->second,now);
             const auto fail=s_failed.find(id);const auto persistent=s_failedPersistent.find(id);
             const bool cooling=fail!=s_failed.end()&&std::chrono::steady_clock::now()-fail->second<std::chrono::seconds(RETRY_COOLDOWN_SEC);
             const bool missing=persistent!=s_failedPersistent.end()&&AlterEgo::WikiFreshness::ArtworkRemaining(persistent->second,now,true)>0;
@@ -804,7 +804,7 @@ namespace Skinventory {
             out.wikiUrl="https://wiki.guildwars2.com/wiki/"+encoded;
         }
         auto path=GetCacheFilePath(id,rev);
-        if(PreviewFileExists(path))out.localPath=path;
+        if(PreviewFileExists(path))out.localPath=path;else out.imageUrl.clear();
         return out;
     }
     static json ArtworkQuery(const std::string& params){
@@ -906,8 +906,10 @@ namespace Skinventory {
                     // Only the verified associated set's named gallery files.
                     Artwork::Gallery setGallery;setGallery.set=gallery.set;
                     if(auto src=resolve(Artwork::RankedFiles(setPage,name,setGallery)))return src;
+                    if(setPage.contains("continue"))throw std::runtime_error("Incomplete set gallery");
                 }
             }
+            if(j.contains("continue"))throw std::runtime_error("Incomplete Wiki gallery");
             return std::nullopt;
         };
         for(const auto& title:candidates)if(auto s=inspect(title))return s;

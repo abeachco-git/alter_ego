@@ -53,7 +53,7 @@ inline std::string FileTitle(std::string s){
     s=Trim(std::move(s));
     if(Lower(s).rfind("file:",0)==0)s=s.substr(5);
     if(!PlainTitle(s))return {};
-    const auto name=Lower(s),dot=name.rfind('.');
+    const auto name=Lower(s);const auto dot=name.rfind('.');
     if(dot==std::string::npos)return {};
     const auto ext=name.substr(dot);
     if(ext!=".jpg"&&ext!=".jpeg"&&ext!=".png")return {};
@@ -89,6 +89,20 @@ inline Gallery ReadGallery(const std::string& text){
         if(low.rfind("<gallery",0)==0){inGallery=true;continue;}
         if(low.rfind("</gallery",0)==0){inGallery=false;continue;}
         if(inGallery){add(line.substr(0,line.find('|')));continue;}
+        // A compact Armor gallery invocation may keep the set on the
+        // opening line. Interpret only its literal set field.
+        if(low.rfind("{{armor gallery",0)==0&&g.set.empty()){
+            const auto pipe=low.find('|');
+            if(pipe!=std::string::npos){
+                auto rest=line.substr(pipe+1);
+                const auto eq=rest.find('=');
+                if(eq!=std::string::npos&&Lower(Trim(rest.substr(0,eq)))=="set"){
+                    auto value=Trim(rest.substr(eq+1));auto end=value.find_first_of("|}");
+                    if(end!=std::string::npos)value=Trim(value.substr(0,end));
+                    if(PlainTitle(value))g.set=value;
+                }
+            }
+        }
         if(!infobox&&(low.rfind("{{skin infobox",0)==0||low.rfind("{{armor infobox",0)==0||low.rfind("{{item infobox",0)==0||low.rfind("{{weapon infobox",0)==0||low.rfind("{{armor gallery",0)==0)){
             infobox=true;depth=0;
         }
@@ -148,7 +162,7 @@ inline std::vector<std::string> RankedFiles(const Json& j,const std::string& ski
             add(title,exact?40+exact:associated?10+associated:0);
         }
     }
-    if(scored.empty()&&j.contains("continue"))throw std::runtime_error("Incomplete Wiki image list");
+    if(scored.empty()&&gallery.set.empty()&&j.contains("continue"))throw std::runtime_error("Incomplete Wiki image list");
     std::stable_sort(scored.begin(),scored.end(),[](const auto& a,const auto& b){return a.first>b.first;});
     std::vector<std::string> out;for(auto& e:scored)out.push_back(std::move(e.second));return out;
 }
