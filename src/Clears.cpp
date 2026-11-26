@@ -3056,7 +3056,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             pickerOrder.push_back(i);
         // Presentation order only: original achievement indices remain intact.
         std::stable_sort(pickerOrder.begin(), pickerOrder.end(),
-            [](size_t left, size_t right) {
+            [&weeklyStrikes](size_t left, size_t right) {
                 return AlterEgo::StrikePickerOrder(weeklyStrikes.bitNames[left]) <
                        AlterEgo::StrikePickerOrder(weeklyStrikes.bitNames[right]);
             });
