@@ -115,6 +115,11 @@ inline Loadout* FindLoadout(Document& doc, const std::string& id) {
     for (auto& item : doc.loadouts) if (item.id == id) return &item;
     return nullptr;
 }
+inline const Loadout* FindLoadout(const Document& doc, const std::string& id) {
+    for (const auto& loadout : doc.loadouts) if (loadout.id == id) return &loadout;
+    return nullptr;
+}
+
 
 // Explicit record duplication preserves the native graph rather than projecting
 // through the portable format (which intentionally omits some references).
