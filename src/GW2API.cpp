@@ -24,6 +24,7 @@
 #include "NativeLibraryStore.h"
 #include "NativeLibraryEditing.h"
 #include "InfusionTotalsCore.h"
+#include "SkillEditCore.h"
 #include "LibraryBackup.h"
 
 #include <windows.h>
@@ -124,6 +125,7 @@ namespace AlterEgo {
                 row["type"]=raw.value("type",std::string{});
                 row["specialization"]=raw.contains("specialization")?Cache::ReferenceId(raw.at("specialization")):0u;
                 row["professions"]=raw.value("professions",std::vector<std::string>{});
+                if(auto flag=SkillEdit::NoUnderwaterFlag(raw))row["no_underwater"]=*flag;
             }
             break;
         case D::ItemStats:
@@ -1451,21 +1453,24 @@ namespace AlterEgo {
         AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchTraitDetails(*claim); });
     }
 
-    void GW2API::FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids) {
+    void GW2API::FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids,bool requireEnvironmentMetadata) {
         std::vector<uint32_t> missing;
-        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:skill_ids)if(id&&!s_skill_cache.count(id))missing.push_back(id);}
+        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:skill_ids)if(id){
+            const auto it=s_skill_cache.find(id);
+            if(it==s_skill_cache.end()||(requireEnvironmentMetadata&&!it->second->no_underwater.has_value()))missing.push_back(id);
+        }}
         auto claim=RefreshEngine::ClaimIds("skills",missing);
         if(claim->ids.empty())return;
         auto ids=claim->ids;
-        AlterEgo::Background::Workers().Launch([ids,claim]() {
+        AlterEgo::Background::Workers().Launch([ids,claim,requireEnvironmentMetadata]() {
             ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);
             if (ids.empty()) return;
             std::vector<uint32_t> to_fetch;
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 for (uint32_t id : ids) {
-                    if (id != 0 && s_skill_cache.find(id) == s_skill_cache.end())
-                        to_fetch.push_back(id);
+                    const auto it=s_skill_cache.find(id);
+                    if(id&&(it==s_skill_cache.end()||(requireEnvironmentMetadata&&!it->second->no_underwater.has_value())))to_fetch.push_back(id);
                 }
             }
             if (to_fetch.empty()) return;
@@ -3052,6 +3057,7 @@ namespace AlterEgo {
                 v.description=row.value("description",std::string{});v.type=row.value("type",std::string{});
                 v.specialization=row.value("specialization",0u);v.professions=row.at("professions").get<std::vector<std::string>>();
                 if(row.contains("facts"))v.facts=row.at("facts");
+                if(row.contains("no_underwater")&&row.at("no_underwater").is_boolean())v.no_underwater=row.at("no_underwater").get<bool>();
                 s_skill_cache[id]=std::make_shared<const SkillInfo>(std::move(v));break;
             }
             case D::ItemStats: {
@@ -3170,6 +3176,7 @@ namespace AlterEgo {
                     for (const auto& p : it["professions"])
                         if (p.is_string()) info.professions.push_back(p.get<std::string>());
                 if (it.contains("facts")) info.facts = it["facts"];
+                if(it.contains("no_underwater")&&it.at("no_underwater").is_boolean())info.no_underwater=it.at("no_underwater").get<bool>();
                 s_skill_cache[info.id]=std::make_shared<const SkillInfo>(std::move(info));
             }
         }

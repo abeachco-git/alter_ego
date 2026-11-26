@@ -27,5 +27,13 @@ int case_skill_edit_core(int,char**) {
     assert(!SpecializationChoiceAllowed(specs,2,2,false));
     assert(SpecializationChoiceAllowed(specs,2,3,true));
     assert(SpecializationChoiceAllowed(specs,0,0,false));
+    using J=nlohmann::json;
+    assert(!NoUnderwaterFlag(J::object()).has_value());
+    assert(!NoUnderwaterFlag(J{{"flags",J::array({"NoUnderwater",4})}}).has_value());
+    assert(NoUnderwaterFlag(J{{"flags",J::array()}})==false);
+    assert(NoUnderwaterFlag(J{{"flags",J::array({"NoUnderwater","GroundTargeted"})}})==true);
+    assert(EnvironmentChoiceAllowed(false,true));
+    assert(!EnvironmentChoiceAllowed(true,true));
+    assert(EnvironmentChoiceAllowed(true,false)&&EnvironmentChoiceAllowed(true,std::nullopt));
     return 0;
 }

@@ -1,6 +1,19 @@
 #pragma once
 #include <cstdint>
+#include <optional>
 namespace AlterEgo::SkillEdit {
+template<class Json> std::optional<bool> NoUnderwaterFlag(const Json& row) {
+    if(!row.is_object()||!row.contains("flags")||!row.at("flags").is_array())return std::nullopt;
+    bool restricted=false;
+    for(const auto& flag:row.at("flags")){
+        if(!flag.is_string())return std::nullopt;
+        if(flag=="NoUnderwater")restricted=true;
+    }
+    return restricted;
+}
+inline bool EnvironmentChoiceAllowed(bool aquatic,std::optional<bool> noUnderwater) {
+    return !aquatic||!noUnderwater.value_or(false);
+}
 template<class Ids> bool SpecializationChoiceAllowed(const Ids& ids,int slot,uint32_t next,bool elite) {
     if(slot<0||slot>=3||(elite&&slot!=2))return false;
     if(next)for(int i=0;i<3;++i)if(i!=slot&&ids[i]==next)return false;

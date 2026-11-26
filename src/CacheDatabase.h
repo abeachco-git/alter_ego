@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 27;
+constexpr int kSchemaVersion = 28;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -33,6 +33,10 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 }
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if(version==28){
+        db.Exec("ALTER TABLE reference_skills ADD COLUMN no_underwater INTEGER CHECK(no_underwater IN (0,1))");
+        return;
+    }
     if(version==27){
         db.Exec(R"SQL(
 CREATE TABLE commerce_latest_prices(item_id INTEGER PRIMARY KEY CHECK(item_id BETWEEN 1 AND 4294967295),

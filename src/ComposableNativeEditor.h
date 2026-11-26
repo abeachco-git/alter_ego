@@ -112,25 +112,34 @@ static std::pair<std::vector<uint32_t>, bool> ComponentNativeSkillSpecs(
 }
 
 static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const char* label,
-        const char* role,const std::string& profession,const std::vector<uint32_t>& specs,bool allowAnySpec){
+        const char* role,const std::string& profession,const std::vector<uint32_t>& specs,bool allowAnySpec,bool aquatic){
     ImGui::PushID(key);
     const uint32_t id=parent.contains(key)&&parent[key].is_number_integer()?parent[key].get<uint32_t>():0;
     bool changed=false;
     ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);ImGui::SameLine(140.0f);
     if(RenderEditableSkillIcon(id,38.0f,false))ImGui::OpenPopup("##component_skill_palette");
-    auto apply=[&](uint32_t next){if(next!=id){parent[key]=next;changed=true;}};
+    auto apply=[&](uint32_t next){
+        const auto info=AlterEgo::GW2API::GetSkillInfo(next);
+        if(next!=id&&(!info||AlterEgo::SkillEdit::EnvironmentChoiceAllowed(aquatic,info->no_underwater))){parent[key]=next;changed=true;}
+    };
     if(ImGui::BeginPopupContextItem("##component_skill_id")){
         const auto skill=AlterEgo::GW2API::GetSkillInfo(id);
         if(skill)CopyNameMenuItem(skill->name);
         if(ImGui::MenuItem("Clear Skill",nullptr,false,id!=0))apply(0);
         ImGui::TextDisabled("Advanced: exact skill ID");
-        ComponentNativeNumber(parent,key,"Skill ID");
-        if(parent.contains(key)&&parent[key].is_number_integer()&&parent[key].get<uint32_t>()!=id)changed=true;
+        uint32_t exact=id;
+        ImGui::SetNextItemWidth(150.0f);
+        if(ImGui::InputScalar("Skill ID",ImGuiDataType_U32,&exact))apply(exact);
+        if(aquatic&&skill&&skill->no_underwater.value_or(false))ImGui::TextDisabled("Existing skill is marked NoUnderwater.");
         ImGui::EndPopup();
     }
     uint32_t next=id;
-    if(RenderSkillPickerPopup("##component_skill_palette",profession,role,specs,allowAnySpec,id,next))apply(next);
+    if(RenderSkillPickerPopup("##component_skill_palette",profession,role,specs,allowAnySpec,id,next,aquatic))apply(next);
     ImGui::SameLine();ImGui::TextDisabled("%s",ComponentNativeSkillName(id).c_str());
+    const auto info=AlterEgo::GW2API::GetSkillInfo(id);
+    if(aquatic&&id&&(!info||!info->no_underwater.has_value()||info->no_underwater.value_or(false))){
+        ImGui::SameLine();ImGui::TextDisabled("%s",info&&info->no_underwater.value_or(false)?"[NoUnderwater]":"[eligibility unknown]");
+    }
     ImGui::PopID();return changed;
 }
 
@@ -155,8 +164,9 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
         return;
     }
     auto& bar = data[key];
+    const bool aquatic=std::string(key)=="aquatic_skills";
     ComponentNativeSkill(bar, "heal", "Heal", "Heal",
-                         profession, specs, allowAnySpec);
+                         profession, specs, allowAnySpec,aquatic);
     ComponentJson utilities = bar.contains("utilities") &&
         bar["utilities"].is_array() ? bar["utilities"] : ComponentJson::array();
     while (utilities.size() < 3) utilities.push_back(0);
@@ -165,14 +175,14 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
         ComponentJson field = {{"skill", utilities[i]}};
         if (ComponentNativeSkill(field, "skill",
                 (std::string("Utility ") + std::to_string(i+1)).c_str(),
-                "Utility", profession, specs, allowAnySpec)) {
+                "Utility", profession, specs, allowAnySpec,aquatic)) {
             if(AlterEgo::SkillEdit::SetUtility(utilities,i,field["skill"].get<uint32_t>()))
                 bar["utilities"]=utilities;
         }
         ImGui::PopID();
     }
     ComponentNativeSkill(bar, "elite", "Elite", "Elite",
-                         profession, specs, allowAnySpec);
+                         profession, specs, allowAnySpec,aquatic);
     ImGui::TreePop();
 }
 
@@ -533,17 +543,14 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,ComponentJson& gear,
         // separately linked Sigils or Infusions components from this draft.
         if(!plan.displacedOffhand.empty())gear.erase(plan.displacedOffhand);
     };
-    if (AlterEgo::UI::BeginCombo("Weapon type##native_weapon", current.empty()
-                         ? "(choose type)" : WeaponDisplayName(current))) {
-        if (ImGui::Selectable("(none)", current.empty())&&!current.empty())apply("",false);
-        for (const auto& [name, definition] : *weapons) {
-            // Match the hand-eligibility policy of the original gear picker.
-            if (!AlterEgo::EquipmentChoice::WeaponTypeEligible(
-                    slot, name, definition.mainhand, definition.offhand,
-                    definition.two_handed)) continue;
-            if (ImGui::Selectable(WeaponDisplayName(name), name == current)&&name!=current)
-                apply(name,definition.two_handed);
-        }
+    if (AlterEgo::UI::BeginCombo("Weapon type##native_weapon",current.empty()?"(choose type)":WeaponDisplayName(current))) {
+        static std::string filter;
+        if(ImGui::IsWindowAppearing())filter.clear();
+        AlterEgo::UI::SearchField("component_weapon_search","Search...",filter);
+        if(ImGui::Selectable("(none)",current.empty())&&!current.empty())apply("",false);
+        RenderWeaponTypeChoices(profession,slot,current,filter,false,[&](const auto& name,const auto& wd){
+            apply(name,wd.two_handed);FetchChosenWeaponMetadata(wd);ImGui::CloseCurrentPopup();
+        });
         ImGui::EndCombo();
     }
 }
@@ -747,8 +754,8 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                     ImGui::SameLine();
                 }
             }
-            ImGui::TextWrapped("%s", info ? info->name.c_str() :
-                               (id ? "Item metadata pending" : "No exact item selected"));
+            if(id)ImGui::TextWrapped("%s (#%u)",info&&!info->name.empty()?info->name.c_str():"Item metadata pending",id);
+            else ImGui::TextDisabled("No exact item selected");
             if (id && !info && RenderActionButton("Fetch item details##component"))
                 AlterEgo::GW2API::FetchItemDetailsAsync({id});
             if (ImGui::TreeNode("##exact_item", "Exact equipment item")) {

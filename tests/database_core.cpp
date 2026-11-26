@@ -571,6 +571,15 @@ int case_database_core(int, char**) {
         auto malformed=skills;malformed.push_back(skills.at(0));
         assert(!Cache::WriteReference(root,D::Skills,malformed,101));
         assert(Cache::ReadReference(root,D::Skills)==skills);
+        auto flags=skills;flags[0]["no_underwater"]=true;
+        assert(Cache::WriteReference(root,D::Skills,flags,102));
+        assert(Cache::ReadReference(root,D::Skills)==flags);
+        flags[0]["no_underwater"]=false;
+        assert(Cache::WriteReference(root,D::Skills,flags,103));
+        assert(Cache::ReadReference(root,D::Skills)==flags);
+        auto invalid=flags;invalid[0]["no_underwater"]="unknown";
+        assert(!Cache::WriteReference(root,D::Skills,invalid,104));
+        assert(Cache::ReadReference(root,D::Skills)==flags);
         J specs=J::array({{{"id",2},{"name","Spec"},{"icon","i"},{"background","b"},{"profession","Engineer"},
             {"profession_icon","p"},{"profession_icon_big","P"},{"elite",true},
             {"minor_traits",J::array({9,8,7})},{"major_traits",J::array({6,5,4})}}});

@@ -126,7 +126,7 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
     case ReferenceDataset::Skills: {
         if(replaceAll)db.Exec("DELETE FROM reference_skills");
         auto erase=db.Prepare("DELETE FROM reference_skills WHERE id=?");
-        auto q=db.Prepare("INSERT INTO reference_skills VALUES(?,?,?,?,?,?,?)");
+        auto q=db.Prepare("INSERT INTO reference_skills VALUES(?,?,?,?,?,?,?,?)");
         auto professions=db.Prepare("INSERT INTO reference_skills_professions VALUES(?,?,?)");
         for(const auto& row:rows) {
             if(!row.is_object())throw std::runtime_error("Invalid metadata row");
@@ -141,6 +141,10 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
             q.Bind(5,row.value("type",std::string()));
             q.Bind(6,ReferenceInteger(row,"specialization"));
             if(row.contains("facts")&&!row.at("facts").is_null())q.Bind(7,row.at("facts").dump());else q.BindNull(7);
+            if(row.contains("no_underwater")){
+                if(!row.at("no_underwater").is_boolean())throw std::runtime_error("Invalid underwater flag");
+                q.Bind(8,row.at("no_underwater").get<bool>()?1:0);
+            }else q.BindNull(8);
             q.Execute();q.Reset();
             if(row.contains("professions")) {
                 const auto& values=row.at("professions");
@@ -267,6 +271,7 @@ inline ReferenceJson ReadReferenceRows(Database::Connection& db,ReferenceDataset
             row["specialization"]=q.Integer(5);
             if(!q.IsNull(6))row["facts"]=ReferenceJson::parse(q.Text(6));
             row["professions"]=ReferenceJson::array();
+            if(!q.IsNull(7))row["no_underwater"]=q.Integer(7)!=0;
             out.push_back(std::move(row));
         }
         {

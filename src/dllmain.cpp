@@ -6660,6 +6660,39 @@ static bool IsWeaponTwoHanded(const std::string& profession, const std::string& 
            weaponType == "Trident" || weaponType == "Speargun";
 }
 
+// Both gear editors use the same eligibility, descriptions, filtering and catalog controls.
+template<class OnChoose>
+static void RenderWeaponTypeChoices(const std::string& profession,const std::string& slot,
+    const std::string& current,const std::string& filter,bool cards,OnChoose choose){
+    const auto weapons=AlterEgo::GW2API::GetProfessionWeapons(profession);
+    if(!weapons)return;
+    for(const auto& [name,wd]:*weapons){
+        if(!AlterEgo::EquipmentChoice::WeaponTypeEligible(slot,name,wd.mainhand,wd.offhand,wd.two_handed))continue;
+        std::string desc=wd.two_handed?"Two-Handed":wd.mainhand&&wd.offhand?"Main / Off Hand":wd.mainhand?"Main Hand":"Off Hand";
+        if(wd.specialization){
+            const auto spec=AlterEgo::GW2API::GetSpecInfo(wd.specialization);
+            desc+=" ("+(spec?spec->name:"Specialization #"+std::to_string(wd.specialization))+")";
+        }
+        const auto label=WeaponDisplayName(name);
+        if(!AlterEgo::UI::CatalogMatches(label,desc.c_str(),filter)&&
+           !AlterEgo::UI::CatalogMatches(name.c_str(),desc.c_str(),filter))continue;
+        ImGui::PushID(name.c_str());
+        const bool selected=current==name;
+        const bool clicked=cards?AlterEgo::UI::CatalogCard("##weapon_option",label,desc.c_str(),selected):
+            AlterEgo::UI::CatalogOption(label,desc.c_str(),selected);
+        if(clicked&&!selected)choose(name,wd);
+        ImGui::PopID();
+    }
+}
+template<class Definition>
+static void FetchChosenWeaponMetadata(const Definition& wd){
+    std::vector<uint32_t> skillIds;
+    for(auto id:wd.skills)if(id)skillIds.push_back(id);
+    for(const auto& [att,skills]:wd.attunement_skills)for(auto id:skills)if(id)skillIds.push_back(id);
+    for(const auto& [weapon,id]:wd.dual_wield)if(id)skillIds.push_back(id);
+    if(!skillIds.empty())AlterEgo::GW2API::FetchSkillDetailsAsync(skillIds);
+}
+
 // Profession -> armor weight class
 static int GetArmorWeight(const std::string& profession) {
     // 0=Heavy, 1=Medium, 2=Light
@@ -7165,7 +7198,7 @@ static void RenderSpecPickerDialog() {
 static std::vector<uint32_t> SelectableBuildSkillIds(
     const std::string& profession, const char* type,
     const std::vector<uint32_t>& specializationIds,
-    bool allowAllSpecializations = false) {
+    bool allowAllSpecializations = false,bool aquatic=false,bool refreshEnvironment=false) {
     if (profession.empty()) return {};
     const auto allIds = AlterEgo::GW2API::GetProfessionSkillIds(profession);
     if (allIds.empty()) {
@@ -7183,9 +7216,11 @@ static std::vector<uint32_t> SelectableBuildSkillIds(
                       skill->specialization) == specializationIds.end()) continue;
         const bool owned = std::find(skill->professions.begin(),
             skill->professions.end(), profession) != skill->professions.end();
-        if (owned) matches.push_back(id);  // never include racial skills
+        if(!owned)continue; // never include racial skills
+        if(aquatic&&refreshEnvironment&&!skill->no_underwater.has_value())missing.push_back(id);
+        if(AlterEgo::SkillEdit::EnvironmentChoiceAllowed(aquatic,skill->no_underwater))matches.push_back(id);
     }
-    if (!missing.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(missing);
+    if (!missing.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(missing,aquatic&&refreshEnvironment);
     return matches;
 }
 
@@ -7193,11 +7228,16 @@ static std::vector<uint32_t> SelectableBuildSkillIds(
 // handled by ImGui instead of a global reopen latch.
 static bool RenderSkillPickerPopup(const char* popup,const std::string& profession,
         const char* role,const std::vector<uint32_t>& specs,bool allowAnySpec,
-        uint32_t current,uint32_t& next) {
+        uint32_t current,uint32_t& next,bool aquatic=false) {
     if(!ImGui::BeginPopup(popup))return false;
     bool selected=false;
     ImGui::TextDisabled("%s - %s",profession.empty()?"Choose a profession":profession.c_str(),role);
-    const auto choices=SelectableBuildSkillIds(profession,role,specs,allowAnySpec);
+    const auto choices=SelectableBuildSkillIds(profession,role,specs,allowAnySpec,aquatic,ImGui::IsWindowAppearing());
+    if(aquatic){
+        ImGui::TextDisabled("Underwater: ? = eligibility unknown.");
+        const auto info=AlterEgo::GW2API::GetSkillInfo(current);
+        if(info&&info->no_underwater.value_or(false))ImGui::TextWrapped("Current skill is marked NoUnderwater; retained until you change it.");
+    }
     if(choices.empty())ImGui::TextDisabled(profession.empty()?"Select a profession first.":
         "No eligible skills available (metadata may be loading).");
     else {
@@ -7211,6 +7251,8 @@ static bool RenderSkillPickerPopup(const char* popup,const std::string& professi
                 ImGui::PushID(static_cast<int>(choices[i]));
                 const auto pos=ImGui::GetCursorScreenPos();
                 if(RenderEditableSkillIcon(choices[i],cell)){next=choices[i];selected=true;}
+                const auto info=AlterEgo::GW2API::GetSkillInfo(choices[i]);
+                if(aquatic&&info&&!info->no_underwater.has_value())ImGui::GetWindowDrawList()->AddText(ImVec2(pos.x+cell-10,pos.y+2),IM_COL32(255,205,90,255),"?");
                 if(choices[i]==current)ImGui::GetWindowDrawList()->AddRect(pos,
                     ImVec2(pos.x+cell,pos.y+cell),IM_COL32(255,255,255,255),0,0,3.0f);
                 ImGui::PopID();
@@ -7955,82 +7997,17 @@ static void RenderGearCustomizeDialog() {
                 AlterEgo::GW2API::FetchProfessionPaletteAsync(editBuild->profession);
                 RenderSpinner("Loading weapon data...");
             } else {
-                std::string filterLower;
-                if (g_GearStatSearch[0]) {
-                    filterLower = g_GearStatSearch;
-                    for (auto& c : filterLower) c = (char)tolower(c);
-                }
-
-                ImGui::BeginChild("##weaponTypeList", ImVec2(0, -30), true);
-                int idx = 0;
-                for (const auto& [wname, wd] : *profWeapons) {
-                    // Filter by mainhand/offhand/two-hand
-                    if (!AlterEgo::EquipmentChoice::WeaponTypeEligible(
-                            g_GearDialogSlot, wname, wd.mainhand, wd.offhand,
-                            wd.two_handed)) continue;
-
-                    // Search filter
-                    if (!filterLower.empty()) {
-                        std::string nLow = wname;
-                        for (auto& c : nLow) c = (char)tolower(c);
-                        if (nLow.find(filterLower) == std::string::npos) continue;
-                    }
-
-                    ImGui::PushID(idx++);
-                    bool isSel = (gs.weapon_type == wname);
-
-                    // Build description string
-                    std::string desc;
-                    if (wd.two_handed) desc = "Two-Handed";
-                    else if (wd.mainhand && wd.offhand) desc = "Main / Off Hand";
-                    else if (wd.mainhand) desc = "Main Hand";
-                    else if (wd.offhand) desc = "Off Hand";
-                    if (wd.specialization != 0) {
-                        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(wd.specialization);
-                        if (specInfo) desc += " (" + specInfo->name + ")";
-                    }
-
-                    ImVec2 cs = ImGui::GetCursorScreenPos();
-                    float cw = ImGui::GetContentRegionAvail().x;
-                    float ch = 32.0f;
-                    ImU32 bg = isSel ? IM_COL32(60, 80, 100, 200) : IM_COL32(35, 35, 40, 180);
-                    ImGui::GetWindowDrawList()->AddRectFilled(cs, ImVec2(cs.x+cw, cs.y+ch), bg, 3.0f);
-                    ImGui::GetWindowDrawList()->AddRect(cs, ImVec2(cs.x+cw, cs.y+ch),
-                        isSel ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
-
-                    ImGui::SetCursorScreenPos(cs);
-                    if (ImGui::InvisibleButton("##wsel", ImVec2(cw, ch)) && !isSel) {
-                        const auto plan=AlterEgo::EquipmentChoice::PlanWeaponChange(
-                            g_GearDialogSlot,gs.weapon_type,wname,wd.two_handed);
-                        AlterEgo::GearEdit::ApplyWeaponChange(gs,wname,plan);
-                        if(!plan.displacedOffhand.empty())
-                            editBuild->gear.erase(plan.displacedOffhand);
-                        // Fetch weapon skill details (including attunements and dual wield)
-                        std::vector<uint32_t> skillIds;
-                        for (int si = 0; si < 5; si++) {
-                            if (wd.skills[si] != 0) skillIds.push_back(wd.skills[si]);
-                        }
-                        for (const auto& [att, askills] : wd.attunement_skills) {
-                            for (auto sid : askills) { if (sid != 0) skillIds.push_back(sid); }
-                        }
-                        for (const auto& [dw, sid] : wd.dual_wield) { if (sid != 0) skillIds.push_back(sid); }
-                        if (!skillIds.empty())
-                            AlterEgo::GW2API::FetchSkillDetailsAsync(skillIds);
-                        // Fetch weapon item icon
-                        uint32_t weapItemId = GetLegendaryWeaponId(wname);
-                        if (weapItemId != 0)
-                            AlterEgo::GW2API::FetchItemDetailsAsync({weapItemId});
+                ImGui::BeginChild("##weaponTypeList",ImVec2(0,-30),true);
+                RenderWeaponTypeChoices(editBuild->profession,g_GearDialogSlot,gs.weapon_type,g_GearStatSearch,true,
+                    [&](const std::string& name,const auto& wd){
+                        const auto plan=AlterEgo::EquipmentChoice::PlanWeaponChange(g_GearDialogSlot,gs.weapon_type,name,wd.two_handed);
+                        AlterEgo::GearEdit::ApplyWeaponChange(gs,name,plan);
+                        if(!plan.displacedOffhand.empty())editBuild->gear.erase(plan.displacedOffhand);
+                        FetchChosenWeaponMetadata(wd);
+                        const auto id=GetLegendaryWeaponId(name);
+                        if(id)AlterEgo::GW2API::FetchItemDetailsAsync({id});
                         commitGear();
-                    }
-
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+2), IM_COL32(220, 200, 120, 255), WeaponDisplayName(wname));
-                    ImGui::GetWindowDrawList()->AddText(
-                        ImVec2(cs.x+6, cs.y+16), IM_COL32(150, 150, 150, 220), desc.c_str());
-                    ImGui::SetCursorScreenPos(ImVec2(cs.x, cs.y + ch + 2));
-
-                    ImGui::PopID();
-                }
+                    });
                 ImGui::EndChild();
             }
         }
@@ -8625,9 +8602,12 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     text.Finish();
 
     // Tooltip
-    if (hovered && isRelicSlot && !build.relic_name.empty()) {
+    if (hovered && isRelicSlot && (!build.relic_name.empty()||build.relic_id)) {
         ImGui::BeginTooltip();
-        ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.8f, 1.0f), "%s", build.relic_name.c_str());
+        const auto info=AlterEgo::GW2API::GetItemInfo(build.relic_id);
+        const auto label=info&&!info->name.empty()?info->name:build.relic_name.empty()?std::string("Relic metadata pending"):build.relic_name;
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.8f, 1.0f), "%s",label.c_str());
+        if(build.relic_id)ImGui::TextDisabled("Item ID: %u%s",build.relic_id,info?"":" (metadata pending)");
         for (const auto& entry : GearCatalog("Relic")) {
             if (build.relic_name == entry.name) {
                 ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", entry.bonus.c_str());
@@ -8635,8 +8615,23 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
             }
         }
         ImGui::EndTooltip();
-    } else if (hovered && (hasData || infusionCount > 0)) {
+    } else if (hovered && (hasData || infusionCount > 0 || (gearSlot&&gearSlot->item_id))) {
         ImGui::BeginTooltip();
+        if(gearSlot&&gearSlot->item_id){
+            const auto info=AlterEgo::GW2API::GetItemInfo(gearSlot->item_id);
+            ImGui::TextWrapped("%s (#%u)",info&&!info->name.empty()?info->name.c_str():"Item metadata pending",gearSlot->item_id);
+        }
+        if(gearSlot&&gearSlot->stat_id)ImGui::TextDisabled("Stat ID: %u%s",gearSlot->stat_id,AlterEgo::GW2API::GetItemStatInfo(gearSlot->stat_id)?"":" (metadata pending)");
+        if(gearSlot){
+            const auto upgrade=[](const char* label,uint32_t id,const std::string& stored){
+                if(!id&&stored.empty())return;
+                const auto info=AlterEgo::GW2API::GetItemInfo(id);
+                const auto name=info&&!info->name.empty()?info->name:stored.empty()?std::string("Metadata pending"):stored;
+                if(id)ImGui::TextWrapped("%s: %s (#%u)",label,name.c_str(),id);
+                else ImGui::TextWrapped("%s: %s",label,name.c_str());
+            };
+            upgrade("Rune",gearSlot->rune_id,gearSlot->rune);upgrade("Sigil",gearSlot->sigil_id,gearSlot->sigil);upgrade("Second sigil",gearSlot->sigil2_id,gearSlot->sigil2);
+        }
         if (hasWeaponType) {
             ImGui::TextColored(ImVec4(0.8f, 0.75f, 0.5f, 1.0f), "%s", WeaponDisplayName(it->second.weapon_type));
         }
@@ -8848,7 +8843,7 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src,float sz,bool ed
             IM_COL32(227,196,122,255),0,0,2.0f);
         uint32_t next=sid;
         if(RenderSkillPickerPopup("##skill_picker",src.profession,
-            slot==0?"Heal":slot==4?"Elite":"Utility",specs,false,sid,next))apply(next);
+            slot==0?"Heal":slot==4?"Elite":"Utility",specs,false,sid,next,aquatic))apply(next);
         ImGui::PopID();
     };
     cell(bar.heal,0);ImGui::SameLine();

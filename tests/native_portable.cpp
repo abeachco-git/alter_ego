@@ -67,5 +67,40 @@ int case_native_portable(int,char**) {
     Composable::Find(compatible,"base_build",baseId)->data["profession"]="Engineer";
     assert(Composable::Merge(local,compatible,false,merged,added,skipped,error));
     assert(merged.loadouts[1].refs.at("skills")==skillId);
+    using AlterEgo::InfusionMode;
+    for(auto mode:{InfusionMode::Slots,InfusionMode::Totals,InfusionMode::Conflict}){
+        Snapshot original;
+        Json build={{"id","mode"},{"name","Mode"},{"profession","Engineer"},
+            {"gear",{{"HelmAquatic",{{"item_id",45},{"rune_id",12}}},
+                     {"WeaponAquaticA",{{"weapon_type","Harpoon"},{"item_id",50}}}}}};
+        if(mode!=InfusionMode::Totals){
+            build["gear"]["Helm"]={{"infusion_attributes",Json::array({"Power"})},{"infusion_snapshot",true}};
+            build["gear"]["WeaponAquaticA"]["infusion_ids"]=Json::array({4294967295u});
+        }
+        if(mode!=InfusionMode::Slots){
+            build["infusion_summary_present"]=true;build["infusion_ar_total"]=150;
+            build["infusion_stat_totals"]={{"Power",90}};
+        }
+        assert(PutLoadout(original.loadouts,build,error));
+        assert(Composable::InfusionPayloadMode(build)==mode);
+        auto& l=original.loadouts.loadouts.front();
+        std::map<std::string,std::string> refs;
+        for(const auto* kind:{"aquatic","infusions"}){refs[kind]=l.refs.at(kind);l.refs.erase(kind);}
+        original.loadouts.equipment_sets.push_back({"set","Mode Set",refs});l.equipment_set_id="set";
+        assert(Composable::InfusionReferenceMode(original.loadouts,Composable::EffectiveRefs(original.loadouts,l))==mode);
+        auto archive=ExportPortableLibrary(original,true,false);
+        PortableLibrary parsed;assert(ParsePortableLibrary(archive,parsed,error));
+        Json resolved;
+        assert(Composable::Resolve(parsed.data.loadouts,parsed.data.loadouts.loadouts.front(),resolved,error)&&resolved==build);
+        Json packet;assert(Composable::ExportPortableLoadout(original.loadouts,"mode",packet,error));
+        Composable::Document imported;
+        assert(Composable::ImportPortableLoadout(imported,packet,"new",error));
+        assert(Composable::Resolve(imported,imported.loadouts.front(),resolved,error));
+        auto expected=build;expected["id"]="new";assert(resolved==expected);
+        assert(Composable::InfusionReferenceMode(imported,Composable::EffectiveRefs(imported,imported.loadouts.front()))==mode);
+        Json old={{"builds",Json::array({build})}};
+        assert(ParsePortableLibrary(old,parsed,error)&&parsed.legacy);
+        assert(Composable::Resolve(parsed.data.loadouts,parsed.data.loadouts.loadouts.front(),resolved,error)&&resolved==build);
+    }
     return 0;
 }

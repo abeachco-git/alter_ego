@@ -189,6 +189,7 @@ namespace AlterEgo {
         std::string type;           // "Heal", "Utility", "Elite", "Weapon", etc.
         uint32_t specialization = 0; // gating elite-spec id (0 = core, usable by all)
         std::vector<std::string> professions; // professions that can slot it; empty = racial
+        std::optional<bool> no_underwater; // Absent means eligibility is unverified.
         nlohmann::json facts;       // Tooltip facts array
     };
 
@@ -409,7 +410,7 @@ namespace AlterEgo {
         static void FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids);
         static void FetchSpecDetailsAsync(const std::vector<uint32_t>& spec_ids);
         static void FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids);
-        static void FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids);
+        static void FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids, bool requireEnvironmentMetadata=false);
         static void FetchItemStatDetailsAsync(const std::vector<uint32_t>& stat_ids);
         static void FetchDyeColorsAsync(bool manual=false);
 
