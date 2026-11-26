@@ -3,6 +3,7 @@
 #include "NativeInventoryCore.h"
 #include <map>
 #include <tuple>
+#include <optional>
 namespace AlterEgo::NativeInventory {
 struct ScopeState {std::string account,scope,character,status;int64_t attempted=0,success=0;};
 struct Row {Slot slot;std::string name,rarity,type,chat;int64_t captured=0;};
@@ -19,14 +20,35 @@ struct Projection {
     std::vector<ScopeState> states;
     std::map<std::string,std::set<std::string>> rosters;
 };
-inline void Record(const std::string& root,const ScopeState& state,const std::vector<Slot>* rows=nullptr){
+// Unknown ownership differs from a verified empty roster.
+inline std::optional<std::set<std::string>> ReadRoster(Database::Connection& db,const std::string& account){
+    auto known=db.Prepare("SELECT 1 FROM native_roster_state WHERE account=?");
+    known.Bind(1,account);if(!known.Step())return std::nullopt;
+    std::set<std::string> names;
+    auto q=db.Prepare("SELECT character FROM native_rosters WHERE account=?");
+    q.Bind(1,account);while(q.Step())names.insert(q.Text(0));
+    return names;
+}
+inline std::optional<std::set<std::string>> ReadRoster(const std::string& root,const std::string& account){
+    std::lock_guard<std::mutex> lock(Cache::Mutex());
+    auto path=Storage::Paths(root).Cache();
+    if(!std::filesystem::exists(path))return std::nullopt;
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
+    Cache::Initialize(db);Database::Transaction tx(db);
+    auto names=ReadRoster(db,account);tx.Commit();return names;
+}
+inline bool Record(const std::string& root,const ScopeState& state,const std::vector<Slot>* rows=nullptr){
     std::lock_guard<std::mutex> lock(Cache::Mutex());
     const auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
     Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
     Cache::Initialize(db);Database::Transaction tx(db);
+    if((state.scope=="Bags"||state.scope=="Equipment")&&!state.character.empty()){
+        auto names=ReadRoster(db,state.account);
+        if(names&&!names->count(state.character))return false;
+    }
     auto old=db.Prepare("SELECT attempted FROM native_inventory_scopes WHERE account=? AND scope=? AND character=?");
     old.Bind(1,state.account);old.Bind(2,state.scope);old.Bind(3,state.character);
-    if(old.Step()&&old.Integer(0)>state.attempted)return;
+    if(old.Step()&&old.Integer(0)>state.attempted)return false;
     auto mark=db.Prepare("INSERT INTO native_inventory_scopes VALUES(?,?,?,?,?,?) ON CONFLICT(account,scope,character) DO UPDATE SET attempted=excluded.attempted,status=excluded.status,success=CASE WHEN excluded.status='Ready' THEN excluded.success ELSE native_inventory_scopes.success END");
     mark.Bind(1,state.account);mark.Bind(2,state.scope);mark.Bind(3,state.character);mark.Bind(4,state.status);
     mark.Bind(5,state.attempted);mark.Bind(6,state.success);mark.Execute();
@@ -51,15 +73,18 @@ inline void Record(const std::string& root,const ScopeState& state,const std::ve
             }
         }
     }
-    tx.Commit();
+    tx.Commit();return true;
 }
-inline void StoreRoster(const std::string& root,const std::string& account,const std::set<std::string>& names,int64_t stamp){
+inline bool StoreRoster(const std::string& root,const std::string& account,const std::set<std::string>& names,int64_t stamp,int64_t attempted=0){
+    if(!attempted)attempted=stamp;
     std::lock_guard<std::mutex> lock(Cache::Mutex());
     const auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
     Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
     Cache::Initialize(db);Database::Transaction tx(db);
     auto old=db.Prepare("SELECT fetched_at FROM native_roster_state WHERE account=?");
-    old.Bind(1,account);if(old.Step()&&old.Integer(0)>stamp)return;
+    old.Bind(1,account);if(old.Step()&&old.Integer(0)>stamp)return false;
+    auto prior=db.Prepare("SELECT attempted FROM native_inventory_scopes WHERE account=? AND scope='Roster' AND character=''");
+    prior.Bind(1,account);if(prior.Step()&&prior.Integer(0)>attempted)return false;
     auto mark=db.Prepare("INSERT INTO native_roster_state VALUES(?,?) ON CONFLICT(account) DO UPDATE SET fetched_at=excluded.fetched_at");
     mark.Bind(1,account);mark.Bind(2,stamp);mark.Execute();
     auto del=db.Prepare("DELETE FROM native_rosters WHERE account=?");del.Bind(1,account);del.Execute();
@@ -67,7 +92,11 @@ inline void StoreRoster(const std::string& root,const std::string& account,const
     for(const auto& name:names){put.Bind(1,account);put.Bind(2,name);put.Execute();put.Reset();}
     // Remove only scopes of characters confirmed absent from this successful roster.
     auto prune=db.Prepare("DELETE FROM native_inventory_scopes WHERE account=? AND scope IN ('Bags','Equipment') AND character<>'' AND character NOT IN (SELECT character FROM native_rosters WHERE account=?)");
-    prune.Bind(1,account);prune.Bind(2,account);prune.Execute();tx.Commit();
+    prune.Bind(1,account);prune.Bind(2,account);prune.Execute();
+    // The verified set, pruning and freshness are one commit.
+    auto status=db.Prepare("INSERT INTO native_inventory_scopes VALUES(?,'Roster','','Ready',?,?) ON CONFLICT(account,scope,character) DO UPDATE SET status='Ready',attempted=excluded.attempted,success=excluded.success");
+    status.Bind(1,account);status.Bind(2,attempted);status.Bind(3,stamp);status.Execute();
+    tx.Commit();return true;
 }
 inline void StoreNames(const std::string& root,const Json& rows){
     if(!rows.is_array())return;

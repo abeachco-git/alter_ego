@@ -44,6 +44,17 @@ int case_native_inventory(int,char**){
     Record(root,{"account-a","Bags","A","Ready",101,101},&bags);
     StoreRoster(root,"account-a",{"B"},102);
     v=Read(root);assert(v.rows.size()==1&&v.rosters.at("account-a").count("B")&&v.rosters.at("account-b").count("C"));
+    // Late success AND failure cannot recreate a pruned character scope.
+    assert(!Record(root,{"account-a","Bags","A","Ready",103,103},&bags));
+    assert(!Record(root,{"account-a","Bags","A","HTTP 503",104,0}));
+    assert(!StoreRoster(root,"account-a",{"A","B"},101,100));
+    v=Read(root);assert(v.rows.size()==1&&v.rosters.at("account-a")==std::set<std::string>{"B"});
+    bool rosterFresh=false;for(const auto& st:v.states)if(st.account=="account-a"&&st.scope=="Roster")rosterFresh=st.status=="Ready"&&st.attempted==102&&st.success==102;
+    assert(rosterFresh);
+    assert(StoreRoster(root,"account-empty",{},103,102));
+    assert(ReadRoster(root,"account-empty").has_value()&&ReadRoster(root,"account-empty")->empty());
+    assert(!ReadRoster(root,"unknown-account"));
+    assert(!Record(root,{"account-empty","Equipment","Gone","Failed",104,0}));
     auto equipped=ParseEquipment(Json::parse(R"({"equipment":[{"id":20,"location":"Equipped","slot":"WeaponA1","tabs":[1,2,3],"upgrades":[30],"infusions":[31]},{"id":20,"location":"Armory","tabs":[4]},{"id":21,"location":"EquippedFromLegendaryArmory","tabs":[1]},{"id":22,"slot":"Pick","charges":50}]})"),"account-a","B");
     assert(equipped.size()==3&&equipped[0].count==1&&equipped[1].count==1&&equipped[2].charges==50);
     Record(root,{"account-a","Equipment","B","Ready",103,103},&equipped);

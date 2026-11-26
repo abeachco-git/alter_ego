@@ -246,3 +246,5 @@ TSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-tsan -R 'refresh\.(backgroun
 ```
 
 The existing section_refresh same-second ticket assertions verify that stale cancellation cannot clear a replacement ticket, and cancellation after success preserves verification. Native equipment now uses this cancellation path on obsolete credentials. The opt-in configuration fails explicitly on unsupported platforms; TSan failures must be investigated, not suppressed. Runner-wide default CI integration is not enabled until reliability is established.
+
+Native inventory fixture now tests late success/failure after roster pruning, older roster rejection, atomic roster freshness, and known-empty versus unknown ownership. Live: overlap Characters roster refresh and Inventory roster/bags/equipment; delete a character between requests; verify newer roster cannot be overwritten or used to resurrect pruned character rows, and stale physical failures cannot mask a later success. No test claims live ArenaNet deletion propagation.

@@ -42,7 +42,7 @@ std::atomic<uint64_t> registryGeneration{1};
 std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
 std::atomic<bool> busy{false};
-std::mutex physicalMutex;
+std::mutex physicalMutex,rosterMutex;
 struct PhysicalEntry {uint64_t epoch=0;PhysicalEquipmentResult value;std::chrono::steady_clock::time_point finished{};};
 std::map<std::pair<std::string,std::string>,PhysicalEntry> physicalCache;
 std::string message;
@@ -155,10 +155,57 @@ std::string Encode(const std::string& s){
         else{out+='%';out+=hex[c>>4];out+=hex[c&15];}}
     return out;
 }
-std::set<std::string> Roster(const std::string& key){
-    auto j=Fetch("/v2/characters",key);if(!j.is_array())throw std::runtime_error("Invalid roster");
-    std::set<std::string> names;for(const auto& n:j){auto name=n.get<std::string>();if(name.empty()||!names.insert(name).second)throw std::runtime_error("Invalid roster");}
-    return names;
+struct RosterResult {
+    ScopeState state;
+    std::set<std::string> names;
+    bool accepted=false;
+};
+struct RosterEntry {
+    uint64_t epoch=0;
+    RosterResult result;
+    std::chrono::steady_clock::time_point finished{};
+};
+std::map<std::string,RosterEntry> rosterCache;
+// One owner for endpoint, durable roster, pruning and status.
+RosterResult FetchRoster(const LinkedAccount& a){
+    using Clock=std::chrono::steady_clock;
+    const auto queued=Clock::now();
+    RosterResult result;result.state={a.id,"Roster",{},"Roster retrieval failed",0,0};
+    std::unique_lock<std::mutex> lock(rosterMutex,std::defer_lock);
+    while(!lock.try_lock()){
+        if(Background::Workers().Stopping()||!Current(a))return result;
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    if(Background::Workers().Stopping()||!Current(a))return result;
+    const auto previous=rosterCache.find(a.id);
+    if(previous!=rosterCache.end()&&previous->second.epoch==a.generation&&
+       previous->second.result.accepted&&previous->second.result.state.status=="Ready"&&
+       previous->second.finished>=queued)return previous->second.result;
+    result.state.attempted=Now();
+    try{
+        const auto response=Request(a,"/v2/characters",{"characters"});
+        if(!response||!response.data.is_array()){
+            if(!a.permissions.count("characters"))result.state.status="Missing permissions";
+            throw std::runtime_error("Roster request failed");
+        }
+        for(const auto& n:response.data){
+            const auto name=n.get<std::string>();
+            if(name.empty()||!result.names.insert(name).second)throw std::runtime_error("Invalid roster");
+        }
+        result.state.status="Ready";result.state.success=Now();
+    }catch(...){result.names.clear();result.state.success=0;if(result.state.status=="Ready")result.state.status="Roster retrieval failed";}
+    try{
+        result.accepted=CommitIfCurrent(a,[&]{
+            if(result.state.status=="Ready"){
+                if(!StoreRoster(root,a.id,result.names,result.state.success,result.state.attempted))return false;
+            }else if(!Record(root,result.state))return false;
+            Publish("",false);return true;
+        });
+    }catch(...){result.accepted=false;}
+    if(result.accepted&&result.state.status=="Ready")
+        rosterCache[a.id]={a.generation,result,Clock::now()};
+    else rosterCache.erase(a.id);
+    return result;
 }
 void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std::string& expected){
     Launch([key,label,expected]{
@@ -298,7 +345,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     a.permissions.count("inventories")&&(!characterScope||a.permissions.count("characters"))&&
                     (name!="Legendary Armory"||a.permissions.count("unlocks"));
                 if(!permitted){
-                    state.status="Missing permissions";commit([&]{Record(root,state);});EndScope(state);publishProgress();return;
+                    state.status="Missing permissions";commit([&]{if(!Record(root,state))throw Background::Cancelled{};});EndScope(state);publishProgress();return;
                 }
                 CharacterActivity::CancelOnShutdown attempts({a.id,character});
                 CharacterActivity::Ticket ticket{};
@@ -313,13 +360,14 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     if(name=="Equipment"){
                         auto physical=RequestPhysicalEquipment(linked,character,!automatic);
                         checkCurrent();
-                        if(physical.started>0)state.attempted=physical.started;
-                        if(!physical.response)throw std::runtime_error(physical.response.error);
-                        if(!physical.inventoryCommitted)throw std::runtime_error("Invalid physical equipment projection");
-                        auto slots=ParseEquipment(physical.response.data,a.id,character);
-                        state.attempted=physical.started;state.success=physical.success;
-                        // RequestPhysicalEquipment already committed the exact physical projection.
-                        for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
+                        // The physical owner alone records success AND failure.
+                        if(!physical.started)throw Background::Cancelled{};
+                        state.attempted=physical.started;
+                        if(physical.response&&physical.inventoryCommitted){
+                            state.success=physical.success;
+                            auto slots=ParseEquipment(physical.response.data,a.id,character);
+                            for(const auto& slot:slots){ids.insert(slot.id);ids.insert(slot.upgrades.begin(),slot.upgrades.end());ids.insert(slot.infusions.begin(),slot.infusions.end());}
+                        }else state.status=physical.response?"Invalid or incomplete response":physical.response.error;
                         EndScope(state);publishProgress();return;
                     }
                     ticket=ActivityScope(name)?attempts.BeginScope(name):CharacterActivity::Ticket{};
@@ -335,7 +383,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     else slots=ParseArray(j,a.id,name,character,{},name!="Materials");
                     Background::Checkpoint();state.success=Now();
                     scopeCommit([&]{
-                        Record(root,state,&slots);
+                        if(!Record(root,state,&slots))throw Background::Cancelled{};
                         if(ActivityScope(name))CharacterActivity::Success({a.id,character},name,ticket,state.success);
                     });
                     for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
@@ -346,7 +394,8 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     Background::Checkpoint();
                     const std::string what=e.what();
                     state.status=what.rfind("HTTP ",0)==0||what=="Invalid key or missing permission"||what=="Transport failed or cancelled"||what=="Rate limited; retry later"?what:"Invalid or incomplete response";
-                    scopeCommit([&]{Record(root,state);});
+                    if(name=="Equipment")throw;
+                    scopeCommit([&]{if(!Record(root,state))throw Background::Cancelled{};});
                 }
                 EndScope(state);publishProgress();
             };
@@ -400,24 +449,26 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
             scope("Legendary Armory",{},"/v2/account/legendaryarmory",false);
             scope("Delivery box",{},"/v2/commerce/delivery",false);
             if((onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment"||onlyScope=="Roster")&&(!automatic||AutoScope("Roster"))){
-                if(!a.permissions.count("characters")){
-                    if(automatic&&!ScopeDue(*previous,a.id,"Roster"))continue;
-                    ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};BeginScope(failed,"Roster");commit([&]{Record(root,failed);});EndScope(failed);publishProgress(true);
-                }else try{
-                    std::set<std::string> names;
-                    auto cached=previous->inventory.rosters.find(a.id);
-                    if(automatic&&onlyScope!="Roster"&&cached!=previous->inventory.rosters.end()){names=cached->second;}
-                    else if(automatic&&!ScopeDue(*previous,a.id,"Roster")){
-                        if(cached!=previous->inventory.rosters.end())names=cached->second;
-                        // No cached roster and cooldown still active: leave empty,
-                        // rather than retrying the roster from another due scope.
-                    }else{ScopeState state{a.id,"Roster","","Ready",Now(),0};BeginScope(state,"Roster");checkCurrent();names=Roster(key.value);state.success=Now();commit([&]{StoreRoster(root,a.id,names,state.success);Record(root,state);});EndScope(state);publishProgress(true);}
-                    for(const auto& ch:names){
-                        const auto path="/v2/characters/"+Encode(ch);
-                        scope("Bags",ch,path+"/inventory",true);
-                        scope("Equipment",ch,path+"/equipment?v=2024-04-01T00:00:00.000Z",false);
-                    }
-                }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};commit([&]{Record(root,failed);});EndScope(failed);publishProgress(true);}
+                std::set<std::string> names;
+                auto cached=previous->inventory.rosters.find(a.id);
+                if(!a.permissions.count("characters")&&automatic&&!ScopeDue(*previous,a.id,"Roster"))continue;
+                if(a.permissions.count("characters")&&automatic&&onlyScope!="Roster"&&cached!=previous->inventory.rosters.end())names=cached->second;
+                else if(a.permissions.count("characters")&&automatic&&!ScopeDue(*previous,a.id,"Roster")){
+                    if(cached!=previous->inventory.rosters.end())names=cached->second;
+                }else{
+                    ScopeState state{a.id,"Roster","","Ready",Now(),0};BeginScope(state,"Roster");
+                    auto result=FetchRoster(linked);
+                    if(!result.accepted)throw Background::Cancelled{};
+                    EndScope(result.state);publishProgress(true);
+                    if(result.state.status!="Ready")continue;
+                    names=std::move(result.names);
+                }
+                // Do not relabel later bag/equipment failures as roster failures.
+                for(const auto& ch:names){
+                    const auto path="/v2/characters/"+Encode(ch);
+                    scope("Bags",ch,path+"/inventory",true);
+                    scope("Equipment",ch,path+"/equipment?v=2024-04-01T00:00:00.000Z",false);
+                }
             }
         }
         // Resolve names in bounded batches. Missing metadata cannot discard verified slots.
@@ -480,6 +531,21 @@ bool CommitIfCurrent(const std::vector<LinkedAccount>& accounts,const std::funct
             std::all_of(accounts.begin(),accounts.end(),[](const auto& a){return Current(a);});
     },commit);
 }
+bool CommitIfRosterCurrent(const std::vector<LinkedAccount>& accounts,const std::map<std::string,std::set<std::string>>& roster,const std::function<bool()>& commit){
+    return CommitIfCurrent(accounts,[&]{
+        for(const auto& [account,names]:roster){
+            auto current=ReadRoster(root,account);
+            if(!current||*current!=names)return false;
+        }
+        return commit();
+    });
+}
+bool CommitIfCharacterCurrent(const LinkedAccount& account,const std::string& character,const std::function<bool()>& commit){
+    return CommitIfCurrent(account,[&]{
+        auto names=ReadRoster(root,account.id);
+        return (!names||names->count(character))&&commit();
+    });
+}
 Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions){
     if(!Current(a))return {0,{},"Account changed"};
     for(const auto& p:permissions)if(!a.permissions.count(p))return {403,{},"Missing API permission: "+p};
@@ -507,7 +573,8 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
     const auto queued=Clock::now();
     std::unique_lock<std::mutex> lock(physicalMutex,std::defer_lock);
     while(!lock.try_lock()){if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};std::this_thread::sleep_for(std::chrono::milliseconds(25));}
-    if(!Current(a))return {{0,{},"Account changed"},0,0};
+    if(Background::Workers().Stopping()||!Current(a))return {{0,{},"Account changed"},0,0};
+    if(!CommitIfCharacterCurrent(a,character,[]{return true;}))return {{0,{},"Character roster changed"},0,0};
     const CharacterActivity::Key k{a.id,character};
     auto& e=physicalCache[k];
     if(e.epoch==a.generation&&e.value.response&&e.value.inventoryCommitted&&
@@ -521,48 +588,40 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
     };
     auto r=Request(a,"/v2/characters/"+Encode(character)+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"});
     PhysicalEquipmentResult result{std::move(r),ticket.started,Now()};
-    if(!result.response){
-        if(Background::Workers().Stopping())return cancel("Cancelled");
-        if(!Current(a))return cancel("Account changed");
-        return result;
+    // Parse before the credential gate, then publish both outcomes while the
+    // physical owner is still held. Consumers never record a delayed failure.
+    std::vector<Slot> slots;
+    bool complete=false;
+    if(result.response){
+        try{slots=ParseEquipment(result.response.data,a.id,character);complete=true;}catch(...){}
     }
-    // Character tabs and physical inventory have different validation needs.
-    // Only a complete physical projection can advance Inventory freshness.
+    if(Background::Workers().Stopping())return cancel("Cancelled");
     try{
-        auto slots=ParseEquipment(result.response.data,a.id,character);
-        {
-            std::lock_guard<std::mutex> credentialLock(credentialMutex);
-            if(Background::Workers().Stopping())return cancel("Cancelled");
-            if(!Current(a))return cancel("Account changed");
-            ScopeState state{a.id,"Equipment",character,"Ready",ticket.started,result.success};
-            Record(root,state,&slots);
-            CharacterActivity::Success(k,"Equipment",ticket,result.success);
-            result.inventoryCommitted=true;
-            // Registry mutation and the corresponding view publication use the
-            // same lock order (credential -> publish -> cache/view).
-            Publish("",false);
-        }
+        const bool accepted=CommitIfCharacterCurrent(a,character,[&]{
+            ScopeState state{a.id,"Equipment",character,complete?"Ready":
+                (result.response?"Invalid or incomplete response":result.response.error),ticket.started,complete?result.success:0};
+            if(!Record(root,state,complete?&slots:nullptr))return false;
+            if(complete){
+                CharacterActivity::Success(k,"Equipment",ticket,result.success);
+                result.inventoryCommitted=true;
+            }
+            Publish("",false);return true;
+        });
+        if(!accepted)return cancel("Account or character roster changed");
     }catch(...){
-        // Preserve character consumer's raw response; Inventory validates it separately.
-    }
-    if(!result.inventoryCommitted){
+        // Preserve the raw response for the character supplement consumer;
+        // only a committed physical projection advances Inventory freshness.
         if(Background::Workers().Stopping())return cancel("Cancelled");
         if(!Current(a))return cancel("Account changed");
     }
-    e={a.generation,result,Clock::now()};return result;
+    if(result.inventoryCommitted)e={a.generation,result,Clock::now()};
+    else physicalCache.erase(k);
+    return result;
 }
 bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names){
-    const auto r=Request(a,"/v2/characters",{"characters"});
-    if(!r||!r.data.is_array())return false;
-    try{
-        std::set<std::string> parsed;
-        for(const auto& n:r.data){auto s=n.get<std::string>();if(s.empty()||!parsed.insert(s).second)return false;}
-        std::lock_guard<std::mutex> lock(credentialMutex);
-        if(Background::Workers().Stopping()||!Current(a))return false;
-        const auto stamp=Now();StoreRoster(root,a.id,parsed,stamp);
-        Record(root,{a.id,"Roster",{},"Ready",stamp,stamp});
-        Publish("",false);names=std::move(parsed);return true;
-    }catch(...){return false;}
+    auto result=FetchRoster(a);
+    if(!result.accepted||result.state.status!="Ready")return false;
+    names=std::move(result.names);return true;
 }
 std::vector<Location> Locations(uint32_t id){
     auto v=Snapshot();std::vector<Location> out;
@@ -610,7 +669,11 @@ void RenderItemAvailability(uint32_t id,const std::string& account,const std::st
 void Initialize(const std::string& directory){
     root=directory;registryReady=false;Launch([]{try{Publish("");}catch(...){registryReady=true;throw;}});
 }
-void Shutdown(){registryReady=false;++registryGeneration;std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();}
+void Shutdown(){
+    // Called only after managed workers join.
+    registryReady=false;++registryGeneration;physicalCache.clear();rosterCache.clear();
+    std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();
+}
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
 std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}
 namespace {

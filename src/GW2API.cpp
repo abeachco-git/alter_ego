@@ -302,7 +302,7 @@ namespace AlterEgo {
             // the busy flag. No stale worker can consume a replacement roster.
             auto reconcile=[&]{
                 if(partial||roster.empty())return;
-                if(!NativeAccounts::CommitIfCurrent(accounts,[&]{return ReconcileCharactersWithRoster(roster);})){
+                if(!NativeAccounts::CommitIfRosterCurrent(accounts,roster,[&]{return ReconcileCharactersWithRoster(roster);})){
                     partial=true;
                     if(s_api&&!Background::Workers().Stopping())s_api->Log(LOGL_WARNING,"AlterEgo","Character roster changed or could not be persisted; previous cache retained.");
                 }
@@ -497,7 +497,7 @@ namespace AlterEgo {
                 if(verified.empty()||!identityVerified||!NativeAccounts::Current(a)){partial=true;continue;}
                 ch.data_refreshed=std::time(nullptr);
                 stage("Saving verified scopes");
-                if(!NativeAccounts::CommitIfCurrent(a,[&]{
+                if(!NativeAccounts::CommitIfCharacterCurrent(a,name,[&]{
                     if(!SaveCharacterData(a.id,name,&ch,a.name))return false;
                     for(const auto& v:verified)CharacterActivity::Success(key,S::Name(v.scope),v.ticket,v.stamp,v.specVerified);
                     return true;

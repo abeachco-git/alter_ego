@@ -4,6 +4,7 @@
 #include <set>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <nlohmann/json.hpp>
 namespace AlterEgo::NativeAccounts {
 struct LinkedAccount {
@@ -27,6 +28,8 @@ bool Current(const LinkedAccount& account);
 // acquire the credential mutex again, or wait for another worker.
 bool CommitIfCurrent(const LinkedAccount& account,const std::function<bool()>& commit);
 bool CommitIfCurrent(const std::vector<LinkedAccount>& accounts,const std::function<bool()>& commit);
+bool CommitIfRosterCurrent(const std::vector<LinkedAccount>& accounts,const std::map<std::string,std::set<std::string>>& roster,const std::function<bool()>& commit);
+bool CommitIfCharacterCurrent(const LinkedAccount& account,const std::string& character,const std::function<bool()>& commit);
 Result Request(const LinkedAccount& account,const std::string& path,
                const std::vector<std::string>& permissions);
 Result Request(const std::string& accountId,const std::string& path,
