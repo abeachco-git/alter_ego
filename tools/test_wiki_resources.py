@@ -5,6 +5,13 @@ from pathlib import Path
 import wiki_resources as w
 
 class Resources(unittest.TestCase):
+    def test_untrusted_resource_boundaries(self):
+        self.assertTrue(w.wiki_url("https://wiki.guildwars2.com/api.php"))
+        for url in ("http://wiki.guildwars2.com/api.php", "https://wiki.guildwars2.com.evil.test/", "https://wiki.guildwars2.com@evil.test/"):
+            self.assertFalse(w.wiki_url(url))
+        self.assertEqual(w.cpp_string("hello"), '"hello"')
+        self.assertNotIn(chr(10), w.cpp_string("line\nnext"))
+        self.assertNotIn(chr(0), w.cpp_string("a\0b"))
     def test_seed_and_generation(self):
         obj=w.load(w.SEED)
         with tempfile.TemporaryDirectory() as d:

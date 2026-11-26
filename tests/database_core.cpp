@@ -2,6 +2,7 @@
 #include "../src/WikiEventCache.h"
 #include "../src/WikiMetadataCache.h"
 #include "../src/Database.h"
+#include "../src/ExternalResourceSafety.h"
 #include "../src/CacheDatabase.h"
 #include "../src/AchievementCatalogCache.h"
 #include "../src/SkinDataCache.h"
@@ -207,6 +208,27 @@ int case_database_core(int, char**) {
         failed=false;
         try{DB::Transaction tx(db);P::StoreObjectives(db,{},200);tx.Commit();}catch(...){failed=true;}
         assert(failed&&P::Read(db).objectives.size()==1);
+    }
+    {
+        namespace R=AlterEgo::ExternalResource;
+        assert(R::ArtworkUrl("https://wiki.guildwars2.com/images/a/icon.png"));
+        assert(R::ArtworkUrl("https://render.guildwars2.com/file/ABC/1.png"));
+        assert(!R::ArtworkUrl("https://wiki.guildwars2.com.evil.test/images/a.png"));
+        assert(!R::ArtworkUrl("https://wiki.guildwars2.com@evil.test/images/a.png"));
+        assert(!R::SafeRedirect("https://wiki.guildwars2.com/api.php","http://wiki.guildwars2.com/api.php"));
+        assert(R::SafeRedirect("https://wiki.guildwars2.com/api.php","https://wiki.guildwars2.com/wiki/Page"));
+        assert(!R::SafeCacheKey("../escape")&&R::SafeCacheKey("Astral Acclaim"));
+        std::string png("\x89PNG\r\n\x1a\n",8);png.resize(33,0);
+        png[11]=13;png.replace(12,4,"IHDR");png[19]=32;png[23]=32;
+        assert(R::ImageHeader(png));png[16]=1;assert(!R::ImageHeader(png));
+        assert(!R::ImageHeader("not an image"));
+        DB::Connection db(temp.path("sql-security.db"),DB::Connection::OpenMode::Create);
+        bool rejected=false;
+        try{auto q=db.Prepare("SELECT 1; SELECT 2");}catch(const DB::Error&){rejected=true;}
+        assert(rejected);rejected=false;
+        try{auto q=db.Prepare("SELECT ?");q.Step();}catch(const DB::Error&){rejected=true;}
+        assert(rejected);
+        auto q=db.Prepare("SELECT ?");q.BindNull(1);assert(q.Step()&&q.IsNull(0));
     }
     constexpr int id = 0x41454c42;
     {

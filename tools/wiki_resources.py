@@ -26,9 +26,32 @@ def write(path, value):
         tmp = Path(out.name)
     tmp.replace(path)
 
+def wiki_url(url):
+    parts = urllib.parse.urlsplit(url)
+    return (parts.scheme == "https" and parts.netloc == "wiki.guildwars2.com"
+            and not any(ord(c) <= 32 or ord(c) == 127 or c == "\\" for c in url))
+
+class WikiRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not wiki_url(newurl):
+            raise ValueError("Unexpected Wiki redirect destination")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def cpp_string(value):
+    # Emit literal UTF-8 bytes; fixed three-digit octal escapes cannot absorb
+    # following digits or introduce arbitrary C++ source tokens.
+    return '"' + ''.join(
+        '\\%03o' % b if b < 32 or b >= 127 or b in (34, 92) else chr(b)
+        for b in value.encode("utf-8")
+    ) + '"'
+
 def get(path):
     req = urllib.request.Request(BASE + path, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=15) as response:
+    if not wiki_url(req.full_url):
+        raise ValueError("Unexpected Wiki URL")
+    with urllib.request.build_opener(WikiRedirect()).open(req, timeout=15) as response:
+        if not wiki_url(response.geturl()):
+            raise ValueError("Unexpected Wiki response origin")
         data = response.read(MAX_BYTES + 1)
         if response.status != 200 or not data or len(data) > MAX_BYTES:
             raise ValueError("Unexpected HTTP payload")
@@ -326,7 +349,7 @@ def due(entry, now, days):
     return not entry["last_attempt"] or now-entry["last_attempt"] >= days*DAY
 
 def generate(obj, out):
-    q = lambda s: json.dumps(s,ensure_ascii=True)
+    q = cpp_string
     d = obj["datasets"]
     raid = d["raid_bounties"]["data"]
     fractals = d["fractals"]["data"]

@@ -1,5 +1,6 @@
 #include "WikiImage.h"
 #include "UntrustedInput.h"
+#include "ExternalResourceSafety.h"
 #include "WikiMetadataCache.h"
 #include "GW2API.h"
 #include "HttpClient.h"
@@ -964,7 +965,7 @@ namespace Skinventory {
     }
 
     Texture_t* WikiImage::GetCurrencyIcon(const std::string& key) {
-        if (!s_API || key.empty()) return nullptr;
+        if (!s_API || !AlterEgo::ExternalResource::SafeCacheKey(key)) return nullptr;
 
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -1113,6 +1114,8 @@ namespace Skinventory {
                 failedDirty = true;
                 continue;
             }
+            if(!AlterEgo::ExternalResource::SafeCacheKey(key))continue;
+            if(!AlterEgo::ExternalResource::SafeCacheKey(key))continue;
             std::string path = CurrencyIconCachePath(key);
             if (HttpClient::DownloadToFile(imageUrl, path)) {
                 std::lock_guard<std::mutex> lock(s_mutex);

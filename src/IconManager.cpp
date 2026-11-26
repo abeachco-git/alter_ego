@@ -1,4 +1,5 @@
 #include "HttpClient.h"
+#include "ExternalResourceSafety.h"
 #include "BackgroundWorkers.h"
 #include <ctime>
 #include "IconManager.h"
@@ -148,10 +149,12 @@ void IconManager::SaveNetworkFailures() {
 bool IconManager::DownloadToFile(const std::string& url, const std::string& filePath) {
     if (AlterEgo::Background::Workers().Stopping()) return {};
     // All dynamic artwork uses the common HTTP transport and diagnostics.
+    if(!AlterEgo::ExternalResource::ArtworkUrl(url))return false;
     auto response=Skinventory::HttpClient::GetEx(url);
     if(response.status_code<200||response.status_code>=300||response.body.empty()||
        response.body.size()>32u*1024u*1024u)return false;
     const auto& buffer=response.body;
+    if(!AlterEgo::ExternalResource::ImageHeader(buffer))return false;
 
     // Verify image magic bytes (PNG or JPEG)
     bool isPng = (buffer.size() >= 8 && buffer[0] == (char)0x89 && buffer[1] == 'P' && buffer[2] == 'N' && buffer[3] == 'G');

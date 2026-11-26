@@ -104,6 +104,16 @@ inline void InsertRecord(Connection& db, const std::string& table,
                          const Fields& fields, Json extra,
                          const std::string& trailingColumns = {},
                          const Keys& trailing = {}) {
+    // Fixed shapes, not just syntactically valid identifiers.
+    const bool allowed=
+        (table=="component_payloads"&&keyColumns=="kind,component_id,flags"&& &fields==&rootFields)||
+        (table=="build_specializations"&&keyColumns=="kind,component_id,ordinal,traits_present"&& &fields==&specFields)||
+        (table=="skill_bars"&&keyColumns=="kind,component_id,bar,utilities_present"&& &fields==&barFields)||
+        (table=="gear_slots"&&keyColumns=="kind,component_id,slot,flags"&& &fields==&gearFields)||
+        (table=="infusion_requirements"&&keyColumns=="kind,component_id,ordinal"&& &fields==&requirementFields)||
+        (table=="loadouts"&&keyColumns=="id,ordinal,fashion_id,modes_present,equipment_set_id"&& &fields==&metadataFields);
+    if(!allowed||(!trailingColumns.empty()&&(table!="gear_slots"||trailingColumns!="raw_slot_json")))
+        throw Database::Error(SQLITE_MISUSE,"Unapproved relational SQL shape");
     std::string sql="INSERT INTO "+table+"("+keyColumns;
     for(const auto& f:fields) sql+=","+std::string(f.column);
     sql+=",extension_json";

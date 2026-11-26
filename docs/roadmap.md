@@ -194,4 +194,5 @@ Character propagation evidence: the [GW2 API client endpoint documentation](http
 
 - [x] Shared bounded JSON parser for clipboard, backup/library imports and runtime Wiki JSON; reject duplicate keys, depth/size/event excess and raw NUL. Regression cases added; CI and live import verification pending.
 - [x] Reject malformed Base64 and mismatched AE2 envelope lengths before metadata requests; preserve v2/v3 and unpadded legacy chat links. Prepared SQL rejects trailing statements.
-- [ ] Validate remote destination and redirects, image signatures/dimensions and build-time Wiki generation; further field/schema validation, SQL identifier restrictions and parser fuzzing with sanitizers. Preserve original import compatibility.
+- [x] Runtime approved HTTPS origins, bounded redirects, per-resource size caps, image headers/dimensions and safe currency cache keys; build Wiki redirect restriction and C++ literal escaping. SQL parameter completeness and insert shape allowlist. CI and live verification pending.
+- [ ] Further field/schema validation (including settings, legacy imports and imported assets), remaining SQL raw execution guard, complete image-decoder safety, and parser fuzzing with sanitizers. Preserve original import compatibility.

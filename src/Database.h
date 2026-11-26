@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
+#include <algorithm>
 
 namespace AlterEgo::Database {
 
@@ -28,6 +30,8 @@ inline void Check(sqlite3* db, int rc, const char* operation) {
 class Statement {
     sqlite3* db_;
     sqlite3_stmt* stmt_ = nullptr;
+    std::vector<bool> bound_;
+    void Mark(int index){bound_.at(static_cast<std::size_t>(index-1))=true;}
 public:
     Statement(sqlite3* db, const char* sql) : db_(db) {
         const char* tail=nullptr;
@@ -39,6 +43,8 @@ public:
         if (!stmt_) throw Error(SQLITE_MISUSE, "Empty SQL statement");
         while(tail && *tail && std::isspace(static_cast<unsigned char>(*tail)))++tail;
         if(tail && *tail){sqlite3_finalize(stmt_);stmt_=nullptr;throw Error(SQLITE_MISUSE,"Unexpected trailing SQL");}
+        try{bound_.resize(static_cast<std::size_t>(sqlite3_bind_parameter_count(stmt_)),false);}
+        catch(...){sqlite3_finalize(stmt_);stmt_=nullptr;throw;}
     }
     ~Statement() { sqlite3_finalize(stmt_); }
     Statement(const Statement&) = delete;
@@ -47,18 +53,19 @@ public:
     Statement& operator=(Statement&&) = delete;
 
     void Bind(int index, std::int64_t value) {
-        Check(db_, sqlite3_bind_int64(stmt_, index, value), "bind integer");
+        Check(db_, sqlite3_bind_int64(stmt_, index, value), "bind integer");Mark(index);
     }
     void Bind(int index, const std::string& value) {
         if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
             throw Error(SQLITE_TOOBIG, "Text binding exceeds size limit");
         Check(db_, sqlite3_bind_text(stmt_, index, value.data(),
-            static_cast<int>(value.size()), SQLITE_TRANSIENT), "bind text");
+            static_cast<int>(value.size()), SQLITE_TRANSIENT), "bind text");Mark(index);
     }
     void BindNull(int index) {
-        Check(db_, sqlite3_bind_null(stmt_, index), "bind null");
+        Check(db_, sqlite3_bind_null(stmt_, index), "bind null");Mark(index);
     }
     bool Step() {
+        if(std::find(bound_.begin(),bound_.end(),false)!=bound_.end())throw Error(SQLITE_MISUSE,"Missing SQL parameter binding");
         const int rc = sqlite3_step(stmt_);
         if (rc == SQLITE_ROW) return true;
         if (rc == SQLITE_DONE) return false;
@@ -71,6 +78,7 @@ public:
     void Reset() {
         Check(db_, sqlite3_reset(stmt_), "reset");
         Check(db_, sqlite3_clear_bindings(stmt_), "clear bindings");
+        std::fill(bound_.begin(),bound_.end(),false);
     }
     bool IsNull(int column) const {
         return sqlite3_column_type(stmt_, column) == SQLITE_NULL;

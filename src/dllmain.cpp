@@ -2315,7 +2315,7 @@ static void FetchActiveSpecialEvent() {
                 auto response=Skinventory::HttpClient::GetEx(
                     "https://wiki.guildwars2.com/api.php?action=parse&page=Special_event&prop=wikitext&format=json");
                 if(response.status_code!=200)throw std::runtime_error("Wiki special event HTTP failure");
-                auto j=nlohmann::json::parse(response.body);
+                auto j=AlterEgo::Untrusted::Parse(response.body,AlterEgo::Untrusted::Wiki);
                 const auto& parsed=j.at("parse");
                 auto body=parsed.at("wikitext").at("*").get<std::string>();
                 if(parsed.at("title").get<std::string>()!="Special event"||!W::ValidSpecialBody(body))

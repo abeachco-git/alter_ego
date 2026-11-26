@@ -16,11 +16,10 @@ inline void Configure(HINTERNET session) {
 }
 // Do not return a successful partial body after a read failure or shutdown.
 template<class Append>
-bool ReadBody(HINTERNET request, Append append) {
+bool ReadBody(HINTERNET request, Append append, std::size_t maxBody=64u*1024u*1024u) {
     char buffer[8192];
     using Clock = std::chrono::steady_clock;
     const auto deadline = Clock::now() + std::chrono::seconds(30);
-    constexpr std::size_t maxBody = 64u * 1024u * 1024u;
     std::size_t total = 0;
     while (!Background::Workers().Stopping() && Clock::now() < deadline) {
         DWORD count = 0;

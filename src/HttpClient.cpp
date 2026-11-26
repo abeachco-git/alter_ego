@@ -1,4 +1,6 @@
 #include "HttpSafety.h"
+#include "ExternalResourceSafety.h"
+#include "UntrustedInput.h"
 #include "HttpClient.h"
 #include "ArenaNetTransport.h"
 #include "ArenaNetAdmission.h"
@@ -42,6 +44,41 @@ namespace Skinventory {
     bool TrackedArtwork(const std::string& url){return AlterEgo::ApiActivity::RenderUrl(url)||AlterEgo::ApiActivity::WikiUrl(url);}
     int StatusCode(HINTERNET h){DWORD code=0,size=sizeof(code);HttpQueryInfoA(h,HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER,&code,&size,nullptr);return static_cast<int>(code);}
     }
+    namespace {
+    namespace R=AlterEgo::ExternalResource;
+    std::size_t LimitFor(const std::string& url) {
+        if(R::ArtworkUrl(url))return R::ArtworkBytes;
+        if(R::Classify(url)==R::Origin::Wiki)return AlterEgo::Untrusted::Wiki.bytes;
+        if(R::Classify(url)==R::Origin::SnowCrows||R::Classify(url)==R::Origin::MetaBattle)return 3u*1024u*1024u;
+        return 64u*1024u*1024u;
+    }
+    HINTERNET OpenChecked(HINTERNET session,const std::string& initial,const char* headers,DWORD headerSize,DWORD flags) {
+        if(R::Classify(initial)==R::Origin::Unknown)return nullptr;
+        auto url=initial;
+        for(unsigned hop=0;hop<=4;++hop){
+            if(AlterEgo::Background::Workers().Stopping())return nullptr;
+            auto h=InternetOpenUrlA(session,url.c_str(),headers,headerSize,flags|INTERNET_FLAG_NO_AUTO_REDIRECT,0);
+            if(!h)return nullptr;
+            const int status=StatusCode(h);
+            if(status!=301&&status!=302&&status!=303&&status!=307&&status!=308)return h;
+            char location[16385]{};DWORD count=sizeof(location);
+            const bool got=HttpQueryInfoA(h,HTTP_QUERY_LOCATION,location,&count,nullptr)!=FALSE;
+            InternetCloseHandle(h);
+            if(!got||!count||count>=sizeof(location)||hop==4)return nullptr;
+            std::string_view raw(location,count);
+            if(raw.find('\0')!=std::string_view::npos)return nullptr;
+            for(unsigned char c:raw)if(c<=32||c==127||c=='\\')return nullptr;
+            char combined[16385]{};DWORD length=sizeof(combined);
+            if(!InternetCombineUrlA(url.c_str(),location,combined,&length,0))return nullptr;
+            std::string next(combined);
+            if(!R::SafeRedirect(url,next))return nullptr;
+            // Never forward custom headers to a changed host.
+            if(headers&&url.substr(0,url.find('/',8))!=next.substr(0,next.find('/',8)))return nullptr;
+            url=std::move(next);
+        }
+        return nullptr;
+    }
+    }
     std::size_t HttpClient::WikiWaiting(){return wikiGate.Waiting();}
 
     std::string HttpClient::Get(const std::string& url) {
@@ -66,7 +103,7 @@ namespace Skinventory {
         }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
-        HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
+        HINTERNET hUrl = OpenChecked(hInternet, url, NULL, 0, flags);
         if (!hUrl || AlterEgo::Background::Workers().Stopping()) {
             if (hUrl) InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
@@ -76,7 +113,7 @@ namespace Skinventory {
         const int status=StatusCode(hUrl);
         activity.Status(status);wiki.Status(status);
         std::string result;
-        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.append(data, count); });
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.append(data, count); },LimitFor(url));
 
         if(complete)activity.Complete();
         InternetCloseHandle(hUrl);
@@ -104,7 +141,7 @@ namespace Skinventory {
         }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
-        HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
+        HINTERNET hUrl = OpenChecked(hInternet, url, NULL, 0, flags);
         if (!hUrl || AlterEgo::Background::Workers().Stopping()) {
             if (hUrl) InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
@@ -118,7 +155,7 @@ namespace Skinventory {
         result.status_code = (int)statusCode;
         activity.Status(result.status_code);wiki.Status(result.status_code);
 
-        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.body.append(data, count); });
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.body.append(data, count); },LimitFor(url));
 
         if(complete)activity.Complete();
         InternetCloseHandle(hUrl);
@@ -146,8 +183,7 @@ namespace Skinventory {
         }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
-        HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(),
-            headers.c_str(), (DWORD)headers.size(), flags, 0);
+        HINTERNET hUrl = OpenChecked(hInternet, url, headers.c_str(), (DWORD)headers.size(), flags);
         if (!hUrl || AlterEgo::Background::Workers().Stopping()) {
             if (hUrl) InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
@@ -161,7 +197,7 @@ namespace Skinventory {
         result.status_code = (int)statusCode;
         activity.Status(result.status_code);wiki.Status(result.status_code);
 
-        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.body.append(data, count); });
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { result.body.append(data, count); },LimitFor(url));
 
         if(complete)activity.Complete();
         InternetCloseHandle(hUrl);
@@ -226,7 +262,7 @@ namespace Skinventory {
                        &statusCode, &statusSize, NULL);
         result.status_code = (int)statusCode;
 
-        const bool complete = AlterEgo::HttpSafety::ReadBody(hRequest, [&](const char* data, DWORD count) { result.body.append(data, count); });
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hRequest, [&](const char* data, DWORD count) { result.body.append(data, count); },LimitFor(url));
 
         InternetCloseHandle(hRequest);
         InternetCloseHandle(hConnect);
@@ -235,6 +271,7 @@ namespace Skinventory {
     }
 
     bool HttpClient::DownloadToFile(const std::string& url, const std::string& filePath) {
+        if(!R::ArtworkUrl(url))return false;
         if (AlterEgo::Background::Workers().Stopping()) return {};
         WikiLease wiki(url);
         if(!wiki.Ready())return {};
@@ -249,8 +286,8 @@ namespace Skinventory {
         }
         wiki.Starting();
         AlterEgo::ApiActivity::Attempt activity(ArtworkEndpoint(url),TrackedArtwork(url));
-        HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0,
-            INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
+        HINTERNET hUrl = OpenChecked(hInternet, url, NULL, 0,
+            INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE);
         if (!hUrl || AlterEgo::Background::Workers().Stopping()) {
             if (hUrl) InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
@@ -260,7 +297,7 @@ namespace Skinventory {
         const int status=StatusCode(hUrl);
         activity.Status(status);wiki.Status(status);
         std::vector<char> buffer;
-        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { buffer.insert(buffer.end(), data, data + count); });
+        const bool complete = AlterEgo::HttpSafety::ReadBody(hUrl, [&](const char* data, DWORD count) { buffer.insert(buffer.end(), data, data + count); },R::ArtworkBytes);
 
         if(complete)activity.Complete();
         InternetCloseHandle(hUrl);
@@ -268,11 +305,16 @@ namespace Skinventory {
 
         if (!complete || AlterEgo::Background::Workers().Stopping() || status<200 || status>=300 || buffer.empty()) return false;
 
-        std::ofstream file(filePath, std::ios::binary);
+        if(!R::ImageHeader(std::string_view(buffer.data(),buffer.size())))return false;
+        const auto temporary=filePath+".part";
+        std::ofstream file(temporary, std::ios::binary|std::ios::trunc);
         if (!file.is_open()) return false;
-        file.write(buffer.data(), buffer.size());
+        file.write(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         file.close();
-        return file.good();
+        if(!file.good()||!MoveFileExA(temporary.c_str(),filePath.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
+            DeleteFileA(temporary.c_str());return false;
+        }
+        return true;
     }
 
 }
