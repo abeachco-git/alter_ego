@@ -39,7 +39,7 @@ struct View {
 std::atomic<uint64_t> inventoryGeneration{0};
 uint32_t revealItem=0;
 InventoryNavigation navigation;
-std::set<std::string> expandedInventoryGroups;
+std::set<std::string> expandedInventoryGroups,guildCollapsedGroups;
 bool groupRevealPending=false;
 // Render-thread preferences, persisted in the ordinary settings file.
 std::set<uint32_t> walletPins;
@@ -838,6 +838,11 @@ void SetInventoryGrouped(bool value){
     if(navigation.grouped!=value){navigation.grouped=value;navigation.group.clear();groupRevealPending=value&&navigation.item!=0;}
 }
 std::set<std::string> InventoryExpandedGroups(){return expandedInventoryGroups;}
+std::set<std::string> GuildCollapsedGroups(){return guildCollapsedGroups;}
+void SetGuildCollapsedGroups(const std::set<std::string>& value){
+    guildCollapsedGroups.clear();
+    for(const auto& key:value)if(!key.empty()&&key.size()<=1024&&guildCollapsedGroups.size()<4096)guildCollapsedGroups.insert(key);
+}
 void SetInventoryExpandedGroups(const std::set<std::string>& value){
     expandedInventoryGroups.clear();
     for(const auto& key:value)if(!key.empty()&&key.size()<=1024&&expandedInventoryGroups.size()<4096)expandedInventoryGroups.insert(key);
@@ -938,6 +943,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             // Plain searchable list, no filter popup: same SearchField used by Characters.
             UI::SearchField("guild_search","Search items or ID",q);
         }
+        const auto searchWords=AlterEgo::Search::Words(q);
         if(subview==1){
             for(const auto& a:accounts){
                 if(multi&&all)ImGui::TextUnformatted(Display(a).c_str());
@@ -945,7 +951,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                 // including per-account failures and stale timestamps in its tooltip.
                 ImGui::PushID(a.id.c_str());
                 std::vector<const WalletRow*> visible;
-                for(const auto& w:v->inventory.wallet)if(w.account==a.id&&Match(w.name,w.id,q)&&(!pinFilter||walletPins.count(w.id))&&(!balanceFilter||w.value>0))visible.push_back(&w);
+                for(const auto& w:v->inventory.wallet)if(w.account==a.id&&Match(w.name,w.id,searchWords)&&(!pinFilter||walletPins.count(w.id))&&(!balanceFilter||w.value>0))visible.push_back(&w);
                 std::stable_sort(visible.begin(),visible.end(),[&](const WalletRow* a,const WalletRow* b){
                     const bool fa=walletPins.count(a->id),fb=walletPins.count(b->id);
                     if(fa!=fb)return fa;
@@ -998,7 +1004,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                     ImGui::TextDisabled("%s%s",g.status.c_str(),Due("Guild bank",0,g.success,Now())?" (stale)":"");
                     ImGui::TextUnformatted("Shared coins:");ImGui::SameLine();RenderCoins(g.coins);
                     std::map<uint32_t,std::pair<const Row*,int64_t>> groups;
-                    for(const auto& r:g.rows)if(Match(r.name,r.slot.id,q)){auto& x=groups[r.slot.id];x.first=&r;x.second+=r.slot.count;}
+                    for(const auto& r:g.rows)if(Match(r.name,r.slot.id,searchWords)){auto& x=groups[r.slot.id];x.first=&r;x.second+=r.slot.count;}
                     for(const auto& [item,x]:groups){
                         ImGui::PushID(static_cast<int>(item));
                         const auto& row=*x.first;
@@ -1049,7 +1055,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             UI::FilterChoice("Transferability",transfer,transferOptions,2);
         },
         [&]{scope.clear();binding.clear();rarity.clear();type.clear();characterFilter.clear();freshness=minQuantity=transfer=0;});
-    if(query!=previousQuery){nav.item=0;nav.currency=false;nav.group.clear();groupRevealPending=false;}
+    // Preserve typed selection while it still matches the rebuilt projection.
+    if(query!=previousQuery)groupRevealPending=false;
     const char* sorts[]={"Name","Quantity"};ImGui::SetNextItemWidth(120);UI::Combo("##inventory_sort",&sort,sorts,2);
     auto tokens=Skinventory::Search::Words(query);
     // Explicit Find in Inventory navigation can reveal even an unusually short ID.
@@ -1234,12 +1241,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                     if(c.account_name==node.account&&c.name==node.character){profession=c.profession;break;}
                 std::function<void(ImDrawList*,ImVec2,ImVec2)> decorate;
                 if(!profession.empty())decorate=[&](ImDrawList* d,ImVec2 a,ImVec2 b){DrawInventoryCharacterLabel(d,a,b,profession,node.label);};
-                const bool open=forceExpand||expandedInventoryGroups.count(node.key)!=0;
-                if(UI::CatalogBranchRow(i,open,node.label,decorate)&&!forceExpand){
-                    if(open)expandedInventoryGroups.erase(node.key);
-                    else if(expandedInventoryGroups.size()<4096)expandedInventoryGroups.insert(node.key);
-                    expansionChanged=true;
-                }
+                const bool open=GroupBrowse::Expanded(expandedInventoryGroups,node.key,false,forceExpand);
+                if(UI::CatalogBranchRow(i,open,node.label,decorate)&&GroupBrowse::Toggle(expandedInventoryGroups,node.key,forceExpand))expansionChanged=true;
             }
             ImGui::PopID();
             if(indent>0)ImGui::Unindent(indent);

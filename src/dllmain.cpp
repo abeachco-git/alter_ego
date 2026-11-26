@@ -927,6 +927,7 @@ static std::vector<std::string> g_SourceRefreshNotes;
 static std::optional<std::vector<AlterEgo::SnowCrows::InfusionTotal>> g_SourceInfusionOffer;
 static bool g_LibDetailsFetched = false;
 static std::unordered_set<std::string> g_LibCollapsedProfessions; // session-persisted
+static std::set<std::string> g_ComponentCollapsedKinds;
 // Inline edit buffers — std::string + ImGui resize callback so long names
 // or notes are never silently truncated by a fixed buffer size.
 static std::string g_LibEditName;
@@ -1646,6 +1647,7 @@ static bool SaveSettings() {
     j["wallet_pins"] = AlterEgo::NativeAccounts::WalletPins();
     j["inventory_grouped"]=AlterEgo::NativeAccounts::InventoryGrouped();
     j["inventory_expanded_groups"]=AlterEgo::NativeAccounts::InventoryExpandedGroups();
+    j["guild_collapsed_groups"]=AlterEgo::NativeAccounts::GuildCollapsedGroups();
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
     j["warn_stale_specialization"] = g_WarnStaleSpecialization;
     j["birthday_mode"] = g_BirthdayMode;
@@ -1711,6 +1713,9 @@ static void LoadSettings() {
     AlterEgo::NativeAccounts::SetInventoryGrouped(inventoryGrouped);
     if(j.contains("inventory_expanded_groups")&&j["inventory_expanded_groups"].is_array()&&j["inventory_expanded_groups"].size()<=4096){
         try{AlterEgo::NativeAccounts::SetInventoryExpandedGroups(j["inventory_expanded_groups"].get<std::set<std::string>>());}catch(...){}
+    }
+    if(j.contains("guild_collapsed_groups")&&j["guild_collapsed_groups"].is_array()&&j["guild_collapsed_groups"].size()<=4096){
+        try{AlterEgo::NativeAccounts::SetGuildCollapsedGroups(j["guild_collapsed_groups"].get<std::set<std::string>>());}catch(...){}
     }
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
     AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;
@@ -1792,6 +1797,7 @@ static bool SaveSession() {
     if(!g_LibSelectedId.empty())j["lib_selected_id"]=g_LibSelectedId;
     j["lib_filter_modes"] = g_LibFilterModes;
     j["lib_collapsed_professions"] = g_LibCollapsedProfessions;
+    j["component_collapsed_kinds"] = g_ComponentCollapsedKinds;
     if (!g_LibCompareBuildId.empty()) j["compare_saved_id"] = g_LibCompareBuildId;
 
     // Account selector
@@ -1847,6 +1853,10 @@ static void LoadSession() {
             for (const auto& prof : j["lib_collapsed_professions"])
                 if (prof.is_string())
                     g_LibCollapsedProfessions.insert(prof.get<std::string>());
+        }
+        if(j.contains("component_collapsed_kinds")&&j["component_collapsed_kinds"].is_array()&&j["component_collapsed_kinds"].size()<=32){
+            g_ComponentCollapsedKinds.clear();
+            for(const auto& kind:j["component_collapsed_kinds"])if(kind.is_string()&&kind.get<std::string>().size()<=64)g_ComponentCollapsedKinds.insert(kind.get<std::string>());
         }
         if (j.contains("compare_saved_id"))
             g_LibCompareBuildId = j["compare_saved_id"].get<std::string>();
@@ -6806,27 +6816,17 @@ static void OpenGearDialog(const std::string& buildId, const std::string& slot,
 static std::vector<std::shared_ptr<const AlterEgo::ItemStatInfo>> GetSortedStatCombos(const char* filter) {
     std::vector<std::shared_ptr<const AlterEgo::ItemStatInfo>> result;
     const auto& allStats = AlterEgo::GW2API::GetAllItemStats();
-    std::string filterLower;
-    if (filter && filter[0]) {
-        filterLower = filter;
-        for (auto& c : filterLower) c = (char)tolower(c);
-    }
+    const auto searchWords=AlterEgo::Search::Words(filter?filter:"");
     std::set<std::string> seenNames;
     for (const auto& [id, row] : allStats) {
         const auto& info=*row;
         if (info.name.empty() || info.attributes.empty()) continue;
         // Deduplicate: GW2 API has multiple stat IDs with the same name (different tiers)
         if (!seenNames.insert(info.name).second) continue;
-        if (!filterLower.empty()) {
-            std::string nameLower = info.name;
-            for (auto& c : nameLower) c = (char)tolower(c);
-            bool matchesAttr = false;
-            for (const auto& a : info.attributes) {
-                std::string aLower = FriendlyAttrName(a);
-                for (auto& c : aLower) c = (char)tolower(c);
-                if (aLower.find(filterLower) != std::string::npos) { matchesAttr = true; break; }
-            }
-            if (nameLower.find(filterLower) == std::string::npos && !matchesAttr) continue;
+        if (!searchWords.empty()) {
+            std::vector<std::string> fields{info.name};
+            for(const auto& a:info.attributes)fields.push_back(FriendlyAttrName(a));
+            if(!AlterEgo::Search::MatchesFields(searchWords,fields))continue;
         }
         result.push_back(row);
     }
@@ -6879,22 +6879,11 @@ static bool RenderCardSelector(const char* searchBuf, const char* childId,
                                const char* const* names, const char* const* descs, int count,
                                const std::string& currentSelection) {
     bool changed = false;
-    std::string filterLower;
-    if (searchBuf && searchBuf[0]) {
-        filterLower = searchBuf;
-        for (auto& c : filterLower) c = (char)tolower(c);
-    }
+    const auto searchWords=AlterEgo::Search::Words(searchBuf?searchBuf:"");
 
     ImGui::BeginChild(childId, ImVec2(0, -30), true);
     for (int i = 0; i < count; i++) {
-        if (!filterLower.empty()) {
-            std::string nameLow = names[i];
-            for (auto& c : nameLow) c = (char)tolower(c);
-            std::string descLow = descs[i];
-            for (auto& c : descLow) c = (char)tolower(c);
-            if (nameLow.find(filterLower) == std::string::npos &&
-                descLow.find(filterLower) == std::string::npos) continue;
-        }
+        if(!AlterEgo::Search::MatchesFields(searchWords,{names[i],descs[i]}))continue;
 
         ImGui::PushID(i);
         bool isSelected = (currentSelection == names[i]);
@@ -11260,13 +11249,8 @@ static void RenderBuildLibrary() {
         };
         std::vector<LibraryGroup> groups;
         std::unordered_map<std::string, size_t> groupLookup;
-        const bool searching = g_LibSearchBuf[0] != '\0';
-        std::string searchText;
-        if (searching) {
-            searchText = g_LibSearchBuf;
-            std::transform(searchText.begin(), searchText.end(),
-                searchText.begin(), ::tolower);
-        }
+        const auto searchWords=AlterEgo::Search::Words(g_LibSearchBuf);
+        const bool searching=!searchWords.empty();
         for (int i = 0; i < static_cast<int>(builds.size()); ++i) {
             const auto& b = builds[i];
             auto found = groupLookup.find(b.profession);
@@ -11279,10 +11263,12 @@ static void RenderBuildLibrary() {
             ++group.total;
             if (!GameModeMatchesFilter(b, g_LibFilterModes)) continue;
             if (searching) {
-                std::string lowerName = b.name;
-                std::transform(lowerName.begin(), lowerName.end(),
-                    lowerName.begin(), ::tolower);
-                if (lowerName.find(searchText) == std::string::npos) continue;
+                std::vector<std::string> fields{b.name,b.profession};
+                for(const auto& specialization:b.specializations) {
+                    const auto info=AlterEgo::GW2API::GetSpecInfo(specialization.spec_id);
+                    if(info)fields.push_back(info->name);
+                }
+                if(!AlterEgo::Search::MatchesFields(searchWords,fields))continue;
             }
             group.visible.push_back(i);
             if(b.id==g_LibSelectedId)selectedMatches=true;
@@ -11295,17 +11281,12 @@ static void RenderBuildLibrary() {
             ImGui::PushID(profession.c_str());
             if (anyGroupDrawn) ImGui::Spacing();
             anyGroupDrawn = true;
-            const bool storedExpanded = !g_LibCollapsedProfessions.count(profession);
-            const bool expanded = searching || storedExpanded;
+            const bool expanded = AlterEgo::GroupBrowse::Expanded(g_LibCollapsedProfessions,profession,true,searching);
 
             // No sidebar font override: same heading scale, +/- control,
             // and vertical metrics as Vault and Clears.
             if (AlterEgo::CompletionTheme::CenteredSectionToggle(
-                    expanded, profession.c_str()) && !searching) {
-                if (storedExpanded) g_LibCollapsedProfessions.insert(profession);
-                else g_LibCollapsedProfessions.erase(profession);
-                SaveSession();
-            }
+                    expanded, profession.c_str()) && AlterEgo::GroupBrowse::Toggle(g_LibCollapsedProfessions,profession,searching)) SaveSession();
             const std::string displayName =
                 profession == "Necromancer" ? "Necro" : profession;
             const std::string count = std::to_string(group.visible.size());
@@ -11322,12 +11303,8 @@ static void RenderBuildLibrary() {
 
             // SectionHeading lays out the real row. This overlay makes the
             // title draggable while leaving the +/- button fully clickable.
-            const ImVec2 headerMin = ImGui::GetItemRectMin();
-            const ImVec2 headerMax = ImGui::GetItemRectMax();
-            const ImVec2 afterHeading = ImGui::GetCursorScreenPos();
-            ImGui::SetCursorScreenPos(headerMin);
-            ImGui::InvisibleButton("##moveProfession",
-                ImVec2(headerMax.x-headerMin.x,headerMax.y-headerMin.y));
+            const auto heading=AlterEgo::CompletionTheme::BeginHeadingTarget("##moveProfession");
+            const auto headerMin=heading.min,headerMax=heading.max;
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Drag to reorder %s and all its builds. Right-click to create a build.",
                     profession.c_str());
@@ -11363,7 +11340,7 @@ static void RenderBuildLibrary() {
                 }
                 ImGui::EndDragDropTarget();
             }
-            ImGui::SetCursorScreenPos(afterHeading);
+            AlterEgo::CompletionTheme::EndHeadingTarget(heading);
             if (!expanded) { ImGui::PopID(); continue; }
 
             for (const int i : group.visible) {
@@ -14325,10 +14302,10 @@ static void RenderAchievements() {
     const auto frame=CaptureAchFrame();
 
     // Search mode — cached results to avoid iterating 8000+ names every frame
-    bool searchActive = g_AchSearchBuf[0] != '\0';
+    const auto achievementSearchWords=AlterEgo::Search::Words(g_AchSearchBuf);
+    bool searchActive = !achievementSearchWords.empty();
     if (searchActive) {
-        std::string query(g_AchSearchBuf);
-        std::transform(query.begin(), query.end(), query.begin(), ::tolower);
+        std::string query=AlterEgo::Search::Lower(g_AchSearchBuf);
 
         if (!g_AchNameIndexReady) {
             if (g_AchNameIndexFetching) RenderSpinner("Loading search index...");
@@ -14351,9 +14328,7 @@ static void RenderAchievements() {
             s_achSearchTruncated = false;
 
             for (const auto& [id, name] : frame.catalog->names) {
-                std::string lowerName = name;
-                std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
-                if (lowerName.find(query) != std::string::npos) {
+                if (AlterEgo::Search::Matches(name,achievementSearchWords)) {
                     // Skip achievements from hidden groups (e.g. Character Adventure Guide)
                     auto catIt = frame.groups->idToCategory.find(id);
                     if (catIt != frame.groups->idToCategory.end() && frame.groups->hiddenCats.count(catIt->second)) continue;
@@ -16020,12 +15995,7 @@ void AddonRender() {
                 std::string fetchingCharName = AlterEgo::GW2API::GetCurrentFetchCharName();
 
                 // Prepare lowercase search string
-                std::string charSearchLower;
-                if (g_CharSearchBuf[0] != '\0') {
-                    charSearchLower = g_CharSearchBuf;
-                    std::transform(charSearchLower.begin(), charSearchLower.end(),
-                                   charSearchLower.begin(), ::tolower);
-                }
+                const auto charSearchWords=AlterEgo::Search::Words(g_CharSearchBuf);
 
                 // Build account display name lookup for headers
                 bool showAcctHeaders = AlterEgo::GW2API::IsMultiAccount();
@@ -16047,15 +16017,7 @@ void AddonRender() {
                         continue;
 
                     // Apply search filter
-                    if (!charSearchLower.empty()) {
-                        std::string nameLower = ch.name;
-                        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-                        std::string profLower = ch.profession;
-                        std::transform(profLower.begin(), profLower.end(), profLower.begin(), ::tolower);
-                        if (nameLower.find(charSearchLower) == std::string::npos &&
-                            profLower.find(charSearchLower) == std::string::npos)
-                            continue;
-                    }
+                    if(!AlterEgo::Search::MatchesFields(charSearchWords,{ch.name,ch.profession}))continue;
 
                     // Account group header
                     if (showAcctHeaders && ch.account_name != lastAcctHeader) {

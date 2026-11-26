@@ -66,6 +66,8 @@ bool InventoryGrouped();
 void SetInventoryGrouped(bool value);
 std::set<std::string> InventoryExpandedGroups();
 void SetInventoryExpandedGroups(const std::set<std::string>& value);
+std::set<std::string> GuildCollapsedGroups();
+void SetGuildCollapsedGroups(const std::set<std::string>& value);
 std::string RevealAccount(uint32_t id,const std::string& selectedAccount);
 void RenderInventory(const std::string& selectedAccount,const std::function<void()>& saveSettings,float& listWidth);
 void RenderInventoryStatusRow(const std::string& selectedAccount);

@@ -1,4 +1,5 @@
 #pragma once
+#include "GroupBrowseCore.h"
 
 // Unified progress/completion visual language for Alter Ego.
 // Shared by the Characters-independent Achievements, Vault, and Clears views.
@@ -100,6 +101,15 @@ inline bool CenteredSectionToggle(bool expanded, const char* title) {
     ImGui::SetCursorScreenPos(ImVec2(labelPos.x, start.y));
     return clicked;
 }
+// Preserve the native context/drag target over the heading, not the toggle.
+struct HeadingTarget {ImVec2 min,max,after;};
+inline HeadingTarget BeginHeadingTarget(const char* id){
+    HeadingTarget target{ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),ImGui::GetCursorScreenPos()};
+    ImGui::SetCursorScreenPos(target.min);
+    ImGui::InvisibleButton(id,ImVec2(target.max.x-target.min.x,target.max.y-target.min.y));
+    return target;
+}
+inline void EndHeadingTarget(const HeadingTarget& target){ImGui::SetCursorScreenPos(target.after);}
 // Unified section title: large neutral title, small reset text, counts
 // right-aligned. Keeps all parts on one line when space allows, otherwise
 // places the right-hand summary on a second line rather than clipping.

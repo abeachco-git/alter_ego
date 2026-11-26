@@ -62,7 +62,6 @@ static std::string g_ComponentSearch;
 static bool g_ComponentUnusedOnly = false;
 static int g_ComponentSort = 0; // Name, Usage
 static bool g_ComponentSortAscending=true;
-static std::set<std::string> g_ComponentCollapsedKinds;
 static std::string g_ComponentSelectedId;
 static std::string g_ComponentSelectedKind;
 static std::string g_ComponentEditorId;
@@ -276,13 +275,6 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
     }
 }
 
-static bool ComponentUISearchMatch(std::string text, std::string needle) {
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-    std::transform(needle.begin(), needle.end(), needle.begin(),
-                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-    return text.find(needle) != std::string::npos;
-}
 #include "ComposableNativeEditor.h"
 
 static bool ComponentUIStartEditor(const std::string& mode,
@@ -623,7 +615,8 @@ static bool ComponentUICompatible(const ComponentJson& doc,
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id) {
     if(g_LibEditMode){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Loadout edit first.");return;}
     MarkNavigation();
-    g_ComponentKindFilters.clear();g_ComponentCollapsedKinds.erase(kind);
+    g_ComponentKindFilters.clear();
+    if(AlterEgo::GroupBrowse::Reveal(g_ComponentCollapsedKinds,kind,true))SaveSession();
     g_ComponentPendingKind=-1;
     g_ComponentSelectedKind = kind;
     g_ComponentSelectedId = id;
@@ -1249,7 +1242,8 @@ static void RenderComponentLibrary() {
     struct Entry {const ComponentJson* item;ComponentBrowse::SortKey key;};
     struct Group {std::string kind;std::vector<Entry> items;};
     std::vector<Group> groups;size_t count=0;
-    const bool searching=!g_ComponentSearch.empty();
+    const auto searchWords=AlterEgo::Search::Words(g_ComponentSearch);
+    const bool searching=!searchWords.empty();
     const bool filtered=searching||g_ComponentUnusedOnly||!g_ComponentKindFilters.empty();
     for(int n:kComponentGroupOrder){
         const std::string kind=kComponentKinds[n].kind;
@@ -1261,8 +1255,7 @@ static void RenderComponentLibrary() {
             const auto id=item.value("id",std::string()),name=item.value("name",id);
             const int references=ComponentUIUsage(doc,kind,id);
             if(g_ComponentUnusedOnly&&references>0)continue;
-            if(!ComponentUISearchMatch(name,g_ComponentSearch)&&!ComponentUISearchMatch(id,g_ComponentSearch)&&
-               !ComponentUISearchMatch(ComponentUIShortDescription(kind,item["data"]),g_ComponentSearch))continue;
+            if(!AlterEgo::Search::MatchesFields(searchWords,{name,id,ComponentUIShortDescription(kind,item["data"])}))continue;
             g.items.push_back({&item,ComponentBrowse::Key(name,id,references)});
         }
         if(filtered&&g.items.empty())continue;
@@ -1280,18 +1273,16 @@ static void RenderComponentLibrary() {
         const auto& kind=g.kind;ImGui::PushID(kind.c_str());
         if(!first)ImGui::Spacing();
         first=false;
-        const bool expanded=searching||!g_ComponentCollapsedKinds.count(kind);
+        const bool expanded=AlterEgo::GroupBrowse::Expanded(g_ComponentCollapsedKinds,kind,true,searching);
         const auto summary=std::to_string(g.items.size());
-        if(CompletionTheme::CenteredSectionToggle(expanded,ComponentLabel(kind))&&!searching){
-            if(expanded)g_ComponentCollapsedKinds.insert(kind);else g_ComponentCollapsedKinds.erase(kind);
-        }
+        if(CompletionTheme::CenteredSectionToggle(expanded,ComponentLabel(kind))&&
+           AlterEgo::GroupBrowse::Toggle(g_ComponentCollapsedKinds,kind,searching))SaveSession();
         CompletionTheme::SectionHeading(ComponentLabel(kind),nullptr,summary.c_str(),CompletionTheme::kAvailableText);
         // The canonical heading is drawn with a dummy; add a transparent
         // hit target only over that heading, leaving the +/- button alone.
-        const auto lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax(),after=ImGui::GetCursorScreenPos();
-        ImGui::SetCursorScreenPos(lo);ImGui::InvisibleButton("##category_actions",ImVec2(hi.x-lo.x,hi.y-lo.y));
+        const auto heading=CompletionTheme::BeginHeadingTarget("##category_actions");
         if(ImGui::BeginPopupContextItem("##category_menu")){ComponentCreationMenu(kind);ImGui::EndPopup();}
-        ImGui::SetCursorScreenPos(after);
+        CompletionTheme::EndHeadingTarget(heading);
         if(expanded)for(const auto& entry:g.items){
             const auto* item=entry.item;
             const auto id=item->value("id",std::string()),name=item->value("name",id);
@@ -1525,13 +1516,11 @@ static void RenderEquipmentSetLibrary() {
     UI::SearchField("equipment_sets_search","Search equipment sets...",search);ImGui::Separator();
     bool selectedVisible=false;
     if(sets.empty())ImGui::TextDisabled("No equipment sets. Right-click to create one.");
+    const auto searchWords=AlterEgo::Search::Words(search);
     for(const auto& set:sets) {
         const auto id=set.value("id",std::string()),name=set.value("name",id);
         if(id==g_EquipmentSetSelectedId)selected=&set;
-        if(!search.empty()) {
-            auto lower=[](std::string value){for(char& c:value)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return value;};
-            if(lower(name).find(lower(search))==std::string::npos)continue;
-        }
+        if(!AlterEgo::Search::Matches(name,searchWords))continue;
         ImGui::PushID(id.c_str());
         const bool clicked=UI::SelectableOption((name+"###set_row").c_str(),id==g_EquipmentSetSelectedId);
         if((clicked||ImGui::IsItemClicked(ImGuiMouseButton_Right))&&id!=g_EquipmentSetSelectedId) {

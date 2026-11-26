@@ -1,4 +1,5 @@
 #pragma once
+#include "GroupBrowseCore.h"
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -15,10 +16,7 @@ struct GroupPath {
 };
 // Length-prefix each part; names containing separators cannot collide.
 inline std::string GroupKey(const GroupPath& p){
-    std::string key;
-    for(const auto* part:{&p.account,&p.character,&p.storage})
-        key+=std::to_string(part->size())+":"+*part;
-    return key;
+    return GroupBrowse::PathKey({p.account,p.character,p.storage});
 }
 inline int StorageRank(const std::string& s){
     const std::vector<std::string> order={"Bank","Shared inventory","Materials","Legendary Armory","Delivery box","Wallet","Equipment","Bags"};
@@ -50,14 +48,14 @@ class GroupTree {
     static void FlattenNodes(const std::vector<GroupNode>& nodes,const std::set<std::string>& expanded,bool force,int depth,std::vector<GroupLine>& out){
         for(const auto& n:nodes){
             out.push_back({&n,nullptr,depth});
-            if(!force&&!expanded.count(n.key))continue;
+            if(!GroupBrowse::Expanded(expanded,n.key,false,force))continue;
             FlattenNodes(n.children,expanded,force,depth+1,out);
             for(const auto& leaf:n.leaves)out.push_back({&n,&leaf,depth+1});
         }
     }
     static bool ExpandNodes(const std::vector<GroupNode>& nodes,const std::string& key,std::set<std::string>& expanded){
         for(const auto& n:nodes)if(n.key==key||ExpandNodes(n.children,key,expanded)){
-            expanded.insert(n.key);return true;
+            GroupBrowse::Reveal(expanded,n.key,false);return true;
         }
         return false;
     }
