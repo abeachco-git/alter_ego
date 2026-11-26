@@ -432,6 +432,26 @@ int case_composable_loadouts(int, char**) {
     assert(!ImportPortableLoadout(document, portablePacket, "imported-one", error));
     assert(ToJson(document) == afterPortable);
     assert(beforePortable["loadouts"].size() == 2);
+    // Explicit duplication keeps the source graph and opaque metadata intact.
+    {
+        auto graph=document;
+        auto* source=FindLoadout(graph,"one");assert(source);
+        source->metadata["future_field"]={{"value",42}};
+        source->fashion_id="fashion:example";
+        const auto original=*source;
+        assert(DuplicateLoadout(graph,"one","duplicate-one","One - Copy",1234,error));
+        auto* duplicate=FindLoadout(graph,"duplicate-one");assert(duplicate);
+        assert(duplicate->refs==original.refs&&duplicate->equipment_set_id==original.equipment_set_id);
+        assert(duplicate->fashion_id==original.fashion_id&&duplicate->metadata.at("future_field")==original.metadata.at("future_field"));
+        assert(duplicate->metadata.at("id")=="duplicate-one"&&duplicate->metadata.at("created")==1234);
+        assert(FindLoadout(graph,"one")->metadata==original.metadata);
+        const auto beforeRename=duplicate->metadata;
+        assert(RenameLoadout(graph,"duplicate-one","Renamed",error));
+        auto expected=beforeRename;expected["name"]="Renamed";assert(duplicate->metadata==expected);
+        assert(!DuplicateLoadout(graph,"one","duplicate-one","Conflict",0,error));
+        assert(!RenameLoadout(graph,"duplicate-one","   ",error));
+        assert(FashionUsers(graph,"fashion:example").size()==2);
+    }
     // Do not alter downstream persistence fixture, which tests the original
     // two-Loadout upstream library.
     document = untouched;

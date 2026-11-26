@@ -85,7 +85,44 @@ int case_fashion_library(int, char**) {
     Look unrelated=look;unrelated.name="Other";assert(lib.Add(unrelated)==1); // stale projection cannot overwrite edited row
     assert(lib.looks[0].notes=="Saved draft");
     assert(verified.RemoveDraft(current));assert(verified.looks.size()==1&&verified.looks[0].name=="Other");
-    assert(!verified.RemoveDraft(current));assert(verified.Remove(0));
+    assert(!verified.RemoveDraft(current));
+    const auto other=verified.looks.front();
+    assert(verified.DuplicateDraft(other,"Other - Copy")==1);
+    const auto cloned=verified.looks.back();
+    assert(cloned.id!=other.id&&cloned.wardrobe_link==other.wardrobe_link&&cloned.characters==other.characters);
+    assert(cloned.notes==other.notes&&cloned.extension==other.extension&&cloned.complete==other.complete);
+    assert(verified.RemoveDraft(cloned));
+    // Reviewed optional-reference detachment must be atomic and must not
+    // silently detach a newly linked Loadout or a differently named owner.
+    auto& store=NativeLibrary::RuntimeStore();
+    NativeLibrary::Snapshot before;std::string error;
+    assert(store.Read(before,error));auto graph=before;
+    const Composable::Json legacy={{"builds",Composable::Json::array({
+        {{"id","owner"},{"name","Owner"},{"profession","Necromancer"},
+         {"skills",{{"heal",0},{"utilities",{0,0,0}},{"elite",0}}}}
+    })}};
+    assert(Composable::SplitLegacy(legacy,graph.loadouts,error));
+    auto* owner=Composable::FindLoadout(graph.loadouts,"owner");assert(owner);
+    owner->fashion_id=other.id;
+    assert(store.Commit(before,graph,error));
+    const auto reviewed=Composable::FashionUsers(graph.loadouts,other.id);
+    assert(reviewed.size()==1);
+    assert(!verified.RemoveDraft(other)); // unreviewed references are protected
+    assert(store.Read(before,error));graph=before;
+    assert(Composable::DuplicateLoadout(graph.loadouts,"owner","second-owner","Second Owner",42,error));
+    assert(store.Commit(before,graph,error));
+    assert(!verified.RemoveDraft(other,reviewed)); // a reference was added
+    assert(store.Read(before,error));
+    assert(before.fashion.size()==1&&Composable::FashionUsers(before.loadouts,other.id).size()==2);
+    const auto reviewedBoth=Composable::FashionUsers(before.loadouts,other.id);
+    const auto originalGraph=before.loadouts;
+    assert(verified.RemoveDraft(other,reviewedBoth));
+    assert(store.Read(before,error)&&before.fashion.empty());
+    assert(before.loadouts.loadouts.size()==2);
+    for(auto& l:before.loadouts.loadouts)assert(l.fashion_id.empty());
+    auto expectedGraph=originalGraph;
+    for(auto& l:expectedGraph.loadouts)l.fashion_id.clear();
+    assert(Composable::ToJson(before.loadouts)==Composable::ToJson(expectedGraph));
     NativeLibrary::RuntimeStore().Close();
     std::filesystem::remove_all(file);
     return 0;

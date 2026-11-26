@@ -114,6 +114,31 @@ inline Loadout* FindLoadout(Document& doc, const std::string& id) {
     return nullptr;
 }
 
+// Explicit record duplication preserves the native graph rather than projecting
+// through the portable format (which intentionally omits some references).
+inline bool DuplicateLoadout(Document& doc,const std::string& sourceId,const std::string& newId,
+                             const std::string& name,int64_t created,std::string& error) {
+    if(newId.empty()||name.find_first_not_of(" \t\r\n")==std::string::npos||FindLoadout(doc,newId))
+        return Fail(error,"Invalid duplicate Loadout identity or name.");
+    auto it=std::find_if(doc.loadouts.begin(),doc.loadouts.end(),[&](const auto& l){return l.id==sourceId;});
+    if(it==doc.loadouts.end())return Fail(error,"Source Loadout no longer exists.");
+    auto copy=*it;
+    copy.id=newId;copy.metadata["id"]=newId;copy.metadata["name"]=name;copy.metadata["created"]=created;
+    doc.loadouts.insert(it+1,std::move(copy));
+    return true;
+}
+inline bool RenameLoadout(Document& doc,const std::string& id,const std::string& name,std::string& error){
+    auto* l=FindLoadout(doc,id);
+    if(!l||name.find_first_not_of(" \t\r\n")==std::string::npos)return Fail(error,"Invalid Loadout or name.");
+    l->metadata["name"]=name;return true;
+}
+// IDs and displayed names are the reviewed detachment consequences.
+inline std::map<std::string,std::string> FashionUsers(const Document& doc,const std::string& id){
+    std::map<std::string,std::string> result;
+    if(!id.empty())for(const auto& l:doc.loadouts)
+        if(l.fashion_id==id)result.emplace(l.id,l.metadata.value("name",l.id));
+    return result;
+}
 inline bool Validate(const Document& doc, std::string& error) {
     error.clear();
     for (const auto& [kind, list] : doc.components) {

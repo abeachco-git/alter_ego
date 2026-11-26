@@ -949,6 +949,8 @@ static bool g_EditReviewPending=false;
 static std::string g_LibEditBuildId;   // which build is being edited
 static AlterEgo::RecordSelection::RevisionTarget g_LibDeleteTarget;
 static bool g_LibDeletePending=false;
+static AlterEgo::UI::NameActionDraft g_LibNameAction;
+static AlterEgo::RecordSelection::RevisionTarget g_LibNameTarget;
 static std::atomic<bool> g_RelaySending{false};    // relay POST in progress
 static std::string g_RelayResultCode;  // 4-char code on success
 static std::string g_RelayResultError; // error message on failure
@@ -9270,7 +9272,7 @@ static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
 
 namespace { static void CopyPortableLoadout(const std::string& loadoutId); }
 // Shared domain action wiring for header and context menu.
-enum class SavedLoadoutAction { Copy, Compare, Edit, Delete };
+enum class SavedLoadoutAction { Copy, Compare, Edit, Rename, Duplicate, Delete };
 static void ExecuteSavedLoadoutAction(SavedLoadoutAction action,
                                       const AlterEgo::SavedBuild& build) {
     switch (action) {
@@ -9285,6 +9287,11 @@ static void ExecuteSavedLoadoutAction(SavedLoadoutAction action,
         g_LibSelectedId=build.id;
         g_LibEditBuildId = build.id;
         EnterBuildEditMode(build);
+        break;
+    case SavedLoadoutAction::Rename:
+    case SavedLoadoutAction::Duplicate:
+        g_LibNameTarget={build.id,build.name,AlterEgo::GW2API::GetBuildLibraryRevision()};
+        g_LibNameAction.Start(build.name,action==SavedLoadoutAction::Duplicate);
         break;
     case SavedLoadoutAction::Delete:
         g_LibDeleteTarget={build.id,build.name,AlterEgo::GW2API::GetBuildLibraryRevision()};g_LibDeletePending=true;
@@ -9455,17 +9462,18 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
                     }
                 }
             } else {
+            if (RenderActionButton("Edit##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit, build);
+            AlterEgo::UI::SameLineIfActionFits("Rename");
+            if (RenderActionButton("Rename##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Rename, build);
+            AlterEgo::UI::SameLineIfActionFits("Duplicate");
+            if (RenderActionButton("Duplicate##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Duplicate, build);
+            AlterEgo::UI::SameLineIfActionFits("Copy");
             if (RenderActionButton("Copy##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, build);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy Portable Loadout");
-            AlterEgo::UI::SameLineIfActionFits("Compare");
-            if (RenderActionButton("Compare##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, build);
-
             AlterEgo::UI::SameLineIfActionFits("Share");
             if (RenderActionButton("Share##headerBuild")) ImGui::OpenPopup("##share_menu");
-
-            AlterEgo::UI::SameLineIfActionFits("Edit");
-            if (RenderActionButton("Edit##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit, build);
-
+            AlterEgo::UI::SameLineIfActionFits("Compare");
+            if (RenderActionButton("Compare##headerBuild")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, build);
             AlterEgo::UI::SameLineIfActionFits("Delete");
             if (AlterEgo::UI::Button("Delete##headerBuild", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) ExecuteSavedLoadoutAction(SavedLoadoutAction::Delete, build);
 
@@ -11425,6 +11433,13 @@ static void RenderLibraryImportDialog() {
 
 }
 
+static void LoadoutCreationMenu(){
+    using namespace AlterEgo::UI;
+    if(MenuAction("New",MenuIcon::New)){
+        g_NewBuildModes={AlterEgo::GameMode::PvE};g_NewBuildDialogOpen=true;
+    }
+    if(MenuAction("Paste",MenuIcon::Paste))PastePortableLoadout();
+}
 static void RenderBuildLibrary() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
 
@@ -11538,7 +11553,7 @@ static void RenderBuildLibrary() {
                 ImGui::SetTooltip("Drag to reorder %s and all its builds. Right-click to create a build.",
                     profession.c_str());
             if (!g_LibEditMode && ImGui::BeginPopupContextItem("##profession_actions")) {
-                if (ImGui::MenuItem("New Loadout")) g_NewBuildProfessionPending = profession;
+                if (AlterEgo::UI::MenuAction("New",AlterEgo::UI::MenuIcon::New)) g_NewBuildProfessionPending = profession;
                 ImGui::EndPopup();
             }
             if (!g_LibEditMode && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
@@ -11574,7 +11589,7 @@ static void RenderBuildLibrary() {
 
             for (const int i : group.visible) {
                 const auto& b = builds[i];
-            ImGui::PushID(i);
+            ImGui::PushID(b.id.c_str());
             bool selected=(g_LibSelectedId==b.id);
             ImVec4 bProfColor = GetProfessionColor(b.profession);
 
@@ -11586,7 +11601,7 @@ static void RenderBuildLibrary() {
 
             ImGui::InvisibleButton("##buildrow", ImVec2(availW, rowH));
             bool hovered = ImGui::IsItemHovered();
-            bool clicked = ImGui::IsItemClicked();
+            bool clicked = ImGui::IsItemClicked()||ImGui::IsItemClicked(ImGuiMouseButton_Right);
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
 
@@ -11747,16 +11762,20 @@ static void RenderBuildLibrary() {
                 g_LibDetailsFetched = false;
             }
             if (!g_LibEditMode && ImGui::BeginPopupContextItem("##build_actions")) {
-                CopyNameMenuItem(b.name);
-                if (ImGui::MenuItem("Copy Portable Loadout")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy, b);
-                if (ImGui::MenuItem("Compare")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare, b);
-                if (ImGui::BeginMenu("Share")) {
-                    RenderBuildShareMenuItems(b);
-                    ImGui::EndMenu();
+                using namespace AlterEgo::UI;
+                LoadoutCreationMenu();ImGui::Separator();
+                if(MenuAction("Edit",MenuIcon::Edit))ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit,b);
+                if(MenuAction("Rename",MenuIcon::Rename))ExecuteSavedLoadoutAction(SavedLoadoutAction::Rename,b);
+                if(MenuAction("Duplicate",MenuIcon::Duplicate))ExecuteSavedLoadoutAction(SavedLoadoutAction::Duplicate,b);
+                ImGui::Separator();CopyNameMenuItem(b.name,"Copy Name",true);
+                if(MenuAction("Copy Portable Loadout",MenuIcon::Copy))ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy,b);
+                if(BeginActionMenu("Share",MenuIcon::Share)){
+                    RenderBuildShareMenuItems(b);ImGui::EndMenu();
                 }
-                if (ImGui::MenuItem("Edit")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit, b);
                 ImGui::Separator();
-                if (AlterEgo::UI::DestructiveMenuItem("Delete")) ExecuteSavedLoadoutAction(SavedLoadoutAction::Delete, b);
+                if(MenuAction("Compare",MenuIcon::Compare))ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare,b);
+                ImGui::Separator();
+                if(MenuAction("Delete",MenuIcon::Delete))ExecuteSavedLoadoutAction(SavedLoadoutAction::Delete,b);
                 ImGui::EndPopup();
             }
 
@@ -11796,14 +11815,9 @@ static void RenderBuildLibrary() {
             } // within the profession
             ImGui::PopID();
         } // profession groups
-        if (ImGui::BeginPopupContextWindow("##loadout_empty_actions",
+        if (!g_LibEditMode&&ImGui::BeginPopupContextWindow("##loadout_empty_actions",
                 ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
-            if (ImGui::MenuItem("New")) {
-                g_NewBuildModes = {AlterEgo::GameMode::PvE};
-                g_NewBuildDialogOpen = true;
-            }
-            if (ImGui::MenuItem("Paste Portable Loadout")) PastePortableLoadout();
-            ImGui::EndPopup();
+            LoadoutCreationMenu();ImGui::EndPopup();
         }
     }
 
@@ -11942,6 +11956,24 @@ static void RenderBuildLibrary() {
     }
     ImGui::EndChild();
 
+    if(!g_LibNameTarget.id.empty()){
+        using API=AlterEgo::GW2API;
+        const bool valid=g_LibNameTarget.Current(API::GetBuildLibraryRevision())&&
+            AlterEgo::RecordSelection::ById(API::GetSavedBuilds(),g_LibNameTarget.id)>=0;
+        AlterEgo::UI::RenderNameAction("Name Loadout##loadout_name_action",g_LibNameAction,valid,
+            g_LibNameAction.duplicate?"Create a separate Loadout with the same component, Equipment Set and Fashion references.":"Only the name will change.",
+            [&](const std::string& name,bool duplicate){
+                std::string savedId;
+                const bool ok=duplicate?API::DuplicateSavedLoadout(g_LibNameTarget.id,name,g_LibNameTarget.revision,&savedId):
+                    API::RenameSavedLoadout(g_LibNameTarget.id,name,g_LibNameTarget.revision);
+                if(ok){
+                    if(duplicate){g_LibSelectedId=savedId;MarkNavigation();}
+                    g_LibDetailsFetched=false;g_EditDraftId.clear();g_LibNameTarget={};
+                }
+                return ok;
+            });
+        if(!ImGui::IsPopupOpen("Name Loadout##loadout_name_action")&&!g_LibNameAction.pending)g_LibNameTarget={};
+    }
     if(g_LibDeletePending){g_LibDeletePending=false;ImGui::OpenPopup("Delete Loadout?##ctx");}
     if(ImGui::BeginPopupModal("Delete Loadout?##ctx",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoMove)){
         const auto target=g_LibDeleteTarget;

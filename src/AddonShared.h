@@ -31,8 +31,8 @@ extern AddonAPI_t* APIDefs;
 // Copy text to the Windows clipboard
 void CopyToClipboard(const std::string& text);
 // Copy plain names without IDs, formatting or chat-link encoding.
-inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Name"){
-    if(!name.empty()&&ImGui::MenuItem(label))CopyToClipboard(name);
+inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Name",bool icon=false){
+    if(!name.empty()&&(icon?AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Copy):ImGui::MenuItem(label)))CopyToClipboard(name);
 }
 
 // Draw a gradient-backed section header with a colored accent underline.

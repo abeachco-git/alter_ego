@@ -55,6 +55,68 @@ inline bool DestructiveMenuItem(const char* label, bool enabled = true) {
     ImGui::PopStyleColor();
     return clicked;
 }
+// Original vector menu icons, compiled into the DLL. Keep native MenuItem/
+// BeginMenu responsible for navigation, selection, focus and popup closing.
+// A font-responsive text gutter reserves space; drawing is non-interactive.
+enum class MenuIcon { New, Paste, Edit, Rename, Duplicate, Copy, Share, Compare, Preview, Delete, Regenerate, Open, Detach };
+inline std::string MenuIconLabel(const char* label){
+    std::string gutter;
+    const float width=ImGui::GetFontSize()*1.35f;
+    for(int i=0;i<20&&ImGui::CalcTextSize(gutter.c_str()).x<width;++i)gutter+=' ';
+    return gutter+label;
+}
+inline void DrawMenuIcon(ImDrawList* draw,ImVec2 pos,MenuIcon icon,ImU32 color,float size){
+    const float s=size*.82f;
+    pos.y+=(size-s)*.5f;pos.x+=(size-s)*.5f;
+    auto p=[&](float x,float y){return ImVec2(pos.x+x*s,pos.y+y*s);};
+    const float thick=std::max(1.f,size*.085f);
+    auto line=[&](float a,float b,float c,float d){draw->AddLine(p(a,b),p(c,d),color,thick);};
+    auto rect=[&](float a,float b,float c,float d){draw->AddRect(p(a,b),p(c,d),color,s*.08f,0,thick);};
+    auto circle=[&](float x,float y,float r){draw->AddCircle(p(x,y),s*r,color,12,thick);};
+    switch(icon){
+    case MenuIcon::New:line(.12f,.5f,.88f,.5f);line(.5f,.12f,.5f,.88f);break;
+    case MenuIcon::Paste:rect(.18f,.2f,.82f,.94f);rect(.35f,.04f,.65f,.27f);line(.34f,.48f,.66f,.48f);line(.34f,.68f,.66f,.68f);break;
+    case MenuIcon::Edit:line(.15f,.85f,.25f,.55f);line(.25f,.55f,.72f,.08f);line(.72f,.08f,.92f,.28f);line(.92f,.28f,.45f,.75f);line(.45f,.75f,.15f,.85f);line(.61f,.19f,.81f,.39f);break;
+    case MenuIcon::Rename:line(.5f,.1f,.5f,.9f);line(.27f,.1f,.73f,.1f);line(.27f,.9f,.73f,.9f);break;
+    case MenuIcon::Duplicate:rect(.06f,.06f,.62f,.62f);rect(.38f,.38f,.94f,.94f);break;
+    case MenuIcon::Copy:rect(.12f,.06f,.7f,.76f);rect(.31f,.24f,.89f,.94f);line(.45f,.48f,.74f,.48f);break;
+    case MenuIcon::Share:circle(.2f,.5f,.13f);circle(.8f,.16f,.13f);circle(.8f,.84f,.13f);line(.32f,.43f,.68f,.23f);line(.32f,.57f,.68f,.77f);break;
+    case MenuIcon::Compare:rect(.07f,.12f,.93f,.88f);line(.5f,.12f,.5f,.88f);break;
+    case MenuIcon::Preview:line(.04f,.5f,.3f,.24f);line(.3f,.24f,.7f,.24f);line(.7f,.24f,.96f,.5f);line(.96f,.5f,.7f,.76f);line(.7f,.76f,.3f,.76f);line(.3f,.76f,.04f,.5f);circle(.5f,.5f,.17f);break;
+    case MenuIcon::Delete:line(.12f,.23f,.88f,.23f);line(.36f,.1f,.64f,.1f);line(.36f,.1f,.36f,.23f);line(.64f,.1f,.64f,.23f);rect(.23f,.23f,.77f,.91f);line(.42f,.4f,.42f,.75f);line(.58f,.4f,.58f,.75f);break;
+    case MenuIcon::Regenerate:draw->PathArcTo(p(.5f,.5f),s*.35f,.1f,5.3f,12);draw->PathStroke(color,0,thick);line(.7f,.14f,.92f,.14f);line(.92f,.14f,.92f,.36f);break;
+    case MenuIcon::Open:rect(.1f,.32f,.7f,.9f);line(.42f,.55f,.9f,.08f);line(.58f,.08f,.9f,.08f);line(.9f,.08f,.9f,.4f);break;
+    case MenuIcon::Detach:line(.08f,.76f,.38f,.46f);line(.62f,.54f,.92f,.24f);line(.18f,.18f,.82f,.82f);break;
+    }
+}
+inline bool MenuAction(const char* label,MenuIcon icon,bool enabled=true,const char* reason=nullptr){
+    const auto pos=ImGui::GetCursorScreenPos();
+    auto* draw=ImGui::GetWindowDrawList();
+    const auto size=ImGui::GetFontSize();
+    const auto padded=MenuIconLabel(label);
+    const bool destructive=icon==MenuIcon::Delete;
+    const bool clicked=destructive?DestructiveMenuItem(padded.c_str(),enabled):ImGui::MenuItem(padded.c_str(),nullptr,false,enabled);
+    DrawMenuIcon(draw,pos,icon,enabled?(destructive?ImGui::GetColorU32(DestructiveText):ImGui::GetColorU32(ImGuiCol_Text)):ImGui::GetColorU32(ImGuiCol_TextDisabled),size);
+    if(!enabled&&reason&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",reason);
+    return clicked;
+}
+inline bool BeginActionMenu(const char* label,MenuIcon icon,bool enabled=true){
+    const auto pos=ImGui::GetCursorScreenPos();auto* draw=ImGui::GetWindowDrawList();
+    const auto size=ImGui::GetFontSize();const auto color=ImGui::GetColorU32(enabled?ImGuiCol_Text:ImGuiCol_TextDisabled);
+    const auto padded=MenuIconLabel(label);
+    const bool open=ImGui::BeginMenu(padded.c_str(),enabled);
+    DrawMenuIcon(draw,pos,icon,color,size);
+    return open;
+}
+inline bool AvailableActionButton(const char* label,ButtonRole role,bool enabled=true,const char* reason=nullptr){
+    if(!enabled){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
+    const bool clicked=Button(label,ImVec2(0,0),role)&&enabled;
+    if(!enabled){
+        if(reason&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",reason);
+        ImGui::PopStyleVar();ImGui::PopItemFlag();
+    }
+    return clicked;
+}
 // Shared split dropdown row: primary label navigates, independent side
 // chevron opens a flyout. Caller owns popup contents and close policy.
 struct TabFlyoutResult {bool clicked=false;ImVec2 anchor;};
@@ -156,6 +218,32 @@ inline bool InputTextMultiline(const char* label, std::string& str, const ImVec2
                                ImGuiInputTextFlags flags = 0) {
     return ImGui::InputTextMultiline(label, str.data(), str.capacity() + 1, size,
         flags | ImGuiInputTextFlags_CallbackResize, ResizeString, &str);
+}
+// Name-only record operations. The caller owns the stable target, validation
+// and commit. Failed transactions leave the name and popup intact.
+struct NameActionDraft{
+    std::string name,error;
+    bool pending=false,duplicate=false;
+    void Start(const std::string& original,bool copy){
+        name=original+(copy?" - Copy":"");error.clear();duplicate=copy;pending=true;
+    }
+};
+template<class Commit>
+inline void RenderNameAction(const char* popup,NameActionDraft& draft,bool valid,const char* explanation,Commit commit){
+    if(draft.pending){draft.pending=false;ImGui::OpenPopup(popup);}
+    if(!ImGui::BeginPopupModal(popup,nullptr,ImGuiWindowFlags_AlwaysAutoResize))return;
+    ImGui::TextUnformatted(draft.duplicate?"Duplicate record":"Rename record");
+    if(explanation&&*explanation)ImGui::TextWrapped("%s",explanation);
+    if(!valid)ImGui::TextWrapped("Record changed. Cancel and review again.");
+    ImGui::SetNextItemWidth(std::max(220.f,ImGui::GetFontSize()*22.f));
+    InputText("Name",draft.name);
+    const auto action=SaveCancel("name_action",valid&&draft.name.find_first_not_of(" \t\r\n")!=std::string::npos,draft.duplicate?"Duplicate":"Save");
+    if(action==EditAction::Save){
+        if(commit(draft.name,draft.duplicate)){draft={};ImGui::CloseCurrentPopup();}
+        else if(draft.error.empty())draft.error="Could not save. Check the name or reopen this record.";
+    }else if(action==EditAction::Cancel){draft={};ImGui::CloseCurrentPopup();}
+    if(!draft.error.empty())ImGui::TextWrapped("%s",draft.error.c_str());
+    ImGui::EndPopup();
 }
 // Compact search and filter presentation. All query state and filtering
 // semantics remain owned by the caller; these helpers never fetch data.

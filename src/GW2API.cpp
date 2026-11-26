@@ -2002,6 +2002,24 @@ namespace AlterEgo {
     bool GW2API::RemoveSavedBuild(const std::string& id,uint64_t expectedRevision) {
         return CommitComposableEdit([&](Composable::Document& doc,std::string& error){if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");return Composable::RemoveLoadout(doc,id,error);});
     }
+    bool GW2API::RenameSavedLoadout(const std::string& id,const std::string& name,uint64_t expectedRevision){
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
+            return Composable::RenameLoadout(doc,id,name,error);
+        });
+    }
+    bool GW2API::DuplicateSavedLoadout(const std::string& id,const std::string& name,uint64_t expectedRevision,std::string* savedId){
+        std::string newId;
+        const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
+            const auto now=std::time(nullptr);
+            const auto prefix=std::to_string(now)+"_copy_";
+            unsigned n=0;do{newId=prefix+std::to_string(n++);}while(Composable::FindLoadout(doc,newId));
+            return Composable::DuplicateLoadout(doc,id,newId,name,static_cast<int64_t>(now),error);
+        });
+        if(ok&&savedId)*savedId=newId;
+        return ok;
+    }
     bool GW2API::UpdateSavedBuild(const std::string& id,const std::string& name,const std::string& notes) {
         return CommitComposableEdit([&](Composable::Document& doc,std::string&){
             auto* l=Composable::FindLoadout(doc,id);if(!l)return false;
@@ -2712,9 +2730,11 @@ namespace AlterEgo {
 
     bool GW2API::DuplicateLoadoutComponent(const std::string& kind,
                                             const std::string& componentId,
-                                            const std::string& name) {
-        if (!Composable::IsKind(kind) || name.empty()) return false;
-        return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+                                            const std::string& name,std::string* savedId,uint64_t expectedRevision) {
+        if (!Composable::IsKind(kind) || Composable::ComponentNameKey(name).empty()) return false;
+        std::string resultId;
+        const bool ok=CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
             const auto* original = Composable::Find(doc, kind, componentId);
             if (!original) return Composable::Fail(error, "Component not found.");
             Composable::Component copy = *original;
@@ -2724,16 +2744,20 @@ namespace AlterEgo {
                           ":" + std::to_string(counter.fetch_add(1));
             } while (Composable::Find(doc, kind, copy.id));
             copy.name = Composable::UniqueComponentName(doc, kind, name);
+            resultId=copy.id;
             doc.components[kind].push_back(std::move(copy));
             return true;
         });
+        if(ok&&savedId)*savedId=resultId;
+        return ok;
     }
 
     bool GW2API::RenameLoadoutComponent(const std::string& kind,
                                          const std::string& componentId,
-                                         const std::string& name) {
+                                         const std::string& name,uint64_t expectedRevision) {
         if (!Composable::IsKind(kind) || name.empty()) return false;
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
             auto* component = Composable::Find(doc, kind, componentId);
             if (!component) return Composable::Fail(error, "Component not found.");
             if (Composable::ComponentNameKey(name).empty() ||
@@ -2883,9 +2907,10 @@ namespace AlterEgo {
                 result.emplace_back(match.id,match.name);
         return result;
     }
-    bool GW2API::RenameEquipmentSet(const std::string& setId,const std::string& name) {
+    bool GW2API::RenameEquipmentSet(const std::string& setId,const std::string& name,uint64_t expectedRevision) {
         if(Composable::ComponentNameKey(name).empty())return false;
-        return CommitComposableEdit([&](Composable::Document& doc,std::string&) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error) {
+            if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
             auto* set=Composable::FindEquipmentSet(doc,setId);
             if(!set)return false;
             set->name=name;return true;

@@ -24,12 +24,16 @@ public:
         return -1;
     }
 
-    int Add(Look look) {
+    int Add(Look look,const Look* duplicateBaseline=nullptr) {
         look.wardrobe_link = CanonicalLink(look.wardrobe_link);
         if (look.wardrobe_link.empty() || look.name.empty()) return -1;
         NativeLibrary::Snapshot before;auto& store=NativeLibrary::RuntimeStore();
         if(directory.empty()||!store.Read(before,error))return -1;
         auto next=before;
+        if(duplicateBaseline){
+            const auto it=std::find_if(next.fashion.begin(),next.fashion.end(),[&](const Look& row){return row.id==duplicateBaseline->id;});
+            if(it==next.fashion.end()||ToJson(*it)!=ToJson(*duplicateBaseline)){error="Saved Fashion changed; review again.";return -1;}
+        }
         if (look.created == 0) look.created = std::time(nullptr);
         if (look.id.empty()) {
             const std::string prefix = std::to_string(look.created) + "_fashion_";
@@ -45,6 +49,12 @@ public:
         next.fashion.push_back(std::move(look));auto published=next.fashion;
         if(!store.Commit(before,std::move(next),error))return -1;
         looks=std::move(published);return static_cast<int>(looks.size())-1;
+    }
+
+    int DuplicateDraft(const Look& baseline,const std::string& name){
+        if(name.find_first_not_of(" \t\r\n")==std::string::npos)return -1;
+        auto copy=baseline;copy.id.clear();copy.created=0;copy.name=name;
+        return Add(std::move(copy),&baseline);
     }
 
     bool Update(int idx, const Look& updated) {
@@ -70,13 +80,14 @@ public:
         looks=std::move(published);return true;
     }
 
-    bool RemoveDraft(const Look& baseline){
+    bool RemoveDraft(const Look& baseline,const std::map<std::string,std::string>& reviewedUsers={}){
         if(directory.empty()||baseline.id.empty())return false;
         NativeLibrary::Snapshot before;auto& store=NativeLibrary::RuntimeStore();
         if(!store.Read(before,error))return false;
         auto next=before;
         auto it=std::find_if(next.fashion.begin(),next.fashion.end(),[&](const Look& look){return look.id==baseline.id;});
         if(it==next.fashion.end()||ToJson(*it)!=ToJson(baseline)){error="Saved Fashion changed; review again.";return false;}
+        if(Composable::FashionUsers(next.loadouts,baseline.id)!=reviewedUsers){error="Referencing Loadouts changed; cancel and review again.";return false;}
         next.fashion.erase(it);
         for(auto& l:next.loadouts.loadouts)if(l.fashion_id==baseline.id)l.fashion_id.clear();
         auto published=next.fashion;
