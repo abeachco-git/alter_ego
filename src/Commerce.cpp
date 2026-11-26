@@ -190,7 +190,9 @@ namespace Skinventory {
             for(size_t j=i;j<end;++j) { if(!ids.empty()) ids+=","; ids+=std::to_string(item_ids[j]); }
             bool ok=false;
             try {
-                const auto batch=json::parse(HttpClient::Get("https://api.guildwars2.com/v2/commerce/prices?ids="+ids));
+                const auto body=HttpClient::Get("https://api.guildwars2.com/v2/commerce/prices?ids="+ids);
+                AlterEgo::Background::Checkpoint();
+                const auto batch=AlterEgo::Untrusted::Parse(body,AlterEgo::Untrusted::PublicApi);
                 if(batch.is_array()) {
                     for(const auto& entry:batch) {
                         const auto item=entry.value("id",uint32_t(0));

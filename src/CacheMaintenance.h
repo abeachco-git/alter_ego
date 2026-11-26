@@ -147,7 +147,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     // Do not migrate or edit a foreign, damaged or unsupported database.
     const auto version=db.Scalar("PRAGMA user_version");
     if(db.Scalar("PRAGMA application_id")!=Cache::kApplicationId ||
-       (version!=Cache::kSchemaVersion && version!=20 && version!=19 && version!=18 && version!=17 && version!=16 && version!=15 && version!=14 && version!=13 && version!=8))
+       (version!=Cache::kSchemaVersion && version!=24 && version!=23 && version!=22 && version!=21 && version!=20 && version!=19 && version!=18 && version!=17 && version!=16 && version!=15 && version!=14 && version!=13 && version!=8))
         throw std::runtime_error("Unsupported cache database; use Rebuild all cache to quarantine it");
     // Upgrade known older schemas before selective operations.
     Cache::Initialize(db);
@@ -173,7 +173,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
                 "DELETE FROM commerce_skin_items; DELETE FROM commerce_item_name_ids; DELETE FROM commerce_vendor_prices;"
                 "DELETE FROM item_name_aliases; DELETE FROM reference_items; DELETE FROM skins;"
                 "DELETE FROM reference_specializations; DELETE FROM reference_traits; DELETE FROM reference_skills;"
-                "DELETE FROM reference_itemstats; DELETE FROM reference_dyes; DELETE FROM reference_metadata_snapshots;"
+                "DELETE FROM reference_itemstats; DELETE FROM reference_dyes; DELETE FROM reference_metadata_snapshots; DELETE FROM reference_record_watermarks;"
                 "DELETE FROM reference_freshness WHERE dataset IN ('spec_cache','trait_cache','skill_cache','itemstat_cache','dye_cache',"
                 "'item_cache','item_name_cache','skin_catalog','skin_fashion','commerce_item_map','commerce_prices');");break;
     default: throw std::runtime_error("Invalid selective operation");

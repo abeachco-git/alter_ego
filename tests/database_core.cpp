@@ -528,6 +528,20 @@ int case_database_core(int, char**) {
         assert(Cache::ReadReference(root,D::Skills)==skills);
         auto stale=skills;stale[0]["name"]="Stale";
         assert(!Cache::WriteReference(root,D::Skills,stale,99));
+        const auto ordered=(temp.dir/"reference-order-regression").u8string();
+        J accepted=J::array();auto newer=skills;newer[0]["name"]="New skill";
+        assert(Cache::WriteReferenceObservations(ordered,D::Skills,newer,200,accepted)&&accepted==newer);
+        auto older=skills;auto disjoint=skills[0];disjoint["id"]=11;older.push_back(disjoint);
+        assert(Cache::WriteReferenceObservations(ordered,D::Skills,older,100,accepted)&&accepted.size()==1&&accepted[0]["id"]==11);
+        auto replay=newer;replay[0]["name"]="Replay";
+        assert(Cache::WriteReferenceObservations(ordered,D::Skills,replay,200,accepted)&&accepted.empty());
+        auto stored=Cache::ReadReference(ordered,D::Skills);
+        assert(stored&&stored->size()==2&&stored->at(0)["name"]=="New skill"&&stored->at(1)["id"]==11);
+        auto broken=newer;broken[0]["professions"]=J::array({1});
+        assert(!Cache::WriteReferenceObservations(ordered,D::Skills,broken,300,accepted));
+        assert(Cache::ReadReference(ordered,D::Skills)==stored);
+        assert(Cache::WriteReferenceObservations(ordered,D::Skills,newer,300,accepted)&&accepted.size()==1);
+
         assert(Cache::ReadReference(root,D::Skills)==skills);
         auto malformed=skills;malformed.push_back(skills.at(0));
         assert(!Cache::WriteReference(root,D::Skills,malformed,101));

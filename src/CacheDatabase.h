@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 24;
+constexpr int kSchemaVersion = 25;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -33,6 +33,14 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 }
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if(version==25){
+        db.Exec(R"SQL(
+CREATE TABLE reference_record_watermarks(dataset TEXT NOT NULL,
+    id INTEGER NOT NULL CHECK(id BETWEEN 0 AND 4294967295),
+    request_at INTEGER NOT NULL CHECK(request_at>0), PRIMARY KEY(dataset,id)) STRICT;
+)SQL");
+        return;
+    }
     if(version==24){
         db.Exec(R"SQL(
 ALTER TABLE skins ADD COLUMN common_verified_at INTEGER NOT NULL DEFAULT 0 CHECK(common_verified_at>=0);

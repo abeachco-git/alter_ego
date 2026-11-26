@@ -1,4 +1,5 @@
 #include "NativeAccounts.h"
+#include "UntrustedInput.h"
 #include "AccountCommitGate.h"
 #include "NativeInventoryStore.h"
 #include "ArenaNetTransport.h"
@@ -152,7 +153,7 @@ Json Fetch(const std::string& path,const std::string& key){
     auto r=ArenaNet::Get(path,key);
     Background::Checkpoint();
     if(r.status_code!=200)throw std::runtime_error(Error(r.status_code));
-    return Json::parse(r.body);
+    return Untrusted::Parse(r.body,Untrusted::PublicApi);
 }
 std::string Encode(const std::string& s){
     constexpr char hex[]="0123456789ABCDEF";std::string out;
@@ -563,7 +564,7 @@ Result Request(const LinkedAccount& a,const std::string& path,const std::vector<
     if(!Current(a))return {0,{},"Account changed"};
     if(r.status_code!=200)return {r.status_code,{},Error(r.status_code)};
     try{
-        auto parsed=Json::parse(r.body);
+        auto parsed=Untrusted::Parse(r.body,Untrusted::PublicApi);
         if(Background::Workers().Stopping())return {0,{},"Cancelled"};
         if(!Current(a))return {0,{},"Account changed"};
         return {200,std::move(parsed),{}};

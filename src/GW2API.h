@@ -424,11 +424,7 @@ namespace AlterEgo {
         // the GW2 API. Loaded at startup; saved after each batch fetch.
         static bool LoadReferenceCaches();
         static void AdoptCommittedSkins(const nlohmann::json& rows);
-        static bool SaveSpecCache();
-        static bool SaveTraitCache();
-        static bool SaveSkillCache();
-        static bool SaveItemStatCache();
-        static bool SaveDyeColorsCache();
+        static void AdoptReferenceObservations(int dataset,const nlohmann::json& rows);
 
         // --- Build Library ---
         static const std::vector<SavedBuild>& GetSavedBuilds();

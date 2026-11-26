@@ -54,7 +54,7 @@ inline int64_t ReferenceChannel(const ReferenceJson& row,const char* key,size_t 
     if(n<0||n>255)throw std::runtime_error("Invalid dye channel");
     return n;
 }
-inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const ReferenceJson& rows) {
+inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const ReferenceJson& rows,bool replaceAll=true) {
     if(!rows.is_array()||rows.empty())throw std::runtime_error("Empty metadata snapshot");
     // These are full projections of cumulative in-memory maps. Replacing a
     // single dataset atomically prevents mixing rows from different captures.
@@ -62,13 +62,15 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
     // heterogeneous and the existing tooltip adapter consumes them verbatim.
     switch(d) {
     case ReferenceDataset::Specializations: {
-        db.Exec("DELETE FROM reference_specializations");
+        if(replaceAll)db.Exec("DELETE FROM reference_specializations");
+        auto erase=db.Prepare("DELETE FROM reference_specializations WHERE id=?");
         auto q=db.Prepare("INSERT INTO reference_specializations VALUES(?,?,?,?,?,?,?,?)");
         auto minor_traits=db.Prepare("INSERT INTO reference_specializations_minor_traits VALUES(?,?,?)");
         auto major_traits=db.Prepare("INSERT INTO reference_specializations_major_traits VALUES(?,?,?)");
         for(const auto& row:rows) {
             if(!row.is_object())throw std::runtime_error("Invalid metadata row");
             const auto id=ReferenceId(row.at("id"));
+            if(!replaceAll){erase.Bind(1,id);erase.Execute();erase.Reset();}
             q.Bind(1,id);
             q.Bind(2,row.value("name",std::string()));
             q.Bind(3,row.value("icon",std::string()));
@@ -101,11 +103,13 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
         break;
     }
     case ReferenceDataset::Traits: {
-        db.Exec("DELETE FROM reference_traits");
+        if(replaceAll)db.Exec("DELETE FROM reference_traits");
+        auto erase=db.Prepare("DELETE FROM reference_traits WHERE id=?");
         auto q=db.Prepare("INSERT INTO reference_traits VALUES(?,?,?,?,?,?,?,?)");
         for(const auto& row:rows) {
             if(!row.is_object())throw std::runtime_error("Invalid metadata row");
             const auto id=ReferenceId(row.at("id"));
+            if(!replaceAll){erase.Bind(1,id);erase.Execute();erase.Reset();}
             q.Bind(1,id);
             q.Bind(2,row.value("name",std::string()));
             q.Bind(3,row.value("icon",std::string()));
@@ -120,7 +124,8 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
         break;
     }
     case ReferenceDataset::Skills: {
-        db.Exec("DELETE FROM reference_skills");
+        if(replaceAll)db.Exec("DELETE FROM reference_skills");
+        auto erase=db.Prepare("DELETE FROM reference_skills WHERE id=?");
         auto q=db.Prepare("INSERT INTO reference_skills VALUES(?,?,?,?,?,?,?)");
         auto professions=db.Prepare("INSERT INTO reference_skills_professions VALUES(?,?,?)");
         for(const auto& row:rows) {
@@ -128,6 +133,7 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
             // Older cache rows without profession metadata must refetch on demand.
             if(!row.contains("professions"))continue;
             const auto id=ReferenceId(row.at("id"));
+            if(!replaceAll){erase.Bind(1,id);erase.Execute();erase.Reset();}
             q.Bind(1,id);
             q.Bind(2,row.value("name",std::string()));
             q.Bind(3,row.value("icon",std::string()));
@@ -150,12 +156,14 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
         break;
     }
     case ReferenceDataset::ItemStats: {
-        db.Exec("DELETE FROM reference_itemstats");
+        if(replaceAll)db.Exec("DELETE FROM reference_itemstats");
+        auto erase=db.Prepare("DELETE FROM reference_itemstats WHERE id=?");
         auto q=db.Prepare("INSERT INTO reference_itemstats VALUES(?,?)");
         auto attributes=db.Prepare("INSERT INTO reference_itemstats_attributes VALUES(?,?,?)");
         for(const auto& row:rows) {
             if(!row.is_object())throw std::runtime_error("Invalid metadata row");
             const auto id=ReferenceId(row.at("id"));
+            if(!replaceAll){erase.Bind(1,id);erase.Execute();erase.Reset();}
             q.Bind(1,id);
             q.Bind(2,row.value("name",std::string()));
             q.Execute();q.Reset();
@@ -173,11 +181,13 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
         break;
     }
     case ReferenceDataset::Dyes: {
-        db.Exec("DELETE FROM reference_dyes");
+        if(replaceAll)db.Exec("DELETE FROM reference_dyes");
+        auto erase=db.Prepare("DELETE FROM reference_dyes WHERE id=?");
         auto q=db.Prepare("INSERT INTO reference_dyes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
         for(const auto& row:rows) {
             if(!row.is_object())throw std::runtime_error("Invalid metadata row");
             const auto id=ReferenceId(row.at("id"));
+            if(!replaceAll){erase.Bind(1,id);erase.Execute();erase.Reset();}
             q.Bind(1,id);
             q.Bind(2,row.value("name",std::string()));
             q.Bind(3,ReferenceChannel(row,"base",0));
@@ -304,13 +314,50 @@ inline bool HasReferenceSnapshot(Database::Connection& db,ReferenceDataset d,int
     if(captured)*captured=q.Integer(0);
     return true;
 }
+inline void MarkReferenceSnapshot(Database::Connection& db,ReferenceDataset d,int64_t captured) {
+    auto q=db.Prepare("INSERT INTO reference_metadata_snapshots VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET captured_at=MAX(reference_metadata_snapshots.captured_at,excluded.captured_at)");
+    q.Bind(1,std::string(ReferenceName(d)));q.Bind(2,captured);q.Execute();
+    auto fresh=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=MAX(reference_freshness.saved_at,excluded.saved_at)");
+    fresh.Bind(1,std::string(ReferenceName(d)));fresh.Bind(2,captured/1000000);fresh.Execute();
+}
 inline void StoreReferenceSnapshot(Database::Connection& db,ReferenceDataset d,
                                     const ReferenceJson& rows,int64_t captured) {
-    WriteReferenceRows(db,d,rows);
-    auto q=db.Prepare("INSERT INTO reference_metadata_snapshots VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET captured_at=excluded.captured_at");
-    q.Bind(1,std::string(ReferenceName(d)));q.Bind(2,captured);q.Execute();
-    auto fresh=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=excluded.saved_at");
-    fresh.Bind(1,std::string(ReferenceName(d)));fresh.Bind(2,captured/1000000);fresh.Execute();
+    WriteReferenceRows(db,d,rows);MarkReferenceSnapshot(db,d,captured);
+}
+// Request-stamped row merges retain unrelated historical IDs and child data.
+// The caller holds the publication gate through commit and live adoption.
+inline std::mutex& ReferencePublicationMutex(){static std::mutex m;return m;}
+inline ReferenceJson StoreReferenceObservations(Database::Connection& db,ReferenceDataset d,
+                                               const ReferenceJson& rows,int64_t stamp){
+    if(stamp<=0||!rows.is_array()||rows.empty())throw std::runtime_error("Invalid reference observations");
+    const auto dataset=std::string(ReferenceName(d));
+    auto watermark=db.Prepare("INSERT INTO reference_record_watermarks VALUES(?,?,?) ON CONFLICT(dataset,id) DO UPDATE SET request_at=excluded.request_at WHERE excluded.request_at>reference_record_watermarks.request_at RETURNING id");
+    auto accepted=ReferenceJson::array();std::set<uint32_t> seen;
+    for(const auto& row:rows){
+        const auto id=ReferenceId(row.at("id"));
+        if(!seen.insert(id).second||row.at("name").get<std::string>().empty()||
+           (d==ReferenceDataset::Skills&&(!row.contains("professions")||!row.at("professions").is_array())))
+            throw std::runtime_error("Invalid reference observation");
+        watermark.Bind(1,dataset);watermark.Bind(2,id);watermark.Bind(3,stamp);
+        if(watermark.Step()){accepted.push_back(row);if(watermark.Step())throw std::runtime_error("Duplicate watermark result");}
+        watermark.Reset();
+    }
+    if(!accepted.empty())WriteReferenceRows(db,d,accepted,false);
+    MarkReferenceSnapshot(db,d,stamp);
+    return accepted;
+}
+inline bool WriteReferenceObservations(const std::string& root,ReferenceDataset d,
+                                      const ReferenceJson& rows,int64_t stamp,ReferenceJson& accepted){
+    if(root.empty())return false;
+    try{
+        std::lock_guard<std::mutex> lock(Mutex());
+        const auto path=Storage::Paths(root).Cache();
+        std::filesystem::create_directories(path.parent_path());
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+        Initialize(db);Database::Transaction tx(db);
+        auto committed=StoreReferenceObservations(db,d,rows,stamp);
+        tx.Commit();accepted=std::move(committed);return true;
+    }catch(...){return false;}
 }
 inline bool WriteReference(const std::string& root,ReferenceDataset d,
                            const ReferenceJson& rows,int64_t captured) {

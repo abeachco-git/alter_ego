@@ -57,7 +57,6 @@ namespace AlterEgo {
         bool g_loadoutDocumentLoaded = false;
         std::mutex g_loadoutPersistenceMutex;
         std::mutex g_characterSaveMutex;
-        std::mutex g_statPersistMutex;
 
         // A manual character refresh also refreshes crafting; a debounced
         // automatic equipment/spec refresh reuses persisted crafting details.
@@ -86,6 +85,68 @@ namespace AlterEgo {
             }
         }
         return result;
+    }
+
+    // Parse network data to the durable projection before touching live state.
+    static json ReferenceObservation(Cache::ReferenceDataset dataset,const json& raw){
+        using D=Cache::ReferenceDataset;
+        const auto id=Cache::ReferenceId(raw.at("id"));
+        const auto name=raw.at("name").get<std::string>();
+        if(!id||name.empty())throw std::runtime_error("Invalid reference identity");
+        json row={{"id",id},{"name",name}};
+        if(dataset!=D::ItemStats)row["icon"]=raw.value("icon",std::string{});
+        switch(dataset){
+        case D::Specializations:
+            for(const char* key:{"background","profession","profession_icon","profession_icon_big"})
+                row[key]=raw.value(key,std::string{});
+            row["elite"]=raw.value("elite",false);
+            for(const char* key:{"minor_traits","major_traits"}){
+                row[key]=json::array();
+                if(raw.contains(key)){
+                    if(!raw.at(key).is_array())throw std::runtime_error("Invalid trait list");
+                    for(const auto& v:raw.at(key))row[key].push_back(Cache::ReferenceId(v));
+                }
+            }
+            break;
+        case D::Traits:
+        case D::Skills:
+            row["description"]=StripHtmlTags(raw.value("description",std::string{}));
+            if(raw.contains("facts"))row["facts"]=raw.at("facts");
+            if(dataset==D::Traits){
+                for(const char* key:{"tier","order"}){
+                    const auto value=Cache::ReferenceInteger(raw,key);
+                    if(value<0||value>INT_MAX)throw std::runtime_error("Invalid trait position");
+                    row[key]=value;
+                }
+                row["slot"]=raw.value("slot",std::string{});
+            }else{
+                row["type"]=raw.value("type",std::string{});
+                row["specialization"]=raw.contains("specialization")?Cache::ReferenceId(raw.at("specialization")):0u;
+                row["professions"]=raw.value("professions",std::vector<std::string>{});
+            }
+            break;
+        case D::ItemStats:
+            row["attributes"]=json::array();
+            if(!raw.at("attributes").is_array())throw std::runtime_error("Invalid stat attributes");
+            for(const auto& attr:raw.at("attributes"))row["attributes"].push_back(attr.at("attribute").get<std::string>());
+            break;
+        default:throw std::runtime_error("Unsupported partial reference dataset");
+        }
+        return row;
+    }
+    template<class Iterator>
+    static json ReferenceBatch(Cache::ReferenceDataset dataset,const std::string& response,Iterator first,Iterator last){
+        auto raw=Untrusted::Parse(response,Untrusted::PublicApi);
+        if(!raw.is_array())throw std::runtime_error("Invalid reference batch");
+        std::set<uint32_t> expected(first,last),seen;auto rows=json::array();
+        for(const auto& entry:raw){
+            const auto id=Cache::ReferenceId(entry.at("id"));
+            if(!expected.count(id)||!seen.insert(id).second)throw std::runtime_error("Unexpected reference ID");
+            // Some API stat rows are intentionally unnamed/nonselectable.
+            if(entry.at("name").get<std::string>().empty())continue;
+            rows.push_back(ReferenceObservation(dataset,entry));
+        }
+        return rows;
     }
 
     // URL-encode helper
@@ -977,6 +1038,7 @@ namespace AlterEgo {
         Background::Workers().Launch([root,manual]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
             PublicCatalog::Attempt(root,"public_stats");
+            const auto requestStamp=Cache::ReferenceSnapshotTime();
             auto raw=PublicCatalog::Fetch("/v2/itemstats?ids=all");
             if(!raw.is_array()||raw.size()<50)throw std::runtime_error("Incomplete item stats");
             std::map<uint32_t,ItemStatInfo> staged;
@@ -990,16 +1052,14 @@ namespace AlterEgo {
             json rows=json::array();
             for(const auto& [id,info]:staged)rows.push_back({{"id",id},{"name",info.name},{"attributes",info.attributes}});
             Background::Checkpoint();
-            std::lock_guard<std::mutex> persist(g_statPersistMutex);
+            std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
+            Background::Checkpoint();auto accepted=json::array();
             PublicCatalog::WithDb(root,[&](auto& db){
                 Database::Transaction tx(db);
-                // Retain historical stat identities still used by saved gear.
-                auto previous=Cache::ReadReferenceRows(db,Cache::ReferenceDataset::ItemStats);
-                for(const auto& r:previous)if(!staged.count(Cache::ReferenceId(r.at("id"))))rows.push_back(r);
-                Cache::StoreReferenceSnapshot(db,Cache::ReferenceDataset::ItemStats,rows,Cache::ReferenceSnapshotTime());
+                accepted=Cache::StoreReferenceObservations(db,Cache::ReferenceDataset::ItemStats,rows,requestStamp);
                 PublicCatalog::Mark(db,"public_stats",PublicCatalog::Now());tx.Commit();PublicCatalog::Publish(db);
             });
-            {std::lock_guard<std::mutex> lock(s_mutex);for(auto& [id,info]:staged)s_itemstat_cache[id]=std::make_shared<const ItemStatInfo>(std::move(info));}
+            AdoptReferenceObservations(static_cast<int>(Cache::ReferenceDataset::ItemStats),accepted);
             PublicCatalog::EndDataset("public_stats",true);
         },[]{PublicCatalog::EndDataset("public_stats",false);});
     }
@@ -1039,8 +1099,10 @@ namespace AlterEgo {
                 try {
                     const std::string url = "https://api.guildwars2.com/v2/professions/" + prof;
                     const std::string response = HttpGet(url);
+                    Background::Checkpoint();
                     if (!response.empty()) {
                         json j = Untrusted::Parse(response,Untrusted::PublicApi);
+                        if(!j.is_object()||j.value("id",std::string{})!=prof)throw std::runtime_error("Unexpected profession identity");
                         ProfessionInfo info;
                         info.name = j.value("name", prof);
                         info.icon_url = j.value("icon", "");
@@ -1289,41 +1351,24 @@ namespace AlterEgo {
             }
 
             std::string url = "https://api.guildwars2.com/v2/specializations?ids=" + ids_param;
+            const auto requestStamp=Cache::ReferenceSnapshotTime();
             std::string response = HttpGet(url);
             if (Background::Workers().Stopping()) return;
             claim->MarkAttempted(to_fetch.begin(),to_fetch.end());
             if (response.empty()) return;
 
             try {
-                json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                if (j.is_array()) {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    for (const auto& spec : j) {
-                        if (!spec.contains("id")) continue;
-                        SpecializationInfo info;
-                        info.id = spec["id"].get<uint32_t>();
-                        info.name = spec.value("name", "");
-                        if(info.name.empty()||!std::binary_search(to_fetch.begin(),to_fetch.end(),info.id))continue;
-                        info.icon_url = spec.value("icon", "");
-                        info.background_url = spec.value("background", "");
-                        info.profession = spec.value("profession", "");
-                        info.profession_icon_url = spec.value("profession_icon", "");
-                        info.profession_icon_big_url = spec.value("profession_icon_big", "");
-                        info.elite = spec.value("elite", false);
-                        if (spec.contains("minor_traits")) {
-                            for (const auto& t : spec["minor_traits"])
-                                info.minor_traits.push_back(t.get<uint32_t>());
-                        }
-                        if (spec.contains("major_traits")) {
-                            for (const auto& t : spec["major_traits"])
-                                info.major_traits.push_back(t.get<uint32_t>());
-                        }
-                        s_spec_cache[info.id]=std::make_shared<const SpecializationInfo>(info);
-                    }
+                const auto dataset=Cache::ReferenceDataset::Specializations;
+                auto rows=ReferenceBatch(dataset,response,to_fetch.begin(),to_fetch.end());
+                if(!rows.empty()){
+                    std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
+                    if(Background::Workers().Stopping())return;
+                    auto accepted=json::array();
+                    if(Cache::WriteReferenceObservations(GetDataDirectory(),dataset,rows,requestStamp,accepted))
+                        AdoptReferenceObservations(static_cast<int>(dataset),accepted);
                 }
             } catch (...) {}
 
-            SaveSpecCache();
 
             // Chain-fetch all trait details for loaded specs
             std::vector<uint32_t> all_trait_ids;
@@ -1368,37 +1413,26 @@ namespace AlterEgo {
                 ids_param += std::to_string(to_fetch[j]);
             }
 
+            const auto requestStamp=Cache::ReferenceSnapshotTime();
             std::string response = HttpGet("https://api.guildwars2.com/v2/traits?ids=" + ids_param);
             if (Background::Workers().Stopping()) return;
             claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
-                json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                if (j.is_array()) {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    for (const auto& trait : j) {
-                        if (!trait.contains("id")) continue;
-                        TraitInfo info;
-                        info.id = trait["id"].get<uint32_t>();
-                        info.name = trait.value("name", "");
-                        if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
-                        info.icon_url = trait.value("icon", "");
-                        if (trait.contains("description"))
-                            info.description = StripHtmlTags(trait["description"].get<std::string>());
-                        info.tier = trait.value("tier", 0);
-                        info.order = trait.value("order", 0);
-                        info.slot = trait.value("slot", "");
-                        if (trait.contains("facts"))
-                            info.facts = trait["facts"];
-                        s_trait_cache[info.id]=std::make_shared<const TraitInfo>(info);
-                    }
+                const auto dataset=Cache::ReferenceDataset::Traits;
+                auto rows=ReferenceBatch(dataset,response,to_fetch.begin()+i,to_fetch.begin()+end);
+                if(!rows.empty()){
+                    std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
+                    if(Background::Workers().Stopping())return;
+                    auto accepted=json::array();
+                    if(Cache::WriteReferenceObservations(GetDataDirectory(),dataset,rows,requestStamp,accepted))
+                        AdoptReferenceObservations(static_cast<int>(dataset),accepted);
                 }
             } catch (...) {}
 
             if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
         }
-        SaveTraitCache();
     }
 
     void GW2API::FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids) {
@@ -1441,39 +1475,26 @@ namespace AlterEgo {
                     ids_param += std::to_string(to_fetch[j]);
                 }
 
-                std::string response = HttpGet("https://api.guildwars2.com/v2/skills?ids=" + ids_param);
+                const auto requestStamp=Cache::ReferenceSnapshotTime();
+            std::string response = HttpGet("https://api.guildwars2.com/v2/skills?ids=" + ids_param);
             if (Background::Workers().Stopping()) return;
             claim->MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
                 if (response.empty()) continue;
 
                 try {
-                    json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                    if (j.is_array()) {
-                        std::lock_guard<std::mutex> lock(s_mutex);
-                        for (const auto& skill : j) {
-                            if (!skill.contains("id")) continue;
-                            SkillInfo info;
-                            info.id = skill["id"].get<uint32_t>();
-                            info.name = skill.value("name", "");
-                            if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
-                            info.icon_url = skill.value("icon", "");
-                            if (skill.contains("description"))
-                                info.description = StripHtmlTags(skill["description"].get<std::string>());
-                            info.type = skill.value("type", "");
-                            info.specialization = skill.value("specialization", 0u);
-                            if (skill.contains("professions") && skill["professions"].is_array())
-                                for (const auto& p : skill["professions"])
-                                    if (p.is_string()) info.professions.push_back(p.get<std::string>());
-                            if (skill.contains("facts"))
-                                info.facts = skill["facts"];
-                            s_skill_cache[info.id]=std::make_shared<const SkillInfo>(info);
-                        }
-                    }
-                } catch (...) {}
+                const auto dataset=Cache::ReferenceDataset::Skills;
+                auto rows=ReferenceBatch(dataset,response,to_fetch.begin()+i,to_fetch.begin()+end);
+                if(!rows.empty()){
+                    std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
+                    if(Background::Workers().Stopping())return;
+                    auto accepted=json::array();
+                    if(Cache::WriteReferenceObservations(GetDataDirectory(),dataset,rows,requestStamp,accepted))
+                        AdoptReferenceObservations(static_cast<int>(dataset),accepted);
+                }
+            } catch (...) {}
 
                 if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
             }
-            SaveSkillCache();
         });
     }
 
@@ -1509,36 +1530,26 @@ namespace AlterEgo {
                     ids_param += std::to_string(to_fetch[j]);
                 }
 
-                std::string response = HttpGet("https://api.guildwars2.com/v2/itemstats?ids=" + ids_param);
+                const auto requestStamp=Cache::ReferenceSnapshotTime();
+            std::string response = HttpGet("https://api.guildwars2.com/v2/itemstats?ids=" + ids_param);
             if (Background::Workers().Stopping()) return;
             claim->MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
                 if (response.empty()) continue;
 
                 try {
-                    json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                    if (j.is_array()) {
-                        std::lock_guard<std::mutex> lock(s_mutex);
-                        for (const auto& stat : j) {
-                            if (!stat.contains("id")) continue;
-                            ItemStatInfo info;
-                            info.id = stat["id"].get<uint32_t>();
-                            info.name = stat.value("name", "");
-                            if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
-                            if (stat.contains("attributes") && stat["attributes"].is_array()) {
-                                for (const auto& attr : stat["attributes"]) {
-                                    info.attributes.push_back(attr.value("attribute", ""));
-                                }
-                            }
-                            // This was a missing-ID lookup. A complete catalog
-                            // may have supplied it while HTTP was in flight.
-                            s_itemstat_cache.try_emplace(info.id,std::make_shared<const ItemStatInfo>(std::move(info)));
-                        }
-                    }
-                } catch (...) {}
+                const auto dataset=Cache::ReferenceDataset::ItemStats;
+                auto rows=ReferenceBatch(dataset,response,to_fetch.begin()+i,to_fetch.begin()+end);
+                if(!rows.empty()){
+                    std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
+                    if(Background::Workers().Stopping())return;
+                    auto accepted=json::array();
+                    if(Cache::WriteReferenceObservations(GetDataDirectory(),dataset,rows,requestStamp,accepted))
+                        AdoptReferenceObservations(static_cast<int>(dataset),accepted);
+                }
+            } catch (...) {}
 
                 if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
             }
-            SaveItemStatCache();
         });
     }
 
@@ -1549,6 +1560,7 @@ namespace AlterEgo {
         Background::Workers().Launch([root,manual]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
             PublicCatalog::Attempt(root,"public_dyes");
+            const auto requestStamp=Cache::ReferenceSnapshotTime();
             auto raw=PublicCatalog::Fetch("/v2/colors?ids=all");
             if(!raw.is_array()||raw.size()<100)throw std::runtime_error("Incomplete dye catalog");
             std::map<int,DyeColor> staged;json rows=json::array();
@@ -1576,15 +1588,19 @@ namespace AlterEgo {
                     {"metal",{dc.metal_r,dc.metal_g,dc.metal_b}}});
             }
             Background::Checkpoint();
+            std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
+            Background::Checkpoint();auto accepted=json::array();
             PublicCatalog::WithDb(root,[&](auto& db){
                 Database::Transaction tx(db);
                 const json previous=Cache::ReadReferenceRows(db,Cache::ReferenceDataset::Dyes);
                 if(rows.size()<previous.size()*9/10)throw std::runtime_error("Truncated dye catalog");
-                for(const auto& r:previous)if(!staged.count(r.at("id").get<int>()))rows.push_back(r);
-                Cache::StoreReferenceSnapshot(db,Cache::ReferenceDataset::Dyes,rows,Cache::ReferenceSnapshotTime());
+                accepted=Cache::StoreReferenceObservations(db,Cache::ReferenceDataset::Dyes,rows,requestStamp);
                 PublicCatalog::Mark(db,"public_dyes",PublicCatalog::Now());tx.Commit();PublicCatalog::Publish(db);
             });
-            {std::lock_guard<std::mutex> lock(s_mutex);for(auto& [id,dc]:staged)s_dye_cache[id]=std::make_shared<const DyeColor>(std::move(dc));}
+            {std::lock_guard<std::mutex> lock(s_mutex);for(const auto& row:accepted){
+                const auto id=row.at("id").get<int>();
+                s_dye_cache[id]=std::make_shared<const DyeColor>(std::move(staged.at(id)));
+            }}
             PublicCatalog::EndDataset("public_dyes",true);
         },[]{PublicCatalog::EndDataset("public_dyes",false);});
     }
@@ -2948,145 +2964,44 @@ namespace AlterEgo {
         for(auto& [id,row]:staged)s_skin_cache[id]=std::move(row);
     }
 
-    bool GW2API::SaveSpecCache() {
-        EnsureDataDirectory();
-        int64_t capturedAt = 0;
-        json arr;
-        decltype(s_spec_cache) snapshot;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            capturedAt = Cache::ReferenceSnapshotTime();
-            snapshot=s_spec_cache;
-        }
-        arr=json::array();
-        {
-            for (const auto& [id, row] : snapshot) {
-                const auto& info=*row;
-                json j;
-                j["id"] = info.id;
-                j["name"] = info.name;
-                j["icon"] = info.icon_url;
-                j["background"] = info.background_url;
-                j["profession"] = info.profession;
-                j["profession_icon"] = info.profession_icon_url;
-                j["profession_icon_big"] = info.profession_icon_big_url;
-                j["elite"] = info.elite;
-                j["minor_traits"] = info.minor_traits;
-                j["major_traits"] = info.major_traits;
-                arr.push_back(std::move(j));
+    void GW2API::AdoptReferenceObservations(int dataset,const json& rows) {
+        using D=Cache::ReferenceDataset;
+        // Rows have passed typed validation and the durable watermark check.
+        // No parsing of untrusted network bytes occurs under the domain lock.
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for(const auto& row:rows){
+            const auto id=row.at("id").get<uint32_t>();
+            const auto name=row.at("name").get<std::string>();
+            switch(static_cast<D>(dataset)){
+            case D::Specializations: {
+                SpecializationInfo v;v.id=id;v.name=name;v.icon_url=row.value("icon",std::string{});
+                v.background_url=row.value("background",std::string{});v.profession=row.value("profession",std::string{});
+                v.profession_icon_url=row.value("profession_icon",std::string{});
+                v.profession_icon_big_url=row.value("profession_icon_big",std::string{});v.elite=row.value("elite",false);
+                v.minor_traits=row.at("minor_traits").get<std::vector<uint32_t>>();
+                v.major_traits=row.at("major_traits").get<std::vector<uint32_t>>();
+                s_spec_cache[id]=std::make_shared<const SpecializationInfo>(std::move(v));break;
+            }
+            case D::Traits: {
+                TraitInfo v;v.id=id;v.name=name;v.icon_url=row.value("icon",std::string{});
+                v.description=row.value("description",std::string{});v.tier=row.value("tier",0);v.order=row.value("order",0);
+                v.slot=row.value("slot",std::string{});if(row.contains("facts"))v.facts=row.at("facts");
+                s_trait_cache[id]=std::make_shared<const TraitInfo>(std::move(v));break;
+            }
+            case D::Skills: {
+                SkillInfo v;v.id=id;v.name=name;v.icon_url=row.value("icon",std::string{});
+                v.description=row.value("description",std::string{});v.type=row.value("type",std::string{});
+                v.specialization=row.value("specialization",0u);v.professions=row.at("professions").get<std::vector<std::string>>();
+                if(row.contains("facts"))v.facts=row.at("facts");
+                s_skill_cache[id]=std::make_shared<const SkillInfo>(std::move(v));break;
+            }
+            case D::ItemStats: {
+                ItemStatInfo v;v.id=id;v.name=name;v.attributes=row.at("attributes").get<std::vector<std::string>>();
+                s_itemstat_cache[id]=std::make_shared<const ItemStatInfo>(std::move(v));break;
+            }
+            default:break;
             }
         }
-        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::Specializations,arr,capturedAt);
-    }
-
-    bool GW2API::SaveTraitCache() {
-        EnsureDataDirectory();
-        int64_t capturedAt = 0;
-        json arr;
-        decltype(s_trait_cache) snapshot;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            capturedAt = Cache::ReferenceSnapshotTime();
-            snapshot=s_trait_cache;
-        }
-        arr=json::array();
-        {
-            for (const auto& [id, row] : snapshot) {
-                const auto& info=*row;
-                json j;
-                j["id"] = info.id;
-                j["name"] = info.name;
-                j["icon"] = info.icon_url;
-                if (!info.description.empty()) j["description"] = info.description;
-                j["tier"] = info.tier;
-                j["order"] = info.order;
-                j["slot"] = info.slot;
-                if (!info.facts.is_null()) j["facts"] = info.facts;
-                arr.push_back(std::move(j));
-            }
-        }
-        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::Traits,arr,capturedAt);
-    }
-
-    bool GW2API::SaveSkillCache() {
-        EnsureDataDirectory();
-        int64_t capturedAt = 0;
-        json arr;
-        decltype(s_skill_cache) snapshot;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            capturedAt = Cache::ReferenceSnapshotTime();
-            snapshot=s_skill_cache;
-        }
-        arr=json::array();
-        {
-            for (const auto& [id, row] : snapshot) {
-                const auto& info=*row;
-                json j;
-                j["id"] = info.id;
-                j["name"] = info.name;
-                j["icon"] = info.icon_url;
-                if (!info.description.empty()) j["description"] = info.description;
-                j["type"] = info.type;
-                j["specialization"] = info.specialization;
-                j["professions"] = info.professions;
-                if (!info.facts.is_null()) j["facts"] = info.facts;
-                arr.push_back(std::move(j));
-            }
-        }
-        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::Skills,arr,capturedAt);
-    }
-
-    bool GW2API::SaveItemStatCache() {
-        std::lock_guard<std::mutex> persist(g_statPersistMutex);
-        EnsureDataDirectory();
-        int64_t capturedAt = 0;
-        json arr;
-        decltype(s_itemstat_cache) snapshot;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            capturedAt = Cache::ReferenceSnapshotTime();
-            snapshot=s_itemstat_cache;
-        }
-        arr=json::array();
-        {
-            for (const auto& [id, row] : snapshot) {
-                const auto& info=*row;
-                json j;
-                j["id"] = info.id;
-                j["name"] = info.name;
-                j["attributes"] = info.attributes;
-                arr.push_back(std::move(j));
-            }
-        }
-        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::ItemStats,arr,capturedAt);
-    }
-
-    bool GW2API::SaveDyeColorsCache() {
-        EnsureDataDirectory();
-        int64_t capturedAt = 0;
-        json arr;
-        decltype(s_dye_cache) snapshot;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            capturedAt = Cache::ReferenceSnapshotTime();
-            snapshot=s_dye_cache;
-        }
-        arr=json::array();
-        {
-            for (const auto& [id, row] : snapshot) {
-                const auto& dc=*row;
-                json j;
-                j["id"] = dc.id;
-                j["name"] = dc.name;
-                j["base"] = { dc.r, dc.g, dc.b };
-                j["cloth"] = { dc.cloth_r, dc.cloth_g, dc.cloth_b };
-                j["leather"] = { dc.leather_r, dc.leather_g, dc.leather_b };
-                j["metal"] = { dc.metal_r, dc.metal_g, dc.metal_b };
-                arr.push_back(std::move(j));
-            }
-        }
-        return Cache::WriteReference(GetDataDirectory(),Cache::ReferenceDataset::Dyes,arr,capturedAt);
     }
 
     bool GW2API::LoadReferenceCaches() {
@@ -3272,6 +3187,8 @@ namespace AlterEgo {
     }
 
     void GW2API::FetchProfessionPaletteAsync(const std::string& profession) {
+        static const std::set<std::string> valid={"Guardian","Warrior","Engineer","Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"};
+        if(!valid.count(profession))return;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             // Already have data or already fetching
@@ -3292,14 +3209,18 @@ namespace AlterEgo {
             }
 
             try {
+                Background::Checkpoint();
                 json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                if (j.contains("skills_by_palette") && j["skills_by_palette"].is_array()) {
+                if(j.value("id",std::string{})!=prof)throw std::runtime_error("Unexpected profession palette identity");
+                if (j.contains("skills_by_palette") && j["skills_by_palette"].is_array() && !j["skills_by_palette"].empty()) {
                     std::unordered_map<uint16_t, uint32_t> p2s;
                     std::unordered_map<uint32_t, uint16_t> s2p;
                     for (const auto& pair : j["skills_by_palette"]) {
                         if (!pair.is_array() || pair.size() < 2) continue;
-                        uint16_t palette_id = pair[0].get<uint16_t>();
-                        uint32_t skill_id = pair[1].get<uint32_t>();
+                        const auto palette=Cache::ReferenceId(pair[0]);
+                        const auto skill_id=Cache::ReferenceId(pair[1]);
+                        if(palette>UINT16_MAX||!skill_id)throw std::runtime_error("Invalid palette mapping");
+                        const auto palette_id=static_cast<uint16_t>(palette);
                         p2s[palette_id] = skill_id;
                         s2p[skill_id] = palette_id;
                     }
@@ -3350,22 +3271,26 @@ namespace AlterEgo {
                         }
                     }
 
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    s_palette_to_skill[prof] = std::move(p2s);
-                    s_skill_to_palette[prof] = std::move(s2p);
-                    if (!weapons.empty()) s_profession_weapons[prof]=std::make_shared<const std::map<std::string, ProfessionWeaponData>>(std::move(weapons));
-                    s_palette_fetching.erase(prof);
-
+                    Background::Checkpoint();
+                    if(p2s.empty())throw std::runtime_error("Empty palette mapping");
+                    const auto count=p2s.size();
+                    auto weaponData=std::make_shared<const std::map<std::string, ProfessionWeaponData>>(std::move(weapons));
+                    {
+                        std::lock_guard<std::mutex> lock(s_mutex);
+                        s_palette_to_skill[prof] = std::move(p2s);
+                        s_skill_to_palette[prof] = std::move(s2p);
+                        if(!weaponData->empty())s_profession_weapons[prof]=std::move(weaponData);
+                    }
                     if (s_api) {
                         std::string msg = "Loaded palette mapping for " + prof +
-                            " (" + std::to_string(s_palette_to_skill[prof].size()) + " skills)";
+                            " (" + std::to_string(count) + " skills)";
                         s_api->Log(LOGL_INFO, "AlterEgo", msg.c_str());
                     }
                 }
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_palette_fetching.erase(prof);
-            }
+            } catch (...) {}
+            // Even a syntactically valid but incomplete response must release admission.
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_palette_fetching.erase(prof);
         }, [prof] { std::lock_guard<std::mutex> lock(s_mutex); s_palette_fetching.erase(prof); });
     }
 
