@@ -7172,7 +7172,7 @@ static bool RenderSkillPickerPopup(const char* popup,const std::string& professi
 // record environment eligibility, so never invent an aquatic restriction.
 static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t other,uint32_t& next) {
     using AlterEgo::SkillEdit::PairChoiceAllowed;
-    const auto pets=legend?std::vector<AlterEgo::GW2API::PetInfo>{}:AlterEgo::GW2API::GetPets();
+    const auto pets=legend?std::vector<AlterEgo::PetInfo>{}:AlterEgo::GW2API::GetPets();
     std::string name;
     if(legend)name=current<=255?LegendNameForCode(static_cast<uint8_t>(current)):
         "Unknown legend ("+std::to_string(current)+")";
