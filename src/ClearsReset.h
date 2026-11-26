@@ -2,12 +2,27 @@
 // Pure daily/weekly rollover policy, shared by Vault and Clears.
 // Reset times and timestamps are UTC epoch seconds. No GW2/Windows deps.
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <tuple>
 #include <vector>
 namespace ClearsReset {
 inline constexpr int64_t kResetBufferSeconds = 60;
+inline constexpr const char* NoCacheHeaders="Cache-Control: no-cache\r\nPragma: no-cache\r\n";
+inline int64_t RequestToken(){
+    static std::atomic<int64_t> last{0};
+    const auto wall=std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    auto old=last.load(std::memory_order_relaxed);
+    for(;;){const auto next=std::max<int64_t>(wall,old+1);
+        if(last.compare_exchange_weak(old,next,std::memory_order_relaxed))return next;}
+}
+inline std::string FreshPath(std::string path,int64_t token){
+    if(token>0)path+=(path.find('?')==std::string::npos?"?":"&")+std::string("ae_refresh=")+std::to_string(token);
+    return path;
+}
 
 inline bool Due(int64_t lastHandledReset, int64_t currentReset, int64_t now) {
     return currentReset > lastHandledReset &&
@@ -29,9 +44,7 @@ inline int64_t InitialMarker(int64_t currentReset, int64_t now,
 inline std::string FreshCategoryUrl(uint32_t categoryId, int64_t requestToken) {
     std::string url = "https://api.guildwars2.com/v2/achievements/categories/" +
                       std::to_string(categoryId);
-    if (requestToken > 0)
-        url += "?ae_refresh=" + std::to_string(requestToken);
-    return url;
+    return FreshPath(std::move(url),requestToken);
 }
 
 // Explicit modern schema (including object-shaped achievement IDs) on the
@@ -83,12 +96,12 @@ inline bool LooksUnrotated(const std::vector<uint32_t>& before,
            SortedIds(before) == SortedIds(after));
 }
 
-// Weekly objectives can legitimately reuse IDs. Compare claimed state and
+// Daily, weekly and seasonal objectives can legitimately reuse IDs. Compare claimed state and
 // progress as well as IDs: a reset progress counter confirms a fresh response,
 // while an unchanged pre-reset snapshot is not evidence of a new week.
 // The check is independent of ordering and handles incomplete API responses.
 template<class Period>
-bool LooksUnrotatedVaultWeek(const Period& previous, const Period& current) {
+bool LooksUnrotatedVaultPeriod(const Period& previous, const Period& current) {
     if (current.objectives.empty()) return true;
     if (previous.objectives.empty()) return false; // no comparison baseline
     if (previous.meta_progress_current != current.meta_progress_current ||
@@ -108,6 +121,19 @@ bool LooksUnrotatedVaultWeek(const Period& previous, const Period& current) {
     return snapshot(previous) == snapshot(current);
 }
 
+// An identical all-zero period is ambiguous: the API has no period ID.
+ // After the propagation window and repeated fresh requests, allow a reset-shaped
+ // response. Never use this escape hatch for yesterday's claimed/progressed rows.
+template<class Period> bool ResetShaped(const Period& period){
+    if(period.objectives.empty()||period.meta_progress_current!=0||period.meta_reward_claimed)return false;
+    for(const auto& o:period.objectives)if(o.claimed||o.progress_current!=0)return false;
+    return true;
+}
+template<class Period> bool HoldVault(const Period& prior,const Period& current,int64_t elapsed,int failures,bool allowEmpty=false){
+    if(current.objectives.empty())return !allowEmpty;
+    if(!LooksUnrotatedVaultPeriod(prior,current))return false;
+    return !(elapsed>=900&&failures>=3&&ResetShaped(current));
+}
 // A held-over API result is retried with bounded, gradually slower polling.
 inline int64_t RetryDelaySeconds(int attempted) {
     if (attempted <= 1) return 30;
@@ -115,4 +141,16 @@ inline int64_t RetryDelaySeconds(int attempted) {
     if (attempted == 3) return 120;
     return 300;
 }
+// Same retry state for each independently published section. Caller owns its
+// domain mutex; steady time is milliseconds, never wall-clock time.
+struct RetryState {
+    int failures=0;int64_t at=0;std::string reason;
+    bool Ready(int64_t now,bool manual=false)const{return manual||at==0||now>=at;}
+    void Reset(){failures=0;at=0;reason.clear();}
+    void Fail(int64_t now,std::string why){
+        if(failures<4)++failures;
+        at=now+RetryDelaySeconds(failures)*1000;reason=std::move(why);
+    }
+    int64_t Remaining(int64_t now)const{return std::max<int64_t>(0,(at-now+999)/1000);}
+};
 } // namespace ClearsReset

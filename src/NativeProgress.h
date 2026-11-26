@@ -4,6 +4,7 @@
 #include "BackgroundWorkers.h"
 #include "RefreshEngine.h"
 #include "ApiActivity.h"
+#include "ClearsReset.h"
 #include <chrono>
 #include <ctime>
 #include <memory>
@@ -78,7 +79,12 @@ inline AchievementResult FetchAchievements(const std::string& root,const NativeA
         e.failedAt=static_cast<int64_t>(std::time(nullptr));e.errorStatus=status;e.error=error;
         return AchievementResult{status,std::move(error),{}};
     };
-    auto r=NativeAccounts::Request(a,"/v2/account/achievements",{"progression"});
+    const bool resetRefresh=minimumEpoch>0&&(!e.snapshot||e.snapshot->fetchedAt<minimumEpoch);
+    const auto path=std::string("/v2/account/achievements");
+    auto r=NativeAccounts::Request(a,resetRefresh?ClearsReset::FreshPath(path,ClearsReset::RequestToken()):path,
+        {"progression"},resetRefresh?ClearsReset::NoCacheHeaders:"");
+    if(resetRefresh&&(r.status==400||r.status==404))
+        r=NativeAccounts::Request(a,path,{"progression"},ClearsReset::NoCacheHeaders);
     if(Background::Workers().Stopping())return {0,"Cancelled",{}};
     if(!NativeAccounts::Current(a))return {0,"Account changed",{}};
     if(!r)return fail(r.status,r.error);

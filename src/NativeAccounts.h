@@ -31,7 +31,7 @@ bool CommitIfCurrent(const std::vector<LinkedAccount>& accounts,const std::funct
 bool CommitIfRosterCurrent(const std::vector<LinkedAccount>& accounts,const std::map<std::string,std::set<std::string>>& roster,const std::function<bool()>& commit);
 bool CommitIfCharacterCurrent(const LinkedAccount& account,const std::string& character,const std::function<bool()>& commit);
 Result Request(const LinkedAccount& account,const std::string& path,
-               const std::vector<std::string>& permissions);
+               const std::vector<std::string>& permissions,const std::string& headers={});
 Result Request(const std::string& accountId,const std::string& path,
                const std::vector<std::string>& permissions);
 bool RefreshRoster(const LinkedAccount& account,std::set<std::string>& names);

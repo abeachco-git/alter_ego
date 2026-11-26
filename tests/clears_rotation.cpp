@@ -54,7 +54,7 @@ int case_clears_rotation(int, char**) {
         {{51, 10, 10, true}, {52, 1, 1, true}}};
     WeeklyPeriod oldResponse = lastWeek;
     std::reverse(oldResponse.objectives.begin(), oldResponse.objectives.end());
-    assert(LooksUnrotatedVaultWeek(lastWeek, oldResponse));
+    assert(LooksUnrotatedVaultPeriod(lastWeek, oldResponse));
     WeeklyPeriod newWeek = lastWeek;
     newWeek.meta_progress_current = 0;
     newWeek.meta_reward_claimed = false;
@@ -62,15 +62,29 @@ int case_clears_rotation(int, char**) {
         o.progress_current = 0;
         o.claimed = false;
     }
-    assert(!LooksUnrotatedVaultWeek(lastWeek, newWeek));
-    assert(LooksUnrotatedVaultWeek(lastWeek, WeeklyPeriod{}));
-    assert(!LooksUnrotatedVaultWeek(WeeklyPeriod{}, newWeek));
+    assert(!LooksUnrotatedVaultPeriod(lastWeek, newWeek));
+    assert(LooksUnrotatedVaultPeriod(lastWeek, WeeklyPeriod{}));
+    assert(!LooksUnrotatedVaultPeriod(WeeklyPeriod{}, newWeek));
     WeeklyPeriod changedIds = lastWeek;
     changedIds.objectives.front().id = 999;
-    assert(!LooksUnrotatedVaultWeek(lastWeek, changedIds));
+    assert(!LooksUnrotatedVaultPeriod(lastWeek, changedIds));
     WeeklyPeriod changedProgress = lastWeek;
     changedProgress.objectives.front().progress_current = 0;
-    assert(!LooksUnrotatedVaultWeek(lastWeek, changedProgress));
+    assert(!LooksUnrotatedVaultPeriod(lastWeek, changedProgress));
+    assert(!HoldVault(lastWeek,newWeek,60,0)); // same daily IDs with reset progress
+    assert(HoldVault(lastWeek,oldResponse,7200,8)); // never accept claimed prior snapshot
+    assert(HoldVault(newWeek,newWeek,899,4));
+    assert(HoldVault(newWeek,newWeek,900,2));
+    assert(!HoldVault(newWeek,newWeek,900,3)); // identical all-zero rotation
+    assert(!HoldVault(lastWeek,WeeklyPeriod{},60,0,true)); // valid empty Special
+    assert(HoldVault(lastWeek,WeeklyPeriod{},60,0,false));
+    RetryState first,second;first.Fail(1000,"held");assert(!first.Ready(30000)&&second.Ready(30000));
+    assert(first.Ready(31000)&&first.Ready(2000,true));first.Fail(31000,"held");
+    assert(first.at==91000&&first.Remaining(31000)==60);
+    first.Reset();assert(first.Ready(0)&&first.reason.empty());
+    assert(FreshPath("/v2/account/wizardsvault/daily",42)=="/v2/account/wizardsvault/daily?ae_refresh=42");
+    assert(FreshPath("/v2/test?ids=all",43)=="/v2/test?ids=all&ae_refresh=43");
+    assert(RequestToken()<RequestToken());
     // Retry URLs must change even on the same day, otherwise an initially
     // stale max-age=3600 result could be cached for a full hour.
     assert(FreshCategoryUrl(88, 0) ==

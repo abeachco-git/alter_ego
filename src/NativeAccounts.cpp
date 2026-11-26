@@ -571,14 +571,14 @@ bool CommitIfCharacterCurrent(const LinkedAccount& account,const std::string& ch
         return (!names||names->count(character))&&commit();
     });
 }
-Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions){
+Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions,const std::string& headers){
     if(!Current(a))return {0,{},"Account changed"};
     for(const auto& p:permissions)if(!a.permissions.count(p))return {403,{},"Missing API permission: "+p};
     std::unique_lock<std::mutex> lock(credentialMutex);
     if(!Current(a))return {0,{},"Account changed"};
     Secret key(Key(a.id));lock.unlock();
     if(key.value.empty())return {401,{},"API key unavailable"};
-    auto r=ArenaNet::Get(path,key.value);
+    auto r=ArenaNet::Get(path,key.value,headers);
     if(Background::Workers().Stopping())return {0,{},"Cancelled"};
     if(!Current(a))return {0,{},"Account changed"};
     if(r.status_code!=200)return {r.status_code,{},Error(r.status_code)};
