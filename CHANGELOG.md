@@ -11,6 +11,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 ### Added
 
 - Reusable loadout components, shared Equipment Sets and independent Fashion records.
+- Source refresh for Snow Crows and MetaBattle now stages presence-aware changes for review, preserves omitted local values and supports private or explicitly shared saves.
 - Optional Aquatic equipment components, separate underwater skill selections, and mutually exclusive slot-based or aggregate infusion requirements with reversible editor drafts.
 - Direct account linking with Windows Credential Manager, account-scoped inventory, wallet and guild bank views.
 - Item-location navigation from character equipment, Compare and Skinventory shopping.
