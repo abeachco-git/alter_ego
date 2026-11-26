@@ -76,9 +76,24 @@ struct IdBatch {
     template<class Iterator> void MarkAttempted(Iterator first,Iterator last){
         attempted.insert(first,last);
     }
+    // Incremental consumers release committed IDs without waiting for a
+    // long bulk request. The destructor only releases outstanding ownership.
+    std::set<uint32_t> released;
+    template<class Iterator> void ReleaseIds(Iterator first,Iterator last,bool completed=false){
+        auto& r=Metadata();std::lock_guard<std::mutex> lock(r.mutex);
+        for(;first!=last;++first){
+            const auto id=*first;if(!released.insert(id).second)continue;
+            auto it=r.records.find({dataset,id});if(it==r.records.end())continue;
+            it->second.pending=false;
+            if(attempted.count(id))it->second.retry=MetadataRegistry::Clock::now()+std::chrono::seconds(FailureSeconds);
+            else if(completed)it->second.retry={};
+        }
+        r.changed.notify_all();
+    }
     ~IdBatch(){
         auto& r=Metadata();std::lock_guard<std::mutex> lock(r.mutex);
         for(auto id:ids){
+            if(released.count(id))continue;
             auto it=r.records.find({dataset,id});
             if(it==r.records.end())continue;
             auto& e=it->second;

@@ -1,4 +1,5 @@
 #include "../src/SkinSearchCore.h"
+#include "../src/CommercePriceCore.h"
 #include "../src/SkinFilters.h"
 #include "../src/SplitPanelCore.h"
 #include "../src/LibraryModeFilter.h"
@@ -56,5 +57,21 @@ int case_skin_search(int, char**) {
  assert(BetterPrice(a,b));assert(!BetterPrice(b,a));
  b.sell_quantity=1;assert(BetterPrice(b,a));assert(!BetterPrice(a,b));
  a.sell_price=50;assert(BetterPrice(b,a));
+ const std::string record=R"({"id":1,"buys":{"unit_price":100,"quantity":20},"sells":{"unit_price":120,"quantity":3}})";
+ auto prices=ParseCommercePrices(200,"["+record+"]",{1},100);
+ assert(prices.size()==1&&prices.at(1).buy_price==100&&prices.at(1).sell_price==120);
+ assert(ParseCommercePrices(200,"["+record+"]",{1,2},100).empty());
+ prices=ParseCommercePrices(206,"["+record+"]",{1,2},100);
+ assert(prices.size()==2&&prices.at(1).tradeable&&!prices.at(2).tradeable);
+ assert(ParseCommercePrices(206,"[]",{1,2},100).empty());
+ assert(ParseCommercePrices(206,"["+record+"]",{1},100).empty());
+ assert(ParseCommercePrices(200,"["+record+","+record+"]",{1},100).empty());
+ assert(ParseCommercePrices(200,"["+record+"]",{2},100).empty());
+ assert(ParseCommercePrices(429,"[]",{1},100).empty());
+ assert(ParseCommercePrices(404,R"({"text":"Not found"})",{1},100).empty());
+ assert(!ParseCommercePrices(404,R"({"text":"all ids provided are invalid"})",{1},100).at(1).tradeable);
+ assert(EstimateInstantSale(250,3420)==726750);
+ assert(EstimateInstantSale(1,1)==0);
+ assert(!EstimateInstantSale(9223372036854775807LL,2));
     return 0;
 }

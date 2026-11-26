@@ -32,7 +32,13 @@ int case_auto_refresh_policy(int, char**) {
         assert(!InspectId("commerce_item_prices",11).pending&&InspectId("commerce_item_prices",11).retrySeconds>0);
         assert(ClaimIds("commerce_item_prices",{11,12})->ids.size()==1);
         assert(ClaimIds("commerce_item_prices",{11},true)->ids.size()==1);
-        overlap.reset();ResetMetadata();
+        overlap.reset();
+        auto batch=ClaimIds("commerce_item_prices",{21,22});std::vector<uint32_t> firstId{21};
+        batch->ReleaseIds(firstId.begin(),firstId.end(),true);
+        assert(!InspectId("commerce_item_prices",21).pending&&InspectId("commerce_item_prices",22).pending);
+        auto newer=ClaimIds("commerce_item_prices",{21});assert(newer->ids.size()==1);
+        batch.reset();assert(InspectId("commerce_item_prices",21).pending&&!InspectId("commerce_item_prices",22).pending);
+        newer.reset();ResetMetadata();
     }
     using namespace std::chrono;
     AlterEgo::ArenaNet::Admission queue(2);

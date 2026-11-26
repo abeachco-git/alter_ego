@@ -1,6 +1,7 @@
 #include "BackgroundWorkers.h"
 #include "RefreshEngine.h"
 #include "Commerce.h"
+#include "CommercePriceCore.h"
 #include "HttpClient.h"
 #include "SkinCache.h"
 #include "CommerceCache.h"
@@ -35,51 +36,20 @@ namespace Skinventory {
     bool FreshPrice(const PriceInfo& p,int64_t now){
         return !AlterEgo::RefreshEngine::Due(p.fetched_at_unix,0,now,Commerce::PriceTTL);
     }
-    int PriceField(const json& j,const char* key){
-        const auto& v=j.at(key);
-        if(!v.is_number_integer())throw std::runtime_error("Invalid commerce integer");
-        const auto n=v.get<int64_t>();if(n<0||n>2147483647LL)throw std::runtime_error("Invalid commerce range");
-        return static_cast<int>(n);
-    }
-    // Called only by owned workers. Missing IDs are not inferred to be
-    // nontradeable unless the API explicitly reports a partial/not-found result.
     std::unordered_map<uint32_t,PriceInfo> FetchItemBatch(const std::vector<uint32_t>& ids,bool& attempted){
-        std::unordered_map<uint32_t,PriceInfo> out;
-        if(ids.empty())return out;
-        std::string query;std::unordered_set<uint32_t> expected(ids.begin(),ids.end());
+        if(ids.empty())return {};
+        std::string query;
         for(auto id:ids){if(!query.empty())query+=",";query+=std::to_string(id);}
-        auto response=HttpClient::GetEx("https://api.guildwars2.com/v2/commerce/prices?ids="+query);
+        const auto response=HttpClient::GetEx("https://api.guildwars2.com/v2/commerce/prices?ids="+query);
         attempted=response.attempted;
         AlterEgo::Background::Checkpoint();
-        if(response.status_code!=200&&response.status_code!=206&&response.status_code!=404)return {};
-        try{
-            auto body=AlterEgo::Untrusted::Parse(response.body,AlterEgo::Untrusted::PublicApi);
-            if(response.status_code==404){
-                if(!body.is_object()||body.value("text",std::string())!="all ids provided are invalid")return {};
-            }else{
-                if(!body.is_array())return {};
-                for(const auto& e:body){
-                    const auto& raw=e.at("id");if(!raw.is_number_integer())return {};
-                    const auto n=raw.get<int64_t>();if(n<=0||n>4294967295LL)return {};
-                    auto id=static_cast<uint32_t>(n);if(!expected.count(id)||out.count(id))return {};
-                    PriceInfo p;p.item_id=id;p.tradeable=true;p.fetched_at_unix=NowUnix();
-                    p.buy_price=PriceField(e.at("buys"),"unit_price");p.buy_quantity=PriceField(e.at("buys"),"quantity");
-                    p.sell_price=PriceField(e.at("sells"),"unit_price");p.sell_quantity=PriceField(e.at("sells"),"quantity");
-                    out.emplace(id,p);
-                }
-            }
-            if(response.status_code==200&&out.size()!=expected.size())return {};
-            if(response.status_code!=200)for(auto id:ids)if(!out.count(id)){PriceInfo p;p.item_id=id;p.fetched_at_unix=NowUnix();out.emplace(id,p);}
-            return out;
-        }catch(const AlterEgo::Background::Cancelled&){throw;}catch(...){return {};}
+        return ParseCommercePrices(response.status_code,response.body,ids,NowUnix());
     }
     }
-
 
     std::string Commerce::s_data_dir;
     std::mutex Commerce::s_mutex;
     std::mutex Commerce::s_publication_mutex;
-    uint64_t Commerce::s_mapping_generation=0;
     std::unordered_map<uint32_t, PriceInfo> Commerce::s_prices;
     std::unordered_map<uint32_t, std::vector<uint32_t>> Commerce::s_skin_to_item;
     std::unordered_map<uint32_t, std::string> Commerce::s_item_names;
@@ -146,9 +116,12 @@ namespace Skinventory {
                 Background::Checkpoint();
                 if(!explicitDemand&&!AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::TradingPrices))break;
                 const auto end=std::min(i+200,claim->ids.size());
-                std::vector<uint32_t> batch(claim->ids.begin()+i,claim->ids.begin()+end);
-                // ClaimIds guarantees one owner per item across every consumer.
-                bool attempted=false;auto rows=FetchItemBatch(batch,attempted);
+                std::vector<uint32_t> batch(claim->ids.begin()+i,claim->ids.begin()+end),needed;
+                // Recheck after acquiring ownership to close the read/claim race.
+                {std::lock_guard<std::mutex> lock(s_mutex);const auto now=NowUnix();
+                    for(auto id:needed){auto it=itemPrices.find(id);if(manual||it==itemPrices.end()||!FreshPrice(it->second,now))needed.push_back(id);}
+                }
+                bool attempted=false;auto rows=FetchItemBatch(needed,attempted);
                 Background::Checkpoint();
                 const bool saved=Cache::WriteItemPrices(Cache::RootFromLegacySkinDirectory(s_data_dir),rows);
                 {
@@ -164,7 +137,8 @@ namespace Skinventory {
                     priceDone+=static_cast<unsigned>(batch.size());
                     priceStatus="Fetching prices "+std::to_string(priceDone)+"/"+std::to_string(priceTotal);
                 }
-                Background::Pause(std::chrono::milliseconds(200));
+                claim->ReleaseIds(batch.begin(),batch.end(),attempted||needed.empty());
+                if(!needed.empty())Background::Pause(std::chrono::milliseconds(200));
             }
             finish(false);
         },[finish]{finish(true);});
@@ -232,7 +206,12 @@ namespace Skinventory {
 
     std::string Commerce::GetFetchStatus() {
         std::lock_guard<std::mutex> lock(s_mutex);
-        return s_item_map_ready&&(s_fetching||!priceStatus.empty())?priceStatus:s_fetch_status;
+        return s_fetch_status;
+    }
+
+    std::string Commerce::GetPriceFetchStatus(){
+        std::lock_guard<std::mutex> lock(s_mutex);
+        return priceStatus;
     }
 
     bool Commerce::IsItemMapReady() {
@@ -267,7 +246,6 @@ namespace Skinventory {
         std::lock_guard<std::mutex> lock(s_mutex);
         const auto changed=ChangedCommerceCandidates(s_skin_to_item,skins);
         if(!changed.empty()){
-            ++s_mapping_generation;
             for(auto skin:changed)s_prices.erase(skin);
             ++s_price_generation;
         }

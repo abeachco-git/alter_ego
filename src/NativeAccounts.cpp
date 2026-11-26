@@ -11,6 +11,7 @@
 #include "CharacterActivity.h"
 #include "RefreshUI.h"
 #include "Commerce.h"
+#include "CommercePriceCore.h"
 #include "RefreshProgress.h"
 #include "ChatLink.h"
 #include <windows.h>
@@ -1166,11 +1167,17 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         static uint32_t priceDemandId=0;
         static auto priceDemandSince=std::chrono::steady_clock::time_point{};
         static auto priceDemandPoll=std::chrono::steady_clock::time_point{};
+        static auto lastVisible=std::chrono::steady_clock::time_point{};
         const auto tick=std::chrono::steady_clock::now();
-        if(priceDemandId!=group.id||tick-priceDemandPoll>std::chrono::seconds(2)){
-            priceDemandId=group.id;priceDemandSince=tick;priceDemandPoll=tick;
+        if(priceDemandId!=group.id||tick-lastVisible>std::chrono::seconds(2)){
+            priceDemandId=group.id;priceDemandSince=tick;priceDemandPoll={};
         }
-        if(tick-priceDemandSince>=std::chrono::milliseconds(500)&&tick-priceDemandPoll>=std::chrono::seconds(1)){
+        lastVisible=tick;
+        if(!status.pending&&status.retry_at<=now&&
+            (!status.price||RefreshEngine::Due(status.price->fetched_at_unix,0,now,Commerce::PriceTTL))&&
+            AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::TradingPrices)&&
+            tick-priceDemandSince>=std::chrono::milliseconds(500)&&
+            (priceDemandPoll==std::chrono::steady_clock::time_point{}||tick-priceDemandPoll>=std::chrono::seconds(5))){
             Commerce::RequestItemPrices({group.id});priceDemandPoll=tick;
         }
         if(status.price&&status.price->tradeable){
@@ -1182,19 +1189,17 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             int64_t eligible=0;auto f=v->inventory.flags.find(group.id);
             if(locations!=v->index.end())for(auto idx:locations->second){
                 const auto& row=v->inventory.rows[idx];const auto& slot=row.slot;
-                if(allowed(slot.account)&&Fresh(*v,row)&&slot.binding==Binding::Unbound&&
-                    f!=v->inventory.flags.end()&&f->second.known&&!f->second.accountBound&&!f->second.soulbound&&
-                    (slot.scope=="Bank"||slot.scope=="Shared inventory"||slot.scope=="Bags"||slot.scope=="Materials"))
-                    eligible+=slot.count;
+                if(allowed(slot.account)&&f!=v->inventory.flags.end()&&PotentiallySellable(slot,f->second,Fresh(*v,row))){
+                    if(slot.count>0&&eligible<=9223372036854775807LL-slot.count)eligible+=slot.count;
+                    else {eligible=0;break;}
+                }
             }
-            if(eligible>0&&p.buy_price>0&&p.buy_quantity>0){
-                // Bound arithmetic: aggregate quantity can exceed a single stack.
-                const auto count=std::min<int64_t>(eligible,9223372036854775807LL/std::max(1,p.buy_price)/100);
-                const auto gross=count*p.buy_price;
-                const auto net=gross-(gross*5+99)/100-(gross*10+99)/100;
-                ImGui::TextUnformatted("Estimated instant sale after fees:");ImGui::SameLine();RenderCoins(net);
-                if(ImGui::IsItemHovered())ImGui::SetTooltip("Estimate for %lld verified unbound items at the current best buy price. Order depth and actual fees may differ.",static_cast<long long>(eligible));
-            }else ImGui::TextDisabled("No verified sellable owned quantity");
+            const auto net=Skinventory::EstimateInstantSale(eligible,p.buy_price);
+            if(net&&p.buy_quantity>0){
+                ImGui::TextUnformatted("Estimated instant sale after fees:");ImGui::SameLine();RenderCoins(*net);
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Estimate for %lld potentially sellable items in fresh storage at the best buy price. Order depth and actual fees may differ.",static_cast<long long>(eligible));
+            }else if(eligible>0)ImGui::TextDisabled("No available instant-sale estimate");
+            else ImGui::TextDisabled("No verified sellable owned quantity");
         }else if(status.price)ImGui::TextDisabled("Not tradeable");
         else ImGui::TextDisabled("Price not retrieved");
         if(status.pending)ImGui::TextDisabled("Price request queued or refreshing");

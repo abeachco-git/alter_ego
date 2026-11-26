@@ -506,6 +506,9 @@ int case_database_core(int, char**) {
         auto q=p;q.item_id=12;q.sell_price=40;q.fetched_at_unix=102;
         assert(Cache::WriteItemPrices(root,{{11,p},{12,q}}));
         auto latest=Cache::ReadItemPrices(root);assert(latest.at(11).sell_price==75&&latest.at(12).sell_price==40);
+        auto malformed=p;malformed.buy_price=-1;
+        assert(!Cache::WriteItemPrices(root,{{11,malformed}}));
+        assert(Cache::ReadItemPrices(root).at(11).sell_price==75);
         auto older=p;older.fetched_at_unix=100;older.sell_price=1;
         assert(Cache::WriteItemPrices(root,{{11,older}}));
         latest=Cache::ReadItemPrices(root);assert(latest.at(11).sell_price==75);

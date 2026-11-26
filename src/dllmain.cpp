@@ -13416,7 +13416,7 @@ static void RenderSkinShoppingList() {
 
     // Thin progress bar when fetching (replaces verbose status text)
     if (Skinventory::Commerce::IsFetching()) {
-        std::string fetchMsg = Skinventory::Commerce::GetFetchStatus();
+        std::string fetchMsg = Skinventory::Commerce::GetPriceFetchStatus();
         int curN = 0, totN = 0;
         // Parse "...N/M" out of the status message
         for (size_t i = 0; i < fetchMsg.size(); i++) {
@@ -13446,7 +13446,7 @@ static void RenderSkinShoppingList() {
     }
     s_wasFetching = isFetching;
     if(!isFetching) {
-        const auto status=Skinventory::Commerce::GetFetchStatus();
+        const auto status=Skinventory::Commerce::GetPriceFetchStatus();
         if(status.find("Some prices could not be retrieved")==0)
             ImGui::TextColored(AlterEgo::UI::WarningText,"%s",status.c_str());
     }

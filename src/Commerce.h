@@ -42,6 +42,7 @@ namespace Skinventory {
         // Is a price fetch in progress?
         static bool IsFetching();
         static std::string GetFetchStatus();
+        static std::string GetPriceFetchStatus();
 
         // Item map: skin_id -> candidate item IDs and actual TP item names
         // Must be built once from /v2/items
@@ -68,7 +69,6 @@ namespace Skinventory {
         static std::mutex s_mutex;
         // Serialize durable mapping/price publication; never acquire from getters.
         static std::mutex s_publication_mutex;
-        static uint64_t s_mapping_generation; // guarded by s_mutex
         static void AdoptMapping(CommerceCandidates skins,std::unordered_map<uint32_t,std::string> names,std::unordered_map<uint32_t,int> vendors);
 
         // skin_id -> PriceInfo

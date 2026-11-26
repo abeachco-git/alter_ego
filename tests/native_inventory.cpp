@@ -179,5 +179,16 @@ int case_native_inventory(int,char**){
     snap=Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a");
     assert(snap&&snap->at("special").at("fetched_at")==330&&snap->at("weekly").at("fetched_at")==100);
     assert(Cache::ReadCompletion(root,CompletionDataset::Vault,"account-b")->at("daily").at("fetched_at")==260);
-    std::filesystem::remove_all(root);return 0;
+    std::filesystem::remove_all(root);{
+        using namespace AlterEgo::NativeInventory;
+        Slot slot;slot.account="a";slot.scope="Materials";slot.binding=Binding::Unknown;
+        ItemFlags flags;flags.known=true;
+        assert(PotentiallySellable(slot,flags,true));
+        assert(!PotentiallySellable(slot,flags,false));
+        slot.scope="Bank";assert(!PotentiallySellable(slot,flags,true));
+        slot.binding=Binding::Unbound;assert(PotentiallySellable(slot,flags,true));
+        slot.binding=Binding::Account;assert(!PotentiallySellable(slot,flags,true));
+        slot.binding=Binding::Unbound;flags.accountBound=true;assert(!PotentiallySellable(slot,flags,true));
+    }
+    return 0;
 }

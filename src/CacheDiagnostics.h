@@ -87,7 +87,7 @@ inline DatabaseDiagnostic InspectDatabase(const std::filesystem::path& path,int 
                 {"Fashion skins","SELECT count(*) FROM skins WHERE fashion=1","skin_fashion"},
                 {"Owned skin records","SELECT count(*) FROM owned_skins",nullptr},
                 {"Commerce mappings","SELECT count(*) FROM commerce_skin_items","commerce_item_map"},
-                {"Trading Post item prices","SELECT count(*) FROM commerce_latest_prices",nullptr},
+                {"Trading Post item prices","SELECT count(*) FROM commerce_latest_prices","commerce_latest_prices"},
                 {"Items","SELECT count(*) FROM reference_items WHERE complete=1","item_cache"},
                 {"Item aliases","SELECT count(*) FROM item_name_aliases","item_name_cache"},
                 {"Equipment catalog","SELECT count(*) FROM public_upgrade_items","public_upgrades"},

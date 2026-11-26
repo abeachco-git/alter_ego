@@ -21,6 +21,15 @@ inline std::unordered_map<uint32_t,Skinventory::PriceInfo> ReadItemPrices(const 
     }
     return out;
 }
+inline auto LatestPriceUpsert(Database::Connection& db){
+    return db.Prepare("INSERT INTO commerce_latest_prices VALUES(?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET fetched_at=excluded.fetched_at,buy=excluded.buy,sell=excluded.sell,buy_quantity=excluded.buy_quantity,sell_quantity=excluded.sell_quantity,tradeable=excluded.tradeable WHERE excluded.fetched_at>=commerce_latest_prices.fetched_at");
+}
+template<class Statement> inline void PutLatestPrice(Statement& q,uint32_t id,const Skinventory::PriceInfo& p){
+    q.Bind(1,id);q.Bind(2,p.fetched_at_unix);q.Bind(3,p.buy_price);q.Bind(4,p.sell_price);q.Bind(5,p.buy_quantity);q.Bind(6,p.sell_quantity);q.Bind(7,p.tradeable?1:0);q.Execute();q.Reset();
+}
+inline void MarkLatestPrices(Database::Connection& db){
+    db.Exec("INSERT INTO reference_freshness SELECT 'commerce_latest_prices',MAX(fetched_at) FROM commerce_latest_prices HAVING COUNT(*)>0 ON CONFLICT(dataset) DO UPDATE SET saved_at=excluded.saved_at");
+}
 inline bool WriteItemPrices(const std::string& root,const std::unordered_map<uint32_t,Skinventory::PriceInfo>& rows){
     if(root.empty())return false;
     if(rows.empty())return true;
@@ -29,9 +38,9 @@ inline bool WriteItemPrices(const std::string& root,const std::unordered_map<uin
         auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
         Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);Initialize(db);
         Database::Transaction tx(db);
-        auto q=db.Prepare("INSERT INTO commerce_latest_prices VALUES(?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET fetched_at=excluded.fetched_at,buy=excluded.buy,sell=excluded.sell,buy_quantity=excluded.buy_quantity,sell_quantity=excluded.sell_quantity,tradeable=excluded.tradeable WHERE excluded.fetched_at>=commerce_latest_prices.fetched_at");
-        for(const auto& [id,p]:rows){q.Bind(1,id);q.Bind(2,p.fetched_at_unix);q.Bind(3,p.buy_price);q.Bind(4,p.sell_price);q.Bind(5,p.buy_quantity);q.Bind(6,p.sell_quantity);q.Bind(7,p.tradeable?1:0);q.Execute();q.Reset();}
-        tx.Commit();return true;
+        auto q=LatestPriceUpsert(db);
+        for(const auto& [id,p]:rows){if(id!=p.item_id)throw std::runtime_error("Mismatched commerce item ID");PutLatestPrice(q,id,p);}
+        MarkLatestPrices(db);tx.Commit();return true;
     }catch(...){return false;}
 }
 enum class CommerceDataset { Mapping, Prices };
@@ -92,6 +101,7 @@ inline bool WriteCommerce(const std::string& root,CommerceDataset d,const Json& 
             auto current=db.Prepare("SELECT fetched_at FROM commerce_skin_price_choices WHERE skin_id=?");
             auto item=db.Prepare("INSERT INTO commerce_item_prices VALUES(?,?,?,?,?,?,?) ON CONFLICT(item_id,fetched_at) DO UPDATE SET buy=excluded.buy,sell=excluded.sell,buy_quantity=excluded.buy_quantity,sell_quantity=excluded.sell_quantity,tradeable=excluded.tradeable");
             auto choice=db.Prepare("INSERT INTO commerce_skin_price_choices VALUES(?,?,?) ON CONFLICT(skin_id) DO UPDATE SET item_id=excluded.item_id,fetched_at=excluded.fetched_at");
+            auto latest=LatestPriceUpsert(db);
             for(const auto& [key,v]:data.items()) {
                 const auto id=CatalogId(key);
                 const auto stamp=v.value("ts",int64_t(0));
@@ -103,12 +113,17 @@ inline bool WriteCommerce(const std::string& root,CommerceDataset d,const Json& 
                     item.Bind(1,itemId);item.Bind(2,stamp);item.Bind(3,v.value("buy",0));item.Bind(4,v.value("sell",0));
                     item.Bind(5,v.value("buy_q",0));item.Bind(6,v.value("sell_q",0));item.Bind(7,v.value("tradeable",false));
                     item.Execute();item.Reset();
+                    Skinventory::PriceInfo p;p.item_id=itemId;p.fetched_at_unix=stamp;
+                    p.buy_price=v.value("buy",0);p.sell_price=v.value("sell",0);
+                    p.buy_quantity=v.value("buy_q",0);p.sell_quantity=v.value("sell_q",0);p.tradeable=v.value("tradeable",false);
+                    if(stamp>0&&p.buy_price>=0&&p.sell_price>=0&&p.buy_quantity>=0&&p.sell_quantity>=0)PutLatestPrice(latest,itemId,p);
                 }
                 choice.Bind(1,id);if(itemId)choice.Bind(2,itemId);else choice.BindNull(2);
                 choice.Bind(3,stamp);choice.Execute();choice.Reset();
             }
             db.Exec("DELETE FROM commerce_item_prices WHERE NOT EXISTS (SELECT 1 FROM commerce_skin_price_choices c WHERE c.item_id=commerce_item_prices.item_id AND c.fetched_at=commerce_item_prices.fetched_at)");
         }
+        if(d==CommerceDataset::Prices)MarkLatestPrices(db);
         auto fresh=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=excluded.saved_at");
         fresh.Bind(1,std::string(CommerceName(d)));
         fresh.Bind(2,std::chrono::duration_cast<std::chrono::seconds>(
@@ -154,16 +169,6 @@ ON c.item_id=p.item_id AND c.fetched_at=p.fetched_at
     std::ifstream file(legacy);if(!file)return std::nullopt;
     auto data=Json::parse(file);file.close();
     if(!WriteCommerce(root,d,data))return std::nullopt;
-    if(d==CommerceDataset::Prices){
-        std::unordered_map<uint32_t,Skinventory::PriceInfo> observations;
-        for(const auto& [key,v]:data.items()){
-            Skinventory::PriceInfo p;p.item_id=v.value("item_id",0u);p.fetched_at_unix=v.value("ts",int64_t(0));
-            p.buy_price=v.value("buy",0);p.sell_price=v.value("sell",0);p.buy_quantity=v.value("buy_q",0);p.sell_quantity=v.value("sell_q",0);p.tradeable=v.value("tradeable",false);
-            if(!p.item_id||p.fetched_at_unix<=0||p.buy_price<0||p.sell_price<0||p.buy_quantity<0||p.sell_quantity<0)continue;
-            auto it=observations.find(p.item_id);if(it==observations.end()||it->second.fetched_at_unix<p.fetched_at_unix)observations[p.item_id]=p;
-        }
-        if(!WriteItemPrices(root,observations))return std::nullopt;
-    }
     std::error_code ec;std::filesystem::remove(legacy,ec);
     return data;
 }

@@ -182,7 +182,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
                 "DELETE FROM reference_specializations; DELETE FROM reference_traits; DELETE FROM reference_skills;"
                 "DELETE FROM reference_itemstats; DELETE FROM reference_dyes; DELETE FROM reference_metadata_snapshots; DELETE FROM reference_record_watermarks;"
                 "DELETE FROM reference_freshness WHERE dataset IN ('spec_cache','trait_cache','skill_cache','itemstat_cache','dye_cache',"
-                "'item_cache','item_name_cache','skin_catalog','skin_fashion','commerce_item_map','commerce_prices');");break;
+                "'item_cache','item_name_cache','skin_catalog','skin_fashion','commerce_item_map','commerce_prices','commerce_latest_prices');");break;
     default: throw std::runtime_error("Invalid selective operation");
     }
     db.Verify();tx.Commit();

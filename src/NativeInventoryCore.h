@@ -171,6 +171,11 @@ inline bool UsableLoose(const Slot& s,const std::string& account,const std::stri
     if(f.known&&f.soulbound&&s.binding==Binding::Unbound)return false;
     return true;
 }
+inline bool PotentiallySellable(const Slot& s,const ItemFlags& f,bool fresh){
+    if(!f.known||f.accountBound||f.soulbound)return false;
+    if(s.binding!=Binding::Unbound&&!(s.scope=="Materials"&&s.binding==Binding::Unknown))return false;
+    return UsableLoose(s,s.account,{},f,fresh);
+}
 inline std::string Lower(std::string s){for(auto& c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;}
 // Character is one facet, regardless of the number of selected names.
 // Account scope is a navigation context, not an additional item filter.
