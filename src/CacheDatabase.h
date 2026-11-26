@@ -34,7 +34,9 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
     if(version==28){
-        db.Exec("ALTER TABLE reference_skills ADD COLUMN no_underwater INTEGER CHECK(no_underwater IN (0,1))");
+        db.Exec(R"SQL(
+ALTER TABLE reference_skills ADD COLUMN no_underwater INTEGER CHECK(no_underwater IN (0,1));
+)SQL");
         return;
     }
     if(version==27){
