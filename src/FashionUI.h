@@ -4,12 +4,15 @@
 #include "FashionLibrary.h"
 
 static AlterEgo::Fashion::Library g_FashionLibrary;
-static int g_FashionSelected = -1;
+static std::string g_FashionSelectedId;
+static std::optional<AlterEgo::Fashion::Look> g_FashionDeleteTarget;
+static bool g_FashionDeletePending=false;
+static std::string g_FashionDeleteError;
 static char g_FashionSearch[160] = "";
 static int g_FashionFilter = 0;
 static bool g_FashionDialog = false;
 static AddonWindowFocusRequest g_FashionDialogFocus;
-static int g_FashionEditing = -1;
+static bool g_FashionEditing=false;
 static AlterEgo::Fashion::Look g_FashionDraft,g_FashionEditBaseline;
 static char g_FashionName[256] = "";
 static char g_FashionNotes[1024] = "";
@@ -47,13 +50,13 @@ static void StartFashionEdit(const AlterEgo::Fashion::Look& look, int index = -1
     g_FashionDialogFocus.Request();
     // This window is modeless: don't silently replace an existing draft.
     if(g_FashionDialog){
-        if(g_FashionEditing!=index||g_FashionDraft.id!=look.id)
+        if(g_FashionEditing!=(index>=0)||g_FashionDraft.id!=look.id)
             g_FashionError="Save or cancel the current Fashion draft first.";
         return;
     }
     g_FashionEditBaseline=index>=0&&index<(int)g_FashionLibrary.looks.size()?g_FashionLibrary.looks[index]:look;
     g_FashionDraft = look;
-    g_FashionEditing = index;
+    g_FashionEditing=index>=0;
     snprintf(g_FashionName, sizeof(g_FashionName), "%s", look.name.c_str());
     snprintf(g_FashionNotes, sizeof(g_FashionNotes), "%s", look.notes.c_str());
     std::string names;
@@ -108,9 +111,9 @@ static bool SelectExistingFashion(int index,const std::string& character) {
     auto existing=g_FashionLibrary.looks[index];
     if(!character.empty()) {
         AlterEgo::Fashion::Associate(existing,character);
-        if(!g_FashionLibrary.Update(index,existing))return false;
+        if(!g_FashionLibrary.UpdateDraft(g_FashionLibrary.looks[index],existing))return false;
     }
-    g_FashionSelected=index;
+    g_FashionSelectedId=existing.id;
     NavigateToLibraryCollection(1);
     return true;
 }
@@ -118,7 +121,7 @@ static bool SelectExistingFashion(int index,const std::string& character) {
 static bool SaveNewFashion(const AlterEgo::Fashion::Look& look) {
     const int index=g_FashionLibrary.Add(look);
     if(index<0)return false;
-    g_FashionSelected=index;
+    g_FashionSelectedId=g_FashionLibrary.looks[index].id;
     NavigateToLibraryCollection(1);
     if(APIDefs)APIDefs->GUI_SendAlert("Fashion saved.");
     return true;
@@ -154,7 +157,7 @@ static void RenderFashionDialog() {
     }
     if (!g_FashionDraft.complete)
         ImGui::TextDisabled("Equipment capture may omit outfit and visibility settings.");
-    const int duplicate = g_FashionEditing < 0
+    const int duplicate = !g_FashionEditing
         ? g_FashionLibrary.FindExact(g_FashionDraft.wardrobe_link) : -1;
     if (duplicate >= 0) {
         ImGui::TextWrapped("Same appearance saved as '%s'.", g_FashionLibrary.looks[duplicate].name.c_str());
@@ -184,14 +187,13 @@ static void RenderFashionDialog() {
             AlterEgo::Fashion::Associate(next, n.substr(first, last-first+1));
         }
         bool ok = false;
-        if (g_FashionEditing >= 0) {
+        if (g_FashionEditing) {
             ok = g_FashionLibrary.UpdateDraft(g_FashionEditBaseline,next);
-            if(ok)for(int i=0;i<(int)g_FashionLibrary.looks.size();++i)
-                if(g_FashionLibrary.looks[i].id==g_FashionEditBaseline.id){g_FashionSelected=i;break;}
+            if(ok)g_FashionSelectedId=g_FashionEditBaseline.id;
         } else {
             int added = g_FashionLibrary.Add(std::move(next));
             ok = added >= 0;
-            if (ok) g_FashionSelected = added;
+            if(ok)g_FashionSelectedId=g_FashionLibrary.looks[added].id;
         }
         if (ok) {
             NavigateToLibraryCollection(1);
@@ -263,6 +265,7 @@ static void CopyFashionWardrobeLink(const AlterEgo::Fashion::Look& look) {
     if (APIDefs) APIDefs->GUI_SendAlert("Wardrobe link copied.");
 }
 
+static void RequestFashionDelete(const AlterEgo::Fashion::Look& look){g_FashionDeleteTarget=look;g_FashionDeletePending=true;g_FashionDeleteError.clear();}
 static void RenderFashionLibrary() {
     // Collection-wide actions remain in the top-level Library dropdown.
     // Keep the shared search/filter toolbar inside the collection sidebar.
@@ -281,27 +284,28 @@ static void RenderFashionLibrary() {
         [&] { g_FashionFilter = 0; });
     ImGui::Separator();
     // Defer destructive actions until the details pane owns the confirmation popup.
-    int pendingDelete = -1;
+    bool selectedVisible=false;
     if (g_FashionLibrary.looks.empty())
         ImGui::TextWrapped("No saved fashion. Capture an Equipment tab or import a Wardrobe Template.");
     for (int i = 0; i < (int)g_FashionLibrary.looks.size(); ++i) {
         const auto& look = g_FashionLibrary.looks[i];
         if (!AlterEgo::Fashion::MatchesSearch(look, g_FashionSearch)) continue;
         if (g_FashionFilter && look.weight != filters[g_FashionFilter]) continue;
-        ImGui::PushID(i);
-        if (ImGui::Selectable(look.name.c_str(), i == g_FashionSelected)) {MarkNavigation();g_FashionSelected = i;}
+        ImGui::PushID(look.id.c_str());
+        const auto label=look.name+"###fashion_row";
+        if(ImGui::Selectable(label.c_str(),look.id==g_FashionSelectedId)){MarkNavigation();g_FashionSelectedId=look.id;}
+        if(look.id==g_FashionSelectedId)selectedVisible=true;
         if (ImGui::BeginPopupContextItem("##fashion_actions")) {
             CopyNameMenuItem(look.name);
             if (ImGui::MenuItem("Copy Wardrobe Link"))
                 CopyFashionWardrobeLink(look);
             if (ImGui::MenuItem("Edit")) {
-                g_FashionSelected = i;
+                g_FashionSelectedId=look.id;
                 StartFashionEdit(look, i);
             }
             ImGui::Separator();
             if (AlterEgo::UI::DestructiveMenuItem("Delete")) {
-                g_FashionSelected = i;
-                pendingDelete = i;
+                RequestFashionDelete(look);
             }
             ImGui::EndPopup();
         }
@@ -310,11 +314,11 @@ static void RenderFashionLibrary() {
     ImGui::EndChild();
     if(split.Divider("##fashion_split",g_FashionListWidth))SaveSettings();
     ImGui::BeginChild("##fashion_detail", ImVec2(0, 0), true);
-    int toDelete = -1;
-    if (g_FashionSelected < 0 || g_FashionSelected >= (int)g_FashionLibrary.looks.size()) {
-        ImGui::TextDisabled("Select a saved appearance.");
-    } else {
-        auto look = g_FashionLibrary.looks[g_FashionSelected];
+    const int selectedIndex=AlterEgo::RecordSelection::ById(g_FashionLibrary.looks,g_FashionSelectedId);
+    if(selectedIndex<0){g_FashionSelectedId.clear();ImGui::TextDisabled("Select a saved appearance.");}
+    else{
+        auto look=g_FashionLibrary.looks[selectedIndex];
+        if(!selectedVisible)ImGui::TextDisabled("Selected appearance is outside current filters.");
         AlterEgo::DecodedWardrobeLink w{};
         const bool decoded = AlterEgo::Fashion::DecodeValid(look.wardrobe_link, w);
         if (decoded) {
@@ -334,24 +338,13 @@ static void RenderFashionLibrary() {
         if (RenderActionButton("Copy Wardrobe Link"))
             CopyFashionWardrobeLink(look);
         if (g_PieUIPresent.load()) {
-            ImGui::SameLine();
+            AlterEgo::UI::SameLineIfActionFits("Preview");
             if (RenderActionButton("Preview")) PieUI_PreviewChatLink(look.wardrobe_link);
         }
-        ImGui::SameLine();
-        if (RenderActionButton("Edit##fashion")) StartFashionEdit(look, g_FashionSelected);
-        ImGui::SameLine();
-        if (AlterEgo::UI::Button("Delete##fashion", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive) || pendingDelete == g_FashionSelected)
-            ImGui::OpenPopup("Delete appearance##fashion");
-        if (ImGui::BeginPopupModal("Delete appearance##fashion", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextWrapped("Delete '%s' from the Fashion Library?", look.name.c_str());
-            if (AlterEgo::UI::Button("Delete##confirm_fashion", ImVec2(0,0), AlterEgo::UI::ButtonRole::Destructive)) {
-                toDelete = g_FashionSelected;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (RenderActionButton("Cancel##delete_fashion")) ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-        }
+        AlterEgo::UI::SameLineIfActionFits("Edit");
+        if(RenderActionButton("Edit##fashion"))StartFashionEdit(look,selectedIndex);
+        AlterEgo::UI::SameLineIfActionFits("Delete");
+        if(AlterEgo::UI::Button("Delete##fashion",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive))RequestFashionDelete(look);
         if (!look.notes.empty()) { ImGui::Spacing(); ImGui::TextWrapped("%s", look.notes.c_str()); }
         const std::string assocLabel = "Associated characters (" + std::to_string(look.characters.size()) + ")";
         if (ImGui::TreeNode(assocLabel.c_str())) {
@@ -409,9 +402,25 @@ static void RenderFashionLibrary() {
         }
     }
     ImGui::EndChild();
-    if (toDelete >= 0 && g_FashionLibrary.Remove(toDelete)) {
-        AlterEgo::GW2API::LoadBuildLibrary();
-        g_FashionSelected = g_FashionLibrary.looks.empty() ? -1 :
-            ImMin(toDelete, (int)g_FashionLibrary.looks.size()-1);
+    if(g_FashionDeletePending){g_FashionDeletePending=false;ImGui::OpenPopup("Delete appearance##fashion");}
+    if(ImGui::BeginPopupModal("Delete appearance##fashion",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        if(g_FashionDeleteTarget){
+            const auto target=*g_FashionDeleteTarget;
+            const int index=AlterEgo::RecordSelection::ById(g_FashionLibrary.looks,target.id);
+            const bool valid=index>=0&&AlterEgo::Fashion::ToJson(g_FashionLibrary.looks[index])==AlterEgo::Fashion::ToJson(target);
+            ImGui::TextWrapped("Delete '%s' from the Fashion Library?",target.name.c_str());
+            if(!valid)ImGui::TextWrapped("Saved Fashion changed. Cancel and review again.");
+            if(valid&&AlterEgo::UI::Button("Delete##confirm_fashion",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive)){
+                if(g_FashionLibrary.RemoveDraft(target)){
+                    AlterEgo::GW2API::LoadBuildLibrary();
+                    if(g_FashionSelectedId==target.id)g_FashionSelectedId.clear();
+                    g_FashionDeleteTarget.reset();ImGui::CloseCurrentPopup();
+                }else g_FashionDeleteError=g_FashionLibrary.error;
+            }
+            if(valid)ImGui::SameLine();
+        }
+        if(RenderActionButton("Cancel##delete_fashion")){g_FashionDeleteTarget.reset();ImGui::CloseCurrentPopup();}
+        if(!g_FashionDeleteError.empty())ImGui::TextWrapped("%s",g_FashionDeleteError.c_str());
+        ImGui::EndPopup();
     }
 }

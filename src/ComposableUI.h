@@ -938,9 +938,9 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
         if(index<0)ImGui::TextDisabled("%s",ComponentUIFashionName(fashionId).c_str());
         else{
             const auto& look=g_FashionLibrary.looks[index];
-            if(ReferenceHitRow(look.name,false,"Right-click for Fashion actions.")&&actions){g_FashionSelected=index;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
+            if(ReferenceHitRow(look.name,false,"Right-click for Fashion actions.")&&actions){g_FashionSelectedId=look.id;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
             if(ImGui::BeginPopupContextItem("##fashion_actions")){
-                if(actions&&ImGui::MenuItem("Open in Fashion")){g_FashionSelected=index;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
+                if(actions&&ImGui::MenuItem("Open in Fashion")){g_FashionSelectedId=look.id;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
                 if(actions&&ImGui::MenuItem("Edit Fashion"))StartFashionEdit(look,index);
                 CopyNameMenuItem(look.name);ImGui::EndPopup();
             }
@@ -1213,7 +1213,7 @@ static void RenderComponentLibrary() {
         ImGui::TextWrapped("%s",ComponentUIShortDescription(kind,item->at("data")).c_str());
         ImGui::Separator();
         const auto action=[&](const char* label,ComponentAction command,bool sameLine){
-            if(sameLine&&ImGui::GetContentRegionMax().x+ImGui::GetWindowPos().x-ImGui::GetItemRectMax().x>=UI::CompactButtonWidth(label)+gap)ImGui::SameLine();
+            if(sameLine)UI::SameLineIfActionFits(label);
             if(UI::Button(label,ImVec2(0,0),UI::ButtonRole::Compact))RunComponentAction(command,kind,*item);
         };
         action("Edit",ComponentAction::Edit,false);
@@ -1299,7 +1299,7 @@ static void RenderComponentLibrary() {
                     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
                     for (int index = 0; index < static_cast<int>(builds.size()); ++index)
                         if (builds[index].id == loadout.value("id", std::string())) {
-                            g_LibSelectedIdx = index;
+                            g_LibSelectedId=builds[index].id;
                             g_LibraryCollection = 0;MarkNavigation();
                             g_LibDetailsFetched = false;
                             break;
@@ -1376,11 +1376,13 @@ static void RenderEquipmentSetLibrary() {
     using namespace AlterEgo;
     const auto& doc=ComponentUISnapshot();
     auto& search=g_EquipmentSetSearch;
-    UI::SearchField("equipment_sets_search","Search equipment sets...",search);
     if(!doc.contains("equipment_sets")){ImGui::TextDisabled("Equipment set library unavailable.");return;}
     const ComponentJson* selected=nullptr;
     const auto& sets=doc.at("equipment_sets");
-    ImGui::BeginChild("##equipment_set_list",ImVec2(0,150),true);
+    const UI::SplitPanel split(g_EquipmentSetListWidth,220.f,130.f,220.f);
+    ImGui::BeginChild("##equipment_set_list",ImVec2(split.left,0),true);
+    UI::SearchField("equipment_sets_search","Search equipment sets...",search);ImGui::Separator();
+    bool selectedVisible=false;
     if(sets.empty())ImGui::TextDisabled("No equipment sets. Right-click to create one.");
     for(const auto& set:sets) {
         const auto id=set.value("id",std::string()),name=set.value("name",id);
@@ -1389,10 +1391,11 @@ static void RenderEquipmentSetLibrary() {
             auto lower=[](std::string value){for(char& c:value)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return value;};
             if(lower(name).find(lower(search))==std::string::npos)continue;
         }
-        if(UI::SelectableOption((name+"##"+id).c_str(),id==g_EquipmentSetSelectedId)) {
+        ImGui::PushID(id.c_str());
+        if(UI::SelectableOption((name+"###set_row").c_str(),id==g_EquipmentSetSelectedId)) {
             MarkNavigation();g_EquipmentSetSelectedId=id;selected=&set;
         }
-        ImGui::PushID(id.c_str());
+        if(id==g_EquipmentSetSelectedId)selectedVisible=true;
         if(ImGui::BeginPopupContextItem("##set_name")){
             if(ImGui::MenuItem("New"))BeginNewEquipmentSet();
             ImGui::Separator();
@@ -1405,41 +1408,31 @@ static void RenderEquipmentSetLibrary() {
         if(ImGui::MenuItem("New"))BeginNewEquipmentSet();ImGui::EndPopup();
     }
     ImGui::EndChild();
-    if(!selected){ImGui::TextDisabled("Select an equipment set.");return;}
+    if(split.Divider("##equipment_set_split",g_EquipmentSetListWidth))SaveSettings();
+    ImGui::BeginChild("##equipment_set_detail",ImVec2(0,0),true);
+    static std::string duplicateName;
+    static RecordSelection::RevisionTarget duplicateTarget,deleteTarget;
+    if(!selected){g_EquipmentSetSelectedId.clear();ImGui::TextDisabled("Select an equipment set.");}
+    else{
     const auto id=selected->value("id",std::string()),name=selected->value("name",id);
-    ImGui::TextUnformatted(name.c_str());
+    if(!selectedVisible)ImGui::TextDisabled("Selected set is outside current search.");
+    ImGui::TextWrapped("%s",name.c_str());
     int users=0;
     for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==id)++users;
     ImGui::TextDisabled("Used by %d Loadout(s)",users);
     for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==id)
         ImGui::BulletText("%s",l.at("metadata").value("name",l.value("id",std::string())).c_str());
-    static std::string duplicateName;
-    static uint64_t duplicateRevision=0;
     if(RenderActionButton("Edit##equipment_set"))BeginReferenceEditor(*selected,true);
-    ImGui::SameLine();
-    if(RenderActionButton("Duplicate##equipment_set")){duplicateName=name+" - Copy";duplicateRevision=GW2API::GetBuildLibraryRevision();ImGui::OpenPopup("Duplicate equipment set");}
-    if(ImGui::BeginPopupModal("Duplicate equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
-        UI::InputText("Name",duplicateName);
-        const auto action=UI::SaveCancel("duplicate_set",!Composable::ComponentNameKey(duplicateName).empty()&&duplicateRevision==GW2API::GetBuildLibraryRevision());
-        if(action==UI::EditAction::Save) {
-            g_ComponentCommand={ComponentUICommand::DuplicateSet,"","",id,duplicateName,ComponentJson::object(),duplicateRevision};
-            ImGui::CloseCurrentPopup();
-        }else if(action==UI::EditAction::Cancel)ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
+    UI::SameLineIfActionFits("Duplicate");
+    if(RenderActionButton("Duplicate##equipment_set")){
+        duplicateName=name+" - Copy";duplicateTarget={id,name,GW2API::GetBuildLibraryRevision()};ImGui::OpenPopup("Duplicate equipment set");
     }
-    ImGui::SameLine();
-    if(!users) {
-        if(UI::Button("Delete##equipment_set",ImVec2(0,0),UI::ButtonRole::Destructive))ImGui::OpenPopup("Delete equipment set?");
-    } else ImGui::TextDisabled("Referenced sets cannot be deleted.");
-    if(ImGui::BeginPopupModal("Delete equipment set?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("Delete this unused named set? Its components are retained.");
-        if(UI::Button("Delete",ImVec2(0,0),UI::ButtonRole::Destructive)) {
-            g_ComponentCommand={ComponentUICommand::RemoveSet,"","",id,"",ComponentJson::object()};
-            ImGui::CloseCurrentPopup();
+    if(!users){
+        UI::SameLineIfActionFits("Delete");
+        if(UI::Button("Delete##equipment_set",ImVec2(0,0),UI::ButtonRole::Destructive)){
+            deleteTarget={id,name,GW2API::GetBuildLibraryRevision()};ImGui::OpenPopup("Delete equipment set?");
         }
-        ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
+    }else ImGui::TextDisabled("Referenced sets cannot be deleted.");
     ImGui::Separator();
     if(ImGui::BeginTable("##equipment_set_refs",2,ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,110.f);
@@ -1461,6 +1454,35 @@ static void RenderEquipmentSetLibrary() {
         }
         ImGui::EndCombo();
     }
+    }
+    auto findSet=[&](const std::string& key){return std::find_if(sets.begin(),sets.end(),[&](const auto& set){return set.value("id",std::string())==key;});};
+    if(ImGui::BeginPopupModal("Duplicate equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        const bool valid=duplicateTarget.Current(GW2API::GetBuildLibraryRevision())&&findSet(duplicateTarget.id)!=sets.end();
+        ImGui::TextWrapped("Duplicate %s",duplicateTarget.name.c_str());
+        if(!valid)ImGui::TextWrapped("Library changed. Cancel and review again.");
+        UI::InputText("Name",duplicateName);
+        const auto action=UI::SaveCancel("duplicate_set",valid&&!Composable::ComponentNameKey(duplicateName).empty());
+        if(action==UI::EditAction::Save){
+            g_ComponentCommand={ComponentUICommand::DuplicateSet,"","",duplicateTarget.id,duplicateName,ComponentJson::object(),duplicateTarget.revision};
+            duplicateTarget={};ImGui::CloseCurrentPopup();
+        }else if(action==UI::EditAction::Cancel){duplicateTarget={};ImGui::CloseCurrentPopup();}
+        ImGui::EndPopup();
+    }
+    if(ImGui::BeginPopupModal("Delete equipment set?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        const auto& loadouts=doc.at("loadouts");
+        const bool referenced=std::any_of(loadouts.begin(),loadouts.end(),[&](const auto& l){return l.value("equipment_set_id",std::string())==deleteTarget.id;});
+        const bool valid=deleteTarget.Current(GW2API::GetBuildLibraryRevision())&&!referenced&&findSet(deleteTarget.id)!=sets.end();
+        ImGui::TextWrapped("Delete unused set '%s'? Its components are retained.",deleteTarget.name.c_str());
+        if(!valid)ImGui::TextWrapped("Library changed or the set is referenced. Cancel and review again.");
+        if(valid&&UI::Button("Delete",ImVec2(0,0),UI::ButtonRole::Destructive)){
+            g_ComponentCommand={ComponentUICommand::RemoveSet,"","",deleteTarget.id,"",ComponentJson::object(),deleteTarget.revision};
+            deleteTarget={};ImGui::CloseCurrentPopup();
+        }
+        if(valid)ImGui::SameLine();
+        if(RenderActionButton("Cancel")){deleteTarget={};ImGui::CloseCurrentPopup();}
+        ImGui::EndPopup();
+    }
+    ImGui::EndChild();
     RenderComponentUIEditor();
 }
 
@@ -1503,7 +1525,7 @@ static void ProcessComponentUICommand() {
         if(success){g_LibraryCollection=3;MarkNavigation();}
         break;
     case ComponentUICommand::DuplicateSet:
-        success=API::DuplicateEquipmentSet(command.component_id,command.name,&g_EquipmentSetSelectedId);
+        success=API::DuplicateEquipmentSet(command.component_id,command.name,&g_EquipmentSetSelectedId,command.expected_revision);
         break;
     case ComponentUICommand::AssignSetPart:
         success=API::AssignEquipmentSetComponent(command.loadout_id,command.kind,command.component_id,command.expected_revision);
@@ -1512,8 +1534,8 @@ static void ProcessComponentUICommand() {
         success=API::RenameEquipmentSet(command.component_id,command.name);
         break;
     case ComponentUICommand::RemoveSet:
-        success=API::RemoveEquipmentSet(command.component_id);
-        if(success)g_EquipmentSetSelectedId.clear();
+        success=API::RemoveEquipmentSet(command.component_id,command.expected_revision);
+        if(success&&g_EquipmentSetSelectedId==command.component_id)g_EquipmentSetSelectedId.clear();
         break;
     case ComponentUICommand::Consolidate:
         success=API::ConsolidateLoadoutComponent(command.kind,command.component_id,command.loadout_id,command.expected_revision);
@@ -1566,12 +1588,12 @@ static void ProcessComponentUICommand() {
         if (success) {
             g_LibraryCollection = 0;MarkNavigation();
             const auto& builds = API::GetSavedBuilds();
-            if (!builds.empty()) g_LibSelectedIdx = static_cast<int>(builds.size()) - 1;
+            if (!builds.empty()) g_LibSelectedId=builds.back().id;
             g_LibDetailsFetched = false;
         }
         break;
     case ComponentUICommand::RemoveUnused:
-        success = API::DeleteUnusedLoadoutComponent(command.kind, command.component_id);
+        success=API::DeleteUnusedLoadoutComponent(command.kind,command.component_id,command.expected_revision);
         if (success && g_ComponentSelectedKind==command.kind && g_ComponentSelectedId == command.component_id)
             g_ComponentSelectedId.clear();
         break;

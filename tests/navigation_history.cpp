@@ -1,4 +1,8 @@
 #include "../src/NavigationHistory.h"
+#include "../src/RecordSelectionCore.h"
+#include <vector>
+#include <algorithm>
+#include <utility>
 #include <cassert>
 #include <string>
 struct NavTestState {
@@ -22,5 +26,18 @@ int case_navigation_history(int,char**){
     assert(h.CanMove(1)&&h.Move(1)->id=="hero");
     for(int i=0;i<100;++i)h.Observe({"skins",std::to_string(i),""},true);
     int count=0;while(h.Move(-1))++count;assert(count==63);
-    h.Clear();assert(h.Empty());return 0;
+    h.Clear();assert(h.Empty());
+    using namespace AlterEgo::RecordSelection;
+    struct Row{std::string id,name;};
+    std::vector<Row> rows={{"a","Duplicate"},{"b","Duplicate"},{"c","Other"}};
+    const RevisionTarget target{"b","Duplicate",42};
+    assert(ById(rows,target.id)==1&&target.Current(42)&&!target.Current(43));
+    std::reverse(rows.begin(),rows.end());rows.erase(rows.begin());
+    assert(ById(rows,target.id)==0);
+    rows[0].name="Renamed";assert(ById(rows,target.id)==0);
+    rows.erase(rows.begin());assert(ById(rows,target.id)==-1);
+    std::vector<std::pair<std::string,std::string>> chars={{"account-a","Hero"},{"account-b","Hero"}};
+    const auto key=chars[1];assert(IndexOf(chars,key,[](const auto& row){return row;})==1);
+    std::reverse(chars.begin(),chars.end());assert(IndexOf(chars,key,[](const auto& row){return row;})==0);
+    return 0;
 }

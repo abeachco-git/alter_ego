@@ -162,6 +162,9 @@ inline bool InputTextMultiline(const char* label, std::string& str, const ImVec2
 inline float CompactButtonWidth(const char* label) {
     return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 }
+inline void SameLineIfActionFits(const char* label){
+    if(ImGui::GetWindowPos().x+ImGui::GetContentRegionMax().x-ImGui::GetItemRectMax().x>=CompactButtonWidth(label)+ImGui::GetStyle().ItemSpacing.x)ImGui::SameLine();
+}
 template<class Edit, class Clear, class HasText>
 inline bool SearchFieldCore(const char* id, float width, Edit edit, Clear clear, HasText hasText) {
     ImGui::PushID(id);

@@ -80,7 +80,11 @@ int case_fashion_library(int, char**) {
     assert(!lib.UpdateDraft(baseline,abandoned));
     Library verified;assert(verified.Load(file));
     assert(verified.looks[0].notes=="Saved draft");
-    assert(verified.Remove(0));
+    assert(!verified.RemoveDraft(baseline));
+    const auto current=verified.looks[0];
+    Look unrelated=look;unrelated.name="Other";assert(verified.Add(unrelated)==1);
+    assert(verified.RemoveDraft(current));assert(verified.looks.size()==1&&verified.looks[0].name=="Other");
+    assert(!verified.RemoveDraft(current));assert(verified.Remove(0));
     NativeLibrary::RuntimeStore().Close();
     std::filesystem::remove_all(file);
     return 0;

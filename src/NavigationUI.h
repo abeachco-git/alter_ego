@@ -31,22 +31,17 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
     s.page=g_MainTab;s.account=g_SelectedAccountFilter;
     switch(s.page) {
         case 0: {
-            auto chars=AlterEgo::GW2API::GetCharacters();
-            if(g_SelectedCharIdx>=0&&g_SelectedCharIdx<(int)g_CharDisplayOrder.size()){
-                const int idx=g_CharDisplayOrder[g_SelectedCharIdx];
-                if(idx>=0&&idx<(int)chars->size())s.id=(*chars)[idx].name;
-            }
+            s.id=g_SelectedCharKey.second;s.kind=g_SelectedCharKey.first;
             s.sub=g_SelectedTab;s.buildTab=g_SelectedBuildTab;s.equipTab=g_SelectedEquipTab;
             s.search=g_CharSearchBuf;s.sort=g_CharSortMode;s.first=g_CharSortAscending;break;
         }
         case 1: {
             s.collection=g_LibraryCollection;
             if(s.collection==0){
-                const auto& builds=AlterEgo::GW2API::GetSavedBuilds();
-                if(g_LibSelectedIdx>=0&&g_LibSelectedIdx<(int)builds.size())s.id=builds[g_LibSelectedIdx].id;
+                s.id=g_LibSelectedId;
                 s.search=g_LibSearchBuf;s.modes=g_LibFilterModes;
             }else if(s.collection==1){
-                if(g_FashionSelected>=0&&g_FashionSelected<(int)g_FashionLibrary.looks.size())s.id=g_FashionLibrary.looks[g_FashionSelected].id;
+                s.id=g_FashionSelectedId;
                 s.search=g_FashionSearch;s.category=g_FashionFilter;
             }else if(s.collection==2){
                 s.id=g_ComponentSelectedId;s.kind=g_ComponentSelectedKind;s.search=g_ComponentSearch;
@@ -98,12 +93,7 @@ static void RestoreNavigation(const NavigationSnapshot& s){
     switch(s.page){
         case 0:{
             g_CharSortMode=static_cast<decltype(g_CharSortMode)>(s.sort);g_CharSortAscending=s.first;
-            RebuildCharDisplayOrder();auto chars=AlterEgo::GW2API::GetCharacters();
-            g_SelectedCharIdx=-1;
-            for(int i=0;i<(int)g_CharDisplayOrder.size();++i){
-                const int idx=g_CharDisplayOrder[i];
-                if(idx>=0&&idx<(int)chars->size()&&(*chars)[idx].name==s.id){g_SelectedCharIdx=i;break;}
-            }
+            g_SelectedCharKey={s.kind,s.id};RebuildCharDisplayOrder();
             g_SessionSelectedCharName.clear();g_DetailsFetched=false;
             g_SelectedBuildTab=s.buildTab;g_SelectedEquipTab=s.equipTab;
             snprintf(g_CharSearchBuf,sizeof(g_CharSearchBuf),"%s",s.search.c_str());break;
@@ -111,13 +101,11 @@ static void RestoreNavigation(const NavigationSnapshot& s){
         case 1:{
             g_LibraryCollection=s.collection;
             if(s.collection==0){
-                const auto& builds=AlterEgo::GW2API::GetSavedBuilds();g_LibSelectedIdx=-1;
-                for(int i=0;i<(int)builds.size();++i)if(builds[i].id==s.id){g_LibSelectedIdx=i;break;}
+                g_LibSelectedId=s.id;
                 g_LibDetailsFetched=false;g_LibFilterModes=s.modes;
                 snprintf(g_LibSearchBuf,sizeof(g_LibSearchBuf),"%s",s.search.c_str());
             }else if(s.collection==1){
-                g_FashionSelected=-1;
-                for(int i=0;i<(int)g_FashionLibrary.looks.size();++i)if(g_FashionLibrary.looks[i].id==s.id){g_FashionSelected=i;break;}
+                g_FashionSelectedId=s.id;
                 g_FashionFilter=s.category;snprintf(g_FashionSearch,sizeof(g_FashionSearch),"%s",s.search.c_str());
             }else if(s.collection==2){
                 g_ComponentSelectedId=s.id;g_ComponentSelectedKind=s.kind;g_ComponentKindFilters=s.componentKinds;

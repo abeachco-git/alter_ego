@@ -436,7 +436,7 @@ namespace AlterEgo {
         // Atomically replace the source-derived fields without changing the
         // saved build identity, custom name, notes, or creation timestamp.
         static bool RefreshSavedBuildFromSource(const std::string& id, const SavedBuild& updated);
-        static bool RemoveSavedBuild(const std::string& id);
+        static bool RemoveSavedBuild(const std::string& id,uint64_t expectedRevision=0);
         static bool UpdateSavedBuild(const std::string& id, const std::string& name, const std::string& notes);
         static bool SetSavedBuildGameMode(const std::string& id, GameMode mode);
         static bool SetSavedBuildGameModes(const std::string& id, const std::vector<GameMode>& modes);
@@ -486,7 +486,7 @@ namespace AlterEgo {
                                            const std::string& componentId,
                                            const std::string& name);
         static bool DeleteUnusedLoadoutComponent(const std::string& kind,
-                                                 const std::string& componentId);
+                                                 const std::string& componentId,uint64_t expectedRevision=0);
         // Capture an independent component from live or imported SavedBuild
         // data, without creating a new Loadout or mutating existing ones.
         static std::string SuggestLibraryComponentName(const std::string& kind,
@@ -502,14 +502,14 @@ namespace AlterEgo {
     static bool ApplyEquipmentSet(const std::string& loadoutId,const std::string& setId);
     static bool DetachEquipmentSet(const std::string& loadoutId);
     static bool SaveLoadoutAsEquipmentSet(const std::string& loadoutId,const std::string& name,std::string* savedId,const std::set<std::string>& kinds={});
-    static bool DuplicateEquipmentSet(const std::string& setId,const std::string& name,std::string* savedId);
+    static bool DuplicateEquipmentSet(const std::string& setId,const std::string& name,std::string* savedId,uint64_t expectedRevision=0);
     static bool CreateEquipmentSet(const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision,std::string* savedId);
         static bool SaveEquipmentSetDraft(const std::string& id,const std::string& name,const std::map<std::string,std::string>& refs,uint64_t revision);
     static bool SaveLoadoutReferenceDraft(const std::string& id,const std::string& setId,const std::string& fashionId,const std::map<std::string,std::string>& refs,uint64_t revision);
     static bool AssignEquipmentSetComponent(const std::string& setId,const std::string& kind,const std::string& componentId,uint64_t revision);
     static std::vector<std::pair<std::string,std::string>> FindCapturedEquipmentSets(const SavedBuild& capture);
     static bool RenameEquipmentSet(const std::string& setId,const std::string& name);
-    static bool RemoveEquipmentSet(const std::string& setId);
+    static bool RemoveEquipmentSet(const std::string& setId,uint64_t expectedRevision=0);
     static bool ReplaceCapturedLoadoutComponent(const SavedBuild& capture,
         const std::string& kind, const std::string& componentId);
     static bool ImportPortableLoadout(const nlohmann::json& packet);

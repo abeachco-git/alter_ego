@@ -1999,8 +1999,8 @@ namespace AlterEgo {
             return NativeLibrary::PutLoadout(doc,NativeLibrary::PatchDraft(raw,SerializeSavedBuild(old),SerializeSavedBuild(merged)),error,LookupComponentDisplayName);
         });
     }
-    bool GW2API::RemoveSavedBuild(const std::string& id) {
-        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){return Composable::RemoveLoadout(doc,id,error);});
+    bool GW2API::RemoveSavedBuild(const std::string& id,uint64_t expectedRevision) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error){if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");return Composable::RemoveLoadout(doc,id,error);});
     }
     bool GW2API::UpdateSavedBuild(const std::string& id,const std::string& name,const std::string& notes) {
         return CommitComposableEdit([&](Composable::Document& doc,std::string&){
@@ -2746,8 +2746,9 @@ namespace AlterEgo {
     }
 
     bool GW2API::DeleteUnusedLoadoutComponent(const std::string& kind,
-                                               const std::string& componentId) {
+                                               const std::string& componentId,uint64_t expectedRevision) {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
+            if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
             return Composable::RemoveUnreferenced(doc, kind, componentId, error);
         });
     }
@@ -2833,9 +2834,10 @@ namespace AlterEgo {
         if(ok&&savedId)*savedId=id;
         return ok;
     }
-    bool GW2API::DuplicateEquipmentSet(const std::string& setId,const std::string& name,std::string* savedId) {
+    bool GW2API::DuplicateEquipmentSet(const std::string& setId,const std::string& name,std::string* savedId,uint64_t expectedRevision) {
         std::string id;
         const bool ok=CommitComposableEdit([&](Composable::Document& doc,std::string& error){
+            if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
             const auto* source=Composable::FindEquipmentSet(doc,setId);
             if(!source||Composable::ComponentNameKey(name).empty())return Composable::Fail(error,"Invalid equipment set.");
             auto copy=*source;
@@ -2889,8 +2891,9 @@ namespace AlterEgo {
             set->name=name;return true;
         });
     }
-    bool GW2API::RemoveEquipmentSet(const std::string& setId) {
-        return CommitComposableEdit([&](Composable::Document& doc,std::string&) {
+    bool GW2API::RemoveEquipmentSet(const std::string& setId,uint64_t expectedRevision) {
+        return CommitComposableEdit([&](Composable::Document& doc,std::string& error) {
+            if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
             auto it=std::find_if(doc.equipment_sets.begin(),doc.equipment_sets.end(),
                 [&](const auto& set){return set.id==setId;});
             if(it==doc.equipment_sets.end()||!Composable::EquipmentSetUsers(doc,setId).empty())return false;
