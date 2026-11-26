@@ -198,3 +198,5 @@ Character propagation evidence: the [GW2 API client endpoint documentation](http
 - [ ] Further field/schema validation (including settings, legacy imports and imported assets), remaining SQL raw execution guard, complete image-decoder safety, and parser fuzzing with sanitizers. Preserve original import compatibility.
 
 - [x] Known visible field/control validation in clipboard portable imports, bounded component arrays and infusion counts, local custom font path rebasing, currency key validation before lookup, 12,000-case sanitizer corpus. CI and in-game verification pending. Legacy migration retains its previous 64 MiB file budget; opaque extension data preserved within parser budgets.
+
+- [x] Remove optional embedded Inter font, resource script, license and dependency entry; legacy selected Inter falls back to Nexus default, explicit local custom fonts retained (including any old on-disk Inter copy). No user files deleted. Regression and exact-commit Windows CI pending.

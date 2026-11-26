@@ -1712,11 +1712,12 @@ static void LoadSettings() {
         const auto& f = j["font"];
         if (f.contains("face") && f["face"].is_number_integer()) {
             int face = f["face"].get<int>();
-            if (face >= 0 && face <= 2) g_FontConfig.face = (AlterEgo::Font::Face)face;
+            g_FontConfig.face = AlterEgo::Font::DecodeFace(face);
         }
         if (f.contains("path") && f["path"].is_string())
             g_FontConfig.customPath = AlterEgo::Font::LocalCustomPath(AlterEgo::GW2API::GetDataDirectory(),f["path"].get<std::string>());
         if(g_FontConfig.face==AlterEgo::Font::Face::Custom && g_FontConfig.customPath.empty())g_FontConfig.face=AlterEgo::Font::Face::NexusDefault;
+        if(g_FontConfig.face==AlterEgo::Font::Face::NexusDefault)g_FontConfig.customPath.clear();
         if (f.contains("px") && f["px"].is_number()) {
             const auto size=f["px"].get<double>();
             if(std::isfinite(size))g_FontConfig.px=static_cast<float>(std::max(10.0,std::min(32.0,size)));
@@ -17485,7 +17486,6 @@ static std::vector<std::string> ScanFontFolder(std::string& outDir) {
         std::string lower = name;
         for (auto& ch : lower) ch = (char)tolower((unsigned char)ch);
         // Skip the bundled face's cache file — it's already listed as "Inter (bundled)".
-        if (lower == "inter_regular.ttf") continue;
         if (lower.size() > 4 && lower.substr(lower.size() - 4) == ".ttf")
             out.push_back(name);
     }
@@ -17843,7 +17843,6 @@ void AddonOptions() {
     // Current selection label.
     std::string current;
     if (g_FontConfig.face == AlterEgo::Font::Face::NexusDefault) current = "Nexus default";
-    else if (g_FontConfig.face == AlterEgo::Font::Face::Bundled)  current = "Inter (bundled)";
     else {
         current = g_FontConfig.customPath;
         auto slash = current.find_last_of("/\\");
@@ -17854,11 +17853,6 @@ void AddonOptions() {
     if (AlterEgo::UI::BeginCombo("##fontface", current.c_str())) {
         if (ImGui::Selectable("Nexus default", g_FontConfig.face == AlterEgo::Font::Face::NexusDefault)) {
             g_FontConfig.face = AlterEgo::Font::Face::NexusDefault;
-            g_FontConfig.customPath.clear();
-            SaveSettings();
-        }
-        if (ImGui::Selectable("Inter (bundled)", g_FontConfig.face == AlterEgo::Font::Face::Bundled)) {
-            g_FontConfig.face = AlterEgo::Font::Face::Bundled;
             g_FontConfig.customPath.clear();
             SaveSettings();
         }

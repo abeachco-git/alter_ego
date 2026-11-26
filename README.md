@@ -254,6 +254,6 @@ Development is AI-assisted.
 
 Alter Ego's source code is licensed under the [MIT License](LICENSE).
 
-See [Third-Party Notices](THIRD_PARTY_NOTICES.txt) for bundled dependencies, artwork, fonts and applicable third-party content licenses.
+See [Third-Party Notices](THIRD_PARTY_NOTICES.txt) for bundled dependencies, artwork and applicable third-party content licenses.
 
 Alter Ego is an unofficial fan project and is not affiliated with or endorsed by ArenaNet, NCSOFT or Raidcore.

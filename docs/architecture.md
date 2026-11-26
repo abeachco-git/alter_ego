@@ -99,7 +99,7 @@ Cache schema v2 also stores achievement definitions, ordered bits/flags/prerequi
 
 ## Presentation and resources
 
-The bundled Inter font and its OFL notice are embedded Windows resources. Custom fonts use the Nexus file registration API. The default font path leaves the ambient Nexus font unchanged. Preserve exact stored fields when presenting or editing incomplete imported data; Cancel must not persist edits.
+No separate font is bundled or downloaded by the addon. Custom fonts use the Nexus file registration API. The default font path leaves the ambient Nexus font unchanged; saved legacy face 1 (Inter) falls back to Nexus, while face 2 remains custom. Preserve exact stored fields when presenting or editing incomplete imported data; Cancel must not persist edits.
 
 Fixed profession, specialization, crafting and status icons are version-controlled in `assets/icons/` and embedded offline during compilation. The manifest records provenance and hashes; CI checks linked resource bytes. Update artwork only through explicit reviewed maintenance. Item, skin and skill artwork uses a persistent runtime cache. Do not reintroduce removed raid/strike banner artwork unless explicitly requested.
 

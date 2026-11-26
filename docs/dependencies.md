@@ -1,6 +1,6 @@
 # Dependency maintenance
 
-[dependencies.json](../dependencies.json) records bundled versions, upstream provenance, local Git blob/tree fingerprints, licenses and update policies. It covers DLL libraries and the embedded font, not every build tool, operating-system package, external artwork or optional source-only example.
+[dependencies.json](../dependencies.json) records bundled versions, upstream provenance, local Git blob/tree fingerprints, licenses and update policies. It covers DLL libraries, not every build tool, operating-system package, external artwork or optional source-only example.
 
 - ImGui 1.80, its modified stb headers and Nexus API v6 are compatibility-locked. Never upgrade these automatically.
 - SQLite and nlohmann/json updates are manual, with upstream release/security review and existing regression and binary gates. Inter updates are manual.

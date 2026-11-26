@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Vendored addon dependencies and embedded font; not a complete binary/toolchain SBOM. GitHub Actions are tracked separately by Dependabot.",
+  "scope": "Vendored addon dependencies; not a complete binary/toolchain SBOM. GitHub Actions are tracked separately by Dependabot.",
   "components": [
     {
       "id": "imgui",
@@ -84,29 +84,6 @@
       "upstream_commit": null,
       "policy": "abi-locked",
       "notes": "6 is an API/ABI level, not a verified upstream release. Exact local header fingerprint; no verified OSV commit.",
-      "depends_on": []
-    },
-    {
-      "id": "inter",
-      "name": "Inter",
-      "version": "4.001",
-      "type": "library",
-      "source": "https://github.com/rsms/inter",
-      "purl": "pkg:github/rsms/inter@9221beed3e5b521ce94050ca542f568755c17c22",
-      "license": "OFL-1.1",
-      "paths": [
-        {
-          "path": "assets/inter_regular.ttf",
-          "git_object": "b7aaca8de1fe458399e17311d35d543a1fa2f984"
-        },
-        {
-          "path": "assets/OFL.txt",
-          "git_object": "9b2ca37b3ffc77391d8b2ebef4a974ef32bf46ea"
-        }
-      ],
-      "upstream_commit": "9221beed3e5b521ce94050ca542f568755c17c22",
-      "policy": "manual",
-      "notes": "Font name table: Version 4.001;git-9221beed3. Embedded unmodified font asset.",
       "depends_on": []
     },
     {

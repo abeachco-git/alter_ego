@@ -9,7 +9,9 @@
 
 namespace AlterEgo { namespace Font {
 
-    enum class Face : int { NexusDefault = 0, Bundled = 1, Custom = 2 };
+    // Keep persisted Custom value 2; legacy bundled Inter value 1 maps to default.
+    enum class Face : int { NexusDefault = 0, Custom = 2 };
+    inline Face DecodeFace(int saved) { return saved==2?Face::Custom:Face::NexusDefault; }
 
     struct Config {
         Face        face = Face::NexusDefault;
@@ -41,8 +43,6 @@ namespace AlterEgo { namespace Font {
     inline std::string Identifier(const Config& c) {
         if (c.face == Face::NexusDefault) return std::string();
         int px = (int)std::lround(c.px);
-        if (c.face == Face::Bundled)
-            return "AlterEgo_F_BUNDLED_" + std::to_string(px);
         char buf[16];
         std::snprintf(buf, sizeof(buf), "%08x", Fnv32(c.customPath));
         return std::string("AlterEgo_F_C") + buf + "_" + std::to_string(px);

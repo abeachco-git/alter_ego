@@ -60,14 +60,11 @@ add_custom_command(
     COMMENT "Embed fixed profession, elite specialization, crafting and status icons"
     VERBATIM
 )
-configure_file("${CMAKE_SOURCE_DIR}/src/AlterEgoResources.rc.in"
-               "${CMAKE_BINARY_DIR}/AlterEgoResources.rc" @ONLY)
 
 # Source files
 set(SOURCES
     src/dllmain.cpp
     "${EMBEDDED_ICONS_RC}"
-    "${CMAKE_BINARY_DIR}/AlterEgoResources.rc"
     src/Clears.cpp
     src/GW2API.cpp
     src/NativeLibrary.cpp

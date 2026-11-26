@@ -1,3 +1,0 @@
-// Embed the bundled Inter font and its required license notice as Windows resources.
-201 RCDATA "@CMAKE_SOURCE_DIR@/assets/inter_regular.ttf"
-202 RCDATA "@CMAKE_SOURCE_DIR@/assets/OFL.txt"

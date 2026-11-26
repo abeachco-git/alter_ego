@@ -188,7 +188,10 @@ jobs:
         run: |
           test -s LICENSE
           test -s THIRD_PARTY_NOTICES.txt
-          grep -Fq 'SIL OPEN FONT LICENSE Version 1.1' THIRD_PARTY_NOTICES.txt
+          grep -Fq 'SQLite — public domain' THIRD_PARTY_NOTICES.txt
+          test ! -e assets/inter_regular.ttf
+          test ! -e assets/OFL.txt
+          test ! -e src/AlterEgoResources.rc.in
       - name: Upload DLL
         uses: actions/upload-artifact@v7.0.2
         with:

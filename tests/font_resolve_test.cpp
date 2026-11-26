@@ -12,15 +12,15 @@ int case_font_resolve_test(int, char**) {
     CHECK(Identifier(d).empty());
     CHECK(IsDefault(d));
 
-    // Bundled id format + px rounding.
-    Config b{Face::Bundled, "", 16.0f};
-    CHECK(Identifier(b) == "AlterEgo_F_BUNDLED_16");
-    CHECK(!IsDefault(b));
-    Config b18{Face::Bundled, "", 18.0f};
-    Config b1799{Face::Bundled, "", 17.99f};
-    CHECK(Identifier(b18) == Identifier(b1799));      // 18.0 and 17.99 -> same id
-    Config b19{Face::Bundled, "", 19.0f};
-    CHECK(Identifier(b18) != Identifier(b19));         // 18 vs 19 differ
+    // Original persisted face 1 (bundled Inter) now resolves to Nexus default;
+    // face 2 is still a custom font. Unknown values also fall back safely.
+    CHECK(DecodeFace(0)==Face::NexusDefault);
+    CHECK(DecodeFace(1)==Face::NexusDefault);
+    CHECK(DecodeFace(2)==Face::Custom);
+    CHECK(DecodeFace(99)==Face::NexusDefault);
+    Config old{DecodeFace(1), "", 16.0f};
+    CHECK(Identifier(old).empty());
+    CHECK(IsDefault(old));
 
     // Custom id depends on path; same path+px -> same id, different path -> different id.
     Config ca{Face::Custom, "/x/a.ttf", 16.0f};
@@ -29,6 +29,10 @@ int case_font_resolve_test(int, char**) {
     CHECK(Identifier(ca) == Identifier(ca2));
     CHECK(Identifier(ca) != Identifier(cb));
     CHECK(Identifier(ca).rfind("AlterEgo_F_C", 0) == 0);
+    Config c18{Face::Custom, "/x/a.ttf", 18.0f};
+    Config c1799{Face::Custom, "/x/a.ttf", 17.99f};
+    CHECK(Identifier(c18)==Identifier(c1799));
+    CHECK(Identifier(ca)!=Identifier(c18));
 
     if (g_fail == 0) { printf("ALL PASS\n"); return 0; }
     printf("%d FAILURE(S)\n", g_fail); return 1;
