@@ -1647,7 +1647,7 @@ static bool SaveSettings() {
     j["wallet_pins"] = AlterEgo::NativeAccounts::WalletPins();
     j["inventory_grouped"]=AlterEgo::NativeAccounts::InventoryGrouped();
     j["inventory_expanded_groups"]=AlterEgo::NativeAccounts::InventoryExpandedGroups();
-    j["guild_collapsed_groups"]=AlterEgo::NativeAccounts::GuildCollapsedGroups();
+    j["guild_expanded_groups"]=AlterEgo::NativeAccounts::GuildExpandedGroups();
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
     j["warn_stale_specialization"] = g_WarnStaleSpecialization;
     j["birthday_mode"] = g_BirthdayMode;
@@ -1714,8 +1714,8 @@ static void LoadSettings() {
     if(j.contains("inventory_expanded_groups")&&j["inventory_expanded_groups"].is_array()&&j["inventory_expanded_groups"].size()<=4096){
         try{AlterEgo::NativeAccounts::SetInventoryExpandedGroups(j["inventory_expanded_groups"].get<std::set<std::string>>());}catch(...){}
     }
-    if(j.contains("guild_collapsed_groups")&&j["guild_collapsed_groups"].is_array()&&j["guild_collapsed_groups"].size()<=4096){
-        try{AlterEgo::NativeAccounts::SetGuildCollapsedGroups(j["guild_collapsed_groups"].get<std::set<std::string>>());}catch(...){}
+    if(j.contains("guild_expanded_groups")&&j["guild_expanded_groups"].is_array()&&j["guild_expanded_groups"].size()<=4096){
+        try{AlterEgo::NativeAccounts::SetGuildExpandedGroups(j["guild_expanded_groups"].get<std::set<std::string>>());}catch(...){}
     }
     getBool("auto_refresh_on_specialization", g_AutoRefreshOnSpecialization);
     AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;
@@ -12504,6 +12504,20 @@ static void DrawCoinIcon(ImVec4 color, float radius) {
     ImGui::Dummy(ImVec2(radius * 2.0f + 1.0f, ImGui::GetTextLineHeight()));
 }
 
+// Match the native coin renderer's text, icon and spacing widths.
+float CoinAmountWidth(int64_t copper) {
+    if(copper<=0)return ImGui::CalcTextSize("0").x+13.f;
+    const auto gold=copper/10000,silver=(copper%10000)/100,cop=copper%100;
+    float width=0.f;
+    const auto add=[&](int64_t value){
+        if(width>0.f)width+=2.f;
+        width+=ImGui::CalcTextSize(std::to_string(value).c_str()).x+12.f;
+    };
+    if(gold>0)add(gold);
+    if(silver>0||gold>0)add(silver);
+    add(cop);
+    return width;
+}
 void RenderCoins(int64_t copper) {
     if (copper <= 0) {
         ImGui::TextColored(COIN_COPPER, "0");

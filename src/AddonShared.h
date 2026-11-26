@@ -85,6 +85,7 @@ void DrawInventoryCharacterLabel(ImDrawList* draw,ImVec2 min,ImVec2 max,const st
 
 // Common item presentation and actions, shared by Skinventory and native Inventory.
 ImVec4 GetSkinRarityColor(const std::string& rarity);
+float CoinAmountWidth(int64_t copper);
 void RenderCoins(int64_t copper);
 void MarkInventoryNavigation();
 std::string CharacterLoadUnavailable(const std::string& character,const std::string& account);

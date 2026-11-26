@@ -39,7 +39,7 @@ struct View {
 std::atomic<uint64_t> inventoryGeneration{0};
 uint32_t revealItem=0;
 InventoryNavigation navigation;
-std::set<std::string> expandedInventoryGroups,guildCollapsedGroups;
+std::set<std::string> expandedInventoryGroups,guildExpandedGroups;
 bool groupRevealPending=false;
 // Render-thread preferences, persisted in the ordinary settings file.
 std::set<uint32_t> walletPins;
@@ -838,10 +838,10 @@ void SetInventoryGrouped(bool value){
     if(navigation.grouped!=value){navigation.grouped=value;navigation.group.clear();groupRevealPending=value&&navigation.item!=0;}
 }
 std::set<std::string> InventoryExpandedGroups(){return expandedInventoryGroups;}
-std::set<std::string> GuildCollapsedGroups(){return guildCollapsedGroups;}
-void SetGuildCollapsedGroups(const std::set<std::string>& value){
-    guildCollapsedGroups.clear();
-    for(const auto& key:value)if(!key.empty()&&key.size()<=1024&&guildCollapsedGroups.size()<4096)guildCollapsedGroups.insert(key);
+std::set<std::string> GuildExpandedGroups(){return guildExpandedGroups;}
+void SetGuildExpandedGroups(const std::set<std::string>& value){
+    guildExpandedGroups.clear();
+    for(const auto& key:value)if(!key.empty()&&key.size()<=1024&&guildExpandedGroups.size()<4096)guildExpandedGroups.insert(key);
 }
 void SetInventoryExpandedGroups(const std::set<std::string>& value){
     expandedInventoryGroups.clear();
@@ -942,6 +942,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         }else{
             // Plain searchable list, no filter popup: same SearchField used by Characters.
             UI::SearchField("guild_search","Search items or ID",q);
+            const char* guildSorts[]={"Name","Quantity"};
+            ImGui::SetNextItemWidth(120.f);UI::Combo("##guild_sort",&nav.guildSort,guildSorts,2);
         }
         const auto searchWords=AlterEgo::Search::Words(q);
         if(subview==1){
@@ -957,33 +959,27 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                     if(fa!=fb)return fa;
                     return a->order==b->order?a->id<b->id:a->order<b->order;
                 });
-                int rowIndex=0;
-                for(const auto* ptr:visible){
-                    const auto& w=*ptr;ImGui::PushID(static_cast<int>(w.id));
+                const float pitch=UI::WalletRowHeight();
+                UI::CatalogLines(static_cast<int>(visible.size()),pitch,0.f,[&](int rowIndex){
+                    const auto& w=*visible[rowIndex];ImGui::PushID(static_cast<int>(w.id));
                     const auto p=ImGui::GetCursorScreenPos();
-                    UI::CatalogRowBackground(rowIndex++,p,ImVec2(p.x+ImGui::GetContentRegionAvail().x,p.y+ImGui::GetFrameHeight()));
+                    UI::CatalogRowBackground(rowIndex,p,ImVec2(p.x+ImGui::GetContentRegionAvail().x,p.y+pitch));
                     const bool pinned=walletPins.count(w.id)!=0;
-                    if(UI::PinButton("##currency_pin",pinned,"Pin currency","Unpin currency")){
+                    if(UI::PinButton("##currency_pin",pinned,"Pin currency","Unpin currency",pitch)){
                         if(pinned)walletPins.erase(w.id);else walletPins.insert(w.id);
                         if(saveSettings)saveSettings();
                     }
                     ImGui::SameLine();
-                    // Reserved currency ID namespace; use the ordinary disk-backed icon queue.
-                    const uint32_t iconId=0x40000000u|w.id;
-                    const float iconSize=ImGui::GetFrameHeight();
-                    if(auto* tex=IconManager::GetIcon(iconId);tex&&tex->Resource)
-                        ImGui::Image(tex->Resource,ImVec2(iconSize,iconSize));
-                    else{
-                        ImGui::Dummy(ImVec2(iconSize,iconSize));
-                        if(!w.icon.empty())IconManager::RequestIcon(iconId,w.icon,true);
-                    }
-                    ImGui::SameLine();ImGui::AlignTextToFramePadding();
-                    std::string label=w.name.empty()?"Currency #"+std::to_string(w.id):w.name;
-                    if(w.id==1){ImGui::Text("%s:",label.c_str());ImGui::SameLine();RenderCoins(w.value);}
-                    else ImGui::Text("%s: %lld",label.c_str(),static_cast<long long>(w.value));
-                    if(!w.description.empty()&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",w.description.c_str());
+                    const std::string label=w.name.empty()?"Currency #"+std::to_string(w.id):w.name;
+                    const auto balance=std::to_string(w.value);
+                    const float amountWidth=w.id==1?CoinAmountWidth(w.value):ImGui::CalcTextSize(balance.c_str()).x;
+                    UI::WalletCatalogLabel(0x40000000u|w.id,w.icon,label,w.description,amountWidth);
+                    ItemMenu(w.id,label,{}, {},true);
+                    ImGui::SameLine(0,4.f);ImGui::AlignTextToFramePadding();
+                    if(w.id==1)RenderCoins(w.value);
+                    else ImGui::TextUnformatted(balance.c_str());
                     ImGui::PopID();
-                }
+                });
                 if(visible.empty())ImGui::TextDisabled("No matching cached currencies.");
                 ImGui::PopID();
             }
@@ -996,26 +992,51 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                 auto access=v->inventory.guildAccess.find(a.id);
                 if(access!=v->inventory.guildAccess.end())shown.insert(access->second.begin(),access->second.end());
             }
+            bool anyGuild=false;
             for(const auto& id:shown){
                 auto it=v->inventory.guilds.find(id);if(it==v->inventory.guilds.end())continue;
-                const auto& g=it->second;ImGui::PushID(id.c_str());
-                auto title=(g.name.empty()?id:g.name)+" ["+g.tag+"]";
-                if(ImGui::TreeNode((title+"###guild").c_str())){
+                const auto& g=it->second;
+                std::map<uint32_t,std::pair<const Row*,int64_t>> groups;
+                for(const auto& r:g.rows)if(Match(r.name,r.slot.id,searchWords)){
+                    auto& x=groups[r.slot.id];x.first=&r;x.second+=r.slot.count;
+                }
+                if(!searchWords.empty()&&groups.empty())continue;
+                anyGuild=true;
+                ImGui::PushID(id.c_str());
+                const auto title=(g.name.empty()?id:g.name)+" ["+g.tag+"]";
+                const bool forced=!searchWords.empty();
+                const bool open=GroupBrowse::Expanded(guildExpandedGroups,id,false,forced);
+                if(UI::CatalogBranchRow(0,open,title)&&GroupBrowse::Toggle(guildExpandedGroups,id,forced)){
+                    if(saveSettings)saveSettings();
+                }
+                if(open){
+                    ImGui::Indent(14.f);
                     ImGui::TextDisabled("%s%s",g.status.c_str(),Due("Guild bank",0,g.success,Now())?" (stale)":"");
                     ImGui::TextUnformatted("Shared coins:");ImGui::SameLine();RenderCoins(g.coins);
-                    std::map<uint32_t,std::pair<const Row*,int64_t>> groups;
-                    for(const auto& r:g.rows)if(Match(r.name,r.slot.id,searchWords)){auto& x=groups[r.slot.id];x.first=&r;x.second+=r.slot.count;}
-                    for(const auto& [item,x]:groups){
-                        ImGui::PushID(static_cast<int>(item));
-                        const auto& row=*x.first;
+                    std::vector<uint32_t> ordered;
+                    for(const auto& [item,x]:groups)ordered.push_back(item);
+                    std::sort(ordered.begin(),ordered.end(),[&](uint32_t a,uint32_t b){
+                        const auto& x=groups.at(a);const auto& y=groups.at(b);
+                        if(nav.guildSort==1&&x.second!=y.second)return x.second>y.second;
+                        const auto xn=x.first->name.empty()?"Item #"+std::to_string(a):x.first->name;
+                        const auto yn=y.first->name.empty()?"Item #"+std::to_string(b):y.first->name;
+                        return xn!=yn?xn<yn:a<b;
+                    });
+                    UI::CatalogRows(static_cast<int>(ordered.size()),[&](int i){
+                        const auto item=ordered[i];const auto& x=groups.at(item);const auto& row=*x.first;
                         const auto name=row.name.empty()?"Item #"+std::to_string(item):row.name;
-                        ImGui::TextColored(GetSkinRarityColor(row.rarity),"%s x%lld",name.c_str(),static_cast<long long>(x.second));
+                        const auto meta=v->inventory.metadata.find(item);
+                        ImGui::PushID(static_cast<int>(item));
+                        UI::CatalogRow(i,false,item,meta==v->inventory.metadata.end()?"":meta->second.icon,name,row.rarity,std::to_string(x.second));
+                        // Shared guild stock has no personal character-load targets.
                         ItemMenu(item,name,row.chat);ImGui::PopID();
-                    }
+                    });
                     if(groups.empty())ImGui::TextDisabled("No matching cached items.");
-                    ImGui::TreePop();
-                }ImGui::PopID();
+                    ImGui::Unindent(14.f);
+                }
+                ImGui::PopID();
             }
+            if(!shown.empty()&&!anyGuild&&!searchWords.empty())ImGui::TextDisabled("No matching cached guild items.");
             if(shown.empty())ImGui::TextDisabled("No verified guild bank access.");
         }
         return;

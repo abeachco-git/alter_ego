@@ -30,6 +30,13 @@ inline bool PinButton(const char* id,bool pinned,const char* pinTip,const char* 
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",pinned?unpinTip:pinTip);
     return clicked;
 }
+// Catalog item and currency artwork share the existing cache and visible
+// row demand. No metadata lookup or request owner is introduced.
+inline void DrawCatalogIcon(ImDrawList* draw,uint32_t id,const std::string& url,ImVec2 p,ImVec2 end,ImU32 tint=IM_COL32_WHITE){
+    auto* tex=id?IconManager::GetIcon(id):nullptr;
+    if(tex&&tex->Resource)draw->AddImage(tex->Resource,p,end,ImVec2(0,0),ImVec2(1,1),tint);
+    else if(id&&!url.empty())IconManager::RequestIcon(id,url,true);
+}
 struct CatalogRowResult {bool clicked=false,hovered=false;};
 // Both catalog rows and tiles use the same native activation and hover
 // target. Caller supplies its stable ID scope and immediately owns the
@@ -74,9 +81,7 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const float sz=16.f;
     const ImVec2 ip(p.x+8,p.y+(height-sz)*.5f),ie(ip.x+sz,ip.y+sz);
     dl->AddRectFilled(ip,ie,ImGui::ColorConvertFloat4ToU32(ImVec4(rc.x*.18f,rc.y*.18f,rc.z*.18f,1)),1.5f);
-    auto* tex=iconId?IconManager::GetIcon(iconId):nullptr;
-    if(tex&&tex->Resource)dl->AddImage(tex->Resource,ip,ie,ImVec2(0,0),ImVec2(1,1),dim?IM_COL32(170,170,170,130):IM_COL32_WHITE);
-    else if(iconId&&!url.empty())IconManager::RequestIcon(iconId,url,true);
+    DrawCatalogIcon(dl,iconId,url,ip,ie,dim?IM_COL32(170,170,170,130):IM_COL32_WHITE);
     const auto textColor=ImGui::GetColorU32(dim?ImGuiCol_TextDisabled:ImGuiCol_Text);
     const float ty=p.y+(height-ImGui::GetTextLineHeight())*.5f;
     const float tailWidth=trailing.empty()?0.f:ImGui::CalcTextSize(trailing.c_str()).x+12.f;
@@ -92,6 +97,30 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
         else dl->AddCircle(dot,3.5f,IM_COL32(120,110,90,200),14,1.2f);}
     if(hovered&&ImGui::CalcTextSize(name.c_str()).x>right-left)ImGui::SetTooltip("%s",name.c_str());
     return hit;
+}
+// Pin and currency content have separate native hit targets; the label
+// is clipped independently of the right-aligned amount. Caller renders
+// the specialized amount and actions using the existing domain helpers.
+inline float WalletRowHeight(){return std::ceil(std::max(CatalogRowHeight(),ImGui::GetFrameHeight()));}
+inline void WalletCatalogLabel(uint32_t id,const std::string& url,const std::string& name,const std::string& description,float amountWidth){
+    const float pitch=WalletRowHeight();
+    const auto p=ImGui::GetCursorScreenPos();
+    const float width=std::max(1.f,ImGui::GetContentRegionAvail().x-amountWidth-8.f);
+    const auto hit=CatalogHitTarget("##wallet_label",ImVec2(width,pitch));
+    auto* draw=ImGui::GetWindowDrawList();
+    const float iconSize=16.f;
+    const ImVec2 ip(p.x+2,p.y+(pitch-iconSize)*.5f),ie(ip.x+iconSize,ip.y+iconSize);
+    draw->PushClipRect(p,ImVec2(p.x+width,p.y+pitch),true);
+    draw->AddRectFilled(ip,ie,IM_COL32(255,255,255,12),1.5f);
+    DrawCatalogIcon(draw,id,url,ip,ie);
+    const float left=ie.x+6.f,ty=p.y+(pitch-ImGui::GetTextLineHeight())*.5f;
+    draw->AddText(ImVec2(left,ty),ImGui::GetColorU32(ImGuiCol_Text),name.c_str());
+    draw->PopClipRect();
+    if(hit.hovered&&(!description.empty()||ImGui::CalcTextSize(name.c_str()).x>p.x+width-left)){
+        ImGui::BeginTooltip();ImGui::TextUnformatted(name.c_str());
+        if(!description.empty())ImGui::TextWrapped("%s",description.c_str());
+        ImGui::EndTooltip();
+    }
 }
 // Fixed-pitch collapsible header for hierarchical catalogs. Native hit target
 // and clipper geometry are the same as ordinary catalog rows.

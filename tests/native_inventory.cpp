@@ -16,6 +16,14 @@ int case_native_inventory(int,char**){
         GroupTree tree;
         const GroupPath bank{"a","","Bank"},bags{"a","Hero","Bags"},equipment{"a","Hero","Equipment"},wallet{"b","","Wallet"};
         assert(GroupKey({"a","b:c","d"})!=GroupKey({"a:b","c","d"}));
+        std::set<std::string> overrides;
+        using namespace AlterEgo::GroupBrowse;
+        assert(Expanded(overrides,"guild",false,true)&&overrides.empty());
+        assert(!Toggle(overrides,"guild",true)&&overrides.empty());
+        assert(Toggle(overrides,"guild")&&Expanded(overrides,"guild",false));
+        assert(!Expanded(overrides,"guild",true));
+        assert(Reveal(overrides,"guild",true)&&Expanded(overrides,"guild",true));
+        assert(PathKey({"a","b:c","d"})==GroupKey({"a","b:c","d"}));
         assert(StorageRank("Bank")<StorageRank("Bags")&&StorageRank("Equipment")<StorageRank("Bags"));
         tree.Add(bank,"Account A",true,{{0,20},{1,1}});
         tree.Add(equipment,"Account A",true,{{2,1}});
