@@ -75,7 +75,42 @@ int case_section_refresh(int, char**) {
     assert(!tracker.Due(key,"Bags",0,0,now+599));
     assert(tracker.Due(key,"Bags",0,0,now+600));
     assert(tracker.Due(key,"Bags",0,0,now+1,false,true));
-    assert(tracker.Due({key.first,{}},"Bank",0,0,now+1,false));
+    assert(tracker.Due({key.first,{}}, "Bank",0,0,now+1,false));
+    // The account-scoped policy drives both freshness labels and eligibility.
+    // Ordinary recurring requests retain their independent deterministic spread.
+    {
+        A::Tracker storage;
+        const A::Key account{key.first,{}};
+        storage.Observe(key.first,key.second,34,true,now);
+        std::set<int64_t> offsets;
+        for(const auto* scope:{"Bank","Shared inventory","Materials","Legendary Armory"}){
+            const auto interval=std::string(scope)=="Legendary Armory"?1800:600;
+            const auto offset=F::Offset(account.first+"//"+scope);
+            if(interval==600)offsets.insert(offset);
+            assert(F::ActivitySeconds(true,scope)==interval);
+            assert(storage.Due(account,scope,0,0,now+1,false)); // first retrieval unchanged
+            assert(storage.Fresh(account,scope,now,now+interval-1,false));
+            assert(!storage.Fresh(account,scope,now,now+interval,false));
+            const auto eligible=storage.Eligible(account,scope,now,0,now+interval,false);
+            assert(eligible.at==now+interval+offset);
+            assert(!storage.Due(account,scope,now,0,now+interval+offset-1,false));
+            assert(storage.Due(account,scope,now,0,now+interval+offset,false));
+            assert(!storage.Due(account,scope,now,now+interval+offset,now+interval+offset+1,false));
+            assert(storage.Due(account,scope,now,now+interval+offset,now+interval+offset+1,false,true));
+        }
+        assert(offsets.size()>1); // sample account does not schedule all three together
+        storage.Observe(key.first,"Another",34,true,now+100);
+        assert(storage.Eligible(account,"Bank",now,0,now+101,false).at==now+600+F::Offset(account.first+"//Bank"));
+        storage.Finish(now+200);
+        for(const auto* scope:{"Bank","Shared inventory","Materials","Legendary Armory"}){
+            assert(!storage.Due(account,scope,now,0,now+799,false));
+            assert(storage.Due(account,scope,now,0,now+800,false));
+            const auto ticket=storage.Begin(account,scope,now+800);
+            storage.Success(account,scope,ticket,now+801);
+            assert(storage.Fresh(account,scope,now+801,now+99999,false));
+            assert(!storage.Due(account,scope,now+801,0,now+99999,false));
+        }
+    }
     assert(!tracker.Due(key,"Bags",now-90000,0,now+10));
     assert(tracker.Due(key,"Bags",now-90000,0,now+646));
     assert(tracker.Fresh(other,"Bags",now-90000,now+646));

@@ -17799,7 +17799,8 @@ void AddonOptions() {
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     }
-    ImGui::TextDisabled("Characters: 10 minutes while relevant views are open; login alone does not fetch.");
+    ImGui::TextDisabled("Characters, Bank, Shared inventory and Materials: 10 minutes while relevant views are open.");
+    ImGui::TextDisabled("Legendary Armory: 30 minutes; login alone does not fetch.");
     if (ImGui::Checkbox("When specialization changes##ae_auto_spec", &g_AutoRefreshOnSpecialization)){
         AlterEgo::CharacterActivity::SpecSignal()=g_AutoRefreshOnSpecialization;SaveSettings();
     }

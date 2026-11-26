@@ -94,7 +94,7 @@ public:
         auto i=rows_.find(k);if(i==rows_.end())return true;
         const auto& e=i->second;auto it=e.scopes.find(scope);const Scope s=it==e.scopes.end()?Scope{}:it->second;
         if(Active(k)){
-            const auto interval=k.second.empty()?RefreshEngine::BrowseSeconds:RefreshEngine::CharacterSeconds;
+            const auto interval=RefreshEngine::ActivitySeconds(k.second.empty(),scope);
             const bool specDue=specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
             return !specDue&&now-std::max(e.login,success)<interval;
         }
@@ -108,7 +108,7 @@ public:
         Eligibility result;
         if(Active(k)){
             const bool missing=success<=0||success>now;
-            const auto interval=k.second.empty()?RefreshEngine::BrowseSeconds:RefreshEngine::CharacterSeconds;
+            const auto interval=RefreshEngine::ActivitySeconds(k.second.empty(),scope);
             const auto base=missing?e.login:std::max(e.login,success);
             const auto normalAt=missing&&k.second.empty()?now:base+interval+
                 (missing?0:RefreshEngine::Offset(k.first+"/"+k.second+"/"+scope));

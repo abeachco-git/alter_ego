@@ -21,7 +21,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 
 ### Changed
 
-- Track character activity locally and refresh character/inventory snapshots only on visible demand; 10-minute active interval and post-logout grace, shared equipment retrieval and 30-minute active account storage.
+- Track character activity locally and refresh character/inventory snapshots only on visible demand; 10-minute active interval and post-logout grace, shared equipment retrieval, 10-minute active Bank/shared inventory/material storage and 30-minute Legendary Armory.
 
 - Start unified freshness scheduling: configurable objective tracking, shared achievement progress, per-section Vault refresh and automatic failure cooldowns, pre-dispatch public metadata deduplication, and 30-minute Legendary Armory freshness.
 
