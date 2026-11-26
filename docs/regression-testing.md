@@ -263,3 +263,5 @@ Skin metadata ordering regression covers delayed catalog vs Fashion, equal repla
 Reference observation regression covers delayed disjoint/same-ID batches, equal replay, transactional malformed-child rollback and watermark reuse after rejection. Offline and Windows verification pending; no live tests or discretionary benchmark work.
 
 Cancellation finalizer regression verifies finish-once, no persistence on stop, ordinary failure during unwinding, and explicit dismissal after success. Offline/Windows CI pending; no live testing.
+
+API diagnostics regression distinguishes cancelled vs failed/active counts; metadata transport carries an actual-send marker. Offline/Windows CI pending.

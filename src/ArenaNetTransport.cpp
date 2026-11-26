@@ -53,12 +53,13 @@ Skinventory::HttpResponse Get(const std::string& path,const std::string& key,con
     std::string headers=extraHeaders;
     if(!key.empty())headers+="Authorization: Bearer "+key+"\r\n";
     ApiActivity::Attempt activity(ApiActivity::ApiEndpoint(path));
+    const Skinventory::HttpResponse attemptedFailure{0,{},true};
     const BOOL sent=HttpSendRequestA(request.value,headers.empty()?nullptr:headers.c_str(),
         static_cast<DWORD>(headers.size()),nullptr,0);
     if(!headers.empty())SecureZeroMemory(&headers[0],headers.size());
-    if(!sent||!HttpSafety::Ready(deadline))return {};
+    if(!sent||!HttpSafety::Ready(deadline))return attemptedFailure;
     DWORD code=0,size=sizeof(code);
-    if(!HttpQueryInfoA(request.value,HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER,&code,&size,nullptr))return {};
+    if(!HttpQueryInfoA(request.value,HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER,&code,&size,nullptr))return attemptedFailure;
     activity.Status(static_cast<int>(code));
     if(code==429){
         char retry[64]{};size=sizeof(retry);unsigned long seconds=5;
@@ -68,8 +69,8 @@ Skinventory::HttpResponse Get(const std::string& path,const std::string& key,con
         }
         rateLimit=Clock::now()+std::chrono::seconds(seconds);
     }
-    Skinventory::HttpResponse result;result.status_code=static_cast<int>(code);
-    if(!HttpSafety::ReadBody(request.value,[&](const char* data,DWORD count){result.body.append(data,count);},64u*1024u*1024u,deadline))return {};
+    Skinventory::HttpResponse result;result.status_code=static_cast<int>(code);result.attempted=true;
+    if(!HttpSafety::ReadBody(request.value,[&](const char* data,DWORD count){result.body.append(data,count);},64u*1024u*1024u,deadline))return attemptedFailure;
     activity.Complete();
     return result;
 }

@@ -614,7 +614,7 @@ namespace AlterEgo {
         static std::mutex s_mutex;
 
         // HTTP helpers (for public/unauthenticated endpoints only)
-        static std::string HttpGet(const std::string& url);
+        static std::string HttpGet(const std::string& url,bool* attempted=nullptr);
         static bool EnsureDataDirectory();
 
         // Batch fetch helpers (public endpoints, synchronous)

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string_view>
+#include "BackgroundWorkers.h"
 
 namespace AlterEgo::ApiActivity {
 // Fixed labels only. Never retain URL strings, query values, character names,
@@ -75,7 +76,7 @@ inline unsigned Priority(Reason r){
 }
 inline int64_t Now(){return std::chrono::duration_cast<std::chrono::seconds>(
     std::chrono::steady_clock::now().time_since_epoch()).count();}
-struct Totals {uint64_t started=0,success=0,failed=0,limited=0,active=0;};
+struct Totals {uint64_t started=0,success=0,failed=0,limited=0,active=0,cancelled=0;};
 struct Snapshot {
     std::array<Totals,Count> endpoints{};
     std::array<uint64_t,SourceCount> last10{},last60{},peak{};
@@ -98,10 +99,11 @@ public:
         ++session_.reasons[Source(e)][static_cast<size_t>(reason)];
         auto& peak=session_.peak[Source(e)];peak=std::max(peak,n);
     }
-    void Finish(Endpoint e,int status,bool complete){
+    void Finish(Endpoint e,int status,bool complete,bool cancelled=false){
         std::lock_guard<std::mutex> lock(mutex_);
         auto& t=session_.endpoints[static_cast<size_t>(e)];
         if(t.active)--t.active;
+        if(cancelled){++t.cancelled;return;}
         if(complete&&status>=200&&status<300)++t.success;else ++t.failed;
         if(status==429)++t.limited;
     }
@@ -136,7 +138,7 @@ public:
     explicit Attempt(Endpoint endpoint,bool enabled=true):endpoint_(endpoint),enabled_(enabled){
         if(enabled_)Session().Start(endpoint_);
     }
-    ~Attempt(){if(enabled_)Session().Finish(endpoint_,status_,complete_);}
+    ~Attempt(){if(enabled_)Session().Finish(endpoint_,status_,complete_,!complete_&&Background::Workers().Stopping());}
     Attempt(const Attempt&)=delete;
     Attempt& operator=(const Attempt&)=delete;
     void Status(int s){status_=s;}

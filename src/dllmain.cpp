@@ -5377,7 +5377,7 @@ static bool ImportBuildFromRelay(const std::string& code, AlterEgo::SavedBuild& 
     }
 
     try {
-        auto j = nlohmann::json::parse(body);
+        auto j = AlterEgo::Untrusted::Parse(body,AlterEgo::Untrusted::Library);
 
         std::string name = j.value("name", "Mobile Build");
         std::string profession = j.value("profession", "");
@@ -5567,7 +5567,7 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
 
         if (resp.status_code == 200) {
             try {
-                auto r = nlohmann::json::parse(resp.body);
+                auto r = AlterEgo::Untrusted::Parse(resp.body,AlterEgo::Untrusted::Clipboard);
                 std::string code = r.value("code", "");
                 if (!code.empty()) {
                     g_RelayResultCode = code;
@@ -17668,14 +17668,14 @@ static void RenderStorageDiagnostics() {
             for(size_t i=0;i<Count;++i)if(Source(static_cast<Endpoint>(i))==source){
                 const auto& t=activity.endpoints[i];
                 totals.started+=t.started;totals.success+=t.success;totals.failed+=t.failed;
-                totals.limited+=t.limited;totals.active+=t.active;
+                totals.limited+=t.limited;totals.active+=t.active;totals.cancelled+=t.cancelled;
             }
             ImGui::Text("%s: %llu / %llu / %llu",sources[source],
                 (unsigned long long)activity.last10[source],(unsigned long long)activity.last60[source],
                 (unsigned long long)totals.started);
-            ImGui::TextWrapped("  OK %llu | failed %llu (429: %llu) | active %llu | waiting %llu | peak %llu/s",
+            ImGui::TextWrapped("  OK %llu | failed %llu (429: %llu) | cancelled %llu | active %llu | waiting %llu | peak %llu/s",
                 (unsigned long long)totals.success,(unsigned long long)totals.failed,
-                (unsigned long long)totals.limited,(unsigned long long)totals.active,
+                (unsigned long long)totals.limited,(unsigned long long)totals.cancelled,(unsigned long long)totals.active,
                 (unsigned long long)(source==0?apiWaiting:source==1?wikiWaiting:0),(unsigned long long)activity.peak[source]);
             const auto& reasons=activity.reasons[source];
             ImGui::TextDisabled("  Manual %llu | objective %llu | visible %llu | background %llu | other %llu",
@@ -17694,9 +17694,9 @@ static void RenderStorageDiagnostics() {
         if(ImGui::TreeNode("Endpoint groups##ae_api_endpoints")){
             for(size_t i=0;i<Count;++i){
                 const auto& t=activity.endpoints[i];if(!t.started)continue;
-                ImGui::TextWrapped("%s: %llu requests, %llu OK, %llu failed (%llu 429)",
+                ImGui::TextWrapped("%s: %llu requests, %llu OK, %llu failed (%llu 429), %llu cancelled",
                     Labels[i],(unsigned long long)t.started,(unsigned long long)t.success,
-                    (unsigned long long)t.failed,(unsigned long long)t.limited);
+                    (unsigned long long)t.failed,(unsigned long long)t.limited,(unsigned long long)t.cancelled);
             }
             ImGui::TreePop();
         }

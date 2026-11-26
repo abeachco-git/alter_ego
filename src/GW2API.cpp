@@ -1143,8 +1143,10 @@ namespace AlterEgo {
     // Public endpoint fetching (direct HTTP, no auth needed)
     // =========================================================================
 
-    std::string GW2API::HttpGet(const std::string& url) {
-        return Skinventory::HttpClient::Get(url);
+    std::string GW2API::HttpGet(const std::string& url,bool* attempted) {
+        if(!attempted)return Skinventory::HttpClient::Get(url);
+        auto response=Skinventory::HttpClient::GetEx(url);*attempted=response.attempted;
+        return response.status_code>=200&&response.status_code<300?std::move(response.body):std::string{};
     }
 
     // --- Batch fetch: items ---
@@ -1212,9 +1214,10 @@ namespace AlterEgo {
 
             std::string url = "https://api.guildwars2.com/v2/items?ids=" + ids_param;
             const auto requestStamp=Cache::ReferenceSnapshotTime();
-            std::string response = HttpGet(url);
+            bool attempted=false;
+            std::string response = HttpGet(url,&attempted);
             if (Background::Workers().Stopping()) return;
-            claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
+            if(attempted)claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
@@ -1275,9 +1278,10 @@ namespace AlterEgo {
 
             std::string url = "https://api.guildwars2.com/v2/skins?ids=" + ids_param;
             const auto requestStamp=Cache::ReferenceSnapshotTime();
-            std::string response = HttpGet(url);
+            bool attempted=false;
+            std::string response = HttpGet(url,&attempted);
             if (Background::Workers().Stopping()) return;
-            claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
+            if(attempted)claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
@@ -1353,9 +1357,10 @@ namespace AlterEgo {
 
             std::string url = "https://api.guildwars2.com/v2/specializations?ids=" + ids_param;
             const auto requestStamp=Cache::ReferenceSnapshotTime();
-            std::string response = HttpGet(url);
+            bool attempted=false;
+            std::string response = HttpGet(url,&attempted);
             if (Background::Workers().Stopping()) return;
-            claim->MarkAttempted(to_fetch.begin(),to_fetch.end());
+            if(attempted)claim->MarkAttempted(to_fetch.begin(),to_fetch.end());
             if (response.empty()) return;
 
             try {
@@ -1415,9 +1420,10 @@ namespace AlterEgo {
             }
 
             const auto requestStamp=Cache::ReferenceSnapshotTime();
-            std::string response = HttpGet("https://api.guildwars2.com/v2/traits?ids=" + ids_param);
+            bool attempted=false;
+            std::string response = HttpGet("https://api.guildwars2.com/v2/traits?ids=" + ids_param,&attempted);
             if (Background::Workers().Stopping()) return;
-            claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
+            if(attempted)claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
@@ -1477,9 +1483,10 @@ namespace AlterEgo {
                 }
 
                 const auto requestStamp=Cache::ReferenceSnapshotTime();
-            std::string response = HttpGet("https://api.guildwars2.com/v2/skills?ids=" + ids_param);
+            bool attempted=false;
+            std::string response = HttpGet("https://api.guildwars2.com/v2/skills?ids=" + ids_param,&attempted);
             if (Background::Workers().Stopping()) return;
-            claim->MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
+            if(attempted)claim->MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
                 if (response.empty()) continue;
 
                 try {
@@ -1532,9 +1539,10 @@ namespace AlterEgo {
                 }
 
                 const auto requestStamp=Cache::ReferenceSnapshotTime();
-            std::string response = HttpGet("https://api.guildwars2.com/v2/itemstats?ids=" + ids_param);
+            bool attempted=false;
+            std::string response = HttpGet("https://api.guildwars2.com/v2/itemstats?ids=" + ids_param,&attempted);
             if (Background::Workers().Stopping()) return;
-            claim->MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
+            if(attempted)claim->MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
                 if (response.empty()) continue;
 
                 try {

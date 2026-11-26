@@ -238,3 +238,5 @@ Verification (2026-11-26 UTC): implementation `75203d0f7fa9bc883692133dafdb6967e
 - [x] Reference metadata per-record request ordering (schema v25): specialization, trait, skill, full/partial stats and dye observations commit transactionally before live adoption; preserve historical IDs and reject stale/equal observations. Profession/palette identity checks and admission cleanup; bounded native API and Commerce parsing. CI pending. Other public/account metadata and asynchronous transport remain open.
 
 - [x] Cancellation-state hardening: public catalog and Wiki retry stamps finalize only after non-cancelled outcomes. CI pending. Local admission vs actual HTTP send, other account-specific retry/transport and host lifecycle audit remain open.
+
+- [x] Metadata broker cooldown now requires an actual ArenaNet send; cancelled HTTP diagnostics are separate from failures; relay/Clears parsers bounded. CI pending. Strict transport cancellation remains open.

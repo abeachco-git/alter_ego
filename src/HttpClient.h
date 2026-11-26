@@ -9,6 +9,8 @@ namespace Skinventory {
     struct HttpResponse {
         int status_code = 0;
         std::string body;
+        // ArenaNet transport entered HttpSendRequest; local admission rejection is not an attempt.
+        bool attempted=false;
     };
 
     class HttpClient {

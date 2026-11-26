@@ -93,3 +93,5 @@ Verification (2026-11-26 UTC): implementation `75203d0f7fa9bc883692133dafdb6967e
 - Reference v25 per-record ordered writes and commit-before-adoption for spec/trait/skill/stat/dye, palette admission cleanup and bounded native/Commerce parsing implemented. CI pending.
 
 - Cancellation-state hardening implemented; durable retry markers now finalize only for non-cancelled catalog/Wiki outcomes. CI pending; asynchronous transport remains open.
+
+- Metadata cooldown now requires actual transport send; cancelled HTTP diagnostics, relay and Clears bounded parsing implemented. CI pending.

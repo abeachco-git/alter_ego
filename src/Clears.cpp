@@ -1,3 +1,4 @@
+#include "UntrustedInput.h"
 #include "AccountIdentity.h"
 #include "CallbackLifetime.h"
 #include "BackgroundWorkers.h"
@@ -637,7 +638,7 @@ static std::vector<uint32_t> ReadCategoryIds(const std::string& url,uint32_t cat
         "Cache-Control: no-cache\r\nPragma: no-cache\r\n");
     if(response.status_code!=200 && response.status_code!=206)return {};
     try {
-        return ClearsReset::CategoryIds(nlohmann::json::parse(response.body),catId);
+        return ClearsReset::CategoryIds(AlterEgo::Untrusted::Parse(response.body,AlterEgo::Untrusted::PublicApi),catId);
     } catch (...) {return {};}
 }
 

@@ -277,6 +277,9 @@ int case_section_refresh(int, char**) {
     assert(rec.Read(3700).last60[0]==1);
     rec.Start(D::Endpoint::Catalog,3700);
     assert(rec.Read(3700).last60[0]==2);
+    rec.Start(D::Endpoint::Catalog,3700);rec.Finish(D::Endpoint::Catalog,0,false,true);
+    const auto cancelled=rec.Read(3700).endpoints[static_cast<size_t>(D::Endpoint::Catalog)];
+    assert(cancelled.cancelled==1&&cancelled.failed==0&&cancelled.active==1);
     assert(Stale(0, now));
     assert(!Stale(now - 900, now));
     assert(Stale(now - 901, now));
