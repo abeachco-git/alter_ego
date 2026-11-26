@@ -189,3 +189,5 @@ Gear customization infusion rows reserve independent hit targets for selection a
 Last Login retains newest-first default and both directions; unknown timestamps remain last within each account. In the visible character list, a muted No recorded login separator appears only between known and unknown rows in the same account. Preserve selected identity when rebuilding the shared Characters/Compare roster ordering; no refresh requests on sorting.
 
 Inventory Trading Post appears between Locations and Item Information. It uses RenderCoins, the shared action button and RefreshUI timestamp; the footer tooltip separately reports selected-item pricing eligibility, cooldown and last success without changing the storage timestamp. Automatic selected-item demand is debounced; search results and filters do not fetch prices. Shopping Refresh Prices explicitly forces the shared item price requests.
+
+Skin Browser Preview reports Wiki image loading or failure/cooldown separately from ownership refresh. Use the shared status/action controls and explicit Retry preview; never request on every frame. Cached previews take precedence over failure backoff.

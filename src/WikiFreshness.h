@@ -4,6 +4,12 @@
 namespace AlterEgo::WikiFreshness {
 inline constexpr int64_t SpecialInterval=6*3600, SpecialRetry=60*60;
 inline constexpr int64_t SkinInterval=30LL*86400, SkinRetry=86400;
+inline constexpr int64_t ArtworkRetry=900, ArtworkMissingRetry=7LL*86400;
+inline int64_t ArtworkRemaining(int64_t failedAt,int64_t now,bool confirmedMissing){
+    if(failedAt<=0||failedAt>now)return 0;
+    const auto interval=confirmedMissing?ArtworkMissingRetry:ArtworkRetry;
+    return now-failedAt>=interval?0:interval-(now-failedAt);
+}
 struct Stamp {int64_t success=0,attempt=0;};
 inline bool Due(Stamp s,int64_t now,int64_t interval,int64_t retry) {
     return (!s.success||s.success>now||now-s.success>=interval) &&

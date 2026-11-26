@@ -9,6 +9,10 @@ Living implementation tracker for the experimental branch. Checked items indicat
 - [ ] Live validation of rate limiting, large Shopping requests, and in-game pricing layout.
 - [ ] Optional visible-row batching and price sorting; no automatic full-result fetching.
 
+## Wiki preview recovery
+- [x] Cache-first preview lookup, one-time removal of ambiguous legacy skin failure records, verified exact-filename fast path and combined page lookup, transient 15m session retry vs verified missing 7d, explicit Retry preview and visible failure status. Existing shared HTTP admission, validation and acquisition caching retained; offline/build/live verification pending.
+- [ ] Verify live Wiki API access, previously cached previews, Abaddon Pistol/Mace, armor variants and failure recovery in Nexus.
+
 ## Implementation tracker (living)
 
 - [x] Native registry, explicit API key setup, permission reporting, Windows Credential Manager.

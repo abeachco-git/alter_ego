@@ -36,7 +36,7 @@ namespace Skinventory {
         // Request a wiki image for a skin by name (async, on-click)
         // weightClass is used to resolve disambiguation pages (e.g. "heavy", "medium", "light")
         static void RequestImage(uint32_t skinId, const std::string& skinName,
-                                  const std::string& weightClass = "");
+                                  const std::string& weightClass = "", bool manual=false);
 
         // Get loaded texture for a skin (nullptr if not loaded/loading)
         static Texture_t* GetImage(uint32_t skinId);
@@ -55,6 +55,7 @@ namespace Skinventory {
 
         // Is an image currently being fetched?
         static bool IsLoading(uint32_t skinId);
+        static std::string ImageStatus(uint32_t skinId);
 
         // Process ready queue (call every frame from render thread)
         static void Tick();
@@ -74,7 +75,7 @@ namespace Skinventory {
         static void LoadWikiDataCache();
         static void SaveFailedCache();
         static void LoadFailedCache();
-        static void RecordFailure(uint32_t skinId);
+        static void RecordFailure(uint32_t skinId,bool confirmedMissing,const std::string& reason);
         // (DownloadCurrencyIcons moved to public above.)
 
         static AddonAPI_t* s_API;
@@ -85,6 +86,7 @@ namespace Skinventory {
             std::string skinName;
             std::string weightClass;
             bool metadataOnly=false;
+            bool manual=false;
         };
 
         static std::unordered_map<uint32_t, Texture_t*> s_imageCache;
@@ -95,7 +97,9 @@ namespace Skinventory {
         static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> s_failed;
         static std::unordered_map<uint32_t, int64_t> s_failedPersistent; // skin_id -> unix_timestamp
         static std::unordered_map<std::string, int64_t> s_currencyFailedPersistent; // currency key -> unix_timestamp
-        static const int RETRY_COOLDOWN_SEC = 600;
+        static std::unordered_map<uint32_t,std::string> s_imageErrors;
+        static std::unordered_map<uint32_t,std::chrono::steady_clock::time_point> s_texturePending;
+        static const int RETRY_COOLDOWN_SEC = AlterEgo::WikiFreshness::ArtworkRetry;
         static const int64_t PERSISTENT_RETRY_DAYS = 7;
 
         static std::vector<QueuedRequest> s_requestQueue;

@@ -13353,7 +13353,13 @@ static void RenderSkinDetailPanel() {
 
         ImGui::Image(wikiTex->Resource, ImVec2(displayW, displayH));
     } else if (Skinventory::WikiImage::IsLoading(g_SkinSelectedId)) {
-        RenderSpinner("Loading wiki image...", ImVec4(1.0f, 0.85f, 0.0f, 1.0f));
+        const auto status=Skinventory::WikiImage::ImageStatus(g_SkinSelectedId);
+        RenderSpinner(status.c_str(), ImVec4(1.0f, 0.85f, 0.0f, 1.0f));
+    } else {
+        const auto status=Skinventory::WikiImage::ImageStatus(g_SkinSelectedId);
+        AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Waiting,status);
+        if(RenderActionButton("Retry preview"))Skinventory::WikiImage::RequestImage(g_SkinSelectedId,skin.name,skin.weight_class,true);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Retry the preview immediately; cached artwork is preferred. Shared Wiki rate limits still apply.");
     }
 
     // Action buttons

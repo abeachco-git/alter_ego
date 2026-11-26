@@ -134,6 +134,14 @@ inline std::optional<Json> Read(const std::string& root,Kind kind,const std::fil
     if(Storage::ReadMigrationBytes(legacy)==bytes)std::filesystem::remove(legacy,ec);
     return verified;
 }
+inline void ResetUnclassifiedArtworkFailures(Database::Connection& db){
+    Database::Transaction tx(db);
+    auto q=db.Prepare("SELECT 1 FROM reference_freshness WHERE dataset='wiki_skin_artwork_failure_policy_v2'");
+    if(!q.Step()){
+        db.Exec("DELETE FROM wiki_skin_failures; INSERT INTO reference_freshness VALUES('wiki_skin_artwork_failure_policy_v2',1)");
+    }
+    tx.Commit();
+}
 inline std::map<uint32_t,WikiFreshness::Stamp> ReadFreshness(Database::Connection& db) {
     std::map<uint32_t,WikiFreshness::Stamp> out;
     auto q=db.Prepare("SELECT skin_id,success,attempt FROM wiki_skin_freshness");

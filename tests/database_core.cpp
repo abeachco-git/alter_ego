@@ -719,6 +719,16 @@ int case_database_core(int, char**) {
         assert(Cache::Wiki::Read(root,WikiKind::Metadata,wikiLegacy)==wikiData);
         const J wikiFailures={{"skins",{{"42",100}}},{"currencies",{{"Karma",200}}}};
         assert(Cache::Wiki::Write(root,WikiKind::Failures,wikiFailures));
+        Cache::Wiki::WithDb(root,[](auto& db){
+            Cache::Wiki::ResetUnclassifiedArtworkFailures(db);
+            assert(db.Scalar("SELECT count(*) FROM wiki_skin_failures")==0);
+            assert(db.Scalar("SELECT count(*) FROM wiki_currency_failures")>0);
+        });
+        assert(Cache::Wiki::Write(root,WikiKind::Failures,wikiFailures));
+        Cache::Wiki::WithDb(root,[](auto& db){
+            Cache::Wiki::ResetUnclassifiedArtworkFailures(db);
+            assert(db.Scalar("SELECT count(*) FROM wiki_skin_failures")>0);
+        });
         assert(!Cache::Wiki::Write(root,WikiKind::Metadata,J{{"bad",{{"vendor","Bad"}}}}));
         assert(Cache::Wiki::Read(root,WikiKind::Metadata,wikiLegacy)==wikiData);
         Storage::WriteMigrationBytes(paths.base/"characters.json","stale legacy");

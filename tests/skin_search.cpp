@@ -1,5 +1,7 @@
 #include "../src/SkinSearchCore.h"
 #include "../src/CommercePriceCore.h"
+#include "../src/WikiArtworkCore.h"
+#include "../src/WikiFreshness.h"
 #include "../src/SkinFilters.h"
 #include "../src/SplitPanelCore.h"
 #include "../src/LibraryModeFilter.h"
@@ -73,5 +75,20 @@ int case_skin_search(int, char**) {
  assert(EstimateInstantSale(250,3420)==726750);
  assert(EstimateInstantSale(1,1)==0);
  assert(!EstimateInstantSale(9223372036854775807LL,2));
+    {
+        namespace W=AlterEgo::WikiArtwork;
+        const auto q=W::Query(200,R"({"query":{"pages":{"7":{"pageid":7,"images":[{"title":"File:Other.jpg"},{"title":"File:Abaddon Pistol.png"},{"title":"File:Abaddon Pistol.jpg"},{"title":"File:Abaddon Pistol icon.png"}]}}}})");
+        assert(W::BestFile(q,"Abaddon Pistol")=="File:Abaddon Pistol.jpg");
+        const auto missing=W::Query(200,R"({"query":{"pages":{"-1":{"missing":""}}}})");
+        assert(W::ImageUrl(missing).empty()&&W::BestFile(missing,"Missing").empty());
+        const auto img=W::Query(200,R"({"query":{"pages":{"7":{"pageid":7,"imageinfo":[{"url":"https://wiki.guildwars2.com/images/a/ab/Abaddon_Pistol.jpg"}]}}}})");
+        assert(!W::ImageUrl(img).empty());
+        for(int status:{0,403,429,503}){bool failed=false;try{W::Query(status,"{}");}catch(...){failed=true;}assert(failed);}
+        bool failed=false;try{W::Query(200,R"({"error":{"code":"maxlag"}})");}catch(...){failed=true;}assert(failed);
+        failed=false;try{W::BestFile(W::Query(200,R"({"continue":{"imcontinue":"more"},"query":{"pages":{"7":{"pageid":7}}}})"),"Missing");}catch(...){failed=true;}assert(failed);
+        using AlterEgo::WikiFreshness::ArtworkRemaining;
+        assert(ArtworkRemaining(100,101,false)==899&&ArtworkRemaining(100,1000,false)==0);
+        assert(ArtworkRemaining(100,1000,true)>0&&ArtworkRemaining(100,99,true)==0);
+    }
     return 0;
 }
