@@ -4,7 +4,7 @@
 
 - Requests to discuss or suggest are discussion only. Implement when approved; do not ask again for routine in-scope decisions.
 - Work on the requested branch. Never modify or merge into main or another branch without approval.
-- Preserve original Alter Ego library import compatibility, saved data, exact native component identity and independent functional Compare semantics and the Nexus ImGui 1.80 ABI. Do not upgrade ImGui or change its allocator/context contract independently.
+- Preserve existing local libraries, supported original Pie or Cake external import/export, GW2 build links, Snow Crows and MetaBattle runtime import/refresh, current Alter Ego portable round-trips, exact native component identity and independent functional Compare semantics, and the Nexus ImGui 1.80 ABI. Older experimental Alter Ego portable formats have no compatibility requirement; this does not authorize discarding local database data. Do not upgrade ImGui or change its allocator/context contract independently.
 - Prefer existing modules and canonical helpers over parallel implementations. Keep changes cohesive; extract a focused helper when useful rather than growing `dllmain.cpp` unnecessarily. Avoid unrelated refactors.
 
 ## Read only the relevant references
@@ -29,7 +29,7 @@ This is the authoritative agent instruction file; `CLAUDE.md` delegates here. Do
 - SQLite is authoritative for Loadouts and Fashion. Use repository transactions, preserve exact content and referenced identities, and keep SQL off render paths. Never recreate legacy mirrors or silently replace damaged databases. Rebuildable achievement and Skinventory data belong in the independent cache database; use StoragePaths.h for classified filesystem paths and the existing repositories for relational data. Do not place user-created information in the disposable cache.
 - Extend existing regression cases and suites. Keep assertions enabled; do not weaken tests or skip binary checks to obtain a green build. MetaBattle is excluded from automated regression testing by explicit user request; retain the runtime importer. Skill icon research is manual-only.
 
-- Treat clipboard, imports, chat codes, API/Wiki responses and remote artwork as untrusted. Bound JSON before and during parsing via `UntrustedInput.h`; use typed validation, bound SQL values and trusted identifiers, and retain prior verified data on rejection. Preserve valid historical formats and unknown extension data within resource budgets.
+- Treat clipboard, imports, chat codes, API/Wiki responses and remote artwork as untrusted. Bound JSON before and during parsing via `UntrustedInput.h`; use typed validation, bound SQL values and trusted identifiers, and retain prior verified data on rejection. Preserve supported interchange formats and unknown extension data within resource budgets.
 
 ## Definition of done — implementation and DLL delivery
 
