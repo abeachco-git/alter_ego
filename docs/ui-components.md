@@ -76,7 +76,7 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 
 - Optional toolbar actions use standard action-button height; the adjacent search and filter controls align to that height without changing popup styling. Never make a refresh button an exception to shared button styling.
 
-- Individual filter removal must preserve other compatible filters, search text, sorting and view settings. Skinventory Shopping marks only its local filter results dirty; no price refresh. The Browser ownership chip resets to All without changing list/grid. A removable component kind resets to its required default Base Build and clears incompatible selection. Keep both Skinventory views and all other filter toolbars in sync through `RenderFilterChips`.
+- Individual filter removal must preserve other compatible filters, search text, sorting and view settings. Skinventory Shopping marks only its local filter results dirty; no price refresh. The Browser ownership chip resets to All without changing list/grid. Component kind chips remove only that kind; an empty set means all categories. Preserve compatible selection. Keep both Skinventory views and all other filter toolbars in sync through `RenderFilterChips`.
 
 ## Canonical-control guardrails
 
