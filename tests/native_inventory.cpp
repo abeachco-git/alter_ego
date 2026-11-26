@@ -125,8 +125,11 @@ int case_native_inventory(int,char**){
     assert(!HasMinimumQuery(Words(""))&&!HasMinimumQuery(Words("  a b ")));
     assert(HasMinimumQuery(Words("val"))&&HasMinimumQuery(Words("valk kr")));
     assert(!CanBrowseItems(false,false,false,false,false,false,false,false));
-    assert(!CanBrowseItems(true,false,false,false,false,false,false,false));
-    assert(!CanBrowseItems(false,true,true,true,true,true,true,true));
+    // Every nonempty combination of real facets enables browsing, including
+    // Bags alone, Character alone, and rarity/type without a character.
+    for(unsigned mask=0;mask<256;++mask){
+        assert(CanBrowseItems(mask&1,mask&2,mask&4,mask&8,mask&16,mask&32,mask&64,mask&128)==(mask!=0));
+    }
     assert(CanBrowseItems(true,true,false,false,false,false,false,false));
     assert(CanBrowseItems(true,false,true,false,false,false,false,false));
     assert(CanBrowseItems(true,false,false,true,false,false,false,false));
@@ -147,7 +150,7 @@ int case_native_inventory(int,char**){
     assert(!MatchesStorageView("Items",twoCharacters,"Bags","C"));
     assert(!MatchesStorageView("Bank",twoCharacters,"Bank",""));
     assert(MatchesStorageView("",{},"Bank",""));
-    assert(!CanBrowseItems(!twoCharacters.empty(),false,false,false,false,false,false,false));
+    assert(CanBrowseItems(!twoCharacters.empty(),false,false,false,false,false,false,false));
     assert(Match("Valkyrie Krait Star",12345,"valk kr"));
     assert(Match("Valkyrie Krait Star",12345,"KR VALK"));
     assert(!Match("Valkyrie Krait Star",12345,"valk sword"));

@@ -201,7 +201,8 @@ inline bool WalletMatchesBalance(int64_t value,bool fresh,int freshness) {
 using SearchIdentity=std::pair<bool,uint32_t>;
 inline bool CanBrowseItems(bool character, bool storage, bool binding, bool rarity,
                            bool type, bool freshness, bool quantity, bool transfer) {
-    return character&&(storage||binding||rarity||type||freshness||quantity||transfer);
+    // Any real facet permits local browsing; account context and sort do not.
+    return character||storage||binding||rarity||type||freshness||quantity||transfer;
 }
 inline bool Match(const std::string& name,uint32_t id,const std::vector<std::string>& words){
     return Skinventory::Search::Matches(name+" "+std::to_string(id),words);

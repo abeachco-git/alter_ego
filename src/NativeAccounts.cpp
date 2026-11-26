@@ -1013,8 +1013,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     const bool canBrowse=CanBrowseItems(!characterFilter.empty(),!scope.empty(),
         !binding.empty(),!rarity.empty(),!type.empty(),freshness!=0,minQuantity>0,transfer!=0);
     const bool walletEligible=WalletMatchesFacets(scope,characterFilter,binding,rarity,type,transfer!=0);
-    const bool showResults=canSearch||canBrowse||(walletEligible&&(scope=="Wallet"||(type.size()==1&&type.count("Currency"))));
-    if(!showResults)ImGui::TextWrapped("Enter at least 3 characters, select Wallet or Currency, or select a character and another filter.");
+    const bool showResults=canSearch||canBrowse;
+    if(!showResults)ImGui::TextWrapped("Enter at least 3 characters or select a filter to browse inventory.");
     if(!canSearch){
         if(showResults&&!tokens.empty())ImGui::TextDisabled("Enter 3 characters to narrow these filtered results.");
         tokens.clear();
