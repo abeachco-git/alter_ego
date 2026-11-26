@@ -445,7 +445,33 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
     if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
         const auto info=selectedId?AlterEgo::GW2API::GetItemInfo(selectedId):nullptr;
         CopyNameMenuItem(info&&!info->name.empty()?info->name:selected);
-        if (ImGui::MenuItem("Clear")) { item.erase(idField); item.erase(nameField); }
+        using AlterEgo::UI::MenuAction;
+        using AlterEgo::UI::MenuIcon;
+        const bool rune=std::strcmp(family,"runes")==0,sigil=std::strcmp(family,"sigils")==0;
+        const auto field=rune||sigil?GearCopyField::Upgrade:GearCopyField::Relic;
+        const bool recorded=(item.contains(idField)||item.contains(nameField))&&
+            (!item.contains(idField)||(item[idField].is_number_integer()&&item[idField]>=0&&item[idField]<=UINT32_MAX))&&
+            (!item.contains(nameField)||item[nameField].is_string());
+        ImGui::Separator();
+        if(MenuAction("Copy",MenuIcon::Copy,recorded)){
+            GearClipboard clip;clip.valid=true;clip.field=field;
+            clip.slot=rune?"Helm":sigil?"WeaponA1":"Relic";
+            if(rune){clip.data.rune_id=selectedId;clip.data.rune=selected;}
+            else if(sigil){clip.data.sigil_id=selectedId;clip.data.sigil=selected;}
+            else{clip.relicId=selectedId;clip.relicName=selected;}
+            g_GearClipboard=std::move(clip);
+        }
+        const auto& clip=g_GearClipboard;
+        const bool compatible=clip.valid&&clip.field==field&&
+            (rune?IsArmorSlot(clip.slot):sigil?IsWeaponSlot(clip.slot):clip.slot=="Relic");
+        if(MenuAction("Paste",MenuIcon::Paste,compatible)){
+            const uint32_t nextId=rune?clip.data.rune_id:sigil?clip.data.sigil_id:clip.relicId;
+            const auto& name=rune?clip.data.rune:sigil?clip.data.sigil:clip.relicName;
+            if(nextId)item[idField]=nextId;else item.erase(idField);
+            if(!name.empty())item[nameField]=name;else item.erase(nameField);
+        }
+        ImGui::Separator();
+        if (MenuAction("Clear",MenuIcon::Delete,recorded)) { item.erase(idField); item.erase(nameField); }
         ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -468,6 +494,27 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
             item["stat_id"]=next;item["stat_name"]=name;g_ComponentStatSearch.clear();
         });
         ImGui::EndCombo();
+    }
+    if(ImGui::BeginPopupContextItem("##native_stat_context")){
+        using AlterEgo::UI::MenuAction;
+        using AlterEgo::UI::MenuIcon;
+        CopyNameMenuItem(info&&!info->name.empty()?info->name:storedName);
+        AlterEgo::BuildGearSlot checked;
+        using namespace AlterEgo::GearEdit;
+        const bool recorded=ReadComponentField(item,CopyField::Stats,true,checked);
+        ImGui::Separator();
+        if(MenuAction("Copy",MenuIcon::Copy,recorded)){
+            GearClipboard clip;clip.valid=true;clip.field=GearCopyField::Stats;clip.slot="Helm";clip.data=checked;
+            g_GearClipboard=std::move(clip);
+        }
+        AlterEgo::BuildGearSlot target;
+        const bool compatible=g_GearClipboard.valid&&g_GearClipboard.field==GearCopyField::Stats&&
+            ReadComponentField(item,CopyField::Stats,true,target,false);
+        if(MenuAction("Paste",MenuIcon::Paste,compatible))
+            ApplyComponentField(item,CopyField::Stats,true,g_GearClipboard.data,1);
+        ImGui::Separator();
+        if(MenuAction("Clear",MenuIcon::Delete,recorded)){item.erase("stat_id");item.erase("stat_name");}
+        ImGui::EndPopup();
     }
     ImGui::PopID();
 }
@@ -529,7 +576,7 @@ static bool ComponentGearApply(ComponentJson& part,const std::string& kind,const
     const std::string& profession,const GearClipboard& clip){
     using namespace AlterEgo::GearEdit;
     if(!ComponentGearCanPaste(part,kind,slot,clip))return false;
-    const std::string type=part.value("weapon_type",std::string());
+    const std::string type=part.contains("weapon_type")&&part["weapon_type"].is_string()?part["weapon_type"].get<std::string>():std::string{};
     const bool weapon=IsWeaponSlot(slot);
     const bool knownTwo=weapon&&!type.empty()&&IsWeaponTwoHanded(profession,type);
     const bool knownWeapon=weapon&&!type.empty();
@@ -539,7 +586,7 @@ static bool ComponentGearApply(ComponentJson& part,const std::string& kind,const
         capacity=IsOffhandSlot(slot)?1:knownWeapon?(knownTwo?2:1):second?2:1;
     }
     if(clip.field==GearCopyField::Infusions){
-        const bool exactItem=part.contains("item_id")&&part["item_id"].is_number_integer();
+        const bool exactItem=part.contains("item_id")&&part["item_id"].is_number_integer()&&part["item_id"]>0&&part["item_id"]<=UINT32_MAX;
         capacity=InfusionCapacity(slot,knownWeapon?knownTwo:!IsOffhandSlot(slot));
         if(exactItem){
             const auto info=AlterEgo::GW2API::GetItemInfo(part["item_id"].get<uint32_t>());
@@ -638,7 +685,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         if (ImGui::BeginPopupContextItem("##native_slot_context")) {
             ComponentStoredNameActions(data["gear"].at(slot));
             auto capture=[&](GearCopyField field){return ComponentGearCapture(data["gear"].at(slot),kind,slot,field);};
-            if(ImGui::BeginMenu("Copy")){
+            if(AlterEgo::UI::BeginActionMenu("Copy",AlterEgo::UI::MenuIcon::Copy)){
                 if(ImGui::MenuItem("Exact slot")){
                     copiedSlot=data["gear"].at(slot);copiedKind=kind;copiedFrom=slot;
                 }
@@ -649,11 +696,11 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                 }
                 ImGui::EndMenu();
             }
-            if(ImGui::MenuItem("Paste",nullptr,false,ComponentGearCanPaste(data["gear"].at(slot),kind,slot,g_GearClipboard)))
+            if(AlterEgo::UI::MenuAction("Paste",AlterEgo::UI::MenuIcon::Paste,ComponentGearCanPaste(data["gear"].at(slot),kind,slot,g_GearClipboard)))
                 ComponentGearApply(data["gear"][slot],kind,slot,profession,g_GearClipboard);
-            if(ImGui::MenuItem("Paste Exact Slot",nullptr,false,copiedKind==kind&&copiedFrom==slot&&copiedSlot.is_object()))
+            if(AlterEgo::UI::MenuAction("Paste Exact Slot",AlterEgo::UI::MenuIcon::Paste,copiedKind==kind&&copiedFrom==slot&&copiedSlot.is_object()))
                 data["gear"][slot]=copiedSlot;
-            if(ImGui::BeginMenu("Copy to All Recorded Slots")){
+            if(AlterEgo::UI::BeginActionMenu("Copy to All Recorded Slots",AlterEgo::UI::MenuIcon::Copy)){
                 for(const auto& choice:std::array<std::pair<GearCopyField,const char*>,3>{{
                     {GearCopyField::Stats,"Stats"},{GearCopyField::Upgrade,"Rune / Sigils"},{GearCopyField::Infusions,"Infusions"}}}){
                     auto clip=capture(choice.first);
@@ -664,7 +711,8 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                 }
                 ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Clear Slot")) {
+            ImGui::Separator();
+            if (AlterEgo::UI::MenuAction("Clear Slot",AlterEgo::UI::MenuIcon::Delete)) {
                 g_ComponentGearSelectedSlot = slot;
                 g_ComponentGearRemovalPending = slot;
             }

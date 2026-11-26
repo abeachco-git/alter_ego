@@ -7483,11 +7483,13 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
         CopyCachedItemNamesMenu(gear.infusion_ids,"Copy Infusion Name");
     }
     auto capture = [&](GearCopyField field) { return CaptureGearClipboard(b,slot,field); };
-    if (ImGui::MenuItem("Edit")) {
+    ImGui::Separator();
+    if (AlterEgo::UI::MenuAction("Edit",AlterEgo::UI::MenuIcon::Edit)) {
         auto c = capture(GearCopyField::All); c.data.slot = slot;
         OpenGearDialog(b.id,slot,c.data);
     }
-    if (ImGui::BeginMenu("Copy")) {
+    ImGui::Separator();
+    if (AlterEgo::UI::BeginActionMenu("Copy",AlterEgo::UI::MenuIcon::Copy)) {
         if (ImGui::MenuItem(relic ? "Relic" : "Configuration")) g_GearClipboard = capture(relic ? GearCopyField::Relic : GearCopyField::All);
         if (!relic) {
             if (ImGui::MenuItem("Stats")) g_GearClipboard = capture(GearCopyField::Stats);
@@ -7496,10 +7498,10 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
         }
         ImGui::EndMenu();
     }
-    if (ImGui::MenuItem("Paste",nullptr,false,GearCanPaste(b,slot,g_GearClipboard)))
+    if (AlterEgo::UI::MenuAction("Paste",AlterEgo::UI::MenuIcon::Paste,GearCanPaste(b,slot,g_GearClipboard)))
         ApplyGearClipboard(b,slot,g_GearClipboard);
     if (!relic) {
-        if (ImGui::BeginMenu("Copy to all slots")) {
+        if (AlterEgo::UI::BeginActionMenu("Copy to all slots",AlterEgo::UI::MenuIcon::Copy)) {
             const std::string group = IsArmorSlot(slot) ? "Armor" : IsWeaponSlot(slot) ? "Weapons" : "Trinkets";
             if (ImGui::MenuItem("Configuration")) CopyGearToGroup(b,capture(GearCopyField::All),group);
             if (ImGui::MenuItem("Stats")) CopyGearToGroup(b,capture(GearCopyField::Stats),group);
@@ -7514,7 +7516,8 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
             ImGui::EndMenu();
         }
     }
-    if (ImGui::BeginMenu("Clear")) {
+    ImGui::Separator();
+    if (AlterEgo::UI::BeginActionMenu("Clear",AlterEgo::UI::MenuIcon::Delete)) {
         if (ImGui::MenuItem(relic ? "Relic" : "Entire slot")) clearAfter = true;
         if (!relic) {
             if (ImGui::MenuItem("Stats")) ClearGearSlot(b,slot,GearCopyField::Stats);
