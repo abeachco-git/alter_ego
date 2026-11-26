@@ -100,6 +100,7 @@ static void LibraryBackupRestoreCurrentState(unsigned selected) {
 static bool LibraryBackupApplyImport() {
     auto& ui = g_LibraryBackupUI;
     const unsigned selected = LibraryBackupImportMask();
+    if(LibraryDraftOpen()){ui.error="Finish the current Library editor before importing.";return false;}
     const std::string dir = AlterEgo::GW2API::GetDataDirectory();
     ui.error.clear();
     // Do NOT write any current file before Backup::Apply has created a
@@ -184,7 +185,8 @@ static void RenderLibraryBackupUI() {
         }
         ImGui::TextDisabled("API caches, account links and keys are excluded; custom portraits and fonts are included.");
         ImGui::Spacing();
-        if (mask && RenderActionButton("Export##ae_backup_export")) {
+        const auto exportAction=AlterEgo::UI::SaveCancel("backup_export",mask!=0,"Export","Choose at least one export collection.",false,ui.error.c_str());
+        if(exportAction==AlterEgo::UI::EditAction::Save) {
             const bool zip = !single || ui.exportZip;
             char filename[MAX_PATH] = {};
             if (!zip) {
@@ -216,12 +218,7 @@ static void RenderLibraryBackupUI() {
                 }
             }
         }
-        ImGui::SameLine();
-        if (RenderActionButton("Cancel##ae_backup_export")) ImGui::CloseCurrentPopup();
-        if (!ui.error.empty()) {
-            ImGui::Spacing();
-            ImGui::TextWrapped("Export failed: %s", ui.error.c_str());
-        }
+        if(exportAction==AlterEgo::UI::EditAction::Cancel||AlterEgo::UI::EditorEscape())ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
@@ -287,30 +284,23 @@ static void RenderLibraryBackupUI() {
         }
         ImGui::TextDisabled("Recovery snapshots are saved in Alter Ego's backups/recovery folder.");
         ImGui::Spacing();
-        if ((selected & AlterEgo::Backup::Builds) && g_EditDirty)
-            ImGui::TextWrapped("Save or cancel unsaved build edits before restoring Builds.");
-        const bool canRestore = selected && ui.error.empty() &&
-            (!(selected & AlterEgo::Backup::Builds) || !g_EditDirty) &&
-            (!ui.replace || ui.replaceAcknowledged);
-        if (!canRestore) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-        const bool restoreClicked = RenderActionButton(ui.replace ?
-            "Replace Selected##ae_backup_import" : "Merge##ae_backup_import");
-        if (!canRestore) ImGui::PopStyleVar();
-        if (canRestore && restoreClicked) {
+        const bool draftOpen=LibraryDraftOpen();
+        if(draftOpen)ImGui::TextWrapped("Save or cancel the current Library editor before importing.");
+        const bool canRestore=selected&&ui.error.empty()&&!draftOpen&&(!ui.replace||ui.replaceAcknowledged);
+        const auto restoreAction=AlterEgo::UI::ActionFooter("backup_import",canRestore,ui.replace?"Replace Selected":"Merge","Cancel",
+            ui.replace?AlterEgo::UI::ButtonRole::Destructive:AlterEgo::UI::ButtonRole::Standard,
+            draftOpen?"Finish the current editor first.":"Select valid data and acknowledge replacement when applicable.",false,ui.error.c_str());
+        if (restoreAction==AlterEgo::UI::EditAction::Save) {
             if (LibraryBackupApplyImport()) {
                 ImGui::CloseCurrentPopup();
             }
             ui.previewDirty = true;
         }
-        ImGui::SameLine();
-        if (RenderActionButton("Cancel##ae_backup_import")) {
+        if (restoreAction==AlterEgo::UI::EditAction::Cancel||AlterEgo::UI::EditorEscape()) {
             ImGui::CloseCurrentPopup();
             ui.error.clear();
         }
-        if (!ui.error.empty()) {
-            ImGui::Spacing();
-            ImGui::TextWrapped("Import failed: %s", ui.error.c_str());
-        }
+
         if (!ui.lastRecovery.empty() && !ui.error.empty())
             ImGui::TextWrapped("Recovery backup: %s", ui.lastRecovery.c_str());
         ImGui::EndPopup();

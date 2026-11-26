@@ -50,6 +50,7 @@ static ComponentUICommand g_ComponentCommand;
 using ReferenceMap=std::map<std::string,std::string>;
 struct ReferenceEditorDraft {
     bool open=false, isSet=false, queued=false, confirmed=false, parentDraft=false, newSet=false;
+    bool closeRequested=false;
     uint64_t revision=0;
     std::string id,name,setId,fashionId,error;
     ReferenceMap refs,originalRefs;
@@ -73,6 +74,9 @@ static std::string g_ComponentSkillProfessionHint; // UI-only skill picker filte
 static ComponentJson g_ComponentEditorDraft = ComponentJson::object();
 static std::string g_ComponentEditorError;
 static bool g_ComponentEditorOpen = false;
+static bool g_ComponentCloseRequested=false;
+static ComponentJson g_ComponentEditorBaseline;
+static std::string g_ComponentEditorInitialName;
 static bool g_ComponentEditorNew = false;
 static std::string g_ComponentEditorMode; // create, duplicate, rename, edit, copy_for_loadout
 static bool g_ComponentEditorSaveQueued = false;
@@ -293,10 +297,15 @@ static bool ComponentUISearchMatch(std::string text, std::string needle) {
 }
 #include "ComposableNativeEditor.h"
 
-static void ComponentUIStartEditor(const std::string& mode,
+static bool ComponentUIStartEditor(const std::string& mode,
                                    const std::string& kind,
                                    const std::string& id,
                                    const ComponentJson* component) {
+    if(g_LibEditMode||OtherLibraryEditorOpen()){
+        if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");
+        return false;
+    }
+    g_ComponentCloseRequested=false;
     g_ComponentEditorMode = mode;
     g_ComponentEditorRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
     g_ComponentEditorAutoName = (mode == "create");
@@ -317,15 +326,18 @@ static void ComponentUIStartEditor(const std::string& mode,
     g_ComponentEditorDraft = component && component->contains("data") &&
         component->at("data").is_object()
         ? component->at("data") : ComponentJson::object();
+    g_ComponentEditorInitialName=g_ComponentEditorName;
+    g_ComponentEditorBaseline=g_ComponentEditorDraft;
     g_ComponentEditorError.clear();
     g_ComponentEditorOpen = true;
+    return true;
 }
 static void ComponentUIStartPrivateEditor(const std::string& loadoutId,
                                            const std::string& kind,
                                            const std::string& componentId,
                                            const ComponentJson* component) {
-    ComponentUIStartEditor("copy_for_loadout", kind, componentId, component);
-    g_ComponentEditorPrivateLoadoutId = loadoutId;
+    if(ComponentUIStartEditor("copy_for_loadout", kind, componentId, component))
+        g_ComponentEditorPrivateLoadoutId = loadoutId;
 }
 
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id);
@@ -363,8 +375,12 @@ static void RenderComponentUIEditor() {
     if (g_ComponentEditorOpen && !ImGui::IsPopupOpen("Component editor##ae_components"))
         ImGui::OpenPopup("Component editor##ae_components");
     ImGui::SetNextWindowSize(ImVec2(750.0f, 660.0f), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Component editor##ae_components",
-                                &g_ComponentEditorOpen)) return;
+    if(!g_ComponentEditorOpen)return;
+    bool windowOpen=true;
+    if (!ImGui::BeginPopupModal("Component editor##ae_components",&windowOpen)){
+        if(!windowOpen)g_ComponentCloseRequested=true;
+        return;
+    }
 
     ImGui::Text("%s - %s", ComponentLabel(g_ComponentEditorKind),
                 g_ComponentEditorMode == "edit" ? "Edit shared data" :
@@ -526,7 +542,15 @@ static void RenderComponentUIEditor() {
         ImGui::TextWrapped("%s", g_ComponentEditorError.c_str());
     const bool editorStale=g_ComponentEditorMode!="create"&&g_ComponentEditorRevision!=AlterEgo::GW2API::GetBuildLibraryRevision();
     if(editorStale)ImGui::TextWrapped("Library changed. Cancel and reopen this editor before saving.");
-    const auto editAction=AlterEgo::UI::SaveCancel("component_editor",!editorStale&&!AlterEgo::Composable::ComponentNameKey(g_ComponentEditorName).empty()&&g_ComponentEditorDraft.is_object());
+    const bool creating=g_ComponentEditorMode=="create"||g_ComponentEditorMode=="duplicate"||g_ComponentEditorMode=="copy_for_loadout";
+    const bool dirty=g_ComponentEditorDraft!=g_ComponentEditorBaseline||
+        (!g_ComponentEditorAutoName&&g_ComponentEditorName!=g_ComponentEditorInitialName)||
+        (!creating&&g_ComponentEditorName!=g_ComponentEditorInitialName);
+    const bool named=!AlterEgo::Composable::ComponentNameKey(g_ComponentEditorName).empty();
+    const bool canSave=AlterEgo::EditorLifecycle::CanSave(!editorStale&&named&&g_ComponentEditorDraft.is_object(),dirty,creating,g_ComponentEditorSaveQueued);
+    const auto editAction=AlterEgo::UI::SaveCancel("component_editor",canSave,"Save",
+        editorStale?"Library changed. Cancel and reopen.":!named?"Enter a component name.":"No changes to save.",
+        g_ComponentEditorSaveQueued,g_ComponentEditorError.c_str());
     if (editAction==AlterEgo::UI::EditAction::Save) {
         if (ComponentUIEditorCanCommit()) {
             ComponentUICommand cmd;
@@ -554,9 +578,10 @@ static void RenderComponentUIEditor() {
             ImGui::CloseCurrentPopup();
         }
     }
-    if (editAction==AlterEgo::UI::EditAction::Cancel) {
-        g_ComponentEditorOpen = false;
-        ImGui::CloseCurrentPopup();
+    const bool closeRequested=g_ComponentCloseRequested||editAction==AlterEgo::UI::EditAction::Cancel||AlterEgo::UI::EditorEscape();
+    g_ComponentCloseRequested=false;
+    if(g_ComponentEditorOpen&&AlterEgo::UI::DiscardRequested("Discard component changes?",closeRequested,dirty,g_ComponentEditorSaveQueued)){
+        g_ComponentEditorOpen=false;ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
 }
@@ -593,6 +618,7 @@ static bool ComponentUICompatible(const ComponentJson& doc,
 }
 
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id) {
+    if(g_LibEditMode){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Loadout edit first.");return;}
     MarkNavigation();
     g_ComponentKindFilters.clear();g_ComponentCollapsedKinds.erase(kind);
     g_ComponentPendingKind=-1;
@@ -659,7 +685,12 @@ static std::string ComponentUIRefName(const ComponentJson& doc,const std::string
     const auto* part=ComponentUIFind(doc,kind,id);
     return part?part->value("name",id):"(missing)";
 }
-static void BeginReferenceEditor(const ComponentJson& owner,bool isSet) {
+static bool BeginReferenceEditor(const ComponentJson& owner,bool isSet) {
+    const bool parent=g_LibEditMode&&!isSet&&g_EditRefsReady&&owner.value("id",std::string())==g_EditDraftId;
+    if(OtherLibraryEditorOpen()||(g_LibEditMode&&!parent)||g_GearDialogOpen){
+        if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");
+        return false;
+    }
     auto& e=g_ReferenceEditor;e={};
     e.open=true;e.isSet=isSet;e.revision=AlterEgo::GW2API::GetBuildLibraryRevision();
     e.id=owner.value("id",std::string());e.refs=e.originalRefs=ComponentUIRefs(owner);
@@ -675,8 +706,10 @@ static void BeginReferenceEditor(const ComponentJson& owner,bool isSet) {
             e.fashionId=e.originalFashion=g_EditFashionId;
         }
     }
+    return true;
 }
 static void BeginNewEquipmentSet(){
+    if(LibraryDraftOpen()){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");return;}
     auto& e=g_ReferenceEditor;e={};
     e.open=true;e.isSet=true;e.newSet=true;
     e.revision=AlterEgo::GW2API::GetBuildLibraryRevision();
@@ -838,7 +871,11 @@ static void RenderReferenceEditor(){
     if(!ImGui::IsPopupOpen(popup))ImGui::OpenPopup(popup);
     const auto display=ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowSize(ImVec2(std::min(580.f,display.x-24.f),std::min(620.f,display.y-24.f)),ImGuiCond_Appearing);
-    if(!ImGui::BeginPopupModal(popup,&e.open))return;
+    bool windowOpen=true;
+    if(!ImGui::BeginPopupModal(popup,&windowOpen)){
+        if(!windowOpen)e.closeRequested=true;
+        return;
+    }
     const auto& doc=ComponentUISnapshot();
     const auto* owner=e.isSet?ComponentUIFindSet(doc,e.id):ComponentUIFindLoadout(doc,e.id);
     const bool stale=e.revision!=GW2API::GetBuildLibraryRevision()||(!e.newSet&&!owner);
@@ -858,9 +895,10 @@ static void RenderReferenceEditor(){
     const bool dirty=e.refs!=e.originalRefs||(e.isSet?e.name!=e.originalName:e.setId!=e.originalSet||e.fashionId!=e.originalFashion);
     const bool valid=!stale&&dirty&&(!e.isSet||(!e.refs.empty()&&!Composable::ComponentNameKey(e.name).empty()&&(!adding||!users||e.confirmed)));
     if(e.isSet&&e.refs.empty())ImGui::TextDisabled("Include at least one equipment category.");
-    if(!e.error.empty())ImGui::TextWrapped("%s",e.error.c_str());
-    if(e.parentDraft)ImGui::TextWrapped("Save here stages selections in the Loadout draft. The top Save commits all changes; Cancel discards them.");
-    const auto action=UI::SaveCancel("reference_editor",valid);
+    if(e.parentDraft)ImGui::TextWrapped("Apply stages selections in the Loadout draft. The top Save commits all changes; Cancel discards them.");
+    const auto action=UI::SaveCancel("reference_editor",valid,e.parentDraft?"Apply":"Save",
+        stale?"Library changed. Cancel and reopen.":!dirty?"No changes to save.":!e.refs.size()&&e.isSet?"Include an equipment category.":"Review the required fields and shared replacement consent.",
+        e.queued,e.error.c_str());
     if(action==UI::EditAction::Save){
         if(e.parentDraft){
             if(ApplyParentReferenceDraft(e)){e.open=false;ImGui::CloseCurrentPopup();}
@@ -869,7 +907,9 @@ static void RenderReferenceEditor(){
                 ComponentJson{{"refs",e.refs},{"fashion",e.fashionId}},e.revision};
             e.queued=true;e.open=false;ImGui::CloseCurrentPopup();
         }
-    }else if(action==UI::EditAction::Cancel){e={};ImGui::CloseCurrentPopup();}
+    }
+    const bool closeRequested=e.closeRequested||action==UI::EditAction::Cancel||UI::EditorEscape();e.closeRequested=false;
+    if(e.open&&UI::DiscardRequested("Discard reference changes?",closeRequested,dirty,e.queued)){e={};ImGui::CloseCurrentPopup();}
     ImGui::EndPopup();
 }
 // Read-only references share the same menu/action dispatcher as the Components collection.
@@ -933,7 +973,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             if(linked){
                 if(actions&&AlterEgo::UI::MenuAction("Open in Equipment Sets",AlterEgo::UI::MenuIcon::Open)){g_EquipmentSetSelectedId=linkedId;NavigateToLibraryCollection(3);}
                 if(actions&&AlterEgo::UI::MenuAction("Edit Shared Set",AlterEgo::UI::MenuIcon::Edit))BeginReferenceEditor(*linked,true);
-                if(actions&&AlterEgo::UI::MenuAction("Detach Set",AlterEgo::UI::MenuIcon::Detach)){BeginReferenceEditor(*l,false);DraftSelectEquipmentSet(doc,"");}
+                if(actions&&AlterEgo::UI::MenuAction("Detach Set",AlterEgo::UI::MenuIcon::Detach)){if(BeginReferenceEditor(*l,false))DraftSelectEquipmentSet(doc,"");}
                 CopyNameMenuItem(setLabel,"Copy Name",true);
             }
             if(actions&&AlterEgo::UI::MenuAction(linked?"Create Separate Set":"Save as Equipment Set",AlterEgo::UI::MenuIcon::Duplicate)){
@@ -1024,19 +1064,22 @@ static void RenderLoadoutSaveReview(){
             ImGui::PopID();
         }
     }
-    const auto action=UI::SaveCancel("unified_review",valid);
+    const auto action=UI::SaveCancel("unified_review",valid,"Save","Resolve the review before saving.");
     if(action==UI::EditAction::Save){g_EditSavePending=true;ImGui::CloseCurrentPopup();}
-    else if(action==UI::EditAction::Cancel){g_EditSharedKinds.clear();ImGui::CloseCurrentPopup();}
+    else if(action==UI::EditAction::Cancel||UI::EditorEscape()){g_EditSharedKinds.clear();ImGui::CloseCurrentPopup();}
     ImGui::EndPopup();
 }
 
 // Both surfaces invoke one action dispatcher; destructive confirmation is
 // owned by the page rather than a row popup or a transient item pointer.
 enum class ComponentAction { Edit, Rename, Duplicate, Copy, Delete };
-struct ComponentDeleteDraft {std::string kind,id,name;uint64_t revision=0;bool pending=false;};
+struct ComponentDeleteDraft {std::string kind,id,name;uint64_t revision=0;bool pending=false;std::string error;};
 static ComponentDeleteDraft g_ComponentDelete;
 static void RunComponentAction(ComponentAction action,const std::string& kind,const ComponentJson& item){
     const auto id=item.value("id",std::string()),name=item.value("name",id);
+    if(action!=ComponentAction::Copy&&LibraryDraftOpen()){
+        if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");return;
+    }
     switch(action){
     case ComponentAction::Edit:ComponentUIStartEditor("edit",kind,id,&item);break;
     case ComponentAction::Rename:
@@ -1056,6 +1099,7 @@ static void RunComponentAction(ComponentAction action,const std::string& kind,co
     }
 }
 static void ImportComponentClipboard(){
+    if(LibraryDraftOpen()){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");return;}
     const char* clipboard=ImGui::GetClipboardText();
     g_ComponentStatus.clear();
     if(!clipboard||!*clipboard){g_ComponentStatus="Clipboard is empty.";return;}
@@ -1094,7 +1138,7 @@ static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,co
     if(mutableActions){
         ImGui::Separator();
         if(MenuAction("Regenerate Name",MenuIcon::Regenerate)){
-            ComponentUIStartEditor("rename",kind,id,&item);g_ComponentEditorAutoName=true;g_ComponentNameRequested=false;
+            if(ComponentUIStartEditor("rename",kind,id,&item)){g_ComponentEditorAutoName=true;g_ComponentNameRequested=false;}
         }
     }
     if(!reference&&mutableActions){
@@ -1111,12 +1155,13 @@ static void RenderComponentDeleteConfirm(const ComponentJson& doc){
         ComponentUIFind(doc,d.kind,d.id)&&ComponentUIUsage(doc,d.kind,d.id)==0;
     ImGui::TextWrapped("Delete %s?",d.name.c_str());
     if(!valid)ImGui::TextWrapped("Library changed or the component is referenced. Cancel and review again.");
-    else if(AlterEgo::UI::Button("Delete##component_confirm",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive)){
-        g_ComponentCommand={ComponentUICommand::RemoveUnused,"",d.kind,d.id,"",ComponentJson::object(),d.revision};
-        ImGui::CloseCurrentPopup();
-    }
-    if(valid)ImGui::SameLine();
-    if(RenderActionButton("Cancel##component_confirm"))ImGui::CloseCurrentPopup();
+    const auto action=AlterEgo::UI::ConfirmCancel("component_delete",valid,"Delete","Library changed or referenced.",d.error.c_str());
+    if(action==AlterEgo::UI::EditAction::Save){
+        if(AlterEgo::GW2API::DeleteUnusedLoadoutComponent(d.kind,d.id,d.revision)){
+            if(g_ComponentSelectedKind==d.kind&&g_ComponentSelectedId==d.id)g_ComponentSelectedId.clear();
+            d={};ImGui::CloseCurrentPopup();
+        }else d.error="Could not delete the component. Original data retained.";
+    }else if(action==AlterEgo::UI::EditAction::Cancel||AlterEgo::UI::EditorEscape()){d={};ImGui::CloseCurrentPopup();}
     ImGui::EndPopup();
 }
 static void RenderComponentLibrary() {
@@ -1376,7 +1421,7 @@ static void RenderComponentLibrary() {
                         ? meta.value("name", targetId) : targetId;
                     offered = true;
                     if (ImGui::Selectable((targetName + "##attach" + targetId).c_str())){
-                        BeginReferenceEditor(loadout,false);g_ReferenceEditor.refs[kind]=id;
+                        if(BeginReferenceEditor(loadout,false))g_ReferenceEditor.refs[kind]=id;
                     }
                 }
             if (!offered) ImGui::TextDisabled("Already assigned or no compatible Loadouts.");
@@ -1411,9 +1456,11 @@ static std::string g_EquipmentSetSearch;
 static AlterEgo::UI::NameActionDraft g_SetNameAction;
 static AlterEgo::RecordSelection::RevisionTarget g_SetNameTarget,g_SetDeleteTarget;
 static bool g_SetDeletePending=false;
+static std::string g_SetDeleteError;
 enum class EquipmentSetAction {Edit,Rename,Duplicate,Delete};
 static void RunEquipmentSetAction(EquipmentSetAction action,const ComponentJson& set,int users){
     const auto id=set.value("id",std::string()),name=set.value("name",id);
+    if(LibraryDraftOpen()){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");return;}
     const AlterEgo::RecordSelection::RevisionTarget target{id,name,AlterEgo::GW2API::GetBuildLibraryRevision()};
     switch(action){
     case EquipmentSetAction::Edit:BeginReferenceEditor(set,true);break;
@@ -1421,7 +1468,7 @@ static void RunEquipmentSetAction(EquipmentSetAction action,const ComponentJson&
     case EquipmentSetAction::Duplicate:
         g_SetNameTarget=target;g_SetNameAction.Start(name,action==EquipmentSetAction::Duplicate);break;
     case EquipmentSetAction::Delete:
-        if(!users){g_SetDeleteTarget=target;g_SetDeletePending=true;}break;
+        if(!users){g_SetDeleteTarget=target;g_SetDeletePending=true;g_SetDeleteError.clear();}break;
     }
 }
 static void EquipmentSetCreationMenu(){
@@ -1509,7 +1556,7 @@ static void RenderEquipmentSetLibrary() {
         for(const auto& loadout:doc.at("loadouts")) {
             const auto target=loadout.value("id",std::string());
             if(UI::SelectableOption((loadout.at("metadata").value("name",target)+"##"+target).c_str())){
-                BeginReferenceEditor(loadout,false);DraftSelectEquipmentSet(doc,id);
+                if(BeginReferenceEditor(loadout,false))DraftSelectEquipmentSet(doc,id);
             }
         }
         ImGui::EndCombo();
@@ -1537,12 +1584,13 @@ static void RenderEquipmentSetLibrary() {
         const bool valid=g_SetDeleteTarget.Current(GW2API::GetBuildLibraryRevision())&&usage[g_SetDeleteTarget.id]==0&&findSet(g_SetDeleteTarget.id)!=sets.end();
         ImGui::TextWrapped("Delete unused set '%s'? Its components are retained.",g_SetDeleteTarget.name.c_str());
         if(!valid)ImGui::TextWrapped("Library changed or the set is referenced. Cancel and review again.");
-        if(valid&&UI::Button("Delete",ImVec2(0,0),UI::ButtonRole::Destructive)){
-            g_ComponentCommand={ComponentUICommand::RemoveSet,"","",g_SetDeleteTarget.id,"",ComponentJson::object(),g_SetDeleteTarget.revision};
-            g_SetDeleteTarget={};ImGui::CloseCurrentPopup();
-        }
-        if(valid)ImGui::SameLine();
-        if(RenderActionButton("Cancel")){g_SetDeleteTarget={};ImGui::CloseCurrentPopup();}
+        const auto action=UI::ConfirmCancel("set_delete",valid,"Delete","Library changed or referenced.",g_SetDeleteError.c_str());
+        if(action==UI::EditAction::Save){
+            if(GW2API::RemoveEquipmentSet(g_SetDeleteTarget.id,g_SetDeleteTarget.revision)){
+                if(g_EquipmentSetSelectedId==g_SetDeleteTarget.id)g_EquipmentSetSelectedId.clear();
+                g_SetDeleteTarget={};ImGui::CloseCurrentPopup();
+            }else g_SetDeleteError="Could not delete the Equipment Set. Original data retained.";
+        }else if(action==UI::EditAction::Cancel||UI::EditorEscape()){g_SetDeleteTarget={};ImGui::CloseCurrentPopup();}
         ImGui::EndPopup();
     }
     RenderComponentUIEditor();

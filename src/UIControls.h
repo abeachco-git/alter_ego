@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "SplitPanelCore.h"
+#include "EditorLifecycle.h"
 #include <set>
 #include <string>
 #include <algorithm>
@@ -38,15 +39,70 @@ inline bool Button(const char* label, ImVec2 size = ImVec2(0,0),
 }
 // Shared explicit edit footer. Callers own validation, draft and commit.
 enum class EditAction { None, Save, Cancel };
-inline EditAction SaveCancel(const char* scope,bool canSave=true,const char* saveLabel="Save") {
+inline void ActionMessage(const char* message,bool error=false){
+    if(!message||!*message)return;
+    if(error)ImGui::PushStyleColor(ImGuiCol_Text,DestructiveText);
+    ImGui::TextWrapped("%s",message);
+    if(error)ImGui::PopStyleColor();
+}
+inline EditAction ActionFooter(const char* scope,bool enabled,const char* primary,
+    const char* secondary="Cancel",ButtonRole role=ButtonRole::Standard,
+    const char* reason=nullptr,bool pending=false,const char* error=nullptr){
     ImGui::PushID(scope);
-    if(!canSave){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
-    const bool save=Button(saveLabel,ImVec2(std::max(80.f,ImGui::CalcTextSize(saveLabel).x+2*ImGui::GetStyle().FramePadding.x),0))&&canSave;
-    if(!canSave){ImGui::PopStyleVar();ImGui::PopItemFlag();}
-    ImGui::SameLine();
-    const bool cancel=Button("Cancel",ImVec2(80,0));
+    const auto width=[](const char* label){return std::max(80.f,ImGui::CalcTextSize(label,nullptr,true).x+2*ImGui::GetStyle().FramePadding.x);};
+    const float primaryWidth=width(primary),secondaryWidth=width(secondary);
+    const bool fits=ImGui::GetContentRegionAvail().x>=primaryWidth+secondaryWidth+ImGui::GetStyle().ItemSpacing.x;
+    auto draw=[&](const char* label,float w,ButtonRole style,bool available,const char* why){
+        if(!available){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
+        const bool clicked=Button(label,ImVec2(w,0),style)&&available;
+        if(!available){
+            if(why&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",why);
+            ImGui::PopStyleVar();ImGui::PopItemFlag();
+        }
+        return clicked;
+    };
+    const bool save=draw(primary,primaryWidth,role,enabled&&!pending,pending?"Operation in progress.":reason);
+    if(fits)ImGui::SameLine();
+    const bool cancel=draw(secondary,secondaryWidth,ButtonRole::Standard,!pending,"Operation in progress.");
+    if(pending)ActionMessage("Working...");
+    if(error&&*error)ActionMessage(error,true);
     ImGui::PopID();
     return save?EditAction::Save:cancel?EditAction::Cancel:EditAction::None;
+}
+inline EditAction SaveCancel(const char* scope,bool canSave=true,const char* saveLabel="Save",
+    const char* reason=nullptr,bool pending=false,const char* error=nullptr){
+    return ActionFooter(scope,canSave,saveLabel,"Cancel",ButtonRole::Standard,reason,pending,error);
+}
+inline EditAction ConfirmCancel(const char* scope,bool enabled,const char* confirm,
+    const char* reason=nullptr,const char* error=nullptr,bool pending=false){
+    return ActionFooter(scope,enabled,confirm,"Cancel",ButtonRole::Destructive,reason,pending,error);
+}
+// Read only the native ImGui key state, never install or override a host
+// keyboard handler. An active field or deeper popup owns Escape first.
+inline bool EditorEscape(){
+    if(!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)||
+       ImGui::GetIO().WantTextInput||ImGui::IsAnyItemActive()||
+       ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId))return false;
+    const int key=ImGui::GetKeyIndex(ImGuiKey_Escape);
+    return key>=0&&ImGui::IsKeyPressed(key,false);
+}
+// Call at the owning window's stable ID scope every frame. No data is discarded
+// until the caller receives true, including when a nested draft is dirty.
+inline bool DiscardRequested(const char* popup,bool requested,bool dirty,bool pending=false,
+    const char* message="Your unsaved changes will be lost."){
+    using namespace AlterEgo::EditorLifecycle;
+    const auto decision=RequestClose(requested,dirty,pending);
+    if(decision==CloseDecision::Close)return true;
+    if(decision==CloseDecision::ConfirmDiscard)ImGui::OpenPopup(popup);
+    bool discard=false;
+    if(ImGui::BeginPopupModal(popup,nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        ImGui::TextWrapped("%s",message);
+        const auto action=ActionFooter("discard",true,"Discard changes","Keep editing",ButtonRole::Destructive);
+        if(action==EditAction::Save){discard=true;ImGui::CloseCurrentPopup();}
+        else if(action==EditAction::Cancel||EditorEscape())ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    return discard;
 }
 inline bool SmallButton(const char* label) { return ImGui::SmallButton(label); }
 inline bool DestructiveMenuItem(const char* label, bool enabled = true) {
@@ -222,10 +278,10 @@ inline bool InputTextMultiline(const char* label, std::string& str, const ImVec2
 // Name-only record operations. The caller owns the stable target, validation
 // and commit. Failed transactions leave the name and popup intact.
 struct NameActionDraft{
-    std::string name,error;
+    std::string name,error,initialName;
     bool pending=false,duplicate=false;
     void Start(const std::string& original,bool copy){
-        name=original+(copy?" - Copy":"");error.clear();duplicate=copy;pending=true;
+        name=original+(copy?" - Copy":"");initialName=name;error.clear();duplicate=copy;pending=true;
     }
 };
 template<class Commit>
@@ -237,12 +293,17 @@ inline void RenderNameAction(const char* popup,NameActionDraft& draft,bool valid
     if(!valid)ImGui::TextWrapped("Record changed. Cancel and review again.");
     ImGui::SetNextItemWidth(std::max(220.f,ImGui::GetFontSize()*22.f));
     InputText("Name",draft.name);
-    const auto action=SaveCancel("name_action",valid&&draft.name.find_first_not_of(" \t\r\n")!=std::string::npos,draft.duplicate?"Duplicate":"Save");
+    const bool dirty=draft.name!=draft.initialName;
+    const bool named=draft.name.find_first_not_of(" \t\r\n")!=std::string::npos;
+    const bool canSave=EditorLifecycle::CanSave(valid&&named,dirty,draft.duplicate);
+    const char* reason=!valid?"Record changed; reopen this dialog.":!named?"Enter a name.":"No changes to save.";
+    const auto action=SaveCancel("name_action",canSave,draft.duplicate?"Duplicate":"Save",reason,false,draft.error.c_str());
     if(action==EditAction::Save){
         if(commit(draft.name,draft.duplicate)){draft={};ImGui::CloseCurrentPopup();}
         else if(draft.error.empty())draft.error="Could not save. Check the name or reopen this record.";
-    }else if(action==EditAction::Cancel){draft={};ImGui::CloseCurrentPopup();}
-    if(!draft.error.empty())ImGui::TextWrapped("%s",draft.error.c_str());
+    }else if(DiscardRequested("Discard changes?##name_action",action==EditAction::Cancel||EditorEscape(),dirty)){
+        draft={};ImGui::CloseCurrentPopup();
+    }
     ImGui::EndPopup();
 }
 // Compact search and filter presentation. All query state and filtering

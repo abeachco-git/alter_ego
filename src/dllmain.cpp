@@ -866,7 +866,7 @@ static float g_LibListWidth = 220.0f; // Resizable build list column width
 static int g_LibraryCollection = 0; // 0 Loadouts, 1 Fashion, 2 Components, 3 Equipment Sets
 static bool g_SwitchToLibrary = false; // select Library after creation/import/navigation
 static std::string g_LibSelectedId;
-static void SelectLoadoutAt(int index){const auto& builds=AlterEgo::GW2API::GetSavedBuilds();g_LibSelectedId=index>=0&&index<(int)builds.size()?builds[index].id:std::string{};}
+static void SelectLoadoutAt(int index);
 // Build editor: "+ New Loadout" dialog state
 static bool g_NewBuildDialogOpen = false;
 static std::string g_NewBuildProfessionPending;
@@ -879,7 +879,11 @@ static std::string g_EditSetId,g_EditFashionId;
 static std::map<std::string,std::string> g_EditRefs;
 static std::set<std::string> g_EditSharedKinds;
 static std::string g_EditDraftId;          // id the draft currently mirrors
-static bool g_EditDirty = false;           // true once the draft diverges from the snapshot
+static bool g_EditDirty = false;           // edit activity; reconciled against exact baseline
+static nlohmann::json g_EditBaseline;
+static std::map<std::string,std::string> g_EditBaselineRefs;
+static std::string g_EditBaselineSet,g_EditBaselineFashion,g_EditError;
+static uint64_t g_DiscardNewBuildRevision=0;
 static bool g_EditIsNewBuild = false;      // true while editing a freshly-created build (cancel discards it)
 static std::string g_DiscardNewBuildId;    // deferred: id of a new build to delete after the render pass
 static int g_SpecPickerSlot = -1;          // 0..2 while spec picker open, else -1
@@ -897,6 +901,11 @@ static std::string g_LibImportPendingProfession;
 // Right-pane edit mode: by default the Name/Mode/Notes inputs are hidden
 // behind an Edit button to keep the preview clean.
 static bool g_LibEditMode = false;
+static void SelectLoadoutAt(int index){
+    if(g_LibEditMode)return;
+    const auto& builds=AlterEgo::GW2API::GetSavedBuilds();
+    g_LibSelectedId=index>=0&&index<(int)builds.size()?builds[index].id:std::string{};
+}
 static std::vector<AlterEgo::GameMode> g_LibImportModes{AlterEgo::GameMode::PvE};
 static bool g_LibShowImport = false;
 static std::string g_LibImportError;
@@ -939,16 +948,30 @@ static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
     }
     g_LibEditName = build.name;
     g_LibEditNotes = build.notes;
-    g_EditDirty = false;
+    g_EditBaseline=AlterEgo::GW2API::EditorBuildSnapshot(build);
+    g_EditBaselineRefs=g_EditRefs;g_EditBaselineSet=g_EditSetId;g_EditBaselineFashion=g_EditFashionId;
+    g_EditError.clear();g_EditDirty = false;
     g_LibEditMode = true;
 }
-static inline void MarkEditDirty() { g_EditDirty = true; }
+static inline void MarkEditDirty() { g_EditDirty = true;g_EditError.clear(); }
+static bool LoadoutDraftDirty(){
+    if(!g_LibEditMode)return false;
+    auto current=AlterEgo::GW2API::EditorBuildSnapshot(g_EditDraft);
+    current["name"]=g_LibEditName;current["notes"]=g_LibEditNotes;
+    return current!=g_EditBaseline||g_EditRefs!=g_EditBaselineRefs||
+        g_EditSetId!=g_EditBaselineSet||g_EditFashionId!=g_EditBaselineFashion;
+}
+// Defined after the editor headers; use the same protection in launchers,
+// backup/restore and navigation without introducing a global draft owner.
+static bool OtherLibraryEditorOpen();
+static bool LibraryDraftOpen();
 static bool g_EditSavePending = false;
 static bool g_EditReviewPending=false;
 
 static std::string g_LibEditBuildId;   // which build is being edited
 static AlterEgo::RecordSelection::RevisionTarget g_LibDeleteTarget;
 static bool g_LibDeletePending=false;
+static std::string g_LibDeleteError;
 static AlterEgo::UI::NameActionDraft g_LibNameAction;
 static AlterEgo::RecordSelection::RevisionTarget g_LibNameTarget;
 static std::atomic<bool> g_RelaySending{false};    // relay POST in progress
@@ -1352,6 +1375,10 @@ static bool SavePreferenceFile(const std::string& path,const nlohmann::json& dat
 static bool g_GearDialogOpen = false;
 static AlterEgo::SavedBuild g_GearDialogDraft;
 static bool g_GearDialogDirty=false;
+static nlohmann::json g_GearDialogBaseline;
+static bool GearDraftDirty(){
+    return g_GearDialogOpen&&g_GearDialogDirty&&AlterEgo::GW2API::EditorBuildSnapshot(g_GearDialogDraft)!=g_GearDialogBaseline;
+}
 static AddonWindowFocusRequest g_GearDialogFocus;
 static std::string g_GearDialogSlot;          // Which slot is being edited
 static std::string g_GearDialogBuildId;       // Which saved build
@@ -1364,6 +1391,8 @@ static int g_GearExactInfusionId = 0;
 
 // Save to Library dialog state
 static bool g_SaveLibDialogOpen = false;
+static std::string g_SaveLibError;
+static nlohmann::json g_SaveLibBaseline;
 static AddonWindowFocusRequest g_SaveLibDialogFocus;
 static char g_SaveLibName[128] = "";
 static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
@@ -1392,6 +1421,12 @@ static std::string g_ComponentSelectNamePending; // Newly captured component to 
 static int g_SaveLibEquipTab = 0;          // Selected equipment tab number (1-based)
 static std::string g_SaveLibCharName;      // Character name (to find equipment)
 static int g_SaveLibBuildTab = 0;       // Live build tab ID being captured
+static nlohmann::json CaptureFormSnapshot(){
+    return {{"target",g_SaveLibTarget},{"kind",g_SaveLibComponentKind},{"update",g_SaveLibUpdateId},
+        {"modes",g_SaveLibModes},{"build",g_SaveLibBuildTab},{"equipment",g_SaveLibEquipTab},
+        {"equipment_mode",g_SaveLibEquipmentMode},{"set_name",g_SaveLibSetName},
+        {"set_kinds",g_SaveLibSetKinds},{"name",g_SaveLibNameManuallyEdited?std::string(g_SaveLibName):std::string{}}};
+}
 
 // Saved vs. retrieved character comparison state (never mutates a saved build).
 static std::string g_LibCompareBuildId;
@@ -3643,6 +3678,8 @@ static std::string BuildWardrobeLink(const AlterEgo::Character& ch, int tab) {
 // build-selection logic.
 // One navigation path for the Library menu, saved Fashion and imported builds.
 static void NavigateToLibraryCollection(int collection) {
+    // Inline editing owns the selected Loadout until Save/Discard.
+    if(g_LibEditMode&&collection!=0){if(APIDefs)APIDefs->GUI_SendAlert("Save or cancel the current Loadout edit first.");return;}
     MarkNavigation();
     g_LibraryCollection = (collection >= 0 && collection <= 3) ? collection : 0;
     g_SwitchToLibrary = true;
@@ -4078,9 +4115,16 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     static std::string launchCharacter,launchAccount;
     static int launchBuildTab = 0, launchEquipmentTab = 0, launchKind = -1;
     g_SaveLibDialogFocus.Request();
-    if (g_SaveLibDialogOpen && launchCharacter == ch.name && launchAccount==ch.account_name &&
-        launchBuildTab == bt.tab && launchEquipmentTab == requestedEquipment &&
-        launchKind == componentKind) return;
+    if(g_SaveLibDialogOpen){
+        if(launchCharacter!=ch.name||launchAccount!=ch.account_name||launchBuildTab!=bt.tab||
+           launchEquipmentTab!=requestedEquipment||launchKind!=componentKind)
+            g_SaveLibError="Save or cancel the current capture before starting another.";
+        return;
+    }
+    if(g_LibEditMode||OtherLibraryEditorOpen()){
+        if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");
+        return;
+    }
     launchCharacter = ch.name;
     launchAccount=ch.account_name;
     g_SaveLibAccount=ch.account_name;
@@ -4103,6 +4147,7 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
     g_SaveLibUpdateId.clear();
     g_SaveLibFashionError.clear();
     g_SaveLibEquipTab = requestedEquipment;
+    g_SaveLibError.clear();g_SaveLibBaseline=CaptureFormSnapshot();
     g_SaveLibDialogOpen = true;
 }
 
@@ -6684,6 +6729,7 @@ static void OpenGearDialog(const std::string& buildId, const std::string& slot,
     if(g_GearDialogOpen)return; // Focus the existing draft; never silently replace it.
     if(!g_LibEditMode||g_EditDraft.id!=buildId)return;
     g_GearDialogDraft=g_EditDraft;
+    g_GearDialogBaseline=AlterEgo::GW2API::EditorBuildSnapshot(g_GearDialogDraft);
     g_GearDialogDirty=false;
     g_GearDialogOpen = true;
     g_GearDialogSlot = slot;
@@ -6933,6 +6979,7 @@ bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selecte
 // "+ New Loadout" dialog: pick a profession + game mode, create a blank build,
 // and drop straight into edit mode.
 static void RenderNewBuildDialog() {
+    if(g_NewBuildDialogOpen&&(g_LibEditMode||OtherLibraryEditorOpen())){g_NewBuildDialogOpen=false;return;}
     if (g_NewBuildDialogOpen && !ImGui::IsPopupOpen("New Loadout###newbuild"))
         ImGui::OpenPopup("New Loadout###newbuild");
 
@@ -7420,8 +7467,8 @@ static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCo
     auto it = b.gear.find(slot);
     if (it == b.gear.end()) return;
     if (field == GearCopyField::All) {
-        if (&b!=&g_GearDialogDraft && g_GearDialogOpen && g_GearDialogBuildId == b.id && g_GearDialogSlot == slot)
-            g_GearDialogOpen = false;
+        // Do not invalidate a pending child draft through an outside clear.
+        if (&b!=&g_GearDialogDraft && g_GearDialogOpen && g_GearDialogBuildId == b.id)return;
         const bool hadInfusions = !it->second.infusion_ids.empty() ||
             !it->second.infusion_attributes.empty() || it->second.infusion_snapshot;
         b.gear.erase(it);
@@ -7568,7 +7615,8 @@ static void RenderGearCustomizeDialog() {
 
     ImGui::SetNextWindowSize(ImVec2(540, 440), ImGuiCond_FirstUseEver);
     g_GearDialogFocus.ApplyBeforeBegin();
-    if (!ImGui::Begin("Customize##GearDialog", &g_GearDialogOpen, ImGuiWindowFlags_NoCollapse)) {
+    bool windowOpen=true;
+    if (!ImGui::Begin("Customize##GearDialog", &windowOpen, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
@@ -8248,12 +8296,15 @@ static void RenderGearCustomizeDialog() {
         ImGui::EndTable();
     }
     ImGui::EndChild();
-    const auto action=AlterEgo::UI::SaveCancel("gear_customize",g_GearDialogDirty);
+    const bool dirty=GearDraftDirty();
+    const auto action=AlterEgo::UI::SaveCancel("gear_customize",dirty,"Apply","No equipment changes to apply.");
     if(action==AlterEgo::UI::EditAction::Save){
         AlterEgo::GearEdit::ApplyEquipmentDraft(g_EditDraft,g_GearDialogDraft);
         MarkEditDirty();
         g_GearDialogOpen=false;
-    }else if(action==AlterEgo::UI::EditAction::Cancel)g_GearDialogOpen=false;
+    }else if(AlterEgo::UI::DiscardRequested("Discard gear changes?",!windowOpen||action==AlterEgo::UI::EditAction::Cancel||AlterEgo::UI::EditorEscape(),dirty)){
+        g_GearDialogOpen=false;
+    }
     ImGui::End();
 }
 
@@ -8263,7 +8314,8 @@ static void RenderSaveToLibraryDialog() {
 
     ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
     g_SaveLibDialogFocus.ApplyBeforeBegin();
-    if (!ImGui::Begin("Save to Library##SaveLibDialog", &g_SaveLibDialogOpen,
+    bool windowOpen=true;
+    if (!ImGui::Begin("Save to Library##SaveLibDialog", &windowOpen,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
@@ -8481,7 +8533,8 @@ static void RenderSaveToLibraryDialog() {
     auto finishLoadout=[&](SavedBuild capture,const std::string& setId,const std::string& newName) {
         const int idx=GW2API::AddSavedBuild(std::move(capture),setId,newName,g_SaveLibSetKinds);
         if(idx>=0){SelectLoadoutAt(idx);g_LibDetailsFetched=false;NavigateToLibraryCollection(0);g_SaveLibDialogOpen=false;}
-        if(APIDefs)APIDefs->GUI_SendAlert(idx>=0?"Loadout saved to library!":"Could not save Loadout; review equipment selection.");
+        if(idx<0)g_SaveLibError="Could not save Loadout; review equipment selection. Draft retained.";
+        if(APIDefs&&idx>=0)APIDefs->GUI_SendAlert("Loadout saved to library!");
         return idx>=0;
     };
     const bool ready=sourceChar&&(!needsBuild||currentBuild())&&(!needsEquipment||hasEquipment(g_SaveLibEquipTab))&&
@@ -8495,13 +8548,9 @@ static void RenderSaveToLibraryDialog() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    if(!ready) {
-        ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.5f);
-    }
-    const bool saveClicked=RenderActionButton(g_SaveLibTarget==2?
-        "Review Update##saveToLibrary":"Save##saveToLibrary",ImVec2(g_SaveLibTarget==2?115:80,0));
-    if(!ready){ImGui::PopStyleVar();ImGui::PopItemFlag();}
+    const auto captureAction=UI::SaveCancel("capture",ready,g_SaveLibTarget==2?"Review Update":"Save",
+        "Complete the required capture fields.",false,g_SaveLibError.c_str());
+    const bool saveClicked=captureAction==UI::EditAction::Save;
     if(saveClicked&&ready&&fashion) {
         g_SaveLibFashionError.clear();
         if(!CaptureLiveFashion(*sourceChar,g_SaveLibEquipTab,g_SaveLibName,g_SaveLibPendingFashion))
@@ -8512,6 +8561,7 @@ static void RenderSaveToLibraryDialog() {
         else g_SaveLibFashionError="Could not save Fashion. Original library data is preserved.";
     }
     if(saveClicked&&ready&&!fashion) {
+        g_SaveLibError.clear();
         std::string name = g_SaveLibName;
         if (name.empty()) name = g_SaveLibTarget == 0 ? "Unnamed Loadout" : "Unnamed Component";
 
@@ -8555,9 +8605,7 @@ static void RenderSaveToLibraryDialog() {
                     NavigateToLibraryCollection(2);
                     g_SaveLibDialogOpen = false;
                     if (APIDefs) APIDefs->GUI_SendAlert("Component saved or existing identical component reused.");
-                } else if (APIDefs) {
-                    APIDefs->GUI_SendAlert("Could not save the selected component.");
-                }
+                } else g_SaveLibError="Could not save the selected component. Draft retained.";
             } else {
                 if(g_SaveLibEquipmentMode==0) {
                     g_SaveLibExactSets=GW2API::FindCapturedEquipmentSets(sb);
@@ -8575,10 +8623,9 @@ static void RenderSaveToLibraryDialog() {
             ImGui::OpenPopup("Live build unavailable##save");
         }
     }
-    ImGui::SameLine();
-    if (RenderActionButton("Cancel##saveToLibrary", ImVec2(80, 0))) {
-        g_SaveLibDialogOpen = false;
-    }
+    if(g_SaveLibDialogOpen&&UI::DiscardRequested("Discard capture changes?",
+        !windowOpen||captureAction==UI::EditAction::Cancel||UI::EditorEscape(),
+        CaptureFormSnapshot()!=g_SaveLibBaseline))g_SaveLibDialogOpen=false;
     if(ImGui::BeginPopupModal("Link matching equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
         for(const auto& set:g_SaveLibExactSets)
             if(UI::SelectableOption((set.second+"##"+set.first).c_str(),set.first==g_SaveLibSelectedSet))g_SaveLibSelectedSet=set.first;
@@ -8619,7 +8666,8 @@ static void RenderSaveToLibraryDialog() {
             g_SaveLibPendingKind.c_str(), g_SaveLibPendingName.c_str());
         ImGui::TextWrapped("This replaces saved fields for ALL Loadouts and equipment sets using "
                            "the component. It does not create a private copy.");
-        if (RenderActionButton("Confirm Update##component_replace")) {
+        const auto action=UI::ConfirmCancel("replace_shared",!g_SaveLibPendingId.empty(),"Confirm Update","Select the component to replace.",g_SaveLibError.c_str());
+        if (action==UI::EditAction::Save) {
             const bool applied = AlterEgo::GW2API::ReplaceCapturedLoadoutComponent(
                 g_SaveLibPendingCapture, g_SaveLibPendingKind, g_SaveLibPendingId);
             if (applied) {
@@ -8628,13 +8676,9 @@ static void RenderSaveToLibraryDialog() {
                 NavigateToLibraryCollection(2);
                 g_SaveLibDialogOpen = false;
                 if (APIDefs) APIDefs->GUI_SendAlert("Saved component replaced.");
-            } else if (APIDefs) {
-                APIDefs->GUI_SendAlert("Component update failed. Original data is preserved.");
-            }
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (RenderActionButton("Cancel##component_replace")) ImGui::CloseCurrentPopup();
+                ImGui::CloseCurrentPopup();
+            } else g_SaveLibError="Component update failed. Original data is preserved.";
+        }else if(action==UI::EditAction::Cancel||UI::EditorEscape())ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     if (ImGui::BeginPopup("Live build unavailable##save")) {
@@ -9284,17 +9328,20 @@ static void ExecuteSavedLoadoutAction(SavedLoadoutAction action,
         ActivateSavedBuildCompare(build);
         break;
     case SavedLoadoutAction::Edit:
+        if(OtherLibraryEditorOpen()){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");break;}
         g_LibSelectedId=build.id;
         g_LibEditBuildId = build.id;
         EnterBuildEditMode(build);
         break;
     case SavedLoadoutAction::Rename:
     case SavedLoadoutAction::Duplicate:
+        if(LibraryDraftOpen()){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");break;}
         g_LibNameTarget={build.id,build.name,AlterEgo::GW2API::GetBuildLibraryRevision()};
         g_LibNameAction.Start(build.name,action==SavedLoadoutAction::Duplicate);
         break;
     case SavedLoadoutAction::Delete:
-        g_LibDeleteTarget={build.id,build.name,AlterEgo::GW2API::GetBuildLibraryRevision()};g_LibDeletePending=true;
+        if(LibraryDraftOpen()){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");break;}
+        g_LibDeleteTarget={build.id,build.name,AlterEgo::GW2API::GetBuildLibraryRevision()};g_LibDeletePending=true;g_LibDeleteError.clear();
         break;
     }
 }
@@ -9434,31 +9481,27 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         // Top-right header buttons. Editing: Save / Cancel. Otherwise: Share / Edit / Delete.
         if (showEditButton) {
             if (g_LibEditMode) {
-                // ImGui 1.80 has no BeginDisabled — dim when clean and guard the click.
-                bool canSave = g_EditDirty && g_EditRefsReady && !g_GearDialogOpen;
-                if (!canSave) ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
-                                                  ImGui::GetStyle().Alpha * 0.5f);
-                if (RenderActionButton("Save##hdr") && canSave) {
-                    g_EditDraft.name = g_LibEditName;
-                    g_EditDraft.notes = g_LibEditNotes;
-                    if (g_EditDraft.game_modes.empty())
-                        g_EditDraft.game_modes = {g_EditDraft.game_mode};
-                    g_EditDraft.game_mode = g_EditDraft.game_modes.front();
-                    // Defer commit until after the render pass: the transactional
-                    // component projection can invalidate saved-build references.
-                    g_EditReviewPending = true;
+                // Compare the actual editable fields and reference IDs, not sticky activity flags.
+                g_EditDirty=LoadoutDraftDirty();
+                const bool stale=g_EditDraftRevision!=AlterEgo::GW2API::GetBuildLibraryRevision();
+                const bool valid=g_EditRefsReady&&!stale&&!g_GearDialogOpen&&!g_LibEditName.empty();
+                const bool canSave=AlterEgo::EditorLifecycle::CanSave(valid,g_EditDirty,g_EditIsNewBuild,g_EditSavePending);
+                const char* why=stale?"Library changed. Reopen the Loadout before saving.":g_GearDialogOpen?"Apply or cancel gear customization first.":!g_EditRefsReady?"References unavailable.":g_LibEditName.empty()?"Enter a name.":"No changes to save.";
+                const auto action=AlterEgo::UI::SaveCancel("loadout_header",canSave,"Save",why,g_EditSavePending,g_EditError.c_str());
+                if(action==AlterEgo::UI::EditAction::Save){
+                    g_EditDraft.name=g_LibEditName;g_EditDraft.notes=g_LibEditNotes;
+                    if(g_EditDraft.game_modes.empty())g_EditDraft.game_modes={g_EditDraft.game_mode};
+                    g_EditDraft.game_mode=g_EditDraft.game_modes.front();
+                    g_EditReviewPending=true;
                 }
-                if (!canSave) ImGui::PopStyleVar();
-
-                AlterEgo::UI::SameLineIfActionFits("Cancel");
-                if (RenderActionButton("Cancel##hdr")) {
-                    g_GearDialogOpen=false; // Discard the unaccepted child draft too.
-                    if (g_EditDirty) ImGui::OpenPopup("Discard changes?##editcancel");
-                    else {
-                        // Clean cancel: a brand-new build is discarded (deferred to
-                        // after the render pass so `build` isn't freed mid-draw).
-                        if (g_EditIsNewBuild) g_DiscardNewBuildId = build.id;
-                        g_LibEditMode = false; g_EditIsNewBuild = false;
+                if(AlterEgo::UI::DiscardRequested("Discard changes?##editcancel",
+                    action==AlterEgo::UI::EditAction::Cancel,g_EditDirty||GearDraftDirty(),g_EditSavePending,
+                    "Unsaved Loadout and gear changes will be lost.")){
+                    if(g_EditIsNewBuild){
+                        g_DiscardNewBuildId=build.id;g_DiscardNewBuildRevision=g_EditDraftRevision;
+                    }else{
+                        g_LibEditMode=false;g_EditDirty=false;g_EditDraftId.clear();g_EditError.clear();
+                        g_GearDialogOpen=false;
                     }
                 }
             } else {
@@ -9486,21 +9529,6 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
 
             } // end else (non-edit Share / Edit / Delete cluster)
 
-            // Cancel-with-unsaved-changes confirmation (paired with the Cancel button).
-            if (ImGui::BeginPopupModal("Discard changes?##editcancel", nullptr,
-                                       ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::TextColored(ImVec4(0.85f, 0.8f, 0.7f, 1.0f), "Discard your unsaved changes?");
-                ImGui::Spacing();
-                if (AlterEgo::UI::Button("Discard", ImVec2(110, 0), AlterEgo::UI::ButtonRole::Destructive)) {
-                    if (g_EditIsNewBuild) g_DiscardNewBuildId = build.id; // discard the blank build
-                    g_LibEditMode = false; g_EditDirty = false; g_EditDraftId.clear();
-                    g_EditIsNewBuild = false;
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::SameLine();
-                if (RenderActionButton("Keep editing", ImVec2(110, 0))) ImGui::CloseCurrentPopup();
-                ImGui::EndPopup();
-            }
         }
 
         // Native layout continues after the mode and action rows.
@@ -11250,6 +11278,14 @@ static bool g_StorageMaintenancePending=false;
 static std::string g_StorageMaintenanceMessage;
 #include "ComposableUI.h"
 
+static bool OtherLibraryEditorOpen(){
+    return g_FashionDialog||g_ComponentEditorOpen||g_ComponentEditorSaveQueued||
+        g_ReferenceEditor.open||g_ReferenceEditor.queued||g_SaveLibDialogOpen;
+}
+static bool LibraryDraftOpen(){
+    return g_LibEditMode||g_GearDialogOpen||OtherLibraryEditorOpen()||g_NewBuildDialogOpen||g_LibShowImport;
+}
+
 static void RenderLibraryImportDialog() {
     // Keep the import form and its asynchronous palette-data retry inside a
     // modal; it no longer shifts the library list and details while open.
@@ -11435,10 +11471,11 @@ static void RenderLibraryImportDialog() {
 
 static void LoadoutCreationMenu(){
     using namespace AlterEgo::UI;
-    if(MenuAction("New",MenuIcon::New)){
+    const bool ready=!LibraryDraftOpen();
+    if(MenuAction("New",MenuIcon::New,ready,"Finish the current Library editor first.")){
         g_NewBuildModes={AlterEgo::GameMode::PvE};g_NewBuildDialogOpen=true;
     }
-    if(MenuAction("Paste",MenuIcon::Paste))PastePortableLoadout();
+    if(MenuAction("Paste",MenuIcon::Paste,ready,"Finish the current Library editor first."))PastePortableLoadout();
 }
 static void RenderBuildLibrary() {
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
@@ -11553,7 +11590,7 @@ static void RenderBuildLibrary() {
                 ImGui::SetTooltip("Drag to reorder %s and all its builds. Right-click to create a build.",
                     profession.c_str());
             if (!g_LibEditMode && ImGui::BeginPopupContextItem("##profession_actions")) {
-                if (AlterEgo::UI::MenuAction("New",AlterEgo::UI::MenuIcon::New)) g_NewBuildProfessionPending = profession;
+                if (AlterEgo::UI::MenuAction("New",AlterEgo::UI::MenuIcon::New,!OtherLibraryEditorOpen(),"Finish the current Library editor first.")) g_NewBuildProfessionPending = profession;
                 ImGui::EndPopup();
             }
             if (!g_LibEditMode && ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
@@ -11945,10 +11982,11 @@ static void RenderBuildLibrary() {
         // Deferred: a cancelled brand-new build is removed here, after the preview
         // has finished using `build` (removing it mid-draw would dangle the ref).
         if (!g_DiscardNewBuildId.empty()) {
-            AlterEgo::GW2API::RemoveSavedBuild(g_DiscardNewBuildId);
+            if(AlterEgo::GW2API::RemoveSavedBuild(g_DiscardNewBuildId,g_DiscardNewBuildRevision)){
+                g_EditDraftId.clear();g_LibSelectedId.clear();g_LibEditMode=false;
+                g_EditDirty=false;g_EditIsNewBuild=false;g_GearDialogOpen=false;g_EditError.clear();
+            }else g_EditError="Could not discard the provisional Loadout. Library changed; draft retained.";
             g_DiscardNewBuildId.clear();
-            g_EditDraftId.clear();
-            g_LibSelectedId.clear();
         }
     } else {
         g_LibSelectedId.clear();
@@ -11980,18 +12018,19 @@ static void RenderBuildLibrary() {
         const bool valid=target.Current(AlterEgo::GW2API::GetBuildLibraryRevision())&&AlterEgo::RecordSelection::ById(AlterEgo::GW2API::GetSavedBuilds(),target.id)>=0;
         ImGui::TextWrapped("Delete \"%s\"?",target.name.c_str());
         if(!valid)ImGui::TextWrapped("Library changed. Cancel and review again.");
-        if(valid&&AlterEgo::UI::Button("Delete",ImVec2(80,0),AlterEgo::UI::ButtonRole::Destructive)){
+        const auto action=AlterEgo::UI::ConfirmCancel("loadout_delete",valid,"Delete","Library changed; review again.",g_LibDeleteError.c_str());
+        if(action==AlterEgo::UI::EditAction::Save){
             if(AlterEgo::GW2API::RemoveSavedBuild(target.id,target.revision)){
                 if(g_LibSelectedId==target.id)g_LibSelectedId.clear();
                 g_LibDeleteTarget={};ImGui::CloseCurrentPopup();
-            }else if(APIDefs)APIDefs->GUI_SendAlert("Could not delete the selected Loadout.");
+            }else g_LibDeleteError="Could not delete the selected Loadout. Original data retained.";
+        }else if(action==AlterEgo::UI::EditAction::Cancel||AlterEgo::UI::EditorEscape()){
+            g_LibDeleteTarget={};ImGui::CloseCurrentPopup();
         }
-        if(valid)ImGui::SameLine();
-        if(RenderActionButton("Cancel",ImVec2(80,0))){g_LibDeleteTarget={};ImGui::CloseCurrentPopup();}
         ImGui::EndPopup();
     }
     // Post-render insertion avoids invalidating the list's references.
-    if (!g_NewBuildProfessionPending.empty()) {
+    if (!g_NewBuildProfessionPending.empty()&&!OtherLibraryEditorOpen()&&!g_LibEditMode) {
         const std::string profession = g_NewBuildProfessionPending;
         g_NewBuildProfessionPending.clear();
         auto blank = AlterEgo::GW2API::CreateBlankBuild(profession, AlterEgo::GameMode::PvE);
@@ -17070,7 +17109,7 @@ void AddonRender() {
         ImGuiTabBar* libraryTabBar = GImGui->CurrentTabBar;
         const ImGuiID previousSelectedTab = libraryTabBar ? libraryTabBar->SelectedTabId : 0;
         ImGuiTabItemFlags libraryFlags = NavigationTabFlags(1);
-        if(g_LibEditMode)libraryFlags|=ImGuiTabItemFlags_SetSelected;
+        if(g_LibEditMode){g_LibraryCollection=0;libraryFlags|=ImGuiTabItemFlags_SetSelected;}
         if (g_SwitchToLibrary) {
             libraryFlags |= ImGuiTabItemFlags_SetSelected;
             g_SwitchToLibrary = false;
@@ -17303,7 +17342,7 @@ void AddonRender() {
                 libraryMouseOverSubmenu = ImGui::IsMouseHoveringRect(subPos,
                     ImVec2(subPos.x + ImGui::GetWindowSize().x,
                            subPos.y + ImGui::GetWindowSize().y), false);
-                if (ImGui::MenuItem("New")) {
+                if (ImGui::MenuItem("New",nullptr,false,!LibraryDraftOpen())) {
                     g_NewBuildModes = {AlterEgo::GameMode::PvE};
                     g_NewBuildDialogOpen = true;
                     libraryActionSelected = true;
@@ -17312,17 +17351,17 @@ void AddonRender() {
                 }
                 ImGui::EndPopup();
             }
-            if (ImGui::MenuItem("Components", nullptr, onComponents)) {
+            if (ImGui::MenuItem("Components", nullptr, onComponents,!g_LibEditMode)) {
                 libraryActionSelected = true;
                 NavigateToLibraryCollection(2);
                 if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
             }
-            if(ImGui::MenuItem("Equipment Sets",nullptr,g_MainTab==1&&g_LibraryCollection==3)) {
+            if(ImGui::MenuItem("Equipment Sets",nullptr,g_MainTab==1&&g_LibraryCollection==3,!g_LibEditMode)) {
                 libraryActionSelected=true;
                 NavigateToLibraryCollection(3);
                 if(libraryTabBar)libraryTabBar->NextSelectedTabId=libraryTabId;
             }
-            if (ImGui::MenuItem("Fashion", nullptr, onFashion)) {
+            if (ImGui::MenuItem("Fashion", nullptr, onFashion,!g_LibEditMode)) {
                 libraryActionSelected = true;
                 NavigateToLibraryCollection(1);
                 if (libraryTabBar) libraryTabBar->NextSelectedTabId = libraryTabId;
@@ -17330,7 +17369,7 @@ void AddonRender() {
 
             ImGui::Separator();
             ImGui::TextDisabled("TEMPLATE IMPORT");
-            if (ImGui::MenuItem("Import from Link / URL")) {
+            if (ImGui::MenuItem("Import from Link / URL",nullptr,false,!LibraryDraftOpen())) {
                 libraryActionSelected = true;
                 g_LibShowImport = true;
                 g_LibImportBuf[0] = '\0';
@@ -17454,8 +17493,9 @@ void AddonRender() {
             g_LibEditMode = false; g_EditDirty = false;
             g_EditIsNewBuild = false;
             g_GearDialogOpen = false;
-        } else if (APIDefs) {
-            APIDefs->GUI_SendAlert("Could not save Loadout. Check the library revision or component compatibility. Draft retained.");
+        } else {
+            g_EditError="Could not save Loadout. Check the library revision or component compatibility. Draft retained.";
+            if(APIDefs)APIDefs->GUI_SendAlert(g_EditError.c_str());
         }
     }
 }

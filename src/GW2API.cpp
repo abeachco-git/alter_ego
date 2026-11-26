@@ -2262,6 +2262,13 @@ namespace AlterEgo {
         return bj;
     }
 
+    nlohmann::json GW2API::EditorBuildSnapshot(const SavedBuild& draft) {
+        auto snapshot=SerializeSavedBuild(draft);
+        // Codes are derived from editable fields, not separate user edits.
+        snapshot.erase("chat_link");snapshot.erase("ae2_code");
+        return snapshot;
+    }
+
     static std::string LookupComponentDisplayName(const std::string& category, uint32_t id) {
         if (category == "spec") {
             if (const auto info = GW2API::GetSpecInfo(id)) return info->name;

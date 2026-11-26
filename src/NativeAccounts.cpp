@@ -727,10 +727,7 @@ bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
 std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}
 namespace {
 bool EnabledAction(const char* label,bool enabled,UI::ButtonRole role=UI::ButtonRole::Standard){
-    if(!enabled){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.5f);}
-    const bool clicked=UI::Button(label,ImVec2(0,0),role)&&enabled;
-    if(!enabled){ImGui::PopStyleVar();ImGui::PopItemFlag();}
-    return clicked;
+    return UI::AvailableActionButton(label,role,enabled,"Operation unavailable or already in progress.");
 }
 std::vector<Account> SelectedAccounts(const View& v,const std::string& account){
     std::vector<Account> out;
@@ -789,19 +786,33 @@ void RenderOptions(){
         auto secret=std::make_shared<Secret>(std::string(key));SecureZeroMemory(key,sizeof(key));
         Link(secret,label,editing);editing.clear();label[0]=0;
     }
-    if(!editing.empty()){ImGui::SameLine();if(RenderActionButton("Cancel edit")){editing.clear();label[0]=0;SecureZeroMemory(key,sizeof(key));}}
+    // Keep credentials only for the current form; do not overwrite a typed
+    // credential or label by opening a different account's edit.
+    if(!editing.empty()||key[0]||label[0]){
+        UI::SameLineIfActionFits("Cancel edit");
+        const bool cancel=UI::AvailableActionButton("Cancel edit",UI::ButtonRole::Standard,!busy.load(),"Validation in progress.");
+        if(UI::DiscardRequested("Discard account input?",cancel,key[0]!=0||label[0]!=0,busy.load(),
+            "Discard the current label and any entered API key?")){
+            editing.clear();label[0]=0;SecureZeroMemory(key,sizeof(key));
+        }
+    }
     for(const auto& a:v->accounts){
         ImGui::PushID(a.id.c_str());ImGui::Separator();ImGui::TextUnformatted(Display(a).c_str());
         if(!a.label.empty())ImGui::TextDisabled("%s",a.name.c_str());
         std::string missing;for(const auto& p:recommended)if(!a.permissions.count(p)){if(!missing.empty())missing+=", ";missing+=p;}
         if(missing.empty())ImGui::TextUnformatted("All recommended permissions granted");
         else ImGui::TextWrapped("Missing: %s",missing.c_str());
-        if(EnabledAction("Edit",!busy.load())){editing=a.id;snprintf(label,sizeof(label),"%s",a.label.c_str());SecureZeroMemory(key,sizeof(key));}
+        const bool canEdit=!busy.load()&&(editing==a.id||(!key[0]&&!label[0]&&editing.empty()));
+        if(UI::AvailableActionButton("Edit",UI::ButtonRole::Standard,canEdit,"Finish or cancel the current account form first.")&&editing!=a.id){
+            editing=a.id;snprintf(label,sizeof(label),"%s",a.label.c_str());SecureZeroMemory(key,sizeof(key));
+        }
         ImGui::SameLine();if(EnabledAction("Unlink",!busy.load(),UI::ButtonRole::Destructive)){removing=a.id;ImGui::OpenPopup("Unlink account?");}
         if(ImGui::BeginPopupModal("Unlink account?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-            ImGui::TextWrapped("Remove the linked account and its stored credential? Saved Library data is unaffected.");
-            if(EnabledAction("Unlink account",!busy.load(),UI::ButtonRole::Destructive)){Remove(removing);ImGui::CloseCurrentPopup();}
-            ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
+            ImGui::TextWrapped("Remove %s and its stored credential? Saved Library data is unaffected.",Display(a).c_str());
+            const bool valid=removing==a.id;
+            const auto action=UI::ConfirmCancel("unlink",valid,"Unlink account","Account changed; review again.",nullptr,busy.load());
+            if(action==UI::EditAction::Save){Remove(removing);removing.clear();ImGui::CloseCurrentPopup();}
+            else if(action==UI::EditAction::Cancel||UI::EditorEscape()){removing.clear();ImGui::CloseCurrentPopup();}
             ImGui::EndPopup();
         }
         ImGui::PopID();

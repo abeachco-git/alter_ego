@@ -33,7 +33,7 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
         case 0: {
             s.id=g_SelectedCharKey.second;s.kind=g_SelectedCharKey.first;
             s.sub=g_SelectedTab;s.buildTab=g_SelectedBuildTab;s.equipTab=g_SelectedEquipTab;
-            s.search=g_CharSearchBuf;s.sort=g_CharSortMode;s.first=g_CharSortAscending;break;
+            s.search=g_CharSearchBuf;break; // Character ordering is a global preference, not history.
         }
         case 1: {
             s.collection=g_LibraryCollection;
@@ -92,7 +92,7 @@ static void RestoreNavigation(const NavigationSnapshot& s){
     }
     switch(s.page){
         case 0:{
-            g_CharSortMode=static_cast<decltype(g_CharSortMode)>(s.sort);g_CharSortAscending=s.first;
+            // Preserve the current global sort and direction, including Custom.
             g_SelectedCharKey={s.kind,s.id};RebuildCharDisplayOrder();
             g_SessionSelectedCharName.clear();g_DetailsFetched=false;
             g_SelectedBuildTab=s.buildTab;g_SelectedEquipTab=s.equipTab;

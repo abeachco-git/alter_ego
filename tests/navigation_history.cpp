@@ -1,4 +1,5 @@
 #include "../src/NavigationHistory.h"
+#include "../src/EditorLifecycle.h"
 #include "../src/RecordSelectionCore.h"
 #include <vector>
 #include <algorithm>
@@ -39,5 +40,15 @@ int case_navigation_history(int,char**){
     std::vector<std::pair<std::string,std::string>> chars={{"account-a","Hero"},{"account-b","Hero"}};
     const auto key=chars[1];assert(IndexOf(chars,key,[](const auto& row){return row;})==1);
     std::reverse(chars.begin(),chars.end());assert(IndexOf(chars,key,[](const auto& row){return row;})==0);
+    using namespace AlterEgo::EditorLifecycle;
+    assert(RequestClose(false,true)==CloseDecision::KeepOpen);
+    assert(RequestClose(true,false)==CloseDecision::Close);
+    assert(RequestClose(true,true)==CloseDecision::ConfirmDiscard);
+    assert(RequestClose(true,true,true)==CloseDecision::KeepOpen);
+    assert(!CanSave(true,false)&&CanSave(true,true)&&CanSave(true,false,true));
+    assert(!CanSave(false,true)&&!CanSave(true,true,false,true));
+    assert(!CanReplaceEditor(true)&&!CanReplaceEditor(false,true)&&CanReplaceEditor(false));
+    // A parent close must account for a dirty child, even if the parent itself is clean.
+    assert(RequestClose(true,false||true)==CloseDecision::ConfirmDiscard);
     return 0;
 }
