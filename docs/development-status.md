@@ -68,3 +68,5 @@ The build cited above is a historical verified checkpoint, not the latest branch
 - Clears/Vault rendering and rollover pass: remove domain mutex across entire content rendering, use coherent local frame snapshots; invalidate old Special response at known season advance and prevent stale Special restoration on persistence. Actual relational cache tests extend independent section/account fixture. CI and live verification pending.
 
 - Completion/ownership first pass verified by workflow 45731076808. Frame-snapshot follow-up passed offline and parser sanitizer gates; corrected a Windows-only compiler error in the strike sort capture. Focused local ThreadSanitizer: 30 iterations each of `background_workers` and `callback_lifetime`, no reports. Final Windows build and in-game checks remain required.
+
+- Inventory credential pass: retain the original registry generation and key per refresh, reject obsolete storage and failure commits, and serialize physical view publication with credential mutation. No refresh intervals or public metadata scope changed. Windows and live verification pending.

@@ -155,10 +155,10 @@ std::string Encode(const std::string& s){
         else{out+='%';out+=hex[c>>4];out+=hex[c&15];}}
     return out;
 }
-std::set<std::string> Roster(const Account& a,const std::string& key){
+std::set<std::string> Roster(const std::string& key){
     auto j=Fetch("/v2/characters",key);if(!j.is_array())throw std::runtime_error("Invalid roster");
     std::set<std::string> names;for(const auto& n:j){auto name=n.get<std::string>();if(name.empty()||!names.insert(name).second)throw std::runtime_error("Invalid roster");}
-    StoreRoster(root,a.id,names,Now());return names;
+    return names;
 }
 void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std::string& expected){
     Launch([key,label,expected]{
@@ -248,10 +248,11 @@ bool Fresh(const View& v,const Row& row){
     const auto& s=row.slot;auto it=v.scopes.find({s.account,s.scope,s.character});
     return it!=v.scopes.end()&&it->second.status=="Ready"&&ScopeFresh(s.account,s.scope,s.character,row.captured);
 }
-void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const std::set<std::string>& characterFilter={},bool includeWallet=false){
-    Launch([accounts,onlyScope,automatic,onlyCharacter,characterFilter,includeWallet]{
+void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const std::set<std::string>& characterFilter={},bool includeWallet=false){
+    Launch([accounts,epoch,onlyScope,automatic,onlyCharacter,characterFilter,includeWallet]{
         ApiActivity::ReasonScope reason(automatic?ApiActivity::Reason::Visible:ApiActivity::Reason::Manual);
         const auto previous=Snapshot();
+        if(previous->credentialEpoch!=epoch)throw Background::Cancelled{};
         std::set<uint32_t> ids;std::set<std::string> fetchedGuilds;
         bool currencyMetadataNeeded=false;
         auto lastPublish=std::chrono::steady_clock::time_point{};
@@ -264,13 +265,32 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             }
         };
         for(const auto& a:accounts){
-            Background::Checkpoint();Secret key(Key(a.id));
+            // Account selection and permissions came from the same immutable
+            // registry view at admission. Never attach a later credential to it.
+            LinkedAccount linked;linked.id=a.id;linked.name=a.name;
+            linked.permissions=a.permissions;linked.generation=epoch;
+            const auto checkCurrent=[&]{
+                Background::Checkpoint();
+                if(!Current(linked))throw Background::Cancelled{};
+            };
+            checkCurrent();
+            std::unique_lock<std::mutex> credentialLock(credentialMutex);
+            checkCurrent();
+            Secret key(Key(a.id));credentialLock.unlock();
             if(key.value.empty()){Message("Stored credential unavailable. Replace it in Account Management.");continue;}
+            const auto fetchAccount=[&](const std::string& path){
+                checkCurrent();
+                return Fetch(path,key.value);
+            };
+            const auto commit=[&](const auto& write){
+                if(!CommitIfCurrent(linked,[&]{write();return true;}))
+                    throw Background::Cancelled{};
+            };
             auto scope=[&](const std::string& name,const std::string& character,const std::string& path,bool bags){
                 if(!MatchesStorageView(onlyScope,characterFilter,name,character))return;
                 if(!onlyCharacter.empty()&&character!=onlyCharacter)return;
                 if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
-                Background::Checkpoint();
+                checkCurrent();
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
                 BeginScope(state,(accounts.size()>1?a.name+" / ":"")+name+(character.empty()?"":" / "+character));
                 const bool characterScope=bags||name=="Equipment";
@@ -278,14 +298,22 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     a.permissions.count("inventories")&&(!characterScope||a.permissions.count("characters"))&&
                     (name!="Legendary Armory"||a.permissions.count("unlocks"));
                 if(!permitted){
-                    state.status="Missing permissions";Record(root,state);EndScope(state);publishProgress();return;
+                    state.status="Missing permissions";commit([&]{Record(root,state);});EndScope(state);publishProgress();return;
                 }
                 CharacterActivity::CancelOnShutdown attempts({a.id,character});
+                CharacterActivity::Ticket ticket{};
+                const auto scopeCommit=[&](const auto& write){
+                    try{commit(write);}
+                    catch(const Background::Cancelled&){
+                        if(ActivityScope(name))CharacterActivity::Cancel({a.id,character},name,ticket);
+                        throw;
+                    }
+                };
                 try{
                     if(name=="Equipment"){
-                        const auto links=Linked();auto linked=std::find_if(links.begin(),links.end(),[&](const auto& x){return x.id==a.id;});
-                        if(linked==links.end())throw std::runtime_error("Account changed");
-                        auto physical=RequestPhysicalEquipment(*linked,character,!automatic);
+                        auto physical=RequestPhysicalEquipment(linked,character,!automatic);
+                        checkCurrent();
+                        if(physical.started>0)state.attempted=physical.started;
                         if(!physical.response)throw std::runtime_error(physical.response.error);
                         if(!physical.inventoryCommitted)throw std::runtime_error("Invalid physical equipment projection");
                         auto slots=ParseEquipment(physical.response.data,a.id,character);
@@ -294,8 +322,8 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                         for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
                         EndScope(state);publishProgress();return;
                     }
-                    const auto ticket=ActivityScope(name)?attempts.BeginScope(name):CharacterActivity::Ticket{};
-                    auto j=Fetch(path,key.value);std::vector<Slot> slots;
+                    ticket=ActivityScope(name)?attempts.BeginScope(name):CharacterActivity::Ticket{};
+                    auto j=fetchAccount(path);std::vector<Slot> slots;
                     if(bags){
                         const auto& b=j.at("bags");if(!b.is_array())throw std::runtime_error("Invalid bags");
                         size_t i=0;for(const auto& bag:b){auto prefix=std::to_string(i++)+"/";if(bag.is_null())continue;
@@ -305,37 +333,46 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                     else if(name=="Legendary Armory")slots=ParseArmory(j,a.id);
                     else if(name=="Delivery box")slots=ParseArray(j.at("items"),a.id,name,{},{},false);
                     else slots=ParseArray(j,a.id,name,character,{},name!="Materials");
-                    Background::Checkpoint();state.success=Now();Record(root,state,&slots);
-                    if(ActivityScope(name))CharacterActivity::Success({a.id,character},name,ticket,state.success);
+                    Background::Checkpoint();state.success=Now();
+                    scopeCommit([&]{
+                        Record(root,state,&slots);
+                        if(ActivityScope(name))CharacterActivity::Success({a.id,character},name,ticket,state.success);
+                    });
                     for(const auto& s:slots){ids.insert(s.id);ids.insert(s.upgrades.begin(),s.upgrades.end());ids.insert(s.infusions.begin(),s.infusions.end());}
+                }catch(const Background::Cancelled&){
+                    if(ActivityScope(name))CharacterActivity::Cancel({a.id,character},name,ticket);
+                    throw;
                 }catch(const std::exception& e){
                     Background::Checkpoint();
                     const std::string what=e.what();
                     state.status=what.rfind("HTTP ",0)==0||what=="Invalid key or missing permission"||what=="Transport failed or cancelled"||what=="Rate limited; retry later"?what:"Invalid or incomplete response";
-                    Record(root,state);
+                    scopeCommit([&]{Record(root,state);});
                 }
                 EndScope(state);publishProgress();
             };
             if((onlyScope.empty()||onlyScope=="Wallet"||(includeWallet&&onlyScope=="Items"))&&(!automatic||ScopeDue(*previous,a.id,"Wallet"))){
+                checkCurrent();
                 ScopeState state{a.id,"Wallet","","Ready",Now(),0};
                 BeginScope(state,"Wallet");
                 try{
                     if(!a.permissions.count("wallet"))throw std::runtime_error("Missing wallet permission");
-                    auto rows=ParseWallet(Fetch("/v2/account/wallet",key.value));state.success=Now();
-                    RecordWallet(root,state,&rows);currencyMetadataNeeded=true;
-                }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();state.status=a.permissions.count("wallet")?"Wallet request failed":"Missing permissions";RecordWallet(root,state);}
+                    auto rows=ParseWallet(fetchAccount("/v2/account/wallet"));state.success=Now();
+                    commit([&]{RecordWallet(root,state,&rows);});currencyMetadataNeeded=true;
+                }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();state.status=a.permissions.count("wallet")?"Wallet request failed":"Missing permissions";commit([&]{RecordWallet(root,state);});}
                 EndScope(state);publishProgress();
             }
             if((onlyScope.empty()||onlyScope=="Guild bank")&&(!automatic||ScopeDue(*previous,a.id,"Guild access"))){
+                checkCurrent();
                 SetActiveScope("Guild access");
                 try{
                     if(!a.permissions.count("guilds"))throw std::runtime_error("Missing guilds permission");
-                    auto identity=Fetch("/v2/account",key.value);
+                    auto identity=fetchAccount("/v2/account");
                     if(identity.at("id").get<std::string>()!=a.id)throw std::runtime_error("Account mismatch");
                     std::set<std::string> guilds;
                     for(const auto& raw:identity.at("guild_leader")){auto id=raw.get<std::string>();if(!ValidGuid(id))throw std::runtime_error("Invalid guild ID");guilds.insert(id);}
-                    StoreGuildAccess(root,a.id,guilds,Now());
+                    commit([&]{StoreGuildAccess(root,a.id,guilds,Now());});
                     for(const auto& id:guilds){
+                        checkCurrent();
                         if(fetchedGuilds.count(id))continue;
                         auto old=previous->inventory.guilds.find(id);
                         if(automatic&&old!=previous->inventory.guilds.end()&&!Due("Guild bank",old->second.attempted,old->second.success,Now()))continue;
@@ -345,15 +382,15 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                             auto meta=Fetch("/v2/guild/"+id,{});g.name=meta.at("name").get<std::string>();g.tag=meta.value("tag",std::string{});
                         }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();}
                         try{
-                            auto stock=ParseGuild(Fetch("/v2/guild/"+id+"/stash",key.value),id);
-                            g.status="Ready";g.success=Now();RecordGuild(root,g,&stock);
+                            auto stock=ParseGuild(fetchAccount("/v2/guild/"+id+"/stash"),id);
+                            g.status="Ready";g.success=Now();commit([&]{RecordGuild(root,g,&stock);});
                             for(const auto& s:stock.slots)ids.insert(s.id);
                             fetchedGuilds.insert(id);
-                        }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();g.status="Guild stash unavailable";RecordGuild(root,g);}
+                        }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();g.status="Guild stash unavailable";commit([&]{RecordGuild(root,g);});}
                         publishProgress(true);
                     }
                 }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();
-                    ScopeState state{a.id,"Guild access","",a.permissions.count("guilds")?"Guild access request failed":"Missing permissions",Now(),0};Record(root,state);
+                    ScopeState state{a.id,"Guild access","",a.permissions.count("guilds")?"Guild access request failed":"Missing permissions",Now(),0};commit([&]{Record(root,state);});
                 }
                 SetActiveScope("");publishProgress(true);
             }
@@ -365,7 +402,7 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
             if((onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment"||onlyScope=="Roster")&&(!automatic||AutoScope("Roster"))){
                 if(!a.permissions.count("characters")){
                     if(automatic&&!ScopeDue(*previous,a.id,"Roster"))continue;
-                    ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};BeginScope(failed,"Roster");Record(root,failed);EndScope(failed);publishProgress(true);
+                    ScopeState failed{a.id,"Roster",{},"Missing permissions",Now(),0};BeginScope(failed,"Roster");commit([&]{Record(root,failed);});EndScope(failed);publishProgress(true);
                 }else try{
                     std::set<std::string> names;
                     auto cached=previous->inventory.rosters.find(a.id);
@@ -374,13 +411,13 @@ void Refresh(const std::vector<Account>& accounts,const std::string& onlyScope,b
                         if(cached!=previous->inventory.rosters.end())names=cached->second;
                         // No cached roster and cooldown still active: leave empty,
                         // rather than retrying the roster from another due scope.
-                    }else{ScopeState state{a.id,"Roster","","Ready",Now(),0};BeginScope(state,"Roster");names=Roster(a,key.value);state.success=Now();Record(root,state);EndScope(state);publishProgress(true);}
+                    }else{ScopeState state{a.id,"Roster","","Ready",Now(),0};BeginScope(state,"Roster");checkCurrent();names=Roster(key.value);state.success=Now();commit([&]{StoreRoster(root,a.id,names,state.success);Record(root,state);});EndScope(state);publishProgress(true);}
                     for(const auto& ch:names){
                         const auto path="/v2/characters/"+Encode(ch);
                         scope("Bags",ch,path+"/inventory",true);
                         scope("Equipment",ch,path+"/equipment?v=2024-04-01T00:00:00.000Z",false);
                     }
-                }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};Record(root,failed);EndScope(failed);publishProgress(true);}
+                }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();ScopeState failed{a.id,"Roster",{},"Roster retrieval failed",Now(),0};commit([&]{Record(root,failed);});EndScope(failed);publishProgress(true);}
             }
         }
         // Resolve names in bounded batches. Missing metadata cannot discard verified slots.
@@ -493,8 +530,10 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
             Record(root,state,&slots);
             CharacterActivity::Success(k,"Equipment",ticket,result.success);
             result.inventoryCommitted=true;
+            // Registry mutation and the corresponding view publication use the
+            // same lock order (credential -> publish -> cache/view).
+            Publish("",false);
         }
-        Publish("",false);
     }catch(...){
         // Preserve character consumer's raw response; Inventory validates it separately.
     }
@@ -507,7 +546,7 @@ bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names){
         std::set<std::string> parsed;
         for(const auto& n:r.data){auto s=n.get<std::string>();if(s.empty()||!parsed.insert(s).second)return false;}
         std::lock_guard<std::mutex> lock(credentialMutex);
-        if(!Current(a))return false;
+        if(Background::Workers().Stopping()||!Current(a))return false;
         const auto stamp=Now();StoreRoster(root,a.id,parsed,stamp);
         Record(root,{a.id,"Roster",{},"Ready",stamp,stamp});
         Publish("",false);names=std::move(parsed);return true;
@@ -679,7 +718,7 @@ static void PollDemand(const std::string& selectedAccount,const std::string& req
     for(const auto& a:accounts){
         auto run=[&](const std::string& scope,const std::string& ch={}){
             if(!ScopeDue(*v,a.id,scope,ch))return false;
-            last=now;Refresh({a},scope=="Guild access"?"Guild bank":scope,true,ch);return true;
+            last=now;Refresh({a},v->credentialEpoch,scope=="Guild access"?"Guild bank":scope,true,ch);return true;
         };
         if(requested=="Wallet"){if(run("Wallet"))return;continue;}
         if(requested=="Guild bank"){if(run("Guild access"))return;continue;}
@@ -1148,7 +1187,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     if(accounts.empty())detail="Link or select an account.";
     const bool incompatible=(characterFiltered&&scope!="Items"&&scope!="Bags"&&scope!="Equipment")||(itemView&&scope=="Wallet"&&!includeWallet);
     if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty()||incompatible,nullptr,idleLabel,true))
-        Refresh(accounts,scope,false,{},characterFiltered?characters:noCharacters,includeWallet);
+        Refresh(accounts,v->credentialEpoch,scope,false,{},characterFiltered?characters:noCharacters,includeWallet);
 }
 
 }

@@ -90,5 +90,21 @@ int case_character_request(int,char**) {
     persisted[captured.first]=captured.second;
     assert(persisted.at("A.B")==std::set<int>({42,43}));
     assert(!persisted.count("A_B"));
+    // The same gate covers successful inventory data AND failed attempts.
+    // An obsolete response cannot advance retry timestamps or replace rows.
+    const auto inventoryEpoch=epoch;
+    int rows=42,attempt=10;
+    {std::lock_guard<std::mutex> lock(credential);++epoch;}
+    assert(!AlterEgo::AccountCommit::Run(credential,[&]{return inventoryEpoch==epoch;},[&]{
+        rows=99;attempt=20;return true;
+    }));
+    assert(!AlterEgo::AccountCommit::Run(credential,[&]{return inventoryEpoch==epoch;},[&]{
+        attempt=21;return true;
+    }));
+    assert(rows==42&&attempt==10);
+    assert(AlterEgo::AccountCommit::Run(credential,[&]{return epoch==inventoryEpoch+1;},[&]{
+        rows=7;attempt=22;return true;
+    }));
+    assert(rows==7&&attempt==22);
     return 0;
 }
