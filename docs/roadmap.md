@@ -240,3 +240,5 @@ Verification (2026-11-26 UTC): implementation `75203d0f7fa9bc883692133dafdb6967e
 - [x] Cancellation-state hardening: public catalog and Wiki retry stamps finalize only after non-cancelled outcomes. CI pending. Local admission vs actual HTTP send, other account-specific retry/transport and host lifecycle audit remain open.
 
 - [x] Metadata broker cooldown now requires an actual ArenaNet send; cancelled HTTP diagnostics are separate from failures; relay/Clears parsers bounded. CI pending. Strict transport cancellation remains open.
+
+- [x] Native Inventory public item enrichment now shares the direct/Commerce item watermark and durable publication gate; binding flags and currencies have independent row watermarks. Public Catalog rebuild clears those derived definitions, not account balances. CI pending.

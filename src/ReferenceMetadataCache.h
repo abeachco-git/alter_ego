@@ -327,20 +327,26 @@ inline void StoreReferenceSnapshot(Database::Connection& db,ReferenceDataset d,
 // Request-stamped row merges retain unrelated historical IDs and child data.
 // The caller holds the publication gate through commit and live adoption.
 inline std::mutex& ReferencePublicationMutex(){static std::mutex m;return m;}
+inline constexpr const char* RecordWatermarkSql="INSERT INTO reference_record_watermarks VALUES(?,?,?) ON CONFLICT(dataset,id) DO UPDATE SET request_at=excluded.request_at WHERE excluded.request_at>reference_record_watermarks.request_at RETURNING id";
+inline bool ClaimRecordWatermark(Database::Statement& q,const std::string& dataset,uint32_t id,int64_t stamp){
+    if(stamp<=0)throw std::runtime_error("Invalid request watermark");
+    q.Bind(1,dataset);q.Bind(2,id);q.Bind(3,stamp);
+    const bool accepted=q.Step();
+    if(accepted&&q.Step())throw std::runtime_error("Duplicate watermark result");
+    q.Reset();return accepted;
+}
 inline ReferenceJson StoreReferenceObservations(Database::Connection& db,ReferenceDataset d,
                                                const ReferenceJson& rows,int64_t stamp){
     if(stamp<=0||!rows.is_array()||rows.empty())throw std::runtime_error("Invalid reference observations");
     const auto dataset=std::string(ReferenceName(d));
-    auto watermark=db.Prepare("INSERT INTO reference_record_watermarks VALUES(?,?,?) ON CONFLICT(dataset,id) DO UPDATE SET request_at=excluded.request_at WHERE excluded.request_at>reference_record_watermarks.request_at RETURNING id");
+    auto watermark=db.Prepare(RecordWatermarkSql);
     auto accepted=ReferenceJson::array();std::set<uint32_t> seen;
     for(const auto& row:rows){
         const auto id=ReferenceId(row.at("id"));
         if(!seen.insert(id).second||row.at("name").get<std::string>().empty()||
            (d==ReferenceDataset::Skills&&(!row.contains("professions")||!row.at("professions").is_array())))
             throw std::runtime_error("Invalid reference observation");
-        watermark.Bind(1,dataset);watermark.Bind(2,id);watermark.Bind(3,stamp);
-        if(watermark.Step()){accepted.push_back(row);if(watermark.Step())throw std::runtime_error("Duplicate watermark result");}
-        watermark.Reset();
+        if(ClaimRecordWatermark(watermark,dataset,id,stamp))accepted.push_back(row);
     }
     if(!accepted.empty())WriteReferenceRows(db,d,accepted,false);
     MarkReferenceSnapshot(db,d,stamp);

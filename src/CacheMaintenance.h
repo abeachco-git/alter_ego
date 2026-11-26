@@ -171,7 +171,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
                 "DELETE FROM reference_freshness WHERE dataset IN ('public_upgrades','public_upgrades_attempt','public_vault','public_vault_attempt','public_pets','public_pets_attempt','public_legends','public_legends_attempt','public_stats','public_stats_attempt','public_dyes','public_dyes_attempt','public_item_discovery','public_item_discovery_attempt','public_skins','public_skins_attempt');"
                 "DELETE FROM commerce_skin_price_choices; DELETE FROM commerce_item_prices;"
                 "DELETE FROM commerce_skin_items; DELETE FROM commerce_item_name_ids; DELETE FROM commerce_vendor_prices;"
-                "DELETE FROM item_name_aliases; DELETE FROM reference_items; DELETE FROM skins;"
+                "DELETE FROM item_name_aliases; DELETE FROM reference_items; DELETE FROM skins; DELETE FROM native_item_flags; DELETE FROM native_currencies;"
                 "DELETE FROM reference_specializations; DELETE FROM reference_traits; DELETE FROM reference_skills;"
                 "DELETE FROM reference_itemstats; DELETE FROM reference_dyes; DELETE FROM reference_metadata_snapshots; DELETE FROM reference_record_watermarks;"
                 "DELETE FROM reference_freshness WHERE dataset IN ('spec_cache','trait_cache','skill_cache','itemstat_cache','dye_cache',"

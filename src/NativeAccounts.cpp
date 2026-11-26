@@ -484,11 +484,30 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
         for(const auto& [id,meta]:cached.metadata)if(meta.complete&&cached.flags.count(id))ids.erase(id);
         
         if(currencyMetadataNeeded&&std::any_of(cached.wallet.begin(),cached.wallet.end(),[](const WalletRow& w){return w.name.empty()||!w.iconKnown;}))
-            try{StoreCurrencies(root,Fetch("/v2/currencies?ids=all",{}));}catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();} 
-        std::string batch;unsigned count=0;
+            try{
+                const auto stamp=Cache::ReferenceSnapshotTime();
+                auto definitions=Fetch("/v2/currencies?ids=all",{});
+                Background::Checkpoint();StoreCurrencies(root,definitions,stamp);
+            }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();}
+        std::string batch;unsigned count=0;std::set<uint32_t> expected;
         unsigned metadataDone=0;const auto metadataTotal=ids.size();
-        auto flush=[&]{if(batch.empty())return;SetActiveScope("Item metadata "+std::to_string(metadataDone)+"/"+std::to_string(metadataTotal));try{StoreNames(root,Fetch("/v2/items?ids="+batch,{}));}catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();}metadataDone+=count;batch.clear();count=0;publishProgress();};
-        for(auto id:ids){Background::Checkpoint();if(count==100)flush();if(count++)batch+=",";batch+=std::to_string(id);}flush();
+        auto flush=[&]{
+            if(batch.empty())return;
+            SetActiveScope("Item metadata "+std::to_string(metadataDone)+"/"+std::to_string(metadataTotal));
+            try{
+                const auto stamp=Cache::ReferenceSnapshotTime();
+                auto rows=Fetch("/v2/items?ids="+batch,{});
+                if(!rows.is_array()||rows.empty())throw std::runtime_error("Invalid item response");
+                std::set<uint32_t> seen;
+                for(const auto& row:rows){const auto id=ItemId(row.at("id"));
+                    if(!expected.count(id)||!seen.insert(id).second)throw std::runtime_error("Unexpected item metadata ID");}
+                std::lock_guard<std::mutex> publication(Cache::ItemPublicationMutex());
+                Background::Checkpoint();
+                auto accepted=StoreNames(root,rows,stamp);GW2API::AdoptPublicItems(accepted);
+            }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();}
+            metadataDone+=count;batch.clear();expected.clear();count=0;publishProgress();
+        };
+        for(auto id:ids){Background::Checkpoint();if(count==100)flush();if(count++)batch+=",";batch+=std::to_string(id);expected.insert(id);}flush();
         Publish("Refresh finished. Check individual storage status for failures or stale data.");
     });
 }

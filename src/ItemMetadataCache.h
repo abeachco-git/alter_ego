@@ -1,5 +1,6 @@
 #pragma once
 #include "ReferenceMetadataCache.h"
+#include "NativeInventoryCore.h"
 
 namespace AlterEgo::Cache {
 enum class ItemDataset { Details, Aliases };
@@ -43,6 +44,8 @@ ON CONFLICT(id) DO UPDATE SET
 WHERE reference_items.complete=0 OR excluded.verified_at>reference_items.verified_at
 RETURNING id
 )SQL");
+        auto flagWatermark=db.Prepare(RecordWatermarkSql);
+        auto flags=db.Prepare("INSERT INTO native_item_flags VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET account_bound=excluded.account_bound,soulbound=excluded.soulbound,bind_on_use=excluded.bind_on_use");
         std::set<uint32_t> seen;
         for(const auto& row:data) {
             const auto id=ReferenceId(row.at("id"));
@@ -62,6 +65,15 @@ RETURNING id
                 if(q.Step())throw std::runtime_error("Unexpected duplicate item result");
             }
             q.Reset();
+            // Binding metadata has its own watermark: an older response may
+            // fill previously absent flags but cannot regress verified flags.
+            if(verified>0&&row.contains("flags")){
+                const auto parsed=NativeInventory::ParseFlags(row.at("flags"));
+                if(ClaimRecordWatermark(flagWatermark,"native_item_flags",id,verified)){
+                    flags.Bind(1,id);flags.Bind(2,int(parsed.accountBound));flags.Bind(3,int(parsed.soulbound));
+                    flags.Bind(4,int(parsed.bindOnUse));flags.Execute();flags.Reset();
+                }
+            }
         }
     } else {
         if(!data.is_object())throw std::runtime_error("Invalid item name snapshot");

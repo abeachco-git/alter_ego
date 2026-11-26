@@ -24,6 +24,18 @@ int case_native_inventory(int,char**){
     Record(root,{"account-a","Bank","","Ready",100,100},&rows);
     StoreNames(root,Json::array({Json{{"id",10},{"name","Item"},{"icon","https://example.test/icon.png"},{"description","Test description"},{"details",{{"type","Focus"}}},{"flags",Json::array()}}}));
     auto presentation=Read(root).metadata.at(10);assert(presentation.complete&&presentation.icon=="https://example.test/icon.png"&&presentation.description=="Test description"&&presentation.details.at("type")=="Focus");
+    // The Native Inventory producer shares item row ownership with direct and Commerce writers.
+    const auto newer=Cache::ReferenceSnapshotTime(),older=newer-1;
+    auto observations=Json::array({Json{{"id",10},{"name","New item"},{"flags",Json::array({"AccountBound"})}}});
+    assert(StoreNames(root,observations,newer).size()==1);
+    auto delayed=observations;delayed[0]["name"]="Old item";delayed[0]["flags"]=Json::array();
+    auto accepted=Json::array();
+    assert(Cache::WriteItemObservations(root,delayed,older,accepted)&&accepted.empty());
+    auto itemRows=Cache::ReadItems(root,Cache::ItemDataset::Details);
+    assert(itemRows&&itemRows->at(0).at("name")=="New item"&&Read(root).flags.at(10).accountBound);
+    auto latest=delayed;latest[0]["name"]="Latest item";
+    assert(Cache::WriteItemObservations(root,latest,Cache::ReferenceSnapshotTime(),accepted)&&accepted.size()==1);
+    assert(!Read(root).flags.at(10).accountBound);
     auto other=ParseArray(Json::parse(R"([{"id":10,"count":3}])"),"account-b","Bank");
     Record(root,{"account-b","Bank","","Ready",100,100},&other);
     Record(root,{"account-a","Bank","","HTTP 503",101,0});
@@ -82,14 +94,16 @@ int case_native_inventory(int,char**){
     auto wallet=ParseWallet(Json::parse(R"([{"id":1,"value":123456},{"id":2,"value":0}])"));
     RecordWallet(root,{"account-a","Wallet","","Ready",200,200},&wallet);
     RecordWallet(root,{"account-a","Wallet","","Failed",201,0});
-    StoreCurrencies(root,Json::parse(R"([{"id":1,"name":"Coin","description":"","order":1,"icon":"https://render.guildwars2.com/file/test/1.png"}])"));
+    const auto currencyStamp=Cache::ReferenceSnapshotTime();
+    StoreCurrencies(root,Json::parse(R"([{"id":1,"name":"Coin","description":"","order":1,"icon":"https://render.guildwars2.com/file/test/1.png"}])"),currencyStamp);
+    StoreCurrencies(root,Json::parse(R"([{"id":1,"name":"Stale coin","order":2,"icon":"old"}])"),currencyStamp-1);
     auto g=ParseGuild(Json::parse(R"([{"upgrade_id":1,"size":2,"coins":500,"inventory":[{"id":10,"count":4},null]}])"),"guild-a");
     GuildRow gr;gr.id="guild-a";gr.name="Guild";gr.status="Ready";gr.attempted=200;gr.success=200;
     RecordGuild(root,gr,&g);StoreGuildAccess(root,"account-a",{"guild-a"},200);StoreGuildAccess(root,"account-b",{"guild-a"},200);
     v=Read(root);assert(v.guilds.size()==1&&v.guilds.at("guild-a").rows.size()==1&&v.guilds.at("guild-a").coins==500);
     assert(v.wallet.size()==2&&v.wallet.front().value>=0);
     for(const auto& row:v.wallet){
-        if(row.id==1)assert(row.iconKnown&&row.icon=="https://render.guildwars2.com/file/test/1.png");
+        if(row.id==1)assert(row.name=="Coin"&&row.iconKnown&&row.icon=="https://render.guildwars2.com/file/test/1.png");
         if(row.id==2)assert(!row.iconKnown&&row.icon.empty());
     }
     assert(!UsableLoose(g.slots.front(),"account-a","B",{},true));

@@ -265,3 +265,5 @@ Reference observation regression covers delayed disjoint/same-ID batches, equal 
 Cancellation finalizer regression verifies finish-once, no persistence on stop, ordinary failure during unwinding, and explicit dismissal after success. Offline/Windows CI pending; no live testing.
 
 API diagnostics regression distinguishes cancelled vs failed/active counts; metadata transport carries an actual-send marker. Offline/Windows CI pending.
+
+Native Inventory regression covers native vs delayed direct item observations, flag freshness across producers, and stale currency definition rejection. Offline/Windows verification pending.

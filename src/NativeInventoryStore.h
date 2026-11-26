@@ -1,5 +1,5 @@
 #pragma once
-#include "CacheDatabase.h"
+#include "ItemMetadataCache.h"
 #include "NativeInventoryCore.h"
 #include <map>
 #include <tuple>
@@ -98,20 +98,14 @@ inline bool StoreRoster(const std::string& root,const std::string& account,const
     status.Bind(1,account);status.Bind(2,attempted);status.Bind(3,stamp);status.Execute();
     tx.Commit();return true;
 }
-inline void StoreNames(const std::string& root,const Json& rows){
-    if(!rows.is_array())return;
-    std::lock_guard<std::mutex> lock(Cache::Mutex());
-    const auto path=Storage::Paths(root).Cache();
-    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
-    Cache::Initialize(db);Database::Transaction tx(db);
-    auto flags=db.Prepare("INSERT INTO native_item_flags VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET account_bound=excluded.account_bound,soulbound=excluded.soulbound,bind_on_use=excluded.bind_on_use");
-    auto q=db.Prepare("INSERT INTO reference_items(id,name,rarity,type,chat_link,icon,description,default_skin,details,complete) VALUES(?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET name=excluded.name,rarity=excluded.rarity,type=excluded.type,chat_link=excluded.chat_link,icon=excluded.icon,description=excluded.description,default_skin=excluded.default_skin,details=excluded.details,complete=1 WHERE reference_items.complete=0");
-    for(const auto& row:rows){
-        q.Bind(1,ItemId(row.at("id")));q.Bind(2,row.at("name").get<std::string>());q.Bind(3,row.value("rarity",std::string{}));
-        q.Bind(4,row.value("type",std::string{}));q.Bind(5,row.value("chat_link",std::string{}));q.Bind(6,row.value("icon",std::string{}));q.Bind(7,row.value("description",std::string{}));q.Bind(8,static_cast<int64_t>(row.value("default_skin",0u)));q.Bind(9,row.value("details",Json::object()).dump());q.Execute();q.Reset();
-        if(row.contains("flags")){auto f=ParseFlags(row.at("flags"));flags.Bind(1,ItemId(row.at("id")));flags.Bind(2,int(f.accountBound));flags.Bind(3,int(f.soulbound));flags.Bind(4,int(f.bindOnUse));flags.Execute();flags.Reset();}
-    }
-    tx.Commit();
+// Native enrichment uses the same item-detail transaction and watermark as
+// direct item lookup and Commerce; caller holds ItemPublicationMutex through adoption.
+inline Json StoreNames(const std::string& root,const Json& rows,int64_t stamp=Cache::ReferenceSnapshotTime()){
+    if(!rows.is_array()||rows.empty())throw std::runtime_error("Invalid item metadata");
+    for(const auto& row:rows)if(row.at("name").get<std::string>().empty())throw std::runtime_error("Missing item name");
+    auto accepted=Json::array();
+    if(!Cache::WriteItemObservations(root,rows,stamp,accepted))throw std::runtime_error("Item metadata persistence failed");
+    return accepted;
 }
 inline void RecordWallet(const std::string& root,const ScopeState& state,const std::vector<CurrencyBalance>* rows=nullptr){
     if(state.scope!="Wallet")throw std::runtime_error("Wrong wallet scope");
@@ -128,12 +122,19 @@ inline void RecordWallet(const std::string& root,const ScopeState& state,const s
         for(auto& r:*rows){put.Bind(1,state.account);put.Bind(2,r.id);put.Bind(3,r.value);put.Execute();put.Reset();}
     }tx.Commit();
 }
-inline void StoreCurrencies(const std::string& root,const Json& j){
-    if(!j.is_array())throw std::runtime_error("Invalid currency definitions");
+inline void StoreCurrencies(const std::string& root,const Json& j,int64_t stamp=Cache::ReferenceSnapshotTime()){
+    if(!j.is_array()||j.empty()||stamp<=0)throw std::runtime_error("Invalid currency definitions");
     std::lock_guard<std::mutex> lock(Cache::Mutex());Database::Connection db(Storage::Paths(root).Cache().u8string(),Database::Connection::OpenMode::Existing);
     Cache::Initialize(db);Database::Transaction tx(db);
     auto q=db.Prepare("INSERT INTO native_currencies(id,name,description,sort_order,icon,icon_known) VALUES(?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,sort_order=excluded.sort_order,icon=CASE WHEN excluded.icon<>'' THEN excluded.icon ELSE native_currencies.icon END,icon_known=1");
-    for(const auto& r:j){q.Bind(1,ItemId(r.at("id")));q.Bind(2,r.at("name").get<std::string>());q.Bind(3,r.value("description",std::string{}));q.Bind(4,r.value("order",0));q.Bind(5,r.value("icon",std::string{}));q.Execute();q.Reset();}tx.Commit();
+    auto watermark=db.Prepare(Cache::RecordWatermarkSql);std::set<uint32_t> seen;
+    for(const auto& r:j){
+        const auto id=ItemId(r.at("id"));const auto name=r.at("name").get<std::string>();
+        if(name.empty()||!seen.insert(id).second)throw std::runtime_error("Invalid currency definition");
+        if(!Cache::ClaimRecordWatermark(watermark,"native_currencies",id,stamp))continue;
+        q.Bind(1,id);q.Bind(2,name);q.Bind(3,r.value("description",std::string{}));
+        q.Bind(4,Cache::ReferenceInteger(r,"order"));q.Bind(5,r.value("icon",std::string{}));q.Execute();q.Reset();
+    }tx.Commit();
 }
 inline void StoreGuildAccess(const std::string& root,const std::string& account,const std::set<std::string>& ids,int64_t stamp){
     std::lock_guard<std::mutex> lock(Cache::Mutex());auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
