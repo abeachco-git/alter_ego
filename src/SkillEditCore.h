@@ -1,6 +1,15 @@
 #pragma once
 #include <cstdint>
 namespace AlterEgo::SkillEdit {
+// Only the other slot of the same environment participates in duplicate
+// validation. The caller never mirrors or mutates the other pair.
+inline bool PairChoiceAllowed(uint32_t other,uint32_t next) {
+    return !next||other!=next;
+}
+template<class Value> bool SetPairChoice(Value& current,uint32_t other,uint32_t next) {
+    if(!PairChoiceAllowed(other,next)||current==next)return false;
+    current=next;return true;
+}
 template<class Utilities> bool SetUtility(Utilities& u,int index,uint32_t next) {
     if(index<0||index>=3)return false;
     const auto previous=u[index];

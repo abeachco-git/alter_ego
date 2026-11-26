@@ -17,5 +17,10 @@ int case_skill_edit_core(int,char**) {
     assert(u==nlohmann::json({4,3,2,99}));
     assert(!SetUtility(u,0,4));
     assert(SetUtility(u,1,0)&&u==nlohmann::json({4,0,2,99}));
+    uint32_t pets[4]={1,2,3,4};
+    assert(!SetPairChoice(pets[0],pets[1],2));
+    assert(SetPairChoice(pets[0],pets[1],3));
+    assert(pets[2]==3&&pets[3]==4);
+    assert(SetPairChoice(pets[2],pets[3],0)&&pets[0]==3);
     return 0;
 }

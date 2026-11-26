@@ -307,32 +307,43 @@ static void ComponentNativeSpecializations(ComponentJson& data,
     ImGui::TreePop();
 }
 
-static void ComponentNativeIntegerArray(ComponentJson& data, const char* key,
-                                        const char* label, size_t length) {
-    if (!ImGui::TreeNode(key, "%s", label)) return;
-    if (!data.contains(key)) {
-        if (RenderActionButton((std::string("Add ") + label + "##array").c_str()))
-            data[key] = ComponentJson::array();
-        ImGui::TreePop();
-        return;
+static void ComponentNativeProfessionPair(ComponentJson& data,const char* key,
+                                           const char* label,bool legend,bool eligible) {
+    if(!eligible&&!data.contains(key))return;
+    if(!ImGui::TreeNode(key,"%s",label))return;
+    if(data.contains(key)&&!data[key].is_array()){
+        ImGui::TextDisabled("Unrecognized array format; preserved.");ImGui::TreePop();return;
     }
-    if (!data[key].is_array()) {
-        ImGui::TextDisabled("Unrecognized array format; preserved.");
-        ImGui::TreePop();
-        return;
-    }
-    auto& values = data[key];
-    for (size_t i = 0; i < length; ++i) {
-        ImGui::PushID(static_cast<int>(i));
-        const ComponentJson original = i < values.size()
-            ? values[i] : ComponentJson(0);
-        ComponentJson one = {{"value", original}};
-        ComponentNativeNumber(one, "value", ("Entry " + std::to_string(i+1)).c_str());
-        if (one["value"] != original) {
-            while (values.size() <= i) values.push_back(0);
-            values[i] = one["value"];
+    ComponentJson values=data.contains(key)?data[key]:ComponentJson::array();
+    auto get=[&](size_t i)->uint32_t{
+        if(i>=values.size()||!values[i].is_number_integer())return 0;
+        auto n=values[i].get<int64_t>();return n>=0&&n<=UINT32_MAX?static_cast<uint32_t>(n):0;
+    };
+    auto set=[&](size_t i,uint32_t value){
+        while(values.size()<=i)values.push_back(0);
+        values[i]=value;data[key]=values;
+    };
+    for(int env=0;env<2;++env){
+        ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
+        for(int i=0;i<2;++i){
+            size_t slot=env*2+i,other=env*2+1-i;
+            if(i)ImGui::SameLine();ImGui::PushID(static_cast<int>(slot));
+            uint32_t current=get(slot),next=current;
+            if(eligible&&RenderProfessionPairChoice(legend,current,get(other),next)&&next!=current)
+                set(slot,next);
+            ImGui::PopID();
         }
-        ImGui::PopID();
+    }
+    if(ImGui::TreeNode("##advanced_ids","Advanced exact IDs")){
+        for(size_t i=0;i<4;++i){
+            ImGui::PushID(static_cast<int>(i));
+            ComponentJson original=i<values.size()?values[i]:ComponentJson(0);
+            ComponentJson one={{"value",original}};
+            ComponentNativeNumber(one,"value",("Entry "+std::to_string(i+1)).c_str(),legend?255:INT_MAX);
+            if(one["value"]!=original){while(values.size()<=i)values.push_back(0);values[i]=one["value"];data[key]=values;}
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
     }
     ImGui::TreePop();
 }
@@ -865,8 +876,8 @@ static void RenderComponentNativeEditor(const std::string& kind,
             ComponentNativeText(data, "profession", "Profession");
         }
         ComponentNativeSpecializations(data, data.value("profession", std::string()));
-        ComponentNativeIntegerArray(data, "pets", "Ranger pets (terrestrial, aquatic)", 4);
-        ComponentNativeIntegerArray(data, "legend_codes", "Revenant legends", 4);
+        ComponentNativeProfessionPair(data,"pets","Ranger pets",false,profession=="Ranger");
+        ComponentNativeProfessionPair(data,"legend_codes","Revenant legends",true,profession=="Revenant");
         if (ImGui::TreeNode("##weapon_proficiency", "Build template weapon IDs")) {
             if (data.contains("weapons") && !data["weapons"].is_array()) {
                 ImGui::TextDisabled("Unrecognized weapon definition; preserved.");

@@ -888,8 +888,6 @@ static uint64_t g_DiscardNewBuildRevision=0;
 static bool g_EditIsNewBuild = false;      // true while editing a freshly-created build (cancel discards it)
 static std::string g_DiscardNewBuildId;    // deferred: id of a new build to delete after the render pass
 static int g_SpecPickerSlot = -1;          // 0..2 while spec picker open, else -1
-static int g_LegendPickerSlot = -1;        // 0..1 (Revenant) while open, else -1
-static int g_PetPickerSlot = -1;           // 0..1 (Ranger) while open, else -1
 static std::set<std::string> g_LibFilterModes; // empty = All; selected modes are ORed
 static char g_LibSearchBuf[128] = "";
 static char g_LibImportBuf[4096] = "";
@@ -7186,117 +7184,58 @@ static bool RenderSkillPickerPopup(const char* popup,const std::string& professi
     return selected;
 }
 
-// Revenant legend picker (active legend slot 0/1). Prevents the same legend
-// in both slots; mirrors the choice to the aquatic legend slot.
-static void RenderLegendPickerDialog() {
-    if (g_LegendPickerSlot < 0) return;
-    const char* POPUP = "Choose Legend##legendpick";
-    if (!ImGui::IsPopupOpen(POPUP)) ImGui::OpenPopup(POPUP);
-    ImVec2 dispSize = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(dispSize.x * 0.5f, dispSize.y * 0.5f),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    bool open = true;
-    if (ImGui::BeginPopupModal(POPUP, &open, ImGuiWindowFlags_AlwaysAutoResize)) {
-        const int slot = g_LegendPickerSlot; // 0 or 1
-        const int other = slot == 0 ? 1 : 0;
+// Both native editors use this field-scoped selector. The catalog does not
+// record environment eligibility, so never invent an aquatic restriction.
+static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t other,uint32_t& next) {
+    using AlterEgo::SkillEdit::PairChoiceAllowed;
+    const auto pets=legend?std::vector<AlterEgo::GW2API::PetInfo>{}:AlterEgo::GW2API::GetPets();
+    std::string name;
+    if(legend)name=current<=255?LegendNameForCode(static_cast<uint8_t>(current)):
+        "Unknown legend ("+std::to_string(current)+")";
+    else {
+        name=current?"Unknown pet ("+std::to_string(current)+")":"Choose pet";
+        for(const auto& p:pets)if(p.id==current){name=p.name;break;}
+    }
+    if(RenderChipButton(name.c_str(),current!=0))ImGui::OpenPopup("##pair_choice");
+    bool changed=false;
+    if(ImGui::BeginPopupContextItem("##pair_context")){
+        if(current)CopyNameMenuItem(name);
+        if(ImGui::MenuItem("Clear",nullptr,false,current!=0)){next=0;changed=true;}
+        ImGui::EndPopup();
+    }
+    if(!ImGui::BeginPopup("##pair_choice"))return changed;
+    ImGui::TextDisabled("Environment eligibility not verified by catalog.");
+    if(ImGui::Selectable("(None)",current==0)){next=0;changed=true;ImGui::CloseCurrentPopup();}
+    auto row=[&](uint32_t id,const std::string& label,uint32_t iconId,
+                 const std::string& url,bool disabled,bool selected){
+        ImGui::PushID(static_cast<int>(id));
+        auto* icon=iconId?AlterEgo::IconManager::GetIcon(iconId):nullptr;
+        constexpr float size=30.0f;
+        if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(size,size),ImVec2(0,0),ImVec2(1,1),
+            disabled?ImVec4(1,1,1,0.4f):ImVec4(1,1,1,1));
+        else {ImGui::Dummy(ImVec2(size,size));if(iconId&&!url.empty())AlterEgo::IconManager::RequestIcon(iconId,url);}
+        ImGui::SameLine();
+        if(disabled)ImGui::TextDisabled("%s",label.c_str());
+        else if(ImGui::Selectable(label.c_str(),selected)){
+            next=id;changed=true;ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopID();
+    };
+    if(legend){
         AlterEgo::GW2API::FetchLegendsAsync();
-        for (const auto& l : LegendOptions()) {
-            bool usedOther = (AlterEgo::PublicCatalog::CanonicalLegendCode(g_EditDraft.legend_codes[other]) == l.code);
-            ImGui::PushID((int)l.code);
-
-            // Legend emblem icon (the swap skill's icon).
-            const float legIconSz = 26.0f;
-            uint32_t swap = l.swap;
-            uint32_t ikey = swap + 5000000u;
-            Texture_t* itex = swap ? AlterEgo::IconManager::GetIcon(ikey) : nullptr;
-            if (itex && itex->Resource) {
-                ImGui::Image(itex->Resource, ImVec2(legIconSz, legIconSz),
-                             ImVec2(0, 0), ImVec2(1, 1),
-                             usedOther ? ImVec4(1, 1, 1, 0.4f) : ImVec4(1, 1, 1, 1));
-            } else {
-                if (swap && !l.icon.empty()) AlterEgo::IconManager::RequestIcon(ikey, l.icon);
-                ImGui::Dummy(ImVec2(legIconSz, legIconSz));
-            }
-            ImGui::SameLine(0, 8);
-            ImGui::AlignTextToFramePadding();
-
-            bool clicked = false;
-            if (usedOther) ImGui::TextDisabled("%s", l.name.c_str());
-            else clicked = ImGui::Selectable(l.name.c_str());
-            ImGui::PopID();
-
-            if (clicked) {
-                g_EditDraft.legend_codes[slot] = l.code;
-                g_EditDraft.legend_codes[slot + 2] = l.code; // mirror to aquatic
-                MarkEditDirty();
-                g_LegendPickerSlot = -1;
-                ImGui::CloseCurrentPopup();
-            }
-        }
-        ImGui::Separator();
-        if (ImGui::Selectable("(None)")) {
-            g_EditDraft.legend_codes[slot] = 0;
-            g_EditDraft.legend_codes[slot + 2] = 0;
-            MarkEditDirty();
-            g_LegendPickerSlot = -1;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
+        auto canonical=[](uint32_t value){return value<=255?static_cast<uint32_t>(
+            AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(value))):value;};
+        for(const auto& l:LegendOptions())row(l.code,l.name,l.swap?l.swap+5000000u:0,l.icon,
+            !PairChoiceAllowed(canonical(other),l.code),canonical(current)==l.code);
+    }else if(pets.empty()){
+        RenderSpinner("Loading pets...");AlterEgo::GW2API::FetchPetsAsync();
+    }else{
+        ImGui::BeginChild("##petlist",ImVec2(280,360),true);
+        for(const auto& p:pets)row(p.id,p.name,9400000u+p.id,p.icon_url,!PairChoiceAllowed(other,p.id),current==p.id);
+        ImGui::EndChild();
     }
-    if (!open) g_LegendPickerSlot = -1;
-}
-
-// Ranger pet picker (terrestrial slot 0/1). The pet byte is the /v2/pets id.
-// Prevents the same pet in both slots; mirrors to the aquatic slot.
-static void RenderPetPickerDialog() {
-    if (g_PetPickerSlot < 0) return;
-    const char* POPUP = "Choose Pet##petpick";
-    if (!ImGui::IsPopupOpen(POPUP)) ImGui::OpenPopup(POPUP);
-    ImVec2 dispSize = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(dispSize.x * 0.5f, dispSize.y * 0.5f),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    bool open = true;
-    if (ImGui::BeginPopupModal(POPUP, &open, ImGuiWindowFlags_AlwaysAutoResize)) {
-        const int slot = g_PetPickerSlot; // 0 or 1
-        const int other = slot == 0 ? 1 : 0;
-        auto pets = AlterEgo::GW2API::GetPets();
-        if (pets.empty()) {
-            RenderSpinner("Loading pets...");
-            AlterEgo::GW2API::FetchPetsAsync();
-        } else {
-            ImGui::BeginChild("##petlist", ImVec2(280, 360), true);
-            for (const auto& p : pets) {
-                bool usedOther = (g_EditDraft.pets.terrestrial[other] == p.id);
-                ImGui::PushID(static_cast<int>(p.id));
-                const uint32_t iconId=9400000u+p.id;
-                auto* icon=AlterEgo::IconManager::GetIcon(iconId);
-                const float iconSize=32.0f;
-                if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(iconSize,iconSize),ImVec2(0,0),ImVec2(1,1),usedOther?ImVec4(1,1,1,0.4f):ImVec4(1,1,1,1));
-                else {ImGui::Dummy(ImVec2(iconSize,iconSize));if(!p.icon_url.empty())AlterEgo::IconManager::RequestIcon(iconId,p.icon_url);}
-                ImGui::SameLine();
-                if (usedOther) {
-                    ImGui::TextDisabled("%s", p.name.c_str());
-                } else if (ImGui::Selectable(p.name.c_str())) {
-                    g_EditDraft.pets.terrestrial[slot] = p.id;
-                    g_EditDraft.pets.aquatic[slot] = p.id; // mirror to aquatic
-                    MarkEditDirty();
-                    g_PetPickerSlot = -1;
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::PopID();
-            }
-            ImGui::EndChild();
-            if (AlterEgo::UI::Button("(None)", ImVec2(0,0), AlterEgo::UI::ButtonRole::Compact)) {
-                g_EditDraft.pets.terrestrial[slot] = 0;
-                g_EditDraft.pets.aquatic[slot] = 0;
-                MarkEditDirty();
-                g_PetPickerSlot = -1;
-                ImGui::CloseCurrentPopup();
-            }
-        }
-        ImGui::EndPopup();
-    }
-    if (!open) g_PetPickerSlot = -1;
+    ImGui::EndPopup();
+    return changed;
 }
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
@@ -9885,73 +9824,47 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     if((g_LibEditMode||recordedAquatic)&&ImGui::TreeNode("Aquatic skills##loadout")){
         RenderBuildSkillRow(skillSrc,skillSz,skillEditable,true);ImGui::TreePop();
     }
-    // Editing: Revenant legends / Ranger pets (not part of the heal/util/elite row).
-    if (build.profession == "Revenant") {
-        const uint8_t* legends = g_LibEditMode ? g_EditDraft.legend_codes : build.legend_codes;
-        if (g_LibEditMode || legends[0] || legends[1]) {
-            ImGui::Spacing();
-            RenderSectionHeader("Legends", AlterEgo::UI::SectionGold);
-            AlterEgo::GW2API::FetchLegendsAsync();
-            for (int slot = 0; slot < 2; slot++) {
-                if (slot) ImGui::SameLine(0, 18);
-                uint8_t code = legends[slot];
-                uint32_t swap = code ? AlterEgo::GW2API::GetLegendSwapSkill(code) : 0;
-                ImGui::PushID(3000 + slot);
-                ImGui::BeginGroup();
-                if (g_LibEditMode) {
-                    ImVec2 ip = ImGui::GetCursorScreenPos();
-                    if (RenderEditableSkillIcon(swap, 40.0f,false)) g_LegendPickerSlot = slot;
-                    if (ImGui::BeginPopupContextItem("##legend_edit_context")) {
-                        if(code)CopyNameMenuItem(LegendNameForCode(code));
-                        if (ImGui::MenuItem("Clear Legend",nullptr,false,code != 0)) {
-                            g_EditDraft.legend_codes[slot] = 0;
-                            g_EditDraft.legend_codes[slot+2] = 0;
-                            MarkEditDirty();
-                        }
-                        ImGui::EndPopup();
+    // Each environment owns its own pair. Reuse the native selector used by
+    // standalone Base Build components; no hidden mirrored assignments.
+    if(build.profession=="Revenant"){
+        const auto* values=g_LibEditMode?g_EditDraft.legend_codes:build.legend_codes;
+        if(g_LibEditMode||values[0]||values[1]||values[2]||values[3]){
+            ImGui::Spacing();RenderSectionHeader("Legends",AlterEgo::UI::SectionGold);
+            for(int env=0;env<2;++env){
+                if(!g_LibEditMode&&!values[env*2]&&!values[env*2+1])continue;
+                ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
+                for(int i=0;i<2;++i){
+                    int slot=env*2+i,other=env*2+(1-i);
+                    if(i)ImGui::SameLine(0,18);
+                    ImGui::PushID(3000+slot);
+                    if(g_LibEditMode){
+                        uint32_t next=values[slot];
+                        if(RenderProfessionPairChoice(true,values[slot],values[other],next)&&
+                           AlterEgo::SkillEdit::SetPairChoice(g_EditDraft.legend_codes[slot],
+                               AlterEgo::PublicCatalog::CanonicalLegendCode(values[other]),next))MarkEditDirty();
+                    }else{
+                        ImGui::BeginGroup();
+                        RenderSkillIcon(values[slot]?AlterEgo::GW2API::GetLegendSwapSkill(values[slot]):0,40.0f);
+                        ImGui::TextUnformatted(LegendNameForCode(values[slot]).c_str());ImGui::EndGroup();
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::GetWindowDrawList()->AddRect(ip, ImVec2(ip.x + 40, ip.y + 40),
-                            IM_COL32(227, 196, 122, 255), 0.0f, 0, 2.0f);
-                } else {
-                    RenderSkillIcon(swap, 40.0f); // read-only emblem
+                    ImGui::PopID();
                 }
-                ImGui::TextColored(code ? ImVec4(0.85f, 0.82f, 0.70f, 1.0f)
-                                        : ImVec4(0.55f, 0.55f, 0.55f, 1.0f),
-                                   "%s", LegendNameForCode(code).c_str());
-                ImGui::EndGroup();
-                ImGui::PopID();
             }
         }
     }
-    if (g_LibEditMode && build.profession == "Ranger") {
-        ImGui::Spacing();
-        RenderSectionHeader("Pets", AlterEgo::UI::SectionGold);
-        AlterEgo::GW2API::FetchPetsAsync();
-        auto pets = AlterEgo::GW2API::GetPets();
-        auto petName = [&](uint32_t id) -> const char* {
-            if (!id) return "Choose pet";
-            for (const auto& p : pets) if (p.id == id) return p.name.c_str();
-            return "Pet";
-        };
-        for (int slot = 0; slot < 2; slot++) {
-            if (slot) ImGui::SameLine();
-            ImGui::PushID(3100 + slot);
-            if (RenderChipButton(petName(g_EditDraft.pets.terrestrial[slot]),
-                                 g_EditDraft.pets.terrestrial[slot] != 0))
-                g_PetPickerSlot = slot;
-            if (ImGui::BeginPopupContextItem("##pet_edit_context")) {
-                if(g_EditDraft.pets.terrestrial[slot]){
-                    for(const auto& pet:pets)if(pet.id==g_EditDraft.pets.terrestrial[slot])CopyNameMenuItem(pet.name);
-                }
-                if (ImGui::MenuItem("Clear Pet")) {
-                    g_EditDraft.pets.terrestrial[slot] = 0;
-                    g_EditDraft.pets.aquatic[slot] = 0;
-                    MarkEditDirty();
-                }
-                ImGui::EndPopup();
+    if(g_LibEditMode&&build.profession=="Ranger"){
+        ImGui::Spacing();RenderSectionHeader("Pets",AlterEgo::UI::SectionGold);
+        for(int env=0;env<2;++env){
+            ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
+            auto* pair=env?g_EditDraft.pets.aquatic:g_EditDraft.pets.terrestrial;
+            for(int i=0;i<2;++i){
+                if(i)ImGui::SameLine();
+                ImGui::PushID(3100+env*2+i);
+                uint32_t next=pair[i];
+                if(RenderProfessionPairChoice(false,pair[i],pair[1-i],next)&&
+                   AlterEgo::SkillEdit::SetPairChoice(pair[i],pair[1-i],next))MarkEditDirty();
+                ImGui::PopID();
             }
-            ImGui::PopID();
         }
     }
 
@@ -16000,8 +15913,6 @@ void AddonRender() {
     RenderGearCustomizeDialog();
     RenderNewBuildDialog();
     RenderSpecPickerDialog();
-    RenderLegendPickerDialog();
-    RenderPetPickerDialog();
     RenderSaveToLibraryDialog();
     RenderFashionDialog();
 
