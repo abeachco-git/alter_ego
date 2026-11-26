@@ -23,10 +23,10 @@ def schema(path):
     source = (ROOT / path).read_text(encoding="utf-8")
     version = int(re.search(r"kSchemaVersion\s*=\s*(\d+)", source)[1])
     blocks = re.findall(r'R"SQL\((.*?)\)SQL"', source, re.S)
-    # Durable library schema v4 is fresh-only: intermediate experimental
-    # schemas are deliberately not migration sources. Cache migrations remain
-    # ordered one block per version, and unexpected layouts still fail closed.
-    if path == "src/NativeLibrarySchema.h" and version == 4 and len(blocks) == 1:
+    # The native library has one fresh-schema block. V4 migration to v5
+    # is a separate backed-up graph rebuild, exercised by native regression tests.
+    # Cache migrations remain ordered one block per version.
+    if path == "src/NativeLibrarySchema.h" and version == 5 and len(blocks) == 1:
         return version, blocks
     if len(blocks) != version:
         raise RuntimeError("Schema migration layout changed; update benchmark")
