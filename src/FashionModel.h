@@ -1,4 +1,5 @@
 #pragma once
+#include "SearchCore.h"
 // Persistent, profession-agnostic wardrobe snapshots for the Fashion collection.
 // Live equipment captures are explicitly marked partial: the character API does
 // not expose all Fashion Template visibility/outfit settings.
@@ -63,13 +64,9 @@ inline bool ContainsIgnoreCase(std::string haystack, std::string needle) {
 }
 
 inline bool MatchesSearch(const Look& look, const std::string& query) {
-    if (query.empty() || ContainsIgnoreCase(look.name, query) ||
-        ContainsIgnoreCase(look.notes, query) ||
-        ContainsIgnoreCase(look.weight, query) ||
-        ContainsIgnoreCase(look.source_character, query)) return true;
-    for (const auto& character : look.characters)
-        if (ContainsIgnoreCase(character, query)) return true;
-    return false;
+    std::vector<std::string> fields{look.name,look.notes,look.weight,look.source_character};
+    fields.insert(fields.end(),look.characters.begin(),look.characters.end());
+    return AlterEgo::Search::MatchesFields(AlterEgo::Search::Words(query),fields);
 }
 
 inline void Associate(Look& look, const std::string& character) {

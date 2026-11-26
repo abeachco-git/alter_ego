@@ -1,4 +1,5 @@
 #pragma once
+#include "SearchCore.h"
 #include <optional>
 #include <algorithm>
 #include <cctype>
@@ -19,51 +20,7 @@ inline std::string SkinCategorySubtype(const std::string& type, const std::strin
     return subtype;
 }
 }
-namespace Skinventory::Search {
-inline std::string Lower(std::string s) {
-    for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    return s;
-}
-// One adjacent transposition, insertion, deletion or substitution; never
-// fuzzy-match short tokens (they otherwise match almost everything).
-inline bool NearWord(const std::string& a, const std::string& b) {
-    if (a.size() < 5 || b.size() < 4 || a.size() > b.size()+1 || b.size() > a.size()+1) return false;
-    if (a.size() == b.size()) {
-        size_t i=0; while (i<a.size() && a[i]==b[i]) ++i;
-        if (i==a.size()) return true;
-        if (a.substr(i+1)==b.substr(i+1)) return true;
-        return i+1<a.size() && a[i]==b[i+1] && a[i+1]==b[i] && a.substr(i+2)==b.substr(i+2);
-    }
-    const auto& x=a.size()<b.size()?a:b;
-    const auto& y=a.size()<b.size()?b:a;
-    size_t i=0; while(i<x.size() && x[i]==y[i]) ++i;
-    return x.substr(i)==y.substr(i+1);
-}
-inline std::vector<std::string> Words(const std::string& s) {
-    std::istringstream in(Lower(s)); std::vector<std::string> out;
-    for (std::string token; in>>token;) out.push_back(token);
-    return out;
-}
-// Opt-in minimum for search-first views; count non-whitespace bytes across
-// tokens so a short second word ("valk kr") remains valid.
-inline bool HasMinimumQuery(const std::vector<std::string>& query,size_t minimum=3) {
-    size_t count=0;
-    for(const auto& token:query){count+=token.size();if(count>=minimum)return true;}
-    return minimum==0;
-}
-inline bool Matches(const std::string& text, const std::vector<std::string>& query) {
-    const auto hay=Lower(text);
-    for (const auto& q:query) {
-        if(hay.find(q)!=std::string::npos) continue;
-        // Numeric IDs are literal; do not turn a mistyped ID into a different item.
-        if(std::any_of(q.begin(),q.end(),[](unsigned char c){return std::isdigit(c)!=0;}))return false;
-        bool found=false;
-        for(const auto& word:Words(hay)) if(NearWord(q,word)) {found=true;break;}
-        if(!found) return false;
-    }
-    return true;
-}
-}
+namespace Skinventory { namespace Search = AlterEgo::Search; }
 namespace Skinventory {
 using CommerceCandidates=std::unordered_map<uint32_t,std::vector<uint32_t>>;
 // Price choices describe the complete candidate set, not just the winner.

@@ -270,7 +270,7 @@ inline bool CanBrowseItems(bool character, bool storage, bool binding, bool rari
     return character||storage||binding||rarity||type||freshness||quantity||transfer;
 }
 inline bool Match(const std::string& name,uint32_t id,const std::vector<std::string>& words){
-    return Skinventory::Search::Matches(name+" "+std::to_string(id),words);
+    return AlterEgo::Search::MatchesId(name,id,words);
 }
 inline bool Match(const std::string& name,uint32_t id,const std::string& query){
     return Match(name,id,Skinventory::Search::Words(query));

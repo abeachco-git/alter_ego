@@ -1,4 +1,5 @@
 #pragma once
+#include "SearchCore.h"
 // Canonical general-purpose Alter Ego UI controls. Read docs/ui-components.md.
 // Keep Nexus/ImGui 1.80 compatibility; no request or domain logic belongs here.
 #include "imgui.h"
@@ -585,13 +586,7 @@ inline bool SearchToolbar(const char* id, const char* hint, Query& query,
 // A catalog entry can be shown as a card in the full gear editor or a
 // dropdown option in a standalone component. Both use the same search rules.
 inline bool CatalogMatches(const char* name, const char* description, std::string filter) {
-    const auto lower = [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); };
-    std::transform(filter.begin(), filter.end(), filter.begin(), lower);
-    if (filter.empty()) return true;
-    std::string n = name ? name : "", d = description ? description : "";
-    std::transform(n.begin(), n.end(), n.begin(), lower);
-    std::transform(d.begin(), d.end(), d.begin(), lower);
-    return n.find(filter) != std::string::npos || d.find(filter) != std::string::npos;
+    return AlterEgo::Search::MatchesFields(AlterEgo::Search::Words(filter),{name?name:"",description?description:""});
 }
 inline bool CatalogCard(const char* id, const char* name, const char* description, bool selected) {
     const ImVec2 pos = ImGui::GetCursorScreenPos();

@@ -244,6 +244,9 @@ int case_native_inventory(int,char**){
     assert(!Match("Valkyrie Krait Star",12345,"valk sword"));
     assert(!Match("Valkyrie Krait Star",12345,"12346"));
     assert(Match("Valkyrie Krait Star",12345,"12345"));
+    assert(!Match("Valkyrie Krait Star",123456,"12345"));
+    assert(Match("Valkyrie Krait Star",12345,"12345 valk"));
+    assert(Match("Version 12345",99,"12345"));
     using AlterEgo::Cache::CompletionDataset;
     const auto vaultPeriod=[](int64_t stamp,int id){return Json{{"fetched_at",stamp},{"objectives",Json::array({Json{{"id",id},{"title","Objective"},{"claimed",false}}})}};};
     assert(Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"daily",vaultPeriod(100,1)},{"weekly",vaultPeriod(100,2)}}));
