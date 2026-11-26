@@ -464,22 +464,9 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
             item.erase("stat_id");
             item.erase("stat_name");
         }
-        const auto choices = GetSortedStatCombos(g_ComponentStatSearch.c_str());
-        for (const auto& stat : choices) {
-            ImGui::PushID(static_cast<int>(stat->id));
-            if (AlterEgo::UI::SelectableOption(stat->name.c_str(), stat->id == id)) {
-                item["stat_id"] = stat->id;
-                item["stat_name"] = stat->name;
-                g_ComponentStatSearch.clear();
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip();
-                for (const auto& attr : stat->attributes)
-                    ImGui::BulletText("%s", FriendlyAttrName(attr));
-                ImGui::EndTooltip();
-            }
-            ImGui::PopID();
-        }
+        RenderGearStatChoices(g_ComponentStatSearch.c_str(),id,false,[&](uint32_t next,const std::string& name){
+            item["stat_id"]=next;item["stat_name"]=name;g_ComponentStatSearch.clear();
+        });
         ImGui::EndCombo();
     }
     ImGui::PopID();

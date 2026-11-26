@@ -6791,6 +6791,42 @@ static std::vector<std::shared_ptr<const AlterEgo::ItemStatInfo>> GetSortedStatC
     return result;
 }
 
+// Share the sorted stat catalog, selected ID and attribute presentation.
+template<class OnChoose> static void RenderGearStatChoices(const char* filter,
+    uint32_t current,bool cards,OnChoose choose){
+    for(const auto& stat:GetSortedStatCombos(filter)){
+        ImGui::PushID(static_cast<int>(stat->id));
+        const bool selected=current==stat->id;
+        if(cards){
+            const ImVec2 pos=ImGui::GetCursorScreenPos();
+            const float width=ImGui::GetContentRegionAvail().x;
+            const float line=std::max(14.0f,ImGui::GetTextLineHeight());
+            const float height=line*(1+stat->attributes.size())+6.0f;
+            auto* dl=ImGui::GetWindowDrawList();
+            dl->AddRectFilled(pos,ImVec2(pos.x+width,pos.y+height),selected?IM_COL32(60,80,100,200):IM_COL32(35,35,40,180),3.0f);
+            dl->AddRect(pos,ImVec2(pos.x+width,pos.y+height),selected?IM_COL32(100,160,220,255):IM_COL32(80,80,80,180),3.0f);
+            if(ImGui::InvisibleButton("##stat_choice",ImVec2(width,height)))choose(stat->id,stat->name);
+            ImVec2 text(pos.x+6,pos.y+3);
+            dl->PushClipRect(pos,ImVec2(pos.x+width,pos.y+height),true);
+            dl->AddText(text,IM_COL32(255,210,80,255),stat->name.c_str());
+            for(const auto& attr:stat->attributes){
+                text.y+=line;auto label=std::string("+")+FriendlyAttrName(attr);
+                dl->AddText(text,IM_COL32(100,200,100,255),label.c_str());
+            }
+            dl->PopClipRect();
+            ImGui::SetCursorScreenPos(ImVec2(pos.x,pos.y+height+2));
+        }else{
+            if(AlterEgo::UI::SelectableOption(stat->name.c_str(),selected))choose(stat->id,stat->name);
+            if(ImGui::IsItemHovered()){
+                ImGui::BeginTooltip();
+                for(const auto& attr:stat->attributes)ImGui::BulletText("%s",FriendlyAttrName(attr));
+                ImGui::EndTooltip();
+            }
+        }
+        ImGui::PopID();
+    }
+}
+
 // Helper: render a card-based selector list and return the selected name (empty = no change)
 // Returns true if a card was clicked (and sets outName)
 static bool RenderCardSelector(const char* searchBuf, const char* childId,
@@ -7842,46 +7878,10 @@ static void RenderGearCustomizeDialog() {
                 [&](uint32_t id,const std::string& name){editBuild->relic_id=id;editBuild->relic_name=name;commitGear();});
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 0) {
-            // --- Stat combo selector ---
-            ImGui::BeginChild("##statList", ImVec2(0, -30), true);
-            auto combos = GetSortedStatCombos(g_GearStatSearch);
-            for (const auto& stat : combos) {
-                ImGui::PushID((int)stat->id);
-                bool isSelected = (g_GearSelectedStatId == stat->id);
-
-                ImVec2 cardStart = ImGui::GetCursorScreenPos();
-                float cardW = ImGui::GetContentRegionAvail().x;
-                float cardH = 14.0f + stat->attributes.size() * 14.0f + 6.0f;
-
-                ImU32 bgCol = isSelected ? IM_COL32(60, 80, 100, 200) : IM_COL32(35, 35, 40, 180);
-                ImGui::GetWindowDrawList()->AddRectFilled(
-                    cardStart, ImVec2(cardStart.x + cardW, cardStart.y + cardH), bgCol, 3.0f);
-                ImGui::GetWindowDrawList()->AddRect(
-                    cardStart, ImVec2(cardStart.x + cardW, cardStart.y + cardH),
-                    isSelected ? IM_COL32(100, 160, 220, 255) : IM_COL32(80, 80, 80, 180), 3.0f);
-
-                ImGui::SetCursorScreenPos(cardStart);
-                if (ImGui::InvisibleButton("##sel", ImVec2(cardW, cardH))) {
-                    g_GearSelectedStatId = stat->id;
-                    gs.stat_id = stat->id;
-                    gs.stat_name = stat->name;
-                    commitGear();
-                }
-
-                ImVec2 textPos(cardStart.x + 6, cardStart.y + 3);
-                ImGui::GetWindowDrawList()->AddText(textPos,
-                    IM_COL32(255, 210, 80, 255), stat->name.c_str());
-                for (size_t ai = 0; ai < stat->attributes.size(); ai++) {
-                    textPos.y += 14.0f;
-                    char attrBuf[64];
-                    snprintf(attrBuf, sizeof(attrBuf), "+%s", FriendlyAttrName(stat->attributes[ai]));
-                    ImGui::GetWindowDrawList()->AddText(textPos,
-                        IM_COL32(100, 200, 100, 255), attrBuf);
-                }
-                ImGui::SetCursorScreenPos(ImVec2(cardStart.x, cardStart.y + cardH + 2));
-
-                ImGui::PopID();
-            }
+            ImGui::BeginChild("##statList",ImVec2(0,-30),true);
+            RenderGearStatChoices(g_GearStatSearch,g_GearSelectedStatId,true,[&](uint32_t id,const std::string& name){
+                g_GearSelectedStatId=id;gs.stat_id=id;gs.stat_name=name;commitGear();
+            });
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 1) {
             ImGui::BeginChild("##upgradeList",ImVec2(0,-30),true);
