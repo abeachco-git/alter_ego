@@ -63,6 +63,11 @@ void BeginScope(const ScopeState& state,const std::string& label){
 void EndScope(ScopeState state){
     std::lock_guard<std::mutex> lock(viewMutex);
     auto key=ScopeKey{state.account,state.scope,state.character};
+    // Shared endpoint owners already published the authoritative outcome.
+    // Do not let a delayed inventory consumer overlay a newer owner result.
+    if(state.scope=="Equipment"||state.scope=="Roster"){
+        liveScopes.erase(key);++processedScopes;activeScope.clear();return;
+    }
     auto prior=liveScopes.find(key);
     if(state.status!="Ready"&&prior!=liveScopes.end())state.success=prior->second.success;
     liveScopes[key]=std::move(state);++processedScopes;activeScope.clear();
@@ -344,7 +349,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
                     a.permissions.count("inventories")&&(!characterScope||a.permissions.count("characters"))&&
                     (name!="Legendary Armory"||a.permissions.count("unlocks"));
-                if(!permitted){
+                if(!permitted&&name!="Equipment"){
                     state.status="Missing permissions";commit([&]{if(!Record(root,state))throw Background::Cancelled{};});EndScope(state);publishProgress();return;
                 }
                 CharacterActivity::CancelOnShutdown attempts({a.id,character});

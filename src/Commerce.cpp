@@ -211,7 +211,7 @@ namespace Skinventory {
                 }
             } catch(...) {}
             if(!ok) for(size_t j=i;j<end;++j) for(auto skin:item_to_skin[item_ids[j]]) failed.insert(skin);
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            AlterEgo::Background::Pause(std::chrono::milliseconds(200));
         }
         AlterEgo::Background::Checkpoint();
         {
@@ -449,7 +449,7 @@ namespace Skinventory {
                 }
 
                 // Stay well under the 600 req/min GW2 API limit
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                AlterEgo::Background::Pause(std::chrono::milliseconds(200));
             }
 
             // Step 3: Store

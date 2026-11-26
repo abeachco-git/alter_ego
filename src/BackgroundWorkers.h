@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <condition_variable>
 #include <list>
@@ -19,7 +20,7 @@ class WorkerGroup {
     };
     std::mutex mutex_;
     std::list<Entry> jobs_;
-    std::condition_variable joined_;
+    std::condition_variable joined_,stopSignal_;
     bool joining_=false;
     std::atomic<bool> stopping_{true};
     std::atomic<std::size_t> active_{0}, failures_{0};
@@ -43,8 +44,14 @@ public:
     std::size_t FailureCount() const noexcept { return failures_.load(); }
     void Checkpoint() const { if (Stopping()) throw Cancelled{}; }
     void RequestStop() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopping_ = true;
+        {std::lock_guard<std::mutex> lock(mutex_);stopping_=true;}
+        stopSignal_.notify_all();
+    }
+    // Interrupt only local delays; the current WinINet call still owns its handles.
+    template<class Rep,class Period>
+    bool WaitFor(const std::chrono::duration<Rep,Period>& duration){
+        std::unique_lock<std::mutex> lock(mutex_);
+        return !stopSignal_.wait_for(lock,duration,[&]{return stopping_.load();});
     }
     template<class Job, class Failure>
     bool Launch(Job job, Failure failure) {
@@ -95,6 +102,7 @@ public:
             joining_=true;
             joining.splice(joining.end(), jobs_);
         }
+        stopSignal_.notify_all();
         for (auto& entry : joining) entry.thread.join();
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -109,5 +117,7 @@ inline WorkerGroup& Workers() {
     return group;
 }
 inline void Checkpoint() { Workers().Checkpoint(); }
+template<class Rep,class Period>
+inline void Pause(const std::chrono::duration<Rep,Period>& duration){if(!Workers().WaitFor(duration))throw Cancelled{};}
 
 } // namespace AlterEgo::Background

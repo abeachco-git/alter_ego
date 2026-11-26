@@ -21,24 +21,25 @@ static void ReceiveFont(const char* id, void* font) {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
     if (!callbackLease) return;
     std::lock_guard<std::mutex> lock(s_mtx);
-    if (s_api && id) s_fonts[id] = static_cast<ImFont*>(font);
+    if (s_api && id && s_requested.count(id))s_fonts[id]=static_cast<ImFont*>(font);
 }
 
 void Initialize(AddonAPI_t* api) {
-    s_api = api;
+    std::lock_guard<std::mutex> lock(s_mtx);s_api=api;
 }
 
 static ImFont* RequestTtf(const Font::Config& cfg) {
-    if (!s_api) return nullptr;
     const std::string id = Font::Identifier(cfg);
     if (id.empty()) return nullptr;
 
     const auto& path=cfg.customPath;
     if (cfg.face!=Font::Face::Custom || path.empty() ||
-        !std::filesystem::is_regular_file(path) || !s_api->Fonts_AddFromFile)
+        !std::filesystem::is_regular_file(path))
         return nullptr;
 
     std::unique_lock<std::mutex> lock(s_mtx);
+    auto* api=s_api;
+    if(!api||!api->Fonts_AddFromFile)return nullptr;
     auto it = s_fonts.find(id);
     if (it != s_fonts.end() && it->second) return it->second;
     if (s_requested.count(id)) return nullptr;
@@ -46,7 +47,7 @@ static ImFont* RequestTtf(const Font::Config& cfg) {
     s_fonts[id] = nullptr;
     lock.unlock();
 
-    s_api->Fonts_AddFromFile(id.c_str(), cfg.px, path.c_str(),
+    api->Fonts_AddFromFile(id.c_str(), cfg.px, path.c_str(),
                             &ReceiveFont, nullptr);
     return nullptr;
 }

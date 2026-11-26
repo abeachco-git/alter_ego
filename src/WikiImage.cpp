@@ -1221,7 +1221,10 @@ namespace Skinventory {
             if(req.metadataOnly){
                 try{RefreshMetadata(req.skinId,req.skinName,req.weightClass);}catch(...){}
                 {std::lock_guard<std::mutex> lock(s_mutex);s_metadataPending.erase(req.skinId);}
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                {
+                    std::unique_lock<std::mutex> delayLock(s_mutex);
+                    if(s_queueCV.wait_for(delayLock,std::chrono::milliseconds(500),[]{return s_stopWorker.load();}))return;
+                }
                 continue;
             }
             try {
@@ -1253,7 +1256,10 @@ namespace Skinventory {
                 if(!s_stopWorker)try { s_failed[req.skinId]=std::chrono::steady_clock::now(); } catch (...) {}
             }
             // Rate limit
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            {
+                    std::unique_lock<std::mutex> delayLock(s_mutex);
+                    if(s_queueCV.wait_for(delayLock,std::chrono::milliseconds(500),[]{return s_stopWorker.load();}))return;
+                }
         }
     }
 

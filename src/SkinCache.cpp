@@ -140,12 +140,12 @@ namespace Skinventory {
         return ids;
     }
 
-    bool SkinCache::SaveToDisk() {
-        if (!EnsureDataDirectory()) return false;
+    // Only the catalog worker writes network-derived catalog data. Stage
+    // the full replacement before persistence; never serialize under the UI lock.
+    static bool PersistCatalog(const std::string& dir,const std::unordered_map<uint32_t,SkinInfo>& catalog){
         json j = json::array();
         {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (const auto& [id, skin] : s_skins) {
+            for (const auto& [id, skin] : catalog) {
                 json entry;
                 entry["id"] = skin.id;
                 entry["name"] = skin.name;
@@ -161,8 +161,15 @@ namespace Skinventory {
         }
 
         return AlterEgo::Cache::WriteSkins(
-            AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
+            AlterEgo::Cache::RootFromLegacySkinDirectory(dir),
             AlterEgo::Cache::SkinProjection::Catalog,j);
+    }
+
+    bool SkinCache::SaveToDisk() {
+        if(!EnsureDataDirectory())return false;
+        decltype(s_skins) copy;
+        {std::lock_guard<std::mutex> lock(s_mutex);copy=s_skins;}
+        return PersistCatalog(s_data_dir,copy);
     }
 
     bool SkinCache::LoadFromDisk() {
@@ -304,29 +311,31 @@ namespace Skinventory {
                     s_status_message = "Fetching skins " + std::to_string(i) + "/" + std::to_string(total) + "...";
                 }
                 FetchSkinBatch(ids, i, end, fetched);
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                AlterEgo::Background::Pause(std::chrono::milliseconds(200));
             }
 
         AlterEgo::Background::Checkpoint();
             if(fetched.size()!=ids.size())throw std::runtime_error("Incomplete skin catalog");
 
-            // Step 3: Store and index
+            if(!PersistCatalog(s_data_dir,fetched))throw std::runtime_error("Skin persistence failed");
+            // Publish a verified replacement only after durable write.
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 s_skins = std::move(fetched);
                 RebuildIndex();
                 s_status_message = "Loaded " + std::to_string(s_skins.size()) + " skins";
             }
-            if(!SaveToDisk())throw std::runtime_error("Skin persistence failed");
             PublicCatalog::CompleteCheck(root,"public_skins");
-            PublicCatalog::EndDataset("public_skins",true);
             s_status=CacheStatus::Ready;
+            PublicCatalog::EndDataset("public_skins",true);
 
         } catch (...) {
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                s_status = s_skins.empty()?CacheStatus::Error:CacheStatus::Ready;
+                s_status_message = "Unexpected error during skin fetch; cached data retained";
+            }
             PublicCatalog::EndDataset("public_skins",false);
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_status = CacheStatus::Error;
-            s_status_message = "Unexpected error during skin fetch";
         }
     }
 
@@ -352,10 +361,12 @@ namespace Skinventory {
 
             if (new_ids.empty()) {
                 PublicCatalog::CompleteCheck(root,"public_skins");
+                {
+                    std::lock_guard<std::mutex> lock(s_mutex);
+                    s_status = CacheStatus::Ready;
+                    s_status_message = "Cache up to date (" + std::to_string(s_skins.size()) + " skins)";
+                }
                 PublicCatalog::EndDataset("public_skins",true);
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_status = CacheStatus::Ready;
-                s_status_message = "Cache up to date (" + std::to_string(s_skins.size()) + " skins)";
                 return;
             }
 
@@ -371,36 +382,33 @@ namespace Skinventory {
             AlterEgo::Background::Checkpoint();
                 size_t end = std::min(i + BATCH_SIZE, new_ids.size());
                 FetchSkinBatch(new_ids, i, end, fetched);
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                AlterEgo::Background::Pause(std::chrono::milliseconds(200));
             }
 
         AlterEgo::Background::Checkpoint();
             if(fetched.size()!=new_ids.size())throw std::runtime_error("Incomplete skin update");
-            // Step 4: Merge into existing cache
-            if (!fetched.empty()) {
+            // Stage the merge and persist before replacing the catalog.
+            decltype(s_skins) merged;
+            {std::lock_guard<std::mutex> lock(s_mutex);merged=s_skins;}
+            for(auto& [id,skin]:fetched)merged[id]=std::move(skin);
+            if(!PersistCatalog(s_data_dir,merged))throw std::runtime_error("Skin persistence failed");
+            {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                for (auto& [id, skin] : fetched) {
-                    s_skins[id] = std::move(skin);
-                }
-                RebuildIndex();
-                s_status_message = "Updated: " + std::to_string(s_skins.size()) + " skins (" +
-                                   std::to_string(fetched.size()) + " new)";
-            } else {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_status_message = "Cache up to date (" + std::to_string(s_skins.size()) + " skins)";
+                s_skins=std::move(merged);RebuildIndex();
+                s_status_message="Updated: "+std::to_string(s_skins.size())+" skins ("+
+                    std::to_string(fetched.size())+" new)";
             }
-
-            if(!SaveToDisk())throw std::runtime_error("Skin persistence failed");
             PublicCatalog::CompleteCheck(root,"public_skins");
-            PublicCatalog::EndDataset("public_skins",true);
             s_status=CacheStatus::Ready;
+            PublicCatalog::EndDataset("public_skins",true);
 
         } catch (...) {
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                s_status = s_skins.empty()?CacheStatus::Error:CacheStatus::Ready;
+                s_status_message = "Update error, using cached data";
+            }
             PublicCatalog::EndDataset("public_skins",false);
-            // On error during update, stay Ready with existing data
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_status = CacheStatus::Ready;
-            s_status_message = "Update error, using cached data";
         }
     }
 

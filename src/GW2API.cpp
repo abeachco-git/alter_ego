@@ -55,6 +55,7 @@ namespace AlterEgo {
         bool g_loadoutDocumentLoaded = false;
         std::mutex g_loadoutPersistenceMutex;
         std::mutex g_characterSaveMutex;
+        std::mutex g_skinPersistMutex,g_statPersistMutex;
 
         // A manual character refresh also refreshes crafting; a debounced
         // automatic equipment/spec refresh reuses persisted crafting details.
@@ -987,6 +988,7 @@ namespace AlterEgo {
             json rows=json::array();
             for(const auto& [id,info]:staged)rows.push_back({{"id",id},{"name",info.name},{"attributes",info.attributes}});
             Background::Checkpoint();
+            std::lock_guard<std::mutex> persist(g_statPersistMutex);
             PublicCatalog::WithDb(root,[&](auto& db){
                 Database::Transaction tx(db);
                 // Retain historical stat identities still used by saved gear.
@@ -1083,7 +1085,8 @@ namespace AlterEgo {
     // --- Batch fetch: items ---
 
     void GW2API::AdoptPublicItems(const nlohmann::json& rows) {
-        std::lock_guard<std::mutex> lock(s_mutex);
+        decltype(s_item_cache) staged;
+        staged.reserve(rows.size());
         for(const auto& item:rows) {
             ItemInfo info;info.id=item.at("id").get<uint32_t>();
             info.name=item.value("name",std::string{});
@@ -1094,8 +1097,10 @@ namespace AlterEgo {
             info.default_skin=item.value("default_skin",0u);
             info.description=StripHtmlTags(item.value("description",std::string{}));
             if(item.contains("details"))info.details=item.at("details");
-            s_item_cache[info.id]=std::make_shared<const ItemInfo>(std::move(info));
+            staged[info.id]=std::make_shared<const ItemInfo>(std::move(info));
         }
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for(auto& [id,row]:staged)s_item_cache[id]=std::move(row);
     }
 
     void GW2API::FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
@@ -1546,7 +1551,9 @@ namespace AlterEgo {
                                     info.attributes.push_back(attr.value("attribute", ""));
                                 }
                             }
-                            s_itemstat_cache[info.id]=std::make_shared<const ItemStatInfo>(info);
+                            // This was a missing-ID lookup. A complete catalog
+                            // may have supplied it while HTTP was in flight.
+                            s_itemstat_cache.try_emplace(info.id,std::make_shared<const ItemStatInfo>(std::move(info)));
                         }
                     }
                 } catch (...) {}
@@ -2947,10 +2954,15 @@ namespace AlterEgo {
         EnsureDataDirectory();
         int64_t captured=0;
         json arr = json::array();
+        decltype(s_item_cache) snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             captured=Cache::ReferenceSnapshotTime();
-            for (const auto& [id, row] : s_item_cache) {
+            snapshot=s_item_cache;
+        }
+        arr=json::array();
+        {
+            for (const auto& [id, row] : snapshot) {
                 const auto& info=*row;
                 json j;
                 j["id"] = info.id;
@@ -2969,12 +2981,17 @@ namespace AlterEgo {
     }
 
     bool GW2API::SaveSkinCache() {
+        std::lock_guard<std::mutex> persist(g_skinPersistMutex);
         EnsureDataDirectory();
         json arr;
+        decltype(s_skin_cache) snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            arr = json::array();
-            for (const auto& [id, row] : s_skin_cache) {
+            snapshot=s_skin_cache;
+        }
+        arr=json::array();
+        {
+            for (const auto& [id, row] : snapshot) {
                 const auto& info=*row;
                 json j;
                 j["id"] = info.id;
@@ -2995,11 +3012,15 @@ namespace AlterEgo {
         EnsureDataDirectory();
         int64_t capturedAt = 0;
         json arr;
+        decltype(s_spec_cache) snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
-            arr = json::array();
-            for (const auto& [id, row] : s_spec_cache) {
+            snapshot=s_spec_cache;
+        }
+        arr=json::array();
+        {
+            for (const auto& [id, row] : snapshot) {
                 const auto& info=*row;
                 json j;
                 j["id"] = info.id;
@@ -3022,11 +3043,15 @@ namespace AlterEgo {
         EnsureDataDirectory();
         int64_t capturedAt = 0;
         json arr;
+        decltype(s_trait_cache) snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
-            arr = json::array();
-            for (const auto& [id, row] : s_trait_cache) {
+            snapshot=s_trait_cache;
+        }
+        arr=json::array();
+        {
+            for (const auto& [id, row] : snapshot) {
                 const auto& info=*row;
                 json j;
                 j["id"] = info.id;
@@ -3047,11 +3072,15 @@ namespace AlterEgo {
         EnsureDataDirectory();
         int64_t capturedAt = 0;
         json arr;
+        decltype(s_skill_cache) snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
-            arr = json::array();
-            for (const auto& [id, row] : s_skill_cache) {
+            snapshot=s_skill_cache;
+        }
+        arr=json::array();
+        {
+            for (const auto& [id, row] : snapshot) {
                 const auto& info=*row;
                 json j;
                 j["id"] = info.id;
@@ -3069,14 +3098,19 @@ namespace AlterEgo {
     }
 
     bool GW2API::SaveItemStatCache() {
+        std::lock_guard<std::mutex> persist(g_statPersistMutex);
         EnsureDataDirectory();
         int64_t capturedAt = 0;
         json arr;
+        decltype(s_itemstat_cache) snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
-            arr = json::array();
-            for (const auto& [id, row] : s_itemstat_cache) {
+            snapshot=s_itemstat_cache;
+        }
+        arr=json::array();
+        {
+            for (const auto& [id, row] : snapshot) {
                 const auto& info=*row;
                 json j;
                 j["id"] = info.id;
@@ -3092,11 +3126,15 @@ namespace AlterEgo {
         EnsureDataDirectory();
         int64_t capturedAt = 0;
         json arr;
+        decltype(s_dye_cache) snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             capturedAt = Cache::ReferenceSnapshotTime();
-            arr = json::array();
-            for (const auto& [id, row] : s_dye_cache) {
+            snapshot=s_dye_cache;
+        }
+        arr=json::array();
+        {
+            for (const auto& [id, row] : snapshot) {
                 const auto& dc=*row;
                 json j;
                 j["id"] = dc.id;

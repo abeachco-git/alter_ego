@@ -56,6 +56,24 @@ int case_background_workers(int, char**) {
     for(int i=0;i<32;++i)assert(group.Launch([&] { ++completed; }));
     group.JoinAll();
     assert(group.ActiveCount()==0 && completed==34);
+    // A long local delay must wake promptly on shutdown, including JoinAll.
+    assert(group.Open());
+    std::promise<void> waiting,interrupted;
+    auto wake=interrupted.get_future();
+    assert(group.Launch([&]{
+        waiting.set_value();
+        assert(!group.WaitFor(std::chrono::seconds(30)));
+        interrupted.set_value();
+    }));
+    waiting.get_future().wait();
+    auto joining=std::async(std::launch::async,[&]{group.JoinAll();});
+    assert(wake.wait_for(std::chrono::seconds(2))==std::future_status::ready);
+    joining.get();
+    assert(group.Open());
+    assert(group.WaitFor(std::chrono::milliseconds(1)));
+    group.RequestStop();
+    assert(!group.WaitFor(std::chrono::seconds(30)));
+    group.JoinAll();
     // A large catalog is not copied/rebuilt on steady-state render frames.
     using Catalog=std::unordered_map<unsigned,std::shared_ptr<const std::vector<unsigned>>>;
     Catalog canonical;

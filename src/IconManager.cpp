@@ -428,7 +428,8 @@ void IconManager::DownloadWorker() {
             ProcessRequestQueue();
         } catch (...) {}
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(REQUEST_DELAY_MS));
+        std::unique_lock<std::mutex> delayLock(s_Mutex);
+        if(s_QueueCV.wait_for(delayLock,std::chrono::milliseconds(REQUEST_DELAY_MS),[]{return s_StopWorker.load();}))return;
     }
 }
 
