@@ -6,6 +6,7 @@
 #include "WikiMetadataCache.h"
 #include "GW2API.h"
 #include "HttpClient.h"
+#include "AtomicFile.h"
 
 #include <nlohmann/json.hpp>
 #include <windows.h>
@@ -25,6 +26,9 @@ namespace Skinventory {
     AddonAPI_t* WikiImage::s_API = nullptr;
     std::string WikiImage::s_cacheDir;
     std::unordered_map<uint32_t, Texture_t*> WikiImage::s_imageCache;
+    std::unordered_map<uint32_t,AlterEgo::WikiArtwork::Source> WikiImage::s_sources;
+    std::unordered_set<uint32_t> WikiImage::s_sourceChecked;
+    std::unordered_map<uint32_t,std::string> WikiImage::s_textureRevision;
     std::unordered_map<uint32_t, WikiSkinData> WikiImage::s_wikiDataCache;
     std::map<uint32_t,AlterEgo::WikiFreshness::Stamp> WikiImage::s_metadataFreshness;
     std::unordered_set<uint32_t> WikiImage::s_metadataPending;
@@ -79,7 +83,7 @@ namespace Skinventory {
         }
 
         std::lock_guard<std::mutex> lock(s_mutex);
-        s_imageCache.clear();
+        s_imageCache.clear();s_sources.clear();s_sourceChecked.clear();s_textureRevision.clear();
         s_loading.clear();s_imageErrors.clear();s_texturePending.clear();
         s_requestQueue.clear();
         s_readyQueue.clear();
@@ -94,8 +98,33 @@ namespace Skinventory {
         s_API=nullptr;
     }
 
-    std::string WikiImage::GetCacheFilePath(uint32_t skinId) {
-        return s_cacheDir + "\\" + std::to_string(skinId) + ".jpg";
+    std::string WikiImage::GetCacheFilePath(uint32_t skinId,const std::string& revision) {
+        return s_cacheDir+"\\"+std::to_string(skinId)+(revision.empty()?"":"_"+revision)+".jpg";
+    }
+    std::string WikiImage::TextureId(uint32_t skinId,const std::string& revision){
+        return "WIKI_IMG_"+std::to_string(skinId)+(revision.empty()?"":"_"+revision);
+    }
+    static bool PreviewFileExists(const std::string& path){
+        const DWORD attrs=GetFileAttributesA(path.c_str());
+        return attrs!=INVALID_FILE_ATTRIBUTES&&!(attrs&FILE_ATTRIBUTE_DIRECTORY);
+    }
+    void WikiImage::LoadPreviewSource(uint32_t id){
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if(!s_sourceChecked.insert(id).second)return;
+        }
+        try{
+            const auto path=std::filesystem::u8path(s_cacheDir+"\\"+std::to_string(id)+".preview.json");
+            std::error_code ec;const auto size=std::filesystem::file_size(path,ec);
+            if(ec||size==0||size>32768)return;
+            std::ifstream in(path,std::ios::binary);
+            std::string bytes(static_cast<size_t>(size),'\0');
+            if(!in.read(bytes.data(),static_cast<std::streamsize>(size)))return;
+            auto source=AlterEgo::WikiArtwork::ReadSource(AlterEgo::Untrusted::Parse(bytes,{32768,1000,16384,8}));
+            if(!PreviewFileExists(GetCacheFilePath(id,source.revision)))return;
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_sources.emplace(id,std::move(source));
+        }catch(...){}
     }
 
     std::string WikiImage::GetWikiDataCachePath() {
@@ -215,7 +244,7 @@ namespace Skinventory {
         bool persist=false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_loading.erase(skinId);s_texturePending.erase(skinId);
+            s_loading.erase(skinId);
             if(s_stopWorker||AlterEgo::Background::Workers().Stopping())return;
             s_failed[skinId]=std::chrono::steady_clock::now();
             s_imageErrors[skinId]=reason;
@@ -615,108 +644,87 @@ namespace Skinventory {
         return data;
     }
 
-    bool WikiImage::LoadFromDisk(uint32_t skinId) {
-        if (!s_API) return false;
-        const auto filePath=GetCacheFilePath(skinId);
-        const DWORD attrs=GetFileAttributesA(filePath.c_str());
-        if(attrs==INVALID_FILE_ATTRIBUTES||(attrs&FILE_ATTRIBUTE_DIRECTORY))return false;
-        const auto identifier="WIKI_IMG_"+std::to_string(skinId);
-        try {
-            auto* tex=s_API->Textures_GetOrCreateFromFile(identifier.c_str(),filePath.c_str());
+    bool WikiImage::LoadFromDisk(uint32_t id) {
+        if(!s_API)return false;
+        std::string rev;
+        {std::lock_guard<std::mutex> lock(s_mutex);auto it=s_sources.find(id);if(it!=s_sources.end())rev=it->second.revision;}
+        const auto path=GetCacheFilePath(id,rev);
+        if(!PreviewFileExists(path))return false;
+        const auto identifier=TextureId(id,rev);
+        try{
+            auto* tex=s_API->Textures_GetOrCreateFromFile(identifier.c_str(),path.c_str());
             std::lock_guard<std::mutex> lock(s_mutex);
-            if(tex&&tex->Resource){
-                s_imageCache[skinId]=tex;s_loading.erase(skinId);s_texturePending.erase(skinId);
-                s_failed.erase(skinId);s_failedPersistent.erase(skinId);s_imageErrors.erase(skinId);
-            }else{
-                // A null return can mean Nexus has queued texture creation.
-                // Do not re-download a file merely because publication is deferred.
-                s_texturePending[skinId]=std::chrono::steady_clock::now();
-            }
+            auto source=s_sources.find(id);
+            if((source==s_sources.end()?std::string{}:source->second.revision)!=rev)return true;
+            if(tex&&tex->Resource){s_imageCache[id]=tex;s_textureRevision[id]=rev;s_texturePending.erase(id);}
+            else s_texturePending[id]=std::chrono::steady_clock::now();
         }catch(...){
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_loading.erase(skinId);s_texturePending.erase(skinId);
-            s_imageErrors[skinId]="Cached preview could not be loaded";
+            s_texturePending.erase(id);s_imageErrors[id]="Cached preview could not be loaded";
         }
         return true;
     }
-
-    void WikiImage::RequestImage(uint32_t skinId,const std::string& skinName,
-                                const std::string& weightClass,bool manual) {
-        if(!s_API||s_stopWorker||skinName.empty()||!skinId)return;
-        bool reserved=false;
+    void WikiImage::RequestImage(uint32_t id,const std::string& name,const std::string& weight,bool manual){
+        if(!s_API||s_stopWorker||name.empty()||!id)return;
+        LoadPreviewSource(id);
+        bool load=false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            if(s_stopWorker)return;
-            if(!s_imageCache.count(skinId)&&!s_loading.count(skinId)){
-                s_loading[skinId]=true;reserved=true;
-            }
+            load=!s_imageCache.count(id)&&!s_texturePending.count(id)&&!s_loading.count(id);
         }
-        if(reserved&&!LoadFromDisk(skinId)){
+        if(load)LoadFromDisk(id);
+        {
             std::lock_guard<std::mutex> lock(s_mutex);
             const auto now=static_cast<int64_t>(std::time(nullptr));
-            const auto fail=s_failed.find(skinId);
-            const auto persistent=s_failedPersistent.find(skinId);
+            const auto it=s_sources.find(id);
+            const bool due=it==s_sources.end()||AlterEgo::WikiArtwork::Due(it->second,now);
+            const auto fail=s_failed.find(id);const auto persistent=s_failedPersistent.find(id);
             const bool cooling=fail!=s_failed.end()&&std::chrono::steady_clock::now()-fail->second<std::chrono::seconds(RETRY_COOLDOWN_SEC);
             const bool missing=persistent!=s_failedPersistent.end()&&AlterEgo::WikiFreshness::ArtworkRemaining(persistent->second,now,true)>0;
-            if(s_stopWorker||(!manual&&(cooling||missing)))s_loading.erase(skinId);
-            else{
-                try{s_requestQueue.push_back({skinId,skinName,weightClass,false,manual});}
-                catch(...){s_loading.erase(skinId);}
+            if(!s_stopWorker&&!s_loading.count(id)&&(manual||(due&&!cooling&&!missing))){
+                try{s_loading[id]=true;s_requestQueue.push_back({id,name,weight,false,manual});}
+                catch(...){s_loading.erase(id);}
             }
         }
         s_queueCV.notify_one();
-        RequestMetadata(skinId,skinName,weightClass);
+        RequestMetadata(id,name,weight);
     }
-
-    Texture_t* WikiImage::GetImage(uint32_t skinId) {
-        if (!s_API) return nullptr;
-
+    Texture_t* WikiImage::GetImage(uint32_t id){
+        if(!s_API)return nullptr;
+        std::string rev;Texture_t* old=nullptr;bool pending=false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            auto it = s_imageCache.find(skinId);
-            if (it != s_imageCache.end()) {
-                if (it->second && it->second->Resource) return it->second;
-                s_imageCache.erase(it);
+            auto source=s_sources.find(id);if(source!=s_sources.end())rev=source->second.revision;
+            auto it=s_imageCache.find(id);
+            if(it!=s_imageCache.end()&&it->second&&it->second->Resource){
+                old=it->second;auto actual=s_textureRevision.find(id);
+                if(actual!=s_textureRevision.end()&&actual->second==rev)return old;
             }
+            pending=s_texturePending.count(id)!=0;
         }
-
-        // Check if Nexus loaded the texture since we last checked
-        std::string identifier = "WIKI_IMG_" + std::to_string(skinId);
-        Texture_t* tex = nullptr;
-        try {
-            tex = s_API->Textures_Get(identifier.c_str());
-        } catch (...) {
-            return nullptr;
-        }
-
-        if (tex && tex->Resource) {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_imageCache[skinId] = tex;
-            s_loading.erase(skinId);s_texturePending.erase(skinId);
-            s_failed.erase(skinId);s_failedPersistent.erase(skinId);s_imageErrors.erase(skinId);
-            return tex;
-        }
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            auto it=s_texturePending.find(skinId);
-            if(it!=s_texturePending.end()&&std::chrono::steady_clock::now()-it->second>=std::chrono::seconds(15)){
-                s_texturePending.erase(it);s_loading.erase(skinId);s_imageErrors[skinId]="Cached preview could not be loaded";
-            }
-        }
-        return nullptr;
-    }
-
-    bool WikiImage::IsLoading(uint32_t skinId) {
+        if(!pending)return old;
+        Texture_t* tex=nullptr;
+        try{tex=s_API->Textures_Get(TextureId(id,rev).c_str());}catch(...){}
         std::lock_guard<std::mutex> lock(s_mutex);
-        return s_loading.find(skinId) != s_loading.end();
+        auto source=s_sources.find(id);
+        if((source==s_sources.end()?std::string{}:source->second.revision)!=rev)return old;
+        if(tex&&tex->Resource){s_imageCache[id]=tex;s_textureRevision[id]=rev;s_texturePending.erase(id);return tex;}
+        auto it=s_texturePending.find(id);
+        if(it!=s_texturePending.end()&&std::chrono::steady_clock::now()-it->second>=std::chrono::seconds(15)){
+            s_texturePending.erase(it);s_imageErrors[id]="Cached preview could not be loaded";
+        }
+        return old;
     }
-
+    bool WikiImage::IsLoading(uint32_t id){
+        std::lock_guard<std::mutex> lock(s_mutex);
+        return s_loading.count(id)||s_texturePending.count(id);
+    }
     std::string WikiImage::ImageStatus(uint32_t skinId){
         std::lock_guard<std::mutex> lock(s_mutex);
+        if(s_loading.count(skinId))return "Refreshing Wiki preview...";
         if(s_texturePending.count(skinId))return "Loading cached preview...";
-        if(s_loading.count(skinId))return "Loading wiki image...";
         auto reason=s_imageErrors.find(skinId);
-        std::string message=reason==s_imageErrors.end()?"Preview not retrieved":reason->second;
+        std::string message=reason==s_imageErrors.end()?(s_sources.count(skinId)?"Preview cached":"Preview not verified"):reason->second;
         const auto p=s_failedPersistent.find(skinId);
         const auto f=s_failed.find(skinId);
         if(p!=s_failedPersistent.end()){
@@ -745,7 +753,7 @@ namespace Skinventory {
             // Texture publication can be deferred by Nexus. Release the HTTP
             // loading marker without recording a persistent network failure.
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_loading.erase(skinId);
+            s_imageErrors[skinId]="Cached preview could not be loaded";
         }
 
         // Load currency icons that have been downloaded
@@ -784,6 +792,21 @@ namespace Skinventory {
         return encoded;
     }
 
+    WikiImage::PreviewLinks WikiImage::GetPreviewLinks(uint32_t id,const std::string& name){
+        PreviewLinks out;std::string page=name,rev;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            auto it=s_sources.find(id);
+            if(it!=s_sources.end()){out.imageUrl=it->second.url;page=it->second.page;rev=it->second.revision;}
+        }
+        if(AlterEgo::WikiArtwork::PlainTitle(page)){
+            auto encoded=UrlEncode(page);std::replace(encoded.begin(),encoded.end(),'+','_');
+            out.wikiUrl="https://wiki.guildwars2.com/wiki/"+encoded;
+        }
+        auto path=GetCacheFilePath(id,rev);
+        if(PreviewFileExists(path))out.localPath=path;
+        return out;
+    }
     static json ArtworkQuery(const std::string& params){
         auto r=HttpClient::GetEx("https://wiki.guildwars2.com/api.php?action=query&format=json&"+params);
         return AlterEgo::WikiArtwork::Query(r.status_code,r.body);
@@ -807,13 +830,20 @@ namespace Skinventory {
         return "";
     }
 
-    static std::string FindBestImageOnPage(const std::string& pageTitle,const std::string& skinName){
-        auto j=ArtworkQuery("titles="+UrlEncode(pageTitle)+"&redirects=1&prop=images%7Ccategories&imlimit=50&cllimit=50");
-        return AlterEgo::WikiArtwork::BestFile(j,skinName);
+    namespace Artwork=AlterEgo::WikiArtwork;
+    static json ArtworkPage(const std::string& title){
+        return ArtworkQuery("titles="+UrlEncode(title)+"&redirects=1&prop=images%7Ccategories&imlimit=50&cllimit=50");
     }
-    static std::string ResolveImageUrl(const std::string& fileTitle){
-        return AlterEgo::WikiArtwork::ImageUrl(ArtworkQuery("titles="+UrlEncode(fileTitle)+"&redirects=1&prop=imageinfo&iiprop=url"));
+    static std::optional<Artwork::Source> ResolvePreview(const std::string& file,const std::string& page){
+        return Artwork::ImageSource(ArtworkQuery("titles="+UrlEncode(file)+"&redirects=1&prop=imageinfo&iiprop=url%7Csize%7Csha1"),page,static_cast<int64_t>(std::time(nullptr)));
     }
+    static Artwork::Gallery PageGallery(const std::string& title){
+        const auto r=HttpClient::GetEx("https://wiki.guildwars2.com/api.php?action=parse&page="+UrlEncode(title)+"&redirects=1&prop=wikitext&format=json");
+        if(r.status_code!=200)throw std::runtime_error("Wiki gallery lookup failed");
+        const auto j=AlterEgo::Untrusted::Parse(r.body,AlterEgo::Untrusted::Wiki);
+        return Artwork::ReadGallery(j.at("parse").at("wikitext").at("*").get<std::string>());
+    }
+
     static std::string ArtworkSearchTitle(const std::string& name){
         auto j=ArtworkQuery("list=search&srsearch="+UrlEncode(name)+"&srnamespace=0&srlimit=1");
         const auto& matches=j.at("query").at("search");
@@ -842,45 +872,52 @@ namespace Skinventory {
         return {};
     }
 
-    std::string WikiImage::ScrapeWikiImageUrl(const std::string& skinName,
-                                                    const std::string& weightClass,
-                                                    std::string& outPageTitle) {
-        outPageTitle.clear();
-        // Weapon renders commonly use the exact skin name. Verify through
-        // imageinfo (never construct an unverified CDN URL). Keep armor
-        // weight-specific resolution first to avoid selecting the wrong skin.
-        if(weightClass.empty()){
-            auto url=ResolveImageUrl("File:"+skinName+".jpg");
-            if(!url.empty()){outPageTitle=skinName;return url;}
-        }
+    std::optional<Artwork::Source> WikiImage::DiscoverPreview(const std::string& name,const std::string& weight){
+        // Retain the proven exact weapon fast path. The size and revision
+        // come from the Wiki, not from a guessed CDN address.
+        if(weight.empty())if(auto s=ResolvePreview("File:"+name+".jpg",name))return s;
         std::vector<std::string> candidates;
-        if(!weightClass.empty()){
-            auto wc=AlterEgo::WikiArtwork::Lower(weightClass);
-            candidates.push_back(skinName+" ("+wc+" skin)");
-            candidates.push_back(skinName+" ("+wc+")");
+        if(!weight.empty()){
+            const auto wc=Artwork::Lower(weight);
+            candidates.push_back(name+" ("+wc+" skin)");candidates.push_back(name+" ("+wc+")");
         }
-        candidates.push_back(skinName);
-        for(const auto& page:candidates){
-            if(s_stopWorker)return {};
-            auto file=FindBestImageOnPage(page,skinName);
-            if(!file.empty()){
-                auto url=ResolveImageUrl(file);
-                if(!url.empty()){outPageTitle=page;return url;}
-                // A listed file with no imageinfo is inconclusive, not a
-                // verified negative.
-                throw std::runtime_error("Wiki listed artwork could not be resolved");
+        candidates.push_back(name);
+        std::unordered_set<std::string> tried;
+        unsigned fileLookups=0;
+        const auto inspect=[&](const std::string& title)->std::optional<Artwork::Source>{
+            if(s_stopWorker||!Artwork::PlainTitle(title))return std::nullopt;
+            const auto j=ArtworkPage(title);const auto& p=Artwork::SinglePage(j);
+            if(!Artwork::EligiblePage(p))return std::nullopt;
+            const auto actual=p.at("title").get<std::string>();
+            auto gallery=PageGallery(actual);
+            const auto resolve=[&](const std::vector<std::string>& files)->std::optional<Artwork::Source>{
+                for(const auto& file:files){
+                    if(s_stopWorker)return std::nullopt;
+                    if(!tried.insert(Artwork::Lower(file)).second)continue;
+                    if(++fileLookups>12)throw std::runtime_error("Wiki preview candidate limit");
+                    if(auto src=ResolvePreview(file,actual))return src;
+                }
+                return std::nullopt;
+            };
+            if(auto src=resolve(Artwork::RankedFiles(j,name,gallery)))return src;
+            if(!gallery.set.empty()&&Artwork::Lower(gallery.set)!=Artwork::Lower(actual)){
+                const auto setPage=ArtworkPage(gallery.set);
+                if(Artwork::EligiblePage(Artwork::SinglePage(setPage))){
+                    // Only the verified associated set's named gallery files.
+                    Artwork::Gallery setGallery;setGallery.set=gallery.set;
+                    if(auto src=resolve(Artwork::RankedFiles(setPage,name,setGallery)))return src;
+                }
             }
-        }
-        auto found=ArtworkSearchTitle(skinName);
-        if(!found.empty()&&std::find(candidates.begin(),candidates.end(),found)==candidates.end()){
-            auto file=FindBestImageOnPage(found,skinName);
-            if(!file.empty()){
-                auto url=ResolveImageUrl(file);
-                if(!url.empty()){outPageTitle=found;return url;}
-                throw std::runtime_error("Wiki listed artwork could not be resolved");
-            }
-        }
-        return {};
+            return std::nullopt;
+        };
+        for(const auto& title:candidates)if(auto s=inspect(title))return s;
+        if(s_stopWorker)return std::nullopt;
+        auto found=ArtworkSearchTitle(name);
+        // An unrelated fuzzy result must not lend its gallery to this skin.
+        if(!found.empty()&&Artwork::Lower(found).rfind(Artwork::Lower(name)+" (",0)==0&&
+            std::find(candidates.begin(),candidates.end(),found)==candidates.end())
+            if(auto s=inspect(found))return s;
+        return std::nullopt;
     }
 
     std::string WikiImage::CurrencyIconCachePath(const std::string& key) {
@@ -1163,25 +1200,36 @@ namespace Skinventory {
                 continue;
             }
             try {
-            // Scrape wiki for image URL only
-            std::string matchedPage;
-            std::string imageUrl = ScrapeWikiImageUrl(req.skinName, req.weightClass, matchedPage);
+            auto source=DiscoverPreview(req.skinName,req.weightClass);
             if(s_stopWorker)return;
-
-            if (imageUrl.empty()) {
-                RecordFailure(req.skinId,true,"No preview found on Wiki");
-                continue;
+            if(!source){RecordFailure(req.skinId,true,"No preview found on Wiki");continue;}
+            Artwork::Source previous;
+            {std::lock_guard<std::mutex> lock(s_mutex);auto it=s_sources.find(req.skinId);if(it!=s_sources.end())previous=it->second;}
+            const auto path=GetCacheFilePath(req.skinId,source->revision);
+            const bool unchanged=Artwork::SameRevision(previous,*source)&&PreviewFileExists(path);
+            if(!unchanged&&!HttpClient::DownloadToFile(source->url,path)){
+                RecordFailure(req.skinId,false,"Wiki image download failed");continue;
             }
-
-            // Download to disk
-            std::string filePath = GetCacheFilePath(req.skinId);
-            if (HttpClient::DownloadToFile(imageUrl, filePath)) {
+            if(s_stopWorker)return;
+            // The image is atomically written by the existing HTTP handler.
+            // Commit its pointer only after successful download; previous
+            // files/texture identities are retained, including on failure.
+            std::string error;
+            if(!AlterEgo::Storage::ReplaceFile(std::filesystem::u8path(s_cacheDir+"\\"+std::to_string(req.skinId)+".preview.json"),Artwork::SourceJson(*source).dump(),error)){
+                RecordFailure(req.skinId,false,"Preview metadata could not be saved");continue;
+            }
+            bool persist=false;
+            {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 if(s_stopWorker)return;
-                s_readyQueue.push_back(req.skinId);
-            } else {
-                RecordFailure(req.skinId,false,"Wiki image download failed");
+                s_sources[req.skinId]=*source;
+                s_loading.erase(req.skinId);s_failed.erase(req.skinId);s_imageErrors.erase(req.skinId);
+                persist=s_failedPersistent.erase(req.skinId)>0;
+                if(!unchanged||!s_imageCache.count(req.skinId)||s_textureRevision[req.skinId]!=source->revision){
+                    s_texturePending.erase(req.skinId);s_readyQueue.push_back(req.skinId);
+                }
             }
+            if(persist)SaveFailedCache();
 
             } catch(const std::exception& e) {
                 // Report bounded, fixed diagnostics (never raw remote data).

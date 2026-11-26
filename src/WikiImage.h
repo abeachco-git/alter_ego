@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <map>
 #include "WikiFreshness.h"
+#include "WikiArtworkCore.h"
 #include <mutex>
 #include <atomic>
 #include <vector>
@@ -56,17 +57,19 @@ namespace Skinventory {
         // Is an image currently being fetched?
         static bool IsLoading(uint32_t skinId);
         static std::string ImageStatus(uint32_t skinId);
+        struct PreviewLinks {std::string imageUrl,wikiUrl,localPath;};
+        static PreviewLinks GetPreviewLinks(uint32_t skinId,const std::string& skinName);
 
         // Process ready queue (call every frame from render thread)
         static void Tick();
 
     private:
         static void DownloadWorker();
-        static std::string ScrapeWikiImageUrl(const std::string& skinName,
-                                                    const std::string& weightClass,
-                                                    std::string& outPageTitle);
+        static std::optional<AlterEgo::WikiArtwork::Source> DiscoverPreview(const std::string& skinName,const std::string& weightClass);
         static WikiSkinData ScrapeAcquisitionFromPage(const std::string& pageTitle);
-        static std::string GetCacheFilePath(uint32_t skinId);
+        static std::string GetCacheFilePath(uint32_t skinId,const std::string& revision={});
+        static std::string TextureId(uint32_t skinId,const std::string& revision);
+        static void LoadPreviewSource(uint32_t skinId);
         static std::string GetWikiDataCachePath();
         static std::string GetFailedCachePath();
         static bool LoadFromDisk(uint32_t skinId);
@@ -90,6 +93,9 @@ namespace Skinventory {
         };
 
         static std::unordered_map<uint32_t, Texture_t*> s_imageCache;
+        static std::unordered_map<uint32_t,AlterEgo::WikiArtwork::Source> s_sources;
+        static std::unordered_set<uint32_t> s_sourceChecked;
+        static std::unordered_map<uint32_t,std::string> s_textureRevision;
         static std::unordered_map<uint32_t, WikiSkinData> s_wikiDataCache;
         static std::map<uint32_t,AlterEgo::WikiFreshness::Stamp> s_metadataFreshness;
         static std::unordered_set<uint32_t> s_metadataPending;

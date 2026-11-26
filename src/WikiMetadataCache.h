@@ -136,9 +136,9 @@ inline std::optional<Json> Read(const std::string& root,Kind kind,const std::fil
 }
 inline void ResetUnclassifiedArtworkFailures(Database::Connection& db){
     Database::Transaction tx(db);
-    auto q=db.Prepare("SELECT 1 FROM reference_freshness WHERE dataset='wiki_skin_artwork_failure_policy_v2'");
+    auto q=db.Prepare("SELECT 1 FROM reference_freshness WHERE dataset='wiki_skin_artwork_failure_policy_v3'");
     if(!q.Step()){
-        db.Exec("DELETE FROM wiki_skin_failures; INSERT INTO reference_freshness VALUES('wiki_skin_artwork_failure_policy_v2',1)");
+        db.Exec("DELETE FROM wiki_skin_failures; INSERT INTO reference_freshness VALUES('wiki_skin_artwork_failure_policy_v3',1)");
     }
     tx.Commit();
 }

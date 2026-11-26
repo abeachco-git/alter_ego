@@ -13336,7 +13336,18 @@ static void RenderSkinDetailPanel() {
     // Preview
     sectionHeader("Preview");
 
-    Texture_t* wikiTex = Skinventory::WikiImage::GetImage(g_SkinSelectedId);
+    using Skinventory::WikiImage;
+    // Visible demand, including restored navigation; never scan the catalog.
+    static uint32_t previewDemandId=0;
+    static auto previewDemandAt=std::chrono::steady_clock::time_point{};
+    const auto previewNow=std::chrono::steady_clock::now();
+    if(previewDemandId!=g_SkinSelectedId||previewNow-previewDemandAt>=std::chrono::seconds(60)){
+        previewDemandId=g_SkinSelectedId;previewDemandAt=previewNow;
+        WikiImage::RequestImage(g_SkinSelectedId,skin.name,skin.weight_class);
+    }
+    ImGui::PushID(static_cast<int>(g_SkinSelectedId));
+    ImGui::BeginGroup();
+    Texture_t* wikiTex = WikiImage::GetImage(g_SkinSelectedId);
     if (wikiTex && wikiTex->Resource) {
         float panelWidth = ImGui::GetContentRegionAvail().x;
         float maxHeight = 400.0f;
@@ -13352,15 +13363,28 @@ static void RenderSkinDetailPanel() {
         float displayH = imgH * scale;
 
         ImGui::Image(wikiTex->Resource, ImVec2(displayW, displayH));
+        const auto status=WikiImage::ImageStatus(g_SkinSelectedId);
+        if(WikiImage::IsLoading(g_SkinSelectedId)||status!="Preview cached")ImGui::TextDisabled("%s",status.c_str());
     } else if (Skinventory::WikiImage::IsLoading(g_SkinSelectedId)) {
         const auto status=Skinventory::WikiImage::ImageStatus(g_SkinSelectedId);
         RenderSpinner(status.c_str(), ImVec4(1.0f, 0.85f, 0.0f, 1.0f));
     } else {
         const auto status=Skinventory::WikiImage::ImageStatus(g_SkinSelectedId);
         AlterEgo::RefreshUI::Status(AlterEgo::RefreshUI::State::Waiting,status);
-        if(RenderActionButton("Retry preview"))Skinventory::WikiImage::RequestImage(g_SkinSelectedId,skin.name,skin.weight_class,true);
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("Retry the preview immediately; cached artwork is preferred. Shared Wiki rate limits still apply.");
     }
+    ImGui::EndGroup();
+    if(ImGui::BeginPopupContextItem("##preview_actions")){
+        if(ImGui::MenuItem("Refresh Preview",nullptr,false,!WikiImage::IsLoading(g_SkinSelectedId)))
+            WikiImage::RequestImage(g_SkinSelectedId,skin.name,skin.weight_class,true);
+        ImGui::Separator();
+        const auto links=WikiImage::GetPreviewLinks(g_SkinSelectedId,skin.name);
+        if(ImGui::MenuItem("Copy Image URL",nullptr,false,!links.imageUrl.empty()))CopyToClipboard(links.imageUrl);
+        if(ImGui::MenuItem("Copy Wiki URL",nullptr,false,!links.wikiUrl.empty()))CopyToClipboard(links.wikiUrl);
+        if(ImGui::MenuItem("Copy Local File Path",nullptr,false,!links.localPath.empty()))CopyToClipboard(links.localPath);
+        ImGui::EndPopup();
+    }
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Right-click for preview refresh and copy actions.");
+    ImGui::PopID();
 
     // Action buttons
     ImGui::Separator();

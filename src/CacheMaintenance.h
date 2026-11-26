@@ -136,7 +136,8 @@ inline void Artwork(Archive& a) {
         const auto dot=name.find_last_of('.');
         if(dot==std::string::npos)return false;
         const auto ext=name.substr(dot);
-        return ext==".png"||ext==".jpg"||ext==".jpeg"||name=="wiki_failed.json";
+        return ext==".png"||ext==".jpg"||ext==".jpeg"||name=="wiki_failed.json"||
+            (name.size()>13&&name.compare(name.size()-13,13,".preview.json")==0);
     };
     a.Files("cache/wiki_images",image);
     a.Files("Skinventory/wiki_cache",image);
