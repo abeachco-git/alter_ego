@@ -10204,7 +10204,13 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     } else if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Totals && requiredTotals.present) {
         // Aggregate guide targets are terrestrial. Compare each configured land
         // weapon set independently; never add the alternate set or aquatic gear.
-        auto configs=LiveInfusionConfigurations(liveCharacter,equipmentTab);
+        const auto available=LiveInfusionConfigurations(liveCharacter,equipmentTab);
+        const bool specified=std::any_of(saved.gear.begin(),saved.gear.end(),[](const auto& entry){
+            const auto& slot=entry.first;const auto& gear=entry.second;
+            return (slot=="WeaponA1"||slot=="WeaponA2"||slot=="WeaponB1"||slot=="WeaponB2")&&
+                (gear.item_id||!gear.weapon_type.empty());
+        });
+        auto configs=specified?SavedInfusionConfigurations(saved):available;
         configs.erase(std::remove_if(configs.begin(),configs.end(),[](auto c){
             return c==InfusionConfig::WaterA||c==InfusionConfig::WaterB;
         }),configs.end());
@@ -10212,7 +10218,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         const auto liveTotals=GetLiveInfusionSummary(liveCharacter,equipmentTab,config);
         const std::string prefix=configs.size()>1?std::string(AlterEgo::InfusionConfigurationLabel(config))+" / ":"";
         if (!requiredTotals.complete || !liveTotals.complete ||
-            liveCharacter.equipment.empty()) {
+            liveCharacter.equipment.empty()||std::find(available.begin(),available.end(),config)==available.end()) {
             result.AddUnverified("Infusion totals", prefix+"Totals", "Unknown", "Metadata unavailable");
         } else {
             const int minAR = AlterEgo::AgonyRequirement(requiredTotals.agonyResistance);

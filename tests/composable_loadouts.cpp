@@ -44,6 +44,30 @@ static const Json kExample = Json::parse(R"({
 
 int case_composable_loadouts(int, char**) {
     std::string error;
+    {
+        using AlterEgo::InfusionMode;
+        const Json totals={{"infusion_summary_present",true},{"infusion_ar_total",150}};
+        const Json water={{"gear",{{"HelmAquatic",{{"infusion_attributes",Json::array({"Power"})}}}}}};
+        assert(InfusionPayloadMode(totals)==InfusionMode::Totals);
+        assert(InfusionPayloadMode(water)==InfusionMode::Slots);
+        auto mixed=totals;mixed["gear"]=water.at("gear");
+        assert(InfusionPayloadMode(mixed)==InfusionMode::Conflict);
+        Document before;
+        before.components["infusions"].push_back({"i","Totals",totals});
+        before.components["aquatic"].push_back({"a","Aquatic",Json::object()});
+        Loadout l;l.id="L";l.metadata={{"id","L"},{"name","Test"}};l.refs={{"infusions","i"},{"aquatic","a"}};
+        before.loadouts.push_back(l);
+        before.equipment_sets.push_back({"set","Test Set",{{"infusions","i"},{"aquatic","a"}}});
+        auto after=before;
+        after.components["aquatic"][0].data=water;
+        assert(!ValidateNoNewInfusionConflicts(before,after,error));
+        assert(ValidateNoNewInfusionConflicts(after,after,error)); // legacy unchanged
+        assert(ValidateNoNewInfusionConflicts(after,before,error)); // resolution allowed
+        auto onlySet=before;onlySet.loadouts.clear();
+        auto mixedSet=after;mixedSet.loadouts.clear();
+        assert(!ValidateNoNewInfusionConflicts(onlySet,mixedSet,error));
+    }
+    error.clear();
     // Content-derived names are independent of the originating loadout.
     const Json sampleArmor = {{"gear", {{"Helm", {{"stat_name","Berserker"}}},
                                         {"Coat", {{"stat_name","Berserker"}}}}}};

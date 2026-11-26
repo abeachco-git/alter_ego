@@ -870,7 +870,10 @@ static bool ComponentNativeInfusionRequirements(ComponentJson& data) {
     }
     if(ImGui::BeginPopup("##component_total_mode")){
         ImGui::TextWrapped("Individual terrestrial infusion requirements will be removed on Save. A linked Aquatic component is not modified here.");
-        const auto configs=SavedInfusionConfigurations(projection);
+        auto configs=SavedInfusionConfigurations(projection);
+        configs.erase(std::remove_if(configs.begin(),configs.end(),[](auto c){
+            return c==InfusionConfig::WaterA||c==InfusionConfig::WaterB;
+        }),configs.end());
         static int selected=-1;
         if(ImGui::IsWindowAppearing())selected=configs.size()==1?static_cast<int>(configs.front()):-1;
         const bool restore=mode==InfusionMode::Conflict||g_ComponentInfusionTotalsDraft.has_value();
@@ -881,7 +884,9 @@ static bool ComponentNativeInfusionRequirements(ComponentJson& data) {
         const bool picked=std::any_of(configs.begin(),configs.end(),[&](auto c){return static_cast<int>(c)==selected;});
         auto total=picked?ComputeSavedSlotInfusions(projection,static_cast<InfusionConfig>(selected)):InfusionSummary{false,false,0,{}};
         if(!restore&&picked&&!total.complete)ImGui::TextDisabled("Exact amounts or metadata are incomplete.");
-        if((restore||(picked&&total.complete))&&RenderActionButton("Switch to totals")){
+        const bool calculatedSwitch=(restore||(picked&&total.complete))&&RenderActionButton("Switch to totals");
+        const bool blankSwitch=!restore&&RenderActionButton("Start blank manual totals");
+        if(calculatedSwitch||blankSwitch){
             g_ComponentInfusionSlotDraft=data;
             GearEdit::ClearComponentInfusionSlots(data);
             if(mode!=InfusionMode::Conflict){
@@ -890,6 +895,7 @@ static bool ComponentNativeInfusionRequirements(ComponentJson& data) {
                     for(const char* key:{"infusion_totals","infusion_summary_present","infusion_ar_total","infusion_stat_totals"})
                         if(g_ComponentInfusionTotalsDraft->contains(key))data[key]=g_ComponentInfusionTotalsDraft->at(key);
                 }else{
+                    if(blankSwitch)total={true,true,0,{}};
                     data["infusion_summary_present"]=true;data["infusion_ar_total"]=total.agonyResistance;
                     data["infusion_stat_totals"]=total.stats;
                 }
@@ -901,6 +907,13 @@ static bool ComponentNativeInfusionRequirements(ComponentJson& data) {
     if(mode==InfusionMode::Slots){
         ImGui::TextDisabled("Calculated from this terrestrial component only; aquatic upgrades belong to Aquatic.");
         RenderSlotInfusionSummaries(projection);
+        if(g_ComponentInfusionTotalsDraft&&ImGui::CollapsingHeader("Previous aggregate targets (unsaved reference)")){
+            SavedBuild previous;
+            if(ComponentInfusionProjection(*g_ComponentInfusionTotalsDraft,previous)){
+                ForgetSlotInfusions(previous);
+                ImGui::PushID("previous_targets");RenderInfusionTotals(GetSavedInfusionSummary(previous));ImGui::PopID();
+            }
+        }
     }else if(mode==InfusionMode::Totals){
         const auto total=GetSavedInfusionSummary(projection);
         std::function<void(const InfusionSummary&)> update;
@@ -909,6 +922,17 @@ static bool ComponentNativeInfusionRequirements(ComponentJson& data) {
             data["infusion_summary_present"]=true;data["infusion_ar_total"]=next.agonyResistance;
             data["infusion_stat_totals"]=next.stats;
         };
+        if(!total.complete&&RenderActionButton("Replace with blank manual totals..."))
+            ImGui::OpenPopup("##component_manual_targets");
+        if(ImGui::BeginPopup("##component_manual_targets")){
+            ImGui::TextWrapped("Imported amounts cannot be verified. Starting blank replaces them on Save.");
+            if(RenderActionButton("Start manual totals")){
+                GearEdit::ClearComponentInfusionTotals(data);data["infusion_summary_present"]=true;
+                data["infusion_ar_total"]=0;data["infusion_stat_totals"]=ComponentJson::object();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
         RenderInfusionTotals(total,update);
         if(!projection.infusion_totals.empty())ImGui::TextDisabled("Imported aggregate recommendations; editing converts to numeric targets.");
     }

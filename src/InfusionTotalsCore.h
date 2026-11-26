@@ -18,6 +18,9 @@ struct InfusionSummary {
  // A mixed legacy projection must be resolved explicitly, never silently
  // prefer one side or compare both. Empty recorded slots are meaningful.
 enum class InfusionMode { Slots, Totals, Conflict };
+inline InfusionMode ResolveInfusionMode(bool totals,bool slots){
+    return !totals?InfusionMode::Slots:slots?InfusionMode::Conflict:InfusionMode::Totals;
+}
 enum class InfusionConfiguration { LandA, LandB, WaterA, WaterB };
 inline bool InfusionSlotEligible(const std::string& slot) {
     return slot!="Amulet"&&slot!="Relic";
@@ -60,9 +63,10 @@ template<class Slot> bool HasSlotInfusionData(const Slot& s) {
 }
 template<class Build> InfusionMode GetInfusionMode(const Build& b) {
     const bool totals=b.infusion_summary_present || !b.infusion_totals.empty();
-    if(!totals)return InfusionMode::Slots;
-    for(const auto& entry:b.gear)if(InfusionSlotEligible(entry.first)&&HasSlotInfusionData(entry.second))return InfusionMode::Conflict;
-    return InfusionMode::Totals;
+    const bool slots=std::any_of(b.gear.begin(),b.gear.end(),[](const auto& entry){
+        return InfusionSlotEligible(entry.first)&&HasSlotInfusionData(entry.second);
+    });
+    return ResolveInfusionMode(totals,slots);
 }
 template<class Build> void ForgetAggregateInfusions(Build& b) {
     b.infusion_summary_present=false;b.infusion_ar_total=0;

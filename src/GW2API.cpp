@@ -2470,6 +2470,10 @@ namespace AlterEgo {
         Composable::Document next=before;
         if (!edit(next, error) || !Composable::Validate(next, error))
             return false;
+        if(!Composable::ValidateNoNewInfusionConflicts(before,next,error)){
+            if(s_api)s_api->Log(LOGL_WARNING,"AlterEgo",error.c_str());
+            return false;
+        }
 
         // The game chat link is derived from specialization/skill selection.
         // AE2 embeds both skills and gear; invalidate it whenever a component
@@ -2592,6 +2596,10 @@ namespace AlterEgo {
         if(revision!=GetBuildLibraryRevision()||!GetComposableLoadouts(snapshot)||
            revision!=GetBuildLibraryRevision()||!Composable::FromJson(snapshot,doc,error))
             return Composable::Fail(error,"Library changed or could not be loaded.");
+        const auto* original=Composable::FindLoadout(doc,draft.id);
+        if(GetInfusionMode(draft)==InfusionMode::Conflict&&original&&
+            Composable::InfusionReferenceMode(doc,Composable::EffectiveRefs(doc,*original))!=InfusionMode::Conflict)
+            return Composable::Fail(error,"Resolve the mixed infusion requirements in the Loadout draft before saving.");
         if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,setId,fashionId,refs,error))return false;
         const auto* l=Composable::FindLoadout(doc,draft.id);
         json raw;SavedBuild baseline;

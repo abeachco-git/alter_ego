@@ -1,6 +1,7 @@
 #pragma once
 #include "UntrustedInput.h"
 #include "EquipmentChoiceCore.h"
+#include "InfusionTotalsCore.h"
 // Alter Ego v3 composable Loadout model.
 //
 // This is a pure, platform-independent data layer. Build templates, physical
@@ -178,6 +179,61 @@ inline bool Validate(const Document& doc, std::string& error) {
         for(const auto& [kind,id]:set.refs)
             if(!IsEquipmentKind(kind)||!Find(doc,kind,id))
                 return Fail(error,"Unresolved equipment set component: "+kind);
+    }
+    return true;
+}
+
+// Derive the mode from exact typed stored data without changing old payloads.
+struct InfusionPresence { bool totals=false, slots=false; };
+inline InfusionPresence InfusionPayloadPresence(const Json& data) {
+    InfusionPresence flags;
+    if(!data.is_object())return flags;
+    const auto summary=data.find("infusion_summary_present");
+    flags.totals=summary!=data.end()&&(!summary->is_boolean()||*summary==true);
+    const auto aggregate=data.find("infusion_totals");
+    if(aggregate!=data.end()&&(!aggregate->is_array()||!aggregate->empty()))flags.totals=true;
+    const auto gear=data.find("gear");
+    if(gear!=data.end()&&gear->is_object())for(auto slot=gear->begin();slot!=gear->end();++slot){
+        if(!InfusionSlotEligible(slot.key())||!slot->is_object())continue;
+        const auto snapshot=slot->find("infusion_snapshot");
+        if(snapshot!=slot->end()&&(!snapshot->is_boolean()||*snapshot==true))flags.slots=true;
+        const auto legacy=slot->find("infusion");
+        if(legacy!=slot->end()&&(!legacy->is_string()||*legacy!=""))flags.slots=true;
+        const auto ids=slot->find("infusion_ids");
+        if(ids!=slot->end()&&(!ids->is_array()||std::any_of(ids->begin(),ids->end(),[](const auto& v){return !v.is_number_integer()||v!=0;})))flags.slots=true;
+        const auto attrs=slot->find("infusion_attributes");
+        if(attrs!=slot->end()&&(!attrs->is_array()||std::any_of(attrs->begin(),attrs->end(),[](const auto& v){return !v.is_string()||v!="";})))flags.slots=true;
+    }
+    return flags;
+}
+inline InfusionMode InfusionPayloadMode(const Json& data) {
+    const auto flags=InfusionPayloadPresence(data);return ResolveInfusionMode(flags.totals,flags.slots);
+}
+inline InfusionMode InfusionReferenceMode(const Document& doc,const std::map<std::string,std::string>& refs) {
+    InfusionPresence flags;
+    for(const auto& [kind,id]:refs){
+        if(kind!="infusions"&&kind!="aquatic")continue;
+        const auto* part=Find(doc,kind,id);if(!part)continue;
+        const auto partFlags=InfusionPayloadPresence(part->data);
+        flags.totals|=partFlags.totals;flags.slots|=partFlags.slots;
+    }
+    return ResolveInfusionMode(flags.totals,flags.slots);
+}
+// New conflicts caused by shared edits/references are prohibited. Existing
+// legacy mixed records may still be read, renamed, imported, or duplicated;
+// their data is never discarded just to satisfy a new invariant.
+inline bool ValidateNoNewInfusionConflicts(const Document& before,const Document& after,std::string& error) {
+    for(const auto& l:after.loadouts){
+        const auto* old=FindLoadout(before,l.id);
+        if(old&&InfusionReferenceMode(before,EffectiveRefs(before,*old))!=InfusionMode::Conflict&&
+            InfusionReferenceMode(after,EffectiveRefs(after,l))==InfusionMode::Conflict)
+            return Fail(error,"Loadout '"+l.metadata.value("name",l.id)+"' would mix aggregate and slot infusions. Resolve together in Loadout Edit.");
+    }
+    for(const auto& set:after.equipment_sets){
+        const auto* old=FindEquipmentSet(before,set.id);
+        if(old&&InfusionReferenceMode(before,old->refs)!=InfusionMode::Conflict&&
+            InfusionReferenceMode(after,set.refs)==InfusionMode::Conflict)
+            return Fail(error,"Equipment Set '"+set.name+"' would mix aggregate and slot infusions. Choose compatible Infusions and Aquatic components.");
     }
     return true;
 }

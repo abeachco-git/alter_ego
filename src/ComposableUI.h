@@ -157,16 +157,10 @@ static std::string ComponentUIShortDescription(const std::string& kind,
         return profession.empty() ? "Specializations and traits" : profession;
     }
     if (kind == "skills") return "Heal, utility and elite skills";
-    if (kind == "infusions") {
-        auto summary = AlterEgo::Composable::Semantics::Infusions(data);
-        if (summary.known) {
-            int count = 0;
-            for (const auto& entry : summary.counts) count += entry.second;
-            return std::to_string(count) + " recorded infusions";
-        }
-        if (data.contains("infusion_summary_present"))
-            return "Aggregate AR / stat requirements";
-        return "No verified infusion totals";
+    if(kind=="infusions"){
+        const auto mode=AlterEgo::Composable::InfusionPayloadMode(data);
+        return mode==AlterEgo::InfusionMode::Conflict?"Mixed legacy requirements":
+            mode==AlterEgo::InfusionMode::Totals?"Aggregate AR / stat targets":"Per-slot infusion requirements";
     }
     if (kind == "runes") {
         auto summary = AlterEgo::Composable::Semantics::Runes(data);
@@ -195,30 +189,22 @@ static std::string ComponentUIShortDescription(const std::string& kind,
 // remains deliberately lossless: it reads the same component payload, without
 // interpreting missing item names as empty slots.
 static void ComponentStoredNameActions(const ComponentJson& item);
+static bool ComponentInfusionProjection(const ComponentJson& data,AlterEgo::SavedBuild& b);
 static void RenderComponentInventory(const std::string& kind, const ComponentJson& data) {
     if (!data.is_object()) return;
-    if (kind == "runes" || kind == "sigils" || kind == "infusions") {
-        AlterEgo::Composable::Semantics::Summary summary;
-        if (kind == "runes") summary = AlterEgo::Composable::Semantics::Runes(data);
-        else if (kind == "sigils") summary = AlterEgo::Composable::Semantics::Sigils(data);
-        else summary = AlterEgo::Composable::Semantics::Infusions(data);
-        ImGui::TextDisabled("%s", summary.known
-            ? "Functional totals (slot independent where applicable)"
-            : "Totals cannot be verified from saved fields");
-        for (const auto& entry : summary.counts)
-            ImGui::BulletText("%d x %s", entry.second, entry.first.c_str());
-        if (kind == "infusions" && data.contains("infusion_ar_total") &&
-            data["infusion_ar_total"].is_number_integer())
-            ImGui::Text("Saved agony resistance: %d",
-                data["infusion_ar_total"].get<int>());
-        if (kind == "infusions" && data.contains("infusion_stat_totals") &&
-            data["infusion_stat_totals"].is_object()) {
-            for (auto it = data["infusion_stat_totals"].begin();
-                 it != data["infusion_stat_totals"].end(); ++it)
-                if (it.value().is_number_integer())
-                    ImGui::BulletText("%s: %lld", it.key().c_str(),
-                        static_cast<long long>(it.value().get<int64_t>()));
-        }
+    if(kind=="infusions"){
+        AlterEgo::SavedBuild projection;
+        if(ComponentInfusionProjection(data,projection)){
+            const auto mode=AlterEgo::GetInfusionMode(projection);
+            if(mode==AlterEgo::InfusionMode::Conflict)ImGui::TextWrapped("Mixed legacy requirements: resolve in Edit before comparing.");
+            else if(mode==AlterEgo::InfusionMode::Totals)RenderInfusionTotals(GetSavedInfusionSummary(projection));
+            else RenderSlotInfusionSummaries(projection);
+        }else ImGui::TextDisabled("Unsupported infusion data; exact fields preserved.");
+    }
+    if(kind=="runes"||kind=="sigils"){
+        const auto summary=kind=="runes"?AlterEgo::Composable::Semantics::Runes(data):AlterEgo::Composable::Semantics::Sigils(data);
+        ImGui::TextDisabled("%s",summary.known?"Functional totals (slot independent where applicable)":"Totals cannot be verified from saved fields");
+        for(const auto& entry:summary.counts)ImGui::BulletText("%d x %s",entry.second,entry.first.c_str());
     }
     if (kind == "relic") {
         if (data.contains("relic_name") && data["relic_name"].is_string()){
@@ -355,6 +341,20 @@ static bool ComponentUIEditorCanCommit() {
     if (!g_ComponentEditorDraft.is_object()) {
         g_ComponentEditorError = "Component data must be an object.";
         return false;
+    }
+    if(g_ComponentEditorMode=="edit"&&(g_ComponentEditorKind=="infusions"||g_ComponentEditorKind=="aquatic")){
+        AlterEgo::Composable::Document before;
+        std::string error;
+        if(!AlterEgo::Composable::FromJson(ComponentUISnapshot(),before,error)){
+            g_ComponentEditorError="Library changed or is unavailable.";return false;
+        }
+        auto next=before;
+        auto* part=AlterEgo::Composable::Find(next,g_ComponentEditorKind,g_ComponentEditorId);
+        if(!part){g_ComponentEditorError="Component is no longer available.";return false;}
+        part->data=g_ComponentEditorDraft;
+        if(!AlterEgo::Composable::ValidateNoNewInfusionConflicts(before,next,error)){
+            g_ComponentEditorError=error;return false;
+        }
     }
     return true;
 }

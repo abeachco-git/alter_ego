@@ -279,19 +279,24 @@ static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::
         }
         if(ImGui::BeginPopup("##confirm_total_mode")){
             ImGui::TextWrapped("Individual infusion identities and placement will be removed on Save. You can switch back before saving.");
-            const auto configs=SavedInfusionConfigurations(build);
+            auto configs=SavedInfusionConfigurations(build);
+            configs.erase(std::remove_if(configs.begin(),configs.end(),[](auto c){
+                return c==InfusionConfig::WaterA||c==InfusionConfig::WaterB;
+            }),configs.end());
             static int chosen=-1;
             if(ImGui::IsWindowAppearing())chosen=configs.size()==1?static_cast<int>(configs.front()):-1;
             const bool reuse=mode==InfusionMode::Conflict||g_InfusionTotalsDraft.has_value();
             if(!reuse){
-                ImGui::TextUnformatted("Choose the configuration to calculate:");
+                ImGui::TextUnformatted("Aggregate targets apply to terrestrial equipment. Choose a reference set:");
                 for(auto config:configs)
                     if(ImGui::RadioButton(InfusionConfigurationLabel(config),chosen==static_cast<int>(config)))chosen=static_cast<int>(config);
             }
             const bool selected=std::any_of(configs.begin(),configs.end(),[&](auto c){return static_cast<int>(c)==chosen;});
             const auto calculated=selected?ComputeSavedSlotInfusions(build,static_cast<InfusionConfig>(chosen)):InfusionSummary{false,false,0,{}};
-            if(!reuse&&selected&&!calculated.complete)ImGui::TextDisabled("Metadata or exact amounts are incomplete; cannot convert.");
-            if((reuse||(selected&&calculated.complete))&&RenderActionButton("Switch to totals")){
+            if(!reuse&&selected&&!calculated.complete)ImGui::TextDisabled("Metadata or amounts are incomplete; automatic calculation is unavailable.");
+            const bool calculatedSwitch=(reuse||(selected&&calculated.complete))&&RenderActionButton("Switch to totals");
+            const bool blankSwitch=!reuse&&RenderActionButton("Start blank manual totals");
+            if(calculatedSwitch||blankSwitch){
                 g_InfusionSlotDraft=*edit;
                 if(mode==InfusionMode::Conflict){
                     ForgetSlotInfusions(*edit);
@@ -302,15 +307,15 @@ static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::
                     edit->infusion_summary_present=old.infusion_summary_present;
                     edit->infusion_ar_total=old.infusion_ar_total;
                     edit->infusion_stat_totals=old.infusion_stat_totals;
-                }else SetNumericInfusionTotals(*edit,calculated);
+                }else SetNumericInfusionTotals(*edit,blankSwitch?InfusionSummary{true,true,0,{}}:calculated);
                 MarkEditDirty();ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }
-        if(mode==InfusionMode::Slots&&g_InfusionTotalsDraft){
-            const auto& old=*g_InfusionTotalsDraft;
-            if(old.infusion_summary_present)
-                ImGui::TextDisabled("Previous target: %d AR (restore with Use totals).",old.infusion_ar_total);
+        if(mode==InfusionMode::Slots&&g_InfusionTotalsDraft&&
+            ImGui::CollapsingHeader("Previous aggregate targets (unsaved reference)")){
+            auto prior=*g_InfusionTotalsDraft;ForgetSlotInfusions(prior);
+            ImGui::PushID("previous_targets");RenderInfusionTotals(GetSavedInfusionSummary(prior));ImGui::PopID();
         }
     }
     if(mode==InfusionMode::Slots)RenderSlotInfusionSummaries(build);
@@ -318,6 +323,15 @@ static void RenderSavedInfusionMode(const AlterEgo::SavedBuild& build,AlterEgo::
         std::function<void(const InfusionSummary&)> update;
         if(edit&&summary.complete)update=[&](const InfusionSummary& next){UpdateInfusionEditDraft(*edit,next);};
         if(!build.infusion_totals.empty())ImGui::TextDisabled("Imported aggregate recommendations; editing converts to numeric targets.");
+        if(edit&&!summary.complete&&RenderActionButton("Replace with blank manual totals..."))
+            ImGui::OpenPopup("##manual_targets");
+        if(ImGui::BeginPopup("##manual_targets")){
+            ImGui::TextWrapped("Imported amounts cannot be verified. Starting blank replaces these recommendations on Save.");
+            if(RenderActionButton("Start manual totals")){
+                UpdateInfusionEditDraft(*edit,{true,true,0,{}});ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
         RenderInfusionTotals(summary,update);
     }
 }

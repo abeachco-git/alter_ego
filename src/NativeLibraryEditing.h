@@ -307,6 +307,8 @@ inline bool CreateEquipmentSet(Composable::Document& doc,const std::string& id,c
         for(const auto& [kind,ref]:refs)
             if(!Composable::IsEquipmentKind(kind)||!Composable::Find(next,kind,ref))
                 return Composable::Fail(err,"Invalid equipment set component.");
+        if(Composable::InfusionReferenceMode(next,refs)==InfusionMode::Conflict)
+            return Composable::Fail(err,"Choose compatible Infusions and Aquatic components; aggregate and slot modes cannot coexist.");
         next.equipment_sets.push_back({id,name,refs});
         return true;
     },error);
