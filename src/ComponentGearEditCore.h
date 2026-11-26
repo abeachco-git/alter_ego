@@ -55,7 +55,8 @@ template<class Slot> bool ReadComponentField(const GearJson& part,CopyField fiel
             out.infusion_snapshot=part.at("infusion_snapshot").get<bool>();
         }
         if(!str("infusion",out.infusion))return false;
-        if(requirePresent&&!out.infusion.empty()&&out.infusion_ids.empty()&&out.infusion_attributes.empty())return false;
+        if(requirePresent&&!HasInfusionRequirements(out))return false;
+        if(requirePresent&&!out.infusion.empty()&&out.infusion_ids.empty()&&out.infusion_attributes.empty()&&!out.infusion_snapshot)return false;
     }
     return ok&&(!requirePresent||any);
 }
@@ -73,12 +74,12 @@ template<class Slot> void WriteComponentField(GearJson& part,CopyField field,boo
     }
 }
 template<class Slot> bool ApplyComponentField(GearJson& dest,CopyField field,bool armor,
-    const Slot& source,int capacity){
+    const Slot& source,int capacity,bool capacityVerified=true){
     Slot value{};
     if(!ReadComponentField(dest,field,armor,value,false))return false;
     if(field==CopyField::Stats)CopyStats(value,source);
     else if(field==CopyField::Upgrade){if(armor)CopyRune(value,source);else CopySigils(value,source,capacity);}
-    else if(field==CopyField::Infusions){if(capacity<=0)return false;CopyInfusions(value,source,capacity);}
+    else if(field==CopyField::Infusions){if(capacity<=0||!CopyInfusions(value,source,capacity,capacityVerified))return false;}
     else return false;
     WriteComponentField(dest,field,armor,value);return true;
 }

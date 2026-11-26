@@ -252,10 +252,10 @@ static void ComponentNativeSpecializations(ComponentJson& data,
                     const uint32_t tid = definition->major_traits[tier * 3 + option];
                     const bool selected = choice == static_cast<int>(tid) ||
                         (choice < 0 && -choice == option + 1);
-                    bool clicked = false;
-                    RenderTraitIcon(tid, selected, false, 34, true, &clicked);
-                    if (clicked) {
-                        traits[tier] = tid;
+                    bool clicked = false, clearRequested=false;
+                    RenderTraitIcon(tid, selected, false, 34, true, &clicked,&clearRequested);
+                    if (clicked||clearRequested) {
+                        traits[tier] = clearRequested?0:tid;
                         spec["traits"] = traits;
                     }
                 }
@@ -581,6 +581,7 @@ static bool ComponentGearApply(ComponentJson& part,const std::string& kind,const
     const bool knownTwo=weapon&&!type.empty()&&IsWeaponTwoHanded(profession,type);
     const bool knownWeapon=weapon&&!type.empty();
     int capacity=1;
+    bool capacityVerified=false;
     if(clip.field==GearCopyField::Upgrade&&weapon){
         const bool second=clip.data.sigil2_id||!clip.data.sigil2.empty();
         capacity=IsOffhandSlot(slot)?1:knownWeapon?(knownTwo?2:1):second?2:1;
@@ -590,15 +591,13 @@ static bool ComponentGearApply(ComponentJson& part,const std::string& kind,const
         capacity=InfusionCapacity(slot,knownWeapon?knownTwo:!IsOffhandSlot(slot));
         if(exactItem){
             const auto info=AlterEgo::GW2API::GetItemInfo(part["item_id"].get<uint32_t>());
-            if(info&&info->details.is_object()&&info->details.contains("infusion_slots")&&info->details["infusion_slots"].is_array())
+            if(info&&info->details.is_object()&&info->details.contains("infusion_slots")&&info->details["infusion_slots"].is_array()){
                 capacity=std::min(capacity,static_cast<int>(info->details["infusion_slots"].size()));
+                capacityVerified=true;
+            }
         }
-        // With no confirmed item capacity, retain the source pattern rather
-        // than filling hypothetical additional sockets.
-        if(!exactItem&&!(knownWeapon&&knownTwo))
-            capacity=std::min(capacity,std::max(1,static_cast<int>(std::max(clip.data.infusion_ids.size(),clip.data.infusion_attributes.size()))));
     }
-    return ApplyComponentField(part,clip.field,IsArmorSlot(slot),clip.data,capacity);
+    return ApplyComponentField(part,clip.field,IsArmorSlot(slot),clip.data,capacity,capacityVerified);
 }
 
 // Same canonical slot order and readable details as Components > Inventory.

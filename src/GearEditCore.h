@@ -72,7 +72,15 @@ inline int InfusionSelectionAfterRemoval(int selected,size_t removed,size_t rema
     if(static_cast<size_t>(selected)>removed)--selected;
     return std::min(selected,static_cast<int>(remaining-1));
 }
-template<class Slot> void CopyInfusions(Slot& dest, const Slot& source, int capacity) {
+// An empty snapshot is an explicit requirement; missing data must not clear
+// another slot. An unknown socket count is not permission to fill the maximum.
+template<class Slot> bool HasInfusionRequirements(const Slot& source) {
+    return source.infusion_snapshot ||
+        std::any_of(source.infusion_ids.begin(),source.infusion_ids.end(),[](auto id){return id!=0;}) ||
+        std::any_of(source.infusion_attributes.begin(),source.infusion_attributes.end(),[](const auto& a){return !a.empty();});
+}
+template<class Slot> bool CopyInfusions(Slot& dest, const Slot& source, int capacity, bool capacityVerified=true) {
+    if(!HasInfusionRequirements(source))return false;
     using Id = typename decltype(source.infusion_ids)::value_type;
     std::vector<Id> ids;
     std::vector<std::string> attrs;
@@ -82,10 +90,13 @@ template<class Slot> void CopyInfusions(Slot& dest, const Slot& source, int capa
         const std::string attr = i < source.infusion_attributes.size() ? source.infusion_attributes[i] : "";
         if (id || !attr.empty()) { ids.push_back(id); attrs.push_back(attr); }
     }
+    if(!capacityVerified && ids.size()<static_cast<size_t>(std::max(0,capacity)))
+        capacity=static_cast<int>(ids.size());
     dest.infusion_ids = FillPattern(ids, capacity);
     dest.infusion_attributes = FillPattern(attrs, capacity);
     dest.infusion_snapshot = true;
     dest.infusion.clear();
+    return true;
 }
 template<class Slot> void CopyStats(Slot& dest,const Slot& source){
     dest.stat_id=source.stat_id;dest.stat_name=source.stat_name;

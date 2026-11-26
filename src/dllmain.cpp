@@ -3913,7 +3913,7 @@ static void DrawDottedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, floa
 // Helper: render a single trait icon with selected/dimmed state and tooltip
 // Returns the center screen position of the rendered icon
 static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, float size,
-                              bool editable = false, bool* clicked = nullptr,bool externalContext=false) {
+                              bool editable = false, bool* clicked = nullptr,bool* clearRequested=nullptr) {
     const auto tinfo = AlterEgo::GW2API::GetTraitInfo(trait_id);
 
     ImGui::PushID((int)(trait_id + 2000000));
@@ -3979,8 +3979,15 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
         ImGui::EndTooltip();
     }
 
-    if(tinfo&&!externalContext&&ImGui::BeginPopupContextItem("##trait_name")) {
-        CopyNameMenuItem(tinfo->name);ImGui::EndPopup();
+    const bool canClear=clearRequested&&selected&&!isMinor;
+    if((tinfo||canClear)&&ImGui::BeginPopupContextItem("##trait_name")) {
+        if(tinfo)CopyNameMenuItem(tinfo->name);
+        if(canClear){
+            if(tinfo)ImGui::Separator();
+            if(AlterEgo::UI::MenuAction("Clear Trait",AlterEgo::UI::MenuIcon::Delete))
+                *clearRequested=true;
+        }
+        ImGui::EndPopup();
     }
     ImGui::PopID();
     return center;
@@ -4707,16 +4714,12 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                             int majorIdx = tier * 3 + row;
                             uint32_t tid = specInfo->major_traits[majorIdx];
                             bool selected = ((uint32_t)spec.traits[tier] == tid);
-                            ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz,false,nullptr,g_LibEditMode&&selected);
-                            if (g_LibEditMode && selected &&
-                                ImGui::BeginPopupContextItem("##trait_edit_context")) {
-                                const auto trait=AlterEgo::GW2API::GetTraitInfo(tid);
-                                if(trait)CopyNameMenuItem(trait->name);
-                                if (ImGui::MenuItem("Clear Trait")) {
-                                    g_EditDraft.specializations[i].traits[tier] = 0;
-                                    MarkEditDirty();
-                                }
-                                ImGui::EndPopup();
+                            bool clearRequested=false;
+                            ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz,false,nullptr,
+                                                       g_LibEditMode?&clearRequested:nullptr);
+                            if(clearRequested){
+                                g_EditDraft.specializations[i].traits[tier] = 0;
+                                MarkEditDirty();
                             }
                             if (selected) {
                                 selectedCenters[tier] = c;
@@ -7293,15 +7296,19 @@ static bool GearSlotBlocked(const AlterEgo::SavedBuild& b, const std::string& sl
     auto it = b.gear.find(slot == "WeaponA2" ? "WeaponA1" : "WeaponB1");
     return it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
 }
-static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
+static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot,
+    bool* capacityVerified=nullptr) {
+    if(capacityVerified)*capacityVerified=false;
     auto it = b.gear.find(slot);
     const bool two = it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
     int capacity = AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
     if (capacity && it != b.gear.end() && it->second.item_id) {
         const auto info = AlterEgo::GW2API::GetItemInfo(it->second.item_id);
         if (info && info->details.is_object() && info->details.contains("infusion_slots") &&
-            info->details["infusion_slots"].is_array())
+            info->details["infusion_slots"].is_array()){
             capacity = std::min(capacity, static_cast<int>(info->details["infusion_slots"].size()));
+            if(capacityVerified)*capacityVerified=true;
+        }
     }
     return capacity;
 }
@@ -7377,12 +7384,10 @@ static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,c
         if (IsWeaponSlot(slot)) AlterEgo::GearEdit::CopySigils(dest,c.data,GearSigilCapacity(b,slot));
     }
     if (c.field == GearCopyField::All || c.field == GearCopyField::Infusions) {
-        if (GearInfusionCapacity(b,slot) > 0 &&
-            (c.field == GearCopyField::Infusions || !c.data.infusion_ids.empty() ||
-             !c.data.infusion_attributes.empty() || c.data.infusion_snapshot)) {
-            AlterEgo::GearEdit::CopyInfusions(dest,c.data,GearInfusionCapacity(b,slot));
+        bool capacityVerified=false;
+        const int capacity=GearInfusionCapacity(b,slot,&capacityVerified);
+        if(capacity>0&&AlterEgo::GearEdit::CopyInfusions(dest,c.data,capacity,capacityVerified))
             InvalidateGearInfusionTotals(b);
-        }
     }
     MarkGearEditDirty(b);
 }
@@ -7421,6 +7426,8 @@ static GearClipboard CaptureGearClipboard(const AlterEgo::SavedBuild& b,const st
         if (!any) { c.data.rune = b.rune_name; c.data.rune_id = b.rune_id; }
     }
     c.relicId = b.relic_id; c.relicName = b.relic_name;
+    if(field==GearCopyField::Infusions)
+        c.valid=AlterEgo::GearEdit::HasInfusionRequirements(c.data);
     return c;
 }
 static void CopyGearToGroup(AlterEgo::SavedBuild& b,const GearClipboard& c,const std::string& group) {
@@ -9527,10 +9534,14 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
                             } else {
                                 selected = ((uint32_t)spec.traits[tier] == tid);
                             }
-                            bool tClicked = false;
+                            bool tClicked = false, clearRequested=false;
                             ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz,
-                                                       g_LibEditMode, &tClicked);
-                            if (tClicked) {
+                                                       g_LibEditMode, &tClicked,
+                                                       g_LibEditMode?&clearRequested:nullptr);
+                            if(clearRequested){
+                                g_EditDraft.specializations[i].traits[tier] = 0;
+                                MarkEditDirty();
+                            }else if (tClicked) {
                                 g_EditDraft.specializations[i].traits[tier] = (int)tid;
                                 MarkEditDirty();
                             }
