@@ -227,3 +227,5 @@ Verification: implementation commits `d7bb44f` and `a8961e3` passed required off
 
 - [x] Cooperative HTTP phase budget and owning handles for common HTTP paths; bounded public metadata parsing; callback admission starts after subsystem initialization and dedicated artwork workers join before cache reset. Strictly monotonic process-local snapshot capture timestamps. Implementation pending CI verification.
 - [ ] Remaining hardening: true per-record request-start ordering across full/partial item and skin catalog writers (capture timestamps alone do not solve this), complete metadata owner audit, host callback quiescence and asynchronous cancellable HTTP transport. Live Nexus/in-game and discretionary benchmarks deferred by user; do not claim completion from source changes alone.
+
+- [x] Item detail ordering: cache schema v23 stores per-record request-start watermarks; direct and Commerce catalog writes share commit/adoption ownership and reject stale/equal records while permitting disjoint older batches. Removed aggregate item snapshot rewrite. Offline/Windows verification pending. Skin and other metadata ownership remain open.

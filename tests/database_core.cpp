@@ -568,6 +568,29 @@ int case_database_core(int, char**) {
         assert(Cache::ReadItems(root,D::Aliases)->at("Old item spelling")==12);
         // Name-only Commerce records must never look like fetched details.
         assert(Cache::ReadItems(root,D::Details)->size()==1);
+        // Delayed same-second responses cannot regress a newer record. Older
+        // requests for disjoint IDs are still accepted.
+        auto accepted=J::array();
+        const auto later=Cache::ReferenceSnapshotTime();
+        const auto newest=Cache::ReferenceSnapshotTime();
+        assert(newest>later);
+        auto row=[](uint32_t id,const char* name){return J{{"id",id},{"name",name},{"type","Armor"}};};
+        assert(Cache::WriteItemObservations(root,J::array({row(99,"new")}),newest,accepted));
+        assert(accepted.size()==1);
+        assert(Cache::WriteItemObservations(root,J::array({row(99,"old"),row(100,"other")}),later,accepted));
+        assert(accepted.size()==1&&accepted.at(0).at("id")==100);
+        assert(Cache::WriteItemObservations(root,J::array({row(99,"equal")}),newest,accepted));
+        assert(accepted.empty());
+        auto ordered=Cache::ReadItems(root,D::Details);assert(ordered);
+        bool foundNew=false,foundOther=false;
+        for(const auto& entry:*ordered){
+            if(entry.at("id")==99){assert(entry.at("name")=="new");foundNew=true;}
+            if(entry.at("id")==100){assert(entry.at("name")=="other");foundOther=true;}
+        }
+        assert(foundNew&&foundOther);
+        assert(!Cache::WriteItemObservations(root,J::array({row(99,"invalid"),row(99,"duplicate")}),Cache::ReferenceSnapshotTime(),accepted));
+        assert(Cache::ReadItems(root,D::Details)==ordered);
+
     }
     {
         namespace Storage=AlterEgo::Storage;

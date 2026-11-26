@@ -58,7 +58,16 @@ inline void Mark(Database::Connection& db,const std::string& dataset,int64_t sta
     auto q=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=excluded.saved_at");
     q.Bind(1,dataset);q.Bind(2,stamp);q.Execute();
 }
-inline void StoreUpgrades(Database::Connection& db,const std::set<uint32_t>& ids,const Json& rows,int64_t stamp) {
+inline std::string StoredKind(Database::Connection& db,uint32_t id) {
+    auto q=db.Prepare("SELECT type,details FROM reference_items WHERE id=? AND complete=1");
+    q.Bind(1,id);
+    if(!q.Step())throw std::runtime_error("Missing durable item observation");
+    Json row={{"type",q.Text(0)}};
+    if(!q.IsNull(1))row["details"]=Json::parse(q.Text(1));
+    return Kind(row);
+}
+inline void StoreUpgrades(Database::Connection& db,const std::set<uint32_t>& ids,const Json& rows,int64_t stamp,
+                          const Cache::ItemRequestStamps* requestStamps=nullptr,Json* accepted=nullptr) {
     if(ids.empty()||!rows.is_array()||rows.empty())throw std::runtime_error("Empty upgrade catalog");
     const auto previousCount=db.Scalar("SELECT count(*) FROM public_item_index");
     if(previousCount>0&&static_cast<int64_t>(ids.size())<previousCount*9/10)
@@ -72,10 +81,11 @@ inline void StoreUpgrades(Database::Connection& db,const std::set<uint32_t>& ids
         kinds.insert(kind);
     }
     if(kinds.size()!=5)throw std::runtime_error("Incomplete upgrade categories");
-    Cache::StoreItemSnapshot(db,Cache::ItemDataset::Details,rows,stamp*1000000);
+    Cache::StoreItemSnapshot(db,Cache::ItemDataset::Details,rows,requestStamps?Cache::ReferenceSnapshotTime():stamp*1000000,requestStamps,accepted);
     db.Exec("DELETE FROM public_upgrade_items; DELETE FROM public_item_index;");
     auto item=db.Prepare("INSERT INTO public_upgrade_items VALUES(?,?)");
-    for(const auto& row:rows){item.Bind(1,Id(row.at("id")));item.Bind(2,Kind(row));item.Execute();item.Reset();}
+    for(const auto& row:rows){const auto id=Id(row.at("id"));const auto kind=StoredKind(db,id);if(kind.empty())continue;item.Bind(1,id);item.Bind(2,kind);item.Execute();item.Reset();}
+    if(db.Scalar("SELECT count(DISTINCT kind) FROM public_upgrade_items")!=5)throw std::runtime_error("Incomplete durable upgrade categories");
     auto index=db.Prepare("INSERT INTO public_item_index VALUES(?)");
     for(auto id:ids){index.Bind(1,id);index.Execute();index.Reset();}
     Mark(db,"public_upgrades",stamp);
@@ -88,7 +98,8 @@ inline std::set<uint32_t> PlanItems(const std::set<uint32_t>& index,const std::s
     return result;
 }
 inline void StoreIncrementalItems(Database::Connection& db,const std::set<uint32_t>& index,
-                                  const Json& rows,bool discover,bool refresh,int64_t stamp) {
+                                  const Json& rows,bool discover,bool refresh,int64_t stamp,
+                                  const Cache::ItemRequestStamps* requestStamps=nullptr,Json* accepted=nullptr) {
     std::set<uint32_t> previous,known;
     auto old=db.Prepare("SELECT id FROM public_item_index");
     while(old.Step())previous.insert(static_cast<uint32_t>(old.Integer(0)));
@@ -99,11 +110,11 @@ inline void StoreIncrementalItems(Database::Connection& db,const std::set<uint32
     if((discover&&stamp<Fresh(db,"public_item_discovery"))||(refresh&&stamp<Fresh(db,"public_upgrades")))
         throw std::runtime_error("Older item refresh");
     ValidateBatch(rows,PlanItems(index,previous,known,discover,refresh));
-    if(!rows.empty())Cache::StoreItemSnapshot(db,Cache::ItemDataset::Details,rows,Cache::ReferenceSnapshotTime());
+    if(!rows.empty())Cache::StoreItemSnapshot(db,Cache::ItemDataset::Details,rows,Cache::ReferenceSnapshotTime(),requestStamps,accepted);
     auto put=db.Prepare("INSERT INTO public_upgrade_items VALUES(?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind");
     auto remove=db.Prepare("DELETE FROM public_upgrade_items WHERE id=?");
     for(const auto& row:rows){
-        const auto id=Id(row.at("id"));const auto kind=Kind(row);
+        const auto id=Id(row.at("id"));const auto kind=StoredKind(db,id);
         if(kind.empty()){remove.Bind(1,id);remove.Execute();remove.Reset();}
         else{put.Bind(1,id);put.Bind(2,kind);put.Execute();put.Reset();}
     }

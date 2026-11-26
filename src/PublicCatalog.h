@@ -42,14 +42,18 @@ inline Json Fetch(const std::string& path) {
     if(r.status_code!=200)throw std::runtime_error("Public API HTTP "+std::to_string(r.status_code));
     return Untrusted::Parse(r.body,Untrusted::PublicApi);
 }
-inline void CommitUpgrades(const std::string& root,const std::set<uint32_t>& ids,const Json& rows) {
-    WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreUpgrades(db,ids,rows,Now());tx.Commit();Publish(db);});
-    GW2API::AdoptPublicItems(rows);
+inline void CommitUpgrades(const std::string& root,const std::set<uint32_t>& ids,const Json& rows,const Cache::ItemRequestStamps& stamps) {
+    std::lock_guard<std::mutex> publication(Cache::ItemPublicationMutex());
+    Background::Checkpoint();auto accepted=Json::array();
+    WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreUpgrades(db,ids,rows,Now(),&stamps,&accepted);tx.Commit();Publish(db);});
+    GW2API::AdoptPublicItems(accepted);
 }
 inline void CommitIncrementalItems(const std::string& root,const std::set<uint32_t>& index,
-                                   const Json& rows,bool discover,bool refresh) {
-    WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreIncrementalItems(db,index,rows,discover,refresh,Now());tx.Commit();Publish(db);});
-    GW2API::AdoptPublicItems(rows);
+                                   const Json& rows,bool discover,bool refresh,const Cache::ItemRequestStamps& stamps) {
+    std::lock_guard<std::mutex> publication(Cache::ItemPublicationMutex());
+    Background::Checkpoint();auto accepted=Json::array();
+    WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreIncrementalItems(db,index,rows,discover,refresh,Now(),&stamps,&accepted);tx.Commit();Publish(db);});
+    GW2API::AdoptPublicItems(accepted);
 }
 inline void CompleteCheck(const std::string& root,const std::string& dataset) {
     WithDb(root,[&](auto& db){Mark(db,dataset,Now());Publish(db);});

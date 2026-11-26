@@ -352,6 +352,7 @@ namespace Skinventory {
             const auto planned=incremental?PublicCatalog::PlanItems(index,old->index,old->upgradeIds,discover,refresh):index;
             std::vector<uint32_t> ids(planned.begin(),planned.end());
             json upgrades=json::array(),observations=json::array();
+            Cache::ItemRequestStamps itemStamps;
             const size_t BATCH_SIZE=200,total=ids.size();
             std::unordered_map<uint32_t,std::vector<uint32_t>> skin_map;
             std::unordered_map<uint32_t,std::string> item_names;
@@ -384,19 +385,21 @@ namespace Skinventory {
                 }
 
                 std::string url = "https://api.guildwars2.com/v2/items?ids=" + ids_param;
+                const auto requestStamp=Cache::ReferenceSnapshotTime();
                 std::string batch_response = HttpClient::Get(url);
+                Background::Checkpoint();
                 if (batch_response.empty()) throw std::runtime_error("Item metadata batch unavailable");
 
                 try {
-                    json batch = json::parse(batch_response);
+                    json batch = Untrusted::Parse(batch_response,Untrusted::PublicApi);
                     AlterEgo::PublicCatalog::ValidateBatch(batch,std::set<uint32_t>(ids.begin()+i,ids.begin()+end));
 
                     for (const auto& item : batch) {
                         std::string type = item.value("type", "");
                         const uint32_t item_id=item.value("id",uint32_t(0));
                         if(!item_id) continue;
-                        if(incremental)observations.push_back(item);
-                        else if(!PublicCatalog::Kind(item).empty())upgrades.push_back(item);
+                        if(incremental){observations.push_back(item);itemStamps.emplace(item_id,requestStamp);}
+                        else if(!PublicCatalog::Kind(item).empty()){upgrades.push_back(item);itemStamps.emplace(item_id,requestStamp);}
                         if(incremental&&(!discover||old->index.count(item_id)))continue;
                         const uint32_t default_skin=item.value("default_skin",uint32_t(0));
                         const bool equipment=type=="Armor" || type=="Weapon" || type=="Back";
@@ -465,8 +468,8 @@ namespace Skinventory {
                     json{{"version",2},{"skins",skins},{"names",names},{"vendors",vendors}}))
                     throw std::runtime_error("Item mapping persistence failed");
             }
-            if(incremental)PublicCatalog::CommitIncrementalItems(root,index,observations,discover,refresh);
-            else PublicCatalog::CommitUpgrades(root,index,upgrades);
+            if(incremental)PublicCatalog::CommitIncrementalItems(root,index,observations,discover,refresh,itemStamps);
+            else PublicCatalog::CommitUpgrades(root,index,upgrades,itemStamps);
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 if(newItems){

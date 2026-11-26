@@ -1085,7 +1085,7 @@ namespace AlterEgo {
 
     // --- Batch fetch: items ---
 
-    void GW2API::AdoptPublicItems(const nlohmann::json& rows) {
+    void GW2API::AdoptPublicItems(const nlohmann::json& rows,bool recordAliases) {
         decltype(s_item_cache) staged;
         staged.reserve(rows.size());
         for(const auto& item:rows) {
@@ -1101,7 +1101,10 @@ namespace AlterEgo {
             staged[info.id]=std::make_shared<const ItemInfo>(std::move(info));
         }
         std::lock_guard<std::mutex> lock(s_mutex);
-        for(auto& [id,row]:staged)s_item_cache[id]=std::move(row);
+        for(auto& [id,row]:staged){
+            if(recordAliases&&!row->name.empty()){s_item_name_id_cache[row->name]=id;s_item_name_cache_dirty=true;}
+            s_item_cache[id]=std::move(row);
+        }
     }
 
     void GW2API::FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
@@ -1144,43 +1147,33 @@ namespace AlterEgo {
             }
 
             std::string url = "https://api.guildwars2.com/v2/items?ids=" + ids_param;
+            const auto requestStamp=Cache::ReferenceSnapshotTime();
             std::string response = HttpGet(url);
             if (Background::Workers().Stopping()) return;
             claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
-                json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                if (j.is_array()) {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    for (const auto& item : j) {
-                        if (!item.contains("id")) continue;
-                        ItemInfo info;
-                        info.id = item["id"].get<uint32_t>();
-                        info.name = item.value("name", "");
-                        if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
-                        info.icon_url = item.value("icon", "");
-                        info.rarity = item.value("rarity", "");
-                        info.type = item.value("type", "");
-                        info.chat_link = item.value("chat_link", "");
-                        info.default_skin = item.value("default_skin", 0u);
-                        if (item.contains("description"))
-                            info.description = StripHtmlTags(item["description"].get<std::string>());
-                        if (item.contains("details"))
-                            info.details = item["details"];
-                        // Also populate persistent name→ID cache
-                        if (!info.name.empty()) {
-                            s_item_name_id_cache[info.name] = info.id;
-                            s_item_name_cache_dirty = true;
-                        }
-                        s_item_cache[info.id]=std::make_shared<const ItemInfo>(info);
-                    }
+                auto j=Untrusted::Parse(response,Untrusted::PublicApi);
+                if(!j.is_array())continue;
+                auto rows=json::array();std::set<uint32_t> seen;
+                for(const auto& item:j){
+                    const auto id=Cache::ReferenceId(item.at("id"));
+                    if(!id||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,id)||
+                       item.at("name").get<std::string>().empty()||!seen.insert(id).second)
+                        throw std::runtime_error("Invalid item response");
+                    rows.push_back(item);
                 }
-            } catch (...) {}
+                if(rows.empty())continue;
+                std::lock_guard<std::mutex> publication(Cache::ItemPublicationMutex());
+                if(Background::Workers().Stopping())return;
+                auto accepted=json::array();
+                if(Cache::WriteItemObservations(GetDataDirectory(),rows,requestStamp,accepted))
+                    AdoptPublicItems(accepted,true);
+            }catch(...) {}
 
             if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
         }
-        SaveItemCache();
     }
 
     void GW2API::FetchSkinDetails(RefreshEngine::IdBatch& claim) {
@@ -2950,36 +2943,6 @@ namespace AlterEgo {
     // re-hitting the API, even if the API is rate-limited or unavailable.
     // Saves happen at the end of each fetch batch; loads happen at startup.
     // =========================================================================
-
-    bool GW2API::SaveItemCache() {
-        EnsureDataDirectory();
-        int64_t captured=0;
-        json arr = json::array();
-        decltype(s_item_cache) snapshot;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            captured=Cache::ReferenceSnapshotTime();
-            snapshot=s_item_cache;
-        }
-        arr=json::array();
-        {
-            for (const auto& [id, row] : snapshot) {
-                const auto& info=*row;
-                json j;
-                j["id"] = info.id;
-                j["name"] = info.name;
-                j["icon"] = info.icon_url;
-                j["rarity"] = info.rarity;
-                j["type"] = info.type;
-                if (!info.description.empty()) j["description"] = info.description;
-                if (!info.chat_link.empty()) j["chat_link"] = info.chat_link;
-                if (info.default_skin) j["default_skin"] = info.default_skin;
-                if (!info.details.is_null()) j["details"] = info.details;
-                arr.push_back(std::move(j));
-            }
-        }
-        return Cache::WriteItems(GetDataDirectory(),Cache::ItemDataset::Details,arr,captured);
-    }
 
     bool GW2API::SaveSkinCache() {
         std::lock_guard<std::mutex> persist(g_skinPersistMutex);

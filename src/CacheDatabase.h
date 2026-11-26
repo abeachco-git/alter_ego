@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 22;
+constexpr int kSchemaVersion = 23;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -33,6 +33,10 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 }
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if(version==23){
+        db.Exec("ALTER TABLE reference_items ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0 CHECK(verified_at>=0)");
+        return;
+    }
     if(version==22){
         db.Exec(R"SQL(
 ALTER TABLE native_currencies ADD COLUMN icon TEXT NOT NULL DEFAULT '';

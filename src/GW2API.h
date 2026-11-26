@@ -398,7 +398,7 @@ namespace AlterEgo {
         static std::shared_ptr<const ItemStatInfo> GetItemStatInfo(uint32_t stat_id);
         static std::unordered_map<uint32_t, std::shared_ptr<const ItemStatInfo>> GetAllItemStats();
         static void FetchAllItemStatsAsync(bool manual=false);
-        static void AdoptPublicItems(const nlohmann::json& rows);
+        static void AdoptPublicItems(const nlohmann::json& rows,bool recordAliases=false);
         static std::shared_ptr<const ProfessionInfo> GetProfessionInfo(const std::string& profession);
         static void FetchProfessionInfoAsync(const std::string& profession);
         static std::shared_ptr<const std::map<std::string, ProfessionWeaponData>> GetProfessionWeapons(const std::string& profession);
@@ -423,7 +423,6 @@ namespace AlterEgo {
         // gear/builds can render instantly on next launch without re-hitting
         // the GW2 API. Loaded at startup; saved after each batch fetch.
         static bool LoadReferenceCaches();
-        static bool SaveItemCache();
         static bool SaveSkinCache();
         static bool SaveSpecCache();
         static bool SaveTraitCache();

@@ -3,6 +3,9 @@
 
 namespace AlterEgo::Cache {
 enum class ItemDataset { Details, Aliases };
+using ItemRequestStamps = std::map<uint32_t,int64_t>;
+// Hold only across durable commit and live adoption, never across HTTP.
+inline std::mutex& ItemPublicationMutex(){static std::mutex mutex;return mutex;}
 inline const char* ItemDatasetName(ItemDataset d) {
     return d==ItemDataset::Details?"item_cache":"item_name_cache";
 }
@@ -24,16 +27,21 @@ inline bool ItemSnapshotExists(Database::Connection& db,ItemDataset d,int64_t* s
     if(stamp)*stamp=q.Integer(0);
     return true;
 }
-inline void StoreItemSnapshot(Database::Connection& db,ItemDataset d,const ReferenceJson& data,int64_t stamp) {
+inline void StoreItemSnapshot(Database::Connection& db,ItemDataset d,const ReferenceJson& data,int64_t stamp,
+                              const ItemRequestStamps* requestStamps=nullptr,
+                              ReferenceJson* accepted=nullptr) {
     if(d==ItemDataset::Details) {
         if(!data.is_array()||data.empty())throw std::runtime_error("Invalid item detail snapshot");
         auto q=db.Prepare(R"SQL(
-INSERT INTO reference_items(id,name,icon,rarity,type,description,chat_link,default_skin,details,complete)
-VALUES(?,?,?,?,?,?,?,?,?,1)
+INSERT INTO reference_items(id,name,icon,rarity,type,description,chat_link,default_skin,details,complete,verified_at)
+VALUES(?,?,?,?,?,?,?,?,?,1,?)
 ON CONFLICT(id) DO UPDATE SET
  name=COALESCE(NULLIF(excluded.name,''),reference_items.name),
  icon=excluded.icon,rarity=excluded.rarity,type=excluded.type,description=excluded.description,
- chat_link=excluded.chat_link,default_skin=excluded.default_skin,details=excluded.details,complete=1
+ chat_link=excluded.chat_link,default_skin=excluded.default_skin,details=excluded.details,complete=1,
+ verified_at=excluded.verified_at
+WHERE reference_items.complete=0 OR excluded.verified_at>reference_items.verified_at
+RETURNING id
 )SQL");
         std::set<uint32_t> seen;
         for(const auto& row:data) {
@@ -46,7 +54,14 @@ ON CONFLICT(id) DO UPDATE SET
             // Type-specific details are heterogeneous API extensions.
             if(row.contains("details")&&!row.at("details").is_null())q.Bind(9,row.at("details").dump());
             else q.BindNull(9);
-            q.Execute();q.Reset();
+            const auto verified=requestStamps?requestStamps->at(id):stamp;
+            if(verified<0)throw std::runtime_error("Invalid item request stamp");
+            q.Bind(10,verified);
+            if(q.Step()){
+                if(accepted)accepted->push_back(row);
+                if(q.Step())throw std::runtime_error("Unexpected duplicate item result");
+            }
+            q.Reset();
         }
     } else {
         if(!data.is_object())throw std::runtime_error("Invalid item name snapshot");
@@ -59,9 +74,9 @@ ON CONFLICT(id) DO UPDATE SET
             alias.Bind(1,name);alias.Bind(2,id);alias.Execute();alias.Reset();
         }
     }
-    auto mark=db.Prepare("INSERT INTO reference_metadata_snapshots VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET captured_at=excluded.captured_at");
+    auto mark=db.Prepare("INSERT INTO reference_metadata_snapshots VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET captured_at=MAX(reference_metadata_snapshots.captured_at,excluded.captured_at)");
     mark.Bind(1,std::string(ItemDatasetName(d)));mark.Bind(2,stamp);mark.Execute();
-    auto fresh=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=excluded.saved_at");
+    auto fresh=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=MAX(reference_freshness.saved_at,excluded.saved_at)");
     fresh.Bind(1,std::string(ItemDatasetName(d)));fresh.Bind(2,stamp/1000000);fresh.Execute();
 }
 inline ReferenceJson ReadItemRows(Database::Connection& db,ItemDataset d) {
@@ -98,6 +113,20 @@ inline bool WriteItems(const std::string& root,ItemDataset d,const ReferenceJson
         int64_t previous=0;
         if(ItemSnapshotExists(db,d,&previous)&&stamp<previous)return false;
         StoreItemSnapshot(db,d,data,stamp);tx.Commit();return true;
+    }catch(...){return false;}
+}
+// Batches may finish in any order; the row watermark decides the winner.
+inline bool WriteItemObservations(const std::string& root,const ReferenceJson& rows,int64_t requestStamp,ReferenceJson& accepted) {
+    if(root.empty()||requestStamp<=0||rows.empty())return false;
+    try{
+        std::lock_guard<std::mutex> lock(Mutex());
+        const auto path=Storage::Paths(root).Cache();
+        std::filesystem::create_directories(path.parent_path());
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+        Initialize(db);Database::Transaction tx(db);
+        auto committed=ReferenceJson::array();
+        StoreItemSnapshot(db,ItemDataset::Details,rows,requestStamp,nullptr,&committed);
+        tx.Commit();accepted=std::move(committed);return true;
     }catch(...){return false;}
 }
 inline std::optional<ReferenceJson> ReadItems(const std::string& root,ItemDataset d) {
