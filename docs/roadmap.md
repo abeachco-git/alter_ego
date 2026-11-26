@@ -4,7 +4,8 @@ Living implementation tracker for the experimental branch. Checked items indicat
 
 ## Trading Post item pricing
 - [x] Initial shared item-ID observations, one-hour TTL, bounded batched requests, shared cache lock, per-item pending claims and retry cooldown; selected inventory detail and independent price refresh/status tooltip. Build and runtime validation pending.
-- [ ] Consolidate remaining skin-choice scheduling and publication into a single coordinator; test partial responses, cancellation, migration and cache retention.
+- [x] Consolidate Inventory/Skinventory price requests using RefreshEngine ID claims and existing HTTP admission; derive cheapest skin choices from shared item observations, preserve legacy fallback, integrate cache maintenance, settings migration and diagnostics. Added offline coverage; CI/live validation pending.
+- [ ] Live validation of partial responses, rate limiting, large Shopping requests, and in-game pricing layout.
 - [ ] Optional visible-row batching and price sorting; no automatic full-result fetching.
 
 ## Implementation tracker (living)

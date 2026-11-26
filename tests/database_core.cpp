@@ -502,6 +502,16 @@ int case_database_core(int, char**) {
         J prices={{"1",observation},{"2",observation}};
         assert(Cache::WriteCommerce(root,D::Prices,prices));
         assert(Cache::ReadCommerce(root,D::Prices,absent)==prices);
+        Skinventory::PriceInfo p;p.item_id=11;p.fetched_at_unix=101;p.tradeable=true;p.sell_price=75;p.sell_quantity=2;
+        auto q=p;q.item_id=12;q.sell_price=40;q.fetched_at_unix=102;
+        assert(Cache::WriteItemPrices(root,{{11,p},{12,q}}));
+        auto latest=Cache::ReadItemPrices(root);assert(latest.at(11).sell_price==75&&latest.at(12).sell_price==40);
+        auto older=p;older.fetched_at_unix=100;older.sell_price=1;
+        assert(Cache::WriteItemPrices(root,{{11,older}}));
+        latest=Cache::ReadItemPrices(root);assert(latest.at(11).sell_price==75);
+        auto choice=Skinventory::SelectSkinPrice({11,12},latest);
+        assert(choice&&choice->item_id==12&&choice->fetched_at_unix==101);
+        assert(!Skinventory::SelectSkinPrice({11,999},latest));
         {
             DB::Connection db(AlterEgo::Storage::Paths(root).Cache().u8string(),DB::Connection::OpenMode::Existing);
             assert(db.Scalar("SELECT count(*) FROM commerce_item_prices")==1);
@@ -520,6 +530,7 @@ int case_database_core(int, char**) {
         changed["skins"].erase("2");
         assert(Cache::WriteCommerce(root,D::Mapping,changed));
         assert(Cache::ReadCommerce(root,D::Prices,absent)->empty());
+        assert(Cache::ReadItemPrices(root).at(11).sell_price==75);
         auto paths=AlterEgo::Storage::Paths(root);
         AlterEgo::Storage::WriteMigrationBytes(paths.base/"item_cache.json","[]");
         auto moved=AlterEgo::Storage::ResolveCache(root,"item_cache.json");

@@ -1163,15 +1163,22 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         const auto now=Now();
         // A selected-item demand is independent of the inventory search and
         // inventory storage refresh. No result-list or per-row price requests.
-        Commerce::RequestItemPrices({group.id});
-        const auto coin=[](int64_t c){
-            return std::to_string(c/10000)+"g "+std::to_string(c/100%100)+"s "+std::to_string(c%100)+"c";
-        };
+        static uint32_t priceDemandId=0;
+        static auto priceDemandSince=std::chrono::steady_clock::time_point{};
+        static auto priceDemandPoll=std::chrono::steady_clock::time_point{};
+        const auto tick=std::chrono::steady_clock::now();
+        if(priceDemandId!=group.id||tick-priceDemandPoll>std::chrono::seconds(2)){
+            priceDemandId=group.id;priceDemandSince=tick;priceDemandPoll=tick;
+        }
+        if(tick-priceDemandSince>=std::chrono::milliseconds(500)&&tick-priceDemandPoll>=std::chrono::seconds(1)){
+            Commerce::RequestItemPrices({group.id});priceDemandPoll=tick;
+        }
         if(status.price&&status.price->tradeable){
             const auto& p=*status.price;
-            const auto buy=p.buy_quantity>0&&p.buy_price>0?coin(p.buy_price):std::string("No buy orders");
-            const auto sell=p.sell_quantity>0&&p.sell_price>0?coin(p.sell_price):std::string("No sell listings");
-            ImGui::Text("Buy order: %s",buy.c_str());ImGui::Text("Sell listing: %s",sell.c_str());
+            ImGui::TextUnformatted("Buy order:");ImGui::SameLine();
+            if(p.buy_quantity>0&&p.buy_price>0)RenderCoins(p.buy_price);else ImGui::TextDisabled("No buy orders");
+            ImGui::TextUnformatted("Sell listing:");ImGui::SameLine();
+            if(p.sell_quantity>0&&p.sell_price>0)RenderCoins(p.sell_price);else ImGui::TextDisabled("No sell listings");
             int64_t eligible=0;auto f=v->inventory.flags.find(group.id);
             if(locations!=v->index.end())for(auto idx:locations->second){
                 const auto& row=v->inventory.rows[idx];const auto& slot=row.slot;
@@ -1185,7 +1192,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                 const auto count=std::min<int64_t>(eligible,9223372036854775807LL/std::max(1,p.buy_price)/100);
                 const auto gross=count*p.buy_price;
                 const auto net=gross-(gross*5+99)/100-(gross*10+99)/100;
-                ImGui::Text("Estimated instant sale after fees: %s",coin(net).c_str());
+                ImGui::TextUnformatted("Estimated instant sale after fees:");ImGui::SameLine();RenderCoins(net);
                 if(ImGui::IsItemHovered())ImGui::SetTooltip("Estimate for %lld verified unbound items at the current best buy price. Order depth and actual fees may differ.",static_cast<long long>(eligible));
             }else ImGui::TextDisabled("No verified sellable owned quantity");
         }else if(status.price)ImGui::TextDisabled("Not tradeable");
@@ -1193,7 +1200,9 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         if(status.pending)ImGui::TextDisabled("Price request queued or refreshing");
         else if(status.retry_at>now)ImGui::TextDisabled("Price refresh failed; retry in %lldm",static_cast<long long>((status.retry_at-now+59)/60));
         else if(status.price&&(now<status.price->fetched_at_unix||now-status.price->fetched_at_unix>=Commerce::PriceTTL))ImGui::TextDisabled("Price stale");
-        if(UI::Button("Refresh price")&&!status.pending)Commerce::RequestItemPrices({group.id},true);
+        if(status.pending){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*0.5f);}
+        if(UI::Button("Refresh price",ImVec2(0,UI::ActionButtonHeight()))&&!status.pending)Commerce::RequestItemPrices({group.id},true);
+        if(status.pending){ImGui::PopStyleVar();ImGui::PopItemFlag();}
         RefreshUI::Timestamp(status.price?static_cast<std::time_t>(status.price->fetched_at_unix):0,"Trading Post price");
     }
     RenderSectionHeader("Item Information",UI::SectionGold);

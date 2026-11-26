@@ -154,6 +154,16 @@ ON c.item_id=p.item_id AND c.fetched_at=p.fetched_at
     std::ifstream file(legacy);if(!file)return std::nullopt;
     auto data=Json::parse(file);file.close();
     if(!WriteCommerce(root,d,data))return std::nullopt;
+    if(d==CommerceDataset::Prices){
+        std::unordered_map<uint32_t,Skinventory::PriceInfo> observations;
+        for(const auto& [key,v]:data.items()){
+            Skinventory::PriceInfo p;p.item_id=v.value("item_id",0u);p.fetched_at_unix=v.value("ts",int64_t(0));
+            p.buy_price=v.value("buy",0);p.sell_price=v.value("sell",0);p.buy_quantity=v.value("buy_q",0);p.sell_quantity=v.value("sell_q",0);p.tradeable=v.value("tradeable",false);
+            if(!p.item_id||p.fetched_at_unix<=0||p.buy_price<0||p.sell_price<0||p.buy_quantity<0||p.sell_quantity<0)continue;
+            auto it=observations.find(p.item_id);if(it==observations.end()||it->second.fetched_at_unix<p.fetched_at_unix)observations[p.item_id]=p;
+        }
+        if(!WriteItemPrices(root,observations))return std::nullopt;
+    }
     std::error_code ec;std::filesystem::remove(legacy,ec);
     return data;
 }

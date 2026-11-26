@@ -1627,6 +1627,7 @@ static bool SaveSettings() {
     j["show_last_login"] = g_ShowLastLogin;
     j["auto_refresh_enabled"] = g_AutoRefreshEnabled;
     j["auto_refresh_datasets"] = AlterEgo::AutoRefreshPolicy::GetMask();
+    j["auto_refresh_dataset_count"] = static_cast<uint32_t>(AlterEgo::AutoRefreshPolicy::Dataset::Count);
     j["objective_tracking_minutes"] = AlterEgo::RefreshEngine::ObjectiveMinutes();
     j["wallet_pins"] = AlterEgo::NativeAccounts::WalletPins();
     j["auto_refresh_on_specialization"] = g_AutoRefreshOnSpecialization;
@@ -1677,8 +1678,13 @@ static void LoadSettings() {
         try{AlterEgo::RefreshEngine::SetObjectiveMinutes(j["objective_tracking_minutes"].get<int>());}catch(...){}
     }
     AlterEgo::AutoRefreshPolicy::SetMask(AlterEgo::AutoRefreshPolicy::AllMask);
-    if(j.contains("auto_refresh_datasets")&&j["auto_refresh_datasets"].is_number_unsigned())
-        AlterEgo::AutoRefreshPolicy::SetMask(j["auto_refresh_datasets"].get<uint32_t>());
+    if(j.contains("auto_refresh_datasets")&&j["auto_refresh_datasets"].is_number_unsigned()){
+        auto mask=j["auto_refresh_datasets"].get<uint32_t>();
+        const auto count=j.value("auto_refresh_dataset_count",15u);
+        if(count<=static_cast<uint32_t>(AlterEgo::AutoRefreshPolicy::Dataset::TradingPrices))
+            mask|=1u<<static_cast<uint32_t>(AlterEgo::AutoRefreshPolicy::Dataset::TradingPrices);
+        AlterEgo::AutoRefreshPolicy::SetMask(mask);
+    }
     // Migrate the old preference on next normal settings save.
     const char* walletPinKey=j.contains("wallet_pins")?"wallet_pins":"wallet_favorites";
     if(j.contains(walletPinKey)&&j[walletPinKey].is_array()){
@@ -13380,6 +13386,7 @@ static void RenderSkinShoppingList() {
     }
 
     static bool s_needsFetch = true;
+    static bool s_forcePriceFetch = false;
     auto& query=g_ShopNavigationQuery;
     auto& filters=g_ShopNavigationFilters;
     auto& source=g_ShopNavigationSource;
@@ -13404,7 +13411,7 @@ static void RenderSkinShoppingList() {
         [&] {source=maxGold=0;filters={};changed();},
         "Refresh Prices", &refreshClicked)) changed();
     if(refreshClicked && !Skinventory::Commerce::IsFetching()) {
-        g_SkinShopListDirty=true; s_needsFetch=true;
+        g_SkinShopListDirty=true; s_needsFetch=true; s_forcePriceFetch=true;
     }
 
     // Thin progress bar when fetching (replaces verbose status text)
@@ -13484,7 +13491,7 @@ static void RenderSkinShoppingList() {
         }
         if(s_needsFetch) {
             s_needsFetch=false;
-            Skinventory::Commerce::FetchPricesForSkins(priceIds);
+            Skinventory::Commerce::FetchPricesForSkins(priceIds,s_forcePriceFetch);s_forcePriceFetch=false;
         }
         filterDirty=true;
     }
@@ -17816,6 +17823,7 @@ void AddonOptions() {
     if (ImGui::Checkbox("Warn when live specialization differs from retrieved build##ae_warn_spec",
                         &g_WarnStaleSpecialization))
         SaveSettings();
+    ImGui::TextDisabled("Trading Post prices: 60 minutes, selected item demand only; manual refresh bypasses TTL.");
     ImGui::TextDisabled("Applies to automatic API refreshes across all tabs.");
     ImGui::TextDisabled("Manual Refresh bypasses ordinary freshness/cooldown; offline automatic refresh waits 10 minutes.");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");

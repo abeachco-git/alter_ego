@@ -31,7 +31,7 @@ namespace Skinventory {
         static void RequestItemPrices(const std::vector<uint32_t>& ids,bool manual=false);
 
         // Batch fetch prices for multiple skins (for shopping list)
-        static void FetchPricesForSkins(const std::vector<uint32_t>& skin_ids);
+        static void FetchPricesForSkins(const std::vector<uint32_t>& skin_ids,bool manual=false);
 
         // Thread-safe cached price snapshot. Empty if not fetched yet.
         static std::optional<PriceInfo> GetPrice(uint32_t skin_id);
@@ -59,11 +59,9 @@ namespace Skinventory {
 
         // Persistence for cached prices
         static bool LoadPriceCache();
-        static bool SavePriceCache();
 
     private:
-        static void FetchPriceWorker(std::vector<uint32_t> item_ids,
-                                      std::unordered_map<uint32_t, std::vector<uint32_t>> item_to_skin,uint64_t mappingGeneration);
+        static void RequestPrices(const std::vector<uint32_t>& ids,bool manual,bool explicitDemand);
         static void ItemMapWorker(bool incremental=false,bool discover=true,bool refresh=true);
 
         static std::string s_data_dir;
@@ -84,7 +82,7 @@ namespace Skinventory {
         // skin_id -> vendor price in copper (cultural armor)
         static std::unordered_map<uint32_t, int> s_vendor_prices;
 
-        static std::atomic<bool> s_fetching;
+        static std::atomic<unsigned> s_fetching;
         static std::string s_fetch_status;
         static std::atomic<bool> s_item_map_ready;
         static std::atomic<bool> s_item_map_building;

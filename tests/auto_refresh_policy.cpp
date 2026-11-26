@@ -23,6 +23,17 @@ int case_auto_refresh_policy(int, char**) {
     assert(AllowRequest(true,Dataset::Wallet)&&!AllowRequest(false,Dataset::Wallet));
     SetMask(0xffffffffu);assert(GetMask()==AllMask&&Enabled(Dataset::Wallet));
     SetEnabled(false);assert(!Enabled(Dataset::Bank)&&Included(Dataset::Bank));
+    {
+        using namespace AlterEgo::RefreshEngine;
+        auto first=ClaimIds("commerce_item_prices",{11,12,11});assert(first->ids.size()==2);
+        assert(InspectId("commerce_item_prices",11).pending);
+        auto overlap=ClaimIds("commerce_item_prices",{12,13},true);assert(overlap->ids.size()==1&&overlap->ids.front()==13);
+        first->attempted.insert(11);first.reset();
+        assert(!InspectId("commerce_item_prices",11).pending&&InspectId("commerce_item_prices",11).retrySeconds>0);
+        assert(ClaimIds("commerce_item_prices",{11,12})->ids.size()==1);
+        assert(ClaimIds("commerce_item_prices",{11},true)->ids.size()==1);
+        overlap.reset();ResetMetadata();
+    }
     using namespace std::chrono;
     AlterEgo::ArenaNet::Admission queue(2);
     assert(queue.Acquire([]{return false;},seconds(1)));

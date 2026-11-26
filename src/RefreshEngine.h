@@ -109,6 +109,15 @@ inline std::shared_ptr<IdBatch> ClaimIds(const std::string& dataset,const std::v
     ApiActivity::Session().MetadataClaim(batch->ids.size(),coalesced,cooldown,manual);
     return batch;
 }
+// Read-only inspection for refresh controls; no claim or diagnostic mutation.
+struct IdStatus {bool pending=false;int64_t retrySeconds=0;};
+inline IdStatus InspectId(const std::string& dataset,uint32_t id){
+    auto& r=Metadata();std::lock_guard<std::mutex> lock(r.mutex);
+    auto it=r.records.find({dataset,id});if(it==r.records.end())return {};
+    const auto remaining=it->second.retry-MetadataRegistry::Clock::now();
+    return {it->second.pending,remaining>MetadataRegistry::Clock::duration::zero()?
+        std::chrono::duration_cast<std::chrono::seconds>(remaining).count()+1:0};
+}
 // Synchronous callers that actually consume metadata immediately can join
 // an existing owner instead of starting a duplicate HTTP request. Ordinary
 // asynchronous discovery never waits; shutdown and timeouts remain bounded.

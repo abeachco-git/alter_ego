@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -93,5 +94,20 @@ inline bool BetterPrice(const PriceInfo& candidate, const PriceInfo& current) {
     if(a && candidate.sell_price!=current.sell_price) return candidate.sell_price<current.sell_price;
     if(!a && candidate.buy_price!=current.buy_price) return candidate.buy_price>current.buy_price;
     return candidate.item_id<current.item_id;
+}
+// All candidates must have an observation before a cheapest choice is
+// verified. Its freshness is the oldest candidate, not the winning price.
+inline std::optional<PriceInfo> SelectSkinPrice(const std::vector<uint32_t>& candidates,
+        const std::unordered_map<uint32_t,PriceInfo>& prices,std::optional<PriceInfo> fallback={}){
+    if(candidates.empty())return PriceInfo{};
+    PriceInfo best;int64_t oldest=0;
+    for(auto id:candidates){
+        auto it=prices.find(id);if(it==prices.end())return fallback;
+        const auto& p=it->second;
+        if(p.fetched_at_unix<=0)return fallback;
+        if(!oldest||p.fetched_at_unix<oldest)oldest=p.fetched_at_unix;
+        if(BetterPrice(p,best))best=p;
+    }
+    best.fetched_at_unix=oldest;return best;
 }
 }
