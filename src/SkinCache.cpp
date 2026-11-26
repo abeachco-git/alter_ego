@@ -140,40 +140,42 @@ namespace Skinventory {
         return ids;
     }
 
-    // Only the catalog worker writes network-derived catalog data. Stage
-    // the full replacement before persistence; never serialize under the UI lock.
-    static bool PersistCatalog(const std::string& dir,const std::unordered_map<uint32_t,SkinInfo>& catalog){
-        json j = json::array();
-        {
-            for (const auto& [id, skin] : catalog) {
-                json entry;
-                entry["id"] = skin.id;
-                entry["name"] = skin.name;
-                entry["type"] = skin.type;
-                entry["subtype"] = skin.subtype;
-                entry["weight_class"] = skin.weight_class;
-                entry["rarity"] = skin.rarity;
-                entry["icon"] = skin.icon_url;
-                entry["flags"] = skin.flags;
-                entry["restrictions"] = skin.restrictions;
-                j.push_back(std::move(entry));
-            }
+    void SkinCache::AdoptCommittedSkins(const json& rows) {
+        std::unordered_map<uint32_t,SkinInfo> staged;
+        for(const auto& row:rows){
+            if(!row.value("catalog",false))continue;
+            SkinInfo info;
+            info.id=row.at("id").get<uint32_t>();
+            info.name=row.value("name",std::string{});
+            info.type=row.value("type",std::string{});
+            info.subtype=row.value("subtype",std::string{});
+            info.weight_class=row.value("weight_class",std::string{});
+            info.rarity=row.value("rarity",std::string{});
+            info.icon_url=row.value("icon",std::string{});
+            info.flags=row.value("flags",std::vector<std::string>{});
+            info.restrictions=row.value("restrictions",std::vector<std::string>{});
+            staged[info.id]=std::move(info);
         }
-
-        return AlterEgo::Cache::WriteSkins(
-            AlterEgo::Cache::RootFromLegacySkinDirectory(dir),
-            AlterEgo::Cache::SkinProjection::Catalog,j);
+        if(staged.empty())return;
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for(auto& [id,row]:staged)s_skins[id]=std::move(row);
+        RebuildIndex();
     }
 
-    bool SkinCache::SaveToDisk() {
-        if(!EnsureDataDirectory())return false;
-        decltype(s_skins) copy;
-        {std::lock_guard<std::mutex> lock(s_mutex);copy=s_skins;}
-        return PersistCatalog(s_data_dir,copy);
+    static bool CommitCatalog(const std::string& root,const json& rows,const AlterEgo::Cache::SkinRequestStamps& stamps){
+        using namespace AlterEgo;
+        std::lock_guard<std::mutex> publication(Cache::SkinPublicationMutex());
+        Background::Checkpoint();
+        auto committed=json::array();
+        if(!Cache::WriteSkins(root,Cache::SkinProjection::Catalog,rows,&stamps,&committed))return false;
+        SkinCache::AdoptCommittedSkins(committed);
+        GW2API::AdoptCommittedSkins(committed);
+        return true;
     }
 
     bool SkinCache::LoadFromDisk() {
         try {
+            std::lock_guard<std::mutex> publication(AlterEgo::Cache::SkinPublicationMutex());
             auto snapshot=AlterEgo::Cache::ReadSkins(
                 AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),
                 AlterEgo::Cache::SkinProjection::Catalog,
@@ -242,47 +244,30 @@ namespace Skinventory {
         std::string response = HttpClient::Get("https://api.guildwars2.com/v2/skins");
         if (response.empty()) return {};
         try {
-            json j = json::parse(response);
+            json j = AlterEgo::Untrusted::Parse(response,AlterEgo::Untrusted::PublicApi);
             const auto ids=AlterEgo::PublicCatalog::Index(j);
             return {ids.begin(),ids.end()};
         } catch (...) { return {}; }
     }
 
     // Helper: fetch skin details for a batch of IDs, append to 'out'.
-    static void FetchSkinBatch(const std::vector<uint32_t>& ids, size_t start, size_t end,
-                                std::unordered_map<uint32_t, SkinInfo>& out) {
-        std::string ids_param;
-        for (size_t j = start; j < end; j++) {
-            if (!ids_param.empty()) ids_param += ",";
-            ids_param += std::to_string(ids[j]);
+    static void FetchSkinBatch(const std::vector<uint32_t>& ids,size_t start,size_t end,
+                               json& out,AlterEgo::Cache::SkinRequestStamps& stamps){
+        using namespace AlterEgo;
+        std::string query;
+        for(size_t j=start;j<end;++j){if(!query.empty())query+=',';query+=std::to_string(ids[j]);}
+        const auto stamp=Cache::ReferenceSnapshotTime();
+        auto response=HttpClient::Get("https://api.guildwars2.com/v2/skins?ids="+query);
+        Background::Checkpoint();
+        auto batch=Untrusted::Parse(response,Untrusted::PublicApi);
+        if(!batch.is_array())throw std::runtime_error("Invalid skin batch");
+        std::set<uint32_t> expected(ids.begin()+start,ids.begin()+end);
+        for(const auto& raw:batch){
+            auto row=Cache::SkinObservation(raw);const auto id=row.at("id").get<uint32_t>();
+            if(!expected.erase(id)||!stamps.emplace(id,stamp).second)throw std::runtime_error("Unexpected skin ID");
+            out.push_back(std::move(row));
         }
-        std::string url = "https://api.guildwars2.com/v2/skins?ids=" + ids_param;
-        std::string response = HttpClient::Get(url);
-        if(response.empty())throw std::runtime_error("Missing skin batch");
-        {
-            json batch=json::parse(response);
-            AlterEgo::PublicCatalog::ValidateBatch(batch,std::set<uint32_t>(ids.begin()+start,ids.begin()+end));
-            for (const auto& entry : batch) {
-                SkinInfo skin;
-                skin.id = entry.value("id", (uint32_t)0);
-                skin.name = entry.value("name", "");
-                skin.type = entry.value("type", "");
-                skin.rarity = entry.value("rarity", "");
-                skin.icon_url = entry.value("icon", "");
-                if (entry.contains("details") && entry["details"].is_object()) {
-                    const auto& details = entry["details"];
-                    skin.subtype = details.value("type", "");
-                    skin.weight_class = details.value("weight_class", "");
-                }
-                if (entry.contains("flags") && entry["flags"].is_array()) {
-                    for (const auto& f : entry["flags"]) skin.flags.push_back(f.get<std::string>());
-                }
-                if (entry.contains("restrictions") && entry["restrictions"].is_array()) {
-                    for (const auto& r : entry["restrictions"]) skin.restrictions.push_back(r.get<std::string>());
-                }
-                if (skin.id > 0) out[skin.id] = std::move(skin);
-            }
-        }
+        if(!expected.empty())throw std::runtime_error("Incomplete skin batch");
     }
 
     void SkinCache::FetchWorker() {
@@ -301,7 +286,7 @@ namespace Skinventory {
             // Step 2: Fetch skin details in batches of 200
             const size_t BATCH_SIZE = 200;
             size_t total = ids.size();
-            std::unordered_map<uint32_t, SkinInfo> fetched;
+            auto fetched=json::array();Cache::SkinRequestStamps stamps;
 
             for (size_t i = 0; i < total; i += BATCH_SIZE) {
             AlterEgo::Background::Checkpoint();
@@ -310,19 +295,16 @@ namespace Skinventory {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     s_status_message = "Fetching skins " + std::to_string(i) + "/" + std::to_string(total) + "...";
                 }
-                FetchSkinBatch(ids, i, end, fetched);
+                FetchSkinBatch(ids,i,end,fetched,stamps);
                 AlterEgo::Background::Pause(std::chrono::milliseconds(200));
             }
 
         AlterEgo::Background::Checkpoint();
             if(fetched.size()!=ids.size())throw std::runtime_error("Incomplete skin catalog");
 
-            if(!PersistCatalog(s_data_dir,fetched))throw std::runtime_error("Skin persistence failed");
-            // Publish a verified replacement only after durable write.
+            if(!CommitCatalog(root,fetched,stamps))throw std::runtime_error("Skin persistence failed");
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                s_skins = std::move(fetched);
-                RebuildIndex();
                 s_status_message = "Loaded " + std::to_string(s_skins.size()) + " skins";
             }
             PublicCatalog::CompleteCheck(root,"public_skins");
@@ -377,24 +359,20 @@ namespace Skinventory {
             }
 
             const size_t BATCH_SIZE = 200;
-            std::unordered_map<uint32_t, SkinInfo> fetched;
+            auto fetched=json::array();Cache::SkinRequestStamps stamps;
             for (size_t i = 0; i < new_ids.size(); i += BATCH_SIZE) {
             AlterEgo::Background::Checkpoint();
                 size_t end = std::min(i + BATCH_SIZE, new_ids.size());
-                FetchSkinBatch(new_ids, i, end, fetched);
+                FetchSkinBatch(new_ids,i,end,fetched,stamps);
                 AlterEgo::Background::Pause(std::chrono::milliseconds(200));
             }
 
         AlterEgo::Background::Checkpoint();
             if(fetched.size()!=new_ids.size())throw std::runtime_error("Incomplete skin update");
-            // Stage the merge and persist before replacing the catalog.
-            decltype(s_skins) merged;
-            {std::lock_guard<std::mutex> lock(s_mutex);merged=s_skins;}
-            for(auto& [id,skin]:fetched)merged[id]=std::move(skin);
-            if(!PersistCatalog(s_data_dir,merged))throw std::runtime_error("Skin persistence failed");
+            // Persist only observations made by this request, not stale copies of existing IDs.
+            if(!CommitCatalog(root,fetched,stamps))throw std::runtime_error("Skin persistence failed");
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                s_skins=std::move(merged);RebuildIndex();
                 s_status_message="Updated: "+std::to_string(s_skins.size())+" skins ("+
                     std::to_string(fetched.size())+" new)";
             }

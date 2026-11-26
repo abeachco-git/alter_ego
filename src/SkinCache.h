@@ -7,6 +7,7 @@
 #include <atomic>
 #include <optional>
 #include <cstdint>
+#include <nlohmann/json.hpp>
 
 namespace Skinventory {
 
@@ -71,7 +72,8 @@ namespace Skinventory {
 
         // Persistence
         static bool LoadFromDisk();
-        static bool SaveToDisk();
+        // Called under the shared skin publication gate, after durable commit.
+        static void AdoptCommittedSkins(const nlohmann::json& rows);
 
     private:
         static void FetchWorker();

@@ -6,6 +6,7 @@
 #include "GW2API.h"
 #include "CharacterRequest.h"
 #include "SkinDataCache.h"
+#include "SkinCache.h"
 #include "ReferenceMetadataCache.h"
 #include "ItemMetadataCache.h"
 #include "PublicCatalog.h"
@@ -56,7 +57,7 @@ namespace AlterEgo {
         bool g_loadoutDocumentLoaded = false;
         std::mutex g_loadoutPersistenceMutex;
         std::mutex g_characterSaveMutex;
-        std::mutex g_skinPersistMutex,g_statPersistMutex;
+        std::mutex g_statPersistMutex;
 
         // A manual character refresh also refreshes crafting; a debounced
         // automatic equipment/spec refresh reuses persisted crafting details.
@@ -1210,51 +1211,34 @@ namespace AlterEgo {
             }
 
             std::string url = "https://api.guildwars2.com/v2/skins?ids=" + ids_param;
+            const auto requestStamp=Cache::ReferenceSnapshotTime();
             std::string response = HttpGet(url);
             if (Background::Workers().Stopping()) return;
             claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
             if (response.empty()) continue;
 
             try {
-                json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                if (j.is_array()) {
-                    std::lock_guard<std::mutex> lock(s_mutex);
-                    for (const auto& skin : j) {
-                        if (!skin.contains("id")) continue;
-                        SkinInfo info;
-                        info.id = skin["id"].get<uint32_t>();
-                        info.name = skin.value("name", "");
-                        if(info.name.empty()||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,info.id))continue;
-                        info.icon_url = skin.value("icon", "");
-                        info.type = skin.value("type", "");
-                        info.rarity = skin.value("rarity", "");
-                        if (skin.contains("details") && skin["details"].is_object())
-                            info.weight_class = skin["details"].value("weight_class", std::string());
-                        // Extract dye slot count and per-channel material from details.dye_slots.default
-                        // Null entries = unused channels, only count non-null
-                        if (skin.contains("details") && skin["details"].contains("dye_slots") &&
-                            skin["details"]["dye_slots"].contains("default") &&
-                            skin["details"]["dye_slots"]["default"].is_array()) {
-                            int count = 0;
-                            for (const auto& ds : skin["details"]["dye_slots"]["default"]) {
-                                if (!ds.is_null()) {
-                                    count++;
-                                    info.dye_slot_materials.push_back(
-                                        ds.value("material", "cloth"));
-                                } else {
-                                    info.dye_slot_materials.push_back("");
-                                }
-                            }
-                            info.dye_slot_count = count;
-                        }
-                        s_skin_cache[info.id]=std::make_shared<const SkinInfo>(info);
-                    }
+                auto j=Untrusted::Parse(response,Untrusted::PublicApi);
+                if(!j.is_array())continue;
+                auto rows=json::array();Cache::SkinRequestStamps stamps;
+                for(const auto& raw:j){
+                    auto row=Cache::SkinObservation(raw);const auto id=row.at("id").get<uint32_t>();
+                    if(!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,id)||
+                       !stamps.emplace(id,requestStamp).second)throw std::runtime_error("Unexpected skin response");
+                    rows.push_back(std::move(row));
                 }
-            } catch (...) {}
+                if(rows.empty())continue;
+                std::lock_guard<std::mutex> publication(Cache::SkinPublicationMutex());
+                if(Background::Workers().Stopping())return;
+                auto committed=json::array();
+                if(Cache::WriteSkins(GetDataDirectory(),Cache::SkinProjection::Fashion,rows,&stamps,&committed)){
+                    AdoptCommittedSkins(committed);
+                    Skinventory::SkinCache::AdoptCommittedSkins(committed);
+                }
+            }catch(...) {}
 
             if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
         }
-        SaveSkinCache();
     }
 
     // --- Async wrappers ---
@@ -2944,32 +2928,24 @@ namespace AlterEgo {
     // Saves happen at the end of each fetch batch; loads happen at startup.
     // =========================================================================
 
-    bool GW2API::SaveSkinCache() {
-        std::lock_guard<std::mutex> persist(g_skinPersistMutex);
-        EnsureDataDirectory();
-        json arr;
-        decltype(s_skin_cache) snapshot;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            snapshot=s_skin_cache;
+    void GW2API::AdoptCommittedSkins(const nlohmann::json& rows) {
+        decltype(s_skin_cache) staged;
+        for(const auto& row:rows){
+            if(!row.value("fashion",false))continue;
+            SkinInfo info;
+            info.id=row.at("id").get<uint32_t>();
+            info.name=row.value("name",std::string{});
+            info.type=row.value("type",std::string{});
+            info.rarity=row.value("rarity",std::string{});
+            info.icon_url=row.value("icon",std::string{});
+            info.weight_class=row.value("weight_class",std::string{});
+            info.dye_slot_count=row.value("dye_slot_count",-1);
+            if(row.contains("dye_slot_materials"))
+                info.dye_slot_materials=row.at("dye_slot_materials").get<std::vector<std::string>>();
+            staged[info.id]=std::make_shared<const SkinInfo>(std::move(info));
         }
-        arr=json::array();
-        {
-            for (const auto& [id, row] : snapshot) {
-                const auto& info=*row;
-                json j;
-                j["id"] = info.id;
-                j["name"] = info.name;
-                j["icon"] = info.icon_url;
-                j["type"] = info.type;
-                j["rarity"] = info.rarity;
-                if (!info.weight_class.empty()) j["weight_class"] = info.weight_class;
-                if (info.dye_slot_count >= 0) j["dye_slot_count"] = info.dye_slot_count;
-                if (!info.dye_slot_materials.empty()) j["dye_slot_materials"] = info.dye_slot_materials;
-                arr.push_back(std::move(j));
-            }
-        }
-        return Cache::WriteSkins(GetDataDirectory(),Cache::SkinProjection::Fashion,arr);
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for(auto& [id,row]:staged)s_skin_cache[id]=std::move(row);
     }
 
     bool GW2API::SaveSpecCache() {

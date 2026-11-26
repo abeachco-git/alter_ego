@@ -423,7 +423,7 @@ namespace AlterEgo {
         // gear/builds can render instantly on next launch without re-hitting
         // the GW2 API. Loaded at startup; saved after each batch fetch.
         static bool LoadReferenceCaches();
-        static bool SaveSkinCache();
+        static void AdoptCommittedSkins(const nlohmann::json& rows);
         static bool SaveSpecCache();
         static bool SaveTraitCache();
         static bool SaveSkillCache();
