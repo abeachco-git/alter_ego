@@ -85,7 +85,8 @@ static std::vector<uint32_t> g_ClearsPriorDailyBountyIds;
 // Only yesterday's verified T4 names can seed an offline rotation preview.
 static std::vector<std::string> g_ClearsPriorDailyT4Names;
 static bool g_ClearsDailyRolloverPending = false;
-static std::array<ClearsReset::RetryState,4> g_ClearsSectionRetry;
+static std::array<ClearsReset::RetryState,4> g_ClearsSectionRetry,g_ClearsProgressRetry;
+static std::array<std::vector<ClearEntry>,2> g_ClearsPriorWeekly;
 static std::array<std::time_t,4> g_ClearsSectionSuccess{};
 static std::atomic<long long> g_ClearsDailyRolloverRetryAtMs{0};
 static constexpr const char* ClearKeys[]={"dailyFractals","dailyBounties","weeklyWings","weeklyStrikes"};
@@ -94,7 +95,8 @@ static void UpdateClearsRetryLocked(){
     g_ClearsDailyRolloverPending=g_DailyFractals.empty()&&!g_ClearsPriorDailyFractalIds.empty()||
                                  g_DailyBounties.empty()&&!g_ClearsPriorDailyBountyIds.empty();
     long long next=0;
-    for(const auto& retry:g_ClearsSectionRetry)if(retry.at>0&&(next==0||retry.at<next))next=retry.at;
+    for(const auto* retries:{&g_ClearsSectionRetry,&g_ClearsProgressRetry})
+        for(const auto& retry:*retries)if(retry.at>0&&(next==0||retry.at<next))next=retry.at;
     g_ClearsDailyRolloverRetryAtMs=next;
 }
 static bool ClearDefinitionsMissing(size_t i){
@@ -337,26 +339,31 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
     const std::string acctName=GetEffectiveAccountName();
     const auto credential=AlterEgo::NativeAccounts::FindLinked(acctName);
     std::vector<uint32_t> allIds;
+    std::array<bool,4> requestedSections{};
+    bool force=manual;
+    int64_t minimumEpoch=0;
     uint64_t generation=0;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         if(acctName.empty() || acctName!=g_ClearsCacheAccount||g_ClearsCompletionInFlight||g_ClearsFetching)return;
-        const bool needFractals = !skipCompletedSections ||
-            !AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals);
-        const bool needBounties = !skipCompletedSections ||
-            !AlterEgo::SectionRefresh::ClearsDone(g_DailyBounties);
-        const bool needRaids = !skipCompletedSections ||
-            !AlterEgo::SectionRefresh::ClearsDone(g_WeeklyWings);
-        const bool needStrikes = !skipCompletedSections ||
-            !(g_WeeklyStrikes.id != 0 && g_WeeklyStrikes.done);
-        if (needFractals)
-            for (const auto& e : g_DailyFractals) if (e.id) allIds.push_back(e.id);
-        if (needBounties)
-            for (const auto& e : g_DailyBounties) if (e.id) allIds.push_back(e.id);
-        if (needRaids)
-            for (const auto& e : g_WeeklyWings) if (e.id) allIds.push_back(e.id);
-        if (needStrikes && g_WeeklyStrikes.id > 0)
-            allIds.push_back(g_WeeklyStrikes.id);
+        const auto now=std::chrono::system_clock::now();
+        const int64_t daily=ResetEpoch(CalcLastDailyReset(now)),weekly=ResetEpoch(CalcLastWeeklyReset(now));
+        const bool completed[]={AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals),
+            AlterEgo::SectionRefresh::ClearsDone(g_DailyBounties),AlterEgo::SectionRefresh::ClearsDone(g_WeeklyWings),
+            g_WeeklyStrikes.id!=0&&g_WeeklyStrikes.done};
+        for(size_t i=0;i<4;++i){
+            const auto reset=i<2?daily:weekly;
+            if(ClearDefinitionsMissing(i)||!ClearsReset::GracePassed(reset,ResetEpoch(now))||
+               !g_ClearsProgressRetry[i].Ready(NowMs(),manual))continue;
+            requestedSections[i]=!skipCompletedSections||!completed[i]||g_ClearsSectionSuccess[i]==0;
+            if(!requestedSections[i])continue;
+            minimumEpoch=std::max(minimumEpoch,reset+ClearsReset::kResetBufferSeconds);
+            if(i>=2&&g_ClearsProgressRetry[i].reason=="API returned prior weekly progress")force=true;
+            if(i==0)for(const auto& e:g_DailyFractals)allIds.push_back(e.id);
+            if(i==1)for(const auto& e:g_DailyBounties)allIds.push_back(e.id);
+            if(i==2)for(const auto& e:g_WeeklyWings)allIds.push_back(e.id);
+            if(i==3)allIds.push_back(g_WeeklyStrikes.id);
+        }
         if (allIds.empty()) return; // every known section is done
         g_ClearsRetrySelective = skipCompletedSections;
         g_ClearsCompletionInFlight = true;
@@ -366,12 +373,8 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
             ? "Refreshing incomplete sections..." : "Querying completion...";
     }
 
-    const auto now=std::chrono::system_clock::now();
-    const auto daily=CalcLastDailyReset(now);
-    const auto weekly=CalcLastWeeklyReset(now);
-    const auto minimumEpoch=std::chrono::system_clock::to_time_t(std::max(daily,weekly));
-    AlterEgo::Background::Workers().Launch([acctName,credential,allIds,generation,manual,minimumEpoch]{
-        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),credential,manual,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimumEpoch);
+    AlterEgo::Background::Workers().Launch([acctName,credential,allIds,generation,force,minimumEpoch,requestedSections]{
+        auto result=AlterEgo::NativeProgress::FetchAchievements(AlterEgo::GW2API::GetDataDirectory(),credential,force,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimumEpoch);
         AlterEgo::Background::Checkpoint();
         const bool accepted=AlterEgo::NativeAccounts::CommitIfCurrent(credential,[&]{
         std::lock_guard<std::mutex> saving(g_ClearsSaveMutex);
@@ -382,8 +385,12 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
             g_ClearsCompletionInFlight=false;g_ClearsQueryStartedAtMs=0;g_ClearsFetching=false;
             if(!result.snapshot){
                 g_ClearsStatusMsg=result.error;
-                // Shared account progress broker owns ordinary failure cooldowns.
-                return true;
+                for(size_t i=0;i<4;++i)if(requestedSections[i]){
+                    auto& retry=g_ClearsProgressRetry[i];retry.Fail(NowMs(),result.error.empty()?"Progress refresh failed":result.error);
+                    // Match the shared account broker's ordinary error cooldown.
+                    retry.at=NowMs()+AlterEgo::RefreshEngine::FailureSeconds*1000;
+                }
+                UpdateClearsRetryLocked();return true;
             }
             const std::set<uint32_t> requested(allIds.begin(),allIds.end());
             auto apply=[&](ClearEntry& e){
@@ -395,14 +402,22 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
                 if(p.done&&e.max>0&&e.current>=e.max)e.bitDone.assign(e.bitNames.size(),true);
                 else for(auto bit:p.completed_bits)if(bit<e.bitDone.size())e.bitDone[bit]=true;
             };
-            auto applySection=[&](size_t section,auto& rows){
-                bool covered=!rows.empty();
-                for(auto& e:rows){if(!requested.count(e.id))covered=false;apply(e);}
-                if(covered)g_ClearsSectionSuccess[section]=result.snapshot->fetchedAt;
+            auto applySection=[&](size_t section,std::vector<ClearEntry>& rows){
+                if(!requestedSections[section]||rows.empty())return;
+                auto next=rows;
+                for(auto& e:next){if(!requested.count(e.id))return;apply(e);}
+                if(section>=2&&ClearsReset::HoldClearProgress(g_ClearsPriorWeekly[section-2],next)){
+                    g_ClearsProgressRetry[section].Fail(NowMs(),"API returned prior weekly progress");
+                    return;
+                }
+                rows=std::move(next);g_ClearsSectionSuccess[section]=result.snapshot->fetchedAt;
+                g_ClearsProgressRetry[section].Reset();
+                if(section>=2)g_ClearsPriorWeekly[section-2].clear();
             };
             applySection(0,g_DailyFractals);applySection(1,g_DailyBounties);
-            applySection(2,g_WeeklyWings);apply(g_WeeklyStrikes);
-            if(g_WeeklyStrikes.id&&requested.count(g_WeeklyStrikes.id))g_ClearsSectionSuccess[3]=result.snapshot->fetchedAt;
+            applySection(2,g_WeeklyWings);
+            if(g_WeeklyStrikes.id){std::vector<ClearEntry> strikes{g_WeeklyStrikes};applySection(3,strikes);g_WeeklyStrikes=std::move(strikes.front());}
+            UpdateClearsRetryLocked();
             g_ClearsFetched=std::any_of(g_ClearsSectionSuccess.begin(),g_ClearsSectionSuccess.end(),[](auto stamp){return stamp>0;});
             g_ClearsStatusMsg.clear();g_ClearsLastSuccessTime=result.snapshot->fetchedAt;
             g_LastClearsCompletionQuery=std::chrono::steady_clock::now();g_ClearsSuccessUntil=g_LastClearsCompletionQuery+std::chrono::seconds(4);
@@ -554,6 +569,10 @@ static void FetchVaultData(bool skipClaimedSections) {
         // Never publish new-season progress against an expired known season.
         // Daily/weekly requests do not depend on that public endpoint.
         if(expired)request[2]=false;
+        const auto clockNow=std::chrono::system_clock::now();
+        if(!ClearsReset::GracePassed(ResetEpoch(CalcLastDailyReset(clockNow)),now))request[0]=false;
+        if(!ClearsReset::GracePassed(ResetEpoch(CalcLastWeeklyReset(clockNow)),now))request[1]=false;
+        if(g_VaultSpecialRolloverPending&&!ClearsReset::GracePassed(g_VaultSpecialResetEpoch,now))request[2]=false;
         if (!request[0] && !request[1] && !request[2]) return;
         generation=++g_VaultGeneration;
         g_VaultRequestCredential=credential;
@@ -731,8 +750,12 @@ static void FetchClears(bool manual) {
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         if(account!=g_ClearsCacheAccount||g_ClearsFetching||g_ClearsCompletionInFlight||g_ClearsQueryPending)return;
-        for(size_t i=0;i<request.size();++i)
-            request[i]=manual||(ClearDefinitionsMissing(i)&&g_ClearsSectionRetry[i].Ready(NowMs()));
+        const auto now=std::chrono::system_clock::now();
+        for(size_t i=0;i<request.size();++i){
+            const auto reset=ResetEpoch(i<2?CalcLastDailyReset(now):CalcLastWeeklyReset(now));
+            request[i]=ClearsReset::GracePassed(reset,ResetEpoch(now))&&
+                (manual||((ClearDefinitionsMissing(i)||g_ClearsSectionRetry[i].at!=0)&&g_ClearsSectionRetry[i].Ready(NowMs())));
+        }
         if(std::none_of(request.begin(),request.end(),[](bool x){return x;}))return;
         prior={g_ClearsPriorDailyFractalIds,g_ClearsPriorDailyBountyIds};
         generation=++g_ClearsGeneration;g_ClearsFetching=true;
@@ -818,7 +841,7 @@ static void FetchClears(bool manual) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
         g_ClearsFetching=false;
-        if(any){
+        if(any||(manual&&(!g_DailyFractals.empty()||!g_DailyBounties.empty()||!g_WeeklyWings.empty()||g_WeeklyStrikes.id))){
             g_ClearsPendingManual=manual;g_ClearsQueryPending=true;
             g_ClearsStatusMsg="Querying completion...";
         }
@@ -827,7 +850,7 @@ static void FetchClears(bool manual) {
         if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount)return;
         g_ClearsFetching=false;
         if(!AlterEgo::Background::Workers().Stopping()){
-            for(size_t i=0;i<request.size();++i)if(request[i]&&ClearDefinitionsMissing(i))
+            for(size_t i=0;i<request.size();++i)if(request[i]&&(ClearDefinitionsMissing(i)||g_ClearsSectionRetry[i].at!=0))
                 g_ClearsSectionRetry[i].Fail(NowMs(),"Definition refresh interrupted");
             UpdateClearsRetryLocked();
         }
@@ -926,7 +949,7 @@ void LoadClearsCache() {
         g_ClearsLastSuccessTime=static_cast<std::time_t>(fetchEpoch);g_ClearsSectionSuccess={};
         g_DailyFractals.clear();g_DailyBounties.clear();g_WeeklyWings.clear();g_WeeklyStrikes={};
         g_ClearsPriorDailyFractalIds.clear();g_ClearsPriorDailyBountyIds.clear();g_ClearsPriorDailyT4Names.clear();
-        g_ClearsSectionRetry={};
+        g_ClearsSectionRetry={};g_ClearsProgressRetry={};g_ClearsPriorWeekly={};
         for(size_t i=0;i<4;++i){
             if(!j.contains(ClearKeys[i]))continue;
             const auto stamp=j.contains("section_stamps")?j.at("section_stamps").value(ClearKeys[i],fetchEpoch):fetchEpoch;
@@ -934,7 +957,9 @@ void LoadClearsCache() {
             const auto grace=i<2?dailyGrace:weeklyGrace;
             const bool stale=time<grace&&now>=grace;
             if(i==3){
-                if(!stale){g_WeeklyStrikes=deserializeEntry(j.at(ClearKeys[i]));if(g_WeeklyStrikes.id)g_ClearsSectionSuccess[i]=stamp;}
+                auto strike=deserializeEntry(j.at(ClearKeys[i]));
+                if(!stale){g_WeeklyStrikes=std::move(strike);if(g_WeeklyStrikes.id)g_ClearsSectionSuccess[i]=stamp;}
+                else if(strike.id&&stamp>0&&CalcLastWeeklyReset(time)+std::chrono::hours(168)==weeklyReset)g_ClearsPriorWeekly[1]={std::move(strike)};
                 continue;
             }
             std::vector<ClearEntry> entries;std::set<uint32_t> seen;
@@ -949,6 +974,7 @@ void LoadClearsCache() {
                         for(const auto& e:entries)if(e.tier=="T4")g_ClearsPriorDailyT4Names.push_back(ShortenFractalName(e.name));}
                     else g_ClearsPriorDailyBountyIds=DailyIds(entries);
                 }
+                if(i==2&&stamp>0&&CalcLastWeeklyReset(time)+std::chrono::hours(168)==weeklyReset)g_ClearsPriorWeekly[0]=std::move(entries);
                 continue;
             }
             if(entries.empty())continue;
@@ -3102,6 +3128,7 @@ static void RenderClearsShared(bool showVault) {
             }
         }
         g_ClearsSectionRetry[0].Reset();g_ClearsSectionRetry[1].Reset();
+        g_ClearsProgressRetry[0].Reset();g_ClearsProgressRetry[1].Reset();
         g_ClearsSectionSuccess[0]=0;g_ClearsSectionSuccess[1]=0;
         g_DailyFractals.clear();
         g_DailyBounties.clear();UpdateClearsRetryLocked();
@@ -3119,9 +3146,12 @@ static void RenderClearsShared(bool showVault) {
     if (ClearsReset::Due(ResetEpoch(g_LastWeeklyReset), weeklyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         ++g_ClearsGeneration;g_ClearsFetching=false;g_ClearsPendingManual=false;
+        if(g_ClearsSectionSuccess[2]>0)g_ClearsPriorWeekly[0]=g_WeeklyWings;
+        if(g_ClearsSectionSuccess[3]>0&&g_WeeklyStrikes.id)g_ClearsPriorWeekly[1]={g_WeeklyStrikes};
         g_WeeklyWings.clear();
         g_WeeklyStrikes = ClearEntry{};
         g_ClearsSectionRetry[2].Reset();g_ClearsSectionRetry[3].Reset();
+        g_ClearsProgressRetry[2].Reset();g_ClearsProgressRetry[3].Reset();
         g_ClearsSectionSuccess[2]=0;g_ClearsSectionSuccess[3]=0;UpdateClearsRetryLocked();
         g_ClearsFetched = !g_DailyFractals.empty() || !g_DailyBounties.empty();
         g_ClearsQueryPending = false;
@@ -3250,10 +3280,14 @@ static void RenderClearsShared(bool showVault) {
     auto steadyNow = std::chrono::steady_clock::now();
     if(!showVault&&AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)&&
         !g_ClearsFetching&&!g_ClearsQueryPending.load()&&!g_ClearsCompletionInFlight.load()){
-        bool missing=false;
+        bool missing=false,progressDue=false;
         {std::lock_guard<std::mutex> lock(g_ClearsMutex);
-            for(size_t i=0;i<4;++i)if(ClearDefinitionsMissing(i)&&g_ClearsSectionRetry[i].Ready(NowMs()))missing=true;}
-        if(missing)FetchClears(); // recover a missed/failed weekly reset without requiring navigation
+            for(size_t i=0;i<4;++i){
+                if((ClearDefinitionsMissing(i)||g_ClearsSectionRetry[i].at!=0)&&g_ClearsSectionRetry[i].Ready(NowMs()))missing=true;
+                if(!ClearDefinitionsMissing(i)&&(g_ClearsSectionSuccess[i]==0||g_ClearsProgressRetry[i].at!=0)&&g_ClearsProgressRetry[i].Ready(NowMs()))progressDue=true;
+            }}
+        if(progressDue)SendClearsAchQuery(true);
+        else if(missing)FetchClears(); // only due definition sections
     }
     if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
         !showVault && g_ClearsFetched && !g_ClearsFetching &&
@@ -3317,7 +3351,7 @@ void SyncCompletionAccountCaches() {
         g_ClearsQueryStartedAtMs = 0;
         g_ClearsRetryAtMs = 0;
         g_ClearsDailyRolloverRetryAtMs = 0;
-        g_ClearsDailyRolloverPending = false;g_ClearsSectionRetry={};g_ClearsSectionSuccess={};
+        g_ClearsDailyRolloverPending = false;g_ClearsSectionRetry={};g_ClearsProgressRetry={};g_ClearsPriorWeekly={};g_ClearsSectionSuccess={};
         g_ClearsLastSuccessTime = 0;
         g_ClearsSuccessUntil = {};
         g_LastClearsCompletionQuery = {};
@@ -3419,12 +3453,11 @@ void RenderVaultStatusRow() {
     if (pending) {
         state = AlterEgo::RefreshUI::State::Working;
         detail = status.empty() ? "Fetching Vault objectives..." : status;
-    } else if (failed) {
-        state = AlterEgo::RefreshUI::State::Error;
-        detail = status.empty() ? "Vault refresh failed" : status;
     } else if (waitingForRollover) {
         state = AlterEgo::RefreshUI::State::Ready;
         detail = status.empty() ? "Waiting for updated Vault objectives..." : status;
+    } else if(failed){
+        state=AlterEgo::RefreshUI::State::Error;detail=status;
     } else if (std::chrono::steady_clock::now() < successUntil) {
         state = AlterEgo::RefreshUI::State::Success;
         detail = status;
@@ -3444,14 +3477,14 @@ void RenderClearsStatusRow() {
     std::chrono::steady_clock::time_point successUntil;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        updated = g_ClearsLastSuccessTime;
+        updated = *std::min_element(g_ClearsSectionSuccess.begin(),g_ClearsSectionSuccess.end());
         status = g_ClearsStatusMsg;failed=!status.empty();
         haveData = g_ClearsFetched;
         waitingForDailyRollover = g_ClearsDailyRolloverRetryAtMs.load() != 0;
         for(size_t i=0;i<4;++i){
             status+="\n"+std::string(ClearLabels[i])+": "+AlterEgo::RefreshUI::Age(g_ClearsSectionSuccess[i]);
-            const auto& retry=g_ClearsSectionRetry[i];
-            if(!retry.reason.empty())status+=" - "+retry.reason+"; retry in "+std::to_string(retry.Remaining(NowMs()))+"s";
+            for(const auto* retry:{&g_ClearsSectionRetry[i],&g_ClearsProgressRetry[i]})
+                if(!retry->reason.empty())status+=" - "+retry->reason+"; retry in "+std::to_string(retry->Remaining(NowMs()))+"s";
         }
         successUntil = g_ClearsSuccessUntil;
     }

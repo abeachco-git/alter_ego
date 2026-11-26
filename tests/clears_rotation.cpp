@@ -34,6 +34,7 @@ int case_clears_rotation(int, char**) {
     assert(!Due(reset - day, reset, reset + 59));
     assert(Due(reset - day, reset, reset + 60));
     assert(!Due(reset, reset, reset + 3600));
+    assert(!GracePassed(reset,reset+59)&&GracePassed(reset,reset+60));
     assert(LooksUnrotated({101, 102}, {102, 101}));
     assert(!LooksUnrotated({101, 102}, {101, 103}));
     assert(LooksUnrotated({101, 102}, {}));
@@ -80,6 +81,10 @@ int case_clears_rotation(int, char**) {
     assert(HoldVault(lastWeek,WeeklyPeriod{},60,0,false));
     RetryState first,second;first.Fail(1000,"held");assert(!first.Ready(30000)&&second.Ready(30000));
     assert(first.Ready(31000)&&first.Ready(2000,true));first.Fail(31000,"held");
+    struct ClearProgress{uint32_t id;bool done;int current;std::vector<bool> bitDone;};
+    const std::vector<ClearProgress> prior{{1,true,2,{true,true}}},zero{{1,false,0,{false,false}}},changed{{1,false,1,{true,false}}};
+    assert(HoldClearProgress(prior,prior));assert(!HoldClearProgress(prior,zero));
+    assert(!HoldClearProgress(prior,changed));assert(!HoldClearProgress(zero,zero));
     assert(first.at==91000&&first.Remaining(31000)==60);
     first.Reset();assert(first.Ready(0)&&first.reason.empty());
     assert(FreshPath("/v2/account/wizardsvault/daily",42)=="/v2/account/wizardsvault/daily?ae_refresh=42");

@@ -24,9 +24,10 @@ inline std::string FreshPath(std::string path,int64_t token){
     return path;
 }
 
+inline bool GracePassed(int64_t reset,int64_t now){return now>=reset+kResetBufferSeconds;}
 inline bool Due(int64_t lastHandledReset, int64_t currentReset, int64_t now) {
     return currentReset > lastHandledReset &&
-           now >= currentReset + kResetBufferSeconds;
+           GracePassed(currentReset,now);
 }
 
 // At startup inside the grace minute, retain the previous-day marker so the
@@ -133,6 +134,19 @@ template<class Period> bool HoldVault(const Period& prior,const Period& current,
     if(current.objectives.empty())return !allowEmpty;
     if(!LooksUnrotatedVaultPeriod(prior,current))return false;
     return !(elapsed>=900&&failures>=3&&ResetShaped(current));
+}
+// Weekly raid/strike definitions may retain IDs indefinitely. A matching
+// nonzero prior completion fingerprint is not proof of reset. Unlike Vault,
+// the account achievement endpoint omits entries with no progress.
+template<class Entries> bool HoldClearProgress(const Entries& prior,const Entries& current){
+    if(prior.empty()||prior.size()!=current.size())return false;
+    bool progressed=false;
+    for(const auto& old:prior){
+        progressed=progressed||old.done||old.current>0||std::any_of(old.bitDone.begin(),old.bitDone.end(),[](bool b){return b;});
+        const auto it=std::find_if(current.begin(),current.end(),[&](const auto& e){return e.id==old.id;});
+        if(it==current.end()||it->done!=old.done||it->current!=old.current||it->bitDone!=old.bitDone)return false;
+    }
+    return progressed;
 }
 // A held-over API result is retried with bounded, gradually slower polling.
 inline int64_t RetryDelaySeconds(int attempted) {
