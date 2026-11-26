@@ -170,13 +170,14 @@ static void SaveClearUiSettings();
 static bool RenderVaultSectionToggle(int index, const char* title,
                                      ImVec4 color, const char* suffix,
                                      const char* summary,
-                                     bool summaryComplete);
+                                     bool summaryComplete,std::chrono::system_clock::time_point seasonEnd);
 static std::chrono::system_clock::time_point g_VaultLastDailyReset{};
 static std::chrono::system_clock::time_point g_VaultLastWeeklyReset{};
 static std::chrono::system_clock::time_point g_VaultSeasonEnd{};
 static std::chrono::system_clock::time_point g_PublicVaultSeasonEnd{};
 static int64_t g_PublicVaultSeasonSuccess=0,g_PublicVaultSeasonAttempt=0;
 static bool g_PublicVaultSeasonPending=false;
+static uint64_t g_VaultSeasonRevision=0,g_VaultRequestSeasonRevision=0;
 
 // =========================================================================
 // Clears - Backend (reset calculations, fetch, API response)
@@ -212,7 +213,7 @@ static nlohmann::json CaptureVaultCacheLocked();
 static bool PersistVaultCache(const std::string& account,const nlohmann::json& snapshot);
 static void RenderClearsTabContent(const std::string& dailyResetStr, const std::string& weeklyResetStr);
 static void RenderVaultPeriodSection(int sectionIndex, const char* title, const char* resetLabel,
-                                     ImVec4 color, const VaultPeriod& period);
+                                     ImVec4 color, const VaultPeriod& period,std::chrono::system_clock::time_point seasonEnd);
 static void RenderVaultTab(const std::string& dailyResetStr, const std::string& weeklyResetStr);
 
 // Calculate the most recent daily reset (00:00 UTC) before 'now'
@@ -447,6 +448,7 @@ static void RefreshVaultSeason(bool manual){
             if(season.verifiedAt<g_PublicVaultSeasonSuccess)return;
             const auto previous=g_VaultSeasonEnd;
             if(previous!=std::chrono::system_clock::time_point{}&&previous<=std::chrono::system_clock::now()&&previous!=tp){
+                ++g_VaultSeasonRevision;
                 g_VaultSpecial={};g_VaultSectionSuccess[2]=0;
                 g_VaultSectionAttempt[g_VaultCacheAccount][2]=0;UpdateVaultFreshness();
             }
@@ -528,6 +530,7 @@ static void FetchVaultData(bool skipClaimedSections) {
         for(uint8_t i=0;i<3;++i)if(request[i])g_VaultSectionAttempt[account][i]=std::time(nullptr);
         generation=++g_VaultGeneration;
         g_VaultRequestCredential=credential;
+        g_VaultRequestSeasonRevision=g_VaultSeasonRevision;
         g_VaultFetching = true;
         g_VaultInitialAttempted = true;
         g_VaultLastAttemptFailed = false;
@@ -566,6 +569,11 @@ static void ApplyVaultSection(uint8_t type,const std::string& account,uint64_t g
             g_VaultSectionAttempt[account][type]=0;g_VaultTerminal[type]=true;g_VaultRetryNeeded[type]=false;
             if(std::all_of(std::begin(g_VaultTerminal),std::end(g_VaultTerminal),[](bool x){return x;}))g_VaultFetching=false;
             return;
+        }
+        if(type==2&&g_VaultRequestSeasonRevision!=g_VaultSeasonRevision){
+            // Season changed while this batch was in flight. Reject only its
+            // Special response; daily and weekly remain independent.
+            status=0;g_VaultSectionAttempt[account][type]=0;
         }
         if(status==429&&++g_VaultRetryAttempts[type]<=3){
             g_VaultRetryNeeded[type]=true;
@@ -1227,6 +1235,10 @@ void LoadVaultCache() {
             if(dailyStale)g_VaultSectionSuccess[0]=0;
             if(weeklyStale)g_VaultSectionSuccess[1]=0;
             if(seasonEndEpoch>0&&now>=g_VaultSeasonEnd){g_VaultSpecial={};g_VaultSectionSuccess[2]=0;}
+            if(g_PublicVaultSeasonEnd>g_VaultSeasonEnd){
+                if(seasonEndEpoch>0&&stamps[2]<seasonEndEpoch){g_VaultSpecial={};g_VaultSectionSuccess[2]=0;}
+                g_VaultSeasonEnd=g_PublicVaultSeasonEnd;
+            }
             UpdateVaultFreshness();
         }
 
@@ -2366,7 +2378,7 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
 
 static void RenderVaultPeriodSection(int sectionIndex, const char* title,
                                      const char* resetLabel, ImVec4 color,
-                                     const VaultPeriod& period)
+                                     const VaultPeriod& period,std::chrono::system_clock::time_point seasonEnd)
 {
     // One heading for title, reset, claimed count and Astral Acclaim.
     // Count progress by completed objectives, independent of claiming rewards.
@@ -2388,7 +2400,7 @@ static void RenderVaultPeriodSection(int sectionIndex, const char* title,
         claimedCount == static_cast<int>(period.objectives.size()) &&
         earnedAA >= totalAA;
     if (!RenderVaultSectionToggle(sectionIndex, title, color, suffix,
-                                  summary, fullyClaimed))
+                                  summary, fullyClaimed,seasonEnd))
         return;
     if (period.objectives.empty()) {
         ImGui::TextDisabled("  No data");
@@ -2544,25 +2556,30 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
     ImGui::Separator();
     ImGui::BeginChild("##VaultContentScroll", ImVec2(0, 0), false);
 
-    std::lock_guard<std::mutex> lock(g_ClearsMutex);
+    VaultPeriod daily,weekly,special;
+    std::chrono::system_clock::time_point seasonEnd;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        daily=g_VaultDaily;weekly=g_VaultWeekly;special=g_VaultSpecial;seasonEnd=g_VaultSeasonEnd;
+    }
 
     RenderVaultPeriodSection(0, "Daily Objectives", dailyResetStr.c_str(),
-        ImVec4(0.61f, 0.43f, 0.92f, 1.0f), g_VaultDaily);
+        ImVec4(0.61f, 0.43f, 0.92f, 1.0f), daily,seasonEnd);
 
     ImGui::Spacing();
     ImGui::Separator();
 
     RenderVaultPeriodSection(1, "Weekly Objectives", weeklyResetStr.c_str(),
-        ImVec4(0.91f, 0.78f, 0.29f, 1.0f), g_VaultWeekly);
+        ImVec4(0.91f, 0.78f, 0.29f, 1.0f), weekly,seasonEnd);
 
-    if (!g_VaultSpecial.objectives.empty()) {
+    if (!special.objectives.empty()) {
         ImGui::Spacing();
         ImGui::Separator();
         std::string seasonLabel = "seasonal";
-        if (g_VaultSeasonEnd != std::chrono::system_clock::time_point{}) {
+        if (seasonEnd != std::chrono::system_clock::time_point{}) {
             auto sNow = std::chrono::system_clock::now();
-            if (g_VaultSeasonEnd > sNow) {
-                auto rem = std::chrono::duration_cast<std::chrono::seconds>(g_VaultSeasonEnd - sNow).count();
+            if (seasonEnd > sNow) {
+                auto rem = std::chrono::duration_cast<std::chrono::seconds>(seasonEnd - sNow).count();
                 // Count calendar days remaining, consistent with the in-game
                 // Wizard's Vault display; never show 0 while time remains.
                 const int days = static_cast<int>((rem + 86399) / 86400);
@@ -2573,7 +2590,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
             }
         }
         RenderVaultPeriodSection(2, "Special Objectives", seasonLabel.c_str(),
-            ImVec4(0.9f, 0.70f, 0.30f, 1.0f), g_VaultSpecial);
+            ImVec4(0.9f, 0.70f, 0.30f, 1.0f), special,seasonEnd);
     }
     ImGui::EndChild();
 }
@@ -2638,7 +2655,7 @@ static void SaveClearUiSettings() {
 static bool RenderVaultSectionToggle(int index, const char* title,
                                      ImVec4 color, const char* suffix,
                                      const char* summary,
-                                     bool summaryComplete) {
+                                     bool summaryComplete,std::chrono::system_clock::time_point seasonEnd) {
     (void)color;
     LoadClearUiSettings();
     ImGui::PushID("VaultSection");
@@ -2653,9 +2670,9 @@ static bool RenderVaultSectionToggle(int index, const char* title,
     // The heading is a single invisible layout item, so the season's exact
     // end timestamp can be shown on hover without adding visible clutter.
     if (index == 2 &&
-        g_VaultSeasonEnd != std::chrono::system_clock::time_point{} &&
+        seasonEnd != std::chrono::system_clock::time_point{} &&
         ImGui::IsItemHovered()) {
-        const std::time_t tt = std::chrono::system_clock::to_time_t(g_VaultSeasonEnd);
+        const std::time_t tt = std::chrono::system_clock::to_time_t(seasonEnd);
         std::tm utc{};
 #ifdef _WIN32
         gmtime_s(&utc, &tt);
@@ -2721,7 +2738,17 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     ImGui::Separator();
     ImGui::BeginChild("##ClearsContentScroll", ImVec2(0, 0), false);
 
-    std::lock_guard<std::mutex> lock(g_ClearsMutex);
+    std::vector<ClearEntry> dailyFractals,dailyBounties,weeklyWings;
+    ClearEntry weeklyStrikes;
+    std::vector<std::string> priorT4Names;
+    bool fetched,rolloverPending;
+    {
+        std::lock_guard<std::mutex> lock(g_ClearsMutex);
+        dailyFractals=g_DailyFractals;dailyBounties=g_DailyBounties;
+        weeklyWings=g_WeeklyWings;weeklyStrikes=g_WeeklyStrikes;
+        priorT4Names=g_ClearsPriorDailyT4Names;
+        fetched=g_ClearsFetched;rolloverPending=g_ClearsDailyRolloverPending;
+    }
     const int64_t utcNow = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     const int64_t weeklyEndUtc = std::chrono::duration_cast<std::chrono::seconds>(
@@ -2737,12 +2764,12 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     }
 
     if (showFractals) {
-    if (g_DailyFractals.empty()) {
-        if (g_ClearsDailyRolloverPending) {
+    if (dailyFractals.empty()) {
+        if (rolloverPending) {
             // The hard-coded date anchor can drift. Only derive a forecast
             // from yesterday's verified three T4 objectives, if available.
             const auto* forecast = ClearsRotation::NextFractalsFromLive(
-                g_ClearsPriorDailyT4Names);
+                priorT4Names);
             if (forecast) {
                 ImGui::TextDisabled("Forecast from yesterday (unverified; completion unknown):");
                 for (const char* name : forecast->dailies)
@@ -2760,7 +2787,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         // Build three daily map cards, then a fourth Recommended card.
         // Status comes from the existing native achievement completion data.
         std::vector<DailyFractalCard> cards;
-        for (const auto& e : g_DailyFractals) {
+        for (const auto& e : dailyFractals) {
             int tier = -1;
             if      (e.tier == "T1") tier = 0;
             else if (e.tier == "T2") tier = 1;
@@ -2785,7 +2812,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         recommended.title = "Recommended";
         recommended.recommended = true;
         std::vector<const ClearEntry*> recs;
-        for (const auto& e : g_DailyFractals)
+        for (const auto& e : dailyFractals)
             if (e.tier == "Rec") recs.push_back(&e);
         std::sort(recs.begin(), recs.end(),
             [](const ClearEntry* a, const ClearEntry* b) {
@@ -2812,21 +2839,21 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 recommended.labels[t] = "?";
         }
         cards.push_back(std::move(recommended));
-        RenderDailyFractalCards(cards, g_ClearsFetched,
-                                g_ClearsHideComplete && g_ClearsFetched);
+        RenderDailyFractalCards(cards, fetched,
+                                g_ClearsHideComplete && fetched);
 
         // Uncategorized fractals (no tier) — show as plain rows
-        for (const auto& e : g_DailyFractals) {
-            if (!e.tier.empty() || (g_ClearsHideComplete && g_ClearsFetched && e.done)) continue;
+        for (const auto& e : dailyFractals) {
+            if (!e.tier.empty() || (g_ClearsHideComplete && fetched && e.done)) continue;
             ImGui::Text("  ");
             ImGui::SameLine();
-            RenderClearStatus(g_ClearsFetched, e.done, e.name.c_str());
+            RenderClearStatus(fetched, e.done, e.name.c_str());
         }
         ImGui::Unindent(4.0f);
     }
-    if (g_ClearsFetched && g_ShowFractalNextResets) {
+    if (fetched && g_ShowFractalNextResets) {
         std::vector<std::string> todaysT4;
-        for (const auto& e : g_DailyFractals)
+        for (const auto& e : dailyFractals)
             if (e.tier == "T4")
                 todaysT4.push_back(ShortenFractalName(e.name));
         const auto* next = ClearsRotation::NextFractalsFromLive(todaysT4);
@@ -2904,21 +2931,21 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         snprintf(suffix, sizeof(suffix), "(resets in %s)", dailyResetStr.c_str());
         char summary[64] = {};
         int completed = 0;
-        if (g_ClearsFetched && !g_DailyBounties.empty()) {
-            for (const auto& bounty : g_DailyBounties)
+        if (fetched && !dailyBounties.empty()) {
+            for (const auto& bounty : dailyBounties)
                 if (bounty.done) ++completed;
             snprintf(summary, sizeof(summary), "%d / %zu completed",
-                completed, g_DailyBounties.size());
+                completed, dailyBounties.size());
         }
         showBounties = RenderClearSectionToggle(1, "Daily Raid Bounties",
             ImVec4(0.9f, 0.6f, 0.3f, 1.0f), suffix,
             summary[0] ? summary : nullptr,
-            summary[0] && completed == static_cast<int>(g_DailyBounties.size()));
+            summary[0] && completed == static_cast<int>(dailyBounties.size()));
     }
 
     if (showBounties) {
-    if (g_DailyBounties.empty()) {
-        if (g_ClearsDailyRolloverPending) {
+    if (dailyBounties.empty()) {
+        if (rolloverPending) {
             const int rotation = ClearsRotation::BountySet(utcNow);
             ImGui::TextDisabled("Rotation forecast (not API-verified; completion unknown):");
             for (int column = 0; column < 4; ++column)
@@ -2932,12 +2959,12 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         float gapBnty = 6.0f;
         float halfWBnty = (availW - gapBnty) * 0.5f;
         size_t visibleCount = 0;
-        for (const auto& e : g_DailyBounties)
-            if (!g_ClearsHideComplete || !g_ClearsFetched || !e.done) ++visibleCount;
+        for (const auto& e : dailyBounties)
+            if (!g_ClearsHideComplete || !fetched || !e.done) ++visibleCount;
         size_t shown = 0;
-        for (size_t i = 0; i < g_DailyBounties.size(); i++) {
-            const auto& e = g_DailyBounties[i];
-            if (g_ClearsHideComplete && g_ClearsFetched && e.done) continue;
+        for (size_t i = 0; i < dailyBounties.size(); i++) {
+            const auto& e = dailyBounties[i];
+            if (g_ClearsHideComplete && fetched && e.done) continue;
             std::string display = e.name;
             if (display.find("Raid Bounty: ") == 0)
                 display = display.substr(13);
@@ -2971,7 +2998,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
             ImGui::PushID((int)i);
             ImVec2 startPos = ImGui::GetCursorScreenPos();
             RenderClearBanner(display, subtitle,
-                g_ClearsFetched, e.done, theme,
+                fetched, e.done, theme,
                 /*tooltip*/ nullptr, /*widthOverride*/ halfWBnty,
                 bannerKey);
             ImGui::PopID();
@@ -2998,22 +3025,22 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         snprintf(suffix, sizeof(suffix), "(resets in %s)", weeklyResetStr.c_str());
         char summary[64] = {};
         int completed = 0;
-        if (g_ClearsFetched && g_WeeklyStrikes.id != 0 &&
-            !g_WeeklyStrikes.bitNames.empty()) {
-            for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); ++i)
-                if (i < g_WeeklyStrikes.bitDone.size() &&
-                    g_WeeklyStrikes.bitDone[i]) ++completed;
+        if (fetched && weeklyStrikes.id != 0 &&
+            !weeklyStrikes.bitNames.empty()) {
+            for (size_t i = 0; i < weeklyStrikes.bitNames.size(); ++i)
+                if (i < weeklyStrikes.bitDone.size() &&
+                    weeklyStrikes.bitDone[i]) ++completed;
             snprintf(summary, sizeof(summary), "%d / %zu completed",
-                completed, g_WeeklyStrikes.bitNames.size());
+                completed, weeklyStrikes.bitNames.size());
         }
         showStrikes = RenderClearSectionToggle(2, "Weekly Strikes",
             ImVec4(0.7f, 0.4f, 0.9f, 1.0f), suffix,
             summary[0] ? summary : nullptr,
-            summary[0] && completed == static_cast<int>(g_WeeklyStrikes.bitNames.size()));
+            summary[0] && completed == static_cast<int>(weeklyStrikes.bitNames.size()));
     }
 
     if (showStrikes) {
-    if (g_WeeklyStrikes.id == 0) {
+    if (weeklyStrikes.id == 0) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
         ImGui::Indent(4.0f);
@@ -3024,24 +3051,24 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         const int strikeColumns = gridWidth >= 900.0f ? 3 : 2;
         size_t shown = 0;
         std::vector<size_t> pickerOrder;
-        pickerOrder.reserve(g_WeeklyStrikes.bitNames.size());
-        for (size_t i = 0; i < g_WeeklyStrikes.bitNames.size(); ++i)
+        pickerOrder.reserve(weeklyStrikes.bitNames.size());
+        for (size_t i = 0; i < weeklyStrikes.bitNames.size(); ++i)
             pickerOrder.push_back(i);
         // Presentation order only: original achievement indices remain intact.
         std::stable_sort(pickerOrder.begin(), pickerOrder.end(),
             [](size_t left, size_t right) {
-                return AlterEgo::StrikePickerOrder(g_WeeklyStrikes.bitNames[left]) <
-                       AlterEgo::StrikePickerOrder(g_WeeklyStrikes.bitNames[right]);
+                return AlterEgo::StrikePickerOrder(weeklyStrikes.bitNames[left]) <
+                       AlterEgo::StrikePickerOrder(weeklyStrikes.bitNames[right]);
             });
 
         if (ImGui::BeginTable("##WeeklyStrikesGrid", strikeColumns,
                               ImGuiTableFlags_SizingStretchSame)) {
             for (const size_t i : pickerOrder) {
-                const bool bitDone = i < g_WeeklyStrikes.bitDone.size() &&
-                    g_WeeklyStrikes.bitDone[i];
-                if (g_ClearsHideComplete && g_ClearsFetched && bitDone) continue;
+                const bool bitDone = i < weeklyStrikes.bitDone.size() &&
+                    weeklyStrikes.bitDone[i];
+                if (g_ClearsHideComplete && fetched && bitDone) continue;
 
-                const std::string& name = g_WeeklyStrikes.bitNames[i];
+                const std::string& name = weeklyStrikes.bitNames[i];
                 // Display aliases only: never change the source achievement
                 // name, bit index, theme, or bounty matching.
                 const std::string normalized = ClearsRotation::Normalize(name);
@@ -3057,14 +3084,14 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 const std::string subtitle = AlterEgo::StrikePickerCategory(name);
                 bool dailyCompletedToday = false;
                 const std::string date = UpcomingBountyLabel(
-                    isKela ? "Kela" : name, g_DailyBounties,
-                    utcNow, weeklyEndUtc, g_ClearsFetched, &dailyCompletedToday);
+                    isKela ? "Kela" : name, dailyBounties,
+                    utcNow, weeklyEndUtc, fetched, &dailyCompletedToday);
 
                 if (shown % strikeColumns == 0) ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex((int)(shown % strikeColumns));
                 ImGui::PushID((int)i);
                 RenderClearBanner(displayName, subtitle,
-                    g_ClearsFetched, bitDone, StrikeTheme(name),
+                    fetched, bitDone, StrikeTheme(name),
                     /*tooltip*/ description,
                     /*widthOverride*/ ImGui::GetContentRegionAvail().x,
                     /*bannerKey*/ "strike:" + name, date,
@@ -3103,8 +3130,8 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         snprintf(suffix, sizeof(suffix), "(resets in %s)", weeklyResetStr.c_str());
         char summary[64] = {};
         int completed = 0, total = 0;
-        if (g_ClearsFetched && !g_WeeklyWings.empty()) {
-            for (const auto& wing : g_WeeklyWings)
+        if (fetched && !weeklyWings.empty()) {
+            for (const auto& wing : weeklyWings)
                 for (size_t i = 0; i < wing.bitNames.size(); ++i)
                     if (!ShortenEncounterName(wing.bitNames[i]).empty()) {
                         ++total;
@@ -3121,14 +3148,14 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
     }
 
     if (showRaids) {
-    if (g_WeeklyWings.empty()) {
+    if (weeklyWings.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "  No data");
     } else {
         ImGui::Indent(4.0f);
         uint32_t embWingId = CurrentEmboldenedWingId();
         uint32_t cotmWingId = CurrentCallOfTheMistsWingId();
         size_t visibleWings = 0;
-        for (const auto& wing : g_WeeklyWings) {
+        for (const auto& wing : weeklyWings) {
             std::string cleanName = CleanWingName(wing.name);
             const char* shortW = WingShortName(wing.id);
 
@@ -3141,7 +3168,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 bool bitDone = (i < wing.bitDone.size()) ? wing.bitDone[i] : false;
                 ++totalCount;
                 if (bitDone) ++doneCount;
-                if (g_ClearsHideComplete && g_ClearsFetched && bitDone) continue;
+                if (g_ClearsHideComplete && fetched && bitDone) continue;
                 WingEncChip c;
                 c.label = shortEnc;
                 c.fullName = wing.bitNames[i];
@@ -3150,21 +3177,21 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                 const std::string bountyKey =
                     shortEnc == "CA" ? "Conjured Amalgamate" :
                     shortEnc == "Twins" ? "Twin Largos" : shortEnc;
-                c.bountyDate = UpcomingBountyLabel(bountyKey, g_DailyBounties,
-                    utcNow, weeklyEndUtc, g_ClearsFetched, &c.dailyCompletedToday);
+                c.bountyDate = UpcomingBountyLabel(bountyKey, dailyBounties,
+                    utcNow, weeklyEndUtc, fetched, &c.dailyCompletedToday);
                 chips.push_back(c);
             }
 
-            if (g_ClearsHideComplete && g_ClearsFetched && chips.empty()) continue;
+            if (g_ClearsHideComplete && fetched && chips.empty()) continue;
             ++visibleWings;
             ImGui::PushID((int)wing.id);
             if (ImGui::GetContentRegionAvail().x >= 830.0f) {
                 RenderCompactWingBanner(shortW ? shortW : "", cleanName,
-                    wing.id, doneCount, totalCount, g_ClearsFetched, chips,
+                    wing.id, doneCount, totalCount, fetched, chips,
                     wing.id == embWingId, wing.id == cotmWingId);
             } else {
                 RenderWingBanner(shortW ? shortW : "", cleanName,
-                    wing.id, doneCount, totalCount, g_ClearsFetched,
+                    wing.id, doneCount, totalCount, fetched,
                     WingTheme(wing.id), chips,
                     /*bannerKey*/ "wing:" + std::to_string(wing.id),
                     /*isEmboldened*/ wing.id == embWingId,

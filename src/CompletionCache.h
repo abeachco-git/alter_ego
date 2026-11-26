@@ -198,11 +198,17 @@ inline bool WriteVaultPeriods(const std::string& root,const std::string& account
         auto prior=Read(db,CompletionDataset::Vault,account);
         Json merged=prior.value_or(Json{{"account",account},{"fetch_time",0}});
         int64_t newest=Number(merged,"fetch_time");
+        const auto oldEnd=Number(merged,"season_end"),patchEnd=Number(patch,"season_end");
+        // Advancing a known season must not relabel its expired Special rows.
+        const bool seasonAdvanced=oldEnd>0&&patchEnd>oldEnd;
+        if(seasonAdvanced&&merged.contains("special")&&Number(merged.at("special"),"fetched_at")<oldEnd)
+            merged.erase("special");
         for(const char* key:{"daily","weekly","special"}){
             if(!patch.contains(key))continue;
             const auto& row=patch.at(key);
             auto stamp=Number(row,"fetched_at");
             if(stamp<=0)throw std::runtime_error("Unverified Vault period");
+            if(std::string(key)=="special"&&((patchEnd>0&&patchEnd<oldEnd)||(seasonAdvanced&&stamp<oldEnd)))continue;
             if(merged.contains(key)&&stamp<Number(merged.at(key),"fetched_at"))continue;
             merged[key]=row;newest=std::max(newest,stamp);
         }

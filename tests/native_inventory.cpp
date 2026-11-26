@@ -140,5 +140,19 @@ int case_native_inventory(int,char**){
     assert(!Cache::ReadCompletion(root,CompletionDataset::Vault,"account-b"));
     assert(!Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"weekly",vaultPeriod(0,6)}}));
     assert(Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a")->at("weekly").at("fetched_at")==100);
+    // Persist outgoing A after selection moves to B, then a newer season;
+    // late Special patches from the old season cannot resurrect stale data.
+    const Json outgoing{{"account","account-a"},{"season_end",300},{"special",vaultPeriod(250,7)}};
+    assert(Cache::WriteVaultPeriods(root,"account-b",Json{{"account","account-b"},{"daily",vaultPeriod(260,8)}}));
+    assert(Cache::WriteVaultPeriods(root,"account-a",outgoing));
+    assert(Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a")->at("special").at("fetched_at")==250);
+    assert(Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"season_end",600}}));
+    assert(!Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a")->contains("special"));
+    assert(Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"season_end",300},{"special",vaultPeriod(320,9)}}));
+    assert(!Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a")->contains("special"));
+    assert(Cache::WriteVaultPeriods(root,"account-a",Json{{"account","account-a"},{"season_end",600},{"special",vaultPeriod(330,10)}}));
+    snap=Cache::ReadCompletion(root,CompletionDataset::Vault,"account-a");
+    assert(snap&&snap->at("special").at("fetched_at")==330&&snap->at("weekly").at("fetched_at")==100);
+    assert(Cache::ReadCompletion(root,CompletionDataset::Vault,"account-b")->at("daily").at("fetched_at")==260);
     std::filesystem::remove_all(root);return 0;
 }
