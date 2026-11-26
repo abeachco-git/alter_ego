@@ -3,6 +3,10 @@ name: Build Alter Ego Windows DLL (UCRT)
 on:
   workflow_dispatch:
     inputs:
+      stock_toolchain:
+        description: 'Fallback: install toolchain from Debian instead of GHCR'
+        type: boolean
+        default: false
       wiki_refresh:
         description: 'Force bounded Wiki reference refresh'
         type: boolean
@@ -33,19 +37,62 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: debian:trixie
+    # Main and the legacy feature branch retain the stock path until rollout.
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ github.ref_name == 'experiment/composable-loadouts' && !inputs.stock_toolchain && format('ghcr.io/{0}/alter-ego-ucrt-toolchain:trixie-exp-v1', github.repository_owner) || 'debian:trixie' }}
+      credentials:
+        username: ${{ github.ref_name == 'experiment/composable-loadouts' && !inputs.stock_toolchain && github.actor || '' }}
+        password: ${{ github.ref_name == 'experiment/composable-loadouts' && !inputs.stock_toolchain && secrets.GITHUB_TOKEN || '' }}
     env:
       CCACHE_DIR: /tmp/alter-ego-ccache
-      CCACHE_MAXSIZE: 500M
+      CCACHE_MAXSIZE: 1G
       CCACHE_COMPILERCHECK: content
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1
-      - name: Install matching UCRT cross-compiler
+        with:
+          persist-credentials: false
+      - name: Install matching UCRT cross-compiler (stock fallback)
+        if: github.ref_name != 'experiment/composable-loadouts' || inputs.stock_toolchain
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             cmake make file python3 python3-pil ca-certificates ccache g++ g++-mingw-w64-ucrt64             gcc-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64
+      - name: Verify toolchain and choose safe build parallelism
+        run: |
           x86_64-w64-mingw32ucrt-g++ --version
+          g++ --version
+          cmake --version
+          python3 -c "import PIL"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          mib = 1024 * 1024
+          cpus = len(os.sched_getaffinity(0))
+          try:
+              quota, period = Path('/sys/fs/cgroup/cpu.max').read_text().split()
+              if quota != 'max':
+                  cpus = min(cpus, max(1, int(quota) // int(period)))
+          except (OSError, ValueError):
+              pass
+          available = next(int(line.split()[1]) * 1024 for line in
+                           Path('/proc/meminfo').read_text().splitlines()
+                           if line.startswith('MemAvailable:'))
+          try:
+              limit = Path('/sys/fs/cgroup/memory.max').read_text().strip()
+              if limit != 'max':
+                  used = int(Path('/sys/fs/cgroup/memory.current').read_text())
+                  available = min(available, max(0, int(limit) - used))
+          except (OSError, ValueError):
+              pass
+          # Reserve memory for the runner/linker; budget 3 GiB per compiler.
+          jobs = max(1, min(4, cpus, (available - 1536*mib) // (3072*mib)))
+          print(f'CPU slots: {cpus}; available memory: {available//mib} MiB; build jobs: {jobs}')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'AE_BUILD_JOBS={jobs}\n')
+          PY
       - name: Diagnose GW2 Wiki connectivity
         if: github.event_name == 'workflow_dispatch' && inputs.wiki_diagnostic
         continue-on-error: true
@@ -147,19 +194,27 @@ jobs:
       - name: Run required offline regression tests
         run: |
           cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build build-tests --parallel 2
+          cmake --build build-tests --parallel "$AE_BUILD_JOBS"
           ctest --test-dir build-tests --output-on-failure
       - name: Exercise untrusted parsers under ASan and UBSan
         run: |
-          g++ -std=c++17 -O1 -g -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined -fno-sanitize-recover=all -Ilib tests/untrusted_fuzz.cpp src/ChatLink.cpp -o build-tests/untrusted-fuzz
+          flags="-std=c++17 -O1 -g -fno-omit-frame-pointer -fno-pie -fsanitize=address,undefined -fno-sanitize-recover=all -Ilib"
+          # Cache compilation units, not the linked executable or test result.
+          ccache g++ $flags -c tests/untrusted_fuzz.cpp -o build-tests/untrusted_fuzz.o
+          ccache g++ $flags -c src/ChatLink.cpp -o build-tests/untrusted_ChatLink.o
+          g++ -no-pie -fsanitize=address,undefined -fno-sanitize-recover=all build-tests/untrusted_fuzz.o build-tests/untrusted_ChatLink.o -o build-tests/untrusted-fuzz
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 build-tests/untrusted-fuzz
       - name: Run reproducible SQLite benchmark
         run: python3 tools/benchmark_sqlite.py --output sqlite-benchmark.json
+      - name: Report native test and sanitizer compiler cache statistics
+        run: |
+          ccache --show-stats
+          ccache --zero-stats
       - name: Configure Windows release build
         run: |
           cmake -S . -B build -DAE_WIKI_STATE="$PWD/.wiki-reference-state/rotations.json" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache             -DCMAKE_CXX_FLAGS="-mcrtdll=ucrtbase" -DCMAKE_C_FLAGS="-mcrtdll=ucrtbase"
       - name: Compile Windows DLL
-        run: cmake --build build --parallel 2
+        run: cmake --build build --parallel "$AE_BUILD_JOBS"
       - name: Verify embedded fixed UI assets
         run: |
           python3 tools/verify_embedded_icons.py build/AlterEgo.dll
@@ -181,7 +236,7 @@ jobs:
             echo "Wrong CRT imported (MSVCRT)" >&2
             exit 1
           fi
-      - name: Report compiler cache statistics
+      - name: Report Windows compiler cache statistics
         if: always()
         run: ccache --show-stats
       - name: Verify distribution notices
