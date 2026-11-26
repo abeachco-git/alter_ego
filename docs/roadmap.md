@@ -4,15 +4,15 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 **Approval:** proposed means discussion only; previously approved outstanding work is identified below. No new implementation is authorized by this documentation cleanup. Priorities are relative, not a mandate to implement unrelated work. Split broad items into explicitly approved, independently testable batches.
 
-## Application-wide consistency audit — proposed, discussion only
+## Application-wide consistency audit — Part 2 approved; Parts 3–4 proposed
 
 Source audit at [7849cfd (build 668)](https://github.com/abeachco-git/alter_ego/commit/7849cfd77cac7d5e35d4b2cbb77e813290929c59). These are confirmed source-level duplication/behavior differences and proposals, not an assertion that all paths are broken. No implementation is approved by this audit or by a handoff. Recheck the current branch and existing helpers, agree on each package and its behavior decisions with the user before editing, and approve individual sub-items if a package is too broad. Each approved package should be independently testable, reversible and deliverable; do not blanket-refactor the app. Existing roadmap items remain authoritative for their own scope. The packages below track only unresolved proposals; they are not a mandate to implement every item.
 
 ### Part 2 — Equipment, skills and build editing primitives (high impact, high risk)
 
-- [ ] B1. Consolidate full Loadout and standalone Component gear editor behavior using typed editing primitives/adapters and existing catalogs, GearEditCore, EquipmentChoiceCore and ComposableGearPresentation. RenderGearEditContext currently offers typed field-specific copy/paste, clear, and propagation; ComponentNativeGear independently copies JSON fields and supports different compatibility/propagation options. Reuse compatible slot/stat/weapon/rune/sigil/relic/infusion controls and operations, preserve capacity and valid slot constraints, explicitly absent versus unknown data, exact IDs, imported fields and component-specific boundaries. Do not merge private/shared commit paths. Evidence: src/dllmain.cpp (RenderGearEditContext, RenderGearCustomizeDialog, RenderBuildGearPanel), src/ComposableNativeEditor.h (ComponentNativeGear, catalog/stat/weapon/infusion functions).
-- [ ] B2 remainder. Review trait-specific context parity and aquatic eligibility metadata; never invent restrictions when catalog support is missing. Shared skill, specialization and pet/legend picker implementations and independent environment edits are verified in build #679.
-- [ ] B3. Align field-level context actions and edited slot summaries for supported fields. Reuse existing icon, tooltip, name-copy and clipboard primitives. Internal typed gear/component clipboard and portable external clipboard have different purposes; do not indiscriminately unify formats or allow incompatible pastes. Never use direct Windows clipboard or bypass the Nexus/ImGui native input path.
+- [ ] B1 remainder. Consolidate remaining weapon and infusion picker/editing paths where their semantics agree. Review unknown capacity, explicitly empty versus absent requirements, imported fields and slot compatibility; do not fill hypothetical sockets. Preserve component ownership and separate private/shared commit paths.
+- [ ] B2 remainder. Review trait-specific context parity and authoritative aquatic eligibility metadata for skills, pets and legends; never invent restrictions when catalog support is missing.
+- [ ] B3 remainder. Align remaining edited-slot summaries, tooltips and specialized context actions; preserve separate exact-slot, typed field and portable clipboard semantics and native host clipboard callbacks.
 
 Acceptance discussion: identical edit behavior for equivalent fields, private/shared draft isolation and explicit Save review, exact round-trip preservation, clear/copy/paste/slot capacity and utility swaps, independent aquatic decisions, and no new per-frame requests. Split B1 and B2 into independent implementation batches if needed.
 
@@ -38,7 +38,7 @@ Acceptance discussion: regression fixtures for equivalent and different builds, 
 - Before implementing any package, present evidence, exact proposed changes, deliberate exceptions, unresolved behavior decisions, dependencies, risk and regression checks. Ask for approval of that package only. Update this tracker as work is approved; prune completed items after required automated verification and retain remaining validation in development-status.md. Do not mark discussion as implementation.
 - After an approved implementation, follow AGENTS.md definition of done, including exact-commit Windows build and verified DLL delivery. Live/in-game validation is separate and must be reported honestly.
 
-**Part 2 approved (implementation in progress):** first-class optional Aquatic equipment component owns its headgear, weapons and upgrades; preserve existing libraries and exact imported fields. Loadout bulk operations include compatible configured aquatic slots, without creating unconfigured aquatic equipment. Skills, pets and legends edit terrestrial and aquatic independently. All Part 2 proposals are approved; Parts 3 and 4 remain discussion only. Keep pending implementation and verification tracked until delivery.
+**Part 2 approved:** the remaining B1–B3 items above are authorized within the agreed aquatic and ownership policies. Parts 3 and 4 remain discussion only.
 
 ## Remaining Library work
 
