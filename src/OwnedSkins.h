@@ -70,8 +70,6 @@ namespace Skinventory {
         static std::unordered_set<uint32_t> GetOwnedSnapshot();
 
     private:
-        static bool SaveToCache();
-
         static AddonAPI_t* s_API;
         static std::string s_data_dir;
         static std::unordered_set<uint32_t> s_owned_skins;

@@ -58,3 +58,5 @@ Native authenticated account retrieval, account-scoped inventory, wallet, guild 
 Remaining work includes independent dataset freshness, scheduling, semantic inventory alternatives and broader shopping acquisition mapping, plus authenticated multi-account and in-game validation. Do not treat an offline build as live verification.
 
 The build cited above is a historical verified checkpoint, not the latest branch binary.
+
+- Callback/UI ownership pass: chat and explicit Pie handoff copy bounded values into independent inboxes; toast and window/tracker keybind state is render-owned, no toast mutex across UI or Nexus calls. Ownership persistence captures the verified account and snapshot under the domain lock, serializes writes and cache loads, and never re-reads selection to save a completed response. Worker reopen fenced until join completes. Offline and Windows verification pending; native escape pointer, external texture/atlas lifetime and broad remaining account/render audit remain open.

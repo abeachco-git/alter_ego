@@ -1,5 +1,6 @@
 #include "AccountIdentity.h"
 #include "CallbackLifetime.h"
+#include "UiCallbackInbox.h"
 #include "BackgroundWorkers.h"
 #include <windows.h>
 #include <commdlg.h>
@@ -1107,13 +1108,18 @@ struct BuildToast {
     bool has_gear = false;      // True if AE2 with gear data
 };
 static BuildToast g_BuildToast;
-static std::mutex g_BuildToastMutex;
+// Toast and settings are render-owned. Callbacks only publish copied input.
 static bool g_ChatBuildDetection = true;  // master toggle
+static std::atomic<bool> g_ChatDetectionEnabled{true};
+struct ChatBuildInput {ChatMessageType type;std::string content,sender;};
+static AlterEgo::Callbacks::UiInbox<ChatBuildInput,128> g_ChatBuildInbox;
+static AlterEgo::Callbacks::UiInbox<std::string,16> g_PieBuildInbox;
+static AlterEgo::Callbacks::UiToggles g_UiToggles;
 static float g_ToastPosX = -1.0f;        // -1 = auto-center
 static float g_ToastPosY = 100.0f;
 static bool g_ToastPosInitialized = false;
 static bool g_ToastNeedsFocus = false;
-static bool g_ChatAddonConnected = false; // true once we receive any EV_CHAT:Message
+static std::atomic<bool> g_ChatAddonConnected{false}; // true once we receive any EV_CHAT:Message
 
 // =========================================================================
 // Pie UI inter-addon bridge — presence handshake + explicit build import
@@ -1706,6 +1712,7 @@ static void LoadSettings() {
     getInt("library_collection", g_LibraryCollection);
     if (g_LibraryCollection < 0 || g_LibraryCollection > 3) g_LibraryCollection = 0;
     getBool("chat_build_detection", g_ChatBuildDetection);
+    g_ChatDetectionEnabled.store(g_ChatBuildDetection);
     getFloat("toast_pos_x", g_ToastPosX);
     getFloat("toast_pos_y", g_ToastPosY);
     if (j.contains("font") && j["font"].is_object()) {
@@ -5774,7 +5781,7 @@ static void OnEvChatMessage(void* eventArgs) {
     if (!callbackLease) return;
     if (!eventArgs) return;
     g_ChatAddonConnected = true;
-    if (!g_ChatBuildDetection) return;
+    if (!g_ChatDetectionEnabled.load()) return;
 
     EvChatMessage* msg = (EvChatMessage*)eventArgs;
 
@@ -5793,9 +5800,26 @@ static void OnEvChatMessage(void* eventArgs) {
     ChatGenericMessage* gm = &msg->Whisper;
     if (!gm->Content) return;
 
-    std::string content(gm->Content);
-    std::string sender = gm->CharacterName ? std::string(gm->CharacterName) : "Unknown";
+    // The host owns eventArgs and all pointers inside it; do not retain them.
+    // Chat is short; bound copying before allocating or parsing.
+    try {
+        auto copy=[](const char* p,size_t limit)->std::string{
+            if(!p)return {};
+            size_t n=0;while(n<limit && p[n])++n;
+            if(n==limit)return {};
+            return std::string(p,n);
+        };
+        auto content=copy(gm->Content,16384);
+        if(content.find("AE2:")==std::string::npos&&content.find("[&")==std::string::npos)return;
+        auto sender=gm->CharacterName?copy(gm->CharacterName,256):std::string("Unknown");
+        g_ChatBuildInbox.Push({msg->Type,std::move(content),std::move(sender)});
+    }catch(...){ /* Never unwind into the event dispatcher. */ }
+}
 
+static void HandleChatBuildInput(const ChatBuildInput& input) {
+    if(!g_ChatBuildDetection)return;
+    const auto& content=input.content;
+    const auto& sender=input.sender;
     // Skip our own messages (no toast for builds we posted ourselves)
     if (!g_CurrentCharName.empty() && sender == g_CurrentCharName)
         return;
@@ -5837,14 +5861,13 @@ static void OnEvChatMessage(void* eventArgs) {
                             // Suppress the auto-toast when Pie UI is present — it renders
                             // chat build codes as clickable links and imports explicitly.
                             if (!g_PieUIPresent.load()) {
-                                std::lock_guard<std::mutex> lock(g_BuildToastMutex);
                                 g_BuildToast.active = true;
                                 g_BuildToast.sender = sender;
                                 g_BuildToast.chat_link = chatLink;
                                 g_BuildToast.ae2_code = ae2code;
                                 g_BuildToast.profession = profession;
                                 g_BuildToast.spec_name = specName;
-                                g_BuildToast.channel = ChatChannelName(msg->Type);
+                                g_BuildToast.channel = ChatChannelName(input.type);
                                 g_BuildToast.has_gear = ae2hasGear;
                                 g_ToastNeedsFocus = true;
                             }
@@ -5855,7 +5878,7 @@ static void OnEvChatMessage(void* eventArgs) {
                             }
 
                             if (APIDefs) {
-                                std::string log = "AE2 build detected in " + std::string(ChatChannelName(msg->Type))
+                                std::string log = "AE2 build detected in " + std::string(ChatChannelName(input.type))
                                     + " from " + sender + ": " + profession;
                                 if (!specName.empty()) log += " (" + specName + ")";
                                 if (ae2hasGear) log += " [with gear]";
@@ -5902,14 +5925,13 @@ static void OnEvChatMessage(void* eventArgs) {
 
             // Suppress the auto-toast when Pie UI is present (see AE2 branch above).
             if (!g_PieUIPresent.load()) {
-                std::lock_guard<std::mutex> lock(g_BuildToastMutex);
                 g_BuildToast.active = true;
                 g_BuildToast.sender = sender;
                 g_BuildToast.chat_link = link;
                 g_BuildToast.ae2_code.clear();
                 g_BuildToast.profession = profession;
                 g_BuildToast.spec_name = specName;
-                g_BuildToast.channel = ChatChannelName(msg->Type);
+                g_BuildToast.channel = ChatChannelName(input.type);
                 g_BuildToast.has_gear = false;
                 g_ToastNeedsFocus = true;
             }
@@ -5920,7 +5942,7 @@ static void OnEvChatMessage(void* eventArgs) {
             }
 
             if (APIDefs) {
-                std::string log = "Build link detected in " + std::string(ChatChannelName(msg->Type))
+                std::string log = "Build link detected in " + std::string(ChatChannelName(input.type))
                                 + " from " + sender + ": " + profession;
                 if (!specName.empty()) log += " (" + specName + ")";
                 APIDefs->Log(LOGL_DEBUG, "AlterEgo", log.c_str());
@@ -5932,7 +5954,6 @@ static void OnEvChatMessage(void* eventArgs) {
 }
 
 static void RenderBuildToast() {
-    std::lock_guard<std::mutex> lock(g_BuildToastMutex);
     if (!g_BuildToast.active) return;
 
     ThemeGuard themeGuard;
@@ -6124,9 +6145,15 @@ static void OnPieImportBuild(void* eventArgs) {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
     if (!callbackLease) return;
     if (!eventArgs) return;
-    std::string payload((const char*)eventArgs);
-    if (payload.empty()) return;
+    try {
+        const auto* p=static_cast<const char*>(eventArgs);
+        size_t n=0;while(n<4096 && p[n])++n;
+        if(n==0||n==4096)return;
+        g_PieBuildInbox.Push(std::string(p,n));
+    }catch(...){ /* Never unwind into the event dispatcher. */ }
+}
 
+static void HandlePieBuildInput(const std::string& payload) {
     std::string ae2code, chatLink;
     bool hasGear = false;
 
@@ -6165,7 +6192,6 @@ static void OnPieImportBuild(void* eventArgs) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(g_BuildToastMutex);
         g_BuildToast.active = true;
         g_BuildToast.sender.clear();        // no chat sender on an explicit Pie hand-off
         g_BuildToast.chat_link = chatLink;
@@ -12423,6 +12449,9 @@ void AddonUnload() {
     // No new callback body can enter; drain admitted work before teardown.
     // Do not hold a subsystem lock while waiting (events may reenter synchronously).
     AlterEgo::Callbacks::Runtime().Drain();
+    // Preserve a final tracker toggle in settings; do not import or notify during unload.
+    if(g_UiToggles.Take()&2)g_AchPopoutVisible=!g_AchPopoutVisible;
+    (void)g_ChatBuildInbox.Take();(void)g_PieBuildInbox.Take();
     // End observation at shutdown, not after a slow HTTP worker joins.
     {std::lock_guard<std::mutex> lock(AlterEgo::CharacterActivity::Mutex());
         AlterEgo::CharacterActivity::State().Finish(shutdownAt);}
@@ -12686,19 +12715,9 @@ void OnMumbleIdentityUpdated(void* eventArgs) {
 void ProcessKeybind(const char* aIdentifier, bool aIsRelease) {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
     if (!callbackLease) return;
-    if (aIsRelease) return;
-
-    if (strcmp(aIdentifier, "KB_ALTER_EGO_TOGGLE") == 0) {
-        g_WindowVisible = !g_WindowVisible;
-        if (APIDefs) {
-            APIDefs->Log(LOGL_INFO, "AlterEgo",
-                g_WindowVisible ? "Window shown" : "Window hidden");
-        }
-    }
-    else if (strcmp(aIdentifier, "KB_ALTER_EGO_TRACKER") == 0) {
-        g_AchPopoutVisible = !g_AchPopoutVisible;
-        SaveAchTrackerState();
-    }
+    if (aIsRelease || !aIdentifier) return;
+    if (strcmp(aIdentifier, "KB_ALTER_EGO_TOGGLE") == 0) g_UiToggles.Toggle(1);
+    else if (strcmp(aIdentifier, "KB_ALTER_EGO_TRACKER") == 0) g_UiToggles.Toggle(2);
 }
 
 
@@ -15915,6 +15934,12 @@ static void SyncTabDropdownOpen(TabDropdownState& state, const char* popup) {
 void AddonRender() {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
     if (!callbackLease) return;
+    const auto toggles=g_UiToggles.Take();
+    if(toggles&1){
+        g_WindowVisible=!g_WindowVisible;
+        if(APIDefs)APIDefs->Log(LOGL_INFO,"AlterEgo",g_WindowVisible?"Window shown":"Window hidden");
+    }
+    if(toggles&2){g_AchPopoutVisible=!g_AchPopoutVisible;SaveAchTrackerState();}
     DefaultFontScope _fontScope(g_FontConfig);
     // Process icon download queue every frame
     AlterEgo::IconManager::Tick();
@@ -15934,6 +15959,10 @@ void AddonRender() {
         }
     }
     ObserveCharacterActivity(); // local only, no character HTTP while hidden
+    // No host callback or inbox lock is held while decoding, fetching or drawing.
+    for(const auto& input:g_ChatBuildInbox.Take())HandleChatBuildInput(input);
+    // Explicit Pie clicks take precedence over automatic notifications.
+    for(const auto& input:g_PieBuildInbox.Take())HandlePieBuildInput(input);
     PollAchievementCachePersistence(); // load/save disk progress, even when window is hidden
     SyncCompletionAccountCaches(); // selected-account Clears/Vault snapshots, even with UI hidden
     Skinventory::OwnedSkins::SetAccountName(GetEffectiveAccountName());
@@ -17772,6 +17801,7 @@ void AddonOptions() {
     RenderSectionHeader("Chat Build Detection", AlterEgo::UI::SectionGold);
     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Requires 'Events: Chat' addon from the Nexus library.");
     if (ImGui::Checkbox("Detect build links in chat", &g_ChatBuildDetection)) {
+        g_ChatDetectionEnabled.store(g_ChatBuildDetection);
         SaveSettings();
     }
     if (g_ChatBuildDetection) {

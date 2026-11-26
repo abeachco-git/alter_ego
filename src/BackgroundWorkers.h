@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <cstddef>
+#include <condition_variable>
 #include <list>
 #include <mutex>
 #include <thread>
@@ -18,6 +19,8 @@ class WorkerGroup {
     };
     std::mutex mutex_;
     std::list<Entry> jobs_;
+    std::condition_variable joined_;
+    bool joining_=false;
     std::atomic<bool> stopping_{true};
     std::atomic<std::size_t> active_{0}, failures_{0};
 
@@ -31,7 +34,7 @@ class WorkerGroup {
 public:
     bool Open() {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!jobs_.empty() || active_.load() != 0) return false;
+        if (!stopping_ || joining_ || !jobs_.empty() || active_.load() != 0) return false;
         stopping_ = false;
         return true;
     }
@@ -86,11 +89,18 @@ public:
     void JoinAll() {
         std::list<Entry> joining;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::unique_lock<std::mutex> lock(mutex_);
             stopping_ = true;
+            if(joining_){joined_.wait(lock,[&]{return !joining_;});return;}
+            joining_=true;
             joining.splice(joining.end(), jobs_);
         }
         for (auto& entry : joining) entry.thread.join();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            joining_=false;
+        }
+        joined_.notify_all();
     }
 };
 

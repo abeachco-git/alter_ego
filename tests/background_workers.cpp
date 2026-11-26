@@ -9,6 +9,7 @@ int case_background_workers(int, char**) {
     std::atomic<int> failures{0}, completed{0};
     assert(!group.Launch([] { assert(false); }, [&] { ++failures; }));
     assert(group.Open());
+    assert(!group.Open()); // already open, cannot start a replacement session
     assert(group.Launch([&] { ++completed; }));
     assert(group.Launch([] { throw std::runtime_error("test"); }, [&] { ++failures; }));
     std::mutex mutex;

@@ -35,7 +35,19 @@ namespace Skinventory {
     std::unordered_set<uint32_t> OwnedSkins::s_locally_marked;
     std::string OwnedSkins::s_account_name;
 
-    namespace {uint64_t accountEpoch=0;}
+    namespace {
+    uint64_t accountEpoch=0;
+    // Serialize capture and persistence of updates, not browsing-account changes.
+    // A write must keep the identity and IDs captured together at publication.
+    std::mutex ownershipSaveMutex;
+    bool PersistOwnership(const std::string& dir,const std::string& account,
+                          const AlterEgo::Cache::OwnershipSnapshot& snapshot) {
+        if(dir.empty()||account.empty())return false;
+        try{return AlterEgo::Cache::WriteOwnership(
+            AlterEgo::Cache::RootFromLegacySkinDirectory(dir),account,snapshot);}
+        catch(...){return false;}
+    }
+    }
     void OwnedSkins::Tick(){}
     void OwnedSkins::SetDataDirectory(const std::string& dir){s_data_dir=dir;}
     void OwnedSkins::Initialize(AddonAPI_t* api){s_API=api;}
@@ -55,6 +67,7 @@ namespace Skinventory {
         const auto dir=s_data_dir;
         AlterEgo::Background::Workers().Launch([name,epoch,dir]{
             try{
+                std::lock_guard<std::mutex> saving(ownershipSaveMutex);
                 auto snapshot=AlterEgo::Cache::ReadOwnership(AlterEgo::Cache::RootFromLegacySkinDirectory(dir),name);
                 if(!snapshot)return;
                 std::lock_guard<std::mutex> lock(s_mutex);
@@ -86,16 +99,20 @@ namespace Skinventory {
                     }valid=true;
                 }
             }catch(...){}
+            std::lock_guard<std::mutex> saving(ownershipSaveMutex);
+            AlterEgo::Cache::OwnershipSnapshot snapshot;
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                if(accountEpoch!=epoch||s_account_name!=account)return;
+                if(accountEpoch!=epoch||s_account_name!=account||AlterEgo::Background::Workers().Stopping())return;
                 s_querying=false;
                 if(!valid){s_status_message=result.error.empty()?"Invalid skin ownership response":result.error;return;}
                 parsed.insert(s_locally_marked.begin(),s_locally_marked.end());s_owned_skins=std::move(parsed);
                 s_has_data=true;s_last_success_time=std::time(nullptr);++s_generation;
                 s_status_message="Owned: "+std::to_string(s_owned_skins.size());
+                snapshot.fetchedAt=static_cast<int64_t>(s_last_success_time);
+                snapshot.ids.insert(s_owned_skins.begin(),s_owned_skins.end());
             }
-            SaveToCache();
+            PersistOwnership(s_data_dir,account,snapshot);
         },[epoch]{std::lock_guard<std::mutex> lock(s_mutex);if(accountEpoch==epoch){s_querying=false;s_status_message="Ownership refresh cancelled";}});
     }
     void OwnedSkins::RequestOwnedSkins(const std::vector<uint32_t>&){RequestOwnedSkinsViaApi();}
@@ -115,18 +132,24 @@ namespace Skinventory {
         // Alerts are from the logged-in character, which may be on a different
         // account than the one the user has selected in Skinventory.
         const std::string loggedIn = AlterEgo::GW2API::GetCurrentAccountName();
+        std::lock_guard<std::mutex> saving(ownershipSaveMutex);
         bool persist = false;
+        AlterEgo::Cache::OwnershipSnapshot snapshot;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             if (s_account_name.empty() || loggedIn != s_account_name) return;
             s_owned_skins.insert(skin_id);
             s_locally_marked.insert(skin_id);
+            ++s_generation;
             persist = s_has_data.load();
+            if(persist){
+                snapshot.fetchedAt=static_cast<int64_t>(s_last_success_time);
+                snapshot.ids.insert(s_owned_skins.begin(),s_owned_skins.end());
+            }
         }
-        s_generation++;
-        // Do not replace a complete ownership snapshot with a partial
-        // one-item alert if no full ownership data has been loaded.
-        if (persist) SaveToCache();
+        // Never re-read the browsing account after publication: switching
+        // accounts must not lose the outgoing account's verified update.
+        if (persist) PersistOwnership(s_data_dir,loggedIn,snapshot);
     }
 
     bool OwnedSkins::HasData() {
@@ -169,25 +192,5 @@ namespace Skinventory {
     }
 
     // --- Disk Cache ---
-
-    bool OwnedSkins::SaveToCache() {
-        static std::mutex saveMutex;
-        std::lock_guard<std::mutex> saving(saveMutex);
-        std::string account;
-        AlterEgo::Cache::OwnershipSnapshot snapshot;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            account=s_account_name;
-            if(!s_has_data.load())return false;
-            snapshot.fetchedAt=static_cast<int64_t>(s_last_success_time);
-            snapshot.ids.insert(s_owned_skins.begin(),s_owned_skins.end());
-        }
-        if(s_data_dir.empty()||account.empty())return false;
-        try {
-            return AlterEgo::Cache::WriteOwnership(
-                AlterEgo::Cache::RootFromLegacySkinDirectory(s_data_dir),account,snapshot);
-        } catch(...) { return false; }
-    }
-
 
 }
