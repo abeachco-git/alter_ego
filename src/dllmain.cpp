@@ -7039,82 +7039,66 @@ static void RenderNewBuildDialog() {
 
 // Specialization picker for the build editor. Lists the profession's specs,
 // enforces a single elite spec and no duplicate specs across the 3 slots.
+// Common selection rows; modal and inline combo retain their own scope.
+static bool RenderSpecializationChoices(const std::string& profession,
+    const std::array<uint32_t,3>& ids,int slot,uint32_t& next) {
+    if(slot<0||slot>=3)return false;
+    bool changed=false;
+    auto specIds=AlterEgo::GW2API::GetProfessionSpecIds(profession);
+    if(specIds.empty()){
+        if(!profession.empty()){RenderSpinner("Loading specializations...");
+            AlterEgo::GW2API::FetchProfessionInfoAsync(profession);}
+        else ImGui::TextDisabled("No profession selected.");
+    }
+    for(uint32_t sid:specIds){
+        const auto si=AlterEgo::GW2API::GetSpecInfo(sid);
+        if(!si||(si->elite&&slot!=2))continue;
+        const bool allowed=AlterEgo::SkillEdit::SpecializationChoiceAllowed(ids,slot,sid,si->elite);
+        const auto label=si->name+(si->elite?"  (Elite)":"");
+        ImGui::PushID(static_cast<int>(sid));
+        constexpr float size=22.0f;
+        const uint32_t key=sid+1500000u;
+        auto* icon=AlterEgo::IconManager::GetIcon(key);
+        if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(size,size),ImVec2(0,0),ImVec2(1,1),
+            allowed?ImVec4(1,1,1,1):ImVec4(1,1,1,0.4f));
+        else {ImGui::Dummy(ImVec2(size,size));if(!si->icon_url.empty())AlterEgo::IconManager::RequestIcon(key,si->icon_url);}
+        ImGui::SameLine(0,8);ImGui::AlignTextToFramePadding();
+        if(!allowed)ImGui::TextDisabled("%s",label.c_str());
+        else if(ImGui::Selectable(label.c_str(),ids[slot]==sid)){next=sid;changed=true;}
+        ImGui::PopID();
+    }
+    ImGui::Separator();
+    if(ImGui::Selectable("(None)",ids[slot]==0)){next=0;changed=true;}
+    return changed;
+}
 static void RenderSpecPickerDialog() {
-    if (g_SpecPickerSlot < 0) return;
-    const char* POPUP = "Choose Specialization##specpick";
-    if (!ImGui::IsPopupOpen(POPUP)) ImGui::OpenPopup(POPUP);
-
-    ImVec2 dispSize = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(dispSize.x * 0.5f, dispSize.y * 0.5f),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    bool open = true;
-    if (ImGui::BeginPopupModal(POPUP, &open, ImGuiWindowFlags_AlwaysAutoResize)) {
-        auto specIds = AlterEgo::GW2API::GetProfessionSpecIds(g_EditDraft.profession);
-        if (specIds.empty()) {
-            RenderSpinner("Loading specializations...");
-            AlterEgo::GW2API::FetchProfessionInfoAsync(g_EditDraft.profession);
-        } else {
-            for (uint32_t sid : specIds) {
-                const auto si = AlterEgo::GW2API::GetSpecInfo(sid);
-                if (!si) continue;
-                // Elite specs are only valid on the third spec line (slot index 2).
-                if (si->elite && g_SpecPickerSlot != 2) continue;
-                bool usedElsewhere = false;
-                for (int o = 0; o < 3; o++)
-                    if (o != g_SpecPickerSlot && g_EditDraft.specializations[o].spec_id == sid)
-                        usedElsewhere = true;
-                std::string label = si->name + (si->elite ? "  (Elite)" : "");
-
-                // Spec icon (cache key = spec id + 1500000).
-                ImGui::PushID((int)sid);
-                const float specIconSz = 22.0f;
-                uint32_t ikey = sid + 1500000u;
-                Texture_t* itex = AlterEgo::IconManager::GetIcon(ikey);
-                if (itex && itex->Resource) {
-                    ImGui::Image(itex->Resource, ImVec2(specIconSz, specIconSz),
-                                 ImVec2(0, 0), ImVec2(1, 1),
-                                 usedElsewhere ? ImVec4(1, 1, 1, 0.4f) : ImVec4(1, 1, 1, 1));
-                } else {
-                    if (!si->icon_url.empty()) AlterEgo::IconManager::RequestIcon(ikey, si->icon_url);
-                    ImGui::Dummy(ImVec2(specIconSz, specIconSz));
+    if(g_SpecPickerSlot<0)return;
+    const char* POPUP="Choose Specialization##specpick";
+    if(!ImGui::IsPopupOpen(POPUP))ImGui::OpenPopup(POPUP);
+    const auto size=ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(size.x*0.5f,size.y*0.5f),ImGuiCond_Appearing,ImVec2(0.5f,0.5f));
+    bool open=true;
+    if(ImGui::BeginPopupModal(POPUP,&open,ImGuiWindowFlags_AlwaysAutoResize)){
+        const int slot=g_SpecPickerSlot;
+        std::array<uint32_t,3> ids{};
+        for(int i=0;i<3;++i)ids[i]=g_EditDraft.specializations[i].spec_id;
+        uint32_t next=ids[slot];
+        if(RenderSpecializationChoices(g_EditDraft.profession,ids,slot,next)){
+            if(next!=ids[slot]){
+                const auto info=AlterEgo::GW2API::GetSpecInfo(next);
+                if(info&&info->elite)for(int i=0;i<3;++i)if(i!=slot){
+                    const auto other=AlterEgo::GW2API::GetSpecInfo(ids[i]);
+                    if(other&&other->elite)g_EditDraft.specializations[i]={};
                 }
-                ImGui::SameLine(0, 8);
-                ImGui::AlignTextToFramePadding();
-
-                bool clicked = false;
-                if (usedElsewhere) ImGui::TextDisabled("%s", label.c_str());
-                else clicked = ImGui::Selectable(label.c_str());
-                ImGui::PopID();
-
-                if (clicked) {
-                    if (si->elite)
-                        for (int o = 0; o < 3; o++) {
-                            if (o == g_SpecPickerSlot) continue;
-                            const auto oi = AlterEgo::GW2API::GetSpecInfo(
-                                g_EditDraft.specializations[o].spec_id);
-                            if (oi && oi->elite)
-                                g_EditDraft.specializations[o] = AlterEgo::SpecLine{};
-                        }
-                    g_EditDraft.specializations[g_SpecPickerSlot].spec_id = sid;
-                    g_EditDraft.specializations[g_SpecPickerSlot].traits[0] = 0;
-                    g_EditDraft.specializations[g_SpecPickerSlot].traits[1] = 0;
-                    g_EditDraft.specializations[g_SpecPickerSlot].traits[2] = 0;
-                    MarkEditDirty();
-                    g_SpecPickerSlot = -1;
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::Separator();
-            if (ImGui::Selectable("(None)")) {
-                g_EditDraft.specializations[g_SpecPickerSlot] = AlterEgo::SpecLine{};
+                g_EditDraft.specializations[slot]={};
+                g_EditDraft.specializations[slot].spec_id=next;
                 MarkEditDirty();
-                g_SpecPickerSlot = -1;
-                ImGui::CloseCurrentPopup();
             }
+            g_SpecPickerSlot=-1;ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
-    if (!open) g_SpecPickerSlot = -1; // closed via window X
+    if(!open)g_SpecPickerSlot=-1;
 }
 
 // Shared eligibility policy for both the monolithic Loadout editor and the

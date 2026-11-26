@@ -209,36 +209,19 @@ static void ComponentNativeSpecializations(ComponentJson& data,
         ImGui::Separator();
         ImGui::Text("Line %d", i + 1);
         ComponentNativeNumber(spec, "id", "Specialization ID");
-        if (!candidates.empty()) {
+        if(!profession.empty()){
             ImGui::SameLine();
-            if (AlterEgo::UI::BeginCombo("##specialization", ComponentNativeSpecName(priorId).c_str())) {
-                if (ImGui::Selectable("(none)", !priorId)) spec["id"] = 0;
-                for (uint32_t choice : candidates) {
-                    const auto definition = AlterEgo::GW2API::GetSpecInfo(choice);
-                    if (!definition) continue;
-                    if (definition->elite && i != 2) continue;
-                    bool alreadyUsed = false;
-                    for (int other = 0; other < count; ++other)
-                        if (other != i && specs[other].is_object() &&
-                            specs[other].value("id", uint32_t(0)) == choice)
-                            alreadyUsed = true;
-                    ImGui::PushID(static_cast<int>(choice));
-                    const uint32_t key = choice + 1500000u;
-                    Texture_t* icon = AlterEgo::IconManager::GetIcon(key);
-                    if (icon && icon->Resource) {
-                        ImGui::Image(icon->Resource, ImVec2(24, 24));
-                    } else {
-                        if (!definition->icon_url.empty())
-                            AlterEgo::IconManager::RequestIcon(key, definition->icon_url);
-                        ImGui::Dummy(ImVec2(24, 24));
+            if(AlterEgo::UI::BeginCombo("##specialization",ComponentNativeSpecName(priorId).c_str())){
+                std::array<uint32_t,3> ids{};
+                for(int j=0;j<count;++j)if(specs[j].is_object())ids[j]=specs[j].value("id",uint32_t(0));
+                uint32_t next=ids[i];
+                if(RenderSpecializationChoices(profession,ids,i,next)&&next!=ids[i]){
+                    spec["id"]=next;
+                    auto info=AlterEgo::GW2API::GetSpecInfo(next);
+                    if(info&&info->elite)for(int j=0;j<count;++j)if(j!=i&&specs[j].is_object()){
+                        auto other=AlterEgo::GW2API::GetSpecInfo(ids[j]);
+                        if(other&&other->elite){specs[j]["id"]=0;specs[j]["traits"]=ComponentJson::array({0,0,0});}
                     }
-                    ImGui::SameLine(0, 8);
-                    if (alreadyUsed) {
-                        ImGui::TextDisabled("%s (already selected)", definition->name.c_str());
-                    } else if (ImGui::Selectable(definition->name.c_str(), choice == priorId)) {
-                        spec["id"] = choice;
-                    }
-                    ImGui::PopID();
                 }
                 ImGui::EndCombo();
             }

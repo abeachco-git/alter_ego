@@ -22,5 +22,10 @@ int case_skill_edit_core(int,char**) {
     assert(SetPairChoice(pets[0],pets[1],3));
     assert(pets[2]==3&&pets[3]==4);
     assert(SetPairChoice(pets[2],pets[3],0)&&pets[0]==3);
+    uint32_t specs[3]={1,2,0};
+    assert(!SpecializationChoiceAllowed(specs,0,3,true));
+    assert(!SpecializationChoiceAllowed(specs,2,2,false));
+    assert(SpecializationChoiceAllowed(specs,2,3,true));
+    assert(SpecializationChoiceAllowed(specs,0,0,false));
     return 0;
 }

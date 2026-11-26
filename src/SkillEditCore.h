@@ -1,6 +1,11 @@
 #pragma once
 #include <cstdint>
 namespace AlterEgo::SkillEdit {
+template<class Ids> bool SpecializationChoiceAllowed(const Ids& ids,int slot,uint32_t next,bool elite) {
+    if(slot<0||slot>=3||(elite&&slot!=2))return false;
+    if(next)for(int i=0;i<3;++i)if(i!=slot&&ids[i]==next)return false;
+    return true;
+}
 // Only the other slot of the same environment participates in duplicate
 // validation. The caller never mirrors or mutates the other pair.
 inline bool PairChoiceAllowed(uint32_t other,uint32_t next) {
