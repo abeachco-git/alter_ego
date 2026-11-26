@@ -7405,28 +7405,36 @@ static bool GearSlotBlocked(const AlterEgo::SavedBuild& b, const std::string& sl
     auto it = b.gear.find(slot == "WeaponA2" ? "WeaponA1" : "WeaponB1");
     return it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
 }
-static int GearInfusionCapacity(const AlterEgo::SavedBuild& b, const std::string& slot,
+// Both native editors use this same exact-item capacity resolver. Local
+// metadata only; rendering and clipboard checks never fetch item details.
+static AlterEgo::GearEdit::SocketCapacity ResolveGearInfusionCapacity(
+    const std::string& slot,const std::string& profession,const std::string& weaponType,
+    uint32_t itemId,bool blocked=false) {
+    using namespace AlterEgo::GearEdit;
+    const bool two=weaponType.empty()||IsWeaponTwoHanded(profession,weaponType);
+    std::optional<size_t> sockets;
+    if(itemId){
+        const auto info=AlterEgo::GW2API::GetItemInfo(itemId);
+        if(info&&info->details.is_object()&&info->details.contains("infusion_slots")&&
+            info->details["infusion_slots"].is_array())sockets=info->details["infusion_slots"].size();
+    }
+    return ResolveSocketCapacity(InfusionCapacity(slot,two,blocked),sockets);
+}
+static int GearInfusionCapacity(const AlterEgo::SavedBuild& b,const std::string& slot,
     bool* capacityVerified=nullptr) {
     if(capacityVerified)*capacityVerified=false;
     if(AlterEgo::GetInfusionMode(b)!=AlterEgo::InfusionMode::Slots)return 0;
-    auto it = b.gear.find(slot);
-    const bool two = it != b.gear.end() && IsWeaponTwoHanded(b.profession,it->second.weapon_type);
-    int capacity = AlterEgo::GearEdit::InfusionCapacity(slot,two,GearSlotBlocked(b,slot));
-    if (capacity && it != b.gear.end() && it->second.item_id) {
-        const auto info = AlterEgo::GW2API::GetItemInfo(it->second.item_id);
-        if (info && info->details.is_object() && info->details.contains("infusion_slots") &&
-            info->details["infusion_slots"].is_array()){
-            capacity = std::min(capacity, static_cast<int>(info->details["infusion_slots"].size()));
-            if(capacityVerified)*capacityVerified=true;
-        }
-    }
-    return capacity;
+    const auto it=b.gear.find(slot);
+    const auto capacity=ResolveGearInfusionCapacity(slot,b.profession,
+        it==b.gear.end()?std::string{}:it->second.weapon_type,it==b.gear.end()?0:it->second.item_id,GearSlotBlocked(b,slot));
+    if(capacityVerified)*capacityVerified=capacity.verified;
+    return capacity.limit;
 }
-static int GearSigilCapacity(const AlterEgo::SavedBuild& b, const std::string& slot) {
-    if (!IsWeaponSlot(slot) || GearSlotBlocked(b,slot)) return 0;
-    auto it = b.gear.find(slot);
-    if (it == b.gear.end() || it->second.weapon_type.empty()) return 0;
-    return IsWeaponTwoHanded(b.profession,it->second.weapon_type) ? 2 : 1;
+static int GearSigilCapacity(const AlterEgo::SavedBuild& b,const std::string& slot) {
+    if(!IsWeaponSlot(slot)||GearSlotBlocked(b,slot))return 0;
+    const auto it=b.gear.find(slot);
+    if(it==b.gear.end()||it->second.weapon_type.empty())return 0;
+    return AlterEgo::GearEdit::SigilCapacity(slot,IsWeaponTwoHanded(b.profession,it->second.weapon_type));
 }
 static bool GearSameGroup(const std::string& a,const std::string& b) {
     return (IsArmorSlot(a) && IsArmorSlot(b)) ||
@@ -7767,8 +7775,9 @@ static void RenderGearCustomizeDialog() {
             }
 
             ImVec2 tp(p.x + 6, p.y + 3);
-            if (gs.stat_id != 0 && !gs.stat_name.empty()) {
-                ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(255, 210, 80, 255), gs.stat_name.c_str());
+            if (gs.stat_id != 0 || !gs.stat_name.empty()) {
+                const auto label=gs.stat_name.empty()?"Stat #"+std::to_string(gs.stat_id)+" (metadata pending)":gs.stat_name;
+                ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(255, 210, 80, 255), label.c_str());
                 const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                 if (statInfo) {
                     for (const auto& a : statInfo->attributes) {
@@ -7787,7 +7796,8 @@ static void RenderGearCustomizeDialog() {
         // Rune/Sigil area (clickable to switch to rune/sigil tab)
         if (isArmor || isWeapon) {
             bool isTwoHand = isWeapon && editBuild && IsWeaponTwoHanded(editBuild->profession, gs.weapon_type);
-            int sigilCount = (isWeapon && isTwoHand) ? 2 : 1;
+            int sigilCount = isWeapon?std::max(1,GearSigilCapacity(*editBuild,g_GearDialogSlot)):1;
+            if(isWeapon&&sigilCount<2&&(gs.sigil2_id||!gs.sigil2.empty()))ImGui::TextDisabled("Recorded second sigil exceeds known capacity; retained.");
 
             for (int sigilIdx = 0; sigilIdx < sigilCount; sigilIdx++) {
                 const char* upgradeLabel;
@@ -7935,7 +7945,10 @@ static void RenderGearCustomizeDialog() {
                 }
                 ImGui::PopID();
             }
-            const int maxSlots = GearInfusionCapacity(*editBuild,g_GearDialogSlot);
+            bool socketCountVerified=false;
+            const int maxSlots = GearInfusionCapacity(*editBuild,g_GearDialogSlot,&socketCountVerified);
+            if(maxSlots>0&&!socketCountVerified)ImGui::TextDisabled("Socket capacity unverified (maximum %d).",maxSlots);
+            if(AlterEgo::GearEdit::InfusionPositionCount(gs)>static_cast<size_t>(maxSlots))ImGui::TextDisabled("Recorded requirements exceed capacity; retained.");
             if (AlterEgo::GearEdit::InfusionPositionCount(gs)<static_cast<size_t>(maxSlots)&&
                 RenderActionButton("+ Add infusion")&&AlterEgo::GearEdit::AddInfusionPosition(gs,maxSlots)) {
                 g_GearEditingInfusionIndex=static_cast<int>(AlterEgo::GearEdit::InfusionPositionCount(gs)-1);

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include "EquipmentChoiceCore.h"
@@ -58,6 +59,21 @@ inline int InfusionCapacity(const std::string& slot, bool twoHanded, bool blocke
     if (EquipmentChoice::IsAquaticWeaponSlot(slot))return 2;
     if (slot.rfind("Weapon",0) == 0) return twoHanded ? 2 : 1;
     return 1;
+}
+struct SocketCapacity { int limit=0; bool verified=false; };
+// Exact socket metadata can reduce, never expand, the physical upper bound.
+// No metadata means a bound only, not a license to repeat a copy pattern.
+inline SocketCapacity ResolveSocketCapacity(int physical,std::optional<size_t> sockets) {
+    if(physical<=0)return {};
+    if(!sockets)return {physical,false};
+    return {static_cast<int>(std::min(static_cast<size_t>(physical),*sockets)),true};
+}
+inline int SigilCapacity(const std::string& slot,bool twoHanded,bool blocked=false) {
+    if(blocked)return 0;
+    if(EquipmentChoice::IsAquaticWeaponSlot(slot))return 2;
+    if(slot=="WeaponA2"||slot=="WeaponB2")return 1;
+    if(slot=="WeaponA1"||slot=="WeaponB1")return twoHanded?2:1;
+    return 0;
 }
 template<class T> std::vector<T> FillPattern(const std::vector<T>& pattern, int capacity) {
     std::vector<T> result;

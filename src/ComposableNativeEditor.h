@@ -358,7 +358,13 @@ static bool ComponentNativeSlotAllowed(const std::string& kind,
     return AlterEgo::Composable::SlotKind(slot) == kind;
 }
 
-static void ComponentNativeInfusionSlots(ComponentJson& part,const std::string& slot) {
+static AlterEgo::GearEdit::SocketCapacity ComponentInfusionCapacity(const ComponentJson& part,const std::string& slot,const std::string& profession){
+    const auto exact=part.find("item_id");
+    const uint32_t id=exact!=part.end()&&exact->is_number_integer()&&*exact>0&&*exact<=UINT32_MAX?exact->get<uint32_t>():0;
+    const auto type=part.find("weapon_type");
+    return ResolveGearInfusionCapacity(slot,profession,type!=part.end()&&type->is_string()?type->get<std::string>():std::string{},id);
+}
+static void ComponentNativeInfusionSlots(ComponentJson& part,const std::string& slot,const std::string& profession) {
     using namespace AlterEgo;
     using namespace AlterEgo::GearEdit;
     BuildGearSlot value;
@@ -396,16 +402,9 @@ static void ComponentNativeInfusionSlots(ComponentJson& part,const std::string& 
         }
         ImGui::PopID();
     }
-    // Unknown item capacity uses the slot's physical upper bound, not a
-    // claim that every item has that many sockets. Imported excess is kept.
-    int capacity=InfusionCapacity(slot,true);
-    const auto exact=part.value("item_id",uint32_t(0));
-    if(exact){
-        const auto info=GW2API::GetItemInfo(exact);
-        if(info&&info->details.is_object()&&info->details.contains("infusion_slots")&&
-           info->details["infusion_slots"].is_array())
-            capacity=std::min(capacity,static_cast<int>(info->details["infusion_slots"].size()));
-    }
+    const auto socketCapacity=ComponentInfusionCapacity(part,slot,profession);
+    const int capacity=socketCapacity.limit;
+    if(capacity>0&&!socketCapacity.verified)ImGui::TextDisabled("Socket capacity unverified (maximum %d).",capacity);
     if(InfusionPositionCount(value)>static_cast<size_t>(capacity))
         ImGui::TextDisabled("Imported requirements exceed known capacity; preserved.");
     if(InfusionPositionCount(value)<static_cast<size_t>(capacity)&&RenderActionButton("+ Add infusion##component"))
@@ -559,9 +558,10 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,ComponentJson& gear,
 // functions as the parent Loadout. Exact raw slot copy remains a separate
 // same-component/same-position action so extensions cannot cross slot types.
 static bool ComponentGearCanPaste(const ComponentJson& part,const std::string& kind,
-    const std::string& slot,const GearClipboard& clip){
+    const std::string& slot,const GearClipboard& clip,const std::string& profession){
     using namespace AlterEgo::GearEdit;
     if(!clip.valid||!ComponentOwnsField(kind,slot,clip.field))return false;
+    if(clip.field==CopyField::Infusions&&ComponentInfusionCapacity(part,slot,profession).limit<=0)return false;
     if(clip.field==GearCopyField::Upgrade&&
        ((IsArmorSlot(slot)!=IsArmorSlot(clip.slot))||(!IsArmorSlot(slot)&&!IsWeaponSlot(slot))))return false;
     AlterEgo::BuildGearSlot checked;
@@ -577,7 +577,7 @@ static GearClipboard ComponentGearCapture(const ComponentJson& part,const std::s
 static bool ComponentGearApply(ComponentJson& part,const std::string& kind,const std::string& slot,
     const std::string& profession,const GearClipboard& clip){
     using namespace AlterEgo::GearEdit;
-    if(!ComponentGearCanPaste(part,kind,slot,clip))return false;
+    if(!ComponentGearCanPaste(part,kind,slot,clip,profession))return false;
     const std::string type=part.contains("weapon_type")&&part["weapon_type"].is_string()?part["weapon_type"].get<std::string>():std::string{};
     const bool weapon=IsWeaponSlot(slot);
     const bool knownTwo=weapon&&!type.empty()&&IsWeaponTwoHanded(profession,type);
@@ -586,18 +586,12 @@ static bool ComponentGearApply(ComponentJson& part,const std::string& kind,const
     bool capacityVerified=false;
     if(clip.field==GearCopyField::Upgrade&&weapon){
         const bool second=clip.data.sigil2_id||!clip.data.sigil2.empty();
-        capacity=IsOffhandSlot(slot)?1:knownWeapon?(knownTwo?2:1):second?2:1;
+        capacity=SigilCapacity(slot,knownWeapon?knownTwo:second);
+        if(!capacity)return false;
     }
     if(clip.field==GearCopyField::Infusions){
-        const bool exactItem=part.contains("item_id")&&part["item_id"].is_number_integer()&&part["item_id"]>0&&part["item_id"]<=UINT32_MAX;
-        capacity=InfusionCapacity(slot,knownWeapon?knownTwo:!IsOffhandSlot(slot));
-        if(exactItem){
-            const auto info=AlterEgo::GW2API::GetItemInfo(part["item_id"].get<uint32_t>());
-            if(info&&info->details.is_object()&&info->details.contains("infusion_slots")&&info->details["infusion_slots"].is_array()){
-                capacity=std::min(capacity,static_cast<int>(info->details["infusion_slots"].size()));
-                capacityVerified=true;
-            }
-        }
+        const auto sockets=ComponentInfusionCapacity(part,slot,profession);
+        capacity=sockets.limit;capacityVerified=sockets.verified;
     }
     return ApplyComponentField(part,clip.field,IsArmorSlot(slot),clip.data,capacity,capacityVerified);
 }
@@ -698,7 +692,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                 }
                 ImGui::EndMenu();
             }
-            if(AlterEgo::UI::MenuAction("Paste",AlterEgo::UI::MenuIcon::Paste,ComponentGearCanPaste(data["gear"].at(slot),kind,slot,g_GearClipboard)))
+            if(AlterEgo::UI::MenuAction("Paste",AlterEgo::UI::MenuIcon::Paste,ComponentGearCanPaste(data["gear"].at(slot),kind,slot,g_GearClipboard,profession)))
                 ComponentGearApply(data["gear"][slot],kind,slot,profession,g_GearClipboard);
             if(AlterEgo::UI::MenuAction("Paste Exact Slot",AlterEgo::UI::MenuIcon::Paste,copiedKind==kind&&copiedFrom==slot&&copiedSlot.is_object()))
                 data["gear"][slot]=copiedSlot;
@@ -786,18 +780,27 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         if (kind == "sigils" || (water&&weapon)) {
             ImGui::TextUnformatted("Sigil 1");
             ComponentNativeCatalogChoice(item, "sigil_id", "sigil", "sigils");
-            ImGui::TextUnformatted("Sigil 2 (two-handed weapons)");
-            ComponentNativeCatalogChoice(item, "sigil2_id", "sigil2", "sigils");
+            const auto type=item.value("weapon_type",std::string{});
+            const int capacity=AlterEgo::GearEdit::SigilCapacity(slot,type.empty()||IsWeaponTwoHanded(profession,type));
+            if(capacity>=2){
+                ImGui::TextUnformatted("Sigil 2 (two-handed weapons)");
+                ComponentNativeCatalogChoice(item,"sigil2_id","sigil2","sigils");
+            }else if(item.contains("sigil2_id")||item.contains("sigil2")){
+                ImGui::TextDisabled("Recorded second sigil exceeds known capacity; retained.");
+                if(RenderActionButton("Clear second sigil")){item.erase("sigil2_id");item.erase("sigil2");}
+            }
             if (ImGui::TreeNode("##advanced_sigils", "Advanced exact sigil IDs and names")) {
                 ComponentNativeNumber(item, "sigil_id", "Sigil 1 ID");
                 ComponentNativeText(item, "sigil", "Sigil 1 name");
-                ComponentNativeNumber(item, "sigil2_id", "Sigil 2 ID");
-                ComponentNativeText(item, "sigil2", "Sigil 2 name");
+                if(capacity>=2){
+                    ComponentNativeNumber(item,"sigil2_id","Sigil 2 ID");
+                    ComponentNativeText(item,"sigil2","Sigil 2 name");
+                }
                 ImGui::TreePop();
             }
         }
         if (kind == "infusions" || water) {
-            ComponentNativeInfusionSlots(item,slot);
+            ComponentNativeInfusionSlots(item,slot,profession);
         }
         if (ImGui::TreeNode("##slot_exact", "Exact stored slot fields (read only)")) {
             for (auto field = item.begin(); field != item.end(); ++field)

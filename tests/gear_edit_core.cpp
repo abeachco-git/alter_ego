@@ -85,6 +85,17 @@ int case_gear_edit_core(int, char**) {
     assert(InfusionCapacity("WeaponB2",false,true) == 0);
     assert(InfusionCapacity("WeaponB2",true)==1);
     assert(InfusionCapacity("WeaponAquaticA",false)==2);
+    assert(ResolveSocketCapacity(3,std::nullopt).limit==3&&!ResolveSocketCapacity(3,std::nullopt).verified);
+    assert(ResolveSocketCapacity(3,1).limit==1&&ResolveSocketCapacity(3,1).verified);
+    assert(ResolveSocketCapacity(1,3).limit==1);
+    assert(ResolveSocketCapacity(0,3).limit==0);
+    assert(ResolveSocketCapacity(2,0).limit==0&&ResolveSocketCapacity(2,0).verified);
+    assert(SigilCapacity("WeaponA2",true)==1&&SigilCapacity("WeaponA1",true)==2);
+    assert(SigilCapacity("WeaponAquaticA",false)==2&&SigilCapacity("Ring1",true)==0);
+    assert(!ComponentOwnsField("sigils","Ring1",CopyField::Upgrade));
+    assert(!ComponentOwnsField("infusions","HelmAquatic",CopyField::Infusions));
+    assert(!ComponentOwnsField("infusions","Amulet",CopyField::Infusions));
+    assert(ComponentOwnsField("aquatic","WeaponAquaticA",CopyField::Infusions));
     Slot flexible;flexible.infusion_attributes={"Power","Precision"};flexible.infusion="old";
     assert(InfusionPositionCount(flexible)==2&&InfusionPositionAt(flexible,1).attribute=="Precision");
     assert(SetInfusionPosition(flexible,0,{4294967295u,""}));

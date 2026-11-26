@@ -23,9 +23,12 @@ inline void ClearComponentInfusionTotals(GearJson& data) {
 }
 inline bool ComponentOwnsField(const std::string& kind,const std::string& slot,CopyField field){
     const bool water=kind=="aquatic"&&EquipmentChoice::IsAquaticGearSlot(slot);
-    if(field==CopyField::Stats)return water||kind=="armor"||kind=="trinkets"||kind=="weapons";
-    if(field==CopyField::Upgrade)return water||kind=="runes"||kind=="sigils";
-    if(field==CopyField::Infusions)return (water||kind=="infusions")&&slot!="Amulet"&&slot!="Relic";
+    const bool armor=slot=="Helm"||slot=="Shoulders"||slot=="Coat"||slot=="Gloves"||slot=="Leggings"||slot=="Boots";
+    const bool weapon=slot=="WeaponA1"||slot=="WeaponA2"||slot=="WeaponB1"||slot=="WeaponB2";
+    const bool trinket=slot=="Backpack"||slot=="Accessory1"||slot=="Accessory2"||slot=="Amulet"||slot=="Ring1"||slot=="Ring2";
+    if(field==CopyField::Stats)return water||(kind=="armor"&&armor)||(kind=="trinkets"&&trinket)||(kind=="weapons"&&weapon);
+    if(field==CopyField::Upgrade)return water||(kind=="runes"&&armor)||(kind=="sigils"&&weapon);
+    if(field==CopyField::Infusions)return (water||(kind=="infusions"&&(armor||weapon||trinket)))&&slot!="Amulet"&&slot!="Relic";
     return field==CopyField::Relic&&kind=="relic";
 }
 // Accept only known, typed fields. Never reinterpret an unfamiliar imported
