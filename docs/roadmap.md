@@ -72,7 +72,7 @@ Previously approved program; the current intervals, coverage watermarks and owne
 - [ ] Host callback/resource lifetime: establish Nexus callback quiescence before unmapping, raw Escape pointer lifetime, asynchronous texture/atlas ownership and shutdown ordering; never infer host guarantees from local tests.
 - [ ] Strict cancellable HTTP transport design: synchronous WinINet calls remain non-interruptible despite cooperative bounds; review single-owner async state machine and cancellation/drain before implementation. No incidental transport changes.
 - [ ] Storage recovery gaps: failed initial migration and failed-character-write retry policy; selective rebuild coverage, per-dataset size reporting, integrity check versus quick check, obsolete-path review and quarantine cleanup usability. Preserve originals and authoritative data.
-- [ ] Full opt-in ThreadSanitizer execution and optional automated TSan CI remain unverified/deferred; see [regression testing](regression-testing.md). Discretionary performance/SQLite benchmarks and journal policy decision are deferred, not required for the current consistency discussion.
+- [ ] Optional automated TSan CI and journal policy review are deferred decisions; execution/measurement gaps are tracked in [development status](development-status.md), not required for the current consistency discussion.
 
 ## Known defect / investigation
 

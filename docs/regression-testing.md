@@ -42,6 +42,7 @@ slightly slower; use the reported ccache hit/miss statistics and workflow step
 timings to evaluate warm builds. If the cache is absent or evicted, compile
 normally.
 
+The experimental DLL workflow pulls the repository-owned GHCR image `ghcr.io/abeachco-git/alter-ego-ucrt-toolchain:trixie-exp-v1` (read-only package access), rather than installing Debian Trixie UCRT/native dependencies every build. `.github/ci/Dockerfile.ucrt` contains no addon source or credentials. `ci-toolchain.yml` rebuilds from a freshly pulled base, smoke-tests native sanitizers and x64 UCRT imports, then publishes using the repository token; experiment and main tags are separate. The weekly cron becomes active only when the publisher workflow reaches the default branch. Until then, rerun the experimental publisher when updates are needed. Main keeps the stock path until its own image is published and default-branch rollout is approved. Manual `stock_toolchain` on the DLL workflow bypasses GHCR if the registry is unavailable. Parallelism is bounded by CPU affinity/quota and available/cgroup memory, capped at four jobs with 3 GiB per compiler and 1.5 GiB reserved. Native sanitizer object compilation is cached, but all tests, linking, SQLite and artifact verification execute every build. Cache statistics distinguish native and Windows compilation. Use the workflow cache statistics to evaluate cold/warm builds. Stock fallback remains available; current verification gaps are tracked in development-status.md.
 
 Do not reintroduce automated MetaBattle checks without explicit approval. Do not weaken the remaining required offline cases or binary verification to resolve a failed build. Follow the delivery definition in [AGENTS.md](../AGENTS.md).
 
@@ -231,7 +232,7 @@ Account publication: character_request adds queued-generation rejection and capt
 
 Vault period merge regressions include a captured outgoing-account patch, newer season metadata, late old-season Special response, and new-season Special success while preserving other periods/accounts. Live: update public season while Special request is pending, switch accounts and return, confirm old Special data cannot reappear under the new season; verify unchanged daily/weekly and all Clears/Vault card interactions, artwork, assistance and season-end tooltip with frame snapshots.
 
-Focused Linux ThreadSanitizer verification: compile the existing `background_workers.cpp` and `callback_lifetime.cpp` cases with a small runner and `-std=c++17 -g -O1 -fno-omit-frame-pointer -fsanitize=thread -pthread -fno-pie -no-pie`; run with `TSAN_OPTIONS=halt_on_error=1`. Thirty iterations per case passed with exact source blob verification at `1d0ea43`. This does not instrument the entire addon, WinINet or Nexus.
+Focused Linux ThreadSanitizer procedure: compile the existing `background_workers.cpp` and `callback_lifetime.cpp` cases with a small runner and `-std=c++17 -g -O1 -fno-omit-frame-pointer -fsanitize=thread -pthread -fno-pie -no-pie`; run with `TSAN_OPTIONS=halt_on_error=1`. Use the opt-in target below for repeatable focused runs. This does not instrument the entire addon, WinINet or Nexus; current evidence and gaps belong in development-status.md.
 
 Inventory credential regression: character_request verifies that both success and failed-attempt writes are rejected for a superseded epoch, while a new epoch can commit. In game replace or unlink while queued/in-flight across Bank, Wallet, Bags, Equipment, guild stash and roster; verify no obsolete retry timestamp, no cross-account rows and no unnecessary HTTP. Same-generation concurrent roster ordering and live host behavior still require validation.
 
@@ -255,27 +256,21 @@ Callback lifetime regression now rejects reopening a closed session with a local
 
 Item detail ordering regression covers later request completing first, same-watermark replay, older unrelated ID acceptance, and duplicate-row rollback preserving verified records. Full catalog and partial runtime publication use the same durable row guard; live verification remains deferred.
 
-
 Skin metadata ordering regression covers delayed catalog vs Fashion, equal replay, older dye response, independent flags clearing, canonical cross-projection fields and duplicate-row transaction rollback. Live testing remains deferred.
 
-Reference observation regression covers delayed disjoint/same-ID batches, equal replay, transactional malformed-child rollback and watermark reuse after rejection. Offline and Windows verification passed; no live tests or discretionary benchmark work.
+Reference observation regression covers delayed disjoint/same-ID batches, equal replay, transactional malformed-child rollback and watermark reuse after rejection.
 
-Cancellation finalizer regression verifies finish-once, no persistence on stop, ordinary failure during unwinding, and explicit dismissal after success. Offline/Windows CI passed; no live testing.
+Cancellation finalizer regression verifies finish-once, no persistence on stop, ordinary failure during unwinding, and explicit dismissal after success.
 
-API diagnostics regression distinguishes cancelled vs failed/active counts; metadata transport carries an actual-send marker. Offline/Windows CI passed.
+API diagnostics regression distinguishes cancelled vs failed/active counts; metadata transport carries an actual-send marker.
 
-Native Inventory regression covers native vs delayed direct item observations, flag freshness across producers, and stale currency definition rejection. Offline/Windows verification passed.
+Native Inventory regression covers native vs delayed direct item observations, flag freshness across producers, and stale currency definition rejection.
 
-
-- Shared reset refresh policy: preserve Fractal alternate-route validation; Vault daily/weekly compare progress and IDs, use unique cache-busting paths/no-cache headers (canonical authenticated route fallback), independently retry daily/weekly/special. Identical all-zero periods can be accepted after 15 minutes and three failed confirmations because the API exposes no period ID; unchanged claimed responses remain held. Special waits for valid new season metadata; authenticated achievement progress uses fresh reset requests via existing credential broker. Regression and Windows build passed.
+See [Architecture](architecture.md#unified-freshness-engine) for the current reset request/acceptance policy.
 
 Objective rollover tests exercise matching Vault IDs with changed progress, held claimed snapshots, bounded ambiguous zero-progress handling, Special empty results, fresh URL construction, independent backoff and transactional Clears partial merges, stale patch rejection and rollback. Live test remains required for the exact user's daily Vault response, daily/weekly/season reset and an API failure in one section while the others succeed. Preserve the working Fractal alternate-route tests.
 
-- Final rollover guard: enforce propagation grace on actual daily/weekly requests, request fresh account progress for reset-sensitive consumers, reject an unchanged nonzero previous-week raid/strike completion fingerprint, and retry only that section's progress while other sections retain successful data. All-zero identical weekly progress is safe to display as incomplete, not evidence of a reset ID. Existing shared account broker and ordinary failure cooldown retained. CI passed; live validation pending.
-
-
-CI toolchain optimization: the experimental DLL workflow pulls the repository-owned GHCR image `ghcr.io/abeachco-git/alter-ego-ucrt-toolchain:trixie-exp-v1` (read-only package access), rather than installing Debian Trixie UCRT/native dependencies every build. `.github/ci/Dockerfile.ucrt` contains no addon source or credentials. `ci-toolchain.yml` rebuilds from a freshly pulled base, smoke-tests native sanitizers and x64 UCRT imports, then publishes using the repository token; experiment and main tags are separate. The weekly cron becomes active only when the publisher workflow reaches the default branch. Until then, rerun the experimental publisher when updates are needed. Main keeps the stock path until its own image is published and default-branch rollout is approved. Manual `stock_toolchain` on the DLL workflow bypasses GHCR if the registry is unavailable. Parallelism is bounded by CPU affinity/quota and available/cgroup memory, capped at four jobs with 3 GiB per compiler and 1.5 GiB reserved. The compiler cache cap is 1 GB (not an increase in the repository cache quota); native sanitizer object compilation is cached, but all tests, linking, SQLite and artifact verification execute every build. Cache statistics distinguish native and Windows compilation. Use the workflow cache statistics to evaluate cold/warm builds. Stock fallback remains available; current verification gaps are tracked in development-status.md.
-
+Verify propagation grace, rejection of unchanged nonzero prior-week raid/strike progress, independent retry of only the affected section, and safe handling of identical all-zero weekly progress.
 
 Catalog rows: offline tests cover whole-pixel pitch at fractional font sizes, cumulative cursor/clipper agreement, fixed grid pitch across column counts and selected-row scroll centering. In-game also verify Skinventory grid clicks after deep scrolling, switching grid/list, missing metadata, resizing and reveal from Shopping/Compare.  In-game verify Inventory and Skinventory mouse activation on release, keyboard activation where enabled by the host, right-click menus, scrolled rows, filtering and returning via navigation; the intermittent input failure is not reproduced by the offline pitch test.
 

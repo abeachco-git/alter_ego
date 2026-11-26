@@ -22,9 +22,9 @@ User-led in-game testing and discretionary benchmarks were deferred; the followi
 
 ## Outstanding non-live verification / decisions
 
-- [ ] Full native opt-in TSan configuration and possible CI integration; focused worker/callback/snapshot runs previously passed, but not the full suite. Preserve required sanitizer tests.
+- [ ] Full native opt-in TSan configuration and possible CI integration; focused worker/callback/snapshot runs previously passed (including 30 iterations per worker/callback case at `1d0ea43`), but not the full suite. Preserve required sanitizer tests.
 - [ ] Deferred discretionary startup, request-volume, database-size, search-latency, DLL-size and native SQLite/connection contention measurements; evaluate journal policy only with evidence. The existing synthetic CI SQLite benchmark remains mandatory.
 - [ ] CI toolchain stock fallback has not been independently rerun since GHCR rollout; default-branch image publishing/weekly schedule and release rollout remain subject to main integration approval.
-- [ ] Independent release gates remain in the release checklist.
+Independent release gates remain in the [release checklist](release-checklist.md).
 
 Historical implementation and verification evidence is in [Git history](https://github.com/abeachco-git/alter_ego/commits/experiment/composable-loadouts/) and Actions, including the [prior status ledger](https://github.com/abeachco-git/alter_ego/blob/aa94826e0dfeb6f019976ad78a941a4a060c10d1/docs/development-status.md).

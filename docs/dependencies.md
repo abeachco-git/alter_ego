@@ -3,7 +3,7 @@
 [dependencies.json](../dependencies.json) records bundled versions, upstream provenance, local Git blob/tree fingerprints, licenses and update policies. It covers DLL libraries, not every build tool, operating-system package, external artwork or optional source-only example.
 
 - ImGui 1.80, its modified stb headers and Nexus API v6 are compatibility-locked. Never upgrade these automatically.
-- SQLite and nlohmann/json updates are manual, with upstream release/security review and existing regression and binary gates. Inter updates are manual.
+- SQLite and nlohmann/json updates are manual, with upstream release/security review and existing regression and binary gates.
 - The JavaScript AE2 library is first-party code with no runtime package dependencies. Dependabot is configured only for GitHub Actions (weekly grouped version PRs; default branch activation required). Do not auto-merge dependency PRs.
 
 ## Verification and reporting

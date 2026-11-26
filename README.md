@@ -63,7 +63,7 @@ Find what you own without manually searching through characters and storage.
 - Search across character inventories, equipped items, bank, shared inventory, material storage and Legendary Armory.
 - Locate individual items and their quantities.
 - Filter by character, storage location, rarity, item type and other attributes.
-- Browse wallet currencies and mark favorites.
+- Browse wallet currencies and pin frequently used currencies.
 - Browse accessible guild bank storage.
 - Navigate directly to relevant inventory results from other areas of Alter Ego.
 
@@ -142,7 +142,7 @@ For full functionality, enable the following permissions:
 | `unlocks` | Wardrobe and other unlocks |
 | `progression` | Achievements and account progress |
 | `guilds` | Guild information and accessible storage |
-| `tradingpost` | Trading Post account information |
+| `tradingpost` | Delivery box / Trading Post account information |
 
 Open **Nexus → Alter Ego options** to enter your API key and link your account.
 
@@ -228,6 +228,8 @@ Contributions, bug reports and feature suggestions are welcome.
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 - [Roadmap](docs/roadmap.md)
+- [Current development and validation status](docs/development-status.md)
+- [Release checklist](docs/release-checklist.md)
 - [Architecture](docs/architecture.md)
 - [UI Conventions](docs/ui-components.md)
 - [Regression Testing](docs/regression-testing.md)
