@@ -86,6 +86,15 @@ template<class Slot> void CopyInfusions(Slot& dest, const Slot& source, int capa
     dest.infusion_snapshot = true;
     dest.infusion.clear();
 }
+template<class Slot> void CopyStats(Slot& dest,const Slot& source){
+    dest.stat_id=source.stat_id;dest.stat_name=source.stat_name;
+}
+template<class Slot> void CopyRune(Slot& dest,const Slot& source){
+    dest.rune_id=source.rune_id;dest.rune=source.rune;
+}
+template<class Slot> void ClearInfusions(Slot& dest){
+    dest.infusion_ids.clear();dest.infusion_attributes.clear();dest.infusion.clear();dest.infusion_snapshot=true;
+}
 template<class Slot> void CopySigils(Slot& dest, const Slot& source, int capacity) {
     dest.sigil = capacity > 0 ? source.sigil : "";
     dest.sigil_id = capacity > 0 ? source.sigil_id : 0;

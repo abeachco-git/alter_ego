@@ -437,20 +437,9 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
             item.erase(idField);
             item.erase(nameField);
         }
-        auto offer = [&](const char* name, uint32_t id, const char* bonus) {
-            if (!AlterEgo::UI::CatalogMatches(name, bonus, g_ComponentCatalogSearch)) return;
-            ImGui::PushID(static_cast<int>(id));
-            if (AlterEgo::UI::CatalogOption(name, bonus, selectedId ? selectedId == id : selected == name)) {
-                item[idField] = id;
-                item[nameField] = name;
-                g_ComponentCatalogSearch.clear();
-            }
-            ImGui::PopID();
-        };
-        const char* kind = std::strcmp(family, "runes") == 0 ? "Rune" :
-                           std::strcmp(family, "sigils") == 0 ? "Sigil" : "Relic";
-        for (const auto& entry : GearCatalog(kind))
-            offer(entry.name.c_str(), entry.item_id, entry.bonus.c_str());
+        const char* kind=std::strcmp(family,"runes")==0?"Rune":std::strcmp(family,"sigils")==0?"Sigil":"Relic";
+        RenderGearCatalogChoices(kind,g_ComponentCatalogSearch,selectedId,selected,false,
+            [&](uint32_t id,const std::string& name){item[idField]=id;item[nameField]=name;g_ComponentCatalogSearch.clear();});
         ImGui::EndCombo();
     }
     if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {

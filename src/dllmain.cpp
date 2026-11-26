@@ -6577,6 +6577,21 @@ static std::vector<AlterEgo::PublicCatalog::Entry> GearCatalog(const std::string
     if(kind=="Relic")for(const auto& e:RELIC_LIST)rows.push_back({e.name,"Legacy entry (not refreshed)",kind,"",e.item_id});
     return rows;
 }
+// Catalog selection has one eligibility/filter/ID policy. The caller chooses
+// card or compact option presentation and retains ownership of its draft.
+template<class OnChoose>
+static void RenderGearCatalogChoices(const std::string& family,const std::string& filter,
+    uint32_t currentId,const std::string& currentName,bool cards,OnChoose choose){
+    for(const auto& e:GearCatalog(family)){
+        if(!AlterEgo::UI::CatalogMatches(e.name.c_str(),e.bonus.c_str(),filter))continue;
+        ImGui::PushID(static_cast<int>(e.item_id));
+        const bool selected=currentId?currentId==e.item_id:currentName==e.name;
+        bool clicked=cards?AlterEgo::UI::CatalogCard("##gear_option",e.name.c_str(),e.bonus.c_str(),selected):
+            AlterEgo::UI::CatalogOption(e.name.c_str(),e.bonus.c_str(),selected);
+        if(clicked)choose(e.item_id,e.name);
+        ImGui::PopID();
+    }
+}
 static void SeedItemNameCache() {
     for (int i = 0; i < RUNE_COUNT; i++)
         if(!AlterEgo::GW2API::FindItemIdByName(RUNE_LIST[i].name))
@@ -7318,10 +7333,10 @@ static void ApplyGearClipboard(AlterEgo::SavedBuild& b,const std::string& slot,c
         }
     }
     if (c.field == GearCopyField::All || c.field == GearCopyField::Stats) {
-        dest.stat_id = c.data.stat_id; dest.stat_name = c.data.stat_name;
+        AlterEgo::GearEdit::CopyStats(dest,c.data);
     }
     if (c.field == GearCopyField::All || c.field == GearCopyField::Upgrade) {
-        if (IsArmorSlot(slot)) { dest.rune = c.data.rune; dest.rune_id = c.data.rune_id; }
+        if (IsArmorSlot(slot)) AlterEgo::GearEdit::CopyRune(dest,c.data);
         if (IsWeaponSlot(slot)) AlterEgo::GearEdit::CopySigils(dest,c.data,GearSigilCapacity(b,slot));
     }
     if (c.field == GearCopyField::All || c.field == GearCopyField::Infusions) {
@@ -7354,8 +7369,7 @@ static void ClearGearSlot(AlterEgo::SavedBuild& b,const std::string& slot,GearCo
             item.rune.clear(); item.sigil.clear(); item.sigil2.clear();
         }
         if (field == GearCopyField::Infusions) {
-            item.infusion_ids.clear(); item.infusion_attributes.clear(); item.infusion.clear();
-            item.infusion_snapshot = true; InvalidateGearInfusionTotals(b);
+            AlterEgo::GearEdit::ClearInfusions(item); InvalidateGearInfusionTotals(b);
         }
     }
     MarkGearEditDirty(b);
@@ -7823,30 +7837,9 @@ static void RenderGearCustomizeDialog() {
         AlterEgo::UI::SearchField("gear_catalog", "Search...", g_GearStatSearch);
 
         if (g_GearSelectorTab == 0 && isRelic) {
-            // --- Relic selector ---
-            std::string filterLower;
-            if (g_GearStatSearch[0]) {
-                filterLower = g_GearStatSearch;
-                for (auto& c : filterLower) c = (char)tolower(c);
-            }
-
-            ImGui::BeginChild("##relicList", ImVec2(0, -30), true);
-            for (const auto& entry : GearCatalog("Relic")) {
-                if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
-
-                ImGui::PushID(static_cast<int>(entry.item_id));
-                bool isSel = editBuild->relic_id ? editBuild->relic_id==entry.item_id : editBuild->relic_name==entry.name;
-
-                if (AlterEgo::UI::CatalogCard("##relsel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
-                    editBuild->relic_name = entry.name;
-                    editBuild->relic_id = entry.item_id;
-                    commitGear();
-                }
-
-                
-
-                ImGui::PopID();
-            }
+            ImGui::BeginChild("##relicList",ImVec2(0,-30),true);
+            RenderGearCatalogChoices("Relic",g_GearStatSearch,editBuild->relic_id,editBuild->relic_name,true,
+                [&](uint32_t id,const std::string& name){editBuild->relic_id=id;editBuild->relic_name=name;commitGear();});
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 0) {
             // --- Stat combo selector ---
@@ -7891,59 +7884,16 @@ static void RenderGearCustomizeDialog() {
             }
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 1) {
-            // --- Rune or Sigil selector ---
-            std::string filterLower;
-            if (g_GearStatSearch[0]) {
-                filterLower = g_GearStatSearch;
-                for (auto& c : filterLower) c = (char)tolower(c);
-            }
-
-            ImGui::BeginChild("##upgradeList", ImVec2(0, -30), true);
-
-            if (isArmor) {
-                for (const auto& entry : GearCatalog("Rune")) {
-                    if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
-
-                    ImGui::PushID(static_cast<int>(entry.item_id));
-                    bool isSel = gs.rune_id ? gs.rune_id==entry.item_id : gs.rune==entry.name;
-
-                    if (AlterEgo::UI::CatalogCard("##rsel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
-                        ExpandSharedRune(*editBuild);
-                        gs.rune = entry.name;
-                        gs.rune_id = entry.item_id;
-                        commitGear();
-                    }
-
-                    
-
-                    ImGui::PopID();
-                }
-            } else if (isWeapon) {
-                for (const auto& entry : GearCatalog("Sigil")) {
-                    if (!AlterEgo::UI::CatalogMatches(entry.name.c_str(), entry.bonus.c_str(), filterLower)) continue;
-
-                    ImGui::PushID(static_cast<int>(entry.item_id));
-                    const std::string& activeSigil = g_GearEditingSigil2 ? gs.sigil2 : gs.sigil;
-                    const auto activeId=g_GearEditingSigil2?gs.sigil2_id:gs.sigil_id;
-                    bool isSel = activeId ? activeId==entry.item_id : activeSigil==entry.name;
-
-                    if (AlterEgo::UI::CatalogCard("##ssel", entry.name.c_str(), entry.bonus.c_str(), isSel)) {
-                        uint32_t sid = entry.item_id;
-                        if (g_GearEditingSigil2) {
-                            gs.sigil2 = entry.name;
-                            gs.sigil2_id = sid;
-                        } else {
-                            gs.sigil = entry.name;
-                            gs.sigil_id = sid;
-                        }
-                        commitGear();
-                    }
-
-                    
-
-                    ImGui::PopID();
-                }
-            }
+            ImGui::BeginChild("##upgradeList",ImVec2(0,-30),true);
+            if(isArmor)RenderGearCatalogChoices("Rune",g_GearStatSearch,gs.rune_id,gs.rune,true,
+                [&](uint32_t id,const std::string& name){ExpandSharedRune(*editBuild);gs.rune_id=id;gs.rune=name;commitGear();});
+            else if(isWeapon)RenderGearCatalogChoices("Sigil",g_GearStatSearch,
+                g_GearEditingSigil2?gs.sigil2_id:gs.sigil_id,g_GearEditingSigil2?gs.sigil2:gs.sigil,true,
+                [&](uint32_t id,const std::string& name){
+                    if(g_GearEditingSigil2){gs.sigil2_id=id;gs.sigil2=name;}
+                    else{gs.sigil_id=id;gs.sigil=name;}
+                    commitGear();
+                });
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 2 && isWeapon) {
             // --- Weapon type selector ---

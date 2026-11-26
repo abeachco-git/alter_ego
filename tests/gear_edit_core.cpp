@@ -31,6 +31,10 @@ int case_gear_edit_core(int, char**) {
     assert(dst.infusion_ids == std::vector<uint32_t>({42,43,42}));
     CopyInfusions(dst, src, InfusionCapacity("Amulet", false));
     assert(dst.infusion_ids.empty());
+    src.stat_id=1130;src.stat_name="Berserker";src.rune_id=9;src.rune="Scholar";
+    CopyStats(dst,src);CopyRune(dst,src);
+    assert(dst.stat_id==1130&&dst.stat_name=="Berserker"&&dst.rune_id==9&&dst.rune=="Scholar");
+    ClearInfusions(dst);assert(dst.infusion_snapshot&&dst.infusion_ids.empty());
     Slot removal;
     removal.infusion_ids={11,22,33};
     removal.infusion_attributes={"Power","","Precision"};
