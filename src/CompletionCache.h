@@ -202,12 +202,13 @@ inline bool WriteClearsSections(const std::string& root,const std::string& accou
         Initialize(db);Database::Transaction tx(db);
         auto prior=Read(db,CompletionDataset::Clears,account);
         Json merged=prior.value_or(Json{{"account",account},{"fetch_time",0}});
-        int64_t newest=Number(merged,"fetch_time");
+        const int64_t legacyStamp=Number(merged,"fetch_time");
+        int64_t newest=legacyStamp;
         // Convert the legacy aggregate timestamp into section stamps before
         // moving the aggregate forward. Omitted sections keep their old age.
         for(const char* key:{"dailyFractals","dailyBounties","weeklyWings","weeklyStrikes"}){
             if(merged.contains(key)&&(!merged.contains("section_stamps")||!merged["section_stamps"].contains(key)))
-                merged["section_stamps"][key]=newest;
+                merged["section_stamps"][key]=legacyStamp;
             if(!patch.contains(key))continue;
             const auto stamp=Number(patch.at("section_stamps"),key);
             if(stamp<=0)throw std::runtime_error("Unverified Clears section");
