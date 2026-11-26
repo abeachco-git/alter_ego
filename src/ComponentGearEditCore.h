@@ -31,6 +31,22 @@ inline bool ComponentOwnsField(const std::string& kind,const std::string& slot,C
     if(field==CopyField::Infusions)return (water||(kind=="infusions"&&(armor||weapon||trinket)))&&slot!="Amulet"&&slot!="Relic";
     return field==CopyField::Relic&&kind=="relic";
 }
+// A standalone weapon edit can invalidate its exact identity and displace
+// its own offhand, but must not mutate independently referenced upgrades.
+inline bool ApplyComponentWeaponChange(GearJson& gear,const std::string& slot,const std::string& next,bool twoHanded){
+    if(!gear.is_object()||!gear.contains(slot)||!gear.at(slot).is_object()||
+       !EquipmentChoice::WeaponEnvironmentAllowed(slot,next))return false;
+    auto& item=gear.at(slot);
+    auto existing=item.find("weapon_type");
+    if(existing!=item.end()&&!existing->is_string())return false;
+    const auto current=existing==item.end()?std::string{}:existing->get<std::string>();
+    const auto plan=EquipmentChoice::PlanWeaponChange(slot,current,next,twoHanded);
+    if(!plan.changed)return false;
+    if(next.empty())item.erase("weapon_type");else item["weapon_type"]=next;
+    item.erase("item_id");item.erase("item_name");
+    if(!plan.displacedOffhand.empty())gear.erase(plan.displacedOffhand);
+    return true;
+}
 // Accept only known, typed fields. Never reinterpret an unfamiliar imported
 // representation as an empty value or silently overwrite it on paste.
 template<class Slot> bool ReadComponentField(const GearJson& part,CopyField field,

@@ -534,13 +534,7 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,ComponentJson& gear,
     }
     const std::string current = item.value("weapon_type", std::string());
     auto apply=[&](const std::string& next,bool twoHanded){
-        const auto plan=AlterEgo::EquipmentChoice::PlanWeaponChange(slot,current,next,twoHanded);
-        if(!plan.changed)return;
-        if(next.empty())item.erase("weapon_type");else item["weapon_type"]=next;
-        item.erase("item_id");item.erase("item_name");
-        // A Weapons component owns physical weapon slots only. Never edit
-        // separately linked Sigils or Infusions components from this draft.
-        if(!plan.displacedOffhand.empty())gear.erase(plan.displacedOffhand);
+        AlterEgo::GearEdit::ApplyComponentWeaponChange(gear,slot,next,twoHanded);
     };
     if (AlterEgo::UI::BeginCombo("Weapon type##native_weapon",current.empty()?"(choose type)":WeaponDisplayName(current))) {
         static std::string filter;
@@ -753,7 +747,10 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             if (id && !info && RenderActionButton("Fetch item details##component"))
                 AlterEgo::GW2API::FetchItemDetailsAsync({id});
             if (ImGui::TreeNode("##exact_item", "Exact equipment item")) {
-                ComponentNativeNumber(item, "item_id", "Item ID");
+                uint32_t exact=id;ImGui::SetNextItemWidth(150);
+                if(ImGui::InputScalar("Item ID",ImGuiDataType_U32,&exact)){
+                    if(exact!=id){item["item_id"]=exact;item.erase("item_name");}
+                }
                 ImGui::TreePop();
             }
             ImGui::TextUnformatted("Stats");
@@ -763,8 +760,28 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             if (ImGui::TreeNode("##advanced_gear_ids", "Advanced: exact stats and weapon type")) {
                 ComponentNativeNumber(item, "stat_id", "Stat ID");
                 ComponentNativeText(item, "stat_name", "Stat name");
-                if (weapon)
-                    ComponentNativeText(item, "weapon_type", "Weapon type");
+                if(weapon){
+                    // Advanced input is a deliberate Enter-confirmed transition,
+                    // not a raw mutation that leaves a stale exact item identity.
+                    const auto existing=item.find("weapon_type");
+                    if(existing!=item.end()&&!existing->is_string())ImGui::TextDisabled("Unknown weapon type representation; retained.");
+                    else{
+                        auto entered=existing==item.end()?std::string{}:existing->get<std::string>();
+                        ImGui::SetNextItemWidth(180);
+                        if(AlterEgo::UI::InputText("Weapon type (Enter to apply)",entered,ImGuiInputTextFlags_EnterReturnsTrue)){
+                            bool valid=AlterEgo::EquipmentChoice::WeaponEnvironmentAllowed(slot,entered);
+                            bool two=IsWeaponTwoHanded(profession,entered);
+                            const auto defs=AlterEgo::GW2API::GetProfessionWeapons(profession);
+                            if(defs&&!entered.empty()){
+                                const auto it=defs->find(entered);
+                                valid=valid&&it!=defs->end()&&AlterEgo::EquipmentChoice::WeaponTypeEligible(slot,entered,it->second.mainhand,it->second.offhand,it->second.two_handed);
+                                if(it!=defs->end())two=it->second.two_handed;
+                            }
+                            if(valid)AlterEgo::GearEdit::ApplyComponentWeaponChange(data["gear"],slot,entered,two);
+                        }
+                        ImGui::TextDisabled("Known profession/hand restrictions apply; unknown definitions are unverified.");
+                    }
+                }
                 ImGui::TreePop();
             }
         }

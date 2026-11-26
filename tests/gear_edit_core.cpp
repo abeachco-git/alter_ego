@@ -117,6 +117,16 @@ int case_gear_edit_core(int, char**) {
     auto changed=AlterEgo::EquipmentChoice::PlanWeaponChange("WeaponA1","Sword","Axe",false);
     ApplyWeaponChange(weapon,"Axe",changed);
     assert(weapon.item_id==0&&weapon.weapon_type=="Axe"&&weapon.sigil2_id==0&&weapon.infusion_ids.size()==1);
+    GearJson weapons={{"WeaponA1",{{"weapon_type","Sword"},{"item_id",42},{"future",99}}},
+                      {"WeaponA2",{{"weapon_type","Axe"}}},
+                      {"WeaponAquaticA",{{"weapon_type","Harpoon"},{"item_id",77}}}};
+    const auto original=weapons;
+    assert(!ApplyComponentWeaponChange(weapons,"WeaponA1","Sword",false)&&weapons==original);
+    assert(!ApplyComponentWeaponChange(weapons,"WeaponA1","Harpoon",true)&&weapons==original);
+    assert(ApplyComponentWeaponChange(weapons,"WeaponA1","Greatsword",true));
+    assert(!weapons["WeaponA1"].contains("item_id")&&weapons["WeaponA1"]["future"]==99&&!weapons.contains("WeaponA2"));
+    assert(!ApplyComponentWeaponChange(weapons,"WeaponAquaticA","Spear",true));
+    assert(ApplyComponentWeaponChange(weapons,"WeaponAquaticA","Trident",true)&&weapons.contains("WeaponA1"));
     Build parent;
     assert(!HasRecordedAquaticGear(parent.gear));
     parent.gear["HelmAquatic"].infusion_snapshot=true;

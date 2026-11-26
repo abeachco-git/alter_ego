@@ -18,11 +18,14 @@ inline bool WeaponEligible(const std::string& slot, bool mainhand,
     // Aquatic and future slot classes may have different restrictions.
     return true;
 }
+inline bool WeaponEnvironmentAllowed(const std::string& slot,const std::string& type){
+    if(type.empty())return true;
+    const bool waterOnly=type=="Harpoon"||type=="Speargun"||type=="Trident";
+    return IsAquaticWeaponSlot(slot)==waterOnly;
+}
 inline bool WeaponTypeEligible(const std::string& slot,const std::string& type,
     bool mainhand,bool offhand,bool twoHanded) {
-    const bool waterOnly=type=="Harpoon"||type=="Speargun"||type=="Trident";
-    if(IsAquaticWeaponSlot(slot))return waterOnly;
-    if(waterOnly)return false;
+    if(!WeaponEnvironmentAllowed(slot,type))return false;
     return WeaponEligible(slot,mainhand,offhand,twoHanded);
 }
 // A deliberate weapon type change invalidates the old exact physical item.
