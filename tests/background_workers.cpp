@@ -74,6 +74,17 @@ int case_background_workers(int, char**) {
     group.RequestStop();
     assert(!group.WaitFor(std::chrono::seconds(30)));
     group.JoinAll();
+    // Retry/failure state records only finished non-cancelled operations.
+    int recorded=0;bool stopped=false;
+    {AlterEgo::Background::CompletedAttempt a([&]{return stopped;},[&]{++recorded;});a.Finish();a.Finish();}
+    assert(recorded==1);
+    {AlterEgo::Background::CompletedAttempt a([&]{return stopped;},[&]{++recorded;});stopped=true;}
+    assert(recorded==1);stopped=false;
+    try{AlterEgo::Background::CompletedAttempt a([&]{return stopped;},[&]{++recorded;});throw std::runtime_error("failed");}
+    catch(const std::runtime_error&){}
+    assert(recorded==2);
+    {AlterEgo::Background::CompletedAttempt a([&]{return stopped;},[&]{++recorded;});a.Dismiss();}
+    assert(recorded==2);
     // A large catalog is not copied/rebuilt on steady-state render frames.
     using Catalog=std::unordered_map<unsigned,std::shared_ptr<const std::vector<unsigned>>>;
     Catalog canonical;

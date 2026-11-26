@@ -91,3 +91,5 @@ Verification (2026-11-26 UTC): implementation `75203d0f7fa9bc883692133dafdb6967e
 - Skin catalog/Fashion request ordering implemented with cache schema v24; no aggregate writes, canonical cross-projection adoption, bounded shared observation parsing and independent field groups. Offline/Windows verification pending.
 
 - Reference v25 per-record ordered writes and commit-before-adoption for spec/trait/skill/stat/dye, palette admission cleanup and bounded native/Commerce parsing implemented. CI pending.
+
+- Cancellation-state hardening implemented; durable retry markers now finalize only for non-cancelled catalog/Wiki outcomes. CI pending; asynchronous transport remains open.

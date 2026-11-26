@@ -17,6 +17,7 @@ inline Timers Fetch() {
     auto request=[](const char* url,bool wrapped){
         Background::Checkpoint();
         auto response=Skinventory::HttpClient::GetEx(url);
+        Background::Checkpoint();
         if(response.status_code!=200)throw std::runtime_error("Wiki HTTP "+std::to_string(response.status_code));
         return ParseResponse(response.body,wrapped);
     };
@@ -33,16 +34,22 @@ inline void Refresh(const std::string& root,bool manual=false) {
     SetStatus("Refreshing event timers...");
     Background::Workers().Launch([root]{
         const auto attempt=PublicCatalog::Now();
-        PublicCatalog::WithDb(root,[&](auto& db){PublicCatalog::Mark(db,AttemptDataset,attempt);});
-        auto existing=*Get();existing.attempt=attempt;Publish(std::move(existing));
+        Background::CompletedAttempt outcome([]{return Background::Workers().Stopping();},[&]{
+            PublicCatalog::WithDb(root,[&](auto& db){
+                if(Background::Workers().Stopping())return;
+                PublicCatalog::MarkAttempt(db,AttemptDataset,attempt);
+                auto existing=*Get();existing.attempt=PublicCatalog::Fresh(db,AttemptDataset);Publish(std::move(existing));
+            });
+        });
         auto timers=Fetch();
         Background::Checkpoint();
         PublicCatalog::WithDb(root,[&](auto& db){
             Snapshot next{std::move(timers),PublicCatalog::Now(),attempt,false};
-            Database::Transaction tx(db);Store(db,next);tx.Commit();
+            Background::Checkpoint();
+            Database::Transaction tx(db);Store(db,next);PublicCatalog::MarkAttempt(db,AttemptDataset,attempt);tx.Commit();
             Publish(std::move(next));
         });
-        SetStatus("Event timers up to date");busy=false;
-    },[]{SetStatus("Event timer refresh failed; previous snapshot retained");busy=false;});
+        outcome.Dismiss();SetStatus("Event timers up to date");busy=false;
+    },[]{SetStatus(Background::Workers().Stopping()?"Event timer refresh cancelled":"Event timer refresh failed; previous snapshot retained");busy=false;});
 }
 } // namespace AlterEgo::WikiEvents

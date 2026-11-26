@@ -141,7 +141,7 @@ inline std::map<uint32_t,WikiFreshness::Stamp> ReadFreshness(Database::Connectio
     return out;
 }
 inline void MarkAttempt(Database::Connection& db,uint32_t id,int64_t now) {
-    auto q=db.Prepare("INSERT INTO wiki_skin_freshness VALUES(?,0,?) ON CONFLICT(skin_id) DO UPDATE SET attempt=excluded.attempt");
+    auto q=db.Prepare("INSERT INTO wiki_skin_freshness VALUES(?,0,?) ON CONFLICT(skin_id) DO UPDATE SET attempt=MAX(wiki_skin_freshness.attempt,excluded.attempt)");
     q.Bind(1,id);q.Bind(2,now);q.Execute();
 }
 inline void StoreVerified(Database::Connection& db,uint32_t id,const Json& row,int64_t now) {

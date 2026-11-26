@@ -32,9 +32,27 @@ inline void Load(const std::string& root) {
     {std::lock_guard<std::mutex> lock(stateMutex);state=std::make_shared<const Snapshot>();vaultStatus.clear();status.clear();busy.clear();}
     try{WithDb(root,[](auto& db){Publish(db);});}catch(...){}
 }
-inline void Attempt(const std::string& root,const std::string& dataset) {
-    WithDb(root,[&](auto& db){Mark(db,dataset+"_attempt",Now());Publish(db);});
-}
+// Busy ownership already suppresses duplicate work while a request runs.
+// Persist the original attempt time only after a non-cancelled outcome.
+class DatasetAttempt {
+    std::string root_,dataset_;int64_t started_;bool armed_;
+public:
+    DatasetAttempt(const std::string& root,const std::string& dataset,bool enabled=true)
+        :root_(root),dataset_(dataset+"_attempt"),started_(Now()),armed_(enabled){}
+    DatasetAttempt(const DatasetAttempt&)=delete;
+    DatasetAttempt& operator=(const DatasetAttempt&)=delete;
+    ~DatasetAttempt(){Finish();}
+    void Finish() noexcept {
+        if(!armed_)return;armed_=false;
+        try{
+            if(Background::Workers().Stopping())return;
+            WithDb(root_,[&](auto& db){
+                if(Background::Workers().Stopping())return;
+                MarkAttempt(db,dataset_,started_);Publish(db);
+            });
+        }catch(...){}
+    }
+};
 inline Json Fetch(const std::string& path) {
     Background::Checkpoint();
     auto r=ArenaNet::Get(path);
@@ -64,13 +82,14 @@ inline void RefreshVault(const std::string& root,bool manual) {
     {std::lock_guard<std::mutex> lock(stateMutex);vaultStatus="Refreshing...";}
     Background::Workers().Launch([root,manual]{
         ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
-        Attempt(root,"public_vault");
+        DatasetAttempt attempt(root,"public_vault");
         auto rows=ParseObjectives(Fetch("/v2/wizardsvault/objectives?ids=all"));
         Background::Checkpoint();
         WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreObjectives(db,rows,Now());tx.Commit();Publish(db);});
+        attempt.Finish();
         {std::lock_guard<std::mutex> lock(stateMutex);vaultStatus="Up to date";}
         vaultBusy=false;
-    },[]{std::lock_guard<std::mutex> lock(stateMutex);vaultStatus="Refresh failed; cached data retained";vaultBusy=false;});
+    },[]{std::lock_guard<std::mutex> lock(stateMutex);vaultStatus=Background::Workers().Stopping()?"Refresh cancelled":"Refresh failed; cached data retained";vaultBusy=false;});
 }
 inline bool BeginDataset(const std::string& name,bool manual,bool initialRequired=false) {
     std::lock_guard<std::mutex> lock(stateMutex);
@@ -81,7 +100,7 @@ inline bool BeginDataset(const std::string& name,bool manual,bool initialRequire
 }
 inline void EndDataset(const std::string& name,bool ok) {
     std::lock_guard<std::mutex> lock(stateMutex);busy.erase(name);
-    status[name]=ok?"Up to date":"Refresh failed; cached data retained";
+    status[name]=ok?"Up to date":Background::Workers().Stopping()?"Refresh cancelled":"Refresh failed; cached data retained";
 }
 inline std::string DatasetStatus(const std::string& name) {
     std::lock_guard<std::mutex> lock(stateMutex);
@@ -91,10 +110,11 @@ inline void RefreshPets(const std::string& root,bool manual=false,bool initialRe
     if(!BeginDataset("public_pets",manual,initialRequired))return;
     Background::Workers().Launch([root,manual]{
         ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
-        Attempt(root,"public_pets");
+        DatasetAttempt attempt(root,"public_pets");
         auto rows=ParsePets(Fetch("/v2/pets?ids=all"));
         Background::Checkpoint();
         WithDb(root,[&](auto& db){Database::Transaction tx(db);StorePets(db,rows,Now());tx.Commit();Publish(db);});
+        attempt.Finish();
         EndDataset("public_pets",true);
     },[]{EndDataset("public_pets",false);});
 }
@@ -102,7 +122,7 @@ inline void RefreshLegends(const std::string& root,bool manual=false,bool initia
     if(!BeginDataset("public_legends",manual,initialRequired))return;
     Background::Workers().Launch([root,manual]{
         ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
-        Attempt(root,"public_legends");
+        DatasetAttempt attempt(root,"public_legends");
         auto raw=Fetch("/v2/legends?ids=all&v=2019-12-19T00:00:00.000Z");
         if(!raw.is_array()||raw.empty())throw std::runtime_error("Empty legend API");
         std::set<uint32_t> swaps;
@@ -115,6 +135,7 @@ inline void RefreshLegends(const std::string& root,bool manual=false,bool initia
         WithDb(root,[&](auto& db){Database::Transaction tx(db);StoreLegends(db,rows,Now());tx.Commit();Publish(db);});
         // Swap skills use the existing icon/skill cache owner; no repeat
         // lookup is needed to display the legend icon itself.
+        attempt.Finish();
         EndDataset("public_legends",true);
     },[]{EndDataset("public_legends",false);});
 }

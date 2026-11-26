@@ -54,6 +54,10 @@ inline int64_t Fresh(Database::Connection& db,const std::string& dataset) {
     auto q=db.Prepare("SELECT saved_at FROM reference_freshness WHERE dataset=?");
     q.Bind(1,dataset);return q.Step()?q.Integer(0):0;
 }
+inline void MarkAttempt(Database::Connection& db,const std::string& dataset,int64_t stamp) {
+    auto q=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=MAX(reference_freshness.saved_at,excluded.saved_at)");
+    q.Bind(1,dataset);q.Bind(2,stamp);q.Execute();
+}
 inline void Mark(Database::Connection& db,const std::string& dataset,int64_t stamp) {
     auto q=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=excluded.saved_at");
     q.Bind(1,dataset);q.Bind(2,stamp);q.Execute();

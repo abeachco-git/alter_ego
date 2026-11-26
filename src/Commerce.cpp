@@ -346,8 +346,8 @@ namespace Skinventory {
         try {
             const auto root=Cache::RootFromLegacySkinDirectory(s_data_dir);
             const auto old=PublicCatalog::Get();
-            if(discover)PublicCatalog::Attempt(root,"public_item_discovery");
-            if(refresh)PublicCatalog::Attempt(root,"public_upgrades");
+            PublicCatalog::DatasetAttempt discovery(root,"public_item_discovery",discover);
+            PublicCatalog::DatasetAttempt upgradesAttempt(root,"public_upgrades",refresh);
             const auto index=discover?PublicCatalog::Index(PublicCatalog::Fetch("/v2/items")):old->index;
             if(index.empty()||(!old->index.empty()&&index.size()<old->index.size()*9/10))
                 throw std::runtime_error("Incomplete item index");
@@ -472,6 +472,7 @@ namespace Skinventory {
             }
             if(incremental)PublicCatalog::CommitIncrementalItems(root,index,observations,discover,refresh,itemStamps);
             else PublicCatalog::CommitUpgrades(root,index,upgrades,itemStamps);
+            discovery.Finish();upgradesAttempt.Finish();
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 if(newItems){

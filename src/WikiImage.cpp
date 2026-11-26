@@ -210,7 +210,7 @@ namespace Skinventory {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_loading.erase(skinId);
-            if(s_stopWorker)return; // cancellation is not a negative lookup
+            if(s_stopWorker||AlterEgo::Background::Workers().Stopping())return; // cancellation is not a negative lookup
             s_failed[skinId] = std::chrono::steady_clock::now();
             s_failedPersistent[skinId] = nowTs;
         }
@@ -1108,7 +1108,7 @@ namespace Skinventory {
             if (imageUrl.empty()) {
                 {
                     std::lock_guard<std::mutex> lock(s_mutex);
-                    if(s_stopWorker)return;
+                    if(s_stopWorker||AlterEgo::Background::Workers().Stopping())return;
                     s_currencyFailedPersistent[key] = nowTs;
                 }
                 failedDirty = true;
@@ -1123,7 +1123,7 @@ namespace Skinventory {
             } else {
                 {
                     std::lock_guard<std::mutex> lock(s_mutex);
-                    if(s_stopWorker)return;
+                    if(s_stopWorker||AlterEgo::Background::Workers().Stopping())return;
                     s_currencyFailedPersistent[key] = nowTs;
                 }
                 failedDirty = true;
@@ -1136,12 +1136,15 @@ namespace Skinventory {
         namespace W=AlterEgo::Cache::Wiki;
         const auto root=AlterEgo::GW2API::GetDataDirectory();
         const auto attempt=static_cast<int64_t>(std::time(nullptr));
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_metadataFreshness[id].attempt=attempt;
-        }
-        W::WithDb(root,[&](auto& db){W::MarkAttempt(db,id,attempt);});
-        if(s_stopWorker)return;
+        auto stopped=[] {return s_stopWorker.load()||AlterEgo::Background::Workers().Stopping();};
+        AlterEgo::Background::CompletedAttempt outcome(stopped,[&]{
+            W::WithDb(root,[&](auto& db){if(!stopped())W::MarkAttempt(db,id,attempt);});
+            if(!stopped()){
+                std::lock_guard<std::mutex> lock(s_mutex);
+                s_metadataFreshness[id].attempt=std::max(s_metadataFreshness[id].attempt,attempt);
+            }
+        });
+        if(stopped())return;
         std::vector<std::string> candidates;
         if(!weight.empty()){
             auto wc=weight;
@@ -1193,7 +1196,8 @@ namespace Skinventory {
                   {"vendor",data.vendor_name},{"vendor_location",data.vendor_location},{"vendor_waypoint",data.vendor_waypoint},
                   {"vendor_cost",data.vendor_cost},{"vendor_cost_keys",data.vendor_cost_keys}};
         const auto verified=static_cast<int64_t>(std::time(nullptr));
-        W::WithDb(root,[&](auto& db){W::StoreVerified(db,id,row,verified);});
+        W::WithDb(root,[&](auto& db){if(stopped())throw AlterEgo::Background::Cancelled{};W::StoreVerified(db,id,row,verified);});
+        outcome.Dismiss();
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_wikiDataCache[id]=data;

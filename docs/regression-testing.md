@@ -261,3 +261,5 @@ Verification (2026-11-26 UTC): implementation `75203d0f7fa9bc883692133dafdb6967e
 Skin metadata ordering regression covers delayed catalog vs Fashion, equal replay, older dye response, independent flags clearing, canonical cross-projection fields and duplicate-row transaction rollback. Live testing remains deferred.
 
 Reference observation regression covers delayed disjoint/same-ID batches, equal replay, transactional malformed-child rollback and watermark reuse after rejection. Offline and Windows verification pending; no live tests or discretionary benchmark work.
+
+Cancellation finalizer regression verifies finish-once, no persistence on stop, ordinary failure during unwinding, and explicit dismissal after success. Offline/Windows CI pending; no live testing.

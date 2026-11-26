@@ -1037,7 +1037,7 @@ namespace AlterEgo {
         const auto root=GetDataDirectory();
         Background::Workers().Launch([root,manual]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
-            PublicCatalog::Attempt(root,"public_stats");
+            PublicCatalog::DatasetAttempt attempt(root,"public_stats");
             const auto requestStamp=Cache::ReferenceSnapshotTime();
             auto raw=PublicCatalog::Fetch("/v2/itemstats?ids=all");
             if(!raw.is_array()||raw.size()<50)throw std::runtime_error("Incomplete item stats");
@@ -1060,6 +1060,7 @@ namespace AlterEgo {
                 PublicCatalog::Mark(db,"public_stats",PublicCatalog::Now());tx.Commit();PublicCatalog::Publish(db);
             });
             AdoptReferenceObservations(static_cast<int>(Cache::ReferenceDataset::ItemStats),accepted);
+            attempt.Finish();
             PublicCatalog::EndDataset("public_stats",true);
         },[]{PublicCatalog::EndDataset("public_stats",false);});
     }
@@ -1559,7 +1560,7 @@ namespace AlterEgo {
         const auto root=GetDataDirectory();
         Background::Workers().Launch([root,manual]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Background);
-            PublicCatalog::Attempt(root,"public_dyes");
+            PublicCatalog::DatasetAttempt attempt(root,"public_dyes");
             const auto requestStamp=Cache::ReferenceSnapshotTime();
             auto raw=PublicCatalog::Fetch("/v2/colors?ids=all");
             if(!raw.is_array()||raw.size()<100)throw std::runtime_error("Incomplete dye catalog");
@@ -1601,6 +1602,7 @@ namespace AlterEgo {
                 const auto id=row.at("id").get<int>();
                 s_dye_cache[id]=std::make_shared<const DyeColor>(std::move(staged.at(id)));
             }}
+            attempt.Finish();
             PublicCatalog::EndDataset("public_dyes",true);
         },[]{PublicCatalog::EndDataset("public_dyes",false);});
     }

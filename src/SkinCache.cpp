@@ -274,7 +274,7 @@ namespace Skinventory {
         using namespace AlterEgo;
         const auto root=Cache::RootFromLegacySkinDirectory(s_data_dir);
         try {
-            PublicCatalog::Attempt(root,"public_skins");
+            PublicCatalog::DatasetAttempt attempt(root,"public_skins");
             // Step 1: Get all skin IDs
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
@@ -309,6 +309,7 @@ namespace Skinventory {
             }
             PublicCatalog::CompleteCheck(root,"public_skins");
             s_status=CacheStatus::Ready;
+            attempt.Finish();
             PublicCatalog::EndDataset("public_skins",true);
 
         } catch (...) {
@@ -325,7 +326,7 @@ namespace Skinventory {
         using namespace AlterEgo;
         const auto root=Cache::RootFromLegacySkinDirectory(s_data_dir);
         try {
-            PublicCatalog::Attempt(root,"public_skins");
+            PublicCatalog::DatasetAttempt attempt(root,"public_skins");
             // Step 1: Get current API skin IDs
             auto api_ids = FetchSkinIdList();
             if(api_ids.empty())throw std::runtime_error("Missing skin index");
@@ -348,7 +349,8 @@ namespace Skinventory {
                     s_status = CacheStatus::Ready;
                     s_status_message = "Cache up to date (" + std::to_string(s_skins.size()) + " skins)";
                 }
-                PublicCatalog::EndDataset("public_skins",true);
+                attempt.Finish();
+            PublicCatalog::EndDataset("public_skins",true);
                 return;
             }
 
@@ -378,6 +380,7 @@ namespace Skinventory {
             }
             PublicCatalog::CompleteCheck(root,"public_skins");
             s_status=CacheStatus::Ready;
+            attempt.Finish();
             PublicCatalog::EndDataset("public_skins",true);
 
         } catch (...) {

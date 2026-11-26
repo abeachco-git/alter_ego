@@ -13,6 +13,22 @@ namespace AlterEgo::Background {
 // Owner-thread lifecycle: Open on addon load, RequestStop before deregistration,
 // JoinAll before destroying any worker-accessible state. Never join from a job.
 struct Cancelled {};
+// A failed/finished operation may record retry state; an abandoned operation
+// must not do so. Finalization runs at most once, and is safe during unwinding.
+template<class Stop,class Record> class CompletedAttempt {
+    Stop stop_;Record record_;bool armed_=true;
+public:
+    CompletedAttempt(Stop stop,Record record):stop_(std::move(stop)),record_(std::move(record)){}
+    CompletedAttempt(const CompletedAttempt&)=delete;
+    CompletedAttempt& operator=(const CompletedAttempt&)=delete;
+    ~CompletedAttempt(){Finish();}
+    void Dismiss() noexcept {armed_=false;}
+    void Finish() noexcept {
+        if(!armed_)return;
+        armed_=false;
+        try{if(!stop_())record_();}catch(...){}
+    }
+};
 class WorkerGroup {
     struct Entry {
         std::atomic<bool> done{false};
