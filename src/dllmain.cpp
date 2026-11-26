@@ -1388,7 +1388,7 @@ static uint32_t g_GearSelectedStatId = 0;     // Currently selected stat in dial
 static int g_GearSelectorTab = 0;             // 0 = Stats, 1 = Rune/Sigil, 2 = Weapon Type
 static bool g_GearEditingSigil2 = false;      // true = editing second sigil slot (two-handed)
 static int g_GearEditingInfusionIndex = 0;
-static int g_GearExactInfusionId = 0;
+static uint32_t g_GearExactInfusionId = 0;
 
 // Save to Library dialog state
 static bool g_SaveLibDialogOpen = false;
@@ -6759,7 +6759,7 @@ static void OpenGearDialog(const std::string& buildId, const std::string& slot,
     g_GearEditingSigil2 = false;
     g_GearEditingInfusionIndex = 0;
     g_GearExactInfusionId = current.infusion_ids.empty()
-        ? 0 : static_cast<int>(current.infusion_ids.front());
+        ? 0 : current.infusion_ids.front();
     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
 }
 
@@ -7282,6 +7282,70 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
 
+static std::string InfusionPositionLabel(const AlterEgo::GearEdit::InfusionPosition& requirement) {
+    if(!requirement.attribute.empty())return std::string("Stat: ")+InfusionAttributeLabel(requirement.attribute);
+    if(!requirement.exactId)return "Exact: (choose item)";
+    const auto item=AlterEgo::GW2API::GetItemInfo(requirement.exactId);
+    const auto id="#"+std::to_string(requirement.exactId);
+    return item&&!item->name.empty()?"Exact: "+item->name+" ("+id+")":"Exact: "+id+" (metadata pending)";
+}
+static bool RenderInfusionPositionSelect(const std::string& label,bool selected) {
+    const float width=std::max(1.0f,ImGui::GetContentRegionAvail().x-
+        AlterEgo::UI::CompactButtonWidth("X")-ImGui::GetStyle().ItemSpacing.x);
+    const bool clicked=ImGui::Selectable(label.c_str(),selected,0,ImVec2(width,0));
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",label.c_str());
+    return clicked;
+}
+static bool RenderInfusionRemoveButton() {
+    ImGui::SameLine();
+    const bool clicked=AlterEgo::UI::SmallButton("X##removeInfusion");
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Remove infusion");
+    return clicked;
+}
+// Same local catalog, matching mode, full uint32 item IDs and display for both
+// private gear customization and native component editors.
+static void RenderInfusionPositionPicker(AlterEgo::GearEdit::InfusionPosition requirement,
+        uint32_t& exactInput,const char* query,float resultsHeight,
+        const std::function<void(const AlterEgo::GearEdit::InfusionPosition&)>& apply) {
+    const bool flexible=!requirement.attribute.empty();
+    if(ImGui::RadioButton("By Attribute",flexible)&&!flexible){requirement.attribute="Power";apply(requirement);}
+    ImGui::SameLine();
+    if(ImGui::RadioButton("Exact item",!flexible)&&flexible){
+        requirement.attribute.clear();exactInput=requirement.exactId;apply(requirement);
+    }
+    if(!requirement.attribute.empty()){
+        ImGui::TextWrapped("Matches any positive amount of this attribute. Agony resistance and cosmetic appearance are ignored.");
+        ImGui::BeginChild("##infusionAttributes",ImVec2(0,resultsHeight),true);
+        for(const auto* key:kInfusionStatNames){
+            const auto* label=InfusionAttributeLabel(key);
+            if(!AlterEgo::UI::CatalogMatches(label,"",query?query:""))continue;
+            if(ImGui::Selectable(label,requirement.attribute==key)){requirement.attribute=key;apply(requirement);}
+        }
+        ImGui::EndChild();
+        return;
+    }
+    ImGui::TextWrapped("%s",InfusionPositionLabel(requirement).c_str());
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::InputScalar("Item ID",ImGuiDataType_U32,&exactInput);
+    auto setExact=[&](uint32_t id){
+        requirement.exactId=id;requirement.attribute.clear();exactInput=id;apply(requirement);
+        if(id&&!AlterEgo::GW2API::GetItemInfo(id))AlterEgo::GW2API::FetchItemDetailsAsync({id});
+    };
+    if(exactInput&&RenderActionButton("Set exact ID"))setExact(exactInput);
+    if(query&&*query){
+        const auto entries=AlterEgo::GW2API::SearchKnownInfusions(query,100,false);
+        ImGui::BeginChild("##knownInfusions",ImVec2(0,resultsHeight),true);
+        for(const auto& entry:entries){
+            ImGui::PushID(static_cast<int>(entry.second));
+            const std::string label=entry.first+" (#"+std::to_string(entry.second)+")";
+            if(ImGui::Selectable(label.c_str(),requirement.exactId==entry.second))setExact(entry.second);
+            ImGui::PopID();
+        }
+        if(entries.empty())ImGui::TextDisabled("No cached matches. Enter an item ID instead.");
+        ImGui::EndChild();
+    }else ImGui::TextDisabled("Use Search to filter cached infusion names.");
+}
+
 // Clipboard is typed and local to Alter Ego. Copying across slot types never
 // transfers an incompatible exact item ID or overwrites a weapon type.
 using GearCopyField=AlterEgo::GearEdit::CopyField;
@@ -7775,35 +7839,18 @@ static void RenderGearCustomizeDialog() {
             AlterEgo::GetInfusionMode(*editBuild)==AlterEgo::InfusionMode::Slots) {
             ImGui::Spacing();
             ImGui::TextUnformatted("Infusions");
-            if (!gs.infusion_attributes.empty() &&
-                gs.infusion_attributes.size() != gs.infusion_ids.size())
-                gs.infusion_attributes.resize(gs.infusion_ids.size());
-            for (size_t i = 0; i < gs.infusion_ids.size(); ++i) {
-                const std::string attr = i < gs.infusion_attributes.size()
-                    ? gs.infusion_attributes[i] : std::string();
-                const uint32_t id = gs.infusion_ids[i];
-                const auto item = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
-                const std::string selected = !attr.empty()
-                    ? std::string("Stat: ") + InfusionAttributeLabel(attr)
-                    : (id ? (std::string("Exact: ") +
-                        (item ? item->name : "#" + std::to_string(id)))
-                          : "Exact: (choose item)");
-                const std::string label = "Slot " + std::to_string(i + 1) + ": " + selected;
+            for(size_t i=0;i<AlterEgo::GearEdit::InfusionPositionCount(gs);++i){
+                const auto req=AlterEgo::GearEdit::InfusionPositionAt(gs,i);
+                const auto& attr=req.attribute;const auto id=req.exactId;
+                const auto item=id?AlterEgo::GW2API::GetItemInfo(id):nullptr;
+                const auto label="Slot "+std::to_string(i+1)+": "+InfusionPositionLabel(req);
                 ImGui::PushID(static_cast<int>(i));
-                // Selectable defaults to the full column width. Reserve a separate
-                // hit area for Remove; long infusion names must not cover it.
-                const float removeWidth=AlterEgo::UI::CompactButtonWidth("X");
-                const float rowWidth=ImGui::GetContentRegionAvail().x;
-                const float selectWidth=std::max(1.0f,rowWidth-removeWidth-ImGui::GetStyle().ItemSpacing.x);
-                if (ImGui::Selectable(label.c_str(),
-                    g_GearSelectorTab == 3 && g_GearEditingInfusionIndex == static_cast<int>(i),
-                    0,ImVec2(selectWidth,0))) {
+                if(RenderInfusionPositionSelect(label,g_GearSelectorTab==3&&g_GearEditingInfusionIndex==static_cast<int>(i))){
                     g_GearSelectorTab = 3;
                     g_GearEditingInfusionIndex = static_cast<int>(i);
-                    g_GearExactInfusionId = static_cast<int>(id);
+                    g_GearExactInfusionId = id;
                     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
                 }
-                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",label.c_str());
                 bool removeInfusion = false;
                 if (ImGui::BeginPopupContextItem("##single_infusion_edit")) {
                     if(item)CopyNameMenuItem(item->name);
@@ -7816,13 +7863,9 @@ static void RenderGearCustomizeDialog() {
                         g_GearClipboard = snapshot;
                     const bool compatible = g_GearClipboard.valid &&
                         g_GearClipboard.field == GearCopyField::Infusions &&
-                        !g_GearClipboard.data.infusion_ids.empty();
+                        AlterEgo::GearEdit::InfusionPositionCount(g_GearClipboard.data)>0;
                     if (AlterEgo::UI::MenuAction("Paste",AlterEgo::UI::MenuIcon::Paste,compatible)) {
-                        gs.infusion_ids[i] = g_GearClipboard.data.infusion_ids.front();
-                        gs.infusion_attributes.resize(gs.infusion_ids.size());
-                        gs.infusion_attributes[i] = g_GearClipboard.data.infusion_attributes.empty()
-                            ? "" : g_GearClipboard.data.infusion_attributes.front();
-                        gs.infusion_snapshot = true; commitGear();
+                        if(AlterEgo::GearEdit::SetInfusionPosition(gs,i,AlterEgo::GearEdit::InfusionPositionAt(g_GearClipboard.data,0)))commitGear();
                     }
                     if (AlterEgo::UI::MenuAction("Fill This Item",AlterEgo::UI::MenuIcon::Copy,snapshot.valid))
                         ApplyGearClipboard(*editBuild,g_GearDialogSlot,snapshot);
@@ -7835,15 +7878,13 @@ static void RenderGearCustomizeDialog() {
                     if (AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete)) removeInfusion = true;
                     ImGui::EndPopup();
                 }
-                ImGui::SameLine();
-                const bool clickedRemove=AlterEgo::UI::SmallButton("X##removeInfusion");
-                if(ImGui::IsItemHovered())ImGui::SetTooltip("Remove infusion");
+                const bool clickedRemove=RenderInfusionRemoveButton();
                 if (clickedRemove || removeInfusion) {
                     if(AlterEgo::GearEdit::RemoveInfusion(gs,i)){
                         g_GearEditingInfusionIndex=AlterEgo::GearEdit::InfusionSelectionAfterRemoval(
-                            g_GearEditingInfusionIndex,i,gs.infusion_ids.size());
+                            g_GearEditingInfusionIndex,i,AlterEgo::GearEdit::InfusionPositionCount(gs));
                         g_GearExactInfusionId=g_GearEditingInfusionIndex>=0
-                            ?static_cast<int>(gs.infusion_ids[g_GearEditingInfusionIndex]):0;
+                            ?AlterEgo::GearEdit::InfusionPositionAt(gs,g_GearEditingInfusionIndex).exactId:0;
                         if(g_GearEditingInfusionIndex<0&&g_GearSelectorTab==3)g_GearSelectorTab=0;
                         commitGear();
                     }
@@ -7853,13 +7894,9 @@ static void RenderGearCustomizeDialog() {
                 ImGui::PopID();
             }
             const int maxSlots = GearInfusionCapacity(*editBuild,g_GearDialogSlot);
-            if (gs.infusion_ids.size() < static_cast<size_t>(maxSlots) &&
-                RenderActionButton("+ Add infusion")) {
-                gs.infusion_ids.push_back(0);
-                gs.infusion_attributes.resize(gs.infusion_ids.size());
-                gs.infusion_attributes.back() = "Power";
-                gs.infusion_snapshot = true;
-                g_GearEditingInfusionIndex = static_cast<int>(gs.infusion_ids.size() - 1);
+            if (AlterEgo::GearEdit::InfusionPositionCount(gs)<static_cast<size_t>(maxSlots)&&
+                RenderActionButton("+ Add infusion")&&AlterEgo::GearEdit::AddInfusionPosition(gs,maxSlots)) {
+                g_GearEditingInfusionIndex=static_cast<int>(AlterEgo::GearEdit::InfusionPositionCount(gs)-1);
                 g_GearExactInfusionId = 0;
                 g_GearSelectorTab = 3;
                 memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
@@ -7998,102 +8035,14 @@ static void RenderGearCustomizeDialog() {
             }
         }
 
-        else if (g_GearSelectorTab == 3 && !isRelic &&
-                 g_GearEditingInfusionIndex >= 0 &&
-                 g_GearEditingInfusionIndex < static_cast<int>(gs.infusion_ids.size())) {
-            // Edit one infusion requirement at a time. Names are searched
-            // locally from the existing item cache; a manual ID always works
-            // even if the catalog has not encountered that infusion yet.
-            const size_t index = static_cast<size_t>(g_GearEditingInfusionIndex);
-            gs.infusion_attributes.resize(gs.infusion_ids.size());
-            auto& attribute = gs.infusion_attributes[index];
-            const bool byAttribute = !attribute.empty();
-            ImGui::Text("Infusion slot %d", g_GearEditingInfusionIndex + 1);
-            if (ImGui::RadioButton("By Attribute", byAttribute)) {
-                if (!byAttribute) {
-                    attribute = "Power";
-                    gs.infusion_snapshot = true;
-                    commitGear();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::RadioButton("Exact item", !byAttribute)) {
-                if (byAttribute) {
-                    attribute.clear(); // Never discard the original captured ID.
-                    g_GearExactInfusionId = static_cast<int>(gs.infusion_ids[index]);
-                    gs.infusion_snapshot = true;
-                    commitGear();
-                }
-            }
-            if (!attribute.empty()) {
-                ImGui::TextWrapped("Match any positive amount of this attribute. "
-                    "Agony resistance and cosmetic appearance are ignored.");
-                static constexpr struct { const char* key; const char* label; } choices[] = {
-                    {"Power", "Power"}, {"Precision", "Precision"},
-                    {"ConditionDamage", "Condition Damage"},
-                    {"ConditionDuration", "Expertise"},
-                    {"BoonDuration", "Concentration"},
-                    {"Healing", "Healing Power"},
-                    {"Toughness", "Toughness"}, {"Vitality", "Vitality"},
-                    {"CritDamage", "Ferocity"}
-                };
-                ImGui::BeginChild("##infusionAttributes", ImVec2(0, -30), true);
-                for (const auto& choice : choices) {
-                    if (g_GearStatSearch[0]) {
-                        std::string needle = g_GearStatSearch;
-                        std::string label = choice.label;
-                        std::transform(needle.begin(), needle.end(), needle.begin(),
-                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                        std::transform(label.begin(), label.end(), label.begin(),
-                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                        if (label.find(needle) == std::string::npos) continue;
-                    }
-                    if (ImGui::Selectable(choice.label, attribute == choice.key)) {
-                        attribute = choice.key;
-                        gs.infusion_snapshot = true;
-                        commitGear();
-                    }
-                }
-                ImGui::EndChild();
-            } else {
-                const uint32_t exactId = gs.infusion_ids[index];
-                const auto exactInfo = exactId
-                    ? AlterEgo::GW2API::GetItemInfo(exactId) : nullptr;
-                ImGui::TextWrapped("Exact ID: %u (%s)", exactId,
-                    exactInfo ? exactInfo->name.c_str() : "name not cached");
-                ImGui::SetNextItemWidth(130.0f);
-                ImGui::InputInt("Item ID", &g_GearExactInfusionId, 0, 0);
-                if (g_GearExactInfusionId > 0 && RenderActionButton("Set exact ID")) {
-                    gs.infusion_ids[index] = static_cast<uint32_t>(g_GearExactInfusionId);
-                    gs.infusion_snapshot = true;
-                    AlterEgo::GW2API::FetchItemDetailsAsync({gs.infusion_ids[index]});
-                    commitGear();
-                }
-                const bool enrichment=g_GearDialogSlot=="Amulet";
-                ImGui::TextDisabled(enrichment?"Search enrichment catalog:":"Search infusion catalog:");
-                if (g_GearStatSearch[0]) {
-                    const auto entries = AlterEgo::GW2API::SearchKnownInfusions(
-                        g_GearStatSearch, 100, enrichment);
-                    ImGui::BeginChild("##knownInfusions", ImVec2(0, -30), true);
-                    for (const auto& entry : entries) {
-                        const std::string itemLabel = entry.first + " (ID " +
-                            std::to_string(entry.second) + ")";
-                        if (ImGui::Selectable(itemLabel.c_str(),
-                            gs.infusion_ids[index] == entry.second)) {
-                            gs.infusion_ids[index] = entry.second;
-                            g_GearExactInfusionId = static_cast<int>(entry.second);
-                            gs.infusion_snapshot = true;
-                            AlterEgo::GW2API::FetchItemDetailsAsync({entry.second});
-                            commitGear();
-                        }
-                    }
-                    if (entries.empty())
-                        ImGui::TextDisabled("No cached matches. Enter an item ID instead.");
-                    ImGui::EndChild();
-                } else {
-                    ImGui::TextDisabled("Use Search above to filter catalog names.");
-                }
-            }
+        else if(g_GearSelectorTab==3&&!isRelic&&g_GearEditingInfusionIndex>=0&&
+                static_cast<size_t>(g_GearEditingInfusionIndex)<AlterEgo::GearEdit::InfusionPositionCount(gs)){
+            const auto index=static_cast<size_t>(g_GearEditingInfusionIndex);
+            ImGui::Text("Infusion slot %d",g_GearEditingInfusionIndex+1);
+            RenderInfusionPositionPicker(AlterEgo::GearEdit::InfusionPositionAt(gs,index),
+                g_GearExactInfusionId,g_GearStatSearch,-30,[&](const auto& req){
+                    if(AlterEgo::GearEdit::SetInfusionPosition(gs,index,req))commitGear();
+                });
         }
 
         ImGui::EndTable();
@@ -8519,10 +8468,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     const auto* gearSlot = it != build.gear.end() ? &it->second : nullptr;
     size_t infusionCount = 0;
     if (gearSlot) {
-        for (size_t i = 0; i < gearSlot->infusion_ids.size(); ++i) {
-            const bool hasAttribute = i < gearSlot->infusion_attributes.size() &&
-                !gearSlot->infusion_attributes[i].empty();
-            if (hasAttribute || gearSlot->infusion_ids[i] != 0) ++infusionCount;
+        for(size_t i=0;i<AlterEgo::GearEdit::InfusionPositionCount(*gearSlot);++i){
+            const auto req=AlterEgo::GearEdit::InfusionPositionAt(*gearSlot,i);
+            if(req.exactId||!req.attribute.empty())++infusionCount;
         }
     }
 
@@ -8706,19 +8654,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.62f, 0.88f, 1.0f, 1.0f),
                 "Infusions (%zu)", infusionCount);
-            for (size_t i = 0; i < gearSlot->infusion_ids.size(); ++i) {
-                const uint32_t id = gearSlot->infusion_ids[i];
-                const std::string attribute = i < gearSlot->infusion_attributes.size()
-                    ? gearSlot->infusion_attributes[i] : std::string();
-                if (!attribute.empty()) {
-                    ImGui::BulletText("Any %s infusion", InfusionAttributeLabel(attribute));
-                } else if (id != 0) {
-                    const auto info = AlterEgo::GW2API::GetItemInfo(id);
-                    if (info && !info->name.empty())
-                        ImGui::BulletText("%s (exact)", info->name.c_str());
-                    else
-                        ImGui::BulletText("Infusion #%u (exact)", id);
-                }
+            for(size_t i=0;i<AlterEgo::GearEdit::InfusionPositionCount(*gearSlot);++i){
+                const auto req=AlterEgo::GearEdit::InfusionPositionAt(*gearSlot,i);
+                if(req.exactId||!req.attribute.empty())ImGui::BulletText("%s",InfusionPositionLabel(req).c_str());
             }
         }
         ImGui::EndTooltip();
@@ -9078,14 +9016,15 @@ static void PollBuildSource() {
     if (build.chat_link.empty() && AlterEgo::GW2API::HasPaletteData(build.profession))
         build.chat_link = AlterEgo::GW2API::EncodeSavedBuildToChatLink(build);
     if (received.refresh) {
-        if (AlterEgo::GW2API::RefreshSavedBuildFromSource(received.targetId, build)) {
+        std::string refreshReason;
+        if (AlterEgo::GW2API::RefreshSavedBuildFromSource(received.targetId, build,&refreshReason)) {
             g_LibDetailsFetched = false;
             g_EditDraftId.clear();
             if (APIDefs) APIDefs->GUI_SendAlert(
                 received.page.sourceUrl.find("metabattle.com") != std::string::npos
                     ? "MetaBattle build refreshed." : "Snow Crows build refreshed.");
         } else {
-            g_BuildSourceRefreshError = "Could not update the original saved build.";
+            g_BuildSourceRefreshError = refreshReason.empty()?"Could not update the original saved build.":refreshReason;
         }
     } else {
         // Optional user-provided import name overrides the page's full title.

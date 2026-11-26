@@ -38,9 +38,9 @@ inline std::vector<std::string> SortedGearSlots(const Json& gear) {
 inline std::string SafeNameOrId(const Json& value, const char* nameKey,
                                 const char* idKey) {
     const auto name = value.find(nameKey);
-    if (name != value.end() && name->is_string() && !name->get<std::string>().empty())
-        return name->get<std::string>();
     const auto id = value.find(idKey);
+    if (name != value.end() && name->is_string() && !name->get<std::string>().empty())
+        return name->get<std::string>()+(id!=value.end()&&id->is_number_integer()&&*id!=0?" (#"+id->dump()+")":"");
     if (id != value.end() && id->is_number_integer() && *id != 0)
         return "#" + id->dump();
     return {};

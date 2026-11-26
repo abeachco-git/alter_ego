@@ -349,69 +349,59 @@ static bool ComponentNativeSlotAllowed(const std::string& kind,
 }
 
 static void ComponentNativeInfusionSlots(ComponentJson& part,const std::string& slot) {
-    // Preserve unfamiliar imported formats instead of converting them merely
-    // because the user opened the graphical editor.
-    if ((part.contains("infusion_ids") && !part["infusion_ids"].is_array()) ||
-        (part.contains("infusion_attributes") &&
-         !part["infusion_attributes"].is_array())) {
-        ImGui::TextDisabled("Unsupported infusion array format; preserved.");
-        return;
+    using namespace AlterEgo;
+    using namespace AlterEgo::GearEdit;
+    BuildGearSlot value;
+    if(!ReadComponentField(part,CopyField::Infusions,false,value,false)){
+        ImGui::TextDisabled("Unsupported infusion fields; preserved.");return;
     }
-    // Optional infusion arrays must stay absent until an actual edit.
-    ComponentJson ids = part.contains("infusion_ids") &&
-        part["infusion_ids"].is_array() ? part["infusion_ids"] : ComponentJson::array();
-    ComponentJson attrs = part.contains("infusion_attributes") &&
-        part["infusion_attributes"].is_array() ? part["infusion_attributes"] : ComponentJson::array();
-    while (attrs.size() < ids.size()) attrs.push_back("");
-    int remove = -1;
-    for (size_t i = 0; i < ids.size(); ++i) {
+    bool changed=false;
+    static std::string query;
+    static uint32_t input=0;
+    for(size_t i=0;i<InfusionPositionCount(value);++i){
         ImGui::PushID(static_cast<int>(i));
-        ComponentJson value = {{"id", ids[i]}};
-        ComponentNativeNumber(value, "id", "Infusion item ID");
-        if (value["id"] != ids[i]) {
-            ids[i] = value["id"];
-            part["infusion_ids"] = ids;
+        const auto req=InfusionPositionAt(value,i);
+        const auto label="Slot "+std::to_string(i+1)+": "+InfusionPositionLabel(req);
+        if(RenderInfusionPositionSelect(label,false)){
+            input=req.exactId;query.clear();ImGui::OpenPopup("##component_infusion_picker");
         }
-        ImGui::SameLine();
-        if (RenderActionButton("Remove##infusion")) remove = static_cast<int>(i);
-        ComponentJson attribute = {{"name", attrs[i]}};
-        ComponentNativeText(attribute, "name", "Attribute");
-        if (attribute["name"] != attrs[i]) {
-            attrs[i] = attribute["name"];
-            part["infusion_attributes"] = attrs;
+        bool remove=false;
+        if(ImGui::BeginPopupContextItem("##component_infusion_context")){
+            const auto item=req.exactId?GW2API::GetItemInfo(req.exactId):nullptr;
+            if(item){CopyNameMenuItem(item->name);ImGui::Separator();}
+            if(AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete))remove=true;
+            ImGui::EndPopup();
+        }
+        remove=RenderInfusionRemoveButton()||remove;
+        ImGui::SetNextWindowSize(ImVec2(340,0),ImGuiCond_Appearing);
+        if(ImGui::BeginPopup("##component_infusion_picker")){
+            AlterEgo::UI::SearchField("component_infusion_search","Search...",query);
+            RenderInfusionPositionPicker(InfusionPositionAt(value,i),input,query.c_str(),180,
+                [&](const auto& next){changed=SetInfusionPosition(value,i,next)||changed;});
+            ImGui::EndPopup();
+        }
+        if(remove){
+            changed=RemoveInfusion(value,i)||changed;
+            ImGui::PopID();break;
         }
         ImGui::PopID();
     }
-    if (remove >= 0) {
-        ids.erase(ids.begin() + remove);
-        attrs.erase(attrs.begin() + remove);
-        part["infusion_ids"] = ids;
-        if (part.contains("infusion_attributes") || !attrs.empty())
-            part["infusion_attributes"] = attrs;
-        part["infusion_snapshot"]=true;part.erase("infusion");
-    }
-    // A standalone upgrade component may not know the weapon or exact item.
-    // Enforce the physical upper bound; keep imported over-capacity values
-    // visible and do not trim them merely by opening the editor.
-    int capacity=AlterEgo::GearEdit::InfusionCapacity(slot,true);
+    // Unknown item capacity uses the slot's physical upper bound, not a
+    // claim that every item has that many sockets. Imported excess is kept.
+    int capacity=InfusionCapacity(slot,true);
     const auto exact=part.value("item_id",uint32_t(0));
     if(exact){
-        const auto info=AlterEgo::GW2API::GetItemInfo(exact);
+        const auto info=GW2API::GetItemInfo(exact);
         if(info&&info->details.is_object()&&info->details.contains("infusion_slots")&&
            info->details["infusion_slots"].is_array())
             capacity=std::min(capacity,static_cast<int>(info->details["infusion_slots"].size()));
     }
-    if(static_cast<int>(ids.size())>capacity)ImGui::TextDisabled("Imported requirements exceed known capacity; preserved.");
-    if (static_cast<int>(ids.size())<capacity && RenderActionButton("Add infusion##component")) {
-        ids.push_back(0);
-        attrs.push_back("");
-        part["infusion_ids"] = ids;
-        part["infusion_attributes"] = attrs;
-        part["infusion_snapshot"]=true;part.erase("infusion");
-    }
-    bool snapshot = part.value("infusion_snapshot", false);
-    if (ImGui::Checkbox("Recorded equipment snapshot", &snapshot))
-        part["infusion_snapshot"] = snapshot;
+    if(InfusionPositionCount(value)>static_cast<size_t>(capacity))
+        ImGui::TextDisabled("Imported requirements exceed known capacity; preserved.");
+    if(InfusionPositionCount(value)<static_cast<size_t>(capacity)&&RenderActionButton("+ Add infusion##component"))
+        changed=AddInfusionPosition(value,capacity)||changed;
+    if(!value.infusion.empty())ImGui::TextDisabled("Legacy infusion: %s",value.infusion.c_str());
+    if(changed)WriteComponentField(part,CopyField::Infusions,false,value);
 }
 
 // Reuse the same database-backed upgrade catalogs as the traditional
@@ -801,7 +791,6 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         }
         if (kind == "infusions" || water) {
             ComponentNativeInfusionSlots(item,slot);
-            ComponentNativeText(item, "infusion", "Legacy infusion label");
         }
         if (ImGui::TreeNode("##slot_exact", "Exact stored slot fields (read only)")) {
             for (auto field = item.begin(); field != item.end(); ++field)

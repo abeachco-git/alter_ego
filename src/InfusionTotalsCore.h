@@ -95,6 +95,23 @@ template<class Build> void RestoreSlotInfusions(Build& b,const Build& previous) 
         s.infusion_snapshot=v.infusion_snapshot;s.infusion=v.infusion;
     }
 }
+// Until source review/merge is implemented, never refresh a source-backed
+// Loadout over local slot choices. Aggregate manual targets stay authoritative.
+template<class Build> bool PreserveInfusionModeOnSourceRefresh(const Build& old,Build& incoming) {
+    const auto mode=GetInfusionMode(old);
+    if(mode==InfusionMode::Conflict)return false;
+    if(mode==InfusionMode::Slots){
+        for(const auto& entry:old.gear)
+            if(InfusionSlotEligible(entry.first)&&HasSlotInfusionData(entry.second))return false;
+    }else if(old.infusion_summary_present){
+        incoming.infusion_summary_present=true;incoming.infusion_ar_total=old.infusion_ar_total;
+        incoming.infusion_stat_totals=old.infusion_stat_totals;
+        incoming.infusion_totals=old.infusion_totals;
+    }else if(incoming.infusion_totals.empty()&&!incoming.infusion_summary_present){
+        incoming.infusion_totals=old.infusion_totals;
+    }
+    return true;
+}
 inline int AgonyRequirement(int savedTotal) {
     return std::min(150, std::max(0, savedTotal));
 }

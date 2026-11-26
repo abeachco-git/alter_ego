@@ -23,6 +23,7 @@
 #include "BuildGroupOrder.h"
 #include "NativeLibraryStore.h"
 #include "NativeLibraryEditing.h"
+#include "InfusionTotalsCore.h"
 #include "LibraryBackup.h"
 
 #include <windows.h>
@@ -1987,7 +1988,7 @@ namespace AlterEgo {
         });
         return ok?position:-1;
     }
-    bool GW2API::RefreshSavedBuildFromSource(const std::string& id,const SavedBuild& updated) {
+    bool GW2API::RefreshSavedBuildFromSource(const std::string& id,const SavedBuild& updated,std::string* reason) {
         return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
             auto* l=Composable::FindLoadout(doc,id);json raw;SavedBuild old;
             if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,old)||
@@ -1995,7 +1996,10 @@ namespace AlterEgo {
             auto merged=updated;merged.id=old.id;merged.name=old.name;merged.notes=old.notes;
             merged.game_mode=old.game_mode;merged.game_modes=old.game_modes;
             merged.created=old.created;merged.source_character=old.source_character;
-            if(old.infusion_summary_present){merged.infusion_summary_present=true;merged.infusion_ar_total=old.infusion_ar_total;merged.infusion_stat_totals=old.infusion_stat_totals;}
+            if(!PreserveInfusionModeOnSourceRefresh(old,merged)){
+                if(reason)*reason="Refresh would replace local infusion requirements. Keep the current Loadout until source-change review is available.";
+                return Composable::Fail(error,"Source refresh would replace local infusion requirements.");
+            }
             return NativeLibrary::PutLoadout(doc,NativeLibrary::PatchDraft(raw,SerializeSavedBuild(old),SerializeSavedBuild(merged)),error,LookupComponentDisplayName);
         });
     }

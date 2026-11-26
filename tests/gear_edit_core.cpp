@@ -83,6 +83,21 @@ int case_gear_edit_core(int, char**) {
     CopySigils(dst,src,2); assert(dst.sigil2_id == 2);
     CopySigils(dst,src,1); assert(dst.sigil2_id == 0);
     assert(InfusionCapacity("WeaponB2",false,true) == 0);
+    assert(InfusionCapacity("WeaponB2",true)==1);
+    assert(InfusionCapacity("WeaponAquaticA",false)==2);
+    Slot flexible;flexible.infusion_attributes={"Power","Precision"};flexible.infusion="old";
+    assert(InfusionPositionCount(flexible)==2&&InfusionPositionAt(flexible,1).attribute=="Precision");
+    assert(SetInfusionPosition(flexible,0,{4294967295u,""}));
+    assert(flexible.infusion_ids[0]==4294967295u&&flexible.infusion_attributes[1]=="Precision");
+    assert(flexible.infusion_snapshot&&flexible.infusion.empty());
+    assert(!AddInfusionPosition(flexible,2));
+    assert(AddInfusionPosition(flexible,3)&&InfusionPositionAt(flexible,2).attribute=="Power");
+    assert(RemoveInfusion(flexible,1)&&InfusionPositionCount(flexible)==2);
+    GearJson data={{"gear",{{"Helm",{{"infusion_ids",GearJson::array({11})},{"extension",42}}},
+                              {"Ring1",{{"infusion_snapshot",true}}},{"Ring2",GearJson::object()}}}};
+    ClearComponentInfusionSlots(data);
+    assert(data["gear"]["Helm"]["extension"]==42&&!data["gear"]["Helm"].contains("infusion_ids"));
+    assert(!data["gear"].contains("Ring1")&&data["gear"].contains("Ring2"));
     Slot weapon;
     weapon.weapon_type="Sword";weapon.item_id=42;weapon.sigil2_id=77;weapon.infusion_ids={1,2};
     auto same=AlterEgo::EquipmentChoice::PlanWeaponChange("WeaponA1","Sword","Sword",false);

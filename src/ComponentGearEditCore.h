@@ -9,10 +9,13 @@ using GearJson=nlohmann::json;
 // Infusions component owns only terrestrial infusion fields, not aquatic gear.
 inline void ClearComponentInfusionSlots(GearJson& data) {
     if(!data.contains("gear")||!data["gear"].is_object())return;
-    for(auto& slot:data["gear"])if(slot.is_object())
-        for(const char* key:{"infusion_ids","infusion_attributes","infusion_snapshot","infusion"})slot.erase(key);
     auto& gear=data["gear"];
-    for(auto it=gear.begin();it!=gear.end();)if(it.value().is_object()&&it.value().empty())it=gear.erase(it);else ++it;
+    for(auto it=gear.begin();it!=gear.end();){
+        bool removed=false;
+        if(it.value().is_object())for(const char* key:{"infusion_ids","infusion_attributes","infusion_snapshot","infusion"})
+            removed=it.value().erase(key)>0||removed;
+        if(removed&&it.value().empty())it=gear.erase(it);else ++it;
+    }
     if(gear.empty())data.erase("gear");
 }
 inline void ClearComponentInfusionTotals(GearJson& data) {

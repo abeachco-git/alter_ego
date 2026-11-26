@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include "EquipmentChoiceCore.h"
@@ -53,7 +54,9 @@ inline int InfusionCapacity(const std::string& slot, bool twoHanded, bool blocke
     if (blocked || slot == "Amulet" || slot == "Relic") return 0;
     if (slot == "Ring1" || slot == "Ring2") return 3;
     if (slot == "Backpack") return 2;
-    if (slot.rfind("Weapon",0) == 0 || EquipmentChoice::IsAquaticWeaponSlot(slot)) return twoHanded ? 2 : 1;
+    if (slot=="WeaponA2"||slot=="WeaponB2")return 1;
+    if (EquipmentChoice::IsAquaticWeaponSlot(slot))return 2;
+    if (slot.rfind("Weapon",0) == 0) return twoHanded ? 2 : 1;
     return 1;
 }
 template<class T> std::vector<T> FillPattern(const std::vector<T>& pattern, int capacity) {
@@ -63,17 +66,41 @@ template<class T> std::vector<T> FillPattern(const std::vector<T>& pattern, int 
         result.push_back(pattern[static_cast<size_t>(i) % pattern.size()]);
     return result;
 }
+// The paired arrays are normalized only on deliberate edits, not inspection.
+struct InfusionPosition { uint32_t exactId=0; std::string attribute; };
+template<class Slot> size_t InfusionPositionCount(const Slot& s) {
+    return std::max(s.infusion_ids.size(),s.infusion_attributes.size());
+}
+template<class Slot> InfusionPosition InfusionPositionAt(const Slot& s,size_t i) {
+    return {i<s.infusion_ids.size()?s.infusion_ids[i]:0,
+        i<s.infusion_attributes.size()?s.infusion_attributes[i]:std::string{}};
+}
+template<class Slot> void NormalizeInfusionPositions(Slot& s) {
+    const auto n=InfusionPositionCount(s);
+    s.infusion_ids.resize(n);s.infusion_attributes.resize(n);
+}
+template<class Slot> void MarkInfusionSnapshot(Slot& s) {
+    s.infusion_snapshot=true;s.infusion.clear();
+}
+template<class Slot> bool SetInfusionPosition(Slot& s,size_t i,const InfusionPosition& next) {
+    if(i>=InfusionPositionCount(s))return false;
+    const auto previous=InfusionPositionAt(s,i);
+    if(previous.exactId==next.exactId&&previous.attribute==next.attribute)return false;
+    NormalizeInfusionPositions(s);s.infusion_ids[i]=next.exactId;s.infusion_attributes[i]=next.attribute;
+    MarkInfusionSnapshot(s);return true;
+}
+template<class Slot> bool AddInfusionPosition(Slot& s,int capacity) {
+    if(capacity<=0||InfusionPositionCount(s)>=static_cast<size_t>(capacity))return false;
+    NormalizeInfusionPositions(s);s.infusion_ids.push_back(0);s.infusion_attributes.push_back("Power");
+    MarkInfusionSnapshot(s);return true;
+}
 // Removal is an explicit recorded empty snapshot, not unknown data.
-template<class Slot> bool RemoveInfusion(Slot& slot, size_t index) {
-    if(index>=slot.infusion_ids.size())return false;
-    slot.infusion_ids.erase(slot.infusion_ids.begin()+index);
-    if(index<slot.infusion_attributes.size())
-        slot.infusion_attributes.erase(slot.infusion_attributes.begin()+index);
-    if(!slot.infusion_attributes.empty())
-        slot.infusion_attributes.resize(slot.infusion_ids.size());
-    slot.infusion_snapshot=true;
-    slot.infusion.clear();
-    return true;
+template<class Slot> bool RemoveInfusion(Slot& s,size_t index) {
+    if(index>=InfusionPositionCount(s))return false;
+    NormalizeInfusionPositions(s);
+    s.infusion_ids.erase(s.infusion_ids.begin()+index);
+    s.infusion_attributes.erase(s.infusion_attributes.begin()+index);
+    MarkInfusionSnapshot(s);return true;
 }
 // Keep selection on the same surviving requirement where possible.
 inline int InfusionSelectionAfterRemoval(int selected,size_t removed,size_t remaining) {
