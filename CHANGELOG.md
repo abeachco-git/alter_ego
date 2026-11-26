@@ -39,7 +39,8 @@ This is a draft for the experimental branch, not a published or fully validated 
 - Disabled external one-time-code relay sharing and imports by default; local sharing remains available.
 
 - Native SQLite storage for durable library data and rebuildable caches.
-- More consistent searches, filters, resizable panels, navigation and refresh feedback.
+- Consistent multi-word and typo-tolerant searches, exact numeric inventory identifiers, persistent group expansion, Library selection reveal, and standard Wallet and Guild Bank catalog rows with sorting and balances.
+- More consistent filters, resizable panels, navigation and refresh feedback.
 - Account-aware data retrieval, per-dataset refresh preferences and independent Vault period storage.
 - Independent project documentation, MIT license and third-party notices, including Wiki contributor credit and reference dataset source attribution.
 
