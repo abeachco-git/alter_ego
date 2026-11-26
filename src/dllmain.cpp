@@ -70,6 +70,7 @@
 #include "EquipmentTabCore.h"
 #include "EquipmentChoiceCore.h"
 #include "GearEditCore.h"
+#include "ComponentGearEditCore.h"
 #include "SkillEditCore.h"
 #include "RefreshUI.h"
 #include "CacheDatabase.h"
@@ -7277,7 +7278,7 @@ static const char* InfusionAttributeLabel(const std::string& attribute);
 
 // Clipboard is typed and local to Alter Ego. Copying across slot types never
 // transfers an incompatible exact item ID or overwrites a weapon type.
-enum class GearCopyField { All, Stats, Upgrade, Infusions, Relic };
+using GearCopyField=AlterEgo::GearEdit::CopyField;
 struct GearClipboard {
     bool valid = false;
     GearCopyField field = GearCopyField::All;

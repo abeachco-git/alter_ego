@@ -506,6 +506,54 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,
     }
 }
 
+// Field-level clipboard adapters use the same typed clipboard and mutation
+// functions as the parent Loadout. Exact raw slot copy remains a separate
+// same-component/same-position action so extensions cannot cross slot types.
+static bool ComponentGearCanPaste(const ComponentJson& part,const std::string& kind,
+    const std::string& slot,const GearClipboard& clip){
+    using namespace AlterEgo::GearEdit;
+    if(!clip.valid||!ComponentOwnsField(kind,slot,clip.field))return false;
+    if(clip.field==GearCopyField::Upgrade&&
+       ((IsArmorSlot(slot)!=IsArmorSlot(clip.slot))||(!IsArmorSlot(slot)&&!IsWeaponSlot(slot))))return false;
+    AlterEgo::BuildGearSlot checked;
+    return ReadComponentField(part,clip.field,IsArmorSlot(slot),checked,false);
+}
+static GearClipboard ComponentGearCapture(const ComponentJson& part,const std::string& kind,
+    const std::string& slot,GearCopyField field){
+    using namespace AlterEgo::GearEdit;
+    GearClipboard clip;clip.field=field;clip.slot=slot;
+    clip.valid=ComponentOwnsField(kind,slot,field)&&ReadComponentField(part,field,IsArmorSlot(slot),clip.data);
+    return clip;
+}
+static bool ComponentGearApply(ComponentJson& part,const std::string& kind,const std::string& slot,
+    const std::string& profession,const GearClipboard& clip){
+    using namespace AlterEgo::GearEdit;
+    if(!ComponentGearCanPaste(part,kind,slot,clip))return false;
+    const std::string type=part.value("weapon_type",std::string());
+    const bool weapon=IsWeaponSlot(slot);
+    const bool knownTwo=weapon&&!type.empty()&&IsWeaponTwoHanded(profession,type);
+    const bool knownWeapon=weapon&&!type.empty();
+    int capacity=1;
+    if(clip.field==GearCopyField::Upgrade&&weapon){
+        const bool second=clip.data.sigil2_id||!clip.data.sigil2.empty();
+        capacity=IsOffhandSlot(slot)?1:knownWeapon?(knownTwo?2:1):second?2:1;
+    }
+    if(clip.field==GearCopyField::Infusions){
+        const bool exactItem=part.contains("item_id")&&part["item_id"].is_number_integer();
+        capacity=InfusionCapacity(slot,knownWeapon?knownTwo:!IsOffhandSlot(slot));
+        if(exactItem){
+            const auto info=AlterEgo::GW2API::GetItemInfo(part["item_id"].get<uint32_t>());
+            if(info&&info->details.is_object()&&info->details.contains("infusion_slots")&&info->details["infusion_slots"].is_array())
+                capacity=std::min(capacity,static_cast<int>(info->details["infusion_slots"].size()));
+        }
+        // With no confirmed item capacity, retain the source pattern rather
+        // than filling hypothetical additional sockets.
+        if(!exactItem&&!(knownWeapon&&knownTwo))
+            capacity=std::min(capacity,std::max(1,static_cast<int>(std::max(clip.data.infusion_ids.size(),clip.data.infusion_attributes.size()))));
+    }
+    return ApplyComponentField(part,clip.field,IsArmorSlot(slot),clip.data,capacity);
+}
+
 // Same canonical slot order and readable details as Components > Inventory.
 // Graphical choice controls below reuse the original Loadout's profession,
 // stat, item, rune/sigil and relic metadata; all writes target only the draft.
@@ -589,45 +637,32 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         }
         if (ImGui::BeginPopupContextItem("##native_slot_context")) {
             ComponentStoredNameActions(data["gear"].at(slot));
-            if (ImGui::MenuItem("Copy")) {
-                copiedSlot = data["gear"].at(slot);
-                copiedKind = kind;
-                copiedFrom = slot;
+            auto capture=[&](GearCopyField field){return ComponentGearCapture(data["gear"].at(slot),kind,slot,field);};
+            if(ImGui::BeginMenu("Copy")){
+                if(ImGui::MenuItem("Exact slot")){
+                    copiedSlot=data["gear"].at(slot);copiedKind=kind;copiedFrom=slot;
+                }
+                for(const auto& choice:std::array<std::pair<GearCopyField,const char*>,3>{{
+                    {GearCopyField::Stats,"Stats"},{GearCopyField::Upgrade,"Rune / Sigils"},{GearCopyField::Infusions,"Infusions"}}}){
+                    auto clip=capture(choice.first);
+                    if(ImGui::MenuItem(choice.second,nullptr,false,clip.valid))g_GearClipboard=clip;
+                }
+                ImGui::EndMenu();
             }
-            const bool compatible = copiedKind == kind && copiedSlot.is_object() &&
-                (copiedFrom == slot || kind == "armor" || kind == "trinkets" || kind == "runes");
-            if (ImGui::MenuItem("Paste",nullptr,false,compatible)) {
-                if (copiedFrom == slot) data["gear"][slot] = copiedSlot;
-                else {
-                    auto& dest = data["gear"][slot];
-                    if (dest.is_object()) {
-                        if (kind == "runes") {
-                            for (const char* field : {"rune","rune_id"}) {
-                                if (copiedSlot.contains(field)) dest[field] = copiedSlot[field];
-                                else dest.erase(field);
-                            }
-                        } else {
-                            for (const char* field : {"stat_id","stat_name"}) {
-                                if (copiedSlot.contains(field)) dest[field] = copiedSlot[field];
-                                else dest.erase(field);
-                            }
-                        }
+            if(ImGui::MenuItem("Paste",nullptr,false,ComponentGearCanPaste(data["gear"].at(slot),kind,slot,g_GearClipboard)))
+                ComponentGearApply(data["gear"][slot],kind,slot,profession,g_GearClipboard);
+            if(ImGui::MenuItem("Paste Exact Slot",nullptr,false,copiedKind==kind&&copiedFrom==slot&&copiedSlot.is_object()))
+                data["gear"][slot]=copiedSlot;
+            if(ImGui::BeginMenu("Copy to All Recorded Slots")){
+                for(const auto& choice:std::array<std::pair<GearCopyField,const char*>,3>{{
+                    {GearCopyField::Stats,"Stats"},{GearCopyField::Upgrade,"Rune / Sigils"},{GearCopyField::Infusions,"Infusions"}}}){
+                    auto clip=capture(choice.first);
+                    if(ImGui::MenuItem(choice.second,nullptr,false,clip.valid)){
+                        for(auto entry=data["gear"].begin();entry!=data["gear"].end();++entry)
+                            if(entry.key()!=slot)ComponentGearApply(entry.value(),kind,entry.key(),profession,clip);
                     }
                 }
-            }
-            if ((kind == "armor" || kind == "trinkets" || kind == "runes") &&
-                ImGui::MenuItem("Copy to All Recorded Slots")) {
-                const auto source = data["gear"].at(slot);
-                if (source.is_object()) for (auto& dest : data["gear"]) {
-                    if (!dest.is_object()) continue;
-                    const std::vector<const char*> fields = kind == "runes"
-                        ? std::vector<const char*>{"rune","rune_id"}
-                        : std::vector<const char*>{"stat_id","stat_name"};
-                    for (const char* field : fields) {
-                        if (source.contains(field)) dest[field] = source[field];
-                        else dest.erase(field);
-                    }
-                }
+                ImGui::EndMenu();
             }
             if (ImGui::MenuItem("Clear Slot")) {
                 g_ComponentGearSelectedSlot = slot;

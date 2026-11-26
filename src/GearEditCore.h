@@ -6,6 +6,7 @@
 #include "EquipmentChoiceCore.h"
 
 namespace AlterEgo { namespace GearEdit {
+enum class CopyField { All, Stats, Upgrade, Infusions, Relic };
 // A child gear editor works on a private draft. Applying it updates only
 // equipment fields, preserving concurrent metadata/build edits on the parent.
 template<class Build> void ApplyEquipmentDraft(Build& parent,const Build& draft) {

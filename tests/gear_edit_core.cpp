@@ -1,4 +1,5 @@
 #include "../src/GearEditCore.h"
+#include "../src/ComponentGearEditCore.h"
 #include <cassert>
 #include <cstdint>
 #include <map>
@@ -35,6 +36,16 @@ int case_gear_edit_core(int, char**) {
     CopyStats(dst,src);CopyRune(dst,src);
     assert(dst.stat_id==1130&&dst.stat_name=="Berserker"&&dst.rune_id==9&&dst.rune=="Scholar");
     ClearInfusions(dst);assert(dst.infusion_snapshot&&dst.infusion_ids.empty());
+    GearJson partial={{"stat_id",1130},{"stat_name","Berserker"},{"future",42}};
+    Slot typed{};assert(ReadComponentField(partial,CopyField::Stats,true,typed));
+    GearJson target={{"item_id",7},{"future",99}};
+    assert(ApplyComponentField(target,CopyField::Stats,true,typed,1));
+    assert(target["stat_id"]==1130&&target["item_id"]==7&&target["future"]==99);
+    target["stat_id"]="unknown";
+    const auto unchanged=target;
+    assert(!ApplyComponentField(target,CopyField::Stats,true,typed,1)&&target==unchanged);
+    assert(ComponentOwnsField("aquatic","HelmAquatic",CopyField::Upgrade));
+    assert(!ComponentOwnsField("armor","Helm",CopyField::Upgrade));
     Slot removal;
     removal.infusion_ids={11,22,33};
     removal.infusion_attributes={"Power","","Precision"};
