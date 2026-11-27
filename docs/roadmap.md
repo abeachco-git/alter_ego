@@ -6,11 +6,7 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 ## Application-wide consistency audit — Part 4
 
-D2 requires separate explicit approval; the remaining D1 regression coverage is approved. Reuse the current comparison, exact-identity and activity-scheduler foundations; this is not a blanket refactor. Findings below are source-level evidence, not completed runtime fixes.
-
-### D1 — Remaining regression coverage (approved)
-
-- [ ] Add dedicated native Library/editing fixtures for reordered-utility functional equivalence versus exact payload reuse, and navigation fixtures for account-qualified Compare destinations and restoration. The existing suites passed, but these additional targeted regressions were not added in the D1 implementation batch. Preserve current storage and navigation semantics; independently verify any resulting changes.
+D2 requires separate explicit approval. Reuse the current comparison, exact-identity and activity-scheduler foundations; this is not a blanket refactor. Findings below are source-level evidence, not completed runtime fixes.
 
 ### D2 — Freshness and status policy consistency (high impact; separate approval)
 
@@ -23,11 +19,11 @@ D2 requires separate explicit approval; the remaining D1 regression coverage is 
 
 - Preserve existing visuals, stable Nexus ImGui 1.80 ABI, thread ownership, exact component/storage semantics, bounded inputs and existing clipboard/HTTP ownership. Reuse the established domain helpers instead of introducing parallel engines.
 - D2 remains proposed; agree on individual behavior decisions and obtain separate package approval before implementation. A handoff is not approval. Remove completed items only after required automated verification and DLL delivery; deferred live validation belongs in development status. Follow AGENTS.md.
-- Keep the remaining Library and freshness/metadata programs below intact; D1 and D2 do not authorize unrelated work.
+- Keep the remaining Library and freshness/metadata programs below intact; D2 does not authorize unrelated work.
 
 ## Application-wide consistency audit — Part 5 (proposed)
 
-- [ ] **Dropdown context menus and consistency:** audit all application dropdowns, including closed selected values and selectable entries, for useful entity-specific context actions. Reuse shared selector controls, context-menu icons/grouping, domain action handlers and navigation; establish a consistent pattern for right-click targets without changing selection or acting on the wrong entity. Review appropriate Compare, Open in Library, copy, reset/clear and existing entity actions rather than inventing actions or forcing menus on simple sort/settings controls. Preserve stable ImGui IDs, keyboard behavior, disabled states, account/reference identity and narrow layouts. The D1 Loadout selector may establish the pattern; application-wide adoption is separately proposed and requires approval. Extend existing regression coverage and follow DLL verification requirements if implemented.
+- [ ] **Dropdown context menus and consistency:** audit all application dropdowns, including closed selected values and selectable entries, for useful entity-specific context actions. Reuse shared selector controls, context-menu icons/grouping, domain action handlers and navigation; establish a consistent pattern for right-click targets without changing selection or acting on the wrong entity. Review appropriate Compare, Open in Library, copy, reset/clear and existing entity actions rather than inventing actions or forcing menus on simple sort/settings controls. Preserve stable ImGui IDs, keyboard behavior, disabled states, account/reference identity and narrow layouts. The Character Loadout selector establishes an initial pattern; application-wide adoption is separately proposed and requires approval. Extend existing regression coverage and follow DLL verification requirements if implemented.
 
 - [ ] **Tooltip consistency and shared presentation (discussion first):** audit application-wide tooltip call sites and existing helpers (including `UI::TooltipText`, native ImGui hover/tooltip calls, item/skill/trait/stat/catalog renderers and RefreshUI). Inventory findings by domain and prioritize duplicate implementations, inconsistent triggers, missing explanations and conflicting hover targets. Propose a small set of reusable patterns: concise control/action hints; disabled-action reasons; full text for clipped labels; rich entity details; comparison/configuration-health explanations; freshness, price and retrieval diagnostics. Standardize where appropriate titles, wrapping/maximum width, spacing, colors, delay, disabled hover, icon/row hit targets, and formatting of unknown, empty, stale or unverified data. Preserve intentionally different rich content and native Nexus/ImGui 1.80 behavior; do not add tooltips to self-explanatory controls or replace important visible information with hover-only content. Audit all pages, dialogs, editors, dropdowns, context menus and popouts, including narrow layouts and adjacent/nested hover targets. Reuse canonical domain evidence and scheduler status rather than duplicating calculations or wording that belongs to D1/D2. No tooltip-triggered HTTP, SQL, refreshes or side effects; preserve existing metadata ownership. Discuss findings and proposed batches before implementing, then add suitable regression/manual checks and deliver a verified DLL for any approved runtime changes.
 
@@ -35,7 +31,7 @@ D2 requires separate explicit approval; the remaining D1 regression coverage is 
 
 - [ ] **Approved remainder:** inline inherited-category editing: review whether replacing an inherited category should require switching/detaching the set or a deliberate private override; do not silently mutate shared sets. Preserve the existing atomic parent Save review and explicit shared consent. Preserve the existing equipment ownership and draft rules; do not reopen completed Part 1 work.
 - [ ] **Approved remainder, design decision needed:** auto-name provenance and deferred safe repair. Explicit Regenerate Name and readable suggestions already exist. Persist provenance only with a reviewed compatibility design; never rename custom/imported names or change identity. Resolve missing metadata through existing owners, not render-time SQL/HTTP. Agree naming formats and how confidently identified legacy auto-names can be repaired.
-- [ ] **Audit remainder:** verify all create/edit/capture/import/migration, exact-reuse, compatibility, explicit-sharing and revision paths; coordinate with D1 rather than duplicate semantic engines.
+- [ ] **Audit remainder:** verify all create/edit/capture/import/migration, exact-reuse, compatibility, explicit-sharing and revision paths; reuse the established comparison and exact-identity helpers rather than duplicate semantic engines.
 
 ## Remaining freshness, metadata and request ownership
 
