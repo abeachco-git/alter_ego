@@ -1,5 +1,6 @@
 #include "../src/NativeLibraryEditing.h"
 #include "../src/ComponentBrowseCore.h"
+#include "../src/ComposableSemantics.h"
 #include <cassert>
 using namespace AlterEgo;
 using namespace AlterEgo::NativeLibrary;
@@ -73,6 +74,47 @@ int case_native_editing(int,char**) {
     assert(PutLoadout(doc,wrongLoadout,err));
     assert(doc.loadouts.back().refs.at("skills")!=skills);
     assert(VerifiedSkillsProfession(doc,"missing").empty());
+    // Functional utility equivalence does not authorize exact native reuse.
+    // Exercise both explicit editing decisions and the unified aggregate Save.
+    {
+        Composable::Document graph;std::string error;
+        auto original=a;
+        original["skills"]["heal"]=10;original["skills"]["elite"]=11;
+        original["aquatic_skills"]={{"heal",20},{"elite",21},{"utilities",{4,5,6}}};
+        auto peer=original;peer["id"]="b";peer["name"]="B";
+        auto reordered=original;reordered["id"]="c";reordered["name"]="C";
+        reordered["skills"]["utilities"]={3,1,2};
+        reordered["aquatic_skills"]["utilities"]={6,4,5};
+        assert(Composable::Semantics::SameUtilities(original["skills"],reordered["skills"]));
+        assert(Composable::Semantics::SameUtilities(original["aquatic_skills"],reordered["aquatic_skills"]));
+        assert(PutLoadout(graph,original,error));
+        assert(PutLoadout(graph,peer,error));
+        assert(PutLoadout(graph,reordered,error));
+        const auto ref=[&](const char* id){return Composable::FindLoadout(graph,id)->refs.at("skills");};
+        const auto first=ref("a"),second=ref("c");
+        assert(first==ref("b")&&first!=second);
+        const auto firstPayload=Composable::Find(graph,"skills",first)->data;
+        const auto secondPayload=Composable::Find(graph,"skills",second)->data;
+        assert(!ExactContent(firstPayload,secondPayload));
+        assert(EditIndex(graph).Matches("skills",firstPayload,"Engineer").size()==1);
+        const auto matches=EditIndex(graph).Matches("skills",secondPayload,"Engineer");
+        assert(matches.size()==1&&matches.front().id==second);
+        const auto before=Composable::ToJson(graph);
+        assert(!ConsolidateExact(graph,"skills",first,second,error));
+        assert(!ReuseEditedForLoadout(graph,"a","skills",first,second,firstPayload,error));
+        assert(Composable::ToJson(graph)==before);
+        assert(ReuseEditedForLoadout(graph,"a","skills",first,second,secondPayload,error));
+        assert(ref("a")==second&&ref("b")==first&&ref("c")==second);
+        Json resolved;
+        assert(Composable::Resolve(graph,*Composable::FindLoadout(graph,"a"),resolved,error));
+        assert(resolved["skills"]==reordered["skills"]&&resolved["aquatic_skills"]==reordered["aquatic_skills"]);
+        assert(PutUnifiedLoadout(graph,original,{},error));
+        assert(ref("a")==first&&ref("b")==first&&ref("c")==second);
+        assert(Composable::Find(graph,"skills",first)->data==firstPayload);
+        assert(Composable::Find(graph,"skills",second)->data==secondPayload);
+        assert(Composable::Resolve(graph,*Composable::FindLoadout(graph,"a"),resolved,error));
+        assert(resolved["skills"]==original["skills"]&&resolved["aquatic_skills"]==original["aquatic_skills"]);
+    }
     // A unified private edit forks only the linked shared set and changed
     // categories; subsequent edits in that same fork cannot mutate the old set.
     {
