@@ -63,6 +63,7 @@ namespace AlterEgo {
         uint32_t id = 0;
         std::string name;           // e.g. "Berserker's", "Minstrel's"
         std::vector<std::string> attributes; // e.g. {"Power", "Precision", "CritDamage"}
+        nlohmann::json formulas; // nullable, ordered validated public coefficients
     };
 
     // A gear slot in a saved build (user-entered stats/upgrades)

@@ -167,7 +167,7 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
     case ReferenceDataset::ItemStats: {
         if(replaceAll)db.Exec("DELETE FROM reference_itemstats");
         auto erase=db.Prepare("DELETE FROM reference_itemstats WHERE id=?");
-        auto q=db.Prepare("INSERT INTO reference_itemstats VALUES(?,?)");
+        auto q=db.Prepare("INSERT INTO reference_itemstats(id,name,formulas) VALUES(?,?,?)");
         auto attributes=db.Prepare("INSERT INTO reference_itemstats_attributes VALUES(?,?,?)");
         for(const auto& row:rows) {
             if(!row.is_object())throw std::runtime_error("Invalid metadata row");
@@ -175,6 +175,8 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
             if(!replaceAll){erase.Bind(1,id);erase.Execute();erase.Reset();}
             q.Bind(1,id);
             q.Bind(2,row.value("name",std::string()));
+            const auto formulas=ReferenceExtras::ProjectStatFormulas(row);
+            if(formulas.is_null())q.BindNull(3);else q.Bind(3,formulas.dump());
             q.Execute();q.Reset();
             if(row.contains("attributes")) {
                 const auto& values=row.at("attributes");
@@ -288,19 +290,21 @@ inline ReferenceJson ReadReferenceRows(Database::Connection& db,ReferenceDataset
         break;
     }
     case ReferenceDataset::ItemStats: {
-        auto q=db.Prepare("SELECT * FROM reference_itemstats ORDER BY id");
+        auto q=db.Prepare("SELECT id,name,formulas FROM reference_itemstats ORDER BY id");
         std::map<int64_t,size_t> indexes;
         while(q.Step()) {
             ReferenceJson row={{"id",q.Integer(0)}};
             indexes.emplace(q.Integer(0),out.size());
             row["name"]=q.Text(1);
             row["attributes"]=ReferenceJson::array();
+            if(!q.IsNull(2))row["formulas"]=ReferenceJson::parse(q.Text(2));
             out.push_back(std::move(row));
         }
         {
             auto child=db.Prepare("SELECT id,value FROM reference_itemstats_attributes ORDER BY id,ordinal");
             while(child.Step())out.at(indexes.at(child.Integer(0)))["attributes"].push_back(child.Text(1));
         }
+        for(auto& row:out)if(row.contains("formulas"))row["formulas"]=ReferenceExtras::ProjectStatFormulas(row);
         break;
     }
     case ReferenceDataset::Dyes: {

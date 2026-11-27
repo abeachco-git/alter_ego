@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdint>
+#include <cmath>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -71,6 +73,48 @@ inline Json ProjectItem(const Json& row){
         out["restrictions"]=std::move(list);
     }
     return out;
+}
+// The /v2/itemstats response carries names, multipliers and offsets.
+// Legacy name-only rows intentionally have no formula projection.
+inline double StatNumber(const Json& v){
+    if(!v.is_number())throw std::runtime_error("Invalid stat coefficient");
+    const double n=v.get<double>();
+    if(!std::isfinite(n)||std::abs(n)>1e9)throw std::runtime_error("Stat coefficient out of range");
+    return n;
+}
+inline Json ProjectStatFormulas(const Json& row){
+    const auto it=row.find("formulas");
+    if(it==row.end()||it->is_null())return nullptr;
+    const auto& names=row.at("attributes");
+    if(!it->is_array()||!names.is_array()||it->size()!=names.size()||it->size()>128)
+        throw std::runtime_error("Invalid stat formula list");
+    Json formulas=Json::array();std::set<std::string> seen;
+    for(size_t i=0;i<it->size();++i){
+        const auto& f=it->at(i);const auto name=Text(f.at("attribute"));
+        if(name.empty()||name!=Text(names.at(i))||!seen.insert(name).second)
+            throw std::runtime_error("Mismatched stat formula");
+        formulas.push_back({{"attribute",name},{"multiplier",StatNumber(f.at("multiplier"))},{"value",StatNumber(f.at("value"))}});
+    }
+    return formulas;
+}
+inline Json StatObservation(const Json& raw){
+    Json row={{"id",Unsigned(raw.at("id"))},{"name",raw.at("name").get<std::string>()},{"attributes",Json::array()}};
+    const auto& attrs=raw.at("attributes");
+    if(!attrs.is_array()||attrs.size()>128)throw std::runtime_error("Invalid stat attributes");
+    Json formulas=Json::array();bool complete=true;std::set<std::string> seen;
+    for(const auto& attr:attrs){
+        const auto name=Text(attr.at("attribute"));
+        if(name.empty()||!seen.insert(name).second)throw std::runtime_error("Invalid stat attribute");
+        row["attributes"].push_back(name);
+        const bool multiplier=attr.contains("multiplier")&&!attr.at("multiplier").is_null();
+        const bool value=attr.contains("value")&&!attr.at("value").is_null();
+        const double m=multiplier?StatNumber(attr.at("multiplier")):0;
+        const double v=value?StatNumber(attr.at("value")):0;
+        if(multiplier&&value)formulas.push_back({{"attribute",name},{"multiplier",m},{"value",v}});
+        else complete=false;
+    }
+    if(complete){row["formulas"]=std::move(formulas);row["formulas"]=ProjectStatFormulas(row);}
+    return row;
 }
 inline void Merge(Json& row,const Json& extras){for(auto it=extras.begin();it!=extras.end();++it)row[it.key()]=it.value();}
 }

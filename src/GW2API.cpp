@@ -134,10 +134,7 @@ namespace AlterEgo {
             }
             break;
         case D::ItemStats:
-            row["attributes"]=json::array();
-            if(!raw.at("attributes").is_array())throw std::runtime_error("Invalid stat attributes");
-            for(const auto& attr:raw.at("attributes"))row["attributes"].push_back(attr.at("attribute").get<std::string>());
-            break;
+            return ReferenceExtras::StatObservation(raw);
         default:throw std::runtime_error("Unsupported partial reference dataset");
         }
         return row;
@@ -1443,16 +1440,15 @@ namespace AlterEgo {
             const auto requestStamp=Cache::ReferenceSnapshotTime();
             auto raw=PublicCatalog::Fetch("/v2/itemstats?ids=all");
             if(!raw.is_array()||raw.size()<50)throw std::runtime_error("Incomplete item stats");
-            std::map<uint32_t,ItemStatInfo> staged;
-            for(const auto& r:raw){
-                ItemStatInfo info;info.id=Cache::ReferenceId(r.at("id"));info.name=r.at("name").get<std::string>();
-                if(info.name.empty())continue; // nonselectable unnamed stat records
-                for(const auto& a:r.at("attributes"))info.attributes.push_back(a.at("attribute").get<std::string>());
-                if(!staged.emplace(info.id,std::move(info)).second)throw std::runtime_error("Duplicate item stat");
-            }
-            if(staged.size()<50)throw std::runtime_error("Incomplete named item stats");
+            std::set<uint32_t> seen;
             json rows=json::array();
-            for(const auto& [id,info]:staged)rows.push_back({{"id",id},{"name",info.name},{"attributes",info.attributes}});
+            for(const auto& r:raw){
+                if(r.at("name").get<std::string>().empty())continue;
+                auto row=ReferenceObservation(Cache::ReferenceDataset::ItemStats,r);
+                if(!seen.insert(Cache::ReferenceId(row.at("id"))).second)throw std::runtime_error("Duplicate item stat");
+                rows.push_back(std::move(row));
+            }
+            if(rows.size()<50)throw std::runtime_error("Incomplete named item stats");
             Background::Checkpoint();
             std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
             Background::Checkpoint();auto accepted=json::array();
@@ -3512,6 +3508,7 @@ namespace AlterEgo {
             }
             case D::ItemStats: {
                 ItemStatInfo v;v.id=id;v.name=name;v.attributes=row.at("attributes").get<std::vector<std::string>>();
+                v.formulas=ReferenceExtras::ProjectStatFormulas(row);
                 s_itemstat_cache[id]=std::make_shared<const ItemStatInfo>(std::move(v));break;
             }
             default:break;
@@ -3666,6 +3663,7 @@ namespace AlterEgo {
                 info.name = it.value("name", "");
                 if (it.contains("attributes") && it["attributes"].is_array())
                     for (const auto& a : it["attributes"]) info.attributes.push_back(a.get<std::string>());
+                info.formulas=ReferenceExtras::ProjectStatFormulas(it);
                 s_itemstat_cache[info.id]=std::make_shared<const ItemStatInfo>(std::move(info));
             }
         }

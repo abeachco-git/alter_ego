@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <cmath>
+#include <algorithm>
+#include <set>
 namespace AlterEgo::TooltipCore {
 // Pure, display-only helpers. Never infer exact identities or empty slots.
 inline const char* FriendlyAttribute(const std::string& attr){
@@ -14,6 +17,7 @@ inline const char* FriendlyAttribute(const std::string& attr){
     if(attr=="ConditionDuration")return "Expertise";
     if(attr=="BoonDuration")return "Concentration";
     if(attr=="Healing"||attr=="HealingPower")return "Healing Power";
+    if(attr=="AgonyResistance")return "Agony Resistance";
     return attr.c_str();
 }
 inline std::string EntityName(const std::string& known,const std::string& stored={}){
@@ -23,9 +27,56 @@ inline std::string EntityName(const std::string& known,const std::string& stored
 // inferred effective effects. Consumers choose the parts appropriate to context.
 enum ItemDefinitionPart : unsigned {
     ItemType=1u, ItemCombat=2u, ItemAttributes=4u, ItemEffects=8u,
-    ItemDescription=16u, ItemAcquisition=32u, ItemAll=63u
+    ItemDescription=16u, ItemAcquisition=32u, ItemUtility=64u, ItemAll=127u
 };
 struct ItemDefinitionLine { unsigned part; std::string text; };
+template<class Json> uint32_t PositiveId(const Json& value){
+    if(value.is_number_unsigned()){const auto v=value.template get<uint64_t>();return v&&v<=UINT32_MAX?static_cast<uint32_t>(v):0;}
+    if(value.is_number_integer()){const auto v=value.template get<int64_t>();return v>0&&v<=UINT32_MAX?static_cast<uint32_t>(v):0;}
+    return 0;
+}
+template<class Json> uint32_t FieldId(const Json& value,const char* field){
+    if(!value.is_object())return 0;
+    auto it=value.find(field);return it==value.end()?0:PositiveId(*it);
+}
+template<class Json> uint32_t FixedStatId(const Json& details){
+    if(!details.is_object())return 0;
+    auto it=details.find("infix_upgrade");return it==details.end()?0:FieldId(*it,"id");
+}
+template<class Json> bool SupportsStat(const Json& details,uint32_t stat){
+    if(!stat||!details.is_object())return false;
+    auto choices=details.find("stat_choices");
+    if(choices!=details.end()){
+        if(!choices->is_array())return false;
+        if(!choices->empty()){
+            for(const auto& value:*choices)if(PositiveId(value)==stat)return true;
+            return false;
+        }
+    }
+    return FixedStatId(details)==stat;
+}
+// Derived item-only values, never observed equipped stats or character totals.
+template<class Json> std::vector<std::string> CalculatedStatLines(const Json& details,uint32_t stat,const Json& formulas){
+    if(!SupportsStat(details,stat)||!formulas.is_array()||formulas.empty()||formulas.size()>128)return {};
+    auto adjustment=details.find("attribute_adjustment");
+    if(adjustment==details.end()||!adjustment->is_number())return {};
+    const double x=adjustment->template get<double>();
+    if(!std::isfinite(x)||x<0||x>1e9)return {};
+    std::vector<std::string> out;std::set<std::string> seen;
+    for(const auto& formula:formulas){
+        if(!formula.is_object())return {};
+        auto a=formula.find("attribute"),m=formula.find("multiplier"),v=formula.find("value");
+        if(a==formula.end()||!a->is_string()||m==formula.end()||!m->is_number()||v==formula.end()||!v->is_number())return {};
+        const auto name=a->template get<std::string>();
+        const double multiplier=m->template get<double>(),value=v->template get<double>();
+        if(name.empty()||!seen.insert(name).second||!std::isfinite(multiplier)||!std::isfinite(value)||std::abs(multiplier)>1e9||std::abs(value)>1e9)return {};
+        const double rounded=std::round(x*multiplier+value);
+        if(!std::isfinite(rounded)||rounded<INT32_MIN||rounded>INT32_MAX)return {};
+        const auto n=static_cast<int32_t>(rounded);
+        out.push_back((n>0?"+":"")+std::to_string(n)+" "+FriendlyAttribute(name));
+    }
+    return out;
+}
 inline const char* WeaponTypeLabel(const std::string& name){
     if(name=="Harpoon")return "Spear";
     if(name=="Speargun")return "Harpoon Gun";
@@ -35,7 +86,11 @@ template<class Json> std::vector<ItemDefinitionLine> ItemDefinitionLines(
     const std::string& type,const std::string& rarity,const std::string& description,
     const Json& details,unsigned parts=ItemAll){
     std::vector<ItemDefinitionLine> out;
-    auto add=[&](unsigned part,std::string line){if((parts&part)&&!line.empty())out.push_back({part,std::move(line)});};
+    auto add=[&](unsigned part,std::string line){
+        if(!(parts&part)||line.empty())return;
+        if((part==ItemEffects||part==ItemDescription)&&std::any_of(out.begin(),out.end(),[&](const auto& prior){return prior.text==line;}))return;
+        out.push_back({part,std::move(line)});
+    };
     auto str=[](const Json& j,const char* key){
         if(!j.is_object())return std::string{};
         auto it=j.find(key);return it!=j.end()&&it->is_string()?it->template get<std::string>():std::string{};
@@ -58,6 +113,20 @@ template<class Json> std::vector<ItemDefinitionLine> ItemDefinitionLines(
     const auto defense=integer(details,"defense"),lo=integer(details,"min_power"),hi=integer(details,"max_power");
     if(defense&&*defense>0)add(ItemCombat,"Defense: "+std::to_string(*defense));
     if(lo&&hi&&*lo>=0&&*hi>=*lo)add(ItemCombat,"Weapon Strength: "+std::to_string(*lo)+" - "+std::to_string(*hi));
+    const auto charges=integer(details,"charges");
+    if(charges&&*charges>=0&&*charges<=UINT32_MAX)add(ItemUtility,"Definition charges: "+std::to_string(*charges));
+    const auto size=integer(details,"size");
+    if(type=="Bag"&&size&&*size>=0&&*size<=UINT32_MAX)add(ItemUtility,"Capacity: "+std::to_string(*size)+" slots");
+    if(type=="Weapon"){
+        const auto damage=str(details,"damage_type");
+        if(!damage.empty())add(ItemCombat,"Damage type: "+damage);
+    }
+    if(details.is_object()){
+        const auto slots=details.find("infusion_slots");
+        if(slots!=details.end()&&slots->is_array()&&slots->size()<=128&&
+           std::all_of(slots->begin(),slots->end(),[](const auto& s){return s.is_object();}))
+            add(ItemUtility,"Definition infusion slots: "+std::to_string(slots->size()));
+    }
     const bool legendaryRelic=type=="Relic"&&rarity=="Legendary";
     if(details.is_object()){
         auto infix=details.find("infix_upgrade");

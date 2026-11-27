@@ -786,6 +786,16 @@ int case_database_core(int, char**) {
         assert(!std::filesystem::exists(paths.CacheDirectory()/"itemstat_cache.json"));
         AlterEgo::Storage::WriteMigrationBytes(legacy,"[]");
         assert(Cache::ReadReference(root,D::ItemStats)==stats);
+        auto richer=stats;
+        richer[0]["formulas"]=J::array({J{{"attribute","Power"},{"multiplier",0.35},{"value",0}},J{{"attribute","Precision"},{"multiplier",0.25},{"value",3}}});
+        assert(Cache::WriteReference(root,D::ItemStats,richer,101));
+        assert(Cache::ReadReference(root,D::ItemStats)==richer);
+        auto malformed=richer;malformed[0]["formulas"][0]["multiplier"]="bad";
+        assert(!Cache::WriteReference(root,D::ItemStats,malformed,102));
+        assert(Cache::ReadReference(root,D::ItemStats)==richer);
+        malformed=richer;malformed[0]["formulas"][0]["attribute"]="Vitality";
+        assert(!Cache::WriteReference(root,D::ItemStats,malformed,103));
+        assert(Cache::ReadReference(root,D::ItemStats)==richer);
         J dyes=J::array({{{"id",0},{"name","Dye"},{"base",J::array({1,2,3})},
             {"cloth",J::array({4,5,6})},{"leather",J::array({7,8,9})},{"metal",J::array({10,11,12})}}});
         assert(Cache::WriteReference(root,D::Dyes,dyes,100));
@@ -883,6 +893,16 @@ int case_database_core(int, char**) {
         assert(db.Scalar("SELECT count(*) FROM reference_items WHERE id=77 AND name='Prior' AND complete=1 AND verified_at=12345 AND optional_metadata IS NULL")==1);
         const auto rows=Cache::ReadItemRows(db,Cache::ItemDataset::Details,true);
         assert(rows.size()==1&&!rows[0].contains("level")&&!rows[0].contains("vendor_value")&&!rows[0].contains("restrictions"));
+    }
+    {
+        namespace Cache=AlterEgo::Cache;
+        const auto path=temp.dir/"stat-formulas-v33.db";
+        DB::Connection db(path.u8string(),DB::Connection::OpenMode::Create);
+        DB::Migrate(db,Cache::kApplicationId,33,Cache::Upgrade);
+        db.Exec("INSERT INTO reference_itemstats(id,name) VALUES(7,'Old stat'); INSERT INTO reference_itemstats_attributes VALUES(7,0,'Power')");
+        Cache::Initialize(db);
+        auto rows=Cache::ReadReferenceRows(db,Cache::ReferenceDataset::ItemStats);
+        assert(rows.size()==1&&rows[0]["attributes"]==Cache::ReferenceJson::array({"Power"})&&!rows[0].contains("formulas"));
     }
     {
         // Selective startup maintenance must still accept the immediately

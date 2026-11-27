@@ -69,6 +69,23 @@ int case_composable_gear_presentation(int, char**) {
     assert(ItemAcquisitionLines(Json::object()).empty());
     assert(ItemAcquisitionLines(Json{{"restrictions",Json::array()}}).empty());
     assert(!extras.contains("flags"));
+    const auto raw=Json{{"id",161},{"name","Stat"},{"attributes",Json::array({Json{{"attribute","Power"},{"multiplier",0.35},{"value",0}},Json{{"attribute","Precision"},{"multiplier",0.25},{"value",0}}})}};
+    const auto stat=AlterEgo::ReferenceExtras::StatObservation(raw);
+    assert(stat["attributes"]==Json::array({"Power","Precision"}));
+    const Json physical={{"attribute_adjustment",341.44},{"stat_choices",Json::array({161,162})}};
+    assert((CalculatedStatLines(physical,161,stat["formulas"])==std::vector<std::string>{"+120 Power","+85 Precision"}));
+    assert(CalculatedStatLines(physical,163,stat["formulas"]).empty());
+    assert(CalculatedStatLines(Json{{"attribute_adjustment",341.44},{"infix_upgrade",{{"id",161}}}},161,stat["formulas"]).size()==2);
+    assert(CalculatedStatLines(Json{{"infix_upgrade",{{"id",161}}}},161,stat["formulas"]).empty());
+    assert(CalculatedStatLines(physical,161,Json()).empty());
+    assert(FixedStatId(Json{{"infix_upgrade",{{"id",4294967297ull}}}})==0);
+    auto partial=raw;partial["attributes"][0].erase("value");assert(!AlterEgo::ReferenceExtras::StatObservation(partial).contains("formulas"));
+    auto malformed=raw;malformed["attributes"][0]["value"]="3";
+    bool rejected=false;try{AlterEgo::ReferenceExtras::StatObservation(malformed);}catch(...){rejected=true;}assert(rejected);
+    lines=ItemDefinitionLines("Tool","Basic","",Json{{"type","Salvage"},{"charges",25}},ItemUtility);
+    assert(lines.size()==1&&contains("Definition charges: 25"));
+    lines=ItemDefinitionLines("Bag","Basic","",Json{{"size",20}},ItemUtility);assert(contains("Capacity: 20 slots"));
+    lines=ItemDefinitionLines("Armor","Rare","",Json{{"infusion_slots",Json::array()}},ItemUtility);assert(contains("Definition infusion slots: 0"));
     std::cout << "Composable gear presentation PASS\n";
     return 0;
 }
