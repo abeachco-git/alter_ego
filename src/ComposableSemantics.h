@@ -2,7 +2,7 @@
 // Functional equivalence for the v3 component graph.
 //
 // Equipment placement and aggregate requirements are deliberately separate.
-// These summaries power future Compare UI; no live UI behavior changes here.
+// Shared by detailed Compare, recognition and advisory component hints.
 #include "ComposableLoadouts.h"
 #include <algorithm>
 #include <map>
@@ -37,7 +37,7 @@ inline Json Part(const Document& doc, const Loadout& loadout,
     const Component* item = Find(doc, kind, it->second);
     return item ? item->data : Json::object();
 }
-inline Summary Runes(const Json& runes) {
+inline Summary Runes(const Json& runes,const std::set<std::string>& knownEmpty={}) {
     Summary summary;
     if (runes.contains("gear") && runes.at("gear").is_object()) {
         const auto& gear = runes.at("gear");
@@ -48,14 +48,14 @@ inline Summary Runes(const Json& runes) {
                                  "Gloves", "Leggings", "Boots"}) {
             const auto it = gear.find(slot);
             if (it == gear.end() || !it->is_object()) {
-                complete = false;
+                if(!knownEmpty.count(slot))complete = false;
                 continue;
             }
             const std::string identity = Identity(*it, "rune_id", "rune");
             Add(summary, identity);
             if (identity.rfind("id:", 0) != 0) complete = false;
         }
-        if (!summary.counts.empty()) {
+        if (!summary.counts.empty()||complete) {
             summary.known = complete;
             return summary;
         }
@@ -114,7 +114,7 @@ inline std::string WeaponSet(const std::string& slot) {
     if (IsAquaticComparisonSlot(slot)) return "aquatic:" + CanonicalComparisonSlot(slot);
     return slot; // Future/unknown set: compare conservatively.
 }
-inline Summary Sigils(const Json& sigils) {
+inline Summary Sigils(const Json& sigils,bool observedComplete=false) {
     Summary summary;
     if (!sigils.contains("gear") || !sigils.at("gear").is_object())
         return summary;
@@ -131,7 +131,7 @@ inline Summary Sigils(const Json& sigils) {
             (first.empty() && second.empty()))
             allIdentified = false;
     }
-    summary.known = allIdentified && !summary.counts.empty();
+    summary.known = allIdentified && (!summary.counts.empty()||observedComplete);
     return summary;
 }
 

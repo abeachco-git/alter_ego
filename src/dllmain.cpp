@@ -10094,6 +10094,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         const char* armorSlots[] = {
             "Helm","Shoulders","Coat","Gloves","Leggings","Boots"
         };
+        std::set<std::string> observedEmptyRunes;
         int savedArmorPieces = 0;
         bool runeRequired = saved.rune_id != 0 || !saved.rune_name.empty();
         for (const char* slot : armorSlots) {
@@ -10110,10 +10111,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             const auto* liveItem = getEquipped(slot);
             if (liveItem && !liveItem->upgrades.empty() && liveItem->upgrades[0])
                 liveRunes["gear"][slot]["rune_id"] = liveItem->upgrades[0];
+            else if(liveItem&&liveItem->upgrades_observed&&liveItem->upgrades.empty())observedEmptyRunes.insert(slot);
         }
         if (runeRequired) {
             const auto expected = AlterEgo::Composable::Semantics::Runes(savedRunes);
-            const auto observed = AlterEgo::Composable::Semantics::Runes(liveRunes);
+            const auto observed = AlterEgo::Composable::Semantics::Runes(liveRunes,observedEmptyRunes);
             const auto verdict = AlterEgo::Composable::Semantics::Compare(expected, observed);
             auto label = [](const AlterEgo::Composable::Semantics::Summary& summary) {
                 std::string str;
@@ -10163,6 +10165,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     missingLiveSigilData = true;
                 continue;
             }
+            if(equipped->upgrades.empty()&&!equipped->upgrades_observed)missingLiveSigilData=true;
             if (!equipped->upgrades.empty() && equipped->upgrades[0])
                 liveSigils["gear"][slot]["sigil_id"] = equipped->upgrades[0];
             if (equipped->upgrades.size() > 1 && equipped->upgrades[1])
@@ -10170,7 +10173,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         }
         if (!comparedSets.empty()) {
             const auto expected = AlterEgo::Composable::Semantics::Sigils(savedSigils);
-            const auto observed = AlterEgo::Composable::Semantics::Sigils(liveSigils);
+            const auto observed = AlterEgo::Composable::Semantics::Sigils(liveSigils,!missingLiveSigilData);
             auto label = [](const AlterEgo::Composable::Semantics::Summary& summary) {
                 std::string str;
                 for (const auto& [id, count] : summary.counts) {
@@ -10201,7 +10204,8 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     auto expected=savedRunes,actual=liveRunes;
                     expected["gear"]["Helm"]={{"rune_id",g.rune_id}};
                     actual["gear"]["Helm"]={{"rune_id",observed->upgrades[0]}};
-                    const auto e=AlterEgo::Composable::Semantics::Runes(expected),a=AlterEgo::Composable::Semantics::Runes(actual);
+                    auto underwaterEmpty=observedEmptyRunes;underwaterEmpty.erase("Helm");
+                    const auto e=AlterEgo::Composable::Semantics::Runes(expected),a=AlterEgo::Composable::Semantics::Runes(actual,underwaterEmpty);
                     const auto verdict=AlterEgo::Composable::Semantics::Compare(e,a);
                     if(verdict==AlterEgo::Composable::Semantics::Verdict::Unverified)
                         addId("Aquatic","Breather rune",g.rune_id,observed->upgrades[0],itemName);
@@ -10311,6 +10315,12 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         }),configs.end());
         for(auto config:configs){
         const auto liveTotals=GetLiveInfusionSummary(liveCharacter,equipmentTab,config);
+        bool observedComplete=liveCharacter.scope_stamps[AlterEgo::CharacterScopes::Index(AlterEgo::CharacterScopes::Tabs)]>0;
+        for(const auto& eq:liveCharacter.equipment){
+            if(!eq.id||eq.tab!=equipmentTab||!AlterEgo::InfusionSlotInConfiguration(eq.slot,config)||eq.infusions_observed||!eq.infusions.empty())continue;
+            const auto capacity=ResolveGearInfusionCapacity(eq.slot,liveCharacter.profession,"",eq.id,false);
+            if(!capacity.verified||capacity.limit>0)observedComplete=false;
+        }
         const std::string prefix=configs.size()>1?std::string(AlterEgo::InfusionConfigurationLabel(config))+" / ":"";
         if (!requiredTotals.complete || !liveTotals.complete ||
             liveCharacter.equipment.empty()||std::find(available.begin(),available.end(),config)==available.end()) {
@@ -10318,7 +10328,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         } else {
             const int minAR = AlterEgo::AgonyRequirement(requiredTotals.agonyResistance);
             if (minAR > 0) {
-                result.Add("Infusion totals", prefix+"Agony Resistance",
+                if(liveTotals.agonyResistance<minAR&&!observedComplete)
+                    result.AddUnverified("Infusion totals",prefix+"Agony Resistance",std::to_string(minAR),"Incomplete observations");
+                else result.Add("Infusion totals", prefix+"Agony Resistance",
                     "sufficient", liveTotals.agonyResistance >= minAR ? "sufficient" : "low",
                     std::to_string(requiredTotals.agonyResistance) +
                         " (minimum " + std::to_string(minAR) + ")",
@@ -10328,7 +10340,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 if (target <= 0) continue;
                 auto it = liveTotals.stats.find(attr);
                 const int current = it == liveTotals.stats.end() ? 0 : it->second;
-                result.Add("Infusion totals", prefix+InfusionAttributeLabel(attr),
+                if(current<target&&!observedComplete)
+                    result.AddUnverified("Infusion totals",prefix+InfusionAttributeLabel(attr),"+"+std::to_string(target),"Incomplete observations");
+                else result.Add("Infusion totals", prefix+InfusionAttributeLabel(attr),
                     "sufficient", current >= target ? "sufficient" : "low",
                     "+" + std::to_string(target), "+" + std::to_string(current));
             }
@@ -10353,7 +10367,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         if(!recorded.count(slot))completeGear=false;
     }
     bool aquaticPartial=false;
-    if(std::any_of(recorded.begin(),recorded.end(),[](const auto& slot){return AlterEgo::IsAquaticComparisonSlot(slot);})){
+    if(std::any_of(saved.gear.begin(),saved.gear.end(),[](const auto& entry){return AlterEgo::IsAquaticComparisonSlot(entry.first);})){
         for(const auto& e:liveCharacter.equipment){
             const auto slot=AlterEgo::CanonicalComparisonSlot(e.slot);
             if(e.id&&e.tab==equipmentTab&&AlterEgo::IsAquaticComparisonSlot(slot)&&!recorded.count(slot))aquaticPartial=true;

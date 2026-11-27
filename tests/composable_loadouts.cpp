@@ -493,6 +493,15 @@ int case_composable_loadouts(int, char**) {
     // two-Loadout upstream library.
     document = untouched;
 
+    // Explicitly observed empty upgrade slots are evidence, unlike omitted slots.
+    {
+        using namespace AlterEgo::Composable::Semantics;
+        const Json empty={{"gear",Json::object()}};
+        const std::set<std::string> armor={"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
+        assert(!Runes(empty).known&&Runes(empty,armor).known);
+        assert(!Sigils(empty).known&&Sigils(empty,true).known);
+        assert(Compare(Runes(empty,armor),Runes(empty))==Verdict::Unverified);
+    }
     // Native migration/backup/restart tests live in persistence.native_migration.
     // Character intent belongs to account + character, never observed tabs.
     {
