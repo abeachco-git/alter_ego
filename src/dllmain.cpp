@@ -3967,65 +3967,18 @@ static bool DecodeBuildLink(const std::string& link, const std::string& name,
 // NOTE: BuildTemplate's SpecLine.traits stores choice indices 0-3 directly (see GW2API.h),
 // so they map straight into the chat-link trait fields — no major_traits ID lookup.
 static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
-    auto ProfCode = [](const std::string& p) -> uint8_t {
-        if (p == "Guardian")     return 1;
-        if (p == "Warrior")      return 2;
-        if (p == "Engineer")     return 3;
-        if (p == "Ranger")       return 4;
-        if (p == "Thief")        return 5;
-        if (p == "Elementalist") return 6;
-        if (p == "Mesmer")       return 7;
-        if (p == "Necromancer")  return 8;
-        if (p == "Revenant")     return 9;
-        return 0;
-    };
-
-    AlterEgo::DecodedBuildLink link{};
-    link.profession = ProfCode(bt.profession);
-
-    for (int i = 0; i < 3; i++) {
-        link.specs[i].spec_id = (uint8_t)bt.specializations[i].spec_id;
-        for (int t = 0; t < 3; t++)
-            link.specs[i].traits[t] = (uint8_t)bt.specializations[i].traits[t];
-    }
-
-    auto ToPalette = [&](uint32_t skill_id) -> uint16_t {
-        if (skill_id == 0) return 0;
-        return AlterEgo::GW2API::GetPaletteIdFromSkill(bt.profession, skill_id);
-    };
-    link.terrestrial_skills[0] = ToPalette(bt.terrestrial_skills.heal);
-    link.terrestrial_skills[1] = ToPalette(bt.terrestrial_skills.utilities[0]);
-    link.terrestrial_skills[2] = ToPalette(bt.terrestrial_skills.utilities[1]);
-    link.terrestrial_skills[3] = ToPalette(bt.terrestrial_skills.utilities[2]);
-    link.terrestrial_skills[4] = ToPalette(bt.terrestrial_skills.elite);
-    link.aquatic_skills[0] = ToPalette(bt.aquatic_skills.heal);
-    link.aquatic_skills[1] = ToPalette(bt.aquatic_skills.utilities[0]);
-    link.aquatic_skills[2] = ToPalette(bt.aquatic_skills.utilities[1]);
-    link.aquatic_skills[3] = ToPalette(bt.aquatic_skills.utilities[2]);
-    link.aquatic_skills[4] = ToPalette(bt.aquatic_skills.elite);
-
-    if (bt.profession == "Ranger") {
-        link.pets[0] = (uint8_t)bt.pets.terrestrial[0];
-        link.pets[1] = (uint8_t)bt.pets.terrestrial[1];
-        link.pets[2] = (uint8_t)bt.pets.aquatic[0];
-        link.pets[3] = (uint8_t)bt.pets.aquatic[1];
-    }
-
-    if (bt.profession == "Revenant") {
-        const auto catalog=AlterEgo::PublicCatalog::Get();
-        auto LegendByte = [&](const std::string& s) -> uint8_t {
-            return AlterEgo::PublicCatalog::LegendCode(catalog->legends,s);
-        };
-        link.legends[0] = LegendByte(bt.legends.terrestrial[0]);
-        link.legends[1] = LegendByte(bt.legends.terrestrial[1]);
-        link.legends[2] = LegendByte(bt.legends.aquatic[0]);
-        link.legends[3] = LegendByte(bt.legends.aquatic[1]);
-    }
-
-    for (auto w : bt.weapons)
-        link.weapons.push_back((uint16_t)w);
-
-    return AlterEgo::ChatLink::EncodeBuild(link);
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    const auto link=AlterEgo::ProjectDerivedBuildLink(bt,
+        [](uint32_t,int,int choice)->std::optional<int>{return choice;},
+        [&](uint32_t id){return AlterEgo::GW2API::GetPaletteIdFromSkill(bt.profession,id);},
+        [&](int i)->std::optional<uint32_t>{
+            const auto& name=i<2?bt.legends.terrestrial[i]:bt.legends.aquatic[i-2];
+            if(name.empty())return 0;
+            const auto id=AlterEgo::PublicCatalog::LegendCode(catalog->legends,name);
+            if(!id)return std::nullopt;
+            return id;
+        });
+    return link?AlterEgo::ChatLink::EncodeBuild(*link):std::string{};
 }
 
 // Capture an native API build tab directly rather than round-tripping through a chat link.
@@ -4306,7 +4259,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
                 shareSnapshot.chat_link = EncodeBuildTabChatLink(bt);
         }
         if (shareSnapshot.chat_link.empty())
-            ImGui::TextDisabled("Build-link data is loading. Build sharing may be unavailable.");
+            ImGui::TextDisabled("Build link unavailable: missing or unrepresentable data.");
         // Fashion sharing uses the character's active equipment tab and stays
         // available even while the build palette is still loading.
         RenderBuildShareMenuItems(shareSnapshot,shareSource?&*shareSource:nullptr);
@@ -4453,10 +4406,12 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
         if (!hasPalette)
             AlterEgo::GW2API::FetchProfessionPaletteAsync(mbt.profession);
 
-        if (ImGui::Selectable(hasPalette ? "Copy Build Chat Link" : "Copy Build Chat Link (loading...)") && hasPalette) {
-            CopyToClipboard(EncodeBuildTabChatLink(mbt));
+        const auto link=hasPalette?EncodeBuildTabChatLink(mbt):std::string{};
+        if (AlterEgo::UI::MenuAction("Copy Build Chat Link",AlterEgo::UI::MenuIcon::Copy,!link.empty())) {
+            CopyToClipboard(link);
             if (APIDefs) APIDefs->GUI_SendAlert("Build link copied!");
         }
+        if(link.empty())ImGui::TextDisabled("%s",hasPalette?"Build link unavailable for retrieved data.":"Build-link palette loading.");
         if (ImGui::Selectable("Save to Library..."))
             OpenSaveLiveBuildDialog(ch, mbt);
         ImGui::EndPopup();
@@ -5493,15 +5448,11 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
 // export actions. The caller owns the popup and supplies the exact build data.
 static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
     const AlterEgo::Character* liveCharacter) {
-                if (ImGui::Selectable("Copy build-only chat link")) {
-                    if (build.chat_link.empty()) {
-                        if (APIDefs) APIDefs->GUI_SendAlert("Build link unavailable; refresh or retry.");
-                    } else {
-                        CopyToClipboard(build.chat_link);
-                        if (APIDefs) APIDefs->GUI_SendAlert("Build link copied to clipboard!");
-                    }
+                if (AlterEgo::UI::MenuAction("Copy build-only chat link",AlterEgo::UI::MenuIcon::Copy,!build.chat_link.empty())) {
+                    CopyToClipboard(build.chat_link);
+                    if (APIDefs) APIDefs->GUI_SendAlert("Build link copied to clipboard!");
                 }
-                if (ImGui::Selectable("Copy entire build + equipment code")) {
+                if (AlterEgo::UI::MenuAction("Copy entire build + equipment code",AlterEgo::UI::MenuIcon::Copy,!build.chat_link.empty())) {
                     std::string ae2 = ExportBuildToAE2(build);
                     if (!ae2.empty()) {
                         CopyToClipboard(ae2);
@@ -5526,7 +5477,7 @@ static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
                     }
                 }
                 if constexpr (AlterEgo::BuildRelay::Enabled) {
-                    if (!g_RelaySending && ImGui::Selectable("Share complete build via one-time code")) {
+                    if (!g_RelaySending && AlterEgo::UI::MenuAction("Share complete build via one-time code",AlterEgo::UI::MenuIcon::Share,!build.chat_link.empty())) {
                         if (build.chat_link.empty()) {
                             if (APIDefs) APIDefs->GUI_SendAlert("Cannot send: build has no chat link.");
                         } else {

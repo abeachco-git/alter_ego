@@ -115,6 +115,63 @@ namespace AlterEgo {
         for(std::size_t i=0;i<values->size();++i)link.inactive_rev_skills[i]=(*values)[i];
     }
 
+    // Shared checked projection from a live or saved typed build. The low-level
+    // codec remains available for exact imported wire packets. Adapters resolve
+    // the different trait/legend representations; missing nonzero mappings must
+    // never silently encode as zero. No requests or persistence here.
+    template<class Build,class TraitChoice,class Palette,class LegendChoice>
+    std::optional<DecodedBuildLink> ProjectDerivedBuildLink(const Build& b,
+        TraitChoice traitChoice,Palette palette,LegendChoice legendChoice,
+        const std::optional<InactiveLegendPalettes>& inactive=std::nullopt) {
+        DecodedBuildLink link{};
+        static constexpr const char* professions[]={"Guardian","Warrior","Engineer",
+            "Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"};
+        for(std::size_t i=0;i<9;++i)if(b.profession==professions[i])link.profession=static_cast<uint8_t>(i+1);
+        if(!link.profession||b.weapons.size()>255)return std::nullopt;
+        for(int i=0;i<3;++i){
+            const auto& spec=b.specializations[i];
+            if(spec.spec_id>255)return std::nullopt;
+            link.specs[i].spec_id=static_cast<uint8_t>(spec.spec_id);
+            for(int t=0;t<3;++t){
+                const auto choice=traitChoice(spec.spec_id,t,spec.traits[t]);
+                if(!choice||*choice<0||*choice>3)return std::nullopt;
+                link.specs[i].traits[t]=static_cast<uint8_t>(*choice);
+            }
+        }
+        auto bar=[&](const auto& source,uint16_t (&target)[5]){
+            const uint32_t ids[]={source.heal,source.utilities[0],source.utilities[1],
+                source.utilities[2],source.elite};
+            for(int i=0;i<5;++i){
+                if(!ids[i])continue;
+                const auto value=palette(ids[i]);
+                if(!value||value>65535)return false;
+                target[i]=static_cast<uint16_t>(value);
+            }
+            return true;
+        };
+        if(!bar(b.terrestrial_skills,link.terrestrial_skills)||
+           !bar(b.aquatic_skills,link.aquatic_skills))return std::nullopt;
+        if(link.profession==PROF_RANGER){
+            for(int i=0;i<4;++i){
+                const auto id=i<2?b.pets.terrestrial[i]:b.pets.aquatic[i-2];
+                if(id>255)return std::nullopt;
+                link.pets[i]=static_cast<uint8_t>(id);
+            }
+        }else if(link.profession==PROF_REVENANT){
+            for(int i=0;i<4;++i){
+                const auto id=legendChoice(i);
+                if(!id||*id>255)return std::nullopt;
+                link.legends[i]=static_cast<uint8_t>(*id);
+            }
+            ApplyInactiveLegendPalettes(link,inactive);
+        }
+        for(auto w:b.weapons){
+            if(w>65535)return std::nullopt;
+            link.weapons.push_back(static_cast<uint16_t>(w));
+        }
+        return link;
+    }
+
     // Decoded wardrobe template link
     struct DecodedWardrobeLink {
         uint16_t aquabreather_skin = 0;

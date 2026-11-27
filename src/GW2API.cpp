@@ -2445,60 +2445,21 @@ namespace AlterEgo {
     }
 
     std::string GW2API::EncodeSavedBuildToChatLink(const SavedBuild& b) {
-        auto profCode = [](const std::string& p) -> uint8_t {
-            if (p == "Guardian")     return 1;
-            if (p == "Warrior")      return 2;
-            if (p == "Engineer")     return 3;
-            if (p == "Ranger")       return 4;
-            if (p == "Thief")        return 5;
-            if (p == "Elementalist") return 6;
-            if (p == "Mesmer")       return 7;
-            if (p == "Necromancer")  return 8;
-            if (p == "Revenant")     return 9;
-            return 0;
-        };
-        DecodedBuildLink link{};
-        link.profession = profCode(b.profession);
-        for (int i = 0; i < 3; i++) {
-            link.specs[i].spec_id = (uint8_t)b.specializations[i].spec_id;
-            const auto si = GetSpecInfo(b.specializations[i].spec_id);
-            for (int t = 0; t < 3; t++) {
-                int traitId = b.specializations[i].traits[t];
-                uint8_t choice = 0;
-                if (traitId > 0 && si && si->major_traits.size() >= 9) {
-                    for (int r = 0; r < 3; r++)
-                        if ((int)si->major_traits[t * 3 + r] == traitId) { choice = (uint8_t)(r + 1); break; }
-                } else if (traitId < 0) {
-                    choice = (uint8_t)(-traitId); // unresolved placeholder already holds the choice
-                }
-                link.specs[i].traits[t] = choice;
-            }
-        }
-        auto toPal = [&](uint32_t skill_id) -> uint16_t {
-            return skill_id ? GetPaletteIdFromSkill(b.profession, skill_id) : 0;
-        };
-        link.terrestrial_skills[0] = toPal(b.terrestrial_skills.heal);
-        link.terrestrial_skills[1] = toPal(b.terrestrial_skills.utilities[0]);
-        link.terrestrial_skills[2] = toPal(b.terrestrial_skills.utilities[1]);
-        link.terrestrial_skills[3] = toPal(b.terrestrial_skills.utilities[2]);
-        link.terrestrial_skills[4] = toPal(b.terrestrial_skills.elite);
-        link.aquatic_skills[0] = toPal(b.aquatic_skills.heal);
-        link.aquatic_skills[1] = toPal(b.aquatic_skills.utilities[0]);
-        link.aquatic_skills[2] = toPal(b.aquatic_skills.utilities[1]);
-        link.aquatic_skills[3] = toPal(b.aquatic_skills.utilities[2]);
-        link.aquatic_skills[4] = toPal(b.aquatic_skills.elite);
-        if (b.profession == "Ranger") {
-            link.pets[0] = (uint8_t)b.pets.terrestrial[0];
-            link.pets[1] = (uint8_t)b.pets.terrestrial[1];
-            link.pets[2] = (uint8_t)b.pets.aquatic[0];
-            link.pets[3] = (uint8_t)b.pets.aquatic[1];
-        }
-        if (b.profession == "Revenant") {
-            for (int i = 0; i < 4; i++) link.legends[i] = b.legend_codes[i];
-            ApplyInactiveLegendPalettes(link,b.inactive_rev_skills);
-        }
-        for (auto w : b.weapons) link.weapons.push_back((uint16_t)w);
-        return ChatLink::EncodeBuild(link);
+        const auto link=ProjectDerivedBuildLink(b,
+            [](uint32_t specId,int tier,int traitId)->std::optional<int>{
+                if(!traitId)return 0;
+                // Imported unresolved trait placeholders store wire choices.
+                if(traitId<0)return traitId>=-3?std::optional<int>(-traitId):std::nullopt;
+                const auto si=GetSpecInfo(specId);
+                if(si&&si->major_traits.size()>=9)
+                    for(int r=0;r<3;++r)
+                        if(si->major_traits[tier*3+r]==static_cast<uint32_t>(traitId))return r+1;
+                return std::nullopt;
+            },
+            [&](uint32_t id){return GetPaletteIdFromSkill(b.profession,id);},
+            [&](int i)->std::optional<uint32_t>{return b.legend_codes[i];},
+            b.inactive_rev_skills);
+        return link?ChatLink::EncodeBuild(*link):std::string{};
     }
 
     std::vector<uint32_t> GW2API::GetProfessionSpecIds(const std::string& profession) {
