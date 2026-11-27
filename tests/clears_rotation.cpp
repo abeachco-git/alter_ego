@@ -1,5 +1,6 @@
 #include "../src/ClearsRotation.h"
 #include "../src/ClearsReset.h"
+#include "../src/ClearsPublicEpoch.h"
 #include "../src/FractalScales.h"
 #include "../src/FractalCardLayout.h"
 #include <cassert>
@@ -39,6 +40,61 @@ int case_clears_rotation(int, char**) {
     assert(!LooksUnrotated({101, 102}, {101, 103}));
     assert(LooksUnrotated({101, 102}, {}));
     assert(!LooksUnrotated({}, {101, 102}));
+    // Public membership is epoch-qualified and cannot encode account progress.
+    // A timestamp or base definition alone does not prove daily rollover.
+    {
+        namespace P=ClearsPublicEpoch;
+        P::Cache shared;
+        const auto yesterday=reset-day;
+        P::Category old{yesterday,yesterday+60,1,{101,102},{}};
+        assert(shared.StoreCategory(0,old,{},yesterday+60));
+        assert(!P::CategoryUsable(old,0,yesterday,yesterday+60,{},true));
+        assert(!shared.GetCategory(0,reset));
+        const auto baseline=shared.DailyBaselines(0,reset,{102,101});
+        assert(baseline.size()==1&&P::Held(baseline,{101,102}));
+        assert(!shared.StoreCategory(0,{reset,reset+60,2,{101,102},{}},{},reset+61));
+        assert(!shared.StoreCategory(0,{reset,reset+59,3,{101,103},{}},{},reset+61));
+        assert(!shared.StoreCategory(0,{reset,reset+60,4,{101,103},{}},{},reset+day));
+        assert(shared.StoreCategory(0,{reset,reset+60,5,{101,103},{}},{},reset+61));
+        const auto current=shared.GetCategory(0,reset);
+        assert(current&&current->proofPrior==P::Ids({101,102}));
+        assert(P::CategoryUsable(*current,0,reset,reset+62,{},true));
+        // A different account's actual prior IDs can veto a shared candidate.
+        assert(!P::CategoryUsable(*current,0,reset,reset+62,{{103,101}},true));
+        assert(!P::CategoryUsable(*current,0,reset+day,reset+day+60,{},true));
+        assert(!shared.StoreCategory(0,{reset,reset+62,6,{101,102},{}},{},reset+63));
+        P::Section defs{reset,reset+61,7,{101,103},{101,103},{{101,"A",1,{"First"}},{103,"B",2,{"Second"}}}};
+        assert(shared.StoreSection(0,defs,*current,reset+62));
+        assert(P::SectionUsable(*shared.GetSection(0,reset),0,*current,{103,101},reset+63));
+        assert(!shared.GetSection(1,reset)); // independent bounties
+        auto incomplete=defs;incomplete.token=8;incomplete.definitions.pop_back();
+        assert(!shared.StoreSection(0,incomplete,*current,reset+63));
+        assert(shared.GetSection(0,reset)->token==7);
+        auto changed=*current;changed.ids={101,104};
+        assert(!P::SectionUsable(defs,0,changed,{101,104},reset+63));
+        assert(!P::SectionUsable(defs,0,*current,{101,103},reset+day));
+        // A cold-start observation without any baseline may satisfy its own
+        // live request but not another baseline-free account's rollover.
+        P::Category cold{reset,reset+60,9,{201,202},{}};
+        assert(shared.StoreCategory(1,cold,{},reset+61));
+        assert(!P::CategoryUsable(cold,1,reset,reset+62,{},true));
+        assert(P::CategoryUsable(cold,1,reset,reset+62,{{200,202}},true));
+        shared.ConfirmDaily(1,cold,{200,202},reset+62);
+        assert(P::CategoryUsable(*shared.GetCategory(1,reset),1,reset,reset+63,{},true));
+        // Weekly public membership may legitimately retain identical IDs.
+        // It verifies only definitions; per-account progress still has its
+        // own existing nonzero-fingerprint hold and independent retries.
+        P::Category weekly{reset,reset+60,10,{9125,9128},{}};
+        assert(shared.StoreCategory(2,weekly,{},reset+61));
+        assert(P::CategoryUsable(weekly,2,reset,reset+62,{},true));
+        P::Section raids{reset,reset+61,11,weekly.ids,{9128},{{9128,"Raid",1,{"Boss"}}}};
+        assert(shared.StoreSection(2,raids,weekly,reset+62));
+        assert(!shared.GetSection(3,reset));
+        P::Section strikes{reset,reset+61,12,weekly.ids,{9125},{}};
+        assert(!shared.StoreSection(3,strikes,weekly,reset+62));
+        assert(shared.GetSection(2,reset)&&!shared.GetSection(3,reset));
+        assert(!P::CategoryUsable(weekly,2,reset,reset+P::Week,{},true));
+    }
     // A weekly response may contain the identical IDs but must reset its
     // progress/claim information. A held-over response is not fresh.
     struct WeeklyObjective {

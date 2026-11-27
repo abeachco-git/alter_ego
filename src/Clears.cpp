@@ -33,6 +33,7 @@
 #include "StrikeDisplayName.h"
 #include "StrikePicker.h"
 #include "ClearsReset.h"
+#include "ClearsPublicEpoch.h"
 #include "SectionRefresh.h"
 #include "AutoRefreshPolicy.h"
 #include "FractalScales.h"
@@ -56,6 +57,8 @@ static constexpr uint32_t CAT_DAILY_FRACTALS = 88;
 static constexpr uint32_t CAT_DAILY_BOUNTIES = 475;
 static constexpr uint32_t CAT_WEEKLY_RAIDS   = 477;
 static constexpr uint32_t ACH_WEEKLY_STRIKES = 9125;
+// Public membership and definitions only; deliberately not persisted with any account.
+static ClearsPublicEpoch::Cache g_ClearsPublicEpochs;
 
 struct ClearEntry {
     uint32_t id = 0;
@@ -681,31 +684,113 @@ static std::vector<uint32_t> ReadCategoryIds(const std::string& url,uint32_t cat
 }
 
 static std::vector<uint32_t> FetchCategoryIds(uint32_t catId,int64_t requestToken,
-                                            const std::vector<uint32_t>& prior) {
+                                            const ClearsPublicEpoch::Baselines& prior) {
     auto ids=ReadCategoryIds(ClearsReset::FreshCategoryUrl(catId,requestToken),catId);
-    if(!ClearsReset::LooksUnrotated(prior,ids))return ids;
-    // The alternate documented bulk endpoint uses an explicit schema and
-    // language. It may avoid stale representation caches; never promote an
-    // unchanged result just because it came from another URL.
+    if(!ClearsPublicEpoch::Held(prior,ids))return ids;
+    // Both original routes retain no-cache headers, exact category identity
+    // and rollover fingerprint validation. Never accept unchanged prior IDs.
     AlterEgo::Background::Checkpoint();
     auto alternate=ReadCategoryIds(ClearsReset::AlternateCategoryUrl(catId,requestToken),catId);
-    if(!ClearsReset::LooksUnrotated(prior,alternate))return alternate;
+    if(!ClearsPublicEpoch::Held(prior,alternate))return alternate;
     return ids.empty()?alternate:ids;
 }
 
-// Helper: fetch achievement details (name, bits) from public API
-static std::vector<ClearEntry> FetchAchievementDetails(const std::vector<uint32_t>& ids) {
-    std::vector<ClearEntry> entries;
-    // Keep reset validation and section retries independent. Until Part 9B.2,
-    // each admitted Clears detail request requires a fresh observation.
-    const auto definitions=AlterEgo::AchievementDefinitions::Acquire(ids,true,true);
-    if(definitions.size()!=ids.size())return entries;
-    for(const auto& def:definitions){
-        ClearEntry entry;entry.id=def->id;entry.name=def->name;entry.max=def->max_count;
-        for(const auto& bit:def->bits)entry.bitNames.push_back(bit.text);
-        entries.push_back(std::move(entry));
+static int64_t ClearPublicNow(){return ResetEpoch(std::chrono::system_clock::now());}
+struct ClearCategoryResult {
+    std::optional<ClearsPublicEpoch::Category> category;
+    std::string error;
+};
+static ClearCategoryResult AcquireClearCategory(size_t category,int64_t epoch,
+                                                  const std::vector<uint32_t>& prior,bool force){
+    namespace P=ClearsPublicEpoch;
+    namespace R=AlterEgo::RefreshEngine;
+    namespace B=AlterEgo::Background;
+    const uint32_t catId=category==0?CAT_DAILY_FRACTALS:category==1?CAT_DAILY_BOUNTIES:CAT_WEEKLY_RAIDS;
+    const auto key="clears-public-category:"+std::to_string(epoch);
+    const auto initial=g_ClearsPublicEpochs.GetCategory(category,epoch);
+    const auto baseline=initial?initial->token:0;
+    const auto reuse=[&]() -> std::optional<P::Category>{
+        auto candidate=g_ClearsPublicEpochs.GetCategory(category,epoch);
+        const auto baselines=g_ClearsPublicEpochs.DailyBaselines(category,epoch,prior);
+        if(!candidate||(force&&candidate->token<=baseline)||
+           !P::CategoryUsable(*candidate,category,epoch,ClearPublicNow(),baselines,true))return {};
+        g_ClearsPublicEpochs.ConfirmDaily(category,*candidate,prior,ClearPublicNow());
+        return candidate;
+    };
+    if(auto value=reuse())return {std::move(value),{}};
+    // A single claim per category/epoch. Section-specific retry policy owns
+    // failures; the shared metadata claim has no additional retry penalty.
+    auto claim=R::ClaimIds(key,{catId});
+    if(claim->ids.empty()){
+        if(R::WaitForIds(key,{catId},[]{return B::Workers().Stopping();})){
+            if(auto value=reuse())return {std::move(value),{}};
+        }
+        B::Checkpoint();
+        return {{},"Shared category response unavailable or unverified"};
     }
-    return entries;
+    if(auto value=reuse())return {std::move(value),{}};
+    B::Checkpoint();
+    const auto started=ClearPublicNow();
+    if(!P::InWindow(epoch,P::Period(category),started,started))return {{},"Reset window changed"};
+    const auto baselines=g_ClearsPublicEpochs.DailyBaselines(category,epoch,prior);
+    const auto token=ClearsReset::RequestToken();
+    auto ids=FetchCategoryIds(catId,token,baselines);
+    B::Checkpoint();
+    if(P::Held(baselines,ids))return {{},ids.empty()?"Missing category response (both API routes checked)":"API returned prior IDs (both routes checked)"};
+    P::Category value{epoch,started,token,std::move(ids),{}};
+    if(!g_ClearsPublicEpochs.StoreCategory(category,value,prior,ClearPublicNow()))
+        return {{},"Category response no longer verifies the reset window"};
+    // The first live fetch may proceed without a previous fingerprint, as
+    // before. It is not promoted to shared rollover proof on timestamp alone.
+    return {std::move(value),{}};
+}
+
+static std::vector<ClearEntry> FetchAchievementDetails(size_t section,const ClearsPublicEpoch::Category& category,
+                                                       const std::vector<uint32_t>& ids,bool force) {
+    namespace P=ClearsPublicEpoch;
+    namespace R=AlterEgo::RefreshEngine;
+    namespace B=AlterEgo::Background;
+    const auto key="clears-public-section:"+std::to_string(category.epoch);
+    const uint32_t sectionId=static_cast<uint32_t>(section+1);
+    const auto initial=g_ClearsPublicEpochs.GetSection(section,category.epoch);
+    const auto baseline=initial?initial->token:0;
+    const auto project=[](const std::vector<P::Definition>& definitions){
+        std::vector<ClearEntry> entries;
+        for(const auto& def:definitions){
+            ClearEntry entry;entry.id=def.id;entry.name=def.name;entry.max=def.max;
+            entry.bitNames=def.bitNames;entries.push_back(std::move(entry));
+        }
+        return entries;
+    };
+    const auto reuse=[&]() -> std::optional<P::Section>{
+        auto candidate=g_ClearsPublicEpochs.GetSection(section,category.epoch);
+        if(!candidate||(force&&candidate->token<=baseline)||
+           !P::SectionUsable(*candidate,section,category,ids,ClearPublicNow()))return {};
+        return candidate;
+    };
+    if(auto value=reuse())return project(value->definitions);
+    auto claim=R::ClaimIds(key,{sectionId});
+    if(claim->ids.empty()){
+        if(R::WaitForIds(key,{sectionId},[]{return B::Workers().Stopping();})){
+            if(auto value=reuse())return project(value->definitions);
+        }
+        B::Checkpoint();return {};
+    }
+    if(auto value=reuse())return project(value->definitions);
+    const auto started=ClearPublicNow();
+    if(!P::InWindow(category.epoch,P::Period(section<2?section:2),started,started))return {};
+    const auto token=ClearsReset::RequestToken();
+    const auto definitions=AlterEgo::AchievementDefinitions::Acquire(ids,true,true);
+    if(definitions.size()!=ids.size())return {};
+    P::Section value{category.epoch,started,token,category.ids,ids,{}};
+    for(const auto& def:definitions){
+        P::Definition entry;entry.id=def->id;entry.name=def->name;entry.max=def->max_count;
+        for(const auto& bit:def->bits)entry.bitNames.push_back(bit.text);
+        value.definitions.push_back(std::move(entry));
+    }
+    B::Checkpoint();
+    if(!g_ClearsPublicEpochs.StoreSection(section,value,category,ClearPublicNow()))return {};
+    return project(value.definitions);
 }
 
 // Fetch all clears data (runs on background thread)
@@ -714,7 +799,8 @@ static void FetchClears(bool manual) {
     const auto account=GetEffectiveAccountName();
     if(account.empty())return;
     uint64_t generation=0;
-    std::array<bool,4> request{};
+    std::array<bool,4> request{},forcePublic{};
+    std::array<int64_t,4> epochs{};
     std::array<std::vector<uint32_t>,2> prior;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
@@ -722,6 +808,8 @@ static void FetchClears(bool manual) {
         const auto now=std::chrono::system_clock::now();
         for(size_t i=0;i<request.size();++i){
             const auto reset=ResetEpoch(i<2?CalcLastDailyReset(now):CalcLastWeeklyReset(now));
+            epochs[i]=reset;
+            forcePublic[i]=manual||g_ClearsSectionRetry[i].at!=0;
             request[i]=ClearsReset::GracePassed(reset,ResetEpoch(now))&&
                 (manual||((ClearDefinitionsMissing(i)||g_ClearsSectionRetry[i].at!=0)&&g_ClearsSectionRetry[i].Ready(NowMs())));
         }
@@ -730,13 +818,17 @@ static void FetchClears(bool manual) {
         generation=++g_ClearsGeneration;g_ClearsFetching=true;
         g_ClearsStatusMsg="Fetching achievement data...";
     }
-    AlterEgo::Background::Workers().Launch([manual,account,generation,request,prior]{
+    AlterEgo::Background::Workers().Launch([manual,account,generation,request,forcePublic,epochs,prior]{
         AlterEgo::ApiActivity::ReasonScope reason(manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Objective);
         bool any=false;
         auto publish=[&](size_t section,std::vector<ClearEntry> entries,const std::string& error){
             AlterEgo::Background::Checkpoint();
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
             if(generation!=g_ClearsGeneration||account!=g_ClearsCacheAccount||!g_ClearsFetching)return false;
+            // Do not publish a response that crossed its actual reset, even
+            // before the render-thread grace marker has been advanced.
+            const auto now=std::chrono::system_clock::now();
+            if(epochs[section]!=ResetEpoch(section<2?CalcLastDailyReset(now):CalcLastWeeklyReset(now)))return true;
             if(!error.empty()){
                 g_ClearsSectionRetry[section].Fail(NowMs(),error);
                 g_ClearsStatusMsg=std::string(ClearLabels[section])+": "+error;
@@ -770,12 +862,13 @@ static void FetchClears(bool manual) {
         };
         for(size_t i=0;i<2;++i)if(request[i]){
             AlterEgo::Background::Checkpoint();
-            const auto ids=FetchCategoryIds(i==0?CAT_DAILY_FRACTALS:CAT_DAILY_BOUNTIES,ClearsReset::RequestToken(),prior[i]);
-            if(ClearsReset::LooksUnrotated(prior[i],ids)){
-                if(!publish(i,{},ids.empty()?"Missing category response (both API routes checked)":"API returned prior IDs (both routes checked)"))return;
+            const auto result=AcquireClearCategory(i,epochs[i],prior[i],forcePublic[i]);
+            if(!result.category){
+                if(!publish(i,{},result.error))return;
                 continue;
             }
-            auto entries=FetchAchievementDetails(ids);
+            const auto& ids=result.category->ids;
+            auto entries=FetchAchievementDetails(i,*result.category,ids,forcePublic[i]);
             if(!AlterEgo::Identity::ExactIds(ids,DailyIds(entries))){
                 if(!publish(i,{},"Incomplete achievement definitions"))return;continue;
             }
@@ -786,12 +879,13 @@ static void FetchClears(bool manual) {
             AlterEgo::Background::Checkpoint();
             // Weekly raids and strikes share category 477, but neither
             // depends on the other's detail request succeeding.
-            const auto ids=FetchCategoryIds(CAT_WEEKLY_RAIDS,ClearsReset::RequestToken(),{});
+            const auto result=AcquireClearCategory(2,epochs[2],{},(request[2]&&forcePublic[2])||(request[3]&&forcePublic[3]));
             for(size_t i=2;i<4;++i)if(request[i]){
+                if(!result.category){if(!publish(i,{},"Missing weekly category IDs: "+result.error))return;continue;}
                 std::vector<uint32_t> wanted;
-                for(auto id:ids)if((id==ACH_WEEKLY_STRIKES)==(i==3))wanted.push_back(id);
+                for(auto id:result.category->ids)if((id==ACH_WEEKLY_STRIKES)==(i==3))wanted.push_back(id);
                 if(wanted.empty()){if(!publish(i,{},"Missing weekly category IDs"))return;continue;}
-                auto entries=FetchAchievementDetails(wanted);
+                auto entries=FetchAchievementDetails(i,*result.category,wanted,forcePublic[i]);
                 if(!AlterEgo::Identity::ExactIds(wanted,DailyIds(entries))){
                     if(!publish(i,{},"Incomplete achievement definitions"))return;continue;
                 }
