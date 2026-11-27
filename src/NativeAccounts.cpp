@@ -58,6 +58,7 @@ std::atomic<uint64_t> registryGeneration{1};
 std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
 std::shared_ptr<const CharacterLoadout::Projection> loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();
+std::shared_ptr<const PetOwnership::Projection> petOwnership=std::make_shared<PetOwnership::Projection>();
 std::atomic<uint64_t> loadoutPreferenceRevision{0};
 std::shared_ptr<const CharacterOrder::OrderProjection> customOrder=std::make_shared<CharacterOrder::OrderProjection>();
 std::atomic<uint64_t> customOrderRevision{0};
@@ -172,7 +173,13 @@ std::shared_ptr<const CharacterOrder::OrderProjection> OrderSnapshot(){
 void PublishOrder(std::shared_ptr<const CharacterOrder::OrderProjection> next){
     std::lock_guard<std::mutex> lock(viewMutex);customOrder=std::move(next);++customOrderRevision;
 }
-void RefreshLoadoutPreferences(){
+std::shared_ptr<const PetOwnership::Projection> PetSnapshot(){
+    std::lock_guard<std::mutex> lock(viewMutex);return petOwnership;
+}
+void PublishPets(std::shared_ptr<const PetOwnership::Projection> next){
+    std::lock_guard<std::mutex> lock(viewMutex);petOwnership=std::move(next);
+}
+void RefreshCharacterPreferences(){
     if(!std::filesystem::exists(AccountPath()))return;
     Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
     Database::Transaction tx(db);
@@ -180,7 +187,8 @@ void RefreshLoadoutPreferences(){
         if(!identityRosterBlocked.count(account)){CharacterLoadout::AdoptPortable(db,state);CharacterOrder::AdoptRanks(db,state);}
     auto order=std::make_shared<CharacterOrder::OrderProjection>(CharacterOrder::ReadOrder(db));
     auto next=std::make_shared<CharacterLoadout::Projection>(CharacterLoadout::ReadProjection(db));
-    tx.Commit();PublishPreferences(std::move(next));PublishOrder(std::move(order));
+    auto pets=std::make_shared<PetOwnership::Projection>(PetOwnership::Read(db));
+    tx.Commit();PublishPreferences(std::move(next));PublishOrder(std::move(order));PublishPets(std::move(pets));
 }
 // Credential gate is already held. Bootstrap only once, using exact GUID
 // and independently verified cached core data. Never replay old cache
@@ -275,7 +283,7 @@ bool AdoptIdentity(const CharacterIdentity::State& state,
             const auto order=OrderSnapshot();
             if(std::any_of(pending->pending.begin(),pending->pending.end(),[&](const auto& p){return p.account==account&&p.HasEvidence();})||
                std::any_of(order->pending.begin(),order->pending.end(),[&](const auto& p){return p.account==account;}))
-                RefreshLoadoutPreferences();
+                RefreshCharacterPreferences();
         }catch(...){}
         return true;
     }catch(...){
@@ -1015,6 +1023,31 @@ bool SaveCustomOrder(const std::string& account,const std::vector<CharacterIdent
         tx.Commit();PublishOrder(std::move(next));return true;
     }catch(...){return false;}
 }
+PetOwnership::Collection CharacterPets(const CharacterIdentity::Ref& ref){
+    const auto snapshot=PetSnapshot();const auto found=snapshot->find(ref);
+    return found==snapshot->end()?PetOwnership::Collection{}:found->second;
+}
+bool SetCharacterPetOwnership(const CharacterIdentity::Address& address,uint32_t pet,PetOwnership::Manual manual){
+    try{return CommitIfCharacterCurrent(FindLinked(address.account),address,[&]{
+        Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+        Database::Transaction tx(db);
+        if(!PetOwnership::SetManual(db,address.Reference(),pet,manual))return false;
+        auto next=std::make_shared<PetOwnership::Projection>(PetOwnership::Read(db));
+        tx.Commit();PublishPets(std::move(next));return true;
+    });}catch(...){return false;}
+}
+bool RecordCommittedPets(const CharacterIdentity::Address& address,const std::set<uint32_t>& pets){
+    if(address.binding.evidence.profession!="Ranger"||pets.empty())return true;
+    const auto existing=CharacterPets(address.Reference());
+    if(std::all_of(pets.begin(),pets.end(),[&](uint32_t id){return PetOwnership::Get(existing,id).observed;}))return true;
+    try{
+        Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+        Database::Transaction tx(db);
+        if(!PetOwnership::Observe(db,address.Reference(),pets))return false;
+        auto next=std::make_shared<PetOwnership::Projection>(PetOwnership::Read(db));
+        tx.Commit();PublishPets(std::move(next));return true;
+    }catch(...){return false;}
+}
 CharacterLoadout::Choice ExpectedLoadout(const CharacterIdentity::Ref& ref){return PreferenceSnapshot()->Get(ref);}
 uint64_t LoadoutPreferenceRevision(){return loadoutPreferenceRevision.load();}
 bool StageLoadoutPreferences(const CharacterLoadout::PortableChoices& records){
@@ -1493,7 +1526,7 @@ void Initialize(const std::string& directory){
                 else{identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
             }catch(...){identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
         }
-        try{RefreshLoadoutPreferences();}catch(...){}
+        try{RefreshCharacterPreferences();}catch(...){}
         Publish("");
     }catch(...){
         GW2API::DiscardIdentityCache("",{},true);registryReady=false;
@@ -1503,7 +1536,7 @@ void Shutdown(){
     // Called only after managed workers join.
     registryReady=false;++registryGeneration;physicalCache.clear();bagCache.clear();rosterCache.clear();
     identityStates.clear();identityRosterBlocked.clear();identityProofs.clear();identityConfirmation.clear();identityRecoveryAttempts.clear();
-    std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();++loadoutPreferenceRevision;customOrder=std::make_shared<CharacterOrder::OrderProjection>();++customOrderRevision;renameNotices.clear();message.clear();root.clear();
+    std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();++loadoutPreferenceRevision;petOwnership=std::make_shared<PetOwnership::Projection>();customOrder=std::make_shared<CharacterOrder::OrderProjection>();++customOrderRevision;renameNotices.clear();message.clear();root.clear();
 }
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
 std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}

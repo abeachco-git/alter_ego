@@ -407,7 +407,7 @@ bool g_WindowVisible = false;
 
 // UI State
 static AlterEgo::CharacterIdentity::Selection g_SelectedCharacter;
-static int g_SelectedTab = 0;          // 0 = Equipment, 1 = Build
+static int g_SelectedTab = 0;          // Equipment, Build, Tools, Ranger Pets
 static bool RenderChipStrip(const std::vector<std::string>& labels,
                             const std::vector<bool>& activeMarkers,
                             int& selectedIdx,
@@ -7273,8 +7273,10 @@ static void RenderCompanionAssociatedSkills(const ProfessionChoiceDisplay& choic
     }
     ImGui::TextDisabled("%s",choice.skillsKnown?"Catalog skills":"Catalog skills (partial)");
     ImGui::PushID("associated_skills");
+    const float pitch=size+ImGui::GetStyle().ItemSpacing.x;
+    const int columns=std::max(1,static_cast<int>((ImGui::GetContentRegionAvail().x+ImGui::GetStyle().ItemSpacing.x)/pitch));
     for(size_t i=0;i<choice.skills.size();++i){
-        if(i&&ImGui::GetContentRegionAvail().x>=size)ImGui::SameLine();
+        if(i%static_cast<size_t>(columns))ImGui::SameLine();
         ImGui::PushID(static_cast<int>(i));
         RenderSkillIcon(choice.skills[i],size);
         ImGui::PopID();
@@ -7319,6 +7321,115 @@ static bool RenderProfessionPairSection(bool legend,std::array<uint32_t,4>& valu
     }
     ImGui::PopID();
     return changed;
+}
+// Ranger collection consumes the same immutable public catalog and
+// identity-qualified durable projection. Filters never modify ownership.
+static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
+    using namespace AlterEgo;
+    namespace PO=PetOwnership;
+    const auto address=CharacterAddressFor(ch);
+    const auto ownership=address?NativeAccounts::CharacterPets(address->Reference()):PO::Collection{};
+    const auto active=ch.active_build_tab>0?PO::Selected(ch.build_tabs,ch.active_build_tab):std::set<uint32_t>{};
+    const auto catalog=PublicCatalog::Get();
+    if(catalog->pets.empty()){GW2API::FetchPetsAsync();RenderSpinner("Loading pet catalog...");return;}
+    static std::string search;
+    static int filter=0,mode=0;
+    static uint32_t selected=0;
+    UI::SearchField("ranger_pet_search","Search pets...",search);
+    const char* filters[]={"All","Owned / observed","Not owned","Unknown","Active build"};
+    UI::FilterChoice("Ownership",filter,filters,IM_ARRAYSIZE(filters));
+    const char* views[]={"List","Grid"};
+    UI::FilterChoice("View",mode,views,IM_ARRAYSIZE(views));
+    ImGui::TextWrapped("Pet unlocks are not exposed by the API. Observed means selected in a verified character build; other ownership can be marked manually.");
+    if(!address)ImGui::TextDisabled("Verified character identity unavailable; ownership edits disabled.");
+    const auto words=Search::Words(search);
+    std::vector<const PublicCatalog::Pet*> visible;
+    size_t known=0;
+    for(const auto& pet:catalog->pets){
+        const auto state=PO::Get(ownership,pet.id).State();
+        const bool owned=state==PO::Status::Owned||state==PO::Status::Observed;
+        if(owned)++known;
+        if((filter==1&&!owned)||(filter==2&&state!=PO::Status::NotOwned)||
+            (filter==3&&state!=PO::Status::Unknown)||(filter==4&&!active.count(pet.id)))continue;
+        if(!Search::Matches(pet.name,words))continue;
+        visible.push_back(&pet);
+    }
+    ImGui::TextDisabled("%zu confirmed or observed / %zu catalog pets | %zu shown",known,catalog->pets.size(),visible.size());
+    if(const auto* pet=PublicCatalog::FindPet(catalog->pets,selected)){
+        ImGui::Separator();
+        const auto choice=ResolveProfessionChoice(false,pet->id);
+        ImGui::TextUnformatted(choice.name.c_str());
+        UI::EntityContext("##selected_pet_name",[&]{ProfessionChoiceActions(false,choice);});
+        if(!choice.description.empty())ImGui::TextWrapped("%s",choice.description.c_str());
+        std::vector<uint32_t> missing;
+        for(auto skill:choice.skills)if(!GW2API::GetSkillInfo(skill))missing.push_back(skill);
+        if(!missing.empty())GW2API::FetchSkillDetailsAsync(missing);
+        RenderCompanionAssociatedSkills(choice,30.f);
+        ImGui::Separator();
+    }
+    auto actions=[&](const PublicCatalog::Pet& pet,const PO::Evidence& evidence){
+        ProfessionChoiceActions(false,ResolveProfessionChoice(false,pet.id));
+        ImGui::Separator();
+        auto save=[&](PO::Manual value){
+            if(address&&!NativeAccounts::SetCharacterPetOwnership(*address,pet.id,value)&&APIDefs)
+                APIDefs->GUI_SendAlert("Pet ownership could not be saved; refresh the character identity.");
+        };
+        if(UI::MenuAction("Mark owned",UI::MenuIcon::Edit,address.has_value()&&evidence.manual!=PO::Manual::Owned))save(PO::Manual::Owned);
+        if(UI::MenuAction("Mark not owned",UI::MenuIcon::Edit,address.has_value()&&!evidence.observed&&evidence.manual!=PO::Manual::NotOwned,
+                evidence.observed?"A verified build has selected this pet.":nullptr))save(PO::Manual::NotOwned);
+        if(UI::MenuAction("Clear manual status",UI::MenuIcon::Detach,address.has_value()&&evidence.manual!=PO::Manual::Unknown))save(PO::Manual::Unknown);
+    };
+    auto hover=[&](const PublicCatalog::Pet& pet,const PO::Evidence& evidence){
+        if(!ImGui::IsItemHovered())return;
+        std::string body=PO::Label(evidence.State());
+        if(active.count(pet.id))body+=" | Selected in active build";
+        if(pet.description&&!pet.description->empty())body+="\n"+StripGW2Markup(*pet.description);
+        UI::DetailTooltip(pet.name.c_str(),body.c_str());
+    };
+    ImGui::BeginChild("##ranger_pet_catalog",ImVec2(0,0),false);
+    if(mode==1){
+        const float size=40.f,gap=4.f;
+        const float pitch=UI::CatalogGridPitch(size,gap);
+        const int cols=std::max(1,static_cast<int>((ImGui::GetContentRegionAvail().x+gap)/(size+gap)));
+        const int rows=(static_cast<int>(visible.size())+cols-1)/cols;
+        UI::CatalogLines(rows,pitch,gap,[&](int r){
+            for(int c=0;c<cols;++c){
+                const size_t index=static_cast<size_t>(r*cols+c);if(index>=visible.size())break;
+                const auto& pet=*visible[index];const auto evidence=PO::Get(ownership,pet.id);
+                if(c)ImGui::SameLine(0,gap);
+                ImGui::PushID(static_cast<int>(pet.id));
+                const auto pos=ImGui::GetCursorScreenPos();const ImVec2 end(pos.x+size,pos.y+size);
+                auto* draw=ImGui::GetWindowDrawList();
+                const auto choice=ResolveProfessionChoice(false,pet.id);
+                const auto* tex=IconManager::GetOrRequestIcon(choice.key,choice.icon);
+                if(ImGui::InvisibleButton("##pet_tile",ImVec2(size,size)))selected=pet.id;
+                if(tex&&tex->Resource)draw->AddImage(tex->Resource,pos,end);
+                else draw->AddRectFilled(pos,end,IM_COL32(40,40,60,200));
+                if(selected==pet.id)draw->AddRect(pos,end,IM_COL32(232,196,122,255),0,0,2.f);
+                const auto state=evidence.State();
+                const char* marker=state==PO::Status::Owned?"O":state==PO::Status::Observed?"V":state==PO::Status::NotOwned?"N":"?";
+                draw->AddRectFilled(ImVec2(pos.x,pos.y+size-14),ImVec2(pos.x+14,end.y),IM_COL32(20,20,20,220));
+                draw->AddText(ImVec2(pos.x+3,pos.y+size-14),IM_COL32(240,240,240,255),marker);
+                if(active.count(pet.id))draw->AddCircleFilled(ImVec2(end.x-5,pos.y+5),4,IM_COL32(111,204,122,255));
+                hover(pet,evidence);UI::EntityContext("##pet_actions",[&]{actions(pet,evidence);});
+                ImGui::PopID();
+            }
+        });
+    }else{
+        for(const auto* ptr:visible){
+            const auto& pet=*ptr;const auto evidence=PO::Get(ownership,pet.id);
+            ImGui::PushID(static_cast<int>(pet.id));ImGui::BeginGroup();
+            const auto choice=ResolveProfessionChoice(false,pet.id);
+            const auto* tex=IconManager::GetOrRequestIcon(choice.key,choice.icon);
+            if(tex&&tex->Resource)ImGui::Image(tex->Resource,ImVec2(30,30));else ImGui::Dummy(ImVec2(30,30));
+            ImGui::SameLine();ImGui::AlignTextToFramePadding();
+            const auto label=pet.name+"  |  "+PO::Label(evidence.State())+(active.count(pet.id)?"  |  Active build":"");
+            if(UI::SelectableOption(label.c_str(),selected==pet.id,ImGuiSelectableFlags_None,ImVec2(0,30)))selected=pet.id;
+            ImGui::EndGroup();hover(pet,evidence);
+            UI::EntityContext("##pet_actions",[&]{actions(pet,evidence);});ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
 }
 static void RenderLiveProfessionPairs(const AlterEgo::BuildTemplate& bt) {
     if(bt.profession!="Ranger"&&bt.profession!="Revenant")return;
@@ -16864,7 +16975,7 @@ void AddonRender() {
                     ImGui::Spacing();
                     ImGui::Separator();
 
-                    // Tab bar: Equipment | Build | Tools
+                    // Tab bar: Equipment | Build | Tools | Ranger Pets
                     if (ImGui::BeginTabBar("##detail_tabs")) {
                         if (ImGui::BeginTabItem("Equipment",nullptr,NavigationDetailFlags(0))) {
                             if(g_SelectedTab!=0)MarkNavigation();g_SelectedTab = 0;
@@ -16886,6 +16997,12 @@ void AddonRender() {
                             RenderCharacterToolsPanel(ch);
                             ImGui::EndChild();
                             ImGui::EndTabItem();
+                        }
+                        if(ch.profession=="Ranger"&&ImGui::BeginTabItem("Pets",nullptr,NavigationDetailFlags(3))){
+                            if(g_SelectedTab!=3)MarkNavigation();g_SelectedTab=3;
+                            ImGui::BeginChild("PetsScroll",ImVec2(0,0),false);
+                            RenderCharacterPetsPanel(ch);
+                            ImGui::EndChild();ImGui::EndTabItem();
                         }
                         ImGui::EndTabBar();
                     }

@@ -11,6 +11,7 @@
 #include "CharacterIdentityRuntime.h"
 #include "CharacterPreferenceStore.h"
 #include "CharacterOrderStore.h"
+#include "PetOwnership.h"
 #include "InventoryGroupCore.h"
 namespace AlterEgo::NativeAccounts {
 struct LinkedAccount {
@@ -44,6 +45,11 @@ bool CharacterAccountLinked(const std::string& account);
 CharacterLoadout::Choice ExpectedLoadout(const CharacterIdentity::Ref& ref);
 uint64_t LoadoutPreferenceRevision();
 bool SetExpectedLoadout(const CharacterIdentity::Address& address,const CharacterLoadout::Choice& choice);
+PetOwnership::Collection CharacterPets(const CharacterIdentity::Ref& ref);
+bool SetCharacterPetOwnership(const CharacterIdentity::Address& address,uint32_t pet,PetOwnership::Manual manual);
+// Worker-only: caller already holds the verified character commit gate.
+// Do not reacquire credentialMutex or issue HTTP from this helper.
+bool RecordCommittedPets(const CharacterIdentity::Address& address,const std::set<uint32_t>& pets);
 bool StageLoadoutPreferences(const CharacterLoadout::PortableChoices& records);
 CharacterLoadout::PortableChoices RecoverableLoadoutPreferences(const CharacterIdentity::Address& address);
 bool RecoverLoadoutPreference(const CharacterIdentity::Address& address,const CharacterLoadout::PortableChoice& record);

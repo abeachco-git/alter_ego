@@ -913,6 +913,11 @@ namespace AlterEgo {
                 stage("Saving verified scopes");
                 if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{
                     if(!SaveCharacterData(a.id,name,&ch,a.name))return false;
+                    // Ownership observations are monotonic and durable but
+                    // never manufacture a success stamp for the Builds scope.
+                    if(ch.profession=="Ranger"&&std::any_of(verified.begin(),verified.end(),[](const auto& v){return v.scope==S::Builds;}))
+                        if(!NativeAccounts::RecordCommittedPets(*address,PetOwnership::Selected(ch.build_tabs))&&s_api)
+                            s_api->Log(LOGL_WARNING,"AlterEgo","Verified pet selections could not be persisted to the identity registry.");
                     for(const auto& v:verified)CharacterActivity::Success(key,S::Name(v.scope),v.ticket,v.stamp,v.specVerified);
                     return true;
                 })){ 
@@ -1051,7 +1056,7 @@ namespace AlterEgo {
                     int i = 0;
                     for (const auto& p : pets["terrestrial"]) {
                         if (i >= 2) break;
-                        bt.pets.terrestrial[i] = p.is_null() ? 0 : p.get<uint32_t>();
+                        bt.pets.terrestrial[i] = p.is_null() ? 0 : PublicCatalog::Id(p);
                         i++;
                     }
                 }
@@ -1059,7 +1064,7 @@ namespace AlterEgo {
                     int i = 0;
                     for (const auto& p : pets["aquatic"]) {
                         if (i >= 2) break;
-                        bt.pets.aquatic[i] = p.is_null() ? 0 : p.get<uint32_t>();
+                        bt.pets.aquatic[i] = p.is_null() ? 0 : PublicCatalog::Id(p);
                         i++;
                     }
                 }

@@ -17,7 +17,7 @@ inline const char* Name(Scope s){namespace N=RefreshEngine::ScopeName;return s==
 inline bool SpecSensitive(Scope s){return s==Builds||s==Tabs||s==Physical;}
 using Stamps=std::array<int64_t,5>;
 inline constexpr Mask Visible(int tab){
-    return Core|Crafting|(tab==1?Builds:tab==2?Physical:Tabs|Physical);
+    return Core|Crafting|((tab==1||tab==3)?Builds:tab==2?Physical:Tabs|Physical);
 }
 inline int64_t Oldest(const Stamps& stamps,Mask demand){
     int64_t result=0;bool first=true;

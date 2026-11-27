@@ -3,6 +3,8 @@
 #include "../src/CharacterSelectionCore.h"
 #include "../src/CharacterProvenance.h"
 #include "../src/CharacterPreferenceStore.h"
+#include "../src/PetOwnership.h"
+#include "../src/CharacterScopes.h"
 #include "../src/CharacterIdentityCache.h"
 #include "../src/CharacterActivity.h"
 #include "../src/NativeInventoryStore.h"
@@ -74,6 +76,40 @@ int case_native_inventory(int,char**){
         assert(!info.pending&&info.retrySeconds==0);
         Background::Workers().JoinAll();RefreshEngine::ResetMetadata();
         D::Configure(root,{},{});std::filesystem::remove_all(path);
+    }
+    // Pet ownership is durable character-scoped evidence, not a shared
+    // account-wide unlock list or an inferred unowned catalog.
+    {
+        namespace CI=AlterEgo::CharacterIdentity;
+        namespace PO=AlterEgo::PetOwnership;
+        Database::Connection db(":memory:",Database::Connection::OpenMode::Create);
+        CI::InitializeAccountRegistry(db);
+        const CI::Evidence ranger{"2020-01-01T01:02:03Z","Ranger","Human"};
+        const CI::Evidence ranger2{"2020-01-02T01:02:03Z","Ranger","Human"};
+        const CI::Evidence rev{"2020-01-03T01:02:03Z","Revenant","Human"};
+        auto plan=CI::Commit(db,"A",0,{"Ranger","Other","Rev"},{{"Ranger",ranger},{"Other",ranger2},{"Rev",rev}});
+        assert(plan&&plan->FullyResolved());
+        const CI::Ref one{"A",plan->next.Current("Ranger")->id},two{"A",plan->next.Current("Other")->id},wrong{"A",plan->next.Current("Rev")->id};
+        auto second=CI::Commit(db,"B",0,{"Ranger"},{{"Ranger",ranger}});
+        assert(second&&second->FullyResolved());
+        const CI::Ref foreign{"B",second->next.Current("Ranger")->id};
+        assert(PO::SetManual(db,one,4,PO::Manual::NotOwned));
+        assert(PO::SetManual(db,one,5,PO::Manual::Owned));
+        assert(PO::Observe(db,one,{4,6}));
+        assert(!PO::Observe(db,wrong,{4})&&!PO::SetManual(db,wrong,5,PO::Manual::Owned));
+        assert(!PO::SetManual(db,one,4,PO::Manual::NotOwned));
+        auto projection=PO::Read(db);
+        assert(PO::Get(projection.at(one),4).State()==PO::Status::Observed);
+        assert(PO::Get(projection.at(one),5).State()==PO::Status::Owned);
+        assert(!projection.count(two)&&!projection.count(foreign));
+        assert(PO::SetManual(db,one,5,PO::Manual::Unknown));
+        assert(PO::SetManual(db,one,4,PO::Manual::Owned));
+        assert(PO::SetManual(db,one,4,PO::Manual::Unknown));
+        auto renamed=CI::Commit(db,"A",plan->next.revision,{"Renamed","Other","Rev"},{{"Renamed",ranger},{"Other",ranger2},{"Rev",rev}});
+        assert(renamed&&renamed->next.Current("Renamed")->id==one.id);
+        assert(PO::Get(PO::Read(db).at(one),4).State()==PO::Status::Observed);
+        assert(PO::Get(PO::Read(db).at(one),5).State()==PO::Status::Unknown);
+        assert(AlterEgo::CharacterScopes::Visible(3)==AlterEgo::CharacterScopes::Visible(1));
     }
     // Durable local character identity: rename, same-name reuse, swaps,
     // account isolation, complete observation, v1 migration and rollback.

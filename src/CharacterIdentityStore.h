@@ -44,6 +44,15 @@ CREATE TABLE character_loadout_pending(account TEXT NOT NULL,name TEXT NOT NULL,
 CREATE TABLE character_custom_order(account TEXT NOT NULL,local_id INTEGER NOT NULL,rank INTEGER NOT NULL CHECK(rank>=0),PRIMARY KEY(account,local_id),FOREIGN KEY(account,local_id) REFERENCES character_identities(account,local_id) ON DELETE CASCADE) STRICT;
 CREATE TABLE character_order_pending(account TEXT NOT NULL,name TEXT NOT NULL,created TEXT NOT NULL,profession TEXT NOT NULL,race TEXT NOT NULL,rank INTEGER NOT NULL CHECK(rank>=0),resolved INTEGER NOT NULL DEFAULT 0 CHECK(resolved IN (0,1)),PRIMARY KEY(account,name,created,profession,race,rank)) STRICT;
 )SQL");
+        else if(version==8)c.Exec(R"SQL(
+CREATE TABLE character_pet_ownership(account TEXT NOT NULL,local_id INTEGER NOT NULL,
+    pet_id INTEGER NOT NULL CHECK(pet_id BETWEEN 1 AND 4294967295),
+    observed INTEGER NOT NULL CHECK(observed IN (0,1)),
+    manual INTEGER NOT NULL CHECK(manual IN (0,1,2)),
+    CHECK(observed=0 OR manual<>2), CHECK(observed=1 OR manual<>0),
+    PRIMARY KEY(account,local_id,pet_id),
+    FOREIGN KEY(account,local_id) REFERENCES character_identities(account,local_id) ON DELETE CASCADE) STRICT;
+)SQL");
         else throw Database::Error(SQLITE_ERROR,"Unknown account registry schema");
 }
 inline void InitializeAccountRegistry(Database::Connection& db){
