@@ -1,4 +1,5 @@
 #include "../src/SkillEditCore.h"
+#include "../src/TooltipCore.h"
 #include "../src/ChatLink.h"
 #include "../src/ArtworkRequest.h"
 #include "../src/CatalogRowCore.h"
@@ -157,6 +158,15 @@ int case_skill_edit_core(int,char**) {
         J raw={{"profession","Revenant"},{"specializations",J::array({J{{"id",1}},J{{"id",2}},J{{"id",3}}})},
             {"legend_codes",J::array({13,8,7,2})},{"skills",J{{"heal",9}}},{"aquatic_skills",J{{"utilities",{10,11,12}}}}};
         assert(ThirdSpecialization(raw)==3);
+        const auto ids=ContextSpecializations(raw);
+        auto known=[](uint32_t id)->EliteContext{return id==3?EliteContext("Conduit"):EliteContext(std::string{});};
+        assert(ResolveEliteContext(ids,known)==EliteContext("Conduit"));
+        assert(!ResolveEliteContext(std::array<uint32_t,3>{3,2,1},known));
+        assert(!ResolveEliteContext(std::array<uint32_t,3>{1,1,3},known));
+        assert(!ResolveEliteContext(std::array<uint32_t,3>{0,2,3},known));
+        assert(!ResolveEliteContext(ids,[](uint32_t id)->EliteContext{return id==1?std::nullopt:EliteContext(std::string{});}));
+        auto facts=J::array({J{{"type","Recharge"},{"value",10}},J{{"type","Damage"},{"hit_count",2},{"dmg_multiplier",99}},J{{"type","Buff"},{"status","Might"},{"duration",5}},J{{"type","Unknown"},{"value",9}},J{{"type","Number"},{"text","Targets"},{"value","bad"}}});
+        assert(AlterEgo::TooltipCore::FactLines(facts)==std::vector<std::string>({"Recharge: 10 s","Hits: 2","Might (5 s)"}));
         auto canonical=[](uint32_t id){return id>=13&&id<=19?id-12:id;};
         auto required=[](uint32_t id)->std::optional<uint32_t>{return id==9?std::optional<uint32_t>(4):std::nullopt;};
         auto water=[](uint32_t id)->std::optional<bool>{return id==10?std::optional<bool>(true):std::nullopt;};

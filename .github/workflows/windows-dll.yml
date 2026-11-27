@@ -164,6 +164,19 @@ jobs:
           pets = get("/v2/pets?ids=all")
           assert pets and all({"id","name"} <= p.keys() for p in pets)
           print("Pet sample:", pets[0]["id"],pets[0]["name"])
+          print("Pet fields:", sorted(set().union(*(p.keys() for p in pets))))
+          print("Legend fields:", sorted(set().union(*(l.keys() for l in legends))))
+          pet_skills = {s["id"] for p in pets for s in p.get("skills", []) if isinstance(s, dict) and s.get("id")}
+          legend_skills = {s for l in legends for s in [l.get("swap"), l.get("heal"), l.get("elite"), *l.get("utilities", [])] if isinstance(s, int) and s > 0}
+          skill_ids = sorted(pet_skills | legend_skills)
+          associated = []
+          for i in range(0, len(skill_ids), 200):
+              associated.extend(get("/v2/skills?ids="+",".join(map(str,skill_ids[i:i+200]))))
+          print("Companion skill coverage:", len({s["id"] for s in associated}), "/",len(skill_ids))
+          print("Companion skill fields:", sorted(set().union(*(s.keys() for s in associated))))
+          print("Companion skill types:", sorted({s.get("type", "<missing>") for s in associated}))
+          print("Companion skills with NoUnderwater:", sum("NoUnderwater" in s.get("flags",[]) for s in associated))
+          print("Legend roles:", [(l["code"],l.get("heal"),l.get("utilities"),l.get("elite")) for l in legends])
           stats = get("/v2/itemstats?ids=all")
           print("Stat sample:",stats[0])
           dyes = get("/v2/colors?ids=all")

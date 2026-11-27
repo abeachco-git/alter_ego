@@ -167,7 +167,7 @@ static std::vector<AlterEgo::SkillEdit::EliteContext> ComponentUIEliteContexts(c
         const auto refs=owner.value("refs",ComponentJson::object());
         if(refs.value(kind,std::string())!=id)continue;
         const auto* base=ComponentUIFind(doc,"base_build",refs.value("base_build",std::string()));
-        out.push_back(base?AlterEgo::GW2API::RevenantEliteContext(AlterEgo::SkillEdit::ThirdSpecialization(base->at("data"))):std::nullopt);
+        out.push_back(base?AlterEgo::GW2API::RevenantEliteContext(AlterEgo::SkillEdit::ContextSpecializations(base->at("data"))):std::nullopt);
     }
     return out;
 }

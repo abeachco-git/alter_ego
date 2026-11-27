@@ -310,6 +310,11 @@ int case_database_core(int, char**) {
         assert(saved.pets[0].description==std::optional<std::string>("Pet description"));
         assert(P::AssociatedSkills(saved.pets[0])==std::vector<uint32_t>({100,101}));
         assert(P::AssociatedSkills(saved.legends[0])==std::vector<uint32_t>({600,800,700,701,900}));
+        const auto refs=P::CompanionSkills(saved.legends[0]);
+        assert(refs.size()==6&&refs[0].id==500&&refs[0].role==P::CompanionSkillRole::Invocation);
+        assert(refs[1].role==P::CompanionSkillRole::Heal&&refs[2].role==P::CompanionSkillRole::Utility&&refs.back().role==P::CompanionSkillRole::Elite);
+        const auto petRefs=P::CompanionSkills(saved.pets[0]);
+        assert(petRefs.size()==2&&petRefs[0].role==P::CompanionSkillRole::Pet);
         assert(P::FindPet(saved.pets,4)&&P::FindLegend(saved.legends,8));
         auto absent=P::ParsePets(P::Json::parse(R"([{"id":5,"name":"Unknown"}])"));
         auto empty=P::ParsePets(P::Json::parse(R"([{"id":6,"name":"Empty","skills":[]}])"));

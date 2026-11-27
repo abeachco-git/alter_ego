@@ -198,16 +198,35 @@ inline std::optional<uint32_t> CompanionSkill(const Json& row,const char* field)
     if(it->is_number_integer()&&*it==0)return uint32_t(0);
     return Id(*it);
 }
-inline std::vector<uint32_t> AssociatedSkills(const Pet& pet){
-    return pet.skills.value_or(std::vector<uint32_t>{});
+enum class CompanionSkillRole { Pet, Invocation, Heal, Utility, Elite };
+struct CompanionSkillReference { uint32_t id=0; CompanionSkillRole role=CompanionSkillRole::Pet; };
+inline const char* RoleLabel(CompanionSkillRole role){
+    switch(role){
+    case CompanionSkillRole::Invocation:return "Invocation";
+    case CompanionSkillRole::Heal:return "Heal";
+    case CompanionSkillRole::Utility:return "Utility";
+    case CompanionSkillRole::Elite:return "Elite";
+    default:return "Pet skill";
+    }
 }
-inline std::vector<uint32_t> AssociatedSkills(const Legend& legend){
-    std::vector<uint32_t> ids;
-    if(legend.heal&&*legend.heal)ids.push_back(*legend.heal);
-    if(legend.utilities)ids.insert(ids.end(),legend.utilities->begin(),legend.utilities->end());
-    if(legend.elite&&*legend.elite)ids.push_back(*legend.elite);
-    return ids;
+inline std::vector<CompanionSkillReference> CompanionSkills(const Pet& pet){
+    std::vector<CompanionSkillReference> out;
+    if(pet.skills)for(auto id:*pet.skills)if(id)out.push_back({id,CompanionSkillRole::Pet});
+    return out;
 }
+inline std::vector<CompanionSkillReference> CompanionSkills(const Legend& legend,bool invocation=true){
+    std::vector<CompanionSkillReference> out;
+    if(invocation&&legend.swap)out.push_back({legend.swap,CompanionSkillRole::Invocation});
+    if(legend.heal&&*legend.heal)out.push_back({*legend.heal,CompanionSkillRole::Heal});
+    if(legend.utilities)for(auto id:*legend.utilities)if(id)out.push_back({id,CompanionSkillRole::Utility});
+    if(legend.elite&&*legend.elite)out.push_back({*legend.elite,CompanionSkillRole::Elite});
+    return out;
+}
+inline std::vector<uint32_t> CompanionSkillIds(const std::vector<CompanionSkillReference>& refs){
+    std::vector<uint32_t> ids;for(const auto& ref:refs)ids.push_back(ref.id);return ids;
+}
+inline std::vector<uint32_t> AssociatedSkills(const Pet& pet){return CompanionSkillIds(CompanionSkills(pet));}
+inline std::vector<uint32_t> AssociatedSkills(const Legend& legend){return CompanionSkillIds(CompanionSkills(legend,false));}
 // Skill records share the reference request-start watermark (microseconds).
 // An ordinary legend refresh can reuse complete recent skill observations;
 // manual refresh or stale/missing metadata requires a newer observation.

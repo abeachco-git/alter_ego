@@ -226,6 +226,27 @@ inline ContextVerdict SkillSpecialization(uint32_t required,std::optional<uint32
     if(!required||!selected)return ContextVerdict::Unknown;
     return required==*selected?ContextVerdict::Compatible:ContextVerdict::Incompatible;
 }
+// A core or elite conclusion requires all three known specialization records
+// and valid placement. An imported earlier elite or duplicate is anomalous;
+// do not invent a compatible context or reject an existing choice.
+template<class Lookup> EliteContext ResolveEliteContext(const std::array<uint32_t,3>& ids,Lookup lookup){
+    if(!ids[0]||!ids[1]||!ids[2]||ids[0]==ids[1]||ids[0]==ids[2]||ids[1]==ids[2])return std::nullopt;
+    for(size_t i=0;i<ids.size();++i){
+        auto spec=lookup(ids[i]);
+        if(!spec||(i<2&&!spec->empty()))return std::nullopt;
+        if(i==2)return spec;
+    }
+    return std::nullopt;
+}
+template<class Json> std::array<uint32_t,3> ContextSpecializations(const Json& raw){
+    std::array<uint32_t,3> ids{};
+    if(!raw.is_object()||!raw.contains("specializations"))return ids;
+    const auto& specs=raw.at("specializations");
+    if(!specs.is_array()||specs.size()!=3)return ids;
+    for(size_t i=0;i<ids.size();++i)if(specs[i].is_object()&&specs[i].contains("id"))
+        ids[i]=JsonDisplaySlot(specs[i].at("id")).id;
+    return ids;
+}
 template<class Json> uint32_t ThirdSpecialization(const Json& raw) {
     if(!raw.is_object()||!raw.contains("specializations"))return 0;
     const auto& specs=raw.at("specializations");

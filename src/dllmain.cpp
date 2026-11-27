@@ -3805,6 +3805,29 @@ static void DrawDottedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, floa
     }
 }
 
+// Shared cached semantic tooltip for ordinary, aquatic, trait, companion
+// and Compare consumers. Unknown facts never fabricate character-specific values.
+static void RenderReferenceTooltip(const std::string& name,const std::string& description,
+        const nlohmann::json& facts,const std::string& kind={},const char* role=nullptr,
+        std::optional<bool> noUnderwater=std::nullopt){
+    if(name.empty())return;
+    using namespace AlterEgo;
+    ImGui::BeginTooltip();
+    UI::TooltipLine(name.c_str(),UI::TooltipTitle);
+    if(role&&*role)ImGui::TextDisabled("%s",role);
+    if(!kind.empty()&&(!role||kind!=role))ImGui::TextDisabled("%s",kind.c_str());
+    if(!description.empty())UI::TooltipLine(StripGW2Markup(description).c_str());
+    if(noUnderwater.value_or(false))UI::TooltipLine("Not usable underwater",UI::WarningText);
+    const auto lines=TooltipCore::FactLines(facts);
+    if(!lines.empty()){ImGui::Separator();for(const auto& line:lines)UI::TooltipLine(StripGW2Markup(line).c_str());}
+    ImGui::EndTooltip();
+}
+static void RenderSkillTooltip(const AlterEgo::SkillInfo& skill,const char* role=nullptr){
+    RenderReferenceTooltip(skill.name,skill.description,skill.facts,skill.type,role,skill.no_underwater);
+}
+static void RenderTraitTooltip(const AlterEgo::TraitInfo& trait){
+    RenderReferenceTooltip(trait.name,trait.description,trait.facts,trait.slot.empty()?std::string{}:trait.slot+" Trait");
+}
 // Helper: render a single trait icon with selected/dimmed state and tooltip
 // Returns the center screen position of the rendered icon
 static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, float size,
@@ -3860,19 +3883,7 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
             AlterEgo::IconManager::RequestIcon(trait_id + 2000000, tinfo->icon_url);
     }
 
-    if (ImGui::IsItemHovered() && tinfo) {
-        ImGui::BeginTooltip();
-        AlterEgo::UI::TooltipLine(tinfo->name.c_str(),AlterEgo::UI::TooltipTitle);
-        if (isMinor)
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Minor Trait");
-        if (!tinfo->description.empty()) {
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(300.0f));
-            std::string tdesc = StripGW2Markup(tinfo->description);
-            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", tdesc.c_str());
-            ImGui::PopTextWrapPos();
-        }
-        ImGui::EndTooltip();
-    }
+    if(ImGui::IsItemHovered()&&tinfo)RenderTraitTooltip(*tinfo);
 
     const bool canClear=clearRequested&&selected&&!isMinor;
     if((trait_id||canClear)&&ImGui::BeginPopupContextItem("##trait_name")) {
@@ -3916,7 +3927,7 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,boo
         if (editable) dl->AddRect(pos, max, IM_COL32(90,80,50,200));
     }
     if(ImGui::IsItemHovered()){
-        if(sinfo&&!sinfo->name.empty())AlterEgo::UI::DetailTooltip(sinfo->name.c_str(),StripGW2Markup(sinfo->description).c_str());
+        if(sinfo&&!sinfo->name.empty())RenderSkillTooltip(*sinfo,slotLabel);
         else if(skill_id)AlterEgo::UI::DetailTooltip(slotLabel?slotLabel:"Skill","Recorded skill; metadata not retrieved.");
         else if(slotLabel)AlterEgo::UI::DetailTooltip(slotLabel,unresolved?"Unresolved imported selection; original palette retained.":emptyKnown?"Empty slot":editable?"Not recorded. Click to choose.":"Not recorded.");
         else if(editable)AlterEgo::UI::Hint("Click to choose a skill");
@@ -4434,6 +4445,8 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
 
     // Chip selections may change within this frame; use the current selection.
     const auto& bt = ch.build_tabs[g_SelectedBuildTab];
+    AlterEgo::GW2API::FetchSpecDetailsAsync({bt.specializations[0].spec_id,bt.specializations[1].spec_id,bt.specializations[2].spec_id});
+    AlterEgo::GW2API::FetchProfessionInfoAsync(bt.profession);
 
 
     // Small left/right padding so spec hex portraits & trait selection borders
@@ -6796,7 +6809,7 @@ static LegendOption LegendOptionForCode(uint8_t code) {
 struct ProfessionChoiceDisplay {
     std::string name,icon,description;
     uint32_t key=0,swap=0;
-    std::vector<uint32_t> skills;
+    std::vector<AlterEgo::PublicCatalog::CompanionSkillReference> skills;
     bool skillsKnown=false, nameKnown=false;
 };
 // Cache-only presentation resolution shared by slots and Compare. Requests
@@ -6810,7 +6823,7 @@ static ProfessionChoiceDisplay ResolveProfessionChoice(bool legend,uint32_t curr
         const auto catalog=AlterEgo::PublicCatalog::Get();
         if(const auto* def=AlterEgo::PublicCatalog::FindLegend(catalog->legends,current)){
             result.nameKnown=!def->name.empty();
-            result.skills=AlterEgo::PublicCatalog::AssociatedSkills(*def);
+            result.skills=AlterEgo::PublicCatalog::CompanionSkills(*def);
             result.skillsKnown=def->heal.has_value()&&def->elite.has_value()&&def->utilities.has_value();
         }
         if(const auto skill=result.swap?AlterEgo::GW2API::GetSkillInfo(result.swap):nullptr){
@@ -6824,7 +6837,7 @@ static ProfessionChoiceDisplay ResolveProfessionChoice(bool legend,uint32_t curr
         if(const auto* pet=AlterEgo::PublicCatalog::FindPet(catalog->pets,current)){
             result.name=pet->name;result.icon=pet->icon;result.nameKnown=!pet->name.empty();
             if(pet->description)result.description=StripGW2Markup(*pet->description);
-            result.skills=AlterEgo::PublicCatalog::AssociatedSkills(*pet);
+            result.skills=AlterEgo::PublicCatalog::CompanionSkills(*pet);
             result.skillsKnown=pet->skills.has_value();
         }
         result.key=AlterEgo::ArtworkRequest::PetKey(current);
@@ -7231,8 +7244,6 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
                                        const std::vector<AlterEgo::SkillEdit::EliteContext>& contexts) {
     using AlterEgo::SkillEdit::PairChoiceAllowed;
     const auto catalog=AlterEgo::PublicCatalog::Get();
-    if(legend)AlterEgo::GW2API::FetchLegendsAsync();
-    else AlterEgo::GW2API::FetchPetsAsync();
     const auto& pets=catalog->pets;
     auto display=ResolveProfessionChoice(legend,current);
     if(!current)display.name=unresolved?"Unresolved selection":known?"Empty":editable?"Choose (not recorded)":"Not recorded";
@@ -7331,13 +7342,14 @@ static void RenderCompanionAssociatedSkills(const ProfessionChoiceDisplay& choic
         ImGui::TextDisabled("%s",choice.skillsKnown?"No associated skills reported":"Associated skills not retrieved");
         return;
     }
-    ImGui::TextDisabled("%s",choice.skillsKnown?"Catalog skills":"Catalog skills (partial)");
+    ImGui::TextDisabled("%s",choice.skillsKnown?"Catalog skills (reference)":"Catalog skills (partial)");
     ImGui::PushID("associated_skills");
     const int columns=AlterEgo::SkillEdit::IconColumns(ImGui::GetContentRegionAvail().x,size,ImGui::GetStyle().ItemSpacing.x,static_cast<int>(choice.skills.size()));
     for(size_t i=0;i<choice.skills.size();++i){
         if(i%static_cast<size_t>(columns))ImGui::SameLine();
         ImGui::PushID(static_cast<int>(i));
-        RenderSkillIcon(choice.skills[i],size);
+        const auto& ref=choice.skills[i];
+        RenderSkillIconCore(ref.id,size,false,true,{},AlterEgo::PublicCatalog::RoleLabel(ref.role));
         ImGui::PopID();
     }
     ImGui::PopID();
@@ -7358,12 +7370,14 @@ static uint8_t RenderProfessionPairSection(bool legend,AlterEgo::SkillEdit::Comp
                                         bool editable,const std::vector<AlterEgo::SkillEdit::EliteContext>& contexts={}) {
     auto& values=slots.values;
     ImGui::PushID(legend?"legend_pairs":"pet_pairs");
+    if(legend)AlterEgo::GW2API::FetchLegendsAsync();
+    else AlterEgo::GW2API::FetchPetsAsync();
     // Demand only the selected companions' skills; the canonical skill owner
     // handles cache hits, deduplication, existing claims and retry policy.
     std::vector<uint32_t> missing;
     for(auto id:values)if(id){
         const auto choice=ResolveProfessionChoice(legend,id);
-        for(auto skill:choice.skills)if(skill)missing.push_back(skill);
+        for(const auto& skill:choice.skills)if(skill.id)missing.push_back(skill.id);
     }
     if(!missing.empty()){
         std::sort(missing.begin(),missing.end());missing.erase(std::unique(missing.begin(),missing.end()),missing.end());
@@ -7464,7 +7478,7 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
         UI::EntityContext("##selected_pet_name",[&]{ProfessionChoiceActions(false,choice);});
         if(!choice.description.empty())ImGui::TextWrapped("%s",choice.description.c_str());
         std::vector<uint32_t> missing;
-        for(auto skill:choice.skills)if(skill)missing.push_back(skill);
+        for(const auto& skill:choice.skills)if(skill.id)missing.push_back(skill.id);
         if(!missing.empty())GW2API::FetchSkillDetailsAsync(missing);
         RenderCompanionAssociatedSkills(choice,30.f);
         const auto evidence=PO::Get(ownership,pet->id);
@@ -9597,6 +9611,9 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     // (e.g. API rate-limited or offline). Queues async fetches for missing IDs.
     ResolveBuildItemNames(build);
     RenderLoadoutComponentSelectors(source.id);
+    const auto& metadataSource=g_LibEditMode?g_EditDraft:build;
+    AlterEgo::GW2API::FetchSpecDetailsAsync({metadataSource.specializations[0].spec_id,metadataSource.specializations[1].spec_id,metadataSource.specializations[2].spec_id});
+    AlterEgo::GW2API::FetchProfessionInfoAsync(metadataSource.profession);
     ImGui::Spacing();
 
     // Specializations with trait grid (same logic as RenderBuildPanel)
@@ -10010,7 +10027,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
         ImGui::Spacing();RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
         auto slots=skillSrc.CompanionSlots(legend);
         const std::vector<AlterEgo::SkillEdit::EliteContext> contexts=legend?
-            std::vector<AlterEgo::SkillEdit::EliteContext>{AlterEgo::GW2API::RevenantEliteContext(skillSrc.specializations[2].spec_id)}:
+            std::vector<AlterEgo::SkillEdit::EliteContext>{AlterEgo::GW2API::RevenantEliteContext({skillSrc.specializations[0].spec_id,skillSrc.specializations[1].spec_id,skillSrc.specializations[2].spec_id})}:
             std::vector<AlterEgo::SkillEdit::EliteContext>{};
         if(const auto changed=RenderProfessionPairSection(legend,slots,g_LibEditMode,contexts)){
             auto payload=skillSrc.CompanionPayload(legend);
@@ -11031,8 +11048,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                         if(unique.empty())return;
                         if(unique.size()==1&&ImGui::IsItemHovered()){
                             const auto id=*unique.begin();
-                            if(row->linkType==AlterEgo::LINK_SKILL){const auto v=AlterEgo::GW2API::GetSkillInfo(id);if(v)AlterEgo::UI::DetailTooltip(v->name.c_str(),StripGW2Markup(v->description).c_str());}
-                            else if(row->linkType==AlterEgo::LINK_TRAIT){const auto v=AlterEgo::GW2API::GetTraitInfo(id);if(v)AlterEgo::UI::DetailTooltip(v->name.c_str(),StripGW2Markup(v->description).c_str());}
+                            if(row->linkType==AlterEgo::LINK_SKILL){const auto v=AlterEgo::GW2API::GetSkillInfo(id);if(v)RenderSkillTooltip(*v);}
+                            else if(row->linkType==AlterEgo::LINK_TRAIT){const auto v=AlterEgo::GW2API::GetTraitInfo(id);if(v)RenderTraitTooltip(*v);}
                             else if(row->linkType==AlterEgo::LINK_ITEM){const auto v=AlterEgo::GW2API::GetItemInfo(id);if(v)AlterEgo::UI::DetailTooltip(v->name.c_str(),StripGW2Markup(v->description).c_str(),GetRarityColor(v->rarity));}
                         }
                         ImGui::PushID(row->group.c_str());ImGui::PushID(row->field.c_str());

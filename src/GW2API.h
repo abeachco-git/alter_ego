@@ -164,7 +164,6 @@ namespace AlterEgo {
     // Cached specialization info from /v2/specializations (public, no auth)
     struct SpecializationInfo {
         uint32_t id = 0;
-        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
         std::string name;
         std::string icon_url;
         std::string background_url;
@@ -174,12 +173,12 @@ namespace AlterEgo {
         bool elite = false;
         std::vector<uint32_t> minor_traits;
         std::vector<uint32_t> major_traits;
+        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
     };
 
     // Cached trait info from /v2/traits (public, no auth)
     struct TraitInfo {
         uint32_t id = 0;
-        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
         std::string name;
         std::string icon_url;
         std::string description;
@@ -187,12 +186,12 @@ namespace AlterEgo {
         int order = 0;              // 0=top, 1=mid, 2=bottom
         std::string slot;           // "Major" or "Minor"
         nlohmann::json facts;       // Tooltip facts array
+        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
     };
 
     // Cached skill info from /v2/skills (public, no auth)
     struct SkillInfo {
         uint32_t id = 0;
-        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
         std::string name;
         std::string icon_url;
         std::string description;
@@ -201,6 +200,7 @@ namespace AlterEgo {
         std::vector<std::string> professions; // professions that can slot it; empty = racial
         std::optional<bool> no_underwater; // Absent means eligibility is unverified.
         nlohmann::json facts;       // Tooltip facts array
+        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
     };
 
     // Cached profession info from /v2/professions (public, no auth)
@@ -595,7 +595,7 @@ namespace AlterEgo {
             const std::map<std::string,std::string>& newRefs,uint64_t revision,std::string& error,
             const std::map<std::string,std::string>& oldInherited={},const std::map<std::string,std::string>& newInherited={});
         // Cache-only, evidence-qualified context; no catalog demand here.
-        static std::optional<std::string> RevenantEliteContext(uint32_t thirdSpec);
+        static std::optional<std::string> RevenantEliteContext(const std::array<uint32_t,3>& specs);
         static std::vector<std::string> RevenantContextWarnings(const nlohmann::json& raw);
         static bool ReviewUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
             const std::map<std::string,std::string>& refs,uint64_t revision,nlohmann::json& review,std::string& error,bool includeAll=false,

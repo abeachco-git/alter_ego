@@ -2918,16 +2918,18 @@ namespace AlterEgo {
         draft=std::move(rebased);return true;
     }
 
-    std::optional<std::string> GW2API::RevenantEliteContext(uint32_t thirdSpec){
-        const auto spec=thirdSpec?GetSpecInfo(thirdSpec):nullptr;
-        if(!spec||spec->profession!="Revenant"||spec->name.empty())return std::nullopt;
-        return spec->elite?spec->name:std::string{};
+    std::optional<std::string> GW2API::RevenantEliteContext(const std::array<uint32_t,3>& specs){
+        return SkillEdit::ResolveEliteContext(specs,[](uint32_t id)->SkillEdit::EliteContext{
+            const auto spec=GetSpecInfo(id);
+            if(!spec||spec->profession!="Revenant"||spec->name.empty())return std::nullopt;
+            return spec->elite?spec->name:std::string{};
+        });
     }
     std::vector<std::string> GW2API::RevenantContextWarnings(const json& raw){
         if(!raw.is_object()||raw.value("profession",std::string())!="Revenant")return {};
-        const auto third=SkillEdit::ThirdSpecialization(raw);
-        const auto context=RevenantEliteContext(third);
-        const auto elite=context?std::optional<uint32_t>(context->empty()?0:third):std::nullopt;
+        const auto specs=SkillEdit::ContextSpecializations(raw);
+        const auto context=RevenantEliteContext(specs);
+        const auto elite=context?std::optional<uint32_t>(context->empty()?0:specs[2]):std::nullopt;
         return SkillEdit::RevenantContextWarnings(raw,context,elite,
             [](uint32_t id){return id<=255?uint32_t(PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(id))):id;},
             [](uint32_t id)->std::optional<uint32_t>{
