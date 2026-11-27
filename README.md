@@ -156,7 +156,7 @@ Alter Ego maintains a local cache of retrieved account information.
 
 Automatic refresh is optional and can be configured individually for different types of account data. Refreshes are designed around actual usage, data freshness and API propagation delays rather than continuously retrieving everything.
 
-Manual refresh remains available when needed.
+Automatic character refresh retrieves complete character data and can include other eligible cached characters on the same account in a single request. Manual refresh remains available for the visible character data or explicitly selected characters; Inventory can refresh independently. Cached data stays available while retrieval is underway.
 
 Guild Wars 2 API data may lag behind changes made in-game. Recently changed equipment, builds and inventory may not appear immediately.
 
