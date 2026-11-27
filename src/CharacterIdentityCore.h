@@ -64,6 +64,7 @@ struct Record {
     std::string name;
     bool present=false;
     std::set<std::string> names; // historical only: never a current-name lookup
+    int64_t bindingRevision=0; // changes only when this identity/address changes
 };
 struct State {
     std::string account;
@@ -94,6 +95,7 @@ inline bool Valid(const State& s){
     for(const auto& [id,r]:s.records){
         const auto e=Normalize(r.evidence);
         if(id<1||id>=s.nextId||r.id!=id||!e||!(*e==r.evidence)||!Text(r.name)||
+           r.bindingRevision<0||r.bindingRevision>s.revision||
            r.names.empty()||r.names.size()>MaxAliases)return false;
         for(const auto& n:r.names)if(!Text(n))return false;
         if(r.present&&!current.insert(r.name).second)return false;
@@ -243,6 +245,13 @@ inline Plan Reconcile(const State& old,const std::set<std::string>& roster,
     if(!p.changes.empty()||blocked!=old.blocked||p.next.pendingAbsence!=old.pendingAbsence){
         if(old.revision==std::numeric_limits<int64_t>::max())return fail(Status::Exhausted);
         ++p.next.revision;
+        for(auto& [id,r]:p.next.records){
+            const auto prior=old.records.find(id);
+            if(prior==old.records.end()||r.present!=prior->second.present||
+               r.name!=prior->second.name||
+               (r.present&&bool(blocked.count(r.name))!=bool(old.blocked.count(prior->second.name))))
+                r.bindingRevision=p.next.revision;
+        }
     }
     if(!Valid(p.next))return fail(Status::Invalid);
     return p;

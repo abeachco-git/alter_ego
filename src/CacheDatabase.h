@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 28;
+constexpr int kSchemaVersion = 29;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -33,6 +33,13 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 }
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if(version==29){
+        db.Exec(R"SQL(
+CREATE TABLE cache_character_identity_state(account TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
+CREATE TABLE cache_character_bindings(account TEXT NOT NULL REFERENCES cache_character_identity_state(account) ON DELETE CASCADE,name TEXT NOT NULL,local_id INTEGER NOT NULL CHECK(local_id>0),created TEXT NOT NULL,profession TEXT NOT NULL,race TEXT NOT NULL,binding_revision INTEGER NOT NULL CHECK(binding_revision>=0),PRIMARY KEY(account,name),UNIQUE(account,local_id)) STRICT;
+)SQL");
+        return;
+    }
     if(version==28){
         db.Exec(R"SQL(
 ALTER TABLE reference_skills ADD COLUMN no_underwater INTEGER CHECK(no_underwater IN (0,1));

@@ -1,4 +1,5 @@
 #include "../src/CharacterIdentityStore.h"
+#include "../src/CharacterIdentityCache.h"
 #include "../src/NativeInventoryStore.h"
 #include "../src/InventoryGroupCore.h"
 #include "../src/CharacterOrderCore.h"
@@ -31,7 +32,7 @@ int case_native_inventory(int,char**){
                 conn.Exec("INSERT INTO accounts VALUES('A','Example.1234','','[]')");
             });
             CI::InitializeAccountRegistry(db);
-            assert(db.Scalar("PRAGMA user_version")==3&&db.Scalar("SELECT count(*) FROM accounts")==1);
+            assert(db.Scalar("PRAGMA user_version")==4&&db.Scalar("SELECT count(*) FROM accounts")==1);
             auto initial=CI::Commit(db,"A",0,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
             assert(initial&&*initial&&initial->changes.size()==2);
             alice=initial->next.Current("Alice")->id;bob=initial->next.Current("Bob")->id;
@@ -97,6 +98,55 @@ int case_native_inventory(int,char**){
         assert(CI::Creation("2015-02-03T04:05:06.000Z")==CI::Creation(a.created));
         assert(CI::Creation("2024-02-29T00:00:00Z")&&!CI::Creation("2023-02-29T00:00:00Z"));
         assert(!CI::Creation("2015-02-03")&&!CI::Creation("2015-02-03T24:00:00Z"));
+        std::filesystem::remove_all(root);
+    }
+    // Address fences and interrupted cache adoption use independent durable revisions.
+    {
+        namespace CI=AlterEgo::CharacterIdentity;
+        const CI::Evidence a{"2015-02-03T04:05:06Z","Necromancer","Asura"},
+            b{"2020-01-02T03:04:05Z","Engineer","Human"};
+        CI::State initial;initial.account="A";
+        auto first=CI::Reconcile(initial,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
+        assert(first.FullyResolved());
+        const auto alice=CI::Capture(first.next,"Alice",10),bob=CI::Capture(first.next,"Bob",10);
+        assert(alice&&bob&&CI::Matches(first.next,*alice,10)&&!CI::Matches(first.next,*alice,11));
+        auto rename=CI::Reconcile(first.next,{"Renamed","Bob"},{{"Renamed",a}});
+        assert(rename&&rename.next.Current("Renamed")&&!CI::Matches(rename.next,*alice,10)&&CI::Matches(rename.next,*bob,10));
+        auto back=CI::Reconcile(rename.next,{"Alice","Bob"},{{"Alice",a}});
+        assert(back&&back.next.Current("Alice")->id==alice->binding.id&&!CI::Matches(back.next,*alice,10)&&CI::Matches(back.next,*bob,10));
+        const auto changed=CI::ChangedAddresses(CI::CurrentBindings(first.next),CI::CurrentBindings(back.next));
+        assert(changed==std::set<std::string>{"Alice"});
+        const auto root=std::filesystem::temp_directory_path()/("ae-identity-cache-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        const auto path=(root/"cache.db").string();
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Create);Cache::Initialize(db);
+            db.Exec("INSERT INTO character_rows(character_id,account_name,name) VALUES(1,'A','Alice'),(2,'B','Alice');");
+            db.Exec("INSERT INTO native_inventory_scopes VALUES('A','Bags','Alice','Ready',10,10),('A','Bank','','Ready',10,10),('B','Bags','Alice','Ready',10,10);");
+            auto adopted=CI::AdoptCache(db,first.next);
+            assert(adopted&&adopted->count("Alice")&&db.Scalar("SELECT count(*) FROM character_rows WHERE account_name='A'")==0);
+            assert(db.Scalar("SELECT count(*) FROM native_inventory_scopes")==2);
+            db.Exec("INSERT INTO character_rows(character_id,account_name,name) VALUES(3,'A','Alice'),(4,'A','Bob');");
+            db.Exec("INSERT INTO native_inventory_scopes VALUES('A','Bags','Alice','Ready',20,20),('A','Equipment','Bob','Ready',20,20);");
+            db.Exec("CREATE TRIGGER fail_adoption BEFORE DELETE ON character_rows WHEN OLD.name='Alice' BEGIN SELECT RAISE(ABORT,'fixture'); END");
+            bool failed=false;try{(void)CI::AdoptCache(db,rename.next);}catch(...){failed=true;}
+            assert(failed&&db.Scalar("SELECT count(*) FROM character_rows WHERE account_name='A'")==2);
+            assert(db.Scalar("SELECT revision FROM cache_character_identity_state WHERE account='A'")==first.next.revision);
+            db.Exec("DROP TRIGGER fail_adoption");
+        }
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Existing);Cache::Initialize(db);
+            // Skip the intermediate mapping entirely, simulating an interrupted
+            // adoption followed by a second rename. Durable per-binding revisions
+            // still detect the cycle and preserve Bob's unrelated data.
+            auto recovered=CI::AdoptCache(db,back.next);
+            assert(recovered&&*recovered==std::set<std::string>{"Alice"});
+            assert(db.Scalar("SELECT count(*) FROM character_rows WHERE account_name='A' AND name='Bob'")==1);
+            assert(db.Scalar("SELECT count(*) FROM native_inventory_scopes WHERE account='A' AND scope='Equipment'")==1);
+            auto replay=CI::AdoptCache(db,back.next);assert(replay&&replay->empty());
+            assert(!CI::AdoptCache(db,first.next));
+            assert(db.Scalar("SELECT count(*) FROM character_rows WHERE account_name='B'")==1);
+        }
         std::filesystem::remove_all(root);
     }
     // Distinct group keys, hierarchy, selected leaf reveal and transient search expansion.

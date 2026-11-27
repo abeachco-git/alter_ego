@@ -30,6 +30,10 @@ CREATE INDEX character_identity_fingerprint ON character_identities(account,crea
 CREATE TABLE character_identity_blocked(account TEXT NOT NULL REFERENCES character_identity_state(account) ON DELETE CASCADE,name TEXT NOT NULL,PRIMARY KEY(account,name)) STRICT;
 CREATE TABLE character_identity_pending(account TEXT NOT NULL,local_id INTEGER NOT NULL,PRIMARY KEY(account,local_id),FOREIGN KEY(account,local_id) REFERENCES character_identities(account,local_id) ON DELETE CASCADE) STRICT;
 )SQL");
+        else if(version==4)c.Exec(R"SQL(
+ALTER TABLE character_identities ADD COLUMN binding_revision INTEGER NOT NULL DEFAULT 0 CHECK(binding_revision>=0);
+UPDATE character_identities SET binding_revision=(SELECT revision FROM character_identity_state WHERE account=character_identities.account);
+)SQL");
     });
 }
 // Caller owns a consistent transaction or serial account-registry access.
@@ -39,12 +43,12 @@ inline State Read(Database::Connection& db,const std::string& account){
     auto state=db.Prepare("SELECT revision,next_id FROM character_identity_state WHERE account=?");
     state.Bind(1,account);
     if(state.Step()){s.initialized=true;s.revision=state.Integer(0);s.nextId=state.Integer(1);}
-    auto rows=db.Prepare("SELECT local_id,created,profession,race,name,present FROM character_identities WHERE account=?");
+    auto rows=db.Prepare("SELECT local_id,created,profession,race,name,present,binding_revision FROM character_identities WHERE account=?");
     rows.Bind(1,account);
     while(rows.Step()){
         const auto id=rows.Integer(0);
         if(s.records.size()>=MaxRecords||!s.records.emplace(id,Record{id,
-            {rows.Text(1),rows.Text(2),rows.Text(3)},rows.Text(4),rows.Integer(5)!=0,{}}).second)
+            {rows.Text(1),rows.Text(2),rows.Text(3)},rows.Text(4),rows.Integer(5)!=0,{},rows.Integer(6)}).second)
             throw std::runtime_error("Invalid character identity registry");
     }
     auto aliases=db.Prepare("SELECT local_id,name FROM character_identity_names WHERE account=?");
@@ -88,12 +92,12 @@ inline std::optional<Plan> Commit(Database::Connection& db,const std::string& ac
     // not delete identities or reallocate their stable local IDs.
     auto clear=db.Prepare("UPDATE character_identities SET present=0 WHERE account=?");
     clear.Bind(1,account);clear.Execute();
-    auto row=db.Prepare("INSERT INTO character_identities VALUES(?,?,?,?,?,?,?) ON CONFLICT(account,local_id) DO UPDATE SET name=excluded.name,present=excluded.present");
+    auto row=db.Prepare("INSERT INTO character_identities(account,local_id,created,profession,race,name,present,binding_revision) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account,local_id) DO UPDATE SET name=excluded.name,present=excluded.present,binding_revision=excluded.binding_revision");
     auto alias=db.Prepare("INSERT OR IGNORE INTO character_identity_names VALUES(?,?,?)");
     for(const auto& [id,r]:p.next.records){
         row.Bind(1,account);row.Bind(2,id);row.Bind(3,r.evidence.created);
         row.Bind(4,r.evidence.profession);row.Bind(5,r.evidence.race);row.Bind(6,r.name);
-        row.Bind(7,static_cast<int64_t>(r.present));row.Execute();row.Reset();
+        row.Bind(7,static_cast<int64_t>(r.present));row.Bind(8,r.bindingRevision);row.Execute();row.Reset();
         for(const auto& n:r.names){
             alias.Bind(1,account);alias.Bind(2,id);alias.Bind(3,n);alias.Execute();alias.Reset();
         }

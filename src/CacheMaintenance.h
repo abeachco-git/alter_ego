@@ -149,7 +149,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     // Do not migrate or edit a foreign, damaged or unsupported database.
     const auto version=db.Scalar("PRAGMA user_version");
     if(db.Scalar("PRAGMA application_id")!=Cache::kApplicationId ||
-       (version!=Cache::kSchemaVersion && version!=26 && version!=25 && version!=24 && version!=23 && version!=22 && version!=21 && version!=20 && version!=19 && version!=18 && version!=17 && version!=16 && version!=15 && version!=14 && version!=13 && version!=8))
+       (version!=Cache::kSchemaVersion && version!=28 && version!=27 && version!=26 && version!=25 && version!=24 && version!=23 && version!=22 && version!=21 && version!=20 && version!=19 && version!=18 && version!=17 && version!=16 && version!=15 && version!=14 && version!=13 && version!=8))
         throw std::runtime_error("Unsupported cache database; use Rebuild all cache to quarantine it");
     // Upgrade known older schemas before selective operations.
     Cache::Initialize(db);
@@ -160,7 +160,8 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
         db.Exec("DELETE FROM wiki_skin_failures; DELETE FROM wiki_currency_failures; UPDATE wiki_skin_freshness SET attempt=0; INSERT OR IGNORE INTO wiki_cache_state VALUES('failures');");break;
     case CacheOperation::Characters:
         db.Exec("DELETE FROM character_rows; DELETE FROM character_snapshot;"
-                "DELETE FROM native_inventory_scopes WHERE scope IN ('Roster','Bags','Equipment'); DELETE FROM native_roster_state;");break;
+                "DELETE FROM native_inventory_scopes WHERE scope IN ('Roster','Bags','Equipment'); DELETE FROM native_roster_state;"
+                "DELETE FROM cache_character_identity_state;");break;
     case CacheOperation::Inventory:
         // Retain the roster, independent character projections and public catalogs.
         db.Exec("DELETE FROM native_inventory_scopes WHERE scope<>'Roster'; DELETE FROM native_wallet;"
