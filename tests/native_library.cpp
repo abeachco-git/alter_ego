@@ -1,4 +1,4 @@
-#include "../src/NativeLibraryEditing.h"
+#include "../src/NativeLibraryPortable.h"
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -93,6 +93,97 @@ int case_native_library(int,char**) {
         assert(C::Find(actual.loadouts,"base_build",baseId));
         Json after;assert(C::ToLegacy(actual.loadouts,after,error)&&before==after);
         assert(C::ValidateCurrentCompanionOwnership(actual.loadouts,error));
+    }
+    // Both companion types retain typed ordering, optional presence, unknown
+    // fields and independent identities through native persistence and the
+    // complete portable Library. Selective import keeps unused components.
+    {
+        Scratch companionDb;
+        Json input={{"builds",Json::array({
+            {{"id","ranger"},{"name","Ranger"},{"profession","Ranger"},
+             {"pets",Json::array({4,0,8,2})}},
+            {{"id","revenant"},{"name","Revenant"},{"profession","Revenant"},
+             {"legend_codes",Json::array({2,1,0,3})}},
+            {{"id","omitted"},{"name","Omitted"},{"profession","Ranger"}},
+            {{"id","empty"},{"name","Empty"},{"profession","Ranger"},{"pets",Json::array()}}
+        })}};
+        Native::Snapshot source;
+        assert(C::SplitLegacy(input,source.loadouts,error));
+        auto* ranger=C::FindLoadout(source.loadouts,"ranger");
+        auto* revenant=C::FindLoadout(source.loadouts,"revenant");
+        assert(ranger&&revenant);
+        const auto petsId=ranger->refs.at("pets"),legendsId=revenant->refs.at("legends");
+        auto* pets=C::Find(source.loadouts,"pets",petsId);
+        assert(pets);
+        pets->data["future_companion"]={{"ordered",Json::array({1,0,3})}};
+        auto unused=*pets;unused.id="unused-pets";unused.name="Unused pets";
+        unused.data["pets"]=Json::array({8,4,0,2});
+        source.loadouts.components["pets"].push_back(unused);
+        assert(C::DuplicateLoadout(source.loadouts,"ranger","shared","Shared Ranger",123,error));
+        assert(C::FindLoadout(source.loadouts,"shared")->refs.at("pets")==petsId);
+        assert(!C::FindLoadout(source.loadouts,"omitted")->refs.count("pets"));
+        assert(C::FindLoadout(source.loadouts,"empty")->refs.count("pets"));
+        Native::Repository repo(companionDb.db(),DB::Connection::OpenMode::Create);
+        assert(repo.Commit(repo.Read(),source)==1);
+        const auto stored=repo.Read();
+        assert(C::ToJson(stored.loadouts)==C::ToJson(source.loadouts));
+        const auto packet=Native::ExportPortableLibrary(stored,true,false);
+        Native::PortableLibrary parsed;
+        assert(Native::ParsePortableLibrary(packet,parsed,error));
+        assert(parsed.loadouts&&!parsed.fashion);
+        Native::Snapshot restored;
+        Native::ImportCounts counts;
+        assert(Native::MergePortableLibrary(Native::Snapshot{},parsed,true,false,true,restored,counts,error));
+        assert(C::ToJson(restored.loadouts)==C::ToJson(stored.loadouts));
+        assert(C::Find(restored.loadouts,"pets","unused-pets"));
+        assert(C::FindLoadout(restored.loadouts,"shared")->refs.at("pets")==petsId);
+        assert(C::FindLoadout(restored.loadouts,"revenant")->refs.at("legends")==legendsId);
+
+        auto bad=stored;
+        C::FindLoadout(bad.loadouts,"ranger")->refs["pets"]="does-not-exist";
+        bool rejected=false;
+        try{repo.Commit(stored,bad);}catch(const DB::Error&){rejected=true;}
+        assert(rejected&&repo.Read().revision==1);
+        auto changed=stored;
+        assert(C::Assign(changed.loadouts,"ranger","pets","unused-pets",error));
+        assert(repo.Commit(stored,changed)==2);
+        bool stale=false;
+        try{repo.Commit(stored,source);}catch(const DB::Error&){stale=true;}
+        assert(stale);
+        const auto final=repo.Read();
+        assert(C::FindLoadout(final.loadouts,"ranger")->refs.at("pets")=="unused-pets");
+        assert(C::FindLoadout(final.loadouts,"shared")->refs.at("pets")==petsId);
+        assert(C::FindLoadout(final.loadouts,"revenant")->refs.at("legends")==legendsId);
+    }
+    // The external build-link protocol must preserve both pairs and the six
+    // inactive utility palette IDs independently of the active skill bars.
+    for(const auto profession:{AlterEgo::PROF_RANGER,AlterEgo::PROF_REVENANT}){
+        AlterEgo::DecodedBuildLink original{};
+        original.profession=profession;
+        for(int i=0;i<5;++i){
+            original.terrestrial_skills[i]=static_cast<uint16_t>(600+i);
+            original.aquatic_skills[i]=static_cast<uint16_t>(900-i);
+        }
+        if(profession==AlterEgo::PROF_RANGER){
+            original.pets[0]=4;original.pets[1]=8;original.pets[2]=0;original.pets[3]=2;
+        }else{
+            original.legends[0]=2;original.legends[1]=1;original.legends[2]=0;original.legends[3]=3;
+            for(int i=0;i<6;++i)original.inactive_rev_skills[i]=static_cast<uint16_t>(i==3?0:4000-i*17);
+        }
+        const auto encoded=AlterEgo::ChatLink::EncodeBuild(original);
+        AlterEgo::DecodedBuildLink decoded{};
+        assert(AlterEgo::ChatLink::DecodeBuild(encoded,decoded));
+        assert(decoded.profession==original.profession);
+        for(int i=0;i<4;++i){
+            assert(decoded.pets[i]==original.pets[i]);
+            assert(decoded.legends[i]==original.legends[i]);
+        }
+        for(int i=0;i<5;++i){
+            assert(decoded.terrestrial_skills[i]==original.terrestrial_skills[i]);
+            assert(decoded.aquatic_skills[i]==original.aquatic_skills[i]);
+        }
+        for(int i=0;i<6;++i)assert(decoded.inactive_rev_skills[i]==original.inactive_rev_skills[i]);
+        assert(AlterEgo::ChatLink::EncodeBuild(decoded)==encoded);
     }
     // A populated v5 library migrates without losing legacy labels, content
     // or revision. The two new typed tables are additive.
