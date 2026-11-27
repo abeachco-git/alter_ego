@@ -46,6 +46,6 @@ If only the retry cadence is at fault, revert `56bc729` alone. If only compariso
 - [ ] Test a partial Vault section failure, weekly reset and Special; check independently verified sections and timestamps remain correct.
 - [ ] Compare actual game objectives and API activity; if a regression appears, record affected section, previous/current IDs and completion direction, reset time, visible demand and exact build before reverting.
 
-Current verification: baseline build #709 passed. The separately committed 120-second cap requires exact-commit build verification. Live reset acceptance remains open.
+Current verification: [build #710](https://github.com/abeachco-git/alter_ego/actions/runs/45936342371), exact commit `7f5af152653ff7ecf2a0be03e49e868a37f5656c`, passed required offline regressions (including eight consecutive failures), sanitizers, Windows x64 UCRT compilation and binary verification. Live reset acceptance remains open.
 
 Leaving and reopening a page does not reset elapsed retry cooldowns or create a manual request. Reopening resumes ordinary demand eligibility; only an explicit Refresh bypasses ordinary cooldown. Existing Vault batch timeout remains independent.
