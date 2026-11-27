@@ -319,3 +319,5 @@ Character identity regression: native_inventory exercises registry v1-to-v6 migr
 Character presentation references: native_inventory exercises stable selection through rename, exact-address rejection, different-character exclusion, and evidence-only portable selection encoding. Library backup verifies local session IDs are stripped. Live verify selected Characters/Compare, temporary unavailable states, Back/Forward, session restoration, replacement and rename during each capture confirmation, and captured Share source; in-game checks remain deferred.
 
 Portable history regression covers two owners of one name, pending round-trip, unique current evidence adoption, historical login independent of last-seen and API freshness, and legacy v1 input/merge. Live restore and contextual legacy recovery remain verification items.
+
+Stable custom order fixtures exercise transactional account-local ranks, portable round-trip and idempotent adoption; live verify drag/drop, roster rename/replacement, partial visibility, ordering parity across all character consumers and portable restore. Name-only legacy order remains archived for explicit recovery.

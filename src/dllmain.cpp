@@ -1203,8 +1203,10 @@ enum CharSortMode { Sort_Custom = AlterEgo::CharacterOrder::Custom, Sort_Name, S
 static int g_CharSortMode = Sort_Custom;
 static bool g_CharSortAscending = true;            // true = default direction, false = reversed
 static std::vector<int> g_CharDisplayOrder;        // indices into GetCharacters()
-static std::vector<std::string> g_CustomCharOrder;  // saved custom name order
-static std::pair<std::string,std::string> g_CharDragKey;
+static nlohmann::json g_LegacyCustomOrder=nlohmann::json::array();
+static nlohmann::json g_PendingCustomOrder=nlohmann::json::array();
+static uint64_t g_CharOrderPreferenceRevision=0;
+static AlterEgo::CharacterIdentity::Selection g_CharDragSelection;
 static std::shared_ptr<const std::vector<AlterEgo::Character>> g_CharOrderRoster;
 static std::vector<std::string> g_CharOrderAccounts;
 static int g_CharOrderBirthdayDay=-1;
@@ -1269,12 +1271,15 @@ static std::optional<AlterEgo::Character> BoundCharacter(const std::optional<Alt
     return std::nullopt;
 }
 static AlterEgo::CharacterOrder::Entry CharacterOrderEntry(const AlterEgo::Character& ch){
-    return {{ch.account_name,ch.name},ch.profession,ch.created,ch.level,
+    AlterEgo::CharacterOrder::Entry entry{{ch.account_name,ch.name},ch.profession,ch.created,ch.level,
         g_CharSortMode==Sort_Birthday?DaysUntilBirthday(ch.created):-1,CharacterLastLogin(ch)};
+    if(const auto address=CharacterAddressFor(ch))entry.ref=address->Reference();
+    return entry;
 }
 static std::vector<int> SortCharacterEntries(const std::vector<AlterEgo::CharacterOrder::Entry>& entries){
-    return AlterEgo::CharacterOrder::Indices(entries,g_CharSortMode,g_CharSortAscending,g_CustomCharOrder,
-        AlterEgo::GW2API::IsMultiAccount()?OrderedCharacterAccounts():std::vector<std::string>{});
+    const auto ranks=AlterEgo::NativeAccounts::CustomOrderRanks();
+    return AlterEgo::CharacterOrder::Indices(entries,g_CharSortMode,g_CharSortAscending,{},
+        AlterEgo::GW2API::IsMultiAccount()?OrderedCharacterAccounts():std::vector<std::string>{},&ranks);
 }
 std::vector<std::pair<std::string,std::string>> OrderedCharacterKeys(
     const std::set<std::pair<std::string,std::string>>& requested){
@@ -1290,6 +1295,7 @@ std::vector<std::pair<std::string,std::string>> OrderedCharacterKeys(
     // For metadata-dependent modes they sort after fully retrieved characters.
     for(const auto& key:remaining){
         CharacterOrder::Entry entry;entry.key=key;
+        if(const auto address=NativeAccounts::ResolveCharacterAddress(key.first,key.second))entry.ref=address->Reference();
         auto login=g_LoginHistory.find(key);if(login!=g_LoginHistory.end())entry.login=login->second;
         entries.push_back(std::move(entry));
     }
@@ -1357,6 +1363,7 @@ static void RebuildCharDisplayOrder(const std::shared_ptr<const std::vector<Alte
     g_CharDisplayOrder=SortCharacterEntries(entries);
     g_CharOrderRoster=charsSnapshot;
     g_CharOrderAccounts=OrderedCharacterAccounts();
+    g_CharOrderPreferenceRevision=AlterEgo::NativeAccounts::CustomOrderRevision();
     g_CharOrderBirthdayDay=g_CharSortMode==Sort_Birthday?CharacterOrderCalendarDay():-1;
     if(g_CharSortMode==Sort_LastLogin)g_CharLastLoginSortDirty=false;
 }
@@ -1366,12 +1373,14 @@ static void RebuildCharDisplayOrder(const std::shared_ptr<const std::vector<Alte
 static void EnsureCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& roster){
     bool changed=!g_CharOrderRoster||g_CharOrderRoster->size()!=roster->size()||
         g_CharOrderAccounts!=OrderedCharacterAccounts()||
+        (g_CharSortMode==Sort_Custom&&g_CharOrderPreferenceRevision!=AlterEgo::NativeAccounts::CustomOrderRevision())||
         (g_CharSortMode==Sort_Birthday&&g_CharOrderBirthdayDay!=CharacterOrderCalendarDay())||
         (g_CharSortMode==Sort_LastLogin&&g_CharLastLoginSortDirty);
     if(!changed&&g_CharOrderRoster!=roster){
         for(size_t i=0;i<roster->size();++i){
             const auto& a=(*g_CharOrderRoster)[i];const auto& b=(*roster)[i];
             if(a.name!=b.name||a.account_name!=b.account_name||
+                (g_CharSortMode==Sort_Custom&&(a.created!=b.created||a.profession!=b.profession||a.race!=b.race))||
                 (g_CharSortMode==Sort_Profession&&a.profession!=b.profession)||
                 (g_CharSortMode==Sort_Level&&a.level!=b.level)||
                 ((g_CharSortMode==Sort_Age||g_CharSortMode==Sort_Birthday)&&a.created!=b.created)){changed=true;break;}
@@ -1838,7 +1847,8 @@ static bool SaveCharSortConfig() {
     nlohmann::json j;
     j["sort_mode"] = g_CharSortMode;
     j["sort_ascending"] = g_CharSortAscending;
-    j["custom_order"] = g_CustomCharOrder;
+    if(!g_LegacyCustomOrder.empty())j["legacy_custom_order"]=g_LegacyCustomOrder;
+    if(!g_PendingCustomOrder.empty())j["custom_order_refs"]=g_PendingCustomOrder;
     return SavePreferenceFile(path,j);
 }
 
@@ -1850,10 +1860,11 @@ static void LoadCharSortConfig() {
         auto j = nlohmann::json::parse(file);
         if (j.contains("sort_mode")) g_CharSortMode = j["sort_mode"].get<int>();
         if (j.contains("sort_ascending")) g_CharSortAscending = j["sort_ascending"].get<bool>();
-        if (j.contains("custom_order")) {
-            g_CustomCharOrder.clear();
-            for (const auto& name : j["custom_order"])
-                g_CustomCharOrder.push_back(name.get<std::string>());
+        g_LegacyCustomOrder=j.value("legacy_custom_order",nlohmann::json::array());
+        if(j.contains("custom_order")&&g_LegacyCustomOrder.empty())g_LegacyCustomOrder=j["custom_order"];
+        g_PendingCustomOrder=j.value("custom_order_refs",nlohmann::json::array());
+        if(!g_PendingCustomOrder.empty()&&AlterEgo::NativeAccounts::StageCustomOrder(AlterEgo::CharacterOrder::DecodeRanks(g_PendingCustomOrder))){
+            g_PendingCustomOrder=nlohmann::json::array();SaveCharSortConfig();
         }
     } catch (...) {}
 }
@@ -16456,7 +16467,7 @@ void AddonRender() {
                     // Drag source for Custom sort mode
                     if (g_CharSortMode == Sort_Custom) {
                         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
-                            g_CharDragKey={ch.account_name,ch.name};
+                            g_CharDragSelection=SelectCharacterIdentity(ch);
                             ImGui::SetDragDropPayload("CHAR_REORDER",rowIdentity.c_str(),rowIdentity.size()+1);
                             RenderProfessionCharacterName(ch.name, ch.profession);
                             ImGui::EndDragDropSource();
@@ -16690,10 +16701,12 @@ void AddonRender() {
                 }
 
                 // Custom sort: draw insertion line and handle drop
-                const int dragIndex=CharacterDisplayIndex(g_CharDragKey);
+                int dragIndex=-1;
+                if(ResolveSelection(g_CharDragSelection))for(int di=0;di<(int)g_CharDisplayOrder.size();++di)
+                    if(MatchesSelection(g_CharDragSelection,characters[g_CharDisplayOrder[di]])){dragIndex=di;break;}
                 if(g_CharSortMode==Sort_Custom&&dragIndex>=0&&ImGui::GetDragDropPayload()!=nullptr&&
                     ImGui::GetDragDropPayload()->IsDataType("CHAR_REORDER")){
-                    const std::string& srcAcct=g_CharDragKey.first;
+                    const std::string& srcAcct=g_CharDragSelection.ref.account;
 
                     // Find the range of itemRects indices belonging to the same account
                     int acctFirst = -1, acctLast = -1;
@@ -16748,17 +16761,18 @@ void AddonRender() {
                                     finalPos = (int)g_CharDisplayOrder.size();
                                 g_CharDisplayOrder.insert(g_CharDisplayOrder.begin() + finalPos, movedIdx);
                                 // Update custom order
-                                g_CustomCharOrder.clear();
-                                for (int idx : g_CharDisplayOrder)
-                                    g_CustomCharOrder.push_back(characters[idx].name);
-                                // Selection is keyed by account and character, not display position.
-                                SaveCharSortConfig();
+                                std::vector<AlterEgo::CharacterIdentity::Address> ordered;
+                                for(int idx:g_CharDisplayOrder)if(characters[idx].account_name==srcAcct)
+                                    if(const auto address=CharacterAddressFor(characters[idx]))ordered.push_back(*address);
+                                if(!AlterEgo::NativeAccounts::SaveCustomOrder(srcAcct,ordered)&&APIDefs)
+                                    APIDefs->GUI_SendAlert("Could not save character order.");
+                                RebuildCharDisplayOrder(charactersSnapshot);
                             }
                         }
-                        g_CharDragKey={};
+                        g_CharDragSelection={};
                     }
                 } else if (ImGui::IsMouseReleased(0)) {
-                    g_CharDragKey={};
+                    g_CharDragSelection={};
                 }
 
                 ImGui::EndChild();

@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 #include "CharacterIdentityRuntime.h"
 #include "CharacterPreferenceStore.h"
+#include "CharacterOrderStore.h"
 namespace AlterEgo::NativeAccounts {
 struct LinkedAccount {
     std::string id,name,label;
@@ -54,6 +55,10 @@ bool VerifyCharacterAddress(const LinkedAccount& account,const CharacterIdentity
 void RecoverCharacterAddress(const LinkedAccount& account,const CharacterIdentity::Address& address);
 void PollObservedIdentity(const std::string& name,bool inventory=false);
 void AdoptPendingLoginHistory();
+CharacterOrder::RanksByRef CustomOrderRanks();
+uint64_t CustomOrderRevision();
+bool StageCustomOrder(const CharacterOrder::PortableRanks& records);
+bool SaveCustomOrder(const std::string& account,const std::vector<CharacterIdentity::Address>& ordered);
 bool RecordIdentityObservation(const LinkedAccount& account,const CharacterIdentity::Address& address,
     const std::string& created,const std::string& profession,const std::string& race);
 Result Request(const LinkedAccount& account,const std::string& path,

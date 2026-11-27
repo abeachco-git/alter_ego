@@ -11,6 +11,7 @@
 #include "ComposableLoadouts.h"
 #include "CharacterActivity.h"
 #include "CharacterPreferenceStore.h"
+#include "CharacterOrderStore.h"
 #include <nlohmann/json.hpp>
 #include <ctime>
 #include <filesystem>
@@ -204,6 +205,7 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
         // credentials. Local numeric IDs are not installation-independent.
         try{
             CharacterLoadout::PortableChoices preferences;
+            CharacterOrder::PortableRanks order;
             const auto accountDb=Storage::Paths(dir).Accounts();
             if(std::filesystem::exists(accountDb)){
                 Database::Connection db(accountDb.u8string(),Database::Connection::OpenMode::ReadOnly);
@@ -214,6 +216,7 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
                 if(version>=6){
                     db.Exec("BEGIN");
                     preferences=CharacterLoadout::ExportPortable(db);
+                    if(version>=7)order=CharacterOrder::ExportRanks(db);
                     db.Exec("COMMIT");
                 }
             }
@@ -224,6 +227,13 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
                 preferences.insert(records.begin(),records.end());
             }
             if(!preferences.empty())files["character_loadouts.json"]=CharacterLoadout::EncodePortable(preferences).dump(2);
+            nlohmann::json sort={{"sort_mode",0},{"sort_ascending",true}};
+            if(const auto it=files.find("char_sort.json");it!=files.end())sort=Untrusted::Parse(it->second,Untrusted::Library);
+            if(sort.contains("custom_order_refs")){
+                const auto pendingRanks=CharacterOrder::DecodeRanks(sort.at("custom_order_refs"));
+                order.insert(pendingRanks.begin(),pendingRanks.end());
+            }
+            if(!order.empty()){sort["custom_order_refs"]=CharacterOrder::EncodeRanks(order);files["char_sort.json"]=sort.dump(2);}
         }catch(const std::exception& e){error=std::string("Cannot export character Loadout preferences: ")+e.what();return false;}
         for (const auto& subfolder : {"portraits", "fonts"}) {
             const auto folder = std::filesystem::u8path(dir) / subfolder;

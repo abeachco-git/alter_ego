@@ -56,6 +56,8 @@ std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
 std::shared_ptr<const CharacterLoadout::Projection> loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();
 std::atomic<uint64_t> loadoutPreferenceRevision{0};
+std::shared_ptr<const CharacterOrder::OrderProjection> customOrder=std::make_shared<CharacterOrder::OrderProjection>();
+std::atomic<uint64_t> customOrderRevision{0};
 std::atomic<bool> busy{false};
 std::mutex physicalMutex,rosterMutex;
 struct PhysicalEntry {uint64_t epoch=0;PhysicalEquipmentResult value;std::chrono::steady_clock::time_point finished{};CharacterIdentity::Binding binding;};
@@ -161,14 +163,21 @@ void PublishPreferences(std::shared_ptr<const CharacterLoadout::Projection> next
 }
 // Caller holds the credential gate; no transport or callbacks. Only
 // evidence-qualified pending records are eligible for automatic adoption.
+std::shared_ptr<const CharacterOrder::OrderProjection> OrderSnapshot(){
+    std::lock_guard<std::mutex> lock(viewMutex);return customOrder;
+}
+void PublishOrder(std::shared_ptr<const CharacterOrder::OrderProjection> next){
+    std::lock_guard<std::mutex> lock(viewMutex);customOrder=std::move(next);++customOrderRevision;
+}
 void RefreshLoadoutPreferences(){
     if(!std::filesystem::exists(AccountPath()))return;
     Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
     Database::Transaction tx(db);
     for(const auto& [account,state]:identityStates)
-        if(!identityRosterBlocked.count(account))CharacterLoadout::AdoptPortable(db,state);
+        if(!identityRosterBlocked.count(account)){CharacterLoadout::AdoptPortable(db,state);CharacterOrder::AdoptRanks(db,state);}
+    auto order=std::make_shared<CharacterOrder::OrderProjection>(CharacterOrder::ReadOrder(db));
     auto next=std::make_shared<CharacterLoadout::Projection>(CharacterLoadout::ReadProjection(db));
-    tx.Commit();PublishPreferences(std::move(next));
+    tx.Commit();PublishPreferences(std::move(next));PublishOrder(std::move(order));
 }
 // Credential gate is already held. Bootstrap only once, using exact GUID
 // and independently verified cached core data. Never replay old cache
@@ -248,7 +257,9 @@ bool AdoptIdentity(const CharacterIdentity::State& state,
         // Preferences never make authenticated cache adoption fail.
         try{
             const auto pending=PreferenceSnapshot();
-            if(std::any_of(pending->pending.begin(),pending->pending.end(),[&](const auto& p){return p.account==account&&p.HasEvidence();}))
+            const auto order=OrderSnapshot();
+            if(std::any_of(pending->pending.begin(),pending->pending.end(),[&](const auto& p){return p.account==account&&p.HasEvidence();})||
+               std::any_of(order->pending.begin(),order->pending.end(),[&](const auto& p){return p.account==account;}))
                 RefreshLoadoutPreferences();
         }catch(...){}
         return true;
@@ -891,6 +902,39 @@ void AdoptPendingLoginHistory(){
     std::lock_guard<std::mutex> activity(CharacterActivity::Mutex());
     for(const auto& [account,state]:identityStates)
         if(!identityRosterBlocked.count(account))CharacterActivity::State().AdoptPortableHistory(state);
+}
+CharacterOrder::RanksByRef CustomOrderRanks(){return OrderSnapshot()->ranks;}
+uint64_t CustomOrderRevision(){return customOrderRevision.load();}
+bool StageCustomOrder(const CharacterOrder::PortableRanks& records){
+    if(records.empty())return true;
+    try{
+        std::lock_guard<std::mutex> gate(credentialMutex);
+        if(root.empty())return false;
+        std::filesystem::create_directories(AccountPath().parent_path());
+        Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Create);InitAccounts(db);
+        Database::Transaction tx(db);CharacterOrder::StageRanks(db,records);
+        for(const auto& [account,state]:identityStates)
+            if(!identityRosterBlocked.count(account))CharacterOrder::AdoptRanks(db,state);
+        auto next=std::make_shared<CharacterOrder::OrderProjection>(CharacterOrder::ReadOrder(db));
+        tx.Commit();PublishOrder(std::move(next));return true;
+    }catch(...){return false;}
+}
+bool SaveCustomOrder(const std::string& account,const std::vector<CharacterIdentity::Address>& ordered){
+    try{
+        std::lock_guard<std::mutex> gate(credentialMutex);
+        const auto state=identityStates.find(account);
+        if(state==identityStates.end()||identityRosterBlocked.count(account)||ordered.empty())return false;
+        const auto epoch=registryGeneration.load();
+        std::vector<CharacterIdentity::Ref> refs;
+        for(const auto& address:ordered){
+            if(address.account!=account||!CharacterIdentity::Matches(state->second,address,epoch))return false;
+            refs.push_back(address.Reference());
+        }
+        Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+        Database::Transaction tx(db);if(!CharacterOrder::Reorder(db,account,refs))return false;
+        auto next=std::make_shared<CharacterOrder::OrderProjection>(CharacterOrder::ReadOrder(db));
+        tx.Commit();PublishOrder(std::move(next));return true;
+    }catch(...){return false;}
 }
 CharacterLoadout::Choice ExpectedLoadout(const CharacterIdentity::Ref& ref){return PreferenceSnapshot()->Get(ref);}
 uint64_t LoadoutPreferenceRevision(){return loadoutPreferenceRevision.load();}

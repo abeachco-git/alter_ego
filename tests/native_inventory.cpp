@@ -6,6 +6,7 @@
 #include "../src/NativeInventoryStore.h"
 #include "../src/InventoryGroupCore.h"
 #include "../src/CharacterOrderCore.h"
+#include "../src/CharacterOrderStore.h"
 #include "../src/NativeProgressCore.h"
 #include "../src/CompletionCache.h"
 #include "../src/RefreshProgress.h"
@@ -39,6 +40,22 @@ int case_native_inventory(int,char**){
             auto initial=CI::Commit(db,"A",0,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
             assert(initial&&*initial&&initial->changes.size()==2);
             alice=initial->next.Current("Alice")->id;bob=initial->next.Current("Bob")->id;
+            {
+                Database::Transaction tx(db);
+                assert(CharacterOrder::Reorder(db,"A",{{"A",bob},{"A",alice}}));
+                tx.Commit();
+            }
+            assert(CharacterOrder::ReadOrder(db).ranks.at({"A",bob})==0);
+            assert(CharacterOrder::ReadOrder(db).ranks.at({"A",alice})==1);
+            const auto portableRanks=CharacterOrder::DecodeRanks(CharacterOrder::EncodeRanks(CharacterOrder::ExportRanks(db)));
+            assert(portableRanks.size()==2);
+            {
+                Database::Transaction tx(db);
+                CharacterOrder::StageRanks(db,portableRanks);
+                CharacterOrder::AdoptRanks(db,initial->next);
+                tx.Commit();
+            }
+            assert(CharacterOrder::ReadOrder(db).pending.empty());
             assert(alice!=bob);
             auto unchanged=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
             assert(unchanged&&*unchanged&&unchanged->changes.empty()&&unchanged->next.revision==1);

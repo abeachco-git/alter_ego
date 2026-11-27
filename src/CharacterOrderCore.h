@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "CharacterIdentityRuntime.h"
 namespace AlterEgo::CharacterOrder {
 // Persisted sort values; never reorder these.
 enum Mode { Custom=0, Name, Profession, Level, Age, Birthday, LastLogin };
@@ -15,9 +16,11 @@ struct Entry {
     std::string profession,created;
     int level=0,birthday=-1;
     int64_t login=0;
+    CharacterIdentity::Ref ref;
 };
 inline std::vector<int> Indices(const std::vector<Entry>& rows,int mode,bool asc,
-    const std::vector<std::string>& custom,const std::vector<std::string>& accounts){
+    const std::vector<std::string>& custom,const std::vector<std::string>& accounts,
+    const std::map<CharacterIdentity::Ref,int64_t>* stable=nullptr){
     std::vector<int> order(rows.size());std::iota(order.begin(),order.end(),0);
     std::map<std::string,size_t> customRank,accountRank;
     for(size_t i=0;i<custom.size();++i)customRank.emplace(custom[i],i);
@@ -51,7 +54,13 @@ inline std::vector<int> Indices(const std::vector<Entry>& rows,int mode,bool asc
             if(auto k=unknown(a.login>0,b.login>0))return k>0;
             return before(b.login,a.login);
         case Custom:
-        default:return rank(customRank,an)<rank(customRank,bn);
+        default:
+            if(stable){
+                const auto ai=stable->find(a.ref),bi=stable->find(b.ref);
+                if(ai==stable->end()||bi==stable->end())return ai!=stable->end()&&bi==stable->end();
+                return ai->second!=bi->second?ai->second<bi->second:a.ref<b.ref;
+            }
+            return rank(customRank,an)<rank(customRank,bn);
         }
     });
     return order;
