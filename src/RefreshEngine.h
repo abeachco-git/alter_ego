@@ -66,6 +66,7 @@ inline void ResetMetadata(){auto& r=Metadata();std::lock_guard<std::mutex> lock(
 struct IdBatch {
     std::string dataset;
     std::vector<uint32_t> ids;
+    int64_t retrySeconds=FailureSeconds;
     // Only the owning worker records completed transport attempts. An
     // abandoned claim (including failed launch) must not create a cooldown.
     std::set<uint32_t> attempted;
@@ -81,7 +82,7 @@ struct IdBatch {
             const auto id=*first;if(!released.insert(id).second)continue;
             auto it=r.records.find({dataset,id});if(it==r.records.end())continue;
             it->second.pending=false;
-            if(attempted.count(id))it->second.retry=MetadataRegistry::Clock::now()+std::chrono::seconds(FailureSeconds);
+            if(attempted.count(id))it->second.retry=MetadataRegistry::Clock::now()+std::chrono::seconds(retrySeconds);
             else if(completed)it->second.retry={};
         }
         r.changed.notify_all();
@@ -94,13 +95,13 @@ struct IdBatch {
             if(it==r.records.end())continue;
             auto& e=it->second;
             e.pending=false;
-            if(attempted.count(id))e.retry=MetadataRegistry::Clock::now()+std::chrono::seconds(FailureSeconds);
+            if(attempted.count(id))e.retry=MetadataRegistry::Clock::now()+std::chrono::seconds(retrySeconds);
         }
         r.changed.notify_all();
     }
 };
-inline std::shared_ptr<IdBatch> ClaimIds(const std::string& dataset,const std::vector<uint32_t>& ids,bool manual=false){
-    auto batch=std::make_shared<IdBatch>();batch->dataset=dataset;
+inline std::shared_ptr<IdBatch> ClaimIds(const std::string& dataset,const std::vector<uint32_t>& ids,bool manual=false,int64_t retrySeconds=FailureSeconds){
+    auto batch=std::make_shared<IdBatch>();batch->dataset=dataset;batch->retrySeconds=retrySeconds;
     auto& r=Metadata();std::lock_guard<std::mutex> lock(r.mutex);
     const auto now=MetadataRegistry::Clock::now();
     if(now>=r.pruneAt){

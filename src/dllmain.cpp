@@ -3943,7 +3943,7 @@ static void RenderSkillIcon(uint32_t skill_id, float size);
 static void RenderSkillBarPreview(const std::array<AlterEgo::SkillEdit::DisplaySlot,5>& slots,float size) {
     namespace SE=AlterEgo::SkillEdit;
     std::vector<uint32_t> missing;
-    for(const auto& slot:slots)if(slot.id&&!AlterEgo::GW2API::GetSkillInfo(slot.id))missing.push_back(slot.id);
+    for(const auto& slot:slots)if(slot.id)missing.push_back(slot.id);
     if(!missing.empty()){
         std::sort(missing.begin(),missing.end());missing.erase(std::unique(missing.begin(),missing.end()),missing.end());
         AlterEgo::GW2API::FetchSkillDetailsAsync(missing);
@@ -7121,6 +7121,8 @@ static std::vector<uint32_t> SelectableBuildSkillIds(
     if (allIds.empty()) {
         return {};
     }
+    // Catalog admission sees every demanded ID, including stale cached definitions.
+    AlterEgo::GW2API::FetchSkillDetailsAsync(allIds);
     std::vector<uint32_t> missing;
     std::vector<uint32_t> matches;
     for (uint32_t id : allIds) {
@@ -7229,8 +7231,8 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
                                        const std::vector<AlterEgo::SkillEdit::EliteContext>& contexts) {
     using AlterEgo::SkillEdit::PairChoiceAllowed;
     const auto catalog=AlterEgo::PublicCatalog::Get();
-    if(legend&&catalog->legends.empty())AlterEgo::GW2API::FetchLegendsAsync();
-    if(!legend&&catalog->pets.empty())AlterEgo::GW2API::FetchPetsAsync();
+    if(legend)AlterEgo::GW2API::FetchLegendsAsync();
+    else AlterEgo::GW2API::FetchPetsAsync();
     const auto& pets=catalog->pets;
     auto display=ResolveProfessionChoice(legend,current);
     if(!current)display.name=unresolved?"Unresolved selection":known?"Empty":editable?"Choose (not recorded)":"Not recorded";
@@ -7361,7 +7363,7 @@ static uint8_t RenderProfessionPairSection(bool legend,AlterEgo::SkillEdit::Comp
     std::vector<uint32_t> missing;
     for(auto id:values)if(id){
         const auto choice=ResolveProfessionChoice(legend,id);
-        for(auto skill:choice.skills)if(skill&&!AlterEgo::GW2API::GetSkillInfo(skill))missing.push_back(skill);
+        for(auto skill:choice.skills)if(skill)missing.push_back(skill);
     }
     if(!missing.empty()){
         std::sort(missing.begin(),missing.end());missing.erase(std::unique(missing.begin(),missing.end()),missing.end());
@@ -7462,7 +7464,7 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
         UI::EntityContext("##selected_pet_name",[&]{ProfessionChoiceActions(false,choice);});
         if(!choice.description.empty())ImGui::TextWrapped("%s",choice.description.c_str());
         std::vector<uint32_t> missing;
-        for(auto skill:choice.skills)if(!GW2API::GetSkillInfo(skill))missing.push_back(skill);
+        for(auto skill:choice.skills)if(skill)missing.push_back(skill);
         if(!missing.empty())GW2API::FetchSkillDetailsAsync(missing);
         RenderCompanionAssociatedSkills(choice,30.f);
         const auto evidence=PO::Get(ownership,pet->id);
@@ -9912,8 +9914,8 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     // Fetch skill details for weapon skills
     {
         std::vector<uint32_t> toFetch;
-        for (auto id : wpnSkillsA) { if (id && !AlterEgo::GW2API::GetSkillInfo(id)) toFetch.push_back(id); }
-        for (auto id : wpnSkillsB) { if (id && !AlterEgo::GW2API::GetSkillInfo(id)) toFetch.push_back(id); }
+        for (auto id : wpnSkillsA) { if (id) toFetch.push_back(id); }
+        for (auto id : wpnSkillsB) { if (id) toFetch.push_back(id); }
         if (!toFetch.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(toFetch);
     }
 
@@ -12257,7 +12259,7 @@ static void RenderBuildLibrary() {
             };
             std::vector<uint32_t> need;
             for (uint32_t id : cur)
-                if (id && !AlterEgo::GW2API::GetSkillInfo(id)) need.push_back(id);
+                if (id) need.push_back(id);
             if (!need.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(need);
         }
 

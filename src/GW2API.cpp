@@ -1702,184 +1702,91 @@ namespace AlterEgo {
         AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchSkinDetails(*claim); });
     }
 
-    void GW2API::FetchSpecDetailsAsync(const std::vector<uint32_t>& spec_ids) {
-        std::vector<uint32_t> missing;
-        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:spec_ids)if(id&&!s_spec_cache.count(id))missing.push_back(id);}
-        auto claim=RefreshEngine::ClaimIds("specializations",missing);
-        if(claim->ids.empty())return;
-        auto ids=claim->ids;
-        AlterEgo::Background::Workers().Launch([ids,claim]() {
-            ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);
-            if (ids.empty()) return;
-            std::vector<uint32_t> to_fetch;
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                for (uint32_t id : ids) {
-                    if (id != 0 && s_spec_cache.find(id) == s_spec_cache.end())
-                        to_fetch.push_back(id);
-                }
+    // Shared age/completeness policy, used before claim and again on the worker.
+    // Immutable payload and request watermark are adopted together; no render SQL.
+    std::vector<uint32_t> GW2API::BalanceReferenceDemand(const std::vector<uint32_t>& ids,int dataset,bool environment){
+        using D=Cache::ReferenceDataset;
+        const auto now=PublicCatalog::Now();
+        const bool automatic=AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::PublicCatalog);
+        std::vector<uint32_t> out;
+        std::lock_guard<std::mutex> lock(s_mutex);
+        auto collect=[&](const auto& cache,auto complete){
+            for(auto id:ids)if(id){
+                const auto it=cache.find(id);
+                if(it==cache.end()||PublicCatalog::ReferenceNeedsRefresh(it->second->verified_at,complete(*it->second),now,false,automatic))
+                    out.push_back(id);
             }
-            if (to_fetch.empty()) return;
-
-            std::sort(to_fetch.begin(), to_fetch.end());
-            to_fetch.erase(std::unique(to_fetch.begin(), to_fetch.end()), to_fetch.end());
-
-            std::string ids_param;
-            for (size_t i = 0; i < to_fetch.size(); i++) {
-                if (i > 0) ids_param += ",";
-                ids_param += std::to_string(to_fetch[i]);
-            }
-
-            std::string url = "https://api.guildwars2.com/v2/specializations?ids=" + ids_param;
-            const auto requestStamp=Cache::ReferenceSnapshotTime();
-            bool attempted=false;
-            std::string response = HttpGet(url,&attempted);
-            if (Background::Workers().Stopping()) return;
-            if(attempted)claim->MarkAttempted(to_fetch.begin(),to_fetch.end());
-            if (response.empty()) return;
-
-            try {
-                const auto dataset=Cache::ReferenceDataset::Specializations;
-                auto rows=ReferenceBatch(dataset,response,to_fetch.begin(),to_fetch.end());
-                if(!rows.empty()){
-                    std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
-                    if(Background::Workers().Stopping())return;
-                    auto accepted=json::array();
-                    if(Cache::WriteReferenceObservations(GetDataDirectory(),dataset,rows,requestStamp,accepted))
-                        AdoptReferenceObservations(static_cast<int>(dataset),accepted);
-                }
-            } catch (...) {}
-
-
-            // Chain-fetch all trait details for loaded specs
-            std::vector<uint32_t> all_trait_ids;
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                for (uint32_t sid : to_fetch) {
-                    auto it = s_spec_cache.find(sid);
-                    if (it == s_spec_cache.end()) continue;
-                    for (uint32_t tid : it->second->minor_traits) all_trait_ids.push_back(tid);
-                    for (uint32_t tid : it->second->major_traits) all_trait_ids.push_back(tid);
-                }
-            }
-            if (!all_trait_ids.empty()) {
-                FetchTraitDetailsAsync(all_trait_ids);
-            }
-        });
+        };
+        switch(static_cast<D>(dataset)){
+        case D::Specializations:collect(s_spec_cache,[](const auto&){return true;});break;
+        case D::Traits:collect(s_trait_cache,[](const auto&){return true;});break;
+        case D::Skills:collect(s_skill_cache,[environment](const auto& s){return !environment||s.no_underwater.has_value();});break;
+        default:break;
+        }
+        std::sort(out.begin(),out.end());out.erase(std::unique(out.begin(),out.end()),out.end());
+        return out;
     }
-
-    void GW2API::FetchTraitDetails(RefreshEngine::IdBatch& claim) {
-        const auto& trait_ids=claim.ids;
-        if (trait_ids.empty()) return;
-        std::vector<uint32_t> to_fetch;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (uint32_t id : trait_ids) {
-                if (id != 0 && s_trait_cache.find(id) == s_trait_cache.end())
-                    to_fetch.push_back(id);
+    void GW2API::DemandSpecializationTraits(const std::vector<uint32_t>& ids){
+        std::vector<uint32_t> traits;
+        {std::lock_guard<std::mutex> lock(s_mutex);
+            for(auto id:ids){auto it=s_spec_cache.find(id);if(it==s_spec_cache.end())continue;
+                traits.insert(traits.end(),it->second->minor_traits.begin(),it->second->minor_traits.end());
+                traits.insert(traits.end(),it->second->major_traits.begin(),it->second->major_traits.end());
             }
         }
-        if (to_fetch.empty()) return;
-
-        std::sort(to_fetch.begin(), to_fetch.end());
-        to_fetch.erase(std::unique(to_fetch.begin(), to_fetch.end()), to_fetch.end());
-
-        const size_t BATCH_SIZE = 200;
-        for (size_t i = 0; i < to_fetch.size(); i += BATCH_SIZE) {
-            if (AlterEgo::Background::Workers().Stopping()) return;
-            std::string ids_param;
-            size_t end = std::min(i + BATCH_SIZE, to_fetch.size());
-            for (size_t j = i; j < end; j++) {
-                if (!ids_param.empty()) ids_param += ",";
-                ids_param += std::to_string(to_fetch[j]);
-            }
-
-            const auto requestStamp=Cache::ReferenceSnapshotTime();
-            bool attempted=false;
-            std::string response = HttpGet("https://api.guildwars2.com/v2/traits?ids=" + ids_param,&attempted);
-            if (Background::Workers().Stopping()) return;
-            if(attempted)claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
-            if (response.empty()) continue;
-
-            try {
-                const auto dataset=Cache::ReferenceDataset::Traits;
-                auto rows=ReferenceBatch(dataset,response,to_fetch.begin()+i,to_fetch.begin()+end);
-                if(!rows.empty()){
-                    std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
-                    if(Background::Workers().Stopping())return;
-                    auto accepted=json::array();
-                    if(Cache::WriteReferenceObservations(GetDataDirectory(),dataset,rows,requestStamp,accepted))
-                        AdoptReferenceObservations(static_cast<int>(dataset),accepted);
-                }
-            } catch (...) {}
-
-            if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
-        }
+        if(!traits.empty())FetchTraitDetailsAsync(traits);
     }
-
-    void GW2API::FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids) {
-        std::vector<uint32_t> missing;
-        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:trait_ids)if(id&&!s_trait_cache.count(id))missing.push_back(id);}
-        auto claim=RefreshEngine::ClaimIds("traits",missing);
-        if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim]() { ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);FetchTraitDetails(*claim); });
-    }
-
-    // Transport, validation, ordered persistence and adoption for all skill consumers.
-    // Keep the established partial-batch/attempt behavior for ordinary tooltips.
-    void GW2API::FetchClaimedSkillDetails(RefreshEngine::IdBatch& claim,const std::vector<uint32_t>& ids){
-        const size_t BATCH_SIZE=200;
-        for(size_t i=0;i<ids.size();i+=BATCH_SIZE){
+    void GW2API::FetchClaimedReferenceDetails(RefreshEngine::IdBatch& claim,const std::vector<uint32_t>& ids,int dataset){
+        const auto kind=static_cast<Cache::ReferenceDataset>(dataset);
+        constexpr size_t batchSize=RefreshEngine::PublicBulkIdLimit;
+        for(size_t i=0;i<ids.size();i+=batchSize){
             Background::Checkpoint();
-            const size_t end=std::min(i+BATCH_SIZE,ids.size());
+            const size_t end=std::min(i+batchSize,ids.size());
             std::string query;
             for(size_t j=i;j<end;++j){if(!query.empty())query+=",";query+=std::to_string(ids[j]);}
             const auto requestStamp=Cache::ReferenceSnapshotTime();
             bool attempted=false;
-            const auto response=HttpGet("https://api.guildwars2.com/v2/skills?ids="+query,&attempted);
+            const auto response=HttpGet("https://api.guildwars2.com/v2/"+claim.dataset+"?ids="+query,&attempted);
             Background::Checkpoint();
             if(attempted)claim.MarkAttempted(ids.begin()+i,ids.begin()+end);
             if(response.empty())continue;
             try{
-                const auto dataset=Cache::ReferenceDataset::Skills;
-                auto rows=ReferenceBatch(dataset,response,ids.begin()+i,ids.begin()+end);
+                auto rows=ReferenceBatch(kind,response,ids.begin()+i,ids.begin()+end);
                 if(!rows.empty()){
                     std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
                     Background::Checkpoint();
                     auto accepted=json::array();
-                    if(Cache::WriteReferenceObservations(GetDataDirectory(),dataset,rows,requestStamp,accepted))
-                        AdoptReferenceObservations(static_cast<int>(dataset),accepted);
+                    if(Cache::WriteReferenceObservations(GetDataDirectory(),kind,rows,requestStamp,accepted))
+                        AdoptReferenceObservations(dataset,accepted,requestStamp);
                 }
             }catch(const Background::Cancelled&){throw;}catch(...){}
             Background::Pause(std::chrono::milliseconds(200));
         }
     }
-    void GW2API::FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids,bool requireEnvironmentMetadata) {
-        const auto missing=[&](const std::vector<uint32_t>& ids){
-            std::vector<uint32_t> out;
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for(auto id:ids)if(id){
-                const auto it=s_skill_cache.find(id);
-                if(it==s_skill_cache.end()||(requireEnvironmentMetadata&&!it->second->no_underwater.has_value()))out.push_back(id);
-            }
-            return out;
-        };
-        auto claim=RefreshEngine::ClaimIds("skills",missing(skill_ids));
+    void GW2API::FetchBalanceReferenceAsync(const std::vector<uint32_t>& ids,int dataset,bool environment){
+        using D=Cache::ReferenceDataset;
+        const auto kind=static_cast<D>(dataset);
+        const char* endpoint=kind==D::Skills?"skills":kind==D::Traits?"traits":"specializations";
+        auto due=BalanceReferenceDemand(ids,dataset,environment);
+        if(due.empty())return;
+        auto claim=RefreshEngine::ClaimIds(endpoint,due,false,PublicCatalog::Retry);
         if(claim->ids.empty())return;
-        Background::Workers().Launch([claim,requireEnvironmentMetadata]{
+        Background::Workers().Launch([claim,dataset,environment,kind]{
             ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);
-            std::vector<uint32_t> toFetch;
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                for(auto id:claim->ids){
-                    const auto it=s_skill_cache.find(id);
-                    if(it==s_skill_cache.end()||(requireEnvironmentMetadata&&!it->second->no_underwater.has_value()))toFetch.push_back(id);
-                }
-            }
-            std::sort(toFetch.begin(),toFetch.end());
-            toFetch.erase(std::unique(toFetch.begin(),toFetch.end()),toFetch.end());
-            FetchClaimedSkillDetails(*claim,toFetch);
+            auto toFetch=BalanceReferenceDemand(claim->ids,dataset,environment);
+            FetchClaimedReferenceDetails(*claim,toFetch,dataset);
+            if(kind==D::Specializations&&!Background::Workers().Stopping())DemandSpecializationTraits(claim->ids);
         });
+    }
+    void GW2API::FetchSpecDetailsAsync(const std::vector<uint32_t>& ids){
+        FetchBalanceReferenceAsync(ids,static_cast<int>(Cache::ReferenceDataset::Specializations));
+        DemandSpecializationTraits(ids);
+    }
+    void GW2API::FetchTraitDetailsAsync(const std::vector<uint32_t>& ids){
+        FetchBalanceReferenceAsync(ids,static_cast<int>(Cache::ReferenceDataset::Traits));
+    }
+    void GW2API::FetchSkillDetailsAsync(const std::vector<uint32_t>& ids,bool environment){
+        FetchBalanceReferenceAsync(ids,static_cast<int>(Cache::ReferenceDataset::Skills),environment);
     }
     nlohmann::json GW2API::AcquireLegendSwapSkills(const std::vector<uint32_t>& skillIds,bool manual){
         // Read coherent durable verification + immutable skill handles. This
@@ -1890,19 +1797,12 @@ namespace AlterEgo {
             EvidenceMap result;
             std::lock_guard<std::mutex> publication(Cache::ReferencePublicationMutex());
             Background::Checkpoint();
-            PublicCatalog::WithDb(GetDataDirectory(),[&](auto& db){
-                auto q=db.Prepare("SELECT request_at FROM reference_record_watermarks WHERE dataset=? AND id=?");
-                for(auto id:skillIds){
-                    auto& value=result[id];
-                    q.Bind(1,std::string(Cache::ReferenceName(Cache::ReferenceDataset::Skills)));q.Bind(2,id);
-                    if(q.Step())value.stamp=q.Integer(0);
-                    q.Reset();
-                }
-            });
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
-                for(auto& [id,value]:result){
-                    auto it=s_skill_cache.find(id);if(it!=s_skill_cache.end())value.skill=it->second;
+                for(auto id:skillIds){
+                    auto& value=result[id];
+                    auto it=s_skill_cache.find(id);
+                    if(it!=s_skill_cache.end()){value.skill=it->second;value.stamp=value.skill->verified_at;}
                 }
             }
             return result;
@@ -1912,13 +1812,13 @@ namespace AlterEgo {
         std::vector<uint32_t> needed;
         for(const auto& [id,e]:before)
             if(PublicCatalog::LegendSkillNeedsRefresh(e.stamp,complete(e),now,manual))needed.push_back(id);
-        auto claim=RefreshEngine::ClaimIds("skills",needed,manual);
+        auto claim=RefreshEngine::ClaimIds("skills",needed,manual,PublicCatalog::Retry);
         if(!claim->ids.empty()){
             const auto current=capture();std::vector<uint32_t> toFetch;
             for(auto id:claim->ids)
                 if(!PublicCatalog::LegendSkillCovered(before.at(id).stamp,current.at(id).stamp,complete(current.at(id))))
                     toFetch.push_back(id);
-            FetchClaimedSkillDetails(*claim,toFetch);
+            FetchClaimedReferenceDetails(*claim,toFetch,static_cast<int>(Cache::ReferenceDataset::Skills));
         }
         claim.reset();
         if(!RefreshEngine::WaitForIds("skills",needed,[]{return Background::Workers().Stopping();}))return json::array();
@@ -3563,7 +3463,7 @@ namespace AlterEgo {
         for(auto& [id,row]:staged)s_skin_cache[id]=std::move(row);
     }
 
-    void GW2API::AdoptReferenceObservations(int dataset,const json& rows) {
+    void GW2API::AdoptReferenceObservations(int dataset,const json& rows,int64_t stamp) {
         using D=Cache::ReferenceDataset;
         // Rows have passed typed validation and the durable watermark check.
         // No parsing of untrusted network bytes occurs under the domain lock.
@@ -3573,7 +3473,7 @@ namespace AlterEgo {
             const auto name=row.at("name").get<std::string>();
             switch(static_cast<D>(dataset)){
             case D::Specializations: {
-                SpecializationInfo v;v.id=id;v.name=name;v.icon_url=row.value("icon",std::string{});
+                SpecializationInfo v;v.id=id;v.verified_at=stamp;v.name=name;v.icon_url=row.value("icon",std::string{});
                 v.background_url=row.value("background",std::string{});v.profession=row.value("profession",std::string{});
                 v.profession_icon_url=row.value("profession_icon",std::string{});
                 v.profession_icon_big_url=row.value("profession_icon_big",std::string{});v.elite=row.value("elite",false);
@@ -3582,13 +3482,13 @@ namespace AlterEgo {
                 s_spec_cache[id]=std::make_shared<const SpecializationInfo>(std::move(v));break;
             }
             case D::Traits: {
-                TraitInfo v;v.id=id;v.name=name;v.icon_url=row.value("icon",std::string{});
+                TraitInfo v;v.id=id;v.verified_at=stamp;v.name=name;v.icon_url=row.value("icon",std::string{});
                 v.description=row.value("description",std::string{});v.tier=row.value("tier",0);v.order=row.value("order",0);
                 v.slot=row.value("slot",std::string{});if(row.contains("facts"))v.facts=row.at("facts");
                 s_trait_cache[id]=std::make_shared<const TraitInfo>(std::move(v));break;
             }
             case D::Skills: {
-                SkillInfo v;v.id=id;v.name=name;v.icon_url=row.value("icon",std::string{});
+                SkillInfo v;v.id=id;v.verified_at=stamp;v.name=name;v.icon_url=row.value("icon",std::string{});
                 v.description=row.value("description",std::string{});v.type=row.value("type",std::string{});
                 v.specialization=row.value("specialization",0u);v.professions=row.at("professions").get<std::vector<std::string>>();
                 if(row.contains("facts"))v.facts=row.at("facts");
@@ -3626,7 +3526,7 @@ namespace AlterEgo {
         });}catch(...){}
 
         auto readReference = [](Cache::ReferenceDataset dataset, json& out) {
-            auto snapshot=Cache::ReadReference(GetDataDirectory(),dataset);
+            auto snapshot=Cache::ReadReference(GetDataDirectory(),dataset,true);
             if(!snapshot)return false;
             out=std::move(*snapshot);return out.is_array();
         };
@@ -3681,6 +3581,7 @@ namespace AlterEgo {
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
                 SpecializationInfo info;
+                info.verified_at=it.value("verified_at",int64_t(0));
                 info.id = it["id"].get<uint32_t>();
                 info.name = it.value("name", "");
                 info.icon_url = it.value("icon", "");
@@ -3701,6 +3602,7 @@ namespace AlterEgo {
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
                 TraitInfo info;
+                info.verified_at=it.value("verified_at",int64_t(0));
                 info.id = it["id"].get<uint32_t>();
                 info.name = it.value("name", "");
                 info.icon_url = it.value("icon", "");
@@ -3721,6 +3623,7 @@ namespace AlterEgo {
                 // and elite-spec gating.
                 if (!it.contains("professions")) continue;
                 SkillInfo info;
+                info.verified_at=it.value("verified_at",int64_t(0));
                 info.id = it["id"].get<uint32_t>();
                 info.name = it.value("name", "");
                 info.icon_url = it.value("icon", "");

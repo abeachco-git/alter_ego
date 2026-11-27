@@ -389,7 +389,14 @@ inline bool WriteReference(const std::string& root,ReferenceDataset d,
 // Native snapshots win, even if a legacy file remains. A malformed or
 // interrupted migration keeps the original source. Do not fall back from a
 // damaged/foreign database to stale JSON or overwrite it.
-inline std::optional<ReferenceJson> ReadReference(const std::string& root,ReferenceDataset d) {
+inline void AttachReferenceWatermarks(Database::Connection& db,ReferenceDataset d,ReferenceJson& rows){
+    auto q=db.Prepare("SELECT id,request_at FROM reference_record_watermarks WHERE dataset=?");
+    q.Bind(1,std::string(ReferenceName(d)));
+    std::map<uint32_t,int64_t> stamps;
+    while(q.Step())stamps.emplace(static_cast<uint32_t>(q.Integer(0)),q.Integer(1));
+    for(auto& row:rows){const auto id=ReferenceId(row.at("id"));auto it=stamps.find(id);row["verified_at"]=it==stamps.end()?0:it->second;}
+}
+inline std::optional<ReferenceJson> ReadReference(const std::string& root,ReferenceDataset d,bool withWatermarks=false) {
     if(root.empty())return std::nullopt;
     try {
         std::lock_guard<std::mutex> lock(Mutex());
@@ -401,6 +408,7 @@ inline std::optional<ReferenceJson> ReadReference(const std::string& root,Refere
             Database::Transaction tx(db);
             if(HasReferenceSnapshot(db,d)) {
                 auto out=ReadReferenceRows(db,d);
+                if(withWatermarks)AttachReferenceWatermarks(db,d,out);
                 tx.Commit();return out;
             }
         }
@@ -417,6 +425,7 @@ inline std::optional<ReferenceJson> ReadReference(const std::string& root,Refere
         Database::Transaction tx(db);
         if(!HasReferenceSnapshot(db,d))StoreReferenceSnapshot(db,d,rows,0);
         auto out=ReadReferenceRows(db,d);
+        if(withWatermarks)AttachReferenceWatermarks(db,d,out);
         tx.Commit();
         std::error_code ec;
         std::filesystem::remove(std::filesystem::u8path(legacy),ec);

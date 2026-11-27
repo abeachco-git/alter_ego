@@ -164,6 +164,7 @@ namespace AlterEgo {
     // Cached specialization info from /v2/specializations (public, no auth)
     struct SpecializationInfo {
         uint32_t id = 0;
+        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
         std::string name;
         std::string icon_url;
         std::string background_url;
@@ -178,6 +179,7 @@ namespace AlterEgo {
     // Cached trait info from /v2/traits (public, no auth)
     struct TraitInfo {
         uint32_t id = 0;
+        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
         std::string name;
         std::string icon_url;
         std::string description;
@@ -190,6 +192,7 @@ namespace AlterEgo {
     // Cached skill info from /v2/skills (public, no auth)
     struct SkillInfo {
         uint32_t id = 0;
+        int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
         std::string name;
         std::string icon_url;
         std::string description;
@@ -468,7 +471,7 @@ namespace AlterEgo {
         // the GW2 API. Loaded at startup; saved after each batch fetch.
         static bool LoadReferenceCaches();
         static void AdoptCommittedSkins(const nlohmann::json& rows);
-        static void AdoptReferenceObservations(int dataset,const nlohmann::json& rows);
+        static void AdoptReferenceObservations(int dataset,const nlohmann::json& rows,int64_t stamp=0);
 
         // --- Build Library ---
         static const std::vector<SavedBuild>& GetSavedBuilds();
@@ -678,8 +681,10 @@ namespace AlterEgo {
 
         // Batch fetch helpers (public endpoints, synchronous)
         static void FetchSkinDetails(RefreshEngine::IdBatch& claim);
-        static void FetchTraitDetails(RefreshEngine::IdBatch& claim);
-        static void FetchClaimedSkillDetails(RefreshEngine::IdBatch& claim,const std::vector<uint32_t>& ids);
+        static void FetchClaimedReferenceDetails(RefreshEngine::IdBatch& claim,const std::vector<uint32_t>& ids,int dataset);
+        static void FetchBalanceReferenceAsync(const std::vector<uint32_t>& ids,int dataset,bool requireEnvironmentMetadata=false);
+        static std::vector<uint32_t> BalanceReferenceDemand(const std::vector<uint32_t>& ids,int dataset,bool requireEnvironmentMetadata);
+        static void DemandSpecializationTraits(const std::vector<uint32_t>& ids);
 
         // Parse helpers
         static Character ParseCharacterJson(const nlohmann::json& cj);

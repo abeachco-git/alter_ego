@@ -326,6 +326,11 @@ int case_database_core(int, char**) {
         assert(P::LegendSkillNeedsRefresh(skillStamp,true,101,true));
         assert(P::LegendSkillNeedsRefresh(skillStamp,false,101,false));
         assert(P::LegendSkillNeedsRefresh(0,true,101,false));
+        assert(!P::ReferenceNeedsRefresh(0,true,101,false,false));
+        assert(P::ReferenceNeedsRefresh(0,false,101,false,false));
+        assert(P::ReferenceNeedsRefresh(skillStamp,true,100+P::Week,false,true));
+        assert(!P::ReferenceNeedsRefresh(skillStamp,true,100+P::Week,false,false));
+        assert(P::ReferenceNeedsRefresh(skillStamp,true,101,true,false));
         assert(!P::LegendSkillCovered(skillStamp,skillStamp,true));
         assert(!P::LegendSkillCovered(skillStamp,skillStamp+1,false));
         assert(P::LegendSkillCovered(skillStamp,skillStamp+1,true));
@@ -726,6 +731,10 @@ int case_database_core(int, char**) {
         assert(Cache::WriteReferenceObservations(ordered,D::Skills,older,100,accepted)&&accepted.size()==1&&accepted[0]["id"]==11);
         auto replay=newer;replay[0]["name"]="Replay";
         assert(Cache::WriteReferenceObservations(ordered,D::Skills,replay,200,accepted)&&accepted.empty());
+        auto stamped=Cache::ReadReference(ordered,D::Skills,true);
+        assert(stamped&&stamped->at(0)["verified_at"]==200&&stamped->at(1)["verified_at"]==100);
+        auto legacyStamped=Cache::ReadReference(root,D::Skills,true);
+        assert(legacyStamped&&legacyStamped->at(0)["verified_at"]==0);
         auto stored=Cache::ReadReference(ordered,D::Skills);
         assert(stored&&stored->size()==2&&stored->at(0)["name"]=="New skill"&&stored->at(1)["id"]==11);
         auto broken=newer;broken[0]["professions"]=J::array({1});
