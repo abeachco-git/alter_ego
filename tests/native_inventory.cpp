@@ -4,6 +4,7 @@
 #include "../src/NativeProgressCore.h"
 #include "../src/CompletionCache.h"
 #include "../src/RefreshProgress.h"
+#include "../src/RefreshEngine.h"
 #include "../src/CommercePriceCore.h"
 #include <cassert>
 #include <filesystem>
