@@ -320,7 +320,7 @@ inline const std::map<std::string, std::string>& RootOwnership() {
         {"profession","base_build"}, {"specializations","base_build"},
         {"pets","pets"}, {"legend_codes","legends"},
         {"weapons","base_build"}, // In-game Build Template weapon skills, NOT equipped items.
-        {"skills","skills"}, {"aquatic_skills","skills"},
+        {"skills","skills"}, {"aquatic_skills","skills"}, {"inactive_rev_skills","skills"},
         {"rune_name","runes"}, {"rune_id","runes"},
         {"relic_name","relic"}, {"relic_id","relic"},
         {"infusion_totals","infusions"},
@@ -1115,6 +1115,12 @@ inline bool ValidatePortablePayload(const std::string& kind,
                             return Fail(error, "Invalid trait selection.");
                 }
             }
+        } else if (field == "inactive_rev_skills") {
+            if(!value.is_array()||value.size()!=6)return Fail(error,"Invalid inactive legend palette array.");
+            for(const auto& palette:value){
+                uint32_t id=0;
+                if(!ReadItemId(palette,id)||id>UINT16_MAX)return Fail(error,"Invalid inactive legend palette ID.");
+            }
         } else if (field == "skills" || field == "aquatic_skills") {
             if (!value.is_object()) return Fail(error, "Skill bar must be an object.");
             for (const auto& skillType : {"heal", "elite"})
@@ -1460,7 +1466,7 @@ inline Json ReplaceCapturedFieldsPreservingExtensions(const Json& previous,
                         result["gear"][slot.key()][field.key()] = field.value();
                 }
             }
-        } else if (!RootOwnership().count(it.key()) &&
+        } else if ((!RootOwnership().count(it.key())||it.key()=="inactive_rev_skills") &&
                    !result.contains(it.key())) {
             result[it.key()] = it.value();
         }
@@ -1600,7 +1606,7 @@ inline const std::set<std::string>& KnownLegacyKeys() {
         "id", "name", "source_character", "source_identity", "source_url", "import_warning",
         "chat_link", "ae2_code", "profession", "game_mode", "game_modes",
         "notes", "created", "specializations", "skills", "aquatic_skills",
-        "pets", "legend_codes", "weapons", "gear", "infusion_totals",
+        "pets", "legend_codes", "inactive_rev_skills", "weapons", "gear", "infusion_totals",
         "infusion_summary_present", "infusion_ar_total", "infusion_stat_totals",
         "rune_name", "rune_id", "relic_name", "relic_id"
     };

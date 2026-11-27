@@ -345,6 +345,7 @@ bool ChatLink::DecodeBuild(const std::string& link, DecodedBuildLink& out) {
             out.pets[1] = bytes[offset + 1];
             out.pets[2] = bytes[offset + 2];
             out.pets[3] = bytes[offset + 3];
+            out.companion_choices_known = true;
         }
         offset += 16;
     } else if (out.profession == PROF_REVENANT) {
@@ -353,9 +354,11 @@ bool ChatLink::DecodeBuild(const std::string& link, DecodedBuildLink& out) {
             out.legends[1] = bytes[offset + 1];
             out.legends[2] = bytes[offset + 2];
             out.legends[3] = bytes[offset + 3];
+            out.companion_choices_known = true;
         }
         offset += 4;
-        // 6 inactive legend skills
+        // A truncated link cannot assert that missing bytes were zeros.
+        out.inactive_rev_skills_known = offset + 12 <= bytes.size();
         for (int i = 0; i < 6; i++) {
             if (offset + 2 <= bytes.size()) {
                 out.inactive_rev_skills[i] = ReadU16LE(&bytes[offset]);

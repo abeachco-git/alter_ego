@@ -64,7 +64,7 @@ if(AE_THREAD_SANITIZER)
 endif()
 ae_suite(vault_clears CASES clears_rotation strike_display_name vault_assistance)
 ae_suite(skinventory CASES skin_search)
-ae_suite(imports CASES snowcrows_import build_relay_policy)
+ae_suite(imports CHATLINK CASES snowcrows_import build_relay_policy)
 ae_suite(presentation CASES composable_gear_presentation raid_chip_widths font_resolve_test navigation_history selector_context)
 # Exercise real vendored ImGui 1.80 input, without platform/renderer backends.
 add_library(ae_test_imgui STATIC ../lib/imgui/imgui.cpp ../lib/imgui/imgui_draw.cpp ../lib/imgui/imgui_widgets.cpp ../lib/imgui/imgui_tables.cpp)

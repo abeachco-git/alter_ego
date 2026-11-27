@@ -157,6 +157,18 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     if (gearAt == std::string::npos || skillsAt == std::string::npos || skillsAt <= gearAt) {
         error = "Snow Crows equipment or build section was not found."; return false;
     }
+    // A unique code in the guide header may be a published template.
+    // Never select a rotation/example link from the body; the common
+    // provider patch verifies the decoded profession and field presence.
+    const std::string header=html.substr(0,gearAt);
+    const std::regex templateRe(R"SC(\[&(?:amp;)?[A-Za-z0-9+/=]{4,256}\])SC");
+    for(std::sregex_iterator i(header.begin(),header.end(),templateRe),end;i!=end;++i){
+        const auto candidate=Decode(i->str());
+        if(!parsed.templateCode.empty()&&parsed.templateCode!=candidate){
+            parsed.templateCode.clear();break;
+        }
+        parsed.templateCode=candidate;
+    }
     const std::string gearHtml = html.substr(gearAt, skillsAt - gearAt);
     const std::string skillsHtml = html.substr(skillsAt);
     parsed.skills = {};

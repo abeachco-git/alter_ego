@@ -103,7 +103,8 @@ int case_native_library(int,char**) {
             {{"id","ranger"},{"name","Ranger"},{"profession","Ranger"},
              {"pets",Json::array({4,0,8,2})}},
             {{"id","revenant"},{"name","Revenant"},{"profession","Revenant"},
-             {"legend_codes",Json::array({2,1,0,3})}},
+             {"legend_codes",Json::array({2,1,0,3})},
+             {"inactive_rev_skills",Json::array({65000,0,123,77,4,99})}},
             {{"id","omitted"},{"name","Omitted"},{"profession","Ranger"}},
             {{"id","empty"},{"name","Empty"},{"profession","Ranger"},{"pets",Json::array()}}
         })}};
@@ -138,6 +139,13 @@ int case_native_library(int,char**) {
         assert(C::Find(restored.loadouts,"pets","unused-pets"));
         assert(C::FindLoadout(restored.loadouts,"shared")->refs.at("pets")==petsId);
         assert(C::FindLoadout(restored.loadouts,"revenant")->refs.at("legends")==legendsId);
+        const auto* rev=C::FindLoadout(restored.loadouts,"revenant");
+        const auto* revSkills=C::Find(restored.loadouts,"skills",rev->refs.at("skills"));
+        assert(revSkills&&revSkills->data.at("inactive_rev_skills")==input["builds"][1]["inactive_rev_skills"]);
+        auto invalidPalettes=C::ExportComponent("skills",*revSkills);
+        invalidPalettes["data"]["inactive_rev_skills"][0]=65536;
+        std::string importedKind;C::Component imported;
+        assert(!C::ImportComponent(invalidPalettes,importedKind,imported,error));
 
         auto bad=stored;
         C::FindLoadout(bad.loadouts,"ranger")->refs["pets"]="does-not-exist";
@@ -184,6 +192,19 @@ int case_native_library(int,char**) {
         }
         for(int i=0;i<6;++i)assert(decoded.inactive_rev_skills[i]==original.inactive_rev_skills[i]);
         assert(AlterEgo::ChatLink::EncodeBuild(decoded)==encoded);
+        const auto recorded=AlterEgo::RecordedInactiveLegendPalettes(decoded);
+        assert(decoded.companion_choices_known);
+        assert(recorded.has_value()==(profession==AlterEgo::PROF_REVENANT));
+        if(recorded){
+            AlterEgo::DecodedBuildLink regenerated{};regenerated.profession=profession;
+            AlterEgo::ApplyInactiveLegendPalettes(regenerated,recorded);
+            for(size_t i=0;i<recorded->size();++i)assert(regenerated.inactive_rev_skills[i]==original.inactive_rev_skills[i]);
+        }
+    }
+    {
+        AlterEgo::DecodedBuildLink partial{};
+        assert(AlterEgo::ChatLink::DecodeBuild("[&DQk=]",partial));
+        assert(!partial.companion_choices_known&&!AlterEgo::RecordedInactiveLegendPalettes(partial));
     }
     // A populated v5 library migrates without losing legacy labels, content
     // or revision. The two new typed tables are additive.

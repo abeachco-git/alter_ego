@@ -3,6 +3,7 @@
 // Source HTML adapters currently supply positive values; explicit empty values
 // are reserved for positively identified removals, not zero/default templates.
 #include "SnowCrowsImport.h"
+#include "ChatLink.h"
 #include "InfusionTotalsCore.h"
 #include "GearEditCore.h"
 #include "SkillEditCore.h"
@@ -20,6 +21,9 @@ struct Patch {
     std::array<SpecPatch,3> specs;
     bool completeSpecs=false;
     std::array<Field<uint32_t>,5> skills;
+    std::array<Field<uint32_t>,4> companions;
+    std::optional<InactiveLegendPalettes> inactivePalettes;
+    std::string verifiedTemplate;
     std::map<std::string,GearPatch> gear;
     std::set<std::string> removedSlots;
     Field<uint32_t> rune,relic;
@@ -42,6 +46,19 @@ inline std::string WeaponKey(std::string s){
 template<class Tier> Patch FromPage(const SnowCrows::Page& page,Tier tier,bool initial=false){
     Patch p;p.profession=page.profession;p.sourceUrl=page.sourceUrl;p.warning=page.importWarning;
     std::set<uint32_t> ids;
+    if(!page.templateCode.empty()){
+        DecodedBuildLink decoded{};
+        if(ChatLink::DecodeBuild(page.templateCode,decoded)&&page.profession==ChatLink::ProfessionName(decoded.profession)){
+            p.verifiedTemplate=page.templateCode;
+            if(decoded.companion_choices_known&&(decoded.profession==PROF_RANGER||decoded.profession==PROF_REVENANT)){
+                for(size_t i=0;i<p.companions.size();++i){
+                    const auto id=decoded.profession==PROF_RANGER?decoded.pets[i]:decoded.legends[i];
+                    if(id)p.companions[i]=id; // guide zero is ambiguous, never a deletion
+                }
+                p.inactivePalettes=RecordedInactiveLegendPalettes(decoded);
+            }
+        }else p.warning+=" Published build link could not be validated for this profession; ignored.";
+    }
     p.completeSpecs=std::all_of(page.specs.begin(),page.specs.end(),[&](const auto& s){return s.id&&ids.insert(s.id).second;});
     for(size_t i=0;i<3;++i){
         const auto& s=page.specs[i];if(!s.id)continue;
@@ -124,6 +141,40 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
     for(auto id:utilities)if(id&&!unique.insert(id).second)ambiguous=true;
     if(ambiguous)report.notes.push_back("Utility changes conflict with a retained slot; utility bar left unchanged for review.");
     else std::copy(utilities.begin(),utilities.end(),bar.utilities);
+    // Companion selection is positional. A partially supplied pair must not
+    // displace an omitted local slot or create an illegal duplicate.
+    if(b.profession=="Ranger"||b.profession=="Revenant"){
+        const bool legend=b.profession=="Revenant";
+        bool allPublished=true;
+        for(size_t env=0;env<2;++env){
+            const size_t first=env*2;
+            auto current=[&](size_t i)->uint32_t{
+                return legend?b.legend_codes[first+i]:(env?b.pets.aquatic[i]:b.pets.terrestrial[i]);
+            };
+            const auto a=p.companions[first].value_or(current(0));
+            const auto c=p.companions[first+1].value_or(current(1));
+            if(!p.companions[first]||!p.companions[first+1])allPublished=false;
+            if(!p.companions[first]&&!p.companions[first+1])continue;
+            if(a&&a==c){
+                report.notes.push_back("Companion pair conflicts with a retained slot; pair left unchanged for review.");
+                allPublished=false;continue;
+            }
+            if(legend){
+                if(a>UINT8_MAX||c>UINT8_MAX){allPublished=false;continue;}
+                b.legend_codes[first]=static_cast<uint8_t>(a);
+                b.legend_codes[first+1]=static_cast<uint8_t>(c);
+            }else{
+                auto* pair=env?b.pets.aquatic:b.pets.terrestrial;
+                pair[0]=a;pair[1]=c;
+            }
+        }
+        // Initial imports retain the full protocol block including zeros.
+        // Refresh only replaces the complete order when all corresponding
+        // choices and nonzero palette values were supplied.
+        if(legend&&p.inactivePalettes&&(initial||(allPublished&&
+            std::all_of(p.inactivePalettes->begin(),p.inactivePalettes->end(),[](uint16_t id){return id!=0;}))))
+            b.inactive_rev_skills=p.inactivePalettes;
+    }
     const bool runePatch=p.rune||std::any_of(p.gear.begin(),p.gear.end(),[](const auto& e){return e.second.rune.has_value();});
     if(runePatch&&(b.rune_id||!b.rune_name.empty())){
         // The legacy global rune is a terrestrial fallback. Keep every

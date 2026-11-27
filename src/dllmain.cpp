@@ -5623,6 +5623,7 @@ static bool DecodeBuildLink(const std::string& link, const std::string& name,
     // Legends (Revenant)
     for (int i = 0; i < 4; i++)
         out.legend_codes[i] = decoded.legends[i];
+    out.inactive_rev_skills=AlterEgo::RecordedInactiveLegendPalettes(decoded);
 
     // Weapons
     out.weapons.clear();
@@ -9071,9 +9072,11 @@ static bool SourcePageToSavedBuild(const AlterEgo::SnowCrows::Page& page,AlterEg
     GameMode mode=page.gameMode=="Raid"?GameMode::Raid:page.gameMode=="Fractal"?GameMode::Fractal:
         page.gameMode=="WvW"?GameMode::WvW:page.gameMode=="PvP"?GameMode::PvP:GameMode::PvE;
     auto blank=GW2API::CreateBlankBuild(page.profession,mode);
-    blank.name=page.name;blank.source_url=page.sourceUrl;blank.chat_link=page.templateCode;
+    blank.name=page.name;blank.source_url=page.sourceUrl;
+    const auto patch=SourceRefresh::FromPage(page,SourceTraitTier,true);
+    blank.chat_link=patch.verifiedTemplate;
     SourceRefresh::Report report;
-    return SourceRefresh::Apply(blank,SourceRefresh::FromPage(page,SourceTraitTier,true),result,report,error,
+    return SourceRefresh::Apply(blank,patch,result,report,error,
         [&](const auto& type){return IsWeaponTwoHanded(page.profession,type);},SourceItemCompatibility,true);
 }
 static void FetchBuildSource(const std::string& url, const std::string& refreshId = "") {

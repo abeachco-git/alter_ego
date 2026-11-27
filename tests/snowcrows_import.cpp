@@ -93,6 +93,8 @@ int case_snowcrows_import(int, char**) {
     struct Requirement {uint32_t item_id;int count;std::string attribute;};
     struct Build {std::string profession,source_url,import_warning,name,notes,chat_link,rune_name,relic_name;
         uint32_t rune_id=0,relic_id=0;SpecLine specializations[3];Bar terrestrial_skills,aquatic_skills;
+        struct Pets {uint32_t terrestrial[2]={},aquatic[2]={};} pets;
+        uint8_t legend_codes[4]={};std::optional<InactiveLegendPalettes> inactive_rev_skills;
         std::map<std::string,Slot> gear;std::vector<Requirement> infusion_totals;
         bool infusion_summary_present=false;int infusion_ar_total=0;std::map<std::string,int> infusion_stat_totals;};
     Build old;old.profession="Mesmer";old.source_url=url;old.name="Local";old.notes="Keep";
@@ -141,6 +143,55 @@ int case_snowcrows_import(int, char**) {
     explicitRemove.removedSlots.insert("Coat");
     assert(SR::Apply(old,explicitRemove,merged,report,error,two)&&!merged.gear.count("Coat"));
     partial.profession="Engineer";assert(!SR::Apply(old,partial,merged,report,error,two));
+    // Exercise the shared provider-neutral template projection, not the
+    // excluded MetaBattle parser. Omission and duplicate-pair protection
+    // apply equally to both profession-specific components.
+    for(const auto prof:{PROF_RANGER,PROF_REVENANT}){
+        Build local;local.profession=ChatLink::ProfessionName(prof);local.source_url=url;
+        Page guide;guide.profession=local.profession;guide.sourceUrl=url;
+        DecodedBuildLink code{};code.profession=prof;
+        if(prof==PROF_RANGER){
+            local.pets.terrestrial[0]=4;local.pets.terrestrial[1]=5;
+            local.pets.aquatic[0]=6;local.pets.aquatic[1]=7;
+            code.pets[0]=8;
+        }else{
+            local.legend_codes[0]=1;local.legend_codes[1]=2;
+            local.legend_codes[2]=3;local.legend_codes[3]=4;
+            local.inactive_rev_skills=InactiveLegendPalettes{10,20,30,40,50,60};
+            code.legends[0]=5;
+            code.inactive_rev_skills[0]=99;
+        }
+        auto tier=[](uint32_t,uint32_t){return -1;};
+        auto none=SR::FromPage(guide,tier);
+        assert(SR::Apply(local,none,merged,report,error,two));
+        assert(merged.pets.terrestrial[0]==local.pets.terrestrial[0]&&merged.legend_codes[0]==local.legend_codes[0]);
+        guide.templateCode=ChatLink::EncodeBuild(code);
+        auto supplied=SR::FromPage(guide,tier);
+        assert(supplied.verifiedTemplate==guide.templateCode&&supplied.companions[0]&&!supplied.companions[1]);
+        assert(SR::Apply(local,supplied,merged,report,error,two));
+        if(prof==PROF_RANGER){
+            assert(merged.pets.terrestrial[0]==8&&merged.pets.terrestrial[1]==5&&merged.pets.aquatic[0]==6);
+            code.pets[0]=5;
+        }else{
+            assert(merged.legend_codes[0]==5&&merged.legend_codes[1]==2&&merged.legend_codes[2]==3);
+            assert(merged.inactive_rev_skills==local.inactive_rev_skills);
+            code.legends[0]=2;
+        }
+        guide.templateCode=ChatLink::EncodeBuild(code);
+        assert(SR::Apply(local,SR::FromPage(guide,tier),merged,report,error,two));
+        assert(merged.pets.terrestrial[0]==local.pets.terrestrial[0]&&merged.legend_codes[0]==local.legend_codes[0]);
+        code.profession=PROF_MESMER;guide.templateCode=ChatLink::EncodeBuild(code);
+        auto mismatch=SR::FromPage(guide,tier);
+        assert(mismatch.verifiedTemplate.empty()&&!mismatch.companions[0]);
+    }
+    {
+        DecodedBuildLink code{};code.profession=PROF_MESMER;
+        const auto link=ChatLink::EncodeBuild(code);
+        auto header=sample;header.insert(header.find("<div id=\"gearset\">"),link);
+        Page linked;assert(Parse(url,header,linked,error)&&linked.templateCode==link);
+        header.insert(header.find("<div id=\"gearset\">"),"[&DQk=]");
+        assert(Parse(url,header,linked,error)&&linked.templateCode.empty());
+    }
     assert(PositionalIds("1,0,3,4,5")==std::vector<uint32_t>({1,0,3,4,5}));
     assert(PositionalIds("1,,3").empty());
     return 0;

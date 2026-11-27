@@ -3,6 +3,9 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <array>
+#include <optional>
+#include <cstddef>
 
 namespace AlterEgo {
 
@@ -90,12 +93,27 @@ namespace AlterEgo {
         uint8_t pets[4] = {0};      // terr1, terr2, aqua1, aqua2
         // Revenant legends
         uint8_t legends[4] = {0};   // terr1, terr2, aqua1, aqua2
-        uint16_t inactive_rev_skills[6] = {0}; // inactive legend utilities
+        uint16_t inactive_rev_skills[6] = {0}; // inactive utility palette IDs, exact wire order
+        bool companion_choices_known = false; // complete four-byte pair block decoded
+        bool inactive_rev_skills_known = false; // complete six-value block decoded
         // Weapons (SotO+)
         std::vector<uint16_t> weapons;
         // Skill overrides (Weaponmaster)
         std::vector<uint32_t> skill_overrides;
     };
+
+    // Keep opaque protocol IDs rather than guessing legend-specific aliases.
+    using InactiveLegendPalettes=std::array<uint16_t,6>;
+    inline std::optional<InactiveLegendPalettes> RecordedInactiveLegendPalettes(const DecodedBuildLink& link) {
+        if(link.profession!=PROF_REVENANT||!link.inactive_rev_skills_known)return std::nullopt;
+        InactiveLegendPalettes values{};
+        for(std::size_t i=0;i<values.size();++i)values[i]=link.inactive_rev_skills[i];
+        return values;
+    }
+    inline void ApplyInactiveLegendPalettes(DecodedBuildLink& link,const std::optional<InactiveLegendPalettes>& values) {
+        if(link.profession!=PROF_REVENANT||!values)return;
+        for(std::size_t i=0;i<values->size();++i)link.inactive_rev_skills[i]=(*values)[i];
+    }
 
     // Decoded wardrobe template link
     struct DecodedWardrobeLink {

@@ -2495,6 +2495,7 @@ namespace AlterEgo {
         }
         if (b.profession == "Revenant") {
             for (int i = 0; i < 4; i++) link.legends[i] = b.legend_codes[i];
+            ApplyInactiveLegendPalettes(link,b.inactive_rev_skills);
         }
         for (auto w : b.weapons) link.weapons.push_back((uint16_t)w);
         return ChatLink::EncodeBuild(link);
@@ -2636,6 +2637,7 @@ namespace AlterEgo {
                       b.pets.aquatic[0], b.pets.aquatic[1]};
         bj["legend_codes"] = {b.legend_codes[0], b.legend_codes[1],
                               b.legend_codes[2], b.legend_codes[3]};
+        if(b.inactive_rev_skills)bj["inactive_rev_skills"]=*b.inactive_rev_skills;
         if (!b.weapons.empty()) bj["weapons"] = b.weapons;
 
         if (!b.gear.empty()) {
@@ -2782,6 +2784,14 @@ namespace AlterEgo {
         if (bj.contains("legend_codes") && bj["legend_codes"].is_array() && bj["legend_codes"].size() >= 4) {
             for (int i = 0; i < 4; i++)
                 b.legend_codes[i] = bj["legend_codes"][i].get<uint8_t>();
+        }
+        b.inactive_rev_skills.reset();
+        if(const auto it=bj.find("inactive_rev_skills");it!=bj.end()){
+            // An anomalous extension is preserved in the native graph,
+            // but cannot become a typed protocol value by truncation.
+            std::string fieldError;
+            if(Composable::ValidatePortablePayload("skills",json{{"inactive_rev_skills",*it}},fieldError))
+                b.inactive_rev_skills=it->get<InactiveLegendPalettes>();
         }
         if (bj.contains("weapons") && bj["weapons"].is_array()) {
             for (const auto& w : bj["weapons"])
