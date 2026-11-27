@@ -70,7 +70,7 @@ inline std::shared_ptr<Work> Admit(const std::vector<uint32_t>& ids,Demand deman
     // Still count joined IDs through the common registry's diagnostics.
     std::vector<uint32_t> claimIds=candidates;
     for(const auto& [id,slot]:job->wanted){(void)slot;claimIds.push_back(id);}
-    job->claim=RefreshEngine::ClaimIds(Dataset,claimIds,bypassCooldown);
+    job->claim=RefreshEngine::ClaimIds(Dataset,claimIds,bypassCooldown,PublicCatalog::Retry);
     for(auto id:job->claim->ids){
         auto slot=std::make_shared<Observation>();slot->id=id;MergeDemand(*slot,demand);
         job->owned.emplace(id,slot);job->wanted[id]=slot;s.active.emplace(id,std::move(slot));

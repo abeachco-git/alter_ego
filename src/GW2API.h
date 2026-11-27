@@ -147,6 +147,7 @@ namespace AlterEgo {
         std::string chat_link;
         uint32_t default_skin = 0;  // Default appearance skin ID (when not transmuted)
         nlohmann::json details;     // Full details block for stats, etc.
+        int64_t verified_at=0; // request-start microseconds, zero for legacy data
     };
 
     // Cached info about a skin from /v2/skins (public, no auth)

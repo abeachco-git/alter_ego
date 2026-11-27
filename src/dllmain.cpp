@@ -3604,10 +3604,23 @@ static void RenderLiveComponentSaveMenu(const AlterEgo::Character& ch, int tab,
     }
 }
 
+// Explicit visible equipment demand, not an inventory-wide background sweep.
+static void DemandVisibleEquipmentMetadata(const AlterEgo::Character& ch,int tab,bool tools){
+    std::vector<uint32_t> ids;
+    for(const auto& eq:ch.equipment){
+        const bool utility=AlterEgo::CharacterTools::Utility(eq.slot);
+        if(utility!=tools||(eq.tab!=0&&eq.tab!=tab))continue;
+        if(eq.id)ids.push_back(eq.id);
+        for(auto id:eq.upgrades)if(id)ids.push_back(id);
+        for(auto id:eq.infusions)if(id)ids.push_back(id);
+    }
+    if(!ids.empty())AlterEgo::GW2API::FetchItemDetailsAsync(ids);
+}
 // Character-wide utility items use the existing equipment icon, tooltip and
 // context menu; no template selector or save-to-loadout action.
 static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
     using namespace AlterEgo;
+    DemandVisibleEquipmentMetadata(ch,ch.active_equipment_tab,true);
     const auto row=[&](const char* slot,const char* label,bool gathering,bool charges) {
         ImGui::PushID(slot);
         const auto* eq=CharacterTools::Find(ch.equipment,slot,ch.active_equipment_tab);
@@ -3715,6 +3728,7 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Refresh the displayed tab immediately after a chip selection.
     if (g_SelectedEquipTab > 0 && g_SelectedEquipTab <= maxTab)
         tab = g_SelectedEquipTab;
+    DemandVisibleEquipmentMetadata(ch,tab,false);
 
     // Fashion menu: share the right-clicked tab's look as a wardrobe template chat link.
     if (ImGui::BeginPopup("##fashion_menu")) {
@@ -7436,8 +7450,9 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
         const auto& bt=ch.build_tabs[index];
         return "Tab "+std::to_string(tab)+(bt.name.empty()?"":" - "+bt.name);
     };
+    GW2API::FetchPetsAsync();
     const auto catalog=PublicCatalog::Get();
-    if(catalog->pets.empty()){GW2API::FetchPetsAsync();RenderSpinner("Loading pet catalog...");return;}
+    if(catalog->pets.empty()){RenderSpinner("Loading pet catalog...");return;}
     static std::string search;
     static int filter=0,mode=0;
     static uint32_t selected=0;
@@ -9612,6 +9627,14 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     ResolveBuildItemNames(build);
     RenderLoadoutComponentSelectors(source.id);
     const auto& metadataSource=g_LibEditMode?g_EditDraft:build;
+    std::vector<uint32_t> itemDemand{metadataSource.rune_id,metadataSource.relic_id};
+    for(const auto& inf:metadataSource.infusion_totals)if(inf.item_id)itemDemand.push_back(inf.item_id);
+    for(const auto& entry:metadataSource.gear){
+        const auto& gear=entry.second;
+        for(auto id:{gear.item_id,gear.rune_id,gear.sigil_id,gear.sigil2_id})if(id)itemDemand.push_back(id);
+        for(auto id:gear.infusion_ids)if(id)itemDemand.push_back(id);
+    }
+    AlterEgo::GW2API::FetchItemDetailsAsync(itemDemand);
     AlterEgo::GW2API::FetchSpecDetailsAsync({metadataSource.specializations[0].spec_id,metadataSource.specializations[1].spec_id,metadataSource.specializations[2].spec_id});
     AlterEgo::GW2API::FetchProfessionInfoAsync(metadataSource.profession);
     ImGui::Spacing();
@@ -18026,7 +18049,7 @@ void AddonOptions() {
     ImGui::TextDisabled("Manual Refresh bypasses ordinary freshness/cooldown; offline automatic refresh waits 10 minutes.");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     RenderSectionHeader("Public reference catalogs", AlterEgo::UI::SectionGold);
-    ImGui::TextDisabled("Item/skin discovery, Vault, pets, legends, stats, professions: 7 days. Upgrades/dyes: 30 days. Retry: 24h.");
+    ImGui::TextDisabled("Item/skin discovery, upgrades, Vault, companions, stats, professions: 7 days. Dyes: 30 days.\nDemanded skills, traits, specializations and items: 7 days. Retry: 24h.");
     const auto publicData=AlterEgo::PublicCatalog::Get();
     ImGui::Text("Equipment upgrades: %zu",publicData->entries.size());
     if(publicData->upgrades)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->upgrades)/86400));

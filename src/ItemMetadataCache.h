@@ -91,7 +91,7 @@ RETURNING id
     auto fresh=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=MAX(reference_freshness.saved_at,excluded.saved_at)");
     fresh.Bind(1,std::string(ItemDatasetName(d)));fresh.Bind(2,stamp/1000000);fresh.Execute();
 }
-inline ReferenceJson ReadItemRows(Database::Connection& db,ItemDataset d) {
+inline ReferenceJson ReadItemRows(Database::Connection& db,ItemDataset d,bool withWatermarks=false) {
     if(d==ItemDataset::Aliases) {
         ReferenceJson out=ReferenceJson::object();
         // Names can be nonunique. Use the smallest ID as a deterministic
@@ -103,13 +103,14 @@ inline ReferenceJson ReadItemRows(Database::Connection& db,ItemDataset d) {
         return out;
     }
     ReferenceJson out=ReferenceJson::array();
-    auto q=db.Prepare("SELECT id,name,icon,rarity,type,description,chat_link,default_skin,details FROM reference_items WHERE complete=1 ORDER BY id");
+    auto q=db.Prepare("SELECT id,name,icon,rarity,type,description,chat_link,default_skin,details,verified_at FROM reference_items WHERE complete=1 ORDER BY id");
     while(q.Step()) {
         ReferenceJson row={{"id",q.Integer(0)},{"name",q.Text(1)},{"icon",q.Text(2)},{"rarity",q.Text(3)},{"type",q.Text(4)}};
         if(!q.Text(5).empty())row["description"]=q.Text(5);
         if(!q.Text(6).empty())row["chat_link"]=q.Text(6);
         if(q.Integer(7))row["default_skin"]=q.Integer(7);
         if(!q.IsNull(8))row["details"]=ReferenceJson::parse(q.Text(8));
+        if(withWatermarks)row["verified_at"]=q.Integer(9);
         out.push_back(std::move(row));
     }
     return out;
@@ -152,7 +153,7 @@ inline std::vector<uint32_t> MissingInventoryItemMetadata(const std::string& roo
     for(auto id:ids)if(id){q.Bind(1,id);if(!q.Step()||!q.Integer(0)||q.IsNull(1))missing.push_back(id);q.Reset();}
     return missing;
 }
-inline std::optional<ReferenceJson> ReadItems(const std::string& root,ItemDataset d) {
+inline std::optional<ReferenceJson> ReadItems(const std::string& root,ItemDataset d,bool withWatermarks=false) {
     if(root.empty())return std::nullopt;
     try {
         std::lock_guard<std::mutex> lock(Mutex());
@@ -161,7 +162,7 @@ inline std::optional<ReferenceJson> ReadItems(const std::string& root,ItemDatase
             Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
             Initialize(db);Database::Transaction tx(db);
             if(ItemSnapshotExists(db,d)) {
-                auto out=ReadItemRows(db,d);tx.Commit();return out;
+                auto out=ReadItemRows(db,d,withWatermarks);tx.Commit();return out;
             }
         }
         const auto legacy=Storage::ResolveCache(root,std::string(ItemDatasetName(d))+".json");
@@ -174,7 +175,7 @@ inline std::optional<ReferenceJson> ReadItems(const std::string& root,ItemDatase
                 if(d==ItemDataset::Aliases&&std::filesystem::exists(path)) {
                     Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
                     Initialize(db);Database::Transaction tx(db);
-                    auto out=ReadItemRows(db,d);tx.Commit();return out;
+                    auto out=ReadItemRows(db,d,withWatermarks);tx.Commit();return out;
                 }
                 return std::nullopt;
             }
@@ -184,7 +185,7 @@ inline std::optional<ReferenceJson> ReadItems(const std::string& root,ItemDatase
         Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
         Initialize(db);Database::Transaction tx(db);
         if(!ItemSnapshotExists(db,d))StoreItemSnapshot(db,d,data,0);
-        auto out=ReadItemRows(db,d);tx.Commit();
+        auto out=ReadItemRows(db,d,withWatermarks);tx.Commit();
         std::error_code ec;std::filesystem::remove(std::filesystem::u8path(legacy),ec);
         return out;
     }catch(...){return std::nullopt;}

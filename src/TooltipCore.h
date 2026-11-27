@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <cstddef>
+#include <utility>
 namespace AlterEgo::TooltipCore {
 // Pure, display-only helpers. Never infer exact identities or empty slots.
 inline const char* FriendlyAttribute(const std::string& attr){
@@ -44,7 +45,7 @@ template<class Json> std::vector<std::string> FactLines(const Json& facts){
         else if(type=="Number")value("value","","");
         else if(type=="Percent")value("percent","%","");
         else if(type=="Time")value("duration"," s","Duration");
-        else if(type=="Damage")value("hit_count","","Hits");
+        else if(type=="Damage"){const auto hits=num("hit_count");if(!hits.empty())line="Hits: "+hits;}
         else if(type=="ComboField"||type=="ComboFinisher"){
             const auto field=str(type=="ComboField"?"field_type":"finisher_type");
             if(!field.empty())line=(text.empty()?(type=="ComboField"?"Combo field":"Combo finisher"):text)+": "+field;

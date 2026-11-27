@@ -1557,6 +1557,7 @@ namespace AlterEgo {
         staged.reserve(rows.size());
         for(const auto& item:rows) {
             ItemInfo info;info.id=item.at("id").get<uint32_t>();
+            info.verified_at=item.value("verified_at",int64_t(0));
             info.name=item.value("name",std::string{});
             info.icon_url=item.value("icon",std::string{});
             info.rarity=item.value("rarity",std::string{});
@@ -1581,16 +1582,29 @@ namespace AlterEgo {
         const auto root=GW2API::GetDataDirectory();
         ItemMetadata::Fetch(job,
             [](const std::string& path){return ArenaNet::Get(path);},
-            [&](const json& rows,int64_t stamp,json& accepted){return Cache::WriteItemObservations(root,rows,stamp,accepted);},
+            [&](const json& rows,int64_t stamp,json& accepted){
+                if(!Cache::WriteItemObservations(root,rows,stamp,accepted))return false;
+                // Runtime projection only: the verified stamp was committed with each accepted row.
+                for(auto& row:accepted)row["verified_at"]=stamp;
+                return true;
+            },
             [](const json& rows,bool aliases){GW2API::AdoptPublicItems(rows,aliases);});
+    }
+    static bool ItemDefinitionDue(uint32_t id,bool force,bool allowStale){
+        if(!id)return false;
+        const auto info=GW2API::GetItemInfo(id);
+        return PublicCatalog::ReferenceNeedsRefresh(info?info->verified_at:0,static_cast<bool>(info),
+            PublicCatalog::Now(),force,allowStale&&AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::PublicCatalog));
     }
     void GW2API::FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
         ApiActivity::ReasonScope reason(ApiActivity::Reason::Manual);
-        std::vector<uint32_t> missing;
-        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
-        if(missing.empty())return;
-        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Details,forceRefetch,
-            [forceRefetch](uint32_t id){return forceRefetch||!GW2API::GetItemInfo(id);});
+        // A synchronous import only waits for missing/explicitly requested details.
+        // Visible asynchronous demand handles ordinary age revalidation.
+        std::vector<uint32_t> due;
+        for(auto id:item_ids)if(ItemDefinitionDue(id,forceRefetch,false))due.push_back(id);
+        if(due.empty())return;
+        auto job=ItemMetadata::Admit(due,ItemMetadata::Demand::Details,forceRefetch,
+            [forceRefetch](uint32_t id){return ItemDefinitionDue(id,forceRefetch,false);});
         FetchOwnedItems(*job);(void)ItemMetadata::Await(*job);
     }
     void GW2API::EnrichInventoryItems(const std::vector<uint32_t>& ids,bool manual){
@@ -1679,11 +1693,11 @@ namespace AlterEgo {
     // --- Async wrappers ---
 
     void GW2API::FetchItemDetailsAsync(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
-        std::vector<uint32_t> missing;
-        {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
-        if(missing.empty())return;
-        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Details,forceRefetch,
-            [forceRefetch](uint32_t id){return forceRefetch||!GW2API::GetItemInfo(id);});
+        std::vector<uint32_t> due;
+        for(auto id:item_ids)if(ItemDefinitionDue(id,forceRefetch,true))due.push_back(id);
+        if(due.empty())return;
+        auto job=ItemMetadata::Admit(due,ItemMetadata::Demand::Details,forceRefetch,
+            [forceRefetch](uint32_t id){return ItemDefinitionDue(id,forceRefetch,true);});
         // Coalesced asynchronous consumers merge persistence demand into the
         // active observation. They do not need an additional waiting worker.
         if(job->owned.empty())return;
@@ -3533,12 +3547,13 @@ namespace AlterEgo {
             out=std::move(*snapshot);return out.is_array();
         };
         json j;
-        if (auto items=Cache::ReadItems(GetDataDirectory(),Cache::ItemDataset::Details);items&&items->is_array()) {
+        if (auto items=Cache::ReadItems(GetDataDirectory(),Cache::ItemDataset::Details,true);items&&items->is_array()) {
             j=std::move(*items);
             std::lock_guard<std::mutex> lock(s_mutex);
             for (const auto& it : j) {
                 if (!it.contains("id")) continue;
                 ItemInfo info;
+                info.verified_at=it.value("verified_at",int64_t(0));
                 info.id = it["id"].get<uint32_t>();
                 info.name = it.value("name", "");
                 info.icon_url = it.value("icon", "");

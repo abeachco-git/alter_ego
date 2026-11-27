@@ -341,7 +341,7 @@ namespace Skinventory {
         auto current=PublicCatalog::Get();
         const auto now=PublicCatalog::Now();
         const bool discover=PublicCatalog::DatasetDue(*current,"public_item_discovery",now,manual&&itemsOnly);
-        const bool refresh=PublicCatalog::Due(current->upgrades,current->upgradeAttempt,now,manual&&!itemsOnly,PublicCatalog::Month);
+        const bool refresh=PublicCatalog::Due(current->upgrades,current->upgradeAttempt,now,manual&&!itemsOnly,PublicCatalog::BalanceMetadataAge);
         if((!discover&&!refresh)||s_item_map_building.exchange(true))return;
         {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status="Refreshing public item catalogs...";}
         Background::Workers().Launch([discover,refresh,manual]{

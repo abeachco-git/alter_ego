@@ -116,7 +116,7 @@ int case_database_core(int, char**) {
         auto failed=I::Admit({11},I::Demand::Details,true);
         I::Fetch(*failed,[](const std::string&){return Skinventory::HttpResponse{200,R"([{"id":11,"name":"A"}])",true};},
             [](const J&,int64_t,J&){return false;},adopt);
-        assert(I::Await(*failed).rows.empty()&&R::InspectId(I::Dataset,11).retrySeconds>0);failed.reset();
+        assert(I::Await(*failed).rows.empty()&&R::InspectId(I::Dataset,11).retrySeconds>=AlterEgo::PublicCatalog::Retry-1);failed.reset();
         auto cooldown=I::Admit({11},I::Demand::Inventory,false);
         assert(cooldown->owned.empty());cooldown.reset();
         auto manual=I::Admit({11},I::Demand::Inventory,true);assert(manual->owned.size()==1);manual.reset();
@@ -834,6 +834,8 @@ int case_database_core(int, char**) {
         assert(Cache::WriteItemObservations(orderRoot,J::array({row(99,"equal")}),newest,accepted));
         assert(accepted.empty());
         auto ordered=Cache::ReadItems(orderRoot,D::Details);assert(ordered);
+        auto stamped=Cache::ReadItems(orderRoot,D::Details,true);
+        assert(stamped&&stamped->at(0)["verified_at"]==newest&&stamped->at(1)["verified_at"]==later);
         bool foundNew=false,foundOther=false;
         for(const auto& entry:*ordered){
             if(entry.at("id")==99){assert(entry.at("name")=="new");foundNew=true;}

@@ -165,7 +165,7 @@ int case_skill_edit_core(int,char**) {
         assert(!ResolveEliteContext(std::array<uint32_t,3>{1,1,3},known));
         assert(!ResolveEliteContext(std::array<uint32_t,3>{0,2,3},known));
         assert(!ResolveEliteContext(ids,[](uint32_t id)->EliteContext{return id==1?std::nullopt:EliteContext(std::string{});}));
-        auto facts=J::array({J{{"type","Recharge"},{"value",10}},J{{"type","Damage"},{"hit_count",2},{"dmg_multiplier",99}},J{{"type","Buff"},{"status","Might"},{"duration",5}},J{{"type","Unknown"},{"value",9}},J{{"type","Number"},{"text","Targets"},{"value","bad"}}});
+        auto facts=J::array({J{{"type","Recharge"},{"value",10}},J{{"type","Damage"},{"text","Damage"},{"hit_count",2},{"dmg_multiplier",99}},J{{"type","Buff"},{"status","Might"},{"duration",5}},J{{"type","Unknown"},{"value",9}},J{{"type","Number"},{"text","Targets"},{"value","bad"}}});
         assert(AlterEgo::TooltipCore::FactLines(facts)==std::vector<std::string>({"Recharge: 10 s","Hits: 2","Might (5 s)"}));
         auto canonical=[](uint32_t id){return id>=13&&id<=19?id-12:id;};
         auto required=[](uint32_t id)->std::optional<uint32_t>{return id==9?std::optional<uint32_t>(4):std::nullopt;};
