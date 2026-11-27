@@ -14345,7 +14345,21 @@ static void RenderAchEntry(const AchFrame& frame,uint32_t achId, bool showPinBut
     ImGui::Spacing();
 }
 
+// One account-wide tick shared by actual rendered consumers. Never use
+// remembered tab IDs or an empty tracker as evidence of current demand.
+static void PollAchievementDemand() {
+    static auto lastCheck=std::chrono::steady_clock::time_point{};
+    const auto now=std::chrono::steady_clock::now();
+    if(AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)&&
+       !g_AchProgressFetching&&AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready&&
+       now-lastCheck>=std::chrono::seconds(2)){
+        lastCheck=now;
+        if(IsAchCategoryRefreshDue(g_AchSelectedCatId))SendAchProgressQuery({},true);
+    }
+}
+
 static void RenderAchievements() {
+    PollAchievementDemand();
     // Cached groups remain visible immediately on startup. Refresh stale
     // groups/categories after a daily reset instead of discarding the file.
     // Back off failed fetches to avoid retrying on every rendered frame.
@@ -15027,32 +15041,10 @@ static void RebuildPopoutCache(const AchFrame& frame) {
 }
 
 static void RenderAchPopout() {
-    // Pinned-progress 10-minute auto-refresh is handled globally in
-    // AddonRender so it fires regardless of popout / tab visibility.
-
-    // Refresh pinned progress whenever the popout becomes visible
-    // (button-pressed, or first time after addon load). Resets when hidden
-    // so it'll fire again next time the user reopens it.
-    static bool s_popoutWasVisible = false;
-    if (!g_AchPopoutVisible) {
-        s_popoutWasVisible = false;
+    static bool s_popoutHadDemand=false;
+    if (!g_AchPopoutVisible || g_CurrentCharName.empty()) {
+        s_popoutHadDemand=false;
         return;
-    }
-    if (g_CurrentCharName.empty()) return; // not yet logged in (character select screen)
-
-    if (!s_popoutWasVisible) {
-        s_popoutWasVisible = true;
-        FetchPinnedAchDefs(); // only missing pinned definitions, on demand
-        std::vector<uint32_t> pinnedCopy;
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            pinnedCopy = g_AchPinned;
-        }
-        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements) &&
-            !pinnedCopy.empty() && !g_AchProgressFetching) {
-            {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);g_LastAchProgressQuery=std::chrono::steady_clock::now();}
-            SendAchProgressQuery(pinnedCopy, true);
-        }
     }
 
     const auto frame=CaptureAchFrame();
@@ -15062,8 +15054,15 @@ static void RenderAchPopout() {
     }
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(250, 100), ImVec2(500, 800));
-    if (ImGui::Begin("Achievement Tracker", &g_AchPopoutVisible,
-                     ImGuiWindowFlags_NoCollapse)) {
+    const bool rendered=ImGui::Begin("Achievement Tracker", &g_AchPopoutVisible,
+                     ImGuiWindowFlags_NoCollapse);
+    const bool demand=rendered&&g_AchPopoutVisible&&!frame.pinned.empty();
+    if(demand){
+        if(!s_popoutHadDemand)FetchPinnedAchDefs();
+        PollAchievementDemand();
+    }
+    s_popoutHadDemand=demand;
+    if (rendered) {
 
         // Toolbar
         ImGui::Checkbox("Show completed steps", &g_AchShowCompletedSteps);
@@ -15849,19 +15848,6 @@ void AddonRender() {
                 g_AchProgressQueryStartMs = 0;
                 g_AchStatusMsg = "Achievement progress timed out. Click Refresh to retry.";
             }
-        }
-    }
-
-    // One account-wide objective tick for all achievement browser/popout consumers.
-    {
-        static auto lastCheck=std::chrono::steady_clock::time_point{};
-        const auto now=std::chrono::steady_clock::now();
-        if((g_AchPopoutVisible||(g_WindowVisible&&g_MainTab==4))&&
-           AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)&&
-           !g_AchProgressFetching&&AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready&&
-           now-lastCheck>=std::chrono::seconds(2)){
-            lastCheck=now;
-            if(IsAchCategoryRefreshDue(g_AchSelectedCatId))SendAchProgressQuery({},true);
         }
     }
 
