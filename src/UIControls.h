@@ -6,6 +6,7 @@
 #include "imgui_internal.h"
 #include "SplitPanelCore.h"
 #include "EditorLifecycle.h"
+#include "TooltipCore.h"
 #include <set>
 #include <string>
 #include <algorithm>
@@ -39,7 +40,7 @@ inline void TooltipText(const char* title,const char* body){
 }
 inline void DetailTooltip(const char* title,const char* body=nullptr,ImVec4 color=TooltipTitle){
     if((!title||!*title)&&(!body||!*body))return;
-    ImGui::BeginTooltip();
+    ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
     TooltipLine(title,color);TooltipLine(body);
     ImGui::EndTooltip();
 }
@@ -50,14 +51,7 @@ inline void DisabledHint(const char* reason){
 inline void ClippedTextHint(bool hovered,const std::string& label,float available){
     if(hovered&&!label.empty()&&ImGui::CalcTextSize(label.c_str()).x>available)Hint(label.c_str());
 }
-inline const char* FriendlyAttribute(const std::string& attr){
-    if(attr=="CritDamage")return "Ferocity";
-    if(attr=="ConditionDamage")return "Condition Damage";
-    if(attr=="ConditionDuration")return "Expertise";
-    if(attr=="BoonDuration")return "Concentration";
-    if(attr=="Healing"||attr=="HealingPower")return "Healing Power";
-    return attr.c_str();
-}
+using TooltipCore::FriendlyAttribute;
 inline float ActionButtonHeight() { return std::max(ActionHeight, ImGui::GetFrameHeight()); }
 
 enum class ButtonRole { Standard, Compact, Destructive, CompactDestructive };

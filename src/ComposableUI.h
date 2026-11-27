@@ -525,7 +525,7 @@ static void RenderComponentUIEditor() {
         } else if (!similarName.empty()) {
             ImGui::TextDisabled("Similar functional totals: %s", similarName.c_str());
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Exact saved fields differ. Both records remain independent.");
+                AlterEgo::UI::Hint("Exact saved fields differ. Both records remain independent.");
         }
     }
     if (g_ComponentEditorMode != "rename") {

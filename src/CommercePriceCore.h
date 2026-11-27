@@ -53,6 +53,14 @@ inline std::unordered_map<uint32_t,PriceInfo> ParseCommercePrices(int status,con
         return out;
     }catch(...){return {};}
 }
+// Presentation only; do not use as a request-admission policy.
+inline std::string DescribePriceStatus(const std::optional<PriceInfo>& price,bool pending,int64_t retryAt,int64_t now,int64_t ttl){
+    if(pending)return "Queued or refreshing";
+    if(retryAt>now)return "Refresh failed; retry in "+std::to_string((retryAt-now+59)/60)+"m";
+    if(!price)return "Price not retrieved";
+    if(now<price->fetched_at_unix||now-price->fetched_at_unix>=ttl)return "Price stale";
+    return "Fresh; next eligible in "+std::to_string((ttl-(now-price->fetched_at_unix)+59)/60)+"m";
+}
 // Summary quote only; round each fee upward and reject overflow.
 inline std::optional<int64_t> EstimateInstantSale(int64_t count,int buy){
     if(count<=0||buy<=0||count>std::numeric_limits<int64_t>::max()/buy)return std::nullopt;

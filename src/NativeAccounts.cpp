@@ -1093,7 +1093,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                         const auto name=row.name.empty()?"Item #"+std::to_string(item):row.name;
                         const auto meta=v->inventory.metadata.find(item);
                         ImGui::PushID(static_cast<int>(item));
-                        UI::CatalogRow(i,false,item,meta==v->inventory.metadata.end()?"":meta->second.icon,name,row.rarity,std::to_string(x.second));
+                        UI::CatalogRow(i,false,item,meta==v->inventory.metadata.end()?"":meta->second.icon,name,row.rarity,std::to_string(x.second),false,-1,[&]{if(!row.name.empty())UI::DetailTooltip(name.c_str(),meta==v->inventory.metadata.end()?nullptr:PlainItemDescription(meta->second.description).c_str(),GetSkinRarityColor(row.rarity));});
                         // Shared guild stock has no personal character-load targets.
                         ItemMenu(item,name,row.chat);ImGui::PopID();
                     });
@@ -1470,9 +1470,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             if(all.count!=matching.count)renderEstimate("Matching filters",matching);
         }else if(status.price)ImGui::TextDisabled("Not tradeable");
         else ImGui::TextDisabled("Price not retrieved");
-        if(status.pending)ImGui::TextDisabled("Price request queued or refreshing");
-        else if(status.retry_at>now)ImGui::TextDisabled("Price refresh failed; retry in %lldm",static_cast<long long>((status.retry_at-now+59)/60));
-        else if(status.price&&(now<status.price->fetched_at_unix||now-status.price->fetched_at_unix>=Commerce::PriceTTL))ImGui::TextDisabled("Price stale");
+        if(status.pending||status.retry_at>now||(status.price&&(now<status.price->fetched_at_unix||now-status.price->fetched_at_unix>=Commerce::PriceTTL)))
+            ImGui::TextDisabled("%s",Skinventory::DescribePriceStatus(status.price,status.pending,status.retry_at,now,Commerce::PriceTTL).c_str());
         if(status.pending){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*0.5f);}
         if(UI::Button("Refresh price",ImVec2(0,UI::ActionButtonHeight()))&&!status.pending)Commerce::RequestItemPrices({group.id},true);
         if(status.pending){UI::DisabledHint("Price request queued or refreshing.");ImGui::PopStyleVar();ImGui::PopItemFlag();}
@@ -1623,11 +1622,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     if(itemView&&nav.item&&!nav.currency){
         const auto p=Skinventory::Commerce::GetItemPriceStatus(nav.item);
         detail+="\n\nTrading Post price (selected item): ";
-        if(p.pending)detail+="queued or refreshing";
-        else if(p.retry_at>now)detail+="retry cooldown "+std::to_string((p.retry_at-now+59)/60)+"m";
-        else if(!p.price)detail+="not retrieved";
-        else if(now<p.price->fetched_at_unix||now-p.price->fetched_at_unix>=Skinventory::Commerce::PriceTTL)detail+="stale; refresh due";
-        else detail+="fresh; next eligible in "+std::to_string((Skinventory::Commerce::PriceTTL-(now-p.price->fetched_at_unix)+59)/60)+"m";
+        detail+=Skinventory::DescribePriceStatus(p.price,p.pending,p.retry_at,now,Skinventory::Commerce::PriceTTL);
         if(p.price)detail+="; updated "+RefreshUI::Age(static_cast<std::time_t>(p.price->fetched_at_unix),now);
         if(!AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::TradingPrices))detail+="; automatic refresh disabled";
         detail+="\nPrice refresh is independent of inventory storage.";

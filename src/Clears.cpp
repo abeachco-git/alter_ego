@@ -1901,7 +1901,7 @@ static void RenderWingBanner(const std::string& wingShortName,    // e.g. "W4"
             ImGui::SetCursorScreenPos(min);
             ImGui::PushID(static_cast<int>(iconId));
             ImGui::InvisibleButton("##weeklyModifier", ImVec2(iconSz, iconSz));
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+            if (ImGui::IsItemHovered()) AlterEgo::UI::Hint(tooltip);
             ImGui::PopID();
             ImGui::SetCursorScreenPos(previous);
             iconX += iconSz + 6.0f;
@@ -1996,7 +1996,7 @@ static void RenderCompactWingBanner(const std::string& wingShortName,
         ImGui::SetCursorScreenPos(iMin);
         ImGui::PushID(static_cast<int>(iconId));
         ImGui::InvisibleButton("##wingModifier", ImVec2(iconSize, iconSize));
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        if (ImGui::IsItemHovered()) AlterEgo::UI::Hint(tip);
         ImGui::PopID();
         iconX += iconSize + 3.0f;
     };

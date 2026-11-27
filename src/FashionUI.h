@@ -269,11 +269,7 @@ static void RenderFashionSlot(const char* label, uint16_t skinID, const uint16_t
             }
             ImGui::ColorButton("##fashion_dye", ImVec4(r/255.f, g/255.f, b/255.f, 1.f),
                 ImGuiColorEditFlags_NoDragDrop | ImGuiColorEditFlags_NoTooltip, ImVec2(17, 17));
-            if(ImGui::IsItemHovered()){
-                if(id==1)AlterEgo::UI::Hint("Dye Remover");
-                else if(!id)AlterEgo::UI::Hint("Empty");
-                else if(dye)AlterEgo::UI::Hint(dye->name.c_str());
-            }
+            if(ImGui::IsItemHovered())AlterEgo::UI::Hint(AlterEgo::TooltipCore::DyeName(id,dye?dye->name:std::string{}).c_str());
             ImGui::PopID();
         }
         ImGui::Unindent(126);
@@ -475,11 +471,7 @@ static void RenderFashionLibrary() {
                     ImGui::ColorButton("##outfit_dye", ImVec4(dye ? dye->cloth_r/255.f : .3f,
                         dye ? dye->cloth_g/255.f : .3f, dye ? dye->cloth_b/255.f : .3f, 1),
                         ImGuiColorEditFlags_NoTooltip, ImVec2(17,17));
-                    if(ImGui::IsItemHovered()){
-                        if(id==1)AlterEgo::UI::Hint("Dye Remover");
-                        else if(!id)AlterEgo::UI::Hint("Empty");
-                        else if(dye)AlterEgo::UI::Hint(dye->name.c_str());
-                    }
+                    if(ImGui::IsItemHovered())AlterEgo::UI::Hint(AlterEgo::TooltipCore::DyeName(id,dye?dye->name:std::string{}).c_str());
                     ImGui::PopID();
                 }
                 ImGui::Unindent(126);

@@ -1,9 +1,17 @@
 #include "../src/ComposableGearPresentation.h"
+#include "../src/TooltipCore.h"
 #include <cassert>
 #include <iostream>
 
 using namespace AlterEgo::Composable;
 int case_composable_gear_presentation(int, char**) {
+    using namespace AlterEgo::TooltipCore;
+    assert(EntityName("Known","Stored")=="Known");
+    assert(EntityName("","Stored")=="Stored");
+    assert(EntityName("").empty());
+    assert(std::string(FriendlyAttribute("Healing"))=="Healing Power");
+    assert(std::string(FriendlyAttribute("HealingPower"))=="Healing Power");
+    assert(DyeName(0,"")=="Empty"&&DyeName(1,"")=="Dye Remover"&&DyeName(2,"").empty());
     const Json gear = {
         {"FutureSlot", {{"extension", "keep"}}},
         {"Ring2", {{"stat_name", "Berserker"}, {"stat_id", 1130}, {"item_id", 23}}},

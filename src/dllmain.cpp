@@ -3121,6 +3121,36 @@ static void RenderEquipmentContextActions(const AlterEgo::Character& ch,const Al
         ImGui::EndMenu();
     }
 }
+// Shared cached entity detail sections. Context-specific equipment evidence stays with its owner.
+static void RenderSpecializationTooltip(const std::string& name,ImVec4 color,const std::string& fallback,bool editable){
+    using namespace AlterEgo::UI;
+    ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
+    TooltipLine(name.c_str(),color);
+    if(const auto* d=AlterEgo::GetSpecDescription(name)){
+        ImGui::Spacing();TooltipLine((std::string("\"")+d->flavor+"\"").c_str(),ImVec4(.7f,.85f,.9f,1.f),350.f);
+        ImGui::Spacing();TooltipLine(d->description,TooltipBody,350.f);
+    }else TooltipLine(fallback.c_str(),ImVec4(.6f,.6f,.6f,1.f));
+    if(editable)TooltipLine("(click to change specialization)",ImVec4(.7f,.62f,.35f,1.f));
+    ImGui::EndTooltip();
+}
+static void RenderUpgradeTooltipDetails(const AlterEgo::ItemInfo& info){
+    using namespace AlterEgo::UI;
+    const auto color=ImVec4(.4f,.7f,.9f,1.f);
+    const auto& details=info.details;
+    if(!details.is_object())return;
+    if(details.contains("bonuses")&&details["bonuses"].is_array()){
+        int idx=1;
+        for(const auto& bonus:details["bonuses"]){
+            if(bonus.is_string())TooltipLine(("("+std::to_string(idx)+"): "+StripGW2Markup(bonus.get<std::string>())).c_str(),color);
+            ++idx;
+        }
+    }
+    if(details.contains("infix_upgrade")&&details["infix_upgrade"].is_object()){
+        const auto& infix=details["infix_upgrade"];
+        if(infix.contains("buff")&&infix["buff"].is_object()&&infix["buff"].contains("description")&&infix["buff"]["description"].is_string())
+            TooltipLine(StripGW2Markup(infix["buff"]["description"].get<std::string>()).c_str(),color);
+    }
+}
 static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
 
@@ -3218,7 +3248,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                 ImGui::SameLine();
             }
             ImGui::BeginGroup();
-            ImGui::TextColored(GetRarityColor(rarity), "%s", display_name.c_str());
+            AlterEgo::UI::TooltipLine(display_name.c_str(),GetRarityColor(rarity));
 
             if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
 
@@ -3284,7 +3314,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                     if (info && !info->name.empty())
                         ImGui::BulletText("%s", info->name.c_str());
                     else
-                        ImGui::BulletText("Infusion #%u", id);
+                        ImGui::BulletText("Infusion details unavailable");
                 }
             }
 
@@ -3295,24 +3325,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                 if (uinfo) {
                     ImGui::Spacing();
                     ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "%s", uinfo->name.c_str());
-                    // Show rune bonuses
-                    if (uinfo->details.is_object() && uinfo->details.contains("bonuses") &&
-                        uinfo->details["bonuses"].is_array()) {
-                        int idx = 1;
-                        for (const auto& bonus : uinfo->details["bonuses"]) {
-                            ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "(%d): %s",
-                                idx++, bonus.get<std::string>().c_str());
-                        }
-                    }
-                    // Show sigil description
-                    if (uinfo->details.is_object() && uinfo->details.contains("infix_upgrade") &&
-                        uinfo->details["infix_upgrade"].contains("buff") &&
-                        uinfo->details["infix_upgrade"]["buff"].contains("description")) {
-                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(300.0f));
-                        std::string udesc = StripGW2Markup(uinfo->details["infix_upgrade"]["buff"]["description"].get<std::string>());
-                        ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "%s", udesc.c_str());
-                        ImGui::PopTextWrapPos();
-                    }
+                    RenderUpgradeTooltipDetails(*uinfo);
                 }
             }
 
@@ -4666,26 +4679,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                 if(!g_LibEditMode&&ImGui::BeginPopupContextItem("##spec_name")){
                     CopyNameMenuItem(specName);ImGui::EndPopup();
                 }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextColored(specColor, "%s", specName.c_str());
-                    const auto* specDesc = AlterEgo::GetSpecDescription(specName);
-                    if (specDesc) {
-                        ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(0.7f, 0.85f, 0.9f, 1.0f),
-                            "\"%s\"", specDesc->flavor);
-                        ImGui::Spacing();
-                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(350.0f));
-                        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f),
-                            "%s", specDesc->description);
-                        ImGui::PopTextWrapPos();
-                    } else {
-                        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s%s",
-                            specInfo->profession.c_str(),
-                            isElite ? " (Elite)" : "");
-                    }
-                    ImGui::EndTooltip();
-                }
+                if(ImGui::IsItemHovered())RenderSpecializationTooltip(specName,specColor,specInfo->profession+(isElite?" (Elite)":""),false);
                 ImGui::SetCursorScreenPos(prevPos);
             }
 
@@ -8625,12 +8619,12 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     if (hovered && isRelicSlot && (!build.relic_name.empty()||build.relic_id)) {
         ImGui::BeginTooltip();
         const auto info=AlterEgo::GW2API::GetItemInfo(build.relic_id);
-        const auto label=info&&!info->name.empty()?info->name:build.relic_name.empty()?std::string("Relic metadata pending"):build.relic_name;
-        ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.8f, 1.0f), "%s",label.c_str());
-        if(build.relic_id)ImGui::TextDisabled("Item ID: %u%s",build.relic_id,info?"":" (metadata pending)");
+        const auto label=AlterEgo::TooltipCore::EntityName(info?info->name:std::string{},build.relic_name);
+        AlterEgo::UI::TooltipLine(label.c_str(),ImVec4(.5f,.8f,.8f,1.f));
+        if(info&&!info->description.empty())AlterEgo::UI::TooltipLine(StripGW2Markup(info->description).c_str());
         for (const auto& entry : GearCatalog("Relic")) {
-            if (build.relic_name == entry.name) {
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", entry.bonus.c_str());
+            if ((!info||info->description.empty())&&build.relic_name == entry.name) {
+                AlterEgo::UI::TooltipLine(entry.bonus.c_str());
                 break;
             }
         }
@@ -8639,16 +8633,15 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         ImGui::BeginTooltip();
         if(gearSlot&&gearSlot->item_id){
             const auto info=AlterEgo::GW2API::GetItemInfo(gearSlot->item_id);
-            ImGui::TextWrapped("%s (#%u)",info&&!info->name.empty()?info->name.c_str():"Item metadata pending",gearSlot->item_id);
+            if(info)AlterEgo::UI::TooltipLine(info->name.c_str(),GetRarityColor(info->rarity));
         }
-        if(gearSlot&&gearSlot->stat_id)ImGui::TextDisabled("Stat ID: %u%s",gearSlot->stat_id,AlterEgo::GW2API::GetItemStatInfo(gearSlot->stat_id)?"":" (metadata pending)");
         if(gearSlot){
             const auto upgrade=[](const char* label,uint32_t id,const std::string& stored){
                 if(!id&&stored.empty())return;
                 const auto info=AlterEgo::GW2API::GetItemInfo(id);
-                const auto name=info&&!info->name.empty()?info->name:stored.empty()?std::string("Metadata pending"):stored;
-                if(id)ImGui::TextWrapped("%s: %s (#%u)",label,name.c_str(),id);
-                else ImGui::TextWrapped("%s: %s",label,name.c_str());
+                const auto name=AlterEgo::TooltipCore::EntityName(info?info->name:std::string{},stored);
+                if(!name.empty())AlterEgo::UI::TooltipLine((std::string(label)+": "+name).c_str());
+                if(info)RenderUpgradeTooltipDetails(*info);
             };
             upgrade("Rune",gearSlot->rune_id,gearSlot->rune);upgrade("Sigil",gearSlot->sigil_id,gearSlot->sigil);upgrade("Second sigil",gearSlot->sigil2_id,gearSlot->sigil2);
         }
@@ -9436,25 +9429,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
                             ImVec2(nameAnchor.x + hitSz.x, nameAnchor.y + hitSz.y),
                             IM_COL32(227, 196, 122, 200), 2.0f);
                 }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextColored(specColor, "%s", specName.c_str());
-                    const auto* specDesc = AlterEgo::GetSpecDescription(specName);
-                    if (specDesc) {
-                        ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(0.7f, 0.85f, 0.9f, 1.0f),
-                            "\"%s\"", specDesc->flavor);
-                        ImGui::Spacing();
-                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(350.0f));
-                        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f),
-                            "%s", specDesc->description);
-                        ImGui::PopTextWrapPos();
-                    }
-                    if (g_LibEditMode)
-                        ImGui::TextColored(ImVec4(0.7f, 0.62f, 0.35f, 1.0f),
-                            "(click to change specialization)");
-                    ImGui::EndTooltip();
-                }
+                if(ImGui::IsItemHovered())RenderSpecializationTooltip(specName,specColor,{},g_LibEditMode);
                 ImGui::SetCursorScreenPos(prevPos);
             }
 
@@ -10730,6 +10705,12 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                         if(!row->linkType)return;
                         std::set<uint32_t> unique;for(auto id:ids)if(ChatLinkIdValid(id))unique.insert(id);
                         if(unique.empty())return;
+                        if(unique.size()==1&&ImGui::IsItemHovered()){
+                            const auto id=*unique.begin();
+                            if(row->linkType==AlterEgo::LINK_SKILL){const auto v=AlterEgo::GW2API::GetSkillInfo(id);if(v)AlterEgo::UI::DetailTooltip(v->name.c_str(),StripGW2Markup(v->description).c_str());}
+                            else if(row->linkType==AlterEgo::LINK_TRAIT){const auto v=AlterEgo::GW2API::GetTraitInfo(id);if(v)AlterEgo::UI::DetailTooltip(v->name.c_str(),StripGW2Markup(v->description).c_str());}
+                            else if(row->linkType==AlterEgo::LINK_ITEM){const auto v=AlterEgo::GW2API::GetItemInfo(id);if(v)AlterEgo::UI::DetailTooltip(v->name.c_str(),StripGW2Markup(v->description).c_str(),GetRarityColor(v->rarity));}
+                        }
                         ImGui::PushID(row->group.c_str());ImGui::PushID(row->field.c_str());
                         for(auto id:unique)ImGui::PushID(static_cast<int>(id));
                         AlterEgo::UI::EntityContext(popup,[&]{for(auto id:unique){
@@ -12948,7 +12929,14 @@ static void RenderSkinList(float width) {
                 }
             } else ImGui::TextDisabled("Ownership data not loaded");
         },[&]{g_SkinBrowserFilters={};g_SkinShowOwned=g_SkinShowUnowned=true;changed();});
-    struct SkinDisplayEntry {uint32_t id;bool owned;};
+    static void RenderSkinEntityTooltip(const std::string& name,const std::string& rarity,bool hasOwnerData,bool owned){
+    using namespace AlterEgo::UI;
+    ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
+    TooltipLine(name.c_str(),GetSkinRarityColor(rarity));
+    if(hasOwnerData)TooltipLine(owned?"Owned":"Not owned",owned?ImVec4(.35f,.82f,.35f,1.f):ImVec4(.55f,.55f,.55f,1.f));
+    ImGui::EndTooltip();
+}
+struct SkinDisplayEntry {uint32_t id;bool owned;};
     static std::vector<SkinDisplayEntry> displaySkins;
     static Skinventory::FilterResult result;
     static Skinventory::SkinFilters previous;
@@ -13067,15 +13055,7 @@ static void RenderSkinList(float width) {
                     const bool hovered=hit.hovered;
                     if (hovered) {
                         dl->AddRect(tmin, tmax, IM_COL32(232, 196, 122, 180), 2.0f, 0, 1.5f);
-                        ImGui::BeginTooltip();
-                        ImGui::TextColored(rc, "%s", skin.name.c_str());
-                        if (hasOwnerData) {
-                            ImGui::TextColored(entry.owned
-                                ? ImVec4(0.35f, 0.82f, 0.35f, 1.0f)
-                                : ImVec4(0.55f, 0.55f, 0.55f, 1.0f),
-                                entry.owned ? "Owned" : "Not owned");
-                        }
-                        ImGui::EndTooltip();
+                        RenderSkinEntityTooltip(skin.name,skin.rarity,hasOwnerData,entry.owned);
                     }
                     RenderSkinContextMenu(skin);
                     ImGui::PopID();
@@ -13097,7 +13077,7 @@ static void RenderSkinList(float width) {
             if(!skinOpt){ImGui::Dummy(ImVec2(0,rowH));return;}
             const auto& skin=*skinOpt;
             ImGui::PushID((int)entry.id);
-            const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,entry.id+5000000,skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1,[&]{AlterEgo::UI::DetailTooltip(skin.name.c_str(),hasOwnerData?(entry.owned?"Owned":"Not owned"):nullptr,GetSkinRarityColor(skin.rarity));});
+            const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,entry.id+5000000,skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1,[&]{RenderSkinEntityTooltip(skin.name,skin.rarity,hasOwnerData,entry.owned);});
             RenderSkinContextMenu(skin);ImGui::PopID();
             if(hit.clicked)selectSkin(skin);
         });
@@ -16203,13 +16183,13 @@ void AddonRender() {
                         }
                     }
                     float lineH = ImGui::GetTextLineHeightWithSpacing();
-                    float rowHeight = g_CompactCharList ? 18.0f
+                    float rowHeight = g_CompactCharList ? std::max(18.0f,lineH)
                         : (28.0f + extraLines * lineH);
                     // Show mismatch even when no library build happens to match.
                     const bool recognizeActive=!memoryAccount.empty()&&ch.account_name==memoryAccount&&ch.name==g_CurrentCharName;
                     if (recognizeActive) {
                         const auto& match = GetLoggedInSavedBuildMatch(ch);
-                        if (match.show)rowHeight+=(match.warnings.empty()?1.f:2.f)*lineH;
+                        if (match.show)rowHeight+=(1.f+static_cast<float>(match.warnings.size()))*lineH;
                         if (HasLiveSpecCacheMismatch(ch))
                             rowHeight += lineH;
                     }
@@ -16267,9 +16247,10 @@ void AddonRender() {
                         ImGui::EndPopup();
                     }
 
-                    if (characterHovered) {
+                    if (characterHovered && !ImGui::IsPopupOpen("##character_actions")) {
+                        // The sampled roster includes inactive same-account characters.
                         const std::string location=AlterEgo::GameMemory::Location(g_CurrentCharName,ch.name,memoryAccount,ch.account_name);
-                        if (!location.empty()) ImGui::SetTooltip("Location: %s",location.c_str());
+                        if (!location.empty()) AlterEgo::UI::Hint(("Location: "+location).c_str());
                     }
 
                     // Draw profession-colored left accent bar (non-compact only)
@@ -16414,15 +16395,11 @@ void AddonRender() {
                                     AlterEgo::UI::WarningText;
                                 const auto draw=[&](const std::string& label,ImVec4 tint){
                                     const float width=ImMax(0.f,rMax.x-ImGui::GetCursorScreenPos().x-6.f);
-                                    ImGui::TextColored(tint,"%s",width>=ImGui::CalcTextSize("...").x?TruncateToWidth(label,width).c_str():"");
+                                    ImGui::TextColored(tint,"%s",width>=ImGui::CalcTextSize("...").x?TruncateToWidth(label,width).c_str():label.c_str());
                                     if(ImGui::IsItemHovered())AlterEgo::UI::DetailTooltip("Configuration health",match.tooltip.c_str());
                                 };
-                                draw(match.full?match.name+" - Matches":match.name,color);
-                                if(!match.warnings.empty()){
-                                    std::string warning;
-                                    for(const auto& w:match.warnings){if(!warning.empty())warning+=" / ";warning+=w;}
-                                    draw(warning,color);
-                                }
+                                draw(match.full?"Matches - "+match.name:match.name,color);
+                                for(const auto& warning:match.warnings)draw(warning,color);
                             }
                         }
                     }

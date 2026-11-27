@@ -191,8 +191,8 @@ static void RenderNavigationControls(){
         if(!enabled){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
         if(AlterEgo::UI::Button(label,ImVec2(ImGui::GetFrameHeight(),0),AlterEgo::UI::ButtonRole::Compact)&&enabled)requested=direction;
         if(!enabled){ImGui::PopStyleVar();ImGui::PopItemFlag();}
-        if(blocked)UI::DisabledHint("Finish or cancel the current edit/dialog first.");
-    else if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))UI::Hint(tip);
+        if(blocked)AlterEgo::UI::DisabledHint("Finish or cancel the current edit/dialog first.");
+        else if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))AlterEgo::UI::Hint(tip);
     };
     button("<##nav_back","Back (mouse back / Alt+Left)",-1);ImGui::SameLine();
     button(">##nav_forward","Forward (mouse forward / Alt+Right)",1);

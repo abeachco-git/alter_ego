@@ -8,6 +8,9 @@
 #include "../src/LibraryModeFilter.h"
 #include <cassert>
 int case_skin_search(int, char**) {
+    assert(Skinventory::DescribePriceStatus({},false,0,100,3600)=="Price not retrieved");
+    assert(Skinventory::DescribePriceStatus({},true,0,100,3600)=="Queued or refreshing");
+    assert(Skinventory::DescribePriceStatus({},false,160,100,3600)=="Refresh failed; retry in 1m");
  using namespace Skinventory;
  using namespace AlterEgo::LibraryFilter;
  const auto label=[](const std::string& s){return s;};
