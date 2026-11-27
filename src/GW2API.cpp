@@ -357,6 +357,7 @@ namespace AlterEgo {
             std::lock_guard<std::mutex> lock(s_mutex);
             if(s_fetch_status==FetchStatus::InProgress)return;
             s_character_work.Reset();
+            if(listOnly)s_pending_char_names.clear();
             if(accounts.empty()){s_fetch_status=FetchStatus::Error;s_fetch_message="Link an account in Nexus options";return;}
             s_fetch_status=FetchStatus::InProgress;s_fetch_message="Checking character roster...";
             s_current_char={};s_chars_fetched=0;s_chars_total=0;

@@ -1383,6 +1383,7 @@ static void EnsureCharDisplayOrder(const std::shared_ptr<const std::vector<Alter
 // Character refresh selection popup state
 static bool g_RefreshPopupOpen = false;
 static bool g_RefreshListFetching = false;     // waiting for char list from native API
+static std::string g_RefreshListNotice;         // result of explicit roster retrieval
 static bool g_AutoCharListRequested = false;   // auto-fetched char list on native API connect
 static std::vector<std::string> g_RefreshNames; // display labels at admission
 static std::vector<AlterEgo::CharacterIdentity::Address> g_RefreshAddresses;
@@ -15451,9 +15452,12 @@ static void RenderCharactersStatusRow() {
     namespace S=AlterEgo::CharacterScopes;
     namespace R=AlterEgo::RefreshStatus;
     const auto demand=S::Visible(g_SelectedTab);
-    if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
+    // Consume the roster result before starting another character request;
+    // otherwise ordinary visible demand can overwrite the picker result.
+    const bool pickerPending=g_RefreshListFetching||ImGui::IsPopupOpen("Select Characters to Refresh");
+    if(selected&&!pickerPending)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
     const auto active=AlterEgo::CharacterActivity::ActiveKey();
-    if(!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&(!selected||selected->name!=active.second)){
+    if(!pickerPending&&!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&(!selected||selected->name!=active.second)){
         S::Stamps stamps{};for(const auto& ch:chars)if(ch.account_name==active.first&&ch.name==active.second){stamps=ch.scope_stamps;break;}
         PollDemandCharacter(active.first,active.second,stamps,S::Core);
     }
@@ -15468,12 +15472,17 @@ static void RenderCharactersStatusRow() {
             fetch==AlterEgo::FetchStatus::Error?R::Kind::Failed:R::Kind::NoData;
         inspection.detail=ready?AlterEgo::GW2API::GetFetchStatusMessage():"Link an API key in Nexus options";
     }
-    const auto label=R::Label(inspection.kind,now,inspection.aggregate.retryAt);
+    const auto label=g_RefreshListFetching?std::string("Loading character list"):R::Label(inspection.kind,now,inspection.aggregate.retryAt);
+    if(g_RefreshListFetching){
+        inspection.kind=R::Kind::Working;
+        inspection.detail=AlterEgo::GW2API::GetFetchStatusMessage();
+    }
     const char* disabledReason=!ready?"Link or verify an API account in Nexus options.":
+        g_RefreshListFetching?"The character list is being retrieved.":
         inspection.busy?"A character or roster request is already in progress.":nullptr;
     bool more=false;
     if(AlterEgo::RefreshUI::Row("characters",static_cast<std::time_t>(inspection.aggregate.Timestamp()),"selected character",
-        AlterEgo::RefreshUI::StatusState(inspection.kind),inspection.detail,!ready||inspection.busy,&more,label.c_str(),true,now,disabledReason)){
+        AlterEgo::RefreshUI::StatusState(inspection.kind),inspection.detail,!ready||inspection.busy||g_RefreshListFetching,&more,label.c_str(),true,now,disabledReason)){
         if(selected){
             if(const auto address=CharacterAddressFor(*selected))AlterEgo::GW2API::RequestCharacterRefreshAddresses({*address},demand);
             g_DetailsFetched=false;
@@ -16768,12 +16777,14 @@ void AddonRender() {
             if (g_RefreshListFetching &&
                 AlterEgo::GW2API::GetFetchStatus() != AlterEgo::FetchStatus::InProgress) {
                 g_RefreshListFetching = false;
-                // Prune any cached characters deleted in-game now that we have a
-                // fresh, authoritative roster. Only on success — an errored fetch
-                // must not wipe the cache.
-                const auto& names = AlterEgo::GW2API::GetPendingCharNames();
+                // The native roster owner reconciles identities. Never use
+                // stale picker rows when a new roster retrieval fails.
+                const auto names = AlterEgo::GW2API::GetPendingCharNames();
+                const auto rosterStatus=AlterEgo::GW2API::GetFetchStatus();
+                g_RefreshNames.clear();g_RefreshAddresses.clear();g_RefreshSelection.clear();
+                g_RefreshListNotice=rosterStatus==AlterEgo::FetchStatus::Error?
+                    AlterEgo::GW2API::GetFetchStatusMessage():std::string{};
                 if (!names.empty()) {
-                    g_RefreshNames.clear();g_RefreshAddresses.clear();
                     std::set<AlterEgo::CharacterOrder::Key> keys;
                     std::map<AlterEgo::CharacterOrder::Key,AlterEgo::CharacterIdentity::Address> addresses;
                     for(const auto& account:AlterEgo::NativeAccounts::Linked()){
@@ -16796,8 +16807,10 @@ void AddonRender() {
                         if(current&&AlterEgo::CharacterIdentity::SameAddress(*current,g_RefreshAddresses[i]))
                             g_RefreshSelection[i] = true;
                     }
-                    g_RefreshPopupOpen = true;
                 }
+                if(g_RefreshNames.empty()&&g_RefreshListNotice.empty())
+                    g_RefreshListNotice="No verified characters are available to refresh.";
+                g_RefreshPopupOpen=true;
             }
 
             // Character refresh selection popup: OpenPopup and BeginPopup share
@@ -16808,7 +16821,11 @@ void AddonRender() {
             }
             if (ImGui::BeginPopup("Select Characters to Refresh")) {
                 ImGui::Text("Select characters to refresh:");
+                if(!g_RefreshListNotice.empty())ImGui::TextWrapped("%s",g_RefreshListNotice.c_str());
                 ImGui::Spacing();
+                if(g_RefreshNames.empty()){
+                    if(RenderActionButton("Close"))ImGui::CloseCurrentPopup();
+                }else{
 
                 if (RenderActionButton("All")) {
                     for (size_t i = 0; i < g_RefreshSelection.size(); i++)
@@ -16874,9 +16891,12 @@ void AddonRender() {
                 ImGui::Spacing();
                 char btnLabel[64];
                 snprintf(btnLabel, sizeof(btnLabel), "Refresh Selected (%d)", selCount);
-                bool canRefresh = (selCount > 0);
-                if (!canRefresh) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-                if (RenderActionButton(btnLabel) && canRefresh) {
+                const bool busy=AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress;
+                const bool ready=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
+                const bool canRefresh=selCount>0&&!busy&&ready;
+                const char* why=!ready?"Link or verify an API account in Nexus options.":
+                    busy?"A character or roster request is already in progress.":"Select at least one verified character.";
+                if (AlterEgo::UI::AvailableActionButton(btnLabel,AlterEgo::UI::ButtonRole::Standard,canRefresh,why)) {
                     std::vector<AlterEgo::CharacterIdentity::Address> selected;
                     for(size_t i=0;i<g_RefreshAddresses.size();++i)if(g_RefreshSelection[i])
                         selected.push_back(g_RefreshAddresses[i]);
@@ -16888,11 +16908,11 @@ void AddonRender() {
                     g_RefreshPopupOpen = false;
                     ImGui::CloseCurrentPopup();
                 }
-                if (!canRefresh) ImGui::PopStyleVar();
                 ImGui::SameLine();
                 if (RenderActionButton("Cancel")) {
                     g_RefreshPopupOpen = false;
                     ImGui::CloseCurrentPopup();
+                }
                 }
 
                 ImGui::EndPopup();

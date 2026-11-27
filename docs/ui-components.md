@@ -29,7 +29,7 @@ This is the discoverable source of truth for developers and coding agents. Read 
 | Skill icons | RenderSkillIcon / RenderEditableSkillIcon → RenderSkillIconCore | dllmain.cpp |
 | Trait icons | RenderTraitIcon (read-only/editable) | dllmain.cpp |
 | Infusion totals | RenderInfusionTotals | InfusionTotalsView.h |
-| Refresh footer | RefreshUI::Row; UI::Button / UI::ActionButtonHeight | RefreshUI.h (standard button styling; do not change lifecycle) |
+| Refresh footer | RefreshUI::Row; UI::Button / UI::ActionButtonHeight | RefreshUI.h (standard button styling; both Refresh and optional ellipsis honor availability and explain disabled states) |
 | Gear summaries / ordering | Composable::Presentation::GearSlotSummary / SortedGearSlots | ComposableGearPresentation.h |
 | Equipment catalogs | RUNE_LIST / SIGIL_LIST / RELIC_LIST, GetSortedStatCombos | dllmain.cpp; reused in ComposableNativeEditor.h |
 

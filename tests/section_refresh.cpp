@@ -281,9 +281,10 @@ int case_section_refresh(int, char**) {
         const A::Key hero{"account-explain","Hero"};
         explain.Observe(hero.first,hero.second,34,true,now);
         auto waiting=explain.Inspect(hero,"Core",0,now+1);
-        assert(waiting.active&&!waiting.fresh&&!waiting.eligibility.due);
-        assert(waiting.eligibility.reason==W::LoginGrace&&waiting.eligibility.at==now+600);
-        assert(explain.Due(hero,"Core",0,0,now+600));
+        assert(waiting.active&&!waiting.fresh&&waiting.eligibility.due);
+        assert(waiting.eligibility.reason==W::Due&&waiting.eligibility.at==now+1);
+        assert(explain.Due(hero,"Core",0,0,now+1));
+        assert(!explain.Due(hero,"Core",now-100,0,now+1)); // existing data retains login grace
         auto attempt=explain.Begin(hero,"Core",now+600);
         explain.Failure(hero,"Core",attempt,"HTTP 503");
         auto retry=explain.Inspect(hero,"Core",0,now+601);
@@ -311,6 +312,8 @@ int case_section_refresh(int, char**) {
     assert(S::Visible(1)==(S::Core|S::Crafting|S::Builds));
     assert((S::Compare&S::Crafting)==0);
     scoped.Observe(key.first,key.second,34,true,now);
+    assert(S::Due(scoped,key,stamps,S::Visible(1),now+1,false)==S::Visible(1));
+    assert(S::Due(scoped,key,stamps,S::All,now+1,false)==S::All);
     stamps.fill(now-100);
     assert(!S::Due(scoped,key,stamps,S::All,now+10,true));
     scoped.Observe(key.first,key.second,35,true,now+20);
@@ -325,6 +328,22 @@ int case_section_refresh(int, char**) {
     assert(S::Oldest(stamps,S::Builds)==now+30);
     assert(S::Oldest(stamps,S::Compare)==now-100);
     assert(S::Due(scoped,key,stamps,S::Compare,now+31,true)==(S::Tabs|S::Physical));
+    // Missing detail bootstrap remains visible-demand scoped, honors retry,
+    // and an early offline result cannot cover pending logout reconciliation.
+    A::Tracker bootstrap;
+    bootstrap.Observe(key.first,key.second,34,true,now);
+    auto first=bootstrap.Begin(key,S::Name(S::Builds),now+1);
+    bootstrap.Failure(key,S::Name(S::Builds),first,"HTTP 503");
+    assert(!bootstrap.Due(key,S::Name(S::Builds),0,0,now+2,false));
+    assert(bootstrap.Due(key,S::Name(S::Builds),0,0,now+2,false,true));
+    bootstrap.Finish(now+10);
+    assert(bootstrap.Due(key,S::Name(S::Tabs),0,0,now+11,false));
+    auto initial=bootstrap.Begin(key,S::Name(S::Tabs),now+11);
+    bootstrap.Success(key,S::Name(S::Tabs),initial,now+12);
+    assert(!bootstrap.Fresh(key,S::Name(S::Tabs),now+12,now+13,false));
+    assert(!bootstrap.Due(key,S::Name(S::Tabs),now+12,0,now+609,false));
+    assert(bootstrap.Due(key,S::Name(S::Tabs),now+12,0,now+610,false));
+    assert(!bootstrap.Due(key,"Bags",0,0,now+11,false));
     // A coalesced response obtained before the grace cannot cover logout,
     // even if the supplement consumer joined after the grace expired.
     A::Tracker joinedActivity;

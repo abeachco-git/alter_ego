@@ -248,7 +248,14 @@ public:
         auto it=e.scopes.find(scope);const Scope s=it==e.scopes.end()?Scope{}:it->second;
         const auto attempt=std::max(externalAttempt,s.attempt);
         Eligibility result;
-        if(Active(k)){
+        // Bootstrap only independently verified character-detail scopes.
+        // Inventory and account-level activity policies are unchanged.
+        using namespace RefreshEngine::ScopeName;
+        const bool characterDetail=!k.second.empty()&&
+            (scope==Core||scope==Builds||scope==Tabs||scope==Physical||scope==Crafting);
+        if(characterDetail&&(success<=0||success>now)){
+            result={WaitReason::Due,now,true};
+        }else if(Active(k)){
             const bool missing=success<=0||success>now;
             const auto interval=RefreshEngine::ActivitySeconds(k.second.empty(),scope);
             const auto base=missing?e.login:std::max(e.login,success);

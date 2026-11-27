@@ -103,8 +103,15 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     if(disabled)UI::DisabledHint(disabledReason);
     if (moreClicked) {
         ImGui::SameLine(0.0f, 5.0f);
-        *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH));
-        if (ImGui::IsItemHovered())
+        if(disabled){
+            ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*0.5f);
+        }
+        *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH))&&!disabled;
+        if(disabled){
+            ImGui::PopStyleVar();ImGui::PopItemFlag();
+            UI::DisabledHint(disabledReason);
+        }else if(ImGui::IsItemHovered())
             UI::Hint("Choose one or more characters to refresh");
     }
 
