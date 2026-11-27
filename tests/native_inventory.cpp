@@ -14,6 +14,7 @@
 #include "../src/RefreshEngine.h"
 #include "../src/CommercePriceCore.h"
 #include "../src/AchievementCatalogCache.h"
+#include "../src/AchievementDefinitionOwner.h"
 #include <cassert>
 #include <filesystem>
 #include <chrono>
@@ -41,6 +42,37 @@ int case_native_inventory(int,char**){
         assert(Cache::VerifyAchievementIdIndex(root,stamp/1000000));
         assert(Cache::ReadNameIndexVerification(root)==stamp/1000000);
         std::filesystem::remove_all(path);
+    }
+    {
+        namespace D=AlterEgo::AchievementDefinitions;
+        const auto path=std::filesystem::temp_directory_path()/("ae-achievement-owner-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto root=path.string();RefreshEngine::ResetMetadata();
+        assert(Background::Workers().Open());
+        std::atomic<int> sends{0},published{0};
+        D::Configure(root,{},[&](const D::Ptr&){++published;});
+        const auto row=[](uint32_t id){return D::Json{{"id",id},{"name","Test"},{"description",""},{"requirement",""},{"type","Default"},{"flags",D::Json::array()},{"tiers",D::Json::array({{{"count",1},{"points",1}}})}};};
+        auto good=[&](const std::string&){++sends;return Skinventory::HttpResponse{200,D::Json::array({row(1)}).dump(),true};};
+        auto plan=D::MakePlan({1},true,true);
+        auto claim=RefreshEngine::ClaimIds(Cache::AchievementDefinitionWatermark,{1},true);
+        assert(claim->ids.size()==1);
+        assert(RefreshEngine::ClaimIds(Cache::AchievementDefinitionWatermark,{1},true)->ids.empty());
+        std::vector<D::Ptr> joined;
+        std::thread consumer([&]{joined=D::AcquirePlanned({1},plan,true,good);});
+        D::Fetch(plan,claim,good);consumer.join();claim.reset();
+        assert(joined.size()==1&&sends==1&&published==1);
+        // A later batch in the same full manual scan also reuses that observation.
+        assert(D::AcquirePlanned({1},plan,true,good).size()==1&&sends==1);
+        assert(D::MakePlan({1},false,true).empty());
+        auto wrong=[&](const std::string&){++sends;return Skinventory::HttpResponse{200,D::Json::array({row(2)}).dump(),true};};
+        assert(D::AcquirePlanned({1},D::MakePlan({1},true,true),true,wrong).empty());
+        assert(published==1&&Cache::ReadAchievementWatermarks(root).size()==1);
+        assert(RefreshEngine::InspectId(Cache::AchievementDefinitionWatermark,1).retrySeconds>0);
+        auto cancelled=[&](const std::string&){Background::Workers().RequestStop();return Skinventory::HttpResponse{500,"",true};};
+        try{D::AcquirePlanned({3},D::MakePlan({3},true,true),true,cancelled);assert(false);}catch(const Background::Cancelled&){}
+        auto info=RefreshEngine::InspectId(Cache::AchievementDefinitionWatermark,3);
+        assert(!info.pending&&info.retrySeconds==0);
+        Background::Workers().JoinAll();RefreshEngine::ResetMetadata();
+        D::Configure(root,{},{});std::filesystem::remove_all(path);
     }
     // Durable local character identity: rename, same-name reuse, swaps,
     // account isolation, complete observation, v1 migration and rollback.

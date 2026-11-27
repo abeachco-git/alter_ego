@@ -804,7 +804,7 @@ static void LoadAchDefCache();
 static void FetchAchGroups();
 static void FetchAchCategoryDefs(uint32_t catId, bool automatic = false);
 static void SendAchProgressQuery(const std::vector<uint32_t>& ids, bool automatic = false,
-                                 uint32_t categoryId = 0);
+                                 uint32_t categoryId = 0, const AlterEgo::AchievementNames::CategoryDemand* demand = nullptr);
 static void FetchPinnedAchDefs();
 static void FetchActiveSpecialEvent();
 
@@ -2450,7 +2450,7 @@ static void FetchAchCategoryDefs(uint32_t catId,bool automatic){
     RequestCategoryDefinitions(catId,!automatic);
 }
 
-static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic,uint32_t categoryId){
+static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic,uint32_t categoryId,const AlterEgo::AchievementNames::CategoryDemand* demand){
     if(!APIDefs||(automatic&&!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)))return;
     const std::string account=GetEffectiveAccountName();
     if(account.empty())return;
@@ -2459,6 +2459,7 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         if(account!=g_AchCachedAccount||g_AchProgressFetching)return;
+        if(demand&&!demand->Matches(account,credential.generation,g_AchDemandRevision,g_AchGroupsGeneration,g_AchSelectedCatId))return;
         if(automatic&&!AlterEgo::NativeProgress::AchievementDue(account,g_AchProgressCacheSavedAt,AchievementRefreshInterval()))return;
         generation=++g_AchRequestGeneration;g_AchProgressFetching=true;g_AchProgressQueryStartMs=NowMs();
         if(categoryId)g_AchCategoryRefreshAt[categoryId]=std::chrono::steady_clock::now();
@@ -2513,11 +2514,11 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
     },[generation]{std::lock_guard<std::recursive_mutex> lock(g_AchMutex);if(generation==g_AchRequestGeneration){g_AchProgressFetching=false;g_AchProgressQueryStartMs=0;g_AchRefreshError="Achievement refresh cancelled";}});
 }
 
-static void FinishAchNameIndex(const std::string& error) {
+static void FinishAchNameIndex(const std::string& error,bool cancelled=false) {
     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
     g_AchNameIndexStatus.clear();
     g_AchNameIndexError = error;
-    g_AchNameIndexRetryAt = error.empty() ? 0 : std::time(nullptr) + AlterEgo::AchievementNames::RetryInterval;
+    g_AchNameIndexRetryAt = (cancelled||error.empty()) ? 0 : std::time(nullptr) + AlterEgo::AchievementNames::RetryInterval;
     g_AchNameIndexFetching = false;
 }
 
@@ -2528,7 +2529,8 @@ static void FetchAchNameIndex(bool full = false) {
         g_AchNameIndexError.clear();
         g_AchNameIndexStatus = "Checking achievement IDs...";
     }
-    AlterEgo::Background::Workers().Launch([full]() {
+    const auto baseline=full?AlterEgo::AchievementDefinitions::SnapshotStamps():AlterEgo::AchievementDefinitions::Plan{};
+    AlterEgo::Background::Workers().Launch([full,baseline]() {
         namespace Names=AlterEgo::AchievementNames;
         namespace Definitions=AlterEgo::AchievementDefinitions;
         AlterEgo::ApiActivity::ReasonScope reason(full?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Visible);
@@ -2544,6 +2546,8 @@ static void FetchAchNameIndex(bool full = false) {
                 pending=Names::Plan(ids,g_AchNameIndex,full);
                 g_AchNameIndexStatus="Retrieving achievement definitions (0/"+std::to_string(pending.size())+")...";
             }
+            Definitions::Plan fullPlan;
+            if(full)for(auto id:pending){auto it=baseline.find(id);fullPlan.emplace(id,it==baseline.end()?0:it->second);}
             complete=true;
             for(size_t start=0;start<pending.size();start+=Names::BatchSize){
                 AlterEgo::Background::Checkpoint();
@@ -2553,7 +2557,7 @@ static void FetchAchNameIndex(bool full = false) {
                     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
                     batch=Names::Plan(batch,g_AchNameIndex,false);
                 }
-                if(!batch.empty()&&Definitions::Acquire(batch,full,full).size()!=batch.size())complete=false;
+                if(!batch.empty()&&(full?Definitions::AcquirePlanned(batch,fullPlan,true):Definitions::Acquire(batch,false,false)).size()!=batch.size())complete=false;
                 {
                     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
                     g_AchNameIndexStatus="Retrieving achievement definitions ("+std::to_string(end)+"/"+std::to_string(pending.size())+")...";
@@ -2570,7 +2574,7 @@ static void FetchAchNameIndex(bool full = false) {
             else error="Could not save achievement catalog verification; retry from the Achievements menu.";
         }else error="Achievement definition check incomplete; cached definitions retained. Retry from the Achievements menu.";
         FinishAchNameIndex(error);
-    }, [] { FinishAchNameIndex("Achievement definition check cancelled; cached definitions retained."); });
+    }, [] { FinishAchNameIndex("Achievement definition check cancelled; cached definitions retained.",true); });
 }
 static void FetchPinnedAchDefs() {
     std::vector<uint32_t> ids;
@@ -14458,7 +14462,7 @@ static void RenderAchievements() {
             if(!AlterEgo::AchievementDefinitions::Pending(ids)){
                 g_AchCategoryDemand.reset();
                 if(!ids.empty()&&(!demand.automatic||IsAchCategoryRefreshDue(demand.category)))
-                    SendAchProgressQuery(ids,demand.automatic,demand.category);
+                    SendAchProgressQuery(ids,demand.automatic,demand.category,&demand);
             }
         }
     }

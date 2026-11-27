@@ -98,6 +98,11 @@ inline Plan MakePlan(const std::vector<uint32_t>& ids,bool force,bool revalidate
     }
     return out;
 }
+inline Plan SnapshotStamps(){
+    Plan out;auto& s=Owner();std::lock_guard<std::mutex> lock(s.mutex);
+    for(const auto& [id,record]:s.records)out.emplace(id,record.stamp);
+    return out;
+}
 inline std::vector<uint32_t> Ids(const Plan& plan){
     std::vector<uint32_t> ids;ids.reserve(plan.size());
     for(const auto& [id,stamp]:plan){(void)stamp;ids.push_back(id);}
@@ -111,7 +116,8 @@ inline bool Pending(const std::vector<uint32_t>& ids){
     return false;
 }
 // Every actual producer shares the per-ID claim and durable publication path.
-inline void Fetch(const Plan& plan,const std::shared_ptr<RefreshEngine::IdBatch>& claim){
+template<class Send>
+inline void Fetch(const Plan& plan,const std::shared_ptr<RefreshEngine::IdBatch>& claim,Send&& send){
     auto& s=Owner();
     for(size_t start=0;start<claim->ids.size();start+=AchievementNames::BatchSize){
         Background::Checkpoint();
@@ -129,7 +135,7 @@ inline void Fetch(const Plan& plan,const std::shared_ptr<RefreshEngine::IdBatch>
         std::string idStr;
         for(auto id:batch){if(!idStr.empty())idStr+=",";idStr+=std::to_string(id);}
         const auto stamp=Cache::ReferenceSnapshotTime();
-        const auto reply=Skinventory::HttpClient::GetEx("https://api.guildwars2.com/v2/achievements?ids="+idStr);
+        const auto reply=send("https://api.guildwars2.com/v2/achievements?ids="+idStr);
         Background::Checkpoint();
         bool committed=false;
         try{
@@ -161,19 +167,21 @@ inline void Fetch(const Plan& plan,const std::shared_ptr<RefreshEngine::IdBatch>
         if(end<claim->ids.size())Background::Pause(std::chrono::milliseconds(200));
     }
 }
+inline Skinventory::HttpResponse SendApi(const std::string& url){return Skinventory::HttpClient::GetEx(url);}
 inline void Request(const std::vector<uint32_t>& ids,bool manual,bool revalidateStale,ApiActivity::Reason reason){
     const auto plan=MakePlan(ids,false,revalidateStale);
     auto claim=RefreshEngine::ClaimIds(Cache::AchievementDefinitionWatermark,Ids(plan),manual);
     if(claim->ids.empty())return;
-    Background::Workers().Launch([plan,claim,reason]{ApiActivity::ReasonScope scope(reason);Fetch(plan,claim);});
+    Background::Workers().Launch([plan,claim,reason]{ApiActivity::ReasonScope scope(reason);Fetch(plan,claim,SendApi);});
 }
 // Synchronous consumers join overlapping requests. A forced observation must
 // be newer than the admission baseline; a cached definition cannot prove rollover.
-inline std::vector<Ptr> Acquire(const std::vector<uint32_t>& ids,bool force,bool bypassCooldown){
-    const auto plan=MakePlan(ids,force,true);
+template<class Send>
+inline std::vector<Ptr> AcquirePlanned(const std::vector<uint32_t>& ids,const Plan& baseline,bool bypassCooldown,Send&& send){
+    Plan plan;for(auto id:ids){auto it=baseline.find(id);if(it!=baseline.end())plan.emplace(*it);}
     const auto wanted=Ids(plan);
     auto claim=RefreshEngine::ClaimIds(Cache::AchievementDefinitionWatermark,wanted,bypassCooldown);
-    if(!claim->ids.empty())Fetch(plan,claim);
+    if(!claim->ids.empty())Fetch(plan,claim,send);
     if(!RefreshEngine::WaitForIds(Cache::AchievementDefinitionWatermark,wanted,[]{return Background::Workers().Stopping();}))
         return {};
     Background::Checkpoint();
@@ -185,5 +193,11 @@ inline std::vector<Ptr> Acquire(const std::vector<uint32_t>& ids,bool force,bool
         out.push_back(it->second.def);
     }
     return out;
+}
+inline std::vector<Ptr> AcquirePlanned(const std::vector<uint32_t>& ids,const Plan& baseline,bool bypassCooldown){
+    return AcquirePlanned(ids,baseline,bypassCooldown,SendApi);
+}
+inline std::vector<Ptr> Acquire(const std::vector<uint32_t>& ids,bool force,bool bypassCooldown){
+    return AcquirePlanned(ids,MakePlan(ids,force,true),bypassCooldown);
 }
 } // namespace AlterEgo::AchievementDefinitions
