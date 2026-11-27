@@ -1853,8 +1853,9 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                         const auto item=ordered[i];const auto& x=groups.at(item);const auto& row=*x.first;
                         const auto name=row.name.empty()?"Item #"+std::to_string(item):row.name;
                         const auto meta=v->inventory.metadata.find(item);
+                        const auto current=GW2API::GetItemInfo(item);
                         ImGui::PushID(static_cast<int>(item));
-                        UI::CatalogRow(i,false,item,meta==v->inventory.metadata.end()?"":meta->second.icon,name,row.rarity,std::to_string(x.second),false,-1,[&]{if(!row.name.empty())UI::DetailTooltip(name.c_str(),meta==v->inventory.metadata.end()?nullptr:PlainItemDescription(meta->second.description).c_str(),GetSkinRarityColor(row.rarity));});
+                        UI::CatalogRow(i,false,item,current?current->icon_url:meta==v->inventory.metadata.end()?"":meta->second.icon,name,row.rarity,std::to_string(x.second),false,-1,[&]{if(!row.name.empty())UI::DetailTooltip(name.c_str(),meta==v->inventory.metadata.end()?nullptr:PlainItemDescription(meta->second.description).c_str(),GetSkinRarityColor(row.rarity));});
                         // Shared guild stock has no personal character-load targets.
                         ItemMenu(item,name,row.chat);ImGui::PopID();
                     });
@@ -2073,8 +2074,9 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         const auto& row=*group.locations.front();
         const auto name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
         const auto* meta=metaFor(group.id);
+        const auto current=GW2API::GetItemInfo(group.id);
         ImGui::PushID(static_cast<int>(group.id));
-        auto hit=UI::CatalogRow(rowIndex,on,group.id,meta?meta->icon:"",name,row.rarity,std::to_string(count),false,-1,[&]{if(!group.name.empty())UI::DetailTooltip(name.c_str(),meta?PlainItemDescription(meta->description).c_str():nullptr,GetSkinRarityColor(row.rarity));});
+        auto hit=UI::CatalogRow(rowIndex,on,group.id,current?current->icon_url:meta?meta->icon:"",name,row.rarity,std::to_string(count),false,-1,[&]{if(!group.name.empty())UI::DetailTooltip(name.c_str(),meta?PlainItemDescription(meta->description).c_str():nullptr,GetSkinRarityColor(row.rarity));});
         select(hit.clicked);
         const bool popup=ImGui::IsPopupOpen("##inventory_item_actions")||ImGui::IsItemClicked(ImGuiMouseButton_Right);
         std::map<std::pair<std::string,std::string>,int64_t> targets;

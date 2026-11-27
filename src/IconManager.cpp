@@ -7,6 +7,7 @@
 #include "GW2API.h"
 
 #include <windows.h>
+#include <wincrypt.h>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -14,19 +15,21 @@
 namespace AlterEgo {
 
 AddonAPI_t* IconManager::s_API = nullptr;
-std::unordered_map<uint32_t, Texture_t*> IconManager::s_IconCache;
-std::unordered_set<uint32_t> IconManager::s_DiskCheckedMissing;
-std::unordered_map<uint32_t, bool> IconManager::s_LoadingIcons;
-std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> IconManager::s_FailedIcons;
+std::unordered_map<std::string, Texture_t*> IconManager::s_IconCache;
+std::unordered_set<std::string> IconManager::s_DiskCheckedMissing;
+std::unordered_map<std::string, bool> IconManager::s_LoadingIcons;
+std::unordered_map<std::string, std::chrono::steady_clock::time_point> IconManager::s_FailedIcons;
 std::mutex IconManager::s_Mutex;
-std::unordered_map<uint32_t,int64_t> IconManager::s_NetworkFailures;
+std::unordered_map<std::string,int64_t> IconManager::s_NetworkFailures;
+std::unordered_map<uint32_t,std::string> IconManager::s_LatestKeys;
+std::unordered_map<uint32_t,std::pair<std::string,std::string>> IconManager::s_KeyMemo;
 std::vector<IconManager::QueuedRequest> IconManager::s_RequestQueue;
 std::chrono::steady_clock::time_point IconManager::s_LastRequestTime = std::chrono::steady_clock::now();
 std::string IconManager::s_IconsDir;
 std::thread IconManager::s_DownloadThread;
 std::condition_variable IconManager::s_QueueCV;
 std::atomic<bool> IconManager::s_StopWorker{true};
-std::vector<uint32_t> IconManager::s_ReadyQueue;
+std::vector<std::string> IconManager::s_ReadyQueue;
 
 
 static HMODULE GetEmbeddedResourceModule() {
@@ -73,7 +76,7 @@ void IconManager::Initialize(AddonAPI_t* api) {
     try {
         // Resolve the directory before either render or download can use it.
         GetIconsDir();
-        LoadNetworkFailures();
+        LoadArtworkState();
         s_StopWorker = false;
         s_DownloadThread = std::thread(DownloadWorker);
     } catch (...) {
@@ -104,6 +107,8 @@ void IconManager::Shutdown() {
     s_RequestQueue.clear();
     s_FailedIcons.clear();
     s_NetworkFailures.clear();
+    s_LatestKeys.clear();
+    s_KeyMemo.clear();
     s_API=nullptr;
 }
 
@@ -119,28 +124,72 @@ std::string IconManager::GetIconsDir() {
     return s_IconsDir;
 }
 
-std::string IconManager::GetIconFilePath(uint32_t id) {
-    std::stringstream ss;
-    ss << GetIconsDir() << "\\" << id << ".png";
-    return ss.str();
+std::string IconManager::GetIconFilePath(const std::string& key) {
+    return GetIconsDir()+"\\"+key+".png";
 }
-
-// Only load during initialization and persist on the owned artwork worker.
-void IconManager::LoadNetworkFailures() {
-    std::ifstream file(GetIconsDir()+"\\failed_icons.txt");
-    uint32_t id=0;int64_t stamp=0;const auto now=static_cast<int64_t>(std::time(nullptr));
+// SHA-256 of the exact validated URL. Existing Windows CryptoAPI/advapi32
+// supplies the digest; no network or host texture call under the state lock.
+static std::string ArtworkDigest(const std::string& url){
+    HCRYPTPROV provider=0;HCRYPTHASH hash=0;
+    if(!CryptAcquireContextA(&provider,nullptr,nullptr,PROV_RSA_AES,CRYPT_VERIFYCONTEXT))return {};
+    BYTE bytes[32]={};DWORD count=sizeof(bytes);
+    const bool ok=CryptCreateHash(provider,CALG_SHA_256,0,0,&hash)&&
+        CryptHashData(hash,reinterpret_cast<const BYTE*>(url.data()),static_cast<DWORD>(url.size()),0)&&
+        CryptGetHashParam(hash,HP_HASHVAL,bytes,&count,0)&&count==sizeof(bytes);
+    if(hash)CryptDestroyHash(hash);
+    CryptReleaseContext(provider,0);
+    if(!ok)return {};
+    static constexpr char hex[]="0123456789abcdef";
+    std::string out;out.reserve(64);
+    for(auto byte:bytes){out.push_back(hex[byte>>4]);out.push_back(hex[byte&15]);}
+    return out;
+}
+std::string IconManager::ResolveKey(uint32_t id,const std::string& url){
+    if(!id)return {};
+    if(EmbeddedResource(id))return std::to_string(id);
+    {
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        if(url.empty()){
+            const auto it=s_LatestKeys.find(id);
+            return ArtworkRequest::OfflineKey(id,it==s_LatestKeys.end()?std::string{}:it->second);
+        }
+        const auto it=s_KeyMemo.find(id);
+        if(it!=s_KeyMemo.end()&&it->second.first==url)return it->second.second;
+    }
+    if(!ExternalResource::ArtworkUrl(url))return {};
+    auto key=ArtworkRequest::VersionKey(id,ArtworkDigest(url));
+    if(!key.empty()){
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        s_KeyMemo[id]={url,key};
+    }
+    return key;
+}
+// Version-qualified negative entries and last successful offline pointers.
+// Legacy ID-only failures cannot suppress an exact new source URL.
+void IconManager::LoadArtworkState(){
+    std::ifstream file(GetIconsDir()+"\\artwork_state.txt");
+    const auto now=static_cast<int64_t>(std::time(nullptr));
     std::lock_guard<std::mutex> lock(s_Mutex);
-    s_NetworkFailures.clear();
-    while(file>>id>>stamp)if(id&&stamp>0&&stamp<=now&&now-stamp<NETWORK_RETRY_SECONDS)
-        s_NetworkFailures[id]=stamp;
+    s_NetworkFailures.clear();s_LatestKeys.clear();
+    std::string line;
+    while(std::getline(file,line)){
+        if(line.size()>150)continue;
+        std::istringstream in(line);char kind=0;std::string key,extra;int64_t value=0;
+        if(!(in>>kind>>key>>value)||(in>>extra))continue;
+        const auto owner=ArtworkRequest::VersionOwner(key);if(!owner)continue;
+        if(kind=='L'&&value==owner)s_LatestKeys[owner]=key;
+        else if(kind=='F'&&value>0&&value<=now&&now-value<NETWORK_RETRY_SECONDS)s_NetworkFailures[key]=value;
+    }
 }
-void IconManager::SaveNetworkFailures() {
-    std::unordered_map<uint32_t,int64_t> snapshot;
-    {std::lock_guard<std::mutex> lock(s_Mutex);snapshot=s_NetworkFailures;}
-    const auto path=GetIconsDir()+"\\failed_icons.txt",temporary=path+".part";
+void IconManager::SaveArtworkState(){
+    std::unordered_map<std::string,int64_t> failures;
+    std::unordered_map<uint32_t,std::string> latest;
+    {std::lock_guard<std::mutex> lock(s_Mutex);failures=s_NetworkFailures;latest=s_LatestKeys;}
+    const auto path=GetIconsDir()+"\\artwork_state.txt",temporary=path+".part";
     std::ofstream file(temporary,std::ios::trunc);
     if(!file)return;
-    for(const auto& [id,stamp]:snapshot)file<<id<<' '<<stamp<<'\n';
+    for(const auto& [id,key]:latest)file<<"L "<<key<<' '<<id<<'\n';
+    for(const auto& [key,stamp]:failures)file<<"F "<<key<<' '<<stamp<<'\n';
     file.close();
     if(!file.good()||!MoveFileExA(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
         DeleteFileA(temporary.c_str());
@@ -180,241 +229,141 @@ bool IconManager::DownloadToFile(const std::string& url, const std::string& file
     return true;
 }
 
-bool IconManager::LoadIconFromDisk(uint32_t id) {
-    if (!s_API) return false;
-
-    std::string filePath = GetIconFilePath(id);
-
-    // Try .png first, then .jpg
-    DWORD attrs = GetFileAttributesA(filePath.c_str());
-    if (attrs == INVALID_FILE_ATTRIBUTES) {
-        // Try .jpg extension
-        std::string jpgPath = filePath.substr(0, filePath.size() - 4) + ".jpg";
-        attrs = GetFileAttributesA(jpgPath.c_str());
-        if (attrs == INVALID_FILE_ATTRIBUTES) return false;
-        filePath = jpgPath;
+bool IconManager::LoadIconFromDisk(const std::string& key) {
+    if(!s_API||key.empty())return false;
+    std::string path=GetIconFilePath(key);
+    if(GetFileAttributesA(path.c_str())==INVALID_FILE_ATTRIBUTES){
+        path=path.substr(0,path.size()-4)+".jpg";
+        if(GetFileAttributesA(path.c_str())==INVALID_FILE_ATTRIBUTES)return false;
     }
-
-    std::stringstream ss;
-    ss << "AE_ICON_" << id;
-    std::string identifier = ss.str();
-
-    try {
-        Texture_t* tex = s_API->Textures_GetOrCreateFromFile(identifier.c_str(), filePath.c_str());
-        if (tex && tex->Resource) {
+    const std::string identifier="AE_ICON_"+key;
+    try{
+        Texture_t* tex=s_API->Textures_GetOrCreateFromFile(identifier.c_str(),path.c_str());
+        if(tex&&tex->Resource){
             std::lock_guard<std::mutex> lock(s_Mutex);
-            s_IconCache[id] = tex;
-            s_LoadingIcons.erase(id);
-            s_FailedIcons.erase(id);
+            s_IconCache[key]=tex;s_LoadingIcons.erase(key);s_FailedIcons.erase(key);
             return true;
         }
-    } catch (...) {}
+    }catch(...){}
     return false;
 }
-
-void IconManager::Tick() {
-    if (!s_API) return;
-
-    std::vector<uint32_t> ready;
-    {
+void IconManager::Tick(){
+    if(!s_API)return;
+    std::vector<std::string> ready;
+    {std::lock_guard<std::mutex> lock(s_Mutex);ready.swap(s_ReadyQueue);}
+    for(const auto& key:ready){
+        try{if(LoadIconFromDisk(key))continue;}catch(...){}
         std::lock_guard<std::mutex> lock(s_Mutex);
-        ready.swap(s_ReadyQueue);
-    }
-    for (uint32_t id : ready) {
-        try {
-            if(LoadIconFromDisk(id))continue;
-        } catch (...) {}
-        {
-            std::lock_guard<std::mutex> lock(s_Mutex);
-            s_LoadingIcons.erase(id);
-            s_FailedIcons[id] = std::chrono::steady_clock::now();
-        }
+        s_LoadingIcons.erase(key);s_FailedIcons[key]=std::chrono::steady_clock::now();
     }
 }
-
-Texture_t* IconManager::GetIcon(uint32_t id) {
-    if (!s_API) return nullptr;
-
+Texture_t* IconManager::GetByKey(const std::string& key,uint32_t embeddedId){
+    if(!s_API||key.empty())return nullptr;
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
-        auto it = s_IconCache.find(id);
-        if (it != s_IconCache.end()) {
-            if (it->second && it->second->Resource) {
-                return it->second;
-            }
+        auto it=s_IconCache.find(key);
+        if(it!=s_IconCache.end()){
+            if(it->second&&it->second->Resource)return it->second;
             s_IconCache.erase(it);
         }
     }
-
-    std::stringstream ss;
-    ss << "AE_ICON_" << id;
-    std::string identifier = ss.str();
-
-    Texture_t* tex = nullptr;
-    try {
-        tex = s_API->Textures_Get(identifier.c_str());
-    } catch (...) {
-        return nullptr;
+    const std::string identifier="AE_ICON_"+key;
+    Texture_t* tex=nullptr;
+    try{tex=s_API->Textures_Get(identifier.c_str());}catch(...){return nullptr;}
+    if(tex&&tex->Resource){
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        s_IconCache[key]=tex;s_LoadingIcons.erase(key);s_FailedIcons.erase(key);
+        return tex;
     }
-
-    if (tex) {
-        if (tex->Resource) {
+    if(embeddedId&&key==std::to_string(embeddedId)&&EmbeddedResource(embeddedId)){
+        if(auto* embedded=LoadEmbeddedIcon(s_API,embeddedId,identifier);embedded&&embedded->Resource){
             std::lock_guard<std::mutex> lock(s_Mutex);
-            s_IconCache[id] = tex;
-            s_LoadingIcons.erase(id);
-            s_FailedIcons.erase(id);
-            return tex;
-        }
-    }
-    // A missing Nexus texture does not mean a queued HTTP download failed.
-    // Only the queue owner or disk publication may release its loading marker.
-
-    // Built-in static icons win over network and disk lookup. The first frame
-    // can render these even before the GW2 profession API has responded.
-    if (Texture_t* embedded = LoadEmbeddedIcon(s_API, id, identifier)) {
-        if (embedded->Resource) {
-            std::lock_guard<std::mutex> lock(s_Mutex);
-            s_IconCache[id] = embedded;
-            s_LoadingIcons.erase(id);
-            s_FailedIcons.erase(id);
+            s_IconCache[key]=embedded;s_LoadingIcons.erase(key);s_FailedIcons.erase(key);
             return embedded;
         }
+        return nullptr; // linked resource wins even while Nexus is publishing
     }
-    // A verified embedded resource may still be awaiting Nexus publication.
-    // Never replace it from disk or the network just because it is not ready.
-    if(EmbeddedResource(id))return nullptr;
-    // Offline-first fallback for EVERY cached icon, not only class artwork:
-    // a saved item/skin/skill PNG is usable even if its metadata URL has not
-    // arrived yet. Avoid checking the same missing disk file each frame.
-    bool shouldCheckDisk = false;
-    {
+    bool check=false;
+    {std::lock_guard<std::mutex> lock(s_Mutex);check=s_DiskCheckedMissing.insert(key).second;}
+    if(check&&LoadIconFromDisk(key)){
         std::lock_guard<std::mutex> lock(s_Mutex);
-        shouldCheckDisk = s_DiskCheckedMissing.insert(id).second;
-    }
-    if (shouldCheckDisk && LoadIconFromDisk(id)) {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        auto found = s_IconCache.find(id);
-        if (found != s_IconCache.end()) return found->second;
+        auto it=s_IconCache.find(key);if(it!=s_IconCache.end())return it->second;
     }
     return nullptr;
 }
-
-Texture_t* IconManager::GetOrRequestIcon(uint32_t id, const std::string& iconUrl, bool priority) {
-    return ArtworkRequest::Resolve(id, iconUrl, priority, GetIcon, RequestIcon);
+Texture_t* IconManager::GetIcon(uint32_t id){
+    return GetByKey(ResolveKey(id,{}),id);
 }
-
-void IconManager::RequestIcon(uint32_t id, const std::string& iconUrl, bool priority) {
-    if (!s_API || s_StopWorker) return;
-    // Embedded assets can be resolved without a URL; this also avoids queuing
-    // needless downloads for the nine professions, elite specs, and UI glyphs.
-    if (GetIcon(id)||EmbeddedResource(id)) return;
-
+Texture_t* IconManager::GetOrRequestIcon(uint32_t id,const std::string& iconUrl,bool priority){
+    const auto key=ResolveKey(id,iconUrl);
+    return ArtworkRequest::Resolve(id,iconUrl,priority,
+        [&](uint32_t,const std::string&){return GetByKey(key,id);},
+        [&](uint32_t requested,const std::string& url,bool urgent){RequestKey(requested,key,url,urgent);});
+}
+void IconManager::RequestIcon(uint32_t id,const std::string& iconUrl,bool priority){
+    (void)GetOrRequestIcon(id,iconUrl,priority);
+}
+void IconManager::RequestKey(uint32_t id,const std::string& key,const std::string& url,bool priority){
+    if(!s_API||s_StopWorker||ArtworkRequest::VersionOwner(key)!=id||!id)return;
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
-        if (s_StopWorker || s_IconCache.find(id) != s_IconCache.end()) return;
-        if (s_LoadingIcons.find(id) != s_LoadingIcons.end()) {
-            // Already queued — but if we're now asking for it with priority,
-            // pull it forward in the queue.
-            if (priority) {
-                for (auto it = s_RequestQueue.begin(); it != s_RequestQueue.end(); ++it) {
-                    if (it->id == id) {
-                        std::rotate(s_RequestQueue.begin(),it,it+1);
-                        break;
-                    }
-                }
-            }
+        if(s_StopWorker||s_IconCache.count(key))return;
+        if(s_LoadingIcons.count(key)){
+            if(priority)for(auto it=s_RequestQueue.begin();it!=s_RequestQueue.end();++it)
+                if(it->key==key){std::rotate(s_RequestQueue.begin(),it,it+1);break;}
             return;
         }
-
         const auto now=static_cast<int64_t>(std::time(nullptr));
-        auto network=s_NetworkFailures.find(id);
+        auto network=s_NetworkFailures.find(key);
         if(network!=s_NetworkFailures.end()){
             if(now>=network->second&&now-network->second<NETWORK_RETRY_SECONDS)return;
             s_NetworkFailures.erase(network);
         }
-        auto failIt = s_FailedIcons.find(id);
-        if (failIt != s_FailedIcons.end()) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - failIt->second).count();
-            if (elapsed < RETRY_COOLDOWN_SEC) return;
-            s_FailedIcons.erase(failIt);
+        auto fail=s_FailedIcons.find(key);
+        if(fail!=s_FailedIcons.end()){
+            if(std::chrono::steady_clock::now()-fail->second<std::chrono::seconds(RETRY_COOLDOWN_SEC))return;
+            s_FailedIcons.erase(fail);
         }
-
-        s_LoadingIcons[id] = true;
-    }
-
-    // GetIcon has already attempted the disk cache on the render thread;
-    // callers which reach RequestIcon without GetIcon get that check too.
-    bool wasChecked = false;
-    {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        wasChecked = s_DiskCheckedMissing.count(id) != 0;
-    }
-    if (!wasChecked && LoadIconFromDisk(id)) return;
-
-    // No URL and no disk cache → nothing we can do right now. Clear the loading
-    // flag without marking failed so a later call (with URL) can retry.
-    if (iconUrl.empty()) {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        s_LoadingIcons.erase(id);
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        if(s_StopWorker) {s_LoadingIcons.erase(id);return;}
-        try {
-            QueuedRequest req{id,iconUrl};
-            if (priority)
-                s_RequestQueue.insert(s_RequestQueue.begin(),std::move(req));
-            else
-                s_RequestQueue.push_back(std::move(req));
-        } catch (...) {
-            s_LoadingIcons.erase(id);
-            return;
-        }
+        try{
+            s_LoadingIcons[key]=true;
+            QueuedRequest req{id,key,url};
+            if(priority)s_RequestQueue.insert(s_RequestQueue.begin(),std::move(req));
+            else s_RequestQueue.push_back(std::move(req));
+        }catch(...){s_LoadingIcons.erase(key);return;}
     }
     s_QueueCV.notify_one();
 }
-
-void IconManager::ProcessRequestQueue() {
-    uint32_t id = 0;
-    std::string iconUrl;
-
+void IconManager::ProcessRequestQueue(){
+    QueuedRequest request{};
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
-        if (s_RequestQueue.empty()) return;
-        id = s_RequestQueue.front().id;
-        iconUrl = std::move(s_RequestQueue.front().iconUrl);
-        s_RequestQueue.erase(s_RequestQueue.begin());
+        if(s_RequestQueue.empty())return;
+        request=std::move(s_RequestQueue.front());s_RequestQueue.erase(s_RequestQueue.begin());
     }
-
-    if (iconUrl.empty()) {
-        std::lock_guard<std::mutex> lock(s_Mutex);
-        s_LoadingIcons.erase(id);
-        s_FailedIcons[id] = std::chrono::steady_clock::now();
-        return;
-    }
-
-    try {
-        std::string filePath = GetIconFilePath(id);
-        if (DownloadToFile(iconUrl, filePath)) {
-            bool removed=false;
-            {std::lock_guard<std::mutex> lock(s_Mutex);
-             removed=s_NetworkFailures.erase(id)!=0;
-             if(!s_StopWorker)s_ReadyQueue.push_back(id);else s_LoadingIcons.erase(id);}
-            if(removed)SaveNetworkFailures();
-            return;
+    const auto& key=request.key;
+    try{
+        if(DownloadToFile(request.iconUrl,GetIconFilePath(key))){
+            {
+                std::lock_guard<std::mutex> lock(s_Mutex);
+                s_NetworkFailures.erase(key);
+                // An old queued response can populate only its own version.
+                // It must not replace the offline pointer after newer demand.
+                const auto current=s_KeyMemo.find(request.id);
+                if(current!=s_KeyMemo.end()&&current->second.second==key)s_LatestKeys[request.id]=key;
+                if(!s_StopWorker)s_ReadyQueue.push_back(key);else s_LoadingIcons.erase(key);
+            }
+            SaveArtworkState();return;
         }
-    } catch (...) {}
-
+    }catch(...){}
     bool failed=false;
-    {std::lock_guard<std::mutex> lock(s_Mutex);
-     s_LoadingIcons.erase(id);
-     if(!s_StopWorker&&!Background::Workers().Stopping()){
-         s_NetworkFailures[id]=static_cast<int64_t>(std::time(nullptr));failed=true;
-     }}
-    if(failed)SaveNetworkFailures();
+    {
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        s_LoadingIcons.erase(key);
+        if(!s_StopWorker&&!Background::Workers().Stopping()){
+            s_NetworkFailures[key]=static_cast<int64_t>(std::time(nullptr));failed=true;
+        }
+    }
+    if(failed)SaveArtworkState();
 }
 
 void IconManager::DownloadWorker() {
@@ -437,18 +386,13 @@ void IconManager::DownloadWorker() {
     }
 }
 
-bool IconManager::IsIconLoaded(uint32_t id) {
+bool IconManager::IsIconLoaded(uint32_t id){
+    const auto key=ResolveKey(id,{});
+    if(key.empty())return false;
     std::lock_guard<std::mutex> lock(s_Mutex);
-    if (s_IconCache.find(id) != s_IconCache.end()) return true;
-    if (s_LoadingIcons.find(id) != s_LoadingIcons.end()) return true;
-
-    auto failIt = s_FailedIcons.find(id);
-    if (failIt != s_FailedIcons.end()) {
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::steady_clock::now() - failIt->second).count();
-        if (elapsed < RETRY_COOLDOWN_SEC) return true;
-    }
-    return false;
+    if(s_IconCache.count(key)||s_LoadingIcons.count(key))return true;
+    auto fail=s_FailedIcons.find(key);
+    return fail!=s_FailedIcons.end()&&std::chrono::steady_clock::now()-fail->second<std::chrono::seconds(RETRY_COOLDOWN_SEC);
 }
 
 } // namespace AlterEgo

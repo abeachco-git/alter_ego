@@ -2790,7 +2790,7 @@ static void RenderProfessionEmblem(const std::string& profession, float size) {
     bool drew = false;
     if (GetProfessionBigIconId(profession)) {
         uint32_t profIconId = GetProfessionBigIconId(profession);
-        Texture_t* tex = AlterEgo::IconManager::GetIcon(profIconId);
+        Texture_t* tex = AlterEgo::IconManager::GetOrRequestIcon(profIconId,prof?prof->icon_big_url:"");
         if (tex && tex->Resource) {
             float ir = size - 8.0f;
             float ix = pos.x + (size - ir) * 0.5f;
@@ -2800,8 +2800,6 @@ static void RenderProfessionEmblem(const std::string& profession, float size) {
                 ImVec2(0, 0), ImVec2(1, 1),
                 IM_COL32(240, 226, 190, 230));
             drew = true;
-        } else {
-            AlterEgo::IconManager::RequestIcon(profIconId, prof ? prof->icon_big_url : "");
         }
     }
     if (!drew) {
@@ -2846,7 +2844,7 @@ static void RenderCharacterAvatar(const AlterEgo::Character& ch, float size) {
         const auto prof = AlterEgo::GW2API::GetProfessionInfo(ch.profession);
         if (GetProfessionIconId(ch.profession)) {
             uint32_t profIconId = GetProfessionIconId(ch.profession);
-            Texture_t* ptex = AlterEgo::IconManager::GetIcon(profIconId);
+            Texture_t* ptex = AlterEgo::IconManager::GetOrRequestIcon(profIconId,prof?prof->icon_url:"");
             if (ptex && ptex->Resource) {
                 // Tinted, inset slightly so the gold ring shows
                 float ir = r * 0.78f;
@@ -2856,8 +2854,6 @@ static void RenderCharacterAvatar(const AlterEgo::Character& ch, float size) {
                     ImVec2(0, 0), ImVec2(1, 1),
                     IM_COL32(230, 220, 180, 255), ir, ImDrawCornerFlags_All);
                 drewImage = true;
-            } else {
-                AlterEgo::IconManager::RequestIcon(profIconId, prof ? prof->icon_url : "");
             }
         }
     }
@@ -3061,7 +3057,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
         std::string rarity = "Basic";
 
         if (skin_info) {
-            display_id = eq->skin + 5000000;
+            display_id = AlterEgo::ArtworkRequest::SkinKey(eq->skin);
             icon_url = skin_info->icon_url;
             display_name = skin_info->name;
             rarity = skin_info->rarity;
@@ -3077,7 +3073,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
         // Use item rarity for border color (actual item, not skin)
         if (item_info) rarity = item_info->rarity;
 
-        Texture_t* tex = AlterEgo::IconManager::GetIcon(display_id);
+        Texture_t* tex = AlterEgo::IconManager::GetOrRequestIcon(display_id,icon_url);
         if (tex && tex->Resource) {
             ImVec4 borderColor = GetRarityColor(rarity);
             ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -3096,8 +3092,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                 ImGui::ColorConvertFloat4ToU32(col), 0.0f, 0, 1.0f);
             ImGui::Dummy(ImVec2(ICON_SIZE, ICON_SIZE));
 
-            if (!icon_url.empty())
-                AlterEgo::IconManager::RequestIcon(display_id, icon_url);
+
         }
 
         // Same infusion-count badge as the saved Build Library gear view.
@@ -3848,7 +3843,7 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
         ImGui::SetCursorScreenPos(pos);
     }
 
-    Texture_t* tex = AlterEgo::IconManager::GetIcon(trait_id + 2000000);
+    Texture_t* tex = AlterEgo::IconManager::GetOrRequestIcon(trait_id+2000000,tinfo?tinfo->icon_url:"");
     if (tex && tex->Resource) {
         if (selected) {
             dl->AddRect(
@@ -3878,8 +3873,7 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
             ImGui::ColorConvertFloat4ToU32(col));
         if (!editable) ImGui::Dummy(ImVec2(size, size));
 
-        if (tinfo && !tinfo->icon_url.empty())
-            AlterEgo::IconManager::RequestIcon(trait_id + 2000000, tinfo->icon_url);
+
     }
 
     if(ImGui::IsItemHovered()&&tinfo)RenderTraitTooltip(*tinfo);
@@ -4319,9 +4313,7 @@ static void RenderCharacterHeaderMetadata(const AlterEgo::Character& ch, float w
 
     auto drawPair = [&](uint32_t iconId, const char* url, const char* tooltip,
                         const std::string& value, bool separate) {
-        Texture_t* tex = AlterEgo::IconManager::GetIcon(iconId);
-        if ((!tex || !tex->Resource) && url)
-            AlterEgo::IconManager::RequestIcon(iconId, url);
+        Texture_t* tex = AlterEgo::IconManager::GetOrRequestIcon(iconId,url?url:"");
         const float imageWidth = tex && tex->Resource ? iconSize :
             ImGui::CalcTextSize(tooltip).x;
         const float pairWidth = imageWidth + 4.0f +
@@ -4491,7 +4483,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
             // with a fade-to-dark overlay on the right so trait icons stay readable.
             if (!specInfo->background_url.empty()) {
                 uint32_t bgKey = spec.spec_id + 1000000;
-                Texture_t* bgTex = AlterEgo::IconManager::GetIcon(bgKey);
+                Texture_t* bgTex = AlterEgo::IconManager::GetOrRequestIcon(bgKey,specInfo->background_url);
                 if (bgTex && bgTex->Resource && bgTex->Height > 0) {
                     // Zoom the banner and anchor it to the row's bottom-left.
                     // 15 specs ship with banners whose top ~66% is transparent
@@ -4540,7 +4532,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                     }
                     dl->PopClipRect();
                 } else {
-                    AlterEgo::IconManager::RequestIcon(bgKey, specInfo->background_url);
+                    // The shared resolver has already queued the exact source.
                 }
             }
 
@@ -7096,10 +7088,10 @@ static bool RenderSpecializationChoices(const std::string& profession,
         ImGui::PushID(static_cast<int>(sid));
         constexpr float size=22.0f;
         const uint32_t key=sid+1500000u;
-        auto* icon=AlterEgo::IconManager::GetIcon(key);
+        auto* icon=AlterEgo::IconManager::GetOrRequestIcon(key,si->icon_url);
         if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(size,size),ImVec2(0,0),ImVec2(1,1),
             allowed?ImVec4(1,1,1,1):ImVec4(1,1,1,0.4f));
-        else {ImGui::Dummy(ImVec2(size,size));if(!si->icon_url.empty())AlterEgo::IconManager::RequestIcon(key,si->icon_url);}
+        else ImGui::Dummy(ImVec2(size,size));
         ImGui::SameLine(0,8);ImGui::AlignTextToFramePadding();
         if(!allowed)ImGui::TextDisabled("%s",label.c_str());
         else if(ImGui::Selectable(label.c_str(),ids[slot]==sid)){next=sid;changed=true;}
@@ -8803,8 +8795,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         AlterEgo::GW2API::FetchItemDetailsAsync({iconItemId});
         const auto itemInfo = AlterEgo::GW2API::GetItemInfo(iconItemId);
         if (itemInfo && !itemInfo->icon_url.empty()) {
-            AlterEgo::IconManager::RequestIcon(iconItemId, itemInfo->icon_url);
-            tex = AlterEgo::IconManager::GetIcon(iconItemId);
+            tex = AlterEgo::IconManager::GetOrRequestIcon(iconItemId,itemInfo->icon_url);
         }
     }
 
@@ -9478,20 +9469,12 @@ static void RenderSavedBuildHeader(const AlterEgo::SavedBuild& build, bool showE
         Texture_t* iconTex = nullptr;
         if (eliteSpec) {
             uint32_t specIconId = 2000000u + eliteSpec->id;
-            iconTex = AlterEgo::IconManager::GetIcon(specIconId);
-            if (!iconTex || !iconTex->Resource) {
-                AlterEgo::IconManager::RequestIcon(specIconId,
-                    eliteSpec->profession_icon_big_url, /*priority=*/true);
-            }
+            iconTex = AlterEgo::IconManager::GetOrRequestIcon(specIconId,eliteSpec->profession_icon_big_url,true);
         }
         if (!iconTex || !iconTex->Resource) {
             uint32_t profIconId = GetProfessionBigIconId(build.profession);
-            iconTex = AlterEgo::IconManager::GetIcon(profIconId);
-            if (!iconTex || !iconTex->Resource) {
-                const auto prof = AlterEgo::GW2API::GetProfessionInfo(build.profession);
-                AlterEgo::IconManager::RequestIcon(profIconId,
-                    prof ? prof->icon_big_url : "", /*priority=*/true);
-            }
+            const auto prof = AlterEgo::GW2API::GetProfessionInfo(build.profession);
+            iconTex = AlterEgo::IconManager::GetOrRequestIcon(profIconId,prof?prof->icon_big_url:"",true);
         }
         if (iconTex && iconTex->Resource) {
             dl->AddImage(iconTex->Resource,
@@ -9680,7 +9663,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
             // native aspect, anchored left, fade to dark on the right).
             if (!specInfo->background_url.empty()) {
                 uint32_t bgKey = spec.spec_id + 1000000;
-                Texture_t* bgTex = AlterEgo::IconManager::GetIcon(bgKey);
+                Texture_t* bgTex = AlterEgo::IconManager::GetOrRequestIcon(bgKey,specInfo->background_url);
                 if (bgTex && bgTex->Resource && bgTex->Height > 0) {
                     // Zoom the banner and anchor it to the row's bottom-left.
                     // 15 specs ship with banners whose top ~66% is transparent
@@ -9729,7 +9712,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
                     }
                     dl->PopClipRect();
                 } else {
-                    AlterEgo::IconManager::RequestIcon(bgKey, specInfo->background_url);
+                    // The shared resolver has already queued the exact source.
                 }
             }
 
@@ -11902,9 +11885,7 @@ static void RenderBuildLibrary() {
             const char* iconUrl = GetProfessionIconUrl(profession);
             if (iconId && !iconUrl)
                 AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
-            Texture_t* tex = iconId ? AlterEgo::IconManager::GetIcon(iconId) : nullptr;
-            if (iconId && (!tex || !tex->Resource))
-                AlterEgo::IconManager::RequestIcon(iconId, iconUrl ? iconUrl : "", true);
+            Texture_t* tex = AlterEgo::IconManager::GetOrRequestIcon(iconId,iconUrl?iconUrl:"",true);
             AlterEgo::CompletionTheme::SectionHeading(displayName.c_str(), nullptr,
                 count.c_str(), AlterEgo::CompletionTheme::kAvailableText,
                 tex && tex->Resource ? tex->Resource : nullptr, 18.0f);
@@ -12017,20 +11998,12 @@ static void RenderBuildLibrary() {
             Texture_t* iconTex = nullptr;
             if (eliteSpecId) {
                 uint32_t specIconId = 2000000u + eliteSpecId;
-                iconTex = AlterEgo::IconManager::GetIcon(specIconId);
-                if (!iconTex || !iconTex->Resource) {
-                    AlterEgo::IconManager::RequestIcon(specIconId,
-                        eliteSpec ? eliteSpec->profession_icon_big_url : "", /*priority=*/true);
-                }
+                iconTex = AlterEgo::IconManager::GetOrRequestIcon(specIconId,eliteSpec?eliteSpec->profession_icon_big_url:"",true);
             }
             if (!iconTex || !iconTex->Resource) {
                 uint32_t profIconId = GetProfessionBigIconId(b.profession);
-                iconTex = AlterEgo::IconManager::GetIcon(profIconId);
-                if (!iconTex || !iconTex->Resource) {
-                    const auto prof = AlterEgo::GW2API::GetProfessionInfo(b.profession);
-                    AlterEgo::IconManager::RequestIcon(profIconId,
-                        prof ? prof->icon_big_url : "", /*priority=*/true);
-                }
+                const auto prof = AlterEgo::GW2API::GetProfessionInfo(b.profession);
+                iconTex = AlterEgo::IconManager::GetOrRequestIcon(profIconId,prof?prof->icon_big_url:"",true);
             }
             if (iconTex && iconTex->Resource) {
                 dl->AddImage(iconTex->Resource,
@@ -13442,7 +13415,7 @@ static void RenderSkinList(float width) {
                     bool selected = (g_SkinSelectedId == entry.id);
                     bool dim = hasOwnerData && !entry.owned;
 
-                    const uint32_t displayId=entry.id+5000000;
+                    const uint32_t displayId=AlterEgo::ArtworkRequest::SkinKey(entry.id);
                     const auto tmin=ImGui::GetCursorScreenPos();
                     const ImVec2 tmax(tmin.x+tileSize,tmin.y+tileSize);
                     const auto rc=GetSkinRarityColor(skin.rarity);
@@ -13485,7 +13458,7 @@ static void RenderSkinList(float width) {
             if(!skinOpt){ImGui::Dummy(ImVec2(0,rowH));return;}
             const auto& skin=*skinOpt;
             ImGui::PushID((int)entry.id);
-            const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,entry.id+5000000,skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1,[&]{RenderSkinEntityTooltip(skin.name,skin.rarity,hasOwnerData,entry.owned);});
+            const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,AlterEgo::ArtworkRequest::SkinKey(entry.id),skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1,[&]{RenderSkinEntityTooltip(skin.name,skin.rarity,hasOwnerData,entry.owned);});
             RenderSkinContextMenu(skin);ImGui::PopID();
             if(hit.clicked)selectSkin(skin);
         });
@@ -16804,13 +16777,11 @@ void AddonRender() {
                         if (profIconId) {
                             if (!profIconUrl)
                                 AlterEgo::GW2API::FetchProfessionInfoAsync(ch.profession);
-                            auto* tex = AlterEgo::IconManager::GetIcon(profIconId);
+                            auto* tex = AlterEgo::IconManager::GetOrRequestIcon(profIconId,profIconUrl?profIconUrl:"");
                             ImGui::SetCursorPos(ImVec2(cpos.x, cpos.y + yOff));
                             if (tex && tex->Resource) {
                                 ImGui::Image(tex->Resource, ImVec2(iconSz, iconSz));
                             } else {
-                                AlterEgo::IconManager::RequestIcon(profIconId,
-                                    profIconUrl ? profIconUrl : "");
                                 ImGui::Dummy(ImVec2(iconSz, iconSz));
                             }
                         } else {
@@ -16917,14 +16888,12 @@ void AddonRender() {
                                 const char* cIconUrl = GetCraftingIconUrl(disc);
                                 bool rendered = false;
                                 if (cIconId && cIconUrl) {
-                                    auto* tex = AlterEgo::IconManager::GetIcon(cIconId);
+                                    auto* tex = AlterEgo::IconManager::GetOrRequestIcon(cIconId,cIconUrl);
                                     if (tex && tex->Resource) {
                                         ImGui::Image(tex->Resource, ImVec2(craftIconSz, craftIconSz),
                                             ImVec2(0, 0), ImVec2(1, 1),
                                             ImVec4(1, 1, 1, iconAlpha));
                                         rendered = true;
-                                    } else {
-                                        AlterEgo::IconManager::RequestIcon(cIconId, cIconUrl);
                                     }
                                 }
                                 if (!rendered) ImGui::Dummy(ImVec2(craftIconSz, craftIconSz));

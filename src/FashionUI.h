@@ -303,8 +303,7 @@ static void RenderFashionSlot(const char* label, uint16_t skinID, const uint16_t
     if (!skinID) ImGui::TextDisabled("(none)");
     else {
         if (skin && !skin->icon_url.empty()) {
-            AlterEgo::IconManager::RequestIcon(skinID, skin->icon_url);
-            const auto* tex = AlterEgo::IconManager::GetIcon(skinID);
+            const auto* tex = AlterEgo::IconManager::GetOrRequestIcon(AlterEgo::ArtworkRequest::SkinKey(skinID),skin->icon_url);
             if (tex && tex->Resource) {
                 ImGui::Image(tex->Resource, ImVec2(22, 22));
                 AlterEgo::UI::EntityContext("##fashion_skin_icon",[&]{CopyEntityMenu(skin->name,AlterEgo::LINK_SKIN,skinID);});

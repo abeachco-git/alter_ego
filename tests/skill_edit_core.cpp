@@ -265,9 +265,18 @@ int case_skill_edit_core(int,char**) {
     const auto skillKey=SkillKey(28085),legendKey=SkillKey(28085),petKey=PetKey(4);
     assert(skillKey==5028085&&legendKey==skillKey&&petKey==9400004);
     assert(!SkillKey(0)&&!SkillKey(UINT32_MAX)&&!PetKey(0)&&!PetKey(256));
+    assert(SkinKey(28085)!=skillKey&&SkinKey(4)!=petKey&&!SkinKey(0)&&!SkinKey(UINT32_MAX));
+    const auto oldKey=VersionKey(skillKey,std::string(64,'a')),newKey=VersionKey(skillKey,std::string(64,'b'));
+    assert(oldKey!=newKey&&VersionOwner(oldKey)==skillKey&&VersionOwner(newKey)==skillKey);
+    assert(VersionOwner("0_"+std::string(64,'a'))==0&&VersionOwner("4294967296_"+std::string(64,'a'))==0);
+    assert(VersionKey(skillKey,"../bad").empty()&&!VersionOwner("42_../bad"));
+    assert(OfflineKey(skillKey,oldKey)==oldKey&&OfflineKey(petKey,oldKey)==std::to_string(petKey));
+    std::set<std::string> failed{oldKey},ready{oldKey};
+    assert(!failed.count(newKey)&&!ready.count(newKey));
+    assert(ready.count(oldKey)); // late old publication cannot satisfy new URL
     int texture=1,lookups=0,requests=0;uint32_t requestedKey=0;bool requestedPriority=false;
     uint32_t cachedKey=skillKey;
-    auto lookup=[&](uint32_t key)->int*{++lookups;return key==cachedKey?&texture:nullptr;};
+    auto lookup=[&](uint32_t key,const std::string&)->int*{++lookups;return key==cachedKey?&texture:nullptr;};
     auto request=[&](uint32_t key,const std::string& url,bool priority){
         assert(url=="artwork");++requests;requestedKey=key;requestedPriority=priority;
     };

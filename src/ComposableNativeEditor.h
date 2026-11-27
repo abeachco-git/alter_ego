@@ -735,8 +735,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             const uint32_t id = item.value("item_id", uint32_t(0));
             const auto info = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
             if (info && !info->icon_url.empty()) {
-                AlterEgo::IconManager::RequestIcon(id, info->icon_url);
-                Texture_t* tex = AlterEgo::IconManager::GetIcon(id);
+                Texture_t* tex = AlterEgo::IconManager::GetOrRequestIcon(id,info->icon_url);
                 if (tex && tex->Resource) {
                     ImGui::Image(tex->Resource, ImVec2(40, 40));
                     ImGui::SameLine();

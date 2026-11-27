@@ -10,6 +10,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <utility>
 #include "nexus/Nexus.h"
 #include "ArtworkRequest.h"
 
@@ -25,7 +26,7 @@ public:
     static void Shutdown();
 
     // Get icon texture for a given identifier (returns nullptr if not loaded yet)
-    static Texture_t* GetIcon(uint32_t id);
+    static Texture_t* GetIcon(uint32_t id); // offline/embedded only; use GetOrRequestIcon when URL is known
 
     // Shared offline-first artwork resolution for callers with a metadata URL.
     static Texture_t* GetOrRequestIcon(uint32_t id, const std::string& iconUrl,
@@ -48,21 +49,26 @@ private:
 
     // Disk cache helpers
     static std::string GetIconsDir();
-    static std::string GetIconFilePath(uint32_t id);
+    static std::string GetIconFilePath(const std::string& key);
+    static std::string ResolveKey(uint32_t id,const std::string& url);
+    static Texture_t* GetByKey(const std::string& key,uint32_t embeddedId=0);
+    static void RequestKey(uint32_t id,const std::string& key,const std::string& url,bool priority);
     static bool DownloadToFile(const std::string& url, const std::string& filePath);
-    static bool LoadIconFromDisk(uint32_t id);
-    static void LoadNetworkFailures();
-    static void SaveNetworkFailures();
+    static bool LoadIconFromDisk(const std::string& key);
+    static void LoadArtworkState();
+    static void SaveArtworkState();
 
     static AddonAPI_t* s_API;
-    static std::unordered_map<uint32_t, Texture_t*> s_IconCache;
+    static std::unordered_map<std::string, Texture_t*> s_IconCache;
     // One-time negative disk lookups prevent filesystem stats on every frame.
-    static std::unordered_set<uint32_t> s_DiskCheckedMissing;
-    static std::unordered_map<uint32_t, bool> s_LoadingIcons;
-    static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> s_FailedIcons;
+    static std::unordered_set<std::string> s_DiskCheckedMissing;
+    static std::unordered_map<std::string, bool> s_LoadingIcons;
+    static std::unordered_map<std::string, std::chrono::steady_clock::time_point> s_FailedIcons;
     // Texture publication has a short session cooldown; failed HTTP artwork
     // has a separate durable seven-day retry policy.
-    static std::unordered_map<uint32_t,int64_t> s_NetworkFailures;
+    static std::unordered_map<std::string,int64_t> s_NetworkFailures;
+    static std::unordered_map<uint32_t,std::string> s_LatestKeys;
+    static std::unordered_map<uint32_t,std::pair<std::string,std::string>> s_KeyMemo;
     static constexpr int64_t NETWORK_RETRY_SECONDS=7LL*86400;
     static const int RETRY_COOLDOWN_SEC = 300;
     static std::mutex s_Mutex;
@@ -71,7 +77,7 @@ private:
     // Rate limiting
     struct QueuedRequest {
         uint32_t id;
-        std::string iconUrl;
+        std::string key,iconUrl;
     };
     static std::vector<QueuedRequest> s_RequestQueue;
     static std::chrono::steady_clock::time_point s_LastRequestTime;
@@ -83,7 +89,7 @@ private:
     static std::atomic<bool> s_StopWorker;
 
     // Ready queue: items downloaded to disk, waiting for render-thread texture load
-    static std::vector<uint32_t> s_ReadyQueue;
+    static std::vector<std::string> s_ReadyQueue;
 };
 
 } // namespace AlterEgo
