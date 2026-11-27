@@ -1072,22 +1072,18 @@ namespace AlterEgo {
                 }
             }
 
-            if (build.contains("legends") && build["legends"].is_array()) {
-                bt.legends_known = true;
-                int i = 0;
-                for (const auto& leg : build["legends"]) {
-                    if (i >= 2) break;
-                    bt.legends.terrestrial[i] = leg.is_null() ? "" : leg.get<std::string>();
-                    i++;
-                }
-            }
-            if (build.contains("aquatic_legends") && build["aquatic_legends"].is_array()) {
-                bt.legends_known = true;
-                int i = 0;
-                for (const auto& leg : build["aquatic_legends"]) {
-                    if (i >= 2) break;
-                    bt.legends.aquatic[i] = leg.is_null() ? "" : leg.get<std::string>();
-                    i++;
+            // API:2/characters/:id/buildtabs documents explicit null legend
+            // positions as unselected. Omitted elements/arrays and empty
+            // strings are not equivalent evidence. Pet nulls remain unknown.
+            for(int env=0;env<2;++env){
+                const char* key=env?"aquatic_legends":"legends";
+                if(!build.contains(key)||!build[key].is_array())continue;
+                bt.legends_known=true;
+                auto* pair=env?bt.legends.aquatic:bt.legends.terrestrial;
+                for(size_t i=0;i<2&&i<build[key].size();++i){
+                    const auto slot=SkillEdit::ReadRetrievedLegendSlot(build[key][i],false);
+                    pair[i]=slot.identifier;
+                    if(slot.explicitlyEmpty)bt.legends_empty_slots|=static_cast<uint8_t>(1u<<(env*2+i));
                 }
             }
         }
@@ -2170,7 +2166,14 @@ namespace AlterEgo {
                     bj["skills"] = skillBarToJson(bt.terrestrial_skills);
                     bj["aquatic_skills"] = skillBarToJson(bt.aquatic_skills);
                     if(bt.pets_known)bj["pets"]={bt.pets.terrestrial[0],bt.pets.terrestrial[1],bt.pets.aquatic[0],bt.pets.aquatic[1]};
-                    if(bt.legends_known)bj["legends"]={bt.legends.terrestrial[0],bt.legends.terrestrial[1],bt.legends.aquatic[0],bt.legends.aquatic[1]};
+                    if(bt.legends_known){
+                        auto values=json::array();
+                        for(int i=0;i<4;++i){
+                            const auto& id=i<2?bt.legends.terrestrial[i]:bt.legends.aquatic[i-2];
+                            values.push_back(SkillEdit::EncodeCachedLegendSlot(id,(bt.legends_empty_slots&(1u<<i))!=0));
+                        }
+                        bj["legends"]=std::move(values);
+                    }
                     if(bt.weapons_known||!bt.weapons.empty())bj["weapons"]=bt.weapons;
 
                     bt_arr.push_back(bj);
@@ -2323,13 +2326,21 @@ namespace AlterEgo {
                             if (bj.contains("aquatic_skills"))
                                 bt.aquatic_skills = parseSkillBarJson(bj["aquatic_skills"]);
 
-                            if(bj.contains("pets")&&bj["pets"].is_array()&&bj["pets"].size()==4) {
+                            if(bj.contains("pets")&&bj["pets"].is_array()) {
                                 bt.pets_known=true;
-                                for(int i=0;i<2;++i){bt.pets.terrestrial[i]=bj["pets"][i].get<uint32_t>();bt.pets.aquatic[i]=bj["pets"][i+2].get<uint32_t>();}
+                                for(size_t i=0;i<4&&i<bj["pets"].size();++i){
+                                    const auto slot=SkillEdit::JsonDisplaySlot(bj["pets"][i]);
+                                    if(i<2)bt.pets.terrestrial[i]=slot.id;else bt.pets.aquatic[i-2]=slot.id;
+                                }
                             }
-                            if(bj.contains("legends")&&bj["legends"].is_array()&&bj["legends"].size()==4) {
+                            if(bj.contains("legends")&&bj["legends"].is_array()) {
                                 bt.legends_known=true;
-                                for(int i=0;i<2;++i){bt.legends.terrestrial[i]=bj["legends"][i].get<std::string>();bt.legends.aquatic[i]=bj["legends"][i+2].get<std::string>();}
+                                for(size_t i=0;i<4&&i<bj["legends"].size();++i){
+                                    const auto slot=SkillEdit::ReadRetrievedLegendSlot(bj["legends"][i],true);
+                                    auto& id=i<2?bt.legends.terrestrial[i]:bt.legends.aquatic[i-2];
+                                    id=slot.identifier;
+                                    if(slot.explicitlyEmpty)bt.legends_empty_slots|=static_cast<uint8_t>(1u<<i);
+                                }
                             }
                             if(bj.contains("weapons")&&bj["weapons"].is_array()) {
                                 bt.weapons_known=true;bt.weapons=bj["weapons"].get<std::vector<uint32_t>>();
@@ -2447,8 +2458,8 @@ namespace AlterEgo {
     }
 
     std::string GW2API::EncodeSavedBuildToChatLink(const SavedBuild& b) {
-        if((b.profession=="Ranger"&&(b.CompanionSlots(false).unresolved||b.CompanionPayload(false).size()>4))||
-           (b.profession=="Revenant"&&(b.CompanionSlots(true).unresolved||b.CompanionPayload(true).size()>4)))return {};
+        if((b.profession=="Ranger"&&(!SkillEdit::CompanionPairsRepresentable(b.CompanionSlots(false))||b.CompanionPayload(false).size()>4))||
+           (b.profession=="Revenant"&&(!SkillEdit::CompanionPairsRepresentable(b.CompanionSlots(true))||b.CompanionPayload(true).size()>4)))return {};
         const auto link=ProjectDerivedBuildLink(b,
             [](uint32_t specId,int tier,int traitId)->std::optional<int>{
                 if(!traitId)return 0;
@@ -2607,8 +2618,8 @@ namespace AlterEgo {
 
         const std::array<uint32_t,4> pets={b.pets.terrestrial[0],b.pets.terrestrial[1],b.pets.aquatic[0],b.pets.aquatic[1]};
         const std::array<uint32_t,4> legends={b.legend_codes[0],b.legend_codes[1],b.legend_codes[2],b.legend_codes[3]};
-        if(b.pets_recorded||Composable::HasCompanionSelection(pets))bj["pets"]=b.CompanionPayload(false);
-        if(b.legends_recorded||Composable::HasCompanionSelection(legends))bj["legend_codes"]=b.CompanionPayload(true);
+        if(b.pets_recorded||b.pets_source_slots.is_array()||Composable::HasCompanionSelection(pets))bj["pets"]=b.CompanionPayload(false);
+        if(b.legends_recorded||b.legends_source_slots.is_array()||Composable::HasCompanionSelection(legends))bj["legend_codes"]=b.CompanionPayload(true);
         if(b.inactive_rev_skills)bj["inactive_rev_skills"]=*b.inactive_rev_skills;
         if(b.rev_active_palettes)bj["rev_active_palettes"]=*b.rev_active_palettes;
         if (!b.weapons.empty()) bj["weapons"] = b.weapons;
@@ -3475,7 +3486,15 @@ namespace AlterEgo {
                     capture.profession, error)) return false;
             if(Composable::IsCompanionKind(kind)){
                 json merged;
-                if(!Composable::MergeCapturedCompanion(kind,existing->data,selected->second,merged,error))return false;
+                uint8_t explicitEmpties=0;
+                // This entry point captures a retrieved character tab.
+                // Only its new sparse legend payload can assert explicit API
+                // nulls; no historic padded array is promoted to live evidence.
+                if(kind=="legends"&&capture.legends_source_slots.is_array()){
+                    const auto slots=SkillEdit::JsonCompanionSlots(capture.legends_source_slots,255);
+                    for(size_t i=0;i<4;++i)if(slots.Known(i)&&!slots.values[i])explicitEmpties|=static_cast<uint8_t>(1u<<i);
+                }
+                if(!Composable::MergeCapturedCompanion(kind,existing->data,selected->second,merged,error,explicitEmpties))return false;
                 return Composable::UpdateShared(doc,kind,componentId,merged,error);
             }
             auto replacement=Composable::ReplaceCapturedFieldsPreservingExtensions(existing->data,selected->second);

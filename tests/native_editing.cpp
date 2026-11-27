@@ -15,6 +15,10 @@ int case_native_editing(int,char**) {
         assert(patched.at("pets")==Json({4,8,6,7,999})&&patched.at("future")==42);
         const auto expanded=PatchDraft(stored,before,Json{{"pets",{4,5,0,9}}});
         assert(expanded.at("pets")==Json({4,5,0,9,999}));
+        const auto sparse=PatchDraft(stored,before,Json{{"pets",Json::array({4,5,nullptr,9})}});
+        assert(sparse.at("pets")==Json({4,5,6,9,999}));
+        const auto newSparse=PatchDraft(Json{{"pets",{4}}},Json{{"pets",{4}}},Json{{"pets",Json::array({4,nullptr,nullptr,9})}});
+        assert(newSparse.at("pets")==Json::array({4,nullptr,nullptr,9}));
         const auto shortStored=PatchDraft(Json{{"legend_codes",{4}}},Json{{"legend_codes",{4,5}}},Json{{"legend_codes",{4,8}}});
         assert(shortStored.at("legend_codes")==Json({4,8}));
         RevenantActivePaletteEvidence evidence{};
@@ -213,6 +217,14 @@ int case_native_editing(int,char**) {
         assert(!C::MergeCapturedCompanion(kind,saved,Json{{field,{2,0,0,0}}},result,error));
         assert(C::MergeCapturedCompanion(kind,saved,Json{{field,{6,0,0,7}}},result,error));
         assert(result[field]==Json::array({6,2,3,7,987})&&result["future"]==7);
+        Json sparseCapture;
+        assert(C::MergeCapturedCompanion(kind,Json{{field,{1}}},Json{{field,Json::array({nullptr,nullptr,nullptr,7})}},sparseCapture,error));
+        assert(sparseCapture[field]==Json::array({1,nullptr,nullptr,7}));
+        if(kind=="legends"){
+            assert(C::MergeCapturedCompanion(kind,saved,Json{{field,Json::array({nullptr,0,nullptr,"LegendFuture"})}},sparseCapture,error,2));
+            assert(sparseCapture[field]==Json::array({5,0,3,4,987}));
+            assert(!C::MergeCapturedCompanion(kind,saved,Json{{field,Json::array({nullptr,"LegendFuture"})}},sparseCapture,error,2));
+        }
         assert(C::UpdateShared(graph,kind,shared,result,error));
         assert(C::Resolve(graph,*C::FindLoadout(graph,"b"),raw,error)&&raw[field]==result[field]);
         assert(!C::CaptureProfessionCompatible(graph,kind,shared,"Guardian",error));

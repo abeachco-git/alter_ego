@@ -109,6 +109,7 @@ struct CompanionProjection {
 template<class Json> CompanionProjection JsonCompanionSlots(const Json& array,uint32_t maximum) {
     CompanionProjection result;
     if(array.is_array())for(std::size_t i=0;i<4&&i<array.size();++i){
+        if(array[i].is_null())continue; // explicit gap, not a verified empty choice
         const auto slot=JsonDisplaySlot(array[i],maximum);
         if(slot.evidence==SlotEvidence::Unrecorded)result.unresolved|=static_cast<uint8_t>(1u<<i);
         else result.Set(i,slot.id);
@@ -121,16 +122,66 @@ template<class Json> uint8_t RecordedCompanionSlots(const Json& array,uint32_t m
 // Keep trailing and unrepresentable source values until explicitly replaced.
 template<class Json> void SetCompanionPayloadSlot(Json& payload,std::size_t i,uint32_t id) {
     if(!payload.is_array()||i>=4)return;
-    while(payload.size()<=i)payload.push_back(0);
+    while(payload.size()<=i)payload.push_back(nullptr);
     payload[i]=id;
 }
 template<class Json> Json OverlayCompanionSlots(const Json& original,const std::array<uint32_t,4>& values,uint32_t maximum) {
-    if(!original.is_array())return Json(values);
-    Json result=original;
-    const auto prior=JsonCompanionSlots(original,maximum);
+    Json result=original.is_array()?original:Json::array();
+    const auto prior=JsonCompanionSlots(result,maximum);
     for(std::size_t i=0;i<values.size();++i)
         if(values[i]!=prior.values[i])SetCompanionPayloadSlot(result,i,values[i]);
     return result;
+}
+// Existing typed character-cache legend columns store strings. An internal
+// control-prefixed marker (invalid as an API identifier) distinguishes a
+// newly observed explicit null from old empty-string defaults without
+// migrating the rebuildable cache. It is never exposed in the Library.
+inline constexpr const char* CachedEmptyLegend="\x01" "AE_EMPTY_LEGEND";
+struct RetrievedLegendSlot {std::string identifier;bool explicitlyEmpty=false;};
+template<class Json> RetrievedLegendSlot ReadRetrievedLegendSlot(const Json& value,bool cached){
+    if(value.is_null())return {{},!cached}; // API documents null as empty, cache null is missing
+    if(!value.is_string())return {};
+    const auto name=value.template get<std::string>();
+    if(cached&&name==CachedEmptyLegend)return {{},true};
+    if(name.size()>256||std::any_of(name.begin(),name.end(),[](unsigned char c){return c<32||c==127;}))return {};
+    return {name,false};
+}
+inline std::string EncodeCachedLegendSlot(const std::string& identifier,bool explicitlyEmpty){
+    return explicitlyEmpty&&identifier.empty()?std::string(CachedEmptyLegend):identifier;
+}
+// Build a sparse payload from retrieved evidence. Unknown interior
+// slots remain null; nonempty unmapped native legend identifiers are preserved
+// verbatim as unresolved strings, not manufactured numeric protocol codes.
+template<class Json,class LegendCode> Json CaptureCompanionPayload(
+    const std::array<uint32_t,4>& pets,const std::array<std::string,4>& legends,
+    bool legend,LegendCode code,uint8_t legendEmpty=0){
+    Json result=Json::array();
+    for(size_t i=0;i<4;++i){
+        if(legend){
+            if(legends[i].empty()){
+                if(legendEmpty&(1u<<i))SetCompanionPayloadSlot(result,i,0);
+                continue;
+            }
+            const auto id=code(legends[i]);
+            if(id)SetCompanionPayloadSlot(result,i,id);
+            else{
+                while(result.size()<=i)result.push_back(nullptr);
+                result[i]=legends[i];
+            }
+        }else if(pets[i])SetCompanionPayloadSlot(result,i,pets[i]);
+    }
+    return result;
+}
+// The GW2 wire format has no missing-slot marker. Reject a partially
+// recorded pair or unresolved selection instead of manufacturing an empty.
+// Entirely unrecorded environments retain the existing optional wire default.
+inline bool CompanionPairsRepresentable(const CompanionProjection& slots){
+    if(slots.unresolved)return false;
+    for(size_t env=0;env<2;++env){
+        const auto pair=(slots.recorded>>(2*env))&3u;
+        if(pair==1||pair==2)return false;
+    }
+    return true;
 }
 inline const char* CompanionMissingLabel(const CompanionProjection& slots,std::size_t i) {
     return slots.Unresolved(i)?"Unresolved selection":slots.Known(i)?"Empty":"Not recorded";

@@ -1003,7 +1003,12 @@ int case_database_core(int, char**) {
         auto stale=data;stale["last_updated"]=99;
         assert(!Cache::WriteCharacters(root,stale));assert(Cache::ReadCharacters(root)==read);
         auto updated=data;updated["last_updated"]=101;updated["characters"][0]["equipment"][0]["infusions"]={99};
+        // Existing typed cache columns must preserve the reserved explicit
+        // empty marker distinctly from legacy empty strings and raw IDs.
+        const std::string emptyLegend="\x01" "AE_EMPTY_LEGEND";
+        updated["characters"][0]["build_tabs"][0]["legends"]=J::array({"Legend2",emptyLegend,"","LegendFuture"});
         assert(Cache::WriteCharacters(root,updated));
+        assert(Cache::ReadCharacters(root)->at("characters")[0]["build_tabs"][0]["legends"]==updated["characters"][0]["build_tabs"][0]["legends"]);
         assert(Cache::ReadCharacters(root)->at("characters")[0]["equipment"][0]["infusions"]==J::array({99}));
         DB::Connection db(paths.Cache().u8string(),DB::Connection::OpenMode::Existing);
         assert(db.Scalar("SELECT count(*) FROM character_rows")==3);

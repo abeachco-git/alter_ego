@@ -3962,10 +3962,25 @@ static void RenderSkillBarPreview(const std::array<AlterEgo::SkillEdit::DisplayS
 static bool DecodeBuildLink(const std::string& link, const std::string& name,
                             AlterEgo::GameMode mode, AlterEgo::SavedBuild& out);
 
+// One positive-evidence projection for Characters, Compare, capture and
+// native link admission. Cache retains exact positive IDs and legend strings;
+// neither zero nor null/omission is treated as a verified API empty.
+static nlohmann::json LiveCompanionPayload(const AlterEgo::BuildTemplate& bt,bool legend){
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    return bt.CompanionPayload(legend,[&](const std::string& name){
+        return AlterEgo::PublicCatalog::LegendCode(catalog->legends,name);
+    });
+}
+
 // Encode a live build template (a character's build tab) to a GW2 build chat link [&...].
 // NOTE: BuildTemplate's SpecLine.traits stores choice indices 0-3 directly (see GW2API.h),
 // so they map straight into the chat-link trait fields — no major_traits ID lookup.
 static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
+    if(bt.profession=="Ranger"||bt.profession=="Revenant"){
+        const bool legend=bt.profession=="Revenant";
+        const auto slots=AlterEgo::SkillEdit::JsonCompanionSlots(LiveCompanionPayload(bt,legend),legend?255u:UINT32_MAX);
+        if(!AlterEgo::SkillEdit::CompanionPairsRepresentable(slots))return {};
+    }
     const auto catalog=AlterEgo::PublicCatalog::Get();
     const auto link=AlterEgo::ProjectDerivedBuildLink(bt,
         [](uint32_t,int,int choice)->std::optional<int>{return choice;},
@@ -4051,14 +4066,15 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
             sb.aquatic_skills = capturedTab->aquatic_skills;
             sb.pets = capturedTab->pets;
             sb.weapons = capturedTab->weapons;
-            const auto catalog=AlterEgo::PublicCatalog::Get();
-            auto legendCode = [&](const std::string& value) -> uint8_t {
-                return AlterEgo::PublicCatalog::LegendCode(catalog->legends,value);
-            };
-            sb.legend_codes[0] = legendCode(capturedTab->legends.terrestrial[0]);
-            sb.legend_codes[1] = legendCode(capturedTab->legends.terrestrial[1]);
-            sb.legend_codes[2] = legendCode(capturedTab->legends.aquatic[0]);
-            sb.legend_codes[3] = legendCode(capturedTab->legends.aquatic[1]);
+            if(sb.profession=="Ranger"){
+                auto payload=LiveCompanionPayload(*capturedTab,false);
+                if(!payload.empty())sb.pets_source_slots=std::move(payload);
+            }else if(sb.profession=="Revenant"){
+                auto payload=LiveCompanionPayload(*capturedTab,true);
+                const auto slots=AlterEgo::SkillEdit::JsonCompanionSlots(payload,255u);
+                for(size_t i=0;i<4;++i)sb.legend_codes[i]=static_cast<uint8_t>(slots.values[i]);
+                if(!payload.empty())sb.legends_source_slots=std::move(payload);
+            }
             // Optionally populate gear from character equipment
             if (includeGear) {
                 const auto* ch = capturedChar;
@@ -7334,20 +7350,7 @@ static bool CompanionPairConflict(bool legend,const AlterEgo::SkillEdit::Compani
         AlterEgo::SkillEdit::PairContext::Incompatible;
 }
 static AlterEgo::SkillEdit::CompanionProjection LiveCompanionSlots(const AlterEgo::BuildTemplate& bt,bool legend){
-    AlterEgo::SkillEdit::CompanionProjection slots;
-    const auto catalog=AlterEgo::PublicCatalog::Get();
-    for(int i=0;i<4;++i){
-        if(legend){
-            const auto& name=i<2?bt.legends.terrestrial[i]:bt.legends.aquatic[i-2];
-            const auto code=AlterEgo::PublicCatalog::LegendCode(catalog->legends,name);
-            if(code)slots.Set(i,code);
-            else if(!name.empty())slots.unresolved|=static_cast<uint8_t>(1u<<i);
-        }else{
-            const auto id=i<2?bt.pets.terrestrial[i]:bt.pets.aquatic[i-2];
-            if(id)slots.Set(i,id);
-        }
-    }
-    return slots;
+    return AlterEgo::SkillEdit::JsonCompanionSlots(LiveCompanionPayload(bt,legend),legend?255u:UINT32_MAX);
 }
 static uint8_t RenderProfessionPairSection(bool legend,AlterEgo::SkillEdit::CompanionProjection& slots,
                                         bool editable,const std::vector<AlterEgo::SkillEdit::EliteContext>& contexts={}) {

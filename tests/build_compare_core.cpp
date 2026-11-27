@@ -38,6 +38,10 @@ int case_build_compare_core(int, char**) {
             assert(observed.UnverifiedCount()==1);
             assert(observed.Rows()[0].savedCompanion==8&&observed.Rows()[0].liveCompanion==8);
             assert(observed.Rows().back().savedCompanion==4&&observed.Rows().back().liveCompanion==0);
+            assert(observed.AddCompanion(group,"Aquatic 2",4,0,true,false,"A","Empty"));
+            assert(observed.Rows().back().verified&&!observed.Rows().back().matches&&observed.DifferenceCount()==2);
+            assert(observed.AddCompanion(group,"Terrestrial 3",4,0,false,true,"A","Not recorded"));
+            assert(!observed.Rows().back().verified&&observed.UnverifiedCount()==2);
         }
     }
     using AlterEgo::StatEquivalence;

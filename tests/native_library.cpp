@@ -113,9 +113,9 @@ int case_native_library(int,char**) {
         Scratch companionDb;
         Json input={{"builds",Json::array({
             {{"id","ranger"},{"name","Ranger"},{"profession","Ranger"},
-             {"pets",Json::array({4,0,8,2})}},
+             {"pets",Json::array({4,nullptr,8,2})}},
             {{"id","revenant"},{"name","Revenant"},{"profession","Revenant"},
-             {"legend_codes",Json::array({2,1,0,3})},
+             {"legend_codes",Json::array({2,0,nullptr,"LegendFuture"})},
              {"inactive_rev_skills",Json::array({65000,0,123,77,4,99})}},
             {{"id","omitted"},{"name","Omitted"},{"profession","Ranger"}},
             {{"id","empty"},{"name","Empty"},{"profession","Ranger"},{"pets",Json::array()}}
@@ -156,6 +156,10 @@ int case_native_library(int,char**) {
         assert(C::FindLoadout(restored.loadouts,"shared")->refs.at("pets")==petsId);
         assert(C::FindLoadout(restored.loadouts,"revenant")->refs.at("legends")==legendsId);
         const auto* rev=C::FindLoadout(restored.loadouts,"revenant");
+        const auto* persistedLegend=C::Find(restored.loadouts,"legends",legendsId);
+        const auto* persistedPets=C::Find(restored.loadouts,"pets",petsId);
+        assert(persistedLegend&&persistedLegend->data.at("legend_codes")==input["builds"][1]["legend_codes"]);
+        assert(persistedPets&&persistedPets->data.at("pets")==input["builds"][0]["pets"]);
         const auto* revSkills=C::Find(restored.loadouts,"skills",rev->refs.at("skills"));
         assert(revSkills&&revSkills->data.at("inactive_rev_skills")==input["builds"][1]["inactive_rev_skills"]);
         assert(revSkills->data.at("rev_active_palettes")==input["builds"][1]["rev_active_palettes"]);
@@ -163,6 +167,14 @@ int case_native_library(int,char**) {
         invalidPalettes["data"]["inactive_rev_skills"][0]=65536;
         std::string importedKind;C::Component imported;
         assert(!C::ImportComponent(invalidPalettes,importedKind,imported,error));
+        auto sparseLegend=C::ExportComponent("legends",*persistedLegend);
+        assert(C::ImportComponent(sparseLegend,importedKind,imported,error));
+        sparseLegend["data"]["legend_codes"][3]=std::string(257,'x');
+        assert(!C::ImportComponent(sparseLegend,importedKind,imported,error));
+        auto sparsePets=C::ExportComponent("pets",*persistedPets);
+        assert(C::ImportComponent(sparsePets,importedKind,imported,error));
+        sparsePets["data"]["pets"][1]="LegendFuture";
+        assert(!C::ImportComponent(sparsePets,importedKind,imported,error));
         auto invalidActive=C::ExportComponent("skills",*revSkills);
         invalidActive["data"]["rev_active_palettes"][0][0]=65536;
         assert(!C::ImportComponent(invalidActive,importedKind,imported,error));

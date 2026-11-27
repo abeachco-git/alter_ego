@@ -137,7 +137,10 @@ inline Json PatchDraft(const Json& stored,const Json& baseline,const Json& edite
                     Json patched=*existing;
                     for(size_t slot=0;slot<i.value().size();++slot){
                         if(slot<old->size()&&ExactContent((*old)[slot],i.value()[slot]))continue;
-                        while(patched.size()<=slot)patched.push_back(0);
+                        // Newly added nulls are spacing for a later explicit
+                        // choice, not edits to earlier stored positions.
+                        if(slot>=old->size()&&i.value()[slot].is_null()&&slot<patched.size())continue;
+                        while(patched.size()<=slot)patched.push_back(nullptr);
                         patched[slot]=i.value()[slot];
                     }
                     result[i.key()]=std::move(patched);

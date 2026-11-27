@@ -178,14 +178,15 @@ public:
         if(verdict==Verdict::Unverified)AddUnverified(group,field,saved,current);
         else Add(group,field,"match",verdict==Verdict::Match?"match":"different",saved,current);
     }
-    // Positive IDs are comparable; zero or absent slots are not proven
-    // empty. Terrestrial companions are required for full recognition;
-    // unrecorded optional aquatic slots remain directional.
+    // Positive saved IDs compare against known observed IDs, including
+    // a verified explicit live empty. Saved zero remains conservative:
+    // legacy padded zeros cannot establish a complete functional match.
+    // Unrecorded optional aquatic slots remain directional.
     bool AddCompanion(const std::string& group,const std::string& field,
         uint32_t saved,uint32_t observed,bool observedKnown,bool required,
         const std::string& savedDisplay,const std::string& observedDisplay){
         if(!saved&&!required)return false;
-        if(!saved||!observed||!observedKnown)
+        if(!saved||!observedKnown)
             AddUnverified(group,field,savedDisplay,observedKnown||!observed?observedDisplay:"Unknown");
         else Add(group,field,std::to_string(saved),std::to_string(observed),savedDisplay,observedDisplay);
         rows.back().savedCompanion=saved;rows.back().liveCompanion=observedKnown?observed:0;

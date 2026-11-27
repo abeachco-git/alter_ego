@@ -1079,21 +1079,23 @@ inline std::array<uint32_t,4> ProjectCompanionSlots(const Json& value,uint32_t m
 inline bool HasCompanionSelection(const std::array<uint32_t,4>& slots) {
     return std::any_of(slots.begin(),slots.end(),[](uint32_t id){return id!=0;});
 }
-// A live snapshot has no reliable per-slot empty evidence today. Positive
-// selections can replace saved positions; zeros/omissions cannot clear them.
-// Keep foreign trailing fields, reject a new duplicate introduced by merging.
+// Positive selections and explicitly qualified API empties may replace
+// saved positions; legacy zeros, gaps and unresolved observations cannot
+// clear them. Keep trailing fields and reject newly introduced duplicates.
 inline bool MergeCapturedCompanion(const std::string& kind,const Json& previous,
-                                   const Json& captured,Json& result,std::string& error) {
+                                   const Json& captured,Json& result,std::string& error,uint8_t explicitEmpties=0) {
     if(!IsCompanionKind(kind))return Fail(error,"Not a companion component.");
     const auto field=CompanionField(kind);
     const auto max=kind=="legends"?255u:std::numeric_limits<uint32_t>::max();
-    const auto next=ProjectCompanionSlots(captured.value(field,Json()),max);
-    if(!HasCompanionSelection(next))return Fail(error,"No verified companion selections to capture.");
+    const auto observed=SkillEdit::JsonCompanionSlots(captured.value(field,Json()),max);
+    const auto& next=observed.values;
+    explicitEmpties&=observed.recorded;
+    if(!HasCompanionSelection(next)&&!explicitEmpties)return Fail(error,"No verified companion selections to capture.");
     Json merged=previous;
     if(!merged.contains(field))merged[field]=Json::array();
     if(!merged[field].is_array())return Fail(error,"Saved companion data requires manual review.");
     const auto before=ProjectCompanionSlots(merged[field],max);
-    for(size_t i=0;i<next.size();++i)if(next[i]){
+    for(size_t i=0;i<next.size();++i)if(next[i]||(explicitEmpties&(1u<<i))){
         SkillEdit::SetCompanionPayloadSlot(merged[field],i,next[i]);
     }
     const auto after=ProjectCompanionSlots(merged[field],max);
@@ -1150,9 +1152,16 @@ inline bool ValidatePortablePayload(const std::string& kind,
                    field == "legend_codes") {
             if (!value.is_array() || value.size()>256)
                 return Fail(error, "Invalid build array: " + field);
-            for (const auto& number : value)
-                if (!NonNegativeInteger(number))
-                    return Fail(error, "Invalid build array entry: " + field);
+            for (size_t i=0;i<value.size();++i){
+                const auto& number=value[i];
+                if(NonNegativeInteger(number))continue;
+                if(field!="weapons"&&i<4&&number.is_null())continue;
+                if(field=="legend_codes"&&i<4&&number.is_string()){
+                    const auto& id=number.get_ref<const std::string&>();
+                    if(!id.empty()&&id.size()<=256&&Untrusted::DisplayText(id))continue;
+                }
+                return Fail(error, "Invalid build array entry: " + field);
+            }
         } else if (field == "specializations") {
             if (!value.is_array() || value.size()>16)
                 return Fail(error, "Invalid specialization array.");

@@ -126,7 +126,14 @@ namespace AlterEgo {
         std::vector<uint32_t> weapons; // Weapon type IDs
         bool pets_known = false;
         bool legends_known = false;
+        uint8_t legends_empty_slots = 0; // observed API nulls; legacy cached empty strings are unknown
         bool weapons_known = false;
+        template<class LegendCode> nlohmann::json CompanionPayload(bool legend,LegendCode code)const{
+            return SkillEdit::CaptureCompanionPayload<nlohmann::json>(
+                {pets.terrestrial[0],pets.terrestrial[1],pets.aquatic[0],pets.aquatic[1]},
+                {legends.terrestrial[0],legends.terrestrial[1],legends.aquatic[0],legends.aquatic[1]},
+                legend,code,legends_empty_slots);
+        }
     };
 
     // Cached info about an item from /v2/items (public, no auth)
@@ -309,6 +316,8 @@ namespace AlterEgo {
         }
         nlohmann::json CompanionPayload(bool legend)const {
             const auto& source=legend?legends_source_slots:pets_source_slots;
+            if(!source.is_array()&&(legend?legends_recorded:pets_recorded))
+                return nlohmann::json(CompanionValues(legend)); // complete decoded native pair block
             return SkillEdit::OverlayCompanionSlots(source,CompanionValues(legend),legend?255u:UINT32_MAX);
         }
         SkillEdit::CompanionProjection CompanionSlots(bool legend)const {
