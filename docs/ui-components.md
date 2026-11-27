@@ -164,7 +164,7 @@ Main tab display order: Characters, Library, Compare, Inventory, Skins, Wizard's
 
 Main tabs use UI::TabGroupDividerBefore for purely decorative, muted one-pixel separators before Inventory and Vault. Draw in the existing central-tab gap after all tabs have been submitted; do not create spacer tabs, hit targets or navigation IDs. Respect the actual tab-bar clip rectangle and skip missing/stale layout entries. No extra width or label, and the All Accounts Vault button uses its own ID.
 
-The Achievements dropdown offers Refresh Achievement Names as a separate public-catalog full revalidation action. Keep the regular Refresh footer scoped to account progress. The shared footer reports catalog work/failure; its timestamp remains the last successful account progress retrieval. Search remains a local operation and invalidates when catalog/category generations change.
+The Achievements dropdown offers Refresh Achievement Definitions as a separate public-catalog full revalidation action. Keep the regular Refresh footer scoped to account progress. The shared footer reports catalog work/failure; its timestamp remains the last successful account progress retrieval. Search remains a local operation and invalidates when catalog/category generations change.
 
 Legacy achievement-specific WP buttons have been retired from rows and the popout. Preserve pin actions, name copying, normal achievement/Skinventory navigation and Wiki access. Vault objective assistance and vendor waypoint actions are independent features.
 
