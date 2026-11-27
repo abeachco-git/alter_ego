@@ -1582,12 +1582,7 @@ namespace AlterEgo {
         const auto root=GW2API::GetDataDirectory();
         ItemMetadata::Fetch(job,
             [](const std::string& path){return ArenaNet::Get(path);},
-            [&](const json& rows,int64_t stamp,json& accepted){
-                if(!Cache::WriteItemObservations(root,rows,stamp,accepted))return false;
-                // Runtime projection only: the verified stamp was committed with each accepted row.
-                for(auto& row:accepted)row["verified_at"]=stamp;
-                return true;
-            },
+            [&](const json& rows,int64_t stamp,json& accepted){return Cache::WriteItemObservations(root,rows,stamp,accepted);},
             [](const json& rows,bool aliases){GW2API::AdoptPublicItems(rows,aliases);});
     }
     static bool ItemDefinitionDue(uint32_t id,bool force,bool allowStale){

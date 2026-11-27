@@ -3819,6 +3819,19 @@ static void DrawDottedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, floa
     }
 }
 
+// Explicit context actions use the existing verified-name Wiki search URL;
+// opening a browser is user-initiated and never fetches addon metadata.
+static void ReferenceWikiSearchAction(const std::string& name){
+    using namespace AlterEgo;
+    if(!name.empty()&&UI::MenuAction("Search Wiki",UI::MenuIcon::Open)){
+        const auto url=UI::CatalogWikiSearchUrl(name);
+        ShellExecuteA(NULL,"open",url.c_str(),NULL,NULL,SW_SHOWNORMAL);
+    }
+}
+static void ReferenceEntityActions(const std::string& name,AlterEgo::ChatLinkType kind,uint32_t id){
+    CopyEntityMenu(name,kind,id);
+    if(kind==AlterEgo::LINK_SKILL||kind==AlterEgo::LINK_TRAIT)ReferenceWikiSearchAction(name);
+}
 // Shared cached semantic tooltip for ordinary, aquatic, trait, companion
 // and Compare consumers. Unknown facts never fabricate character-specific values.
 static void RenderReferenceTooltip(const std::string& name,const std::string& description,
@@ -3901,7 +3914,7 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
 
     const bool canClear=clearRequested&&selected&&!isMinor;
     if((trait_id||canClear)&&ImGui::BeginPopupContextItem("##trait_name")) {
-        CopyEntityMenu(tinfo?tinfo->name:std::string{},AlterEgo::LINK_TRAIT,trait_id);
+        ReferenceEntityActions(tinfo?tinfo->name:std::string{},AlterEgo::LINK_TRAIT,trait_id);
         if(canClear){
             if(tinfo)ImGui::Separator();
             if(AlterEgo::UI::MenuAction("Clear Trait",AlterEgo::UI::MenuIcon::Delete))
@@ -3953,7 +3966,7 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,boo
             ImGui::GetColorU32(ImGuiCol_TextDisabled),marker);
     }
     if(nameMenu&&skill_id&&ImGui::BeginPopupContextItem("##skill_name")) {
-        CopyEntityMenu(sinfo?sinfo->name:std::string{},AlterEgo::LINK_SKILL,skill_id);ImGui::EndPopup();
+        ReferenceEntityActions(sinfo?sinfo->name:std::string{},AlterEgo::LINK_SKILL,skill_id);ImGui::EndPopup();
     }
     ImGui::PopID();
     return clicked;
@@ -6864,10 +6877,31 @@ static void ProfessionChoiceActions(bool legend,const ProfessionChoiceDisplay& v
     if(legend&&value.swap)CopyEntityChatLink(LINK_SKILL,value.swap,"Copy Invocation Skill Chat Link");
     // The fixed Wiki search endpoint avoids inventing an article title for
     // a verified catalog name (particularly alternate legend names).
-    if(value.nameKnown&&UI::MenuAction("Search Wiki",UI::MenuIcon::Open)){
-        const auto url=UI::CatalogWikiSearchUrl(value.name);
-        ShellExecuteA(NULL,"open",url.c_str(),NULL,NULL,SW_SHOWNORMAL);
-    }
+    if(value.nameKnown)ReferenceWikiSearchAction(value.name);
+}
+// Common companion tooltip across icon-and-name, picker, collection and Compare.
+// Skill names/roles are cached reference evidence, never actual equipped order.
+static void RenderCompanionTooltip(const ProfessionChoiceDisplay& choice,const std::string& note={}){
+    using namespace AlterEgo;
+    if(choice.name.empty())return;
+    ImGui::BeginTooltip();
+    UI::TooltipLine(choice.name.c_str(),UI::TooltipTitle);
+    if(!choice.description.empty())UI::TooltipLine(choice.description.c_str());
+    if(!note.empty())UI::TooltipLine(note.c_str());
+    if(!choice.skills.empty()){
+        ImGui::Separator();ImGui::TextDisabled("%s",choice.skillsKnown?"Catalog skill references":"Catalog skill references (partial)");
+        size_t shown=0,unresolved=0;
+        for(const auto& ref:choice.skills){
+            const auto skill=GW2API::GetSkillInfo(ref.id);
+            if(!skill||skill->name.empty()){++unresolved;continue;}
+            if(shown++>=8)continue;
+            const auto line=std::string(PublicCatalog::RoleLabel(ref.role))+": "+skill->name;
+            UI::TooltipLine(line.c_str());
+        }
+        if(shown>8)ImGui::TextDisabled("Additional references in details");
+        if(unresolved)ImGui::TextDisabled("%zu skill reference(s) not retrieved",unresolved);
+    }else if(choice.nameKnown&&!choice.skillsKnown)ImGui::TextDisabled("Associated skills not retrieved");
+    ImGui::EndTooltip();
 }
 
 // Render the same GW2 profession image used in the Characters roster in
@@ -7233,7 +7267,7 @@ static bool RenderSkillEditorSlot(uint32_t current,float size,const std::string&
     };
     if(ImGui::BeginPopupContextItem("##skill_edit_context")){
         const auto info=AlterEgo::GW2API::GetSkillInfo(current);
-        CopyEntityMenu(info?info->name:std::string{},AlterEgo::LINK_SKILL,current);
+        ReferenceEntityActions(info?info->name:std::string{},AlterEgo::LINK_SKILL,current);
         if(AlterEgo::UI::MenuAction("Clear Skill",AlterEgo::UI::MenuIcon::Delete,current!=0||unresolved))choose(0);
         if(advanced){
             ImGui::TextDisabled("Advanced: exact skill ID");
@@ -7281,9 +7315,7 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
         ImGui::GetColorU32(current||editable?ImGuiCol_Text:ImGuiCol_TextDisabled),
         display.name.c_str(),nullptr,wrap);
     if(ImGui::IsItemHovered()){
-        const auto details=display.description.empty()&&editable?
-            std::string("Click to choose; right-click for actions."):display.description;
-        AlterEgo::UI::DetailTooltip(display.name.c_str(),details.empty()?nullptr:details.c_str());
+        RenderCompanionTooltip(display,editable&&display.description.empty()?"Click to choose; right-click for actions.":"");
     }
     if(clicked&&editable)ImGui::OpenPopup("##pair_choice");
     bool changed=false;
@@ -7334,8 +7366,8 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
                 const auto hit=UI::CatalogRow(index,option.selected,option.artwork,option.url,option.label,"",
                     {},option.disabled,-1,[&]{
                         const auto value=ResolveProfessionChoice(legend,option.id);
-                        UI::DetailTooltip(option.label.c_str(),!option.reason.empty()?option.reason.c_str():
-                            option.disabled?"Already selected in the other slot.":value.description.empty()?nullptr:value.description.c_str());
+                        RenderCompanionTooltip(value,!option.reason.empty()?option.reason:
+                            option.disabled?"Already selected in the other slot.":"");
                     },iconSize,true);
                 UI::EntityContext("##pair_option_actions",[&]{ProfessionChoiceActions(legend,ResolveProfessionChoice(legend,option.id));});
                 if(hit.clicked&&!option.disabled){if(!option.selected){next=option.id;changed=true;}ImGui::CloseCurrentPopup();}
@@ -7551,8 +7583,7 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
             for(const auto& m:found->second)body+="\n"+tabName(m.tab)+" - "+membershipText(m);
         }
         if(active(pet.id))body+="\nSummoned pet is not reported.";
-        if(pet.description&&!pet.description->empty())body+="\n"+StripGW2Markup(*pet.description);
-        UI::DetailTooltip(pet.name.c_str(),body.c_str());
+        RenderCompanionTooltip(ResolveProfessionChoice(false,pet.id),body);
     };
     ImGui::BeginChild("##ranger_pet_catalog",ImVec2(0,0),false);
     if(mode==1){
@@ -11041,7 +11072,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                             const bool legend=row->group=="Revenant legends";
                             const auto choice=ResolveProfessionChoice(legend,companion);
                             const auto hit=AlterEgo::UI::CatalogRow(0,false,choice.key,choice.icon,label,"",{},false,-1,
-                                [&]{AlterEgo::UI::DetailTooltip(choice.name.c_str(),choice.description.empty()?nullptr:choice.description.c_str());},24.f,true);
+                                [&]{RenderCompanionTooltip(choice);},24.f,true);
                             (void)hit;
                             AlterEgo::UI::EntityContext("##companion_compare",[&]{ProfessionChoiceActions(legend,choice);});
                             handled=true;
@@ -11084,8 +11115,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                             else if(type==AlterEgo::LINK_TRAIT){const auto info=AlterEgo::GW2API::GetTraitInfo(id);if(info)name=info->name;}
                             else if(type==AlterEgo::LINK_ITEM){const auto info=AlterEgo::GW2API::GetItemInfo(id);if(info)name=info->name;}
                             ImGui::PushID(static_cast<int>(id));
-                            if(unique.size()>1){if(AlterEgo::UI::BeginActionMenu(name.empty()?("#"+std::to_string(id)).c_str():name.c_str(),AlterEgo::UI::MenuIcon::Copy)){CopyEntityMenu(name,type,id);ImGui::EndMenu();}}
-                            else CopyEntityMenu(name,type,id);
+                            if(unique.size()>1){if(AlterEgo::UI::BeginActionMenu(name.empty()?("#"+std::to_string(id)).c_str():name.c_str(),AlterEgo::UI::MenuIcon::Copy)){ReferenceEntityActions(name,type,id);ImGui::EndMenu();}}
+                            else ReferenceEntityActions(name,type,id);
                             ImGui::PopID();
                         }});
                         for(size_t i=0;i<unique.size();++i)ImGui::PopID();ImGui::PopID();ImGui::PopID();

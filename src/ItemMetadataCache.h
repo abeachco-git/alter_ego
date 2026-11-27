@@ -61,7 +61,7 @@ RETURNING id
             if(verified<0)throw std::runtime_error("Invalid item request stamp");
             q.Bind(10,verified);
             if(q.Step()){
-                if(accepted)accepted->push_back(row);
+                if(accepted){auto projected=row;projected["verified_at"]=verified;accepted->push_back(std::move(projected));}
                 if(q.Step())throw std::runtime_error("Unexpected duplicate item result");
             }
             q.Reset();

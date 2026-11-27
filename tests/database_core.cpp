@@ -828,6 +828,7 @@ int case_database_core(int, char**) {
         assert(newest>later);
         auto row=[](uint32_t id,const char* name){return J{{"id",id},{"name",name},{"type","Armor"}};};
         assert(Cache::WriteItemObservations(orderRoot,J::array({row(99,"new")}),newest,accepted));
+        assert(accepted.size()==1&&accepted[0]["verified_at"]==newest);
         assert(accepted.size()==1);
         assert(Cache::WriteItemObservations(orderRoot,J::array({row(99,"old"),row(100,"other")}),later,accepted));
         assert(accepted.size()==1&&accepted.at(0).at("id")==100);
