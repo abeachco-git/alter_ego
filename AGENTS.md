@@ -15,6 +15,7 @@ This is the authoritative agent instruction file; `CLAUDE.md` delegates here. Do
 | --- | --- |
 | UI, controls, menus, searches or filters | [UI component reference](docs/ui-components.md) |
 | Persistence, APIs, caches, callbacks, lifecycle or architecture | [Architecture](docs/architecture.md) |
+| Freshness, refresh status, retry policy or freshness tooltips | [Unified freshness engine](docs/architecture.md#unified-freshness-engine) and [UI component reference](docs/ui-components.md) |
 | Tests, CI or build changes | [Regression testing](docs/regression-testing.md) |
 | AE2 share/import format | [Shared build specification](docs/shared-build-spec.md) |
 | Dataset or asset generation | [Tool inventory](tools/README.md) |

@@ -1,6 +1,7 @@
 #include "../src/SectionRefresh.h"
 #include "../src/CharacterActivity.h"
 #include "../src/CharacterScopes.h"
+#include "../src/RefreshStatusCore.h"
 #include "../src/ApiActivity.h"
 #include <cassert>
 #include <ctime>
@@ -28,6 +29,62 @@ int case_section_refresh(int, char**) {
     assert(!F::Due(now-900,0,now,900,false,0,30));
     assert(F::Due(now-930,0,now,900,false,0,30));
     assert(F::Offset("account/vault/0")<=45);
+    // Ordinary retry is independent of the eligibility predicate. A newer
+    // confirmed success supersedes the failed attempt; equal seconds are
+    // conservative until the owner clears its attempt on success.
+    assert(F::RetryUntil(now-1000,now-899,now)==now+1);
+    assert(!F::RetryUntil(now-1000,now-900,now));
+    assert(!F::RetryUntil(now-10,now-11,now));
+    assert(F::RetryUntil(now-10,now-10,now)==now+890);
+    assert(!F::RetryUntil(0,now+1,now));
+    assert(!F::RetryUntil(0,now-1,now,F::FailureSeconds,true));
+    assert(F::Due(now-10,now-11,now,900,false,now-5));
+    assert(!F::Due(now-10,now-10,now,900,false,now-5));
+    assert(F::TimedEligibility(now-1800,0,now,1800).due);
+    assert(!F::TimedEligibility(now-1799,0,now,1800).due);
+    assert(F::TimedEligibility(now-1799,0,now,1800).at==now+1);
+    assert(F::TimedEligibility(now+1,0,now,1800).due);
+    assert(F::TimedEligibility(0,now-899,now,1800).reason==F::WaitReason::Retry);
+    {
+        namespace R=AlterEgo::RefreshStatus;
+        R::Scope current;current.success=now-60;current.fresh=true;current.automatic=true;
+        R::Scope stale=current;stale.success=now-1800;stale.fresh=false;
+        stale.eligibility={F::WaitReason::Due,now,true};
+        assert(R::Project(stale,now)==R::Kind::Due);
+        stale.access=R::Access::Denied;
+        assert(R::Project(stale,now)==R::Kind::Denied);
+        assert(R::Describe(stale,now).find("Refresh due")==std::string::npos);
+        stale.access=R::Access::Unverified;assert(R::Project(stale,now)==R::Kind::Unverified);
+        stale.access=R::Access::NoAPI;assert(R::Project(stale,now)==R::Kind::NoAPI);
+        stale.access=R::Access::Allowed;stale.automatic=false;
+        assert(R::Project(stale,now)==R::Kind::Disabled);
+        stale.automatic=true;stale.demandAllowed=false;
+        assert(R::Project(stale,now)==R::Kind::Scheduled);
+        assert(R::Describe(stale,now).find("Refresh due")==std::string::npos);
+        stale.demandAllowed=true;stale.failed=true;stale.error="Invalid response";
+        stale.eligibility={F::WaitReason::Retry,now+30,false};
+        assert(R::Project(stale,now)==R::Kind::Failed);
+        stale.error="HTTP 503";assert(R::Project(stale,now)==R::Kind::Retry);
+        stale.phase=R::Phase::Queued;assert(R::Project(stale,now)==R::Kind::Queued);
+        stale.phase=R::Phase::Working;assert(R::Project(stale,now)==R::Kind::Working);
+        stale.phase=R::Phase::Idle;R::Aggregate all;all.Add(current,now);all.Add(stale,now);
+        assert(all.Timestamp()==now-1800&&all.Status()==R::Kind::Retry&&all.retryAt==now+30);
+        R::Scope missing;all.Add(missing,now);assert(all.Timestamp()==0);
+        R::Aggregate none;assert(none.Status()==R::Kind::NoScopes&&none.Timestamp()==0);
+        R::Scope future=current;future.success=now+1;future.fresh=false;
+        R::Aggregate invalid;invalid.Add(future,now);assert(!invalid.Timestamp());
+        R::CharacterBatch batch;R::CharacterKey a{"account-a","Hero"},b{"account-b","Hero"};
+        batch.Queue(a,1,3);batch.Queue(b,2,3);
+        assert(batch.Get(a,1).phase==R::Phase::Queued&&batch.Get(a,2).phase==R::Phase::Idle);
+        batch.Start(a,1,3);batch.Activate(a,2);
+        assert(batch.Get(a,1).phase==R::Phase::Working&&batch.Get(a,1).active==2);
+        batch.Finish(a,1,now);assert(batch.Get(a,1).verified==1&&batch.Get(a,1).failed==2);
+        assert(batch.Get(a,1).phase==R::Phase::Idle&&batch.Get(a,1).active==0);
+        assert(batch.Get(b,2).phase==R::Phase::Queued);
+        batch.Stop(now,"Cancelled");assert(batch.Get(b,2).requested==0&&batch.Get(a,1).verified==1);
+        batch.Start(b,2,4);batch.Stop(now+1,"Cancelled");
+        assert(batch.Get(b,2).phase==R::Phase::Idle&&batch.Get(b,2).failed==4&&batch.Get(b,1).requested==0);
+    }
     assert(!F::CharacterDue(false,0,now-100000,now-90000,0,now));
     assert(!F::CharacterDue(true,now-10,now,now-100000,0,now));
     static_assert(F::CharacterSeconds==600);

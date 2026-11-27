@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <set>
 namespace AlterEgo::RefreshEngine {
 // Ordinary wall-clock policy; specialized metadata/transport/reset backoffs
 // retain their own owners and timing.
@@ -24,6 +25,14 @@ inline int64_t ActivitySeconds(bool accountWide,const std::string& scope){
     return !accountWide||scope==Bank||scope==Shared||scope==Materials?CharacterSeconds:BrowseSeconds;
 }
 inline int64_t InventorySeconds(const std::string& scope){return scope==ScopeName::Roster?RosterSeconds:BrowseSeconds;}
+inline bool InventoryPermitted(const std::set<std::string>& permissions,const std::string& scope){
+    using namespace ScopeName;
+    return scope=="Wallet"?permissions.count("wallet"):
+        scope=="Guild access"?permissions.count("guilds"):
+        scope==Roster?permissions.count("characters"):
+        scope=="Delivery box"?permissions.count("tradingpost"):
+        permissions.count("inventories")&&((scope!=Bags&&scope!=Equipment)||permissions.count("characters"))&&(scope!=Armory||permissions.count("unlocks"));
+}
 // Zero means no unresolved attempt. Equality is a possible same-second
 // failure; successful producers clear their attempt. A newer success wins.
 inline int64_t RetryUntil(int64_t success,int64_t attempt,int64_t now,

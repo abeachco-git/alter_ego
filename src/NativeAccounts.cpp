@@ -294,11 +294,7 @@ bool ScopeFresh(const std::string& account,const std::string& scope,const std::s
     const auto now=Now();return success>0&&now>=success&&now-success<FreshSeconds(scope);
 }
 bool ScopePermitted(const Account& a,const std::string& scope){
-    return scope=="Wallet"?a.permissions.count("wallet"):
-        scope=="Guild access"?a.permissions.count("guilds"):
-        scope=="Roster"?a.permissions.count("characters"):
-        scope=="Delivery box"?a.permissions.count("tradingpost"):
-        a.permissions.count("inventories")&&((scope!="Bags"&&scope!="Equipment")||a.permissions.count("characters"))&&(scope!="Legendary Armory"||a.permissions.count("unlocks"));
+    return RefreshEngine::InventoryPermitted(a.permissions,scope);
 }
 // Same eligibility and access evidence for automatic admission and footer
 // projection. The inspection is read-only; only admission owns dispatch.
@@ -1526,6 +1522,8 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
         if(scope=="Items"&&includeWallet)mark(a,"Wallet");
         if(scope=="Guild bank"){
             const auto accessStatus=mark(a,"Guild access");auto access=v->inventory.guildAccess.find(a.id);
+            if(access!=v->inventory.guildAccess.end()&&access->second.empty()&&accessStatus.success>0)
+                detail+="; no accessible guilds in retained roster";
             if(access!=v->inventory.guildAccess.end())for(const auto& id:access->second){
                 auto it=guilds.find(id);
                 if(it==guilds.end()||(it->second.access!=R::Access::Allowed&&accessStatus.access==R::Access::Allowed)||
@@ -1557,6 +1555,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
                 if(!characterFiltered){
                     if(!detail.empty())detail+="\n";
                     detail+=(accounts.size()>1?Display(a)+" / ":"")+dataset+": "+group.Summary();
+                    if(roster->second.empty())detail+=" (verified empty roster)";
                 }
             }
         }

@@ -209,12 +209,23 @@ int case_native_inventory(int,char**){
         assert(!Due(scope,100,0,999)&&Due(scope,100,0,1000));
         assert(!Due(scope,100,100,1899)&&Due(scope,100,100,1900));
         assert(Due(scope,0,0,100));
+        // The Inventory time-based path consumes the same canonical retry result.
+        for(int64_t success:{int64_t(0),int64_t(100),int64_t(101),int64_t(1101)})
+            for(int64_t attempt:{int64_t(0),int64_t(100),int64_t(101),int64_t(1101)})
+                assert(Due(scope,attempt,success,1000)==AlterEgo::RefreshEngine::Due(success,attempt,1000,FreshSeconds(scope)));
     }
     for(const auto* scope:{"Roster"}){
         assert(FreshSeconds(scope)==86400);
         assert(!Due(scope,100,100,86499)&&Due(scope,100,100,86500));
         assert(!Due(scope,100,0,999)&&Due(scope,100,0,1000));
     }
+    using AlterEgo::RefreshEngine::InventoryPermitted;
+    assert(InventoryPermitted({"wallet"},"Wallet")&&!InventoryPermitted({"wallet"},"Bank"));
+    assert(InventoryPermitted({"inventories"},"Bank")&&!InventoryPermitted({"inventories"},"Bags"));
+    assert(InventoryPermitted({"inventories","characters"},"Bags")&&!InventoryPermitted({"inventories","characters"},"Legendary Armory"));
+    assert(InventoryPermitted({"inventories","unlocks"},"Legendary Armory"));
+    assert(InventoryPermitted({"guilds"},"Guild access")&&!InventoryPermitted({"guilds"},"Roster"));
+    assert(InventoryPermitted({"characters"},"Roster")&&InventoryPermitted({"tradingpost"},"Delivery box"));
     assert(Match("Superior Sigil of Force",10,"sigli force"));
     using Skinventory::Search::Words;
     using Skinventory::Search::HasMinimumQuery;

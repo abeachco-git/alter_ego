@@ -144,6 +144,7 @@ public:
             auto s=i->second.scopes.find(scope);
             if(s!=i->second.scopes.end()){out.attempt=std::max(externalAttempt,s->second.attempt);out.error=s->second.error;}
         }
+        if(out.attempt<success)out.error.clear();
         return out;
     }
     void Failure(const Key& k,const std::string& scope,const Ticket& t,const std::string& message){
