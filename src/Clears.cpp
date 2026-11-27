@@ -355,7 +355,7 @@ static bool ClearSectionCompleteLocked(size_t i){
         i==1?AlterEgo::SectionRefresh::ClearsDone(g_DailyBounties):
         i==2?AlterEgo::SectionRefresh::ClearsDone(g_WeeklyWings):g_WeeklyStrikes.id!=0&&g_WeeklyStrikes.done;
 }
-static AlterEgo::RefreshStatus::Scope InspectClearSectionLocked(size_t i,int64_t now,long long tick,bool inspectShared=true){
+static AlterEgo::RefreshStatus::Scope InspectClearSectionLocked(size_t i,int64_t now,long long tick,bool inspectShared=true,bool includeDefinitionRetry=true){
     namespace F=AlterEgo::RefreshEngine;
     const auto wall=std::chrono::system_clock::from_time_t(static_cast<std::time_t>(now));
     const auto reset=ResetEpoch(i<2?CalcLastDailyReset(wall):CalcLastWeeklyReset(wall));
@@ -364,12 +364,12 @@ static AlterEgo::RefreshStatus::Scope InspectClearSectionLocked(size_t i,int64_t
     const auto readyAt=reset+ClearsReset::kResetBufferSeconds;
     auto out=AlterEgo::SectionRefresh::Inspect(g_ClearsSectionSuccess[i],now,F::ObjectiveSeconds(),
         F::Offset(g_ClearsCacheAccount+"/achievements"),readyAt,readyAt,
-        !missing&&ClearSectionCompleteLocked(i),missing||defs.at!=0||progress.at!=0,
-        std::max(defs.Remaining(tick),progress.Remaining(tick)),
+        !missing&&ClearSectionCompleteLocked(i),missing||(includeDefinitionRetry&&defs.at!=0)||progress.at!=0,
+        std::max(includeDefinitionRetry?defs.Remaining(tick):int64_t(0),progress.Remaining(tick)),
         AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears));
     // Ordinary progress uses the existing shared broker's eligibility. Local
     // rollover/definition retries stay independently owned; do not bypass them.
-    if(inspectShared&&!missing&&!out.periodComplete&&defs.at==0&&progress.at==0&&now>=readyAt){
+    if(inspectShared&&!missing&&!out.periodComplete&&(!includeDefinitionRetry||defs.at==0)&&progress.at==0&&now>=readyAt){
         const auto shared=AlterEgo::NativeProgress::InspectAchievementEligibility(
             g_ClearsCacheAccount,out.success,F::ObjectiveSeconds(),readyAt,now);
         out.eligibility=shared.value_or(F::Eligibility{F::WaitReason::Current,0,false});
@@ -378,9 +378,9 @@ static AlterEgo::RefreshStatus::Scope InspectClearSectionLocked(size_t i,int64_t
 }
 static bool ClearsProgressDueLocked(int64_t now,long long tick){
     for(size_t i=0;i<4;++i){
-        const auto scope=InspectClearSectionLocked(i,now,tick);
+        const auto scope=InspectClearSectionLocked(i,now,tick,true,false);
         if(!scope.periodComplete&&!ClearDefinitionsMissing(i)&&g_ClearsProgressRetry[i].Ready(tick)&&
-           g_ClearsSectionRetry[i].at==0&&scope.eligibility.due)return true;
+           scope.eligibility.due)return true;
     }
     return false;
 }
@@ -404,7 +404,7 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
             const auto reset=i<2?daily:weekly;
             if(ClearDefinitionsMissing(i)||!ClearsReset::GracePassed(reset,ResetEpoch(now))||
                !g_ClearsProgressRetry[i].Ready(NowMs(),manual))continue;
-            requestedSections[i]=!skipCompletedSections||!InspectClearSectionLocked(i,ResetEpoch(now),NowMs(),false).periodComplete;
+            requestedSections[i]=!skipCompletedSections||!InspectClearSectionLocked(i,ResetEpoch(now),NowMs(),false,false).periodComplete;
             if(!requestedSections[i])continue;
             minimumEpoch=std::max(minimumEpoch,reset+ClearsReset::kResetBufferSeconds);
             if(i>=2&&g_ClearsProgressRetry[i].reason=="API returned prior weekly progress")force=true;

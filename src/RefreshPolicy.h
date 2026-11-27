@@ -99,9 +99,9 @@ inline std::set<std::string> PlanAccountStorage(const std::vector<AccountStorage
     for(const auto& r:rows){
         if(!SharedAccountStorage(r.scope)||!r.allowed||(!r.seed&&!r.previouslyRetrieved))continue;
         const auto& q=r.eligibility;
-        const bool near=(q.reason==WaitReason::Current||q.reason==WaitReason::ActiveInterval||q.reason==WaitReason::Stagger)&&
+        const bool nearDue=(q.reason==WaitReason::Current||q.reason==WaitReason::ActiveInterval||q.reason==WaitReason::Stagger)&&
             q.at>now&&q.at-now<=StaggerMaxSeconds;
-        if(q.due||near)out.insert(r.scope);
+        if(q.due||nearDue)out.insert(r.scope);
     }
     return out;
 }
