@@ -44,4 +44,6 @@ If only comparison is at fault, revert `198ded0` alone; if only retry admission 
 - [ ] Test a partial Vault section failure, weekly reset and Special; check independently verified sections and timestamps remain correct.
 - [ ] Compare actual game objectives and API activity; if a regression appears, record affected section, previous/current IDs and completion direction, reset time, visible demand and exact build before reverting.
 
-Current verification: offline tests and exact DLL build are required before delivery; live reset acceptance remains open.
+Current verification: [build #709](https://github.com/abeachco-git/alter_ego/actions/runs/45935811447), exact commit `e54638c615c7fe2f36db25012872455865e6a0da`, passed required offline regressions, sanitizers, Windows x64 UCRT build and binary verification. Live reset acceptance remains open.
+
+Leaving and reopening a page does not reset elapsed retry cooldowns or create a manual request. Reopening resumes ordinary demand eligibility; only an explicit Refresh bypasses ordinary cooldown. Existing Vault batch timeout remains independent.
