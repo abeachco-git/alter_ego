@@ -56,7 +56,7 @@
 static constexpr uint32_t CAT_DAILY_FRACTALS = 88;
 static constexpr uint32_t CAT_DAILY_BOUNTIES = 475;
 static constexpr uint32_t CAT_WEEKLY_RAIDS   = 477;
-static constexpr uint32_t ACH_WEEKLY_STRIKES = 9125;
+static constexpr uint32_t ACH_WEEKLY_STRIKES = ClearsPublicEpoch::WeeklyStrikeId;
 // Public membership and definitions only; deliberately not persisted with any account.
 static ClearsPublicEpoch::Cache g_ClearsPublicEpochs;
 
@@ -709,13 +709,8 @@ static ClearCategoryResult AcquireClearCategory(size_t category,int64_t epoch,
     const auto key="clears-public-category:"+std::to_string(epoch);
     const auto initial=g_ClearsPublicEpochs.GetCategory(category,epoch);
     const auto baseline=initial?initial->token:0;
-    const auto reuse=[&]() -> std::optional<P::Category>{
-        auto candidate=g_ClearsPublicEpochs.GetCategory(category,epoch);
-        const auto baselines=g_ClearsPublicEpochs.DailyBaselines(category,epoch,prior);
-        if(!candidate||(force&&candidate->token<=baseline)||
-           !P::CategoryUsable(*candidate,category,epoch,ClearPublicNow(),baselines,true))return {};
-        g_ClearsPublicEpochs.ConfirmDaily(category,*candidate,prior,ClearPublicNow());
-        return candidate;
+    const auto reuse=[&]{
+        return g_ClearsPublicEpochs.ReuseCategory(category,epoch,ClearPublicNow(),prior,force?baseline:0);
     };
     if(auto value=reuse())return {std::move(value),{}};
     // A single claim per category/epoch. Section-specific retry policy owns
@@ -742,7 +737,7 @@ static ClearCategoryResult AcquireClearCategory(size_t category,int64_t epoch,
         return {{},"Category response no longer verifies the reset window"};
     // The first live fetch may proceed without a previous fingerprint, as
     // before. It is not promoted to shared rollover proof on timestamp alone.
-    return {std::move(value),{}};
+    return {g_ClearsPublicEpochs.GetCategory(category,epoch),{}};
 }
 
 static std::vector<ClearEntry> FetchAchievementDetails(size_t section,const ClearsPublicEpoch::Category& category,
@@ -1028,6 +1023,15 @@ void LoadClearsCache() {
             std::vector<ClearEntry> entries;std::set<uint32_t> seen;
             for(const auto& ej:j.at(ClearKeys[i])){
                 auto e=deserializeEntry(ej);if(e.id&&seen.insert(e.id).second)entries.push_back(std::move(e));
+            }
+            // The account snapshot can supply an epoch-qualified public
+            // comparison fingerprint only, never today's shared membership.
+            if(i<2&&stamp>0&&stamp<=ResetEpoch(now)&&!entries.empty()){
+                const auto observedReset=CalcLastDailyReset(time);
+                const auto observedEpoch=ResetEpoch(observedReset);
+                if((observedReset==dailyReset||observedReset+std::chrono::hours(24)==dailyReset)&&
+                   ClearsReset::GracePassed(observedEpoch,stamp))
+                    g_ClearsPublicEpochs.RememberDailyFingerprint(i,observedEpoch,DailyIds(entries));
             }
             if(stale){
                 // Only the immediately preceding day's fingerprint can prove
@@ -3190,6 +3194,14 @@ static void RenderClearsShared(bool showVault) {
     if (ClearsReset::Due(ResetEpoch(g_LastDailyReset), dailyEpoch, nowEpoch)) {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
         ++g_ClearsGeneration;g_ClearsFetching=false;g_ClearsPendingManual=false;
+        // Preserve verified prior-day public ID hints independently of the
+        // selected account, including when its data was restored from disk.
+        for(size_t i=0;i<2;++i)if(g_ClearsSectionSuccess[i]>0){
+            const auto stamp=static_cast<int64_t>(g_ClearsSectionSuccess[i]);
+            const auto observed=ResetEpoch(CalcLastDailyReset(std::chrono::system_clock::from_time_t(g_ClearsSectionSuccess[i])));
+            if(observed==dailyEpoch-ClearsPublicEpoch::Day&&ClearsReset::GracePassed(observed,stamp))
+                g_ClearsPublicEpochs.RememberDailyFingerprint(i,observed,DailyIds(i==0?g_DailyFractals:g_DailyBounties));
+        }
         if (!g_ClearsDailyRolloverPending) {
             g_ClearsPriorDailyFractalIds = DailyIds(g_DailyFractals);
             g_ClearsPriorDailyBountyIds = DailyIds(g_DailyBounties);
@@ -3375,6 +3387,8 @@ void EndVaultViewDemand() {
 
 void RenderVault() { RenderClearsShared(true); }
 void RenderClears() { RenderClearsShared(false); }
+// Called only after workers have joined during addon shutdown.
+void ResetClearsPublicEpochCache(){g_ClearsPublicEpochs.Reset();}
 
 // Called globally on startup and whenever the selected account changes, not
 // only while Vault/Clears is visible. Each selected account restores its own

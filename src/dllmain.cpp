@@ -12366,6 +12366,7 @@ void AddonUnload() {
     SaveCharacterActivity(true);
     AlterEgo::NativeProgress::Reset();
     AlterEgo::RefreshEngine::ResetMetadata();
+    ResetClearsPublicEpochCache();
 
     // Shutdown Skinventory subsystems
     Skinventory::OwnedSkins::Shutdown();

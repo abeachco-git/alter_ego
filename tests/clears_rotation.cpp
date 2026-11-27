@@ -78,9 +78,21 @@ int case_clears_rotation(int, char**) {
         P::Category cold{reset,reset+60,9,{201,202},{}};
         assert(shared.StoreCategory(1,cold,{},reset+61));
         assert(!P::CategoryUsable(cold,1,reset,reset+62,{},true));
-        assert(P::CategoryUsable(cold,1,reset,reset+62,{{200,202}},true));
-        shared.ConfirmDaily(1,cold,{200,202},reset+62);
+        // An older held account baseline is a veto, not positive proof.
+        assert(!P::CategoryUsable(cold,1,reset,reset+62,{{200,202}},true));
+        assert(!shared.ReuseCategory(1,reset,reset+62,{200,202}));
+        shared.RememberDailyFingerprint(1,yesterday,{200,202});
+        assert(shared.ReuseCategory(1,reset,reset+62,{200,202}));
         assert(P::CategoryUsable(*shared.GetCategory(1,reset),1,reset,reset+63,{},true));
+        assert(!shared.ReuseCategory(1,reset,reset+63,{},9)); // forced refresh baseline
+        assert(!shared.StoreCategory(1,{reset,reset+60,8,{201,203},{}},{},reset+63)); // stale token
+        // A prior snapshot from another account can veto reuse/fetch even
+        // after the first caller switched away. No private progress is stored.
+        shared.RememberDailyFingerprint(1,yesterday,{201,202});
+        assert(!shared.ReuseCategory(1,reset,reset+64,{}));
+        assert(!shared.StoreCategory(1,{reset,reset+64,10,{201,202},{}},{},reset+64));
+        assert(shared.StoreCategory(1,{reset,reset+64,11,{201,203},{}},{},reset+64));
+        assert(shared.ReuseCategory(1,reset,reset+65,{},9));
         // Weekly public membership may legitimately retain identical IDs.
         // It verifies only definitions; per-account progress still has its
         // own existing nonzero-fingerprint hold and independent retries.
@@ -94,6 +106,12 @@ int case_clears_rotation(int, char**) {
         assert(!shared.StoreSection(3,strikes,weekly,reset+62));
         assert(shared.GetSection(2,reset)&&!shared.GetSection(3,reset));
         assert(!P::CategoryUsable(weekly,2,reset,reset+P::Week,{},true));
+        auto wrong=raids;wrong.token=13;wrong.wanted={9125};wrong.definitions={{9125,"Strike",1,{"Boss"}}};
+        assert(!shared.StoreSection(2,wrong,weekly,reset+63));
+        auto emptyRaid=raids;emptyRaid.token=14;emptyRaid.definitions[0].bitNames.clear();
+        assert(!shared.StoreSection(2,emptyRaid,weekly,reset+63));
+        assert(shared.GetSection(2,reset)->token==11);
+        shared.Reset();assert(!shared.GetCategory(0,reset)&&!shared.GetSection(2,reset)&&shared.DailyBaselines(1,reset,{}).empty());
     }
     // A weekly response may contain the identical IDs but must reset its
     // progress/claim information. A held-over response is not fresh.

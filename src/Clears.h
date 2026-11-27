@@ -15,6 +15,7 @@ extern std::atomic<bool> g_VaultNeedRequery;
 
 // Public API
 void LoadClearsCache();
+void ResetClearsPublicEpochCache();
 void LoadVaultCache();
 void RenderVault();
 // Render-thread view transition only; no HTTP, no cancellation of in-flight work.
