@@ -157,7 +157,7 @@ int case_composable_loadouts(int, char**) {
         Json emptyFlat;assert(ToLegacy(empty,emptyFlat,error));
         emptyFlat["builds"][0]["notes"]="Metadata only";
         Document reconciled;
-        assert(ReconcileLegacy(empty,emptyFlat,reconciled,error));
+        assert(Reconcile(empty,emptyFlat,reconciled,error));
         assert(reconciled.loadouts[0].refs.at("pets")==empty.loadouts[0].refs.at("pets"));
         assert(!Assign(companions,"two","pets",companions.loadouts[0].refs.at("pets"),error));
         Json flat;assert(ToLegacy(companions,flat,error)&&flat["builds"]==legacy["builds"]);
