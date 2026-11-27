@@ -13,7 +13,7 @@ enum class Phase { Idle, Queued, Working };
 enum class Kind { Ready, NoData, NoScopes, Due, Scheduled, Sync, Disabled, Retry, Failed, NoAPI, Unverified, Denied, Queued, Working, Complete };
 struct Scope {
     int64_t success=0,attempt=0;
-    bool fresh=false,automatic=false,failed=false;
+    bool fresh=false,automatic=false,failed=false,demandAllowed=true;
     Access access=Access::Allowed;
     Phase phase=Phase::Idle;
     Eligibility eligibility;
@@ -69,6 +69,7 @@ inline Kind Project(const Scope& s,int64_t now){
     }
     if(s.fresh)return Kind::Ready;
     if(!s.automatic)return Kind::Disabled;
+    if(!s.demandAllowed)return Kind::Scheduled;
     if(s.eligibility.reason==WaitReason::Retry&&s.eligibility.at>now)return Kind::Retry;
     if(s.eligibility.due)return Kind::Due;
     if(s.eligibility.reason==WaitReason::LoginGrace||s.eligibility.reason==WaitReason::LogoutGrace)return Kind::Sync;
@@ -134,11 +135,13 @@ inline std::string Describe(const Scope& s,int64_t now,int64_t sharedLogoutAt=0)
     if(s.attempt>0)text+="; last attempt: "+Age(s.attempt,now);
     if(s.access!=Access::Allowed)text+="; "+std::string(AccessLabel(s.access));
     else if(!s.automatic)text+="; automatic refresh disabled";
+    else if(!s.demandAllowed)text+="; awaiting eligible account demand";
     else if(s.eligibility.reason!=WaitReason::Current&&
         !(sharedLogoutAt&&s.eligibility.reason==WaitReason::LogoutGrace&&s.eligibility.at==sharedLogoutAt)){
         text+="; "+std::string(Reason(s.eligibility.reason));
         if(s.eligibility.at>now)text+=" "+Duration(s.eligibility.at-now);
     }
+    else if(s.eligibility.reason==WaitReason::Current&&s.eligibility.at>now)text+="; next eligible in "+Duration(s.eligibility.at-now);
     if(s.phase!=Phase::Idle)text+="; "+Label(s.phase==Phase::Queued?Kind::Queued:Kind::Working);
     if(!s.error.empty())text+="; "+s.error;
     return text;

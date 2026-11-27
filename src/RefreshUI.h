@@ -23,7 +23,9 @@ inline State StatusState(RefreshStatus::Kind kind){
     }
 }
 inline std::string Age(std::time_t stamp,int64_t now=0) {
-    return RefreshStatus::Age(stamp,now?now:std::time(nullptr));
+    if(now)return RefreshStatus::Age(stamp,now);
+    const auto current=std::time(nullptr);
+    return RefreshStatus::Age(stamp>current?current:stamp,current);
 }
 inline void DiagnosticsTooltip(const char* title,const std::string& body){
     ImGui::BeginTooltip();

@@ -37,6 +37,7 @@ struct Eligibility { WaitReason reason=WaitReason::Current; int64_t at=0; bool d
 inline Eligibility TimedEligibility(int64_t success,int64_t attempt,int64_t now,int64_t interval){
     if(const auto retry=RetryUntil(success,attempt,now))return {WaitReason::Retry,retry,false};
     if(success<=0||success>now||now-success>=interval)return {WaitReason::Due,now,true};
-    return {};
+    return {WaitReason::Current,success>std::numeric_limits<int64_t>::max()-interval?
+        std::numeric_limits<int64_t>::max():success+interval,false};
 }
 }

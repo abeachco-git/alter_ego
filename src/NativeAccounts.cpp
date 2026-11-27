@@ -59,13 +59,15 @@ using ScopeKey=std::tuple<std::string,std::string,std::string>;
 std::map<ScopeKey,ScopeState> liveScopes;
 unsigned processedScopes=0;
 std::string activeScope;
+std::optional<ScopeKey> activeScopeKey,pendingScopeKey;
 void BeginScope(const ScopeState& state,const std::string& label){
     std::lock_guard<std::mutex> lock(viewMutex);
     auto current=state;current.status="Refreshing";
     auto prior=view->scopes.find({state.account,state.scope,state.character});
     if(prior!=view->scopes.end())current.success=prior->second.success;
     liveScopes[{state.account,state.scope,state.character}]=std::move(current);
-    activeScope=label;
+    activeScope=label;activeScopeKey=ScopeKey{state.account,state.scope,state.character};
+    if(pendingScopeKey==activeScopeKey)pendingScopeKey.reset();
 }
 void EndScope(ScopeState state){
     std::lock_guard<std::mutex> lock(viewMutex);
@@ -73,17 +75,18 @@ void EndScope(ScopeState state){
     // Shared endpoint owners already published the authoritative outcome.
     // Do not let a delayed inventory consumer overlay a newer owner result.
     if(state.scope=="Equipment"||state.scope=="Roster"){
-        liveScopes.erase(key);++processedScopes;activeScope.clear();return;
+        liveScopes.erase(key);++processedScopes;activeScope.clear();activeScopeKey.reset();return;
     }
     auto prior=liveScopes.find(key);
     if(state.status!="Ready"&&prior!=liveScopes.end())state.success=prior->second.success;
-    liveScopes[key]=std::move(state);++processedScopes;activeScope.clear();
+    liveScopes[key]=std::move(state);++processedScopes;activeScope.clear();activeScopeKey.reset();
 }
-void SetActiveScope(const std::string& label){
-    std::lock_guard<std::mutex> lock(viewMutex);activeScope=label;
+void SetActiveScope(const std::string& label,std::optional<ScopeKey> key={}){
+    std::lock_guard<std::mutex> lock(viewMutex);activeScope=label;activeScopeKey=std::move(key);
+    if(pendingScopeKey==activeScopeKey)pendingScopeKey.reset();
 }
 void ClearProgress(){
-    std::lock_guard<std::mutex> lock(viewMutex);liveScopes.clear();processedScopes=0;activeScope.clear();
+    std::lock_guard<std::mutex> lock(viewMutex);liveScopes.clear();processedScopes=0;activeScope.clear();activeScopeKey.reset();pendingScopeKey.reset();
 }
 const std::vector<std::string> recommended={"account","characters","inventories","builds","progression","unlocks","wallet","guilds","tradingpost"};
 std::string Target(const std::string& id){return "AlterEgo/GW2/"+id;}
@@ -142,9 +145,10 @@ void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State st
 std::shared_ptr<const View> Snapshot(){std::lock_guard<std::mutex> lock(viewMutex);return view;}
 void Message(const std::string& msg,RefreshUI::State state=RefreshUI::State::Error){std::lock_guard<std::mutex> lock(viewMutex);message=msg;messageState=state;}
 std::string Status(){std::lock_guard<std::mutex> lock(viewMutex);return message;}
-template<class Job> void Launch(Job job){
+template<class Job> void Launch(Job job,std::optional<ScopeKey> pending={}){
     if(busy.exchange(true))return;
     ClearProgress();
+    {std::lock_guard<std::mutex> lock(viewMutex);pendingScopeKey=std::move(pending);}
     Message("Working...",RefreshUI::State::Working);
     Background::Workers().Launch([job=std::move(job)]{
         try{job();}catch(const Background::Cancelled&){Message("Operation cancelled.");}catch(...){Message("Operation failed; previous verified data retained.");}
@@ -284,34 +288,63 @@ bool AutoScope(const std::string& scope){
     if(scope=="Roster")return AutoScope("Bags")||AutoScope("Equipment");
     return false;
 }
-bool ActivityScope(const std::string& scope){return scope=="Bags"||scope=="Equipment"||scope=="Bank"||scope=="Shared inventory"||scope=="Materials"||scope=="Legendary Armory";}
+bool ActivityScope(const std::string& scope){return RefreshEngine::ActivityInventoryScope(scope);}
 bool ScopeFresh(const std::string& account,const std::string& scope,const std::string& character,int64_t success){
     if(ActivityScope(scope))return CharacterActivity::Fresh({account,character},scope,success,scope=="Equipment"&&CharacterActivity::SpecSignal().load());
-    return success>0&&Now()>=success&&Now()-success<FreshSeconds(scope);
+    const auto now=Now();return success>0&&now>=success&&now-success<FreshSeconds(scope);
+}
+bool ScopePermitted(const Account& a,const std::string& scope){
+    return scope=="Wallet"?a.permissions.count("wallet"):
+        scope=="Guild access"?a.permissions.count("guilds"):
+        scope=="Roster"?a.permissions.count("characters"):
+        scope=="Delivery box"?a.permissions.count("tradingpost"):
+        a.permissions.count("inventories")&&((scope!="Bags"&&scope!="Equipment")||a.permissions.count("characters"))&&(scope!="Legendary Armory"||a.permissions.count("unlocks"));
+}
+// Same eligibility and access evidence for automatic admission and footer
+// projection. The inspection is read-only; only admission owns dispatch.
+RefreshStatus::Scope InspectStorageScope(const std::string& account,const std::string& scope,
+    const std::string& character,const ScopeState* state,bool permitted,int64_t now,
+    RefreshStatus::Phase phase=RefreshStatus::Phase::Idle){
+    namespace R=RefreshStatus;
+    R::Scope result;
+    const auto status=state?state->status:"Not retrieved";
+    result.success=state?state->success:0;result.attempt=state?state->attempted:0;
+    result.automatic=AutoScope(scope);result.access=permitted?R::Access::Allowed:R::Access::Denied;
+    result.phase=phase;
+    const auto unresolved=state&&status!="Ready"?state->attempted:0;
+    if(ActivityScope(scope)){
+        namespace A=CharacterActivity;
+        std::lock_guard<std::mutex> lock(A::Mutex());
+        const auto inspection=A::State().Inspect({account,character},scope,result.success,now,
+            scope=="Equipment"&&A::SpecSignal().load(),unresolved);
+        result.fresh=inspection.fresh;result.eligibility=inspection.eligibility;
+        result.attempt=std::max(result.attempt,inspection.attempt);
+        result.error=inspection.error;
+    }else{
+        result.fresh=result.success>0&&result.success<=now&&now-result.success<FreshSeconds(scope);
+        result.eligibility=RefreshEngine::TimedEligibility(result.success,unresolved,now,FreshSeconds(scope));
+    }
+    if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing"){
+        result.error=status;result.failed=true;
+    }
+    if(!result.error.empty())result.failed=true;
+    return result;
 }
 bool ScopeDue(const View& v,const std::string& account,const std::string& scope,const std::string& character={}){
     auto it=v.scopes.find({account,scope,character});
     if(!AutoScope(scope))return false;
-    {
-        auto a=std::find_if(v.accounts.begin(),v.accounts.end(),[&](const Account& a){return a.id==account;});
-        if(a==v.accounts.end())return false;
-        const bool permitted=scope=="Wallet"?a->permissions.count("wallet"):
-            scope=="Guild access"?a->permissions.count("guilds"):
-            scope=="Roster"?a->permissions.count("characters"):
-            scope=="Delivery box"?a->permissions.count("tradingpost"):
-            a->permissions.count("inventories")&&((scope!="Bags"&&scope!="Equipment")||a->permissions.count("characters"))&&(scope!="Legendary Armory"||a->permissions.count("unlocks"));
-        if(!permitted)return false;
-    }
-    const auto success=it==v.scopes.end()?0:it->second.success;
-    const auto attempt=it==v.scopes.end()||it->second.status=="Ready"?0:it->second.attempted;
-    if(ActivityScope(scope))return CharacterActivity::Due({account,character},scope,success,attempt,scope=="Equipment"&&CharacterActivity::SpecSignal().load());
-    return Due(scope,attempt,success,Now());
+    const auto a=std::find_if(v.accounts.begin(),v.accounts.end(),[&](const Account& row){return row.id==account;});
+    if(a==v.accounts.end()||!ScopePermitted(*a,scope))return false;
+    return InspectStorageScope(account,scope,character,it==v.scopes.end()?nullptr:&it->second,true,Now()).eligibility.due;
 }
 bool Fresh(const View& v,const Row& row){
     const auto& s=row.slot;auto it=v.scopes.find({s.account,s.scope,s.character});
     return it!=v.scopes.end()&&it->second.status=="Ready"&&ScopeFresh(s.account,s.scope,s.character,row.captured);
 }
 void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const std::set<std::string>& characterFilter={},bool includeWallet=false){
+    std::optional<ScopeKey> pending;
+    if(accounts.size()==1&&automatic&&!onlyScope.empty()&&onlyScope!="Items")
+        pending=ScopeKey{accounts.front().id,onlyScope=="Guild bank"?"Guild access":onlyScope,onlyCharacter};
     Launch([accounts,epoch,onlyScope,automatic,onlyCharacter,characterFilter,includeWallet]{
         ApiActivity::ReasonScope reason(automatic?ApiActivity::Reason::Visible:ApiActivity::Reason::Manual);
         const auto previous=Snapshot();
@@ -428,7 +461,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
             }
             if((onlyScope.empty()||onlyScope=="Guild bank")&&(!automatic||ScopeDue(*previous,a.id,"Guild access"))){
                 checkCurrent();
-                SetActiveScope("Guild access");
+                SetActiveScope("Guild access",ScopeKey{a.id,"Guild access",{}});
                 try{
                     if(!a.permissions.count("guilds"))throw std::runtime_error("Missing guilds permission");
                     auto identity=fetchAccount("/v2/account");
@@ -442,7 +475,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                         auto old=previous->inventory.guilds.find(id);
                         if(automatic&&old!=previous->inventory.guilds.end()&&!Due("Guild bank",old->second.attempted,old->second.success,Now()))continue;
                         GuildRow g;g.id=id;g.attempted=Now();
-                        SetActiveScope("Guild bank / "+(old!=previous->inventory.guilds.end()&&!old->second.name.empty()?old->second.name:id));
+                        SetActiveScope("Guild bank / "+(old!=previous->inventory.guilds.end()&&!old->second.name.empty()?old->second.name:id),ScopeKey{id,"Guild bank",{}});
                         try{
                             auto meta=Fetch("/v2/guild/"+id,{});g.name=meta.at("name").get<std::string>();g.tag=meta.value("tag",std::string{});
                         }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();}
@@ -519,7 +552,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
         };
         for(auto id:ids){Background::Checkpoint();if(count==100)flush();if(count++)batch+=",";batch+=std::to_string(id);expected.insert(id);}flush();
         Publish("Refresh finished. Check individual storage status for failures or stale data.");
-    });
+    },std::move(pending));
 }
 std::string Display(const Account& a){return a.label.empty()?a.name:a.label;}
 std::string Active(const View& v,const std::string& ch){
@@ -1453,75 +1486,62 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     const bool includeWallet=itemView&&WalletMatchesFacets(nav.scope,nav.characters,nav.binding,nav.rarity,nav.type,nav.transfer!=0);
     const std::set<std::string> noCharacters;
     const auto& characters=characterFiltered?nav.characters:noCharacters;
-    bool missing=false,failed=false,stale=false,needsManual=false,retrying=false;
+    namespace R=RefreshStatus;
+    const auto now=Now();
+    const auto activeAccount=CharacterActivity::ActiveKey().first;
+    const auto autoAccount=selectedAccount.empty()&&v->accounts.size()>1?activeAccount:selectedAccount;
+    const bool allAuto=!(selectedAccount.empty()&&v->accounts.size()>1);
+    R::Aggregate aggregate;
     std::map<ScopeKey,ScopeState> progress;std::string current;unsigned processed=0;
-    {std::lock_guard<std::mutex> lock(viewMutex);progress=liveScopes;current=activeScope;processed=processedScopes;}
-    std::time_t oldest=0;unsigned count=0;
-    std::string detail;
-    const auto note=[&](const std::string& name,int64_t success,const std::string& status,const std::string& ttlScope,bool show=true,const std::string& account={},const std::string& ch={}){
-        if(show){if(!detail.empty())detail+="\n";detail+=name+": "+status;}
-        if(success<=0)missing=true;
-        else{
-            if(!oldest||success<oldest)oldest=static_cast<std::time_t>(success);
-            if(!ScopeFresh(account,ttlScope,ch,success)){stale=true;if(show)detail+=" (stale or awaiting synchronization)";}
-            if(show)detail+="; "+RefreshUI::Age(static_cast<std::time_t>(success));
-        }
-        if((success<=0||!ScopeFresh(account,ttlScope,ch,success))&&!AutoScope(ttlScope))needsManual=true;
-        if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing"){
-            const bool transient=status=="Rate limited; retry later"||status=="Transport failed or cancelled"||
-                status=="HTTP 429"||status.rfind("HTTP 5",0)==0;
-            if(transient&&AutoScope(ttlScope))retrying=true;else failed=true;
-        }
-        ++count;
+    std::optional<ScopeKey> active,pending;
+    {std::lock_guard<std::mutex> lock(viewMutex);progress=liveScopes;current=activeScope;processed=processedScopes;
+        active=activeScopeKey;pending=pendingScopeKey;}
+    const bool operationBusy=busy.load();
+    const auto phaseFor=[&](const ScopeKey& key){
+        return active&&*active==key?R::Phase::Working:pending&&*pending==key?R::Phase::Queued:R::Phase::Idle;
     };
+    std::string detail;
     const auto mark=[&](const Account& a,const std::string& dataset,const std::string& ch={},RefreshProgress::Counts* group=nullptr){
         const ScopeKey key{a.id,dataset,ch};
         auto it=v->scopes.find(key);auto live=progress.find(key);
-        const auto* s=live!=progress.end()?&live->second:it!=v->scopes.end()?&it->second:nullptr;
-        auto name=(accounts.size()>1?Display(a)+" / ":"")+dataset+(ch.empty()?"":" / "+ch);
-        const auto status=s?s->status:"Not retrieved";const auto success=s?s->success:0;
-        note(name,success,status,dataset,group==nullptr,a.id,ch);
-        if(group)group->Add(status=="Ready"&&success>0&&!ScopeFresh(a.id,dataset,ch,success)?"Stale":status,success>0);
-        if(!group&&ActivityScope(dataset)){
-            namespace A=CharacterActivity;
-            A::Inspection inspection;
-            A::Eligibility eligible;
-            const auto now=Now();
-            {
-                std::lock_guard<std::mutex> lock(A::Mutex());
-                const bool spec=dataset=="Equipment"&&A::SpecSignal().load();
-                inspection=A::State().Inspect({a.id,ch},dataset,success,now,spec);
-                eligible=A::State().Eligible({a.id,ch},dataset,success,s&&status!="Ready"?s->attempted:0,now,spec);
-            }
-            detail+="; "+std::string(inspection.active?"active":"not active");
-            if(!AutoScope(dataset))detail+="; auto refresh disabled";
-            else if(eligible.due)detail+="; refresh due";
-            else if(eligible.at>now){
-                const auto remaining=eligible.at-now;
-                using W=A::WaitReason;
-                const char* reason=eligible.reason==W::Retry?"retry cooldown":
-                    eligible.reason==W::LoginGrace?"login grace":eligible.reason==W::LogoutGrace?"logout grace":
-                    eligible.reason==W::SpecDebounce?"specialization change":eligible.reason==W::Stagger?"staggered refresh":"active interval";
-                detail+="; "+std::string(reason)+" "+std::to_string(remaining/60)+"m "+std::to_string(remaining%60)+"s";
-            }else if(inspection.fresh&&!inspection.active)detail+="; no unverified observed activity";
+        const auto* state=live!=progress.end()?&live->second:it!=v->scopes.end()?&it->second:nullptr;
+        auto inspected=InspectStorageScope(a.id,dataset,ch,state,ScopePermitted(a,dataset),now,phaseFor(key));
+        inspected.demandAllowed=allAuto||(!autoAccount.empty()&&a.id==autoAccount);
+        aggregate.Add(inspected,now);
+        const auto kind=R::Project(inspected,now);
+        if(group){
+            const char* label=kind==R::Kind::Denied?"Permission denied":kind==R::Kind::Working?"Refreshing":
+                kind==R::Kind::Queued?"Queued":inspected.failed?"Failed":inspected.success<=0?"Not retrieved":
+                inspected.fresh?"Ready":"Stale";
+            group->Add(label,inspected.success>0);
+        }else{
+            if(!detail.empty())detail+="\n";
+            detail+=(accounts.size()>1?Display(a)+" / ":"")+dataset+(ch.empty()?"":" / "+ch)+": "+R::Describe(inspected,now);
         }
+        return inspected;
     };
-    std::set<std::string> guilds;
+    std::map<std::string,R::Scope> guilds;
     for(const auto& a:accounts){
         if(scope=="Wallet"){if(!itemView||includeWallet)mark(a,"Wallet");continue;}
         if(scope=="Items"&&includeWallet)mark(a,"Wallet");
         if(scope=="Guild bank"){
-            mark(a,"Guild access");auto access=v->inventory.guildAccess.find(a.id);
-            if(access!=v->inventory.guildAccess.end())guilds.insert(access->second.begin(),access->second.end());
+            const auto accessStatus=mark(a,"Guild access");auto access=v->inventory.guildAccess.find(a.id);
+            if(access!=v->inventory.guildAccess.end())for(const auto& id:access->second){
+                auto it=guilds.find(id);
+                if(it==guilds.end()||(it->second.access!=R::Access::Allowed&&accessStatus.access==R::Access::Allowed)||
+                   (accessStatus.access==R::Access::Allowed&&accessStatus.demandAllowed&&
+                   (!it->second.demandAllowed||accessStatus.eligibility.due||
+                    (accessStatus.eligibility.at&&accessStatus.eligibility.at<it->second.eligibility.at))))
+                    guilds[id]=accessStatus;
+            }
             continue;
         }
         for(const auto* dataset:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box"})
             if(MatchesStorageView(scope,characters,dataset,{}))mark(a,dataset);
         if(scope=="Items"||scope=="Bags"||scope=="Equipment"){
             auto roster=v->inventory.rosters.find(a.id);
-            // Roster is a prerequisite, not a bag/equipment retrieval.
             if(roster==v->inventory.rosters.end()){
-                mark(a,"Roster");missing=true;continue;
+                mark(a,"Roster");aggregate.missing=true;continue;
             }
             for(const auto* dataset:{"Bags","Equipment"}){
                 if(scope!="Items"&&scope!=dataset)continue;
@@ -1541,37 +1561,52 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
             }
         }
     }
-    for(const auto& id:guilds){
+    for(const auto& [id,access]:guilds){
         auto it=v->inventory.guilds.find(id);
-        if(it==v->inventory.guilds.end())note(id,0,"Not retrieved","Guild bank");
-        else note(it->second.name.empty()?id:it->second.name,it->second.success,it->second.status,"Guild bank");
+        ScopeState state{id,"Guild bank",{},"Not retrieved",0,0};
+        std::string name=id;
+        if(it!=v->inventory.guilds.end()){
+            state.status=it->second.status;state.success=it->second.success;state.attempted=it->second.attempted;
+            if(!it->second.name.empty())name=it->second.name;
+        }
+        auto inspected=InspectStorageScope(id,"Guild bank",{},&state,access.access==R::Access::Allowed,now,
+            phaseFor(ScopeKey{id,"Guild bank",{}}));
+        inspected.demandAllowed=access.demandAllowed;
+        // Guild access is the admission gate for a subsequent stash retrieval.
+        if(inspected.eligibility.due&&!access.eligibility.due){
+            inspected.eligibility=access.eligibility;
+            if(inspected.eligibility.reason==R::WaitReason::Current)inspected.eligibility.reason=R::WaitReason::ActiveInterval;
+        }
+        aggregate.Add(inspected,now);
+        detail+="\n"+name+": "+R::Describe(inspected,now);
     }
-    // A scoped aggregate is only fully retrieved when every expected dataset
-    // has succeeded. Use the oldest successful timestamp, never a failure time.
-    if(missing||!count)oldest=0;
-    auto state=RefreshUI::State::Ready;
-    if(busy.load()){state=RefreshUI::State::Working;detail=std::to_string(processed)+" storage scopes processed"+(current.empty()?"":"\nCurrent: "+current)+"\n\n"+detail;}
-    else if(failed)state=RefreshUI::State::Error;
-    else if(retrying||((missing||stale||!count)&&needsManual))state=RefreshUI::State::Waiting;
-    const char* idleLabel=state==RefreshUI::State::Waiting?(retrying?"Retrying":"Auto disabled"):
-        state==RefreshUI::State::Ready&&(missing||stale||!count)?(count?"Scheduled":"No scopes"):nullptr;
-    if(!count&&characterFiltered)detail="No verified storage scopes match the selected characters and storage filter.";
-    if(characterFiltered&&count)detail+="\n\nTimestamp and manual Refresh cover matching character storage only.";
+    if(!guilds.empty())detail+="\nGuild access controls automatic stash retrieval.";
+    auto kind=accounts.empty()?R::Kind::NoAPI:aggregate.Status();
+    if(kind==R::Kind::Working||kind==R::Kind::Queued)
+        detail=std::to_string(processed)+" storage scopes processed"+(current.empty()?"":"\nCurrent: "+current)+"\n\n"+detail;
+    else if(operationBusy)detail+="\nAnother storage/account operation is in progress.";
+    if(!aggregate.count&&characterFiltered)detail="No verified storage scopes match the selected characters and storage filter.";
+    else if(!aggregate.count&&!accounts.empty())detail+="\nNo storage scopes in the current selection.";
+    if(characterFiltered&&aggregate.count)detail+="\n\nTimestamp and manual Refresh cover matching character storage only.";
     if(itemView&&nav.item&&!nav.currency){
-        const auto p=Skinventory::Commerce::GetItemPriceStatus(nav.item);const auto now=Now();
+        const auto p=Skinventory::Commerce::GetItemPriceStatus(nav.item);
         detail+="\n\nTrading Post price (selected item): ";
         if(p.pending)detail+="queued or refreshing";
         else if(p.retry_at>now)detail+="retry cooldown "+std::to_string((p.retry_at-now+59)/60)+"m";
         else if(!p.price)detail+="not retrieved";
         else if(now<p.price->fetched_at_unix||now-p.price->fetched_at_unix>=Skinventory::Commerce::PriceTTL)detail+="stale; refresh due";
         else detail+="fresh; next eligible in "+std::to_string((Skinventory::Commerce::PriceTTL-(now-p.price->fetched_at_unix)+59)/60)+"m";
-        if(p.price)detail+="; updated "+RefreshUI::Age(static_cast<std::time_t>(p.price->fetched_at_unix));
+        if(p.price)detail+="; updated "+RefreshUI::Age(static_cast<std::time_t>(p.price->fetched_at_unix),now);
         if(!AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::TradingPrices))detail+="; automatic refresh disabled";
         detail+="\nPrice refresh is independent of inventory storage.";
     }
     if(accounts.empty())detail="Link or select an account.";
     const bool incompatible=(characterFiltered&&scope!="Items"&&scope!="Bags"&&scope!="Equipment")||(itemView&&scope=="Wallet"&&!includeWallet);
-    if(RefreshUI::Row("native_inventory_refresh",oldest,"inventory scope",state,detail,busy.load()||accounts.empty()||incompatible,nullptr,idleLabel,true))
+    const auto label=R::Label(kind,now,aggregate.retryAt);
+    const char* disabledReason=accounts.empty()?"Link or select an account.":incompatible?"The current storage and character filters are incompatible.":
+        operationBusy?"A storage or account operation is already in progress.":nullptr;
+    if(RefreshUI::Row("native_inventory_refresh",static_cast<std::time_t>(aggregate.Timestamp()),"inventory scope",
+        RefreshUI::StatusState(kind),detail,operationBusy||accounts.empty()||incompatible,nullptr,label.c_str(),true,now,disabledReason))
         Refresh(accounts,v->credentialEpoch,scope,false,{},characterFiltered?characters:noCharacters,includeWallet);
 }
 
