@@ -103,6 +103,8 @@ Use Loadout Library, Components, Fashion, Import Library and Export Library. JSO
 
 The standalone component editor checks exact candidates on draft or revision changes, not on every frame. Create may open an existing match; private Copy & Edit may explicitly reassign to one. Save in shared or duplicate mode preserves the independent identity. Unverified Skills profession context cannot authorize automatic reuse.
 
+Nexus options' Public reference catalogs section offers Refresh profession metadata through the standard action control, with a compact cached/refreshing/failed count. It explicitly refreshes all nine professions; ordinary editor demand requests only the relevant profession. Cached selectors and pure getters do not perform SQL or HTTP; missing native editor metadata can use the same manual owner.
+
 Nexus options include Storage & Cache with an explicit Inspect Storage action, explanatory hover tooltip and cached diagnostic snapshot. Use shared section and action controls. No filesystem/SQL scan on each ImGui frame. The Rebuild button sits beside the operation dropdown (wraps at narrow widths) and offers confirmed startup-only rebuild of the entire cache, downloaded artwork, characters, account progress, achievement catalog, shared public catalogs/prices, or inventory/wallet/guild bank. Show operation results and quarantine location; never invalidate live snapshots.
 
 ### Multi-select skin filters and split panels
