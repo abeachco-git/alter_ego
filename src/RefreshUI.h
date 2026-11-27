@@ -89,7 +89,9 @@ inline float RowHeight() {
 inline bool Row(const char* id, std::time_t stamp, const char* source,
                 State state, const std::string& detail, bool disabled = false,
                 bool* moreClicked = nullptr, const char* statusOverride = nullptr, bool timestampDetails = false,
-                int64_t sampledNow=0,const char* disabledReason=nullptr,ImVec2* moreAnchor=nullptr) {
+                int64_t sampledNow=0,const char* disabledReason=nullptr,ImVec2* moreAnchor=nullptr,
+                void (*contextMenu)()=nullptr,bool moreEnabledWhenRefreshDisabled=false,
+                const char* refreshHint=nullptr) {
     ImGui::PushID(id);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
@@ -101,19 +103,23 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     const bool clicked = UI::Button("Refresh", ImVec2(0, buttonH));
     if (disabled) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
     if(disabled)UI::DisabledHint(disabledReason);
+    else if(refreshHint&&ImGui::IsItemHovered())UI::Hint(refreshHint);
+    if(contextMenu)UI::EntityContext("##refresh_footer_actions",contextMenu);
     if (moreClicked) {
         ImGui::SameLine(0.0f, 5.0f);
-        if(disabled){
+        const bool moreDisabled=disabled&&!moreEnabledWhenRefreshDisabled;
+        if(moreDisabled){
             ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*0.5f);
         }
-        *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH))&&!disabled;
+        *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH))&&!moreDisabled;
         if(moreAnchor)*moreAnchor=ImGui::GetItemRectMin();
-        if(disabled){
+        if(moreDisabled){
             ImGui::PopStyleVar();ImGui::PopItemFlag();
             UI::DisabledHint(disabledReason);
         }else if(ImGui::IsItemHovered())
             UI::Hint("Choose one or more characters to refresh");
+        if(contextMenu)UI::EntityContext("##refresh_footer_actions",contextMenu);
     }
 
     ImGui::SameLine(0.0f, 9.0f);

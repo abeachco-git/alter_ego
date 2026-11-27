@@ -175,7 +175,7 @@ inline void DrawMenuIcon(ImDrawList* draw,ImVec2 pos,MenuIcon icon,ImU32 color,f
         case MenuIcon::Link:line(.12f,.60f,.12f,.80f);line(.12f,.80f,.32f,.88f);line(.32f,.88f,.63f,.57f);line(.37f,.43f,.68f,.12f);line(.68f,.12f,.88f,.20f);line(.88f,.20f,.88f,.40f);line(.88f,.40f,.60f,.68f);line(.32f,.68f,.68f,.32f);break;
     }
 }
-inline bool MenuAction(const char* label,MenuIcon icon,bool enabled=true,const char* reason=nullptr){
+inline bool MenuAction(const char* label,MenuIcon icon,bool enabled=true,const char* reason=nullptr,const char* description=nullptr){
     const auto pos=ImGui::GetCursorScreenPos();
     auto* draw=ImGui::GetWindowDrawList();
     const auto size=ImGui::GetFontSize();
@@ -184,6 +184,7 @@ inline bool MenuAction(const char* label,MenuIcon icon,bool enabled=true,const c
     const bool clicked=destructive?DestructiveMenuItem(padded.c_str(),enabled):ImGui::MenuItem(padded.c_str(),nullptr,false,enabled);
     DrawMenuIcon(draw,pos,icon,enabled?(destructive?ImGui::GetColorU32(DestructiveText):ImGui::GetColorU32(ImGuiCol_Text)):ImGui::GetColorU32(ImGuiCol_TextDisabled),size);
     if(!enabled)DisabledHint(reason);
+    else if(description&&*description&&ImGui::IsItemHovered())Hint(description);
     return clicked;
 }
 inline bool BeginActionMenu(const char* label,MenuIcon icon,bool enabled=true,const char* reason=nullptr){

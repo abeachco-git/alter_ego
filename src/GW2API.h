@@ -329,7 +329,7 @@ namespace AlterEgo {
         // --- native API integration ---
         static AccountStatus GetAccountStatus();
         static void RequestCharacterRefresh(const std::string& priorityChar = ""); // Fetch all characters via native API
-        static void RequestCharacterList();              // Fetch just the character name list
+        static void RequestCharacterList(const std::string& account={}); // Verify roster identities in the requested account scope
         static void RequestCharacterRefreshSelected(
             const std::vector<std::string>& names, bool refreshCrafting = true);
         static void RequestCharacterRefreshAddresses(const std::vector<CharacterIdentity::Address>& addresses,
@@ -352,6 +352,8 @@ namespace AlterEgo {
 
         // --- Fetch state ---
         static FetchStatus GetFetchStatus();
+        struct RosterRefreshInspection { FetchStatus status=FetchStatus::Idle; std::string message; };
+        static RosterRefreshInspection InspectRosterRefresh();
         struct CharacterRefreshInspection { bool busy=false; RefreshStatus::CharacterWork work; std::string message; };
         static CharacterRefreshInspection InspectCharacterRefresh(const std::string& account,const std::string& name,uint64_t generation);
         static std::string GetFetchStatusMessage();

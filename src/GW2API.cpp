@@ -174,6 +174,8 @@ namespace AlterEgo {
     FetchStatus GW2API::s_fetch_status = FetchStatus::Idle;
     std::string GW2API::s_fetch_message;
     RefreshStatus::CharacterBatch GW2API::s_character_work;
+    // Later character-data requests must not overwrite roster progress or completion.
+    static GW2API::RosterRefreshInspection s_roster_refresh;
     std::string GW2API::s_active_character;
     std::vector<Character> GW2API::s_characters;
     bool GW2API::s_has_character_data = false;
@@ -293,7 +295,7 @@ namespace AlterEgo {
         }
         return &result;
     }
-    void GW2API::RequestCharacterList(){RequestNativeCharacters({},true,true,{});}
+    void GW2API::RequestCharacterList(const std::string& account){RequestNativeCharacters({},true,true,{},account);}
     void GW2API::RequestCharacterRefresh(const std::string& priority){RequestNativeCharacters({},false,true,priority);}
     void GW2API::RequestCharacterRefreshSelected(const std::vector<std::string>& names,bool crafting){
         if(!names.empty())RequestNativeCharacters(names,false,crafting,{});
@@ -340,6 +342,7 @@ namespace AlterEgo {
     void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly,CharacterScopes::Mask demand,bool manual,const std::vector<CharacterIdentity::Address>& expected){
         auto accounts=NativeAccounts::Linked();
         if(!accountOnly.empty())accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[&](const auto& a){return a.id!=accountOnly;}),accounts.end());
+        if(listOnly)accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[](const auto& a){return !a.permissions.count("characters");}),accounts.end());
         if(!expected.empty()){
             // Freeze only the exact addresses selected in the UI. A newly
             // bound character with a matching name is not an admitted target.
@@ -358,8 +361,13 @@ namespace AlterEgo {
             if(s_fetch_status==FetchStatus::InProgress)return;
             s_character_work.Reset();
             if(listOnly)s_pending_char_names.clear();
-            if(accounts.empty()){s_fetch_status=FetchStatus::Error;s_fetch_message="Link an account in Nexus options";return;}
+            if(accounts.empty()){
+                s_fetch_status=FetchStatus::Error;s_fetch_message=listOnly?"No linked account with character permission in this scope":"Link an account in Nexus options";
+                if(listOnly)s_roster_refresh={s_fetch_status,s_fetch_message};
+                return;
+            }
             s_fetch_status=FetchStatus::InProgress;s_fetch_message="Checking character roster...";
+            if(listOnly)s_roster_refresh={s_fetch_status,s_fetch_message};
             s_current_char={};s_chars_fetched=0;s_chars_total=0;
             if(!listOnly&&!accountOnly.empty())for(const auto& a:accounts)
                 for(const auto& n:selected)if(a.rosterKnown&&a.characters.count(n))
@@ -367,7 +375,7 @@ namespace AlterEgo {
         }
         Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual,expected]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
-            auto fail=[](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;s_current_char={};s_character_work.Stop(CharacterActivity::Now(),message);};
+            auto fail=[listOnly](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;if(listOnly)s_roster_refresh={s_fetch_status,s_fetch_message};s_current_char={};s_character_work.Stop(CharacterActivity::Now(),message);};
             std::vector<std::pair<NativeAccounts::LinkedAccount,std::string>> targets;
             bool partial=false;
             // A manual roster fetch verifies every configured account; selective
@@ -378,7 +386,7 @@ namespace AlterEgo {
                 auto targetAccount=a;
                 if(listOnly||selected.empty()||!a.rosterKnown){
                     if(!manual){partial=true;continue;} // automatic demand never discovers unrelated rosters
-                    {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_message="Checking roster "+std::to_string(rosterOrdinal)+"/"+std::to_string(accounts.size())+(accounts.size()>1?" - "+a.name:"");}
+                    {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_message="Checking roster "+std::to_string(rosterOrdinal)+"/"+std::to_string(accounts.size())+(accounts.size()>1?" - "+a.name:"");if(listOnly)s_roster_refresh={s_fetch_status,s_fetch_message};}
                     if(!NativeAccounts::RefreshRoster(a,names,listOnly)){partial=true;continue;}
                     // A whole-roster operation targets the newly verified roster;
                     // an individual selection must retain its admitted binding.
@@ -404,7 +412,7 @@ namespace AlterEgo {
             // The shared roster owner adopts both caches before publication.
             // No second name-only pruning pass.
             if(listOnly){
-                {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;s_fetch_message=partial?"Some rosters could not be verified or saved":"Character list received";}
+                {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;s_fetch_message=partial?"Some rosters could not be verified or saved":targets.empty()?"Character list received (empty)":"Character list received";s_roster_refresh={s_fetch_status,s_fetch_message};}
                 return;
             }
             size_t ordinal=0;
@@ -658,7 +666,7 @@ namespace AlterEgo {
                 s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;
                 s_fetch_message=std::to_string(s_chars_fetched)+"/"+std::to_string(s_chars_total)+(partial?" characters refreshed; failed data retained":" characters refreshed");
             }
-        },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message="Character refresh cancelled";s_current_char={};s_character_work.Stop(CharacterActivity::Now(),s_fetch_message);});
+        },[listOnly]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=listOnly?"Character list refresh cancelled":"Character refresh cancelled";if(listOnly)s_roster_refresh={s_fetch_status,s_fetch_message};s_current_char={};s_character_work.Stop(CharacterActivity::Now(),s_fetch_message);});
     }
 
     // --- Parse helpers ---
@@ -897,6 +905,10 @@ namespace AlterEgo {
     FetchStatus GW2API::GetFetchStatus() {
         std::lock_guard<std::mutex> lock(s_mutex);
         return s_fetch_status;
+    }
+
+    GW2API::RosterRefreshInspection GW2API::InspectRosterRefresh(){
+        std::lock_guard<std::mutex> lock(s_mutex);return s_roster_refresh;
     }
 
     GW2API::CharacterRefreshInspection GW2API::InspectCharacterRefresh(const std::string& account,const std::string& name,uint64_t generation) {
