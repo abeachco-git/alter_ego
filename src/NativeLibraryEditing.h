@@ -354,6 +354,57 @@ inline bool SaveLoadoutReferenceDraft(Composable::Document& doc,const std::strin
         Json raw;return Composable::Resolve(next,*l,raw,err);
     },error);
 }
+// Inherited replacement selections are draft-only. They are never persisted
+// as conflicting direct references. A shared replacement changes the set's
+// reference, NOT the payload of either component.
+inline bool SaveParentReferenceDraft(Composable::Document& doc,const std::string& loadoutId,
+    const std::string& setId,const std::string& fashionId,
+    const std::map<std::string,std::string>& refs,
+    const std::map<std::string,std::string>& inherited,
+    const std::set<std::string>& sharedReferences,std::string& error){
+    if(inherited.empty()){
+        if(!sharedReferences.empty())return Composable::Fail(error,"Shared reference consent has no replacement.");
+        return SaveLoadoutReferenceDraft(doc,loadoutId,setId,fashionId,refs,error);
+    }
+    return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err){
+        if(!SaveLoadoutReferenceDraft(next,loadoutId,setId,fashionId,refs,err))return false;
+        auto* l=Composable::FindLoadout(next,loadoutId);
+        auto* set=Composable::FindEquipmentSet(next,setId);
+        if(!l||!set)return Composable::Fail(err,"Inherited replacement requires a linked set.");
+        for(const auto& kind:sharedReferences)if(!inherited.count(kind))
+            return Composable::Fail(err,"Shared reference consent has no replacement.");
+        for(const auto& [kind,id]:inherited){
+            if(!Composable::IsEquipmentKind(kind)||!set->refs.count(kind)||
+                set->refs.at(kind)==id||!Composable::Find(next,kind,id))
+                return Composable::Fail(err,"Invalid inherited replacement: "+kind);
+        }
+        const bool sharedSet=Composable::EquipmentSetUsers(next,setId).size()>1;
+        // Apply explicitly shared selections first; a private fork retains
+        // those same selections plus its private replacements.
+        for(const auto& [kind,id]:inherited)if(sharedReferences.count(kind))
+            set->refs[kind]=id;
+        const bool needsFork=sharedSet&&std::any_of(inherited.begin(),inherited.end(),
+            [&](const auto& change){return !sharedReferences.count(change.first);});
+        if(needsFork){
+            auto copy=*set;
+            const auto prefix=setId+":"+loadoutId+":references";
+            copy.id=prefix;
+            for(unsigned n=1;Composable::FindEquipmentSet(next,copy.id);++n)
+                copy.id=prefix+":"+std::to_string(n);
+            copy.name+=" - "+l->metadata.value("name",loadoutId);
+            l->equipment_set_id=copy.id;
+            next.equipment_sets.push_back(std::move(copy));
+            set=Composable::FindEquipmentSet(next,l->equipment_set_id);
+        }
+        for(const auto& [kind,id]:inherited)if(!sharedReferences.count(kind))
+            set->refs[kind]=id;
+        if(!Composable::ValidateNoNewInfusionConflicts(doc,next,err))return false;
+        for(const auto& owner:next.loadouts)if(owner.id==loadoutId||owner.equipment_set_id==setId){
+            Json raw;if(!Composable::Resolve(next,owner,raw,err))return false;
+        }
+        return true;
+    },error);
+}
 // Review and commit use exactly the same patch/candidate computation.
 // This is a disposable projection of the selected reference graph.
 struct UnifiedChange {

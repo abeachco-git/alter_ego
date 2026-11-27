@@ -876,8 +876,8 @@ static AlterEgo::SavedBuild g_EditDraft;   // working copy while editing a build
 static uint64_t g_EditDraftRevision = 0;
 static bool g_EditRefsReady=false;
 static std::string g_EditSetId,g_EditFashionId;
-static std::map<std::string,std::string> g_EditRefs;
-static std::set<std::string> g_EditSharedKinds;
+static std::map<std::string,std::string> g_EditRefs,g_EditInheritedRefs;
+static std::set<std::string> g_EditSharedKinds,g_EditSharedReferenceKinds;
 static std::string g_EditDraftId;          // id the draft currently mirrors
 static bool g_EditDirty = false;           // edit activity; reconciled against exact baseline
 static nlohmann::json g_EditBaseline;
@@ -942,7 +942,7 @@ static void EnterBuildEditMode(const AlterEgo::SavedBuild& build) {
     g_EditDraft = build;
     g_EditDraftId = build.id;
     g_EditDraftRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
-    g_EditRefsReady=false;g_EditRefs.clear();g_EditSetId.clear();g_EditFashionId.clear();g_EditSharedKinds.clear();
+    g_EditRefsReady=false;g_EditRefs.clear();g_EditInheritedRefs.clear();g_EditSetId.clear();g_EditFashionId.clear();g_EditSharedKinds.clear();g_EditSharedReferenceKinds.clear();
     nlohmann::json graph;
     if(AlterEgo::GW2API::GetComposableLoadouts(graph)&&graph.contains("loadouts")){
         for(const auto& owner:graph.at("loadouts"))if(owner.value("id",std::string())==build.id){
@@ -964,7 +964,7 @@ static bool LoadoutDraftDirty(){
     if(!g_LibEditMode)return false;
     auto current=AlterEgo::GW2API::EditorBuildSnapshot(g_EditDraft);
     current["name"]=g_LibEditName;current["notes"]=g_LibEditNotes;
-    return current!=g_EditBaseline||g_EditRefs!=g_EditBaselineRefs||
+    return current!=g_EditBaseline||g_EditRefs!=g_EditBaselineRefs||!g_EditInheritedRefs.empty()||
         g_EditSetId!=g_EditBaselineSet||g_EditFashionId!=g_EditBaselineFashion;
 }
 // Defined after the editor headers; use the same protection in launchers,
@@ -17514,7 +17514,7 @@ void AddonRender() {
     ImGui::End();
     if (g_EditSavePending) {
         g_EditSavePending = false;
-        if (g_LibEditMode && g_EditRefsReady && AlterEgo::GW2API::SaveUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditSharedKinds,g_EditDraftRevision)) {
+        if (g_LibEditMode && g_EditRefsReady && AlterEgo::GW2API::SaveUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditSharedKinds,g_EditDraftRevision,g_EditInheritedRefs,g_EditSharedReferenceKinds)) {
             g_EditDraftId.clear();
             g_LibEditMode = false; g_EditDirty = false;
             g_EditIsNewBuild = false;

@@ -2663,18 +2663,21 @@ namespace AlterEgo {
 
     bool GW2API::RebaseLoadoutDraft(SavedBuild& draft,const std::string& oldSet,const std::string& oldFashion,
         const std::map<std::string,std::string>& oldRefs,const std::string& newSet,const std::string& newFashion,
-        const std::map<std::string,std::string>& newRefs,uint64_t revision,std::string& error){
+        const std::map<std::string,std::string>& newRefs,uint64_t revision,std::string& error,
+        const std::map<std::string,std::string>& oldInherited,const std::map<std::string,std::string>& newInherited){
         json snapshot;Composable::Document doc;
         if(revision!=GetBuildLibraryRevision()||!GetComposableLoadouts(snapshot)||
            revision!=GetBuildLibraryRevision()||!Composable::FromJson(snapshot,doc,error))
             return Composable::Fail(error,"Library changed or could not be loaded.");
-        if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,oldSet,oldFashion,oldRefs,error))return false;
+        const auto originalGraph=doc;
+        if(!NativeLibrary::SaveParentReferenceDraft(doc,draft.id,oldSet,oldFashion,oldRefs,oldInherited,{},error))return false;
         auto* l=Composable::FindLoadout(doc,draft.id);
         json before;SavedBuild baseline;
         if(!l||!Composable::Resolve(doc,*l,before,error)||!DeserializeSavedBuild(before,baseline))return false;
         const auto previousRefs=Composable::EffectiveRefs(doc,*l);
         const auto edited=NativeLibrary::PatchDraft(before,SerializeSavedBuild(baseline),SerializeSavedBuild(draft));
-        if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,newSet,newFashion,newRefs,error))return false;
+        doc=originalGraph;
+        if(!NativeLibrary::SaveParentReferenceDraft(doc,draft.id,newSet,newFashion,newRefs,newInherited,{},error))return false;
         l=Composable::FindLoadout(doc,draft.id);
         json replacement;if(!l||!Composable::Resolve(doc,*l,replacement,error))return false;
         const auto afterRefs=Composable::EffectiveRefs(doc,*l);
@@ -2693,7 +2696,8 @@ namespace AlterEgo {
     }
 
     bool GW2API::ReviewUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
-        const std::map<std::string,std::string>& refs,uint64_t revision,json& review,std::string& error,bool includeAll){
+        const std::map<std::string,std::string>& refs,uint64_t revision,json& review,std::string& error,bool includeAll,
+        const std::map<std::string,std::string>& inherited){
         json snapshot;Composable::Document doc;
         review=json::array();
         if(revision!=GetBuildLibraryRevision()||!GetComposableLoadouts(snapshot)||
@@ -2703,12 +2707,31 @@ namespace AlterEgo {
         if(GetInfusionMode(draft)==InfusionMode::Conflict&&original&&
             Composable::InfusionReferenceMode(doc,Composable::EffectiveRefs(doc,*original))!=InfusionMode::Conflict)
             return Composable::Fail(error,"Resolve the mixed infusion requirements in the Loadout draft before saving.");
-        if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,setId,fashionId,refs,error))return false;
+        if(!inherited.empty()){
+            const auto* set=Composable::FindEquipmentSet(doc,setId);
+            if(!set)return Composable::Fail(error,"Linked Equipment Set no longer exists.");
+            const auto owners=Composable::EquipmentSetUsers(doc,setId).size();
+            for(const auto& [kind,id]:inherited){
+                const auto old=set->refs.find(kind);
+                const auto* prior=old==set->refs.end()?nullptr:Composable::Find(doc,kind,old->second);
+                const auto* selected=Composable::Find(doc,kind,id);
+                if(!prior||!selected)return Composable::Fail(error,"Inherited reference no longer exists.");
+                json affected=json::array();
+                for(const auto& owner:doc.loadouts)if(owner.equipment_set_id==setId&&owner.id!=draft.id)
+                    affected.push_back(owner.metadata.value("name",owner.id));
+                review.push_back({{"kind",kind},{"name",prior->name+" -> "+selected->name},
+                    {"reference",true},{"shared",owners+(original&&original->equipment_set_id!=setId?1:0)>1},
+                    {"owners",1},{"loadouts",owners+(original&&original->equipment_set_id!=setId?1:0)},
+                    {"set_users",owners},{"affected",affected}});
+            }
+        }
+        if(!NativeLibrary::SaveParentReferenceDraft(doc,draft.id,setId,fashionId,refs,inherited,{},error))return false;
         const auto* l=Composable::FindLoadout(doc,draft.id);
         json raw;SavedBuild baseline;
         if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,baseline))return false;
         const auto edited=NativeLibrary::PatchDraft(raw,SerializeSavedBuild(baseline),SerializeSavedBuild(draft));
         for(const auto& change:NativeLibrary::UnifiedChanges(doc,*l,raw,edited)){
+            if(inherited.count(change.kind))return Composable::Fail(error,"Save the selected "+change.kind+" reference before editing its contents.");
             const bool shared=!change.oldId.empty()&&(change.owners>1||change.loadouts>1||change.setUsers>1);
             if(!includeAll&&!shared&&change.matches.empty())continue;
             std::string reuse;
@@ -2720,15 +2743,18 @@ namespace AlterEgo {
     }
 
     bool GW2API::SaveUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
-        const std::map<std::string,std::string>& refs,const std::set<std::string>& sharedKinds,uint64_t revision){
+        const std::map<std::string,std::string>& refs,const std::set<std::string>& sharedKinds,uint64_t revision,
+        const std::map<std::string,std::string>& inherited,const std::set<std::string>& sharedReferences){
         return CommitComposableEdit([&](Composable::Document& doc,std::string& error){
             if(revision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
-            if(!NativeLibrary::SaveLoadoutReferenceDraft(doc,draft.id,setId,fashionId,refs,error))return false;
+            if(!NativeLibrary::SaveParentReferenceDraft(doc,draft.id,setId,fashionId,refs,inherited,sharedReferences,error))return false;
             auto* l=Composable::FindLoadout(doc,draft.id);
             json raw;SavedBuild baseline;
             if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,baseline))return false;
-            return NativeLibrary::PutUnifiedLoadout(doc,NativeLibrary::PatchDraft(raw,SerializeSavedBuild(baseline),SerializeSavedBuild(draft)),
-                sharedKinds,error,LookupComponentDisplayName);
+            const auto edited=NativeLibrary::PatchDraft(raw,SerializeSavedBuild(baseline),SerializeSavedBuild(draft));
+            for(const auto& change:NativeLibrary::UnifiedChanges(doc,*l,raw,edited))
+                if(inherited.count(change.kind))return Composable::Fail(error,"Save the selected "+change.kind+" reference before editing its contents.");
+            return NativeLibrary::PutUnifiedLoadout(doc,edited,sharedKinds,error,LookupComponentDisplayName);
         });
     }
 

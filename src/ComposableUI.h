@@ -54,7 +54,7 @@ struct ReferenceEditorDraft {
     bool closeRequested=false;
     uint64_t revision=0;
     std::string id,name,setId,fashionId,error;
-    ReferenceMap refs,originalRefs;
+    ReferenceMap refs,originalRefs,inherited,originalInherited;
     std::string originalName,originalSet,originalFashion;
 };
 static ReferenceEditorDraft g_ReferenceEditor;
@@ -700,7 +700,7 @@ static bool BeginReferenceEditor(const ComponentJson& owner,bool isSet) {
         e.fashionId=e.originalFashion=owner.value("fashion_id",std::string());
         if(g_LibEditMode&&g_EditRefsReady&&e.id==g_EditDraftId){
             e.parentDraft=true;e.revision=g_EditDraftRevision;
-            e.refs=e.originalRefs=g_EditRefs;
+            e.refs=e.originalRefs=g_EditRefs;e.inherited=e.originalInherited=g_EditInheritedRefs;
             e.setId=e.originalSet=g_EditSetId;
             e.fashionId=e.originalFashion=g_EditFashionId;
         }
@@ -716,7 +716,11 @@ static void BeginNewEquipmentSet(){
 static void SelectDraftEquipmentSet(ReferenceEditorDraft& e,const ComponentJson& doc,const std::string& id) {
     if(e.setId==id)return;
     if(const auto* old=ComponentUIFindSet(doc,e.setId))
-        for(const auto& [kind,ref]:ComponentUIRefs(*old))e.refs[kind]=ref;
+        for(const auto& [kind,ref]:ComponentUIRefs(*old)){
+            const auto replacement=e.inherited.find(kind);
+            e.refs[kind]=replacement==e.inherited.end()?ref:replacement->second;
+        }
+    e.inherited.clear();
     if(const auto* next=ComponentUIFindSet(doc,id))
         for(const auto& [kind,ref]:ComponentUIRefs(*next))e.refs.erase(kind);
     e.setId=id;e.confirmed=false;
@@ -760,9 +764,9 @@ static void RenderReferenceValue(const ComponentJson& doc,const std::string& kin
     ReferenceComponentActions(doc,kind,id,mutableActions);
 }
 static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* loadout,
-    const std::string& kind,ReferenceMap& refs,bool allowOmit) {
+    const std::string& kind,ReferenceMap& refs,bool allowOmit,bool inherited=false) {
     const auto ref=ComponentUIRef(refs,kind);
-    const auto label=ComponentUIRefName(doc,kind,ref,allowOmit?"Not included":"Not set");
+    const auto label=(inherited?std::string("[Linked] "):std::string{})+ComponentUIRefName(doc,kind,ref,allowOmit?"Not included":"Not set");
     bool changed=false;
     ImGui::SetNextItemWidth(-1);
     if(AlterEgo::UI::BeginCombo("##ref",label.c_str())){
@@ -811,7 +815,17 @@ static void RenderEditableReferenceRows(const ComponentJson& doc,const Component
         const std::string kind=kComponentKinds[kinds[j]].kind;
         ImGui::PushID(kind.c_str());ReferenceLabel(ComponentLabel(kind));
         if(linked&&linked->at("refs").contains(kind)){
-            RenderReferenceValue(doc,kind,linked->at("refs").value(kind,std::string()),true,false);
+            const auto original=linked->at("refs").value(kind,std::string());
+            if(e.parentDraft){
+                const auto staged=e.inherited.find(kind);
+                ReferenceMap selection{{kind,staged==e.inherited.end()?original:staged->second}};
+                candidate["refs"]=e.refs;
+                if(RenderReferencePicker(doc,&candidate,kind,selection,false,true)){
+                    if(selection.at(kind)==original)e.inherited.erase(kind);
+                    else e.inherited[kind]=selection.at(kind);
+                    e.confirmed=false;
+                }
+            }else RenderReferenceValue(doc,kind,original,true,false);
         }else{
             candidate["refs"]=e.refs;
             if(RenderReferencePicker(doc,e.isSet?nullptr:&candidate,kind,e.refs,e.isSet))e.confirmed=false;
@@ -868,10 +882,10 @@ static bool ApplyParentReferenceDraft(ReferenceEditorDraft& e){
     if(!g_LibEditMode||!g_EditRefsReady||e.id!=g_EditDraftId||g_GearDialogOpen){
         e.error="Parent Loadout draft is unavailable. Close gear editing first.";return false;
     }
-    if(!AlterEgo::GW2API::RebaseLoadoutDraft(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,e.setId,e.fashionId,e.refs,e.revision,e.error))return false;
-    g_EditRefs=e.refs;g_EditSetId=e.setId;g_EditFashionId=e.fashionId;
+    if(!AlterEgo::GW2API::RebaseLoadoutDraft(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,e.setId,e.fashionId,e.refs,e.revision,e.error,g_EditInheritedRefs,e.inherited))return false;
+    g_EditRefs=e.refs;g_EditInheritedRefs=e.inherited;g_EditSetId=e.setId;g_EditFashionId=e.fashionId;
     g_InfusionSlotDraft.reset();g_InfusionTotalsDraft.reset();
-    g_EditSharedKinds.clear();g_LibDetailsFetched=false;MarkEditDirty();return true;
+    g_EditSharedKinds.clear();g_EditSharedReferenceKinds.clear();g_LibDetailsFetched=false;MarkEditDirty();return true;
 }
 static void RenderReferenceEditor(){
     using namespace AlterEgo;
@@ -902,7 +916,7 @@ static void RenderReferenceEditor(){
         if(adding&&users)ImGui::Checkbox("Replace independent selections in linked Loadouts",&e.confirmed);
     }
     ImGui::EndChild();
-    const bool dirty=e.refs!=e.originalRefs||(e.isSet?e.name!=e.originalName:e.setId!=e.originalSet||e.fashionId!=e.originalFashion);
+    const bool dirty=e.refs!=e.originalRefs||e.inherited!=e.originalInherited||(e.isSet?e.name!=e.originalName:e.setId!=e.originalSet||e.fashionId!=e.originalFashion);
     const bool valid=!stale&&dirty&&(!e.isSet||(!e.refs.empty()&&!Composable::ComponentNameKey(e.name).empty()&&(!adding||!users||e.confirmed)));
     if(e.isSet&&e.refs.empty())ImGui::TextDisabled("Include at least one equipment category.");
     if(e.parentDraft)ImGui::TextWrapped("Apply stages selections in the Loadout draft. The top Save commits all changes; Cancel discards them.");
@@ -943,9 +957,9 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     if(UI::Button(expanded?"Loadout Components -##loadout_selector":"Loadout Components +##loadout_selector",ImVec2(0,0),UI::ButtonRole::Compact))expanded=!expanded;
     if(!expanded){ImGui::PopID();return;}
     if(editing&&!g_GearDialogOpen){
-        ReferenceEditorDraft e;e.id=loadoutId;e.revision=g_EditDraftRevision;e.refs=g_EditRefs;e.setId=g_EditSetId;e.fashionId=g_EditFashionId;
+        ReferenceEditorDraft e;e.parentDraft=true;e.id=loadoutId;e.revision=g_EditDraftRevision;e.refs=g_EditRefs;e.inherited=g_EditInheritedRefs;e.setId=g_EditSetId;e.fashionId=g_EditFashionId;
         RenderEditableReferences(doc,l,e);
-        if(e.refs!=g_EditRefs||e.setId!=g_EditSetId||e.fashionId!=g_EditFashionId){
+        if(e.refs!=g_EditRefs||e.inherited!=g_EditInheritedRefs||e.setId!=g_EditSetId||e.fashionId!=g_EditFashionId){
             if(ApplyParentReferenceDraft(e))inlineError.clear();
             else inlineError=e.error.empty()?"Cannot apply reference change; review the selected component.":e.error;
         }
@@ -955,7 +969,8 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     const auto direct=editing?g_EditRefs:ComponentUIRefs(*l);
     const auto linkedId=editing?g_EditSetId:l->value("equipment_set_id",std::string());
     const auto* linked=ComponentUIFindSet(doc,linkedId);
-    const auto inherited=linked?ComponentUIRefs(*linked):ReferenceMap{};
+    auto inherited=linked?ComponentUIRefs(*linked):ReferenceMap{};
+    if(editing)for(const auto& [kind,id]:g_EditInheritedRefs)inherited[kind]=id;
     const bool actions=!g_LibEditMode;
     if(g_LibEditMode)ImGui::TextDisabled("Close gear editing or reopen the Loadout draft to change references.");
     RenderReferenceGroupLabel("Build");
@@ -1060,9 +1075,9 @@ static void RenderLoadoutSaveReview(){
         g_EditReviewPending=false;
         error.clear();sourceChanges.clear();
         if(g_SourceRefreshDraft)SourceReviewChanges(g_EditBaseline,GW2API::EditorBuildSnapshot(g_EditDraft),"",sourceChanges);
-        g_EditSharedKinds.clear(); // no implicit consent from an earlier attempt
+        g_EditSharedKinds.clear();g_EditSharedReferenceKinds.clear(); // no implicit consent from an earlier attempt
         if(!g_LibEditMode||!g_EditRefsReady||g_GearDialogOpen)return;
-        if(!GW2API::ReviewUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditDraftRevision,review,error,g_SourceRefreshDraft)){
+        if(!GW2API::ReviewUnifiedLoadout(g_EditDraft,g_EditSetId,g_EditFashionId,g_EditRefs,g_EditDraftRevision,review,error,g_SourceRefreshDraft,g_EditInheritedRefs)){
             if(error.empty())error="Could not review the Loadout draft.";
             ImGui::OpenPopup("Review Loadout changes##ae_unified_review");
         }else if(review.empty()&&!g_SourceRefreshDraft)g_EditSavePending=true;
@@ -1094,21 +1109,28 @@ static void RenderLoadoutSaveReview(){
             ImGui::PushID(kind.c_str());
             RenderSectionHeader(ComponentLabel(kind),UI::SectionGold);
             if(!name.empty())ImGui::TextWrapped("%s",name.c_str());
-            const bool useShared=g_EditSharedKinds.count(kind)!=0;
-            const std::string privateLabel=reuse.empty()?"Only this Loadout":"Reuse "+reuse;
+            const bool reference=row.value("reference",false);
+            auto& sharedChoices=reference?g_EditSharedReferenceKinds:g_EditSharedKinds;
+            const bool useShared=sharedChoices.count(kind)!=0;
+            const std::string privateLabel=reference||reuse.empty()?"Only this Loadout":"Reuse "+reuse;
             if(shared){
-                if(ImGui::RadioButton((privateLabel+"##private").c_str(),!useShared))g_EditSharedKinds.erase(kind);
-                const auto label="Edit shared ("+std::to_string(row.value("loadouts",0))+" Loadouts, "+std::to_string(row.value("owners",0))+" direct owners)";
-                if(ImGui::RadioButton((label+"##shared").c_str(),useShared))g_EditSharedKinds.insert(kind);
+                if(ImGui::RadioButton((privateLabel+"##private").c_str(),!useShared))sharedChoices.erase(kind);
+                const auto label=reference
+                    ?"Replace shared set reference ("+std::to_string(row.value("loadouts",0))+" Loadouts)"
+                    :"Edit shared ("+std::to_string(row.value("loadouts",0))+" Loadouts, "+std::to_string(row.value("owners",0))+" direct owners)";
+                if(ImGui::RadioButton((label+"##shared").c_str(),useShared))sharedChoices.insert(kind);
+                if(reference&&useShared&&row.contains("affected"))for(const auto& owner:row.at("affected"))
+                    ImGui::BulletText("%s",owner.get<std::string>().c_str());
                 if(row.value("set_users",0)>1&&!useShared)
                     ImGui::TextDisabled("Private changes may copy the linked Equipment Set.");
-            }else if(!reuse.empty())ImGui::TextWrapped("Reuse identical component: %s",reuse.c_str());
+            }else if(reference)ImGui::TextWrapped("Replace reference for this Loadout.");
+            else if(!reuse.empty())ImGui::TextWrapped("Reuse identical component: %s",reuse.c_str());
             ImGui::PopID();
         }
     }
     const auto action=UI::SaveCancel("unified_review",valid,"Save","Resolve the review before saving.");
     if(action==UI::EditAction::Save){g_EditSavePending=true;ImGui::CloseCurrentPopup();}
-    else if(action==UI::EditAction::Cancel||UI::EditorEscape()){g_EditSharedKinds.clear();ImGui::CloseCurrentPopup();}
+    else if(action==UI::EditAction::Cancel||UI::EditorEscape()){g_EditSharedKinds.clear();g_EditSharedReferenceKinds.clear();ImGui::CloseCurrentPopup();}
     ImGui::EndPopup();
 }
 

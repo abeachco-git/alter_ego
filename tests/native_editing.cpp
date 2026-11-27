@@ -146,6 +146,50 @@ int case_native_editing(int,char**) {
         edit["profession"]="Necromancer";
         assert(!PutUnifiedLoadout(graph,edit,{},error));assert(Composable::ToJson(graph)==saved);
     }
+    // Inherited reference replacements retain exact selected IDs, never
+    // mutate component payloads, and fork a shared set only once.
+    {
+        Composable::Document graph;std::string error;
+        assert(PutLoadout(graph,a,error));assert(PutLoadout(graph,b,error));
+        assert(SaveSetFromLoadout(graph,"a","set","Set",error,{"armor","sigils"}));
+        assert(ApplyEquipmentSet(graph,"b","set",error));
+        const auto original=*Composable::FindEquipmentSet(graph,"set");
+        auto newArmor=*Composable::Find(graph,"armor",original.refs.at("armor"));
+        newArmor.id="new-armor";newArmor.name="Other armor";
+        newArmor.data["gear"]["Helm"]["stat_id"]=33;
+        graph.components["armor"].push_back(newArmor);
+        auto newSigils=*Composable::Find(graph,"sigils",original.refs.at("sigils"));
+        newSigils.id="new-sigils";newSigils.name="Other sigils";
+        graph.components["sigils"].push_back(newSigils); // even exact-equal payload must retain chosen ID
+        const auto direct=Composable::FindLoadout(graph,"a")->refs;
+        const auto before=Composable::ToJson(graph);
+        assert(!SaveParentReferenceDraft(graph,"a","set","",direct,{{"armor","missing"}},{},error));
+        assert(Composable::ToJson(graph)==before);
+        auto privateGraph=graph;
+        assert(SaveParentReferenceDraft(privateGraph,"a","set","",direct,{{"armor","new-armor"},{"sigils","new-sigils"}},{},error));
+        assert(privateGraph.equipment_sets.size()==graph.equipment_sets.size()+1);
+        const auto* editedOwner=Composable::FindLoadout(privateGraph,"a");
+        assert(editedOwner->equipment_set_id!="set");
+        assert(editedOwner->refs==direct);
+        assert(Composable::EffectiveRefs(privateGraph,*editedOwner).at("armor")=="new-armor");
+        assert(Composable::EffectiveRefs(privateGraph,*editedOwner).at("sigils")=="new-sigils");
+        assert(Composable::FindEquipmentSet(privateGraph,"set")->refs==original.refs);
+        assert(Composable::ToJson(graph)==before);
+        auto mixed=graph;
+        assert(SaveParentReferenceDraft(mixed,"a","set","",direct,{{"armor","new-armor"},{"sigils","new-sigils"}},{"sigils"},error));
+        assert(Composable::FindEquipmentSet(mixed,"set")->refs.at("sigils")=="new-sigils");
+        assert(Composable::FindEquipmentSet(mixed,"set")->refs.at("armor")==original.refs.at("armor"));
+        assert(Composable::Find(mixed,"armor","new-armor")->data==newArmor.data);
+        auto shared=graph;
+        assert(SaveParentReferenceDraft(shared,"a","set","",direct,{{"armor","new-armor"}},{"armor"},error));
+        assert(shared.equipment_sets.size()==graph.equipment_sets.size());
+        assert(Composable::EffectiveRefs(shared,*Composable::FindLoadout(shared,"b")).at("armor")=="new-armor");
+        auto single=graph;
+        assert(DetachEquipmentSet(single,"b",error));
+        assert(SaveParentReferenceDraft(single,"a","set","",direct,{{"armor","new-armor"}},{},error));
+        assert(single.equipment_sets.size()==graph.equipment_sets.size());
+        assert(Composable::FindEquipmentSet(single,"set")->refs.at("armor")=="new-armor");
+    }
     // Standalone creation reuses exact components and never modifies a Loadout.
     {
         const auto before=Composable::ToJson(doc);
