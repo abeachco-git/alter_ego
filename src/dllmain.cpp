@@ -421,6 +421,10 @@ static int g_FashionTab = 0;           // Equipment tab whose fashion menu was o
 static float g_EquipTabScroll = 0.0f;  // Horizontal scroll offset for equipment tab chip strip
 static float g_BuildTabScroll = 0.0f;  // Horizontal scroll offset for build tab chip strip
 static int g_SelectedBuildTab = 0;     // Build tab filter
+// A pet membership link targets a verified character and physical build tab.
+// Apply at the existing detail tab bar, after the current panel unwinds.
+struct PetBuildNavigation {AlterEgo::CharacterIdentity::Ref character;int tab=0;};
+static std::optional<PetBuildNavigation> g_PetBuildNavigation;
 static int g_BuildMenuTab = -1;        // Right-clicked build tab chip (0-based) for the build options menu
 static bool g_ShowQAIcon = true;
 static AlterEgo::Font::Config g_FontConfig; // default = {NexusDefault, "", 16}
@@ -7401,13 +7405,30 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
     namespace PO=PetOwnership;
     const auto address=CharacterAddressFor(ch);
     const auto ownership=address?NativeAccounts::CharacterPets(address->Reference()):PO::Collection{};
-    const auto active=ch.active_build_tab>0?PO::Selected(ch.build_tabs,ch.active_build_tab):std::set<uint32_t>{};
+    const bool buildsVerified=address.has_value()&&ch.scope_stamps[CharacterScopes::Index(CharacterScopes::Builds)]>0;
+    const auto membership=buildsVerified?PO::BuildMemberships(ch.build_tabs):PO::Memberships{};
+    const auto active=[&](uint32_t id){return PO::InTab(membership,id,ch.active_build_tab);};
+    const int viewedTab=g_SelectedBuildTab>=0&&g_SelectedBuildTab<static_cast<int>(ch.build_tabs.size())
+        ?ch.build_tabs[g_SelectedBuildTab].tab:0;
+    auto viewBuild=[&](int tab){
+        if(address&&buildsVerified&&PO::TabIndex(ch.build_tabs,tab)>=0)
+            g_PetBuildNavigation=PetBuildNavigation{address->Reference(),tab};
+    };
+    auto membershipText=[](const PO::Membership& m){
+        return std::string(m.aquatic?"Aquatic":"Terrestrial")+" "+std::to_string(m.slot);
+    };
+    auto tabName=[&](int tab){
+        const int index=PO::TabIndex(ch.build_tabs,tab);
+        if(index<0)return "Tab "+std::to_string(tab);
+        const auto& bt=ch.build_tabs[index];
+        return "Tab "+std::to_string(tab)+(bt.name.empty()?"":" - "+bt.name);
+    };
     const auto catalog=PublicCatalog::Get();
     if(catalog->pets.empty()){GW2API::FetchPetsAsync();RenderSpinner("Loading pet catalog...");return;}
     static std::string search;
     static int filter=0,mode=0;
     static uint32_t selected=0;
-    const char* filters[]={"All","Owned / observed","Not owned","Unknown","Active build"};
+    const char* filters[]={"All","Confirmed / observed","Observed","Manually owned","Not owned","Unknown","Active build","Any build"};
     UI::SearchToolbar("ranger_pet_search","Search pets...",search,[&]{
         UI::FilterChips chips;
         if(filter)chips.push_back({"ownership",filters[filter],[]{filter=0;}});
@@ -7415,21 +7436,28 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
     },[&]{UI::FilterChoice("Ownership",filter,filters,IM_ARRAYSIZE(filters));},[]{filter=0;});
     const char* views[]={"List","Grid"};
     UI::FilterChoice("View",mode,views,IM_ARRAYSIZE(views));
-    ImGui::TextWrapped("Pet unlocks are not exposed by the API. Observed means selected in a verified character build; other ownership can be marked manually.");
+    ImGui::TextDisabled("Ownership is manual or observed in retrieved builds; not a game unlock list.");
+    if(!buildsVerified)ImGui::TextDisabled("Build membership unavailable until verified character data is retrieved.");
     if(!address)ImGui::TextDisabled("Verified character identity unavailable; ownership edits disabled.");
     const auto words=Search::Words(search);
     std::vector<const PublicCatalog::Pet*> visible;
-    size_t known=0;
+    PO::Counts counts;
     for(const auto& pet:catalog->pets){
-        const auto state=PO::Get(ownership,pet.id).State();
-        const bool owned=state==PO::Status::Owned||state==PO::Status::Observed;
-        if(owned)++known;
-        if((filter==1&&!owned)||(filter==2&&state!=PO::Status::NotOwned)||
-            (filter==3&&state!=PO::Status::Unknown)||(filter==4&&!active.count(pet.id)))continue;
+        const auto evidence=PO::Get(ownership,pet.id);
+        counts.Add(evidence);
+        if(!PO::Matches(static_cast<PO::Filter>(filter),evidence,active(pet.id),membership.count(pet.id)!=0))continue;
         if(!Search::Matches(pet.name,words))continue;
         visible.push_back(&pet);
     }
-    ImGui::TextDisabled("%zu confirmed or observed / %zu catalog pets | %zu shown",known,catalog->pets.size(),visible.size());
+    ImGui::TextDisabled("%zu / %zu confirmed or observed | %zu shown",counts.confirmed,catalog->pets.size(),visible.size());
+    const float progress=catalog->pets.empty()?0.f:static_cast<float>(counts.confirmed)/catalog->pets.size();
+    ImGui::ProgressBar(progress,ImVec2(-1,6),"");
+    if(ImGui::IsItemHovered()){
+        const std::string details=std::to_string(counts.observed)+" observed; "+std::to_string(counts.manualOwned)+
+            " manually owned (may overlap). "+std::to_string(counts.notOwned)+" marked not owned; "+
+            std::to_string(counts.unknown)+" unknown. Progress is not an API unlock total.";
+        UI::DetailTooltip("Collection evidence",details.c_str());
+    }
     if(const auto* pet=PublicCatalog::FindPet(catalog->pets,selected)){
         ImGui::Separator();
         const auto choice=ResolveProfessionChoice(false,pet->id);
@@ -7440,6 +7468,38 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
         for(auto skill:choice.skills)if(!GW2API::GetSkillInfo(skill))missing.push_back(skill);
         if(!missing.empty())GW2API::FetchSkillDetailsAsync(missing);
         RenderCompanionAssociatedSkills(choice,30.f);
+        const auto evidence=PO::Get(ownership,pet->id);
+        ImGui::TextDisabled("Ownership: %s%s",PO::Label(evidence.State()),evidence.observed&&evidence.manual==PO::Manual::Owned?" (also observed)":"");
+        const auto found=membership.find(pet->id);
+        if(found!=membership.end()){
+            ImGui::TextDisabled("Recorded build membership");
+            for(size_t i=0;i<found->second.size();){
+                const int tab=found->second[i].tab;
+                std::string label=tabName(tab);
+                if(tab==ch.active_build_tab)label+=" [Active build]";
+                if(tab==viewedTab)label+=" [Viewed]";
+                label+=": ";
+                size_t end=i;
+                for(;end<found->second.size()&&found->second[end].tab==tab;++end){
+                    if(end>i)label+=", ";
+                    label+=membershipText(found->second[end]);
+                }
+                ImGui::PushID(tab);
+                if(UI::SelectableOption((label+"###pet_build_membership").c_str(),false))viewBuild(tab);
+                if(ImGui::IsItemHovered())UI::Hint("View this retrieved build tab in Alter Ego. Does not change the in-game build or summoned pet.");
+                UI::EntityContext("##pet_membership_actions",[&]{
+                    const int index=PO::TabIndex(ch.build_tabs,tab);
+                    if(index>=0){
+                        const auto& bt=ch.build_tabs[index];
+                        CopyNameMenuItem(bt.name.empty()?"Tab "+std::to_string(tab):bt.name);
+                        CopyNativeLinkMenuItem(EncodeBuildTabChatLink(bt),"Copy Build Chat Link");
+                        if(UI::MenuAction("View Build Tab",UI::MenuIcon::Open))viewBuild(tab);
+                    }
+                });
+                ImGui::PopID();
+                i=end;
+            }
+        }else ImGui::TextDisabled("%s",buildsVerified?"No recorded build membership":"Build membership unavailable");
         ImGui::Separator();
     }
     auto actions=[&](const PublicCatalog::Pet& pet,const PO::Evidence& evidence){
@@ -7457,7 +7517,12 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
     auto hover=[&](const PublicCatalog::Pet& pet,const PO::Evidence& evidence){
         if(!ImGui::IsItemHovered())return;
         std::string body=PO::Label(evidence.State());
-        if(active.count(pet.id))body+=" | Selected in active build";
+        if(evidence.observed&&evidence.manual==PO::Manual::Owned)body+=" (also observed)";
+        if(active(pet.id))body+=" | Selected in active build";
+        if(const auto found=membership.find(pet.id);found!=membership.end()){
+            for(const auto& m:found->second)body+="\n"+tabName(m.tab)+" - "+membershipText(m);
+        }
+        if(active(pet.id))body+="\nSummoned pet is not reported.";
         if(pet.description&&!pet.description->empty())body+="\n"+StripGW2Markup(*pet.description);
         UI::DetailTooltip(pet.name.c_str(),body.c_str());
     };
@@ -7482,7 +7547,7 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
                 const char* marker=state==PO::Status::Owned?"O":state==PO::Status::Observed?"V":state==PO::Status::NotOwned?"N":"?";
                 draw->AddRectFilled(ImVec2(pos.x,pos.y+size-14),ImVec2(pos.x+14,end.y),IM_COL32(20,20,20,220));
                 draw->AddText(ImVec2(pos.x+3,pos.y+size-14),IM_COL32(240,240,240,255),marker);
-                if(active.count(pet.id))draw->AddCircleFilled(ImVec2(end.x-5,pos.y+5),4,IM_COL32(111,204,122,255));
+                if(active(pet.id))draw->AddCircleFilled(ImVec2(end.x-5,pos.y+5),4,IM_COL32(111,204,122,255));
                 hover(pet,evidence);UI::EntityContext("##pet_actions",[&]{actions(pet,evidence);});
                 ImGui::PopID();
             }
@@ -7493,7 +7558,7 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
             const auto& pet=*visible[index];const auto evidence=PO::Get(ownership,pet.id);
             ImGui::PushID(static_cast<int>(pet.id));
             const auto choice=ResolveProfessionChoice(false,pet.id);
-            const auto tail=std::string(PO::Label(evidence.State()))+(active.count(pet.id)?" | Active build":"");
+            const auto tail=std::string(PO::Label(evidence.State()))+(active(pet.id)?" | Active build":"");
             const auto hit=UI::CatalogRow(index,selected==pet.id,choice.key,choice.icon,pet.name,"",tail,false,-1,
                 [&]{hover(pet,evidence);},iconSize,true);
             if(hit.clicked)selected=pet.id;
@@ -17032,6 +17097,16 @@ void AddonRender() {
                     ImGui::Spacing();
                     ImGui::Separator();
 
+                    // Resolve the requested physical build tab against the
+                    // current verified identity, not a stale vector position.
+                    int petBuildIndex=-1;
+                    if(g_PetBuildNavigation){
+                        const auto address=CharacterAddressFor(ch);
+                        if(address&&address->Reference()==g_PetBuildNavigation->character&&
+                            ch.scope_stamps[AlterEgo::CharacterScopes::Index(AlterEgo::CharacterScopes::Builds)]>0)
+                            petBuildIndex=AlterEgo::PetOwnership::TabIndex(ch.build_tabs,g_PetBuildNavigation->tab);
+                        if(petBuildIndex<0)g_PetBuildNavigation.reset();
+                    }
                     // Tab bar: Equipment | Build | Tools | Ranger Pets
                     if (ImGui::BeginTabBar("##detail_tabs")) {
                         if (ImGui::BeginTabItem("Equipment",nullptr,NavigationDetailFlags(0))) {
@@ -17041,7 +17116,10 @@ void AddonRender() {
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
-                        if (ImGui::BeginTabItem("Build",nullptr,NavigationDetailFlags(1))) {
+                        if (ImGui::BeginTabItem("Build",nullptr,NavigationDetailFlags(1)|(petBuildIndex>=0?ImGuiTabItemFlags_SetSelected:0))) {
+                            if(petBuildIndex>=0){
+                                MarkNavigation();g_SelectedBuildTab=petBuildIndex;g_PetBuildNavigation.reset();
+                            }
                             if(g_SelectedTab!=1)MarkNavigation();g_SelectedTab = 1;
                             ImGui::BeginChild("BuildScroll", ImVec2(0, 0), false);
                             RenderBuildPanel(ch);

@@ -1,6 +1,11 @@
 #pragma once
 #include "CharacterIdentityRuntime.h"
 #include "Database.h"
+#include <algorithm>
+#include <tuple>
+#include <vector>
+#include <map>
+#include <set>
 
 namespace AlterEgo::PetOwnership {
 enum class Manual : int { Unknown=0, Owned=1, NotOwned=2 };
@@ -27,18 +32,77 @@ inline const char* Label(Status value){
     default:return "Unknown";
     }
 }
-// All-tab membership is ownership evidence only if the caller has verified
-// the character identity and successfully committed the Builds scope.
-// The exact live active tab is separate from historical ownership.
-template<class Tabs> std::set<uint32_t> Selected(const Tabs& tabs,int activeTab=0){
-    std::set<uint32_t> result;
+// Current membership is derived, never persisted. Physical tab number is
+// authoritative, not vector position or display name.
+struct Membership {
+    int tab=0;
+    bool aquatic=false;
+    int slot=0; // one-based
+};
+using Memberships=std::map<uint32_t,std::vector<Membership>>;
+template<class Tabs> Memberships BuildMemberships(const Tabs& tabs){
+    Memberships result;
     for(const auto& tab:tabs){
-        if(tab.profession!="Ranger"||!tab.pets_known||(activeTab&&tab.tab!=activeTab))continue;
-        for(auto id:tab.pets.terrestrial)if(id)result.insert(id);
-        for(auto id:tab.pets.aquatic)if(id)result.insert(id);
+        if(tab.profession!="Ranger"||!tab.pets_known||tab.tab<=0)continue;
+        for(int i=0;i<2;++i){
+            if(tab.pets.terrestrial[i])result[tab.pets.terrestrial[i]].push_back({tab.tab,false,i+1});
+            if(tab.pets.aquatic[i])result[tab.pets.aquatic[i]].push_back({tab.tab,true,i+1});
+        }
+    }
+    for(auto& entry:result){
+        auto& slots=entry.second;
+        std::sort(slots.begin(),slots.end(),[](const Membership& a,const Membership& b){
+            return std::tie(a.tab,a.aquatic,a.slot)<std::tie(b.tab,b.aquatic,b.slot);
+        });
+        slots.erase(std::unique(slots.begin(),slots.end(),[](const Membership& a,const Membership& b){
+            return a.tab==b.tab&&a.aquatic==b.aquatic&&a.slot==b.slot;
+        }),slots.end());
     }
     return result;
 }
+inline bool InTab(const Memberships& membership,uint32_t id,int tab){
+    if(tab<=0)return false;
+    const auto it=membership.find(id);
+    return it!=membership.end()&&std::any_of(it->second.begin(),it->second.end(),[&](const auto& m){return m.tab==tab;});
+}
+template<class Tabs> int TabIndex(const Tabs& tabs,int tab){
+    if(tab<=0)return -1;
+    for(size_t i=0;i<tabs.size();++i)
+        if(tabs[i].tab==tab&&tabs[i].profession=="Ranger"&&tabs[i].pets_known)return static_cast<int>(i);
+    return -1;
+}
+// All-tab membership is ownership evidence only if the caller has verified
+// character identity and committed the Builds scope.
+template<class Tabs> std::set<uint32_t> Selected(const Tabs& tabs,int activeTab=0){
+    std::set<uint32_t> result;
+    const auto membership=BuildMemberships(tabs);
+    for(const auto& entry:membership)
+        if(!activeTab||InTab(membership,entry.first,activeTab))result.insert(entry.first);
+    return result;
+}
+enum class Filter { All, Confirmed, Observed, ManualOwned, NotOwned, Unknown, Active, AnyBuild };
+inline bool Matches(Filter filter,const Evidence& evidence,bool active,bool inBuild){
+    switch(filter){
+    case Filter::Confirmed:return evidence.observed||evidence.manual==Manual::Owned;
+    case Filter::Observed:return evidence.observed;
+    case Filter::ManualOwned:return evidence.manual==Manual::Owned;
+    case Filter::NotOwned:return evidence.State()==Status::NotOwned;
+    case Filter::Unknown:return evidence.State()==Status::Unknown;
+    case Filter::Active:return active;
+    case Filter::AnyBuild:return inBuild;
+    default:return true;
+    }
+}
+struct Counts {
+    size_t confirmed=0,observed=0,manualOwned=0,notOwned=0,unknown=0;
+    void Add(const Evidence& e){
+        if(Matches(Filter::Confirmed,e,false,false))++confirmed;
+        if(e.observed)++observed;
+        if(e.manual==Manual::Owned)++manualOwned;
+        if(e.State()==Status::NotOwned)++notOwned;
+        if(e.State()==Status::Unknown)++unknown;
+    }
+};
 inline bool Ranger(Database::Connection& db,const CharacterIdentity::Ref& ref){
     if(!ref.Valid())return false;
     auto q=db.Prepare("SELECT profession FROM character_identities WHERE account=? AND local_id=? AND present=1");

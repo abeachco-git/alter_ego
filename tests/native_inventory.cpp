@@ -123,6 +123,27 @@ int case_native_inventory(int,char**){
             {"Ranger",3,false,{{99,0},{0,0}}},{"Revenant",4,true,{{77,0},{0,0}}}};
         assert(PO::Selected(tabs)==std::set<uint32_t>({4,6,8}));
         assert(PO::Selected(tabs,1)==std::set<uint32_t>({4,6}));
+        const auto membership=PO::BuildMemberships(tabs);
+        assert(membership.size()==3&&membership.at(4).size()==2);
+        assert(membership.at(4)[0].tab==1&&!membership.at(4)[0].aquatic&&membership.at(4)[0].slot==1);
+        assert(membership.at(4)[1].aquatic&&membership.at(4)[1].slot==2);
+        assert(!membership.count(99)&&!membership.count(77));
+        assert(PO::InTab(membership,4,1)&&!PO::InTab(membership,4,2)&&!PO::InTab(membership,4,0));
+        auto reordered=tabs;std::reverse(reordered.begin(),reordered.end());
+        assert(PO::TabIndex(reordered,1)==3&&PO::TabIndex(reordered,2)==2);
+        assert(PO::TabIndex(reordered,3)==-1&&PO::TabIndex(reordered,4)==-1&&PO::TabIndex(reordered,0)==-1);
+        using F=PO::Filter;
+        const PO::Evidence both{true,PO::Manual::Owned},observed{true,PO::Manual::Unknown},
+            manual{false,PO::Manual::Owned},negative{false,PO::Manual::NotOwned},unknown{};
+        assert(PO::Matches(F::Observed,both,false,false)&&PO::Matches(F::ManualOwned,both,false,false));
+        assert(PO::Matches(F::Confirmed,manual,false,false)&&!PO::Matches(F::Observed,manual,false,false));
+        assert(PO::Matches(F::NotOwned,negative,false,false)&&PO::Matches(F::Unknown,unknown,false,false));
+        assert(PO::Matches(F::Active,unknown,true,true)&&!PO::Matches(F::Active,observed,false,true));
+        assert(PO::Matches(F::AnyBuild,unknown,false,true)&&!PO::Matches(F::AnyBuild,observed,false,false));
+        PO::Counts counts;
+        for(const auto& e:{both,observed,manual,negative,unknown})counts.Add(e);
+        assert(counts.confirmed==3&&counts.observed==2&&counts.manualOwned==2&&counts.notOwned==1&&counts.unknown==1);
+
         saved=one;
         }
         {
