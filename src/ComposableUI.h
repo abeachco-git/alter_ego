@@ -243,6 +243,8 @@ static bool ComponentInfusionProjection(const ComponentJson& data,AlterEgo::Save
 static void DemandComponentItemMetadata(const std::string& kind,const ComponentJson& data){
     const auto ids=AlterEgo::Composable::Presentation::ComponentItemIds(kind,data);
     if(!ids.empty())AlterEgo::GW2API::FetchItemDetailsAsync(ids);
+    const auto stats=AlterEgo::Composable::Presentation::ComponentStatIds(kind,data);
+    if(!stats.empty())AlterEgo::GW2API::FetchItemStatDetailsAsync(stats);
 }
 static void RenderComponentInventory(const std::string& kind, const ComponentJson& data) {
     if (!data.is_object()) return;
@@ -325,7 +327,10 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
                 const bool expanded=ImGui::TreeNodeEx("##component_slot",ImGuiTreeNodeFlags_NoTreePushOnOpen|ImGuiTreeNodeFlags_SpanAvailWidth,"%s",AlterEgo::Composable::Presentation::GearSlotSummary(kind,item).c_str());
                 if(ImGui::IsItemHovered()){
                     const auto ids=AlterEgo::Composable::Presentation::ComponentItemIds(kind,ComponentJson{{"gear",{{slotName,item}}}});
-                    if(ids.size()==1){const auto info=AlterEgo::GW2API::GetItemInfo(ids.front());if(info)RenderItemDefinitionTooltip(*info);}
+                    const auto exact=AlterEgo::TooltipCore::FieldId(item,"item_id");
+                    if(exact&&(kind=="armor"||kind=="weapons"||kind=="trinkets"||kind=="aquatic"))
+                        RenderSavedItemTooltip(exact,AlterEgo::TooltipCore::FieldId(item,"stat_id"));
+                    else if(ids.size()==1){const auto info=AlterEgo::GW2API::GetItemInfo(ids.front());if(info)RenderItemDefinitionTooltip(*info);}
                 }
                 if(ImGui::BeginPopupContextItem("##component_item_names")){
                     ComponentStoredNameActions(item);ImGui::EndPopup();

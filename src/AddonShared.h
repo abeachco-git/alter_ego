@@ -117,6 +117,8 @@ namespace AlterEgo { struct ItemInfo; }
 // Shared cached definition rendering, not equipped-instance evidence.
 void RenderItemDefinitionDetails(const AlterEgo::ItemInfo& info,unsigned parts=AlterEgo::TooltipCore::ItemAll,bool tooltip=true);
 void RenderItemDefinitionTooltip(const AlterEgo::ItemInfo& info);
+void RenderSelectedItemStatDetails(uint32_t itemId,uint32_t statId,bool tooltip=true);
+void RenderSavedItemTooltip(uint32_t itemId,uint32_t statId);
 
 // Returns the account GUID to use for per-account API queries.
 // Returns an empty string when "All Accounts" is selected.

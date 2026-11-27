@@ -2188,12 +2188,22 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         }
         ImGui::TextDisabled("%s%s",BindingName(slot.binding),Fresh(*v,row)?"":" | Stale or failed");
         if(!slot.boundTo.empty())ImGui::TextWrapped("Bound to %s",slot.boundTo.c_str());
-        if(slot.charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(slot.charges));
+        if(slot.charges>=0)ImGui::Text("Remaining charges: %lld",static_cast<long long>(slot.charges));
         if(slot.stat>0)ImGui::TextDisabled("Selected stat ID: %lld",static_cast<long long>(slot.stat));
         const bool glyph=slot.scope=="Equipment"&&(slot.position.find("/Pick")!=std::string::npos||slot.position.find("/Axe")!=std::string::npos||slot.position.find("/Sickle")!=std::string::npos);
         if(glyph&&slot.upgrades.empty())ImGui::TextDisabled("Glyph: Unknown (not reported)");
-        for(auto id:slot.upgrades){if(id)definitionDemand.push_back(id);const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("%s: %s",glyph?"Glyph":"Upgrade",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
-        for(auto id:slot.infusions){if(id)definitionDemand.push_back(id);const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("Infusion: %s",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
+        const auto socket=[&](const char* label,uint32_t id,int index){
+            if(!id)return;
+            definitionDemand.push_back(id);const auto item=GW2API::GetItemInfo(id);
+            const auto name=item&&!item->name.empty()?item->name:std::to_string(id);
+            ImGui::PushID(label);ImGui::PushID(index);
+            ImGui::TextWrapped("%s: %s",label,name.c_str());
+            if(item&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*item);
+            UI::EntityContext("##inventory_socket",[&]{CopyEntityMenu(item?item->name:std::string{},LINK_ITEM,id);});
+            ImGui::PopID();ImGui::PopID();
+        };
+        for(size_t i=0;i<slot.upgrades.size();++i)socket(glyph?"Glyph":"Upgrade",slot.upgrades[i],static_cast<int>(i));
+        for(size_t i=0;i<slot.infusions.size();++i)socket("Infusion",slot.infusions[i],static_cast<int>(i));
         ImGui::Separator();ImGui::PopID();
     }
     // Only the selected item and its displayed sockets demand public definitions.

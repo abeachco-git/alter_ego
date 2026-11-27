@@ -473,7 +473,7 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
 
 static void ComponentNativeStatChoice(ComponentJson& item) {
     ImGui::PushID("##native_stats");
-    const uint32_t id = item.value("stat_id", uint32_t(0));
+    const uint32_t id = AlterEgo::TooltipCore::FieldId(item,"stat_id");
     const auto info = AlterEgo::GW2API::GetItemStatInfo(id);
     const std::string storedName = item.value("stat_name", std::string());
     const std::string shown = !storedName.empty() ? storedName :
@@ -732,7 +732,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         const bool water=kind=="aquatic";
         const bool weapon=kind=="weapons"||(water&&AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(slot));
         if (kind == "armor" || kind == "weapons" || kind == "trinkets" || water) {
-            const uint32_t id = item.value("item_id", uint32_t(0));
+            const uint32_t id = AlterEgo::TooltipCore::FieldId(item,"item_id");
             const auto info = id ? AlterEgo::GW2API::GetItemInfo(id) : nullptr;
             if (info && !info->icon_url.empty()) {
                 Texture_t* tex = AlterEgo::IconManager::GetOrRequestIcon(id,info->icon_url);
@@ -743,7 +743,8 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             }
             if(id)ImGui::TextWrapped("%s (#%u)",info&&!info->name.empty()?info->name.c_str():"Item metadata pending",id);
             else ImGui::TextDisabled("No exact item selected");
-            if(info&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*info);
+            if(info&&ImGui::IsItemHovered())RenderSavedItemTooltip(id,AlterEgo::TooltipCore::FieldId(item,"stat_id"));
+            if(id)AlterEgo::UI::EntityContext("##native_exact_item", [&]{CopyEntityMenu(info?info->name:std::string{},AlterEgo::LINK_ITEM,id);});
             if (ImGui::TreeNode("##exact_item", "Exact equipment item")) {
                 uint32_t exact=id;ImGui::SetNextItemWidth(150);
                 if(ImGui::InputScalar("Item ID",ImGuiDataType_U32,&exact)){
@@ -753,6 +754,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             }
             ImGui::TextUnformatted("Stats");
             ComponentNativeStatChoice(item);
+            RenderSelectedItemStatDetails(id,AlterEgo::TooltipCore::FieldId(item,"stat_id"),false);
             if (weapon)
                 ComponentNativeWeaponChoice(item,data["gear"],profession,slot);
             if (ImGui::TreeNode("##advanced_gear_ids", "Advanced: exact stats and weapon type")) {

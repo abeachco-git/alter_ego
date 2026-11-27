@@ -86,6 +86,8 @@ int case_composable_gear_presentation(int, char**) {
     assert(lines.size()==1&&contains("Definition charges: 25"));
     lines=ItemDefinitionLines("Bag","Basic","",Json{{"size",20}},ItemUtility);assert(contains("Capacity: 20 slots"));
     lines=ItemDefinitionLines("Armor","Rare","",Json{{"infusion_slots",Json::array()}},ItemUtility);assert(contains("Definition infusion slots: 0"));
+    assert((Presentation::ComponentStatIds("armor",component)==std::vector<uint32_t>{999}));
+    assert(Presentation::ComponentStatIds("runes",component).empty());
     std::cout << "Composable gear presentation PASS\n";
     return 0;
 }

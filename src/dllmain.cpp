@@ -2894,7 +2894,7 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
         if (item_info && item_info->details.is_object() &&
             item_info->details.contains("infix_upgrade") &&
             item_info->details["infix_upgrade"].contains("id")) {
-            uint32_t fixedStatId = item_info->details["infix_upgrade"]["id"].get<uint32_t>();
+            uint32_t fixedStatId = AlterEgo::TooltipCore::FixedStatId(item_info->details);
             const auto si = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
             if (si && !si->name.empty()) {
                 out = si->name;
@@ -3024,8 +3024,35 @@ void RenderItemDefinitionTooltip(const AlterEgo::ItemInfo& info){
     RenderItemDefinitionDetails(info);
     ImGui::EndTooltip();
 }
+// Shared exact selected-stat presentation. Visible panels own metadata demand.
+static std::vector<std::string> SelectedStatLines(uint32_t itemId,const AlterEgo::ItemStatInfo& stat){
+    const auto item=AlterEgo::GW2API::GetItemInfo(itemId);
+    return item?AlterEgo::TooltipCore::CalculatedStatLines(item->details,stat.id,stat.formulas):std::vector<std::string>{};
+}
+void RenderSelectedItemStatDetails(uint32_t itemId,uint32_t statId,bool tooltip){
+    using namespace AlterEgo;
+    const auto stat=GW2API::GetItemStatInfo(statId);if(!stat)return;
+    const auto values=SelectedStatLines(itemId,*stat);
+    auto line=[&](const std::string& text){
+        if(tooltip)UI::TooltipLine(text.c_str(),ImVec4(.4f,.9f,.4f,1.f));
+        else ImGui::TextWrapped("%s",text.c_str());
+    };
+    if(!values.empty()){
+        line("Calculated item attributes");
+        for(const auto& text:values)line(text);
+    }else for(const auto& attr:stat->attributes)line(TooltipCore::FriendlyAttribute(attr));
+}
+void RenderSavedItemTooltip(uint32_t itemId,uint32_t statId){
+    using namespace AlterEgo;
+    const auto info=GW2API::GetItemInfo(itemId);if(!info||info->name.empty())return;
+    ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
+    UI::TooltipLine(info->name.c_str(),GetRarityColor(info->rarity));
+    RenderItemDefinitionDetails(*info,TooltipCore::ItemAll&~TooltipCore::ItemAttributes);
+    RenderSelectedItemStatDetails(itemId,statId);
+    ImGui::EndTooltip();
+}
 static void RenderUpgradeTooltipDetails(const AlterEgo::ItemInfo& info){
-    RenderItemDefinitionDetails(info,AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription);
+    RenderItemDefinitionDetails(info,AlterEgo::TooltipCore::ItemAttributes|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription|AlterEgo::TooltipCore::ItemUtility);
 }
 static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
@@ -3125,7 +3152,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             ImGui::BeginGroup();
             AlterEgo::UI::TooltipLine(display_name.c_str(),GetRarityColor(rarity));
 
-            if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
+            if(eq->charges>=0)ImGui::Text("Remaining charges: %lld",static_cast<long long>(eq->charges));
 
             // Public definition facts remain separate from the equipped instance.
             if(item_info)RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemCombat);
@@ -3139,7 +3166,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             } else if (item_info && item_info->details.is_object() &&
                        item_info->details.contains("infix_upgrade") &&
                        item_info->details["infix_upgrade"].contains("id")) {
-                uint32_t fixedStatId = item_info->details["infix_upgrade"]["id"].get<uint32_t>();
+                uint32_t fixedStatId = AlterEgo::TooltipCore::FixedStatId(item_info->details);
                 const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(fixedStatId);
                 if (statInfo && !statInfo->name.empty()) {
                     ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s", statInfo->name.c_str());
@@ -3154,7 +3181,9 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                     ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "+%d %s", val, displayAttr.c_str());
                 }
             } else if(item_info) {
-                RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemAttributes);
+                // A selectable item's fixed definition is not the actual selection.
+                if(eq->stat_id)RenderSelectedItemStatDetails(eq->id,eq->stat_id);
+                else RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemAttributes);
             }
 
             // Show the recorded infusion slots, including IDs whose public
@@ -3166,10 +3195,10 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                 for (uint32_t id : eq->infusions) {
                     if (id == 0) continue;
                     const auto info = AlterEgo::GW2API::GetItemInfo(id);
-                    if (info && !info->name.empty())
+                    if (info && !info->name.empty()){
                         ImGui::BulletText("%s", info->name.c_str());
-                    else
-                        ImGui::BulletText("Infusion details unavailable");
+                        RenderUpgradeTooltipDetails(*info);
+                    }else ImGui::BulletText("Infusion details unavailable");
                 }
             }
 
@@ -3177,11 +3206,11 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             for (auto upgrade_id : eq->upgrades) {
                 if (upgrade_id == 0) continue;
                 const auto uinfo = AlterEgo::GW2API::GetItemInfo(upgrade_id);
-                if (uinfo) {
-                    ImGui::Spacing();
+                ImGui::Spacing();
+                if(uinfo){
                     ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "%s", uinfo->name.c_str());
                     RenderUpgradeTooltipDetails(*uinfo);
-                }
+                }else ImGui::TextDisabled("Upgrade details unavailable");
             }
 
             // Transmuted skin — show original item name (the item before reskin)
@@ -3194,7 +3223,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             if(item_info){
                 ImGui::Spacing();
                 ImGui::TextColored(GetRarityColor(item_info->rarity),"%s",item_info->rarity.c_str());
-                RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription|AlterEgo::TooltipCore::ItemAcquisition);
+                RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription|AlterEgo::TooltipCore::ItemAcquisition|AlterEgo::TooltipCore::ItemUtility);
             }
 
             // Skin unlock status — only show if locked (unlocked is implied for equipped items)
@@ -3562,15 +3591,19 @@ static void RenderLiveComponentSaveMenu(const AlterEgo::Character& ch, int tab,
 
 // Explicit visible equipment demand, not an inventory-wide background sweep.
 static void DemandVisibleEquipmentMetadata(const AlterEgo::Character& ch,int tab,bool tools){
-    std::vector<uint32_t> ids;
+    std::vector<uint32_t> ids,stats;
     for(const auto& eq:ch.equipment){
         const bool utility=AlterEgo::CharacterTools::Utility(eq.slot);
         if(utility!=tools||(eq.tab!=0&&eq.tab!=tab))continue;
         if(eq.id)ids.push_back(eq.id);
+        const auto item=AlterEgo::GW2API::GetItemInfo(eq.id);
+        const auto stat=eq.stat_id?eq.stat_id:item?AlterEgo::TooltipCore::FixedStatId(item->details):0;
+        if(stat)stats.push_back(stat);
         for(auto id:eq.upgrades)if(id)ids.push_back(id);
         for(auto id:eq.infusions)if(id)ids.push_back(id);
     }
     if(!ids.empty())AlterEgo::GW2API::FetchItemDetailsAsync(ids);
+    if(!stats.empty())AlterEgo::GW2API::FetchItemStatDetailsAsync(stats);
 }
 // Character-wide utility items use the existing equipment icon, tooltip and
 // context menu; no template selector or save-to-loadout action.
@@ -3595,6 +3628,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
         ImGui::PushStyleColor(ImGuiCol_Text,GetRarityColor(info?info->rarity:"Basic"));
         ImGui::TextWrapped("%s",name.c_str());
         ImGui::PopStyleColor();
+        if(info&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*info);
         ImGui::PushID(static_cast<int>(eq->id));UI::EntityContext("##tool_item",[&]{RenderEquipmentContextActions(ch,eq);});ImGui::PopID();
         if(eq->skin){
             const auto skin = GW2API::GetSkinInfo(eq->skin);
@@ -3603,7 +3637,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
             ImGui::PushID(static_cast<int>(eq->skin));UI::EntityContext("##tool_skin",[&]{CopyEntityMenu(skin?skin->name:std::string{},LINK_SKIN,eq->skin);});ImGui::PopID();
         }
         if(charges){
-            if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
+            if(eq->charges>=0)ImGui::Text("Remaining charges: %lld",static_cast<long long>(eq->charges));
             // Unknown charges are omitted; explicit zero is still reported.
         }
         if(gathering){
@@ -3614,6 +3648,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
                 const auto glyph = GW2API::GetItemInfo(id);
                 const auto glyphName=glyph&&!glyph->name.empty()?glyph->name:"Item #"+std::to_string(id);
                 ImGui::TextWrapped("Glyph: %s",glyphName.c_str());
+                if(glyph&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*glyph);
                 ImGui::PushID(static_cast<int>(id));UI::EntityContext("##tool_glyph",[&]{CopyEntityMenu(glyph?glyph->name:std::string{},LINK_ITEM,id);});ImGui::PopID();
             }
             if(!reported){
@@ -5643,14 +5678,16 @@ static void FetchDetailsForSavedBuild(const AlterEgo::SavedBuild& build){
     DemandBuildReferenceMetadata(build);
 }
 static void DemandSavedGearMetadata(const AlterEgo::SavedBuild& build){
-    std::vector<uint32_t> ids{build.rune_id,build.relic_id};
+    std::vector<uint32_t> ids{build.rune_id,build.relic_id},stats;
     for(const auto& inf:build.infusion_totals)if(inf.item_id)ids.push_back(inf.item_id);
     for(const auto& entry:build.gear){
         const auto& gear=entry.second;
+        if(gear.stat_id)stats.push_back(gear.stat_id);
         for(auto id:{gear.item_id,gear.rune_id,gear.sigil_id,gear.sigil2_id})if(id)ids.push_back(id);
         for(auto id:gear.infusion_ids)if(id)ids.push_back(id);
     }
     AlterEgo::GW2API::FetchItemDetailsAsync(ids);
+    if(!stats.empty())AlterEgo::GW2API::FetchItemStatDetailsAsync(stats);
 }
 
 // =========================================================================
@@ -8038,16 +8075,11 @@ static void RenderGearCustomizeDialog() {
                 CopyEntityMenu(editBuild->relic_name,AlterEgo::LINK_ITEM,editBuild->relic_id);ImGui::EndPopup();
             }
             ImVec2 tp(p.x + 6, p.y + 3);
-            if (!editBuild->relic_name.empty()) {
-                ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(200, 180, 255, 255), editBuild->relic_name.c_str());
-                // Show bonus text if we can find it in the list
-                for (const auto& entry : GearCatalog("Relic")) {
-                    if (editBuild->relic_name == entry.name) {
-                        tp.y += 14.0f;
-                        ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(150, 150, 150, 220), entry.bonus.c_str());
-                        break;
-                    }
-                }
+            if (!editBuild->relic_name.empty()||editBuild->relic_id) {
+                const auto info=AlterEgo::GW2API::GetItemInfo(editBuild->relic_id);
+                const auto name=info&&!info->name.empty()?info->name:editBuild->relic_name.empty()?"Item #"+std::to_string(editBuild->relic_id):editBuild->relic_name;
+                ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(200, 180, 255, 255), name.c_str());
+                if(info&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*info);
             } else {
                 ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(120, 120, 120, 200), "Relic: (click to select)");
             }
@@ -8081,11 +8113,11 @@ static void RenderGearCustomizeDialog() {
                 ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(255, 210, 80, 255), label.c_str());
                 const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
                 if (statInfo) {
-                    for (const auto& a : statInfo->attributes) {
+                    const auto values=SelectedStatLines(gs.item_id,*statInfo);
+                    for(size_t i=0;i<statInfo->attributes.size();++i){
                         tp.y += 13.0f;
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "  +%s", FriendlyAttrName(a));
-                        ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(100, 200, 100, 255), buf);
+                        const auto label=values.size()==statInfo->attributes.size()?values[i]+" (calc.)":std::string(FriendlyAttrName(statInfo->attributes[i]));
+                        ImGui::GetWindowDrawList()->AddText(tp, IM_COL32(100, 200, 100, 255), label.c_str());
                     }
                 }
             } else {
@@ -8937,12 +8969,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
         AlterEgo::UI::TooltipLine(label.c_str(),ImVec4(.5f,.8f,.8f,1.f));
         if(info)RenderItemDefinitionDetails(*info);
-        for (const auto& entry : GearCatalog("Relic")) {
-            if ((!info||(info->description.empty()&&!(info->type=="Relic"&&info->rarity=="Legendary")))&&build.relic_name == entry.name) {
-                AlterEgo::UI::TooltipLine(entry.bonus.c_str());
-                break;
-            }
-        }
+        // A name-only catalog entry cannot verify a relic effect.
         ImGui::EndTooltip();
         }
     } else if (hovered && (hasData || infusionCount > 0 || (gearSlot&&gearSlot->item_id))) {
@@ -8950,7 +8977,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         const auto cachedItem=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
         if(cachedItem&&!cachedItem->name.empty())AlterEgo::UI::TooltipLine(cachedItem->name.c_str(),GetRarityColor(cachedItem->rarity));
         else AlterEgo::UI::TooltipLine(GearSlotDisplayName(slot),AlterEgo::UI::TooltipTitle);
-        if(cachedItem)RenderItemDefinitionDetails(*cachedItem,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemCombat|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription|AlterEgo::TooltipCore::ItemAcquisition);
+        if(cachedItem)RenderItemDefinitionDetails(*cachedItem,AlterEgo::TooltipCore::ItemAll&~AlterEgo::TooltipCore::ItemAttributes);
         if(gearSlot){
             const auto upgrade=[](const char* label,uint32_t id,const std::string& stored){
                 if(!id&&stored.empty())return;
@@ -8967,12 +8994,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         if (hasStat) {
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s %s",
                 it->second.stat_name.c_str(), GearSlotDisplayName(slot));
-            const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(it->second.stat_id);
-            if (statInfo) {
-                for (const auto& a : statInfo->attributes) {
-                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "  +%s", FriendlyAttrName(a));
-                }
-            }
+            RenderSelectedItemStatDetails(it->second.item_id,it->second.stat_id);
         }
         if (gearSlot && infusionCount > 0) {
             ImGui::Separator();
@@ -8981,7 +9003,11 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
             for(size_t i=0;i<AlterEgo::GearEdit::InfusionPositionCount(*gearSlot);++i){
                 const auto req=AlterEgo::GearEdit::InfusionPositionAt(*gearSlot,i);
                 if(!req.attribute.empty())ImGui::BulletText("Stat: %s",InfusionAttributeLabel(req.attribute));
-                else if(req.exactId){const auto info=AlterEgo::GW2API::GetItemInfo(req.exactId);if(info&&!info->name.empty())ImGui::BulletText("%s",info->name.c_str());}
+                else if(req.exactId){
+                    const auto info=AlterEgo::GW2API::GetItemInfo(req.exactId);
+                    if(info&&!info->name.empty()){ImGui::BulletText("%s",info->name.c_str());RenderUpgradeTooltipDetails(*info);}
+                    else ImGui::BulletText("Infusion details unavailable");
+                }
             }
         }
         ImGui::EndTooltip();

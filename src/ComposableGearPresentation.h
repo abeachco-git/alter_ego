@@ -82,6 +82,19 @@ inline std::vector<uint32_t> ComponentItemIds(const std::string& kind,const Json
     return ids;
 }
 
+inline std::vector<uint32_t> ComponentStatIds(const std::string& kind,const Json& data){
+    std::vector<uint32_t> ids;
+    if(kind!="armor"&&kind!="weapons"&&kind!="trinkets"&&kind!="aquatic")return ids;
+    if(!data.is_object())return ids;
+    auto gear=data.find("gear");if(gear==data.end()||!gear->is_object())return ids;
+    for(const auto& slot:*gear){
+        if(!slot.is_object())continue;
+        auto value=slot.find("stat_id");uint32_t id=0;
+        if(value!=slot.end()&&ReadItemId(*value,id)&&id)ids.push_back(id);
+    }
+    std::sort(ids.begin(),ids.end());ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
+    return ids;
+}
 inline std::string GearSlotSummary(const std::string& kind, const Json& slot) {
     if (!slot.is_object()) return "Unknown imported representation (preserved)";
     std::vector<std::string> pieces;
