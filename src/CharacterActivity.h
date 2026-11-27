@@ -18,9 +18,9 @@ struct Entry {
     std::map<std::string,Scope> scopes;
 };
 struct Ticket {int64_t started=0,seen=0,login=0,specChanged=0;bool active=false;int64_t verificationStarted=0;uint64_t serial=0;};
-enum class WaitReason { Current, Due, LoginGrace, ActiveInterval, Stagger, LogoutGrace, SpecDebounce, Retry };
-struct Eligibility { WaitReason reason=WaitReason::Current; int64_t at=0; bool due=false; };
-struct Inspection { bool active=false, fresh=false; int64_t login=0,lastSeen=0,attempt=0; Eligibility eligibility; std::string error; };
+using RefreshEngine::WaitReason;
+using RefreshEngine::Eligibility;
+struct Inspection { bool active=false, fresh=false; int64_t login=0,lastSeen=0,attempt=0,success=0; Eligibility eligibility; std::string error; };
 class Tracker {
     std::map<Key,Entry> rows_;
     Key active_;
@@ -116,7 +116,7 @@ public:
             if(!missing&&now>=base+interval&&now<normalAt)result.reason=WaitReason::Stagger;
             const bool changed=specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
             if(changed){
-                const auto specAt=std::max(e.specChanged+8,s.success<e.specChanged?int64_t(0):s.success+RefreshEngine::CharacterSeconds);
+                const auto specAt=std::max(e.specChanged+RefreshEngine::SpecializationDebounceSeconds,s.success<e.specChanged?int64_t(0):s.success+RefreshEngine::CharacterSeconds);
                 if(specAt<normalAt)result={WaitReason::SpecDebounce,specAt,now>=specAt};
             }
         }else if(success<=0||success>now||e.lastSeen>Covered(e,s,success)){
@@ -124,8 +124,7 @@ public:
             result={WaitReason::LogoutGrace,at,now>=at};
         }
         if(result.reason==WaitReason::Current)return result;
-        if(attempt>0&&attempt<=now&&attempt>=success&&now-attempt<RefreshEngine::FailureSeconds){
-            const auto retryAt=attempt+RefreshEngine::FailureSeconds;
+        if(const auto retryAt=RefreshEngine::RetryUntil(success,attempt,now)){
             if(retryAt>=result.at)return {WaitReason::Retry,retryAt,false};
             // A longer propagation or activity interval remains the binding constraint.
             result.due=false;
@@ -137,13 +136,13 @@ public:
              bool specSignal=true,bool manual=false)const{
         return manual||Eligible(k,scope,success,externalAttempt,now,specSignal).due;
     }
-    Inspection Inspect(const Key& k,const std::string& scope,int64_t success,int64_t now,bool specSignal=true)const{
-        Inspection out;out.active=Active(k);out.fresh=Fresh(k,scope,success,now,specSignal);
-        out.eligibility=Eligible(k,scope,success,0,now,specSignal);
+    Inspection Inspect(const Key& k,const std::string& scope,int64_t success,int64_t now,bool specSignal=true,int64_t externalAttempt=0)const{
+        Inspection out;out.active=Active(k);out.fresh=Fresh(k,scope,success,now,specSignal);out.success=success;
+        out.eligibility=Eligible(k,scope,success,externalAttempt,now,specSignal);out.attempt=externalAttempt;
         auto i=rows_.find(k);if(i!=rows_.end()){
             out.login=i->second.login;out.lastSeen=i->second.lastSeen;
             auto s=i->second.scopes.find(scope);
-            if(s!=i->second.scopes.end()){out.attempt=s->second.attempt;out.error=s->second.error;}
+            if(s!=i->second.scopes.end()){out.attempt=std::max(externalAttempt,s->second.attempt);out.error=s->second.error;}
         }
         return out;
     }

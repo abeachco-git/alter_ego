@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include "ApiActivity.h"
+#include "RefreshPolicy.h"
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -12,16 +13,6 @@
 #include <string>
 #include <vector>
 namespace AlterEgo::RefreshEngine {
-inline constexpr int64_t BrowseSeconds=1800, DefaultObjectiveSeconds=900, FailureSeconds=900;
-inline constexpr int64_t CharacterSeconds=600, LogoutGraceSeconds=600;
-inline constexpr int64_t SeasonSeconds=86400;
-// Account-wide mutable inventory uses the same interval as active characters.
-// Other account activity scopes retain the general browsing interval.
-inline int64_t ActivitySeconds(bool accountWide,const std::string& scope){
-    if(!accountWide||scope=="Bank"||scope=="Shared inventory"||scope=="Materials")
-        return CharacterSeconds;
-    return BrowseSeconds;
-}
 inline std::atomic<int>& ObjectiveMinutesValue(){static std::atomic<int> n{15};return n;}
 inline int ObjectiveMinutes(){return ObjectiveMinutesValue().load();}
 inline void SetObjectiveMinutes(int n){ObjectiveMinutesValue()=std::max(5,std::min(60,n));}
@@ -29,13 +20,13 @@ inline int64_t ObjectiveSeconds(){return ObjectiveMinutes()*60LL;}
 inline int64_t Offset(const std::string& key){
     uint32_t h=2166136261u;
     for(unsigned char c:key){h^=c;h*=16777619u;}
-    return h%46; // stable 0-45 second spread on ordinary recurring requests
+    return h%(StaggerMaxSeconds+1); // stable 0-45 second spread on ordinary recurring requests
 }
 inline bool Due(int64_t success,int64_t attempt,int64_t now,int64_t interval,
                 bool manual=false,int64_t minimumEpoch=0,int64_t offset=0,
                 int64_t retry=FailureSeconds){
     if(manual)return true;
-    if(attempt>0&&attempt<=now&&now-attempt<retry)return false;
+    if(RetryUntil(success,attempt,now,retry))return false;
     if(success<=0||success>now||success<minimumEpoch)return true;
     return now-success>=interval+offset;
 }
@@ -54,7 +45,7 @@ inline bool CharacterDue(bool active,int64_t activeSince,int64_t lastSeen,int64_
                          int64_t attempt,int64_t now,bool changedSpec=false,bool manual=false,
                          int64_t reconciledThrough=-1){
     if(manual)return true;
-    if(attempt>0&&attempt<=now&&now-attempt<FailureSeconds)return false;
+    if(RetryUntil(success,attempt,now))return false;
     if(active)return changedSpec||now-std::max(activeSince,success>now?int64_t(0):success)>=CharacterSeconds;
     if(!LogoutReady(lastSeen,now))return false;
     if(success<=0)return true;

@@ -10,7 +10,7 @@ inline constexpr Mask All=Core|Builds|Tabs|Physical|Crafting;
 inline constexpr Mask Compare=Core|Builds|Tabs|Physical;
 inline constexpr std::array<Scope,5> Ordered{{Core,Builds,Tabs,Physical,Crafting}};
 inline constexpr size_t Index(Scope s){return s==Core?0:s==Builds?1:s==Tabs?2:s==Physical?3:4;}
-inline const char* Name(Scope s){return s==Core?"Core":s==Builds?"BuildTabs":s==Tabs?"EquipmentTabs":s==Physical?"PhysicalSupplement":"Crafting";}
+inline const char* Name(Scope s){namespace N=RefreshEngine::ScopeName;return s==Core?N::Core:s==Builds?N::Builds:s==Tabs?N::Tabs:s==Physical?N::Physical:N::Crafting;}
 inline bool SpecSensitive(Scope s){return s==Builds||s==Tabs||s==Physical;}
 using Stamps=std::array<int64_t,5>;
 inline constexpr Mask Visible(int tab){

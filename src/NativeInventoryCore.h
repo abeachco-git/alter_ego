@@ -14,6 +14,7 @@
 #include <string_view>
 #include <charconv>
 #include "SkinSearchCore.h"
+#include "RefreshPolicy.h"
 
 namespace AlterEgo::NativeInventory {
 using Json=nlohmann::json;
@@ -196,13 +197,10 @@ inline GuildStock ParseGuild(const Json& j,const std::string& guid){
     return out;
 }
 inline int64_t FreshSeconds(const std::string& scope){
-    if(scope=="Roster")return 86400;
-    return 1800;
+    return RefreshEngine::InventorySeconds(scope);
 }
 inline bool Due(const std::string& scope,int64_t attempted,int64_t success,int64_t now){
-    // Failed attempts back off 15 minutes; manual refresh bypasses Due.
-    if(attempted>0&&attempted>=success&&now>=attempted&&now-attempted<900)return false;
-    return success<=0||now<success||now-success>=FreshSeconds(scope);
+    return RefreshEngine::TimedEligibility(success,attempted,now,FreshSeconds(scope)).due;
 }
 struct ItemFlags {bool known=false,accountBound=false,soulbound=false,bindOnUse=false;};
 inline ItemFlags ParseFlags(const Json& flags){

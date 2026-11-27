@@ -73,7 +73,7 @@ inline AchievementResult FetchAchievements(const std::string& root,const NativeA
     if(e.snapshot&&e.snapshot->fetchedAt>=minimumEpoch&&
        (e.finished>=started||(!force&&!RefreshEngine::Due(e.snapshot->fetchedAt,0,now,maxAge,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements")))))
         {ApiActivity::Session().Shared(e.finished>=started);return {200,{},e.snapshot};}
-    if(!force&&e.failedAt>0&&e.failedAt<=now&&now-e.failedAt<RefreshEngine::FailureSeconds)
+    if(RefreshEngine::RetryUntil(e.snapshot?e.snapshot->fetchedAt:0,e.failedAt,now,RefreshEngine::FailureSeconds,force))
         return {e.errorStatus,e.error.empty()?"Achievement retry cooldown":e.error,{}};
     auto fail=[&](int status,std::string error){
         e.failedAt=static_cast<int64_t>(std::time(nullptr));e.errorStatus=status;e.error=error;
