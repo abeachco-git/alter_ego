@@ -29,7 +29,7 @@ neither the offline parser case nor the live website workflow runs. The runtime
 importer is retained. Snow Crows and all other offline cases remain enabled.
 Skill icon research is manual-only; it builds a baseline DLL for accurate size
 comparisons and uploads the report.
-The existing equipment.skill_edit_core case exercises the shared artwork resolver with fake cache/queue adapters for ordinary skills, legend swap skills and pets (cached, missing, absent URL, invalid key and priority). The persistence.database_core case checks companion artwork URLs survive catalog round-trip. Fixed manifest and exact PE resource checks exclude companions; in-game first-use, offline reuse, queue deduplication, and failed-download recovery require live validation.
+The existing equipment.skill_edit_core case verifies exact, deduplicated recorded skill-bar demand IDs, including aquatic and unresolved palette evidence; empty and unrecorded slots never become requests. Live: verify stale selected Compare metadata, aquatic environment recovery and both editors' shared slot demand with Public Catalogs enabled and disabled; no hover-only or unrelated account requests. The existing equipment.skill_edit_core case exercises the shared artwork resolver with fake cache/queue adapters for ordinary skills, legend swap skills and pets (cached, missing, absent URL, invalid key and priority). The persistence.database_core case checks companion artwork URLs survive catalog round-trip. Fixed manifest and exact PE resource checks exclude companions; in-game first-use, offline reuse, queue deduplication, and failed-download recovery require live validation.
 
 ## CI maintenance
 

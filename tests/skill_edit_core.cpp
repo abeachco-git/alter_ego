@@ -123,6 +123,12 @@ int case_skill_edit_core(int,char**) {
         TestBar draft{0,{0,88,0},0};
         const auto view=WithPaletteBar(DisplayBar(draft),evidence,false);
         assert(view[0].evidence==SlotEvidence::Unresolved&&view[2].id==88);
+        assert(RecordedSkillIds(view)==std::vector<uint32_t>{88});
+        const auto duplicate=DisplayBar(TestBar{88,{0,88,42},0},1u<<4);
+        assert((RecordedSkillIds(duplicate)==std::vector<uint32_t>{42,88}));
+        const auto waterView=WithPaletteBar(DisplayBar(TestBar{0,{12,0,12},0}),evidence,true);
+        assert(RecordedSkillIds(waterView)==std::vector<uint32_t>{12});
+        assert(RecordedSkillIds(DisplayBar(TestBar{},31)).empty());
         const J payload={{"rev_active_palettes",*evidence}};
         assert(ReadPaletteEvidence(payload)==evidence);
         assert(SetSlotWithPaletteEvidence(draft,evidence,false,0,0));

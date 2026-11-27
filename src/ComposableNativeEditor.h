@@ -129,8 +129,7 @@ static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const cha
         parent[key]=next;changed=true;
     }
     const auto info=id?AlterEgo::GW2API::GetSkillInfo(id):nullptr;
-    if(id&&!info)AlterEgo::GW2API::FetchSkillDetailsAsync({id});
-    std::string detail=id?(info&&!info->name.empty()?info->name:"Metadata pending"):SE::MissingSlotLabel(slot.evidence);
+     std::string detail=id?(info&&!info->name.empty()?info->name:"Metadata pending"):SE::MissingSlotLabel(slot.evidence);
     if(aquatic&&id&&(!info||!info->no_underwater.has_value()||info->no_underwater.value_or(false)))
         detail+=info&&info->no_underwater.value_or(false)?" [NoUnderwater]":" [eligibility unknown]";
     if(available>=labelWidth+38.f+100.f)ImGui::SameLine();

@@ -3989,14 +3989,13 @@ static bool RenderEditableSkillIcon(uint32_t skill_id, float size,bool nameMenu=
 static void RenderSkillIcon(uint32_t skill_id, float size);
 // Shared display-only strip. Metadata admission remains with the ordinary
 // visible skill owner; no per-view cache, timer or request policy.
-static void RenderSkillBarPreview(const std::array<AlterEgo::SkillEdit::DisplaySlot,5>& slots,float size) {
+static void DemandSkillBarMetadata(const std::array<AlterEgo::SkillEdit::DisplaySlot,5>& slots,bool aquatic){
+    const auto ids=AlterEgo::SkillEdit::RecordedSkillIds(slots);
+    if(!ids.empty())AlterEgo::GW2API::FetchSkillDetailsAsync(ids,aquatic);
+}
+static void RenderSkillBarPreview(const std::array<AlterEgo::SkillEdit::DisplaySlot,5>& slots,float size,bool aquatic=false) {
     namespace SE=AlterEgo::SkillEdit;
-    std::vector<uint32_t> missing;
-    for(const auto& slot:slots)if(slot.id)missing.push_back(slot.id);
-    if(!missing.empty()){
-        std::sort(missing.begin(),missing.end());missing.erase(std::unique(missing.begin(),missing.end()),missing.end());
-        AlterEgo::GW2API::FetchSkillDetailsAsync(missing);
-    }
+    DemandSkillBarMetadata(slots,aquatic);
     const auto columns=SE::IconColumns(ImGui::GetContentRegionAvail().x,size,ImGui::GetStyle().ItemSpacing.x,5);
     ImGui::PushID("skill_bar_preview");
     for(size_t i=0;i<slots.size();++i){
@@ -4715,7 +4714,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
     const auto& water=bt.aquatic_skills;
     if(water.heal||water.elite||water.utilities[0]||water.utilities[1]||water.utilities[2]||water.empty_slots){
         if(ImGui::TreeNode("Aquatic skills##live")){
-            RenderSkillBarPreview(AlterEgo::SkillEdit::DisplayBar(water,water.empty_slots),ICON_SIZE);
+            RenderSkillBarPreview(AlterEgo::SkillEdit::DisplayBar(water,water.empty_slots),ICON_SIZE,true);
             ImGui::TreePop();
         }
     }
@@ -5678,25 +5677,29 @@ static bool DecodeBuildLink(const std::string& link, const std::string& name,
     return true;
 }
 
-// Fetch spec/trait/skill details needed for a saved build's preview
-static void FetchDetailsForSavedBuild(const AlterEgo::SavedBuild& build) {
-    std::vector<uint32_t> spec_ids, skill_ids;
-
-    for (int i = 0; i < 3; i++) {
-        if (build.specializations[i].spec_id != 0)
-            spec_ids.push_back(build.specializations[i].spec_id);
+// Saved previews and selected Compare inputs share the public reference owners.
+// Demand aquatic IDs first so a duplicate terrestrial ID cannot mask incomplete
+// environment evidence. Neither raw palette values nor unknown slots are IDs.
+template<class Build>
+static void DemandBuildReferenceMetadata(const Build& build){
+    using namespace AlterEgo;
+    GW2API::FetchSpecDetailsAsync({build.specializations[0].spec_id,build.specializations[1].spec_id,build.specializations[2].spec_id});
+    DemandSkillBarMetadata(SkillEdit::DisplayBar(build.aquatic_skills),true);
+    DemandSkillBarMetadata(SkillEdit::DisplayBar(build.terrestrial_skills),false);
+    GW2API::FetchProfessionInfoAsync(build.profession);
+}
+static void FetchDetailsForSavedBuild(const AlterEgo::SavedBuild& build){
+    DemandBuildReferenceMetadata(build);
+}
+static void DemandSavedGearMetadata(const AlterEgo::SavedBuild& build){
+    std::vector<uint32_t> ids{build.rune_id,build.relic_id};
+    for(const auto& inf:build.infusion_totals)if(inf.item_id)ids.push_back(inf.item_id);
+    for(const auto& entry:build.gear){
+        const auto& gear=entry.second;
+        for(auto id:{gear.item_id,gear.rune_id,gear.sigil_id,gear.sigil2_id})if(id)ids.push_back(id);
+        for(auto id:gear.infusion_ids)if(id)ids.push_back(id);
     }
-
-    auto addSkill = [&](uint32_t id) { if (id != 0) skill_ids.push_back(id); };
-    addSkill(build.terrestrial_skills.heal);
-    for (int i = 0; i < 3; i++) addSkill(build.terrestrial_skills.utilities[i]);
-    addSkill(build.terrestrial_skills.elite);
-    addSkill(build.aquatic_skills.heal);
-    for (int i = 0; i < 3; i++) addSkill(build.aquatic_skills.utilities[i]);
-    addSkill(build.aquatic_skills.elite);
-
-    if (!spec_ids.empty()) AlterEgo::GW2API::FetchSpecDetailsAsync(spec_ids);
-    if (!skill_ids.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(skill_ids);
+    AlterEgo::GW2API::FetchItemDetailsAsync(ids);
 }
 
 // =========================================================================
@@ -7266,6 +7269,8 @@ static bool RenderSkillEditorSlot(uint32_t current,float size,const std::string&
         AlterEgo::SkillEdit::SlotEvidence evidence=AlterEgo::SkillEdit::SlotEvidence::Unrecorded){
     using E=AlterEgo::SkillEdit::SlotEvidence;
     const bool unresolved=evidence==E::Unresolved;
+    // Both editors use the canonical demand owner, independent of hover/picker.
+    if(current)AlterEgo::GW2API::FetchSkillDetailsAsync({current},aquatic);
     const auto pos=ImGui::GetCursorScreenPos();
     if(RenderSkillIconCore(current,size,true,false,{},label,evidence==E::Empty,unresolved))ImGui::OpenPopup("##skill_picker");
     const bool hovered=ImGui::IsItemHovered();
@@ -9201,7 +9206,7 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src,float sz,bool ed
     ImGui::PushID(aquatic?"aquatic_bar":"terrestrial_bar");
     const auto slots=SE::WithPaletteBar(SE::DisplayBar(bar),src.rev_active_palettes,aquatic);
     if(!editable){
-        RenderSkillBarPreview(slots,sz);
+        RenderSkillBarPreview(slots,sz,aquatic);
     }else{
         std::vector<uint32_t> specs;
         for(const auto& spec:src.specializations)if(spec.spec_id)specs.push_back(spec.spec_id);
@@ -9669,14 +9674,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     ResolveBuildItemNames(build);
     RenderLoadoutComponentSelectors(source.id);
     const auto& metadataSource=g_LibEditMode?g_EditDraft:build;
-    std::vector<uint32_t> itemDemand{metadataSource.rune_id,metadataSource.relic_id};
-    for(const auto& inf:metadataSource.infusion_totals)if(inf.item_id)itemDemand.push_back(inf.item_id);
-    for(const auto& entry:metadataSource.gear){
-        const auto& gear=entry.second;
-        for(auto id:{gear.item_id,gear.rune_id,gear.sigil_id,gear.sigil2_id})if(id)itemDemand.push_back(id);
-        for(auto id:gear.infusion_ids)if(id)itemDemand.push_back(id);
-    }
-    AlterEgo::GW2API::FetchItemDetailsAsync(itemDemand);
+    DemandSavedGearMetadata(metadataSource);
     AlterEgo::GW2API::FetchSpecDetailsAsync({metadataSource.specializations[0].spec_id,metadataSource.specializations[1].spec_id,metadataSource.specializations[2].spec_id});
     AlterEgo::GW2API::FetchProfessionInfoAsync(metadataSource.profession);
     ImGui::Spacing();
@@ -10821,6 +10819,12 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         cache.equipmentTab != equipmentTab ||
         cache.exactItems != g_LibCompareExactItems ||
         now - cache.updated >= std::chrono::milliseconds(500)) {
+        // Only the selected inputs need public definitions. Keep acquisition
+        // separate from the pure comparison and its hover/context actions.
+        DemandBuildReferenceMetadata(saved);
+        DemandBuildReferenceMetadata(live);
+        DemandSavedGearMetadata(saved);
+        DemandVisibleEquipmentMetadata(*character,equipmentTab,false);
         cache.result = CalculateSavedVsLiveComparison(
             saved, *character, live, equipmentTab, g_LibCompareExactItems);
         if(cache.libraryRevision!=libraryRevision||cache.savedBuildId!=saved.id){

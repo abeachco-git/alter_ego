@@ -34,6 +34,14 @@ template<class Bar> std::array<DisplaySlot,5> DisplayBar(const Bar& bar,uint8_t 
     for(std::size_t i=0;i<ids.size();++i)result[i]=SlotDisplay(ids[i],(emptyMask&(1u<<i))!=0);
     return result;
 }
+// Request only exact recorded IDs; unresolved palette evidence is not a skill ID.
+inline std::vector<uint32_t> RecordedSkillIds(const std::array<DisplaySlot,5>& slots) {
+    std::vector<uint32_t> ids;
+    for(const auto& slot:slots)if(slot.evidence==SlotEvidence::Recorded&&slot.id)ids.push_back(slot.id);
+    std::sort(ids.begin(),ids.end());
+    ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
+    return ids;
+}
 template<class Json> DisplaySlot JsonDisplaySlot(const Json& value,uint32_t maximum=std::numeric_limits<uint32_t>::max()) {
     if(value.is_number_unsigned()){
         const auto n=value.template get<uint64_t>();
