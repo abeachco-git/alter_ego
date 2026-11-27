@@ -177,6 +177,18 @@ public:
         if(verdict==Verdict::Unverified)AddUnverified(group,field,saved,current);
         else Add(group,field,"match",verdict==Verdict::Match?"match":"different",saved,current);
     }
+    // Positive IDs are comparable; zero or absent slots are not proven
+    // empty. Terrestrial companions are required for full recognition;
+    // unrecorded optional aquatic slots remain directional.
+    bool AddCompanion(const std::string& group,const std::string& field,
+        uint32_t saved,uint32_t observed,bool observedKnown,bool required,
+        const std::string& savedDisplay,const std::string& observedDisplay){
+        if(!saved&&!required)return false;
+        if(!saved||!observed||!observedKnown)
+            AddUnverified(group,field,saved?savedDisplay:"Unknown",observedKnown&&observed?observedDisplay:"Unknown");
+        else Add(group,field,std::to_string(saved),std::to_string(observed),savedDisplay,observedDisplay);
+        return true;
+    }
     void AddSkill(const std::string& group,const std::string& field,
                   const std::string& savedKey,const std::string& currentKey,
                   const std::string& savedDisplay,const std::string& currentDisplay,

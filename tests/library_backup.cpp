@@ -191,6 +191,48 @@ int case_library_backup(int, char**) {
     assert(ReadPackage(renamed, individual, err));
     assert(individual.available == Other);
     assert(individual.files.count("settings.json") == 1);
+    // A real native companion graph survives selective ZIP replacement.
+    // Keep independent unused records, shared IDs, exact inactive order and
+    // unknown extensions. A stale restore must leave the newer graph intact.
+    {
+        namespace C=AlterEgo::Composable;
+        namespace N=AlterEgo::NativeLibrary;
+        using Json=C::Json;
+        auto& store=N::RuntimeStore();
+        store.Close();assert(store.Open(src,err));
+        N::Snapshot before;assert(store.Read(before,err));auto source=before;
+        Json ranger={{"id","ranger"},{"name","Ranger"},{"profession","Ranger"},{"pets",{1,2,3,4}}};
+        Json revenant={{"id","rev"},{"name","Revenant"},{"profession","Revenant"},{"legend_codes",{1,2,3,4}},
+            {"inactive_rev_skills",{600,500,400,0,20,10}}};
+        assert(N::PutLoadout(source.loadouts,ranger,err)&&N::PutLoadout(source.loadouts,revenant,err));
+        assert(C::DuplicateLoadout(source.loadouts,"ranger","ranger-peer","Peer",10,err));
+        const auto petId=C::FindLoadout(source.loadouts,"ranger")->refs.at("pets");
+        auto* pet=C::Find(source.loadouts,"pets",petId);pet->data["future"]=Json::array({5,0,4});
+        auto unused=*pet;unused.id="unused-companion";unused.name="Unused companion";
+        source.loadouts.components["pets"].push_back(unused);
+        assert(store.Commit(before,source,err));
+        const auto zip=(base/"companion-native.zip").u8string();
+        assert(Export(src,Builds|AlterEgo::Backup::Fashion,zip,true,err));
+        Package companionPackage;assert(ReadPackage(zip,companionPackage,err));
+        store.Close();assert(store.Open(dst,err));N::Snapshot local;
+        assert(store.Read(local,err));
+        assert(Prepare(dst,companionPackage,Builds,true,plan,err));
+        assert(Apply(dst,plan,recovery,err));
+        N::Snapshot restored;assert(store.Read(restored,err));
+        assert(C::ToJson(restored.loadouts)==C::ToJson(source.loadouts));
+        assert(restored.fashion.size()==local.fashion.size());
+        assert(C::FindLoadout(restored.loadouts,"ranger-peer")->refs.at("pets")==petId);
+        assert(C::Find(restored.loadouts,"pets","unused-companion"));
+        const auto graph=C::ToJson(restored.loadouts);
+        assert(Prepare(dst,companionPackage,AlterEgo::Backup::Fashion,true,plan,err));
+        assert(Apply(dst,plan,recovery,err)&&store.Read(restored,err));
+        assert(C::ToJson(restored.loadouts)==graph);
+        assert(Prepare(dst,companionPackage,Builds,true,plan,err));
+        auto newer=restored;C::FindLoadout(newer.loadouts,"ranger")->metadata["name"]="Newer local name";
+        assert(store.Commit(restored,newer,err));
+        assert(!Apply(dst,plan,recovery,err));
+        assert(store.Read(restored,err)&&C::ToJson(restored.loadouts)==C::ToJson(newer.loadouts));
+    }
     NativeLibrary::RuntimeStore().Close();
     fs::remove_all(base);
     return 0;

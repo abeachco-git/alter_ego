@@ -5623,6 +5623,8 @@ static bool DecodeBuildLink(const std::string& link, const std::string& name,
     // Legends (Revenant)
     for (int i = 0; i < 4; i++)
         out.legend_codes[i] = decoded.legends[i];
+    out.pets_recorded=decoded.profession==AlterEgo::PROF_RANGER&&decoded.companion_choices_known;
+    out.legends_recorded=decoded.profession==AlterEgo::PROF_REVENANT&&decoded.companion_choices_known;
     out.inactive_rev_skills=AlterEgo::RecordedInactiveLegendPalettes(decoded);
 
     // Weapons
@@ -8550,8 +8552,10 @@ static void RenderSaveToLibraryDialog() {
                               nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextWrapped("Replace saved %s: %s",
             g_SaveLibPendingKind.c_str(), g_SaveLibPendingName.c_str());
-        ImGui::TextWrapped("This replaces saved fields for ALL Loadouts and equipment sets using "
+        ImGui::TextWrapped("This updates saved fields for ALL Loadouts and equipment sets using "
                            "the component. It does not create a private copy.");
+        if(Composable::IsCompanionKind(g_SaveLibPendingKind))
+            ImGui::TextDisabled("Only reported selections replace slots; omitted slots are retained.");
         const auto action=UI::ConfirmCancel("replace_shared",sourceChar.has_value()&&!g_SaveLibPendingId.empty(),"Confirm Update",sourceChar?"Select the component to replace.":"Character source changed; reopen capture.",g_SaveLibError.c_str());
         if (action==UI::EditAction::Save) {
             const bool applied = AlterEgo::GW2API::ReplaceCapturedLoadoutComponent(
@@ -9871,6 +9875,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
         for(int i=0;i<4;++i)values[i]=legend?skillSrc.legend_codes[i]:
             (i<2?skillSrc.pets.terrestrial[i]:skillSrc.pets.aquatic[i-2]);
         if(RenderProfessionPairSection(legend,values,g_LibEditMode,false)){
+            if(legend)g_EditDraft.legends_recorded=true;else g_EditDraft.pets_recorded=true;
             for(int i=0;i<4;++i){
                 if(legend)g_EditDraft.legend_codes[i]=static_cast<uint8_t>(values[i]);
                 else if(i<2)g_EditDraft.pets.terrestrial[i]=values[i];
@@ -10066,36 +10071,24 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     const auto& waterSkills=saved.aquatic_skills;
     if(waterSkills.heal||waterSkills.elite||waterSkills.utilities[0]||waterSkills.utilities[1]||waterSkills.utilities[2])
         compareSkills("Aquatic skills", waterSkills, live.aquatic_skills);
-    if (saved.profession == "Ranger") {
-        const auto petName=[](uint32_t id){return id?ResolveProfessionChoice(false,id).name:std::string("Unknown");};
-        for (int i = 0; i < 2; ++i) {
-            if(saved.pets.terrestrial[i]&&live.pets_known&&live.pets.terrestrial[i])
-                addId("Ranger pets","Terrestrial "+std::to_string(i+1),saved.pets.terrestrial[i],live.pets.terrestrial[i],petName);
-            else if(saved.pets.terrestrial[i])
-                result.AddUnverified("Ranger pets","Terrestrial "+std::to_string(i+1),petName(saved.pets.terrestrial[i]),petName(live.pets.terrestrial[i]));
-            if(saved.pets.aquatic[i]){
-                if(!live.pets_known||!live.pets.aquatic[i])
-                    result.AddUnverified("Ranger pets","Aquatic "+std::to_string(i+1),petName(saved.pets.aquatic[i]),"Unknown");
-                else addId("Ranger pets","Aquatic "+std::to_string(i+1),saved.pets.aquatic[i],live.pets.aquatic[i],petName);
-            }
-        }
-    }
-    if (saved.profession == "Revenant") {
+    if(saved.profession=="Ranger"||saved.profession=="Revenant"){
+        const bool legend=saved.profession=="Revenant";
         const auto catalog=AlterEgo::PublicCatalog::Get();
-        auto legendCode=[&](const std::string& value){
-            return AlterEgo::PublicCatalog::LegendCode(catalog->legends,value);
-        };
-        const auto legendName=[](uint32_t id){return id?ResolveProfessionChoice(true,id).name:std::string("Unknown");};
+        const auto group=legend?"Revenant legends":"Ranger pets";
+        const auto display=[&](uint32_t id){return id?ResolveProfessionChoice(legend,id).name:std::string("Unknown");};
         for(int i=0;i<4;++i){
-            const auto expected=AlterEgo::PublicCatalog::CanonicalLegendCode(saved.legend_codes[i]);
-            if(!expected)continue;
-            const auto observed=legendCode(i<2?live.legends.terrestrial[i]:live.legends.aquatic[i-2]);
-            const auto field=std::string(i<2?"Terrestrial ":"Aquatic ")+std::to_string(i%2+1);
-            if(live.legends_known&&observed){
-                addId("Revenant legends",field,expected,observed,legendName);
-                const auto a=ResolveProfessionChoice(true,expected),b=ResolveProfessionChoice(true,observed);
+            const bool land=i<2;const int slot=i%2;
+            const uint32_t expected=legend?AlterEgo::PublicCatalog::CanonicalLegendCode(saved.legend_codes[i]):
+                (land?saved.pets.terrestrial[slot]:saved.pets.aquatic[slot]);
+            const uint32_t observed=legend?AlterEgo::PublicCatalog::LegendCode(catalog->legends,
+                land?live.legends.terrestrial[slot]:live.legends.aquatic[slot]):
+                (land?live.pets.terrestrial[slot]:live.pets.aquatic[slot]);
+            const bool known=legend?live.legends_known:live.pets_known;
+            const auto field=std::string(land?"Terrestrial ":"Aquatic ")+std::to_string(slot+1);
+            if(result.AddCompanion(group,field,expected,observed,known,land,display(expected),display(observed))&&legend){
+                const auto a=ResolveProfessionChoice(true,expected),b=ResolveProfessionChoice(true,known?observed:0);
                 result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.swap,0,0},{b.swap,0,0});
-            }else result.AddUnverified("Revenant legends",field,legendName(expected),"Unknown");
+            }
         }
     }
     auto weaponList = [](const std::vector<uint32_t>& ids) {

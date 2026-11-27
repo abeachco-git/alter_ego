@@ -146,6 +146,40 @@ int case_native_editing(int,char**) {
         edit["profession"]="Necromancer";
         assert(!PutUnifiedLoadout(graph,edit,{},error));assert(Composable::ToJson(graph)==saved);
     }
+    // Companion components use the same private/shared reference transaction
+    // as other categories; capture omissions do not erase local evidence.
+    for(const auto& kind:{std::string("pets"),std::string("legends")}){
+        namespace C=AlterEgo::Composable;
+        C::Document graph;std::string error;
+        const auto field=C::CompanionField(kind);
+        Json original={{"id","a"},{"name","A"},{"profession",C::CompanionProfession(kind)},{field,{1,2,3,4}}};
+        auto peer=original;peer["id"]="b";peer["name"]="B";
+        assert(PutLoadout(graph,original,error)&&PutLoadout(graph,peer,error));
+        auto ref=[&](const char* id){return C::FindLoadout(graph,id)->refs.at(kind);};
+        const auto shared=ref("a");assert(shared==ref("b"));
+        auto edited=original;edited[field][0]=5;
+        assert(PutUnifiedLoadout(graph,edited,{},error));
+        assert(ref("a")!=shared&&ref("b")==shared);
+        assert(PutUnifiedLoadout(graph,original,{},error)&&ref("a")==shared);
+        assert(PutUnifiedLoadout(graph,edited,{kind},error));
+        assert(ref("a")==shared&&ref("b")==shared);
+        Json raw;assert(C::Resolve(graph,*C::FindLoadout(graph,"b"),raw,error)&&raw[field][0]==5);
+        auto* part=C::Find(graph,kind,shared);
+        part->data["future"]=7;part->data[field].push_back(987);
+        const auto saved=part->data;
+        Json result;
+        assert(!C::MergeCapturedCompanion(kind,saved,Json::object(),result,error));
+        assert(!C::MergeCapturedCompanion(kind,saved,Json{{field,{2,0,0,0}}},result,error));
+        assert(C::MergeCapturedCompanion(kind,saved,Json{{field,{6,0,0,7}}},result,error));
+        assert(result[field]==Json::array({6,2,3,7,987})&&result["future"]==7);
+        assert(C::UpdateShared(graph,kind,shared,result,error));
+        assert(C::Resolve(graph,*C::FindLoadout(graph,"b"),raw,error)&&raw[field]==result[field]);
+        assert(!C::CaptureProfessionCompatible(graph,kind,shared,"Guardian",error));
+        assert(C::CaptureProfessionCompatible(graph,kind,shared,C::CompanionProfession(kind),error));
+        const auto projected=C::ProjectCompanionSlots(Json::array({1,0,256,-1}),255);
+        assert((projected==std::array<uint32_t,4>{1,0,0,0}));
+        assert(!C::HasCompanionSelection(C::ProjectCompanionSlots(Json::array(),255)));
+    }
     // Inherited reference replacements retain exact selected IDs, never
     // mutate component payloads, and fork a shared set only once.
     {

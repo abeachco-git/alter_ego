@@ -87,6 +87,18 @@ int case_native_library(int,char**) {
             }
         }
         Json before;assert(C::ToLegacy(prior.loadouts,before,error));
+        // Stale recovery evidence must reject the migration without altering
+        // old schema, revision or raw companion records.
+        bool staleBackup=false;
+        try{Native::Repository stale(old.db(),DB::Connection::OpenMode::Existing,{},true,999);}
+        catch(const DB::Error&){staleBackup=true;}
+        assert(staleBackup);
+        {
+            DB::Connection db(old.db(),DB::Connection::OpenMode::Existing);
+            assert(db.Scalar("PRAGMA user_version")==7);
+            assert(db.Scalar("SELECT revision FROM library_state WHERE singleton=1")==1);
+            assert(db.Scalar("SELECT count(*) FROM build_choices WHERE kind='base_build' AND field='pets'")==4);
+        }
         Native::Repository migrated(old.db(),DB::Connection::OpenMode::Existing);
         const auto actual=migrated.Read();
         assert(actual.revision==2&&actual.loadouts.loadouts[0].refs.count("pets"));

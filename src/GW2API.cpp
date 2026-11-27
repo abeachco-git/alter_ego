@@ -2633,10 +2633,10 @@ namespace AlterEgo {
         bj["skills"] = skillBarToJson(b.terrestrial_skills);
         bj["aquatic_skills"] = skillBarToJson(b.aquatic_skills);
 
-        bj["pets"] = {b.pets.terrestrial[0], b.pets.terrestrial[1],
-                      b.pets.aquatic[0], b.pets.aquatic[1]};
-        bj["legend_codes"] = {b.legend_codes[0], b.legend_codes[1],
-                              b.legend_codes[2], b.legend_codes[3]};
+        const std::array<uint32_t,4> pets={b.pets.terrestrial[0],b.pets.terrestrial[1],b.pets.aquatic[0],b.pets.aquatic[1]};
+        const std::array<uint32_t,4> legends={b.legend_codes[0],b.legend_codes[1],b.legend_codes[2],b.legend_codes[3]};
+        if(b.pets_recorded||Composable::HasCompanionSelection(pets))bj["pets"]=pets;
+        if(b.legends_recorded||Composable::HasCompanionSelection(legends))bj["legend_codes"]=legends;
         if(b.inactive_rev_skills)bj["inactive_rev_skills"]=*b.inactive_rev_skills;
         if (!b.weapons.empty()) bj["weapons"] = b.weapons;
 
@@ -2775,15 +2775,13 @@ namespace AlterEgo {
         if (bj.contains("aquatic_skills"))
             b.aquatic_skills = parseSkillBarJson(bj["aquatic_skills"]);
 
-        if (bj.contains("pets") && bj["pets"].is_array() && bj["pets"].size() >= 4) {
-            b.pets.terrestrial[0] = bj["pets"][0].get<uint32_t>();
-            b.pets.terrestrial[1] = bj["pets"][1].get<uint32_t>();
-            b.pets.aquatic[0] = bj["pets"][2].get<uint32_t>();
-            b.pets.aquatic[1] = bj["pets"][3].get<uint32_t>();
-        }
-        if (bj.contains("legend_codes") && bj["legend_codes"].is_array() && bj["legend_codes"].size() >= 4) {
-            for (int i = 0; i < 4; i++)
-                b.legend_codes[i] = bj["legend_codes"][i].get<uint8_t>();
+        b.pets_recorded=bj.contains("pets")&&bj["pets"].is_array();
+        b.legends_recorded=bj.contains("legend_codes")&&bj["legend_codes"].is_array();
+        const auto pets=Composable::ProjectCompanionSlots(bj.value("pets",json()),UINT32_MAX);
+        const auto legends=Composable::ProjectCompanionSlots(bj.value("legend_codes",json()),UINT8_MAX);
+        for(size_t i=0;i<4;++i){
+            if(i<2)b.pets.terrestrial[i]=pets[i];else b.pets.aquatic[i-2]=pets[i];
+            b.legend_codes[i]=static_cast<uint8_t>(legends[i]);
         }
         b.inactive_rev_skills.reset();
         if(const auto it=bj.find("inactive_rev_skills");it!=bj.end()){
@@ -3457,6 +3455,11 @@ namespace AlterEgo {
             if (!existing) return Composable::Fail(error, "Component not found.");
             if (!Composable::CaptureProfessionCompatible(doc, kind, componentId,
                     capture.profession, error)) return false;
+            if(Composable::IsCompanionKind(kind)){
+                json merged;
+                if(!Composable::MergeCapturedCompanion(kind,existing->data,selected->second,merged,error))return false;
+                return Composable::UpdateShared(doc,kind,componentId,merged,error);
+            }
             return Composable::UpdateShared(doc, kind, componentId,
                 Composable::ReplaceCapturedFieldsPreservingExtensions(
                     existing->data, selected->second), error);

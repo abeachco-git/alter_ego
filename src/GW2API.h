@@ -298,6 +298,7 @@ namespace AlterEgo {
         SkillBar aquatic_skills;
         RangerPets pets;
         uint8_t legend_codes[4] = {0}; // Revenant legend codes
+        bool pets_recorded=false, legends_recorded=false; // explicit saved/link array presence, not live unlock evidence
         std::optional<InactiveLegendPalettes> inactive_rev_skills; // exact wire order; absent if not reported
         std::vector<uint32_t> weapons;
         // Gear (user-entered)

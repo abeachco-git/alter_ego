@@ -1049,6 +1049,44 @@ inline bool ReadItemId(const Json& value,uint32_t& id) {
     if(!NonNegativeInteger(value))return false;
     id=value.get<uint32_t>();return true;
 }
+// Project only representable IDs. The native graph retains partial and
+// foreign arrays exactly; a typed UI view never wraps a foreign ID.
+inline std::array<uint32_t,4> ProjectCompanionSlots(const Json& value,uint32_t maximum) {
+    std::array<uint32_t,4> slots{};
+    if(!value.is_array())return slots;
+    for(size_t i=0;i<slots.size()&&i<value.size();++i){
+        uint32_t id=0;
+        if(ReadItemId(value[i],id)&&id<=maximum)slots[i]=id;
+    }
+    return slots;
+}
+inline bool HasCompanionSelection(const std::array<uint32_t,4>& slots) {
+    return std::any_of(slots.begin(),slots.end(),[](uint32_t id){return id!=0;});
+}
+// A live snapshot has no reliable per-slot empty evidence today. Positive
+// selections can replace saved positions; zeros/omissions cannot clear them.
+// Keep foreign trailing fields, reject a new duplicate introduced by merging.
+inline bool MergeCapturedCompanion(const std::string& kind,const Json& previous,
+                                   const Json& captured,Json& result,std::string& error) {
+    if(!IsCompanionKind(kind))return Fail(error,"Not a companion component.");
+    const auto field=CompanionField(kind);
+    const auto max=kind=="legends"?255u:std::numeric_limits<uint32_t>::max();
+    const auto next=ProjectCompanionSlots(captured.value(field,Json()),max);
+    if(!HasCompanionSelection(next))return Fail(error,"No verified companion selections to capture.");
+    Json merged=previous;
+    if(!merged.contains(field))merged[field]=Json::array();
+    if(!merged[field].is_array())return Fail(error,"Saved companion data requires manual review.");
+    const auto before=ProjectCompanionSlots(merged[field],max);
+    for(size_t i=0;i<next.size();++i)if(next[i]){
+        while(merged[field].size()<=i)merged[field].push_back(0);
+        merged[field][i]=next[i];
+    }
+    const auto after=ProjectCompanionSlots(merged[field],max);
+    for(size_t i=0;i<4;i+=2)
+        if(after[i]&&after[i]==after[i+1]&&(after[i]!=before[i]||after[i+1]!=before[i+1]))
+            return Fail(error,"Captured companion conflicts with a retained slot; edit manually.");
+    result=std::move(merged);return true;
+}
 inline bool ValidPortableGearField(const std::string& field, const Json& value) {
     if (field == "item_id" || field == "stat_id" ||
         field == "rune_id" || field == "sigil_id" || field == "sigil2_id")

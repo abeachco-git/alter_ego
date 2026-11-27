@@ -19,6 +19,25 @@ int case_build_compare_core(int, char**) {
     assert(!c.Rows()[2].verified && !c.Rows()[2].matches);
     assert(c.DifferenceCount() == 1); // unknown isn't a mismatch
     assert(c.UnverifiedCount() == 1);
+    {
+        using namespace AlterEgo;
+        for(const auto* group:{"Ranger pets","Revenant legends"}){
+            BuildComparison missing;
+            missing.SetCoverage(true,true);
+            assert(missing.AddCompanion(group,"Terrestrial 1",0,8,true,true,"Unknown","Pet"));
+            assert(!missing.AddCompanion(group,"Aquatic 1",0,0,false,false,"Unknown","Unknown"));
+            missing.Add("Specializations","Line 1","1","1","Same","Same");
+            assert(!Recognize(missing).Full()&&ClassifyTemplateMatch(missing)==TemplateMatchStatus::Different);
+            BuildComparison observed;
+            observed.SetCoverage(true,true);
+            assert(observed.AddCompanion(group,"Terrestrial 1",8,8,true,true,"A","A"));
+            assert(Recognize(observed).Full());
+            assert(observed.AddCompanion(group,"Terrestrial 2",9,8,true,true,"B","A"));
+            assert(!Recognize(observed).Full()&&observed.DifferenceCount()==1);
+            assert(observed.AddCompanion(group,"Aquatic 1",4,4,false,false,"A","A"));
+            assert(observed.UnverifiedCount()==1);
+        }
+    }
     using AlterEgo::StatEquivalence;
     using AlterEgo::CompareStatDefinitions;
     const std::vector<std::string> assassinStats = {"Power", "Precision", "CritDamage"};
