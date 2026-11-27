@@ -780,7 +780,7 @@ static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* 
             ImGui::PopID();
         }
         ImGui::EndCombo();
-    }else ReferenceComponentActions(doc,kind,ref,false);
+    }else if(!ref.empty()){ImGui::PushID(ref.c_str());ReferenceComponentActions(doc,kind,ref,false);ImGui::PopID();}
     return changed;
 }
 static std::string ComponentUIFashionName(const std::string& id){
@@ -827,9 +827,7 @@ static void RenderSetReferencePicker(const ComponentJson& doc,ReferenceEditorDra
             ImGui::PopID();
         }
         ImGui::EndCombo();
-    }else if(linked&&ImGui::BeginPopupContextItem("##set_ref_copy")){
-        CopyNameMenuItem(label);ImGui::EndPopup();
-    }
+    }else if(linked){ImGui::PushID(e.setId.c_str());AlterEgo::UI::EntityContext("##set_ref_copy",[&]{CopyNameMenuItem(label,"Copy Name",true);});ImGui::PopID();}
 }
 static void RenderFashionReferencePicker(ReferenceEditorDraft& e){
     ImGui::SetNextItemWidth(-1);
@@ -841,8 +839,8 @@ static void RenderFashionReferencePicker(ReferenceEditorDraft& e){
             ImGui::PopID();
         }
         ImGui::EndCombo();
-    }else if(!e.fashionId.empty()&&ImGui::BeginPopupContextItem("##fashion_ref_copy")){
-        for(const auto& look:g_FashionLibrary.looks)if(look.id==e.fashionId){CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");break;}ImGui::EndPopup();
+    }else if(!e.fashionId.empty()){
+        ImGui::PushID(e.fashionId.c_str());AlterEgo::UI::EntityContext("##fashion_ref_copy",[&]{for(const auto& look:g_FashionLibrary.looks)if(look.id==e.fashionId){CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");break;}});ImGui::PopID();
     }
 }
 static void RenderEditableReferences(const ComponentJson& doc,const ComponentJson* owner,ReferenceEditorDraft& e){
@@ -1008,7 +1006,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             if(ImGui::BeginPopupContextItem("##fashion_actions")){
                 if(actions&&AlterEgo::UI::MenuAction("Open in Fashion",AlterEgo::UI::MenuIcon::Open)){g_FashionSelectedId=look.id;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
                 if(actions&&AlterEgo::UI::MenuAction("Edit Fashion",AlterEgo::UI::MenuIcon::Edit,!g_FashionDialog,"Save or cancel the current Fashion draft first."))RunFashionAction(FashionAction::Edit,look);
-                CopyNameMenuItem(look.name,"Copy Name",true);ImGui::EndPopup();
+                CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");ImGui::EndPopup();
             }
         }
         ImGui::PopID();ImGui::EndTable();
@@ -1460,9 +1458,11 @@ static void RenderComponentLibrary() {
                     const std::string targetName = meta.is_object()
                         ? meta.value("name", targetId) : targetId;
                     offered = true;
-                    if (ImGui::Selectable((targetName + "##attach" + targetId).c_str())){
+                    ImGui::PushID(targetId.c_str());
+                    if (AlterEgo::UI::EntityOption((targetName + "##attach" + targetId).c_str(),false,[&]{for(const auto& b:AlterEgo::GW2API::GetSavedBuilds())if(b.id==targetId){SavedLoadoutSelectorActions(b,nullptr);break;}})){
                         if(BeginReferenceEditor(loadout,false))g_ReferenceEditor.refs[kind]=id;
                     }
+                    ImGui::PopID();
                 }
             if (!offered) ImGui::TextDisabled("Already assigned or no compatible Loadouts.");
             ImGui::EndCombo();
@@ -1477,9 +1477,11 @@ static void RenderComponentLibrary() {
                 const auto& meta = loadout.value("metadata", ComponentJson::object());
                 const std::string targetName = meta.is_object()
                     ? meta.value("name", targetId) : targetId;
-                if (ImGui::Selectable((targetName + "##detach" + targetId).c_str())) {
+                ImGui::PushID(targetId.c_str());
+                if (AlterEgo::UI::EntityOption((targetName + "##detach" + targetId).c_str(),false,[&]{for(const auto& b:AlterEgo::GW2API::GetSavedBuilds())if(b.id==targetId){SavedLoadoutSelectorActions(b,nullptr);break;}})) {
                     ComponentUIStartPrivateEditor(targetId, kind, id, item);
                 }
+                ImGui::PopID();
             }
             ImGui::EndCombo();
         }
@@ -1593,9 +1595,11 @@ static void RenderEquipmentSetLibrary() {
     if(UI::BeginCombo("##equipment_set_apply","Apply to Loadout...")) {
         for(const auto& loadout:doc.at("loadouts")) {
             const auto target=loadout.value("id",std::string());
-            if(UI::SelectableOption((loadout.at("metadata").value("name",target)+"##"+target).c_str())){
+            ImGui::PushID(target.c_str());
+            if(UI::EntityOption((loadout.at("metadata").value("name",target)+"##"+target).c_str(),false,[&]{for(const auto& b:AlterEgo::GW2API::GetSavedBuilds())if(b.id==target){SavedLoadoutSelectorActions(b,nullptr);break;}})){
                 if(BeginReferenceEditor(loadout,false))DraftSelectEquipmentSet(doc,id);
             }
+            ImGui::PopID();
         }
         ImGui::EndCombo();
     }

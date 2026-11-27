@@ -234,7 +234,7 @@ static void ComponentNativeSpecializations(ComponentJson& data,
                     }
                 }
                 ImGui::EndCombo();
-            }
+            }else if(priorId){const auto info=AlterEgo::GW2API::GetSpecInfo(priorId);if(info)NameOptionContext(info->name);}
         }
         const uint32_t specId = spec.value("id", uint32_t(0));
         if (specId != priorId) spec["traits"] = ComponentJson::array({0, 0, 0});
@@ -441,8 +441,7 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
         RenderGearCatalogChoices(kind,g_ComponentCatalogSearch,selectedId,selected,false,
             [&](uint32_t id,const std::string& name){item[idField]=id;item[nameField]=name;g_ComponentCatalogSearch.clear();});
         ImGui::EndCombo();
-    }
-    if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
+    }else if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
         const auto info=selectedId?AlterEgo::GW2API::GetItemInfo(selectedId):nullptr;
         CopyEntityMenu(info&&!info->name.empty()?info->name:selected,AlterEgo::LINK_ITEM,selectedId);
         using AlterEgo::UI::MenuAction;
@@ -494,8 +493,7 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
             item["stat_id"]=next;item["stat_name"]=name;g_ComponentStatSearch.clear();
         });
         ImGui::EndCombo();
-    }
-    if(ImGui::BeginPopupContextItem("##native_stat_context")){
+    }else if(ImGui::BeginPopupContextItem("##native_stat_context")){
         using AlterEgo::UI::MenuAction;
         using AlterEgo::UI::MenuIcon;
         CopyNameMenuItem(info&&!info->name.empty()?info->name:storedName);
@@ -546,7 +544,7 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,ComponentJson& gear,
             apply(name,wd.two_handed);FetchChosenWeaponMetadata(wd);ImGui::CloseCurrentPopup();
         });
         ImGui::EndCombo();
-    }
+    }else if(!current.empty())NameOptionContext(WeaponDisplayName(current));
 }
 
 // Field-level clipboard adapters use the same typed clipboard and mutation

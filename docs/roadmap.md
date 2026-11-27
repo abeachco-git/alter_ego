@@ -4,9 +4,8 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 **Approval:** proposed means discussion only; previously approved outstanding work is identified below. No new implementation is authorized by this documentation cleanup. Priorities are relative, not a mandate to implement unrelated work. Split broad items into explicitly approved, independently testable batches.
 
-## Refresh demand follow-up — D2.5
+## Remaining refresh demand follow-up
 
-- [ ] **Approved, verification pending:** targeted Vault directional reset evidence and deferred 429 retry admission; actual rendered Achievement browser/nonempty tracker demand. Preserve working Fractal/daily rollover and existing multi-stage continuations. See [temporary rollback guide](temp-vault-daily-rollover-rollback.md) for independent commits and live checks.
 - [ ] **Separate discussion:** decide which public catalogs genuinely require startup/settings-triggered retrieval. Do not change that policy as part of the approved account settings fix.
 
 ## Application-wide consistency audit — Part 5 (5A approved; 5B proposed)

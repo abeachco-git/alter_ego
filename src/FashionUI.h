@@ -240,11 +240,13 @@ static void RenderFashionSlot(const char* label, uint16_t skinID, const uint16_t
             const auto* tex = AlterEgo::IconManager::GetIcon(skinID);
             if (tex && tex->Resource) {
                 ImGui::Image(tex->Resource, ImVec2(22, 22));
+                AlterEgo::UI::EntityContext("##fashion_skin_icon",[&]{CopyEntityMenu(skin->name,AlterEgo::LINK_SKIN,skinID);});
                 ImGui::SameLine();
             }
         }
         if (skin && !skin->name.empty()) ImGui::TextUnformatted(skin->name.c_str());
         else ImGui::Text("Skin #%u", skinID);
+        AlterEgo::UI::EntityContext("##fashion_skin_name",[&]{CopyEntityMenu(skin?skin->name:std::string{},AlterEgo::LINK_SKIN,skinID);});
     }
     if (dyeIDs) {
         bool displayed = false;
@@ -464,6 +466,7 @@ static void RenderFashionLibrary() {
             RenderFashionSlot("Back", w.backpack_skin, w.backpack_dyes);
             if (w.outfit_id) {
                 ImGui::Text("Outfit #%u", w.outfit_id);
+                AlterEgo::UI::EntityContext("##fashion_outfit",[&]{CopyEntityChatLink(AlterEgo::LINK_OUTFIT,w.outfit_id);});
                 ImGui::Indent(126);
                 for (int i = 0; i < 4; ++i) {
                     if (i) ImGui::SameLine(0, 4);

@@ -457,6 +457,7 @@ static bool g_SkinInitialized = false;
 static bool g_SwitchToInventory = false;
 static void OpenInventoryItem(uint32_t id);
 static bool g_SwitchToSkinventory = false; // set by achievements tab to navigate to Skinventory
+static bool g_ForceCharactersTab = false;
 static bool g_SwitchToCompare = false;     // set by Build Library to open Compare with its selected build
 
 // Portrait cache (for character screenshots in equipment panel)
@@ -7014,18 +7015,17 @@ void DrawInventoryCharacterLabel(ImDrawList* draw,ImVec2 min,ImVec2 max,const st
     DrawProfessionCharacterEntry(draw,min,max,profession,name);
 }
 
+static void CharacterSelectorActions(const std::string& name,const std::string& account);
 // Shared selectable row for single-target and multi-target character pickers.
 // Keep the native ImGui control responsible for selection, hover and keyboard focus.
 static bool SelectProfessionCharacterEntry(const char* id, bool selected,
     const std::string& profession, const std::string& name,
-    const char* prefix = nullptr, ImGuiSelectableFlags flags = ImGuiSelectableFlags_None) {
+    const char* prefix = nullptr, ImGuiSelectableFlags flags = ImGuiSelectableFlags_None,const std::string& account={}) {
     const ImVec2 size(0.0f, ImMax(24.0f, ImGui::GetTextLineHeightWithSpacing()+3.0f));
     const bool clicked=ImGui::Selectable(id,selected,flags,size);
     DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),
         ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),profession,name,prefix);
-    if(ImGui::BeginPopupContextItem("##character_name")){
-        CopyNameMenuItem(name);ImGui::EndPopup();
-    }
+    AlterEgo::UI::EntityContext("##character_name",[&]{CharacterSelectorActions(name,account);});
     return clicked;
 }
 
@@ -7056,14 +7056,14 @@ bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selecte
             const bool on=selected.count(name)!=0;
             const auto it=professions.find(name);
             if(SelectProfessionCharacterEntry("##character",on,it==professions.end()?std::string{}:it->second,
-                name,nullptr,ImGuiSelectableFlags_DontClosePopups)){
+                name,nullptr,ImGuiSelectableFlags_DontClosePopups,NativeAccounts::VerifiedAccountForCharacter(name))){
                 if(on)selected.erase(name);else selected.insert(name);
                 changed=true;
             }
             ImGui::PopID();
         }
         ImGui::EndCombo();
-    }
+    }else if(single){ImGui::PushID(preview.c_str());UI::EntityContext("##character_filter_actions",[&]{CharacterSelectorActions(preview,NativeAccounts::VerifiedAccountForCharacter(preview));});ImGui::PopID();}
     if(decorated)DrawProfessionCharacterEntry(draw,pos,ImVec2(pos.x+width,pos.y+height),profession,preview,nullptr,true);
     ImGui::PopID();
     return changed;
@@ -8210,14 +8210,15 @@ static void RenderSaveToLibraryDialog() {
                             }
                         }
                         if (!compatible) continue;
-                        if (ImGui::Selectable((candidateName + "##" + candidateId).c_str(),
-                                               candidateId == g_SaveLibUpdateId)) {
+                        ImGui::PushID(candidateId.c_str());
+                        if (UI::EntityOption((candidateName + "##" + candidateId).c_str(),candidateId == g_SaveLibUpdateId,[&]{CopyNameMenuItem(candidateName,"Copy Name",true);})) {
                             g_SaveLibUpdateId = candidateId;
                             existingComponentName = candidateName;
                         }
+                        ImGui::PopID();
                     }
                     ImGui::EndCombo();
-                }
+                }else if(!existingComponentName.empty())NameOptionContext(existingComponentName);
             }
         }
         ImGui::TextDisabled("Updates the stored fields without changing its existing name or ID.");
@@ -8250,7 +8251,9 @@ static void RenderSaveToLibraryDialog() {
             if(sourceChar)for(const auto& candidate:sourceChar->build_tabs) {
                 const std::string label=nameForBuild(candidate)+(candidate.is_active?" (Active)":"")+
                     "##build_"+std::to_string(candidate.tab);
-                if(UI::SelectableOption(label.c_str(),candidate.tab==g_SaveLibBuildTab))g_SaveLibBuildTab=candidate.tab;
+                ImGui::PushID(candidate.tab);
+                if(UI::EntityOption(label.c_str(),candidate.tab==g_SaveLibBuildTab,[&]{CopyNameMenuItem(candidate.name,"Copy Name",true);CopyNativeLinkMenuItem(EncodeBuildTabChatLink(candidate),"Copy Build Chat Link");}))g_SaveLibBuildTab=candidate.tab;
+                ImGui::PopID();
             }
             ImGui::EndCombo();
         }
@@ -8262,7 +8265,9 @@ static void RenderSaveToLibraryDialog() {
             if(sourceChar)for(int t=1;t<=GetRetrievedEquipmentTabCount(*sourceChar);++t) {
                 const std::string label=equipName(t)+(t==sourceChar->active_equipment_tab?" (Active)":"")+
                     "##equip_"+std::to_string(t);
-                if(UI::SelectableOption(label.c_str(),t==g_SaveLibEquipTab))g_SaveLibEquipTab=t;
+                ImGui::PushID(t);
+                if(UI::EntityOption(label.c_str(),t==g_SaveLibEquipTab,[&]{CopyNameMenuItem(equipName(t),"Copy Name",true);}))g_SaveLibEquipTab=t;
+                ImGui::PopID();
             }
             ImGui::EndCombo();
         }
@@ -8383,8 +8388,10 @@ static void RenderSaveToLibraryDialog() {
         !windowOpen||captureAction==UI::EditAction::Cancel||UI::EditorEscape(),
         CaptureFormSnapshot()!=g_SaveLibBaseline))g_SaveLibDialogOpen=false;
     if(ImGui::BeginPopupModal("Link matching equipment set",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
-        for(const auto& set:g_SaveLibExactSets)
-            if(UI::SelectableOption((set.second+"##"+set.first).c_str(),set.first==g_SaveLibSelectedSet))g_SaveLibSelectedSet=set.first;
+        for(const auto& set:g_SaveLibExactSets){ImGui::PushID(set.first.c_str());
+            if(UI::EntityOption((set.second+"##"+set.first).c_str(),set.first==g_SaveLibSelectedSet,[&]{CopyNameMenuItem(set.second,"Copy Name",true);}))g_SaveLibSelectedSet=set.first;
+            ImGui::PopID();
+        }
         if(RenderActionButton("Link & Save")&&finishLoadout(g_SaveLibPendingCapture,g_SaveLibSelectedSet,""))ImGui::CloseCurrentPopup();
         ImGui::SameLine();
         if(RenderActionButton("Use independent components")&&finishLoadout(g_SaveLibPendingCapture,"",""))ImGui::CloseCurrentPopup();
@@ -9917,6 +9924,8 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     auto addId = [&](const std::string& group, const std::string& field,
                      uint32_t a, uint32_t b, const std::function<std::string(uint32_t)>& display) {
         result.Add(group, field, idKey(a), idKey(b), display(a), display(b));
+        if(group=="Traits")result.SetLastRowLinks(AlterEgo::LINK_TRAIT,{a,0,0},{b,0,0});
+        else if(group=="Relic"||group=="Exact item IDs"||group=="Aquatic")result.SetLastRowLinks(AlterEgo::LINK_ITEM,{a,0,0},{b,0,0});
     };
     auto traitId = [&](uint32_t spec, int tier, int id) -> uint32_t {
         if (id >= 0) return (uint32_t)id;
@@ -9942,11 +9951,13 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             const auto field=slot + " " + tiers[t];
             if (!a || (!b&&!(l.traits[t]==0&&(l.empty_traits&(1u<<t))))) result.AddUnverified("Traits",field, a?traitName(a):"Unknown", b?traitName(b):"Unknown");
             else addId("Traits",field,a,b,traitName);
+            result.SetLastRowLinks(AlterEgo::LINK_TRAIT,{a,0,0},{b,0,0});
         }
     }
     auto compareSkills = [&](const char* group, const AlterEgo::SkillBar& a,
                               const AlterEgo::SkillBar& b) {
         result.AddSkill(group,"Heal",idKey(a.heal),idKey(b.heal),skillName(a.heal),skillName(b.heal),a.heal&&b.heal,a.heal&&(b.empty_slots&1));
+        result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.heal,0,0},{b.heal,0,0});
         // Utility order is a control-layout preference, not a combat
         // configuration difference. Keep original order on disk/export.
         auto sortedUtilities = [&](const AlterEgo::SkillBar& bar) {
@@ -9966,7 +9977,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         for(int i=0;i<3;++i)liveKnown=liveKnown&&(b.utilities[i]||(b.empty_slots&(2u<<i)));
         result.AddSkill(group,"Utilities",sa.first,sb.first,sa.second,sb.second,
             savedComplete&&liveComplete,savedComplete&&liveKnown);
+        result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.utilities[0],a.utilities[1],a.utilities[2]},{b.utilities[0],b.utilities[1],b.utilities[2]});
         result.AddSkill(group,"Elite",idKey(a.elite),idKey(b.elite),skillName(a.elite),skillName(b.elite),a.elite&&b.elite,a.elite&&(b.empty_slots&16));
+        result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.elite,0,0},{b.elite,0,0});
     };
     compareSkills("Terrestrial skills", saved.terrestrial_skills, live.terrestrial_skills);
     const auto& waterSkills=saved.aquatic_skills;
@@ -10303,6 +10316,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             else if (saved.relic_id && id)
                 addId("Relic", "Item ID", saved.relic_id, id, itemName);
             else result.AddUnverified("Relic","Effect / item",saved.relic_name.empty()?numberLabel(saved.relic_id):saved.relic_name,"Unavailable");
+            result.SetLastRowLinks(AlterEgo::LINK_ITEM,{saved.relic_id,0,0},{id,0,0});
         }
     }
 
@@ -10639,7 +10653,9 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                 ImGui::PushID(static_cast<int>(id));
                 const auto item = AlterEgo::GW2API::GetItemInfo(id);
                 std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count)+"###acquisition";
-                if(ImGui::TreeNode(label.c_str())){
+                const bool expanded=ImGui::TreeNode(label.c_str());
+                AlterEgo::UI::EntityContext("##acquisition_item_actions",[&]{CopyEntityMenu(item?item->name:std::string{},AlterEgo::LINK_ITEM,id);});
+                if(expanded){
                     if(!owner.empty())AlterEgo::NativeAccounts::RenderItemAvailability(id,owner,character->name);
                     else ImGui::TextDisabled("Personal stock ownership unverified");
                     if(AlterEgo::UI::Button("Find in Inventory",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))OpenInventoryItem(id);
@@ -10717,6 +10733,21 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                                            row->field.c_str());
                     ImGui::TableSetColumnIndex(1);
                     ImGui::TextWrapped("%s", row->saved.c_str());
+                    auto linkMenu=[&](const std::array<uint32_t,3>& ids,const char* popup){
+                        if(!row->linkType||std::none_of(ids.begin(),ids.end(),ChatLinkIdValid))return;
+                        AlterEgo::UI::EntityContext(popup,[&]{for(auto id:ids)if(ChatLinkIdValid(id)){
+                            const auto type=static_cast<AlterEgo::ChatLinkType>(row->linkType);
+                            std::string name;
+                            if(type==AlterEgo::LINK_SKILL){const auto info=AlterEgo::GW2API::GetSkillInfo(id);if(info)name=info->name;}
+                            else if(type==AlterEgo::LINK_TRAIT){const auto info=AlterEgo::GW2API::GetTraitInfo(id);if(info)name=info->name;}
+                            else if(type==AlterEgo::LINK_ITEM){const auto info=AlterEgo::GW2API::GetItemInfo(id);if(info)name=info->name;}
+                            ImGui::PushID(static_cast<int>(id));
+                            if(std::count_if(ids.begin(),ids.end(),ChatLinkIdValid)>1){if(AlterEgo::UI::BeginActionMenu(name.empty()?("#"+std::to_string(id)).c_str():name.c_str(),AlterEgo::UI::MenuIcon::Copy)){CopyEntityMenu(name,type,id);ImGui::EndMenu();}}
+                            else CopyEntityMenu(name,type,id);
+                            ImGui::PopID();
+                        }});
+                    };
+                    ImGui::PushID(static_cast<int>(displayed));linkMenu(row->savedLinks,"##saved_link_actions");ImGui::PopID();
                     ImGui::TableSetColumnIndex(2);
                     if (!row->verified)
                         ImGui::PushStyleColor(ImGuiCol_Text,
@@ -10726,6 +10757,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                             ImVec4(1, 0.58f, 0.50f, 1));
                     ImGui::TextWrapped("%s", row->current.c_str());
                     if (!row->verified || !row->matches) ImGui::PopStyleColor();
+                    ImGui::PushID(static_cast<int>(displayed));linkMenu(row->liveLinks,"##live_link_actions");ImGui::PopID();
                 }
                 if (!displayed) {
                     ImGui::TableNextRow();
@@ -10852,6 +10884,7 @@ static void SavedLoadoutSelectorActions(const AlterEgo::SavedBuild& saved,const 
     CopyNameMenuItem(saved.name,"Copy Name",true);
     CopyNativeLinkMenuItem(saved.chat_link,"Copy Build Chat Link");
     if(MenuAction("Copy Portable Loadout",MenuIcon::Copy))ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy,saved);
+    if(BeginActionMenu("Share",MenuIcon::Share)){RenderBuildShareMenuItems(saved);ImGui::EndMenu();}
     ImGui::Separator();
     if(MenuAction("Compare",MenuIcon::Compare,!LibraryDraftOpen(),"Finish the current Library draft first.")){
         if(ch)NavigateToCharacterLoadoutCompare(*ch,saved);else ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare,saved);
@@ -10877,6 +10910,30 @@ static const AlterEgo::SavedBuild* CharacterContextLoadout(const AlterEgo::Chara
         ch.account_name==AlterEgo::GW2API::GetCurrentAccountName()&&!ch.account_name.empty())
         return FindCompatibleLoadout(ch,GetLoggedInSavedBuildMatch(ch).id);
     return nullptr;
+}
+static void CharacterSelectorActions(const std::string& name,const std::string& account){
+    using namespace AlterEgo;
+    using namespace AlterEgo::UI;
+    CopyNameMenuItem(name,"Copy Name",true);
+    if(account.empty())return;
+    const auto roster=GW2API::GetCharacters();
+    const auto target=std::find_if(roster->begin(),roster->end(),[&](const auto& ch){return ch.name==name&&ch.account_name==account;});
+    if(target==roster->end())return;
+    const bool inScope=g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==account;
+    const bool canNavigate=!LibraryDraftOpen()&&!g_SaveLibDialogOpen&&inScope;
+    ImGui::Separator();
+    if(MenuAction("Open in Characters",MenuIcon::Open,canNavigate,"Finish the current draft or select the character's account first.")){
+        MarkNavigation();g_SelectedCharKey={account,name};g_SessionSelectedCharName.clear();
+        g_CharSearchBuf[0]=0;g_DetailsFetched=false;g_SelectedBuildTab=-1;g_SelectedEquipTab=0;g_ForceCharactersTab=true;
+    }
+    if(const auto* loadout=CharacterContextLoadout(*target)){
+        if(MenuAction("Compare",MenuIcon::Compare,canNavigate,"Finish the current draft or select the character's account first."))NavigateToCharacterLoadoutCompare(*target,*loadout);
+    }else if(MenuAction("Compare",MenuIcon::Compare,canNavigate&&!target->build_tabs.empty(),"Requires retrieved build data and no open draft.")){
+        MarkNavigation();g_LibCompareChar=name;g_LibCompareAccount=account;g_LibComparePreviousTarget=name;g_LibComparePreviousAccount=account;
+        g_LibCompareSavedManual=false;g_LibCompareBuildId.clear();g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;g_SwitchToCompare=true;
+    }
+    ImGui::Separator();
+    RenderCharacterLoadMenu("Load Character",name,account);
 }
 static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
     using namespace AlterEgo::CharacterLoadout;
@@ -11019,7 +11076,7 @@ static void RenderCompareTab() {
             for (const auto* ch : compareMatches)
                 if (ch->name == g_CurrentCharName&&ch->account_name==AlterEgo::GW2API::GetCurrentAccountName()) { autoCharacter = ch; break; }
             const bool autoClicked = SelectProfessionCharacterEntry("##compareAutoCharacter",
-                g_LibCompareChar.empty(),autoCharacter->profession,autoCharacter->name,autoPrefix);
+                g_LibCompareChar.empty(),autoCharacter->profession,autoCharacter->name,autoPrefix,ImGuiSelectableFlags_None,autoCharacter->account_name);
             if (autoClicked) {
                 MarkNavigation();g_LibCompareChar.clear();g_LibCompareAccount.clear();
                 g_LibCompareSavedManual = false;
@@ -11028,7 +11085,7 @@ static void RenderCompareTab() {
                 ImGui::PushID(ch->account_name.c_str());ImGui::PushID(ch->name.c_str());
                 const bool selected = ch->name == g_LibCompareChar&&ch->account_name==g_LibCompareAccount;
                 const bool clicked = SelectProfessionCharacterEntry("##compareCharacterEntry",
-                    selected,ch->profession,ch->name);
+                    selected,ch->profession,ch->name,nullptr,ImGuiSelectableFlags_None,ch->account_name);
                 if (clicked) {
                     MarkNavigation();g_LibCompareChar = ch->name;g_LibCompareAccount=ch->account_name;
                     g_LibCompareSavedManual = false;
@@ -11039,7 +11096,7 @@ static void RenderCompareTab() {
                 ImGui::PopID();ImGui::PopID();
             }
             ImGui::EndCombo();
-        }
+        }else{ImGui::PushID(character->account_name.c_str());ImGui::PushID(character->name.c_str());AlterEgo::UI::EntityContext("##compare_character_actions",[&]{CharacterSelectorActions(character->name,character->account_name);});ImGui::PopID();ImGui::PopID();}
         DrawProfessionCharacterEntry(previewDraw, previewMin,
             ImVec2(previewMin.x+previewWidth, previewMin.y+previewHeight),
             character->profession, character->name,
@@ -11122,10 +11179,12 @@ static void RenderCompareTab() {
                 for (int i = 0; i < (int)character->build_tabs.size(); ++i) {
                     const auto& bt = character->build_tabs[i];
                     std::string label = tabLabel(bt) + (bt.is_active ? " (active)" : "");
-                    if (ImGui::Selectable(label.c_str(), i == g_LibCompareBuildTab)) {MarkNavigation();g_LibCompareBuildTab = i;}
+                    ImGui::PushID(bt.tab);
+                    if (AlterEgo::UI::EntityOption(label.c_str(), i == g_LibCompareBuildTab,[&]{CopyNameMenuItem(bt.name,"Copy Name",true);CopyNativeLinkMenuItem(EncodeBuildTabChatLink(bt),"Copy Build Chat Link");})) {MarkNavigation();g_LibCompareBuildTab = i;}
+                    ImGui::PopID();
                 }
                 ImGui::EndCombo();
-            }
+            }else{AlterEgo::UI::EntityContext("##compare_build_tab_actions",[&]{CopyNameMenuItem(live.name,"Copy Name",true);CopyNativeLinkMenuItem(EncodeBuildTabChatLink(live),"Copy Build Chat Link");});}
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1.0f);
             if (AlterEgo::UI::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {
@@ -11133,10 +11192,12 @@ static void RenderCompareTab() {
                 for (int tab = 1; tab <= maxTab; ++tab) {
                     std::string name = equipmentTabName(tab);
                     if (tab == character->active_equipment_tab) name += " (active)";
-                    if (ImGui::Selectable(name.c_str(), tab == g_LibCompareEquipTab)) {MarkNavigation();g_LibCompareEquipTab = tab;}
+                    ImGui::PushID(tab);
+                    if (AlterEgo::UI::EntityOption(name.c_str(), tab == g_LibCompareEquipTab,[&]{CopyNameMenuItem(equipmentTabName(tab),"Copy Name",true);})) {MarkNavigation();g_LibCompareEquipTab = tab;}
+                    ImGui::PopID();
                 }
                 ImGui::EndCombo();
-            }
+            }else if(g_LibCompareEquipTab>0)NameOptionContext(equipmentTabName(g_LibCompareEquipTab));
             ImGui::EndTable();
         }
         if (saved && !saved->gear.empty()) {
@@ -15927,7 +15988,6 @@ void AddonRender() {
         ImGui::TextWrapped("Link your GW2 API key in Nexus > Alter Ego options. Saved Library data remains available.");
 
     // Global account scope, shown only for multiple linked accounts.
-    static bool g_ForceCharactersTab = false;
     static bool accountFallbackNavigation=false;
     RenderNavigationControls();
     BeginNavigationFrame();
@@ -15956,7 +16016,7 @@ void AddonRender() {
                 for (const auto& acct : accounts) {
                     bool selected = (g_SelectedAccountFilter == acct.name);
                     ImGui::PushID(acct.name.c_str());
-                    if (AlterEgo::UI::EntityOption(acct.display_name.c_str(), selected,[&]{CopyNameMenuItem(acct.name,"Copy Account Name",true);})) g_SelectedAccountFilter = acct.name;
+                    if (AlterEgo::UI::EntityOption(acct.display_name.c_str(), selected,[&]{CopyNameMenuItem(acct.display_name,acct.label.empty()?"Copy Account ID":"Copy Account Label",true);})) g_SelectedAccountFilter = acct.name;
                     ImGui::PopID();
                 }
                 if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
@@ -15969,7 +16029,7 @@ void AddonRender() {
                 }
                 ImGui::EndCombo();
             }else if(!g_SelectedAccountFilter.empty()){
-                ImGui::PushID(g_SelectedAccountFilter.c_str());AlterEgo::UI::EntityContext("##account_copy",[&]{CopyNameMenuItem(g_SelectedAccountFilter,"Copy Account Name",true);});ImGui::PopID();
+                ImGui::PushID(g_SelectedAccountFilter.c_str());AlterEgo::UI::EntityContext("##account_copy",[&]{for(const auto& acct:accounts)if(acct.name==g_SelectedAccountFilter){CopyNameMenuItem(acct.display_name,acct.label.empty()?"Copy Account ID":"Copy Account Label",true);break;}});ImGui::PopID();
             }
         }
 
@@ -16812,10 +16872,12 @@ void AddonRender() {
                     ImGui::SameLine();
                     if (cached) {
                         ImGui::TextColored(GetProfessionColor(cached->profession), "%s", g_RefreshNames[i].c_str());
+                        NameOptionContext(g_RefreshNames[i]);
                         ImGui::SameLine();
                         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Lv%d", cached->level);
                     } else {
                         ImGui::Text("%s", g_RefreshNames[i].c_str());
+                        NameOptionContext(g_RefreshNames[i]);
                     }
                     ImGui::PopID();
                 }

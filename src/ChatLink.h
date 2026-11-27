@@ -129,6 +129,12 @@ namespace AlterEgo {
     public:
         // --- Encoding ---
 
+        // Exact single-entity links exposed to UI. Unsupported types and IDs
+        // outside the implemented wire format return an empty string.
+        static constexpr bool EntityIdValid(uint32_t id) { return id != 0 && id <= 0xFFFFFFu; }
+        static std::string EncodeEntity(ChatLinkType type,uint32_t id,
+                                        uint32_t skin=0,uint32_t upgrade1=0,uint32_t upgrade2=0);
+
         // Generate item chat link: [&Base64...]
         static std::string EncodeItem(uint32_t item_id, int count = 1,
                                        uint32_t skin_id = 0,

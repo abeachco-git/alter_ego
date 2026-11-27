@@ -159,6 +159,19 @@ std::string ChatLink::EncodeSkin(uint32_t skin_id) {
     return EncodeSimpleLink(LINK_SKIN, skin_id);
 }
 
+std::string ChatLink::EncodeEntity(ChatLinkType type,uint32_t id,uint32_t skin,uint32_t upgrade1,uint32_t upgrade2) {
+    if(!EntityIdValid(id)||skin>0xFFFFFFu||upgrade1>0xFFFFFFu||upgrade2>0xFFFFFFu)return {};
+    if(type==LINK_ITEM)return EncodeItem(id,1,skin,upgrade1,upgrade2);
+    if(skin||upgrade1||upgrade2)return {};
+    switch(type){
+        case LINK_SKILL:return EncodeSkill(id);
+        case LINK_TRAIT:return EncodeTrait(id);
+        case LINK_SKIN:return EncodeSkin(id);
+        case LINK_RECIPE:case LINK_MAP:case LINK_OUTFIT:return EncodeSimpleLink(type,id);
+        default:return {};
+    }
+}
+
 // --- Build template encoding ---
 
 static void WriteU16LE(std::vector<uint8_t>& buf, uint16_t val) {

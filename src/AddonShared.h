@@ -38,23 +38,13 @@ inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Nam
 
 // Native link copy is distinct from typed equipment/configuration copy. The
 // existing item/simple encoders represent 24-bit IDs; never truncate a target.
-inline bool ChatLinkIdValid(uint32_t id) { return id != 0 && id <= 0xFFFFFFu; }
+inline bool ChatLinkIdValid(uint32_t id) { return AlterEgo::ChatLink::EntityIdValid(id); }
 inline void CopyNativeLinkMenuItem(const std::string& link,const char* label="Copy Chat Link"){
     if(!link.empty()&&AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Copy))CopyToClipboard(link);
 }
 inline void CopyEntityChatLink(AlterEgo::ChatLinkType kind,uint32_t id,const char* label="Copy Chat Link",
                               uint32_t skin=0,uint32_t upgrade1=0,uint32_t upgrade2=0){
-    using namespace AlterEgo;
-    if(!ChatLinkIdValid(id)||skin>0xFFFFFFu||upgrade1>0xFFFFFFu||upgrade2>0xFFFFFFu)return;
-    std::string link;
-    switch(kind){
-        case LINK_ITEM:link=ChatLink::EncodeItem(id,1,skin,upgrade1,upgrade2);break;
-        case LINK_SKILL:link=ChatLink::EncodeSkill(id);break;
-        case LINK_TRAIT:link=ChatLink::EncodeTrait(id);break;
-        case LINK_SKIN:link=ChatLink::EncodeSkin(id);break;
-        default:return;
-    }
-    CopyNativeLinkMenuItem(link,label);
+    CopyNativeLinkMenuItem(AlterEgo::ChatLink::EncodeEntity(kind,id,skin,upgrade1,upgrade2),label);
 }
 inline void CopyEntityMenu(const std::string& name,AlterEgo::ChatLinkType kind,uint32_t id){
     CopyNameMenuItem(name,"Copy Name",true);
