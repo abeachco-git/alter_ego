@@ -2296,17 +2296,18 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
             for(const auto* dataset:{"Bags","Equipment"}){
                 if(scope!="Items"&&scope!=dataset)continue;
                 RefreshProgress::Counts group;
+                R::Aggregate groupCoverage;
                 if(characterFiltered){
                     std::set<CharacterOrder::Key> keys;
                     for(const auto& ch:roster->second)if(matches(a.id,dataset,ch))keys.emplace(a.id,ch);
                     for(const auto& key:OrderedCharacterKeys(keys))mark(a,dataset,key.second);
                 }else{
                     for(const auto& ch:roster->second)
-                        if(matches(a.id,dataset,ch))mark(a,dataset,ch,&group);
+                        if(matches(a.id,dataset,ch))groupCoverage.Add(mark(a,dataset,ch,&group),now);
                 }
                 if(!characterFiltered){
                     if(!detail.empty())detail+="\n";
-                    detail+=(accounts.size()>1?Display(a)+" / ":"")+dataset+": "+group.Summary();
+                    detail+=(accounts.size()>1?Display(a)+" / ":"")+dataset+": "+group.Summary()+R::OldestGroupRetrieval(groupCoverage,now);
                     if(roster->second.empty())detail+=" (verified empty roster)";
                 }
             }
@@ -2354,7 +2355,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     const auto label=R::Label(kind,now,aggregate.retryAt);
     const char* disabledReason=accounts.empty()?"Link or select an account.":incompatible?"The current storage and character filters are incompatible.":
         operationBusy?"A storage or account operation is already in progress.":nullptr;
-    if(RefreshUI::Row("native_inventory_refresh",static_cast<std::time_t>(aggregate.Timestamp()),"inventory scope",
+    if(RefreshUI::Row("native_inventory_refresh",aggregate,"inventory scope",
         RefreshUI::StatusState(kind),detail,operationBusy||accounts.empty()||incompatible,nullptr,label.c_str(),true,now,disabledReason))
         Refresh(accounts,v->credentialEpoch,scope,false,{},characters,includeWallet);
 }

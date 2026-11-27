@@ -15546,7 +15546,7 @@ static void RenderCharactersStatusRow() {
         inspection.busy?"A character or roster request is already in progress.":
         !address?"Select a verified character. Use ... to select characters or right-click to refresh the list.":nullptr;
     bool more=false;
-    if(AlterEgo::RefreshUI::Row("characters",static_cast<std::time_t>(inspection.aggregate.Timestamp()),"selected character",
+    if(AlterEgo::RefreshUI::Row("characters",inspection.aggregate,"selected character",
         AlterEgo::RefreshUI::StatusState(inspection.kind),inspection.detail,blocked||!address,&more,label.c_str(),true,now,disabledReason,&g_RefreshPopupAnchor,
         RenderCharacterRosterContext,!blocked,"Refresh the selected character's visible data.")){
         if(address){AlterEgo::GW2API::RequestCharacterRefreshAddresses({*address},demand);g_DetailsFetched=false;}
@@ -15582,7 +15582,7 @@ static void RenderCompareStatusRow() {
     const auto label=target?R::Label(inspection.kind,now,inspection.aggregate.retryAt):ready?std::string("No character"):R::Label(inspection.kind);
     const char* disabledReason=!ready?"Link or verify an API account in Nexus options.":
         !target?"Select a retrieved character.":inspection.busy?"A character or roster request is already in progress.":nullptr;
-    if(AlterEgo::RefreshUI::Row("compare",static_cast<std::time_t>(inspection.aggregate.Timestamp()),"character build/equipment",
+    if(AlterEgo::RefreshUI::Row("compare",inspection.aggregate,"character build/equipment",
         AlterEgo::RefreshUI::StatusState(inspection.kind),inspection.detail,inspection.busy||!target||!ready,nullptr,label.c_str(),true,now,disabledReason)){
         if(target)if(const auto address=CharacterAddressFor(*target))AlterEgo::GW2API::RequestCharacterRefreshAddresses({*address},S::Compare);
     }

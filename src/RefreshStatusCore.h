@@ -97,12 +97,15 @@ inline int Priority(Kind k){
 struct Aggregate {
     unsigned count=0;
     bool missing=false;
-    int64_t oldest=0,retryAt=0;
+    int64_t oldest=0,newest=0,retryAt=0;
     Kind kind=Kind::Ready;
     void Add(const Scope& s,int64_t now){
         ++count;
         if(s.success<=0||s.success>now)missing=true;
-        else if(!oldest||s.success<oldest)oldest=s.success;
+        else {
+            if(!oldest||s.success<oldest)oldest=s.success;
+            newest=std::max(newest,s.success);
+        }
         const auto next=Project(s,now);
         if(next==Kind::Retry&&(!retryAt||s.eligibility.at<retryAt))retryAt=s.eligibility.at;
         if(Priority(next)>Priority(kind))kind=next;
@@ -110,6 +113,27 @@ struct Aggregate {
     int64_t Timestamp()const{return count&&!missing?oldest:0;}
     Kind Status()const{return count?kind:Kind::NoScopes;}
 };
+// Retrieval age is not freshness: an inactive character can remain current
+// indefinitely. Keep the full-coverage timestamp contract for consumers.
+inline std::string CoverageLabel(const Aggregate& a,int64_t now){
+    if(!a.count)return "No retrieval scopes";
+    if(!a.newest)return "Not retrieved";
+    if(a.missing)return "Incomplete retrieval";
+    if(a.Status()==Kind::Ready)return "All scopes current";
+    return "Oldest " + Age(a.oldest,now);
+}
+inline std::string CoverageDetails(const Aggregate& a,int64_t now){
+    if(!a.count)return "No retrieval scopes";
+    std::string result="Most recent retrieval: "+Age(a.newest,now)+
+        "\nOldest retained retrieval: "+Age(a.oldest,now);
+    if(a.missing)result+="\nComplete retrieval not confirmed for all scopes.";
+    return result;
+}
+inline std::string OldestGroupRetrieval(const Aggregate& a,int64_t now){
+    if(!a.count)return {};
+    if(!a.oldest)return "; no confirmed retrieval";
+    return "; oldest retained: "+Age(a.oldest,now)+(a.missing?" (incomplete)":"");
+}
 inline std::string Label(Kind kind,int64_t now=0,int64_t retryAt=0){
     switch(kind){
     case Kind::NoData:return "Not retrieved";

@@ -91,7 +91,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
                 bool* moreClicked = nullptr, const char* statusOverride = nullptr, bool timestampDetails = false,
                 int64_t sampledNow=0,const char* disabledReason=nullptr,ImVec2* moreAnchor=nullptr,
                 void (*contextMenu)()=nullptr,bool moreEnabledWhenRefreshDisabled=false,
-                const char* refreshHint=nullptr) {
+                const char* refreshHint=nullptr,const RefreshStatus::Aggregate* coverage=nullptr) {
     ImGui::PushID(id);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
@@ -124,7 +124,10 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
 
     ImGui::SameLine(0.0f, 9.0f);
     const float statusX = ImGui::GetCursorScreenPos().x;
-    const std::string stampLabel = stamp > 0 ? "Updated " + Age(stamp,sampledNow) : "Not updated";
+    const auto now=sampledNow?sampledNow:static_cast<int64_t>(std::time(nullptr));
+    const std::string stampLabel = coverage?RefreshStatus::CoverageLabel(*coverage,now):
+        stamp > 0 ? "Updated " + Age(stamp,now) : "Not updated";
+    const auto diagnostics=coverage?RefreshStatus::CoverageDetails(*coverage,now)+(detail.empty()?"":"\n\n"+detail):detail;
     const float stampWidth = ImGui::CalcTextSize(stampLabel.c_str()).x;
     const float rightX = start.x + width;
     const float stampX = std::max(statusX, rightX - stampWidth);
@@ -149,7 +152,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(statusColor, "%s", statusText.c_str());
     if (ImGui::IsItemHovered()){
-        DiagnosticsTooltip(shortStatus,detail);
+        DiagnosticsTooltip(shortStatus,diagnostics);
     }
 
     // Keep timestamp in the same row even when a long API status is reported.
@@ -157,9 +160,25 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     ImGui::SetCursorScreenPos(ImVec2(stampX,
         start.y + (buttonH - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::TextDisabled("%s", stampLabel.c_str());
-    if(ImGui::IsItemHovered())RetrievalTooltip(stamp,source,(timestampDetails||statusText.empty())?detail:std::string{});
+    if(ImGui::IsItemHovered()){
+        if(coverage)DiagnosticsTooltip("Retrieval coverage",std::string(source)+"\n\n"+diagnostics);
+        else RetrievalTooltip(stamp,source,(timestampDetails||statusText.empty())?detail:std::string{});
+    }
     ImGui::PopID();
     return clicked;
+}
+
+// Multi-scope callers use the same footer; the aggregate keeps both retrieval
+// ages while its existing Timestamp() still represents complete coverage.
+inline bool Row(const char* id,const RefreshStatus::Aggregate& coverage,const char* source,
+                State state,const std::string& detail,bool disabled=false,
+                bool* moreClicked=nullptr,const char* statusOverride=nullptr,bool timestampDetails=false,
+                int64_t sampledNow=0,const char* disabledReason=nullptr,ImVec2* moreAnchor=nullptr,
+                void (*contextMenu)()=nullptr,bool moreEnabledWhenRefreshDisabled=false,
+                const char* refreshHint=nullptr){
+    return Row(id,static_cast<std::time_t>(coverage.Timestamp()),source,state,detail,disabled,moreClicked,
+        statusOverride,timestampDetails,sampledNow,disabledReason,moreAnchor,contextMenu,
+        moreEnabledWhenRefreshDisabled,refreshHint,&coverage);
 }
 
 } // namespace AlterEgo::RefreshUI
