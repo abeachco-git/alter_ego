@@ -39,7 +39,7 @@ inline std::string PortraitStem(const std::string& name) {
     if(device=="CON"||device=="PRN"||device=="AUX"||device=="NUL"||
        device=="CONIN$"||device=="CONOUT$")return {};
     if((device.compare(0,3,"COM")==0||device.compare(0,3,"LPT")==0)&&
-       (device.size()==4&&device[3]>='1'&&device[3]<='9'||
+       ((device.size()==4&&device[3]>='1'&&device[3]<='9')||
         device.substr(3)=="\xC2\xB9"||device.substr(3)=="\xC2\xB2"||device.substr(3)=="\xC2\xB3"))return {};
     return name;
 }
