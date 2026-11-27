@@ -114,6 +114,9 @@ int case_composable_loadouts(int, char**) {
                                   {"WeaponA2",{{"sigil_id",100}}}}}};
     const Json sigilsOtherSet = {{"gear",{{"WeaponB1",{{"sigil_id",100},{"sigil2_id",101}}}}}};
     assert(Semantics::SimilarRequirements("sigils", sigilsA, sigilsB));
+    assert(Semantics::WeaponSet("WeaponAquaticA")==Semantics::WeaponSet("AquaticA"));
+    assert(Semantics::WeaponSet("WeaponAquaticA")!=Semantics::WeaponSet("WeaponAquaticB"));
+    assert(Semantics::ComparisonComponent("Aquatic","Breather rune")=="aquatic");
     assert(!Semantics::SimilarRequirements("sigils", sigilsA, sigilsOtherSet));
     assert(!Semantics::SimilarRequirements("sigils", sigilsA, sigilsA));
     const Json sigilsReversed = {{"gear",{{"WeaponA1",{{"sigil_id",101},{"sigil2_id",100}}}}}};

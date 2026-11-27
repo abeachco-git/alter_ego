@@ -9858,7 +9858,9 @@ static AlterEgo::ObservedInfusion GetObservedInfusion(uint32_t itemId) {
     if (attrs == upgrade->end() || !attrs->is_array()) return observed;
     observed.metadataKnown = true;
     for (const auto& attr : *attrs) {
-        if (!attr.is_object()) continue;
+        if (!attr.is_object()||!attr.contains("attribute")||!attr["attribute"].is_string()||!attr.contains("modifier")||!attr["modifier"].is_number()){
+            observed.metadataKnown=false;observed.positiveAttributes.clear();return observed;
+        }
         const auto name = attr.value("attribute", std::string());
         auto modifier = attr.find("modifier");
         if (!name.empty() && modifier != attr.end() &&
@@ -9948,8 +9950,10 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         for (int i = 0; i < 2; ++i) {
             addId("Ranger pets", "Terrestrial " + std::to_string(i + 1),
                   saved.pets.terrestrial[i], live.pets.terrestrial[i], numberLabel);
-            addId("Ranger pets", "Aquatic " + std::to_string(i + 1),
-                  saved.pets.aquatic[i], live.pets.aquatic[i], numberLabel);
+            if(saved.pets.aquatic[i]){
+                if(!live.pets.aquatic[i])result.AddUnverified("Ranger pets","Aquatic "+std::to_string(i+1),numberLabel(saved.pets.aquatic[i]),"Unknown");
+                else addId("Ranger pets","Aquatic "+std::to_string(i+1),saved.pets.aquatic[i],live.pets.aquatic[i],numberLabel);
+            }
         }
     }
     if (saved.profession == "Revenant") {
@@ -9959,8 +9963,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         for (int i = 0; i < 2; ++i) {
             addId("Revenant legends", "Terrestrial " + std::to_string(i + 1),
                   saved.legend_codes[i], legendCode(live.legends.terrestrial[i]), numberLabel);
-            addId("Revenant legends", "Aquatic " + std::to_string(i + 1),
-                  saved.legend_codes[i + 2], legendCode(live.legends.aquatic[i]), numberLabel);
+            if(saved.legend_codes[i+2]){
+                const auto observed=legendCode(live.legends.aquatic[i]);
+                if(!observed)result.AddUnverified("Revenant legends","Aquatic "+std::to_string(i+1),numberLabel(saved.legend_codes[i+2]),"Unknown");
+                else addId("Revenant legends","Aquatic "+std::to_string(i+1),saved.legend_codes[i+2],observed,numberLabel);
+            }
         }
     }
     auto weaponList = [](const std::vector<uint32_t>& ids) {
@@ -9971,10 +9978,10 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         }
         return str;
     };
-    if (!saved.weapons.empty())
-        result.Add("Build", "Weapon proficiency IDs", weaponList(saved.weapons),
-                   weaponList(live.weapons), weaponList(saved.weapons),
-                   live.weapons.empty() ? "(none)" : weaponList(live.weapons));
+    if (!saved.weapons.empty()) {
+        if(!live.weapons_known&&live.weapons.empty())result.AddUnverified("Build","Weapon proficiency IDs",weaponList(saved.weapons),"Unknown");
+        else result.Add("Build","Weapon proficiency IDs",weaponList(saved.weapons),weaponList(live.weapons),weaponList(saved.weapons),weaponList(live.weapons));
+    }
 
     if (!saved.gear.empty() || !saved.infusion_totals.empty() || saved.relic_id || !saved.relic_name.empty()) {
         auto getEquipped = [&](const std::string& slot) -> const AlterEgo::EquipmentItem* {
@@ -10172,6 +10179,52 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                             label(expected), label(observed), label(expected), label(observed));
         }
 
+        // Aquatic runes use five shared armor pieces plus the breather.
+        const auto waterHelm=std::find_if(saved.gear.begin(),saved.gear.end(),[](const auto& entry){
+            return AlterEgo::CanonicalComparisonSlot(entry.first)=="HelmAquatic";});
+        if(waterHelm!=saved.gear.end()){
+            const auto& g=waterHelm->second;
+            if(g.rune_id||!g.rune.empty()){
+                const auto* observed=getEquipped("HelmAquatic");
+                if(!g.rune_id||!observed||observed->upgrades.empty()||!observed->upgrades[0])
+                    result.AddUnverified("Aquatic","Breather rune",g.rune_id?numberLabel(g.rune_id):g.rune,"Unverified");
+                else {
+                    auto expected=savedRunes,actual=liveRunes;
+                    expected["gear"]["Helm"]={{"rune_id",g.rune_id}};
+                    actual["gear"]["Helm"]={{"rune_id",observed->upgrades[0]}};
+                    const auto e=AlterEgo::Composable::Semantics::Runes(expected),a=AlterEgo::Composable::Semantics::Runes(actual);
+                    const auto verdict=AlterEgo::Composable::Semantics::Compare(e,a);
+                    if(verdict==AlterEgo::Composable::Semantics::Verdict::Unverified)
+                        addId("Aquatic","Breather rune",g.rune_id,observed->upgrades[0],itemName);
+                    else {
+                        const auto label=[](const auto& summary){
+                            std::string text;for(const auto& [key,count]:summary.counts){if(!text.empty())text+=", ";text+=std::to_string(count)+" x "+key;}return text;
+                        };
+                        result.Add("Aquatic","Underwater rune configuration",label(e),label(a),label(e),label(a));
+                    }
+                }
+            }
+        }
+        // Underwater weapons never pool upgrades with each other or land sets.
+        for(const auto& [slot,g]:saved.gear){
+            if(!AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(slot))continue;
+            if(!g.sigil_id&&!g.sigil2_id&&g.sigil.empty()&&g.sigil2.empty())continue;
+            const auto* eq=getEquipped(slot);
+            std::vector<uint32_t> expected,observed;
+            if(g.sigil_id)expected.push_back(g.sigil_id);
+            if(g.sigil2_id)expected.push_back(g.sigil2_id);
+            if(eq)for(auto id:eq->upgrades)if(id)observed.push_back(id);
+            auto label=[&](const auto& ids){
+                std::string s;for(auto id:ids){if(!s.empty())s+=", ";s+=itemName(id);}return s.empty()?std::string("Unknown"):s;
+            };
+            expected=AlterEgo::CanonicalUtilitySequence(std::move(expected));
+            observed=AlterEgo::CanonicalUtilitySequence(std::move(observed));
+            const auto field=AlterEgo::CanonicalComparisonSlot(slot)+" sigils";
+            if((!g.sigil.empty()&&!g.sigil_id)||(!g.sigil2.empty()&&!g.sigil2_id)||!eq||observed.empty())
+                result.AddUnverified("Aquatic",field,label(expected),label(observed));
+            else result.Add("Aquatic",field,expected==observed?"equal":"different","equal",label(expected),label(observed));
+        }
+
         // Slot mode is authoritative: compare only recorded physical requirements.
         if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Slots) {
             for(const auto& [slot,gear]:saved.gear){
@@ -10183,9 +10236,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     const std::string attr=n<gear.infusion_attributes.size()?gear.infusion_attributes[n]:"";
                     if(id||!attr.empty())wanted.push_back({id,attr});
                 }
-                const auto* eq=getEquipped(slot=="AquaticA"?"WeaponAquaticA":slot=="AquaticB"?"WeaponAquaticB":slot.c_str());
+                const auto* eq=getEquipped(slot);
+                const char* infusionGroup=AlterEgo::IsAquaticComparisonSlot(slot)?"Aquatic":"Infusions";
+                const auto infusionField=GearSlotDisplayName(slot)+std::string(" infusions");
                 if(!eq||(!gear.infusion.empty()&&wanted.empty()&&!gear.infusion_snapshot)){
-                    result.AddUnverified("Infusions",GearSlotDisplayName(slot),"Recorded requirements","Equipment or exact metadata unavailable");
+                    result.AddUnverified(infusionGroup,infusionField,"Recorded requirements","Equipment or exact metadata unavailable");
                     continue;
                 }
                 std::vector<AlterEgo::ObservedInfusion> installed;
@@ -10203,8 +10258,8 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 if(expected.empty())expected="(none)";
                 if(actual.empty())actual="(none)";
                 if(verdict==AlterEgo::InfusionMatchVerdict::NotVerified)
-                    result.AddUnverified("Infusions",GearSlotDisplayName(slot),expected,actual+" (metadata pending)");
-                else result.Add("Infusions",GearSlotDisplayName(slot),"equivalent",
+                    result.AddUnverified(infusionGroup,infusionField,expected,actual+" (metadata pending)");
+                else result.Add(infusionGroup,infusionField,"equivalent",
                     verdict==AlterEgo::InfusionMatchVerdict::Matches?"equivalent":"different",expected,actual);
             }
         }
@@ -10213,7 +10268,8 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             const auto* eq = getEquipped("Relic");
             uint32_t id = eq ? eq->id : 0;
             const auto info = AlterEgo::GW2API::GetItemInfo(id);
-            if (info && !saved.relic_name.empty())
+            if (saved.relic_id&&id==saved.relic_id) addId("Relic","Item ID",saved.relic_id,id,itemName);
+            else if (info && !saved.relic_name.empty())
                 result.Add("Relic", "Effect / item name", saved.relic_name, info->name,
                            saved.relic_name, info->name);
             else if (saved.relic_id && id)
@@ -10267,6 +10323,24 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         }
         }
     }
+    // Recognition coverage is separate from the directional comparison rows:
+    // a partial requirement may match without proving a complete Loadout.
+    bool completeBuild=liveCharacter.scope_stamps[AlterEgo::CharacterScopes::Index(AlterEgo::CharacterScopes::Builds)]>0;
+    for(int i=0;i<3;++i)completeBuild=completeBuild&&saved.specializations[i].spec_id&&live.specializations[i].spec_id;
+    std::set<std::string> recorded;
+    for(const auto& [slot,g]:saved.gear)
+        if(g.item_id||g.stat_id||!g.stat_name.empty()||!g.weapon_type.empty())
+            recorded.insert(AlterEgo::CanonicalComparisonSlot(slot));
+    if(saved.relic_id||!saved.relic_name.empty())recorded.insert("Relic");
+    bool completeGear=liveCharacter.scope_stamps[AlterEgo::CharacterScopes::Index(AlterEgo::CharacterScopes::Tabs)]>0;
+    bool hasLand=false;
+    for(const auto& e:liveCharacter.equipment){
+        const auto slot=AlterEgo::CanonicalComparisonSlot(e.slot);
+        if(!e.id||!AlterEgo::IsEquipmentInCapturedBuild(slot,e.tab,equipmentTab)||AlterEgo::IsAquaticComparisonSlot(slot))continue;
+        hasLand=true;
+        if(!recorded.count(slot))completeGear=false;
+    }
+    result.SetCoverage(completeBuild,completeGear&&hasLand&&!recorded.empty());
     return result;
 }
 

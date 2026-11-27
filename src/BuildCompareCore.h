@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <array>
+#include <set>
 #include "AscendedStatNames.h"
 
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
@@ -169,6 +170,9 @@ public:
         Add(group,field,savedKey,currentKey,savedDisplay,currentDisplay);
         rows.back().completeSkillIds=true;
     }
+    void SetCoverage(bool build,bool equipment) { buildCoverage=build; equipmentCoverage=equipment; }
+    bool BuildCovered() const { return buildCoverage; }
+    bool EquipmentCovered() const { return equipmentCoverage; }
     size_t DifferenceCount() const { return differences; }
     size_t UnverifiedCount() const { return unverified; }
     const std::vector<ComparisonRow>& Rows() const { return rows; }
@@ -177,6 +181,7 @@ private:
     std::vector<ComparisonRow> rows;
     size_t differences = 0;
     size_t unverified = 0;
+    bool buildCoverage=false, equipmentCoverage=false;
 };
 
 /* Classify the saved-vs-retrieved build template separately from equipment.
@@ -216,5 +221,86 @@ inline TemplateMatchStatus ClassifyTemplateMatch(const BuildComparison& comparis
     }
     return skillsDiffer ? TemplateMatchStatus::SkillsDiffer
                         : TemplateMatchStatus::Exact;
+}
+// Recognition is a projection of the same evidence, never storage identity.
+struct RecognitionEvidence {
+    size_t matches=0, differences=0, unverified=0;
+    size_t buildMatches=0, buildDifferences=0;
+    bool buildCovered=false,equipmentCovered=false;
+    bool Full() const {return buildCovered&&equipmentCovered&&matches>0&&!differences&&!unverified;}
+    bool Meaningful() const {return matches>0;}
+    int Rank() const {
+        if(Full())return 0;
+        if(!Meaningful())return 3;
+        return differences?2:1;
+    }
+};
+inline RecognitionEvidence Recognize(const BuildComparison& comparison) {
+    RecognitionEvidence r;
+    r.buildCovered=comparison.BuildCovered();r.equipmentCovered=comparison.EquipmentCovered();
+    for(const auto& row:comparison.Rows()){
+        const bool build=!IsGearComparisonGroup(row.group);
+        if(!row.verified)++r.unverified;
+        else if(row.matches){++r.matches;if(build)++r.buildMatches;}
+        else {++r.differences;if(build)++r.buildDifferences;}
+    }
+    return r;
+}
+inline bool PreferRecognition(const RecognitionEvidence& a,const RecognitionEvidence& b,bool sourceA=false,bool sourceB=false) {
+    if(a.Rank()!=b.Rank())return a.Rank()<b.Rank();
+    if(a.differences!=b.differences)return a.differences<b.differences;
+    if(a.matches!=b.matches)return a.matches>b.matches;
+    if(a.unverified!=b.unverified)return a.unverified<b.unverified;
+    if(a.buildCovered!=b.buildCovered)return a.buildCovered;
+    if(a.equipmentCovered!=b.equipmentCovered)return a.equipmentCovered;
+    return sourceA&&!sourceB;
+}
+inline std::string HealthCategory(const ComparisonRow& row) {
+    const auto& g=row.group;
+    if(g=="Aquatic"||IsAquaticComparisonSlot(row.field))return "Aquatic";
+    if(IsSkillComparisonGroup(g))return "Skills";
+    if(g=="Traits"||g=="Specializations")return "Traits";
+    if(g=="Ranger pets")return "Pets";
+    if(g=="Revenant legends")return "Legends";
+    if(g=="Build")return "Build";
+    if(g=="Runes")return "Runes";
+    if(g=="Sigils")return "Sigils";
+    if(g=="Infusions")return "Infusions";
+    if(g=="Infusion totals")return "Infusion totals";
+    if(g=="Relic"||row.field=="Relic")return "Relic";
+    if(g=="Weapon types"||row.field.rfind("Weapon",0)==0)return "Weapons";
+    if(g=="Equipment"||g=="Equipment stats"||g=="Exact item IDs"||g=="Upgrades"){
+        if(row.field=="Helm"||row.field=="Shoulders"||row.field=="Coat"||row.field=="Gloves"||row.field=="Leggings"||row.field=="Boots")return "Armor";
+        return "Trinkets";
+    }
+    return "Build";
+}
+struct ConfigurationHealth {
+    std::vector<std::string> warnings;
+    std::vector<std::string> details;
+    RecognitionEvidence evidence;
+};
+inline ConfigurationHealth SummarizeHealth(const BuildComparison& comparison) {
+    ConfigurationHealth h;h.evidence=Recognize(comparison);
+    std::set<std::string> build,gear,unknown;bool totals=false;
+    for(const auto& row:comparison.Rows()){
+        if(row.verified&&row.matches)continue;
+        const auto label=HealthCategory(row);
+        if(!row.verified){unknown.insert(label);continue;}
+        if(label=="Infusion totals"){totals=true;continue;}
+        (IsGearComparisonGroup(row.group)?gear:build).insert(label);
+    }
+    const auto append=[&](const std::set<std::string>& parts,const char* parent){
+        if(parts.empty())return;
+        h.warnings.push_back(std::string("Check ")+(parts.size()>1?parent:*parts.begin()));
+        for(const auto& part:parts)h.details.push_back("Check "+part);
+    };
+    append(build,"Build");append(gear,"Equipment");
+    if(totals){h.warnings.push_back("Check Infusions");h.details.push_back("Check aggregate infusion totals");}
+    for(const auto& part:unknown)h.details.push_back("Unverified: "+part);
+    if(!h.evidence.buildCovered)h.details.push_back("Build coverage incomplete");
+    if(!h.evidence.equipmentCovered)h.details.push_back("Equipment coverage incomplete");
+    if(h.warnings.empty()&&!h.evidence.Full())h.warnings.push_back("Not verified");
+    return h;
 }
 } // namespace AlterEgo

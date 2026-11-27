@@ -163,5 +163,25 @@ int case_build_compare_core(int, char**) {
     assert(AlterEgo::CanonicalComparisonSlot("AquaticA")=="WeaponAquaticA");
     assert(AlterEgo::CanonicalComparisonSlot("Breather")=="HelmAquatic");
     assert(AlterEgo::IsGearComparisonGroup("Aquatic"));
+    AlterEgo::BuildComparison health;
+    health.SetCoverage(true,true);
+    health.Add("Traits","Line 3","1","2","A","B");
+    health.AddSkill("Terrestrial skills","Utilities","1","2","A","B",true);
+    health.Add("Equipment stats","Helm","1","2","A","B");
+    health.Add("Runes","Types / counts","1","2","A","B");
+    health.Add("Infusion totals","AR","enough","low","150","140");
+    auto summary=AlterEgo::SummarizeHealth(health);
+    assert((summary.warnings==std::vector<std::string>{"Check Build","Check Equipment","Check Infusions"}));
+    AlterEgo::BuildComparison armor;
+    armor.Add("Equipment stats","Helm","1","2","A","B");
+    armor.Add("Equipment stats","Coat","1","2","A","B");
+    assert((AlterEgo::SummarizeHealth(armor).warnings==std::vector<std::string>{"Check Armor"}));
+    AlterEgo::BuildComparison exact;
+    exact.SetCoverage(true,true);
+    exact.Add("Traits","Line 3","1","1","A","A");
+    assert(AlterEgo::Recognize(exact).Full());
+    assert(AlterEgo::PreferRecognition(AlterEgo::Recognize(exact),AlterEgo::Recognize(armor)));
+    exact.AddUnverified("Aquatic","Breather rune","A","Unknown");
+    assert(!AlterEgo::Recognize(exact).Full());
     return 0;
 }
