@@ -149,7 +149,21 @@ int case_clears_rotation(int, char**) {
     assert(CategoryIds(json::parse(R"({"id":88,"achievements":[-1]})"),88).empty());
     assert(CategoryIds(json::parse(R"([{"id":88,"achievements":[1]},{"id":88,"achievements":[2]}])"),88).empty());
     assert(RetryDelaySeconds(1) == 30 && RetryDelaySeconds(2) == 60);
-    assert(RetryDelaySeconds(3) == 120 && RetryDelaySeconds(6) == 300);
+    assert(RetryDelaySeconds(3) == 120 && RetryDelaySeconds(4) == 120);
+    assert(RetryDelaySeconds(5) == 120 && RetryDelaySeconds(6) == 120);
+    // Repeated failures remain eligible indefinitely; retain the failure-count
+    // threshold for the guarded zero-progress Vault rollover fallback.
+    RetryState repeated;
+    int64_t attemptTime=1000;
+    for(int i=1;i<=8;++i){
+        repeated.Fail(attemptTime,"held");
+        const int64_t delay=i==1?30:i==2?60:120;
+        assert(repeated.failures==std::min(i,4));
+        assert(repeated.at==attemptTime+delay*1000);
+        assert(!repeated.Ready(repeated.at-1)&&repeated.Ready(repeated.at));
+        attemptTime=repeated.at;
+    }
+    repeated.Reset();assert(repeated.failures==0&&repeated.at==0);
     constexpr int64_t nov21 = 1795219200;
     assert(BountySet(nov21) == 1);
     // Sun Nov 22: game day has already rolled over at 7 PM Eastern,

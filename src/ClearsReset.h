@@ -152,8 +152,7 @@ template<class Entries> bool HoldClearProgress(const Entries& prior,const Entrie
 inline int64_t RetryDelaySeconds(int attempted) {
     if (attempted <= 1) return 30;
     if (attempted == 2) return 60;
-    if (attempted == 3) return 120;
-    return 300;
+    return 120; // third and later attempts; failure count remains saturated
 }
 // Same retry state for each independently published section. Caller owns its
 // domain mutex; steady time is milliseconds, never wall-clock time.
