@@ -885,6 +885,22 @@ int case_database_core(int, char**) {
         assert(rows.size()==1&&!rows[0].contains("level")&&!rows[0].contains("vendor_value")&&!rows[0].contains("restrictions"));
     }
     {
+        // Selective startup maintenance must still accept the immediately
+        // preceding supported schema after a cache version bump.
+        namespace Cache=AlterEgo::Cache;
+        namespace Storage=AlterEgo::Storage;
+        const auto path=temp.dir/"maintenance-v32.db";
+        {
+            DB::Connection db(path.u8string(),DB::Connection::OpenMode::Create);
+            DB::Migrate(db,Cache::kApplicationId,32,Cache::Upgrade);
+            db.Exec("INSERT INTO reference_items(id,name,complete,verified_at) VALUES(78,'Retain',1,12345)");
+        }
+        Storage::MaintenanceDetail::InvalidateDatabase(path,Storage::CacheOperation::Artwork);
+        DB::Connection db(path.u8string(),DB::Connection::OpenMode::Existing);
+        assert(db.Scalar("PRAGMA user_version")==Cache::kSchemaVersion);
+        assert(db.Scalar("SELECT count(*) FROM reference_items WHERE id=78 AND verified_at=12345")==1);
+    }
+    {
         namespace Storage=AlterEgo::Storage;
         const auto root=temp.dir.u8string();
         const Storage::Paths paths(root);
