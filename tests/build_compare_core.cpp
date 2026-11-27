@@ -36,6 +36,8 @@ int case_build_compare_core(int, char**) {
             assert(!Recognize(observed).Full()&&observed.DifferenceCount()==1);
             assert(observed.AddCompanion(group,"Aquatic 1",4,4,false,false,"A","A"));
             assert(observed.UnverifiedCount()==1);
+            assert(observed.Rows()[0].savedCompanion==8&&observed.Rows()[0].liveCompanion==8);
+            assert(observed.Rows().back().savedCompanion==4&&observed.Rows().back().liveCompanion==0);
         }
     }
     using AlterEgo::StatEquivalence;

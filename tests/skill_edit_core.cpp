@@ -1,5 +1,6 @@
 #include "../src/SkillEditCore.h"
 #include "../src/ArtworkRequest.h"
+#include "../src/CatalogRowCore.h"
 #include <cassert>
 #include <nlohmann/json.hpp>
 struct TestBar { uint32_t heal=0, utilities[3]={0,0,0}, elite=0; };
@@ -29,6 +30,13 @@ int case_skill_edit_core(int,char**) {
     assert(SpecializationChoiceAllowed(specs,2,3,true));
     assert(SpecializationChoiceAllowed(specs,0,0,false));
     using J=nlohmann::json;
+    assert(AlterEgo::UI::CatalogRowPitch(14,30)==36);
+    assert(AlterEgo::UI::CatalogRowPitch(20)==26);
+    assert(AlterEgo::UI::CatalogGridColumns(127,40,4)==2);
+    assert(AlterEgo::UI::CatalogGridColumns(128,40,4)==3);
+    assert(AlterEgo::UI::CatalogWikiSearchUrl("Juvenile A & B/#")==
+        "https://wiki.guildwars2.com/wiki/Special:Search?search=Juvenile%20A%20%26%20B%2F%23");
+    assert(AlterEgo::UI::CatalogWikiSearchUrl("").empty());
     {
         const auto bar=DisplayBar(TestBar{0,{2,0,4},0},1u|16u);
         assert(bar[0].evidence==SlotEvidence::Empty&&bar[1].id==2);

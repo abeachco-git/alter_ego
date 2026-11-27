@@ -6818,13 +6818,13 @@ static LegendOption LegendOptionForCode(uint8_t code) {
         return {l->code,l->name,l->swap,l->icon};
     code=AlterEgo::PublicCatalog::CanonicalLegendCode(code);
     for (const auto& l : LegendOptions()) if (l.code == code) return l;
-    return {code,code?"Unknown legend ("+std::to_string(code)+")":"Choose legend",0,{}};
+    return {code,code?"Legend metadata unavailable":"Choose legend",0,{}};
 }
 struct ProfessionChoiceDisplay {
     std::string name,icon,description;
     uint32_t key=0,swap=0;
     std::vector<uint32_t> skills;
-    bool skillsKnown=false;
+    bool skillsKnown=false, nameKnown=false;
 };
 // Cache-only presentation resolution shared by slots and Compare. Requests
 // remain at the existing visible picker/slot demand boundary.
@@ -6832,10 +6832,11 @@ static ProfessionChoiceDisplay ResolveProfessionChoice(bool legend,uint32_t curr
     ProfessionChoiceDisplay result;
     if(legend){
         const auto option=current<=255?LegendOptionForCode(static_cast<uint8_t>(current)):
-            LegendOption{0,"Unknown legend ("+std::to_string(current)+")",0,{}};
+            LegendOption{0,"Legend metadata unavailable",0,{}};
         result.name=option.name;result.swap=option.swap;result.icon=option.icon;
         const auto catalog=AlterEgo::PublicCatalog::Get();
         if(const auto* def=AlterEgo::PublicCatalog::FindLegend(catalog->legends,current)){
+            result.nameKnown=!def->name.empty();
             result.skills=AlterEgo::PublicCatalog::AssociatedSkills(*def);
             result.skillsKnown=def->heal.has_value()&&def->elite.has_value()&&def->utilities.has_value();
         }
@@ -6846,9 +6847,9 @@ static ProfessionChoiceDisplay ResolveProfessionChoice(bool legend,uint32_t curr
         result.key=AlterEgo::ArtworkRequest::SkillKey(result.swap);
     }else{
         const auto catalog=AlterEgo::PublicCatalog::Get();
-        result.name=current?"Unknown pet ("+std::to_string(current)+")":"Choose pet";
+        result.name=current?"Pet metadata unavailable":"Choose pet";
         if(const auto* pet=AlterEgo::PublicCatalog::FindPet(catalog->pets,current)){
-            result.name=pet->name;result.icon=pet->icon;
+            result.name=pet->name;result.icon=pet->icon;result.nameKnown=!pet->name.empty();
             if(pet->description)result.description=StripGW2Markup(*pet->description);
             result.skills=AlterEgo::PublicCatalog::AssociatedSkills(*pet);
             result.skillsKnown=pet->skills.has_value();
@@ -6858,8 +6859,15 @@ static ProfessionChoiceDisplay ResolveProfessionChoice(bool legend,uint32_t curr
     return result;
 }
 static void ProfessionChoiceActions(bool legend,const ProfessionChoiceDisplay& value){
-    if(legend&&value.swap)CopyEntityMenu(value.name,AlterEgo::LINK_SKILL,value.swap);
-    else CopyNameMenuItem(value.name);
+    using namespace AlterEgo;
+    if(value.nameKnown)CopyNameMenuItem(value.name);
+    if(legend&&value.swap)CopyEntityChatLink(LINK_SKILL,value.swap,"Copy Invocation Skill Chat Link");
+    // The fixed Wiki search endpoint avoids inventing an article title for
+    // a verified catalog name (particularly alternate legend names).
+    if(value.nameKnown&&UI::MenuAction("Search Wiki",UI::MenuIcon::Open)){
+        const auto url=UI::CatalogWikiSearchUrl(value.name);
+        ShellExecuteA(NULL,"open",url.c_str(),NULL,NULL,SW_SHOWNORMAL);
+    }
 }
 
 // Render the same GW2 profession image used in the Characters roster in
@@ -7285,44 +7293,45 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     if(!ImGui::BeginPopup("##pair_choice"))return changed;
     ImGui::TextDisabled("Environment eligibility not verified by catalog.");
     if(AlterEgo::UI::SelectableOption("(None)",current==0)){next=0;changed=true;ImGui::CloseCurrentPopup();}
-    auto row=[&](uint32_t id,const std::string& label,uint32_t iconId,
-                 const std::string& url,bool disabled,bool selected){
-        ImGui::PushID(static_cast<int>(id));
-        ImGui::BeginGroup();
-        auto* icon=AlterEgo::IconManager::GetOrRequestIcon(iconId,url);
-        constexpr float size=30.0f;
-        if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(size,size),ImVec2(0,0),ImVec2(1,1),
-            disabled?ImVec4(1,1,1,0.4f):ImVec4(1,1,1,1));
-        else ImGui::Dummy(ImVec2(size,size));
-        ImGui::SameLine();
-        if(disabled)ImGui::TextDisabled("%s",label.c_str());
-        else if(AlterEgo::UI::SelectableOption(label.c_str(),selected)){
-            next=id;changed=true;ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndGroup();
-        if(disabled&&ImGui::IsItemHovered())AlterEgo::UI::Hint("Already selected in the other slot.");
-        else if(ImGui::IsItemHovered()){
-            const auto details=ResolveProfessionChoice(legend,id);
-            AlterEgo::UI::DetailTooltip(label.c_str(),details.description.empty()?nullptr:details.description.c_str());
-        }
-        AlterEgo::UI::EntityContext("##pair_option_actions",[&]{
-            ProfessionChoiceActions(legend,ResolveProfessionChoice(legend,id));
-        });
-        ImGui::PopID();
+    static std::string query;
+    if(ImGui::IsWindowAppearing())query.clear();
+    AlterEgo::UI::SearchField("companion_picker_search",legend?"Search legends...":"Search pets...",query,280.f);
+    const auto words=AlterEgo::Search::Words(query);
+    struct Option {uint32_t id;std::string label;uint32_t artwork;std::string url;bool disabled,selected;};
+    std::vector<Option> options;
+    auto add=[&](uint32_t id,const std::string& label,uint32_t artwork,const std::string& url,bool disabled,bool selected){
+        if(AlterEgo::Search::Matches(label,words))options.push_back({id,label,artwork,url,disabled,selected});
     };
     if(legend){
         AlterEgo::GW2API::FetchLegendsAsync();
         auto canonical=[](uint32_t value){return value<=255?static_cast<uint32_t>(
             AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(value))):value;};
-        for(const auto& l:LegendOptions())row(l.code,l.name,AlterEgo::ArtworkRequest::SkillKey(l.swap),l.icon,
+        for(const auto& l:LegendOptions())add(l.code,l.name,AlterEgo::ArtworkRequest::SkillKey(l.swap),l.icon,
             !PairChoiceAllowed(canonical(other),l.code),canonical(current)==l.code);
     }else if(pets.empty()){
         RenderSpinner("Loading pets...");AlterEgo::GW2API::FetchPetsAsync();
-    }else{
-        ImGui::BeginChild("##petlist",ImVec2(280,360),true);
-        for(const auto& p:pets)row(p.id,p.name,AlterEgo::ArtworkRequest::PetKey(p.id),p.icon,!PairChoiceAllowed(other,p.id),current==p.id);
+    }else for(const auto& p:pets)add(p.id,p.name,AlterEgo::ArtworkRequest::PetKey(p.id),p.icon,
+        !PairChoiceAllowed(other,p.id),current==p.id);
+    if(!options.empty()){
+        namespace UI=AlterEgo::UI;
+        const float iconSize=30.f,pitch=UI::CatalogRowHeight(iconSize);
+        if(ImGui::BeginChild("##companion_options",ImVec2(280.f,std::min(360.f,pitch*options.size())),true)){
+            UI::CatalogLines(static_cast<int>(options.size()),pitch,0.f,[&](int index){
+                const auto& option=options[index];
+                ImGui::PushID(static_cast<int>(option.id));
+                const auto hit=UI::CatalogRow(index,option.selected,option.artwork,option.url,option.label,"",
+                    {},option.disabled,-1,[&]{
+                        const auto value=ResolveProfessionChoice(legend,option.id);
+                        UI::DetailTooltip(option.label.c_str(),option.disabled?"Already selected in the other slot.":
+                            value.description.empty()?nullptr:value.description.c_str());
+                    },iconSize,true);
+                UI::EntityContext("##pair_option_actions",[&]{ProfessionChoiceActions(legend,ResolveProfessionChoice(legend,option.id));});
+                if(hit.clicked&&!option.disabled){next=option.id;changed=true;ImGui::CloseCurrentPopup();}
+                ImGui::PopID();
+            });
+        }
         ImGui::EndChild();
-    }
+    }else if(!query.empty())ImGui::TextDisabled("No matching companions.");
     ImGui::EndPopup();
     return changed;
 }
@@ -7398,9 +7407,12 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
     static std::string search;
     static int filter=0,mode=0;
     static uint32_t selected=0;
-    UI::SearchField("ranger_pet_search","Search pets...",search);
     const char* filters[]={"All","Owned / observed","Not owned","Unknown","Active build"};
-    UI::FilterChoice("Ownership",filter,filters,IM_ARRAYSIZE(filters));
+    UI::SearchToolbar("ranger_pet_search","Search pets...",search,[&]{
+        UI::FilterChips chips;
+        if(filter)chips.push_back({"ownership",filters[filter],[]{filter=0;}});
+        return chips;
+    },[&]{UI::FilterChoice("Ownership",filter,filters,IM_ARRAYSIZE(filters));},[]{filter=0;});
     const char* views[]={"List","Grid"};
     UI::FilterChoice("View",mode,views,IM_ARRAYSIZE(views));
     ImGui::TextWrapped("Pet unlocks are not exposed by the API. Observed means selected in a verified character build; other ownership can be marked manually.");
@@ -7453,7 +7465,7 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
     if(mode==1){
         const float size=40.f,gap=4.f;
         const float pitch=UI::CatalogGridPitch(size,gap);
-        const int cols=std::max(1,static_cast<int>((ImGui::GetContentRegionAvail().x+gap)/(size+gap)));
+        const int cols=UI::CatalogGridColumns(ImGui::GetContentRegionAvail().x,size,gap);
         const int rows=(static_cast<int>(visible.size())+cols-1)/cols;
         UI::CatalogLines(rows,pitch,gap,[&](int r){
             for(int c=0;c<cols;++c){
@@ -7464,11 +7476,8 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
                 const auto pos=ImGui::GetCursorScreenPos();const ImVec2 end(pos.x+size,pos.y+size);
                 auto* draw=ImGui::GetWindowDrawList();
                 const auto choice=ResolveProfessionChoice(false,pet.id);
-                const auto* tex=IconManager::GetOrRequestIcon(choice.key,choice.icon);
-                if(ImGui::InvisibleButton("##pet_tile",ImVec2(size,size)))selected=pet.id;
-                if(tex&&tex->Resource)draw->AddImage(tex->Resource,pos,end);
-                else draw->AddRectFilled(pos,end,IM_COL32(40,40,60,200));
-                if(selected==pet.id)draw->AddRect(pos,end,IM_COL32(232,196,122,255),0,0,2.f);
+                const auto hit=UI::CatalogTile("##pet_tile",size,choice.key,choice.icon,selected==pet.id,IM_COL32(40,40,60,200));
+                if(hit.clicked)selected=pet.id;
                 const auto state=evidence.State();
                 const char* marker=state==PO::Status::Owned?"O":state==PO::Status::Observed?"V":state==PO::Status::NotOwned?"N":"?";
                 draw->AddRectFilled(ImVec2(pos.x,pos.y+size-14),ImVec2(pos.x+14,end.y),IM_COL32(20,20,20,220));
@@ -7479,18 +7488,17 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
             }
         });
     }else{
-        for(const auto* ptr:visible){
-            const auto& pet=*ptr;const auto evidence=PO::Get(ownership,pet.id);
-            ImGui::PushID(static_cast<int>(pet.id));ImGui::BeginGroup();
+        const float iconSize=30.f;
+        UI::CatalogLines(static_cast<int>(visible.size()),UI::CatalogRowHeight(iconSize),0.f,[&](int index){
+            const auto& pet=*visible[index];const auto evidence=PO::Get(ownership,pet.id);
+            ImGui::PushID(static_cast<int>(pet.id));
             const auto choice=ResolveProfessionChoice(false,pet.id);
-            const auto* tex=IconManager::GetOrRequestIcon(choice.key,choice.icon);
-            if(tex&&tex->Resource)ImGui::Image(tex->Resource,ImVec2(30,30));else ImGui::Dummy(ImVec2(30,30));
-            ImGui::SameLine();ImGui::AlignTextToFramePadding();
-            const auto label=pet.name+"  |  "+PO::Label(evidence.State())+(active.count(pet.id)?"  |  Active build":"");
-            if(UI::SelectableOption(label.c_str(),selected==pet.id))selected=pet.id;
-            ImGui::EndGroup();hover(pet,evidence);
+            const auto tail=std::string(PO::Label(evidence.State()))+(active.count(pet.id)?" | Active build":"");
+            const auto hit=UI::CatalogRow(index,selected==pet.id,choice.key,choice.icon,pet.name,"",tail,false,-1,
+                [&]{hover(pet,evidence);},iconSize,true);
+            if(hit.clicked)selected=pet.id;
             UI::EntityContext("##pet_actions",[&]{actions(pet,evidence);});ImGui::PopID();
-        }
+        });
     }
     ImGui::EndChild();
 }
@@ -10051,7 +10059,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     };
     auto skillName = [&](uint32_t id) {
         const auto info = AlterEgo::GW2API::GetSkillInfo(id);
-        return info ? info->name : numberLabel(id);
+        return info&&!info->name.empty()?info->name:id?std::string("Metadata pending"):std::string("Unknown");
     };
     auto itemName = [&](uint32_t id) {
         const auto info = AlterEgo::GW2API::GetItemInfo(id);
@@ -10140,10 +10148,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 (land?live.pets.terrestrial[slot]:live.pets.aquatic[slot]);
             const bool known=legend?live.legends_known:live.pets_known;
             const auto field=std::string(land?"Terrestrial ":"Aquatic ")+std::to_string(slot+1);
-            if(result.AddCompanion(group,field,expected,observed,known,land,display(expected),display(observed))&&legend){
-                const auto a=ResolveProfessionChoice(true,expected),b=ResolveProfessionChoice(true,known?observed:0);
-                result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.swap,0,0},{b.swap,0,0});
-            }
+            result.AddCompanion(group,field,expected,observed,known,land,display(expected),display(observed));
         }
     }
     auto weaponList = [](const std::vector<uint32_t>& ids) {
@@ -10892,8 +10897,40 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     else
                         ImGui::TextWrapped("%s / %s", row->group.c_str(),
                                            row->field.c_str());
+                    auto renderEntity=[&](bool live){
+                        const auto& label=live?row->current:row->saved;
+                        const auto& ids=live?row->liveLinks:row->savedLinks;
+                        const auto companion=live?row->liveCompanion:row->savedCompanion;
+                        ImGui::PushID(row->group.c_str());ImGui::PushID(row->field.c_str());ImGui::PushID(live?1:0);
+                        bool handled=false;
+                        if(companion&&(row->group=="Ranger pets"||row->group=="Revenant legends")){
+                            const bool legend=row->group=="Revenant legends";
+                            const auto choice=ResolveProfessionChoice(legend,companion);
+                            const auto hit=AlterEgo::UI::CatalogRow(0,false,choice.key,choice.icon,label,"",{},false,-1,
+                                [&]{AlterEgo::UI::DetailTooltip(choice.name.c_str(),choice.description.empty()?nullptr:choice.description.c_str());},24.f,true);
+                            (void)hit;
+                            AlterEgo::UI::EntityContext("##companion_compare",[&]{ProfessionChoiceActions(legend,choice);});
+                            handled=true;
+                        }else if(row->linkType==AlterEgo::LINK_SKILL&&AlterEgo::IsSkillComparisonGroup(row->group)){
+                            const auto count=std::count_if(ids.begin(),ids.end(),[](uint32_t id){return id!=0;});
+                            if(count){
+                                const float size=30.f;
+                                const int columns=AlterEgo::SkillEdit::IconColumns(ImGui::GetContentRegionAvail().x,size,ImGui::GetStyle().ItemSpacing.x,3);
+                                int shown=0;
+                                for(size_t i=0;i<ids.size();++i)if(ids[i]){
+                                    if(shown++%columns)ImGui::SameLine();
+                                    ImGui::PushID(static_cast<int>(i));RenderSkillIcon(ids[i],size);ImGui::PopID();
+                                }
+                            }
+                            ImGui::TextWrapped("%s",label.c_str());
+                            handled=true;
+                        }
+                        if(!handled)ImGui::TextWrapped("%s",label.c_str());
+                        ImGui::PopID();ImGui::PopID();ImGui::PopID();
+                        return handled;
+                    };
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::TextWrapped("%s", row->saved.c_str());
+                    const bool savedHandled=renderEntity(false);
                     auto linkMenu=[&](const std::vector<uint32_t>& ids,const char* popup){
                         if(!row->linkType)return;
                         std::set<uint32_t> unique;for(auto id:ids)if(ChatLinkIdValid(id))unique.insert(id);
@@ -10919,7 +10956,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                         }});
                         for(size_t i=0;i<unique.size();++i)ImGui::PopID();ImGui::PopID();ImGui::PopID();
                     };
-                    linkMenu(row->savedLinks,"##saved_link_actions");
+                    if(!savedHandled)linkMenu(row->savedLinks,"##saved_link_actions");
                     ImGui::TableSetColumnIndex(2);
                     if (!row->verified)
                         ImGui::PushStyleColor(ImGuiCol_Text,
@@ -10927,9 +10964,9 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                     else if (!row->matches)
                         ImGui::PushStyleColor(ImGuiCol_Text,
                             ImVec4(1, 0.58f, 0.50f, 1));
-                    ImGui::TextWrapped("%s", row->current.c_str());
+                    const bool liveHandled=renderEntity(true);
                     if (!row->verified || !row->matches) ImGui::PopStyleColor();
-                    linkMenu(row->liveLinks,"##live_link_actions");
+                    if(!liveHandled)linkMenu(row->liveLinks,"##live_link_actions");
                 }
                 if (!displayed) {
                     ImGui::TableNextRow();
@@ -13235,7 +13272,7 @@ static void RenderSkinList(float width) {
         const float tileGap  = 3.0f;
         const float pitch=AlterEgo::UI::CatalogGridPitch(tileSize,tileGap);
         float availW = ImGui::GetContentRegionAvail().x;
-        int cols = std::max(1, (int)((availW + tileGap) / (tileSize + tileGap)));
+        int cols = AlterEgo::UI::CatalogGridColumns(availW,tileSize,tileGap);
         int rows = ((int)displaySkins.size() + cols - 1) / cols;
 
         // Scroll-to-selected
@@ -13265,40 +13302,15 @@ static void RenderSkinList(float width) {
                     bool selected = (g_SkinSelectedId == entry.id);
                     bool dim = hasOwnerData && !entry.owned;
 
-                    uint32_t displayId = entry.id + 5000000;
-                    Texture_t* tex = AlterEgo::IconManager::GetIcon(displayId);
-                    if (!tex || !tex->Resource) {
-                        if (!skin.icon_url.empty())
-                            AlterEgo::IconManager::RequestIcon(displayId, skin.icon_url, /*priority=*/true);
-                    }
-
-                    ImVec2 pos = ImGui::GetCursorScreenPos();
-                    ImVec2 tmin = pos;
-                    ImVec2 tmax(pos.x + tileSize, pos.y + tileSize);
-
-                    // Background fill (rarity-tinted placeholder)
-                    ImVec4 rc = GetSkinRarityColor(skin.rarity);
-                    ImU32 bgCol = ImGui::ColorConvertFloat4ToU32(ImVec4(rc.x * 0.18f, rc.y * 0.18f, rc.z * 0.18f, 1.0f));
-                    dl->AddRectFilled(tmin, tmax, bgCol, 2.0f);
-
-                    if (tex && tex->Resource) {
-                        ImU32 tint = dim
-                            ? IM_COL32(160, 160, 160, 110)
-                            : IM_COL32(255, 255, 255, 255);
-                        dl->AddImage(tex->Resource, tmin, tmax,
-                            ImVec2(0,0), ImVec2(1,1), tint);
-                    }
-
-                    // Rarity border
-                    ImU32 borderCol = ImGui::ColorConvertFloat4ToU32(
-                        dim ? ImVec4(rc.x * 0.55f, rc.y * 0.55f, rc.z * 0.55f, 0.85f) : rc);
-                    dl->AddRect(tmin, tmax, borderCol, 2.0f, 0, 1.5f);
-
-                    // Selection ring (gold)
-                    if (selected) {
-                        dl->AddRect(ImVec2(tmin.x - 1, tmin.y - 1), ImVec2(tmax.x + 1, tmax.y + 1),
-                            IM_COL32(232, 196, 122, 255), 2.5f, 0, 2.0f);
-                    }
+                    const uint32_t displayId=entry.id+5000000;
+                    const auto tmin=ImGui::GetCursorScreenPos();
+                    const ImVec2 tmax(tmin.x+tileSize,tmin.y+tileSize);
+                    const auto rc=GetSkinRarityColor(skin.rarity);
+                    const auto bg=ImGui::ColorConvertFloat4ToU32(ImVec4(rc.x*.18f,rc.y*.18f,rc.z*.18f,1.f));
+                    const auto border=ImGui::ColorConvertFloat4ToU32(dim?ImVec4(rc.x*.55f,rc.y*.55f,rc.z*.55f,.85f):rc);
+                    ImGui::PushID(static_cast<int>(entry.id));
+                    const auto hit=AlterEgo::UI::CatalogTile("##tile",tileSize,displayId,skin.icon_url,selected,bg,border,
+                        dim?IM_COL32(160,160,160,110):IM_COL32_WHITE);
 
                     // Owned check (small green corner mark)
                     if (hasOwnerData && entry.owned) {
@@ -13312,13 +13324,7 @@ static void RenderSkinList(float width) {
                             IM_COL32(160, 230, 170, 255), 1.5f);
                     }
 
-                    ImGui::PushID((int)entry.id);
-                    const auto hit=AlterEgo::UI::CatalogHitTarget("##tile",ImVec2(tileSize,tileSize));
-                    const bool hovered=hit.hovered;
-                    if (hovered) {
-                        dl->AddRect(tmin, tmax, IM_COL32(232, 196, 122, 180), 2.0f, 0, 1.5f);
-                        RenderSkinEntityTooltip(skin.name,skin.rarity,hasOwnerData,entry.owned);
-                    }
+                    if(hit.hovered)RenderSkinEntityTooltip(skin.name,skin.rarity,hasOwnerData,entry.owned);
                     RenderSkinContextMenu(skin);
                     ImGui::PopID();
                     if(hit.clicked)selectSkin(skin);

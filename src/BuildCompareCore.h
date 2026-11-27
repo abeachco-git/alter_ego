@@ -154,6 +154,7 @@ struct ComparisonRow {
     bool completeSkillIds = false; // typed evidence, never inferred from display labels
     uint8_t linkType=0; // optional presentation only, never participates in verdicts
     std::vector<uint32_t> savedLinks{},liveLinks{};
+    uint32_t savedCompanion=0,liveCompanion=0; // presentation identity, never invocation skill ID
 };
 
 class BuildComparison {
@@ -187,6 +188,7 @@ public:
         if(!saved||!observed||!observedKnown)
             AddUnverified(group,field,saved?savedDisplay:"Unknown",observedKnown&&observed?observedDisplay:"Unknown");
         else Add(group,field,std::to_string(saved),std::to_string(observed),savedDisplay,observedDisplay);
+        rows.back().savedCompanion=saved;rows.back().liveCompanion=observedKnown?observed:0;
         return true;
     }
     void AddSkill(const std::string& group,const std::string& field,

@@ -119,18 +119,23 @@ static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const cha
     const auto slot=parent.contains(key)?SE::JsonDisplaySlot(parent[key]):SE::DisplaySlot{};
     const uint32_t id=slot.id;
     bool changed=false;
-    ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);ImGui::SameLine(140.0f);
+    const float available=ImGui::GetContentRegionAvail().x;
+    const float labelWidth=std::max(90.f,ImGui::CalcTextSize("Utility 3").x+ImGui::GetStyle().ItemSpacing.x);
+    ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);
+    if(available>=labelWidth+38.f+100.f)ImGui::SameLine(0.f,std::max(4.f,labelWidth-ImGui::CalcTextSize(label).x));
     uint32_t next=id;
     if(RenderSkillEditorSlot(id,38.0f,profession,role,specs,allowAnySpec,aquatic,true,next,label)){
         parent[key]=next;changed=true;
     }
     const auto info=id?AlterEgo::GW2API::GetSkillInfo(id):nullptr;
     if(id&&!info)AlterEgo::GW2API::FetchSkillDetailsAsync({id});
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s",id?(info&&!info->name.empty()?info->name.c_str():"Metadata pending"):SE::MissingSlotLabel(slot.evidence));
-    if(aquatic&&id&&(!info||!info->no_underwater.has_value()||info->no_underwater.value_or(false))){
-        ImGui::SameLine();ImGui::TextDisabled("%s",info&&info->no_underwater.value_or(false)?"[NoUnderwater]":"[eligibility unknown]");
-    }
+    std::string detail=id?(info&&!info->name.empty()?info->name:"Metadata pending"):SE::MissingSlotLabel(slot.evidence);
+    if(aquatic&&id&&(!info||!info->no_underwater.has_value()||info->no_underwater.value_or(false)))
+        detail+=info&&info->no_underwater.value_or(false)?" [NoUnderwater]":" [eligibility unknown]";
+    if(available>=labelWidth+38.f+100.f)ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s",detail.c_str());
+    ImGui::PopStyleColor();
     ImGui::PopID();return changed;
 }
 

@@ -7,7 +7,7 @@
 namespace AlterEgo::UI {
 // A fixed-height list row; caller owns stable ID, selection, context menu,
 // and domain-specific trailing content. No catalog requests from this helper.
-inline float CatalogRowHeight(){return CatalogRowPitch(ImGui::GetTextLineHeight());}
+inline float CatalogRowHeight(float iconSize=16.f){return CatalogRowPitch(ImGui::GetTextLineHeight(),iconSize);}
 // Shared striping for selectable catalog rows and ordinary wallet rows.
 inline void CatalogRowBackground(int row,ImVec2 p,ImVec2 end,bool selected=false,bool hovered=false){
     const ImU32 bg=selected?IM_COL32(80,64,28,90):hovered?IM_COL32(60,56,40,60):row&1?IM_COL32(255,255,255,10):0;
@@ -34,9 +34,8 @@ inline bool PinButton(const char* id,bool pinned,const char* pinTip,const char* 
 // Catalog item and currency artwork share the existing cache and visible
 // row demand. No metadata lookup or request owner is introduced.
 inline void DrawCatalogIcon(ImDrawList* draw,uint32_t id,const std::string& url,ImVec2 p,ImVec2 end,ImU32 tint=IM_COL32_WHITE){
-    auto* tex=id?IconManager::GetIcon(id):nullptr;
+    auto* tex=IconManager::GetOrRequestIcon(id,url,true);
     if(tex&&tex->Resource)draw->AddImage(tex->Resource,p,end,ImVec2(0,0),ImVec2(1,1),tint);
-    else if(id&&!url.empty())IconManager::RequestIcon(id,url,true);
 }
 struct CatalogRowResult {bool clicked=false,hovered=false;};
 // Both catalog rows and tiles use the same native activation and hover
@@ -60,13 +59,30 @@ template<class RenderRow>
 inline void CatalogRows(int count,RenderRow render){
     CatalogLines(count,CatalogRowHeight(),0.f,render);
 }
+// Shared grid interaction, image geometry, selection and hover ring.
+ // The caller supplies rarity/neutral colors and domain-specific badges.
+inline CatalogRowResult CatalogTile(const char* id,float size,uint32_t artwork,
+    const std::string& url,bool selected,ImU32 background,ImU32 border=0,
+    ImU32 tint=IM_COL32_WHITE){
+    const auto p=ImGui::GetCursorScreenPos();
+    const ImVec2 end(p.x+size,p.y+size);
+    const auto hit=CatalogHitTarget(id,ImVec2(size,size));
+    auto* draw=ImGui::GetWindowDrawList();
+    draw->AddRectFilled(p,end,background,2.f);
+    DrawCatalogIcon(draw,artwork,url,p,end,tint);
+    if(border)draw->AddRect(p,end,border,2.f,0,1.5f);
+    if(selected)draw->AddRect(ImVec2(p.x-1,p.y-1),ImVec2(end.x+1,end.y+1),IM_COL32(232,196,122,255),2.5f,0,2.f);
+    if(hit.hovered)draw->AddRect(p,end,IM_COL32(232,196,122,180),2.f,0,1.5f);
+    return hit;
+}
 inline void CatalogScrollToRow(int row,float pitch){
     ImGui::SetScrollY(CatalogCenteredScroll(row,pitch,ImGui::GetWindowHeight()));
 }
 inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const std::string& url,const std::string& name,const std::string& rarity,
-    const std::string& trailing={},bool dim=false,int ownership=-1,const std::function<void()>& details={}) {
-    const float pitch=CatalogRowHeight(),height=pitch;
+    const std::string& trailing={},bool dim=false,int ownership=-1,const std::function<void()>& details={},
+    float iconSize=16.f,bool neutral=false) {
+    const float pitch=CatalogRowHeight(iconSize),height=pitch;
     const ImVec2 p=ImGui::GetCursorScreenPos();
     const float w=ImMax(1.f,ImGui::GetContentRegionAvail().x);
     const ImVec2 end(p.x+w,p.y+height);
@@ -75,22 +91,25 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const auto hit=CatalogHitTarget("##catalog_row",ImVec2(w,height));
     const bool hovered=hit.hovered;
     auto* dl=ImGui::GetWindowDrawList();
-    const auto rc=GetSkinRarityColor(rarity);
+    const auto rc=neutral?ImVec4(.45f,.45f,.48f,1.f):GetSkinRarityColor(rarity);
     CatalogRowBackground(row,p,end,selected,hovered);
     if(selected||hovered)dl->AddRect(p,end,selected?IM_COL32(232,196,122,220):IM_COL32(197,161,85,110),2.f);
-    dl->AddRectFilled(ImVec2(p.x,p.y+2),ImVec2(p.x+3,end.y-2),ImGui::ColorConvertFloat4ToU32(dim?ImVec4(rc.x*.55f,rc.y*.55f,rc.z*.55f,.85f):rc));
-    const float sz=16.f;
+    if(!neutral)dl->AddRectFilled(ImVec2(p.x,p.y+2),ImVec2(p.x+3,end.y-2),ImGui::ColorConvertFloat4ToU32(dim?ImVec4(rc.x*.55f,rc.y*.55f,rc.z*.55f,.85f):rc));
+    const float sz=iconSize;
     const ImVec2 ip(p.x+8,p.y+(height-sz)*.5f),ie(ip.x+sz,ip.y+sz);
     dl->AddRectFilled(ip,ie,ImGui::ColorConvertFloat4ToU32(ImVec4(rc.x*.18f,rc.y*.18f,rc.z*.18f,1)),1.5f);
     DrawCatalogIcon(dl,iconId,url,ip,ie,dim?IM_COL32(170,170,170,130):IM_COL32_WHITE);
     const auto textColor=ImGui::GetColorU32(dim?ImGuiCol_TextDisabled:ImGuiCol_Text);
     const float ty=p.y+(height-ImGui::GetTextLineHeight())*.5f;
     const float tailWidth=trailing.empty()?0.f:ImGui::CalcTextSize(trailing.c_str()).x+12.f;
-    const float right=end.x-6.f-(ownership>=0?16.f:tailWidth);
     const float left=ie.x+6.f;
+    // Keep the name visible on narrow panels; the full tail remains in
+    // the caller's details tooltip when it cannot fit beside the name.
+    const bool showTail=!trailing.empty()&&ownership<0&&end.x-left>tailWidth+48.f;
+    const float right=end.x-6.f-(ownership>=0?16.f:showTail?tailWidth:0.f);
     if(right>left){dl->PushClipRect(ImVec2(left,p.y),ImVec2(right,end.y),true);
         dl->AddText(ImVec2(left,ty),textColor,name.c_str());dl->PopClipRect();}
-    if(!trailing.empty()&&w>tailWidth+30.f)dl->AddText(ImVec2(end.x-tailWidth+6,ty),ImGui::GetColorU32(ImGuiCol_TextDisabled),trailing.c_str());
+    if(showTail)dl->AddText(ImVec2(end.x-tailWidth+6,ty),ImGui::GetColorU32(ImGuiCol_TextDisabled),trailing.c_str());
     if(ownership>=0){const ImVec2 dot(end.x-12,p.y+height*.5f);
         if(ownership){dl->AddCircleFilled(dot,4,IM_COL32(50,110,60,220));dl->AddCircle(dot,4,IM_COL32(111,204,122,255),14,1.2f);
             dl->AddLine(ImVec2(dot.x-2,dot.y),ImVec2(dot.x-.5f,dot.y+1.5f),IM_COL32(180,240,190,255),1.5f);
