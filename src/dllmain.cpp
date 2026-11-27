@@ -9901,7 +9901,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         int choice = -id;
         if (info && info->major_traits.size() >= 9 && choice >= 1 && choice <= 3)
             return info->major_traits[tier * 3 + choice - 1];
-        return 0; // unresolved: skip rather than report a fictitious difference
+        return 0; // unresolved: emit unverified evidence below
     };
 
     for (int i = 0; i < 3; ++i) {
@@ -9914,13 +9914,14 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         for (int t = 0; t < 3; ++t) {
             uint32_t a = traitId(s.spec_id, t, s.traits[t]);
             uint32_t b = traitId(l.spec_id, t, l.traits[t]);
-            if ((s.traits[t] < 0 && !a) || (l.traits[t] < 0 && !b)) continue;
-            if (a || b) addId("Traits", slot + " " + tiers[t], a, b, traitName);
+            const auto field=slot + " " + tiers[t];
+            if (!a || !b) result.AddUnverified("Traits",field, a?traitName(a):"Unknown", b?traitName(b):"Unknown");
+            else addId("Traits",field,a,b,traitName);
         }
     }
     auto compareSkills = [&](const char* group, const AlterEgo::SkillBar& a,
                               const AlterEgo::SkillBar& b) {
-        addId(group, "Heal", a.heal, b.heal, skillName);
+        result.AddSkill(group,"Heal",idKey(a.heal),idKey(b.heal),skillName(a.heal),skillName(b.heal),a.heal&&b.heal);
         // Utility order is a control-layout preference, not a combat
         // configuration difference. Keep original order on disk/export.
         auto sortedUtilities = [&](const AlterEgo::SkillBar& bar) {
@@ -9934,11 +9935,15 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             return std::make_pair(key, names);
         };
         const auto sa = sortedUtilities(a), sb = sortedUtilities(b);
-        result.Add(group, "Utilities", sa.first, sb.first, sa.second, sb.second);
-        addId(group, "Elite", a.elite, b.elite, skillName);
+        result.AddSkill(group,"Utilities",sa.first,sb.first,sa.second,sb.second,
+            AlterEgo::CompleteUtilityIds({a.utilities[0],a.utilities[1],a.utilities[2]}) &&
+            AlterEgo::CompleteUtilityIds({b.utilities[0],b.utilities[1],b.utilities[2]}));
+        result.AddSkill(group,"Elite",idKey(a.elite),idKey(b.elite),skillName(a.elite),skillName(b.elite),a.elite&&b.elite);
     };
     compareSkills("Terrestrial skills", saved.terrestrial_skills, live.terrestrial_skills);
-    compareSkills("Aquatic skills", saved.aquatic_skills, live.aquatic_skills);
+    const auto& waterSkills=saved.aquatic_skills;
+    if(waterSkills.heal||waterSkills.elite||waterSkills.utilities[0]||waterSkills.utilities[1]||waterSkills.utilities[2])
+        compareSkills("Aquatic skills", waterSkills, live.aquatic_skills);
     if (saved.profession == "Ranger") {
         for (int i = 0; i < 2; ++i) {
             addId("Ranger pets", "Terrestrial " + std::to_string(i + 1),
@@ -9971,18 +9976,26 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                    weaponList(live.weapons), weaponList(saved.weapons),
                    live.weapons.empty() ? "(none)" : weaponList(live.weapons));
 
-    if ((!saved.gear.empty() || !saved.infusion_totals.empty()) && !liveCharacter.equipment.empty()) {
+    if (!saved.gear.empty() || !saved.infusion_totals.empty() || saved.relic_id || !saved.relic_name.empty()) {
         auto getEquipped = [&](const std::string& slot) -> const AlterEgo::EquipmentItem* {
-            // Same shared-tab lookup used by Characters > Equipment.
-            return FindEquipment(liveCharacter, slot, equipmentTab);
+            const auto key=AlterEgo::CanonicalComparisonSlot(slot);
+            for(const auto& eq:liveCharacter.equipment)
+                if(AlterEgo::CanonicalComparisonSlot(eq.slot)==key && eq.tab==equipmentTab)return &eq;
+            if(key=="Relic")for(const auto& eq:liveCharacter.equipment)
+                if(eq.slot=="Relic"&&eq.tab==0)return &eq;
+            return nullptr;
         };
         for (const auto& entry : saved.gear) {
             const std::string& slot = entry.first;
             const auto& gs = entry.second;
             const auto* eq = getEquipped(slot);
-            if (!eq) {
-                // A saved slot is equipped in the source set but missing in live gear.
-                result.Add("Equipment", slot, "present", "missing", "Equipped", "Not equipped");
+            const bool aquatic=AlterEgo::IsAquaticComparisonSlot(slot);
+            const auto group=[&](const char* land){return aquatic?"Aquatic":land;};
+            if (!eq || !eq->id) {
+                const bool tabKnown=liveCharacter.scope_stamps[AlterEgo::CharacterScopes::Index(AlterEgo::CharacterScopes::Tabs)]>0 &&
+                    (liveCharacter.equipment_tab_names.count(equipmentTab)||std::any_of(liveCharacter.equipment.begin(),liveCharacter.equipment.end(),[&](const auto& item){return item.tab==equipmentTab;}));
+                if(tabKnown)result.Add(group("Equipment"),slot,"present","missing","Equipped","Not equipped");
+                else result.AddUnverified(group("Equipment"),slot,"Equipped","Equipment not verified");
                 continue;
             }
             uint32_t liveStat = eq->stat_id;
@@ -10025,36 +10038,36 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     : (liveStat ? numberLabel(liveStat) : "(unknown)");
                 const std::vector<std::string> emptyAttributes;
                 const auto verdict = AlterEgo::CompareStatDefinitions(
-                    savedStat, liveStat, savedName,
+                    savedStat, liveStat, savedInfo && !savedInfo->name.empty() ? savedInfo->name : gs.stat_name,
                     liveInfo ? liveInfo->name : std::string(),
                     savedInfo ? savedInfo->attributes : emptyAttributes,
                     liveInfo ? liveInfo->attributes : emptyAttributes);
                 if (verdict == AlterEgo::StatEquivalence::Matches) {
                     // Identical itemstat IDs, or different IDs with the same
                     // public name and attribute definition, are equivalent.
-                    result.Add("Equipment stats", slot, "equivalent", "equivalent",
+                    result.Add(group("Equipment stats"), slot, "equivalent", "equivalent",
                                savedName, liveName);
                 } else if (verdict == AlterEgo::StatEquivalence::Different) {
-                    result.Add("Equipment stats", slot, "saved-different", "live-different",
+                    result.Add(group("Equipment stats"), slot, "saved-different", "live-different",
                                savedName, liveName);
                 } else {
-                    result.AddUnverified("Equipment stats", slot, savedName,
+                    result.AddUnverified(group("Equipment stats"), slot, savedName,
                         liveName + " (not verified)");
                 }
             }
             if (compareExactItems && gs.item_id)
-                addId("Exact item IDs", slot, gs.item_id, eq->id, itemName);
+                addId(group("Exact item IDs"), slot, gs.item_id, eq->id, itemName);
             // Rune and sigil placement is preserved in gear, but their
             // functional comparison is aggregated by type and weapon set.
-            if (slot.rfind("Weapon", 0) == 0) {
+            if (slot.rfind("Weapon", 0) == 0 || AlterEgo::EquipmentChoice::IsAquaticWeaponSlot(slot)) {
                 if (!gs.weapon_type.empty()) {
                     const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
                     if (info && info->details.contains("type") &&
                         info->details["type"].is_string()) {
                         auto liveType = info->details["type"].get<std::string>();
-                        result.Add("Weapon types", slot, gs.weapon_type, liveType,
+                        result.Add(group("Weapon types"), slot, gs.weapon_type, liveType,
                                    gs.weapon_type, liveType);
-                    }
+                    } else result.AddUnverified(group("Weapon types"),slot,gs.weapon_type,"Metadata unavailable");
                 }
             }
         }
@@ -10205,6 +10218,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                            saved.relic_name, info->name);
             else if (saved.relic_id && id)
                 addId("Relic", "Item ID", saved.relic_id, id, itemName);
+            else result.AddUnverified("Relic","Effect / item",saved.relic_name.empty()?numberLabel(saved.relic_id):saved.relic_name,"Unavailable");
         }
     }
 

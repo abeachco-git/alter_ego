@@ -110,7 +110,7 @@ inline Summary Infusions(const Json& infusions) {
 inline std::string WeaponSet(const std::string& slot) {
     if (slot == "WeaponA1" || slot == "WeaponA2") return "terrestrial:A";
     if (slot == "WeaponB1" || slot == "WeaponB2") return "terrestrial:B";
-    if (slot.rfind("Aquatic", 0) == 0) return "aquatic:" + slot;
+    if (IsAquaticComparisonSlot(slot)) return "aquatic:" + CanonicalComparisonSlot(slot);
     return slot; // Future/unknown set: compare conservatively.
 }
 inline Summary Sigils(const Json& sigils) {
@@ -143,6 +143,7 @@ inline std::string ComparisonComponent(const std::string& group,
         group == "Ranger pets" || group == "Revenant legends")
         return "base_build";
     if (group == "Terrestrial skills" || group == "Aquatic skills") return "skills";
+    if (group == "Aquatic") return "aquatic";
     if (group == "Runes") return "runes";
     if (group == "Sigils") return "sigils";
     if (group == "Infusions" || group == "Infusion totals") return "infusions";
@@ -158,18 +159,7 @@ inline std::string ComparisonComponent(const std::string& group,
 
 // A slot's order of utility skills is ergonomic, not a different build.
 // Heal and elite retain distinct semantics, as do terrestrial and aquatic.
-inline Json SkillBar(const Json& original) {
-    if (!original.is_object()) return original;
-    Json out = original;
-    if (out.contains("utilities") && out.at("utilities").is_array()) {
-        std::vector<Json> values;
-        for (const auto& value : out.at("utilities")) values.push_back(value);
-        std::sort(values.begin(), values.end(),
-            [](const Json& a, const Json& b) { return a.dump() < b.dump(); });
-        out["utilities"] = std::move(values);
-    }
-    return out;
-}
+inline Json SkillBar(const Json& original) { return NormalizeUtilityBar(original); }
 inline bool SameUtilities(const Json& a, const Json& b) {
     if (a.is_object() != b.is_object()) return false;
     return SkillBar(a) == SkillBar(b);
@@ -185,14 +175,8 @@ inline bool SimilarRequirements(const std::string& kind, const Json& a, const Js
     if (!a.is_object() || !b.is_object() || a.empty() || b.empty() || a == b) return false;
     if (kind == "runes") return Compare(Runes(a), Runes(b)) == Verdict::Match;
     if (kind == "sigils") return Compare(Sigils(a), Sigils(b)) == Verdict::Match;
-    if (kind == "infusions") {
-        if (Compare(Infusions(a), Infusions(b)) != Verdict::Match) return false;
-        for (const char* key : {"infusion_summary_present", "infusion_ar_total", "infusion_stat_totals"}) {
-            if (a.contains(key) != b.contains(key)) return false;
-            if (a.contains(key) && a.at(key) != b.at(key)) return false;
-        }
-        return true;
-    }
+    // Pooled legacy counts cannot prove slot/attribute/topology requirements.
+    // Detailed typed infusion comparison is authoritative; suppress this hint.
     return false;
 }
 

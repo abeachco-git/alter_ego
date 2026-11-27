@@ -118,8 +118,8 @@ int case_build_compare_core(int, char**) {
     assert(characterMismatches == 1);
 
     AlterEgo::BuildComparison unorderedUtilityChange;
-    unorderedUtilityChange.Add("Terrestrial skills", "Utilities",
-        "1,2,3", "1,2,4", "Skill A, Skill B, Skill C", "Skill A, Skill B, Skill D");
+    unorderedUtilityChange.AddSkill("Terrestrial skills", "Utilities",
+        "1,2,3", "1,2,4", "Skill A, Skill B, Skill C", "Skill A, Skill B, Skill D", true);
     assert(AlterEgo::ClassifyTemplateMatch(unorderedUtilityChange) ==
            AlterEgo::TemplateMatchStatus::SkillsDiffer);
 
@@ -137,16 +137,16 @@ int case_build_compare_core(int, char**) {
     // masquerade as changed skills.
     AlterEgo::BuildComparison skillChange;
     skillChange.Add("Specializations", "Line 3", "34", "34", "Reaper", "Reaper");
-    skillChange.Add("Terrestrial skills", "Heal", "10", "11", "Heal A", "Heal B");
-    skillChange.Add("Terrestrial skills", "Utility 1", "100", "200", "A", "B");
-    skillChange.Add("Terrestrial skills", "Elite", "400", "401", "C", "D");
-    skillChange.Add("Aquatic skills", "Utility 3", "50", "51", "E", "F");
+    skillChange.AddSkill("Terrestrial skills", "Heal", "10", "11", "Heal A", "Heal B", true);
+    skillChange.AddSkill("Terrestrial skills", "Utility 1", "100", "200", "A", "B", true);
+    skillChange.AddSkill("Terrestrial skills", "Elite", "400", "401", "C", "D", true);
+    skillChange.AddSkill("Aquatic skills", "Utility 3", "50", "51", "E", "F", true);
     skillChange.Add("Equipment stats", "Helm", "1", "1", "Same", "Same");
     assert(ClassifyTemplateMatch(skillChange) == TemplateMatchStatus::SkillsDiffer);
     skillChange.Add("Traits", "Line 3 Master", "22", "23", "X", "Y");
     assert(ClassifyTemplateMatch(skillChange) == TemplateMatchStatus::Different);
     AlterEgo::BuildComparison unknownSkill;
-    unknownSkill.Add("Terrestrial skills", "Utility 2", "0", "200", "(empty)", "B");
+    unknownSkill.AddSkill("Terrestrial skills", "Utility 2", "0", "200", "(empty)", "B", false);
     assert(ClassifyTemplateMatch(unknownSkill) == TemplateMatchStatus::Different);
     AlterEgo::BuildComparison nonSkill;
     nonSkill.Add("Build", "Weapon proficiency IDs", "1", "2", "A", "B");
@@ -155,5 +155,13 @@ int case_build_compare_core(int, char**) {
     unverifiedTemplate.AddUnverified("Traits", "Line 2 Adept", "?", "?");
     assert(ClassifyTemplateMatch(unverifiedTemplate) == TemplateMatchStatus::Different);
 
+    AlterEgo::BuildComparison partialUtilities;
+    partialUtilities.AddSkill("Terrestrial skills","Utilities","0,2,3","1,2,3","Unknown, B, C","A, B, C",false);
+    assert(partialUtilities.UnverifiedCount()==1 && partialUtilities.DifferenceCount()==0);
+    assert(ClassifyTemplateMatch(partialUtilities)==TemplateMatchStatus::Different);
+    assert(CompareStatDefinitions(1050,1070,"#1050","Assassin\'s",{},assassinStats)==StatEquivalence::NotVerified);
+    assert(AlterEgo::CanonicalComparisonSlot("AquaticA")=="WeaponAquaticA");
+    assert(AlterEgo::CanonicalComparisonSlot("Breather")=="HelmAquatic");
+    assert(AlterEgo::IsGearComparisonGroup("Aquatic"));
     return 0;
 }

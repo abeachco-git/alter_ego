@@ -2,6 +2,7 @@
 #include "UntrustedInput.h"
 #include "EquipmentChoiceCore.h"
 #include "InfusionTotalsCore.h"
+#include "BuildCompareCore.h"
 // Alter Ego v3 composable Loadout model.
 //
 // This is a pure, platform-independent data layer. Build templates, physical
@@ -436,6 +437,18 @@ inline const Component* ExactReusableComponent(const Document& doc, const std::s
             if (candidate.data == data) return &candidate;
     return nullptr;
 }
+// Normalize only valid numeric utility IDs, preserving unknown/malformed
+// payloads and multiplicity. This is never an exact storage key.
+inline Json NormalizeUtilityBar(Json bar) {
+    if (!bar.is_object() || !bar.contains("utilities") || !bar["utilities"].is_array()) return bar;
+    std::vector<uint32_t> ids;
+    for(const auto& value:bar["utilities"]) {
+        if(!value.is_number_integer() || value<0 || value>std::numeric_limits<uint32_t>::max())return bar;
+        ids.push_back(value.get<uint32_t>());
+    }
+    bar["utilities"]=CanonicalUtilitySequence(std::move(ids));
+    return bar;
+}
 // Compare only transformations that cannot change equipment compatibility.
 // Utility order and complete rune permutations are functionally interchangeable.
 // Preserve unknown fields, exact IDs, and physical weapon/infusion capacity.
@@ -443,9 +456,7 @@ inline Json ReuseKey(const std::string& kind, Json data) {
     if (kind == "skills") {
         for (const char* key : {"skills", "aquatic_skills"}) {
             if (!data.contains(key) || !data[key].is_object()) continue;
-            auto& bar = data[key];
-            if (bar.contains("utilities") && bar["utilities"].is_array())
-                std::sort(bar["utilities"].begin(), bar["utilities"].end());
+            data[key] = NormalizeUtilityBar(data[key]);
         }
     }
     if (kind == "runes" && data.contains("gear") && data["gear"].is_object() &&

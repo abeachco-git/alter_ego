@@ -11,7 +11,23 @@
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
 // labels are resolved names and may differ when cache lookups are incomplete.
 namespace AlterEgo {
-inline std::array<uint32_t,3> CanonicalUtilityIds(std::array<uint32_t,3> ids){std::sort(ids.begin(),ids.end());return ids;}
+template<class Sequence> inline Sequence CanonicalUtilitySequence(Sequence ids) {
+    std::sort(ids.begin(),ids.end());return ids;
+}
+inline std::array<uint32_t,3> CanonicalUtilityIds(std::array<uint32_t,3> ids){return CanonicalUtilitySequence(ids);}
+inline bool CompleteUtilityIds(const std::array<uint32_t,3>& ids) {
+    return std::all_of(ids.begin(),ids.end(),[](uint32_t id){return id!=0;});
+}
+inline std::string CanonicalComparisonSlot(const std::string& slot) {
+    if(slot=="AquaticA")return "WeaponAquaticA";
+    if(slot=="AquaticB")return "WeaponAquaticB";
+    if(slot=="Breather")return "HelmAquatic";
+    return slot;
+}
+inline bool IsAquaticComparisonSlot(const std::string& slot) {
+    const auto key=CanonicalComparisonSlot(slot);
+    return key=="WeaponAquaticA"||key=="WeaponAquaticB"||key=="HelmAquatic";
+}
 
 // Relics can be shared across equipment tabs (tab 0) in Hoard & Seek's
 // /equipment response, while regular gear belongs to one specific tab.
@@ -88,6 +104,10 @@ inline StatEquivalence CompareStatDefinitions(
     const std::vector<std::string>& savedAttrs,
     const std::vector<std::string>& liveAttrs) {
     if (savedId != 0 && savedId == liveId) return StatEquivalence::Matches;
+    // Display-only numeric placeholders are not canonical name evidence.
+    if ((!savedName.empty() && savedName.front()=='#') ||
+        (!liveName.empty() && liveName.front()=='#'))
+        return StatEquivalence::NotVerified;
     const auto savedCanonical = NamedStats::CanonicalStatName(savedName);
     const auto liveCanonical = NamedStats::CanonicalStatName(liveName);
     // Cross-website names and GW2 itemstat labels can differ by prefix
@@ -122,6 +142,7 @@ struct ComparisonRow {
     std::string current;
     bool matches = false;
     bool verified = true; // NotVerified rows are neither matches nor differences
+    bool completeSkillIds = false; // typed evidence, never inferred from display labels
 };
 
 class BuildComparison {
@@ -140,6 +161,14 @@ public:
         ++unverified;
     }
 
+    void AddSkill(const std::string& group,const std::string& field,
+                  const std::string& savedKey,const std::string& currentKey,
+                  const std::string& savedDisplay,const std::string& currentDisplay,
+                  bool completeIds) {
+        if (!completeIds) { AddUnverified(group,field,savedDisplay,currentDisplay); return; }
+        Add(group,field,savedKey,currentKey,savedDisplay,currentDisplay);
+        rows.back().completeSkillIds=true;
+    }
     size_t DifferenceCount() const { return differences; }
     size_t UnverifiedCount() const { return unverified; }
     const std::vector<ComparisonRow>& Rows() const { return rows; }
@@ -161,11 +190,10 @@ inline bool IsGearComparisonGroup(const std::string& group) {
            group == "Upgrades" || group == "Runes" || group == "Sigils" ||
            group == "Weapon types" ||
            group == "Infusions" || group == "Infusion totals" || group == "Relic" ||
-           group == "Exact item IDs";
+           group == "Exact item IDs" || group == "Aquatic";
 }
-// The Characters page ignores strict, interchangeable per-slot infusion
-// positions. Source-wide total requirements are included by the caller,
-// which recognizes the "Infusions" group's "Total" fields.
+// Slot infusion requirements affect equipment matching. Aggregate minimums
+// remain independent warnings in the Characters summary.
 inline bool IsCharacterEquipmentMatchGroup(const std::string& group) {
     return IsGearComparisonGroup(group) && group != "Infusion totals";
 }
@@ -182,7 +210,7 @@ inline TemplateMatchStatus ClassifyTemplateMatch(const BuildComparison& comparis
                                  row.field.rfind("Utility ", 0) == 0 || row.field == "Utilities";
         // Unknown/empty skill data is not a confirmed skill change.
         if (!IsSkillComparisonGroup(row.group) || !isSkillSlot ||
-            row.saved == "(empty)" || row.current == "(empty)")
+            !row.completeSkillIds)
             return TemplateMatchStatus::Different;
         skillsDiffer = true;
     }
