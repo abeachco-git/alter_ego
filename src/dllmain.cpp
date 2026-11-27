@@ -15421,9 +15421,9 @@ static CharacterFooterInspection DescribeCharacterRefresh(const AlterEgo::Charac
         out.detail+="\n"+std::string(scopeLabel(s))+": "+R::Describe(scope,now,logoutWait);
     }
     out.kind=out.aggregate.Status();
-    if(work.phase==R::Phase::Working&&(work.requested&demand))out.kind=R::Kind::Working;
     if(out.kind==R::Kind::Working||out.kind==R::Kind::Queued){
-        if(work.phase==R::Phase::Working&&!request.message.empty())out.detail+="\nRequest: "+request.message;
+        if(out.kind==R::Kind::Working&&!request.message.empty())out.detail+="\nRequest: "+request.message;
+        else if(work.phase==R::Phase::Working)out.detail+="\nSelected scopes are pending in the current character request.";
     }else{
         if(work.finished>0&&now>=work.finished&&now-work.finished<4&&
            (work.verified&demand)==demand&&out.kind==R::Kind::Ready)out.kind=R::Kind::Complete;

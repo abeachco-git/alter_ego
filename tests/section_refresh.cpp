@@ -82,6 +82,13 @@ int case_section_refresh(int, char**) {
         assert(batch.Get(a,1).phase==R::Phase::Idle&&batch.Get(a,1).active==0);
         assert(batch.Get(b,2).phase==R::Phase::Queued);
         batch.Stop(now,"Cancelled");assert(batch.Get(b,2).requested==0&&batch.Get(a,1).verified==1);
+        R::WorkPhases<std::pair<uint64_t,R::CharacterKey>> shared;
+        const auto epochA=std::make_pair(uint64_t(1),a),epochB=std::make_pair(uint64_t(2),a);
+        shared.Queue(epochA);shared.Queue(epochA);shared.Queue(epochB);
+        shared.Start(epochA);assert(shared.Get(epochA)==R::Phase::Working&&shared.Get(epochB)==R::Phase::Queued);
+        shared.Finish(epochA,R::Phase::Working);assert(shared.Get(epochA)==R::Phase::Queued);
+        shared.Finish(epochA,R::Phase::Queued);assert(shared.Get(epochA)==R::Phase::Idle&&shared.Get(epochB)==R::Phase::Queued);
+        shared.Start(epochB);shared.Finish(epochB,R::Phase::Working);assert(shared.Get(epochB)==R::Phase::Idle);
         batch.Start(b,2,4);batch.Stop(now+1,"Cancelled");
         assert(batch.Get(b,2).phase==R::Phase::Idle&&batch.Get(b,2).failed==4&&batch.Get(b,1).requested==0);
     }

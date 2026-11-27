@@ -146,6 +146,28 @@ inline std::string Describe(const Scope& s,int64_t now,int64_t sharedLogoutAt=0)
     if(!s.error.empty())text+="; "+s.error;
     return text;
 }
+// Read-only phase registry for shared endpoint owners. Multiple consumers can
+// queue behind one active owner for the same exact key. No admission semantics.
+template<class Key> class WorkPhases {
+    struct Counts { unsigned queued=0,working=0; };
+    std::map<Key,Counts> rows_;
+public:
+    void Queue(const Key& key){++rows_[key].queued;}
+    void Start(const Key& key){
+        auto i=rows_.find(key);if(i==rows_.end()||!i->second.queued)return;
+        --i->second.queued;++i->second.working;
+    }
+    void Finish(const Key& key,Phase phase){
+        auto i=rows_.find(key);if(i==rows_.end())return;
+        if(phase==Phase::Working&&i->second.working)--i->second.working;
+        else if(phase==Phase::Queued&&i->second.queued)--i->second.queued;
+        if(!i->second.queued&&!i->second.working)rows_.erase(i);
+    }
+    Phase Get(const Key& key)const{
+        auto i=rows_.find(key);if(i==rows_.end())return Phase::Idle;
+        return i->second.working?Phase::Working:i->second.queued?Phase::Queued:Phase::Idle;
+    }
+};
 // Session-local observations only: never used to admit, cancel, dispatch,
 // persist or retry a request. Caller owns mutex.
 using CharacterKey=std::pair<std::string,std::string>;

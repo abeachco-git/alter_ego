@@ -60,6 +60,26 @@ std::map<ScopeKey,ScopeState> liveScopes;
 unsigned processedScopes=0;
 std::string activeScope;
 std::optional<ScopeKey> activeScopeKey,pendingScopeKey;
+uint64_t progressEpoch=0;
+// Separate observation lock, never held across broker admission, transport,
+// database work or credential gates. Both endpoint consumers report here.
+using BrokerKey=std::pair<uint64_t,ScopeKey>;
+std::mutex brokerStatusMutex;
+RefreshStatus::WorkPhases<BrokerKey> brokerPhases;
+class BrokerWork {
+    BrokerKey key;
+    RefreshStatus::Phase phase=RefreshStatus::Phase::Queued;
+public:
+    BrokerWork(uint64_t epoch,ScopeKey scope):key{epoch,std::move(scope)}{
+        std::lock_guard<std::mutex> lock(brokerStatusMutex);brokerPhases.Queue(key);
+    }
+    BrokerWork(const BrokerWork&)=delete;
+    BrokerWork& operator=(const BrokerWork&)=delete;
+    void Start(){
+        std::lock_guard<std::mutex> lock(brokerStatusMutex);brokerPhases.Start(key);phase=RefreshStatus::Phase::Working;
+    }
+    ~BrokerWork(){std::lock_guard<std::mutex> lock(brokerStatusMutex);brokerPhases.Finish(key,phase);}
+};
 void BeginScope(const ScopeState& state,const std::string& label){
     std::lock_guard<std::mutex> lock(viewMutex);
     auto current=state;current.status="Refreshing";
@@ -86,7 +106,7 @@ void SetActiveScope(const std::string& label,std::optional<ScopeKey> key={}){
     if(pendingScopeKey==activeScopeKey)pendingScopeKey.reset();
 }
 void ClearProgress(){
-    std::lock_guard<std::mutex> lock(viewMutex);liveScopes.clear();processedScopes=0;activeScope.clear();activeScopeKey.reset();pendingScopeKey.reset();
+    std::lock_guard<std::mutex> lock(viewMutex);liveScopes.clear();processedScopes=0;activeScope.clear();activeScopeKey.reset();pendingScopeKey.reset();progressEpoch=0;
 }
 const std::vector<std::string> recommended={"account","characters","inventories","builds","progression","unlocks","wallet","guilds","tradingpost"};
 std::string Target(const std::string& id){return "AlterEgo/GW2/"+id;}
@@ -145,10 +165,10 @@ void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State st
 std::shared_ptr<const View> Snapshot(){std::lock_guard<std::mutex> lock(viewMutex);return view;}
 void Message(const std::string& msg,RefreshUI::State state=RefreshUI::State::Error){std::lock_guard<std::mutex> lock(viewMutex);message=msg;messageState=state;}
 std::string Status(){std::lock_guard<std::mutex> lock(viewMutex);return message;}
-template<class Job> void Launch(Job job,std::optional<ScopeKey> pending={}){
+template<class Job> void Launch(Job job,std::optional<ScopeKey> pending={},uint64_t epoch=0){
     if(busy.exchange(true))return;
     ClearProgress();
-    {std::lock_guard<std::mutex> lock(viewMutex);pendingScopeKey=std::move(pending);}
+    {std::lock_guard<std::mutex> lock(viewMutex);pendingScopeKey=std::move(pending);progressEpoch=epoch;}
     Message("Working...",RefreshUI::State::Working);
     Background::Workers().Launch([job=std::move(job)]{
         try{job();}catch(const Background::Cancelled&){Message("Operation cancelled.");}catch(...){Message("Operation failed; previous verified data retained.");}
@@ -191,6 +211,7 @@ RosterResult FetchRoster(const LinkedAccount& a){
     using Clock=std::chrono::steady_clock;
     const auto queued=Clock::now();
     RosterResult result;result.state={a.id,"Roster",{},"Roster retrieval failed",0,0};
+    BrokerWork observed(a.generation,ScopeKey{a.id,"Roster",{}});
     std::unique_lock<std::mutex> lock(rosterMutex,std::defer_lock);
     while(!lock.try_lock()){
         if(Background::Workers().Stopping()||!Current(a))return result;
@@ -201,6 +222,7 @@ RosterResult FetchRoster(const LinkedAccount& a){
     if(previous!=rosterCache.end()&&previous->second.epoch==a.generation&&
        previous->second.result.accepted&&previous->second.result.state.status=="Ready"&&
        previous->second.finished>=queued)return previous->second.result;
+    observed.Start();
     result.state.attempted=Now();
     try{
         const auto response=Request(a,"/v2/characters",{"characters"});
@@ -339,7 +361,9 @@ bool Fresh(const View& v,const Row& row){
 }
 void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const std::set<std::string>& characterFilter={},bool includeWallet=false){
     std::optional<ScopeKey> pending;
-    if(accounts.size()==1&&automatic&&!onlyScope.empty()&&onlyScope!="Items")
+    const bool singleKnown=onlyScope=="Wallet"||onlyScope=="Bank"||onlyScope=="Shared inventory"||
+        onlyScope=="Materials"||onlyScope=="Legendary Armory"||onlyScope=="Delivery box"||onlyScope=="Roster"||onlyScope=="Guild bank";
+    if(accounts.size()==1&&(singleKnown||(automatic&&!onlyCharacter.empty()&&(onlyScope=="Bags"||onlyScope=="Equipment"))))
         pending=ScopeKey{accounts.front().id,onlyScope=="Guild bank"?"Guild access":onlyScope,onlyCharacter};
     Launch([accounts,epoch,onlyScope,automatic,onlyCharacter,characterFilter,includeWallet]{
         ApiActivity::ReasonScope reason(automatic?ApiActivity::Reason::Visible:ApiActivity::Reason::Manual);
@@ -548,7 +572,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
         };
         for(auto id:ids){Background::Checkpoint();if(count==100)flush();if(count++)batch+=",";batch+=std::to_string(id);expected.insert(id);}flush();
         Publish("Refresh finished. Check individual storage status for failures or stale data.");
-    },std::move(pending));
+    },std::move(pending),epoch);
 }
 std::string Display(const Account& a){return a.label.empty()?a.name:a.label;}
 std::string Active(const View& v,const std::string& ch){
@@ -627,6 +651,7 @@ Result Request(const std::string& id,const std::string& path,const std::vector<s
 PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const std::string& character,bool manual){
     using Clock=std::chrono::steady_clock;
     const auto queued=Clock::now();
+    BrokerWork observed(a.generation,ScopeKey{a.id,"Equipment",character});
     std::unique_lock<std::mutex> lock(physicalMutex,std::defer_lock);
     while(!lock.try_lock()){if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};std::this_thread::sleep_for(std::chrono::milliseconds(25));}
     if(Background::Workers().Stopping()||!Current(a))return {{0,{},"Account changed"},0,0};
@@ -637,6 +662,7 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
        (e.finished>=queued||(!manual&&Clock::now()-e.finished<std::chrono::seconds(15))))return e.value;
     if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};
     CharacterActivity::CancelOnShutdown attempts(k);
+    observed.Start();
     const auto ticket=attempts.BeginScope("Equipment");
     const auto cancel=[&](const char* reason){
         CharacterActivity::Cancel(k,"Equipment",ticket);
@@ -1490,10 +1516,15 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     R::Aggregate aggregate;
     std::map<ScopeKey,ScopeState> progress;std::string current;unsigned processed=0;
     std::optional<ScopeKey> active,pending;
-    {std::lock_guard<std::mutex> lock(viewMutex);progress=liveScopes;current=activeScope;processed=processedScopes;
-        active=activeScopeKey;pending=pendingScopeKey;}
+    {std::lock_guard<std::mutex> lock(viewMutex);if(progressEpoch==v->credentialEpoch){
+        progress=liveScopes;current=activeScope;processed=processedScopes;
+        active=activeScopeKey;pending=pendingScopeKey;}}
+    RefreshStatus::WorkPhases<BrokerKey> sharedWork;
+    {std::lock_guard<std::mutex> lock(brokerStatusMutex);sharedWork=brokerPhases;}
     const bool operationBusy=busy.load();
     const auto phaseFor=[&](const ScopeKey& key){
+        const auto shared=sharedWork.Get({v->credentialEpoch,key});
+        if(shared!=R::Phase::Idle)return shared;
         return active&&*active==key?R::Phase::Working:pending&&*pending==key?R::Phase::Queued:R::Phase::Idle;
     };
     std::string detail;
@@ -1581,9 +1612,11 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     }
     if(!guilds.empty())detail+="\nGuild access controls automatic stash retrieval.";
     auto kind=accounts.empty()?R::Kind::NoAPI:aggregate.Status();
-    if(kind==R::Kind::Working||kind==R::Kind::Queued)
-        detail=std::to_string(processed)+" storage scopes processed"+(current.empty()?"":"\nCurrent: "+current)+"\n\n"+detail;
-    else if(operationBusy)detail+="\nAnother storage/account operation is in progress.";
+    if(kind==R::Kind::Working||kind==R::Kind::Queued){
+        if(operationBusy&&((active&&phaseFor(*active)!=R::Phase::Idle)||(pending&&phaseFor(*pending)!=R::Phase::Idle)))
+            detail=std::to_string(processed)+" storage scopes processed"+(current.empty()?"":"\nCurrent operation: "+current)+"\n\n"+detail;
+        else detail="Matching shared endpoint work is pending or active.\n\n"+detail;
+    }else if(operationBusy)detail+="\nA storage/account operation is in progress; no matching active scope confirmed.";
     if(!aggregate.count&&characterFiltered)detail="No verified storage scopes match the selected characters and storage filter.";
     else if(!aggregate.count&&!accounts.empty())detail+="\nNo storage scopes in the current selection.";
     if(characterFiltered&&aggregate.count)detail+="\n\nTimestamp and manual Refresh cover matching character storage only.";
