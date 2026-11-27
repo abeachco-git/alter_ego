@@ -30,19 +30,21 @@ inline std::string Age(std::time_t stamp,int64_t now=0) {
 inline void DiagnosticsTooltip(const char* title,const std::string& body){
     UI::DetailTooltip(title,body.c_str());
 }
-inline void RetrievalTooltip(std::time_t stamp,const char* source,const std::string& detail={}){
-    std::string body=source;
-    if(stamp>0){
-        std::tm local{};
+inline std::string RetrievalLocalTime(std::time_t stamp){
+    if(stamp<=0)return {};
+    std::tm local{};
 #ifdef _WIN32
         localtime_s(&local,&stamp);
 #else
         localtime_r(&stamp,&local);
 #endif
-        char when[64]={};
-        std::strftime(when,sizeof(when),"%b %d, %Y at %I:%M:%S %p",&local);
-        body+=": ";body+=when;body+=" (local time)";
-    }
+    char when[64]={};
+    std::strftime(when,sizeof(when),"%b %d, %Y at %I:%M:%S %p",&local);
+    return std::string(when)+" (local time)";
+}
+inline void RetrievalTooltip(std::time_t stamp,const char* source,const std::string& detail={}){
+    std::string body=source;
+    if(stamp>0)body+=": "+RetrievalLocalTime(stamp);
     if(!detail.empty())body+="\n\n"+detail;
     DiagnosticsTooltip(stamp>0?"Last confirmed retrieval":"No confirmed complete retrieval",body);
 }
@@ -126,7 +128,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     const float statusX = ImGui::GetCursorScreenPos().x;
     const auto now=sampledNow?sampledNow:static_cast<int64_t>(std::time(nullptr));
     const std::string stampLabel = coverage?RefreshStatus::CoverageLabel(*coverage,now):
-        stamp > 0 ? "Updated " + Age(stamp,now) : "Not updated";
+        stamp > 0 ? "Updated " + Age(stamp,sampledNow) : "Not updated";
     const auto diagnostics=coverage?RefreshStatus::CoverageDetails(*coverage,now)+(detail.empty()?"":"\n\n"+detail):detail;
     const float stampWidth = ImGui::CalcTextSize(stampLabel.c_str()).x;
     const float rightX = start.x + width;
@@ -161,7 +163,15 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
         start.y + (buttonH - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::TextDisabled("%s", stampLabel.c_str());
     if(ImGui::IsItemHovered()){
-        if(coverage)DiagnosticsTooltip("Retrieval coverage",std::string(source)+"\n\n"+diagnostics);
+        if(coverage){
+            std::string body=source;
+            if(coverage->newest){
+                body+="\nLatest success: "+RetrievalLocalTime(static_cast<std::time_t>(coverage->newest));
+                if(coverage->oldest!=coverage->newest)
+                    body+="\nOldest success: "+RetrievalLocalTime(static_cast<std::time_t>(coverage->oldest));
+            }
+            DiagnosticsTooltip("Retrieval coverage",body+"\n\n"+diagnostics);
+        }
         else RetrievalTooltip(stamp,source,(timestampDetails||statusText.empty())?detail:std::string{});
     }
     ImGui::PopID();
