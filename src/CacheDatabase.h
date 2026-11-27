@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 30;
+constexpr int kSchemaVersion = 31;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -33,6 +33,22 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 }
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if(version==31){
+        db.Exec(R"SQL(
+ALTER TABLE public_pets ADD COLUMN description TEXT;
+ALTER TABLE public_pets ADD COLUMN skills_known INTEGER NOT NULL DEFAULT 0 CHECK(skills_known IN (0,1));
+CREATE TABLE public_pet_skills(pet_id INTEGER NOT NULL REFERENCES public_pets(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK(ordinal>=0),skill_id INTEGER NOT NULL CHECK(skill_id BETWEEN 1 AND 4294967295),
+    PRIMARY KEY(pet_id,ordinal)) STRICT;
+ALTER TABLE public_legends ADD COLUMN heal INTEGER CHECK(heal BETWEEN 0 AND 4294967295);
+ALTER TABLE public_legends ADD COLUMN elite INTEGER CHECK(elite BETWEEN 0 AND 4294967295);
+ALTER TABLE public_legends ADD COLUMN utilities_known INTEGER NOT NULL DEFAULT 0 CHECK(utilities_known IN (0,1));
+CREATE TABLE public_legend_utilities(code INTEGER NOT NULL REFERENCES public_legends(code) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK(ordinal>=0),skill_id INTEGER NOT NULL CHECK(skill_id BETWEEN 1 AND 4294967295),
+    PRIMARY KEY(code,ordinal)) STRICT;
+)SQL");
+        return;
+    }
     if(version==30){
         db.Exec(R"SQL(
 CREATE TABLE public_professions(id TEXT PRIMARY KEY,code INTEGER NOT NULL CHECK(code BETWEEN 1 AND 9),name TEXT NOT NULL,icon TEXT NOT NULL,icon_big TEXT NOT NULL,schema_version TEXT NOT NULL) STRICT;

@@ -6799,8 +6799,10 @@ static LegendOption LegendOptionForCode(uint8_t code) {
     return {code,code?"Unknown legend ("+std::to_string(code)+")":"Choose legend",0,{}};
 }
 struct ProfessionChoiceDisplay {
-    std::string name,icon;
+    std::string name,icon,description;
     uint32_t key=0,swap=0;
+    std::vector<uint32_t> skills;
+    bool skillsKnown=false;
 };
 // Cache-only presentation resolution shared by slots and Compare. Requests
 // remain at the existing visible picker/slot demand boundary.
@@ -6810,14 +6812,24 @@ static ProfessionChoiceDisplay ResolveProfessionChoice(bool legend,uint32_t curr
         const auto option=current<=255?LegendOptionForCode(static_cast<uint8_t>(current)):
             LegendOption{0,"Unknown legend ("+std::to_string(current)+")",0,{}};
         result.name=option.name;result.swap=option.swap;result.icon=option.icon;
-        if(const auto skill=result.swap?AlterEgo::GW2API::GetSkillInfo(result.swap):nullptr)
+        const auto catalog=AlterEgo::PublicCatalog::Get();
+        if(const auto* def=AlterEgo::PublicCatalog::FindLegend(catalog->legends,current)){
+            result.skills=AlterEgo::PublicCatalog::AssociatedSkills(*def);
+            result.skillsKnown=def->heal.has_value()&&def->elite.has_value()&&def->utilities.has_value();
+        }
+        if(const auto skill=result.swap?AlterEgo::GW2API::GetSkillInfo(result.swap):nullptr){
             if(!skill->icon_url.empty())result.icon=skill->icon_url;
+            result.description=StripGW2Markup(skill->description);
+        }
         result.key=AlterEgo::ArtworkRequest::SkillKey(result.swap);
     }else{
         const auto catalog=AlterEgo::PublicCatalog::Get();
         result.name=current?"Unknown pet ("+std::to_string(current)+")":"Choose pet";
         if(const auto* pet=AlterEgo::PublicCatalog::FindPet(catalog->pets,current)){
             result.name=pet->name;result.icon=pet->icon;
+            if(pet->description)result.description=StripGW2Markup(*pet->description);
+            result.skills=AlterEgo::PublicCatalog::AssociatedSkills(*pet);
+            result.skillsKnown=pet->skills.has_value();
         }
         result.key=AlterEgo::ArtworkRequest::PetKey(current);
     }
@@ -7192,7 +7204,11 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     if(editable)draw->AddRect(pos,end,IM_COL32(90,80,50,200));
     ImGui::TextUnformatted(display.name.c_str());
     ImGui::EndGroup();
-    if(ImGui::IsItemHovered())AlterEgo::UI::DetailTooltip(display.name.c_str(),editable?"Click the icon to choose; right-click for actions.":nullptr);
+    if(ImGui::IsItemHovered()){
+        const auto details=display.description.empty()&&editable?
+            std::string("Click the icon to choose; right-click for actions."):display.description;
+        AlterEgo::UI::DetailTooltip(display.name.c_str(),details.empty()?nullptr:details.c_str());
+    }
     if(clicked&&editable)ImGui::OpenPopup("##pair_choice");
     bool changed=false;
     AlterEgo::UI::EntityContext("##pair_context",[&]{
@@ -7221,7 +7237,10 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
         }
         ImGui::EndGroup();
         if(disabled&&ImGui::IsItemHovered())AlterEgo::UI::Hint("Already selected in the other slot.");
-        else if(ImGui::IsItemHovered())AlterEgo::UI::DetailTooltip(label.c_str());
+        else if(ImGui::IsItemHovered()){
+            const auto details=ResolveProfessionChoice(legend,id);
+            AlterEgo::UI::DetailTooltip(label.c_str(),details.description.empty()?nullptr:details.description.c_str());
+        }
         AlterEgo::UI::EntityContext("##pair_option_actions",[&]{
             ProfessionChoiceActions(legend,ResolveProfessionChoice(legend,id));
         });
@@ -7244,23 +7263,57 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     return changed;
 }
 
+// The catalog defines associated skills, not the equipped bar or active
+// stance. No synthesis of character-specific utility order or missing variants.
+// The same read-only skill renderer retains tooltips and native links.
+static void RenderCompanionAssociatedSkills(const ProfessionChoiceDisplay& choice,float size){
+    if(choice.skills.empty()){
+        ImGui::TextDisabled("%s",choice.skillsKnown?"No associated skills reported":"Associated skills not retrieved");
+        return;
+    }
+    ImGui::TextDisabled("%s",choice.skillsKnown?"Catalog skills":"Catalog skills (partial)");
+    ImGui::PushID("associated_skills");
+    for(size_t i=0;i<choice.skills.size();++i){
+        if(i&&ImGui::GetContentRegionAvail().x>=size)ImGui::SameLine();
+        ImGui::PushID(static_cast<int>(i));
+        RenderSkillIcon(choice.skills[i],size);
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+}
 // Four positional values: terrestrial 1/2, aquatic 1/2. Each caller owns
 // its source projection and commit boundary; rendering does not save data.
 static bool RenderProfessionPairSection(bool legend,std::array<uint32_t,4>& values,
                                         bool editable,bool known) {
     ImGui::PushID(legend?"legend_pairs":"pet_pairs");
+    // Demand only the selected companions' skills; the canonical skill owner
+    // handles cache hits, deduplication, existing claims and retry policy.
+    std::vector<uint32_t> missing;
+    for(auto id:values)if(id){
+        const auto choice=ResolveProfessionChoice(legend,id);
+        for(auto skill:choice.skills)if(skill&&!AlterEgo::GW2API::GetSkillInfo(skill))missing.push_back(skill);
+    }
+    if(!missing.empty()){
+        std::sort(missing.begin(),missing.end());missing.erase(std::unique(missing.begin(),missing.end()),missing.end());
+        AlterEgo::GW2API::FetchSkillDetailsAsync(missing);
+    }
     bool changed=false;
     for(int env=0;env<2;++env){
         ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
         for(int i=0;i<2;++i){
             const int slot=env*2+i,other=env*2+1-i;
-            if(i)ImGui::SameLine(0,18);
             ImGui::PushID(slot);
             auto next=values[slot];
             const auto otherId=legend&&values[other]<=255?static_cast<uint32_t>(
                 AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(values[other]))):values[other];
             if(RenderProfessionPairChoice(legend,values[slot],values[other],next,editable,known)&&
                 AlterEgo::SkillEdit::SetPairChoice(values[slot],otherId,next))changed=true;
+            if(values[slot]){
+                const auto choice=ResolveProfessionChoice(legend,values[slot]);
+                ImGui::Indent(8.0f);
+                RenderCompanionAssociatedSkills(choice,30.0f);
+                ImGui::Unindent(8.0f);
+            }
             ImGui::PopID();
         }
     }

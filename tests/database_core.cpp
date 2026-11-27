@@ -300,13 +300,23 @@ int case_database_core(int, char**) {
             P::StoreObjectives(db,{{20,{"Combo","PvE",10}}},100);
             tx.Commit();
         }
-        const auto pets=P::ParsePets(P::Json::parse(R"([{"id":4,"name":"Pet","icon":"url"}])"));
-        const auto legends=P::ParseLegends(P::Json::parse(R"([{"id":"Legend8","code":8,"swap":500}])"),
+        const auto pets=P::ParsePets(P::Json::parse(R"([{"id":4,"name":"Pet","icon":"url","description":"Pet description","skills":[{"id":100},{"id":101}]}])"));
+        const auto legends=P::ParseLegends(P::Json::parse(R"([{"id":"Legend8","code":8,"swap":500,"heal":600,"elite":900,"utilities":[800,700,701]}])"),
             P::Json::parse(R"([{"id":500,"name":"Legendary Entity Stance","icon":"url"}])"));
         {DB::Transaction tx(db);P::StorePets(db,pets,100);P::StoreLegends(db,legends,100);tx.Commit();}
         auto saved=P::Read(db);
         assert(saved.pets.size()==1&&saved.pets[0].id==4&&saved.pets[0].icon=="url");
         assert(saved.legends.size()==1&&saved.legends[0].swap==500&&saved.legends[0].icon=="url");
+        assert(saved.pets[0].description==std::optional<std::string>("Pet description"));
+        assert(P::AssociatedSkills(saved.pets[0])==std::vector<uint32_t>({100,101}));
+        assert(P::AssociatedSkills(saved.legends[0])==std::vector<uint32_t>({600,800,700,701,900}));
+        assert(P::FindPet(saved.pets,4)&&P::FindLegend(saved.legends,8));
+        auto absent=P::ParsePets(P::Json::parse(R"([{"id":5,"name":"Unknown"}])"));
+        auto empty=P::ParsePets(P::Json::parse(R"([{"id":6,"name":"Empty","skills":[]}])"));
+        assert(!absent[0].skills.has_value()&&empty[0].skills.has_value()&&empty[0].skills->empty());
+        bool malformed=false;
+        try{(void)P::ParsePets(P::Json::parse(R"([{"id":4,"name":"Pet","skills":[{"id":-1}]}])"));}catch(...){malformed=true;}
+        assert(malformed&&P::AssociatedSkills(P::Read(db).pets[0])==std::vector<uint32_t>({100,101}));
         assert(P::LegendCode(saved.legends,"Legend8")==8);
         assert(P::LegendCode(saved.legends,"Legend9")==0);
         assert(P::CanonicalLegendCode(13)==1&&P::CanonicalLegendCode(19)==7&&P::CanonicalLegendCode(8)==8);

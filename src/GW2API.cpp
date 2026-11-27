@@ -2525,8 +2525,7 @@ namespace AlterEgo {
 
     uint32_t GW2API::GetLegendSwapSkill(uint8_t code) {
         auto catalog=PublicCatalog::Get();
-        code=PublicCatalog::CanonicalLegendCode(code);
-        for(const auto& l:catalog->legends)if(l.code==code)return l.swap;
+        if(const auto* legend=PublicCatalog::FindLegend(catalog->legends,code))return legend->swap;
         return 0;
     }
 

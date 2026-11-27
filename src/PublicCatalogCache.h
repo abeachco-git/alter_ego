@@ -169,8 +169,43 @@ inline std::string Summary(const Json& details,const std::string& description) {
     if(out.empty())out=description;
     return out;
 }
-struct Pet {uint32_t id=0;std::string name,icon;};
-struct Legend {uint8_t code=0;std::string apiId,name,icon;uint32_t swap=0;};
+struct Pet {
+    uint32_t id=0;std::string name,icon;
+    std::optional<std::string> description;
+    std::optional<std::vector<uint32_t>> skills;
+};
+struct Legend {
+    uint8_t code=0;std::string apiId,name,icon;uint32_t swap=0;
+    std::optional<uint32_t> heal,elite;
+    std::optional<std::vector<uint32_t>> utilities;
+};
+// API-defined order, not a character's recorded utility order. Unknown and
+// explicit empty values remain distinct even when read from an older cache.
+inline std::optional<std::vector<uint32_t>> CompanionSkillList(const Json& row,const char* field,bool objects){
+    const auto it=row.find(field);
+    if(it==row.end()||it->is_null())return std::nullopt;
+    if(!it->is_array()||it->size()>64)throw std::runtime_error("Invalid companion skill array");
+    std::vector<uint32_t> ids;
+    for(const auto& v:*it)ids.push_back(Id(objects?v.at("id"):v));
+    return ids;
+}
+inline std::optional<uint32_t> CompanionSkill(const Json& row,const char* field){
+    const auto it=row.find(field);
+    if(it==row.end())return std::nullopt;
+    if(it->is_null())return uint32_t(0);
+    if(it->is_number_integer()&&*it==0)return uint32_t(0);
+    return Id(*it);
+}
+inline std::vector<uint32_t> AssociatedSkills(const Pet& pet){
+    return pet.skills.value_or(std::vector<uint32_t>{});
+}
+inline std::vector<uint32_t> AssociatedSkills(const Legend& legend){
+    std::vector<uint32_t> ids;
+    if(legend.heal&&*legend.heal)ids.push_back(*legend.heal);
+    if(legend.utilities)ids.insert(ids.end(),legend.utilities->begin(),legend.utilities->end());
+    if(legend.elite&&*legend.elite)ids.push_back(*legend.elite);
+    return ids;
+}
 // Skill records share the reference request-start watermark (microseconds).
 // An ordinary legend refresh can reuse complete recent skill observations;
 // manual refresh or stale/missing metadata requires a newer observation.
@@ -187,7 +222,15 @@ inline std::vector<Pet> ParsePets(const Json& rows) {
     for(const auto& r:rows){
         auto id=Id(r.at("id"));auto name=r.at("name").get<std::string>();
         if(id>255||name.empty()||!seen.insert(id).second)throw std::runtime_error("Invalid pet");
-        out.push_back({id,name,r.value("icon",std::string{})});
+        Pet pet{id,name,r.value("icon",std::string{})};
+        const auto description=r.find("description");
+        if(description!=r.end()&&!description->is_null()){
+            if(!description->is_string()||description->get_ref<const std::string&>().size()>8192)
+                throw std::runtime_error("Invalid pet description");
+            pet.description=description->get<std::string>();
+        }
+        pet.skills=CompanionSkillList(r,"skills",true);
+        out.push_back(std::move(pet));
     }
     return out;
 }
@@ -205,7 +248,10 @@ inline std::vector<Legend> ParseLegends(const Json& rows,const Json& skills) {
         auto it=names.find(swap);
         if(code>255||id.empty()||!codes.insert(code).second||!ids.insert(id).second||it==names.end())
             throw std::runtime_error("Invalid legend identity");
-        out.push_back({static_cast<uint8_t>(code),id,it->second.first,it->second.second,swap});
+        Legend legend{static_cast<uint8_t>(code),id,it->second.first,it->second.second,swap};
+        legend.heal=CompanionSkill(r,"heal");legend.elite=CompanionSkill(r,"elite");
+        legend.utilities=CompanionSkillList(r,"utilities",false);
+        out.push_back(std::move(legend));
     }
     return out;
 }
@@ -213,16 +259,36 @@ inline void StorePets(Database::Connection& db,const std::vector<Pet>& rows,int6
     if(rows.empty()||stamp<Fresh(db,"public_pets")||
        static_cast<int64_t>(rows.size())<db.Scalar("SELECT count(*) FROM public_pets")*9/10)
         throw std::runtime_error("Incomplete pet catalog");
-    db.Exec("DELETE FROM public_pets");auto q=db.Prepare("INSERT INTO public_pets VALUES(?,?,?)");
-    for(const auto& r:rows){q.Bind(1,r.id);q.Bind(2,r.name);q.Bind(3,r.icon);q.Execute();q.Reset();}
+    db.Exec("DELETE FROM public_pets");
+    auto q=db.Prepare("INSERT INTO public_pets(id,name,icon,description,skills_known) VALUES(?,?,?,?,?)");
+    auto skill=db.Prepare("INSERT INTO public_pet_skills VALUES(?,?,?)");
+    for(const auto& r:rows){
+        q.Bind(1,r.id);q.Bind(2,r.name);q.Bind(3,r.icon);
+        if(r.description)q.Bind(4,*r.description);else q.BindNull(4);
+        q.Bind(5,r.skills.has_value());q.Execute();q.Reset();
+        if(r.skills)for(size_t i=0;i<r.skills->size();++i){
+            skill.Bind(1,r.id);skill.Bind(2,static_cast<int64_t>(i));skill.Bind(3,(*r.skills)[i]);skill.Execute();skill.Reset();
+        }
+    }
     Mark(db,"public_pets",stamp);
 }
 inline void StoreLegends(Database::Connection& db,const std::vector<Legend>& rows,int64_t stamp) {
     if(rows.empty()||stamp<Fresh(db,"public_legends")||
        static_cast<int64_t>(rows.size())<db.Scalar("SELECT count(*) FROM public_legends"))
         throw std::runtime_error("Incomplete legend catalog");
-    db.Exec("DELETE FROM public_legends");auto q=db.Prepare("INSERT INTO public_legends VALUES(?,?,?,?,?)");
-    for(const auto& r:rows){q.Bind(1,static_cast<int>(r.code));q.Bind(2,r.apiId);q.Bind(3,r.swap);q.Bind(4,r.name);q.Bind(5,r.icon);q.Execute();q.Reset();}
+    db.Exec("DELETE FROM public_legends");
+    auto q=db.Prepare("INSERT INTO public_legends(code,api_id,swap_skill,name,icon,heal,elite,utilities_known) VALUES(?,?,?,?,?,?,?,?)");
+    auto utility=db.Prepare("INSERT INTO public_legend_utilities VALUES(?,?,?)");
+    for(const auto& r:rows){
+        q.Bind(1,static_cast<int>(r.code));q.Bind(2,r.apiId);q.Bind(3,r.swap);q.Bind(4,r.name);q.Bind(5,r.icon);
+        if(r.heal)q.Bind(6,*r.heal);else q.BindNull(6);
+        if(r.elite)q.Bind(7,*r.elite);else q.BindNull(7);
+        q.Bind(8,r.utilities.has_value());q.Execute();q.Reset();
+        if(r.utilities)for(size_t i=0;i<r.utilities->size();++i){
+            utility.Bind(1,static_cast<int>(r.code));utility.Bind(2,static_cast<int64_t>(i));
+            utility.Bind(3,(*r.utilities)[i]);utility.Execute();utility.Reset();
+        }
+    }
     Mark(db,"public_legends",stamp);
 }
 inline uint8_t LegendCode(const std::vector<Legend>& rows,const std::string& id) {
@@ -271,10 +337,26 @@ inline Snapshot Read(Database::Connection& db) {
     }
     auto q=db.Prepare("SELECT id,title,track,acclaim FROM public_vault_objectives");
     while(q.Step())out.objectives.emplace(static_cast<uint32_t>(q.Integer(0)),Objective{q.Text(1),q.Text(2),q.Integer(3)});
-    auto pets=db.Prepare("SELECT id,name,icon FROM public_pets ORDER BY name,id");
-    while(pets.Step())out.pets.push_back({static_cast<uint32_t>(pets.Integer(0)),pets.Text(1),pets.Text(2)});
-    auto legends=db.Prepare("SELECT code,api_id,name,icon,swap_skill FROM public_legends ORDER BY code");
-    while(legends.Step())out.legends.push_back({static_cast<uint8_t>(legends.Integer(0)),legends.Text(1),legends.Text(2),legends.Text(3),static_cast<uint32_t>(legends.Integer(4))});
+    auto pets=db.Prepare("SELECT id,name,icon,description,skills_known FROM public_pets ORDER BY name,id");
+    std::map<uint32_t,std::vector<uint32_t>> petSkills,legendUtilities;
+    auto ps=db.Prepare("SELECT pet_id,skill_id FROM public_pet_skills ORDER BY pet_id,ordinal");
+    while(ps.Step())petSkills[static_cast<uint32_t>(ps.Integer(0))].push_back(static_cast<uint32_t>(ps.Integer(1)));
+    auto ls=db.Prepare("SELECT code,skill_id FROM public_legend_utilities ORDER BY code,ordinal");
+    while(ls.Step())legendUtilities[static_cast<uint32_t>(ls.Integer(0))].push_back(static_cast<uint32_t>(ls.Integer(1)));
+    while(pets.Step()){
+        Pet pet{static_cast<uint32_t>(pets.Integer(0)),pets.Text(1),pets.Text(2)};
+        if(!pets.IsNull(3))pet.description=pets.Text(3);
+        if(pets.Integer(4))pet.skills=std::move(petSkills[pet.id]);
+        out.pets.push_back(std::move(pet));
+    }
+    auto legends=db.Prepare("SELECT code,api_id,name,icon,swap_skill,heal,elite,utilities_known FROM public_legends ORDER BY code");
+    while(legends.Step()){
+        Legend legend{static_cast<uint8_t>(legends.Integer(0)),legends.Text(1),legends.Text(2),legends.Text(3),static_cast<uint32_t>(legends.Integer(4))};
+        if(!legends.IsNull(5))legend.heal=static_cast<uint32_t>(legends.Integer(5));
+        if(!legends.IsNull(6))legend.elite=static_cast<uint32_t>(legends.Integer(6));
+        if(legends.Integer(7))legend.utilities=std::move(legendUtilities[legend.code]);
+        out.legends.push_back(std::move(legend));
+    }
     for(const char* name:{"public_pets","public_legends","public_stats","public_dyes","public_item_discovery","public_skins"})
         out.freshness.emplace(name,std::make_pair(Fresh(db,name),Fresh(db,std::string(name)+"_attempt")));
     return out;
