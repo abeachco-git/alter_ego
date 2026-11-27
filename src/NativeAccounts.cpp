@@ -298,6 +298,23 @@ void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State st
     std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);++inventoryGeneration;if(replaceMessage){message=msg;messageState=state;}registryReady=true;
 }
 std::shared_ptr<const View> Snapshot(){std::lock_guard<std::mutex> lock(viewMutex);return view;}
+GroupPath IdentityGroupPath(const View& v,const std::string& account,const std::string& name,const std::string& scope){
+    GroupPath path{account,name,scope};
+    if(name.empty())return path;
+    const auto a=v.bindings.find(account);
+    if(a!=v.bindings.end()){
+        const auto b=a->second.find(name);
+        if(b!=a->second.end())path.identity=GroupIdentity(b->second);
+    }
+    return path;
+}
+std::string CharacterFilterLabel(const View& v,const CharacterIdentity::Selection& selection){
+    std::string label=selection.name;
+    if(v.accounts.size()>1)for(const auto& a:v.accounts)if(a.id==selection.ref.account){
+        label+=" ("+(a.label.empty()?a.name:a.label)+")";break;
+    }
+    return label;
+}
 void Message(const std::string& msg,RefreshUI::State state=RefreshUI::State::Error){std::lock_guard<std::mutex> lock(viewMutex);message=msg;messageState=state;}
 std::string Status(){std::lock_guard<std::mutex> lock(viewMutex);return message;}
 template<class Job> void Launch(Job job,std::optional<ScopeKey> pending={},uint64_t epoch=0){
@@ -575,7 +592,7 @@ bool Fresh(const View& v,const Row& row){
     const auto& s=row.slot;auto it=v.scopes.find({s.account,s.scope,s.character});
     return it!=v.scopes.end()&&it->second.status=="Ready"&&ScopeFresh(s.account,s.scope,s.character,row.captured);
 }
-void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const std::set<std::string>& characterFilter={},bool includeWallet=false){
+void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const CharacterFilter& characterFilter={},bool includeWallet=false){
     std::optional<ScopeKey> pending;
     const bool singleKnown=onlyScope=="Wallet"||onlyScope=="Bank"||onlyScope=="Shared inventory"||
         onlyScope=="Materials"||onlyScope=="Legendary Armory"||onlyScope=="Delivery box"||onlyScope=="Roster"||onlyScope=="Guild bank";
@@ -623,13 +640,13 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     throw Background::Cancelled{};
             };
             auto scope=[&](const std::string& name,const std::string& character,const std::string& path,bool bags){
-                if(!MatchesStorageView(onlyScope,characterFilter,name,character))return;
+                if(!MatchesStorageView(onlyScope,{},name,character)||!characterFilter.Matches(a.id,character))return;
                 if(!onlyCharacter.empty()&&character!=onlyCharacter)return;
                 if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
                 checkCurrent();
                 const bool characterScope=bags||name=="Equipment";
                 const auto address=characterScope?EnsureCharacterAddress(linked,character):std::optional<CharacterIdentity::Address>{};
-                if(characterScope&&!address)return;
+                if(characterScope&&(!address||!characterFilter.Accepts(*address)))return;
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
                 BeginScope(state,(accounts.size()>1?a.name+" / ":"")+name+(character.empty()?"":" / "+character));
                 const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
@@ -1647,11 +1664,14 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     }
     const UI::SplitPanel split(listWidth,420.f,200.f,240.f);
     ImGui::BeginChild("InventoryList",ImVec2(split.left,0),true);
+    ProjectCharacters(characterFilter,v->bindings,v->credentialEpoch);
     const auto previousQuery=query;
     UI::SearchToolbar("native_inventory","Search items, currencies or ID",query,
         [&]{
             UI::FilterChips c;
-            AddFacetChips(c,"character",characterFilter);
+            for(const auto& [ref,selection]:characterFilter)
+                c.push_back({"character/"+ref.account+"/"+std::to_string(ref.id),CharacterFilterLabel(*v,selection),
+                    [ref]{navigation.characters.erase(ref);}});
             if(!scope.empty())c.push_back({"scope",scope,[&]{scope.clear();}});
             AddFacetChips(c,"binding",binding);AddFacetChips(c,"rarity",rarity);
             AddFacetChips(c,"type",type);
@@ -1661,12 +1681,13 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             return c;
         },
         [&]{
-            std::set<std::string> names=characterFilter;
+            std::vector<CharacterIdentity::Address> candidates;
             for(const auto& a:accounts){
-                auto it=v->inventory.rosters.find(a.id);
-                if(it!=v->inventory.rosters.end())names.insert(it->second.begin(),it->second.end());
+                const auto it=v->bindings.find(a.id);
+                if(it!=v->bindings.end())for(const auto& [name,b]:it->second)
+                    candidates.push_back({a.id,name,b,v->credentialEpoch});
             }
-            RenderCharacterMultiFilter("Character",characterFilter,names);
+            RenderCharacterMultiFilter("Character",characterFilter,candidates);
             UI::FilterChoice("Storage",scope,{"Bank","Shared inventory","Materials","Bags","Equipment","Legendary Armory","Delivery box","Wallet"});
             UI::MultiFilterChoice("Binding",binding,Choices({"Unknown","Unbound","Account bound","Character bound"}));
             UI::MultiFilterChoice("Rarity",rarity,{{"Junk","Junk"},{"Basic","Basic"},{"Fine","Fine"},{"Masterwork","Masterwork"},{"Rare","Rare"},{"Exotic","Exotic"},{"Ascended","Ascended"},{"Legendary","Legendary"}});
@@ -1687,9 +1708,10 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     // Explicit Find in Inventory navigation can reveal even an unusually short ID.
     const bool canSearch=Skinventory::Search::HasMinimumQuery(tokens)||
         (nav.item!=0&&query==std::to_string(nav.item));
-    const bool canBrowse=CanBrowseItems(!characterFilter.empty(),!scope.empty(),
+    const auto selectedCharacters=ProjectCharacters(characterFilter,v->bindings,v->credentialEpoch);
+    const bool canBrowse=CanBrowseItems(selectedCharacters.restricted,!scope.empty(),
         !binding.empty(),!rarity.empty(),!type.empty(),freshness!=0,minQuantity>0,transfer!=0);
-    const bool walletEligible=WalletMatchesFacets(scope,characterFilter,binding,rarity,type,transfer!=0);
+    const bool walletEligible=WalletMatchesSelection(scope,selectedCharacters.restricted,binding,rarity,type,transfer!=0);
     const bool showResults=nav.grouped||canSearch||canBrowse;
     if(!showResults)ImGui::TextWrapped("Enter at least 3 characters or select a filter to browse inventory.");
     if(!canSearch){
@@ -1703,13 +1725,15 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     const auto quantityText=[](uint32_t id,bool currency,int64_t count){if(currency&&id==1)return std::to_string(count/10000)+"g "+std::to_string(count/100%100)+"s "+std::to_string(count%100)+"c";return std::to_string(count);};
     static std::shared_ptr<const View> previous;static std::string prevKey;static std::vector<Group> groups;
     static uint64_t projectionRevision=0;
-    const auto filterKey=Json::array({showResults,selectedAccount,tokens,scope,binding,rarity,type,sort,characterFilter,freshness,minQuantity,transfer,(freshness||transfer)?Now()/10:0}).dump();
+    Json selectionKey=Json::array();
+    for(const auto& [ref,selection]:characterFilter)selectionKey.push_back(CharacterIdentity::EncodeSelection(selection));
+    const auto filterKey=Json::array({showResults,selectedAccount,tokens,scope,binding,rarity,type,sort,selectionKey,freshness,minQuantity,transfer,(freshness||transfer)?Now()/10:0}).dump();
     if(previous!=v||prevKey!=filterKey){
         previous=v;prevKey=filterKey;groups.clear();++projectionRevision;std::map<SearchIdentity,size_t> index;
         if(showResults)for(const auto& row:v->inventory.rows){
             const auto& s=row.slot;
             if(!allowed(s.account)||(!scope.empty()&&scope!=s.scope)||!MatchesFacet(binding,BindingName(s.binding))||!MatchesFacet(rarity,row.rarity)||!MatchesFacet(type,row.type)||!Match(row.name,s.id,tokens))continue;
-            if(!MatchesFacet(characterFilter,s.character))continue;
+            if(!selectedCharacters.Matches(s.account,s.character))continue;
             const bool fresh=Fresh(*v,row);
             if((freshness==1&&!fresh)||(freshness==2&&fresh))continue;
             if(transfer){auto f=v->inventory.flags.find(s.id);if(!fresh||s.binding!=Binding::Unbound||f==v->inventory.flags.end()||f->second.accountBound||f->second.soulbound||s.scope=="Equipment"||s.scope=="Delivery box")continue;}
@@ -1742,7 +1766,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         if(groups.empty())ImGui::TextDisabled("%s",busy.load()?"Refreshing inventory...":"No matching cached items or currencies.");
     }
     auto selected=std::find_if(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item&&x.currency==nav.currency;});
-    if(selected==groups.end()){nav.item=0;nav.currency=false;nav.group.clear();groupRevealPending=false;}
+    // A temporarily missing identity group is not permission to select another owner.
+    if(selected==groups.end()&&nav.group.rfind("identity:",0)!=0){nav.item=0;nav.currency=false;nav.group.clear();groupRevealPending=false;}
 
     // Derive group buckets from the same filtered aggregate, not a second scan
     // or filter implementation. Rebuild only on a projection/character-order change.
@@ -1773,7 +1798,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             std::map<GroupPath,std::vector<GroupLeaf>> buckets;
             for(size_t i=0;i<groups.size();++i){
                 const auto& g=groups[i];std::map<GroupPath,int64_t> counts;
-                for(const auto* r:g.locations){const auto& s=r->slot;counts[{s.account,s.character,s.scope}]+=s.count;}
+                for(const auto* r:g.locations){const auto& s=r->slot;counts[IdentityGroupPath(*v,s.account,s.character,s.scope)]+=s.count;}
                 for(const auto* w:g.balances)counts[{w->account,{},"Wallet"}]+=w->value;
                 for(const auto& [path,count]:counts)buckets[path].push_back({i,count});
             }
@@ -1805,9 +1830,9 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                 tree.Add(path,accountLabels.at(path.account),all,std::move(leaves));
             }
         }
-        if(nav.item){
+        if(nav.item&&selected!=groups.end()){
             const size_t i=static_cast<size_t>(selected-groups.begin());
-            if(!groupCounts.count({i,nav.group})){
+            if(!groupCounts.count({i,nav.group})&&nav.group.rfind("identity:",0)!=0){
                 const auto it=firstGroup.find(i);nav.group=it==firstGroup.end()?std::string{}:it->second;
             }
             // A search reveals matching branches without changing saved expansion.
@@ -1819,7 +1844,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         }
     }
     ImGui::BeginChild("InventoryListScroll",ImVec2(0,0),false);
-    if(nav.grouped&&groupRevealPending&&nav.item){
+    if(nav.grouped&&groupRevealPending&&nav.item&&selected!=groups.end()){
         const size_t i=static_cast<size_t>(selected-groups.begin());
         for(size_t n=0;n<visibleLines.size();++n){
             const auto& line=visibleLines[n];
@@ -1851,7 +1876,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             if(!nav.grouped)targets=loadTargets(group.id);
             else for(const auto* location:group.locations){
                 const auto& slot=location->slot;
-                if(!slot.character.empty()&&GroupKey({slot.account,slot.character,slot.scope})==path)
+                if(!slot.character.empty()&&GroupKey(IdentityGroupPath(*v,slot.account,slot.character,slot.scope))==path)
                     targets[{slot.account,slot.character}]+=slot.count;
             }
         }
@@ -2055,9 +2080,12 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
     const auto scope=nav.subview==1?std::string("Wallet"):nav.subview==2?std::string("Guild bank"):nav.scope.empty()?std::string("Items"):nav.scope;
     const bool itemView=nav.subview==0;
     const bool characterFiltered=itemView&&!nav.characters.empty();
-    const bool includeWallet=itemView&&WalletMatchesFacets(nav.scope,nav.characters,nav.binding,nav.rarity,nav.type,nav.transfer!=0);
-    const std::set<std::string> noCharacters;
-    const auto& characters=characterFiltered?nav.characters:noCharacters;
+    const bool includeWallet=itemView&&WalletMatchesSelection(nav.scope,characterFiltered,nav.binding,nav.rarity,nav.type,nav.transfer!=0);
+    auto selections=nav.characters;
+    const auto characters=characterFiltered?ProjectCharacters(selections,v->bindings,v->credentialEpoch):CharacterFilter{};
+    const auto matches=[&](const std::string& account,const std::string& dataset,const std::string& name){
+        return MatchesStorageView(scope,{},dataset,name)&&characters.Matches(account,name);
+    };
     namespace R=RefreshStatus;
     const auto now=Now();
     const auto activeAccount=CharacterActivity::ActiveKey().first;
@@ -2116,7 +2144,7 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
             continue;
         }
         for(const auto* dataset:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box"})
-            if(MatchesStorageView(scope,characters,dataset,{}))mark(a,dataset);
+            if(matches(a.id,dataset,{}))mark(a,dataset);
         if(scope=="Items"||scope=="Bags"||scope=="Equipment"){
             auto roster=v->inventory.rosters.find(a.id);
             if(roster==v->inventory.rosters.end()){
@@ -2127,11 +2155,11 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
                 RefreshProgress::Counts group;
                 if(characterFiltered){
                     std::set<CharacterOrder::Key> keys;
-                    for(const auto& ch:roster->second)if(MatchesStorageView(scope,characters,dataset,ch))keys.emplace(a.id,ch);
+                    for(const auto& ch:roster->second)if(matches(a.id,dataset,ch))keys.emplace(a.id,ch);
                     for(const auto& key:OrderedCharacterKeys(keys))mark(a,dataset,key.second);
                 }else{
                     for(const auto& ch:roster->second)
-                        if(MatchesStorageView(scope,characters,dataset,ch))mark(a,dataset,ch,&group);
+                        if(matches(a.id,dataset,ch))mark(a,dataset,ch,&group);
                 }
                 if(!characterFiltered){
                     if(!detail.empty())detail+="\n";
@@ -2179,13 +2207,13 @@ void RenderInventoryStatusRow(const std::string& selectedAccount){
         detail+="\nPrice refresh is independent of inventory storage.";
     }
     if(accounts.empty())detail="Link or select an account.";
-    const bool incompatible=(characterFiltered&&scope!="Items"&&scope!="Bags"&&scope!="Equipment")||(itemView&&scope=="Wallet"&&!includeWallet);
+    const bool incompatible=(characterFiltered&&(characters.addresses.empty()||(scope!="Items"&&scope!="Bags"&&scope!="Equipment")))||(itemView&&scope=="Wallet"&&!includeWallet);
     const auto label=R::Label(kind,now,aggregate.retryAt);
     const char* disabledReason=accounts.empty()?"Link or select an account.":incompatible?"The current storage and character filters are incompatible.":
         operationBusy?"A storage or account operation is already in progress.":nullptr;
     if(RefreshUI::Row("native_inventory_refresh",static_cast<std::time_t>(aggregate.Timestamp()),"inventory scope",
         RefreshUI::StatusState(kind),detail,operationBusy||accounts.empty()||incompatible,nullptr,label.c_str(),true,now,disabledReason))
-        Refresh(accounts,v->credentialEpoch,scope,false,{},characterFiltered?characters:noCharacters,includeWallet);
+        Refresh(accounts,v->credentialEpoch,scope,false,{},characters,includeWallet);
 }
 
 }

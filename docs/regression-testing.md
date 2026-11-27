@@ -321,3 +321,5 @@ Character presentation references: native_inventory exercises stable selection t
 Portable history regression covers two owners of one name, pending round-trip, unique current evidence adoption, historical login independent of last-seen and API freshness, and legacy v1 input/merge. Live restore and contextual legacy recovery remain verification items.
 
 Stable custom order fixtures exercise transactional account-local ranks, portable round-trip and idempotent adoption; live verify drag/drop, roster rename/replacement, partial visibility, ordering parity across all character consumers and portable restore. Name-only legacy order remains archived for explicit recovery.
+
+Inventory identity fixtures cover account separation, unresolved nonempty filters, rename/replacement, credential and binding fencing of explicit refresh targets, and stable group keys across a rename. Live verify a rename while Inventory, Characters and Compare are open, including temporarily missing cache rows.

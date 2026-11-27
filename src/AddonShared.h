@@ -12,6 +12,7 @@
 #include "imgui.h"
 #include "UIControls.h"
 #include "ChatLink.h"
+#include "InventoryGroupCore.h"
 
 // A non-modal window can remain open behind its launcher. Request focus at
 // the launch site and consume it immediately before that window's Begin(),
@@ -96,8 +97,8 @@ std::vector<std::string> OrderedCharacterNames(const std::vector<std::string>& n
 
 // Character filter shares Compare's profession rows; empty means All.
 // Names are limited to the caller's verified roster; unknown class stays selectable.
-bool RenderCharacterMultiFilter(const char* label, std::set<std::string>& selected,
-                                const std::set<std::string>& names);
+bool RenderCharacterMultiFilter(const char* label, AlterEgo::NativeInventory::CharacterSelections& selected,
+                                const std::vector<AlterEgo::CharacterIdentity::Address>& candidates);
 
 // Shared profession artwork/name for clipped character branch headers.
 void DrawInventoryCharacterLabel(ImDrawList* draw,ImVec2 min,ImVec2 max,const std::string& profession,const std::string& name);

@@ -251,11 +251,16 @@ inline bool MatchesStorageView(const std::string& selectedScope,const std::set<s
         (characters.empty()||(!character.empty()&&characters.count(character)!=0));
 }
 // Wallet balances are not physical items: inapplicable facets exclude them.
+inline bool WalletMatchesSelection(const std::string& scope,bool restricted,
+                                const std::set<std::string>& binding,const std::set<std::string>& rarity,
+                                const std::set<std::string>& type,bool transfer) {
+    return (scope.empty()||scope=="Items"||scope=="Wallet")&&!restricted&&
+        binding.empty()&&rarity.empty()&&(type.empty()||type.count("Currency"))&&!transfer;
+}
 inline bool WalletMatchesFacets(const std::string& scope,const std::set<std::string>& characters,
                                 const std::set<std::string>& binding,const std::set<std::string>& rarity,
                                 const std::set<std::string>& type,bool transfer) {
-    return (scope.empty()||scope=="Items"||scope=="Wallet")&&characters.empty()&&
-        binding.empty()&&rarity.empty()&&(type.empty()||type.count("Currency"))&&!transfer;
+    return WalletMatchesSelection(scope,!characters.empty(),binding,rarity,type,transfer);
 }
 inline bool WalletMatchesBalance(int64_t value,bool fresh,int freshness) {
     return value>0&&(freshness!=1||fresh)&&(freshness!=2||!fresh);

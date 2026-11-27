@@ -10,6 +10,7 @@
 #include "CharacterIdentityRuntime.h"
 #include "CharacterPreferenceStore.h"
 #include "CharacterOrderStore.h"
+#include "InventoryGroupCore.h"
 namespace AlterEgo::NativeAccounts {
 struct LinkedAccount {
     std::string id,name,label;
@@ -93,7 +94,8 @@ struct InventoryNavigation {
     uint32_t item=0;
     bool currency=false,grouped=false;
     std::string query,walletQuery,guildQuery,scope,group;
-    std::set<std::string> binding,rarity,type,characters;
+    std::set<std::string> binding,rarity,type;
+    NativeInventory::CharacterSelections characters;
 };
 InventoryNavigation CaptureInventoryNavigation();
 void RestoreInventoryNavigation(const InventoryNavigation& state);

@@ -1,5 +1,6 @@
 #pragma once
 #include "GroupBrowseCore.h"
+#include "CharacterSelectionCore.h"
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -8,15 +9,53 @@
 #include <tuple>
 #include <vector>
 namespace AlterEgo::NativeInventory {
+using CharacterSelections=std::map<CharacterIdentity::Ref,CharacterIdentity::Selection>;
+// A restricted selection with zero resolved addresses matches nothing,
+// never All. This same projection drives listing, status and manual refresh.
+struct CharacterFilter {
+    using Key=std::pair<std::string,std::string>;
+    bool restricted=false;
+    std::map<Key,CharacterIdentity::Address> addresses;
+    bool Matches(const std::string& account,const std::string& name)const{
+        return !restricted||addresses.count({account,name})!=0;
+    }
+    bool Accepts(const CharacterIdentity::Address& address)const{
+        if(!restricted)return true;
+        const auto it=addresses.find({address.account,address.name});
+        return it!=addresses.end()&&CharacterIdentity::SameAddress(it->second,address);
+    }
+    bool empty()const{return !restricted;}
+};
+inline CharacterFilter ProjectCharacters(CharacterSelections& selections,
+    const std::map<std::string,CharacterIdentity::Bindings>& bindings,uint64_t epoch){
+    CharacterFilter out;out.restricted=!selections.empty();
+    for(auto& [ref,selection]:selections){
+        const auto account=bindings.find(ref.account);
+        if(account==bindings.end())continue;
+        for(const auto& [name,b]:account->second){
+            CharacterIdentity::Address address{ref.account,name,b,epoch};
+            if(selection.Matches(address)&&selection.Accept(address)){
+                out.addresses.emplace(CharacterFilter::Key{ref.account,name},address);break;
+            }
+        }
+    }
+    return out;
+}
 struct GroupPath {
     std::string account,character,storage;
+    std::string identity{}; // stable evidence token, not a display name
     bool operator<(const GroupPath& o) const {
-        return std::tie(account,character,storage)<std::tie(o.account,o.character,o.storage);
+        return std::tie(account,character,storage,identity)<std::tie(o.account,o.character,o.storage,o.identity);
     }
 };
 // Length-prefix each part; names containing separators cannot collide.
 inline std::string GroupKey(const GroupPath& p){
+    if(!p.character.empty()&&!p.identity.empty())
+        return "identity:"+GroupBrowse::PathKey({p.account,p.identity,p.storage});
     return GroupBrowse::PathKey({p.account,p.character,p.storage});
+}
+inline std::string GroupIdentity(const CharacterIdentity::Binding& b){
+    return GroupBrowse::PathKey({std::to_string(b.id),b.evidence.created,b.evidence.profession,b.evidence.race});
 }
 inline int StorageRank(const std::string& s){
     const std::vector<std::string> order={"Bank","Shared inventory","Materials","Legendary Armory","Delivery box","Wallet","Equipment","Bags"};
@@ -66,7 +105,7 @@ public:
         if(leaves.empty())return;
         auto* nodes=&roots_;
         if(accountParent)nodes=&Ensure(*nodes,{path.account,{},{}},accountLabel,false).children;
-        if(!path.character.empty())nodes=&Ensure(*nodes,{path.account,path.character,{}},path.character,true).children;
+        if(!path.character.empty())nodes=&Ensure(*nodes,{path.account,path.character,{},path.identity},path.character,true).children;
         auto& branch=Ensure(*nodes,path,StorageGroupLabel(path.storage),false);
         branch.leaves=std::move(leaves);
     }

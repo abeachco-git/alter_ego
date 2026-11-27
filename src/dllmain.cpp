@@ -7104,19 +7104,21 @@ static bool SelectProfessionCharacterEntry(const char* id, bool selected,
     return clicked;
 }
 
-bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selected,
-                                const std::set<std::string>& names) {
+bool RenderCharacterMultiFilter(const char* label,AlterEgo::NativeInventory::CharacterSelections& selected,
+                                const std::vector<AlterEgo::CharacterIdentity::Address>& candidates) {
     using namespace AlterEgo;
-    ImGui::PushID(label);
-    UI::FilterFieldLabel(label);
-    const auto chars=GW2API::GetCharacters();
-    std::map<std::string,std::string> professions;
-    for(const auto& c:*chars)if(names.count(c.name)&&!c.profession.empty())professions[c.name]=c.profession;
-    const auto order=OrderedCharacterNames(std::vector<std::string>(names.begin(),names.end()));
+    ImGui::PushID(label);UI::FilterFieldLabel(label);
+    std::map<CharacterOrder::Key,CharacterIdentity::Address> available;
+    std::set<CharacterOrder::Key> keys;
+    for(const auto& address:candidates){
+        const CharacterOrder::Key key{address.account,address.name};
+        available.emplace(key,address);keys.insert(key);
+    }
+    const auto order=OrderedCharacterKeys(keys);
     const bool single=selected.size()==1;
     const auto preview=selected.empty()?std::string("All"):
-        single?*selected.begin():std::to_string(selected.size())+" selected";
-    const auto profession=single&&professions.count(preview)?professions.at(preview):std::string{};
+        single?selected.begin()->second.name:std::to_string(selected.size())+" selected";
+    const auto profession=single?selected.begin()->second.evidence.profession:std::string{};
     const bool decorated=!profession.empty();
     const auto pos=ImGui::GetCursorScreenPos();
     const float width=UI::FilterFieldWidth(),height=ImGui::GetFrameHeight();
@@ -7126,22 +7128,39 @@ bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selecte
         if(ImGui::Selectable("All",selected.empty(),ImGuiSelectableFlags_DontClosePopups)&&!selected.empty()){
             selected.clear();changed=true;
         }
-        for(const auto& name:order){
-            ImGui::PushID(name.c_str());
-            const bool on=selected.count(name)!=0;
-            const auto it=professions.find(name);
-            if(SelectProfessionCharacterEntry("##character",on,it==professions.end()?std::string{}:it->second,
-                name,nullptr,ImGuiSelectableFlags_DontClosePopups)){
-                if(on)selected.erase(name);else selected.insert(name);
+        std::set<CharacterIdentity::Ref> visible;
+        for(const auto& key:order){
+            const auto& address=available.at(key);
+            const auto ref=address.Reference();visible.insert(ref);
+            ImGui::PushID(ref.account.c_str());ImGui::PushID(std::to_string(ref.id).c_str());
+            const auto prior=selected.find(ref);
+            const bool on=prior!=selected.end()&&prior->second.Matches(address);
+            if(SelectProfessionCharacterEntry("##character",on,address.binding.evidence.profession,
+                address.name,nullptr,ImGuiSelectableFlags_DontClosePopups,address.account)){
+                if(on)selected.erase(ref);
+                else selected[ref]={ref,address.binding.evidence,address.name,false};
                 changed=true;
             }
-            ImGui::PopID();
+            ImGui::PopID();ImGui::PopID();
+        }
+        for(auto it=selected.begin();it!=selected.end();){
+            if(visible.count(it->first)){++it;continue;}
+            ImGui::PushID(it->first.account.c_str());ImGui::PushID(std::to_string(it->first.id).c_str());
+            const auto name=it->second.name+" (unavailable)";
+            const bool remove=ImGui::Selectable(name.c_str(),true,ImGuiSelectableFlags_DontClosePopups);
+            ImGui::PopID();ImGui::PopID();
+            if(remove){it=selected.erase(it);changed=true;}else ++it;
         }
         ImGui::EndCombo();
-    }else if(single){ImGui::PushID(preview.c_str());UI::EntityContext("##character_filter_actions",[&]{CharacterSelectorActions(preview,NativeAccounts::VerifiedAccountForCharacter(preview));});ImGui::PopID();}
+    }else if(single){
+        const auto& selection=selected.begin()->second;
+        const auto current=NativeAccounts::ResolveCharacterAddress(selection.ref);
+        if(current&&selection.Matches(*current)){
+            ImGui::PushID(preview.c_str());UI::EntityContext("##character_filter_actions",[&]{CharacterSelectorActions(current->name,current->account);});ImGui::PopID();
+        }
+    }
     if(decorated)DrawProfessionCharacterEntry(draw,pos,ImVec2(pos.x+width,pos.y+height),profession,preview,nullptr,true);
-    ImGui::PopID();
-    return changed;
+    ImGui::PopID();return changed;
 }
 
 // "+ New Loadout" dialog: pick a profession + game mode, create a blank build,

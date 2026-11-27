@@ -394,6 +394,26 @@ INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',1,'Former Alice'
     }
     // Distinct group keys, hierarchy, selected leaf reveal and transient search expansion.
     {
+        {
+            namespace CI=AlterEgo::CharacterIdentity;
+            const CI::Evidence e{"2015-02-03T04:05:06Z","Warrior","Human"};
+            const CI::Evidence replacement{"2026-02-03T04:05:06Z","Warrior","Human"};
+            const CI::Binding first{1,e,1},renamed{1,e,2},other{2,replacement,3};
+            CharacterSelections selections;
+            const CI::Ref ref{"A",1};
+            selections.emplace(ref,CI::Selection{ref,e,"Hero",false});
+            const auto before=ProjectCharacters(selections,{{"A",{{"Hero",first}}},{"B",{{"Hero",first}}}},1);
+            assert(before.Matches("A","Hero")&&!before.Matches("B","Hero")&&!before.Matches("A",""));
+            const auto pending=ProjectCharacters(selections,{},1);
+            assert(pending.restricted&&pending.addresses.empty()&&!pending.Matches("A","Hero"));
+            const auto after=ProjectCharacters(selections,{{"A",{{"Renamed",renamed},{"Hero",other}}}},1);
+            assert(after.Matches("A","Renamed")&&!after.Matches("A","Hero")&&selections.at(ref).name=="Renamed");
+            assert(!before.Accepts(CI::Address{"A","Hero",other,1}));
+            assert(!before.Accepts(CI::Address{"A","Hero",first,2}));
+            assert(GroupKey({"A","Hero","Bags",GroupIdentity(first)})==GroupKey({"A","Renamed","Bags",GroupIdentity(renamed)}));
+            assert(GroupKey({"A","Hero","Bags",GroupIdentity(first)})!=GroupKey({"A","Hero","Bags",GroupIdentity(other)}));
+            assert(GroupKey({"A","Hero","Bags",GroupIdentity(first)})!=GroupKey({"B","Hero","Bags",GroupIdentity(first)}));
+        }
         GroupTree tree;
         const GroupPath bank{"a","","Bank"},bags{"a","Hero","Bags"},equipment{"a","Hero","Equipment"},wallet{"b","","Wallet"};
         assert(GroupKey({"a","b:c","d"})!=GroupKey({"a:b","c","d"}));
