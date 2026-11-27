@@ -780,7 +780,12 @@ static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* 
             ImGui::PopID();
         }
         ImGui::EndCombo();
-    }else if(!ref.empty()){ImGui::PushID(ref.c_str());ReferenceComponentActions(doc,kind,ref,false);ImGui::PopID();}
+    }else if(!ref.empty()){
+        ImGui::PushID(ref.c_str());AlterEgo::UI::EntityContext("##ref_actions",[&]{
+            if(const auto* part=ComponentUIFind(doc,kind,ref))ComponentRowMenu(doc,kind,*part,true,false);
+            if(allowOmit){ImGui::Separator();if(AlterEgo::UI::MenuAction("Not Included",AlterEgo::UI::MenuIcon::Detach)){refs.erase(kind);changed=true;}}
+        });ImGui::PopID();
+    }
     return changed;
 }
 static std::string ComponentUIFashionName(const std::string& id){
@@ -827,7 +832,7 @@ static void RenderSetReferencePicker(const ComponentJson& doc,ReferenceEditorDra
             ImGui::PopID();
         }
         ImGui::EndCombo();
-    }else if(linked){ImGui::PushID(e.setId.c_str());AlterEgo::UI::EntityContext("##set_ref_copy",[&]{CopyNameMenuItem(label,"Copy Name",true);});ImGui::PopID();}
+    }else if(linked){ImGui::PushID(e.setId.c_str());AlterEgo::UI::EntityContext("##set_ref_copy",[&]{CopyNameMenuItem(label,"Copy Name",true);ImGui::Separator();if(AlterEgo::UI::MenuAction("Detach Set",AlterEgo::UI::MenuIcon::Detach))SelectDraftEquipmentSet(e,doc,"");});ImGui::PopID();}
 }
 static void RenderFashionReferencePicker(ReferenceEditorDraft& e){
     ImGui::SetNextItemWidth(-1);
@@ -840,7 +845,7 @@ static void RenderFashionReferencePicker(ReferenceEditorDraft& e){
         }
         ImGui::EndCombo();
     }else if(!e.fashionId.empty()){
-        ImGui::PushID(e.fashionId.c_str());AlterEgo::UI::EntityContext("##fashion_ref_copy",[&]{for(const auto& look:g_FashionLibrary.looks)if(look.id==e.fashionId){CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");break;}});ImGui::PopID();
+        ImGui::PushID(e.fashionId.c_str());AlterEgo::UI::EntityContext("##fashion_ref_copy",[&]{for(const auto& look:g_FashionLibrary.looks)if(look.id==e.fashionId){CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");break;}ImGui::Separator();if(AlterEgo::UI::MenuAction("None",AlterEgo::UI::MenuIcon::Detach))e.fashionId.clear();});ImGui::PopID();
     }
 }
 static void RenderEditableReferences(const ComponentJson& doc,const ComponentJson* owner,ReferenceEditorDraft& e){

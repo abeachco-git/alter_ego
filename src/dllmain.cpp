@@ -3100,7 +3100,7 @@ static void CopyCachedItemLinksMenu(const std::vector<uint32_t>& ids,const char*
         ImGui::EndMenu();
     }
 }
-static void RenderEquipmentContextActions(const AlterEgo::EquipmentItem* eq){
+static void RenderEquipmentContextActions(const AlterEgo::Character& ch,const AlterEgo::EquipmentItem* eq){
     if(!eq||!eq->id)return;
     const auto item_info=AlterEgo::GW2API::GetItemInfo(eq->id);
     const auto skin_info=eq->skin?AlterEgo::GW2API::GetSkinInfo(eq->skin):nullptr;
@@ -3115,12 +3115,13 @@ static void RenderEquipmentContextActions(const AlterEgo::EquipmentItem* eq){
     CopyCachedItemLinksMenu(eq->infusions,"Copy Infusion Chat Link");
     ImGui::Separator();
     if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(eq->id);
-    if(ImGui::BeginMenu("Item Locations")){
-        AlterEgo::NativeAccounts::RenderItemAvailability(eq->id,AlterEgo::GW2API::GetCurrentAccountName(),g_CurrentCharName);
+    const bool verifiedOwner=!ch.account_name.empty()&&AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name)==ch.account_name;
+    if(ImGui::BeginMenu("Item Locations",verifiedOwner)){
+        AlterEgo::NativeAccounts::RenderItemAvailability(eq->id,ch.account_name,ch.name);
         ImGui::EndMenu();
     }
 }
-static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* slotName) {
+static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
 
     if (!eq || eq->id == 0) {
@@ -3407,7 +3408,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
             ImGui::EndTooltip();
         }
 
-        ImGui::PushID(static_cast<int>(eq->id));AlterEgo::UI::EntityContext("##eq_ctx",[&]{RenderEquipmentContextActions(eq);});ImGui::PopID();
+        ImGui::PushID(static_cast<int>(eq->id));AlterEgo::UI::EntityContext("##eq_ctx",[&]{RenderEquipmentContextActions(ch,eq);});ImGui::PopID();
     }
 
     ImGui::PopID();
@@ -3470,12 +3471,12 @@ static void RenderEquipRow(const AlterEgo::Character& ch, const char* slot, int 
     std::string name,rarity;ResolveEquipDisplay(eq,slot,name,rarity);
     const auto pos=ImGui::GetCursorScreenPos();
     const float width=ImGui::GetContentRegionAvail().x;
-    RenderEquipmentSlot(eq,SlotDisplayName(slot));
+    RenderEquipmentSlot(ch,eq,SlotDisplayName(slot));
     AlterEgo::UI::EquipmentText text(pos,ICON_SIZE,width);
     if(eq&&eq->id){
         text.Line(name,ImGui::ColorConvertFloat4ToU32(GetRarityColor(rarity)));
         text.Line(BuildEquipSubtitle(eq),IM_COL32(150,142,120,230));
-        ImGui::PushID(slot);ImGui::PushID(static_cast<int>(eq->id));text.ContextTarget();AlterEgo::UI::EntityContext("##eq_text_actions",[&]{RenderEquipmentContextActions(eq);});ImGui::PopID();ImGui::PopID();
+        ImGui::PushID(slot);ImGui::PushID(static_cast<int>(eq->id));text.ContextTarget();AlterEgo::UI::EntityContext("##eq_text_actions",[&]{RenderEquipmentContextActions(ch,eq);});ImGui::PopID();ImGui::PopID();
     }else text.Line(name,ImGui::GetColorU32(ImGuiCol_TextDisabled));
     text.Finish();
 }
@@ -3747,17 +3748,19 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
         }
         const auto info = GW2API::GetItemInfo(eq->id);
         const std::string name=info&&!info->name.empty()?info->name:"Item #"+std::to_string(eq->id);
-        RenderEquipmentSlot(eq,label);
+        RenderEquipmentSlot(ch,eq,label);
         ImGui::SameLine();
         ImGui::BeginGroup();
         ImGui::TextUnformatted(label);
         ImGui::PushStyleColor(ImGuiCol_Text,GetRarityColor(info?info->rarity:"Basic"));
         ImGui::TextWrapped("%s",name.c_str());
         ImGui::PopStyleColor();
+        ImGui::PushID(static_cast<int>(eq->id));UI::EntityContext("##tool_item",[&]{RenderEquipmentContextActions(ch,eq);});ImGui::PopID();
         if(eq->skin){
             const auto skin = GW2API::GetSkinInfo(eq->skin);
             const auto skinName=skin&&!skin->name.empty()?skin->name:"Skin #"+std::to_string(eq->skin);
             ImGui::TextWrapped("Skin: %s",skinName.c_str());
+            ImGui::PushID(static_cast<int>(eq->skin));UI::EntityContext("##tool_skin",[&]{CopyEntityMenu(skin?skin->name:std::string{},LINK_SKIN,eq->skin);});ImGui::PopID();
         }
         if(charges){
             if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
@@ -3771,6 +3774,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
                 const auto glyph = GW2API::GetItemInfo(id);
                 const auto glyphName=glyph&&!glyph->name.empty()?glyph->name:"Item #"+std::to_string(id);
                 ImGui::TextWrapped("Glyph: %s",glyphName.c_str());
+                ImGui::PushID(static_cast<int>(id));UI::EntityContext("##tool_glyph",[&]{CopyEntityMenu(glyph?glyph->name:std::string{},LINK_ITEM,id);});ImGui::PopID();
             }
             if(!reported){
                 ImGui::TextDisabled("Glyph: Unknown");
