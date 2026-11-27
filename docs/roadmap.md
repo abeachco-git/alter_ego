@@ -6,7 +6,7 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 ## Refresh demand follow-up — D2.5
 
-- [ ] **Discussion only:** confirm actual visible demand for Vault retry dispatch (including master/dataset opt-out), achievement browser and nonempty pinned tracker. Neither manual nor automatic failed requests should retry without current demand. Retain cooldown, verified results and in-flight requests; distinguish retry from bounded successful multi-stage continuations. Discuss whether leaving a page should defer those continuations before changing them. Keep current account/credential/generation and reset safeguards.
+- [ ] **Approved, verification pending:** targeted Vault directional reset evidence and deferred 429 retry admission; actual rendered Achievement browser/nonempty tracker demand. Preserve working Fractal/daily rollover and existing multi-stage continuations. See [temporary rollback guide](temp-vault-daily-rollover-rollback.md) for independent commits and live checks.
 - [ ] **Separate discussion:** decide which public catalogs genuinely require startup/settings-triggered retrieval. Do not change that policy as part of the approved account settings fix.
 
 ## Application-wide consistency audit — Part 5 (proposed)
