@@ -230,6 +230,22 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             ImGui::Text("Profession: %s", data["profession"].get<std::string>().c_str());
         if (data.contains("specializations") && data["specializations"].is_array())
             ImGui::Text("Specialization entries: %d", (int)data["specializations"].size());
+        const auto profession=data.value("profession",std::string());
+        if(profession=="Ranger"||profession=="Revenant"){
+            const bool legend=profession=="Revenant";
+            const auto field=data.find(legend?"legend_codes":"pets");
+            std::array<uint32_t,4> values{};
+            bool known=field!=data.end()&&field->is_array()&&field->size()==4;
+            if(field!=data.end()&&field->is_array())for(size_t i=0;i<values.size()&&i<field->size();++i){
+                const auto& entry=(*field)[i];
+                if(!entry.is_number_integer()){known=false;continue;}
+                const auto n=entry.get<int64_t>();
+                if(n>=0&&n<=(legend?255:UINT32_MAX))values[i]=static_cast<uint32_t>(n);
+                else known=false;
+            }
+            RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
+            RenderProfessionPairSection(legend,values,false,known);
+        }
     }
     if (kind == "skills") {
         for (const auto& bar : {"skills", "aquatic_skills"}) {

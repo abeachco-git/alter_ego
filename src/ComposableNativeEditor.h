@@ -318,17 +318,13 @@ static void ComponentNativeProfessionPair(ComponentJson& data,const char* key,
         while(values.size()<=i)values.push_back(0);
         values[i]=value;data[key]=values;
     };
-    for(int env=0;env<2;++env){
-        ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
-        for(int i=0;i<2;++i){
-            size_t slot=env*2+i,other=env*2+1-i;
-            if(i)ImGui::SameLine();ImGui::PushID(static_cast<int>(slot));
-            uint32_t current=get(slot),next=current;
-            if(eligible&&RenderProfessionPairChoice(legend,current,get(other),next)&&next!=current)
-                set(slot,next);
-            ImGui::PopID();
-        }
-    }
+    if(eligible){
+        std::array<uint32_t,4> projected{};
+        for(size_t i=0;i<projected.size();++i)projected[i]=get(i);
+        const auto original=projected;
+        if(RenderProfessionPairSection(legend,projected,true,values.size()==4))
+            for(size_t i=0;i<projected.size();++i)if(projected[i]!=original[i])set(i,projected[i]);
+    }else ImGui::TextDisabled("Not applicable to this profession; exact fields preserved.");
     if(ImGui::TreeNode("##advanced_ids","Advanced exact IDs")){
         for(size_t i=0;i<4;++i){
             ImGui::PushID(static_cast<int>(i));

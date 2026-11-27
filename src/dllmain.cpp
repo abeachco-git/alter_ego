@@ -4381,6 +4381,7 @@ static void RenderCharacterHeaderActions(const AlterEgo::Character& ch, float bu
     ImGui::PopID();
 }
 
+static void RenderLiveProfessionPairs(const AlterEgo::BuildTemplate& bt);
 static void RenderBuildPanel(const AlterEgo::Character& ch) {
     if (ch.build_tabs.empty()) {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No build tabs available.");
@@ -4675,6 +4676,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
         ImGui::EndGroup();
     }
 
+    RenderLiveProfessionPairs(bt);
     ImGui::Unindent(4.0f);
     RenderLiveInfusionTotals(ch,
         g_SelectedEquipTab > 0 ? g_SelectedEquipTab :
@@ -7137,23 +7139,52 @@ static bool RenderSkillPickerPopup(const char* popup,const std::string& professi
 
 // Both native editors use this field-scoped selector. The catalog does not
 // record environment eligibility, so never invent an aquatic restriction.
-static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t other,uint32_t& next) {
+// Selected slots share geometry and exact entity actions in read and edit modes.
+static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t other,uint32_t& next,
+                                       bool editable=true,bool known=true) {
     using AlterEgo::SkillEdit::PairChoiceAllowed;
     const auto pets=legend?std::vector<AlterEgo::PetInfo>{}:AlterEgo::GW2API::GetPets();
     std::string name;
-    if(legend)name=current<=255?LegendOptionForCode(static_cast<uint8_t>(current)).name:
-        "Unknown legend ("+std::to_string(current)+")";
-    else {
+    std::string url;
+    uint32_t key=0,swap=0;
+    if(legend){
+        if(AlterEgo::PublicCatalog::Get()->legends.empty())AlterEgo::GW2API::FetchLegendsAsync();
+        const auto option=current<=255?LegendOptionForCode(static_cast<uint8_t>(current)):
+            LegendOption{0,"Unknown legend ("+std::to_string(current)+")",0,{}};
+        name=option.name;swap=option.swap;url=option.icon;
+        if(const auto skill=swap?AlterEgo::GW2API::GetSkillInfo(swap):nullptr)
+            if(!skill->icon_url.empty())url=skill->icon_url;
+        key=AlterEgo::ArtworkRequest::SkillKey(swap);
+    }else{
+        if(pets.empty())AlterEgo::GW2API::FetchPetsAsync();
         name=current?"Unknown pet ("+std::to_string(current)+")":"Choose pet";
-        for(const auto& p:pets)if(p.id==current){name=p.name;break;}
+        for(const auto& p:pets)if(p.id==current){name=p.name;url=p.icon_url;break;}
+        key=AlterEgo::ArtworkRequest::PetKey(current);
     }
-    if(RenderChipButton(name.c_str(),current!=0))ImGui::OpenPopup("##pair_choice");
+    if(!current&&!editable)name=known?"Empty":"Not recorded";
+    auto* texture=AlterEgo::IconManager::GetOrRequestIcon(key,url);
+    ImGui::BeginGroup();
+    const ImVec2 pos=ImGui::GetCursorScreenPos(), size(ICON_SIZE,ICON_SIZE);
+    const ImVec2 end(pos.x+size.x,pos.y+size.y);
+    const bool clicked=ImGui::InvisibleButton("##profession_slot",size);
+    auto* draw=ImGui::GetWindowDrawList();
+    if(texture&&texture->Resource)draw->AddImage(texture->Resource,pos,end);
+    else draw->AddRectFilled(pos,end,IM_COL32(40,40,60,200));
+    if(editable)draw->AddRect(pos,end,IM_COL32(90,80,50,200));
+    if(ImGui::IsItemHovered())AlterEgo::UI::Hint(name.c_str());
+    ImGui::TextUnformatted(name.c_str());
+    ImGui::EndGroup();
+    if(clicked&&editable)ImGui::OpenPopup("##pair_choice");
     bool changed=false;
     if(ImGui::BeginPopupContextItem("##pair_context")){
-        if(current)CopyNameMenuItem(name);
-        if(ImGui::MenuItem("Clear",nullptr,false,current!=0)){next=0;changed=true;}
+        if(current){
+            if(legend&&swap)CopyEntityMenu(name,AlterEgo::LINK_SKILL,swap);
+            else CopyNameMenuItem(name);
+        }
+        if(editable&&ImGui::MenuItem("Clear",nullptr,false,current!=0)){next=0;changed=true;}
         ImGui::EndPopup();
     }
+    if(!editable)return false;
     if(!ImGui::BeginPopup("##pair_choice"))return changed;
     ImGui::TextDisabled("Environment eligibility not verified by catalog.");
     if(ImGui::Selectable("(None)",current==0)){next=0;changed=true;ImGui::CloseCurrentPopup();}
@@ -7190,6 +7221,47 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     }
     ImGui::EndPopup();
     return changed;
+}
+
+// Four positional values: terrestrial 1/2, aquatic 1/2. Each caller owns
+// its source projection and commit boundary; rendering does not save data.
+static bool RenderProfessionPairSection(bool legend,std::array<uint32_t,4>& values,
+                                        bool editable,bool known) {
+    ImGui::PushID(legend?"legend_pairs":"pet_pairs");
+    bool changed=false;
+    for(int env=0;env<2;++env){
+        ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
+        for(int i=0;i<2;++i){
+            const int slot=env*2+i,other=env*2+1-i;
+            if(i)ImGui::SameLine(0,18);
+            ImGui::PushID(slot);
+            auto next=values[slot];
+            const auto otherId=legend&&values[other]<=255?static_cast<uint32_t>(
+                AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(values[other]))):values[other];
+            if(RenderProfessionPairChoice(legend,values[slot],values[other],next,editable,known)&&
+                AlterEgo::SkillEdit::SetPairChoice(values[slot],otherId,next))changed=true;
+            ImGui::PopID();
+        }
+    }
+    ImGui::PopID();
+    return changed;
+}
+static void RenderLiveProfessionPairs(const AlterEgo::BuildTemplate& bt) {
+    if(bt.profession!="Ranger"&&bt.profession!="Revenant")return;
+    const bool legend=bt.profession=="Revenant";
+    ImGui::Spacing();RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
+    std::array<uint32_t,4> values{};
+    bool known=legend?bt.legends_known:bt.pets_known;
+    if(legend){
+        const auto catalog=AlterEgo::PublicCatalog::Get();
+        for(int i=0;i<2;++i){
+            values[i]=AlterEgo::PublicCatalog::LegendCode(catalog->legends,bt.legends.terrestrial[i]);
+            values[i+2]=AlterEgo::PublicCatalog::LegendCode(catalog->legends,bt.legends.aquatic[i]);
+            if((!bt.legends.terrestrial[i].empty()&&!values[i])||
+               (!bt.legends.aquatic[i].empty()&&!values[i+2]))known=false;
+        }
+    }else for(int i=0;i<2;++i){values[i]=bt.pets.terrestrial[i];values[i+2]=bt.pets.aquatic[i];}
+    RenderProfessionPairSection(legend,values,false,known);
 }
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
@@ -9601,48 +9673,19 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     if((g_LibEditMode||recordedAquatic)&&ImGui::TreeNode("Aquatic skills##loadout")){
         RenderBuildSkillRow(skillSrc,skillSz,skillEditable,true);ImGui::TreePop();
     }
-    // Each environment owns its own pair. Reuse the native selector used by
-    // standalone Base Build components; no hidden mirrored assignments.
-    if(build.profession=="Revenant"){
-        const auto* values=g_LibEditMode?g_EditDraft.legend_codes:build.legend_codes;
-        if(g_LibEditMode||values[0]||values[1]||values[2]||values[3]){
-            ImGui::Spacing();RenderSectionHeader("Legends",AlterEgo::UI::SectionGold);
-            for(int env=0;env<2;++env){
-                if(!g_LibEditMode&&!values[env*2]&&!values[env*2+1])continue;
-                ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
-                for(int i=0;i<2;++i){
-                    int slot=env*2+i,other=env*2+(1-i);
-                    if(i)ImGui::SameLine(0,18);
-                    ImGui::PushID(3000+slot);
-                    if(g_LibEditMode){
-                        uint32_t next=values[slot];
-                        if(RenderProfessionPairChoice(true,values[slot],values[other],next)&&
-                           AlterEgo::SkillEdit::SetPairChoice(g_EditDraft.legend_codes[slot],
-                               AlterEgo::PublicCatalog::CanonicalLegendCode(values[other]),next))MarkEditDirty();
-                    }else{
-                        ImGui::BeginGroup();
-                        const auto legend=LegendOptionForCode(values[slot]);
-                        RenderSkillIconCore(legend.swap,40.0f,false,true,legend.icon);
-                        ImGui::TextUnformatted(legend.name.c_str());ImGui::EndGroup();
-                    }
-                    ImGui::PopID();
-                }
+    if(skillSrc.profession=="Ranger"||skillSrc.profession=="Revenant"){
+        const bool legend=skillSrc.profession=="Revenant";
+        ImGui::Spacing();RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
+        std::array<uint32_t,4> values{};
+        for(int i=0;i<4;++i)values[i]=legend?skillSrc.legend_codes[i]:
+            (i<2?skillSrc.pets.terrestrial[i]:skillSrc.pets.aquatic[i-2]);
+        if(RenderProfessionPairSection(legend,values,g_LibEditMode,false)){
+            for(int i=0;i<4;++i){
+                if(legend)g_EditDraft.legend_codes[i]=static_cast<uint8_t>(values[i]);
+                else if(i<2)g_EditDraft.pets.terrestrial[i]=values[i];
+                else g_EditDraft.pets.aquatic[i-2]=values[i];
             }
-        }
-    }
-    if(g_LibEditMode&&build.profession=="Ranger"){
-        ImGui::Spacing();RenderSectionHeader("Pets",AlterEgo::UI::SectionGold);
-        for(int env=0;env<2;++env){
-            ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
-            auto* pair=env?g_EditDraft.pets.aquatic:g_EditDraft.pets.terrestrial;
-            for(int i=0;i<2;++i){
-                if(i)ImGui::SameLine();
-                ImGui::PushID(3100+env*2+i);
-                uint32_t next=pair[i];
-                if(RenderProfessionPairChoice(false,pair[i],pair[1-i],next)&&
-                   AlterEgo::SkillEdit::SetPairChoice(pair[i],pair[1-i],next))MarkEditDirty();
-                ImGui::PopID();
-            }
+            MarkEditDirty();
         }
     }
 
