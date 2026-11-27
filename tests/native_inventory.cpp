@@ -31,7 +31,7 @@ int case_native_inventory(int,char**){
                 conn.Exec("INSERT INTO accounts VALUES('A','Example.1234','','[]')");
             });
             CI::InitializeAccountRegistry(db);
-            assert(db.Scalar("PRAGMA user_version")==2&&db.Scalar("SELECT count(*) FROM accounts")==1);
+            assert(db.Scalar("PRAGMA user_version")==3&&db.Scalar("SELECT count(*) FROM accounts")==1);
             auto initial=CI::Commit(db,"A",0,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
             assert(initial&&*initial&&initial->changes.size()==2);
             alice=initial->next.Current("Alice")->id;bob=initial->next.Current("Bob")->id;
@@ -39,43 +39,60 @@ int case_native_inventory(int,char**){
             auto unchanged=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
             assert(unchanged&&*unchanged&&unchanged->changes.empty()&&unchanged->next.revision==1);
             assert(CI::Read(db,"A").revision==1);
-            auto malformed=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a},{"Bob",{b.created,"Unknown",b.race}}});
-            assert(malformed&&malformed->status==CI::Status::Incomplete&&CI::Read(db,"A").revision==1);
             assert(CI::Commit(db,"B",0,{"Alice"},{{"Alice",a}}));
             assert(!CI::Commit(db,"A",0,{"Bob"},{{"Bob",b}})); // obsolete revision
-            auto incomplete=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a}});
-            assert(incomplete&&incomplete->status==CI::Status::Incomplete);
-            auto collision=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a},{"Bob",a}});
-            assert(collision&&collision->status==CI::Status::Ambiguous);
-            assert(CI::Read(db,"A").revision==1);
-            auto swap=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",b},{"Bob",a}});
-            assert(swap&&*swap&&swap->changes.size()==2);
-            assert(swap->next.Current("Bob")->id==alice&&swap->next.Current("Alice")->id==bob);
-            assert(swap->next.records.at(alice).names.count("Alice"));
-            auto rename=CI::Commit(db,"A",2,{"Alice","Renamed"},{{"Alice",b},{"Renamed",a}});
-            assert(rename&&*rename&&rename->changes.size()==1&&rename->next.Current("Renamed")->id==alice);
-            auto reuse=CI::Commit(db,"A",3,{"Alice","Renamed"},{{"Alice",c},{"Renamed",a}});
-            assert(reuse&&*reuse&&reuse->next.Current("Alice")->id!=bob);
-            assert(!reuse->next.records.at(bob).present);
-            auto retired=CI::Commit(db,"A",4,{"Alice","Renamed","Old"},{{"Alice",c},{"Renamed",a},{"Old",b}});
-            assert(retired&&retired->status==CI::Status::Ambiguous);
-            assert(CI::Read(db,"A").revision==4&&CI::Read(db,"B").revision==1);
+            auto apply=[&](const std::set<std::string>& roster,const std::vector<CI::Observation>& observed,bool confirm=false){
+                auto p=CI::Commit(db,"A",CI::Read(db,"A").revision,roster,observed,confirm);
+                assert(p&&*p);return *p;
+            };
+            auto incomplete=apply({"Alice","Bob"},{{"Alice",a}});
+            assert(!incomplete.complete&&incomplete.next.revision==1&&incomplete.next.Current("Bob")->id==bob);
+            auto malformed=apply({"Alice","Bob"},{{"Alice",a},{"Bob",{b.created,"Unknown",b.race}}});
+            assert(!malformed.complete&&malformed.next.Current("Alice")->id==alice&&!malformed.next.Current("Bob"));
+            auto collision=apply({"Alice","Bob","Other"},{{"Alice",a},{"Bob",a},{"Other",c}});
+            assert(collision.complete&&!collision.next.Current("Alice")&&!collision.next.Current("Bob")&&collision.next.Current("Other"));
+            auto partialSwap=apply({"Alice","Bob","Other"},{{"Alice",b}});
+            assert(!partialSwap.next.Current("Alice")&&!partialSwap.next.Current("Bob")&&partialSwap.next.Current("Other"));
+            auto swap=apply({"Alice","Bob","Other"},{{"Alice",b},{"Bob",a},{"Other",c}});
+            assert(swap.FullyResolved()&&swap.next.Current("Bob")->id==alice&&swap.next.Current("Alice")->id==bob);
+            assert(swap.next.records.at(alice).names.count("Alice"));
+            auto rename=apply({"Alice","Renamed","Other"},{{"Renamed",a}});
+            assert(!rename.complete&&rename.next.Current("Renamed")->id==alice&&!rename.next.Current("Bob"));
+            const CI::Evidence d{"2026-01-03T03:04:05Z","Necromancer","Asura"};
+            auto pending=apply({"Alice","Renamed","Other"},{{"Alice",d},{"Renamed",a},{"Other",c}});
+            assert(!pending.next.Current("Alice")&&pending.next.pendingAbsence.count(bob));
+            // A repeated/coalesced observation is not independent confirmation.
+            auto replay=apply({"Alice","Renamed","Other"},{{"Alice",d},{"Renamed",a},{"Other",c}});
+            assert(!replay.next.Current("Alice")&&replay.next.revision==pending.next.revision);
+            auto reuse=apply({"Alice","Renamed","Other"},{{"Alice",d},{"Renamed",a},{"Other",c}},true);
+            assert(reuse.FullyResolved()&&reuse.next.Current("Alice")->id!=bob&&!reuse.next.records.at(bob).present);
+            auto retired=apply({"Alice","Renamed","Other","Old"},{{"Alice",d},{"Renamed",a},{"Other",c},{"Old",b}});
+            assert(!retired.next.Current("Old")&&retired.next.Current("Renamed")->id==alice);
+            assert(CI::Read(db,"B").revision==1);
             db.Exec("DELETE FROM accounts WHERE id='A'");
         }
         {
             Database::Connection db(path,Database::Connection::OpenMode::Existing);
             CI::InitializeAccountRegistry(db);
-            auto s=CI::Read(db,"A");assert(s.revision==4&&s.Current("Renamed")->id==alice);
+            auto s=CI::Read(db,"A");assert(s.initialized&&s.Current("Renamed")->id==alice&&s.blocked.count("Old"));
             assert(!s.records.at(bob).present&&s.records.at(alice).names.size()==3);
             assert(CI::Read(db,"B").Current("Alice"));
+            const auto d=s.Current("Alice")->evidence;
+            const auto revision=s.revision;
             // Force a real transaction failure after the intermediate name
             // claims were freed; rollback restores all identity rows.
             db.Exec("CREATE TRIGGER reject_identity BEFORE UPDATE ON character_identities WHEN NEW.name='Rejected' BEGIN SELECT RAISE(ABORT,'fixture'); END");
-            bool failed=false;try{(void)CI::Commit(db,"A",4,{"Alice","Rejected"},{{"Alice",c},{"Rejected",a}});}catch(...){failed=true;}
-            assert(failed&&CI::Read(db,"A").revision==4&&CI::Read(db,"A").Current("Renamed")->id==alice);
+            bool failed=false;try{(void)CI::Commit(db,"A",revision,{"Alice","Rejected","Other"},{{"Alice",d},{"Rejected",a},{"Other",c}});}catch(...){failed=true;}
+            assert(failed&&CI::Read(db,"A").revision==revision&&CI::Read(db,"A").Current("Renamed")->id==alice);
             db.Exec("DROP TRIGGER reject_identity");
-            auto empty=CI::Commit(db,"A",4,{},{});
-            assert(empty&&*empty&&empty->changes.size()==2&&CI::Read(db,"A").Current("Renamed")==nullptr);
+            auto firstEmpty=CI::Commit(db,"A",revision,{},{});
+            assert(firstEmpty&&*firstEmpty&&firstEmpty->next.pendingAbsence.size()==3&&!firstEmpty->next.Current("Renamed"));
+            auto empty=CI::Commit(db,"A",firstEmpty->next.revision,{},{},true);
+            assert(empty&&empty->changes.size()==3&&CI::Read(db,"A").Current("Renamed")==nullptr);
+            auto initialEmpty=CI::Commit(db,"empty",0,{},{});
+            assert(initialEmpty&&initialEmpty->next.initialized&&CI::Read(db,"empty").initialized);
+            auto sameEmpty=CI::Commit(db,"empty",0,{},{});
+            assert(sameEmpty&&sameEmpty->next.revision==0);
         }
         assert(CI::Creation("2015-02-03T04:05:06.000Z")==CI::Creation(a.created));
         assert(CI::Creation("2024-02-29T00:00:00Z")&&!CI::Creation("2023-02-29T00:00:00Z"));

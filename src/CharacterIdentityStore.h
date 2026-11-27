@@ -16,6 +16,20 @@ CREATE TABLE character_identities(account TEXT NOT NULL REFERENCES character_ide
 CREATE UNIQUE INDEX character_identity_current_name ON character_identities(account,name) WHERE present=1;
 CREATE TABLE character_identity_names(account TEXT NOT NULL,local_id INTEGER NOT NULL,name TEXT NOT NULL,PRIMARY KEY(account,local_id,name),FOREIGN KEY(account,local_id) REFERENCES character_identities(account,local_id) ON DELETE CASCADE) STRICT;
 )SQL");
+        else if(version==3)c.Exec(R"SQL(
+CREATE TABLE character_identities_v3(account TEXT NOT NULL REFERENCES character_identity_state(account) ON DELETE CASCADE,local_id INTEGER NOT NULL CHECK(local_id>0),created TEXT NOT NULL,profession TEXT NOT NULL,race TEXT NOT NULL,name TEXT NOT NULL,present INTEGER NOT NULL CHECK(present IN (0,1)),PRIMARY KEY(account,local_id)) STRICT;
+CREATE TABLE character_identity_names_v3(account TEXT NOT NULL,local_id INTEGER NOT NULL,name TEXT NOT NULL,PRIMARY KEY(account,local_id,name),FOREIGN KEY(account,local_id) REFERENCES character_identities_v3(account,local_id) ON DELETE CASCADE) STRICT;
+INSERT INTO character_identities_v3 SELECT * FROM character_identities;
+INSERT INTO character_identity_names_v3 SELECT * FROM character_identity_names;
+DROP TABLE character_identity_names;
+DROP TABLE character_identities;
+ALTER TABLE character_identities_v3 RENAME TO character_identities;
+ALTER TABLE character_identity_names_v3 RENAME TO character_identity_names;
+CREATE UNIQUE INDEX character_identity_current_name ON character_identities(account,name) WHERE present=1;
+CREATE INDEX character_identity_fingerprint ON character_identities(account,created,profession,race);
+CREATE TABLE character_identity_blocked(account TEXT NOT NULL REFERENCES character_identity_state(account) ON DELETE CASCADE,name TEXT NOT NULL,PRIMARY KEY(account,name)) STRICT;
+CREATE TABLE character_identity_pending(account TEXT NOT NULL,local_id INTEGER NOT NULL,PRIMARY KEY(account,local_id),FOREIGN KEY(account,local_id) REFERENCES character_identities(account,local_id) ON DELETE CASCADE) STRICT;
+)SQL");
     });
 }
 // Caller owns a consistent transaction or serial account-registry access.
@@ -24,7 +38,7 @@ inline State Read(Database::Connection& db,const std::string& account){
     State s;s.account=account;
     auto state=db.Prepare("SELECT revision,next_id FROM character_identity_state WHERE account=?");
     state.Bind(1,account);
-    if(state.Step()){s.revision=state.Integer(0);s.nextId=state.Integer(1);}
+    if(state.Step()){s.initialized=true;s.revision=state.Integer(0);s.nextId=state.Integer(1);}
     auto rows=db.Prepare("SELECT local_id,created,profession,race,name,present FROM character_identities WHERE account=?");
     rows.Bind(1,account);
     while(rows.Step()){
@@ -40,6 +54,18 @@ inline State Read(Database::Connection& db,const std::string& account){
         if(names.size()>=MaxAliases||!names.insert(aliases.Text(1)).second)
             throw std::runtime_error("Invalid character identity history");
     }
+    auto blocked=db.Prepare("SELECT name FROM character_identity_blocked WHERE account=?");
+    blocked.Bind(1,account);
+    while(blocked.Step()){
+        if(s.blocked.size()>=MaxRecords+MaxRoster||!s.blocked.insert(blocked.Text(0)).second)
+            throw std::runtime_error("Invalid blocked character identity");
+    }
+    auto pending=db.Prepare("SELECT local_id FROM character_identity_pending WHERE account=?");
+    pending.Bind(1,account);
+    while(pending.Step()){
+        if(s.pendingAbsence.size()>=MaxRoster||!s.pendingAbsence.insert(pending.Integer(0)).second)
+            throw std::runtime_error("Invalid pending character identity");
+    }
     if(!Valid(s))throw std::runtime_error("Invalid character identity registry");
     return s;
 }
@@ -48,15 +74,14 @@ inline State Read(Database::Connection& db,const std::string& account){
 // dependent migration/recovery before publishing a changed identity.
 inline std::optional<Plan> Commit(Database::Connection& db,const std::string& account,
     int64_t expectedRevision,const std::set<std::string>& roster,
-    const std::vector<Observation>& observations){
+    const std::vector<Observation>& observations,bool confirmAbsences=false){
     Database::Transaction tx(db);
     const auto old=Read(db,account);
     if(old.revision!=expectedRevision)return std::nullopt;
-    auto p=Reconcile(old,roster,observations);
+    auto p=Reconcile(old,roster,observations,confirmAbsences);
     if(!p)return p;
-    // Persist the first verified empty roster (revision zero also denotes
-    // absent state); subsequent unchanged verifications need no writes.
-    if(p.changes.empty()&&old.revision!=0){tx.Commit();return p;}
+    // Revision zero is also a legitimate initialized empty mapping.
+    if(old.initialized&&p.next.revision==old.revision){tx.Commit();return p;}
     auto state=db.Prepare("INSERT INTO character_identity_state VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET revision=excluded.revision,next_id=excluded.next_id");
     state.Bind(1,account);state.Bind(2,p.next.revision);state.Bind(3,p.next.nextId);state.Execute();
     // Free all present-name claims in the same transaction before swaps. Do
@@ -73,6 +98,14 @@ inline std::optional<Plan> Commit(Database::Connection& db,const std::string& ac
             alias.Bind(1,account);alias.Bind(2,id);alias.Bind(3,n);alias.Execute();alias.Reset();
         }
     }
+    auto clearBlocked=db.Prepare("DELETE FROM character_identity_blocked WHERE account=?");
+    clearBlocked.Bind(1,account);clearBlocked.Execute();
+    auto blocked=db.Prepare("INSERT INTO character_identity_blocked VALUES(?,?)");
+    for(const auto& name:p.next.blocked){blocked.Bind(1,account);blocked.Bind(2,name);blocked.Execute();blocked.Reset();}
+    auto clearPending=db.Prepare("DELETE FROM character_identity_pending WHERE account=?");
+    clearPending.Bind(1,account);clearPending.Execute();
+    auto pending=db.Prepare("INSERT INTO character_identity_pending VALUES(?,?)");
+    for(auto id:p.next.pendingAbsence){pending.Bind(1,account);pending.Bind(2,id);pending.Execute();pending.Reset();}
     tx.Commit();return p;
 }
 } // namespace AlterEgo::CharacterIdentity

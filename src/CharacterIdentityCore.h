@@ -70,19 +70,31 @@ struct State {
     int64_t revision=0;
     Id nextId=1;
     std::map<Id,Record> records;
-    const Record* Current(const std::string& name)const{
+    bool initialized=false;
+    // A retained binding is not necessarily safe to use as a current address.
+    std::set<std::string> blocked;
+    std::set<Id> pendingAbsence;
+    const Record* Bound(const std::string& name)const{
         for(const auto& [id,r]:records){(void)id;if(r.present&&r.name==name)return &r;}
         return nullptr;
+    }
+    const Record* Current(const std::string& name)const{
+        return blocked.count(name)?nullptr:Bound(name);
     }
 };
 inline bool Valid(const State& s){
     if(!Text(s.account)||s.revision<0||s.nextId<1||s.records.size()>MaxRecords)return false;
-    std::set<std::string> current;std::set<Evidence> fingerprints;
+    if(s.blocked.size()>MaxRecords+MaxRoster||s.pendingAbsence.size()>MaxRoster)return false;
+    std::set<std::string> current;
+    for(const auto& name:s.blocked)if(!Text(name))return false;
+    for(const auto id:s.pendingAbsence){
+        const auto it=s.records.find(id);
+        if(it==s.records.end()||!it->second.present||!s.blocked.count(it->second.name))return false;
+    }
     for(const auto& [id,r]:s.records){
         const auto e=Normalize(r.evidence);
         if(id<1||id>=s.nextId||r.id!=id||!e||!(*e==r.evidence)||!Text(r.name)||
-           r.names.empty()||r.names.size()>MaxAliases||!r.names.count(r.name)||
-           !fingerprints.insert(r.evidence).second)return false;
+           r.names.empty()||r.names.size()>MaxAliases)return false;
         for(const auto& n:r.names)if(!Text(n))return false;
         if(r.present&&!current.insert(r.name).second)return false;
     }
@@ -96,56 +108,139 @@ struct Plan {
     Status status=Status::Invalid;
     State next;
     std::vector<Change> changes;
+    bool complete=false; // every roster name supplied valid core evidence
     explicit operator bool()const{return status==Status::Ready;}
+    bool FullyResolved()const{return status==Status::Ready&&complete&&next.blocked.empty();}
+
 };
-// The caller must supply one complete, authenticated core observation for
-// EVERY exact name in one verified roster, from the same account/generation.
-// No mutation on partial evidence, collision or historical fingerprint reuse.
-// Simultaneous name swaps are resolved by immutable ID, never sequential renames.
+// The roster is a verified complete NAME list. Core observations may be
+// partial. Only the live owner can establish account, request generation
+// and independent evidence freshness. confirmAbsences must never be set
+// for a replay/coalesced result or a partial scan. A first complete absence
+// blocks the address; a second independently verified complete absence
+// can retire it. Never resolve a retired fingerprint by name alone.
 inline Plan Reconcile(const State& old,const std::set<std::string>& roster,
-                      const std::vector<Observation>& observed){
+                      const std::vector<Observation>& observed,bool confirmAbsences=false){
     auto fail=[](Status status){Plan p;p.status=status;return p;};
     if(!Valid(old)||roster.size()>MaxRoster||observed.size()>MaxRoster)return fail(Status::Invalid);
-    if(roster.size()!=observed.size())return fail(Status::Incomplete);
-    std::map<Evidence,std::string> current;
-    std::set<std::string> names;
+    for(const auto& n:roster)if(!Text(n))return fail(Status::Invalid);
+    std::map<std::string,Evidence> valid;
+    std::map<Evidence,std::vector<std::string>> observedByEvidence;
+    std::set<std::string> supplied;
+    Plan p;p.status=Status::Ready;p.next=old;p.next.initialized=true;
+    auto& blocked=p.next.blocked;blocked.clear();
     for(const auto& row:observed){
+        if(!roster.count(row.name)||!supplied.insert(row.name).second)return fail(Status::Invalid);
         auto e=Normalize(row.evidence);
-        if(!Text(row.name)||!e||!roster.count(row.name)||!names.insert(row.name).second)
-            return fail(Status::Incomplete);
-        if(!current.emplace(*e,row.name).second)return fail(Status::Ambiguous);
+        if(!e){blocked.insert(row.name);continue;}
+        valid.emplace(row.name,*e);observedByEvidence[*e].push_back(row.name);
     }
-    if(names!=roster)return fail(Status::Incomplete);
-    Plan p;p.status=Status::Ready;p.next=old;
-    std::map<Evidence,Id> byEvidence;
-    for(const auto& [id,r]:old.records)byEvidence.emplace(r.evidence,id);
-    std::set<Id> matched;
-    for(const auto& [e,name]:current){
-        const auto prior=byEvidence.find(e);
-        if(prior==byEvidence.end()){
-            if(p.next.records.size()>=MaxRecords||p.next.nextId==std::numeric_limits<Id>::max())
-                return fail(Status::Exhausted);
-            const auto id=p.next.nextId++;
-            p.next.records.emplace(id,Record{id,e,name,true,{name}});
-            p.changes.push_back({id,Kind::Added,{},name});matched.insert(id);
+    p.complete=valid.size()==roster.size();
+    std::map<Evidence,std::vector<Id>> priorByEvidence;
+    for(const auto& [id,r]:old.records)priorByEvidence[r.evidence].push_back(id);
+    // Proposal zero denotes a new identity. Existing proposals are indexed
+    // in both directions so address cycles are evaluated as a single group.
+    std::map<std::string,Id> proposals;
+    std::map<Id,std::string> destinations;
+    for(const auto& n:roster)if(!valid.count(n)&&(!old.Bound(n)||old.blocked.count(n)))blocked.insert(n);
+    for(const auto& [e,names]:observedByEvidence){
+        const auto prior=priorByEvidence.find(e);
+        const bool uniquePrior=prior!=priorByEvidence.end()&&prior->second.size()==1;
+        if(names.size()!=1||(prior!=priorByEvidence.end()&&
+            (!uniquePrior||!old.records.at(prior->second.front()).present))){
+            blocked.insert(names.begin(),names.end());
+            if(prior!=priorByEvidence.end())for(auto id:prior->second){
+                const auto& r=old.records.at(id);
+                if(r.present)blocked.insert(r.name);
+                p.next.pendingAbsence.erase(id);
+            }
+            continue;
+        }
+        const auto& name=names.front();
+        if(prior==priorByEvidence.end()){proposals.emplace(name,0);continue;}
+        const auto id=prior->second.front();const auto& r=old.records.at(id);
+        p.next.pendingAbsence.erase(id);
+        proposals.emplace(name,id);destinations.emplace(id,name);
+        // A partial response cannot authorize moving an identity away from
+        // a still-listed but unobserved old address.
+        if(r.name!=name&&roster.count(r.name)&&!valid.count(r.name)){
+            blocked.insert(r.name);blocked.insert(name);
+        }
+    }
+    // A previously unresolved group requires all of its still-listed
+    // addresses to be observed before clearing its uncertainty.
+    const bool unresolvedOld=std::any_of(old.blocked.begin(),old.blocked.end(),
+        [&](const auto& n){return roster.count(n)&&!valid.count(n);});
+    if(unresolvedOld)for(const auto& [name,id]:proposals){
+        if(old.blocked.count(name)||(id&&old.blocked.count(old.records.at(id).name))){
+            blocked.insert(name);if(id)blocked.insert(old.records.at(id).name);
+        }
+    }
+    std::set<Id> retiring;
+    for(const auto& [id,r]:old.records)if(r.present&&!destinations.count(id)){
+        const bool observedFingerprint=observedByEvidence.count(r.evidence)!=0;
+        if(observedFingerprint){p.next.pendingAbsence.erase(id);continue;}
+        const bool conflict=!roster.count(r.name)||supplied.count(r.name)!=0||old.blocked.count(r.name);
+        if(!conflict)continue;
+        if(p.complete&&confirmAbsences&&old.pendingAbsence.count(id)){
+            retiring.insert(id);p.next.pendingAbsence.erase(id);
         }else{
-            auto& r=p.next.records.at(prior->second);
-            // A previously confirmed absence might be restoration or a rare
-            // fingerprint collision. Do not silently inherit retired intent.
-            if(!r.present)return fail(Status::Ambiguous);
-            matched.insert(r.id);
+            blocked.insert(r.name);
+            if(p.complete)p.next.pendingAbsence.insert(id);
+        }
+    }
+    // History bounds limit new allocation, not verification of other
+    // characters or renaming an established identity.
+    size_t remaining=MaxRecords-old.records.size();
+    auto nextId=old.nextId;
+    for(const auto& [name,id]:proposals)if(!id&&!blocked.count(name)){
+        if(!remaining||nextId==std::numeric_limits<Id>::max())blocked.insert(name);
+        else{--remaining;++nextId;}
+    }
+    // Propagate uncertainty through connected address claims. An occupied
+    // destination may only be adopted if its prior owner is also moving or
+    // independently confirmed retired.
+    bool changed=true;
+    while(changed){
+        const auto before=blocked.size();
+        for(const auto& [name,id]:proposals){
+            const auto* occupant=old.Bound(name);
+            bool conflict=blocked.count(name)!=0||(id&&blocked.count(old.records.at(id).name));
+            if(occupant&&occupant->id!=id&&!retiring.count(occupant->id)){
+                const auto move=destinations.find(occupant->id);
+                if(move==destinations.end()||move->second==name||blocked.count(move->second))conflict=true;
+            }
+            if(conflict){blocked.insert(name);if(id)blocked.insert(old.records.at(id).name);}
+        }
+        changed=blocked.size()!=before;
+    }
+    for(auto id:retiring){
+        auto& r=p.next.records.at(id);r.present=false;
+        p.changes.push_back({id,Kind::Removed,r.name,{}});
+    }
+    for(const auto& [name,id]:proposals){
+        if(blocked.count(name)||(id&&blocked.count(old.records.at(id).name)))continue;
+        if(!id){
+            const auto local=p.next.nextId++;
+            p.next.records.emplace(local,Record{local,valid.at(name),name,true,{name}});
+            p.changes.push_back({local,Kind::Added,{},name});
+        }else{
+            auto& r=p.next.records.at(id);
             if(r.name!=name){
-                if(!r.names.count(name)&&r.names.size()>=MaxAliases)return fail(Status::Exhausted);
-                p.changes.push_back({r.id,Kind::Renamed,r.name,name});
-                r.name=name;r.names.insert(name);
+                p.changes.push_back({id,Kind::Renamed,r.name,name});
+                r.name=name;
+                // Keep existing history at its cap. Current name is stored
+                // independently; a full history must not prevent a rename.
+                if(r.names.size()<MaxAliases)r.names.insert(name);
             }
         }
     }
-    for(auto& [id,r]:p.next.records)if(r.present&&!matched.count(id)){
-        p.changes.push_back({id,Kind::Removed,r.name,{}});r.present=false;
+    // Forget unresolved labels that are neither in the latest roster nor
+    // held by a retained binding. Retired records retain their provenance.
+    for(auto it=blocked.begin();it!=blocked.end();){
+        if(!roster.count(*it)&&!p.next.Bound(*it))it=blocked.erase(it);else ++it;
     }
-    // A verification without a changed binding is not a mapping change.
-    if(!p.changes.empty()){
+    if(!p.changes.empty()||blocked!=old.blocked||p.next.pendingAbsence!=old.pendingAbsence){
         if(old.revision==std::numeric_limits<int64_t>::max())return fail(Status::Exhausted);
         ++p.next.revision;
     }

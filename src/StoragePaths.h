@@ -9,7 +9,7 @@
 
 namespace AlterEgo::Storage {
 inline constexpr int kAccountRegistryApplicationId=0x41454143;
-inline constexpr int kAccountRegistrySchemaVersion=2;
+inline constexpr int kAccountRegistrySchemaVersion=3;
 struct Paths {
     explicit Paths(const std::string& root) : base(std::filesystem::u8path(root)) {}
     std::filesystem::path base;

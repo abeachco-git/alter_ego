@@ -6,7 +6,7 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 ## Approved character identity reconciliation
 
-- [ ] Part 7A.2: verify unchanged mappings do not advance the revision and canonical evidence validation; finish explicit collision representation, targeted uncertainty, confirmed absence handling and history bounds. Do not activate live adoption until request fencing and recovery are integrated.
+- [ ] Part 7A.2: verify scoped partial/ambiguous reconciliation, pending absence confirmation, schema v3 migration, canonical evidence, stable no-op revision and bounded history. Verify the live caller establishes independent observation freshness before confirming absence. Do not activate live adoption until request fencing and recovery are integrated.
 
 - [ ] Wire the single authenticated roster owner to reconcile full core evidence before any destructive pruning. Bootstrap from complete verified cached core evidence only; incomplete or ambiguous snapshots must retain prior evidence. Reuse normal roster/core retrieval; explicitly assess request volume and generation fencing before altering admission. Detect name swaps and same-name replacements even when the name set is unchanged.
 - [ ] Part 7B: integrate crash-recoverable identity adoption with cache pruning and stale request rejection, including physical inventory and character detail publications; preserve account isolation, old verified evidence and historical provenance, never redirect queued Fast Load.
