@@ -71,7 +71,7 @@ int case_native_library(int,char**) {
         }
         {
             DB::Connection db(old.db(),DB::Connection::OpenMode::Existing);
-            db.Exec("DROP TABLE loadout_source_identity;DROP TABLE fashion_character_identity;PRAGMA user_version=5;");
+            db.Exec("DROP TABLE loadout_source_identity;DROP TABLE fashion_character_identity;ALTER TABLE components DROP COLUMN name_origin;PRAGMA user_version=5;");
         }
         {
             Native::Repository migrated(old.db(),DB::Connection::OpenMode::Existing);
@@ -83,6 +83,33 @@ int case_native_library(int,char**) {
             assert(C::ToJson(actual.loadouts)==C::ToJson(expected.loadouts));
             assert(AlterEgo::Fashion::ToJson(actual.fashion[0])==AlterEgo::Fashion::ToJson(look));
         }
+    }
+    // v6 names are protected regardless of their spelling. New provenance
+    // is persisted independently of exact payload/fingerprint and survives
+    // repository reopen, including a name-origin-only revision.
+    {
+        Scratch old;
+        auto prior=expected;
+        {
+            Native::Repository repo(old.db(),DB::Connection::OpenMode::Create);
+            assert(repo.Commit(repo.Read(),prior)==1);
+        }
+        {
+            DB::Connection db(old.db(),DB::Connection::OpenMode::Existing);
+            db.Exec("ALTER TABLE components DROP COLUMN name_origin;PRAGMA user_version=6;");
+        }
+        {
+            Native::Repository migrated(old.db(),DB::Connection::OpenMode::Existing);
+            auto read=migrated.Read();assert(read.revision==1);
+            assert(C::ToJson(read.loadouts)==C::ToJson(prior.loadouts));
+            auto after=read;
+            after.loadouts.components.at("armor").front().nameOrigin=C::NameOrigin::Manual;
+            assert(migrated.Commit(read,after)==2);
+        }
+        Native::Repository reopened(old.db(),DB::Connection::OpenMode::Existing);
+        auto read=reopened.Read();assert(read.revision==2);
+        assert(read.loadouts.components.at("armor").front().nameOrigin==C::NameOrigin::Manual);
+        assert(read.loadouts.components.at("armor").front().data==prior.loadouts.components.at("armor").front().data);
     }
     // Intentional duplicate and distinct physical placement are retained.
     auto sigil=expected.loadouts.components.at("sigils").front();

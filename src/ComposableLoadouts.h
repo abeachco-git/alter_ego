@@ -1,5 +1,6 @@
 #pragma once
 #include "CharacterProvenance.h"
+#include "ComponentNameOrigin.h"
 #include "UntrustedInput.h"
 #include "EquipmentChoiceCore.h"
 #include "InfusionTotalsCore.h"
@@ -46,7 +47,29 @@ inline bool Fail(std::string& error, const std::string& what) {
 struct Component {
     std::string id, name;
     Json data = Json::object();
+    NameOrigin nameOrigin=NameOrigin::Unknown;
 };
+inline bool DecodeNameOrigin(const Json& record,NameOrigin& result){
+    result=NameOrigin::Unknown;
+    const auto it=record.find("name_origin");
+    if(it==record.end())return true;
+    if(!it->is_string())return false;
+    const auto& name=it->get_ref<const std::string&>();
+    if(name=="unknown")return true;
+    if(name=="manual")result=NameOrigin::Manual;
+    else if(name=="automatic")result=NameOrigin::Automatic;
+    else if(name=="automatic_pending")result=NameOrigin::AutomaticPending;
+    else return false;
+    return true;
+}
+inline void EncodeNameOrigin(Json& record,NameOrigin value){
+    switch(value){
+    case NameOrigin::Unknown:record.erase("name_origin");break;
+    case NameOrigin::Manual:record["name_origin"]="manual";break;
+    case NameOrigin::Automatic:record["name_origin"]="automatic";break;
+    case NameOrigin::AutomaticPending:record["name_origin"]="automatic_pending";break;
+    }
+}
 struct Loadout {
     std::string id;
     Json metadata = Json::object(); // Existing name, notes, modes, provenance, etc.
@@ -155,7 +178,7 @@ inline bool Validate(const Document& doc, std::string& error) {
         std::set<std::string> ids;
         for (const auto& item : list) {
             if (item.id.empty() || !ids.insert(item.id).second ||
-                !item.data.is_object())
+                !item.data.is_object() || !ValidNameOrigin(item.nameOrigin))
                 return Fail(error, "Invalid or duplicate component: " + kind);
         }
     }
@@ -333,9 +356,10 @@ inline Json Metadata(const Json& old) {
 // Names describe reusable contents, not the source Loadout.
 using ComponentNameLookup = std::function<std::string(const std::string&, uint32_t)>;
 inline std::string SuggestComponentName(const std::string& kind, const Json& data,
-                                        const ComponentNameLookup& lookup = {}) {
+                                        const ComponentNameLookup& lookup = {},bool* missing=nullptr) {
     bool incomplete=false;
-    auto finish=[&](std::string name){return incomplete?name+" (metadata pending)":name;};
+    if(missing)*missing=false;
+    auto finish=[&](std::string name){if(missing)*missing=incomplete;return incomplete?name+" (metadata pending)":name;};
     std::map<std::string, int> names;
     auto add = [&](std::string value) {
         for (const std::string prefix : {"Superior Sigil of the ", "Superior Rune of the ", "Superior Sigil of ", "Superior Rune of ", "Sigil of the ", "Rune of the ", "Sigil of ", "Rune of "}) {
@@ -352,7 +376,9 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
         if (id) {
             it = obj.find(id);
             if (it != obj.end() && it->is_number_integer() && *it != 0) {
-                if (lookup) {
+                const auto validId=it->is_number_unsigned()?it->get<uint64_t>()<=UINT32_MAX:
+                    it->get<int64_t>()>0&&static_cast<uint64_t>(it->get<int64_t>())<=UINT32_MAX;
+                if (lookup&&validId) {
                     auto resolved = lookup(category, it->get<uint32_t>());
                     if (!resolved.empty()) return resolved;
                 }
@@ -388,6 +414,19 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
         if (names.empty() && data.contains("infusion_totals") && data["infusion_totals"].is_array())
             for (const auto& item : data["infusion_totals"])
                 add(field(item, "attribute", "item_id"));
+        if(names.empty()&&data.contains("gear")&&data["gear"].is_object()){
+            for(const auto& slot:data["gear"]){
+                if(!slot.is_object())continue;
+                const auto ids=slot.find("infusion_ids");
+                const auto attrs=slot.find("infusion_attributes");
+                if(ids!=slot.end()&&ids->is_array()&&!ids->empty()){
+                    for(const auto& id:*ids)if(id.is_number_integer()&&id!=0)
+                        add(field(Json{{"id",id}},"name","id"));
+                }else if(attrs!=slot.end()&&attrs->is_array()){
+                    for(const auto& attr:*attrs)if(attr.is_string())add(attr.get<std::string>());
+                }else add(field(slot,"infusion"));
+            }
+        }
     }
     if (kind == "base_build") {
         std::string profession = field(data, "profession");
@@ -420,10 +459,14 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
     for (const auto& entry : names) {
         if (!name.empty()) name += " / ";
         name += entry.first;
-        if (entry.second > 1 && (names.size() > 1 || kind == "runes") && kind != "sigils")
+        if (entry.second > 1 && (names.size() > 1 || kind == "runes" || kind == "infusions") && kind != "sigils")
             name += " x" + std::to_string(entry.second);
     }
-    if (!name.empty()) return finish(name);
+    if (!name.empty()){
+        if(kind=="armor")name+=" Armor";
+        else if(kind=="trinkets")name+=" Trinkets";
+        return finish(name);
+    }
     if(incomplete){std::string label=kind;label[0]=static_cast<char>(std::toupper(static_cast<unsigned char>(label[0])));return finish(label);}
     if (kind == "aquatic") return "Aquatic";
     if (kind == "armor") return "Armor (unspecified)";
@@ -587,16 +630,52 @@ inline bool ComponentNameAvailable(const Document& doc, const std::string& kind,
     return true;
 }
 inline std::string UniqueComponentName(const Document& doc, const std::string& kind,
-                                       const std::string& proposed) {
+                                       const std::string& proposed,const std::string& exceptId={}) {
     auto group = doc.components.find(kind);
     if (group == doc.components.end()) return proposed;
     std::string name = proposed;
     for (unsigned suffix = 2; ; ++suffix) {
-        if (ComponentNameAvailable(doc, kind, name)) return name;
+        if (ComponentNameAvailable(doc, kind, name,exceptId)) return name;
         name = proposed + " (" + std::to_string(suffix) + ")";
     }
 }
 
+// Only a known generation action creates automatic provenance. Existing
+// saved names are never classified from their spelling or placeholder suffix.
+inline bool ApplyGeneratedName(const Document& doc,const std::string& kind,Component& part,
+    const ComponentNameLookup& lookup={},bool pendingOnly=false){
+    bool incomplete=false;
+    const auto proposed=SuggestComponentName(kind,part.data,lookup,&incomplete);
+    if(pendingOnly&&incomplete)return false;
+    const auto name=UniqueComponentName(doc,kind,proposed,part.id);
+    if(!Untrusted::DisplayText(name))return false;
+    const auto origin=incomplete?NameOrigin::AutomaticPending:NameOrigin::Automatic;
+    const bool changed=part.name!=name||part.nameOrigin!=origin;
+    part.name=name;part.nameOrigin=origin;return changed;
+}
+inline Component GeneratedComponent(const Document& doc,const std::string& kind,const std::string& id,
+    const Json& data,const ComponentNameLookup& lookup={}){
+    Component part{id,UniqueComponentName(doc,kind,SuggestComponentName(kind,data,lookup)),data};
+    ApplyGeneratedName(doc,kind,part,lookup);
+    return part;
+}
+// Run only at a safe library transaction/startup boundary. The lookup is
+// cache-only; no request, waiting, or render-time maintenance is introduced.
+inline bool RepairPendingNames(Document& doc,const ComponentNameLookup& lookup){
+    bool changed=false;
+    for(auto& [kind,parts]:doc.components)for(auto& part:parts)
+        if(part.nameOrigin==NameOrigin::AutomaticPending)
+            changed=ApplyGeneratedName(doc,kind,part,lookup,true)||changed;
+    return changed;
+}
+inline void RefreshEditedAutomaticNames(const Document& before,Document& after,const ComponentNameLookup& lookup){
+    for(auto& [kind,parts]:after.components)for(auto& part:parts){
+        if(!IsAutomaticName(part.nameOrigin))continue;
+        const auto* prior=Find(before,kind,part.id);
+        if(prior&&prior->data.dump()!=part.data.dump())
+            ApplyGeneratedName(after,kind,part,lookup);
+    }
+}
 inline bool SplitLegacy(const Json& legacy, Document& output, std::string& error) {
     error.clear();
     if (!legacy.is_object() || !legacy.contains("builds") ||
@@ -779,8 +858,10 @@ inline Json ToJson(const Document& doc) {
     };
     for (const auto& [kind, list] : doc.components) {
         Json& entries = output["components"][kind] = Json::array();
-        for (const auto& item : list)
-            entries.push_back({{"id", item.id}, {"name", item.name}, {"data", item.data}});
+        for (const auto& item : list){
+            Json entry={{"id",item.id},{"name",item.name},{"data",item.data}};
+            EncodeNameOrigin(entry,item.nameOrigin);entries.push_back(std::move(entry));
+        }
     }
     for (const auto& item : doc.loadouts)
         output["loadouts"].push_back({
@@ -820,11 +901,11 @@ inline bool FromJson(const Json& input, Document& output, std::string& error) {
         for (auto it = input["components"].begin(); it != input["components"].end(); ++it) {
             if (!it.value().is_array())
                 return Fail(error, "Component collection must be an array.");
-            for (const auto& raw : it.value())
-                next.components[it.key()].push_back({
-                    raw.at("id").get<std::string>(), raw.at("name").get<std::string>(),
-                    raw.at("data")
-                });
+            for (const auto& raw : it.value()){
+                Component part{raw.at("id").get<std::string>(),raw.at("name").get<std::string>(),raw.at("data")};
+                if(!DecodeNameOrigin(raw,part.nameOrigin))return Fail(error,"Invalid component name provenance.");
+                next.components[it.key()].push_back(std::move(part));
+            }
         }
         for (const auto& raw : input["loadouts"]) {
             Loadout item;
@@ -855,8 +936,9 @@ inline bool FromJson(const Json& input, Document& output, std::string& error) {
 constexpr const char* kComponentFormat = "alter_ego_loadout_component";
 constexpr int kComponentVersion = 1;
 inline Json ExportComponent(const std::string& kind, const Component& component) {
-    return Json{{"format", kComponentFormat}, {"version", kComponentVersion},
+    Json packet={{"format", kComponentFormat}, {"version", kComponentVersion},
                 {"kind", kind}, {"name", component.name}, {"data", component.data}};
+    EncodeNameOrigin(packet,component.nameOrigin);return packet;
 }
 // Validate only fields understood by upstream SavedBuild. Extension fields
 // remain intentionally unrestricted/lossless. This prevents malformed pasted
@@ -1020,7 +1102,9 @@ inline bool ImportComponent(const Json& input, std::string& kind,
     }
     if (!ValidatePortablePayload(parsedKind, data, error)) return false;
     kind = parsedKind;
-    component = {"", input.at("name").get<std::string>(), data};
+    Component parsed{"",input.at("name").get<std::string>(),data};
+    if(!DecodeNameOrigin(input,parsed.nameOrigin))return Fail(error,"Invalid component name provenance.");
+    component=std::move(parsed);
     return true;
 }
 
@@ -1040,6 +1124,7 @@ inline bool ExportPortableLoadout(const Document& doc, const std::string& id,
         const Component* part = Find(doc, kind, ref);
         if (!part) return Fail(error, "Loadout references an unavailable component.");
         components[kind] = {{"name", part->name}, {"data", part->data}};
+        EncodeNameOrigin(components[kind],part->nameOrigin);
     }
     packet = Json{{"format", kPortableLoadoutFormat},
                   {"version", kPortableLoadoutVersion},
@@ -1088,13 +1173,10 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
             return Fail(error, "Invalid embedded component.");
         std::string kind;
         Component part;
-        if (!ImportComponent(Json{
-            {"format", kComponentFormat},
-            {"version", kComponentVersion},
-            {"kind", it.key()},
-            {"name", it.value()["name"]},
-            {"data", it.value()["data"]}}, kind, part, error))
-            return false;
+        Json embedded={{"format",kComponentFormat},{"version",kComponentVersion},
+            {"kind",it.key()},{"name",it.value()["name"]},{"data",it.value()["data"]}};
+        if(it.value().contains("name_origin"))embedded["name_origin"]=it.value()["name_origin"];
+        if(!ImportComponent(embedded,kind,part,error))return false;
         imported[kind] = std::move(part);
     }
     if (!imported.count("base_build") || !imported.count("skills"))
@@ -1305,6 +1387,7 @@ inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
         if (ComponentNameKey(name) != ComponentNameKey(item->name) &&
             !ComponentNameAvailable(next, kind, name, id))
             return Fail(err, "A component with this name already exists.");
+        if(item->name!=name)item->nameOrigin=NameOrigin::Manual;
         item->name = name;
         item->data = data;
         return true;
@@ -1323,6 +1406,7 @@ inline bool CopyForLoadout(Document& doc, const std::string& loadoutId,
         Component copied = *source;
         copied.id = id;
         copied.name = UniqueComponentName(next, kind, name);
+        copied.nameOrigin=NameOrigin::Manual;
         next.components[kind].push_back(std::move(copied));
         item->refs[kind] = id;
         return true;
@@ -1356,6 +1440,7 @@ inline bool CopyEditedForLoadout(Document& doc, const std::string& loadoutId,
         Component copy = *source;
         copy.id = newId;
         copy.name = UniqueComponentName(next, kind, name);
+        copy.nameOrigin=NameOrigin::Manual;
         copy.data = editedData;
         next.components[kind].push_back(std::move(copy));
         loadout->refs[kind] = newId;
@@ -1488,9 +1573,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
                     created.refs[kind] = match->id;
                     continue;
                 }
-                next.components[kind].push_back({
-                    componentId, UniqueComponentName(next, kind, SuggestComponentName(kind, data, lookup)), data
-                });
+                next.components[kind].push_back(GeneratedComponent(next,kind,componentId,data,lookup));
                 created.refs[kind] = componentId;
             }
             order.push_back(std::move(created));
@@ -1522,8 +1605,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
                     unsigned sequence = 1;
                     while (Find(next,kind,newId))
                         newId = kind + ":" + id + ":" + std::to_string(sequence++);
-                    next.components[kind].push_back({newId,
-                        UniqueComponentName(next,kind,SuggestComponentName(kind,data,lookup)),data});
+                    next.components[kind].push_back(GeneratedComponent(next,kind,newId,data,lookup));
                     updated.refs[kind] = newId;
                 }
                 continue;
@@ -1557,9 +1639,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
                 unsigned sequence = 1;
                 while (Find(next, kind, privateId))
                     privateId = kind + ":" + id + ":" + std::to_string(sequence++);
-                next.components[kind].push_back({
-                    privateId, UniqueComponentName(next, kind, SuggestComponentName(kind, data, lookup)), data
-                });
+                next.components[kind].push_back(GeneratedComponent(next,kind,privateId,data,lookup));
                 updated.refs[kind] = privateId;
             } else previous->data = data;
         }

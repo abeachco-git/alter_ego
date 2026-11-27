@@ -202,8 +202,7 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
         std::string componentId=kind+":"+id;
         for(unsigned i=1;Composable::Find(doc,kind,componentId);++i)
             componentId=kind+":"+id+":"+std::to_string(i);
-        doc.components[kind].push_back({componentId,
-            Composable::UniqueComponentName(doc,kind,Composable::SuggestComponentName(kind,data,lookup)),data});
+        doc.components[kind].push_back(Composable::GeneratedComponent(doc,kind,componentId,data,lookup));
         next.refs[kind]=componentId;
     }
     if(existing)*existing=std::move(next);
@@ -230,8 +229,7 @@ inline bool PutEquipmentSet(Composable::Document& doc,const std::string& id,
         std::string componentId=kind+":"+id;
         for(unsigned n=1;Composable::Find(doc,kind,componentId);++n)
             componentId=kind+":"+id+":"+std::to_string(n);
-        doc.components[kind].push_back({componentId,
-            Composable::UniqueComponentName(doc,kind,Composable::SuggestComponentName(kind,data,lookup)),data});
+        doc.components[kind].push_back(Composable::GeneratedComponent(doc,kind,componentId,data,lookup));
         set.refs[kind]=componentId;
     }
     doc.equipment_sets.push_back(std::move(set));
@@ -481,7 +479,7 @@ inline bool PutUnifiedLoadout(Composable::Document& doc,const Json& raw,
             if(chosen.empty()){
                 chosen=kind+":"+id+":edit";
                 for(unsigned n=1;Composable::Find(next,kind,chosen);++n)chosen=kind+":"+id+":edit:"+std::to_string(n);
-                next.components[kind].push_back({chosen,Composable::UniqueComponentName(next,kind,Composable::SuggestComponentName(kind,data,lookup)),data});
+                next.components[kind].push_back(Composable::GeneratedComponent(next,kind,chosen,data,lookup));
             }
             if(inherited){
                 if(chosen==oldId)continue;

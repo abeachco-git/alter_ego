@@ -190,6 +190,47 @@ int case_native_editing(int,char**) {
         assert(single.equipment_sets.size()==graph.equipment_sets.size());
         assert(Composable::FindEquipmentSet(single,"set")->refs.at("armor")=="new-armor");
     }
+    // Name provenance is explicit, not inferred from suffixes. Only pending
+    // automatic names are repaired, without touching payload or exact IDs.
+    {
+        using namespace Composable;
+        Document graph;
+        const Json relicData={{"relic_id",42}};
+        auto autoPart=GeneratedComponent(graph,"relic","auto",relicData);
+        assert(autoPart.nameOrigin==NameOrigin::AutomaticPending);
+        graph.components["relic"].push_back(autoPart);
+        graph.components["relic"].push_back({"legacy","Relic (metadata pending)",relicData});
+        graph.components["relic"].push_back({"custom","Keep me",relicData,NameOrigin::Manual});
+        assert(!RepairPendingNames(graph,{}));
+        const ComponentNameLookup lookup=[](const std::string& kind,uint32_t id){
+            return kind=="item"&&id==42?std::string("Verified relic"):std::string{};
+        };
+        assert(RepairPendingNames(graph,lookup));
+        assert(Find(graph,"relic","auto")->name=="Verified relic");
+        assert(Find(graph,"relic","auto")->nameOrigin==NameOrigin::Automatic);
+        assert(Find(graph,"relic","auto")->data==relicData);
+        assert(Find(graph,"relic","legacy")->name=="Relic (metadata pending)");
+        assert(Find(graph,"relic","custom")->name=="Keep me");
+        assert(!RepairPendingNames(graph,[](const std::string&,uint32_t){return std::string("Changed upstream name");}));
+        std::string kind,error;Component imported;
+        auto packet=ExportComponent("relic",*Find(graph,"relic","auto"));
+        assert(ImportComponent(packet,kind,imported,error));
+        assert(imported.nameOrigin==NameOrigin::Automatic);
+        packet["name_origin"]="invalid";
+        assert(!ImportComponent(packet,kind,imported,error));
+        packet.erase("name_origin");
+        assert(ImportComponent(packet,kind,imported,error)&&imported.nameOrigin==NameOrigin::Unknown);
+        Document restored;
+        assert(FromJson(ToJson(graph),restored,error));
+        assert(ToJson(graph)==ToJson(restored));
+        auto edited=graph;
+        Find(edited,"relic","auto")->data["relic_id"]=43;
+        RefreshEditedAutomaticNames(graph,edited,lookup);
+        assert(Find(edited,"relic","auto")->nameOrigin==NameOrigin::AutomaticPending);
+        Find(edited,"relic","custom")->data["relic_id"]=43;
+        RefreshEditedAutomaticNames(graph,edited,lookup);
+        assert(Find(edited,"relic","custom")->name=="Keep me");
+    }
     // Standalone creation reuses exact components and never modifies a Loadout.
     {
         const auto before=Composable::ToJson(doc);

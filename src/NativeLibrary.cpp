@@ -55,20 +55,30 @@ Repository::Repository(const std::string& path,Database::Connection::OpenMode mo
     if(id==kApplicationId&&version==4&&backedUpV4Revision>=0&&mode==Database::Connection::OpenMode::Existing){
         UpgradeBackedUpV4(backedUpV4Revision);return;
     }
-    if(id==kApplicationId&&version>0&&version!=5&&version!=kSchemaVersion)
+    if(id==kApplicationId&&version>0&&version!=5&&version!=6&&version!=kSchemaVersion)
         throw Database::Error(SQLITE_NOTADB,"Archive experimental library.db and migrate the original v2 library; schema is not supported.");
     if(id==kApplicationId&&version==kSchemaVersion) {
         if(verify) db_.Verify();
-    } else Database::Migrate(db_,kApplicationId,kSchemaVersion,UpgradeSchema);
+    } else Database::Migrate(db_,kApplicationId,kSchemaVersion,[&](Database::Connection& db,int v){
+        if(v==7&&backedUpV4Revision>=0&&db.Scalar("SELECT revision FROM library_state WHERE singleton=1")!=backedUpV4Revision)
+            throw Database::Error(SQLITE_BUSY,"Library changed after schema backup; reopen.");
+        UpgradeSchema(db,v);
+    });
 }
 Snapshot Repository::ReadUnlocked() {
     Snapshot snapshot;
-    const bool provenance=db_.Scalar("PRAGMA user_version")>=6;
+    const auto schema=db_.Scalar("PRAGMA user_version");
+    const bool provenance=schema>=6;
     snapshot.revision=db_.Scalar("SELECT revision FROM library_state WHERE singleton=1");
     {
-        auto q=db_.Prepare("SELECT kind,id,name,fingerprint FROM components ORDER BY kind,ordinal,id");
+        auto q=db_.Prepare(schema>=7?
+            "SELECT kind,id,name,fingerprint,name_origin FROM components ORDER BY kind,ordinal,id":
+            "SELECT kind,id,name,fingerprint,0 FROM components ORDER BY kind,ordinal,id");
         while(q.Step()) {
             const auto kind=q.Text(0); Component c{q.Text(1),q.Text(2),ReadPayload(db_,kind,q.Text(1))};
+            c.nameOrigin=static_cast<Composable::NameOrigin>(q.Int(4));
+            if(!Composable::ValidNameOrigin(c.nameOrigin))
+                throw Database::Error(SQLITE_CORRUPT,"Invalid component name provenance");
             if(fingerprint_(c.data)!=q.Text(3))
                 throw Database::Error(SQLITE_CORRUPT,"Component fingerprint verification failed");
             snapshot.loadouts.components[kind].push_back(std::move(c));
@@ -126,10 +136,11 @@ std::int64_t Repository::CommitUnlocked(const Snapshot& before,const Snapshot& a
             const auto& c=current[i];auto found=old.find(c.id);
             const bool exists=found!=old.end();
             const bool sameData=exists&&ExactContent(found->second.second->data,c.data);
-            if(sameData&&found->second.first==i&&found->second.second->name==c.name)continue;
-            Run(db_,"INSERT INTO components VALUES(?,?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET "
-                "name=excluded.name,ordinal=excluded.ordinal,fingerprint=excluded.fingerprint",
-                {kind,c.id,c.name,Number(i),fingerprint_(c.data)});
+            if(sameData&&found->second.first==i&&found->second.second->name==c.name&&
+                found->second.second->nameOrigin==c.nameOrigin)continue;
+            Run(db_,"INSERT INTO components(kind,id,name,ordinal,fingerprint,name_origin) VALUES(?,?,?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET "
+                "name=excluded.name,ordinal=excluded.ordinal,fingerprint=excluded.fingerprint,name_origin=excluded.name_origin",
+                {kind,c.id,c.name,Number(i),fingerprint_(c.data),static_cast<std::int64_t>(c.nameOrigin)});
             if(!sameData) {
                 Run(db_,"DELETE FROM component_payloads WHERE kind=? AND component_id=?",{kind,c.id});
                 WritePayload(db_,kind,c);
@@ -223,7 +234,8 @@ DROP TABLE library_state;
 )SQL");
         UpgradeSchema(db_,5);
         UpgradeSchema(db_,6);
-        db_.Exec("PRAGMA user_version=6");
+        UpgradeSchema(db_,7);
+        db_.Exec("PRAGMA user_version=7");
         Snapshot empty;
         CommitUnlocked(empty,after);
         Run(db_,"UPDATE library_state SET revision=? WHERE singleton=1",{before.revision+1});

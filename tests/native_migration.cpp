@@ -94,7 +94,7 @@ int case_native_migration(int,char**) {
         Native::Repository repo(v4paths.Library().u8string(),DB::Connection::OpenMode::Create);
         old.revision=repo.Commit(repo.Read(),old);
     }
-    {DB::Connection db(v4paths.Library().u8string(),DB::Connection::OpenMode::Existing);db.Exec("DROP TABLE loadout_source_identity;DROP TABLE fashion_character_identity;PRAGMA user_version=4");}
+    {DB::Connection db(v4paths.Library().u8string(),DB::Connection::OpenMode::Existing);db.Exec("DROP TABLE loadout_source_identity;DROP TABLE fashion_character_identity;ALTER TABLE components DROP COLUMN name_origin;PRAGMA user_version=4");}
     assert(store.Open(v4root.u8string(),error));Native::Snapshot migrated;assert(store.Read(migrated,error));
     Json afterWater;assert(C::ToLegacy(migrated.loadouts,afterWater,error)&&beforeWater==afterWater);
     assert(migrated.revision==old.revision+1);

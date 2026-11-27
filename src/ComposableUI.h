@@ -46,6 +46,8 @@ struct ComponentUICommand {
     ComponentJson data = ComponentJson::object();
     uint64_t expected_revision = 0;
     std::string candidate_id;
+    AlterEgo::Composable::NameOrigin nameOrigin=AlterEgo::Composable::NameOrigin::Unknown;
+    bool generateName=false;
 };
 static ComponentUICommand g_ComponentCommand;
 using ReferenceMap=std::map<std::string,std::string>;
@@ -68,6 +70,9 @@ static std::string g_ComponentEditorId;
 static std::string g_ComponentEditorKind;
 static std::string g_ComponentEditorName;
 static bool g_ComponentEditorAutoName = false;
+static bool g_ComponentNameRegenerate=false;
+static AlterEgo::Composable::NameOrigin g_ComponentEditorNameOrigin=AlterEgo::Composable::NameOrigin::Unknown,
+    g_ComponentEditorInitialNameOrigin=AlterEgo::Composable::NameOrigin::Unknown;
 static ComponentJson g_ComponentNameRequestedDraft;
 static bool g_ComponentNameRequested=false;
 static std::string g_ComponentSkillProfessionHint; // UI-only skill picker filter
@@ -290,7 +295,14 @@ static bool ComponentUIStartEditor(const std::string& mode,
     g_ComponentCloseRequested=false;
     g_ComponentEditorMode = mode;
     g_ComponentEditorRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
-    g_ComponentEditorAutoName = (mode == "create");
+    using AlterEgo::Composable::NameOrigin;
+    g_ComponentEditorNameOrigin=NameOrigin::Unknown;
+    if(component)AlterEgo::Composable::DecodeNameOrigin(*component,g_ComponentEditorNameOrigin);
+    if(mode=="create")g_ComponentEditorNameOrigin=NameOrigin::Automatic;
+    else if(mode=="duplicate"||mode=="copy_for_loadout")g_ComponentEditorNameOrigin=NameOrigin::Manual;
+    g_ComponentEditorInitialNameOrigin=g_ComponentEditorNameOrigin;
+    g_ComponentEditorAutoName=AlterEgo::Composable::IsAutomaticName(g_ComponentEditorNameOrigin);
+    g_ComponentNameRegenerate=(mode=="create");
     g_ComponentNameRequested=false;
     g_ComponentEditorKind = kind;
     g_ComponentEditorId = id;
@@ -422,19 +434,27 @@ static void RenderComponentUIEditor() {
     } else {
         ImGui::TextDisabled("Components may be reused by multiple Loadouts.");
     }
-    if(g_ComponentEditorAutoName){
+    if(g_ComponentEditorAutoName&&(g_ComponentNameRegenerate||g_ComponentEditorDraft!=g_ComponentEditorBaseline)){
         const bool changed=!g_ComponentNameRequested||g_ComponentNameRequestedDraft!=g_ComponentEditorDraft;
         g_ComponentEditorName=AlterEgo::GW2API::SuggestLibraryComponentName(g_ComponentEditorKind,g_ComponentEditorDraft,changed);
         if(changed){g_ComponentNameRequestedDraft=g_ComponentEditorDraft;g_ComponentNameRequested=true;}
     }
     ImGui::SetNextItemWidth(-1);
-    if (AlterEgo::UI::InputText("Name##component_name", g_ComponentEditorName))
-        g_ComponentEditorAutoName = false;
+    if (AlterEgo::UI::InputText("Name##component_name", g_ComponentEditorName)){
+        g_ComponentEditorAutoName=false;
+        g_ComponentEditorNameOrigin=AlterEgo::Composable::NameOrigin::Manual;
+    }
     if (RenderActionButton("Regenerate Name##component_editor")) {
-        g_ComponentEditorAutoName = true;
+        g_ComponentEditorAutoName=true;g_ComponentNameRegenerate=true;
+        g_ComponentEditorNameOrigin=AlterEgo::Composable::NameOrigin::Automatic;
         g_ComponentNameRequested=false;
         g_ComponentEditorName = AlterEgo::GW2API::SuggestLibraryComponentName(
             g_ComponentEditorKind, g_ComponentEditorDraft);
+    }
+    if(ImGui::GetContentRegionAvail().x>180.f){
+        ImGui::SameLine();
+        ImGui::TextDisabled(g_ComponentEditorAutoName?"Automatic":
+            g_ComponentEditorNameOrigin==AlterEgo::Composable::NameOrigin::Manual?"Custom name":"Existing name");
     }
     // Cache candidate results by draft and committed revision. All match
     // checks use native exact equality and verified profession context.
@@ -540,7 +560,8 @@ static void RenderComponentUIEditor() {
     const bool editorStale=g_ComponentEditorMode!="create"&&g_ComponentEditorRevision!=AlterEgo::GW2API::GetBuildLibraryRevision();
     if(editorStale)ImGui::TextWrapped("Library changed. Cancel and reopen this editor before saving.");
     const bool creating=g_ComponentEditorMode=="create"||g_ComponentEditorMode=="duplicate"||g_ComponentEditorMode=="copy_for_loadout";
-    const bool dirty=g_ComponentEditorDraft!=g_ComponentEditorBaseline||
+    const bool dirty=g_ComponentEditorNameOrigin!=g_ComponentEditorInitialNameOrigin||
+        g_ComponentEditorDraft!=g_ComponentEditorBaseline||
         (!g_ComponentEditorAutoName&&g_ComponentEditorName!=g_ComponentEditorInitialName)||
         (!creating&&g_ComponentEditorName!=g_ComponentEditorInitialName);
     const bool named=!AlterEgo::Composable::ComponentNameKey(g_ComponentEditorName).empty();
@@ -555,6 +576,8 @@ static void RenderComponentUIEditor() {
             cmd.expected_revision = g_ComponentEditorMode=="create" ? 0 : g_ComponentEditorRevision;
             cmd.component_id = g_ComponentEditorId;
             cmd.name = g_ComponentEditorName;
+            cmd.nameOrigin=g_ComponentEditorNameOrigin;
+            cmd.generateName=g_ComponentEditorAutoName;
             if (g_ComponentEditorMode == "copy_for_loadout") {
                 cmd.type = ComponentUICommand::CopyEditedForLoadout;
                 cmd.loadout_id = g_ComponentEditorPrivateLoadoutId;
@@ -1153,6 +1176,7 @@ static void RunComponentAction(ComponentAction action,const std::string& kind,co
     case ComponentAction::Copy:{
         AlterEgo::Composable::Component exported;
         exported.name=name;exported.data=item.at("data");
+        AlterEgo::Composable::DecodeNameOrigin(item,exported.nameOrigin);
         const auto portable=AlterEgo::Composable::ExportComponent(kind,exported).dump(2);
         CopyToClipboard(portable);break;
     }
@@ -1171,7 +1195,10 @@ static void ImportComponentClipboard(){
         const auto packet=AlterEgo::Untrusted::ParseClipboard(clipboard);
         std::string kind,error;AlterEgo::Composable::Component imported;
         if(!AlterEgo::Composable::ImportComponent(packet,kind,imported,error))g_ComponentStatus=error;
-        else g_ComponentCommand={ComponentUICommand::Create,"",kind,"",imported.name,imported.data};
+        else{
+            g_ComponentCommand={ComponentUICommand::Create,"",kind,"",imported.name,imported.data};
+            g_ComponentCommand.nameOrigin=imported.nameOrigin;
+        }
     }catch(const std::exception& e){g_ComponentStatus="Invalid or oversized component clipboard.";}
 }
 static constexpr int kComponentGroupOrder[]={0,1,4,2,6,5,3,8,7,9};
@@ -1202,7 +1229,10 @@ static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,co
     if(mutableActions){
         ImGui::Separator();
         if(MenuAction("Regenerate Name",MenuIcon::Regenerate)){
-            if(ComponentUIStartEditor("rename",kind,id,&item)){g_ComponentEditorAutoName=true;g_ComponentNameRequested=false;}
+            if(ComponentUIStartEditor("rename",kind,id,&item)){
+                g_ComponentEditorAutoName=true;g_ComponentNameRequested=false;g_ComponentNameRegenerate=true;
+                g_ComponentEditorNameOrigin=AlterEgo::Composable::NameOrigin::Automatic;
+            }
         }
     }
     if(!reference&&mutableActions){
@@ -1731,7 +1761,7 @@ static void ProcessComponentUICommand() {
         else
             success = API::CopyEditedLoadoutComponent(
                 command.loadout_id, command.kind, command.component_id,
-                command.name, command.data,command.expected_revision);
+                command.name, command.data,command.expected_revision,command.nameOrigin);
         if (success && g_LibraryCollection == 2) {
             const auto& latest = ComponentUISnapshot();
             const auto* target = ComponentUIFindLoadout(latest, command.loadout_id);
@@ -1746,7 +1776,7 @@ static void ProcessComponentUICommand() {
     case ComponentUICommand::Create: {
         std::string savedId;
         success = API::CreateLoadoutComponent(command.kind, command.name, command.data,
-                                              &savedId);
+                                              &savedId,false,{},command.nameOrigin,command.generateName);
         if (success && !savedId.empty()) ComponentUIOpenLibrary(command.kind, savedId);
         break;
     }
@@ -1756,11 +1786,11 @@ static void ProcessComponentUICommand() {
         break;
     case ComponentUICommand::Rename:
         success = API::RenameLoadoutComponent(
-            command.kind, command.component_id, command.name,command.expected_revision);
+            command.kind, command.component_id, command.name,command.expected_revision,command.nameOrigin);
         break;
     case ComponentUICommand::EditShared:
         success = API::EditAndRenameLoadoutComponent(
-            command.kind, command.component_id, command.name, command.data,command.expected_revision);
+            command.kind, command.component_id, command.name, command.data,command.expected_revision,command.nameOrigin);
         break;
     case ComponentUICommand::ImportPortableLoadout:
         success = API::ImportPortableLoadout(command.data);

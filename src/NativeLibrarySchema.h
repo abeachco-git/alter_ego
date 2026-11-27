@@ -4,12 +4,18 @@
 namespace AlterEgo::NativeLibrary {
 
 constexpr int kApplicationId = 0x41454c42; // AELB
-constexpr int kSchemaVersion = 6;
+constexpr int kSchemaVersion = 7;
 
 inline void UpgradeSchema(Database::Connection& db, int version) {
     // Existing v4 is rebuilt transactionally after a verified backup.
     // Earlier experimental schemas remain unsupported.
     if(version>=1&&version<5)return;
+    if(version==7){
+        db.Exec(R"SQL(
+ALTER TABLE components ADD COLUMN name_origin INTEGER NOT NULL DEFAULT 0 CHECK(name_origin IN (0,1,2,3));
+)SQL");
+        return;
+    }
     if(version==6){
         db.Exec(R"SQL(
 CREATE TABLE loadout_source_identity(

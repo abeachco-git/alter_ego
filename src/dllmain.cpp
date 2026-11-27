@@ -12418,6 +12418,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     g_FashionLibrary.Load(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::GW2API::LoadItemNameCache();
     AlterEgo::GW2API::LoadReferenceCaches();
+    AlterEgo::GW2API::RepairPendingLibraryNames();
     AlterEgo::PublicCatalog::Load(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::WikiEvents::Load(AlterEgo::GW2API::GetDataDirectory());
     if(!AlterEgo::PublicCatalog::Get()->upgrades)SeedItemNameCache();

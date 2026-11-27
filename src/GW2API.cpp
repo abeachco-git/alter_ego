@@ -2573,6 +2573,11 @@ namespace AlterEgo {
         Composable::Document next=before;
         if (!edit(next, error) || !Composable::Validate(next, error))
             return false;
+        // Already an explicit library transaction: name-only metadata changes
+        // share its revision, durable commit and publication. No new SQL/HTTP
+        // is triggered by ordinary rendering.
+        Composable::RefreshEditedAutomaticNames(before,next,LookupComponentDisplayName);
+        Composable::RepairPendingNames(next,LookupComponentDisplayName);
         if(!Composable::ValidateNoNewInfusionConflicts(before,next,error)){
             if(s_api)s_api->Log(LOGL_WARNING,"AlterEgo",error.c_str());
             return false;
@@ -2790,9 +2795,10 @@ namespace AlterEgo {
                                             const std::string& kind,
                                             const std::string& sourceComponentId,
                                             const std::string& name,
-                                            const nlohmann::json& data,uint64_t expectedRevision) {
+                                            const nlohmann::json& data,uint64_t expectedRevision,Composable::NameOrigin nameOrigin) {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
             if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
+            if(!Composable::ValidNameOrigin(nameOrigin))return false;
             static std::atomic<uint64_t> counter{0};
             std::string id;
             do {
@@ -2800,9 +2806,10 @@ namespace AlterEgo {
                     std::to_string(std::time(nullptr)) + ":" +
                     std::to_string(counter.fetch_add(1));
             } while (Composable::Find(doc, kind, id));
-            return Composable::CopyEditedForLoadout(doc, loadoutId, kind,
-                                                      id, name, data, error,
-                                                      sourceComponentId);
+            if(!Composable::CopyEditedForLoadout(doc,loadoutId,kind,id,name,data,error,sourceComponentId))return false;
+            auto* part=Composable::Find(doc,kind,id);part->nameOrigin=nameOrigin;
+            if(Composable::IsAutomaticName(nameOrigin))Composable::ApplyGeneratedName(doc,kind,*part,LookupComponentDisplayName);
+            return true;
         });
     }
 
@@ -2829,10 +2836,18 @@ namespace AlterEgo {
     bool GW2API::EditAndRenameLoadoutComponent(const std::string& kind,
                                                const std::string& componentId,
                                                const std::string& name,
-                                               const nlohmann::json& data,uint64_t expectedRevision) {
+                                               const nlohmann::json& data,uint64_t expectedRevision,Composable::NameOrigin nameOrigin) {
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
             if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed while editing.");
-            return Composable::UpdateSharedNamed(doc, kind, componentId, name, data, error);
+            const auto* previous=Composable::Find(doc,kind,componentId);
+            if(!previous||!Composable::ValidNameOrigin(nameOrigin))return false;
+            auto target=*previous;target.name=name;target.data=data;target.nameOrigin=nameOrigin;
+            if(Composable::IsAutomaticName(nameOrigin)&&
+                (previous->name!=name||previous->nameOrigin!=nameOrigin||!NativeLibrary::ExactContent(previous->data,data)))
+                Composable::ApplyGeneratedName(doc,kind,target,LookupComponentDisplayName);
+            if(!Composable::UpdateSharedNamed(doc,kind,componentId,target.name,data,error))return false;
+            Composable::Find(doc,kind,componentId)->nameOrigin=target.nameOrigin;
+            return true;
         });
     }
 
@@ -2854,8 +2869,9 @@ namespace AlterEgo {
     bool GW2API::CreateLoadoutComponent(const std::string& kind,
                                          const std::string& name,
                                          const nlohmann::json& data,
-                                         std::string* savedId, bool reuseExact, const std::string& profession) {
-        if (Composable::ComponentNameKey(name).empty() || !data.is_object() || !Composable::IsKind(kind))
+                                         std::string* savedId, bool reuseExact, const std::string& profession,
+                                         Composable::NameOrigin nameOrigin,bool generateName) {
+        if (Composable::ComponentNameKey(name).empty() || !data.is_object() || !Composable::IsKind(kind)||!Composable::ValidNameOrigin(nameOrigin))
             return false;
         std::string resultId;
         const bool ok = CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
@@ -2870,7 +2886,9 @@ namespace AlterEgo {
                 id = kind + ":created:" + std::to_string(std::time(nullptr)) +
                      ":" + std::to_string(counter.fetch_add(1));
             } while (Composable::Find(doc, kind, id));
-            doc.components[kind].push_back({id, Composable::UniqueComponentName(doc, kind, name), data});
+            Composable::Component part{id,Composable::UniqueComponentName(doc,kind,name),data,nameOrigin};
+            if(generateName&&Composable::IsAutomaticName(nameOrigin))Composable::ApplyGeneratedName(doc,kind,part,LookupComponentDisplayName);
+            doc.components[kind].push_back(std::move(part));
             resultId = id;
             return Composable::Validate(doc, error);
         });
@@ -2894,6 +2912,7 @@ namespace AlterEgo {
                           ":" + std::to_string(counter.fetch_add(1));
             } while (Composable::Find(doc, kind, copy.id));
             copy.name = Composable::UniqueComponentName(doc, kind, name);
+            copy.nameOrigin=Composable::NameOrigin::Manual;
             resultId=copy.id;
             doc.components[kind].push_back(std::move(copy));
             return true;
@@ -2904,17 +2923,22 @@ namespace AlterEgo {
 
     bool GW2API::RenameLoadoutComponent(const std::string& kind,
                                          const std::string& componentId,
-                                         const std::string& name,uint64_t expectedRevision) {
-        if (!Composable::IsKind(kind) || name.empty()) return false;
+                                         const std::string& name,uint64_t expectedRevision,Composable::NameOrigin nameOrigin) {
+        if (!Composable::IsKind(kind) || name.empty()||!Composable::ValidNameOrigin(nameOrigin)) return false;
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
             if(expectedRevision&&expectedRevision!=g_buildLibraryRevision.load())return Composable::Fail(error,"Library changed; review again.");
             auto* component = Composable::Find(doc, kind, componentId);
             if (!component) return Composable::Fail(error, "Component not found.");
+            if(Composable::IsAutomaticName(nameOrigin)){
+                Composable::ApplyGeneratedName(doc,kind,*component,LookupComponentDisplayName);
+                return true;
+            }
             if (Composable::ComponentNameKey(name).empty() ||
                 (Composable::ComponentNameKey(name) != Composable::ComponentNameKey(component->name) &&
                  !Composable::ComponentNameAvailable(doc, kind, name, componentId)))
                 return Composable::Fail(error, "A component with this name already exists.");
             component->name = name;
+            component->nameOrigin=nameOrigin;
             return true;
         });
     }
@@ -2949,6 +2973,15 @@ namespace AlterEgo {
         return name;
     }
 
+    void GW2API::RepairPendingLibraryNames(){
+        // Called after cached metadata is loaded, before runtime callbacks.
+        // The existing persistence owner revalidates the current durable graph.
+        // A no-op does not publish a revision or write the database.
+        CommitComposableEdit([&](Composable::Document& doc,std::string&){
+            return Composable::RepairPendingNames(doc,LookupComponentDisplayName);
+        });
+    }
+
     std::string GW2API::SuggestCapturedComponentName(const SavedBuild& capture,
                                                       const std::string& kind) {
         const auto fields = Composable::Split(SerializeSavedBuild(capture));
@@ -2973,7 +3006,8 @@ namespace AlterEgo {
         const auto fields = Composable::Split(SerializeSavedBuild(capture));
         auto selected = fields.find(kind);
         if (selected == fields.end()||(kind=="aquatic"&&selected->second.empty())) return false;
-        return CreateLoadoutComponent(kind, name, selected->second, savedId, reuseExact, capture.profession);
+        return CreateLoadoutComponent(kind,name,selected->second,savedId,reuseExact,capture.profession,
+            reuseExact?Composable::NameOrigin::Automatic:Composable::NameOrigin::Manual,reuseExact);
     }
 
     bool GW2API::SaveCapturedEquipmentSet(const SavedBuild& capture,const std::string& name,std::string* savedId,const std::set<std::string>& kinds) {

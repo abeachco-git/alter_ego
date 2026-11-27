@@ -29,7 +29,7 @@ def schema(path):
     if path == "src/NativeLibrarySchema.h":
         if version == 5 and len(blocks) == 1:
             return version, blocks
-        if version == 6 and len(blocks) == 2:
+        if version in (6, 7) and len(blocks) == version - 4:
             return version, list(reversed(blocks))
         raise RuntimeError("Native library schema layout changed; update benchmark")
     if len(blocks) != version:
@@ -78,17 +78,17 @@ def seed(cache, library, mode, sync, scale):
         db.execute("BEGIN IMMEDIATE")
         # Shared membership fixtures model linked and independent Loadouts.
         gear_kinds = ("weapons", "armor", "trinkets", "runes", "sigils", "infusions", "relic")
-        db.execute("INSERT INTO components VALUES('skills','skills-0','Skills',0,'skills-0')")
+        db.execute("INSERT INTO components(kind,id,name,ordinal,fingerprint) VALUES('skills','skills-0','Skills',0,'skills-0')")
         db.execute("INSERT INTO component_payloads(kind,component_id,flags,extension_json) VALUES('skills','skills-0',0,'{}')")
         for kind in gear_kinds:
-            db.execute("INSERT INTO components VALUES(?,?,?,0,?)", (kind,kind+"-0",kind,kind+"-0"))
+            db.execute("INSERT INTO components(kind,id,name,ordinal,fingerprint) VALUES(?,?,?,0,?)", (kind,kind+"-0",kind,kind+"-0"))
             db.execute("INSERT INTO component_payloads(kind,component_id,flags,extension_json) VALUES(?,?,0,'{}')", (kind,kind+"-0"))
         db.execute("INSERT INTO equipment_sets VALUES('set-0','Fixture set',0)")
         db.executemany("INSERT INTO equipment_set_components VALUES('set-0',?,?)", ((kind,kind+"-0") for kind in gear_kinds if kind != "relic"))
         for n in range(250*scale):
             ident = f"component-{n}"
             loadout = f"loadout-{n}"
-            db.execute("INSERT INTO components VALUES('base_build',?,?,?,?)", (ident, ident, n, ident))
+            db.execute("INSERT INTO components(kind,id,name,ordinal,fingerprint) VALUES('base_build',?,?,?,?)", (ident, ident, n, ident))
             db.execute("INSERT INTO component_payloads(kind,component_id,flags,profession,extension_json) "
                        "VALUES('base_build',?,0,'Necromancer','{}')", (ident,))
             linked = n % 2 == 0
