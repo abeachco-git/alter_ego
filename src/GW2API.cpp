@@ -2445,6 +2445,8 @@ namespace AlterEgo {
     }
 
     std::string GW2API::EncodeSavedBuildToChatLink(const SavedBuild& b) {
+        if((b.profession=="Ranger"&&b.CompanionSlots(false).unresolved)||
+           (b.profession=="Revenant"&&b.CompanionSlots(true).unresolved))return {};
         const auto link=ProjectDerivedBuildLink(b,
             [](uint32_t specId,int tier,int traitId)->std::optional<int>{
                 if(!traitId)return 0;
@@ -2596,8 +2598,8 @@ namespace AlterEgo {
 
         const std::array<uint32_t,4> pets={b.pets.terrestrial[0],b.pets.terrestrial[1],b.pets.aquatic[0],b.pets.aquatic[1]};
         const std::array<uint32_t,4> legends={b.legend_codes[0],b.legend_codes[1],b.legend_codes[2],b.legend_codes[3]};
-        if(b.pets_recorded||Composable::HasCompanionSelection(pets))bj["pets"]=pets;
-        if(b.legends_recorded||Composable::HasCompanionSelection(legends))bj["legend_codes"]=legends;
+        if(b.pets_recorded||Composable::HasCompanionSelection(pets))bj["pets"]=b.CompanionPayload(false);
+        if(b.legends_recorded||Composable::HasCompanionSelection(legends))bj["legend_codes"]=b.CompanionPayload(true);
         if(b.inactive_rev_skills)bj["inactive_rev_skills"]=*b.inactive_rev_skills;
         if (!b.weapons.empty()) bj["weapons"] = b.weapons;
 
@@ -2738,8 +2740,10 @@ namespace AlterEgo {
 
         b.pets_recorded=bj.contains("pets")&&bj["pets"].is_array();
         b.legends_recorded=bj.contains("legend_codes")&&bj["legend_codes"].is_array();
-        const auto pets=Composable::ProjectCompanionSlots(bj.value("pets",json()),UINT32_MAX);
-        const auto legends=Composable::ProjectCompanionSlots(bj.value("legend_codes",json()),UINT8_MAX);
+        b.pets_source_slots=bj.value("pets",json());
+        b.legends_source_slots=bj.value("legend_codes",json());
+        const auto pets=Composable::ProjectCompanionSlots(b.pets_source_slots,UINT32_MAX);
+        const auto legends=Composable::ProjectCompanionSlots(b.legends_source_slots,UINT8_MAX);
         for(size_t i=0;i<4;++i){
             if(i<2)b.pets.terrestrial[i]=pets[i];else b.pets.aquatic[i-2]=pets[i];
             b.legend_codes[i]=static_cast<uint8_t>(legends[i]);

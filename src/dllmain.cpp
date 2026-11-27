@@ -7204,14 +7204,14 @@ static bool RenderSkillEditorSlot(uint32_t current,float size,const std::string&
 // record environment eligibility, so never invent an aquatic restriction.
 // Selected slots share geometry and exact entity actions in read and edit modes.
 static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t other,uint32_t& next,
-                                       bool editable=true,bool known=true) {
+                                       bool editable,bool known,bool unresolved) {
     using AlterEgo::SkillEdit::PairChoiceAllowed;
     const auto catalog=AlterEgo::PublicCatalog::Get();
     if(legend&&catalog->legends.empty())AlterEgo::GW2API::FetchLegendsAsync();
     if(!legend&&catalog->pets.empty())AlterEgo::GW2API::FetchPetsAsync();
     const auto& pets=catalog->pets;
     auto display=ResolveProfessionChoice(legend,current);
-    if(!current)display.name=known?"Empty":editable?"Choose (not recorded)":"Not recorded";
+    if(!current)display.name=unresolved?"Unresolved selection":known?"Empty":editable?"Choose (not recorded)":"Not recorded";
     auto* texture=AlterEgo::IconManager::GetOrRequestIcon(display.key,display.icon);
     // A single hit target spans icon and wrapped label. Center the label
     // against the icon, retaining the existing icon geometry.
@@ -7240,7 +7240,7 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     bool changed=false;
     AlterEgo::UI::EntityContext("##pair_context",[&]{
         if(current)ProfessionChoiceActions(legend,display);
-        if(editable&&AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete,current!=0)){
+        if(editable&&AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete,current!=0||unresolved)){
             next=0;changed=true;
         }
     });
@@ -7312,8 +7312,32 @@ static void RenderCompanionAssociatedSkills(const ProfessionChoiceDisplay& choic
 }
 // Four positional values: terrestrial 1/2, aquatic 1/2. Each caller owns
 // its source projection and commit boundary; rendering does not save data.
-static bool RenderProfessionPairSection(bool legend,std::array<uint32_t,4>& values,
-                                        bool editable,uint8_t recordedMask) {
+static uint32_t CanonicalCompanionIdentity(bool legend,uint32_t id){
+    return legend&&id<=255?static_cast<uint32_t>(AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(id))):id;
+}
+static bool CompanionPairConflict(bool legend,const AlterEgo::SkillEdit::CompanionProjection& slots,int env){
+    return AlterEgo::SkillEdit::CompanionPairContext(slots,env,[&](uint32_t id){return CanonicalCompanionIdentity(legend,id);})==
+        AlterEgo::SkillEdit::PairContext::Incompatible;
+}
+static AlterEgo::SkillEdit::CompanionProjection LiveCompanionSlots(const AlterEgo::BuildTemplate& bt,bool legend){
+    AlterEgo::SkillEdit::CompanionProjection slots;
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    for(int i=0;i<4;++i){
+        if(legend){
+            const auto& name=i<2?bt.legends.terrestrial[i]:bt.legends.aquatic[i-2];
+            const auto code=AlterEgo::PublicCatalog::LegendCode(catalog->legends,name);
+            if(code)slots.Set(i,code);
+            else if(!name.empty())slots.unresolved|=static_cast<uint8_t>(1u<<i);
+        }else{
+            const auto id=i<2?bt.pets.terrestrial[i]:bt.pets.aquatic[i-2];
+            if(id)slots.Set(i,id);
+        }
+    }
+    return slots;
+}
+static uint8_t RenderProfessionPairSection(bool legend,AlterEgo::SkillEdit::CompanionProjection& slots,
+                                        bool editable) {
+    auto& values=slots.values;
     ImGui::PushID(legend?"legend_pairs":"pet_pairs");
     // Demand only the selected companions' skills; the canonical skill owner
     // handles cache hits, deduplication, existing claims and retry policy.
@@ -7326,17 +7350,21 @@ static bool RenderProfessionPairSection(bool legend,std::array<uint32_t,4>& valu
         std::sort(missing.begin(),missing.end());missing.erase(std::unique(missing.begin(),missing.end()),missing.end());
         AlterEgo::GW2API::FetchSkillDetailsAsync(missing);
     }
-    bool changed=false;
+    uint8_t changed=0;
     for(int env=0;env<2;++env){
         ImGui::TextDisabled("%s",env?"Aquatic":"Terrestrial");
+        if(CompanionPairConflict(legend,slots,env))
+            ImGui::TextColored(AlterEgo::UI::WarningText,"Duplicate companion choices");
         for(int i=0;i<2;++i){
             const int slot=env*2+i,other=env*2+1-i;
             ImGui::PushID(slot);
             auto next=values[slot];
-            const auto otherId=legend&&values[other]<=255?static_cast<uint32_t>(
-                AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(values[other]))):values[other];
-            if(RenderProfessionPairChoice(legend,values[slot],values[other],next,editable,(recordedMask&(1u<<slot))!=0)&&
-                AlterEgo::SkillEdit::SetPairChoice(values[slot],otherId,next))changed=true;
+            const auto otherId=CanonicalCompanionIdentity(legend,values[other]);
+            if(RenderProfessionPairChoice(legend,values[slot],values[other],next,editable,slots.Known(slot),slots.Unresolved(slot))&&
+                AlterEgo::SkillEdit::PairChoiceAllowed(otherId,CanonicalCompanionIdentity(legend,next))&&
+                (values[slot]!=next||!slots.Known(slot)||slots.Unresolved(slot))){
+                slots.Set(slot,next);changed|=static_cast<uint8_t>(1u<<slot);
+            }
             if(values[slot]){
                 const auto choice=ResolveProfessionChoice(legend,values[slot]);
                 ImGui::Indent(8.0f);
@@ -7522,17 +7550,8 @@ static void RenderLiveProfessionPairs(const AlterEgo::BuildTemplate& bt) {
     if(bt.profession!="Ranger"&&bt.profession!="Revenant")return;
     const bool legend=bt.profession=="Revenant";
     ImGui::Spacing();RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
-    std::array<uint32_t,4> values{};
-    // The live pair-level flag does not establish empty evidence per slot.
-    // Keep zero/unknown slots unrecorded until a typed source says otherwise.
-    if(legend){
-        const auto catalog=AlterEgo::PublicCatalog::Get();
-        for(int i=0;i<2;++i){
-            values[i]=AlterEgo::PublicCatalog::LegendCode(catalog->legends,bt.legends.terrestrial[i]);
-            values[i+2]=AlterEgo::PublicCatalog::LegendCode(catalog->legends,bt.legends.aquatic[i]);
-        }
-    }else for(int i=0;i<2;++i){values[i]=bt.pets.terrestrial[i];values[i+2]=bt.pets.aquatic[i];}
-    RenderProfessionPairSection(legend,values,false,0);
+    auto slots=LiveCompanionSlots(bt,legend);
+    RenderProfessionPairSection(legend,slots,false);
 }
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
@@ -9950,16 +9969,18 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     if(skillSrc.profession=="Ranger"||skillSrc.profession=="Revenant"){
         const bool legend=skillSrc.profession=="Revenant";
         ImGui::Spacing();RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
-        std::array<uint32_t,4> values{};
-        for(int i=0;i<4;++i)values[i]=legend?skillSrc.legend_codes[i]:
-            (i<2?skillSrc.pets.terrestrial[i]:skillSrc.pets.aquatic[i-2]);
-        if(RenderProfessionPairSection(legend,values,g_LibEditMode,0)){
-            if(legend)g_EditDraft.legends_recorded=true;else g_EditDraft.pets_recorded=true;
-            for(int i=0;i<4;++i){
-                if(legend)g_EditDraft.legend_codes[i]=static_cast<uint8_t>(values[i]);
-                else if(i<2)g_EditDraft.pets.terrestrial[i]=values[i];
-                else g_EditDraft.pets.aquatic[i-2]=values[i];
+        auto slots=skillSrc.CompanionSlots(legend);
+        if(const auto changed=RenderProfessionPairSection(legend,slots,g_LibEditMode)){
+            auto payload=skillSrc.CompanionPayload(legend);
+            for(int i=0;i<4;++i)if(changed&(1u<<i)){
+                const auto id=slots.values[i];
+                AlterEgo::SkillEdit::SetCompanionPayloadSlot(payload,i,id);
+                if(legend)g_EditDraft.legend_codes[i]=static_cast<uint8_t>(id);
+                else if(i<2)g_EditDraft.pets.terrestrial[i]=id;
+                else g_EditDraft.pets.aquatic[i-2]=id;
             }
+            if(legend){g_EditDraft.legends_recorded=true;g_EditDraft.legends_source_slots=std::move(payload);}
+            else{g_EditDraft.pets_recorded=true;g_EditDraft.pets_source_slots=std::move(payload);}
             MarkEditDirty();
         }
     }
@@ -10152,19 +10173,20 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         compareSkills("Aquatic skills", waterSkills, live.aquatic_skills);
     if(saved.profession=="Ranger"||saved.profession=="Revenant"){
         const bool legend=saved.profession=="Revenant";
-        const auto catalog=AlterEgo::PublicCatalog::Get();
         const auto group=legend?"Revenant legends":"Ranger pets";
-        const auto display=[&](uint32_t id){return id?ResolveProfessionChoice(legend,id).name:std::string("Unknown");};
+        const auto expectedSlots=saved.CompanionSlots(legend),observedSlots=LiveCompanionSlots(live,legend);
+        const auto display=[&](const AlterEgo::SkillEdit::CompanionProjection& slots,int i){
+            const auto id=slots.values[i];
+            return id?ResolveProfessionChoice(legend,id).name:std::string(AlterEgo::SkillEdit::CompanionMissingLabel(slots,i));
+        };
         for(int i=0;i<4;++i){
             const bool land=i<2;const int slot=i%2;
-            const uint32_t expected=legend?AlterEgo::PublicCatalog::CanonicalLegendCode(saved.legend_codes[i]):
-                (land?saved.pets.terrestrial[slot]:saved.pets.aquatic[slot]);
-            const uint32_t observed=legend?AlterEgo::PublicCatalog::LegendCode(catalog->legends,
-                land?live.legends.terrestrial[slot]:live.legends.aquatic[slot]):
-                (land?live.pets.terrestrial[slot]:live.pets.aquatic[slot]);
-            const bool known=legend?live.legends_known:live.pets_known;
+            const auto expected=CanonicalCompanionIdentity(legend,expectedSlots.values[i]);
+            const auto observed=CanonicalCompanionIdentity(legend,observedSlots.values[i]);
+            const bool known=observedSlots.Known(i)&&(legend?live.legends_known:live.pets_known);
             const auto field=std::string(land?"Terrestrial ":"Aquatic ")+std::to_string(slot+1);
-            result.AddCompanion(group,field,expected,observed,known,land,display(expected),display(observed));
+            result.AddCompanion(group,field,expected,observed,known,land||expectedSlots.Unresolved(i),
+                display(expectedSlots,i),display(observedSlots,i));
         }
     }
     auto weaponList = [](const std::vector<uint32_t>& ids) {
@@ -10691,6 +10713,15 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         cache.updated = now;
     }
     const auto& result = cache.result;
+    if(saved.profession=="Ranger"||saved.profession=="Revenant"){
+        const bool legend=saved.profession=="Revenant";
+        const auto expected=saved.CompanionSlots(legend),observed=LiveCompanionSlots(live,legend);
+        for(int env=0;env<2;++env){
+            const bool a=CompanionPairConflict(legend,expected,env),b=CompanionPairConflict(legend,observed,env);
+            if(a||b)ImGui::TextColored(AlterEgo::UI::WarningText,"%s duplicate companion choices (%s)",
+                env?"Aquatic":"Terrestrial",a&&b?"saved and retrieved":a?"saved":"retrieved");
+        }
+    }
 
     // One independently expandable section per v3 component; fields retain
     // the same semantic comparison rules as the active-character matcher.

@@ -18,6 +18,7 @@
 #include "RefreshStatusCore.h"
 #include "ProfessionMetadataTypes.h"
 #include "ChatLink.h"
+#include "SkillEditCore.h"
 
 namespace AlterEgo {
 
@@ -299,6 +300,26 @@ namespace AlterEgo {
         RangerPets pets;
         uint8_t legend_codes[4] = {0}; // Revenant legend codes
         bool pets_recorded=false, legends_recorded=false; // explicit saved/link array presence, not live unlock evidence
+        // Transient exact source projection, not a second persistent owner.
+        // Typed edits overlay only changed slots; native arrays remain authoritative.
+        nlohmann::json pets_source_slots, legends_source_slots;
+        std::array<uint32_t,4> CompanionValues(bool legend)const {
+            if(legend)return {legend_codes[0],legend_codes[1],legend_codes[2],legend_codes[3]};
+            return {pets.terrestrial[0],pets.terrestrial[1],pets.aquatic[0],pets.aquatic[1]};
+        }
+        nlohmann::json CompanionPayload(bool legend)const {
+            const auto& source=legend?legends_source_slots:pets_source_slots;
+            return SkillEdit::OverlayCompanionSlots(source,CompanionValues(legend),legend?255u:UINT32_MAX);
+        }
+        SkillEdit::CompanionProjection CompanionSlots(bool legend)const {
+            const auto& source=legend?legends_source_slots:pets_source_slots;
+            if(source.is_array()||(legend?legends_recorded:pets_recorded))
+                return SkillEdit::JsonCompanionSlots(CompanionPayload(legend),legend?255u:UINT32_MAX);
+            SkillEdit::CompanionProjection result;
+            const auto values=CompanionValues(legend);
+            for(std::size_t i=0;i<values.size();++i)if(values[i])result.Set(i,values[i]);
+            return result;
+        }
         std::optional<InactiveLegendPalettes> inactive_rev_skills; // exact wire order; absent if not reported
         std::vector<uint32_t> weapons;
         // Gear (user-entered)

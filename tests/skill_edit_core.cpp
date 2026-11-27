@@ -87,6 +87,23 @@ int case_skill_edit_core(int,char**) {
         assert(RecordedCompanionSlots(J::array({0,3,-1,256}),255)==3);
         assert(RecordedCompanionSlots(J::array({1,0}),255)==3);
         assert(RecordedCompanionSlots(J::object(),255)==0);
+        const auto raw=J::array({0,3,256,4,999});
+        auto slots=JsonCompanionSlots(raw,255);
+        assert(slots.Known(0)&&slots.values[0]==0&&slots.Unresolved(2)&&!slots.Known(2));
+        assert(std::string(CompanionMissingLabel(slots,2))=="Unresolved selection");
+        assert(std::string(CompanionMissingLabel(JsonCompanionSlots(J::array({1}),255),3))=="Not recorded");
+        assert(OverlayCompanionSlots(raw,slots.values,255)==raw);
+        slots.Set(1,8);
+        assert(OverlayCompanionSlots(raw,slots.values,255)==J::array({0,8,256,4,999}));
+        auto partialPair=JsonCompanionSlots(J::array({1,2}),255);
+        partialPair.Set(1,9);
+        assert(OverlayCompanionSlots(J::array({1,2}),partialPair.values,255)==J::array({1,9}));
+        auto clear=raw;SetCompanionPayloadSlot(clear,2,0);
+        assert(clear==J::array({0,3,0,4,999}));
+        auto identity=[](uint32_t id){return id==19?13u:id;};
+        assert(CompanionPairContext(JsonCompanionSlots(J::array({13,19}),255),0,identity)==PairContext::Incompatible);
+        assert(CompanionPairContext(JsonCompanionSlots(J::array({13,14}),255),0,identity)==PairContext::Unknown);
+        assert(CompanionPairContext(JsonCompanionSlots(J::array({13,256}),255),0,identity)==PairContext::Unknown);
         assert(IconColumns(214,40,4,5)==4&&IconColumns(216,40,4,5)==5);
         assert(IconColumns(0,40,4,5)==1&&IconColumns(800,40,4,5)==5);
     }

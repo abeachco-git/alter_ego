@@ -5,6 +5,7 @@
 #include "EquipmentChoiceCore.h"
 #include "InfusionTotalsCore.h"
 #include "BuildCompareCore.h"
+#include "SkillEditCore.h"
 // Alter Ego v3 composable Loadout model.
 //
 // This is a pure, platform-independent data layer. Build templates, physical
@@ -1052,13 +1053,7 @@ inline bool ReadItemId(const Json& value,uint32_t& id) {
 // Project only representable IDs. The native graph retains partial and
 // foreign arrays exactly; a typed UI view never wraps a foreign ID.
 inline std::array<uint32_t,4> ProjectCompanionSlots(const Json& value,uint32_t maximum) {
-    std::array<uint32_t,4> slots{};
-    if(!value.is_array())return slots;
-    for(size_t i=0;i<slots.size()&&i<value.size();++i){
-        uint32_t id=0;
-        if(ReadItemId(value[i],id)&&id<=maximum)slots[i]=id;
-    }
-    return slots;
+    return SkillEdit::JsonCompanionSlots(value,maximum).values;
 }
 inline bool HasCompanionSelection(const std::array<uint32_t,4>& slots) {
     return std::any_of(slots.begin(),slots.end(),[](uint32_t id){return id!=0;});
@@ -1078,8 +1073,7 @@ inline bool MergeCapturedCompanion(const std::string& kind,const Json& previous,
     if(!merged[field].is_array())return Fail(error,"Saved companion data requires manual review.");
     const auto before=ProjectCompanionSlots(merged[field],max);
     for(size_t i=0;i<next.size();++i)if(next[i]){
-        while(merged[field].size()<=i)merged[field].push_back(0);
-        merged[field][i]=next[i];
+        SkillEdit::SetCompanionPayloadSlot(merged[field],i,next[i]);
     }
     const auto after=ProjectCompanionSlots(merged[field],max);
     for(size_t i=0;i<4;i+=2)

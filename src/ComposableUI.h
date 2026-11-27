@@ -238,10 +238,9 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
         const bool legend=kind=="legends";
         const auto field=data.find(AlterEgo::Composable::CompanionField(kind));
         const auto payload=field==data.end()?nlohmann::json():*field;
-        auto values=AlterEgo::Composable::ProjectCompanionSlots(payload,legend?255u:UINT32_MAX);
-        const auto mask=AlterEgo::SkillEdit::RecordedCompanionSlots(payload,legend?255u:UINT32_MAX);
+        auto slots=AlterEgo::SkillEdit::JsonCompanionSlots(payload,legend?255u:UINT32_MAX);
         RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
-        RenderProfessionPairSection(legend,values,false,mask);
+        RenderProfessionPairSection(legend,slots,false);
     }
     if (kind == "skills") {
         for (const auto* bar : {"skills", "aquatic_skills"}) {

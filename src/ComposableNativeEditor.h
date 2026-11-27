@@ -307,15 +307,12 @@ static void ComponentNativeProfessionPair(ComponentJson& data,const char* key,
     }
     ComponentJson values=data.contains(key)?data[key]:ComponentJson::array();
     auto set=[&](size_t i,uint32_t value){
-        while(values.size()<=i)values.push_back(0);
-        values[i]=value;data[key]=values;
+        AlterEgo::SkillEdit::SetCompanionPayloadSlot(values,i,value);data[key]=values;
     };
     if(eligible){
-        auto projected=AlterEgo::Composable::ProjectCompanionSlots(values,legend?255u:UINT32_MAX);
-        const auto original=projected;
-        const auto mask=AlterEgo::SkillEdit::RecordedCompanionSlots(values,legend?255u:UINT32_MAX);
-        if(RenderProfessionPairSection(legend,projected,true,mask))
-            for(size_t i=0;i<projected.size();++i)if(projected[i]!=original[i])set(i,projected[i]);
+        auto slots=AlterEgo::SkillEdit::JsonCompanionSlots(values,legend?255u:UINT32_MAX);
+        if(const auto changed=RenderProfessionPairSection(legend,slots,true))
+            for(size_t i=0;i<slots.values.size();++i)if(changed&(1u<<i))set(i,slots.values[i]);
     }else ImGui::TextDisabled("Not applicable to this profession; exact fields preserved.");
     if(ImGui::TreeNode("##advanced_ids","Advanced exact IDs")){
         for(size_t i=0;i<4;++i){

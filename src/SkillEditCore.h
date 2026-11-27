@@ -50,11 +50,55 @@ template<class Json> std::array<DisplaySlot,5> JsonDisplayBar(const Json& bar) {
             slots[i+1]=JsonDisplaySlot(bar.at("utilities")[i]);
     return slots;
 }
+// A present but unrepresentable selection is neither empty nor omitted.
+struct CompanionProjection {
+    std::array<uint32_t,4> values{};
+    uint8_t recorded=0, unresolved=0;
+    bool Known(std::size_t i)const{return (recorded&(1u<<i))!=0;}
+    bool Unresolved(std::size_t i)const{return (unresolved&(1u<<i))!=0;}
+    void Set(std::size_t i,uint32_t id){
+        if(i>=values.size())return;
+        values[i]=id;recorded|=static_cast<uint8_t>(1u<<i);
+        unresolved&=static_cast<uint8_t>(~(1u<<i));
+    }
+};
+template<class Json> CompanionProjection JsonCompanionSlots(const Json& array,uint32_t maximum) {
+    CompanionProjection result;
+    if(array.is_array())for(std::size_t i=0;i<4&&i<array.size();++i){
+        const auto slot=JsonDisplaySlot(array[i],maximum);
+        if(slot.evidence==SlotEvidence::Unrecorded)result.unresolved|=static_cast<uint8_t>(1u<<i);
+        else result.Set(i,slot.id);
+    }
+    return result;
+}
 template<class Json> uint8_t RecordedCompanionSlots(const Json& array,uint32_t maximum) {
-    uint8_t mask=0;
-    if(array.is_array())for(std::size_t i=0;i<4&&i<array.size();++i)
-        if(JsonDisplaySlot(array[i],maximum).evidence!=SlotEvidence::Unrecorded)mask|=static_cast<uint8_t>(1u<<i);
-    return mask;
+    return JsonCompanionSlots(array,maximum).recorded;
+}
+// Keep trailing and unrepresentable source values until explicitly replaced.
+template<class Json> void SetCompanionPayloadSlot(Json& payload,std::size_t i,uint32_t id) {
+    if(!payload.is_array()||i>=4)return;
+    while(payload.size()<=i)payload.push_back(0);
+    payload[i]=id;
+}
+template<class Json> Json OverlayCompanionSlots(const Json& original,const std::array<uint32_t,4>& values,uint32_t maximum) {
+    if(!original.is_array())return Json(values);
+    Json result=original;
+    const auto prior=JsonCompanionSlots(original,maximum);
+    for(std::size_t i=0;i<values.size();++i)
+        if(values[i]!=prior.values[i])SetCompanionPayloadSlot(result,i,values[i]);
+    return result;
+}
+inline const char* CompanionMissingLabel(const CompanionProjection& slots,std::size_t i) {
+    return slots.Unresolved(i)?"Unresolved selection":slots.Known(i)?"Empty":"Not recorded";
+}
+// A duplicate is verified incompatible; different positive identities alone
+// cannot verify specialization or habitat eligibility.
+enum class PairContext { Unknown, Incompatible };
+template<class Canonical> PairContext CompanionPairContext(const CompanionProjection& slots,std::size_t env,Canonical canonical) {
+    if(env>=2)return PairContext::Unknown;
+    const auto a=slots.values[env*2],b=slots.values[env*2+1];
+    if(a&&b&&canonical(a)==canonical(b))return PairContext::Incompatible;
+    return PairContext::Unknown;
 }
 // One width policy for read-only bars, editable bars and catalog strips.
 inline int IconColumns(float available,float size,float spacing,int maximum) {

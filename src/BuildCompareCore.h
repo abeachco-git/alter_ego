@@ -186,7 +186,7 @@ public:
         const std::string& savedDisplay,const std::string& observedDisplay){
         if(!saved&&!required)return false;
         if(!saved||!observed||!observedKnown)
-            AddUnverified(group,field,saved?savedDisplay:"Unknown",observedKnown&&observed?observedDisplay:"Unknown");
+            AddUnverified(group,field,savedDisplay,observedKnown||!observed?observedDisplay:"Unknown");
         else Add(group,field,std::to_string(saved),std::to_string(observed),savedDisplay,observedDisplay);
         rows.back().savedCompanion=saved;rows.back().liveCompanion=observedKnown?observed:0;
         return true;
