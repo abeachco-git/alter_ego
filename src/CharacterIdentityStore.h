@@ -54,6 +54,9 @@ inline std::optional<Plan> Commit(Database::Connection& db,const std::string& ac
     if(old.revision!=expectedRevision)return std::nullopt;
     auto p=Reconcile(old,roster,observations);
     if(!p)return p;
+    // Persist the first verified empty roster (revision zero also denotes
+    // absent state); subsequent unchanged verifications need no writes.
+    if(p.changes.empty()&&old.revision!=0){tx.Commit();return p;}
     auto state=db.Prepare("INSERT INTO character_identity_state VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET revision=excluded.revision,next_id=excluded.next_id");
     state.Bind(1,account);state.Bind(2,p.next.revision);state.Bind(3,p.next.nextId);state.Execute();
     // Free all present-name claims in the same transaction before swaps. Do

@@ -36,6 +36,11 @@ int case_native_inventory(int,char**){
             assert(initial&&*initial&&initial->changes.size()==2);
             alice=initial->next.Current("Alice")->id;bob=initial->next.Current("Bob")->id;
             assert(alice!=bob);
+            auto unchanged=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
+            assert(unchanged&&*unchanged&&unchanged->changes.empty()&&unchanged->next.revision==1);
+            assert(CI::Read(db,"A").revision==1);
+            auto malformed=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a},{"Bob",{b.created,"Unknown",b.race}}});
+            assert(malformed&&malformed->status==CI::Status::Incomplete&&CI::Read(db,"A").revision==1);
             assert(CI::Commit(db,"B",0,{"Alice"},{{"Alice",a}}));
             assert(!CI::Commit(db,"A",0,{"Bob"},{{"Bob",b}})); // obsolete revision
             auto incomplete=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a}});

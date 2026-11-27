@@ -53,7 +53,9 @@ struct Evidence {
 };
 inline std::optional<Evidence> Normalize(Evidence e){
     const auto created=Creation(e.created);
-    if(!created||!Text(e.profession,64)||!Text(e.race,64))return std::nullopt;
+    static const std::set<std::string> professions={"Guardian","Warrior","Engineer","Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"};
+    static const std::set<std::string> races={"Asura","Charr","Human","Norn","Sylvari"};
+    if(!created||!professions.count(e.profession)||!races.count(e.race))return std::nullopt;
     e.created=*created;return e;
 }
 struct Record {
@@ -114,8 +116,7 @@ inline Plan Reconcile(const State& old,const std::set<std::string>& roster,
         if(!current.emplace(*e,row.name).second)return fail(Status::Ambiguous);
     }
     if(names!=roster)return fail(Status::Incomplete);
-    if(old.revision==std::numeric_limits<int64_t>::max())return fail(Status::Exhausted);
-    Plan p;p.status=Status::Ready;p.next=old;++p.next.revision;
+    Plan p;p.status=Status::Ready;p.next=old;
     std::map<Evidence,Id> byEvidence;
     for(const auto& [id,r]:old.records)byEvidence.emplace(r.evidence,id);
     std::set<Id> matched;
@@ -142,6 +143,11 @@ inline Plan Reconcile(const State& old,const std::set<std::string>& roster,
     }
     for(auto& [id,r]:p.next.records)if(r.present&&!matched.count(id)){
         p.changes.push_back({id,Kind::Removed,r.name,{}});r.present=false;
+    }
+    // A verification without a changed binding is not a mapping change.
+    if(!p.changes.empty()){
+        if(old.revision==std::numeric_limits<int64_t>::max())return fail(Status::Exhausted);
+        ++p.next.revision;
     }
     if(!Valid(p.next))return fail(Status::Invalid);
     return p;
