@@ -168,7 +168,7 @@ You can personalize your character profiles by adding custom portraits to:
 <GW2>/addons/AlterEgo/portraits/
 ```
 
-Right-click your character and choose **Copy Portrait Filename**. Use the copied filename stem with your image's extension. The identity-qualified filename stays the same if you rename your character. Older character-name files remain on disk; rename them to the copied filename to use them.
+Name the image exactly after the character's current name, including spaces, followed by `.png`, `.jpg`, or `.jpeg` (for example, `Nul Sul.png`). If you rename a character, rename its portrait file yourself. Characters with the same name use the same portrait; these are user-managed cosmetic files. Any older identity-qualified portrait files remain untouched and can be manually renamed to the current character name.
 
 Supported formats:
 

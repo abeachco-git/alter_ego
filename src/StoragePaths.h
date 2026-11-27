@@ -26,6 +26,23 @@ struct Paths {
     std::filesystem::path Portraits() const { return base/"portraits"; }
     std::filesystem::path Fonts() const { return base/"fonts"; }
 };
+// Portraits are cosmetic user-managed files keyed by the displayed character
+// name, not account identity. Reject unsafe Windows filename components.
+inline std::string PortraitStem(const std::string& name) {
+    if(name.empty()||name.size()>240||name.back()=='.'||name.back()==' ')return {};
+    for(unsigned char ch:name)
+        if(ch<32||ch==127||ch=='/'||ch=='\\'||ch==':'||ch=='*'||ch=='?'||
+           ch=='"'||ch=='<'||ch=='>'||ch=='|')return {};
+    auto device=name.substr(0,name.find('.'));
+    while(!device.empty()&&device.back()==' ')device.pop_back();
+    for(auto& ch:device)if(ch>='a'&&ch<='z')ch=static_cast<char>(ch-'a'+'A');
+    if(device=="CON"||device=="PRN"||device=="AUX"||device=="NUL"||
+       device=="CONIN$"||device=="CONOUT$")return {};
+    if((device.compare(0,3,"COM")==0||device.compare(0,3,"LPT")==0)&&
+       (device.size()==4&&device[3]>='1'&&device[3]<='9'||
+        device.substr(3)=="\xC2\xB9"||device.substr(3)=="\xC2\xB2"||device.substr(3)=="\xC2\xB3"))return {};
+    return name;
+}
 inline bool ConfigName(const std::string& name) {
     return name=="settings.json" || name=="session.json" ||
            name=="char_sort.json" || name=="clears_ui.json" || name=="character_activity.json" || name=="character_loadouts.json";

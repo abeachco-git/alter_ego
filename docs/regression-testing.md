@@ -326,7 +326,7 @@ Stable custom order fixtures exercise transactional account-local ranks, portabl
 
 Inventory identity fixtures cover account separation, unresolved nonempty filters, rename/replacement, credential and binding fencing of explicit refresh targets, and stable group keys across a rename. Live verify a rename while Inventory, Characters and Compare are open, including temporarily missing cache rows.
 
-Identity presentation fixtures cover rename notification generation and startup/replay suppression, stable portrait filenames across renames, different evidence, and rejection of unsafe account path components. Live acceptance includes rename while another main page is visible, portrait file replacement and rename during temporary API propagation. Legacy name-only portrait files are preserved but not automatically associated.
+Identity presentation fixtures cover rename notification generation and startup/replay suppression. Cosmetic portrait filename fixtures preserve exact current names, including spaces and UTF-8, follow the displayed name after rename, and reject unsafe Windows filename components. Live acceptance includes rename while another main page is visible, portrait file lookup/replacement on reselect, default fallback when missing, same-name portraits, and absence of Copy Portrait Filename. Existing name-only files work; prior identity-qualified files remain untouched for manual rename.
 
 Identity admission fixtures cover missing admission bindings, malformed observations invalidating the affected address, and unrelated address continuity. Live verify a rename while an explicit refresh selector is open, stale queued requests, and malformed successful core/404 recovery without altering ordinary refresh intervals.
 

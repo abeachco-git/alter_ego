@@ -1,4 +1,5 @@
 #include "../src/CharacterIdentityStore.h"
+#include "../src/StoragePaths.h"
 #include "../src/CharacterSelectionCore.h"
 #include "../src/CharacterProvenance.h"
 #include "../src/CharacterPreferenceStore.h"
@@ -390,9 +391,14 @@ INSERT INTO character_identity_pending VALUES('A',1);
         assert(notices.size()==1&&notices[0].ref==alice->Reference()&&notices[0].before=="Alice"&&notices[0].after=="Renamed");
         assert(CI::VerifiedRenames(rename.next,rename.next).empty());
         assert(CI::VerifiedRenames(initial,first.next).empty());
-        assert(!CI::PortraitStem(*alice).empty()&&CI::PortraitStem(*alice)==CI::PortraitStem(*renamedAddress));
-        assert(CI::PortraitStem(*alice)!=CI::PortraitStem(*bob));
-        auto invalid=*alice;invalid.account="../escape";assert(CI::PortraitStem(invalid).empty());
+        assert(Storage::PortraitStem(alice->name)=="Alice");
+        assert(Storage::PortraitStem(renamedAddress->name)=="Renamed");
+        assert(Storage::PortraitStem("Nul Sul")=="Nul Sul");
+        assert(Storage::PortraitStem("Éowyn")=="Éowyn");
+        assert(Storage::PortraitStem("Bob")==Storage::PortraitStem(bob->name));
+        for(const auto* unsafe:{"","..","../escape","a\\b","C:foo","a:b","a?b","a*b","a|b","a<b","a>b","a\"b","CON","NUL.txt","Com1","LPT9.png","trail.","trail "})
+            assert(Storage::PortraitStem(unsafe).empty());
+        assert(Storage::PortraitStem(std::string("a\0b",3)).empty());
         assert(selected.Matches(*renamedAddress)&&!selected.Matches(*bob));
         assert(!CI::SameAddress(*alice,*renamedAddress));
         const auto portable=CI::EncodeSelection(selected,true);

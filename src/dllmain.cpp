@@ -2721,18 +2721,9 @@ static void FetchDetailsForCharacter(const AlterEgo::Character& ch) {
     if (!ch.profession.empty()) AlterEgo::GW2API::FetchProfessionInfoAsync(ch.profession);
 }
 
-// A portrait has a portable evidence-qualified filename; never interpret an
-// old character-name file as the current owner's portrait.
-static std::string CharacterPortraitStem(const AlterEgo::Character& ch){
-    const auto address=CharacterAddressFor(ch);
-    if(!address)return {};
-    const auto unique=AlterEgo::NativeAccounts::ResolveCharacterEvidence(address->account,address->binding.evidence);
-    if(!unique||!AlterEgo::CharacterIdentity::SameAddress(*unique,*address))return {};
-    return AlterEgo::CharacterIdentity::PortraitStem(*address);
-}
 // PNG/JPG/JPEG assets are ordinary user-managed files, not cache records.
 static Texture_t* GetCharacterPortraitTexture(const AlterEgo::Character& ch) {
-    const auto stem=CharacterPortraitStem(ch);
+    const auto stem=AlterEgo::Storage::PortraitStem(ch.name);
     if(stem.empty())return nullptr;
     auto cacheIt = s_portraitPathCache.find(stem);
     if (cacheIt == s_portraitPathCache.end()) {
@@ -16285,7 +16276,7 @@ void AddonRender() {
                         g_SelectedEquipTab = 0;
                         g_SelectedBuildTab = -1;
                         // Refresh portrait detection for this character
-                        if(const auto stem=CharacterPortraitStem(ch);!stem.empty()){
+                        if(const auto stem=AlterEgo::Storage::PortraitStem(ch.name);!stem.empty()){
                             s_portraitPathCache.erase(stem);s_portraitMissing.erase(stem);
                         }
                     }
@@ -16295,8 +16286,6 @@ void AddonRender() {
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
                         CopyNameMenuItem(ch.name);
-                        if(const auto stem=CharacterPortraitStem(ch);!stem.empty())
-                            CopyNameMenuItem(stem,"Copy Portrait Filename");
                         RenderCharacterLoadMenu("Load Character",ch.name,ch.account_name);
                         if(const auto* loadout=CharacterContextLoadout(ch)){
                             ImGui::Separator();RenderCharacterLoadoutContext(ch,loadout,false);ImGui::Separator();

@@ -86,17 +86,6 @@ inline std::vector<RenameNotice> VerifiedRenames(const State& prior,const State&
     }
     return out;
 }
-// Evidence-qualified filenames are portable across installations. The caller
-// must establish unique retained evidence before displaying or assigning one.
-inline std::string PortraitStem(const Address& address){
-    const auto evidence=Normalize(address.binding.evidence);
-    if(!address.Reference().Valid()||!evidence||!(*evidence==address.binding.evidence))return {};
-    for(unsigned char c:address.account)if(!((c>='0'&&c<='9')||(c>='a'&&c<='z')||(c>='A'&&c<='Z')||c=='-'))return {};
-    if(address.account.size()>64)return {};
-    auto created=evidence->created;
-    created.erase(std::remove(created.begin(),created.end(),':'),created.end());
-    return "character-"+address.account+"-"+created+"-"+evidence->profession+"-"+evidence->race;
-}
 inline std::set<std::string> ChangedAddresses(const Bindings& prior,const Bindings& next){
     std::set<std::string> result;
     for(const auto& [name,binding]:prior){
