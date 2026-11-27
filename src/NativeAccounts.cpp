@@ -1,3 +1,4 @@
+#include "CharacterIdentityStore.h"
 #include "NativeAccounts.h"
 #include "UntrustedInput.h"
 #include "AccountCommitGate.h"
@@ -135,11 +136,7 @@ bool SaveKey(const std::string& id,const std::string& key){
     cred.Persist=CRED_PERSIST_LOCAL_MACHINE;return CredWriteA(&cred,0)!=FALSE;
 }
 std::filesystem::path AccountPath(){return Storage::Paths(root).Accounts();}
-void InitAccounts(Database::Connection& db){
-    Database::Migrate(db,Storage::kAccountRegistryApplicationId,Storage::kAccountRegistrySchemaVersion,[](Database::Connection& c,int){
-        c.Exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,label TEXT NOT NULL,permissions TEXT NOT NULL) STRICT");
-    });
-}
+void InitAccounts(Database::Connection& db){CharacterIdentity::InitializeAccountRegistry(db);}
 std::vector<Account> Accounts(){
     std::vector<Account> out;const auto p=AccountPath();if(!std::filesystem::exists(p))return out;
     Database::Connection db(p.u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);

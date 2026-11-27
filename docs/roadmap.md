@@ -4,6 +4,13 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 **Approval:** proposed means discussion only; previously approved outstanding work is identified below. No new implementation is authorized by this documentation cleanup. Priorities are relative, not a mandate to implement unrelated work. Split broad items into explicitly approved, independently testable batches.
 
+## Approved character identity reconciliation
+
+- [ ] Complete Part 7A durable identity registry/planner verification, then wire the single authenticated roster owner to reconcile full core evidence before any destructive pruning. Bootstrap from complete verified cached core evidence only; incomplete or ambiguous snapshots must retain prior evidence. Reuse normal roster/core retrieval; explicitly assess request volume and generation fencing before altering admission. Detect name swaps and same-name replacements even when the name set is unchanged.
+- [ ] Part 7B: integrate crash-recoverable identity adoption with cache pruning and stale request rejection, including physical inventory and character detail publications; preserve account isolation, old verified evidence and historical provenance, never redirect queued Fast Load.
+- [ ] Parts 7C–7D: migrate expected Loadout, activity, custom ordering, session/navigation, Inventory filters/group expansion and verified Fashion associations to stable local IDs or safely reconcile them. Preserve original capture names and never infer ownership from historical name strings. Establish notification and unresolved-match behavior; complete migration/backup/recovery and regression/live acceptance.
+- [ ] Part 7E: extend fixtures to live integration and interrupted adoption across stores, missing/partial API data, deletion/recreation, repeated rename, collisions, name reuse and swaps; no changes to native Fast Load internals.
+
 ## Remaining refresh demand follow-up
 
 - [ ] **Separate discussion:** decide which public catalogs genuinely require startup/settings-triggered retrieval. Do not change that policy as part of the approved account settings fix.

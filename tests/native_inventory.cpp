@@ -1,3 +1,4 @@
+#include "../src/CharacterIdentityStore.h"
 #include "../src/NativeInventoryStore.h"
 #include "../src/InventoryGroupCore.h"
 #include "../src/CharacterOrderCore.h"
@@ -12,6 +13,70 @@
 using namespace AlterEgo;
 using namespace AlterEgo::NativeInventory;
 int case_native_inventory(int,char**){
+    // Durable local character identity: rename, same-name reuse, swaps,
+    // account isolation, complete observation, v1 migration and rollback.
+    {
+        namespace CI=AlterEgo::CharacterIdentity;
+        const auto root=std::filesystem::temp_directory_path()/("ae-identity-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        const auto path=(root/"accounts.db").string();
+        const CI::Evidence a{"2015-02-03T04:05:06Z","Necromancer","Asura"},
+            b{"2020-01-02T03:04:05Z","Engineer","Human"},
+            c{"2026-01-02T03:04:05Z","Necromancer","Asura"};
+        CI::Id alice=0,bob=0;
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Create);
+            Database::Migrate(db,Storage::kAccountRegistryApplicationId,1,[](Database::Connection& conn,int){
+                conn.Exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,label TEXT NOT NULL,permissions TEXT NOT NULL) STRICT");
+                conn.Exec("INSERT INTO accounts VALUES('A','Example.1234','','[]')");
+            });
+            CI::InitializeAccountRegistry(db);
+            assert(db.Scalar("PRAGMA user_version")==2&&db.Scalar("SELECT count(*) FROM accounts")==1);
+            auto initial=CI::Commit(db,"A",0,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
+            assert(initial&&*initial&&initial->changes.size()==2);
+            alice=initial->next.Current("Alice")->id;bob=initial->next.Current("Bob")->id;
+            assert(alice!=bob);
+            assert(CI::Commit(db,"B",0,{"Alice"},{{"Alice",a}}));
+            assert(!CI::Commit(db,"A",0,{"Bob"},{{"Bob",b}})); // obsolete revision
+            auto incomplete=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a}});
+            assert(incomplete&&incomplete->status==CI::Status::Incomplete);
+            auto collision=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",a},{"Bob",a}});
+            assert(collision&&collision->status==CI::Status::Ambiguous);
+            assert(CI::Read(db,"A").revision==1);
+            auto swap=CI::Commit(db,"A",1,{"Alice","Bob"},{{"Alice",b},{"Bob",a}});
+            assert(swap&&*swap&&swap->changes.size()==2);
+            assert(swap->next.Current("Bob")->id==alice&&swap->next.Current("Alice")->id==bob);
+            assert(swap->next.records.at(alice).names.count("Alice"));
+            auto rename=CI::Commit(db,"A",2,{"Alice","Renamed"},{{"Alice",b},{"Renamed",a}});
+            assert(rename&&*rename&&rename->changes.size()==1&&rename->next.Current("Renamed")->id==alice);
+            auto reuse=CI::Commit(db,"A",3,{"Alice","Renamed"},{{"Alice",c},{"Renamed",a}});
+            assert(reuse&&*reuse&&reuse->next.Current("Alice")->id!=bob);
+            assert(!reuse->next.records.at(bob).present);
+            auto retired=CI::Commit(db,"A",4,{"Alice","Renamed","Old"},{{"Alice",c},{"Renamed",a},{"Old",b}});
+            assert(retired&&retired->status==CI::Status::Ambiguous);
+            assert(CI::Read(db,"A").revision==4&&CI::Read(db,"B").revision==1);
+            db.Exec("DELETE FROM accounts WHERE id='A'");
+        }
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Existing);
+            CI::InitializeAccountRegistry(db);
+            auto s=CI::Read(db,"A");assert(s.revision==4&&s.Current("Renamed")->id==alice);
+            assert(!s.records.at(bob).present&&s.records.at(alice).names.size()==3);
+            assert(CI::Read(db,"B").Current("Alice"));
+            // Force a real transaction failure after the intermediate name
+            // claims were freed; rollback restores all identity rows.
+            db.Exec("CREATE TRIGGER reject_identity BEFORE UPDATE ON character_identities WHEN NEW.name='Rejected' BEGIN SELECT RAISE(ABORT,'fixture'); END");
+            bool failed=false;try{(void)CI::Commit(db,"A",4,{"Alice","Rejected"},{{"Alice",c},{"Rejected",a}});}catch(...){failed=true;}
+            assert(failed&&CI::Read(db,"A").revision==4&&CI::Read(db,"A").Current("Renamed")->id==alice);
+            db.Exec("DROP TRIGGER reject_identity");
+            auto empty=CI::Commit(db,"A",4,{},{});
+            assert(empty&&*empty&&empty->changes.size()==2&&CI::Read(db,"A").Current("Renamed")==nullptr);
+        }
+        assert(CI::Creation("2015-02-03T04:05:06.000Z")==CI::Creation(a.created));
+        assert(CI::Creation("2024-02-29T00:00:00Z")&&!CI::Creation("2023-02-29T00:00:00Z"));
+        assert(!CI::Creation("2015-02-03")&&!CI::Creation("2015-02-03T24:00:00Z"));
+        std::filesystem::remove_all(root);
+    }
     // Distinct group keys, hierarchy, selected leaf reveal and transient search expansion.
     {
         GroupTree tree;
