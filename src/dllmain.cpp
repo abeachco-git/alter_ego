@@ -7424,7 +7424,7 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
             if(tex&&tex->Resource)ImGui::Image(tex->Resource,ImVec2(30,30));else ImGui::Dummy(ImVec2(30,30));
             ImGui::SameLine();ImGui::AlignTextToFramePadding();
             const auto label=pet.name+"  |  "+PO::Label(evidence.State())+(active.count(pet.id)?"  |  Active build":"");
-            if(UI::SelectableOption(label.c_str(),selected==pet.id,ImGuiSelectableFlags_None,ImVec2(0,30)))selected=pet.id;
+            if(UI::SelectableOption(label.c_str(),selected==pet.id))selected=pet.id;
             ImGui::EndGroup();hover(pet,evidence);
             UI::EntityContext("##pet_actions",[&]{actions(pet,evidence);});ImGui::PopID();
         }

@@ -911,13 +911,13 @@ namespace AlterEgo {
                 {std::lock_guard<std::mutex> lock(s_mutex);S::Mask saving=0;
                     for(const auto& v:verified)saving|=v.scope;s_character_work.Activate(key,saving);}
                 stage("Saving verified scopes");
+                bool petOwnershipSaved=true;
                 if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{
                     if(!SaveCharacterData(a.id,name,&ch,a.name))return false;
                     // Ownership observations are monotonic and durable but
                     // never manufacture a success stamp for the Builds scope.
                     if(ch.profession=="Ranger"&&std::any_of(verified.begin(),verified.end(),[](const auto& v){return v.scope==S::Builds;}))
-                        if(!NativeAccounts::RecordCommittedPets(*address,PetOwnership::Selected(ch.build_tabs))&&s_api)
-                            s_api->Log(LOGL_WARNING,"AlterEgo","Verified pet selections could not be persisted to the identity registry.");
+                        petOwnershipSaved=NativeAccounts::RecordCommittedPets(*address,PetOwnership::Selected(ch.build_tabs));
                     for(const auto& v:verified)CharacterActivity::Success(key,S::Name(v.scope),v.ticket,v.stamp,v.specVerified);
                     return true;
                 })){ 
@@ -926,6 +926,7 @@ namespace AlterEgo {
                     {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Finish(key,0,CharacterActivity::Now(),"Could not save verified data");}
                     continue;
                 }
+                if(!petOwnershipSaved&&s_api)s_api->Log(LOGL_WARNING,"AlterEgo","Verified pet selections could not be persisted to the identity registry.");
                 {std::lock_guard<std::mutex> lock(s_mutex);++s_chars_fetched;
                     S::Mask verifiedMask=0;for(const auto& v:verified)verifiedMask|=v.scope;
                     s_character_work.Finish(key,verifiedMask,CharacterActivity::Now());}
@@ -1056,7 +1057,7 @@ namespace AlterEgo {
                     int i = 0;
                     for (const auto& p : pets["terrestrial"]) {
                         if (i >= 2) break;
-                        bt.pets.terrestrial[i] = p.is_null() ? 0 : PublicCatalog::Id(p);
+                        bt.pets.terrestrial[i] = p.is_null()||(p.is_number_integer()&&p==0) ? 0 : PublicCatalog::Id(p);
                         i++;
                     }
                 }
@@ -1064,7 +1065,7 @@ namespace AlterEgo {
                     int i = 0;
                     for (const auto& p : pets["aquatic"]) {
                         if (i >= 2) break;
-                        bt.pets.aquatic[i] = p.is_null() ? 0 : PublicCatalog::Id(p);
+                        bt.pets.aquatic[i] = p.is_null()||(p.is_number_integer()&&p==0) ? 0 : PublicCatalog::Id(p);
                         i++;
                     }
                 }
