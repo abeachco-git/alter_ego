@@ -290,9 +290,12 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             ImGui::PushID(bar);
             ImGui::TextDisabled("%s", std::string(bar) == "skills"
                 ? "Terrestrial skills" : "Aquatic skills");
-            if(!data.contains(bar))ImGui::TextDisabled("Not recorded");
-            else if(!data[bar].is_object())ImGui::TextDisabled("Unrecognized skill data");
-            else RenderSkillBarPreview(AlterEgo::SkillEdit::JsonDisplayBar(data[bar]),ICON_SIZE);
+            const auto evidence=AlterEgo::SkillEdit::ReadPaletteEvidence(data);
+            if(!data.contains(bar)&&!evidence)ImGui::TextDisabled("Not recorded");
+            else if(data.contains(bar)&&!data[bar].is_object())ImGui::TextDisabled("Unrecognized skill data");
+            else RenderSkillBarPreview(AlterEgo::SkillEdit::WithPaletteBar(
+                AlterEgo::SkillEdit::JsonDisplayBar(data.value(bar,ComponentJson::object())),evidence,
+                std::string(bar)=="aquatic_skills"),ICON_SIZE);
             ImGui::PopID();
         }
         if(data.contains("rev_active_palettes"))ImGui::TextDisabled("Original Revenant palette evidence retained");

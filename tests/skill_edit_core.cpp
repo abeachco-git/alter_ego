@@ -113,6 +113,33 @@ int case_skill_edit_core(int,char**) {
     assert(SpecializationChoiceAllowed(specs,0,0,false));
     using J=nlohmann::json;
     {
+        using namespace AlterEgo;
+        std::optional<RevenantActivePaletteEvidence> evidence=RevenantActivePaletteEvidence{};
+        (*evidence)[0]={123,0,7,2,42};
+        (*evidence)[1]={124,0,7,2,42};
+        (*evidence)[2]={125,88,7,2,42};
+        (*evidence)[9]={126,0,3,4,42};
+        TestBar draft{0,{0,88,0},0};
+        const auto view=WithPaletteBar(DisplayBar(draft),evidence,false);
+        assert(view[0].evidence==SlotEvidence::Unresolved&&view[2].id==88);
+        const J payload={{"rev_active_palettes",*evidence}};
+        assert(ReadPaletteEvidence(payload)==evidence);
+        assert(SetSlotWithPaletteEvidence(draft,evidence,false,0,0));
+        assert(!SetSlotWithPaletteEvidence(draft,evidence,false,0,0));
+        assert(WithPaletteEvidence(SlotDisplay(0),evidence,false,0).evidence==SlotEvidence::Empty);
+        assert(SetSlotWithPaletteEvidence(draft,evidence,false,1,88));
+        assert(draft.utilities[0]==88&&draft.utilities[1]==0);
+        assert((*evidence)[1][0]==0&&(*evidence)[2][0]==0&&(*evidence)[9][0]==126);
+        assert(SetSlotWithPaletteEvidence(draft,evidence,false,1,0));
+        DecodedBuildLink packet{};packet.profession=PROF_REVENANT;
+        packet.legends[0]=7;packet.legends[1]=2;packet.specs[2].spec_id=42;
+        auto reverse=[](uint32_t){return 0u;};
+        assert(ProjectRevenantPalette(evidence,0,0,0,packet,reverse)==0);
+        assert(ProjectRevenantPalette(evidence,0,0,1,packet,reverse)==0);
+        auto invalid=payload;invalid["rev_active_palettes"][1][0]=65536;
+        assert(!ReadPaletteEvidence(invalid));
+    }
+    {
         using V=ContextVerdict;
         assert(LegendSpecialization(1,EliteContext("Herald"))==V::Compatible);
         assert(LegendSpecialization(5,EliteContext("Herald"))==V::Incompatible);

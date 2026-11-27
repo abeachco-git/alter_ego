@@ -95,6 +95,7 @@ int case_snowcrows_import(int, char**) {
         uint32_t rune_id=0,relic_id=0;SpecLine specializations[3];Bar terrestrial_skills,aquatic_skills;
         struct Pets {uint32_t terrestrial[2]={},aquatic[2]={};} pets;
         uint8_t legend_codes[4]={};std::optional<InactiveLegendPalettes> inactive_rev_skills;
+        std::optional<RevenantActivePaletteEvidence> rev_active_palettes;
         std::map<std::string,Slot> gear;std::vector<Requirement> infusion_totals;
         bool infusion_summary_present=false;int infusion_ar_total=0;std::map<std::string,int> infusion_stat_totals;};
     Build old;old.profession="Mesmer";old.source_url=url;old.name="Local";old.notes="Keep";
@@ -143,6 +144,20 @@ int case_snowcrows_import(int, char**) {
     explicitRemove.removedSlots.insert("Coat");
     assert(SR::Apply(old,explicitRemove,merged,report,error,two)&&!merged.gear.count("Coat"));
     partial.profession="Engineer";assert(!SR::Apply(old,partial,merged,report,error,two));
+    {
+        Build local;local.profession="Revenant";local.source_url=url;
+        local.rev_active_palettes=RevenantActivePaletteEvidence{};
+        (*local.rev_active_palettes)[0]={11,0,7,2,42};
+        (*local.rev_active_palettes)[1]={12,55,7,2,42};
+        (*local.rev_active_palettes)[9]={13,0,3,4,42};
+        local.terrestrial_skills.utilities[0]=55;
+        SR::Patch patch;patch.profession=local.profession;patch.sourceUrl=url;
+        assert(SR::Apply(local,patch,merged,report,error,two));
+        assert(merged.rev_active_palettes==local.rev_active_palettes);
+        patch.skills[0]=0;patch.skills[1]=56;
+        assert(SR::Apply(local,patch,merged,report,error,two));
+        assert((*merged.rev_active_palettes)[0][0]==0&&(*merged.rev_active_palettes)[1][0]==0&&(*merged.rev_active_palettes)[9][0]==13);
+    }
     // Exercise the shared provider-neutral template projection, not the
     // excluded MetaBattle parser. Omission and duplicate-pair protection
     // apply equally to both profession-specific components.

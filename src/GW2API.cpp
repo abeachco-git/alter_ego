@@ -2758,12 +2758,7 @@ namespace AlterEgo {
             if(i<2)b.pets.terrestrial[i]=pets[i];else b.pets.aquatic[i-2]=pets[i];
             b.legend_codes[i]=static_cast<uint8_t>(legends[i]);
         }
-        b.rev_active_palettes.reset();
-        if(const auto it=bj.find("rev_active_palettes");it!=bj.end()){
-            std::string fieldError;
-            if(Composable::ValidatePortablePayload("skills",json{{"rev_active_palettes",*it}},fieldError))
-                b.rev_active_palettes=it->get<RevenantActivePaletteEvidence>();
-        }
+        b.rev_active_palettes=SkillEdit::ReadPaletteEvidence(bj);
         b.inactive_rev_skills.reset();
         if(const auto it=bj.find("inactive_rev_skills");it!=bj.end()){
             // An anomalous extension is preserved in the native graph,
@@ -3483,9 +3478,11 @@ namespace AlterEgo {
                 if(!Composable::MergeCapturedCompanion(kind,existing->data,selected->second,merged,error))return false;
                 return Composable::UpdateShared(doc,kind,componentId,merged,error);
             }
-            return Composable::UpdateShared(doc, kind, componentId,
-                Composable::ReplaceCapturedFieldsPreservingExtensions(
-                    existing->data, selected->second), error);
+            auto replacement=Composable::ReplaceCapturedFieldsPreservingExtensions(existing->data,selected->second);
+            if(kind=="skills"&&capture.profession=="Revenant")
+                Composable::MergeCapturedRevenantSkillEvidence(existing->data,replacement,
+                    capture.terrestrial_skills.empty_slots,capture.aquatic_skills.empty_slots);
+            return Composable::UpdateShared(doc,kind,componentId,replacement,error);
         });
     }
 

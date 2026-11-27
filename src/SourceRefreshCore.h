@@ -133,14 +133,25 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
         b.specializations[target]=line;
     }
     auto& bar=b.terrestrial_skills;
-    if(p.skills[0])bar.heal=*p.skills[0];
-    if(p.skills[4])bar.elite=*p.skills[4];
+    const auto oldBar=SkillEdit::DisplayBar(bar);
+    uint8_t suppliedSlots=0;
+    if(p.skills[0]){bar.heal=*p.skills[0];suppliedSlots|=1;}
+    if(p.skills[4]){bar.elite=*p.skills[4];suppliedSlots|=16;}
     std::array<uint32_t,3> utilities{};
     for(size_t i=0;i<3;++i)utilities[i]=p.skills[i+1].value_or(bar.utilities[i]);
     std::set<uint32_t> unique;bool ambiguous=false;
     for(auto id:utilities)if(id&&!unique.insert(id).second)ambiguous=true;
     if(ambiguous)report.notes.push_back("Utility changes conflict with a retained slot; utility bar left unchanged for review.");
-    else std::copy(utilities.begin(),utilities.end(),bar.utilities);
+    else {
+        std::copy(utilities.begin(),utilities.end(),bar.utilities);
+        for(size_t i=1;i<=3;++i)if(p.skills[i])suppliedSlots|=static_cast<uint8_t>(1u<<i);
+    }
+    if(b.profession=="Revenant"){
+        uint8_t explicitClears=0;
+        for(size_t i=0;i<5;++i)if((suppliedSlots&(1u<<i))&&p.skills[i]&&!*p.skills[i])
+            explicitClears|=static_cast<uint8_t>(1u<<i);
+        SkillEdit::RetirePaletteEdits(b.rev_active_palettes,false,oldBar,SkillEdit::DisplayBar(bar),explicitClears);
+    }
     // Companion selection is positional. A partially supplied pair must not
     // displace an omitted local slot or create an illegal duplicate.
     if(b.profession=="Ranger"||b.profession=="Revenant"){

@@ -3892,7 +3892,7 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
 // Returns true when clicked. skill_id 0 draws an empty slot.
 static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,bool nameMenu=true,
                                 const std::string& fallbackIconUrl={},
-                                const char* slotLabel=nullptr,bool emptyKnown=false) {
+                                const char* slotLabel=nullptr,bool emptyKnown=false,bool unresolved=false) {
     const auto sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 max(pos.x + size, pos.y + size);
@@ -3918,8 +3918,14 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,boo
     if(ImGui::IsItemHovered()){
         if(sinfo&&!sinfo->name.empty())AlterEgo::UI::DetailTooltip(sinfo->name.c_str(),StripGW2Markup(sinfo->description).c_str());
         else if(skill_id)AlterEgo::UI::DetailTooltip(slotLabel?slotLabel:"Skill","Recorded skill; metadata not retrieved.");
-        else if(slotLabel)AlterEgo::UI::DetailTooltip(slotLabel,emptyKnown?"Empty slot":editable?"Not recorded. Click to choose.":"Not recorded.");
+        else if(slotLabel)AlterEgo::UI::DetailTooltip(slotLabel,unresolved?"Unresolved imported selection; original palette retained.":emptyKnown?"Empty slot":editable?"Not recorded. Click to choose.":"Not recorded.");
         else if(editable)AlterEgo::UI::Hint("Click to choose a skill");
+    }
+    if(!skill_id&&slotLabel){
+        const char* marker=unresolved?"!":emptyKnown?"-":"?";
+        const auto text=ImGui::CalcTextSize(marker);
+        dl->AddText(ImVec2(pos.x+(size-text.x)*.5f,pos.y+(size-text.y)*.5f),
+            ImGui::GetColorU32(ImGuiCol_TextDisabled),marker);
     }
     if(nameMenu&&skill_id&&ImGui::BeginPopupContextItem("##skill_name")) {
         CopyEntityMenu(sinfo?sinfo->name:std::string{},AlterEgo::LINK_SKILL,skill_id);ImGui::EndPopup();
@@ -3947,15 +3953,8 @@ static void RenderSkillBarPreview(const std::array<AlterEgo::SkillEdit::DisplayS
     for(size_t i=0;i<slots.size();++i){
         if(i%columns)ImGui::SameLine();
         ImGui::PushID(static_cast<int>(i));
-        RenderSkillIconCore(slots[i].id,size,false,true,{},SE::SlotLabel(i),slots[i].evidence==SE::SlotEvidence::Empty);
-        if(!slots[i].id){
-            const auto p=ImGui::GetItemRectMin();
-            const auto max=ImGui::GetItemRectMax();
-            const char* marker=slots[i].evidence==SE::SlotEvidence::Empty?"-":"?";
-            const auto text=ImGui::CalcTextSize(marker);
-            ImGui::GetWindowDrawList()->AddText(ImVec2(p.x+(max.x-p.x-text.x)*.5f,p.y+(max.y-p.y-text.y)*.5f),
-                ImGui::GetColorU32(ImGuiCol_TextDisabled),marker);
-        }
+        RenderSkillIconCore(slots[i].id,size,false,true,{},SE::SlotLabel(i),
+            slots[i].evidence==SE::SlotEvidence::Empty,slots[i].evidence==SE::SlotEvidence::Unresolved);
         ImGui::PopID();
     }
     ImGui::PopID();
@@ -7173,21 +7172,24 @@ static bool RenderSkillPickerPopup(const char* popup,const std::string& professi
 // caller owns its draft and the standalone editor alone exposes exact IDs.
 static bool RenderSkillEditorSlot(uint32_t current,float size,const std::string& profession,
         const char* role,const std::vector<uint32_t>& specs,bool allowAnySpec,bool aquatic,
-        bool advanced,uint32_t& next,const char* label=nullptr){
+        bool advanced,uint32_t& next,const char* label=nullptr,
+        AlterEgo::SkillEdit::SlotEvidence evidence=AlterEgo::SkillEdit::SlotEvidence::Unrecorded){
+    using E=AlterEgo::SkillEdit::SlotEvidence;
+    const bool unresolved=evidence==E::Unresolved;
     const auto pos=ImGui::GetCursorScreenPos();
-    if(RenderSkillIconCore(current,size,true,false,{},label))ImGui::OpenPopup("##skill_picker");
+    if(RenderSkillIconCore(current,size,true,false,{},label,evidence==E::Empty,unresolved))ImGui::OpenPopup("##skill_picker");
     const bool hovered=ImGui::IsItemHovered();
     bool changed=false;
     auto choose=[&](uint32_t id){
         const auto info=id?AlterEgo::GW2API::GetSkillInfo(id):nullptr;
-        if(id!=current&&(!info||AlterEgo::SkillEdit::EnvironmentChoiceAllowed(aquatic,info->no_underwater))){
+        if((id!=current||unresolved)&&(!info||AlterEgo::SkillEdit::EnvironmentChoiceAllowed(aquatic,info->no_underwater))){
             next=id;changed=true;
         }
     };
     if(ImGui::BeginPopupContextItem("##skill_edit_context")){
         const auto info=AlterEgo::GW2API::GetSkillInfo(current);
         CopyEntityMenu(info?info->name:std::string{},AlterEgo::LINK_SKILL,current);
-        if(AlterEgo::UI::MenuAction("Clear Skill",AlterEgo::UI::MenuIcon::Delete,current!=0))choose(0);
+        if(AlterEgo::UI::MenuAction("Clear Skill",AlterEgo::UI::MenuIcon::Delete,current!=0||unresolved))choose(0);
         if(advanced){
             ImGui::TextDisabled("Advanced: exact skill ID");
             uint32_t exact=current;
@@ -9121,29 +9123,20 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src,float sz,bool ed
     namespace SE=AlterEgo::SkillEdit;
     const auto& bar=aquatic?src.aquatic_skills:src.terrestrial_skills;
     ImGui::PushID(aquatic?"aquatic_bar":"terrestrial_bar");
+    const auto slots=SE::WithPaletteBar(SE::DisplayBar(bar),src.rev_active_palettes,aquatic);
     if(!editable){
-        RenderSkillBarPreview(SE::DisplayBar(bar),sz);
-        if(src.profession=="Revenant"&&src.rev_active_palettes){
-            const auto display=SE::DisplayBar(bar);
-            bool unresolved=false;
-            for(size_t i=0;i<display.size();++i){
-                const auto& row=(*src.rev_active_palettes)[(aquatic?5:0)+i];
-                if(row[0]&&!row[1]&&!display[i].id)unresolved=true;
-            }
-            if(unresolved)ImGui::TextDisabled("Unresolved imported skill selection (original palette retained)");
-        }
+        RenderSkillBarPreview(slots,sz);
     }else{
         std::vector<uint32_t> specs;
         for(const auto& spec:src.specializations)if(spec.spec_id)specs.push_back(spec.spec_id);
         const auto columns=SE::IconColumns(ImGui::GetContentRegionAvail().x,sz,ImGui::GetStyle().ItemSpacing.x,5);
-        const auto slots=SE::DisplayBar(bar);
         for(size_t i=0;i<slots.size();++i){
             if(i%columns)ImGui::SameLine();
             ImGui::PushID(static_cast<int>(i)+700);
             uint32_t next=slots[i].id;
-            if(RenderSkillEditorSlot(next,sz,src.profession,SE::SlotRole(i),specs,false,aquatic,false,next,SE::SlotLabel(i))){
+            if(RenderSkillEditorSlot(next,sz,src.profession,SE::SlotRole(i),specs,false,aquatic,false,next,SE::SlotLabel(i),slots[i].evidence)){
                 auto& draft=aquatic?g_EditDraft.aquatic_skills:g_EditDraft.terrestrial_skills;
-                if(SE::SetSlot(draft,static_cast<int>(i),next))MarkEditDirty();
+                if(SE::SetSlotWithPaletteEvidence(draft,g_EditDraft.rev_active_palettes,aquatic,static_cast<int>(i),next))MarkEditDirty();
             }
             ImGui::PopID();
         }

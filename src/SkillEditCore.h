@@ -8,8 +8,9 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include "ChatLink.h"
 namespace AlterEgo::SkillEdit {
-enum class SlotEvidence { Unrecorded, Empty, Recorded };
+enum class SlotEvidence { Unrecorded, Empty, Recorded, Unresolved };
 struct DisplaySlot {
     uint32_t id=0;
     SlotEvidence evidence=SlotEvidence::Unrecorded;
@@ -25,7 +26,7 @@ inline const char* SlotLabel(std::size_t index) {
     return index<5?labels[index]:"Skill";
 }
 inline const char* MissingSlotLabel(SlotEvidence evidence) {
-    return evidence==SlotEvidence::Empty?"Empty":"Not recorded";
+    return evidence==SlotEvidence::Unresolved?"Unresolved selection":evidence==SlotEvidence::Empty?"Empty":"Not recorded";
 }
 template<class Bar> std::array<DisplaySlot,5> DisplayBar(const Bar& bar,uint8_t emptyMask=0) {
     const std::array<uint32_t,5> ids={bar.heal,bar.utilities[0],bar.utilities[1],bar.utilities[2],bar.elite};
@@ -53,6 +54,46 @@ template<class Json> std::array<DisplaySlot,5> JsonDisplayBar(const Json& bar) {
             slots[i+1]=JsonDisplaySlot(bar.at("utilities")[i]);
     return slots;
 }
+// Keep the typed skill bar authoritative. Raw wire evidence only describes
+// the original slot; explicit replacement retires it even for zero -> zero.
+inline DisplaySlot WithPaletteEvidence(DisplaySlot slot,const std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic,size_t index){
+    if(!evidence||index>=5||slot.id)return slot;
+    const auto& row=(*evidence)[(aquatic?5:0)+index];
+    if(!row[1])slot.evidence=row[0]?SlotEvidence::Unresolved:SlotEvidence::Empty;
+    return slot;
+}
+inline std::array<DisplaySlot,5> WithPaletteBar(std::array<DisplaySlot,5> slots,
+    const std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic){
+    for(size_t i=0;i<slots.size();++i)slots[i]=WithPaletteEvidence(slots[i],evidence,aquatic,i);
+    return slots;
+}
+template<class Json> std::optional<RevenantActivePaletteEvidence> ReadPaletteEvidence(const Json& data){
+    if(!data.is_object()||!data.contains("rev_active_palettes"))return std::nullopt;
+    const auto& rows=data.at("rev_active_palettes");
+    if(!rows.is_array()||rows.size()!=10)return std::nullopt;
+    RevenantActivePaletteEvidence result{};
+    for(size_t i=0;i<10;++i){
+        if(!rows[i].is_array()||rows[i].size()!=5)return std::nullopt;
+        for(size_t j=0;j<5;++j){
+            const auto slot=JsonDisplaySlot(rows[i][j]);
+            if(slot.evidence==SlotEvidence::Unrecorded)return std::nullopt;
+            result[i][j]=slot.id;
+        }
+    }
+    return ValidRevenantActivePaletteEvidence(result)?std::optional<RevenantActivePaletteEvidence>(result):std::nullopt;
+}
+inline bool RetirePaletteEdits(std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic,
+    const std::array<DisplaySlot,5>& before,const std::array<DisplaySlot,5>& after,uint8_t explicitSlots=0){
+    if(!evidence)return false;
+    bool changed=false;
+    for(size_t i=0;i<5;++i)if(before[i].id!=after[i].id||(explicitSlots&(1u<<i))){
+        auto& row=(*evidence)[(aquatic?5:0)+i];
+        if(row!=std::array<uint32_t,5>{}){row={};changed=true;}
+    }
+    return changed;
+}
+template<class Bar> bool SetSlotWithPaletteEvidence(Bar& bar,
+    std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic,int slot,uint32_t next);
 // A present but unrepresentable selection is neither empty nor omitted.
 struct CompanionProjection {
     std::array<uint32_t,4> values{};
@@ -222,5 +263,14 @@ template<class Bar> bool SetSlot(Bar& bar,int slot,uint32_t next) {
     auto& field=slot==0?bar.heal:bar.elite;
     if(field==next)return false;
     field=next;return true;
+}
+template<class Bar> bool SetSlotWithPaletteEvidence(Bar& bar,
+    std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic,int slot,uint32_t next){
+    if(slot<0||slot>=5)return false;
+    const auto before=DisplayBar(bar);
+    const bool changed=SetSlot(bar,slot,next);
+    const bool retired=RetirePaletteEdits(evidence,aquatic,before,DisplayBar(bar),
+        static_cast<uint8_t>(1u<<slot));
+    return changed||retired;
 }
 }

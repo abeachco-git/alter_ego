@@ -129,7 +129,19 @@ inline Json PatchDraft(const Json& stored,const Json& baseline,const Json& edite
             if(old==baseline.end())result[i.key()]=i.value();
             else if(!ExactContent(*old,i.value())) {
                 const auto existing=stored.find(i.key());
-                result[i.key()]=existing==stored.end()?i.value():PatchDraft(*existing,*old,i.value());
+                // Companion arrays are positional, not whole-list replacements
+                // when the recorded baseline and stored lengths differ.
+                if(existing!=stored.end()&&(i.key()=="pets"||i.key()=="legend_codes")&&
+                   existing->is_array()&&old->is_array()&&i.value().is_array()&&
+                   i.value().size()>=old->size()){
+                    Json patched=*existing;
+                    for(size_t slot=0;slot<i.value().size();++slot){
+                        if(slot<old->size()&&ExactContent((*old)[slot],i.value()[slot]))continue;
+                        while(patched.size()<=slot)patched.push_back(0);
+                        patched[slot]=i.value()[slot];
+                    }
+                    result[i.key()]=std::move(patched);
+                }else result[i.key()]=existing==stored.end()?i.value():PatchDraft(*existing,*old,i.value());
             }
         }
         return result;

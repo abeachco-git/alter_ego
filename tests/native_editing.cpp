@@ -8,6 +8,27 @@ using Json=Composable::Json;
 
 int case_native_editing(int,char**) {
     {
+        const Json stored={{"pets",{4,5,6,7,999}},{"future",42}};
+        const Json before={{"pets",{4,5}}};
+        const Json edited={{"pets",{4,8}}};
+        const auto patched=PatchDraft(stored,before,edited);
+        assert(patched.at("pets")==Json({4,8,6,7,999})&&patched.at("future")==42);
+        const auto expanded=PatchDraft(stored,before,Json{{"pets",{4,5,0,9}}});
+        assert(expanded.at("pets")==Json({4,5,0,9,999}));
+        const auto shortStored=PatchDraft(Json{{"legend_codes",{4}}},Json{{"legend_codes",{4,5}}},Json{{"legend_codes",{4,8}}});
+        assert(shortStored.at("legend_codes")==Json({4,8}));
+        RevenantActivePaletteEvidence evidence{};
+        evidence[0]={11,0,7,2,42};evidence[1]={12,55,7,2,42};evidence[9]={13,0,3,4,42};
+        const Json previous={{"skills",{{"heal",0},{"utilities",{55,0,0}}}},{"rev_active_palettes",evidence}};
+        Json replacement={{"skills",{{"heal",0},{"utilities",{56,0,0}}}}};
+        Composable::MergeCapturedRevenantSkillEvidence(previous,replacement,0,0);
+        auto retained=SkillEdit::ReadPaletteEvidence(replacement);
+        assert(retained&&(*retained)[0][0]==11&&(*retained)[1][0]==0&&(*retained)[9][0]==13);
+        Composable::MergeCapturedRevenantSkillEvidence(previous,replacement,1,16);
+        retained=SkillEdit::ReadPaletteEvidence(replacement);
+        assert(retained&&(*retained)[0][0]==0&&(*retained)[9][0]==0);
+    }
+    {
         Composable::Document graph;std::string error;
         Json first={{"id","rev-a"},{"name","Rev A"},{"profession","Revenant"},
             {"specializations",Json::array({Json{{"id",1}},Json{{"id",2}},Json{{"id",3}}})},

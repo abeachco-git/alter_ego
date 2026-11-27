@@ -113,10 +113,11 @@ static std::pair<std::vector<uint32_t>, bool> ComponentNativeSkillSpecs(
 }
 
 static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const char* label,
-        const char* role,const std::string& profession,const std::vector<uint32_t>& specs,bool allowAnySpec,bool aquatic){
+        const char* role,const std::string& profession,const std::vector<uint32_t>& specs,bool allowAnySpec,bool aquatic,
+        const std::optional<AlterEgo::RevenantActivePaletteEvidence>& evidence,size_t index){
     namespace SE=AlterEgo::SkillEdit;
     ImGui::PushID(key);
-    const auto slot=parent.contains(key)?SE::JsonDisplaySlot(parent[key]):SE::DisplaySlot{};
+    const auto slot=SE::WithPaletteEvidence(parent.contains(key)?SE::JsonDisplaySlot(parent[key]):SE::DisplaySlot{},evidence,aquatic,index);
     const uint32_t id=slot.id;
     bool changed=false;
     const float available=ImGui::GetContentRegionAvail().x;
@@ -124,7 +125,7 @@ static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const cha
     ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);
     if(available>=labelWidth+38.f+100.f)ImGui::SameLine(0.f,std::max(4.f,labelWidth-ImGui::CalcTextSize(label).x));
     uint32_t next=id;
-    if(RenderSkillEditorSlot(id,38.0f,profession,role,specs,allowAnySpec,aquatic,true,next,label)){
+    if(RenderSkillEditorSlot(id,38.0f,profession,role,specs,allowAnySpec,aquatic,true,next,label,slot.evidence)){
         parent[key]=next;changed=true;
     }
     const auto info=id?AlterEgo::GW2API::GetSkillInfo(id):nullptr;
@@ -159,10 +160,14 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
         ImGui::TreePop();
         return;
     }
+    namespace SE=AlterEgo::SkillEdit;
     auto& bar = data[key];
     const bool aquatic=std::string(key)=="aquatic_skills";
-    ComponentNativeSkill(bar, "heal", "Heal", "Heal",
-                         profession, specs, allowAnySpec,aquatic);
+    auto evidence=SE::ReadPaletteEvidence(data);
+    const auto before=SE::JsonDisplayBar(bar);
+    uint8_t explicitSlots=0;
+    if(ComponentNativeSkill(bar, "heal", "Heal", "Heal",
+                         profession, specs, allowAnySpec,aquatic,evidence,0))explicitSlots|=1;
     ComponentJson utilities = bar.contains("utilities") &&
         bar["utilities"].is_array() ? bar["utilities"] : ComponentJson::array();
     while (utilities.size() < 3) utilities.push_back(0);
@@ -171,14 +176,17 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
         ComponentJson field = {{"skill", utilities[i]}};
         if (ComponentNativeSkill(field, "skill",
                 (std::string("Utility ") + std::to_string(i+1)).c_str(),
-                "Utility", profession, specs, allowAnySpec,aquatic)) {
-            if(AlterEgo::SkillEdit::SetUtility(utilities,i,field["skill"].get<uint32_t>()))
-                bar["utilities"]=utilities;
+                "Utility", profession, specs, allowAnySpec,aquatic,evidence,i+1)) {
+            SE::SetUtility(utilities,i,field["skill"].get<uint32_t>());
+            bar["utilities"]=utilities;
+            explicitSlots|=static_cast<uint8_t>(1u<<(i+1));
         }
         ImGui::PopID();
     }
-    ComponentNativeSkill(bar, "elite", "Elite", "Elite",
-                         profession, specs, allowAnySpec,aquatic);
+    if(ComponentNativeSkill(bar, "elite", "Elite", "Elite",
+                         profession, specs, allowAnySpec,aquatic,evidence,4))explicitSlots|=16;
+    if(SE::RetirePaletteEdits(evidence,aquatic,before,SE::JsonDisplayBar(bar),explicitSlots))
+        data["rev_active_palettes"]=*evidence;
     ImGui::TreePop();
 }
 

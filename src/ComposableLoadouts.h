@@ -1536,6 +1536,23 @@ inline Json ReplaceCapturedFieldsPreservingExtensions(const Json& previous,
     return result;
 }
 
+// Live replacement provides actual skill IDs and explicit API empties,
+// not wire aliases. Preserve unresolved zero projections when the live
+// slot is omitted, but retire evidence for changed typed slots and
+// confirmed clears. Keep the established capture-replacement policy.
+inline void MergeCapturedRevenantSkillEvidence(const Json& previous,Json& replacement,
+    uint8_t landEmpty,uint8_t waterEmpty){
+    auto evidence=SkillEdit::ReadPaletteEvidence(previous);
+    if(!evidence)return;
+    for(int env=0;env<2;++env){
+        const char* key=env?"aquatic_skills":"skills";
+        const auto before=SkillEdit::JsonDisplayBar(previous.value(key,Json::object()));
+        const auto after=SkillEdit::JsonDisplayBar(replacement.value(key,Json::object()));
+        SkillEdit::RetirePaletteEdits(evidence,env!=0,before,after,env?waterEmpty:landEmpty);
+    }
+    replacement["rev_active_palettes"]=*evidence;
+}
+
 // Rename and edit together, with one validation/commit. A failure cannot
 // leave the component's name and payload at different revisions.
 inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
