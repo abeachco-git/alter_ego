@@ -384,7 +384,7 @@ namespace AlterEgo {
                     targets.emplace_back(targetAccount,n);
             }
             std::map<std::string,int> counts;for(const auto& x:targets)++counts[x.second];
-            targets.erase(std::remove_if(targets.begin(),targets.end(),[&](const auto& x){if(expected.empty()&&counts[x.second]>1){partial=true;return true;}return false;}),targets.end());
+            targets.erase(std::remove_if(targets.begin(),targets.end(),[&](const auto& x){if(!listOnly&&expected.empty()&&counts[x.second]>1){partial=true;return true;}return false;}),targets.end());
             if(!selected.empty())for(const auto& n:selected)if(!counts.count(n))partial=true;
             if(!expected.empty()&&targets.size()!=expected.size())partial=true;
             if(!priority.empty())std::stable_partition(targets.begin(),targets.end(),[&](const auto& x){return x.second==priority;});

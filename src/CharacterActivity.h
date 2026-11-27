@@ -79,6 +79,10 @@ class Tracker {
     PortableLogins pendingPortable_;
     Json legacyEntries_=Json::array();
     Key active_;
+    // Session continuity during a live rename is local, not persisted. While
+    // a gameplay identity is unresolved, no name receives active coverage.
+    CharacterIdentity::Ref suspended_;
+    CharacterIdentity::Evidence suspendedEvidence_;
     int64_t missingSince_=0;
     bool dirty_=false;
     uint64_t revision_=0,nextTicket_=0,loginRevision_=0;
@@ -130,24 +134,48 @@ public:
         }else if(spec&&!rows_[k].spec){rows_[k].spec=spec;Dirty();}
         Touch(k,now);Touch({account,{}},now);
     }
+    void SuspendActive(){
+        const auto it=rows_.find(active_);
+        if(it!=rows_.end()&&it->second.bindingId>0){
+            suspended_={active_.first,it->second.bindingId};
+            suspendedEvidence_=it->second.evidence;
+            active_={};Dirty();
+        }
+    }
     void ObserveBound(const std::optional<CharacterIdentity::Address>& address,uint32_t spec,bool gameplay,int64_t now){
+        if(missingSince_&&now-missingSince_>=12)suspended_={};
+        if(!gameplay){
+            Observe({},{},0,false,now);return;
+        }
         if(address){
             const Key key{address->account,address->name};
             const auto it=rows_.find(key);
             // Reject a superseded view after acquiring the activity mutex.
             if(it!=rows_.end()&&it->second.bindingId==address->binding.id&&
                it->second.bindingRevision==address->binding.revision&&it->second.evidence==address->binding.evidence){
-                Observe(key.first,key.second,spec,gameplay,now);return;
+                // Resume the same verified identity after an unresolved
+                // gameplay name. A genuine non-gameplay gap or a different
+                // identity still creates the ordinary new login.
+                if(suspended_.Valid()&&suspended_==address->Reference()&&suspendedEvidence_==address->binding.evidence){
+                    active_=key;Dirty();
+                }
+                suspended_={};
+                Observe(key.first,key.second,spec,true,now);return;
             }
         }
-        Observe({},{},0,false,now);
+        // A confirmed gameplay observation without a binding is not a
+        // logout. Stop assigning active coverage, but retain the session
+        // candidate until evidence resolves or a real gameplay gap occurs.
+        if(missingSince_&&now-missingSince_>=12)End(missingSince_);
+        missingSince_=0;
+        SuspendActive();
     }
     void RetainUnresolvedLogin(const Key& k,int64_t stamp){
         if(k.second.empty()||stamp<=0)return;
         auto& prior=unresolvedLogins_[k];
         if(stamp>prior){prior=stamp;Dirty();}
     }
-    void Finish(int64_t now){End(missingSince_?std::min(now,missingSince_):now);missingSince_=0;}
+    void Finish(int64_t now){End(missingSince_?std::min(now,missingSince_):now);missingSince_=0;suspended_={};}
     Key ActiveKey()const{return active_;}
     uint64_t LoginRevision()const{return loginRevision_;}
     int64_t LastLogin(const Key& k)const{auto i=rows_.find(k);return i==rows_.end()?0:std::max(i->second.login,i->second.historicalLogin);}
@@ -304,7 +332,10 @@ public:
             if(key.first!=account||key.second.empty()){++it;continue;}
             const auto b=bindings.find(key.second);
             if(b!=bindings.end()&&entry.bindingId==b->second.id&&entry.bindingRevision==b->second.revision&&entry.evidence==b->second.evidence){++it;continue;}
-            if(active_==key){activeId=entry.bindingId;activeEvidence=entry.evidence;activeDetached=true;}
+            if(active_==key){
+                activeId=entry.bindingId;activeEvidence=entry.evidence;activeDetached=true;
+                if(activeId>0){suspended_={account,activeId};suspendedEvidence_=activeEvidence;}
+            }
             if(entry.bindingId>0&&CharacterIdentity::Normalize(entry.evidence)){
                 entry.scopes.clear();
                 detached_[{account,entry.bindingId}]={key.second,std::move(entry)};
@@ -322,7 +353,7 @@ public:
             }
             entry.scopes.clear();entry.bindingId=b.id;entry.bindingRevision=b.revision;entry.evidence=b.evidence;
             rows_.emplace(key,std::move(entry));changed=true;
-            if(activeDetached&&activeId==b.id&&activeEvidence==b.evidence)active_=key;
+            if(activeDetached&&activeId==b.id&&activeEvidence==b.evidence){active_=key;suspended_={};}
         }
         if(changed){++loginRevision_;Dirty();}
     }

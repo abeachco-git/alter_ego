@@ -4,15 +4,9 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 **Approval:** proposed means discussion only; previously approved outstanding work is identified below. No new implementation is authorized by this documentation cleanup. Priorities are relative, not a mandate to implement unrelated work. Split broad items into explicitly approved, independently testable batches.
 
-## Approved character identity reconciliation
+## Character identity — final live acceptance
 
-- [ ] Part 7A follow-up verification: extend populated registry migration to a direct v3 ambiguity fixture and exercise larger address-swap groups/live integration; populated v2, three-way swaps and history-limit fixtures are implemented.
-
-- [ ] Part 7B: verify live rename, same-name replacement, swap, missing/partial core, interrupted adoption and account isolation in the running addon; offline fixtures and build verification are tracked in development status. Preserve native Fast Load.
-
-- [ ] Part 7C (approved): verify stable selection, Inventory filters/group expansion, Compare, capture, portraits, portable restore, ordering and rename notifications during live reconciliation (including visible non-character pages). Complete direct v3 ambiguity and larger-swap fixtures and verify exact refresh-selector admission and malformed-core fencing. Legacy name-only recovery is low priority (single tester; preserve archived records without dedicated recovery UI).
-- [ ] Part 7D live acceptance: verified Library/Fashion associations, source-target Compare, portable provenance, duplicate reuse and live rename. Original capture names remain historical.
-- [ ] Part 7E: extend fixtures to live integration and interrupted adoption across stores, missing/partial API data, deletion/recreation, repeated rename, collisions, name reuse and swaps; no changes to native Fast Load internals.
+- [ ] Parts 7A–7E: validate live rename while the addon is open (including non-character pages and API propagation gaps), same-name replacement, repeated rename, collisions, swaps, interrupted adoption, unlink/relink and account isolation; verify selections, Inventory, Compare, Loadout assignments/order/history, portraits, Library/Fashion provenance and portable restoration. See development status and regression testing. Legacy name-only recovery is deliberately deprioritized; preserve archives without a dedicated recovery UI. Preserve native Fast Load.
 
 ## Remaining refresh demand follow-up
 

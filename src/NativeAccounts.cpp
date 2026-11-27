@@ -1225,9 +1225,7 @@ void PollObservedIdentity(const std::string& name,bool inventory){
         !(inventory?(AutoRefreshPolicy::Enabled(D::Bags)||AutoRefreshPolicy::Enabled(D::Equipment)):
                     AutoRefreshPolicy::Enabled(D::Characters)))return;
     auto accounts=Linked();
-    size_t matches=0;
-    for(const auto& account:accounts)if(account.characters.count(name)&&account.bindings.count(name))++matches;
-    if(matches==1){(void)discovery.Admit(name,true,now);return;}
+    if(ResolveObservedCharacter(name)){(void)discovery.Admit(name,true,now);return;}
     accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[](const auto& a){return !a.permissions.count("characters");}),accounts.end());
     if(accounts.empty()||!discovery.Admit(name,false,now))return;
     // Called only from visible demand. The gameplay observer stays local.

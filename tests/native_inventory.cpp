@@ -1,5 +1,6 @@
 #include "../src/CharacterIdentityStore.h"
 #include "../src/CharacterSelectionCore.h"
+#include "../src/CharacterProvenance.h"
 #include "../src/CharacterPreferenceStore.h"
 #include "../src/CharacterIdentityCache.h"
 #include "../src/CharacterActivity.h"
@@ -222,6 +223,66 @@ INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',1,'Former Alice'
         assert(bounded&&bounded.next.Current("Renamed")->id==1&&!bounded.next.Current("New")&&bounded.next.records.at(1).names.size()==CI::MaxAliases);
         std::filesystem::remove_all(root);
     }
+    // Populated ambiguity and pending absence survive both intermediate
+    // schemas. No retired/ambiguous fingerprint can inherit a preference.
+    for(int version:{3,4}){
+        namespace CI=AlterEgo::CharacterIdentity;
+        const auto root=std::filesystem::temp_directory_path()/("ae-ambiguity-migration-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);const auto path=(root/"accounts.db").string();
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Create);
+            Database::Migrate(db,Storage::kAccountRegistryApplicationId,3,CI::UpgradeAccountRegistry);
+            db.Exec(R"SQL(
+INSERT INTO character_identity_state VALUES('A',9,4);
+INSERT INTO character_identities VALUES
+('A',1,'2020-01-02T03:04:05Z','Warrior','Human','Alice',1),
+('A',2,'2020-01-02T03:04:05Z','Warrior','Human','Bob',0),
+('A',3,'2021-01-02T03:04:05Z','Engineer','Asura','Other',1);
+INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',2,'Bob'),('A',3,'Other');
+INSERT INTO character_identity_blocked VALUES('A','Alice');
+INSERT INTO character_identity_pending VALUES('A',1);
+)SQL");
+            if(version==4)Database::Migrate(db,Storage::kAccountRegistryApplicationId,4,CI::UpgradeAccountRegistry);
+        }
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Existing);
+            CI::InitializeAccountRegistry(db);const auto state=CI::Read(db,"A");
+            assert(state.revision==9&&state.records.size()==3&&state.pendingAbsence.count(1));
+            assert(!state.Current("Alice")&&state.Current("Other")->bindingRevision==9);
+            assert(state.records.at(1).evidence==state.records.at(2).evidence);
+            const auto next=CI::Commit(db,"A",9,{"Alice","Other"},
+                {{"Alice",state.records.at(1).evidence},{"Other",state.records.at(3).evidence}});
+            assert(next&&*next&&!next->next.Current("Alice")&&next->next.Current("Other"));
+            assert(db.Scalar("PRAGMA user_version")==Storage::kAccountRegistrySchemaVersion);
+        }
+        std::filesystem::remove_all(root);
+    }
+    // Five-way cycle with partial evidence, complete recovery and repeated
+    // rename-back. Old request fences remain obsolete across the cycle.
+    {
+        namespace CI=AlterEgo::CharacterIdentity;
+        CI::State initial;initial.account="A";
+        const std::vector<std::string> names{"Alice","Bob","Charlie","Delta","Echo"};
+        std::set<std::string> roster(names.begin(),names.end());
+        std::vector<CI::Observation> original,cycle;
+        for(size_t i=0;i<names.size();++i)
+            original.push_back({names[i],{"202"+std::to_string(i)+"-01-02T03:04:05Z","Warrior","Human"}});
+        for(size_t i=0;i<names.size();++i)cycle.push_back({names[(i+1)%names.size()],original[i].evidence});
+        const auto first=CI::Reconcile(initial,roster,original);assert(first.FullyResolved());
+        auto incomplete=cycle;incomplete.pop_back();
+        const auto uncertain=CI::Reconcile(first.next,roster,incomplete);
+        assert(uncertain&&!uncertain.FullyResolved()&&CI::CurrentBindings(uncertain.next).empty());
+        const auto resolved=CI::Reconcile(uncertain.next,roster,cycle);assert(resolved.FullyResolved());
+        for(size_t i=0;i<names.size();++i){
+            const auto before=CI::Capture(first.next,names[i],1);
+            assert(before&&resolved.next.Current(cycle[i].name)->id==before->binding.id&&!CI::Matches(resolved.next,*before,1));
+        }
+        const auto returned=CI::Reconcile(resolved.next,roster,original);assert(returned.FullyResolved());
+        for(const auto& name:names){
+            const auto before=CI::Capture(first.next,name,1);
+            assert(before&&returned.next.Current(name)->id==before->binding.id&&!CI::Matches(returned.next,*before,1));
+        }
+    }
     // Address fences and interrupted cache adoption use independent durable revisions.
     {
         namespace CI=AlterEgo::CharacterIdentity;
@@ -239,9 +300,37 @@ INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',1,'Former Alice'
         assert(!CI::Matches(malformed.next,*alice,10)&&CI::Matches(malformed.next,*bob,10));
         auto rename=CI::Reconcile(first.next,{"Renamed","Bob"},{{"Renamed",a}});
         assert(rename&&rename.next.Current("Renamed")&&!CI::Matches(rename.next,*alice,10)&&CI::Matches(rename.next,*bob,10));
+        // Mumble may report the new gameplay name long before authenticated
+        // roster propagation. No active coverage while unresolved, but the
+        // verified same identity resumes its existing login after adoption.
+        {
+            namespace CA=AlterEgo::CharacterActivity;
+            CA::Tracker live;live.FenceBindings("A",CI::CurrentBindings(first.next));
+            live.ObserveBound(alice,42,true,20);
+            live.ObserveBound(std::nullopt,42,true,25);
+            assert(live.ActiveKey()==CA::Key{}&&live.LastSeen({"A","Alice"})==20);
+            live.ObserveBound(std::nullopt,42,true,100);
+            live.FenceBindings("A",CI::CurrentBindings(rename.next));
+            live.ObserveBound(CI::Capture(rename.next,"Renamed",10),42,true,120);
+            assert(live.ActiveKey()==CA::Key("A","Renamed")&&live.LastLogin({"A","Renamed"})==20);
+            assert(live.LastSeen({"A","Renamed"})==120&&live.LastSeen({"A","Alice"})==0);
+            live.ObserveBound(std::nullopt,42,true,121);
+            live.ObserveBound(std::nullopt,0,false,122);
+            live.ObserveBound(std::nullopt,0,false,135);
+            live.ObserveBound(CI::Capture(rename.next,"Renamed",10),42,true,136);
+            assert(live.LastLogin({"A","Renamed"})==136);
+            live.ObserveBound(std::nullopt,42,true,140);
+            live.ObserveBound(CI::Capture(rename.next,"Bob",10),99,true,141);
+            assert(live.LastLogin({"A","Bob"})==141&&live.LastLogin({"A","Renamed"})==136);
+        }
         CI::Selection selected{alice->Reference(),alice->binding.evidence,alice->name,false};
         const auto renamedAddress=CI::Capture(rename.next,"Renamed",10);
         assert(renamedAddress&&selected.Accept(*renamedAddress)&&selected.name=="Renamed");
+        const auto source=CI::CaptureProvenance(*alice);
+        assert(source.name=="Alice"&&source.Matches(*renamedAddress)&&!source.Matches(*bob));
+        auto otherAccount=*renamedAddress;otherAccount.account="B";assert(!source.Matches(otherAccount));
+        const auto sourceRoundTrip=CI::DecodeProvenance(CI::EncodeProvenance(source));
+        assert(sourceRoundTrip&&*sourceRoundTrip==source);
         const auto notices=CI::VerifiedRenames(first.next,rename.next);
         assert(notices.size()==1&&notices[0].ref==alice->Reference()&&notices[0].before=="Alice"&&notices[0].after=="Renamed");
         assert(CI::VerifiedRenames(rename.next,rename.next).empty());

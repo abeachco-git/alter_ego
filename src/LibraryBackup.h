@@ -157,6 +157,18 @@ inline std::string PortableSession(const std::string& bytes) {
         if(j.contains(key)&&j[key].is_object())j[key].erase("local_id");
     return j.dump(2);
 }
+// Inventory character expansion keys are local presentation state. Do not
+// export registry-local numeric IDs or accept them from another installation.
+inline std::string PortableSettings(const std::string& bytes){
+    auto j=Untrusted::Parse(bytes,Untrusted::Library);
+    if(!j.contains("inventory_expanded_groups")||!j["inventory_expanded_groups"].is_array())return bytes;
+    auto& groups=j["inventory_expanded_groups"];
+    const auto count=groups.size();
+    groups.erase(std::remove_if(groups.begin(),groups.end(),[](const auto& v){
+        return v.is_string()&&v.template get<std::string>().rfind("identity:",0)==0;
+    }),groups.end());
+    return groups.size()==count?bytes:j.dump(2);
+}
 inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
                     std::string& error) {
     files.clear();
@@ -171,6 +183,7 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
             size_t count = 0;
             if (!ValidateCollection(name, data, count, error)) return false;
             if(name=="session.json")data=PortableSession(data);
+            if(name=="settings.json")data=PortableSettings(data);
             files.emplace(name, std::move(data));
         }
         return true;
@@ -460,7 +473,7 @@ inline bool Prepare(const std::string& dir, const Package& package,
             continue;
         }
         if(!replace&&Exists(FilePath(dir,name))){++plan.otherSkipped;continue;}
-        try{plan.writeFiles[name]=name=="session.json"?PortableSession(bytes):bytes;++plan.otherWritten;}
+        try{plan.writeFiles[name]=name=="session.json"?PortableSession(bytes):name=="settings.json"?PortableSettings(bytes):bytes;++plan.otherWritten;}
         catch(const std::exception& e){error=std::string("Cannot import settings: ")+e.what();return false;}
     }
     return true;

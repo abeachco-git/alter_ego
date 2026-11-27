@@ -75,6 +75,10 @@ int case_library_backup(int, char**) {
     assert(full.buildCount == 1 && full.fashionCount == 1);
     assert(full.files.at("portraits/a.png") == portrait);
     assert(full.files.count("settings.json") == 1);
+    const auto localSettings=R"({"inventory_expanded_groups":["identity:local-id-and-evidence","shared-group"],"show_age":true})";
+    const auto sanitized=nlohmann::json::parse(PortableSettings(localSettings));
+    assert(sanitized.at("inventory_expanded_groups")==nlohmann::json::array({"shared-group"}));
+    assert(sanitized.at("show_age")==true);
     const auto session=nlohmann::json::parse(full.files.at("session.json"));
     assert(!session["selected_character_ref"].contains("local_id")&&!session["compare_character_ref"].contains("local_id"));
     assert(!full.files.count("character_activity.json"));
@@ -130,7 +134,9 @@ int case_library_backup(int, char**) {
     assert(native.fashion.size()==1);
     assert(native.fashion[0].source_identity&&*native.fashion[0].source_identity==sourceIdentity);
     assert(native.fashion[0].associations.size()==1&&native.fashion[0].associations[0]==sourceIdentity);
-    assert(Composable::FindLoadout(native.loadouts,"build-a")->metadata.at("source_identity")==CharacterIdentity::EncodeProvenance(sourceIdentity));
+    // Merge must preserve the existing local Loadout, including its absent
+    // provenance. The replacement test below verifies incoming provenance.
+    assert(!Composable::FindLoadout(native.loadouts,"build-a")->metadata.contains("source_identity"));
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":false})");
     assert(Get(FilePath(dst,"portraits/a.png")) == portrait);
     assert(!Exists(FilePath(dst,"character_activity.json")));
@@ -149,6 +155,11 @@ int case_library_backup(int, char**) {
     assert(Apply(dst, plan, recovery, err));
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":true})");
     assert(CharacterActivity::DecodePortableLogins(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at({hero,{}})==3000);
+
+    assert(Prepare(dst,full,Builds,true,plan,err));
+    assert(Apply(dst,plan,recovery,err));
+    assert(NativeLibrary::RuntimeStore().Read(native,err)&&native.loadouts.loadouts.size()==1);
+    assert(Composable::FindLoadout(native.loadouts,"build-a")->metadata.at("source_identity")==CharacterIdentity::EncodeProvenance(sourceIdentity));
 
     // Empty collection files are valid backups and may clear a selected collection.
     Put((base/"empty.json").u8string(), R"({"builds":[]})");

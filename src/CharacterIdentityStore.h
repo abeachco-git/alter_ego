@@ -6,9 +6,7 @@
 namespace AlterEgo::CharacterIdentity {
 // The durable identity registry belongs with accounts, not the disposable
 // cache. Unlinking credentials must not delete historical identity records.
-inline void InitializeAccountRegistry(Database::Connection& db){
-    Database::Migrate(db,Storage::kAccountRegistryApplicationId,
-        Storage::kAccountRegistrySchemaVersion,[](Database::Connection& c,int version){
+inline void UpgradeAccountRegistry(Database::Connection& c,int version){
         if(version==1)c.Exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,label TEXT NOT NULL,permissions TEXT NOT NULL) STRICT");
         else if(version==2)c.Exec(R"SQL(
 CREATE TABLE character_identity_state(account TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>=0),next_id INTEGER NOT NULL CHECK(next_id>0)) STRICT;
@@ -46,7 +44,10 @@ CREATE TABLE character_loadout_pending(account TEXT NOT NULL,name TEXT NOT NULL,
 CREATE TABLE character_custom_order(account TEXT NOT NULL,local_id INTEGER NOT NULL,rank INTEGER NOT NULL CHECK(rank>=0),PRIMARY KEY(account,local_id),FOREIGN KEY(account,local_id) REFERENCES character_identities(account,local_id) ON DELETE CASCADE) STRICT;
 CREATE TABLE character_order_pending(account TEXT NOT NULL,name TEXT NOT NULL,created TEXT NOT NULL,profession TEXT NOT NULL,race TEXT NOT NULL,rank INTEGER NOT NULL CHECK(rank>=0),resolved INTEGER NOT NULL DEFAULT 0 CHECK(resolved IN (0,1)),PRIMARY KEY(account,name,created,profession,race,rank)) STRICT;
 )SQL");
-    });
+        else throw Database::Error(SQLITE_ERROR,"Unknown account registry schema");
+}
+inline void InitializeAccountRegistry(Database::Connection& db){
+    Database::Migrate(db,Storage::kAccountRegistryApplicationId,Storage::kAccountRegistrySchemaVersion,UpgradeAccountRegistry);
 }
 // Caller owns a consistent transaction or serial account-registry access.
 // A missing registry is not equivalent to verified empty character evidence.
