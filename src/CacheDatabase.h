@@ -34,7 +34,9 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
     if(version==33){
-        db.Exec("ALTER TABLE reference_items ADD COLUMN optional_metadata TEXT;");
+        db.Exec(R"SQL(
+ALTER TABLE reference_items ADD COLUMN optional_metadata TEXT;
+)SQL");
         return;
     }
     if(version==32){
