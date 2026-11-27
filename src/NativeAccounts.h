@@ -7,12 +7,14 @@
 #include <map>
 #include <optional>
 #include <nlohmann/json.hpp>
+#include "CharacterIdentityRuntime.h"
 namespace AlterEgo::NativeAccounts {
 struct LinkedAccount {
     std::string id,name,label;
     std::set<std::string> permissions,characters;
     bool rosterKnown=false;
     uint64_t generation=0;
+    CharacterIdentity::Bindings bindings; // immutable queue-admission snapshot
 };
 struct Result {
     int status=0;
@@ -30,21 +32,17 @@ bool Current(const LinkedAccount& account);
 bool CommitIfCurrent(const LinkedAccount& account,const std::function<bool()>& commit);
 bool CommitIfCurrent(const std::vector<LinkedAccount>& accounts,const std::function<bool()>& commit);
 bool CommitIfRosterCurrent(const std::vector<LinkedAccount>& accounts,const std::map<std::string,std::set<std::string>>& roster,const std::function<bool()>& commit);
-bool CommitIfCharacterCurrent(const LinkedAccount& account,const std::string& character,const std::function<bool()>& commit);
+bool CommitIfCharacterCurrent(const LinkedAccount& account,const CharacterIdentity::Address& address,const std::function<bool()>& commit);
+std::optional<CharacterIdentity::Address> EnsureCharacterAddress(const LinkedAccount& account,const std::string& name);
+bool RecordIdentityObservation(const LinkedAccount& account,const CharacterIdentity::Address& address,
+    const std::string& created,const std::string& profession,const std::string& race);
 Result Request(const LinkedAccount& account,const std::string& path,
                const std::vector<std::string>& permissions,const std::string& headers={});
 Result Request(const std::string& accountId,const std::string& path,
                const std::vector<std::string>& permissions);
-bool RefreshRoster(const LinkedAccount& account,std::set<std::string>& names);
-// Evidence collection only until the live address fence and recovery owner
-// are enabled. A stale observation cannot revise the durable registry.
-struct IdentityObservationTicket {uint64_t rosterEpoch=0;int64_t revision=0;bool tracked=false;};
-std::optional<IdentityObservationTicket> BeginIdentityObservation(const LinkedAccount& account,const std::string& name);
-bool RecordIdentityObservation(const LinkedAccount& account,const std::string& name,
-    const IdentityObservationTicket& ticket,const std::string& created,
-    const std::string& profession,const std::string& race);
+bool RefreshRoster(const LinkedAccount& account,std::set<std::string>& names,bool verifyAll=false);
 struct PhysicalEquipmentResult {Result response;int64_t started=0,success=0;bool inventoryCommitted=false;};
-PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& account,const std::string& character,bool manual);
+PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& account,const CharacterIdentity::Address& address,bool manual);
 void PollItemDemand(const std::string& selectedAccount);
 struct Location {std::string account,scope,character,position,binding;int64_t count=0;};
 std::vector<Location> Locations(uint32_t id);

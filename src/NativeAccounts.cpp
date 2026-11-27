@@ -35,6 +35,7 @@ struct Account {std::string id,name,label;std::set<std::string> permissions;};
 struct View {
     std::vector<Account> accounts;Projection inventory;
     uint64_t credentialEpoch=1;
+    std::map<std::string,CharacterIdentity::Bindings> bindings;
     std::map<uint32_t,std::vector<size_t>> index;
     std::map<std::tuple<std::string,std::string,std::string>,ScopeState> scopes;
 };
@@ -52,11 +53,11 @@ std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
 std::atomic<bool> busy{false};
 std::mutex physicalMutex,rosterMutex;
-struct PhysicalEntry {uint64_t epoch=0;PhysicalEquipmentResult value;std::chrono::steady_clock::time_point finished{};};
+struct PhysicalEntry {uint64_t epoch=0;PhysicalEquipmentResult value;std::chrono::steady_clock::time_point finished{};CharacterIdentity::Binding binding;};
 std::map<std::pair<std::string,std::string>,PhysicalEntry> physicalCache;
-// Guarded by credentialMutex. A roster attempt which cannot preserve its
-// evidence or commit the name list blocks subsequent evidence publication.
-std::map<std::string,uint64_t> identityRosterEpoch;
+// Identity mutations, admission checks and view publication use credentialMutex.
+// Never hold it across HTTP or broker acquisition.
+std::map<std::string,CharacterIdentity::State> identityStates;
 std::set<std::string> identityRosterBlocked;
 std::string message;
 RefreshUI::State messageState=RefreshUI::State::Ready;
@@ -154,11 +155,34 @@ CharacterIdentity::State BootstrapIdentity(Database::Connection& db,const std::s
     if(!plan||!*plan)throw std::runtime_error("Could not preserve historical character identity");
     return plan->next;
 }
-bool RetainRosterEvidence(const std::string& account,const std::set<std::string>& names){
-    Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
-    const auto old=BootstrapIdentity(db,account);
-    const auto plan=CharacterIdentity::Commit(db,account,old.revision,names,{});
-    return plan&&*plan;
+// Caller holds credentialMutex. Cache adoption is independently replayable.
+void InvalidateIdentityProjection(const std::string& account,const std::set<std::string>& affected,bool all=false){
+    GW2API::DiscardIdentityCache(account,affected,all);
+    std::lock_guard<std::mutex> lock(viewMutex);
+    for(auto it=liveScopes.begin();it!=liveScopes.end();){
+        if(std::get<0>(it->first)==account&&!std::get<2>(it->first).empty()&&
+           (all||affected.count(std::get<2>(it->first))))it=liveScopes.erase(it);
+        else ++it;
+    }
+}
+bool AdoptIdentity(const CharacterIdentity::State& state){
+    const auto account=state.account;
+    identityRosterBlocked.insert(account);
+    try{
+        const auto affected=CharacterIdentity::AdoptCache(root,state);
+        if(!affected)throw std::runtime_error("Character identity cache recovery failed");
+        InvalidateIdentityProjection(account,*affected);
+        {
+            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+            CharacterActivity::State().FenceBindings(account,CharacterIdentity::CurrentBindings(state));
+        }
+        identityStates[account]=state;
+        identityRosterBlocked.erase(account);
+        return true;
+    }catch(...){
+        InvalidateIdentityProjection(account,{},true);
+        return false;
+    }
 }
 std::vector<Account> Accounts(){
     std::vector<Account> out;const auto p=AccountPath();if(!std::filesystem::exists(p))return out;
@@ -174,6 +198,22 @@ std::vector<Account> Accounts(){
 void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State state=RefreshUI::State::Ready){
     std::lock_guard<std::mutex> serial(publishMutex);
     auto next=std::make_shared<View>();next->credentialEpoch=registryGeneration.load();next->accounts=Accounts();next->inventory=Read(root);
+    for(const auto& [account,state]:identityStates)
+        if(!identityRosterBlocked.count(account))next->bindings.emplace(account,CharacterIdentity::CurrentBindings(state));
+    // Preserve the raw roster for native Fast Load. Filter only character-owned cache rows.
+    const auto safe=[&](const std::string& account,const std::string& name){
+        if(name.empty())return true;
+        const auto it=next->bindings.find(account);
+        return it!=next->bindings.end()&&it->second.count(name);
+    };
+    auto& rows=next->inventory.rows;
+    rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& r){
+        return (r.slot.scope=="Bags"||r.slot.scope=="Equipment")&&!safe(r.slot.account,r.slot.character);
+    }),rows.end());
+    auto& states=next->inventory.states;
+    states.erase(std::remove_if(states.begin(),states.end(),[&](const auto& s){
+        return (s.scope=="Bags"||s.scope=="Equipment")&&!safe(s.account,s.character);
+    }),states.end());
     for(size_t i=0;i<next->inventory.rows.size();++i)next->index[next->inventory.rows[i].slot.id].push_back(i);
     // All location consumers share this order; do not reorder row identities.
     for(auto& entry:next->index)std::sort(entry.second.begin(),entry.second.end(),[&](size_t a,size_t b){
@@ -219,6 +259,7 @@ struct RosterResult {
     ScopeState state;
     std::set<std::string> names;
     bool accepted=false;
+    bool full=false;
 };
 struct RosterEntry {
     uint64_t epoch=0;
@@ -227,7 +268,7 @@ struct RosterEntry {
 };
 std::map<std::string,RosterEntry> rosterCache;
 // One owner for endpoint, durable roster, pruning and status.
-RosterResult FetchRoster(const LinkedAccount& a){
+RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recovery=false){
     using Clock=std::chrono::steady_clock;
     const auto queued=Clock::now();
     RosterResult result;result.state={a.id,"Roster",{},"Roster retrieval failed",0,0};
@@ -241,7 +282,9 @@ RosterResult FetchRoster(const LinkedAccount& a){
     const auto previous=rosterCache.find(a.id);
     if(previous!=rosterCache.end()&&previous->second.epoch==a.generation&&
        previous->second.result.accepted&&previous->second.result.state.status=="Ready"&&
-       previous->second.finished>=queued)return previous->second.result;
+       (previous->second.finished>=queued||
+        (recovery&&Clock::now()-previous->second.finished<std::chrono::seconds(30)))&&
+       (!verifyAll||previous->second.result.full))return previous->second.result;
     observed.Start();
     result.state.attempted=Now();
     try{
@@ -252,23 +295,61 @@ RosterResult FetchRoster(const LinkedAccount& a){
         }
         for(const auto& n:response.data){
             const auto name=n.get<std::string>();
-            if(name.empty()||!result.names.insert(name).second)throw std::runtime_error("Invalid roster");
+            if(!CharacterIdentity::Text(name)||!result.names.insert(name).second||result.names.size()>CharacterIdentity::MaxRoster)
+                throw std::runtime_error("Invalid roster");
         }
         result.state.status="Ready";result.state.success=Now();
     }catch(...){result.names.clear();result.state.success=0;if(result.state.status=="Ready")result.state.status="Roster retrieval failed";}
     try{
-        result.accepted=CommitIfCurrent(a,[&]{
-            if(result.state.status=="Ready"){
-                ++identityRosterEpoch[a.id];
-                identityRosterBlocked.insert(a.id);
-                // Preserve evidence before name-only roster reconciliation can
-                // discard it. This is not live identity adoption: existing
-                // roster and cache ownership remain unchanged for now.
-                if(!RetainRosterEvidence(a.id,result.names))return false;
-                if(!StoreRoster(root,a.id,result.names,result.state.success,result.state.attempted))return false;
-                identityRosterBlocked.erase(a.id);
-            }else if(!Record(root,result.state))return false;
-            Publish("",false);return true;
+        if(result.state.status=="Ready"){
+            CharacterIdentity::State before;
+            if(!CommitIfCurrent(a,[&]{
+                Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+                before=BootstrapIdentity(db,a.id);return true;
+            }))return result;
+            std::vector<CharacterIdentity::Observation> evidence;
+            std::set<std::string> attempted;
+            auto readCore=[&](const std::string& name){
+                if(!attempted.insert(name).second)return;
+                Background::Checkpoint();
+                const auto response=Request(a,"/v2/characters/"+Encode(name)+"/core",{"characters"},"Cache-Control: no-cache\r\n");
+                try{
+                    if(!response||!response.data.is_object()||response.data.at("name").get<std::string>()!=name)return;
+                    const auto e=CharacterIdentity::Normalize({response.data.at("created").get<std::string>(),
+                        response.data.at("profession").get<std::string>(),response.data.at("race").get<std::string>()});
+                    evidence.push_back({name,e.value_or(CharacterIdentity::Evidence{})});
+                }catch(...){}
+            };
+            for(const auto& name:result.names)if(verifyAll||!before.Current(name))readCore(name);
+            auto plan=CharacterIdentity::Reconcile(before,result.names,evidence);
+            const bool missing=std::any_of(before.records.begin(),before.records.end(),[&](const auto& entry){
+                const auto& old=entry.second;
+                if(!old.present)return false;
+                const auto next=plan.next.records.find(old.id);
+                return !plan||next==plan.next.records.end()||
+                    (next->second.present&&!result.names.count(next->second.name));
+            });
+            // Expand only for unresolved ownership or retirement.
+            if(missing||!before.pendingAbsence.empty()||(plan&&!plan.next.blocked.empty()))
+                for(const auto& name:result.names)readCore(name);
+            result.full=attempted.size()==result.names.size();
+            result.accepted=CommitIfCurrent(a,[&]{
+                Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+                // Coalesced results never reach here; the planner itself
+                // requires complete valid evidence for retirement.
+                const auto updated=CharacterIdentity::Commit(db,a.id,before.revision,result.names,evidence,result.full);
+                if(!updated||!*updated)return false;
+                if(!AdoptIdentity(updated->next)){
+                    Publish("",false);return false;
+                }
+                if(!StoreRoster(root,a.id,result.names,result.state.success,result.state.attempted)){
+                    identityRosterBlocked.insert(a.id);InvalidateIdentityProjection(a.id,{},true);
+                    Publish("",false);return false;
+                }
+                Publish("",false);return true;
+            });
+        }else result.accepted=CommitIfCurrent(a,[&]{
+            if(!Record(root,result.state))return false;Publish("",false);return true;
         });
     }catch(...){result.accepted=false;}
     if(result.accepted&&result.state.status=="Ready")
@@ -392,7 +473,8 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
         onlyScope=="Materials"||onlyScope=="Legendary Armory"||onlyScope=="Delivery box"||onlyScope=="Roster"||onlyScope=="Guild bank";
     if(accounts.size()==1&&(singleKnown||(automatic&&!onlyCharacter.empty()&&(onlyScope=="Bags"||onlyScope=="Equipment"))))
         pending=ScopeKey{accounts.front().id,onlyScope=="Guild bank"?"Guild access":onlyScope,onlyCharacter};
-    Launch([accounts,epoch,onlyScope,automatic,onlyCharacter,characterFilter,includeWallet]{
+    const auto admitted=Snapshot();
+    Launch([accounts,epoch,onlyScope,automatic,onlyCharacter,characterFilter,includeWallet,admitted]{
         ApiActivity::ReasonScope reason(automatic?ApiActivity::Reason::Visible:ApiActivity::Reason::Manual);
         const auto previous=Snapshot();
         if(previous->credentialEpoch!=epoch)throw Background::Cancelled{};
@@ -404,6 +486,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
         auto publishProgress=[&](bool force=false){
             const auto now=std::chrono::steady_clock::now();
             if(force||now-lastPublish>=std::chrono::seconds(5)){
+                std::lock_guard<std::mutex> gate(credentialMutex);
                 Publish("",false);lastPublish=std::chrono::steady_clock::now();
             }
         };
@@ -412,6 +495,8 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
             // registry view at admission. Never attach a later credential to it.
             LinkedAccount linked;linked.id=a.id;linked.name=a.name;
             linked.permissions=a.permissions;linked.generation=epoch;
+            const auto admittedBindings=admitted->bindings.find(a.id);
+            if(admittedBindings!=admitted->bindings.end())linked.bindings=admittedBindings->second;
             const auto checkCurrent=[&]{
                 Background::Checkpoint();
                 if(!Current(linked))throw Background::Cancelled{};
@@ -434,19 +519,30 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 if(!onlyCharacter.empty()&&character!=onlyCharacter)return;
                 if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
                 checkCurrent();
+                const bool characterScope=bags||name=="Equipment";
+                const auto address=characterScope?EnsureCharacterAddress(linked,character):std::optional<CharacterIdentity::Address>{};
+                if(characterScope&&!address)return;
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
                 BeginScope(state,(accounts.size()>1?a.name+" / ":"")+name+(character.empty()?"":" / "+character));
-                const bool characterScope=bags||name=="Equipment";
                 const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
                     a.permissions.count("inventories")&&(!characterScope||a.permissions.count("characters"))&&
                     (name!="Legendary Armory"||a.permissions.count("unlocks"));
                 if(!permitted&&name!="Equipment"){
-                    state.status="Missing permissions";commit([&]{if(!Record(root,state))throw Background::Cancelled{};});EndScope(state);publishProgress();return;
+                    state.status="Missing permissions";
+                    const auto write=[&]{if(!Record(root,state))return false;EndScope(state);return true;};
+                    if(address){if(!CommitIfCharacterCurrent(linked,*address,write))return;}
+                    else commit([&]{if(!write())throw Background::Cancelled{};});
+                    publishProgress();return;
                 }
                 CharacterActivity::CancelOnShutdown attempts({a.id,character});
                 CharacterActivity::Ticket ticket{};
                 const auto scopeCommit=[&](const auto& write){
-                    try{commit(write);}
+                    try{
+                        if(address){
+                            if(!CommitIfCharacterCurrent(linked,*address,[&]{write();return true;}))
+                                throw Background::Cancelled{};
+                        }else commit(write);
+                    }
                     catch(const Background::Cancelled&){
                         if(ticket.serial)CharacterActivity::Cancel({a.id,character},name,ticket);
                         throw;
@@ -454,7 +550,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 };
                 try{
                     if(name=="Equipment"){
-                        auto physical=RequestPhysicalEquipment(linked,character,!automatic);
+                        auto physical=RequestPhysicalEquipment(linked,*address,!automatic);
                         checkCurrent();
                         // The physical owner alone records success AND failure.
                         if(!physical.started)throw Background::Cancelled{};
@@ -493,7 +589,11 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     if(name=="Equipment")throw;
                     scopeCommit([&]{if(!Record(root,state))throw Background::Cancelled{};});
                 }
-                EndScope(state);publishProgress();
+                if(address){
+                    if(!CommitIfCharacterCurrent(linked,*address,[&]{EndScope(state);return true;}))
+                        throw Background::Cancelled{};
+                }else EndScope(state);
+                publishProgress();
             };
             if((onlyScope.empty()||onlyScope=="Wallet"||(includeWallet&&onlyScope=="Items"))&&(!automatic||ScopeDue(*previous,a.id,"Wallet"))){
                 checkCurrent();
@@ -553,11 +653,12 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     if(cached!=previous->inventory.rosters.end())names=cached->second;
                 }else{
                     ScopeState state{a.id,"Roster","","Ready",Now(),0};BeginScope(state,"Roster");
-                    auto result=FetchRoster(linked);
+                    auto result=FetchRoster(linked,automatic||onlyScope=="Roster");
                     if(!result.accepted)throw Background::Cancelled{};
                     EndScope(result.state);publishProgress(true);
                     if(result.state.status!="Ready")continue;
                     names=std::move(result.names);
+                    if(onlyCharacter.empty()&&characterFilter.empty())linked.bindings=FindLinked(a.id).bindings;
                 }
                 // Do not relabel later bag/equipment failures as roster failures.
                 for(const auto& ch:names){
@@ -598,7 +699,8 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
             metadataDone+=count;batch.clear();expected.clear();count=0;publishProgress();
         };
         for(auto id:ids){Background::Checkpoint();if(count==100)flush();if(count++)batch+=",";batch+=std::to_string(id);expected.insert(id);}flush();
-        Publish("Refresh finished. Check individual storage status for failures or stale data.");
+        {std::lock_guard<std::mutex> gate(credentialMutex);
+        Publish("Refresh finished. Check individual storage status for failures or stale data.");}
     },std::move(pending),epoch);
 }
 std::string Display(const Account& a){return a.label.empty()?a.name:a.label;}
@@ -613,6 +715,8 @@ std::vector<LinkedAccount> Linked(){
     auto v=Snapshot();std::vector<LinkedAccount> out;const auto gen=v->credentialEpoch;
     for(const auto& a:v->accounts){
         LinkedAccount row;row.id=a.id;row.name=a.name;row.label=a.label;row.permissions=a.permissions;row.generation=gen;
+        const auto bindings=v->bindings.find(a.id);
+        if(bindings!=v->bindings.end())row.bindings=bindings->second;
         const auto it=v->inventory.rosters.find(a.id);
         if(it!=v->inventory.rosters.end()){row.rosterKnown=true;row.characters=it->second;}
         out.push_back(std::move(row));
@@ -647,43 +751,62 @@ bool CommitIfRosterCurrent(const std::vector<LinkedAccount>& accounts,const std:
         return commit();
     });
 }
-bool CommitIfCharacterCurrent(const LinkedAccount& account,const std::string& character,const std::function<bool()>& commit){
-    return CommitIfCurrent(account,[&]{
-        auto names=ReadRoster(root,account.id);
-        return (!names||names->count(character))&&commit();
+bool CommitIfCharacterCurrent(const LinkedAccount& a,const CharacterIdentity::Address& address,const std::function<bool()>& commit){
+    return CommitIfCurrent(a,[&]{
+        const auto it=identityStates.find(a.id);
+        if(identityRosterBlocked.count(a.id)||it==identityStates.end()||
+           !CharacterIdentity::Matches(it->second,address,a.generation))return false;
+        const auto names=ReadRoster(root,a.id);
+        return names&&names->count(address.name)&&commit();
     });
 }
-std::optional<IdentityObservationTicket> BeginIdentityObservation(const LinkedAccount& a,const std::string& name){
-    std::optional<IdentityObservationTicket> result;
-    try{
-        if(!CommitIfCurrent(a,[&]{
-            if(identityRosterBlocked.count(a.id))return false;
-            Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
-            const auto state=BootstrapIdentity(db,a.id);
-            const auto names=ReadRoster(root,a.id);
-            if(names&&!names->count(name))return false;
-            result=IdentityObservationTicket{identityRosterEpoch[a.id],state.revision,names.has_value()};
-            return true;
-        }))return std::nullopt;
-    }catch(...){return std::nullopt;}
-    return result;
-}
-bool RecordIdentityObservation(const LinkedAccount& a,const std::string& name,
-    const IdentityObservationTicket& ticket,const std::string& created,
-    const std::string& profession,const std::string& race){
-    try{
+std::optional<CharacterIdentity::Address> EnsureCharacterAddress(const LinkedAccount& a,const std::string& name){
+    std::optional<CharacterIdentity::Address> address;
+    const auto admitted=a.bindings.find(name);
+    auto capture=[&]{
+        address.reset();
         return CommitIfCurrent(a,[&]{
-            if(identityRosterBlocked.count(a.id)||identityRosterEpoch[a.id]!=ticket.rosterEpoch)return false;
-            if(!ticket.tracked)return true; // no verified roster; keep existing refresh semantics
+            const auto it=identityStates.find(a.id);
+            if(identityRosterBlocked.count(a.id)||it==identityStates.end())return false;
             const auto names=ReadRoster(root,a.id);
             if(!names||!names->count(name))return false;
-            Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
-            const auto plan=CharacterIdentity::Commit(db,a.id,ticket.revision,*names,{{name,{created,profession,race}}});
-            // No retirement confirmation from individual core requests or a
-            // cached roster. Full independent observation is future live work.
-            return plan&&*plan;
+            address=CharacterIdentity::Capture(it->second,name,a.generation);
+            return address.has_value();
         });
-    }catch(...){return false;}
+    };
+    try{
+        if(!capture()){
+            if(admitted!=a.bindings.end())return std::nullopt;
+            const auto roster=FetchRoster(a,true,true);
+            if(!roster.accepted||!capture())return std::nullopt;
+        }
+        if(admitted!=a.bindings.end()&&admitted->second!=address->binding)return std::nullopt;
+        return address;
+    }catch(...){return std::nullopt;}
+}
+bool RecordIdentityObservation(const LinkedAccount& a,const CharacterIdentity::Address& address,
+    const std::string& created,const std::string& profession,const std::string& race){
+    const auto evidence=CharacterIdentity::Normalize({created,profession,race});
+    if(!evidence)return false;
+    if(*evidence==address.binding.evidence)
+        return CommitIfCharacterCurrent(a,address,[]{return true;});
+    // Block conflicting ownership before collecting further evidence. Never
+    // redirect an already admitted character request.
+    try{
+        const bool isolated=CommitIfCharacterCurrent(a,address,[&]{
+            const auto names=ReadRoster(root,a.id);
+            if(!names)return false;
+            Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+            const auto& state=identityStates.at(a.id);
+            const auto updated=CharacterIdentity::Commit(db,a.id,state.revision,*names,
+                {{address.name,*evidence}});
+            if(!updated||!*updated)return false;
+            const bool adopted=AdoptIdentity(updated->next);
+            Publish("",false);return adopted;
+        });
+        if(isolated)(void)FetchRoster(a,true,false);
+    }catch(...){}
+    return false;
 }
 Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions,const std::string& headers){
     if(!Current(a))return {0,{},"Account changed"};
@@ -707,17 +830,18 @@ Result Request(const std::string& id,const std::string& path,const std::vector<s
     for(const auto& a:Linked())if(a.id==id)return Request(a,path,permissions);
     return {401,{},"No linked account"};
 }
-PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const std::string& character,bool manual){
+PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const CharacterIdentity::Address& address,bool manual){
+    const auto& character=address.name;
     using Clock=std::chrono::steady_clock;
     const auto queued=Clock::now();
     BrokerWork observed(a.generation,ScopeKey{a.id,"Equipment",character});
     std::unique_lock<std::mutex> lock(physicalMutex,std::defer_lock);
     while(!lock.try_lock()){if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};std::this_thread::sleep_for(std::chrono::milliseconds(25));}
     if(Background::Workers().Stopping()||!Current(a))return {{0,{},"Account changed"},0,0};
-    if(!CommitIfCharacterCurrent(a,character,[]{return true;}))return {{0,{},"Character roster changed"},0,0};
+    if(!CommitIfCharacterCurrent(a,address,[]{return true;}))return {{0,{},"Character roster changed"},0,0};
     const CharacterActivity::Key k{a.id,character};
     auto& e=physicalCache[k];
-    if(e.epoch==a.generation&&e.value.response&&e.value.inventoryCommitted&&
+    if(e.epoch==a.generation&&e.binding==address.binding&&e.value.response&&e.value.inventoryCommitted&&
        (e.finished>=queued||(!manual&&Clock::now()-e.finished<std::chrono::seconds(15))))return e.value;
     if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};
     CharacterActivity::CancelOnShutdown attempts(k);
@@ -738,7 +862,7 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
     }
     if(Background::Workers().Stopping())return cancel("Cancelled");
     try{
-        const bool accepted=CommitIfCharacterCurrent(a,character,[&]{
+        const bool accepted=CommitIfCharacterCurrent(a,address,[&]{
             ScopeState state{a.id,"Equipment",character,complete?"Ready":
                 (result.response?"Invalid or incomplete response":result.response.error),ticket.started,complete?result.success:0};
             if(!Record(root,state,complete?&slots:nullptr))return false;
@@ -753,14 +877,14 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const st
         // Preserve the raw response for the character supplement consumer;
         // only a committed physical projection advances Inventory freshness.
         if(Background::Workers().Stopping())return cancel("Cancelled");
-        if(!Current(a))return cancel("Account changed");
+        if(!CommitIfCharacterCurrent(a,address,[]{return true;}))return cancel("Account or character changed");
     }
-    if(result.inventoryCommitted)e={a.generation,result,Clock::now()};
+    if(result.inventoryCommitted)e={a.generation,result,Clock::now(),address.binding};
     else physicalCache.erase(k);
     return result;
 }
-bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names){
-    auto result=FetchRoster(a);
+bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names,bool verifyAll){
+    auto result=FetchRoster(a,verifyAll);
     if(!result.accepted||result.state.status!="Ready")return false;
     names=std::move(result.names);return true;
 }
@@ -838,12 +962,27 @@ void RenderItemAvailability(uint32_t id,const std::string& account,const std::st
     }
 }
 void Initialize(const std::string& directory){
-    root=directory;registryReady=false;Launch([]{try{Publish("");}catch(...){registryReady=true;throw;}});
+    root=directory;registryReady=false;
+    // Startup recovery runs before render callbacks or authenticated workers.
+    std::lock_guard<std::mutex> gate(credentialMutex);
+    try{
+        for(const auto& account:Accounts()){
+            try{
+                Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+                const auto state=BootstrapIdentity(db,account.id);
+                if(state.initialized){(void)AdoptIdentity(state);}
+                else{identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
+            }catch(...){identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
+        }
+        Publish("");
+    }catch(...){
+        GW2API::DiscardIdentityCache("",{},true);registryReady=false;
+    }
 }
 void Shutdown(){
     // Called only after managed workers join.
     registryReady=false;++registryGeneration;physicalCache.clear();rosterCache.clear();
-    identityRosterEpoch.clear();identityRosterBlocked.clear();
+    identityStates.clear();identityRosterBlocked.clear();
     std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();
 }
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
