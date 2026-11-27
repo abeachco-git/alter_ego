@@ -9,6 +9,7 @@
 #include "SkinCache.h"
 #include "ReferenceMetadataCache.h"
 #include "ItemMetadataCache.h"
+#include "ItemMetadataOwner.h"
 #include "PublicCatalog.h"
 #include "ProfessionMetadataCore.h"
 #include "CharacterCache.h"
@@ -1284,74 +1285,37 @@ namespace AlterEgo {
         }
     }
 
+    // One transport/validation/publication path for direct, Inventory and
+    // Commerce detail consumers. The bootstrap catalog retains only upgrades
+    // plus ordinary rows explicitly requested by a simultaneous detail consumer.
+    static void FetchOwnedItems(ItemMetadata::Work& job){
+        const auto root=GW2API::GetDataDirectory();
+        ItemMetadata::Fetch(job,
+            [](const std::string& path){return ArenaNet::Get(path);},
+            [&](const json& rows,int64_t stamp,json& accepted){return Cache::WriteItemObservations(root,rows,stamp,accepted);},
+            [](const json& rows,bool aliases){GW2API::AdoptPublicItems(rows,aliases);});
+    }
     void GW2API::FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
         ApiActivity::ReasonScope reason(ApiActivity::Reason::Manual);
         std::vector<uint32_t> missing;
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
         if(missing.empty())return;
-        auto claim=RefreshEngine::ClaimIds("items",missing,forceRefetch);
-        if(!claim->ids.empty())FetchItemDetailsClaimed(*claim,forceRefetch);
-        claim.reset();
-        RefreshEngine::WaitForIds("items",missing,[]{return Background::Workers().Stopping();});
+        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Details,forceRefetch);
+        FetchOwnedItems(*job);(void)ItemMetadata::Await(*job);
     }
-
-    void GW2API::FetchItemDetailsClaimed(RefreshEngine::IdBatch& claim, bool forceRefetch) {
-        const auto& item_ids=claim.ids;
-        if (item_ids.empty()) return;
-
-        std::vector<uint32_t> to_fetch;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (uint32_t id : item_ids) {
-                if (id == 0) continue;
-                if (forceRefetch || s_item_cache.find(id) == s_item_cache.end())
-                    to_fetch.push_back(id);
-            }
-        }
-        if (to_fetch.empty()) return;
-
-        std::sort(to_fetch.begin(), to_fetch.end());
-        to_fetch.erase(std::unique(to_fetch.begin(), to_fetch.end()), to_fetch.end());
-
-        const size_t BATCH_SIZE = 200;
-        for (size_t i = 0; i < to_fetch.size(); i += BATCH_SIZE) {
-            if (AlterEgo::Background::Workers().Stopping()) return;
-            std::string ids_param;
-            size_t end = std::min(i + BATCH_SIZE, to_fetch.size());
-            for (size_t j = i; j < end; j++) {
-                if (!ids_param.empty()) ids_param += ",";
-                ids_param += std::to_string(to_fetch[j]);
-            }
-
-            std::string url = "https://api.guildwars2.com/v2/items?ids=" + ids_param;
-            const auto requestStamp=Cache::ReferenceSnapshotTime();
-            bool attempted=false;
-            std::string response = HttpGet(url,&attempted);
-            if (Background::Workers().Stopping()) return;
-            if(attempted)claim.MarkAttempted(to_fetch.begin()+i,to_fetch.begin()+end);
-            if (response.empty()) continue;
-
-            try {
-                auto j=Untrusted::Parse(response,Untrusted::PublicApi);
-                if(!j.is_array())continue;
-                auto rows=json::array();std::set<uint32_t> seen;
-                for(const auto& item:j){
-                    const auto id=Cache::ReferenceId(item.at("id"));
-                    if(!id||!std::binary_search(to_fetch.begin()+i,to_fetch.begin()+end,id)||
-                       item.at("name").get<std::string>().empty()||!seen.insert(id).second)
-                        throw std::runtime_error("Invalid item response");
-                    rows.push_back(item);
-                }
-                if(rows.empty())continue;
-                std::lock_guard<std::mutex> publication(Cache::ItemPublicationMutex());
-                if(Background::Workers().Stopping())return;
-                auto accepted=json::array();
-                if(Cache::WriteItemObservations(GetDataDirectory(),rows,requestStamp,accepted))
-                    AdoptPublicItems(accepted,true);
-            }catch(...) {}
-
-            if(!Background::Workers().WaitFor(std::chrono::milliseconds(200)))return;
-        }
+    void GW2API::EnrichInventoryItems(const std::vector<uint32_t>& ids,bool manual){
+        auto job=ItemMetadata::Admit(ids,ItemMetadata::Demand::Inventory,manual);
+        FetchOwnedItems(*job);(void)ItemMetadata::Await(*job);
+    }
+    nlohmann::json GW2API::AcquireCatalogItemBatch(const std::vector<uint32_t>& ids,bool incremental,
+                                                   std::map<uint32_t,int64_t>& stamps){
+        // Catalog cadence already governs this scan. A missing ID must not
+        // silently become a completed discovery because a tooltip is cooling down.
+        auto job=ItemMetadata::Admit(ids,incremental?ItemMetadata::Demand::Discovery:ItemMetadata::Demand::InitialDiscovery,true);
+        FetchOwnedItems(*job);auto result=ItemMetadata::Await(*job);
+        PublicCatalog::ValidateBatch(result.rows,std::set<uint32_t>(ids.begin(),ids.end()));
+        stamps.insert(result.stamps.begin(),result.stamps.end());
+        return std::move(result.rows);
     }
 
     void GW2API::FetchSkinDetails(RefreshEngine::IdBatch& claim) {
@@ -1424,9 +1388,15 @@ namespace AlterEgo {
     void GW2API::FetchItemDetailsAsync(const std::vector<uint32_t>& item_ids, bool forceRefetch) {
         std::vector<uint32_t> missing;
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
-        auto claim=RefreshEngine::ClaimIds("items",missing,forceRefetch);
-        if(claim->ids.empty())return;
-        AlterEgo::Background::Workers().Launch([claim, forceRefetch]() { ApiActivity::ReasonScope reason(forceRefetch?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);FetchItemDetailsClaimed(*claim, forceRefetch); });
+        if(missing.empty())return;
+        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Details,forceRefetch);
+        // Coalesced asynchronous consumers merge persistence demand into the
+        // active observation. They do not need an additional waiting worker.
+        if(job->owned.empty())return;
+        Background::Workers().Launch([job,forceRefetch]{
+            ApiActivity::ReasonScope reason(forceRefetch?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
+            FetchOwnedItems(*job);
+        });
     }
 
     void GW2API::FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids) {

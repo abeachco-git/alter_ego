@@ -407,6 +407,10 @@ namespace AlterEgo {
         // Fetch detail data on-demand (direct HTTP — no auth needed)
         static void FetchItemDetails(const std::vector<uint32_t>& item_ids, bool forceRefetch = false); // synchronous
         static void FetchItemDetailsAsync(const std::vector<uint32_t>& item_ids, bool forceRefetch = false);
+        // Worker-only shared item consumers. Catalog batches require exact raw
+        // coverage; Inventory may retain verified partial metadata.
+        static void EnrichInventoryItems(const std::vector<uint32_t>& ids,bool manual);
+        static nlohmann::json AcquireCatalogItemBatch(const std::vector<uint32_t>& ids,bool incremental,std::map<uint32_t,int64_t>& stamps);
         static void FetchSkinDetailsAsync(const std::vector<uint32_t>& skin_ids);
         static void FetchSpecDetailsAsync(const std::vector<uint32_t>& spec_ids);
         static void FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids);
@@ -631,7 +635,6 @@ namespace AlterEgo {
         static bool EnsureDataDirectory();
 
         // Batch fetch helpers (public endpoints, synchronous)
-        static void FetchItemDetailsClaimed(RefreshEngine::IdBatch& claim, bool forceRefetch);
         static void FetchSkinDetails(RefreshEngine::IdBatch& claim);
         static void FetchTraitDetails(RefreshEngine::IdBatch& claim);
         static void FetchClaimedSkillDetails(RefreshEngine::IdBatch& claim,const std::vector<uint32_t>& ids);

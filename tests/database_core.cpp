@@ -6,6 +6,7 @@
 #include "../src/CacheDatabase.h"
 #include "../src/AchievementCatalogCache.h"
 #include "../src/ProfessionMetadataCore.h"
+#include "../src/ItemMetadataOwner.h"
 #include "../src/SkinDataCache.h"
 #include "../src/CommerceCache.h"
 #include "../src/ReferenceMetadataCache.h"
@@ -49,6 +50,61 @@ void Upgrade(DB::Connection& db, int version) {
 }
 
 int case_database_core(int, char**) {
+    {
+        namespace I=AlterEgo::ItemMetadata;
+        namespace R=AlterEgo::RefreshEngine;
+        namespace B=AlterEgo::Background;
+        using J=nlohmann::json;
+        assert(B::Workers().Open());
+        R::ResetMetadata();
+        // Bootstrap scans and normal demand join the same raw observation;
+        // only upgrades and ordinary records requested by a detail consumer
+        // become durable. Full discovery alone retains its original scope.
+        auto catalog=I::Admit({1,2,3},I::Demand::InitialDiscovery,true);
+        auto details=I::Admit({1},I::Demand::Details,false);
+        auto inventory=I::Admit({1,2},I::Demand::Inventory,false);
+        assert(catalog->owned.size()==3&&details->owned.empty()&&inventory->owned.empty());
+        int requests=0;std::set<uint32_t> persisted,aliases;
+        auto send=[&](const std::string& path){
+            assert(path=="/v2/items?ids=1,2,3");++requests;
+            return Skinventory::HttpResponse{200,R"([{"id":1,"name":"Armor","type":"Armor","level":80,"restrictions":["Human"],"default_skin":7,"flags":[]},{"id":2,"name":"Material","type":"CraftingMaterial","flags":[]},{"id":3,"name":"Other","type":"CraftingMaterial"}])",true};
+        };
+        auto save=[&](const J& rows,int64_t stamp,J& accepted){
+            assert(stamp>0);for(const auto& row:rows)persisted.insert(row.at("id").get<uint32_t>());
+            accepted=rows;return true;
+        };
+        auto adopt=[&](const J& rows,bool alias){if(alias)for(const auto& row:rows)aliases.insert(row.at("id").get<uint32_t>());};
+        I::Fetch(*catalog,send,save,adopt);
+        assert(requests==1&&persisted==std::set<uint32_t>({1,2})&&aliases==std::set<uint32_t>({1}));
+        auto result=I::Await(*catalog);assert(result.rows.size()==3&&result.stamps.size()==3&&result.rows[0]["restrictions"][0]=="Human");
+        assert(I::Await(*details).stamps.at(1)==result.stamps.at(1));
+        assert(I::Await(*inventory).rows.size()==2);
+        assert(!R::InspectId(I::Dataset,1).pending);
+        catalog.reset();details.reset();inventory.reset();
+        // A detail join during commit of an upgrade batch must still be
+        // persisted before release, without a second HTTP request.
+        auto initial=I::Admit({4,5},I::Demand::InitialDiscovery,true);
+        std::shared_ptr<I::Work> late;
+        auto lateSave=[&](const J& rows,int64_t stamp,J& accepted){
+            if(!late)late=I::Admit({5},I::Demand::Inventory,true);
+            return save(rows,stamp,accepted);
+        };
+        I::Fetch(*initial,[&](const std::string&){
+            ++requests;return Skinventory::HttpResponse{200,R"([{"id":4,"name":"Rune","type":"UpgradeComponent","details":{"type":"Rune"}},{"id":5,"name":"Material","type":"CraftingMaterial"}])",true};
+        },lateSave,adopt);
+        assert(requests==2&&late&&late->owned.empty()&&persisted.count(4)&&persisted.count(5)&&I::Await(*late).rows.size()==1);
+        initial.reset();late.reset();
+        auto partial=I::Admit({6,7},I::Demand::Discovery,true);
+        I::Fetch(*partial,[](const std::string&){return Skinventory::HttpResponse{200,R"([{"id":6,"name":"Material","type":"CraftingMaterial"}])",true};},save,adopt);
+        const auto incomplete=I::Await(*partial);assert(incomplete.rows.size()==1&&incomplete.stamps.count(6));
+        bool rejected=false;try{AlterEgo::PublicCatalog::ValidateBatch(incomplete.rows,{6,7});}catch(...){rejected=true;}assert(rejected);
+        partial.reset();
+        auto abandoned=I::Admit({8},I::Demand::Details,true);
+        auto joined=I::Admit({8},I::Demand::Discovery,true);
+        abandoned.reset();assert(I::Await(*joined).rows.empty()&&!R::InspectId(I::Dataset,8).pending);
+        joined.reset();R::ResetMetadata();B::Workers().RequestStop();B::Workers().JoinAll();
+    }
+
     {
         namespace P=AlterEgo::ProfessionMetadata;
         const auto root=std::filesystem::temp_directory_path()/("ae-profession-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));

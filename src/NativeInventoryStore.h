@@ -126,6 +126,16 @@ inline void RecordWallet(const std::string& root,const ScopeState& state,const s
         for(auto& r:*rows){put.Bind(1,state.account);put.Bind(2,r.id);put.Bind(3,r.value);put.Execute();put.Reset();}
     }tx.Commit();
 }
+// Only the requested wallet currency IDs are tested; known-empty icons
+// are verified metadata, not a reason to repeat the public catalog call.
+inline bool MissingCurrencyDefinitions(const std::string& root,const std::set<uint32_t>& ids){
+    std::lock_guard<std::mutex> lock(Cache::Mutex());
+    Database::Connection db(Storage::Paths(root).Cache().u8string(),Database::Connection::OpenMode::Existing);
+    Cache::Initialize(db);
+    auto q=db.Prepare("SELECT name,icon_known FROM native_currencies WHERE id=?");
+    for(auto id:ids){q.Bind(1,id);if(!q.Step()||q.Text(0).empty()||!q.Integer(1))return true;q.Reset();}
+    return false;
+}
 inline void StoreCurrencies(const std::string& root,const Json& j,int64_t stamp=Cache::ReferenceSnapshotTime()){
     if(!j.is_array()||j.empty()||stamp<=0)throw std::runtime_error("Invalid currency definitions");
     std::lock_guard<std::mutex> lock(Cache::Mutex());Database::Connection db(Storage::Paths(root).Cache().u8string(),Database::Connection::OpenMode::Existing);

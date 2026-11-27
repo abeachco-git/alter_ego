@@ -390,28 +390,18 @@ namespace Skinventory {
                                    + std::to_string(skin_map.size()) + " skin mappings found)";
                 }
 
-                std::string ids_param;
-                for (size_t j = i; j < end; j++) {
-                    if (!ids_param.empty()) ids_param += ",";
-                    ids_param += std::to_string(ids[j]);
-                }
-
-                std::string url = "https://api.guildwars2.com/v2/items?ids=" + ids_param;
-                const auto requestStamp=Cache::ReferenceSnapshotTime();
-                std::string batch_response = HttpClient::Get(url);
-                Background::Checkpoint();
-                if (batch_response.empty()) throw std::runtime_error("Item metadata batch unavailable");
-
+                // Full raw observations preserve cultural/vendor and skin
+                // mapping fields that are not part of the tooltip projection.
+                const std::vector<uint32_t> requested(ids.begin()+i,ids.begin()+end);
+                Cache::ItemRequestStamps batchStamps;
+                auto batch=GW2API::AcquireCatalogItemBatch(requested,incremental,batchStamps);
                 try {
-                    json batch = Untrusted::Parse(batch_response,Untrusted::PublicApi);
-                    AlterEgo::PublicCatalog::ValidateBatch(batch,std::set<uint32_t>(ids.begin()+i,ids.begin()+end));
-
                     for (const auto& item : batch) {
                         std::string type = item.value("type", "");
                         const uint32_t item_id=item.value("id",uint32_t(0));
                         if(!item_id) continue;
-                        if(incremental){observations.push_back(item);itemStamps.emplace(item_id,requestStamp);}
-                        else if(!PublicCatalog::Kind(item).empty()){upgrades.push_back(item);itemStamps.emplace(item_id,requestStamp);}
+                        if(incremental){observations.push_back(item);itemStamps.emplace(item_id,batchStamps.at(item_id));}
+                        else if(!PublicCatalog::Kind(item).empty()){upgrades.push_back(item);itemStamps.emplace(item_id,batchStamps.at(item_id));}
                         if(incremental&&(!discover||old->index.count(item_id)))continue;
                         const uint32_t default_skin=item.value("default_skin",uint32_t(0));
                         const bool equipment=type=="Armor" || type=="Weapon" || type=="Back";
