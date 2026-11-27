@@ -97,29 +97,29 @@ inline bool LooksUnrotated(const std::vector<uint32_t>& before,
            SortedIds(before) == SortedIds(after));
 }
 
-// Daily, weekly and seasonal objectives can legitimately reuse IDs. Compare claimed state and
-// progress as well as IDs: a reset progress counter confirms a fresh response,
-// while an unchanged pre-reset snapshot is not evidence of a new week.
-// The check is independent of ordering and handles incomplete API responses.
+// Daily, weekly and seasonal objectives may legitimately reuse IDs.
+// Only structural rotation or a completed-to-incomplete / claimed-to-unclaimed
+// transition is reset evidence. Forward progress can be yesterday's late update.
+// A single changed objective is enough; order, reward amount and target changes
+// alone are not evidence. The caller has already validated the API payload.
 template<class Period>
 bool LooksUnrotatedVaultPeriod(const Period& previous, const Period& current) {
     if (current.objectives.empty()) return true;
     if (previous.objectives.empty()) return false; // no comparison baseline
-    if (previous.meta_progress_current != current.meta_progress_current ||
-        previous.meta_progress_complete != current.meta_progress_complete ||
-        previous.meta_reward_astral != current.meta_reward_astral ||
-        previous.meta_reward_claimed != current.meta_reward_claimed ||
-        previous.objectives.size() != current.objectives.size()) return false;
-    auto snapshot = [](const Period& period) {
-        std::vector<std::tuple<uint32_t, int32_t, int32_t, bool>> rows;
-        rows.reserve(period.objectives.size());
-        for (const auto& o : period.objectives)
-            rows.emplace_back(o.id, o.progress_current, o.progress_complete,
-                              o.claimed);
-        std::sort(rows.begin(), rows.end());
-        return rows;
-    };
-    return snapshot(previous) == snapshot(current);
+    if (previous.objectives.size() != current.objectives.size()) return false;
+    const auto done=[](int32_t progress,int32_t target){return target>0&&progress>=target;};
+    if (previous.meta_reward_claimed && !current.meta_reward_claimed) return false;
+    if (done(previous.meta_progress_current,previous.meta_progress_complete) &&
+        !done(current.meta_progress_current,current.meta_progress_complete)) return false;
+    for (const auto& old : previous.objectives) {
+        const auto next=std::find_if(current.objectives.begin(),current.objectives.end(),
+            [&](const auto& o){return o.id==old.id;});
+        if (next==current.objectives.end()) return false;
+        if (old.claimed && !next->claimed) return false;
+        if (done(old.progress_current,old.progress_complete) &&
+            !done(next->progress_current,next->progress_complete)) return false;
+    }
+    return true;
 }
 
 // An identical all-zero period is ambiguous: the API has no period ID.

@@ -72,6 +72,41 @@ int case_clears_rotation(int, char**) {
     WeeklyPeriod changedProgress = lastWeek;
     changedProgress.objectives.front().progress_current = 0;
     assert(!LooksUnrotatedVaultPeriod(lastWeek, changedProgress));
+    // Directional evidence: one completed-to-incomplete or claimed-to-unclaimed
+    // objective is enough, but late forward progress is not a new period.
+    WeeklyPeriod forward = newWeek;
+    forward.objectives.front().progress_current = 1;
+    forward.meta_progress_current = 1;
+    assert(LooksUnrotatedVaultPeriod(newWeek,forward));
+    assert(HoldVault(newWeek,forward,3600,4));
+    WeeklyPeriod partiallyDone = forward;
+    partiallyDone.objectives.front().progress_current = 2;
+    assert(HoldVault(forward,partiallyDone,60,0));
+    assert(HoldVault(partiallyDone,forward,60,0)); // neither is complete
+    WeeklyPeriod completed = forward;
+    completed.objectives.front().progress_current = 10;
+    assert(HoldVault(forward,completed,60,0));
+    assert(!HoldVault(completed,forward,60,0)); // only one objective resets
+    WeeklyPeriod claimed = completed;
+    claimed.objectives.front().claimed = true;
+    assert(HoldVault(completed,claimed,60,0));
+    assert(!HoldVault(claimed,completed,60,0)); // claim resets independently
+    WeeklyPeriod metaDone = forward;
+    metaDone.meta_progress_current = metaDone.meta_progress_complete;
+    assert(HoldVault(forward,metaDone,60,0));
+    assert(!HoldVault(metaDone,forward,60,0));
+    WeeklyPeriod metaClaimed = metaDone;
+    metaClaimed.meta_reward_claimed = true;
+    assert(HoldVault(metaDone,metaClaimed,60,0));
+    assert(!HoldVault(metaClaimed,metaDone,60,0));
+    WeeklyPeriod changedTarget = forward;
+    changedTarget.objectives.front().progress_complete += 5;
+    changedTarget.meta_reward_astral += 1;
+    assert(HoldVault(forward,changedTarget,60,0));
+    WeeklyPeriod removed = lastWeek;
+    removed.objectives.pop_back();
+    assert(!HoldVault(lastWeek,removed,60,0));
+    assert(!HoldVault(removed,lastWeek,60,0));
     assert(!HoldVault(lastWeek,newWeek,60,0)); // same daily IDs with reset progress
     assert(HoldVault(lastWeek,oldResponse,7200,8)); // never accept claimed prior snapshot
     assert(HoldVault(newWeek,newWeek,899,4));
