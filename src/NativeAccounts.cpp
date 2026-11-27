@@ -334,6 +334,7 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
     try{
         if(result.state.status=="Ready"){
             std::vector<CharacterIdentity::Observation> evidence;
+            std::map<std::string,std::pair<Json,int64_t>> coreResponses;
             std::set<std::string> attempted;
             auto readCore=[&](const std::string& name){
                 if(!attempted.insert(name).second)return;
@@ -344,6 +345,7 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
                     const auto e=CharacterIdentity::Normalize({response.data.at("created").get<std::string>(),
                         response.data.at("profession").get<std::string>(),response.data.at("race").get<std::string>()});
                     evidence.push_back({name,e.value_or(CharacterIdentity::Evidence{})});
+                    if(e)coreResponses.emplace(name,std::make_pair(response.data,Now()));
                 }catch(...){}
             };
             for(const auto& name:result.names)if(verifyAll||!before.Current(name))readCore(name);
@@ -381,8 +383,12 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
                 for(const auto& row:evidence){
                     const auto e=CharacterIdentity::Normalize(row.evidence);
                     const auto* bound=updated->next.Current(row.name);
-                    if(e&&bound&&bound->evidence==*e)
+                    if(e&&bound&&bound->evidence==*e){
                         identityProofs[{a.id,row.name}]={{bound->id,bound->evidence,bound->bindingRevision},a.generation,now};
+                        const auto core=coreResponses.find(row.name);
+                        if(core!=coreResponses.end())
+                            (void)GW2API::PublishDiscoveredCore(a.id,row.name,core->second.first,core->second.second);
+                    }
                 }
                 Publish("",false);return true;
             });

@@ -385,6 +385,9 @@ namespace AlterEgo {
         static bool ReconcileCharactersWithRoster(const std::map<std::string,std::set<std::string>>& roster);
         // Cache adoption already committed on disk; discard only affected in-memory rows.
         static void DiscardIdentityCache(const std::string& account,const std::set<std::string>& names,bool all=false);
+        // Caller holds the account gate after verified identity/cache adoption.
+        static bool PublishDiscoveredCore(const std::string& account,const std::string& name,
+            const nlohmann::json& core,int64_t verifiedAt);
 
         // Skin unlock status (from native API cache)
         static bool IsSkinUnlocked(uint32_t skin_id);  // true if unlocked, false if unknown/locked
@@ -638,6 +641,7 @@ namespace AlterEgo {
 
         // Parse helpers
         static Character ParseCharacterJson(const nlohmann::json& cj);
+        static Character ParseVerifiedCore(const std::string& name,const nlohmann::json& core);
         static EquipmentItem ParseEquipmentItem(const nlohmann::json& item_json);
         static BuildTemplate ParseBuildTemplate(const nlohmann::json& tab_json);
 

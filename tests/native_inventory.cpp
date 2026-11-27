@@ -1,5 +1,6 @@
 #include "../src/CharacterIdentityStore.h"
 #include "../src/CharacterIdentityCache.h"
+#include "../src/CharacterActivity.h"
 #include "../src/NativeInventoryStore.h"
 #include "../src/InventoryGroupCore.h"
 #include "../src/CharacterOrderCore.h"
@@ -150,6 +151,67 @@ int case_native_inventory(int,char**){
             auto replay=CI::AdoptCache(db,back.next);assert(replay&&replay->empty());
             assert(!CI::AdoptCache(db,first.next));
             assert(db.Scalar("SELECT count(*) FROM character_rows WHERE account_name='B'")==1);
+        }
+        std::filesystem::remove_all(root);
+    }
+    // Live adoption: durable roster commit, interrupted cache publication,
+    // unchanged revision, stale activity ticket and account-wide isolation.
+    {
+        namespace CI=AlterEgo::CharacterIdentity;
+        namespace CA=AlterEgo::CharacterActivity;
+        const CI::Evidence a{"2015-02-03T04:05:06Z","Necromancer","Asura"},
+            b{"2020-01-02T03:04:05Z","Engineer","Human"};
+        const auto root=std::filesystem::temp_directory_path()/("ae-identity-live-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        const auto accounts=(root/"accounts.db").string(),cache=(root/"cache.db").string();
+        CI::State oldState,newState;
+        CA::Tracker activity;
+        CA::Ticket stale;
+        {
+            Database::Connection db(accounts,Database::Connection::OpenMode::Create);CI::InitializeAccountRegistry(db);
+            auto initial=CI::Commit(db,"A",0,{"Alice","Bob"},{{"Alice",a},{"Bob",b}},false,
+                CI::RosterEvidence{{"Alice","Bob"},10,11});
+            assert(initial&&initial->FullyResolved());oldState=initial->next;
+            auto unchanged=CI::Commit(db,"A",oldState.revision,{"Alice","Bob"},{},false,
+                CI::RosterEvidence{{"Alice","Bob"},20,21});
+            assert(unchanged&&unchanged->next.revision==oldState.revision);
+            assert(CI::ReadVerifiedRoster(db,"A")->success==21);
+            assert(!CI::Commit(db,"A",oldState.revision,{"Alice","Bob"},{},false,
+                CI::RosterEvidence{{"Alice","Bob"},10,11}));
+            Database::Connection cached(cache,Database::Connection::OpenMode::Create);Cache::Initialize(cached);
+            assert(CI::AdoptCache(cached,oldState,CI::ReadVerifiedRoster(db,"A")));
+            cached.Exec("INSERT INTO native_inventory_scopes VALUES('A','Bags','Alice','Ready',22,22),('A','Bank','','Ready',22,22),('A','Equipment','Bob','Ready',22,22);");
+            activity.FenceBindings("A",CI::CurrentBindings(oldState));
+            stale=activity.Begin({"A","Alice"},"Bags",22);
+            auto bobTicket=activity.Begin({"A","Bob"},"Equipment",22);
+            activity.Success({"A","Bob"},"Equipment",bobTicket,23);
+            auto renamed=CI::Commit(db,"A",oldState.revision,{"Renamed","Bob"},{{"Renamed",a}},false,
+                CI::RosterEvidence{{"Renamed","Bob"},30,31});
+            assert(renamed&&renamed->next.Current("Renamed")->id==oldState.Current("Alice")->id);
+            newState=renamed->next;
+            cached.Exec("CREATE TRIGGER fail_roster BEFORE INSERT ON native_rosters WHEN NEW.character='Renamed' BEGIN SELECT RAISE(ABORT,'fixture'); END");
+            bool failed=false;try{(void)CI::AdoptCache(cached,newState,CI::ReadVerifiedRoster(db,"A"));}catch(...){failed=true;}
+            assert(failed&&NativeInventory::ReadRoster(cached,"A")->count("Alice"));
+            assert(cached.Scalar("SELECT count(*) FROM native_inventory_scopes WHERE scope='Bags'")==1);
+            cached.Exec("DROP TRIGGER fail_roster");
+        }
+        {
+            Database::Connection db(accounts,Database::Connection::OpenMode::Existing);CI::InitializeAccountRegistry(db);
+            Database::Connection cached(cache,Database::Connection::OpenMode::Existing);Cache::Initialize(cached);
+            const auto recovered=CI::AdoptCache(cached,CI::Read(db,"A"),CI::ReadVerifiedRoster(db,"A"));
+            assert(recovered&&recovered->count("Alice")&&recovered->count("Renamed"));
+            assert(NativeInventory::ReadRoster(cached,"A")==std::optional<std::set<std::string>>(std::set<std::string>{"Bob","Renamed"}));
+            assert(cached.Scalar("SELECT fetched_at FROM native_roster_state WHERE account='A'")==31);
+            assert(cached.Scalar("SELECT count(*) FROM native_inventory_scopes WHERE scope IN ('Bank','Equipment')")==2);
+            assert(cached.Scalar("SELECT count(*) FROM native_inventory_scopes WHERE scope='Bags'")==0);
+            assert(CI::AdoptCache(cached,newState,CI::ReadVerifiedRoster(db,"A"))->empty());
+            activity.FenceBindings("A",CI::CurrentBindings(newState));
+            activity.Success({"A","Alice"},"Bags",stale,40);
+            const auto saved=activity.Save();CA::Tracker restored;restored.Load(saved);
+            restored.FenceBindings("A",CI::CurrentBindings(newState));
+            assert(restored.Inspect({"A","Alice"},"Bags",0,40).attempt==0);
+            assert(restored.Inspect({"A","Bob"},"Equipment",23,40).success==23);
+            assert(!CI::Matches(newState,*CI::Capture(oldState,"Alice",1),1));
         }
         std::filesystem::remove_all(root);
     }

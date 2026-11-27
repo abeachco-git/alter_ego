@@ -458,13 +458,7 @@ namespace AlterEgo {
                         case S::Core:{
                             identityVerified=false;
                             auto core=require(path+"/core",{"characters"},"Character details");
-                            if(!core.is_object()||core.value("name",std::string{})!=name||
-                                !core.contains("profession")||!core.contains("race")||!core.contains("gender")||
-                                !core.contains("level")||!core.contains("age")||!core.contains("created")||!core.contains("deaths"))
-                                throw std::runtime_error("Invalid character core");
-                            auto c=ParseCharacterJson(core);
-                            if(c.profession.empty()||c.race.empty()||c.gender.empty()||c.created.empty()||c.level<1||c.level>80)
-                                throw std::runtime_error("Incomplete character core");
+                            auto c=ParseVerifiedCore(name,core);
                             if(!NativeAccounts::RecordIdentityObservation(a,*address,c.created,c.profession,c.race))
                                 throw std::runtime_error("Character identity evidence changed");
                             next.race=c.race;next.gender=c.gender;next.profession=c.profession;
@@ -776,6 +770,25 @@ namespace AlterEgo {
         return bt;
     }
 
+    Character GW2API::ParseVerifiedCore(const std::string& name,const json& core){
+        if(!core.is_object()||core.value("name",std::string{})!=name||
+            !core.contains("profession")||!core.contains("race")||!core.contains("gender")||
+            !core.contains("level")||!core.contains("age")||!core.contains("created")||!core.contains("deaths"))
+            throw std::runtime_error("Invalid character core");
+        // Only the core endpoint's fields are authoritative. Do not let
+        // unexpected extra fields populate unverified build/equipment data.
+        Character c;
+        c.name=name;c.profession=core.at("profession").get<std::string>();
+        c.race=core.at("race").get<std::string>();c.gender=core.at("gender").get<std::string>();
+        c.created=core.at("created").get<std::string>();c.level=core.at("level").get<int>();
+        c.age=core.at("age").get<int>();c.deaths=core.at("deaths").get<int>();
+        c.last_modified=SafeStr(core,"last_modified");
+        if(!CharacterIdentity::Normalize({c.created,c.profession,c.race})||
+            c.gender.empty()||c.level<1||c.level>80||c.age<0||c.deaths<0)
+            throw std::runtime_error("Incomplete character core");
+        return c;
+    }
+
     Character GW2API::ParseCharacterJson(const json& cj) {
         Character ch;
         ch.name = cj.value("name", "");
@@ -895,6 +908,23 @@ namespace AlterEgo {
     std::vector<std::string> GW2API::GetPendingCharNames() {
         std::lock_guard<std::mutex> lock(s_mutex);
         return s_pending_char_names;
+    }
+
+    bool GW2API::PublishDiscoveredCore(const std::string& account,const std::string& name,
+        const json& core,int64_t verifiedAt){
+        try{
+            if(verifiedAt<=0)return false;
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                if(std::any_of(s_characters.begin(),s_characters.end(),[&](const Character& c){
+                    return c.account_name==account&&c.name==name;
+                }))return true; // do not overwrite unaffected independently retrieved scopes
+            }
+            auto c=ParseVerifiedCore(name,core);
+            c.account_name=account;c.data_refreshed=verifiedAt;
+            c.scope_stamps[CharacterScopes::Index(CharacterScopes::Core)]=verifiedAt;
+            return SaveCharacterData(account,name,&c);
+        }catch(...){return false;}
     }
 
     void GW2API::DiscardIdentityCache(const std::string& account,const std::set<std::string>& names,bool all){
