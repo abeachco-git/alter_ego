@@ -82,7 +82,8 @@ inline void AdoptRanks(Database::Connection& db,const CharacterIdentity::State& 
 inline PortableRanks ExportRanks(Database::Connection& db){
     auto out=ReadOrder(db).pending;
     auto q=db.Prepare("SELECT p.account,i.name,i.created,i.profession,i.race,p.rank FROM character_custom_order p JOIN character_identities i ON i.account=p.account AND i.local_id=p.local_id");
-    while(q.Step())out.insert(ReadRank(q));return out;
+    while(q.Step())out.insert(ReadRank(q));
+    return out;
 }
 // Retained and temporarily unavailable characters keep their slots; a drag
 // updates only the explicitly represented account and verified identities.
