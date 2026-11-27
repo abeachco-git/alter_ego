@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <nlohmann/json.hpp>
 namespace AlterEgo::NativeAccounts {
 struct LinkedAccount {
@@ -35,6 +36,13 @@ Result Request(const LinkedAccount& account,const std::string& path,
 Result Request(const std::string& accountId,const std::string& path,
                const std::vector<std::string>& permissions);
 bool RefreshRoster(const LinkedAccount& account,std::set<std::string>& names);
+// Evidence collection only until the live address fence and recovery owner
+// are enabled. A stale observation cannot revise the durable registry.
+struct IdentityObservationTicket {uint64_t rosterEpoch=0;int64_t revision=0;bool tracked=false;};
+std::optional<IdentityObservationTicket> BeginIdentityObservation(const LinkedAccount& account,const std::string& name);
+bool RecordIdentityObservation(const LinkedAccount& account,const std::string& name,
+    const IdentityObservationTicket& ticket,const std::string& created,
+    const std::string& profession,const std::string& race);
 struct PhysicalEquipmentResult {Result response;int64_t started=0,success=0;bool inventoryCommitted=false;};
 PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& account,const std::string& character,bool manual);
 void PollItemDemand(const std::string& selectedAccount);

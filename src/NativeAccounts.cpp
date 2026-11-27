@@ -1,4 +1,5 @@
 #include "CharacterIdentityStore.h"
+#include "CharacterIdentityCache.h"
 #include "NativeAccounts.h"
 #include "UntrustedInput.h"
 #include "AccountCommitGate.h"
@@ -53,6 +54,10 @@ std::atomic<bool> busy{false};
 std::mutex physicalMutex,rosterMutex;
 struct PhysicalEntry {uint64_t epoch=0;PhysicalEquipmentResult value;std::chrono::steady_clock::time_point finished{};};
 std::map<std::pair<std::string,std::string>,PhysicalEntry> physicalCache;
+// Guarded by credentialMutex. A roster attempt which cannot preserve its
+// evidence or commit the name list blocks subsequent evidence publication.
+std::map<std::string,uint64_t> identityRosterEpoch;
+std::set<std::string> identityRosterBlocked;
 std::string message;
 RefreshUI::State messageState=RefreshUI::State::Ready;
 using ScopeKey=std::tuple<std::string,std::string,std::string>;
@@ -137,6 +142,24 @@ bool SaveKey(const std::string& id,const std::string& key){
 }
 std::filesystem::path AccountPath(){return Storage::Paths(root).Accounts();}
 void InitAccounts(Database::Connection& db){CharacterIdentity::InitializeAccountRegistry(db);}
+// Credential gate is already held. Bootstrap only once, using exact GUID
+// and independently verified cached core data. Never replay old cache
+// evidence over an initialized durable registry.
+CharacterIdentity::State BootstrapIdentity(Database::Connection& db,const std::string& account){
+    auto state=CharacterIdentity::Read(db,account);
+    if(state.initialized)return state;
+    const auto historical=CharacterIdentity::ReadHistoricalCore(root,account);
+    if(historical.names.empty())return state;
+    const auto plan=CharacterIdentity::Commit(db,account,state.revision,historical.names,historical.observations);
+    if(!plan||!*plan)throw std::runtime_error("Could not preserve historical character identity");
+    return plan->next;
+}
+bool RetainRosterEvidence(const std::string& account,const std::set<std::string>& names){
+    Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+    const auto old=BootstrapIdentity(db,account);
+    const auto plan=CharacterIdentity::Commit(db,account,old.revision,names,{});
+    return plan&&*plan;
+}
 std::vector<Account> Accounts(){
     std::vector<Account> out;const auto p=AccountPath();if(!std::filesystem::exists(p))return out;
     Database::Connection db(p.u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
@@ -236,7 +259,14 @@ RosterResult FetchRoster(const LinkedAccount& a){
     try{
         result.accepted=CommitIfCurrent(a,[&]{
             if(result.state.status=="Ready"){
+                ++identityRosterEpoch[a.id];
+                identityRosterBlocked.insert(a.id);
+                // Preserve evidence before name-only roster reconciliation can
+                // discard it. This is not live identity adoption: existing
+                // roster and cache ownership remain unchanged for now.
+                if(!RetainRosterEvidence(a.id,result.names))return false;
                 if(!StoreRoster(root,a.id,result.names,result.state.success,result.state.attempted))return false;
+                identityRosterBlocked.erase(a.id);
             }else if(!Record(root,result.state))return false;
             Publish("",false);return true;
         });
@@ -623,6 +653,38 @@ bool CommitIfCharacterCurrent(const LinkedAccount& account,const std::string& ch
         return (!names||names->count(character))&&commit();
     });
 }
+std::optional<IdentityObservationTicket> BeginIdentityObservation(const LinkedAccount& a,const std::string& name){
+    std::optional<IdentityObservationTicket> result;
+    try{
+        if(!CommitIfCurrent(a,[&]{
+            if(identityRosterBlocked.count(a.id))return false;
+            Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+            const auto state=BootstrapIdentity(db,a.id);
+            const auto names=ReadRoster(root,a.id);
+            if(names&&!names->count(name))return false;
+            result=IdentityObservationTicket{identityRosterEpoch[a.id],state.revision,names.has_value()};
+            return true;
+        }))return std::nullopt;
+    }catch(...){return std::nullopt;}
+    return result;
+}
+bool RecordIdentityObservation(const LinkedAccount& a,const std::string& name,
+    const IdentityObservationTicket& ticket,const std::string& created,
+    const std::string& profession,const std::string& race){
+    try{
+        return CommitIfCurrent(a,[&]{
+            if(identityRosterBlocked.count(a.id)||identityRosterEpoch[a.id]!=ticket.rosterEpoch)return false;
+            if(!ticket.tracked)return true; // no verified roster; keep existing refresh semantics
+            const auto names=ReadRoster(root,a.id);
+            if(!names||!names->count(name))return false;
+            Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+            const auto plan=CharacterIdentity::Commit(db,a.id,ticket.revision,*names,{{name,{created,profession,race}}});
+            // No retirement confirmation from individual core requests or a
+            // cached roster. Full independent observation is future live work.
+            return plan&&*plan;
+        });
+    }catch(...){return false;}
+}
 Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions,const std::string& headers){
     if(!Current(a))return {0,{},"Account changed"};
     for(const auto& p:permissions)if(!a.permissions.count(p))return {403,{},"Missing API permission: "+p};
@@ -781,6 +843,7 @@ void Initialize(const std::string& directory){
 void Shutdown(){
     // Called only after managed workers join.
     registryReady=false;++registryGeneration;physicalCache.clear();rosterCache.clear();
+    identityRosterEpoch.clear();identityRosterBlocked.clear();
     std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();
 }
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}

@@ -445,6 +445,8 @@ namespace AlterEgo {
                         Character next=ch;
                         switch(scope){
                         case S::Core:{
+                            const auto identityObservation=NativeAccounts::BeginIdentityObservation(a,name);
+                            if(!identityObservation)throw std::runtime_error("Character identity evidence unavailable");
                             auto core=require(path+"/core",{"characters"},"Character details");
                             if(!core.is_object()||core.value("name",std::string{})!=name||
                                 !core.contains("profession")||!core.contains("race")||!core.contains("gender")||
@@ -453,6 +455,8 @@ namespace AlterEgo {
                             auto c=ParseCharacterJson(core);
                             if(c.profession.empty()||c.race.empty()||c.gender.empty()||c.created.empty()||c.level<1||c.level>80)
                                 throw std::runtime_error("Incomplete character core");
+                            if(!NativeAccounts::RecordIdentityObservation(a,name,*identityObservation,c.created,c.profession,c.race))
+                                throw std::runtime_error("Character identity evidence changed");
                             next.race=c.race;next.gender=c.gender;next.profession=c.profession;
                             next.level=c.level;next.age=c.age;next.created=c.created;next.deaths=c.deaths;
                             next.last_modified=SafeStr(core,"last_modified");

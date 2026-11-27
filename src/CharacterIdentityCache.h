@@ -2,6 +2,43 @@
 #include "CharacterIdentityRuntime.h"
 #include "CacheDatabase.h"
 namespace AlterEgo::CharacterIdentity {
+// Exact-account verified core data is historical evidence, not a fresh
+// roster observation. Preserve it before the existing cache can be pruned.
+struct HistoricalCore {
+    std::set<std::string> names;
+    std::vector<Observation> observations;
+};
+inline HistoricalCore ReadHistoricalCore(Database::Connection& db,const std::string& account){
+    Database::Transaction tx(db);
+    HistoricalCore result;
+    auto roster=db.Prepare("SELECT character FROM native_rosters WHERE account=?");
+    roster.Bind(1,account);
+    while(roster.Step()){
+        if(!Text(roster.Text(0)))throw std::runtime_error("Invalid historical roster");
+        result.names.insert(roster.Text(0));
+    }
+    auto cores=db.Prepare("SELECT name,created,profession,race,core_verified FROM character_rows WHERE account_name=?");
+    cores.Bind(1,account);
+    while(cores.Step()){
+        const auto name=cores.Text(0);
+        if(!Text(name))throw std::runtime_error("Invalid historical character name");
+        result.names.insert(name);
+        if(cores.Integer(4)>0){
+            const auto evidence=Normalize({cores.Text(1),cores.Text(2),cores.Text(3)});
+            if(evidence)result.observations.push_back({name,*evidence});
+        }
+    }
+    if(result.names.size()>MaxRoster)throw std::runtime_error("Historical character roster exceeds bounds");
+    tx.Commit();return result;
+}
+inline HistoricalCore ReadHistoricalCore(const std::string& root,const std::string& account){
+    if(root.empty())throw std::runtime_error("Missing cache root");
+    std::lock_guard<std::mutex> lock(Cache::Mutex());
+    const auto path=Storage::Paths(root).Cache();
+    if(!std::filesystem::exists(path))return {};
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
+    Cache::Initialize(db);return ReadHistoricalCore(db,account);
+}
 // Rebuildable cache adoption is an independent transaction. The durable
 // identity registry is committed first; the same state may then be replayed
 // after interruption. The caller MUST gate readers and publications until

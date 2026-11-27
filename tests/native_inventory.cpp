@@ -121,7 +121,11 @@ int case_native_inventory(int,char**){
         const auto path=(root/"cache.db").string();
         {
             Database::Connection db(path,Database::Connection::OpenMode::Create);Cache::Initialize(db);
-            db.Exec("INSERT INTO character_rows(character_id,account_name,name) VALUES(1,'A','Alice'),(2,'B','Alice');");
+            db.Exec("INSERT INTO character_rows(character_id,account_name,name,created,profession,race,core_verified) VALUES(1,'A','Alice','2015-02-03T04:05:06Z','Necromancer','Asura',10),(2,'B','Alice','2020-01-02T03:04:05Z','Engineer','Human',10);");
+            db.Exec("INSERT INTO native_roster_state VALUES('A',10); INSERT INTO native_rosters VALUES('A','Alice'),('A','Unretrieved');");
+            const auto historical=CI::ReadHistoricalCore(db,"A");
+            assert(historical.names.size()==2&&historical.names.count("Unretrieved")&&historical.observations.size()==1);
+            assert(historical.observations.front().evidence==a);
             db.Exec("INSERT INTO native_inventory_scopes VALUES('A','Bags','Alice','Ready',10,10),('A','Bank','','Ready',10,10),('B','Bags','Alice','Ready',10,10);");
             auto adopted=CI::AdoptCache(db,first.next);
             assert(adopted&&adopted->count("Alice")&&db.Scalar("SELECT count(*) FROM character_rows WHERE account_name='A'")==0);
