@@ -581,13 +581,6 @@ static long long NowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-// steady_clock ms at which the render thread should (re)send the ach progress
-// query: set to NowMs() for an immediate boot query, or NowMs()+retry_after_ms
-// for a single HOARD_STATUS_BUSY backoff retry. 0 = nothing pending.
-static std::atomic<long long> g_AchRetryAtMs{0};
-// Keep manual retries alive when the global auto-refresh switch changes.
-static std::atomic<bool> g_AchRetryAutomatic{false};
-static std::atomic<bool> g_AchQueryAutomatic{false};
 static std::atomic<uint64_t> g_AchProgressGen{0};      // incremented when progress updates, triggers popout cache rebuild
 static char g_AchSearchBuf[128] = "";
 static bool g_AchPopoutVisible = false;    // popout tracker window visibility
@@ -2541,7 +2534,6 @@ static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic
         if(account!=g_AchCachedAccount||g_AchProgressFetching)return;
         if(automatic&&!AlterEgo::NativeProgress::AchievementDue(account,g_AchProgressCacheSavedAt,AchievementRefreshInterval()))return;
         generation=++g_AchRequestGeneration;g_AchProgressFetching=true;g_AchProgressQueryStartMs=NowMs();
-        g_AchQueryAutomatic=automatic;
         if(categoryId)g_AchCategoryRefreshAt[categoryId]=std::chrono::steady_clock::now();
     }
     const auto interval=AchievementRefreshInterval();
@@ -14421,27 +14413,6 @@ static void RenderAchievements() {
     // Category selection fetches missing public definitions. The global
     // objective tick owns periodic account-wide progress requests.
 
-    // Fire a scheduled ach-progress query (boot query or BUSY backoff retry).
-    if (g_AchRetryAtMs.load() != 0 && NowMs() >= g_AchRetryAtMs.load() && !g_AchProgressFetching) {
-        g_AchRetryAtMs = 0;
-        std::vector<uint32_t> retryIds;
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            retryIds = g_AchPinned;
-            if (g_AchSelectedCatId > 0) {
-                auto it = g_AchCategories.find(g_AchSelectedCatId);
-                if (it != g_AchCategories.end()) {
-                    retryIds.insert(retryIds.end(), it->second.achievements.begin(),
-                                    it->second.achievements.end());
-                }
-            }
-        }
-        if (!retryIds.empty() &&
-            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements))) {
-            SendAchProgressQuery(retryIds, g_AchRetryAutomatic.load());
-        }
-    }
-
     AlterEgo::UI::SearchField("achievements", "Search achievements...", g_AchSearchBuf);
 
     if (!g_AchGroupsFetched) return;
@@ -15084,22 +15055,6 @@ static void RenderAchPopout() {
         }
     }
 
-    // Fire a scheduled ach-progress query here too — the popout may be open
-    // without the main Achievements tab being visible. Previously this only
-    // fired from RenderAchievements, so a deferred query would never re-send.
-    if (g_AchRetryAtMs.load() != 0 && NowMs() >= g_AchRetryAtMs.load() && !g_AchProgressFetching) {
-        g_AchRetryAtMs = 0;
-        std::vector<uint32_t> pinnedCopy;
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            pinnedCopy = g_AchPinned;
-        }
-        if (!pinnedCopy.empty() &&
-            (!g_AchRetryAutomatic.load() || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements))) {
-            SendAchProgressQuery(pinnedCopy, g_AchRetryAutomatic.load());
-        }
-    }
-
     const auto frame=CaptureAchFrame();
     if (s_popoutCacheDirty || frame.pinned != s_popoutLastPinned ||
         frame.progressRevision != s_popoutLastProgressGen || s_popoutLastCatalogGen != frame.catalogRevision) {
@@ -15585,7 +15540,7 @@ static void RenderSkinventoryStatusRow() {
 static void RenderAchievementsStatusRow() {
     const bool namesWorking = g_AchNameIndexFetching.load();
     const bool working = g_AchGroupsFetching || g_AchCatFetching || namesWorking ||
-        g_AchProgressFetching || g_AchRetryAtMs.load() != 0;
+        g_AchProgressFetching;
     std::string detail, namesError, refreshError;
     std::chrono::steady_clock::time_point successUntil;
     int64_t verifiedAt=0;
@@ -15657,7 +15612,6 @@ static void PollAchievementCachePersistence() {
         // cache. Fresh queries can be scheduled for the selected account.
         g_AchProgressFetching = false;
         g_AchProgressQueryStartMs = 0;
-        g_AchRetryAtMs = 0;
         g_AchCatProgressPending = 0;
     }
 
@@ -17464,27 +17418,16 @@ void AddonOptions() {
         AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
         if (!g_AutoRefreshEnabled) {
             g_SkinRefreshOwned = false;
-            // Discard deferred boot refreshes; manually initiated requests
-            // and the retry phases of ongoing requests remain available.
-            // Only cancel an automatic pending achievement query. A manually
-            // started native API request and its busy-backoff retry must continue.
-            if (g_AchRetryAutomatic.load()) g_AchRetryAtMs = 0;
         } else {
-            // Refresh a stale visible section immediately when re-enabled.
-            if (g_MainTab == 3) RefreshVaultOnEntry();
-            else if (g_MainTab == 6) RefreshClearsOnEntry();
+            // Account data is refreshed by its visible consumer, not the
+            // remembered tab in settings. Keep existing public-catalog policy.
             if (AlterEgo::AutoRefreshPolicy::Included(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog) && g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
                 Skinventory::SkinCache::UpdateCacheAsync();
             AlterEgo::GW2API::FetchAllItemStatsAsync();
             AlterEgo::GW2API::FetchDyeColorsAsync();
             Skinventory::Commerce::RefreshUpgradeCatalogAsync(false);
             AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
-                    AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
-            if ((!g_AchPinned.empty() || g_AchSelectedCatId > 0) &&
-                g_AchRetryAtMs.load() == 0) {
-                g_AchRetryAutomatic = true;
-                g_AchRetryAtMs = NowMs();
-            }
+            AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
         }
         SaveSettings();
     }
@@ -17529,7 +17472,6 @@ void AddonOptions() {
                     AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
                 }
                 if(!included&&dataset==Dataset::SkinOwnership)g_SkinRefreshOwned=false;
-                if(!included&&dataset==Dataset::Achievements&&g_AchRetryAutomatic.load())g_AchRetryAtMs=0;
                 SaveSettings();
             }
         }

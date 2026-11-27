@@ -104,14 +104,11 @@ static bool ClearDefinitionsMissing(size_t i){
 }
 static std::time_t g_ClearsLastSuccessTime = 0;
 static std::chrono::steady_clock::time_point g_ClearsSuccessUntil{};
-// steady_clock ms at which to fire a single BUSY backoff retry (0 = none)
-static std::atomic<long long> g_ClearsRetryAtMs{0};
 // A completion query can be outstanding even though category fetching is done.
 // Track it separately so navigating between tabs cannot duplicate API queries.
 static uint64_t g_ClearsGeneration=0,g_VaultGeneration=0;
 static std::atomic<bool> g_ClearsCompletionInFlight{false};
 static std::atomic<long long> g_ClearsQueryStartedAtMs{0};
-static bool g_ClearsRetrySelective = false;
 static constexpr long long CLEARS_QUERY_TIMEOUT_MS = 120000;
 
 // Public globals — declared extern in Clears.h, accessed from dllmain.cpp
@@ -365,7 +362,6 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
             if(i==3)allIds.push_back(g_WeeklyStrikes.id);
         }
         if (allIds.empty()) return; // every known section is done
-        g_ClearsRetrySelective = skipCompletedSections;
         g_ClearsCompletionInFlight = true;
         generation=++g_ClearsGeneration;
         g_ClearsQueryStartedAtMs = NowMs();
@@ -3240,7 +3236,6 @@ static void RenderClearsShared(bool showVault) {
             ++g_ClearsGeneration;g_ClearsQueryPending=false;g_ClearsPendingManual=false;
             g_ClearsCompletionInFlight = false;
             g_ClearsQueryStartedAtMs = 0;
-            g_ClearsRetryAtMs = 0;
             for (auto& e : g_DailyFractals) { e.done = false; e.current = 0; e.bitDone.assign(e.bitDone.size(), false); }
             for (auto& e : g_DailyBounties) { e.done = false; e.current = 0; e.bitDone.assign(e.bitDone.size(), false); }
             for (auto& e : g_WeeklyWings)   { e.done = false; e.current = 0; e.bitDone.assign(e.bitDone.size(), false); }
@@ -3265,18 +3260,6 @@ static void RenderClearsShared(bool showVault) {
     if (!showVault) g_ClearsAutoBootPending = false;
     if (!showVault && !g_ClearsFetching && g_ClearsQueryPending.exchange(false))
         SendClearsAchQuery(false,g_ClearsPendingManual.exchange(false));
-    // Fire a scheduled BUSY backoff retry once its delay has elapsed.
-    {
-        long long retryAt = g_ClearsRetryAtMs.load();
-        if (!showVault && retryAt != 0 && NowMs() >= retryAt &&
-            !g_ClearsFetching) {
-            g_ClearsRetryAtMs = 0;
-            bool selective;
-            {std::lock_guard<std::mutex> lock(g_ClearsMutex);selective=g_ClearsRetrySelective;}
-            SendClearsAchQuery(selective);
-        }
-    }
-
     auto steadyNow = std::chrono::steady_clock::now();
     if(!showVault&&AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)&&
         !g_ClearsFetching&&!g_ClearsQueryPending.load()&&!g_ClearsCompletionInFlight.load()){
@@ -3292,7 +3275,6 @@ static void RenderClearsShared(bool showVault) {
     if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears) &&
         !showVault && g_ClearsFetched && !g_ClearsFetching &&
         !g_ClearsCompletionInFlight.load() && !g_ClearsQueryPending.load() &&
-        g_ClearsRetryAtMs.load() == 0 &&
         ([&]() {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
             if((g_LastClearsCompletionQuery!=std::chrono::steady_clock::time_point{}&&steadyNow-g_LastClearsCompletionQuery<std::chrono::seconds(2)))return false;
@@ -3349,7 +3331,6 @@ void SyncCompletionAccountCaches() {
         g_ClearsAutoBootPending = false;
         g_ClearsCompletionInFlight = false;
         g_ClearsQueryStartedAtMs = 0;
-        g_ClearsRetryAtMs = 0;
         g_ClearsDailyRolloverRetryAtMs = 0;
         g_ClearsDailyRolloverPending = false;g_ClearsSectionRetry={};g_ClearsProgressRetry={};g_ClearsPriorWeekly={};g_ClearsSectionSuccess={};
         g_ClearsLastSuccessTime = 0;
@@ -3469,7 +3450,7 @@ void RenderVaultStatusRow() {
 
 void RenderClearsStatusRow() {
     const bool fetching = g_ClearsFetching || g_ClearsQueryPending.load() ||
-        g_ClearsCompletionInFlight.load() || g_ClearsRetryAtMs.load() != 0;
+        g_ClearsCompletionInFlight.load();
     std::time_t updated;
     std::string status;
     bool waitingForDailyRollover;
@@ -3535,7 +3516,7 @@ void RefreshClearsOnEntry() {
     if (!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears)) return;
     if (g_ClearsNeedRequery || g_ClearsFetching ||
         g_ClearsCompletionInFlight.load() ||
-        g_ClearsQueryPending.load() || g_ClearsRetryAtMs.load() != 0) return;
+        g_ClearsQueryPending.load()) return;
     bool stale = false;
     bool haveData = false;
     {
