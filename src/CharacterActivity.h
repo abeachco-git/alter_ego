@@ -237,10 +237,9 @@ public:
         const auto& e=i->second;auto it=e.scopes.find(scope);const Scope s=it==e.scopes.end()?Scope{}:it->second;
         if(Active(k)){
             const auto interval=RefreshEngine::ActivitySeconds(k.second.empty(),scope);
-            if(k.second.empty()&&RefreshEngine::SharedActivityStorage(scope))
-                return RefreshEngine::TimedFresh(success,now,interval);
-            const bool specDue=specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
-            return !specDue&&now-std::max(e.login,success)<interval;
+            const bool shared=k.second.empty()&&RefreshEngine::SharedActivityStorage(scope);
+            const bool specDue=!shared&&specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
+            return !specDue&&RefreshEngine::TimedFresh(success,now,interval);
         }
         return e.lastSeen<=Covered(e,s,success);
     }
@@ -258,22 +257,14 @@ public:
             (scope==Core||scope==Builds||scope==Tabs||scope==Physical||scope==Crafting);
         if(characterDetail&&(success<=0||success>now)){
             result={WaitReason::Due,now,true};
-        }else if(Active(k)&&k.second.empty()&&RefreshEngine::SharedActivityStorage(scope)){
-            return RefreshEngine::ActiveSharedStorageEligibility(success,attempt,now,e.login,
-                RefreshEngine::ActivitySeconds(true,scope),RefreshEngine::Offset(k.first+"//"+scope));
         }else if(Active(k)){
-            const bool missing=success<=0||success>now;
+            const bool shared=k.second.empty()&&RefreshEngine::SharedActivityStorage(scope);
             const auto interval=RefreshEngine::ActivitySeconds(k.second.empty(),scope);
-            const auto base=missing?e.login:std::max(e.login,success);
-            const auto normalAt=missing&&k.second.empty()?now:base+interval+
-                (missing?0:RefreshEngine::Offset(k.first+"/"+k.second+"/"+scope));
-            result={missing||base==e.login?WaitReason::LoginGrace:WaitReason::ActiveInterval,normalAt,now>=normalAt};
-            if(!missing&&now>=base+interval&&now<normalAt)result.reason=WaitReason::Stagger;
-            const bool changed=specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
-            if(changed){
-                const auto specAt=std::max(e.specChanged+RefreshEngine::SpecializationDebounceSeconds,s.success<e.specChanged?int64_t(0):s.success+RefreshEngine::CharacterSeconds);
-                if(specAt<normalAt)result={WaitReason::SpecDebounce,specAt,now>=specAt};
-            }
+            const bool changed=!shared&&specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
+            const auto specAt=changed?std::max(e.specChanged+RefreshEngine::SpecializationDebounceSeconds,
+                s.success<e.specChanged?int64_t(0):s.success+RefreshEngine::CharacterSeconds):0;
+            return RefreshEngine::ActiveEligibility(success,attempt,now,e.login,interval,
+                RefreshEngine::Offset(k.first+"/"+k.second+"/"+scope),specAt);
         }else if(success<=0||success>now||e.lastSeen>Covered(e,s,success)){
             const auto at=e.lastSeen>0?e.lastSeen+RefreshEngine::LogoutGraceSeconds:now;
             result={WaitReason::LogoutGrace,at,now>=at};

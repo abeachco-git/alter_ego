@@ -78,7 +78,7 @@ int case_section_refresh(int, char**) {
     assert(F::TimedEligibility(now-10,0,now,1800,false,now-5,30).due);
     assert(F::TimedEligibility(now-900,now-10,now,F::SkinOwnershipSeconds,true).due);
     assert(!F::TimedEligibility(now-900,now-10,now,F::SkinOwnershipSeconds).due);
-    assert(F::InventorySeconds("Wallet")==1800);
+    assert(F::InventorySeconds("Wallet")==600&&F::InventorySeconds("Delivery box")==600);
     {
         namespace R=AlterEgo::RefreshStatus;
         R::Scope current;current.success=now-60;current.fresh=true;current.automatic=true;
@@ -140,9 +140,9 @@ int case_section_refresh(int, char**) {
         assert(batch.Get(b,2).phase==R::Phase::Idle&&batch.Get(b,2).failed==4&&batch.Get(b,1).requested==0);
     }
     assert(!F::CharacterDue(false,0,now-100000,now-90000,0,now));
-    assert(!F::CharacterDue(true,now-10,now,now-100000,0,now));
+    assert(F::CharacterDue(true,now-10,now,now-100000,0,now));
     static_assert(F::CharacterSeconds==600);
-    assert(!F::CharacterDue(true,now-599,now,0,0,now));
+    assert(F::CharacterDue(true,now-599,now,0,0,now));
     assert(F::CharacterDue(true,now-600,now,0,0,now));
     assert(F::CharacterDue(true,now-1,now,0,0,now,false,true));
     assert(F::CharacterDue(true,now-600,now,now-100000,0,now));
@@ -183,7 +183,7 @@ int case_section_refresh(int, char**) {
     A::Tracker loginReload;loginReload.Load(logins.Save());
     assert(loginReload.LastLogin(key)==now+15&&loginReload.ActiveKey().first.empty());
     tracker.Observe(key.first,key.second,34,true,now);
-    assert(!tracker.Due(key,"Bags",0,0,now+599));
+    assert(tracker.Due(key,"Bags",0,0,now+1));
     assert(tracker.Due(key,"Bags",0,0,now+600));
     assert(tracker.Due(key,"Bags",0,0,now+1,false,true));
     assert(tracker.Due({key.first,{}}, "Bank",0,0,now+1,false));
@@ -235,7 +235,7 @@ int case_section_refresh(int, char**) {
             assert(!storage.Due(account,scope,now+801,0,now+99999,false));
         }
     }
-    assert(!tracker.Due(key,"Bags",now-90000,0,now+10));
+    assert(tracker.Due(key,"Bags",now-90000,0,now+10));
     assert(tracker.Due(key,"Bags",now-90000,0,now+646));
     assert(tracker.Fresh(other,"Bags",now-90000,now+646));
     tracker.Observe(key.first,key.second,35,true,now+20);
@@ -279,7 +279,7 @@ int case_section_refresh(int, char**) {
     assert(gaps.Due(key,"Character",now-100,0,now+646));
     gaps.Observe("",key.second,34,true,now+700);
     gaps.Observe(key.first,key.second,34,true,now+713);
-    assert(!gaps.Due(key,"Character",now-100,0,now+714));
+    assert(gaps.Due(key,"Character",now-100,0,now+714));
     // An offline response that overlaps a resumed session cannot cover it.
     gaps.Finish(now+720);
     auto pending=gaps.Begin(key,"Bags",now+1320);
@@ -323,7 +323,7 @@ int case_section_refresh(int, char**) {
         assert(waiting.active&&!waiting.fresh&&waiting.eligibility.due);
         assert(waiting.eligibility.reason==W::Due&&waiting.eligibility.at==now+1);
         assert(explain.Due(hero,"Core",0,0,now+1));
-        assert(!explain.Due(hero,"Core",now-100,0,now+1)); // existing data retains login grace
+        assert(!explain.Due(hero,"Core",now-100,0,now+1)); // recent retrieval retains only remaining lifetime
         auto attempt=explain.Begin(hero,"Core",now+600);
         explain.Failure(hero,"Core",attempt,"HTTP 503");
         auto retry=explain.Inspect(hero,"Core",0,now+601);
@@ -334,7 +334,7 @@ int case_section_refresh(int, char**) {
         assert(explain.Inspect(hero,"Core",0,now+602).error.empty());
         explain.Success(hero,"Core",newer,now+603);
         auto current=explain.Inspect(hero,"Core",now+603,now+604);
-        assert(current.fresh&&current.error.empty()&&current.eligibility.reason==W::ActiveInterval);
+        assert(current.fresh&&current.error.empty()&&current.eligibility.reason==W::Current);
         explain.Observe(hero.first,hero.second,35,true,now+605);
         auto spec=explain.Inspect(hero,"BuildTabs",now+603,now+606);
         assert(spec.eligibility.reason==W::SpecDebounce&&spec.eligibility.at==now+613);
@@ -458,11 +458,48 @@ int case_section_refresh(int, char**) {
     rec.Start(D::Endpoint::Catalog,3700);rec.Finish(D::Endpoint::Catalog,0,false,true);
     const auto cancelled=rec.Read(3700).endpoints[static_cast<size_t>(D::Endpoint::Catalog)];
     assert(cancelled.cancelled==1&&cancelled.failed==0&&cancelled.active==1);
-    assert(Stale(0, now));
-    assert(!Stale(now - 900, now));
-    assert(Stale(now - 901, now));
-    assert(!Stale(now - 10, now));
-    assert(!Stale(now + 20, now)); // tolerate clock skew
+    {
+        namespace R=AlterEgo::RefreshStatus;
+        const auto section=[&](int64_t stamp,bool complete,bool retry=false,int64_t remaining=0,int64_t epoch=0,int64_t readyAt=0){
+            return Inspect(stamp,now,900,0,epoch,readyAt,complete,retry,remaining,true);
+        };
+        assert(section(0,false).eligibility.due);
+        assert(section(now-900,false).eligibility.due);
+        assert(section(now+1,false).eligibility.due);
+        assert(!section(now-10,false).eligibility.due);
+        auto claimed=section(now-18*3600,true);
+        assert(claimed.periodComplete&&claimed.fresh&&!claimed.eligibility.due);
+        R::Aggregate agg;agg.Add(claimed,now);agg.Add(section(now-10,false),now);
+        assert(R::CoverageLabel(agg,now)=="All scopes current");
+        assert(!section(now-1000,true,false,0,now-100).periodComplete);
+        assert(section(now-1000,true,false,0,now-100).eligibility.due);
+        assert(!section(now-1000,true,false,0,now-10,now+50).eligibility.due);
+        assert(section(now-10,true,true,30).eligibility.reason==F::WaitReason::Retry);
+        assert(section(now-10,true,true).eligibility.due);
+        using C=F::AccountStorageCandidate;
+        std::vector<C> candidates{
+            {"Bank",true,true,true,{F::WaitReason::Due,now,true}},
+            {"Wallet",true,false,true,{F::WaitReason::Current,now+40,false}},
+            {"Shared inventory",true,false,true,{F::WaitReason::Stagger,now+10,false}},
+            {"Materials",true,false,true,{F::WaitReason::Retry,now+10,false}},
+            {"Delivery box",true,false,false,{F::WaitReason::Due,now,true}},
+            {"Legendary Armory",true,false,true,{F::WaitReason::Current,now+1000,false}},
+            {"Bags",true,true,true,{F::WaitReason::Due,now,true}}};
+        assert((F::PlanAccountStorage(candidates,now)==std::set<std::string>{"Bank","Wallet","Shared inventory"}));
+        candidates[0].eligibility={F::WaitReason::Current,now+1,false};
+        assert(F::PlanAccountStorage(candidates,now).empty());
+        for(const auto* scope:{"Core","BuildTabs","EquipmentTabs","PhysicalSupplement","Crafting","Bags","Equipment"}){
+            A::Tracker tr;tr.Observe(key.first,key.second,34,true,now);
+            assert(!tr.Fresh(key,scope,now-2040,now+1));
+            assert(tr.Due(key,scope,now-2040,0,now+1));
+            assert(tr.Fresh(key,scope,now-480,now+1));
+            assert(!tr.Due(key,scope,now-480,0,now+1));
+            assert(!tr.Due(key,scope,now-2040,now,now+1));
+            tr.Finish(now+10);
+            assert(!tr.Due(key,scope,now-2040,0,now+11));
+            assert(tr.Due(key,scope,now-2040,0,now+610));
+        }
+    }
     Vault vault;
     assert(!VaultClaimed(vault)); // missing response must refresh
     vault.objectives = {{true}, {false}};

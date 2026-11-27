@@ -779,9 +779,11 @@ INSERT INTO character_identity_pending VALUES('A',1);
     assert(!UsableLoose(g.slots.front(),"account-a","B",{},true));
     assert(UsableLoose(rows.front(),"account-a","B",{},true)&&!UsableLoose(rows.front(),"account-a","B",{},false));
     for(const auto* scope:{"Wallet","Bags","Shared inventory","Bank","Equipment","Delivery box","Materials","Guild bank","Guild access","Legendary Armory"}){
-        assert(FreshSeconds(scope)==1800);
+        const auto interval=std::string(scope)=="Wallet"||std::string(scope)=="Delivery box"?600:1800;
+        assert(FreshSeconds(scope)==interval);
         assert(!Due(scope,100,0,999)&&Due(scope,100,0,1000));
-        assert(!Due(scope,100,100,1899)&&Due(scope,100,100,1900));
+        const auto next=100+std::max(interval,900);
+        assert(!Due(scope,100,100,next-1)&&Due(scope,100,100,next));
         assert(Due(scope,0,0,100));
         // The Inventory time-based path consumes the same canonical retry result.
         for(int64_t success:{int64_t(0),int64_t(100),int64_t(101),int64_t(1101)})

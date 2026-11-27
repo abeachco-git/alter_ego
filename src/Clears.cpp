@@ -168,9 +168,7 @@ static int64_t g_VaultSpecialResetEpoch=0;
 static bool VaultRolloverPending(uint8_t i){
     return i==0?g_VaultDailyRolloverPending:i==1?g_VaultWeeklyRolloverPending:g_VaultSpecialRolloverPending;
 }
-static bool VaultAwaitingRetry(){
-    return std::any_of(g_VaultSectionRetry.begin(),g_VaultSectionRetry.end(),[](const auto& r){return r.at!=0;});
-}
+
 static std::string g_VaultRequestAccount;
 static AlterEgo::NativeAccounts::LinkedAccount g_VaultRequestCredential;
 static constexpr long long VAULT_TIMEOUT_MS = 120000;
@@ -334,6 +332,53 @@ static long long NowMs() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// Caller owns g_ClearsMutex. The same section inspection feeds automatic
+// entry/recurring demand and the shared footer; reset validation stays separate.
+static AlterEgo::RefreshStatus::Scope InspectVaultSectionLocked(uint8_t i,int64_t now,long long tick,bool manual=false){
+    namespace F=AlterEgo::RefreshEngine;
+    const auto wall=std::chrono::system_clock::from_time_t(static_cast<std::time_t>(now));
+    const auto end=std::chrono::system_clock::to_time_t(g_VaultSeasonEnd);
+    const bool expired=end>0&&now>=end;
+    const auto reset=i==0?ResetEpoch(CalcLastDailyReset(wall)):
+        i==1?ResetEpoch(CalcLastWeeklyReset(wall)):g_VaultSpecialResetEpoch;
+    const auto readyAt=reset>0?reset+ClearsReset::kResetBufferSeconds:0;
+    const VaultPeriod* periods[]={&g_VaultDaily,&g_VaultWeekly,&g_VaultSpecial};
+    const auto& retry=g_VaultSectionRetry[i];
+    const bool complete=AlterEgo::SectionRefresh::VaultClaimed(*periods[i])&&(i!=2||(end>now));
+    return AlterEgo::SectionRefresh::Inspect(g_VaultSectionSuccess[i],now,
+        i==2?F::BrowseSeconds:F::ObjectiveSeconds(),F::Offset(g_VaultCacheAccount+"/vault/"+std::to_string(i)),
+        reset,readyAt,complete,VaultRolloverPending(i)||retry.at!=0,retry.Remaining(tick),
+        AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault),manual,i==2&&expired);
+}
+static bool ClearSectionCompleteLocked(size_t i){
+    return i==0?AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals):
+        i==1?AlterEgo::SectionRefresh::ClearsDone(g_DailyBounties):
+        i==2?AlterEgo::SectionRefresh::ClearsDone(g_WeeklyWings):g_WeeklyStrikes.id!=0&&g_WeeklyStrikes.done;
+}
+static AlterEgo::RefreshStatus::Scope InspectClearSectionLocked(size_t i,int64_t now,long long tick){
+    namespace F=AlterEgo::RefreshEngine;
+    const auto wall=std::chrono::system_clock::from_time_t(static_cast<std::time_t>(now));
+    const auto reset=ResetEpoch(i<2?CalcLastDailyReset(wall):CalcLastWeeklyReset(wall));
+    const auto& defs=g_ClearsSectionRetry[i];const auto& progress=g_ClearsProgressRetry[i];
+    const bool missing=ClearDefinitionsMissing(i);
+    return AlterEgo::SectionRefresh::Inspect(g_ClearsSectionSuccess[i],now,F::ObjectiveSeconds(),
+        F::Offset(g_ClearsCacheAccount+"/achievements"),reset,reset+ClearsReset::kResetBufferSeconds,
+        !missing&&ClearSectionCompleteLocked(i),missing||defs.at!=0||progress.at!=0,
+        std::max(defs.Remaining(tick),progress.Remaining(tick)),
+        AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Clears));
+}
+static bool ClearsProgressDueLocked(int64_t now,long long tick){
+    const auto wall=std::chrono::system_clock::from_time_t(static_cast<std::time_t>(now));
+    for(size_t i=0;i<4;++i){
+        const auto scope=InspectClearSectionLocked(i,now,tick);
+        if(scope.periodComplete||ClearDefinitionsMissing(i)||!g_ClearsProgressRetry[i].Ready(tick)||
+           scope.eligibility.reason==AlterEgo::RefreshEngine::WaitReason::ResetGrace)continue;
+        const auto reset=ResetEpoch(i<2?CalcLastDailyReset(wall):CalcLastWeeklyReset(wall));
+        if(AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,scope.success,
+            AlterEgo::RefreshEngine::ObjectiveSeconds(),reset+ClearsReset::kResetBufferSeconds))return true;
+    }
+    return false;
+}
 // Query incomplete sections only when opportunistically refreshing.
 // Manual Refresh and reset fetching continue querying every achievement.
 static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
@@ -350,14 +395,11 @@ static void SendClearsAchQuery(bool skipCompletedSections,bool manual) {
         if(acctName.empty() || acctName!=g_ClearsCacheAccount||g_ClearsCompletionInFlight||g_ClearsFetching)return;
         const auto now=std::chrono::system_clock::now();
         const int64_t daily=ResetEpoch(CalcLastDailyReset(now)),weekly=ResetEpoch(CalcLastWeeklyReset(now));
-        const bool completed[]={AlterEgo::SectionRefresh::ClearsDone(g_DailyFractals),
-            AlterEgo::SectionRefresh::ClearsDone(g_DailyBounties),AlterEgo::SectionRefresh::ClearsDone(g_WeeklyWings),
-            g_WeeklyStrikes.id!=0&&g_WeeklyStrikes.done};
         for(size_t i=0;i<4;++i){
             const auto reset=i<2?daily:weekly;
             if(ClearDefinitionsMissing(i)||!ClearsReset::GracePassed(reset,ResetEpoch(now))||
                !g_ClearsProgressRetry[i].Ready(NowMs(),manual))continue;
-            requestedSections[i]=!skipCompletedSections||!completed[i]||g_ClearsSectionSuccess[i]==0;
+            requestedSections[i]=!skipCompletedSections||!InspectClearSectionLocked(i,ResetEpoch(now),NowMs()).periodComplete;
             if(!requestedSections[i])continue;
             minimumEpoch=std::max(minimumEpoch,reset+ClearsReset::kResetBufferSeconds);
             if(i>=2&&g_ClearsProgressRetry[i].reason=="API returned prior weekly progress")force=true;
@@ -558,22 +600,9 @@ static void FetchVaultData(bool skipClaimedSections) {
             g_VaultSpecialRolloverPending=true;g_VaultSectionRetry[2].Reset();
             g_VaultSpecial={};g_VaultSectionSuccess[2]=0;++g_VaultSeasonRevision;UpdateVaultFreshness();
         }
-        const VaultPeriod* periods[]={&g_VaultDaily,&g_VaultWeekly,&g_VaultSpecial};
-        for(uint8_t i=0;i<3;++i){
-            const auto interval=i==2?AlterEgo::RefreshEngine::BrowseSeconds:AlterEgo::RefreshEngine::ObjectiveSeconds();
-            const bool retry=VaultRolloverPending(i)||g_VaultSectionRetry[i].at!=0;
-            request[i]=!skipClaimedSections||(g_VaultSectionRetry[i].Ready(NowMs())&&
-                (retry||(!AlterEgo::SectionRefresh::VaultClaimed(*periods[i])&&
-                 AlterEgo::RefreshEngine::Due(g_VaultSectionSuccess[i],0,now,interval,false,0,
-                    AlterEgo::RefreshEngine::Offset(account+"/vault/"+std::to_string(i))))));
-        }
-        // Never publish new-season progress against an expired known season.
-        // Daily/weekly requests do not depend on that public endpoint.
-        if(expired)request[2]=false;
-        const auto clockNow=std::chrono::system_clock::now();
-        if(!ClearsReset::GracePassed(ResetEpoch(CalcLastDailyReset(clockNow)),now))request[0]=false;
-        if(!ClearsReset::GracePassed(ResetEpoch(CalcLastWeeklyReset(clockNow)),now))request[1]=false;
-        if(g_VaultSpecialRolloverPending&&!ClearsReset::GracePassed(g_VaultSpecialResetEpoch,now))request[2]=false;
+        const auto tick=NowMs();
+        for(uint8_t i=0;i<3;++i)
+            request[i]=InspectVaultSectionLocked(i,now,tick,!skipClaimedSections).eligibility.due;
         if (!request[0] && !request[1] && !request[2]) return;
         generation=++g_VaultGeneration;
         g_VaultRequestCredential=credential;
@@ -3366,8 +3395,7 @@ static void RenderClearsShared(bool showVault) {
         ([&]() {
             std::lock_guard<std::mutex> lock(g_ClearsMutex);
             if((g_LastClearsCompletionQuery!=std::chrono::steady_clock::time_point{}&&steadyNow-g_LastClearsCompletionQuery<std::chrono::seconds(2)))return false;
-            const auto minimum=std::chrono::system_clock::to_time_t(std::max(dailyReset,weeklyReset));
-            return AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,g_ClearsLastSuccessTime,AlterEgo::RefreshEngine::ObjectiveSeconds(),minimum);
+            return ClearsProgressDueLocked(std::time(nullptr),NowMs());
         })()) {
         {std::lock_guard<std::mutex> lock(g_ClearsMutex);g_LastClearsCompletionQuery=steadyNow;}
         SendClearsAchQuery(true);
@@ -3504,21 +3532,25 @@ void ToggleClearsHideComplete() {
 void RenderVaultStatusRow() {
     // Snapshot worker-thread data before rendering; never keep the lock while
     // invoking a manual refresh, which can initiate new API requests.
-    std::time_t updated;
+    namespace R=AlterEgo::RefreshStatus;
+    R::Aggregate coverage;const auto now=std::time(nullptr);const auto tick=NowMs();
     bool showingData, failed, pending, waitingForRollover;
     std::string status;
     std::chrono::steady_clock::time_point successUntil;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        updated = g_VaultLastSuccessTime;
         showingData = std::any_of(g_VaultSectionSuccess.begin(),g_VaultSectionSuccess.end(),[](auto stamp){return stamp>0;});
         failed = g_VaultLastAttemptFailed;
         pending = g_VaultFetching.load();
-        waitingForRollover = AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Vault) &&
-            VaultAwaitingRetry();
+        waitingForRollover = false;
         status = g_VaultStatusMessage;
         for(uint8_t i=0;i<3;++i){
-            status+="\n"+std::string(VaultSectionName(i))+": "+AlterEgo::RefreshUI::Age(g_VaultSectionSuccess[i]);
+            const auto scope=InspectVaultSectionLocked(i,now,tick);
+            coverage.Add(scope,now);
+            waitingForRollover=waitingForRollover||(scope.automatic&&
+                (scope.eligibility.reason==AlterEgo::RefreshEngine::WaitReason::ResetGrace||
+                 (VaultRolloverPending(i)&&!scope.eligibility.due)));
+            status+="\n"+std::string(VaultSectionName(i))+": "+R::Describe(scope,now);
             const auto& retry=g_VaultSectionRetry[i];
             if(!retry.reason.empty())status+=" - "+retry.reason+"; retry in "+std::to_string(retry.Remaining(NowMs()))+"s";
         }
@@ -3538,27 +3570,32 @@ void RenderVaultStatusRow() {
         state = AlterEgo::RefreshUI::State::Success;
         detail = status;
     }
-    if (AlterEgo::RefreshUI::Row("vault", updated, "Vault", state, detail, pending,nullptr,
-            !pending&&waitingForRollover?"Awaiting sync":nullptr,true))
+    const auto label=R::Label(coverage.Status(),now,coverage.retryAt);
+    if(!pending&&!failed&&!waitingForRollover&&state!=AlterEgo::RefreshUI::State::Success)
+        state=AlterEgo::RefreshUI::StatusState(coverage.Status());
+    if (AlterEgo::RefreshUI::Row("vault", coverage, "Vault", state, detail, pending,nullptr,
+            !pending&&waitingForRollover?"Awaiting sync":!pending&&!failed&&state!=AlterEgo::RefreshUI::State::Success?label.c_str():nullptr,true,now))
         FetchVaultData();
 }
 
 void RenderClearsStatusRow() {
     const bool fetching = g_ClearsFetching || g_ClearsQueryPending.load() ||
         g_ClearsCompletionInFlight.load();
-    std::time_t updated;
+    namespace R=AlterEgo::RefreshStatus;
+    R::Aggregate coverage;const auto now=std::time(nullptr);const auto tick=NowMs();
     std::string status;
     bool waitingForDailyRollover;
     bool haveData,failed;
     std::chrono::steady_clock::time_point successUntil;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        updated = *std::min_element(g_ClearsSectionSuccess.begin(),g_ClearsSectionSuccess.end());
         status = g_ClearsStatusMsg;failed=!status.empty();
         haveData = g_ClearsFetched;
         waitingForDailyRollover = g_ClearsDailyRolloverRetryAtMs.load() != 0;
         for(size_t i=0;i<4;++i){
-            status+="\n"+std::string(ClearLabels[i])+": "+AlterEgo::RefreshUI::Age(g_ClearsSectionSuccess[i]);
+            const auto scope=InspectClearSectionLocked(i,now,tick);
+            coverage.Add(scope,now);
+            status+="\n"+std::string(ClearLabels[i])+": "+R::Describe(scope,now);
             for(const auto* retry:{&g_ClearsSectionRetry[i],&g_ClearsProgressRetry[i]})
                 if(!retry->reason.empty())status+=" - "+retry->reason+"; retry in "+std::to_string(retry->Remaining(NowMs()))+"s";
         }
@@ -3582,8 +3619,11 @@ void RenderClearsStatusRow() {
         state = AlterEgo::RefreshUI::State::Success;
         detail = "Refresh complete"+status;
     }
-    if (AlterEgo::RefreshUI::Row("clears", updated, "Clears", state, detail, fetching,nullptr,
-            !fetching&&waitingForDailyRollover?"Awaiting sync":nullptr,true))
+    const auto label=R::Label(coverage.Status(),now,coverage.retryAt);
+    if(!fetching&&!failed&&!waitingForDailyRollover&&state!=AlterEgo::RefreshUI::State::Success)
+        state=AlterEgo::RefreshUI::StatusState(coverage.Status());
+    if (AlterEgo::RefreshUI::Row("clears", coverage, "Clears", state, detail, fetching,nullptr,
+            !fetching&&waitingForDailyRollover?"Awaiting sync":!fetching&&!failed&&state!=AlterEgo::RefreshUI::State::Success?label.c_str():nullptr,true,now))
         FetchClears(true);
 }
 
@@ -3597,10 +3637,9 @@ void RefreshVaultOnEntry() {
     bool stale = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        stale = AlterEgo::SectionRefresh::Stale(
-            g_VaultLastSuccessTime, std::time(nullptr)) ||
-            g_VaultDailyRolloverPending || g_VaultWeeklyRolloverPending ||
-            g_VaultSeasonEnd==std::chrono::system_clock::time_point{} ||
+        const auto now=std::time(nullptr);const auto tick=NowMs();
+        for(uint8_t i=0;i<3;++i)stale=stale||InspectVaultSectionLocked(i,now,tick).eligibility.due;
+        stale=stale||g_VaultSeasonEnd==std::chrono::system_clock::time_point{}||
             std::chrono::system_clock::now()>=g_VaultSeasonEnd;
     }
     if (!stale) return;
@@ -3616,7 +3655,7 @@ void RefreshClearsOnEntry() {
     bool haveData = false;
     {
         std::lock_guard<std::mutex> lock(g_ClearsMutex);
-        stale = AlterEgo::NativeProgress::AchievementDue(g_ClearsCacheAccount,g_ClearsLastSuccessTime,AlterEgo::RefreshEngine::ObjectiveSeconds()) ||
+        stale = ClearsProgressDueLocked(std::time(nullptr),NowMs()) ||
             g_ClearsDailyRolloverPending;
         haveData = g_ClearsFetched && !g_ClearsDailyRolloverPending&&
             !g_DailyFractals.empty()&&!g_DailyBounties.empty()&&!g_WeeklyWings.empty()&&g_WeeklyStrikes.id;

@@ -3,6 +3,8 @@
 #include <limits>
 #include <string>
 #include <set>
+#include <vector>
+#include <algorithm>
 namespace AlterEgo::RefreshEngine {
 // Ordinary wall-clock policy; specialized metadata/transport/reset backoffs
 // retain their own owners and timing.
@@ -28,7 +30,11 @@ inline int64_t ActivitySeconds(bool accountWide,const std::string& scope){
     using namespace ScopeName;
     return !accountWide||scope==Bank||scope==Shared||scope==Materials?CharacterSeconds:BrowseSeconds;
 }
-inline int64_t InventorySeconds(const std::string& scope){return scope==ScopeName::Roster?RosterSeconds:BrowseSeconds;}
+inline bool SharedAccountStorage(const std::string& scope){return SharedActivityStorage(scope)||scope=="Wallet"||scope=="Delivery box";}
+inline int64_t InventorySeconds(const std::string& scope){
+    return scope==ScopeName::Roster?RosterSeconds:
+        scope=="Wallet"||scope=="Delivery box"?CharacterSeconds:BrowseSeconds;
+}
 inline bool InventoryPermitted(const std::set<std::string>& permissions,const std::string& scope){
     using namespace ScopeName;
     return scope=="Wallet"?permissions.count("wallet"):
@@ -45,7 +51,7 @@ inline int64_t RetryUntil(int64_t success,int64_t attempt,int64_t now,
     return attempt>std::numeric_limits<int64_t>::max()-retry?
         std::numeric_limits<int64_t>::max():attempt+retry;
 }
-enum class WaitReason { Current, Due, LoginGrace, ActiveInterval, Stagger, LogoutGrace, SpecDebounce, Retry };
+enum class WaitReason { Current, Due, ActiveInterval, Stagger, LogoutGrace, SpecDebounce, Retry, ResetGrace };
 struct Eligibility { WaitReason reason=WaitReason::Current; int64_t at=0; bool due=false; };
 inline bool TimedFresh(int64_t success,int64_t now,int64_t interval,int64_t minimumEpoch=0){
     return success>0&&success<=now&&success>=minimumEpoch&&now-success<interval;
@@ -65,11 +71,37 @@ inline Eligibility TimedEligibility(int64_t success,int64_t attempt,int64_t now,
     if(now>=at)return {WaitReason::Due,now,true};
     return {TimedFresh(success,now,interval,minimumEpoch)?WaitReason::Current:WaitReason::Stagger,at,false};
 }
-// A login may activate storage demand, not restart a stale snapshot's
-// lifetime. If already overdue when logging in, skip recurring stagger.
-inline Eligibility ActiveSharedStorageEligibility(int64_t success,int64_t attempt,int64_t now,
-    int64_t login,int64_t interval,int64_t offset){
+// Login activates demand, never freshness. Overdue data at login skips
+// ordinary staggering; specialization debounce is an independent earlier trigger.
+inline Eligibility ActiveEligibility(int64_t success,int64_t attempt,int64_t now,
+    int64_t login,int64_t interval,int64_t offset,int64_t specAt=0){
     const bool overdueAtLogin=login>0&&login<=now&&!TimedFresh(success,login,interval)&&success<=login;
-    return TimedEligibility(success,attempt,now,interval,false,0,overdueAtLogin?0:offset);
+    auto normal=TimedEligibility(success,0,now,interval,false,0,overdueAtLogin?0:offset);
+    if(specAt>0&&!normal.due&&specAt<normal.at)
+        normal={now>=specAt?WaitReason::Due:WaitReason::SpecDebounce,specAt,now>=specAt};
+    if(const auto retry=RetryUntil(success,attempt,now))return {WaitReason::Retry,retry,false};
+    return normal;
+}
+struct AccountStorageCandidate {
+    std::string scope;
+    bool allowed=false,seed=false,previouslyRetrieved=false;
+    Eligibility eligibility;
+};
+// One visible, actually due seed is required. Existing cached peers may join
+// within the ordinary stagger window, never during propagation or retry waits.
+inline std::set<std::string> PlanAccountStorage(const std::vector<AccountStorageCandidate>& rows,int64_t now){
+    std::set<std::string> out;
+    const bool triggered=std::any_of(rows.begin(),rows.end(),[](const auto& r){
+        return SharedAccountStorage(r.scope)&&r.allowed&&r.seed&&r.eligibility.due;
+    });
+    if(!triggered)return out;
+    for(const auto& r:rows){
+        if(!SharedAccountStorage(r.scope)||!r.allowed||(!r.seed&&!r.previouslyRetrieved))continue;
+        const auto& q=r.eligibility;
+        const bool near=(q.reason==WaitReason::Current||q.reason==WaitReason::ActiveInterval||q.reason==WaitReason::Stagger)&&
+            q.at>now&&q.at-now<=StaggerMaxSeconds;
+        if(q.due||near)out.insert(r.scope);
+    }
+    return out;
 }
 }

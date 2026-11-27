@@ -18,6 +18,7 @@ struct Scope {
     Phase phase=Phase::Idle;
     Eligibility eligibility;
     std::string error;
+    bool periodComplete=false;
 };
 inline std::string Duration(int64_t seconds){
     seconds=std::max<int64_t>(0,seconds);
@@ -35,7 +36,7 @@ inline std::string Age(int64_t stamp,int64_t now){
 inline const char* Reason(WaitReason reason){
     switch(reason){
     case WaitReason::Due:return "Refresh due";
-    case WaitReason::LoginGrace:return "Login propagation grace";
+    case WaitReason::ResetGrace:return "Reset propagation grace";
     case WaitReason::ActiveInterval:return "Active refresh interval";
     case WaitReason::Stagger:return "Staggered refresh";
     case WaitReason::LogoutGrace:return "Logout propagation grace";
@@ -72,7 +73,7 @@ inline Kind Project(const Scope& s,int64_t now){
     if(!s.demandAllowed)return Kind::Scheduled;
     if(s.eligibility.reason==WaitReason::Retry&&s.eligibility.at>now)return Kind::Retry;
     if(s.eligibility.due)return Kind::Due;
-    if(s.eligibility.reason==WaitReason::LoginGrace||s.eligibility.reason==WaitReason::LogoutGrace)return Kind::Sync;
+    if(s.eligibility.reason==WaitReason::ResetGrace||s.eligibility.reason==WaitReason::LogoutGrace)return Kind::Sync;
     if(s.eligibility.at>now)return Kind::Scheduled;
     return s.success>0?Kind::Scheduled:Kind::NoData;
 }
@@ -154,7 +155,7 @@ inline std::string Label(Kind kind,int64_t now=0,int64_t retryAt=0){
     }
 }
 inline std::string Describe(const Scope& s,int64_t now,int64_t sharedLogoutAt=0){
-    std::string text=s.success<=0?"Not retrieved":s.success>now?"Unverified timestamp":s.fresh?"Current":"Stale";
+    std::string text=s.success<=0?"Not retrieved":s.success>now?"Unverified timestamp":s.periodComplete?"Complete for period":s.fresh?"Current":"Stale";
     text+="; last success: "+Age(s.success,now);
     if(s.attempt>0)text+="; last attempt: "+Age(s.attempt,now);
     if(s.access!=Access::Allowed)text+="; "+std::string(AccessLabel(s.access));

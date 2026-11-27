@@ -620,7 +620,8 @@ RefreshStatus::Scope InspectStorageScope(const std::string& account,const std::s
         result.error=inspection.error;
     }else{
         result.fresh=RefreshEngine::TimedFresh(result.success,now,FreshSeconds(scope));
-        result.eligibility=RefreshEngine::TimedEligibility(result.success,unresolved,now,FreshSeconds(scope));
+        result.eligibility=RefreshEngine::TimedEligibility(result.success,unresolved,now,FreshSeconds(scope),false,0,
+            RefreshEngine::SharedAccountStorage(scope)?RefreshEngine::Offset(account+"//"+scope):0);
     }
     if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing"){
         result.error=status;result.failed=true;
@@ -639,18 +640,31 @@ bool ScopeDue(const View& v,const std::string& account,const std::string& scope,
     if(a==v.accounts.end()||!ScopePermitted(*a,scope))return false;
     return InspectStorageScope(account,scope,character,it==v.scopes.end()?nullptr:&it->second,true,Now()).eligibility.due;
 }
+// This is the only account-storage planner for the UI trigger and worker admission.
+std::set<std::string> AccountStoragePlan(const View& v,const Account& a,const std::string& requested,bool includeWallet,int64_t now){
+    std::vector<RefreshEngine::AccountStorageCandidate> rows;
+    for(const auto* name:{"Wallet","Bank","Shared inventory","Materials","Legendary Armory","Delivery box"}){
+        const std::string scope=name;
+        const bool seed=requested==scope||(requested=="Items"&&(scope!="Wallet"||includeWallet));
+        const auto it=v.scopes.find({a.id,scope,{}});
+        auto inspected=InspectStorageScope(a.id,scope,{},it==v.scopes.end()?nullptr:&it->second,ScopePermitted(a,scope),now);
+        rows.push_back({scope,inspected.automatic&&inspected.access==RefreshStatus::Access::Allowed,
+            seed,inspected.success>0&&inspected.success<=now,inspected.eligibility});
+    }
+    return RefreshEngine::PlanAccountStorage(rows,now);
+}
 bool Fresh(const View& v,const Row& row){
     const auto& s=row.slot;auto it=v.scopes.find({s.account,s.scope,s.character});
     return it!=v.scopes.end()&&it->second.status=="Ready"&&ScopeFresh(s.account,s.scope,s.character,row.captured);
 }
-void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const CharacterFilter& characterFilter={},bool includeWallet=false){
+void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::string& onlyScope,bool automatic=false,const std::string& onlyCharacter={},const CharacterFilter& characterFilter={},bool includeWallet=false,bool accountBatch=false){
     std::optional<ScopeKey> pending;
     const bool singleKnown=onlyScope=="Wallet"||onlyScope=="Bank"||onlyScope=="Shared inventory"||
         onlyScope=="Materials"||onlyScope=="Legendary Armory"||onlyScope=="Delivery box"||onlyScope=="Roster"||onlyScope=="Guild bank";
-    if(accounts.size()==1&&(singleKnown||(automatic&&!onlyCharacter.empty()&&(onlyScope=="Bags"||onlyScope=="Equipment"))))
+    if(!accountBatch&&accounts.size()==1&&(singleKnown||(automatic&&!onlyCharacter.empty()&&(onlyScope=="Bags"||onlyScope=="Equipment"))))
         pending=ScopeKey{accounts.front().id,onlyScope=="Guild bank"?"Guild access":onlyScope,onlyCharacter};
     const auto admitted=Snapshot();
-    Launch([accounts,epoch,onlyScope,automatic,onlyCharacter,characterFilter,includeWallet,admitted]{
+    Launch([accounts,epoch,onlyScope,automatic,onlyCharacter,characterFilter,includeWallet,accountBatch,admitted]{
         ApiActivity::ReasonScope reason(automatic?ApiActivity::Reason::Visible:ApiActivity::Reason::Manual);
         const auto previous=Snapshot();
         if(previous->credentialEpoch!=epoch)throw Background::Cancelled{};
@@ -667,6 +681,8 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
             }
         };
         for(const auto& a:accounts){
+            const auto accountPlan=accountBatch?AccountStoragePlan(*previous,a,onlyScope,includeWallet,Now()):std::set<std::string>{};
+            if(accountBatch&&accountPlan.empty())continue;
             // Account selection and permissions came from the same immutable
             // registry view at admission. Never attach a later credential to it.
             LinkedAccount linked;linked.id=a.id;linked.name=a.name;
@@ -691,9 +707,13 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     throw Background::Cancelled{};
             };
             auto scope=[&](const std::string& name,const std::string& character,const std::string& path,bool bags){
-                if(!MatchesStorageView(onlyScope,{},name,character)||!characterFilter.Matches(a.id,character))return;
-                if(!onlyCharacter.empty()&&character!=onlyCharacter)return;
-                if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
+                if(accountBatch){
+                    if(!character.empty()||!accountPlan.count(name))return;
+                }else{
+                    if(!MatchesStorageView(onlyScope,{},name,character)||!characterFilter.Matches(a.id,character))return;
+                    if(!onlyCharacter.empty()&&character!=onlyCharacter)return;
+                    if(automatic&&!ScopeDue(*previous,a.id,name,character))return;
+                }
                 checkCurrent();
                 const bool characterScope=bags||name=="Equipment";
                 const auto address=characterScope?EnsureCharacterAddress(linked,character):std::optional<CharacterIdentity::Address>{};
@@ -770,7 +790,8 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 }else EndScope(state);
                 publishProgress();
             };
-            if((onlyScope.empty()||onlyScope=="Wallet"||(includeWallet&&onlyScope=="Items"))&&(!automatic||ScopeDue(*previous,a.id,"Wallet"))){
+            if(accountBatch?accountPlan.count("Wallet")!=0:
+                (onlyScope.empty()||onlyScope=="Wallet"||(includeWallet&&onlyScope=="Items"))&&(!automatic||ScopeDue(*previous,a.id,"Wallet"))){
                 checkCurrent();
                 ScopeState state{a.id,"Wallet","","Ready",Now(),0};
                 BeginScope(state,"Wallet");
@@ -781,7 +802,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 }catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();state.status=a.permissions.count("wallet")?"Wallet request failed":"Missing permissions";commit([&]{RecordWallet(root,state);});}
                 EndScope(state);publishProgress();
             }
-            if((onlyScope.empty()||onlyScope=="Guild bank")&&(!automatic||ScopeDue(*previous,a.id,"Guild access"))){
+            if(!accountBatch&&(onlyScope.empty()||onlyScope=="Guild bank")&&(!automatic||ScopeDue(*previous,a.id,"Guild access"))){
                 checkCurrent();
                 SetActiveScope("Guild access",ScopeKey{a.id,"Guild access",{}});
                 try{
@@ -819,7 +840,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
             scope("Materials",{},"/v2/account/materials",false);
             scope("Legendary Armory",{},"/v2/account/legendaryarmory",false);
             scope("Delivery box",{},"/v2/commerce/delivery",false);
-            if((onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment"||onlyScope=="Roster")&&(!automatic||AutoScope("Roster"))){
+            if(!accountBatch&&(onlyScope.empty()||onlyScope=="Items"||onlyScope=="Bags"||onlyScope=="Equipment"||onlyScope=="Roster")&&(!automatic||AutoScope("Roster"))){
                 std::set<std::string> names;
                 auto cached=previous->inventory.rosters.find(a.id);
                 if(!a.permissions.count("characters")&&automatic&&!ScopeDue(*previous,a.id,"Roster"))continue;
@@ -1636,10 +1657,12 @@ static void PollDemand(const std::string& selectedAccount,const std::string& req
             if(!ScopeDue(*v,a.id,scope,ch))return false;
             last=now;Refresh({a},v->credentialEpoch,scope=="Guild access"?"Guild bank":scope,true,ch);return true;
         };
-        if(requested=="Wallet"){if(run("Wallet"))return;continue;}
+        const auto runAccount=[&]{
+            if(AccountStoragePlan(*v,a,requested,includeWallet,Now()).empty())return false;
+            last=now;Refresh({a},v->credentialEpoch,requested,true,{}, {},includeWallet,true);return true;
+        };
+        if(requested=="Wallet"){if(runAccount())return;continue;}
         if(requested=="Guild bank"){if(run("Guild access"))return;continue;}
-        // Items now displays cached wallet balances; apply its existing independent policy.
-        if(includeWallet&&requested=="Items"&&run("Wallet"))return;
         const bool items=requested=="Items";
         const bool bags=items||requested=="Bags",equipment=items||requested=="Equipment";
         auto roster=v->inventory.rosters.find(a.id);
@@ -1650,8 +1673,7 @@ static void PollDemand(const std::string& selectedAccount,const std::string& req
                 if(equipment&&run("Equipment",active.second))return;
             }
         }
-        for(const auto* s:{"Bank","Shared inventory","Materials","Legendary Armory","Delivery box"})
-            if((items||requested==s)&&run(s))return;
+        if((items||RefreshEngine::SharedAccountStorage(requested))&&runAccount())return;
         if((bags||equipment)&&roster!=v->inventory.rosters.end()){
             for(const auto& ch:roster->second){
                 if(active.first==a.id&&ch==active.second)continue;
