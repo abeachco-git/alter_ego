@@ -13,12 +13,35 @@
 #include "../src/RefreshProgress.h"
 #include "../src/RefreshEngine.h"
 #include "../src/CommercePriceCore.h"
+#include "../src/AchievementCatalogCache.h"
 #include <cassert>
 #include <filesystem>
 #include <chrono>
 using namespace AlterEgo;
 using namespace AlterEgo::NativeInventory;
 int case_native_inventory(int,char**){
+    {
+        const auto path=std::filesystem::temp_directory_path()/("ae-achievement-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto root=path.string();
+        using J=nlohmann::json;
+        const auto row=[](uint32_t id,const std::string& name){return J{{"id",id},{"name",name},{"bits",J::array({{{"type","Text"},{"text","bit"}}})}};};
+        const auto stamp=Cache::ReferenceSnapshotTime();
+        J accepted=J::object();
+        assert(Cache::WriteAchievementObservations(root,J{{"1",row(1,"new")},{"2",row(2,"other")}},stamp,accepted)&&accepted.size()==2);
+        assert(Cache::WriteAchievementObservations(root,J{{"1",row(1,"old")},{"3",row(3,"unrelated")}},stamp-1,accepted)&&accepted.size()==1&&accepted.contains("3"));
+        auto defs=Cache::ReadCatalog(root,Cache::AchievementDataset::Definitions);
+        auto names=Cache::ReadCatalog(root,Cache::AchievementDataset::Names);
+        assert(defs&&names&&defs->size()==3&&defs->at("1").at("name")=="new"&&names->at("1")=="new");
+        assert(Cache::ReadAchievementWatermarks(root).at(1)==stamp);
+        auto bad=row(4,"bad");bad["bits"]=J::array({{{"type",5}}});
+        assert(!Cache::WriteAchievementObservations(root,J{{"1",row(1,"rollback")},{"4",bad}},stamp+1,accepted));
+        defs=Cache::ReadCatalog(root,Cache::AchievementDataset::Definitions);
+        assert(defs&&defs->size()==3&&defs->at("1").at("name")=="new");
+        assert(Cache::ReadAchievementWatermarks(root).at(1)==stamp);
+        assert(Cache::VerifyAchievementIdIndex(root,stamp/1000000));
+        assert(Cache::ReadNameIndexVerification(root)==stamp/1000000);
+        std::filesystem::remove_all(path);
+    }
     // Durable local character identity: rename, same-name reuse, swaps,
     // account isolation, complete observation, v1 migration and rollback.
     {

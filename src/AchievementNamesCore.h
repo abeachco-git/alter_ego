@@ -13,6 +13,22 @@ using Json = nlohmann::json;
 inline constexpr int64_t RefreshInterval = 86400;
 inline constexpr int64_t RetryInterval = 300;
 inline constexpr size_t BatchSize = 200;
+inline constexpr int64_t DefinitionFreshness = 30LL*86400;
+inline bool DefinitionFresh(int64_t requestMicroseconds,int64_t nowSeconds){
+    const auto seconds=requestMicroseconds/1000000;
+    return seconds>0&&seconds<=nowSeconds&&nowSeconds-seconds<DefinitionFreshness;
+}
+struct CategoryDemand {
+    std::string account;
+    uint64_t credentialGeneration=0,revision=0,catalogRevision=0;
+    uint32_t category=0;
+    bool automatic=true;
+    bool Matches(const std::string& currentAccount,uint64_t currentCredential,uint64_t currentRevision,
+                 uint64_t currentCatalog,uint32_t currentCategory)const{
+        return !account.empty()&&account==currentAccount&&credentialGeneration==currentCredential&&
+            revision==currentRevision&&catalogRevision==currentCatalog&&category!=0&&category==currentCategory;
+    }
+};
 
 inline uint32_t Id(const Json& value) {
     if (!value.is_number_integer()) throw std::runtime_error("Invalid achievement ID");

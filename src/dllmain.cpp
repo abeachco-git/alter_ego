@@ -79,6 +79,7 @@
 #include "CacheDatabase.h"
 #include "AchievementCatalogCache.h"
 #include "AchievementNamesCore.h"
+#include "AchievementDefinitionOwner.h"
 #include "UntrustedInput.h"
 #include "RevisionSnapshot.h"
 #include "WikiFreshness.h"
@@ -511,25 +512,8 @@ struct AchCategoryDef {
     std::vector<uint32_t> achievements; // achievement IDs in this category
 };
 
-struct AchBitDef {
-    std::string type;    // "Text", "Item", "Minipet", "Skin"
-    uint32_t item_id = 0; // optional: item/skin/mini ID
-    std::string text;    // display text or hint
-};
-
-struct AchDef {
-    uint32_t id = 0;
-    std::string name;
-    std::string description;
-    std::string requirement;
-    std::string icon_url;
-    std::string type;                    // "Default" or "ItemSet"
-    std::vector<std::string> flags;      // "Repeatable", "Hidden", "Daily", etc.
-    int max_count = 0;                   // from tiers.back().count
-    int total_ap = 0;                    // sum of all tier points
-    std::vector<AchBitDef> bits;
-    std::vector<uint32_t> prerequisites;
-};
+using AchBitDef = AlterEgo::AchievementDefinitions::Bit;
+using AchDef = AlterEgo::AchievementDefinitions::Definition;
 
 using AchProgress = AlterEgo::Cache::AchievementProgress;
 
@@ -551,7 +535,7 @@ static std::atomic<bool> g_AchGroupsFetching{false};
 static std::atomic<bool> g_AchNameIndexReady{false};
 static std::atomic<int64_t> g_AchNameIndexVerifiedAt{0}, g_AchNameIndexRetryAt{0};
 static std::atomic<uint64_t> g_AchCatalogGeneration{0};
-static std::mutex g_AchNamePersistMutex, g_AchDefPersistMutex, g_AchGroupPersistMutex;
+static std::mutex g_AchGroupPersistMutex;
 static std::string g_AchNameIndexStatus, g_AchNameIndexError; // guarded by g_AchMutex
 static std::atomic<bool> g_AchNameIndexFetching{false};
 static std::string g_AchStatusMsg;
@@ -579,8 +563,10 @@ static std::chrono::steady_clock::time_point g_AchLastSave;
 static void SaveAchProgress(const std::string& account);
 static void LoadAchProgress(const std::string& account);
 static std::string GetAchievementCacheAccount();
-static std::atomic<uint32_t> g_AchCatProgressPending{0}; // render-thread progress continuation
-static std::atomic<bool> g_AchCatProgressAutomatic{false};
+// Render-thread-only navigation demand; public workers never schedule private progress.
+static std::optional<AlterEgo::AchievementNames::CategoryDemand> g_AchCategoryDemand;
+static uint64_t g_AchDemandRevision=0;
+static bool g_AchBrowserRendered=false;
 // Monotonic ms helper for scheduling deferred/backoff queries on the render thread.
 static long long NowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -814,8 +800,6 @@ static std::chrono::steady_clock::time_point g_LastAchProgressQuery{};
 static bool SaveAchTrackerState();
 static void LoadAchTrackerState();
 static void LoadAchGroupCache();
-static bool SaveAchDefCache(int64_t verifiedAt = 0);
-static bool SaveAchNameIndex(int64_t verifiedAt = 0);
 static void LoadAchDefCache();
 static void FetchAchGroups();
 static void FetchAchCategoryDefs(uint32_t catId, bool automatic = false);
@@ -2168,50 +2152,6 @@ static void LoadAchGroupCache() {
     } catch (...) {}
 }
 
-static bool SaveAchDefCache(int64_t verifiedAt) {
-    // Serialize capture + persistence across the category, pinned and name workers.
-    std::lock_guard<std::mutex> saveLock(g_AchDefPersistMutex);
-
-    decltype(g_AchDefs) definitions;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        definitions=g_AchDefs;
-    }
-    nlohmann::json j;
-    {
-        for (const auto& [id, definition] : definitions) {
-            const auto& d=*definition;
-            nlohmann::json dj;
-            dj["id"] = d.id;
-            dj["name"] = d.name;
-            dj["description"] = d.description;
-            dj["requirement"] = d.requirement;
-            dj["icon_url"] = d.icon_url;
-            dj["type"] = d.type;
-            dj["flags"] = d.flags;
-            dj["max_count"] = d.max_count;
-            dj["total_ap"] = d.total_ap;
-            dj["prerequisites"] = d.prerequisites;
-            nlohmann::json bits = nlohmann::json::array();
-            for (const auto& b : d.bits) {
-                nlohmann::json bj;
-                bj["type"] = b.type;
-                bj["item_id"] = b.item_id;
-                bj["text"] = b.text;
-                bits.push_back(bj);
-            }
-            dj["bits"] = bits;
-            j[std::to_string(id)] = dj;
-        }
-    }
-
-    const bool definitionsSaved = AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Definitions, j);
-    if (!definitionsSaved && APIDefs)
-        APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save ach_defs cache");
-    const bool namesSaved = SaveAchNameIndex(verifiedAt);
-    return definitionsSaved && namesSaved;
-}
-
 static void LoadAchDefCache() {
     try {
         auto snapshot = AlterEgo::Cache::ReadCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Definitions);
@@ -2249,23 +2189,6 @@ static void LoadAchDefCache() {
     } catch (...) {}
 }
 
-static bool SaveAchNameIndex(int64_t verifiedAt) {
-    std::lock_guard<std::mutex> saveLock(g_AchNamePersistMutex);
-
-    decltype(g_AchNameIndex) names;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        names=g_AchNameIndex;
-    }
-    nlohmann::json j;
-    for (const auto& [id, name] : names) j[std::to_string(id)] = name;
-
-    const bool saved = AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Names, j, verifiedAt);
-    if (saved && verifiedAt > 0) g_AchNameIndexVerifiedAt = std::max(g_AchNameIndexVerifiedAt.load(), verifiedAt);
-    if (!saved && APIDefs) APIDefs->Log(LOGL_WARNING, "AlterEgo", "Could not save ach_name_index cache");
-    return saved;
-}
-
 static void LoadAchNameIndex() {
     // Reuse existing cached definitions without any network traffic at startup.
     try {
@@ -2293,15 +2216,16 @@ static void LoadAchNameIndex() {
     }
 }
 
-// Call only while holding g_AchMutex. Every accepted API definition also
+// Only the canonical definition owner publishes committed observations. Every accepted definition also
 // contributes its name to the shared catalog, including pinned/category fetches.
-static void PublishAchDefinition(AchDef def) {
-    if (!def.id) return;
-    if (!def.name.empty()) {
-        g_AchNameIndex[def.id] = def.name;
-        g_AchNameIndexReady = true;
+static void PublishAchDefinition(const std::shared_ptr<const AchDef>& def) {
+    if(!def||!def->id)return;
+    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+    if(!def->name.empty()){
+        g_AchNameIndex[def->id]=def->name;
+        g_AchNameIndexReady=true;
     }
-    g_AchDefs[def.id] = std::make_shared<const AchDef>(std::move(def));
+    g_AchDefs[def->id]=def;
     ++g_AchCatalogGeneration;
 }
 
@@ -2491,41 +2415,6 @@ static void FetchActiveSpecialEvent() {
     }, [] { g_AchActiveEventFetching = false; });
 }
 
-static AchDef ParseAchDef(const nlohmann::json& ach) {
-    AchDef d;
-    d.id = ach.value("id", 0u);
-    d.name = ach.value("name", "");
-    d.description = ach.value("description", "");
-    d.requirement = ach.value("requirement", "");
-    d.icon_url = ach.value("icon", "");
-    d.type = ach.value("type", "");
-    if (ach.contains("flags") && ach["flags"].is_array()) {
-        for (const auto& f : ach["flags"]) d.flags.push_back(f.get<std::string>());
-    }
-    if (ach.contains("prerequisites") && ach["prerequisites"].is_array()) {
-        for (const auto& p : ach["prerequisites"]) d.prerequisites.push_back(p.get<uint32_t>());
-    }
-    if (ach.contains("bits") && ach["bits"].is_array()) {
-        for (const auto& bj : ach["bits"]) {
-            AchBitDef b;
-            b.type = bj.value("type", "");
-            b.item_id = bj.value("id", 0u);
-            b.text = bj.value("text", "");
-            d.bits.push_back(std::move(b));
-        }
-    }
-    if (ach.contains("tiers") && ach["tiers"].is_array()) {
-        auto& tiers = ach["tiers"];
-        for (const auto& t : tiers) {
-            d.total_ap += t.value("points", 0);
-        }
-        if (!tiers.empty()) {
-            d.max_count = tiers.back().value("count", 0);
-        }
-    }
-    return d;
-}
-
 static int64_t AchievementRefreshInterval(){
     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
     return !g_AchPinned.empty()?AlterEgo::RefreshEngine::ObjectiveSeconds():AlterEgo::RefreshEngine::BrowseSeconds;
@@ -2536,69 +2425,29 @@ static bool IsAchCategoryRefreshDue(uint32_t catId) {
         g_AchProgressCacheSavedAt,AchievementRefreshInterval());
 }
 
-static void FetchAchCategoryDefs(uint32_t catId, bool automatic) {
-    if (g_AchCatFetching) return;
-    g_AchCatFetching = true;
-
-    std::vector<uint32_t> toFetch;
+static std::vector<uint32_t> AchCategoryIds(uint32_t catId){
+    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+    const auto it=g_AchCategories.find(catId);
+    return it==g_AchCategories.end()?std::vector<uint32_t>{}:it->second.achievements;
+}
+static void RequestCategoryDefinitions(uint32_t catId,bool manual){
+    namespace Definitions=AlterEgo::AchievementDefinitions;
+    const auto ids=AchCategoryIds(catId);
+    Definitions::Request(ids,manual,manual||AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog),
+        manual?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Visible);
+    g_AchCatFetching=Definitions::Pending(ids);
+}
+static void FetchAchCategoryDefs(uint32_t catId,bool automatic){
+    const auto account=GetEffectiveAccountName();
+    const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
+    uint64_t catalogRevision;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        auto it = g_AchCategories.find(catId);
-        if (it == g_AchCategories.end()) { g_AchCatFetching = false; return; }
-        for (uint32_t id : it->second.achievements) {
-            if (g_AchDefs.find(id) == g_AchDefs.end()) toFetch.push_back(id);
-        }
+        if(!g_AchCategories.count(catId))return;
+        catalogRevision=g_AchGroupsGeneration;
     }
-
-    if (toFetch.empty()) {
-        g_AchCatFetching = false;
-        // Even a fully cached definition must route its native API progress query
-        // to the render thread. Startup callers mark it as automatic.
-        g_AchCatProgressAutomatic = automatic;
-        g_AchCatProgressPending = catId;
-        return;
-    }
-
-    auto claim=AlterEgo::RefreshEngine::ClaimIds("achievement-definitions",toFetch,!automatic);
-    if(claim->ids.empty()){g_AchCatFetching=false;g_AchCatProgressAutomatic=automatic;g_AchCatProgressPending=catId;return;}
-    toFetch=claim->ids;
-    AlterEgo::Background::Workers().Launch([toFetch, catId, automatic, claim]() {
-        AlterEgo::ApiActivity::ReasonScope reason(automatic?AlterEgo::ApiActivity::Reason::Visible:AlterEgo::ApiActivity::Reason::Manual);
-        // Fetch in batches of 200
-        for (size_t start = 0; start < toFetch.size(); start += 200) {
-            AlterEgo::Background::Checkpoint();
-            size_t end = std::min(start + 200, toFetch.size());
-            std::string idStr;
-            for (size_t i = start; i < end; i++) {
-                if (i > start) idStr += ",";
-                idStr += std::to_string(toFetch[i]);
-            }
-
-            std::string json = Skinventory::HttpClient::Get(
-                "https://api.guildwars2.com/v2/achievements?ids=" + idStr);
-            if (!json.empty()) {
-                try {
-                    auto j = nlohmann::json::parse(json);
-                    if (j.is_array()) {
-                        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                        for (const auto& ach : j) {
-                            AchDef d = ParseAchDef(ach);
-                            PublishAchDefinition(std::move(d));
-                        }
-                    }
-                } catch (...) {}
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
-
-        AlterEgo::Background::Checkpoint();
-        g_AchCatFetching = false;
-        SaveAchDefCache();
-
-        // Signal render thread; preserve the originating request's policy.
-        g_AchCatProgressAutomatic = automatic;
-        g_AchCatProgressPending = catId;
-    }, [] { g_AchCatFetching = false; });
+    g_AchCategoryDemand=AlterEgo::AchievementNames::CategoryDemand{account,credential.generation,++g_AchDemandRevision,catalogRevision,catId,automatic};
+    RequestCategoryDefinitions(catId,!automatic);
 }
 
 static void SendAchProgressQuery(const std::vector<uint32_t>& ids,bool automatic,uint32_t categoryId){
@@ -2680,111 +2529,54 @@ static void FetchAchNameIndex(bool full = false) {
         g_AchNameIndexStatus = "Checking achievement IDs...";
     }
     AlterEgo::Background::Workers().Launch([full]() {
-        namespace Names = AlterEgo::AchievementNames;
-        bool complete = false, fetchedAny = false;
+        namespace Names=AlterEgo::AchievementNames;
+        namespace Definitions=AlterEgo::AchievementDefinitions;
+        AlterEgo::ApiActivity::ReasonScope reason(full?AlterEgo::ApiActivity::Reason::Manual:AlterEgo::ApiActivity::Reason::Visible);
+        bool complete=false;
         std::string error;
         try {
-            const auto ids = Names::ParseIds(nlohmann::json::parse(Skinventory::HttpClient::Get(
-                "https://api.guildwars2.com/v2/achievements")));
+            const auto ids=Names::ParseIds(AlterEgo::Untrusted::Parse(Skinventory::HttpClient::Get(
+                "https://api.guildwars2.com/v2/achievements"),AlterEgo::Untrusted::PublicApi));
+            AlterEgo::Background::Checkpoint();
             std::vector<uint32_t> pending;
             {
                 std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                pending = Names::Plan(ids, g_AchNameIndex, full);
-                g_AchNameIndexStatus = "Retrieving achievement names (0/" + std::to_string(pending.size()) + ")...";
+                pending=Names::Plan(ids,g_AchNameIndex,full);
+                g_AchNameIndexStatus="Retrieving achievement definitions (0/"+std::to_string(pending.size())+")...";
             }
-            for (size_t start = 0; start < pending.size(); start += Names::BatchSize) {
+            complete=true;
+            for(size_t start=0;start<pending.size();start+=Names::BatchSize){
                 AlterEgo::Background::Checkpoint();
-                const size_t end = std::min(start + Names::BatchSize, pending.size());
-                std::vector<uint32_t> batch(pending.begin() + start, pending.begin() + end);
-                if (!full) {
+                const auto end=std::min(start+Names::BatchSize,pending.size());
+                std::vector<uint32_t> batch(pending.begin()+start,pending.begin()+end);
+                if(!full){
                     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                    batch = Names::Plan(batch, g_AchNameIndex, false);
+                    batch=Names::Plan(batch,g_AchNameIndex,false);
                 }
-                if (batch.empty()) continue;
-                std::string idStr;
-                for (const auto id : batch) {
-                    if (!idStr.empty()) idStr += ",";
-                    idStr += std::to_string(id);
-                }
-                const auto data = nlohmann::json::parse(Skinventory::HttpClient::Get(
-                    "https://api.guildwars2.com/v2/achievements?ids=" + idStr));
-                Names::ValidateBatch(batch, data);
-                std::vector<AchDef> defs;
-                defs.reserve(data.size());
-                for (const auto& row : data) {
-                    auto def = ParseAchDef(row);
-                    if (def.id != Names::Id(row.at("id")) || def.name.empty())
-                        throw std::runtime_error("Invalid achievement definition");
-                    defs.push_back(std::move(def));
-                }
-                AlterEgo::Background::Checkpoint();
+                if(!batch.empty()&&Definitions::Acquire(batch,full,full).size()!=batch.size())complete=false;
                 {
                     std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                    for (auto& def : defs) PublishAchDefinition(std::move(def));
-                    g_AchNameIndexStatus = "Retrieving achievement names (" + std::to_string(end) + "/" + std::to_string(pending.size()) + ")...";
+                    g_AchNameIndexStatus="Retrieving achievement definitions ("+std::to_string(end)+"/"+std::to_string(pending.size())+")...";
                 }
-                fetchedAny = true;
-                if (end < pending.size()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                if(end<pending.size())AlterEgo::Background::Pause(std::chrono::milliseconds(200));
             }
-            complete = true;
-        } catch (const AlterEgo::Background::Cancelled&) {
-            throw;
-        } catch (...) {
-            error = "Achievement name check incomplete; cached names retained. Retry from the Achievements menu.";
-        }
+        }catch(const AlterEgo::Background::Cancelled&){throw;}
+        catch(...){complete=false;}
         AlterEgo::Background::Checkpoint();
-        const int64_t verifiedAt = complete ? std::time(nullptr) : 0;
-        // Save successful batches even if a later request failed. Never advance
-        // the complete-check timestamp for an incomplete response.
-        if (fetchedAny || complete) {
-            const bool saved = fetchedAny ? SaveAchDefCache(verifiedAt) : SaveAchNameIndex(verifiedAt);
-            if (!saved) error = "Could not save achievement catalog; retry from the Achievements menu.";
-        }
+        if(complete){
+            const int64_t verifiedAt=std::time(nullptr);
+            if(AlterEgo::Cache::VerifyAchievementIdIndex(AlterEgo::GW2API::GetDataDirectory(),verifiedAt))
+                g_AchNameIndexVerifiedAt=std::max(g_AchNameIndexVerifiedAt.load(),verifiedAt);
+            else error="Could not save achievement catalog verification; retry from the Achievements menu.";
+        }else error="Achievement definition check incomplete; cached definitions retained. Retry from the Achievements menu.";
         FinishAchNameIndex(error);
-    }, [] { FinishAchNameIndex("Achievement name check cancelled; cached names retained."); });
+    }, [] { FinishAchNameIndex("Achievement definition check cancelled; cached definitions retained."); });
 }
-
 static void FetchPinnedAchDefs() {
-    std::vector<uint32_t> missing;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        for (uint32_t id : g_AchPinned) {
-            if (g_AchDefs.find(id) == g_AchDefs.end()) missing.push_back(id);
-        }
-    }
-    if (missing.empty()) return; // All defs cached; progress queried via OnHoardPongForAch
-
-    auto claim=AlterEgo::RefreshEngine::ClaimIds("achievement-definitions",missing);
-    if(claim->ids.empty())return;
-    missing=claim->ids;
-    AlterEgo::Background::Workers().Launch([missing,claim]() {
-        for (size_t start = 0; start < missing.size(); start += 200) {
-            AlterEgo::Background::Checkpoint();
-            size_t end = std::min(start + 200, missing.size());
-            std::string idStr;
-            for (size_t i = start; i < end; i++) {
-                if (i > start) idStr += ",";
-                idStr += std::to_string(missing[i]);
-            }
-            std::string json = Skinventory::HttpClient::Get(
-                "https://api.guildwars2.com/v2/achievements?ids=" + idStr);
-            if (!json.empty()) {
-                try {
-                    auto j = nlohmann::json::parse(json);
-                    if (j.is_array()) {
-                        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                        for (const auto& ach : j) {
-                            AchDef d = ParseAchDef(ach);
-                            PublishAchDefinition(std::move(d));
-                        }
-                    }
-                } catch (...) {}
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
-        SaveAchDefCache();
-        // Progress queried via OnHoardPongForAch when native API is ready
-    });
+    std::vector<uint32_t> ids;
+    {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);ids=g_AchPinned;}
+    AlterEgo::AchievementDefinitions::Request(ids,false,
+        AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog),AlterEgo::ApiActivity::Reason::Objective);
 }
 
 // DLL entry point
@@ -12415,6 +12207,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     LoadAchGroupCache();
     LoadAchDefCache();
     LoadAchNameIndex();
+    AlterEgo::AchievementDefinitions::Configure(AlterEgo::GW2API::GetDataDirectory(),g_AchDefs,PublishAchDefinition);
 
     // Dye data loads independently. Profession metadata is now fetched lazily
     // when a relevant view needs it: avoid a burst of nine background HTTP
@@ -14605,6 +14398,7 @@ static void PollAchievementDemand() {
 }
 
 static void RenderAchievements() {
+    g_AchBrowserRendered=true;
     PollAchievementDemand();
     // Cached groups remain visible immediately on startup. Refresh stale
     // groups/categories after a daily reset instead of discarding the file.
@@ -14650,32 +14444,35 @@ static void RenderAchievements() {
         // below, after the pinned query finishes. Do not force a global reload.
     }
 
-    // Consume category progress continuation only while idle. Manual
-    // navigation remains enabled even if automatic API refresh is disabled.
-    if (!g_AchProgressFetching) {
-        const uint32_t pendingCat = g_AchCatProgressPending.exchange(0);
-        if (pendingCat > 0) {
-            const bool automatic = g_AchCatProgressAutomatic.exchange(false);
-            if (!automatic || AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Achievements)) {
-                std::vector<uint32_t> ids;
-                {
-                    std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-                    auto it = g_AchCategories.find(pendingCat);
-                    if (it != g_AchCategories.end()) ids = it->second.achievements;
-                }
-                if (!ids.empty() &&
-                    (!automatic || IsAchCategoryRefreshDue(pendingCat)))
-                    SendAchProgressQuery(ids, automatic, pendingCat);
+    // Consume only the current rendered browser's demand, never a worker continuation.
+    if(g_AchCategoryDemand&&!g_AchProgressFetching){
+        const auto demand=*g_AchCategoryDemand;
+        const auto account=GetEffectiveAccountName();
+        const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
+        uint64_t catalogRevision;
+        {std::lock_guard<std::recursive_mutex> lock(g_AchMutex);catalogRevision=g_AchGroupsGeneration;}
+        if(!demand.Matches(account,credential.generation,g_AchDemandRevision,catalogRevision,g_AchSelectedCatId))
+            g_AchCategoryDemand.reset();
+        else{
+            const auto ids=AchCategoryIds(demand.category);
+            if(!AlterEgo::AchievementDefinitions::Pending(ids)){
+                g_AchCategoryDemand.reset();
+                if(!ids.empty()&&(!demand.automatic||IsAchCategoryRefreshDue(demand.category)))
+                    SendAchProgressQuery(ids,demand.automatic,demand.category);
             }
         }
     }
 
-    // Category selection fetches missing public definitions. The global
-    // objective tick owns periodic account-wide progress requests.
-
     AlterEgo::UI::SearchField("achievements", "Search achievements...", g_AchSearchBuf);
 
     if (!g_AchGroupsFetched) return;
+    if(AlterEgo::Search::Words(g_AchSearchBuf).empty()&&g_AchSelectedCatId){
+        static auto lastDefinitionCheck=std::chrono::steady_clock::time_point{};
+        const auto now=std::chrono::steady_clock::now();
+        if(now-lastDefinitionCheck>=std::chrono::seconds(2)){
+            lastDefinitionCheck=now;RequestCategoryDefinitions(g_AchSelectedCatId,false);
+        }
+    }else g_AchCatFetching=false;
 
     // A full native account snapshot needs one request, not one per category.
     if(g_AchNeedsInitialFullLoad&&!g_AchProgressFetching&&!g_AchCatFetching&&
@@ -15306,7 +15103,11 @@ static void RenderAchPopout() {
                      ImGuiWindowFlags_NoCollapse);
     const bool demand=rendered&&g_AchPopoutVisible&&!frame.pinned.empty();
     if(demand){
-        if(!s_popoutHadDemand)FetchPinnedAchDefs();
+        static auto lastDefinitionCheck=std::chrono::steady_clock::time_point{};
+        const auto now=std::chrono::steady_clock::now();
+        if(!s_popoutHadDemand||now-lastDefinitionCheck>=std::chrono::seconds(2)){
+            lastDefinitionCheck=now;FetchPinnedAchDefs();
+        }
         PollAchievementDemand();
     }
     s_popoutHadDemand=demand;
@@ -15860,7 +15661,7 @@ static void PollAchievementCachePersistence() {
         // cache. Fresh queries can be scheduled for the selected account.
         g_AchProgressFetching = false;
         g_AchProgressQueryStartMs = 0;
-        g_AchCatProgressPending = 0;
+        ++g_AchDemandRevision;g_AchCategoryDemand.reset();
     }
 
     // Runs even while the Achievements tab (or the whole addon window) is
@@ -16046,6 +15847,15 @@ static void SyncTabDropdownOpen(TabDropdownState& state, const char* popup) {
 void AddonRender() {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
     if (!callbackLease) return;
+    g_AchBrowserRendered=false;
+    struct AchievementDemandFrameEnd{
+        ~AchievementDemandFrameEnd(){
+            if(!g_AchBrowserRendered){
+                if(g_AchCategoryDemand){++g_AchDemandRevision;g_AchCategoryDemand.reset();}
+                g_AchCatFetching=false;
+            }
+        }
+    } achievementDemandFrameEnd;
     // Track actual rendered demand, including hidden-window early returns.
     // Ending demand only revokes manual retry permission; no retrieval here.
     struct VaultDemandFrame {

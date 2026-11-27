@@ -1,4 +1,5 @@
 #include "UntrustedInput.h"
+#include "AchievementDefinitionOwner.h"
 #include "AccountIdentity.h"
 #include "CallbackLifetime.h"
 #include "BackgroundWorkers.h"
@@ -695,45 +696,15 @@ static std::vector<uint32_t> FetchCategoryIds(uint32_t catId,int64_t requestToke
 // Helper: fetch achievement details (name, bits) from public API
 static std::vector<ClearEntry> FetchAchievementDetails(const std::vector<uint32_t>& ids) {
     std::vector<ClearEntry> entries;
-    if (ids.empty()) return entries;
-
-    std::string idStr;
-    for (size_t i = 0; i < ids.size(); i++) {
-        if (i > 0) idStr += ",";
-        idStr += std::to_string(ids[i]);
+    // Keep reset validation and section retries independent. Until Part 9B.2,
+    // each admitted Clears detail request requires a fresh observation.
+    const auto definitions=AlterEgo::AchievementDefinitions::Acquire(ids,true,true);
+    if(definitions.size()!=ids.size())return entries;
+    for(const auto& def:definitions){
+        ClearEntry entry;entry.id=def->id;entry.name=def->name;entry.max=def->max_count;
+        for(const auto& bit:def->bits)entry.bitNames.push_back(bit.text);
+        entries.push_back(std::move(entry));
     }
-    std::string json = Skinventory::HttpClient::Get(
-        "https://api.guildwars2.com/v2/achievements?ids=" + idStr);
-    if (json.empty()) return entries;
-
-    try {
-        auto j = AlterEgo::Untrusted::Parse(json,AlterEgo::Untrusted::PublicApi);
-        if (j.is_array()) {
-            for (const auto& ach : j) {
-                ClearEntry ce;
-                ce.id = ach.value("id", 0u);
-                ce.name = ach.value("name", "");
-                if (ce.id == 0 || ce.name.empty()) continue;
-
-                // Parse bits (sub-objectives)
-                if (ach.contains("bits") && ach["bits"].is_array()) {
-                    for (const auto& bit : ach["bits"]) {
-                        ce.bitNames.push_back(bit.value("text", ""));
-                    }
-                }
-
-                // Parse tier count from tiers
-                if (ach.contains("tiers") && ach["tiers"].is_array()) {
-                    auto& tiers = ach["tiers"];
-                    if (!tiers.empty()) {
-                        ce.max = tiers.back().value("count", 0);
-                    }
-                }
-
-                entries.push_back(std::move(ce));
-            }
-        }
-    } catch (...) {}
     return entries;
 }
 

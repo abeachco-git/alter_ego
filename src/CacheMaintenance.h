@@ -171,6 +171,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     case CacheOperation::AchievementCatalog:
         db.Exec("DELETE FROM achievement_names;"
                 "DELETE FROM achievement_definitions; DELETE FROM achievement_groups; DELETE FROM achievement_categories;"
+                "DELETE FROM reference_record_watermarks WHERE dataset='achievement-definitions';"
                 "DELETE FROM reference_freshness WHERE dataset IN ('ach_name_index','ach_name_index_verified','ach_defs','ach_groups');");break;
     case CacheOperation::PublicCatalog:
         // Item identities are shared by metadata and Commerce. Invalidate them
@@ -182,7 +183,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
                 "DELETE FROM commerce_skin_items; DELETE FROM commerce_item_name_ids; DELETE FROM commerce_vendor_prices;"
                 "DELETE FROM item_name_aliases; DELETE FROM reference_items; DELETE FROM skins; DELETE FROM native_item_flags; DELETE FROM native_currencies;"
                 "DELETE FROM reference_specializations; DELETE FROM reference_traits; DELETE FROM reference_skills;"
-                "DELETE FROM reference_itemstats; DELETE FROM reference_dyes; DELETE FROM reference_metadata_snapshots; DELETE FROM reference_record_watermarks;"
+                "DELETE FROM reference_itemstats; DELETE FROM reference_dyes; DELETE FROM reference_metadata_snapshots; DELETE FROM reference_record_watermarks WHERE dataset<>'achievement-definitions';"
                 "DELETE FROM reference_freshness WHERE dataset IN ('spec_cache','trait_cache','skill_cache','itemstat_cache','dye_cache',"
                 "'item_cache','item_name_cache','skin_catalog','skin_fashion','commerce_item_map','commerce_prices','commerce_latest_prices');");break;
     default: throw std::runtime_error("Invalid selective operation");

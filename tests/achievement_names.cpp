@@ -39,6 +39,17 @@ int case_achievement_names(int,char**) {
     assert(rejects([&]{ValidateGroupCatalog(groups,brokenCategories);}));
     brokenCategories=categories;brokenCategories[0]["achievements"]=Json::array({5,5});
     assert(rejects([&]{ValidateGroupCatalog(groups,brokenCategories);}));
+    assert(!DefinitionFresh(0,100));
+    assert(DefinitionFresh(100000000,100+DefinitionFreshness-1));
+    assert(!DefinitionFresh(100000000,100+DefinitionFreshness));
+    assert(!DefinitionFresh(101000000,100));
+    CategoryDemand demand{"A",7,9,11,4,false};
+    assert(demand.Matches("A",7,9,11,4));
+    assert(!demand.Matches("B",7,9,11,4));
+    assert(!demand.Matches("A",8,9,11,4));
+    assert(!demand.Matches("A",7,10,11,4));
+    assert(!demand.Matches("A",7,9,12,4));
+    assert(!demand.Matches("A",7,9,11,5));
     assert(Due(0,100,0,false));
     assert(!Due(0,100,200,true));
     assert(!Due(100,100+RefreshInterval-1,0,true));

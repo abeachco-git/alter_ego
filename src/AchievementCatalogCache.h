@@ -1,5 +1,6 @@
 #pragma once
 #include "CacheDatabase.h"
+#include "ReferenceMetadataCache.h"
 #include <chrono>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -22,7 +23,7 @@ inline uint32_t CatalogId(const std::string& key) {
 }
 // JSON is only the transient adapter for the established in-memory projections
 // and legacy files. Every persisted field uses a typed SQL column.
-inline void WriteCatalogRows(Database::Connection& db, AchievementDataset d,const Json& data) {
+inline void WriteCatalogRows(Database::Connection& db, AchievementDataset d,const Json& data,bool replaceAll=true) {
     if(!data.is_object()) throw std::runtime_error("Invalid catalog snapshot");
     if(d==AchievementDataset::Names) {
         db.Exec("DELETE FROM achievement_names");
@@ -33,7 +34,8 @@ inline void WriteCatalogRows(Database::Connection& db, AchievementDataset d,cons
             q.Bind(1,id);q.Bind(2,name);q.Execute();q.Reset();
         }
     } else if(d==AchievementDataset::Definitions) {
-        db.Exec("DELETE FROM achievement_definitions");
+        if(replaceAll) db.Exec("DELETE FROM achievement_definitions");
+        auto remove=db.Prepare("DELETE FROM achievement_definitions WHERE id=?");
         auto q=db.Prepare("INSERT INTO achievement_definitions VALUES(?,?,?,?,?,?,?,?)");
         auto flag=db.Prepare("INSERT INTO achievement_definition_flags VALUES(?,?,?)");
         auto pre=db.Prepare("INSERT INTO achievement_prerequisites VALUES(?,?,?)");
@@ -41,6 +43,7 @@ inline void WriteCatalogRows(Database::Connection& db, AchievementDataset d,cons
         for(const auto& [key,v]:data.items()) {
             const auto id=CatalogId(key);
             if(id==0 || v.at("id").get<uint32_t>()!=id) throw std::runtime_error("Invalid definition identity");
+            if(!replaceAll){remove.Bind(1,id);remove.Execute();remove.Reset();}
             q.Bind(1,id);q.Bind(2,v.value("name",""));q.Bind(3,v.value("description",""));
             q.Bind(4,v.value("requirement",""));q.Bind(5,v.value("icon_url",""));q.Bind(6,v.value("type",""));
             q.Bind(7,v.value("max_count",0));q.Bind(8,v.value("total_ap",0));q.Execute();q.Reset();
@@ -155,6 +158,67 @@ inline bool WriteCatalog(const std::string& root,AchievementDataset d,const Json
         }
         tx.Commit();return true;
     } catch(...) { return false; }
+}
+// Canonical per-ID observations reuse the request-start watermark table.
+inline constexpr const char* AchievementDefinitionWatermark="achievement-definitions";
+inline Json StoreAchievementObservations(Database::Connection& db,const Json& rows,int64_t stamp) {
+    if(!rows.is_object()||rows.empty()||stamp<=0) throw std::runtime_error("Invalid achievement observations");
+    auto watermark=db.Prepare(RecordWatermarkSql);
+    auto names=db.Prepare("INSERT INTO achievement_names VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name");
+    Json accepted=Json::object();
+    for(const auto& [key,row]:rows.items()){
+        const auto id=CatalogId(key);
+        const auto name=row.at("name").get<std::string>();
+        if(!id||row.at("id").get<uint32_t>()!=id||name.empty())throw std::runtime_error("Invalid achievement observation");
+        if(ClaimRecordWatermark(watermark,AchievementDefinitionWatermark,id,stamp)){
+            accepted[key]=row;
+            names.Bind(1,id);names.Bind(2,name);names.Execute();names.Reset();
+        }
+    }
+    if(!accepted.empty()){
+        WriteCatalogRows(db,AchievementDataset::Definitions,accepted,false);
+        auto freshness=db.Prepare("INSERT INTO reference_freshness VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET saved_at=max(saved_at,excluded.saved_at)");
+        for(auto dataset:{AchievementDataset::Definitions,AchievementDataset::Names}){
+            freshness.Bind(1,std::string(DatasetName(dataset)));freshness.Bind(2,stamp/1000000);freshness.Execute();freshness.Reset();
+        }
+    }
+    return accepted;
+}
+inline bool WriteAchievementObservations(const std::string& root,const Json& rows,int64_t stamp,Json& accepted){
+    if(root.empty())return false;
+    try{
+        std::lock_guard<std::mutex> lock(Mutex());
+        const auto path=Storage::Paths(root).Cache();
+        std::filesystem::create_directories(path.parent_path());
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+        Initialize(db);Database::Transaction tx(db);
+        auto committed=StoreAchievementObservations(db,rows,stamp);
+        tx.Commit();accepted=std::move(committed);return true;
+    }catch(...){return false;}
+}
+inline std::map<uint32_t,int64_t> ReadAchievementWatermarks(const std::string& root){
+    std::map<uint32_t,int64_t> out;
+    std::lock_guard<std::mutex> lock(Mutex());
+    const auto path=Storage::Paths(root).Cache();
+    if(!std::filesystem::exists(path))return out;
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Existing);
+    Initialize(db);
+    auto q=db.Prepare("SELECT id,request_at FROM reference_record_watermarks WHERE dataset=?");
+    q.Bind(1,std::string(AchievementDefinitionWatermark));
+    while(q.Step())out.emplace(static_cast<uint32_t>(q.Integer(0)),q.Integer(1));
+    return out;
+}
+inline bool VerifyAchievementIdIndex(const std::string& root,int64_t stamp){
+    if(root.empty()||stamp<=0)return false;
+    try{
+        std::lock_guard<std::mutex> lock(Mutex());
+        const auto path=Storage::Paths(root).Cache();
+        std::filesystem::create_directories(path.parent_path());
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+        Initialize(db);Database::Transaction tx(db);
+        auto q=db.Prepare("INSERT INTO reference_freshness VALUES('ach_name_index_verified',?) ON CONFLICT(dataset) DO UPDATE SET saved_at=max(saved_at,excluded.saved_at)");
+        q.Bind(1,stamp);q.Execute();tx.Commit();return true;
+    }catch(...){return false;}
 }
 // The ordinary names save time is not proof of a complete ArenaNet ID check.
 inline int64_t ReadNameIndexVerification(const std::string& root) {
