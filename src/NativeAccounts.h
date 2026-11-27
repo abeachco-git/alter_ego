@@ -45,6 +45,12 @@ void Shutdown();
 void RenderOptions();
 bool HasLinkedAccounts();
 std::string VerifiedAccountForCharacter(const std::string& character);
+struct CharacterAccessInspection {
+    bool linked=false,verified=false,characters=false,builds=false,inventories=false;
+    uint64_t generation=0;
+    std::string label;
+};
+CharacterAccessInspection InspectCharacterAccess(const std::string& account,const std::string& character);
 uint64_t InventoryGeneration();
 int64_t LooseCount(uint32_t id,const std::string& account,const std::string& character={},int64_t stat=-1);
 void RenderItemAvailability(uint32_t id,const std::string& account,const std::string& character,int64_t stat=-1);

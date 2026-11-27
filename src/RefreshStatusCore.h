@@ -148,7 +148,7 @@ inline std::string Describe(const Scope& s,int64_t now,int64_t sharedLogoutAt=0)
 using CharacterKey=std::pair<std::string,std::string>;
 struct CharacterWork {
     uint64_t generation=0;
-    uint32_t requested=0,verified=0,failed=0;
+    uint32_t requested=0,verified=0,failed=0,active=0;
     Phase phase=Phase::Idle;
     int64_t finished=0;
     std::string detail;
@@ -159,17 +159,20 @@ public:
     void Reset(){rows_.clear();}
     void Queue(const CharacterKey& key,uint64_t generation,uint32_t mask){
         if(!key.first.empty()&&!key.second.empty()&&mask)
-            rows_[key]={generation,mask,0,0,Phase::Queued,0,{}};
+            rows_[key]={generation,mask,0,0,0,Phase::Queued,0,{}};
     }
     void Start(const CharacterKey& key,uint64_t generation,uint32_t mask){
         if(!mask){rows_.erase(key);return;}
         Queue(key,generation,mask);
         auto i=rows_.find(key);if(i!=rows_.end())i->second.phase=Phase::Working;
     }
+    void Activate(const CharacterKey& key,uint32_t mask){
+        auto i=rows_.find(key);if(i!=rows_.end())i->second.active=mask&i->second.requested;
+    }
     void Finish(const CharacterKey& key,uint32_t verified,int64_t now,const std::string& detail={}){
         auto i=rows_.find(key);if(i==rows_.end())return;
         auto& r=i->second;r.verified=verified&r.requested;r.failed=r.requested&~r.verified;
-        r.phase=Phase::Idle;r.finished=now;r.detail=detail;
+        r.phase=Phase::Idle;r.active=0;r.finished=now;r.detail=detail;
     }
     void Stop(int64_t now,const std::string& detail){
         for(auto i=rows_.begin();i!=rows_.end();){

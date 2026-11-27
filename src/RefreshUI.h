@@ -5,19 +5,30 @@
 #include <string>
 #include "imgui.h"
 #include "UIControls.h"
+#include "RefreshStatusCore.h"
 
 // Compact, consistent refresh/status presentation for Alter Ego tabs.
 namespace AlterEgo::RefreshUI {
 
 enum class State { Ready, Working, Success, Error, Waiting };
 
-inline std::string Age(std::time_t stamp) {
-    if (stamp <= 0) return "not available";
-    const auto seconds = std::max<std::time_t>(0, std::time(nullptr) - stamp);
-    if (seconds < 60) return "just now";
-    if (seconds < 3600) return std::to_string(seconds / 60) + "m ago";
-    if (seconds < 86400) return std::to_string(seconds / 3600) + "h ago";
-    return std::to_string(seconds / 86400) + "d ago";
+inline State StatusState(RefreshStatus::Kind kind){
+    using K=RefreshStatus::Kind;
+    switch(kind){
+    case K::Working:case K::Queued:return State::Working;
+    case K::Retry:case K::Disabled:return State::Waiting;
+    case K::Failed:case K::NoAPI:case K::Unverified:case K::Denied:return State::Error;
+    case K::Complete:return State::Success;
+    default:return State::Ready;
+    }
+}
+inline std::string Age(std::time_t stamp,int64_t now=0) {
+    return RefreshStatus::Age(stamp,now?now:std::time(nullptr));
+}
+inline void DiagnosticsTooltip(const char* title,const std::string& body){
+    ImGui::BeginTooltip();
+    UI::TooltipText(title,body.c_str());
+    ImGui::EndTooltip();
 }
 
 inline void Timestamp(std::time_t stamp, const char* source = "data") {
@@ -75,7 +86,8 @@ inline float RowHeight() {
 // The optional ellipsis reuses the Characters multi-character picker.
 inline bool Row(const char* id, std::time_t stamp, const char* source,
                 State state, const std::string& detail, bool disabled = false,
-                bool* moreClicked = nullptr, const char* statusOverride = nullptr, bool timestampDetails = false) {
+                bool* moreClicked = nullptr, const char* statusOverride = nullptr, bool timestampDetails = false,
+                int64_t sampledNow=0,const char* disabledReason=nullptr) {
     ImGui::PushID(id);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
@@ -86,6 +98,8 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     }
     const bool clicked = UI::Button("Refresh", ImVec2(0, buttonH));
     if (disabled) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
+    if(disabled&&disabledReason&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        DiagnosticsTooltip("Refresh unavailable",disabledReason);
     if (moreClicked) {
         ImGui::SameLine(0.0f, 5.0f);
         *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH));
@@ -95,7 +109,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
 
     ImGui::SameLine(0.0f, 9.0f);
     const float statusX = ImGui::GetCursorScreenPos().x;
-    const std::string stampLabel = stamp > 0 ? "Updated " + Age(stamp) : "Not updated";
+    const std::string stampLabel = stamp > 0 ? "Updated " + Age(stamp,sampledNow) : "Not updated";
     const float stampWidth = ImGui::CalcTextSize(stampLabel.c_str()).x;
     const float rightX = start.x + width;
     const float stampX = std::max(statusX, rightX - stampWidth);
@@ -106,6 +120,10 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
                               state == State::Waiting ? "Waiting for API" : "Ready";
     if(statusOverride&&*statusOverride)shortStatus=statusOverride;
     std::string statusText(shortStatus);
+    if(sampledNow&&state==State::Working){
+        constexpr char spinner[]="|/-\\\\";
+        statusText=std::string(1,spinner[static_cast<int>(ImGui::GetTime()*8.0)%4])+" "+statusText;
+    }
     while (!statusText.empty() &&
            ImGui::CalcTextSize(statusText.c_str()).x > maxStatus)
         statusText.pop_back();
@@ -115,8 +133,10 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
         ImVec4(0.58f, 0.58f, 0.58f, 1.0f);
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(statusColor, "%s", statusText.c_str());
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", detail.empty() ? shortStatus : detail.c_str());
+    if (ImGui::IsItemHovered()){
+        if(sampledNow)DiagnosticsTooltip(shortStatus,detail);
+        else ImGui::SetTooltip("%s", detail.empty() ? shortStatus : detail.c_str());
+    }
 
     // Keep timestamp in the same row even when a long API status is reported.
     ImGui::SameLine(0.0f, 0.0f);
@@ -133,10 +153,12 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
 #endif
             char when[64] = {};
             std::strftime(when, sizeof(when), "%b %d, %Y at %I:%M:%S %p", &local);
-            ImGui::SetTooltip("Last successful %s retrieval:\n%s (local time)%s%s", source, when,
+            if(sampledNow)DiagnosticsTooltip("Last confirmed retrieval",std::string(source)+": "+when+" (local time)"+(timestampDetails&&!detail.empty()?"\n\n"+detail:std::string{}));
+            else ImGui::SetTooltip("Last successful %s retrieval:\n%s (local time)%s%s", source, when,
                 timestampDetails&&!detail.empty()?"\n\n":"",timestampDetails?detail.c_str():"");
         } else {
-            ImGui::SetTooltip("No confirmed successful %s retrieval time%s%s", source,
+            if(sampledNow)DiagnosticsTooltip("No confirmed complete retrieval",timestampDetails?detail:std::string(source));
+            else ImGui::SetTooltip("No confirmed successful %s retrieval time%s%s", source,
                 timestampDetails&&!detail.empty()?"\n\n":"",timestampDetails?detail.c_str():"");
         }
     }

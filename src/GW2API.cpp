@@ -435,6 +435,7 @@ namespace AlterEgo {
                     Background::Checkpoint();
                     if(!NativeAccounts::Current(a)){partial=true;break;}
                     if(scope!=S::Core&&!identityVerified){partial=true;continue;}
+                    {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Activate(key,scope);}
                     const auto ticket=attempts.BeginScope(S::Name(scope));
                     bool specVerified=true;
                     scopeError.clear();
@@ -574,6 +575,8 @@ namespace AlterEgo {
                     std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Finish(key,0,CharacterActivity::Now(),"No verified scopes committed");continue;
                 }
                 ch.data_refreshed=std::time(nullptr);
+                {std::lock_guard<std::mutex> lock(s_mutex);S::Mask saving=0;
+                    for(const auto& v:verified)saving|=v.scope;s_character_work.Activate(key,saving);}
                 stage("Saving verified scopes");
                 if(!NativeAccounts::CommitIfCharacterCurrent(a,name,[&]{
                     if(!SaveCharacterData(a.id,name,&ch,a.name))return false;

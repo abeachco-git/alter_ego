@@ -725,6 +725,17 @@ void Shutdown(){
 }
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
 std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}
+CharacterAccessInspection InspectCharacterAccess(const std::string& account,const std::string& character){
+    const auto v=Snapshot();CharacterAccessInspection out;
+    for(const auto& a:v->accounts)if(a.id==account){
+        out.linked=true;out.verified=Active(*v,character)==account;
+        out.characters=a.permissions.count("characters")!=0;out.builds=a.permissions.count("builds")!=0;
+        out.inventories=a.permissions.count("inventories")!=0;out.generation=v->credentialEpoch;
+        if(v->accounts.size()>1)out.label=Display(a);
+        break;
+    }
+    return out;
+}
 namespace {
 bool EnabledAction(const char* label,bool enabled,UI::ButtonRole role=UI::ButtonRole::Standard){
     return UI::AvailableActionButton(label,role,enabled,"Operation unavailable or already in progress.");

@@ -438,7 +438,6 @@ static int g_NavIntentFrames=0;
 static void MarkNavigation(){g_NavIntentFrames=3;}
 void MarkInventoryNavigation(){MarkNavigation();}
 static int g_MainTab = 0;             // Stable session IDs: 0=Characters, 1=Build Library, 2=Skinventory, 3=Vault, 4=Achievements, 5=Compare
-static std::chrono::steady_clock::time_point g_FetchDoneTime{}; // For status message fade-out
 
 // Skinventory UI state
 static int g_SkinActiveTab = 0; // 0 = Browser, 1 = Shopping List
@@ -1450,10 +1449,8 @@ static int g_LibCompareBuildTab = -1;    // -1 follows active build tab
 static int g_LibCompareEquipTab = 0;     // 0 follows active equipment tab
 static bool g_LibCompareShowMatches = false;
 static bool g_LibCompareExactItems = false;
-static bool g_LibCompareRefreshPending = false;
-static std::string g_LibCompareRefreshChar;
-static std::string g_LibCompareRefreshResult;
-static std::chrono::steady_clock::time_point g_LibCompareSuccessUntil{};
+// Exact account/name displayed by the Compare renderer in this frame.
+static AlterEgo::CharacterActivity::Key g_LibCompareRenderedTarget;
 
 // Compute days until next character birthday from ISO date string (e.g. "2013-06-25T...")
 // Returns -1 if the date can't be parsed. Returns 0 on the birthday itself.
@@ -10891,6 +10888,7 @@ static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
 // Dedicated top-level Compare tab. Keep the selection by saved build ID so
 // reordering or deleting entries in Build Library doesn't select a wrong build.
 static void RenderCompareTab() {
+    g_LibCompareRenderedTarget={};
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
     // Live selectors remain useful even with an empty saved-build library.
     // Use the exact character ordering selected on the Characters tab:
@@ -10921,6 +10919,7 @@ static void RenderCompareTab() {
         ImGui::TextDisabled("No retrieved characters. Refresh characters first.");
         return;
     }
+    g_LibCompareRenderedTarget={target->account_name,target->name};
     if (g_LibComparePreviousTarget != target->name || g_LibComparePreviousAccount!=target->account_name) {
         if (!g_LibComparePreviousTarget.empty()) g_LibCompareSavedManual = false;
         g_LibComparePreviousTarget = target->name;
@@ -15357,18 +15356,24 @@ static void RenderSkinventory() {
 }
 
 
-// Render-only projection of the activity scheduler. No independent timers,
-// disk access or requests are introduced by the footer.
-static void DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::CharacterScopes::Mask demand,
-    AlterEgo::RefreshUI::State& state,std::string& detail,std::string& label){
+// Read-only projection of the existing scheduler and exact request evidence.
+struct CharacterFooterInspection {
+    AlterEgo::RefreshStatus::Aggregate aggregate;
+    AlterEgo::RefreshStatus::Kind kind=AlterEgo::RefreshStatus::Kind::NoData;
+    std::string detail;
+    bool busy=false;
+};
+static CharacterFooterInspection DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::CharacterScopes::Mask demand,int64_t now){
     namespace A=AlterEgo::CharacterActivity;
     namespace S=AlterEgo::CharacterScopes;
-    namespace R=AlterEgo::RefreshUI;
+    namespace R=AlterEgo::RefreshStatus;
     using W=A::WaitReason;
-    const auto now=A::Now();
+    CharacterFooterInspection out;
     const bool enabled=AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters);
     const bool linked=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
-    const bool owner=!ch.account_name.empty()&&AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name)==ch.account_name;
+    const auto access=AlterEgo::NativeAccounts::InspectCharacterAccess(ch.account_name,ch.name);
+    const auto request=AlterEgo::GW2API::InspectCharacterRefresh(ch.account_name,ch.name,access.generation);
+    const auto& work=request.work;out.busy=request.busy;
     std::array<A::Inspection,5> rows{};
     {
         std::lock_guard<std::mutex> lock(A::Mutex());
@@ -15376,91 +15381,65 @@ static void DescribeCharacterRefresh(const AlterEgo::Character& ch,AlterEgo::Cha
             {ch.account_name,ch.name},S::Name(s),ch.scope_stamps[S::Index(s)],now,
             g_AutoRefreshOnSpecialization&&S::SpecSensitive(s));
     }
-    const auto duration=[](int64_t seconds){
-        seconds=std::max<int64_t>(0,seconds);
-        return std::to_string(seconds/60)+"m "+std::to_string(seconds%60)+"s";
-    };
-    const auto reason=[](W w)->const char*{
-        switch(w){
-        case W::Due:return "Refresh due";
-        case W::LoginGrace:return "Login propagation grace";
-        case W::ActiveInterval:return "Active refresh interval";
-        case W::Stagger:return "Staggered refresh";
-        case W::LogoutGrace:return "Logout propagation grace";
-        case W::SpecDebounce:return "Specialization change";
-        case W::Retry:return "Retry cooldown";
-        default:return "Current";
-        }
-    };
     const auto scopeLabel=[](S::Scope s)->const char*{
         switch(s){case S::Core:return "Character details";case S::Builds:return "Build tabs";
         case S::Tabs:return "Equipment tabs";case S::Physical:return "Physical equipment";
         default:return "Crafting";}
     };
-    std::string summary=ch.name;
     const auto& core=rows[S::Index(S::Core)];
-    summary+=" - "+std::string(core.active?"Active":"Not active");
-    if(core.lastSeen>0)summary+="\nLast observed: "+R::Age(static_cast<std::time_t>(core.lastSeen));
-    summary+="\nAutomatic character refresh: "+std::string(enabled?"Enabled":"Disabled");
-    if(!linked)summary+="\nNo ready API account";
-    else if(!owner)summary+="\nCharacter ownership not verified; manual refresh required";
-    // Logout propagation is a character-level wait. Report it once, while
-    // retaining any independent scope-specific retry or scheduling constraints.
+    out.detail=(access.label.empty()?std::string{}:access.label+" / ")+ch.name+" - "+(core.active?"Active":"Not active");
+    if(core.lastSeen>0)out.detail+="\nLast observed: "+R::Age(core.lastSeen,now);
+    out.detail+="\nAutomatic character refresh: "+std::string(enabled?"Enabled":"Disabled");
+    const auto scopeAccess=[&](S::Scope s){
+        if(!linked)return R::Access::NoAPI;
+        if(!access.linked||!access.verified)return R::Access::Unverified;
+        if(!access.characters||((s==S::Builds||s==S::Tabs)&&!access.builds)||(s==S::Physical&&!access.inventories))
+            return R::Access::Denied;
+        return R::Access::Allowed;
+    };
     int64_t logoutWait=0;
     for(auto s:S::Ordered)if(demand&s){
         const auto& row=rows[S::Index(s)];
-        if(!row.fresh&&row.eligibility.reason==W::LogoutGrace&&row.eligibility.at>now)
+        if(enabled&&scopeAccess(s)==R::Access::Allowed&&!row.fresh&&
+           row.eligibility.reason==W::LogoutGrace&&row.eligibility.at>now)
             logoutWait=std::max(logoutWait,row.eligibility.at);
     }
-    if(logoutWait)summary+="\nWaiting for API sync after logout: "+duration(logoutWait-now);
-    bool stale=false,due=false;
-    int64_t next=0;W nextReason=W::Current;
+    if(logoutWait)out.detail+="\nWaiting for API sync after logout: "+R::Duration(logoutWait-now);
     for(auto s:S::Ordered)if(demand&s){
-        const auto ix=S::Index(s);const auto& row=rows[ix];const auto& e=row.eligibility;
-        summary+="\n"+std::string(scopeLabel(s))+": "+(row.fresh?"Current":"Stale");
-        const auto stamp=ch.scope_stamps[ix];
-        summary+=" (last success: "+std::string(stamp>0?R::Age(static_cast<std::time_t>(stamp)):"not verified")+")";
-        if(e.reason!=W::Current&&!(logoutWait&&e.reason==W::LogoutGrace&&e.at==logoutWait)){
-            summary+="\n  "+std::string(reason(e.reason));
-            if(e.at>now)summary+=" - "+duration(e.at-now);
+        const auto& row=rows[S::Index(s)];
+        R::Scope scope;scope.success=row.success;scope.attempt=row.attempt;scope.fresh=row.fresh;
+        scope.automatic=enabled;scope.access=scopeAccess(s);scope.eligibility=row.eligibility;
+        scope.error=row.error;scope.failed=!scope.error.empty();
+        if((work.failed&s)&&work.finished>=scope.success){
+            scope.failed=true;if(scope.error.empty())scope.error=work.detail.empty()?"Scope did not complete":work.detail;
         }
-        if(row.attempt>0)summary+="\n  Last attempt: "+R::Age(static_cast<std::time_t>(row.attempt));
-        if(!row.error.empty())summary+="\n  "+row.error;
-        if(!row.fresh){
-            stale=true;due=due||e.due;
-            if(e.at>now&&(!next||e.at<next)){next=e.at;nextReason=e.reason;}
+        if(work.requested&s){
+            if(work.phase==R::Phase::Working)scope.phase=(work.active&s)?R::Phase::Working:R::Phase::Queued;
+            else scope.phase=work.phase;
         }
+        out.aggregate.Add(scope,now);
+        out.detail+="\n"+std::string(scopeLabel(s))+": "+R::Describe(scope,now,logoutWait);
     }
-    if(stale&&state!=R::State::Working){
-        state=R::State::Ready;
-        if(!linked){state=R::State::Error;label="No API";}
-        else if(!owner){state=R::State::Error;label="Unverified";}
-        else if(!enabled){state=R::State::Waiting;label="Auto disabled";}
-        else if(due)label="Refresh due";
-        else if(nextReason==W::Retry){state=R::State::Waiting;label="Retry in "+std::to_string((next-now+59)/60)+"m";}
-        else if(nextReason==W::Stagger)label="Scheduled";
-        else if(nextReason==W::SpecDebounce)label="Spec change";
-        else if(nextReason==W::LoginGrace||nextReason==W::LogoutGrace)label="Awaiting sync";
-        else if(next)label="Scheduled";
-        else label="Stale";
-        if(enabled&&linked&&owner){
-            if(due)summary+="\nAutomatic refresh eligible now";
-            else if(next&&next!=logoutWait)summary+="\nNext eligible refresh: "+duration(next-now);
-        }
+    out.kind=out.aggregate.Status();
+    if(work.phase==R::Phase::Working&&(work.requested&demand))out.kind=R::Kind::Working;
+    if(out.kind==R::Kind::Working||out.kind==R::Kind::Queued){
+        if(work.phase==R::Phase::Working&&!request.message.empty())out.detail+="\nRequest: "+request.message;
+    }else{
+        if(work.finished>0&&now>=work.finished&&now-work.finished<4&&
+           (work.verified&demand)==demand&&out.kind==R::Kind::Ready)out.kind=R::Kind::Complete;
+        if(request.busy)out.detail+="\nAnother character or roster operation is in progress.";
+        else if(linked)out.detail+="\nManual Refresh bypasses ordinary waiting periods.";
     }
-    if(state!=R::State::Working&&linked)summary+="\nManual Refresh bypasses ordinary waiting periods.";
-    if(!detail.empty()&&detail!="Ready"&&detail.rfind("Ready - ",0)!=0)
-        summary+="\nRequest status: "+detail;
-    detail=std::move(summary);
+    return out;
 }
 
 static void RenderCharactersStatusRow() {
-    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
-    const auto& chars = *charsSnapshot;
-    const AlterEgo::Character* selected = nullptr;
+    const auto charsSnapshot=AlterEgo::GW2API::GetCharacters();
+    const auto& chars=*charsSnapshot;
     const int selectedIndex=SelectedCharacterIndex(chars);
-    if(selectedIndex>=0)selected=&chars[selectedIndex];
+    const auto* selected=selectedIndex>=0?&chars[selectedIndex]:nullptr;
     namespace S=AlterEgo::CharacterScopes;
+    namespace R=AlterEgo::RefreshStatus;
     const auto demand=S::Visible(g_SelectedTab);
     if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
     const auto active=AlterEgo::CharacterActivity::ActiveKey();
@@ -15468,100 +15447,59 @@ static void RenderCharactersStatusRow() {
         S::Stamps stamps{};for(const auto& ch:chars)if(ch.account_name==active.first&&ch.name==active.second){stamps=ch.scope_stamps;break;}
         PollDemandCharacter(active.first,active.second,stamps,S::Core);
     }
-    const auto hoard = AlterEgo::GW2API::GetAccountStatus();
-    const bool hoardReady = hoard == AlterEgo::AccountStatus::Ready;
-    const auto fetch = AlterEgo::GW2API::GetFetchStatus();
-    const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
-    AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
-    std::string detail = hoardReady ? "Ready" : "Link an API key in Nexus options";
-    if (busy) {
-        g_FetchDoneTime = std::chrono::steady_clock::time_point{};
-        state = AlterEgo::RefreshUI::State::Working;
-        detail = AlterEgo::GW2API::GetFetchStatusMessage();
-    } else if (fetch == AlterEgo::FetchStatus::Error) {
-        state = AlterEgo::RefreshUI::State::Error;
-        detail = AlterEgo::GW2API::GetFetchStatusMessage();
-    } else if (fetch == AlterEgo::FetchStatus::Success) {
-        if (g_FetchDoneTime == std::chrono::steady_clock::time_point{})
-            g_FetchDoneTime = std::chrono::steady_clock::now();
-        if (std::chrono::steady_clock::now() - g_FetchDoneTime < std::chrono::seconds(4)) {
-            state = AlterEgo::RefreshUI::State::Success;
-            detail = "Refresh complete";
+    const auto now=AlterEgo::CharacterActivity::Now();
+    const bool ready=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
+    CharacterFooterInspection inspection;
+    if(selected)inspection=DescribeCharacterRefresh(*selected,demand,now);
+    else{
+        const auto fetch=AlterEgo::GW2API::GetFetchStatus();
+        inspection.busy=fetch==AlterEgo::FetchStatus::InProgress;
+        inspection.kind=!ready?R::Kind::NoAPI:inspection.busy?R::Kind::Working:
+            fetch==AlterEgo::FetchStatus::Error?R::Kind::Failed:R::Kind::NoData;
+        inspection.detail=ready?AlterEgo::GW2API::GetFetchStatusMessage():"Link an API key in Nexus options";
+    }
+    const auto label=R::Label(inspection.kind,now,inspection.aggregate.retryAt);
+    const char* disabledReason=!ready?"Link or verify an API account in Nexus options.":
+        inspection.busy?"A character or roster request is already in progress.":nullptr;
+    bool more=false;
+    if(AlterEgo::RefreshUI::Row("characters",static_cast<std::time_t>(inspection.aggregate.Timestamp()),"selected character",
+        AlterEgo::RefreshUI::StatusState(inspection.kind),inspection.detail,!ready||inspection.busy,&more,label.c_str(),true,now,disabledReason)){
+        if(selected){
+            AlterEgo::GW2API::RequestCharacterActivityRefresh(selected->account_name,selected->name,demand,true);
+            g_DetailsFetched=false;
+        }else{
+            g_RefreshListFetching=true;AlterEgo::GW2API::RequestCharacterList();
         }
     }
-    std::string statusLabel;
-    if(selected)DescribeCharacterRefresh(*selected,demand,state,detail,statusLabel);
-    bool more = false;
-    if (AlterEgo::RefreshUI::Row("characters", selected ? S::Oldest(selected->scope_stamps,demand) : 0,
-          "selected character", state, detail, !hoardReady || busy, &more,statusLabel.c_str(),true)) {
-        if (selected) {
-            const std::string name = selected->name;
-            AlterEgo::GW2API::RequestCharacterActivityRefresh(selected->account_name,name,demand,true);
-            g_DetailsFetched = false;
-        } else {
-            g_RefreshListFetching = true;
-            AlterEgo::GW2API::RequestCharacterList();
-        }
-    }
-    if (more && hoardReady && !busy) {
-        g_RefreshListFetching = true;
-        AlterEgo::GW2API::RequestCharacterList();
-    }
+    if(more&&ready&&!inspection.busy){g_RefreshListFetching=true;AlterEgo::GW2API::RequestCharacterList();}
 }
 
 static void RenderCompareStatusRow() {
-    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
-    const auto& chars = *charsSnapshot;
-    const AlterEgo::Character* target = nullptr;
-    for (const auto& ch : chars) {
-        if (ch.name == g_LibComparePreviousTarget&&ch.account_name==g_LibComparePreviousAccount) { target = &ch; break; }
+    const auto charsSnapshot=AlterEgo::GW2API::GetCharacters();
+    const AlterEgo::Character* target=nullptr;
+    for(const auto& ch:*charsSnapshot)if(ch.account_name==g_LibCompareRenderedTarget.first&&ch.name==g_LibCompareRenderedTarget.second&&!ch.name.empty()){
+        target=&ch;break;
     }
     namespace S=AlterEgo::CharacterScopes;
+    namespace R=AlterEgo::RefreshStatus;
     if(target){PollDemandCharacter(target->account_name,target->name,target->scope_stamps,S::Compare);
         AlterEgo::NativeAccounts::PollItemDemand(target->account_name);}
-    const auto fetch = AlterEgo::GW2API::GetFetchStatus();
-    const bool busy = fetch == AlterEgo::FetchStatus::InProgress;
-    if (g_LibCompareRefreshPending && !busy) {
-        g_LibCompareRefreshPending = false;
-        if (fetch == AlterEgo::FetchStatus::Success) {
-            g_LibCompareRefreshResult = "Refresh complete";
-            g_LibCompareSuccessUntil = std::chrono::steady_clock::now() + std::chrono::seconds(4);
-        } else if (fetch == AlterEgo::FetchStatus::Error) {
-            g_LibCompareRefreshResult = "Refresh failed: " +
-                AlterEgo::GW2API::GetFetchStatusMessage();
-        } else {
-            g_LibCompareRefreshResult = "Refresh stopped before completion";
-        }
+    const auto now=AlterEgo::CharacterActivity::Now();
+    const bool ready=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
+    CharacterFooterInspection inspection;
+    if(target)inspection=DescribeCharacterRefresh(*target,S::Compare,now);
+    else{
+        inspection.busy=AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress;
+        inspection.kind=ready?R::Kind::NoData:R::Kind::NoAPI;
+        inspection.detail=ready?"No retrieved character selected":"Link or verify an API account in Nexus options.";
+        if(inspection.busy)inspection.detail+="\nA character or roster operation is in progress.";
     }
-    AlterEgo::RefreshUI::State state = AlterEgo::RefreshUI::State::Ready;
-    std::string detail = target ? "Ready - " + target->name : "No retrieved character selected";
-    if (busy) {
-        state = AlterEgo::RefreshUI::State::Working;
-        detail = AlterEgo::GW2API::GetFetchStatusMessage();
-    } else if (target && target->name == g_LibCompareRefreshChar &&
-               (g_LibCompareRefreshResult.find("failed") != std::string::npos ||
-                g_LibCompareRefreshResult.find("stopped") != std::string::npos)) {
-        state = AlterEgo::RefreshUI::State::Error;
-        detail = g_LibCompareRefreshResult;
-    } else if (target && target->name == g_LibCompareRefreshChar &&
-               std::chrono::steady_clock::now() < g_LibCompareSuccessUntil) {
-        state = AlterEgo::RefreshUI::State::Success;
-        detail = "Refresh complete";
-    }
-    std::string statusLabel;
-    if(target)DescribeCharacterRefresh(*target,S::Compare,state,detail,statusLabel);
-    else if(!busy){
-        if(AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready){
-            state=AlterEgo::RefreshUI::State::Error;statusLabel="No API";detail="Link or verify an API account in Nexus options.";
-        }else{state=AlterEgo::RefreshUI::State::Ready;statusLabel="No character";}
-    }
-    if (AlterEgo::RefreshUI::Row("compare", target ? S::Oldest(target->scope_stamps,S::Compare) : 0,
-            "character build/equipment", state, detail, busy || !target || AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready,nullptr,statusLabel.c_str(),true)) {
-        const std::string name = target->name;
-        g_LibCompareRefreshChar = name;
-        g_LibCompareRefreshPending = true;
-        g_LibCompareRefreshResult.clear();
-        AlterEgo::GW2API::RequestCharacterActivityRefresh(target->account_name,name,S::Compare,true);
+    const auto label=target?R::Label(inspection.kind,now,inspection.aggregate.retryAt):ready?std::string("No character"):R::Label(inspection.kind);
+    const char* disabledReason=!ready?"Link or verify an API account in Nexus options.":
+        !target?"Select a retrieved character.":inspection.busy?"A character or roster request is already in progress.":nullptr;
+    if(AlterEgo::RefreshUI::Row("compare",static_cast<std::time_t>(inspection.aggregate.Timestamp()),"character build/equipment",
+        AlterEgo::RefreshUI::StatusState(inspection.kind),inspection.detail,inspection.busy||!target||!ready,nullptr,label.c_str(),true,now,disabledReason)){
+        if(target)AlterEgo::GW2API::RequestCharacterActivityRefresh(target->account_name,target->name,S::Compare,true);
     }
 }
 
