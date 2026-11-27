@@ -145,6 +145,7 @@ static std::chrono::steady_clock::time_point g_VaultSuccessUntil{};
 // These per-type retry states and the staged responses are protected by
 // g_ClearsMutex: the API worker delivers Vault responses from a worker thread.
 static long long g_VaultRetryAtMs = 0;
+static AlterEgo::AutoRefreshPolicy::RetryIntent g_VaultRetryIntent;
 static bool g_VaultRetryNeeded[3] = {};
 static int g_VaultRetryAttempts[3] = {};
 static long long g_VaultRequestStartMs = 0;
@@ -572,6 +573,7 @@ static void FetchVaultData(bool skipClaimedSections) {
         if (!request[0] && !request[1] && !request[2]) return;
         generation=++g_VaultGeneration;
         g_VaultRequestCredential=credential;
+        g_VaultRetryIntent.manual=!skipClaimedSections;
         g_VaultRequestSeasonRevision=g_VaultSeasonRevision;
         g_VaultFetching = true;
         g_VaultInitialAttempted = true;
@@ -2364,8 +2366,11 @@ static void RenderGw2ServerDay() {
 
 static void RenderVaultTab(const std::string& dailyResetStr, const std::string& weeklyResetStr)
 {
-    // Handle retry/timeout on the render thread; callbacks never call Events_Raise.
-    std::vector<uint8_t> dueRetryTypes;
+    // Only the rendered Vault page dispatches deferred rate-limit retries.
+    // A disabled automatic request is settled through the existing failure
+    // path, preserving other sections and allowing a subsequent manual click.
+    std::vector<uint8_t> dueRetryTypes, suppressedRetryTypes;
+    bool retryManual=false;
     std::string retryAccount;
     AlterEgo::NativeAccounts::LinkedAccount retryCredential;
     uint64_t retryGeneration=0;
@@ -2387,23 +2392,29 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
                 }
                 g_VaultStatusMessage = "Vault refresh timed out waiting for: " + missing;
                 for(uint8_t i=0;i<3;++i)if(!g_VaultTerminal[i])g_VaultSectionRetry[i].Fail(now,"Request timed out");
-            } else if (g_VaultRetryAtMs != 0 && now >= g_VaultRetryAtMs) {
-                for (uint8_t i = 0; i < 3; ++i) {
-                    if (g_VaultRetryNeeded[i] && !g_VaultResponsesOK[i]) {
-                        g_VaultRetryNeeded[i] = false;
-                        dueRetryTypes.push_back(i);
+            } else if (g_VaultRetryAtMs != 0) {
+                const bool allowed=g_VaultRetryIntent.Allowed(true,AlterEgo::AutoRefreshPolicy::Dataset::Vault);
+                if (!allowed || now >= g_VaultRetryAtMs) {
+                    for (uint8_t i = 0; i < 3; ++i) {
+                        if (g_VaultRetryNeeded[i] && !g_VaultResponsesOK[i]) {
+                            g_VaultRetryNeeded[i] = false;
+                            (allowed?dueRetryTypes:suppressedRetryTypes).push_back(i);
+                        }
                     }
+                    retryAccount = g_VaultRequestAccount;
+                    retryCredential=g_VaultRequestCredential;retryGeneration=g_VaultGeneration;
+                    retryManual=g_VaultRetryIntent.manual;
+                    g_VaultRetryAtMs = 0;
+                    if(allowed)g_VaultStatusMessage = "Retrying Vault objectives...";
                 }
-                retryAccount = g_VaultRequestAccount;
-                retryCredential=g_VaultRequestCredential;retryGeneration=g_VaultGeneration;
-                g_VaultRetryAtMs = 0;
-                g_VaultStatusMessage = "Retrying Vault objectives...";
             }
         }
     }
+    for (uint8_t type : suppressedRetryTypes)
+        ApplyVaultSection(type,retryAccount,retryGeneration,0,{},"Rate limited; automatic refresh disabled");
     for (uint8_t type : dueRetryTypes) {
         if (!g_VaultFetching.load()) break;
-        RequestVaultSection(type,retryAccount,retryCredential,retryGeneration);
+        RequestVaultSection(type,retryAccount,retryCredential,retryGeneration,retryManual);
     }
 
     // Account switches invalidate the old snapshot and cancel pending retries.
@@ -3292,6 +3303,11 @@ static void RenderClearsShared(bool showVault) {
     else
         RenderClearsTabContent(dailyResetStr, weeklyResetStr);
 }
+void EndVaultViewDemand() {
+    std::lock_guard<std::mutex> lock(g_ClearsMutex);
+    g_VaultRetryIntent.EndDemand();
+}
+
 void RenderVault() { RenderClearsShared(true); }
 void RenderClears() { RenderClearsShared(false); }
 
@@ -3350,7 +3366,7 @@ void SyncCompletionAccountCaches() {
         g_VaultFetching = false;
         g_VaultFetched = false;
         g_VaultInitialAttempted = false;
-        g_VaultRequestAccount.clear();g_VaultRequestCredential={};
+        g_VaultRequestAccount.clear();g_VaultRequestCredential={};g_VaultRetryIntent.EndDemand();
         g_VaultRetryAtMs = 0;
         g_VaultRequestStartMs = 0;
         g_VaultDailyRolloverPending = false;

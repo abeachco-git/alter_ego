@@ -3,6 +3,7 @@
 #include "../src/CharacterScopes.h"
 #include "../src/RefreshStatusCore.h"
 #include "../src/ApiActivity.h"
+#include "../src/AutoRefreshPolicy.h"
 #include <cassert>
 #include <ctime>
 #include <vector>
@@ -29,6 +30,26 @@ int case_section_refresh(int, char**) {
     assert(!F::Due(now-900,0,now,900,false,0,30));
     assert(F::Due(now-930,0,now,900,false,0,30));
     assert(F::Offset("account/vault/0")<=45);
+    {
+        namespace P=AlterEgo::AutoRefreshPolicy;
+        const auto oldEnabled=P::Enabled();const auto oldMask=P::GetMask();
+        P::SetEnabled(true);P::SetMask(P::AllMask);
+        P::RetryIntent automatic,manual{true};
+        assert(automatic.Allowed(true,P::Dataset::Vault));
+        assert(!automatic.Allowed(false,P::Dataset::Vault));
+        assert(!manual.Allowed(false,P::Dataset::Vault));
+        P::SetEnabled(false);
+        assert(!automatic.Allowed(true,P::Dataset::Vault));
+        assert(manual.Allowed(true,P::Dataset::Vault));
+        manual.EndDemand();
+        assert(!manual.Allowed(true,P::Dataset::Vault)); // reopen is ordinary eligibility
+        P::SetEnabled(true);P::SetIncluded(P::Dataset::Vault,false);
+        assert(!automatic.Allowed(true,P::Dataset::Vault));
+        manual.manual=true;assert(manual.Allowed(true,P::Dataset::Vault));
+        P::SetIncluded(P::Dataset::Vault,true);
+        manual.EndDemand();assert(manual.Allowed(true,P::Dataset::Vault));
+        P::SetEnabled(oldEnabled);P::SetMask(oldMask);
+    }
     // Ordinary retry is independent of the eligibility predicate. A newer
     // confirmed success supersedes the failed attempt; equal seconds are
     // conservative until the owner clears its attempt on success.

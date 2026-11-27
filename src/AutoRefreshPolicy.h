@@ -1,7 +1,7 @@
 #pragma once
 // Single, thread-safe policy for background/automatic API refresh requests.
-// Manual refresh actions and the completion/retry phases of an already-started
-// manual request remain independent of this option.
+// Manual refresh actions bypass the automatic policy, but a pending retry
+// still requires current view demand. Leaving the view ends manual retry consent.
 #include <atomic>
 #include <cstdint>
 #include <array>
@@ -38,4 +38,12 @@ inline bool AllowRequest(bool userInitiated,Dataset d){return userInitiated||Ena
 inline bool AllowRequest(bool userInitiated) {
     return userInitiated || Enabled();
 }
+// A manual click authorizes retries only while the initiating view stays open.
+// Ordinary auto policy applies if the user later returns. This does not cancel
+// already-dispatched work or change the domain's retry timing.
+struct RetryIntent {
+    bool manual=false;
+    void EndDemand(){manual=false;}
+    bool Allowed(bool visible,Dataset d) const {return visible&&AllowRequest(manual,d);}
+};
 } // namespace AlterEgo::AutoRefreshPolicy

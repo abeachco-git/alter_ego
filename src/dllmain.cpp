@@ -15794,6 +15794,16 @@ static void SyncTabDropdownOpen(TabDropdownState& state, const char* popup) {
 void AddonRender() {
     AlterEgo::Callbacks::Gate::Lease callbackLease(AlterEgo::Callbacks::Runtime());
     if (!callbackLease) return;
+    // Track actual rendered demand, including hidden-window early returns.
+    // Ending demand only revokes manual retry permission; no retrieval here.
+    struct VaultDemandFrame {
+        bool visible=false;
+        ~VaultDemandFrame(){
+            static bool wasVisible=false;
+            if(wasVisible&&!visible)EndVaultViewDemand();
+            wasVisible=visible;
+        }
+    } vaultDemand;
     const auto toggles=g_UiToggles.Take();
     if(toggles&1){
         g_WindowVisible=!g_WindowVisible;
@@ -16939,6 +16949,7 @@ void AddonRender() {
             HandleTabDropdown(vaultMenu, accountTabBar, beforeVault, vaultId,
                 ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
             if (vaultVisible) {
+                vaultDemand.visible=g_WindowVisible;
                 g_MainTab = 3; // Keep original session tab ID.
                 ImGui::BeginChild("##vault_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
                 RenderVault();
