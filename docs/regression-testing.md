@@ -77,7 +77,7 @@ Native editing tests also exercise explicit private-editor reuse, stale source a
 
 Reference metadata coverage verifies typed skill, trait, specialization, item-stat and dye round trips, ordered child records, malformed/duplicate-row rollback, older snapshot rejection, legacy import and native precedence.
 
-Item metadata regression coverage includes v6 canonical name sharing with Commerce, detail completeness, alias migration and precedence, stale-write rejection and duplicate-row rollback.
+Item metadata regression coverage includes v6 canonical name sharing with Commerce, detail completeness, alias migration and precedence, stale-write rejection and duplicate-row rollback. The shared item exchange fixture (`database_core`) tests direct/Inventory/bootstrap overlap with one transport, raw level/restrictions and original request stamps, initial versus incremental retention, late joins during publication, incremental release, partial coverage rejection for catalog completion, duplicate identity rejection, abandoned ownership and failed persistence/cooldown/manual recovery. A satisfied in-memory recheck avoids redundant admission. Native Inventory tests verify complete detail without binding flags remains incomplete for Inventory. Live: overlap a discovery or upgrade refresh, Character/Loadout item tooltips and Inventory enrichment; verify one HTTP observation for shared admitted IDs, exact catalog coverage, preserved skin/cultural vendor mapping, unchanged market price TTL/fees, partial failure retention and no initial ordinary-item cache expansion. No runtime request-count or performance claim from offline fixtures alone.
 
 Storage diagnostics tests cover missing paths without creation, read-only database access, identity rejection, record counts, schema and artwork size.
 
@@ -268,7 +268,7 @@ Cancellation finalizer regression verifies finish-once, no persistence on stop, 
 
 API diagnostics regression distinguishes cancelled vs failed/active counts; metadata transport carries an actual-send marker.
 
-Native Inventory regression covers native vs delayed direct item observations, flag freshness across producers, and stale currency definition rejection.
+Native Inventory regression covers native vs delayed direct item observations, flag freshness across producers, stale currency definition rejection and worker-side detail/binding completeness. The public currency fixture overlaps distinct missing currency demands, verifies one catalog transport, known-empty icon evidence and subsequent reuse. Live: refresh wallets across accounts with a missing currency and an empty icon; verify separate account balances, no duplicate catalog query, retained prior verified definitions on failure and correct currency/item distinctions.
 
 See [Architecture](architecture.md#unified-freshness-engine) for the current reset request/acceptance policy.
 
