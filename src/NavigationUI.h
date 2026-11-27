@@ -8,7 +8,7 @@
 struct NavigationSnapshot {
     int page=0,collection=0,sub=0,buildTab=0,equipTab=0,category=0,sort=0,view=0;
     uint32_t record=0,achievement=0;
-    std::string id,kind,second,search,account,compareTarget;
+    std::string id,kind,second,search,account,compareTarget,compareAccount;
     bool first=false,other=false,manual=false;
     std::set<std::string> modes,componentKinds;
     Skinventory::SkinFilters skins;
@@ -62,9 +62,9 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
             s.search=g_AchSearchBuf;s.first=g_AchHideEmptyCats;s.other=g_AchHideCompletedCats;break;
         case 7:s.inventory=AlterEgo::NativeAccounts::CaptureInventoryNavigation();s.sub=s.inventory.subview;s.record=s.inventory.item;s.kind=s.inventory.currency?"currency":"item";
             if(s.sub==0){s.id=s.inventory.grouped?"groups":"list";s.second=s.inventory.grouped?s.inventory.group:std::string{};}break;
-        case 5:s.id=g_LibCompareChar;s.manual=g_LibCompareSavedManual;
+        case 5:s.id=g_LibCompareChar;s.kind=g_LibCompareAccount;s.manual=g_LibCompareSavedManual;
             if(s.manual)s.second=g_LibCompareBuildId;
-            s.compareTarget=g_LibComparePreviousTarget;s.buildTab=g_LibCompareBuildTab;s.equipTab=g_LibCompareEquipTab;
+            s.compareTarget=g_LibComparePreviousTarget;s.compareAccount=g_LibComparePreviousAccount;s.buildTab=g_LibCompareBuildTab;s.equipTab=g_LibCompareEquipTab;
             s.first=g_LibCompareShowMatches;s.other=g_LibCompareExactItems;break;
     }
     if(withScroll){
@@ -135,8 +135,8 @@ static void RestoreNavigation(const NavigationSnapshot& s){
             break;
         }
         case 7:AlterEgo::NativeAccounts::RestoreInventoryNavigation(s.inventory);break;
-        case 5:g_LibCompareChar=s.id;g_LibCompareBuildId=s.second;
-            g_LibCompareSavedManual=s.manual;g_LibComparePreviousTarget=s.compareTarget;
+        case 5:g_LibCompareChar=s.id;g_LibCompareAccount=s.kind;g_LibCompareBuildId=s.second;
+            g_LibCompareSavedManual=s.manual;g_LibComparePreviousTarget=s.compareTarget;g_LibComparePreviousAccount=s.compareAccount;
             g_LibCompareBuildTab=s.buildTab;g_LibCompareEquipTab=s.equipTab;
             g_LibCompareShowMatches=s.first;g_LibCompareExactItems=s.other;break;
     }

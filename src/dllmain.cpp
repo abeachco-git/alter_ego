@@ -33,6 +33,7 @@
 #include "GW2API.h"
 #include "FashionModel.h"
 #include "BuildCompareCore.h"
+#include "CharacterLoadoutExpectation.h"
 #include "ComposableSemantics.h"
 #include "InfusionMatchCore.h"
 #include "InfusionTotalsCore.h"
@@ -1440,6 +1441,9 @@ static nlohmann::json CaptureFormSnapshot(){
 // Saved vs. retrieved character comparison state (never mutates a saved build).
 static std::string g_LibCompareBuildId;
 static std::string g_LibCompareChar; // empty = active character (auto)
+static std::string g_LibCompareAccount,g_LibComparePreviousAccount;
+static AlterEgo::CharacterLoadout::Preferences g_CharacterLoadoutPreferences;
+static uint64_t g_CharacterLoadoutRevision=0;
 static bool g_LibCompareSavedManual = false;
 static std::string g_LibComparePreviousTarget;
 static int g_LibCompareBuildTab = -1;    // -1 follows active build tab
@@ -1635,6 +1639,7 @@ void CopyToClipboard(const std::string& text) {
 static bool SaveSettings() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "settings.json");
     nlohmann::json j;
+    j["character_loadout_expectations"]=g_CharacterLoadoutPreferences.Encode();
     j["show_qa_icon"] = g_ShowQAIcon;
     j["compact_char_list"] = g_CompactCharList;
     j["show_crafting_icons"] = g_ShowCraftingIcons;
@@ -1687,6 +1692,8 @@ static void LoadSettings() {
     auto getFloat = [&](const char* k, float& dst) {
         if (j.contains(k) && j[k].is_number()) dst = j[k].get<float>();
     };
+    if(j.contains("character_loadout_expectations"))
+        g_CharacterLoadoutPreferences.Decode(j["character_loadout_expectations"]);
     getBool("show_qa_icon", g_ShowQAIcon);
     getBool("compact_char_list", g_CompactCharList);
     getBool("show_crafting_icons", g_ShowCraftingIcons);
@@ -9069,7 +9076,9 @@ static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
     g_LibCompareBuildId = build.id;
     g_LibCompareSavedManual = true;
     g_LibCompareChar = build.source_character;
+    g_LibCompareAccount=AlterEgo::GW2API::GetAccountForCharacter(build.source_character);
     g_LibComparePreviousTarget = build.source_character;
+    g_LibComparePreviousAccount=g_LibCompareAccount;
     MarkNavigation();
     g_SwitchToCompare = true;
 }
@@ -10358,11 +10367,12 @@ static const AlterEgo::Character* ResolveComparisonCharacter(
     if (matches.empty()) return nullptr;
     if (!g_LibCompareChar.empty()) {
         for (const auto* ch : matches)
-            if (ch->name == g_LibCompareChar) return ch;
-        g_LibCompareChar.clear(); // stale character override
+            if (ch->name == g_LibCompareChar && ch->account_name==g_LibCompareAccount) return ch;
+        g_LibCompareChar.clear();g_LibCompareAccount.clear(); // stale character override
     }
+    const auto account=AlterEgo::GW2API::GetCurrentAccountName();
     for (const auto* ch : matches)
-        if (ch->name == g_CurrentCharName) return ch;
+        if (!account.empty()&&ch->name == g_CurrentCharName&&ch->account_name==account) return ch;
     return matches.front();
 }
 
@@ -10409,7 +10419,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         AlterEgo::BuildComparison result;
         nlohmann::json componentDoc = nlohmann::json::object();
         std::string savedBuildId;
-        std::string characterName;
+        std::string characterName,characterAccount;
         uint64_t characterRevision = 0;
         uint64_t libraryRevision = 0;
         int buildTab = -1;
@@ -10424,7 +10434,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     const uint64_t libraryRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
     const auto now = std::chrono::steady_clock::now();
     if (cache.savedBuildId != saved.id ||
-        cache.characterName != character->name ||
+        cache.characterName != character->name || cache.characterAccount!=character->account_name ||
         cache.characterRevision != characterRevision ||
         cache.libraryRevision != libraryRevision ||
         cache.buildTab != displayedBuildTab ||
@@ -10437,6 +10447,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         AlterEgo::GW2API::GetComposableLoadouts(cache.componentDoc);
         cache.savedBuildId = saved.id;
         cache.characterName = character->name;
+        cache.characterAccount=character->account_name;
         cache.characterRevision = characterRevision;
         cache.libraryRevision = libraryRevision;
         cache.buildTab = displayedBuildTab;
@@ -10690,150 +10701,164 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
 
 }
 
-// Only the logged-in character is compared against saved builds, and only
-// when the native API character data or Build Library revision changes. We reuse
-// the same comparison rules as the dedicated Compare tab.
-struct ActiveSavedBuildMatch {
-    std::string name;
-    std::string skillDifferences;
-    std::string infusionWarning;
-    bool build = false;
-    bool checkUtilities = false;
-    size_t matchingBuilds = 0;
-    AlterEgo::GearMatchStatus gear = AlterEgo::GearMatchStatus::NotVerified;
+// Expected identity, actual recognition and evidence are distinct. Both
+// Characters and automatic Compare consume the same ranked candidate results.
+static const AlterEgo::SavedBuild* FindCompatibleLoadout(const AlterEgo::Character& ch,const std::string& id){
+    for(const auto& saved:AlterEgo::GW2API::GetSavedBuilds())
+        if(saved.id==id&&saved.profession==ch.profession)return &saved;
+    return nullptr;
+}
+static AlterEgo::CharacterLoadout::Choice ExpectedLoadout(const AlterEgo::Character& ch){
+    using namespace AlterEgo::CharacterLoadout;
+    if(!ValidKey({ch.account_name,ch.name}))return {};
+    return Resolve(g_CharacterLoadoutPreferences.Get({ch.account_name,ch.name}),[&](const auto& id){
+        return FindCompatibleLoadout(ch,id)!=nullptr;
+    });
+}
+static void SetExpectedLoadout(const AlterEgo::Character& ch,const AlterEgo::CharacterLoadout::Choice& choice){
+    const auto key=std::make_pair(ch.account_name,ch.name);
+    const auto old=g_CharacterLoadoutPreferences.Get(key);
+    if(old==choice)return;
+    if(choice.mode==AlterEgo::CharacterLoadout::Mode::Explicit&&!FindCompatibleLoadout(ch,choice.id))return;
+    if(!g_CharacterLoadoutPreferences.Set(key,choice))return;
+    if(!SaveSettings()){
+        g_CharacterLoadoutPreferences.Set(key,old);
+        if(APIDefs)APIDefs->GUI_SendAlert("Could not save Loadout assignment.");
+        return;
+    }
+    ++g_CharacterLoadoutRevision;
+}
+struct RankedRecognition {
+    std::string candidateId,matchedId;
+    AlterEgo::ConfigurationHealth health;
+    bool source=false,credible=false;
 };
-static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch() {
-    static ActiveSavedBuildMatch cached;
-    static std::string cachedCharacter;
-    static uint64_t cachedCharacterRevision = 0;
-    static uint64_t cachedLibraryRevision = 0;
-    const uint64_t charRevision = AlterEgo::GW2API::GetCharacterDataRevision();
-    const uint64_t libRevision = AlterEgo::GW2API::GetBuildLibraryRevision();
-    if (cachedCharacter == g_CurrentCharName &&
-        cachedCharacterRevision == charRevision &&
-        cachedLibraryRevision == libRevision) return cached;
-    cachedCharacter = g_CurrentCharName;
-    cachedCharacterRevision = charRevision;
-    cachedLibraryRevision = libRevision;
-    cached = {};
-    if (g_CurrentCharName.empty()) return cached;
-    const auto character = AlterEgo::GW2API::GetCharacter(g_CurrentCharName);
-    if (!character || character->build_tabs.empty()) return cached;
-    const int activeIndex = GetActiveBuildIndex(*character);
-    if (activeIndex < 0) return cached;
-    const auto& build = character->build_tabs[activeIndex];
-    const int equipTab = GetActiveEquipmentTab(*character);
-    size_t equippedCount = 0;
-    for (const auto& item : character->equipment)
-        if (AlterEgo::IsEquipmentInCapturedBuild(item.slot, item.tab, equipTab))
-            ++equippedCount;
-
-    AlterEgo::GearMatchCandidate best;
-    size_t bestInfusionWarnings = static_cast<size_t>(-1);
-    for (const auto& saved : AlterEgo::GW2API::GetSavedBuilds()) {
-        if (saved.profession != character->profession) continue;
-        const auto result = CalculateSavedVsLiveComparison(
-            saved, *character, build, equipTab, false);
-        const auto templateStatus = AlterEgo::ClassifyTemplateMatch(result);
-        if (templateStatus == AlterEgo::TemplateMatchStatus::Different) continue;
-        const bool skillsDiffer = templateStatus == AlterEgo::TemplateMatchStatus::SkillsDiffer;
-        bool requiredDataMissing = false;
-        size_t checkedGearFields = 0, differentGearFields = 0, missingItems = 0;
-        for (const auto& row : result.Rows()) {
-            // Aggregate totals are warnings only; never affect primary matching.
-            if (!AlterEgo::IsCharacterEquipmentMatchGroup(row.group)) continue;
-            if (!row.verified) {
-                requiredDataMissing = true;
-                continue;
-            }
-            ++checkedGearFields;
-            if (!row.matches) {
-                ++differentGearFields;
-                if (row.group == "Equipment") ++missingItems;
-            }
-        }
-        if (!skillsDiffer) ++cached.matchingBuilds;
-
-        // The comparison can skip fields when GW2 API item information is
-        // unavailable. A skipped recorded field must not establish a full match.
-        for (const auto& entry : saved.gear) {
-            const auto& slot = entry.first;
-            const auto& gs = entry.second;
-            const auto* eq = FindEquipment(*character, slot, equipTab);
-            if (!eq) continue; // recorded missing slot already counted above
-            if (gs.item_id != 0 && eq->id == 0) {
-                ++missingItems;
-                continue;
-            }
-            if (gs.stat_id != 0 || !gs.stat_name.empty()) {
-                uint32_t liveStat = eq->stat_id;
-                if (!liveStat && eq->id) {
-                    const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
-                    if (info && info->details.contains("infix_upgrade") &&
-                        info->details["infix_upgrade"].contains("id") &&
-                        info->details["infix_upgrade"]["id"].is_number_unsigned())
-                        liveStat = info->details["infix_upgrade"]["id"].get<uint32_t>();
-                }
-                if (!liveStat) requiredDataMissing = true;
-            }
-            if (!gs.weapon_type.empty()) {
-                const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
-                if (!info || !info->details.contains("type") ||
-                    !info->details["type"].is_string()) requiredDataMissing = true;
-            }
-            if (slot == "Relic" && !saved.relic_name.empty() && saved.relic_id == 0) {
-                const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
-                if (!info) requiredDataMissing = true;
-            }
-        }
-
-        AlterEgo::GearMatchCandidate candidate;
-        candidate.status = AlterEgo::ClassifyGearMatch(
-            !saved.gear.empty(), equippedCount > 0,
-            checkedGearFields, differentGearFields == 0,
-            saved.gear.size() == equippedCount, missingItems, requiredDataMissing);
-        candidate.differingFields = differentGearFields;
-        candidate.missingItems = missingItems;
-        candidate.comparedFields = checkedGearFields;
-        candidate.savedSlots = saved.gear.size();
-        // Reuse Compare's result for a secondary warning and last-resort
-        // tie-break. Never change the gear match classification for infusions.
-        size_t shortfalls = 0;
-        std::string infusionText;
-        for (const auto& row : result.Rows()) {
-            if (row.group != "Infusion totals" || !row.verified || row.matches) continue;
-            ++shortfalls;
-            if (!infusionText.empty()) infusionText += "; ";
-            infusionText += row.field + ": saved " + row.saved + ", live " + row.current;
-        }
-        if (skillsDiffer && candidate.status != AlterEgo::GearMatchStatus::Matches)
-            continue;
-        const bool betterGear = AlterEgo::PreferGearMatchCandidate(candidate, best);
-        const bool sameGear = !betterGear &&
-            !AlterEgo::PreferGearMatchCandidate(best, candidate);
-        if (!cached.build || (cached.checkUtilities && !skillsDiffer) ||
-            (cached.checkUtilities == skillsDiffer &&
-             (betterGear || (sameGear && shortfalls < bestInfusionWarnings)))) {
-            cached.name = saved.name;
-            cached.build = true;
-            cached.checkUtilities = skillsDiffer;
-            cached.gear = candidate.status;
-            cached.skillDifferences.clear();
-            cached.infusionWarning = infusionText;
-            bestInfusionWarnings = shortfalls;
-            if (skillsDiffer) {
-                for (const auto& row : result.Rows()) {
-                    if (AlterEgo::IsSkillComparisonGroup(row.group) && !row.matches) {
-                        if (!cached.skillDifferences.empty()) cached.skillDifferences += "\n";
-                        cached.skillDifferences += row.group + " / " + row.field +
-                            ": " + row.saved + " -> " + row.current;
-                    }
-                }
-            }
-            best = candidate;
+static RankedRecognition RankCharacterLoadouts(const AlterEgo::Character& ch,int buildIndex,int equipTab,bool credibleOnly){
+    RankedRecognition best;
+    if(buildIndex<0||buildIndex>=static_cast<int>(ch.build_tabs.size()))return best;
+    for(const auto& saved:AlterEgo::GW2API::GetSavedBuilds()){
+        if(saved.profession!=ch.profession)continue;
+        const auto compared=CalculateSavedVsLiveComparison(saved,ch,ch.build_tabs[buildIndex],equipTab,false);
+        auto health=AlterEgo::SummarizeHealth(compared);
+        const auto& e=health.evidence;
+        const bool source=saved.source_character==ch.name||(saved.source_character.empty()&&MatchesLegacySourceName(saved.name,ch.name));
+        const auto type=AlterEgo::ClassifyTemplateMatch(compared);
+        bool gearVerified=compared.EquipmentCovered();
+        for(const auto& row:compared.Rows())
+            if(AlterEgo::IsCharacterEquipmentMatchGroup(row.group)&&(!row.verified||!row.matches))gearVerified=false;
+        const bool credible=e.Full()||(type==AlterEgo::TemplateMatchStatus::Exact&&e.buildMatches>=3)||
+            (type==AlterEgo::TemplateMatchStatus::SkillsDiffer&&gearVerified)||
+            (source&&e.buildMatches>=3&&e.buildMatches>e.buildDifferences);
+        if(e.Full()&&best.matchedId.empty())best.matchedId=saved.id;
+        if(!e.Meaningful()||(credibleOnly&&!credible))continue;
+        if(best.candidateId.empty()||AlterEgo::PreferRecognition(e,best.health.evidence,source,best.source)){
+            best.candidateId=saved.id;best.health=std::move(health);best.source=source;best.credible=credible;
         }
     }
+    return best;
+}
+struct ActiveSavedBuildMatch {
+    std::string id,name,matchedId,tooltip;
+    std::vector<std::string> warnings;
+    bool show=false,full=false,explicitChoice=false;
+};
+static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch(const AlterEgo::Character& ch) {
+    static ActiveSavedBuildMatch cached;
+    static std::pair<std::string,std::string> key;
+    static uint64_t charRevision=0,libraryRevision=0,assignmentRevision=0;
+    static int buildTab=-99,equipTab=-99;
+    static std::chrono::steady_clock::time_point updated{};
+    const auto currentKey=std::make_pair(ch.account_name,ch.name);
+    const auto cr=AlterEgo::GW2API::GetCharacterDataRevision(),lr=AlterEgo::GW2API::GetBuildLibraryRevision();
+    const int bi=GetActiveBuildIndex(ch),et=GetActiveEquipmentTab(ch);
+    const auto now=std::chrono::steady_clock::now();
+    if(key==currentKey&&charRevision==cr&&libraryRevision==lr&&assignmentRevision==g_CharacterLoadoutRevision&&
+        buildTab==bi&&equipTab==et&&now-updated<std::chrono::milliseconds(500))return cached;
+    key=currentKey;charRevision=cr;libraryRevision=lr;assignmentRevision=g_CharacterLoadoutRevision;
+    buildTab=bi;equipTab=et;updated=now;cached={};
+    using Mode=AlterEgo::CharacterLoadout::Mode;
+    const auto choice=ExpectedLoadout(ch);
+    if(choice.mode==Mode::None)return cached;
+    cached.show=true;
+    cached.explicitChoice=choice.mode==Mode::Explicit;
+    const auto ranked=RankCharacterLoadouts(ch,bi,et,true);
+    cached.matchedId=ranked.matchedId;
+    const auto* expected=FindCompatibleLoadout(ch,cached.explicitChoice?choice.id:ranked.candidateId);
+    if(!expected){cached.name="No matching Loadout";cached.tooltip="Automatic recognition found no credible candidate in retrieved data.";return cached;}
+    cached.id=expected->id;cached.name=expected->name;
+    AlterEgo::ConfigurationHealth health;
+    if(cached.explicitChoice){
+        if(bi>=0)health=AlterEgo::SummarizeHealth(CalculateSavedVsLiveComparison(*expected,ch,ch.build_tabs[bi],et,false));
+        else health=AlterEgo::SummarizeHealth(AlterEgo::BuildComparison{});
+    }else health=ranked.health;
+    cached.full=health.evidence.Full();
+    cached.warnings=health.warnings;
+    cached.tooltip=(cached.explicitChoice?"Expected: ":"Automatic candidate: ")+cached.name;
+    if(cached.full)cached.tooltip+="\nVerified functional match";
+    else for(const auto& detail:health.details)cached.tooltip+="\n"+detail;
+    if(!cached.matchedId.empty()&&cached.matchedId!=cached.id)
+        if(const auto* match=FindCompatibleLoadout(ch,cached.matchedId))cached.tooltip+="\nMatched: "+match->name;
+    cached.tooltip+="\nBased on retrieved API data.";
     return cached;
+}
+static void NavigateToCharacterLoadoutCompare(const AlterEgo::Character& ch,const AlterEgo::SavedBuild& saved){
+    ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare,saved);
+    g_LibCompareChar=ch.name;g_LibCompareAccount=ch.account_name;
+    g_LibComparePreviousTarget=ch.name;g_LibComparePreviousAccount=ch.account_name;
+    g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;
+}
+static void RenderCharacterLoadoutContext(const AlterEgo::Character& ch,const AlterEgo::SavedBuild* saved,bool preferenceActions){
+    using namespace AlterEgo::UI;
+    if(MenuAction("Compare",MenuIcon::Compare,saved!=nullptr)&&saved)NavigateToCharacterLoadoutCompare(ch,*saved);
+    if(MenuAction("Open in Library",MenuIcon::Open,saved!=nullptr)&&saved){
+        if(!g_LibEditMode){
+            g_LibSelectedId=saved->id;g_LibRevealId=saved->id;g_LibDetailsFetched=false;
+            NavigateToLibraryCollection(0);
+        }else if(APIDefs)APIDefs->GUI_SendAlert("Save or cancel the current Loadout edit first.");
+    }
+    if(preferenceActions){
+        ImGui::Separator();
+        using namespace AlterEgo::CharacterLoadout;
+        if(MenuAction("Reset to Automatic",MenuIcon::Regenerate))SetExpectedLoadout(ch,{});
+        if(MenuAction("None",MenuIcon::Detach))SetExpectedLoadout(ch,{Mode::None,{}});
+    }
+}
+static const AlterEgo::SavedBuild* CharacterContextLoadout(const AlterEgo::Character& ch){
+    const auto choice=ExpectedLoadout(ch);
+    if(choice.mode==AlterEgo::CharacterLoadout::Mode::Explicit)return FindCompatibleLoadout(ch,choice.id);
+    if(choice.mode==AlterEgo::CharacterLoadout::Mode::Automatic&&ch.name==g_CurrentCharName&&
+        ch.account_name==AlterEgo::GW2API::GetCurrentAccountName()&&!ch.account_name.empty())
+        return FindCompatibleLoadout(ch,GetLoggedInSavedBuildMatch(ch).id);
+    return nullptr;
+}
+static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
+    using namespace AlterEgo::CharacterLoadout;
+    if(!ValidKey({ch.account_name,ch.name}))return;
+    const auto choice=ExpectedLoadout(ch);
+    const auto* assigned=FindCompatibleLoadout(ch,choice.id);
+    const std::string preview=assigned?assigned->name:choice.mode==Mode::None?"None":"Automatic";
+    ImGui::PushID("character_expected_loadout");
+    ImGui::TextUnformatted("Loadout");ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImMax(1.f,ImMin(290.f,ImGui::GetContentRegionAvail().x)));
+    const bool open=AlterEgo::UI::BeginCombo("##expected",preview.c_str());
+    if(open){
+        if(AlterEgo::UI::SelectableOption("Automatic",choice.mode==Mode::Automatic))SetExpectedLoadout(ch,{});
+        if(AlterEgo::UI::SelectableOption("None",choice.mode==Mode::None))SetExpectedLoadout(ch,{Mode::None,{}});
+        ImGui::Separator();
+        for(const auto& saved:AlterEgo::GW2API::GetSavedBuilds()){
+            if(saved.profession!=ch.profession)continue;
+            const auto label=saved.name+" ("+GameModeLabel(saved.game_mode)+")##"+saved.id;
+            if(AlterEgo::UI::SelectableOption(label.c_str(),assigned&&assigned->id==saved.id))
+                SetExpectedLoadout(ch,{Mode::Explicit,saved.id});
+        }
+        ImGui::EndCombo();
+    }
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Expected Loadout for this character, independent of in-game tabs.\nAutomatic recognizes a saved Loadout; None disables warnings.\nRight-click for actions.");
+    if(ImGui::BeginPopupContextItem("##expected_context")){
+        RenderCharacterLoadoutContext(ch,CharacterContextLoadout(ch),true);
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
 }
 
 // Dedicated top-level Compare tab. Keep the selection by saved build ID so
@@ -10869,42 +10894,29 @@ static void RenderCompareTab() {
         ImGui::TextDisabled("No retrieved characters. Refresh characters first.");
         return;
     }
-    if (g_LibComparePreviousTarget != target->name) {
+    if (g_LibComparePreviousTarget != target->name || g_LibComparePreviousAccount!=target->account_name) {
         if (!g_LibComparePreviousTarget.empty()) g_LibCompareSavedManual = false;
         g_LibComparePreviousTarget = target->name;
+        g_LibComparePreviousAccount=target->account_name;
         g_LibCompareBuildTab = -1;
         g_LibCompareEquipTab = 0;
     }
 
-    static std::string autoChar, autoId;
-    static uint64_t autoRev = 0, autoLibraryRev = 0;
-    static int autoBuildTab = -99;
-    const uint64_t charRev = AlterEgo::GW2API::GetCharacterDataRevision();
-    const uint64_t libraryRev = AlterEgo::GW2API::GetBuildLibraryRevision();
-    const int currentBuild = GetActiveBuildIndex(*target);
+    static std::string autoChar,autoAccount,autoId;
+    static uint64_t autoRev=0,autoLibraryRev=0;
+    static int autoBuildTab=-99,autoEquipTab=-99;
+    static std::chrono::steady_clock::time_point autoUpdated{};
+    const uint64_t charRev=AlterEgo::GW2API::GetCharacterDataRevision(),libraryRev=AlterEgo::GW2API::GetBuildLibraryRevision();
+    const int activeIndex=GetActiveBuildIndex(*target);
+    const int currentBuild=g_LibCompareBuildTab>=0&&g_LibCompareBuildTab<static_cast<int>(target->build_tabs.size())?g_LibCompareBuildTab:activeIndex;
+    const int currentEquip=g_LibCompareEquipTab>0?g_LibCompareEquipTab:GetActiveEquipmentTab(*target);
+    const auto now=std::chrono::steady_clock::now();
     if (!g_LibCompareSavedManual &&
-        (autoChar != target->name || autoRev != charRev ||
-         autoLibraryRev != libraryRev || autoBuildTab != currentBuild)) {
-        autoChar = target->name; autoRev = charRev;
-        autoLibraryRev = libraryRev; autoBuildTab = currentBuild;
-        autoId.clear();
-        int bestScore = 0x7fffffff;
-        for (const auto& b : builds) {
-            if (b.profession != target->profession || currentBuild < 0) continue;
-            const bool fromChar = b.source_character == target->name;
-            const bool legacyName = b.source_character.empty() &&
-                MatchesLegacySourceName(b.name, target->name);
-            const auto comparison = CalculateSavedVsLiveComparison(
-                b, *target, target->build_tabs[currentBuild],
-                GetActiveEquipmentTab(*target), false);
-            const auto type = AlterEgo::ClassifyTemplateMatch(comparison);
-            if (!fromChar && !legacyName &&
-                type == AlterEgo::TemplateMatchStatus::Different) continue;
-            const int score = (type == AlterEgo::TemplateMatchStatus::SkillsDiffer ? 500 : 0)
-                + (fromChar ? 0 : legacyName ? 40 : 100)
-                + (int)std::min<size_t>(comparison.DifferenceCount(), 200);
-            if (score < bestScore) { bestScore = score; autoId = b.id; }
-        }
+        (autoChar!=target->name||autoAccount!=target->account_name||autoRev!=charRev||autoLibraryRev!=libraryRev||
+         autoBuildTab!=currentBuild||autoEquipTab!=currentEquip||now-autoUpdated>=std::chrono::milliseconds(500))) {
+        autoChar=target->name;autoAccount=target->account_name;autoRev=charRev;autoLibraryRev=libraryRev;
+        autoBuildTab=currentBuild;autoEquipTab=currentEquip;autoUpdated=now;
+        autoId=RankCharacterLoadouts(*target,currentBuild,currentEquip,false).candidateId;
     }
     if (!g_LibCompareSavedManual) g_LibCompareBuildId = autoId;
 
@@ -10952,26 +10964,26 @@ static void RenderCompareTab() {
         if (AlterEgo::UI::BeginCombo("##compareCharacter", "")) {
             const AlterEgo::Character* autoCharacter = character;
             for (const auto* ch : compareMatches)
-                if (ch->name == g_CurrentCharName) { autoCharacter = ch; break; }
+                if (ch->name == g_CurrentCharName&&ch->account_name==AlterEgo::GW2API::GetCurrentAccountName()) { autoCharacter = ch; break; }
             const bool autoClicked = SelectProfessionCharacterEntry("##compareAutoCharacter",
                 g_LibCompareChar.empty(),autoCharacter->profession,autoCharacter->name,autoPrefix);
             if (autoClicked) {
-                MarkNavigation();g_LibCompareChar.clear();
+                MarkNavigation();g_LibCompareChar.clear();g_LibCompareAccount.clear();
                 g_LibCompareSavedManual = false;
             }
             for (const auto* ch : compareMatches) {
-                ImGui::PushID(ch->name.c_str());
-                const bool selected = ch->name == g_LibCompareChar;
+                ImGui::PushID(ch->account_name.c_str());ImGui::PushID(ch->name.c_str());
+                const bool selected = ch->name == g_LibCompareChar&&ch->account_name==g_LibCompareAccount;
                 const bool clicked = SelectProfessionCharacterEntry("##compareCharacterEntry",
                     selected,ch->profession,ch->name);
                 if (clicked) {
-                    MarkNavigation();g_LibCompareChar = ch->name;
+                    MarkNavigation();g_LibCompareChar = ch->name;g_LibCompareAccount=ch->account_name;
                     g_LibCompareSavedManual = false;
                     g_LibCompareBuildTab = -1;
                     g_LibCompareEquipTab = 0;
                 }
                 if (selected) ImGui::SetItemDefaultFocus();
-                ImGui::PopID();
+                ImGui::PopID();ImGui::PopID();
             }
             ImGui::EndCombo();
         }
@@ -15475,7 +15487,7 @@ static void RenderCompareStatusRow() {
     const auto& chars = *charsSnapshot;
     const AlterEgo::Character* target = nullptr;
     for (const auto& ch : chars) {
-        if (ch.name == g_LibComparePreviousTarget) { target = &ch; break; }
+        if (ch.name == g_LibComparePreviousTarget&&ch.account_name==g_LibComparePreviousAccount) { target = &ch; break; }
     }
     namespace S=AlterEgo::CharacterScopes;
     if(target){PollDemandCharacter(target->account_name,target->name,target->scope_stamps,S::Compare);
@@ -16185,13 +16197,10 @@ void AddonRender() {
                     float rowHeight = g_CompactCharList ? 18.0f
                         : (28.0f + extraLines * lineH);
                     // Show mismatch even when no library build happens to match.
-                    if (!g_CompactCharList && !g_CurrentCharName.empty() &&
-                        ch.name == g_CurrentCharName) {
-                        const auto& match = GetLoggedInSavedBuildMatch();
-                        if (match.build)
-                            rowHeight += (match.matchingBuilds > 1 ? 3.0f : 2.0f) * lineH +
-                                         (match.checkUtilities ? lineH : 0.0f) +
-                                          (!match.infusionWarning.empty() ? lineH : 0.0f);
+                    const bool recognizeActive=!memoryAccount.empty()&&ch.account_name==memoryAccount&&ch.name==g_CurrentCharName;
+                    if (!g_CompactCharList && recognizeActive) {
+                        const auto& match = GetLoggedInSavedBuildMatch(ch);
+                        if (match.show)rowHeight+=(match.warnings.empty()?1.f:2.f)*lineH;
                         if (HasLiveSpecCacheMismatch(ch))
                             rowHeight += lineH;
                     }
@@ -16222,6 +16231,9 @@ void AddonRender() {
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
                         CopyNameMenuItem(ch.name);
                         RenderCharacterLoadMenu("Load",ch.name,ch.account_name);
+                        if(const auto* loadout=CharacterContextLoadout(ch)){
+                            ImGui::Separator();RenderCharacterLoadoutContext(ch,loadout,false);ImGui::Separator();
+                        }
                         const int activeBuild = ActiveBuildIndex(ch);
                         const int activeEquip = ActiveEquipmentTab(ch);
                         if (ImGui::MenuItem("Refresh")) {
@@ -16385,71 +16397,23 @@ void AddonRender() {
                                     GetSpecNameForWarning(g_LiveSpecialization),
                                     GetSpecNameForWarning(ch.build_tabs[GetActiveBuildIndex(ch)].specializations[2].spec_id));
                         }
-                        const auto& match = GetLoggedInSavedBuildMatch();
-                        if (match.build) {
-                            // Exact templates stay green. A skills-only near-match
-                            // with identical gear is orange and includes the changed
-                            // heal, utility or elite slots in its tooltip.
-                            const std::string label = (match.checkUtilities ? "Build: " : "Build matches: ") + match.name;
-                            // Fit the rendered text to the actual list width,
-                            // including user-resized narrow character panels.
-                            const float labelWidth = ImMax(0.0f,
-                                rMax.x - ImGui::GetCursorScreenPos().x - 6.0f);
-                            const std::string shortLabel =
-                                labelWidth >= ImGui::CalcTextSize("...").x
-                                    ? TruncateToWidth(label, labelWidth)
-                                    : std::string();
-                            const ImVec4 buildColor = match.checkUtilities
-                                ? ImVec4(1.0f, 0.70f, 0.32f, 1.0f)
-                                : ImVec4(0.55f, 0.88f, 0.58f, 1.0f);
-                            ImGui::TextColored(buildColor, "%s", shortLabel.c_str());
-                            if (ImGui::IsItemHovered()) {
-                                if (match.checkUtilities)
-                                    ImGui::SetTooltip("%s - Check Utilities\n%s\n(cached API data)",
-                                        label.c_str(), match.skillDifferences.c_str());
-                                else
-                                    ImGui::SetTooltip("%s (cached API data)", label.c_str());
-                            }
-                            if (match.checkUtilities) {
-                                ImGui::TextColored(buildColor, "Check Utilities");
-                                if (ImGui::IsItemHovered())
-                                    ImGui::SetTooltip("Saved vs retrieved skills:\n%s\n(cached API data)",
-                                        match.skillDifferences.c_str());
-                            }
-
-                            const char* gearText = "Equipment: DATA MISSING";
-                            ImVec4 gearColor(1.0f, 0.56f, 0.44f, 1.0f);
-                            if (match.gear == AlterEgo::GearMatchStatus::Matches) {
-                                gearText = "Equipment: MATCHES";
-                                gearColor = ImVec4(0.55f, 0.88f, 0.58f, 1.0f);
-                            } else if (match.gear == AlterEgo::GearMatchStatus::MissingItem) {
-                                gearText = "Equipment: MISSING ITEM";
-                            } else if (match.gear == AlterEgo::GearMatchStatus::Different) {
-                                gearText = "Equipment: DOES NOT MATCH";
-                            } else if (match.gear == AlterEgo::GearMatchStatus::NoSavedGear) {
-                                gearText = "Equipment: NOT SAVED";
-                                gearColor = ImVec4(0.65f, 0.65f, 0.65f, 1.0f);
-                            }
-                            const float gearWidth = ImMax(0.0f,
-                                rMax.x - ImGui::GetCursorScreenPos().x - 6.0f);
-                            const std::string shownGearText =
-                                gearWidth >= ImGui::CalcTextSize("...").x
-                                    ? TruncateToWidth(gearText, gearWidth)
-                                    : std::string();
-                            ImGui::TextColored(gearColor, "%s", shownGearText.c_str());
-                            if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s (last retrieved API data)", gearText);
-                            if (!match.infusionWarning.empty()) {
-                                ImGui::TextColored(ImVec4(0.90f, 0.75f, 0.48f, 1.0f),
-                                    "Infusions: check totals");
-                                if (ImGui::IsItemHovered())
-                                    ImGui::SetTooltip("%s", match.infusionWarning.c_str());
-                            }
-                            if (match.matchingBuilds > 1) {
-                                ImGui::TextDisabled("%zu saved builds share this template",
-                                    match.matchingBuilds);
-                                if (ImGui::IsItemHovered())
-                                    ImGui::SetTooltip("Showing the saved build with the closest equipment match.");
+                        if(recognizeActive){
+                            const auto& match=GetLoggedInSavedBuildMatch(ch);
+                            if(match.show){
+                                const auto color=match.full?ImVec4(.55f,.88f,.58f,1.f):
+                                    match.id.empty()?ImVec4(.65f,.65f,.65f,1.f):
+                                    AlterEgo::UI::WarningText;
+                                const auto draw=[&](const std::string& label,ImVec4 tint){
+                                    const float width=ImMax(0.f,rMax.x-ImGui::GetCursorScreenPos().x-6.f);
+                                    ImGui::TextColored(tint,"%s",width>=ImGui::CalcTextSize("...").x?TruncateToWidth(label,width).c_str():"");
+                                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",match.tooltip.c_str());
+                                };
+                                draw(match.full?match.name+" - Matches":match.name,color);
+                                if(!match.warnings.empty()){
+                                    std::string warning;
+                                    for(const auto& w:match.warnings){if(!warning.empty())warning+=" / ";warning+=w;}
+                                    draw(warning,color);
+                                }
                             }
                         }
                     }
@@ -16712,6 +16676,7 @@ void AddonRender() {
                                   headerStart.y + avatarSize) + 4.0f));
                     }
 
+                    RenderCharacterLoadoutSelector(ch);
                     ImGui::Spacing();
                     ImGui::Separator();
 

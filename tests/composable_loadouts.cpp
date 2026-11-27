@@ -1,3 +1,4 @@
+#include "../src/CharacterLoadoutExpectation.h"
 #include "../src/ComposableLoadouts.h"
 #include "../src/ComposableSemantics.h"
 #include <cassert>
@@ -493,5 +494,19 @@ int case_composable_loadouts(int, char**) {
     document = untouched;
 
     // Native migration/backup/restart tests live in persistence.native_migration.
+    // Character intent belongs to account + character, never observed tabs.
+    {
+        using namespace AlterEgo::CharacterLoadout;
+        Preferences p;Key a{"account-a","Hero"},b{"account-b","Hero"};
+        assert(p.Set(a,{Mode::Explicit,"stable-id"}));assert(p.Set(b,{Mode::None,{}}));
+        Preferences restored;assert(restored.Decode(p.Encode()));
+        assert(restored.Get(a).id=="stable-id"&&restored.Get(b).mode==Mode::None);
+        assert(Resolve(restored.Get(a),[](const auto&){return false;}).mode==Mode::Automatic);
+        assert(restored.Get(a).mode==Mode::Explicit);
+        assert(!restored.Set({"","Hero"},{Mode::None,{}}));
+        assert(!restored.Decode(nlohmann::json::array({{{"account","bad"}}})));
+        assert(restored.Get(a).id=="stable-id");
+        assert(restored.Set(a,{}));assert(restored.Get(a).mode==Mode::Automatic);
+    }
     return 0;
 }
