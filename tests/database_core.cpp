@@ -5,6 +5,7 @@
 #include "../src/ExternalResourceSafety.h"
 #include "../src/CacheDatabase.h"
 #include "../src/AchievementCatalogCache.h"
+#include "../src/ProfessionMetadataCore.h"
 #include "../src/SkinDataCache.h"
 #include "../src/CommerceCache.h"
 #include "../src/ReferenceMetadataCache.h"
@@ -48,6 +49,36 @@ void Upgrade(DB::Connection& db, int version) {
 }
 
 int case_database_core(int, char**) {
+    {
+        namespace P=AlterEgo::ProfessionMetadata;
+        const auto root=std::filesystem::temp_directory_path()/("ae-profession-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        {
+            AlterEgo::Database::Connection db((root/"cache.db").string(),AlterEgo::Database::Connection::OpenMode::Create);
+            AlterEgo::Cache::Initialize(db);
+            auto raw=P::Json::parse(R"({"id":"Elementalist","code":6,"name":"Elementalist","icon":"small","icon_big":"big","specializations":[1,2],"skills_by_palette":[[100,10],[100,11],[101,11]],"weapons":{"Dagger":{"flags":["Mainhand","Offhand"],"skills":[{"id":1001,"slot":"Weapon_1","attunement":"Fire"},{"id":1002,"slot":"Weapon_1","attunement":"Water"},{"id":1003,"slot":"Weapon_3","offhand":"Pistol"}]}}})");
+            const auto r=P::Parse("Elementalist",raw);
+            assert(r.paletteToSkill.at(100)==11&&r.skillToPalette.at(11)==101&&r.ambiguousPalettes.count(100)&&r.ambiguousSkills.count(11));
+            assert(r.weapons.at("Dagger").attunement_skills.at("Fire")[0]==1001&&r.weapons.at("Dagger").attunement_skills.at("Water")[0]==1002);
+            assert(r.weapons.at("Dagger").dual_wield.at("Pistol")==1003);
+            {AlterEgo::Database::Transaction tx(db);P::Store(db,r,100);tx.Commit();}
+            auto stored=P::Read(db,"Elementalist");
+            assert(stored&&stored->palettes==r.palettes&&stored->paletteToSkill==r.paletteToSkill&&stored->skillToPalette==r.skillToPalette);
+            assert(stored->weapons.at("Dagger").dual_wield.at("Pistol")==1003&&P::ReadStamps(db,"Elementalist").success==100);
+            auto reject=[](auto action){try{action();return false;}catch(...){return true;}};
+            auto malformed=raw;malformed["code"]=9;assert(reject([&]{P::Parse("Elementalist",malformed);}));
+            malformed=raw;malformed["skills_by_palette"][0][0]=65536;assert(reject([&]{P::Parse("Elementalist",malformed);}));
+            malformed=raw;malformed["specializations"]={1,1};assert(reject([&]{P::Parse("Elementalist",malformed);}));
+            malformed=raw;malformed.erase("weapons");assert(reject([&]{P::Parse("Elementalist",malformed);}));
+            assert(reject([&]{AlterEgo::Database::Transaction tx(db);P::Store(db,r,99);tx.Commit();}));
+            assert(P::Read(db,"Elementalist")->info.icon_big_url=="big");
+            assert(!P::Due({100,0},100+AlterEgo::PublicCatalog::Month-1,false));
+            assert(P::Due({100,0},100+AlterEgo::PublicCatalog::Month,false));
+            assert(!P::Due({0,100},101,false)&&P::Due({0,100},101,true));
+        }
+        std::filesystem::remove_all(root);
+    }
+
     {
         namespace U=AlterEgo::Untrusted;
         assert(U::Parse(R"({"name":"O'Brien; --","nested":[{"x":1},{"x":2}]})",U::Clipboard).at("name")=="O'Brien; --");

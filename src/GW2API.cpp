@@ -10,6 +10,7 @@
 #include "ReferenceMetadataCache.h"
 #include "ItemMetadataCache.h"
 #include "PublicCatalog.h"
+#include "ProfessionMetadataCore.h"
 #include "CharacterCache.h"
 #include "AutoRefreshPolicy.h"
 #include "RefreshEngine.h"
@@ -194,7 +195,9 @@ namespace AlterEgo {
     bool GW2API::s_item_name_cache_dirty = false;
     std::unordered_map<std::string, std::unordered_map<uint16_t, uint32_t>> GW2API::s_palette_to_skill;
     std::unordered_map<std::string, std::unordered_map<uint32_t, uint16_t>> GW2API::s_skill_to_palette;
-    std::unordered_set<std::string> GW2API::s_palette_fetching;
+    // Both public entry points share this per-profession owner, protected by s_mutex.
+    static std::map<std::string,ProfessionMetadata::Stamps> s_professionStamps;
+    static std::set<std::string> s_professionPending;
 
     std::mutex GW2API::s_mutex;
 
@@ -1186,66 +1189,48 @@ namespace AlterEgo {
         return (it != s_profession_weapons.end()) ? it->second : nullptr;
     }
 
-    void GW2API::FetchProfessionInfoAsync(const std::string& profession) {
-        // This function is called every frame by several views. Without an
-        // in-flight guard, a slow first response can create hundreds of
-        // simultaneous detached workers for the same profession.
-        static const std::set<std::string> validProfessions = {
-            "Guardian", "Warrior", "Engineer", "Ranger", "Thief",
-            "Elementalist", "Mesmer", "Necromancer", "Revenant"
-        };
-        static std::unordered_set<std::string> inFlight;
-        if (!validProfessions.count(profession)) return;
-
-        const std::string prof = profession; // own a stable copy before dispatch
+    void GW2API::FetchProfessionInfoAsync(const std::string& profession,bool manual) {
+        namespace P=ProfessionMetadata;
+        if(!P::Code(profession))return;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            if (s_profession_cache.find(prof) != s_profession_cache.end() ||
-                !inFlight.insert(prof).second) return;
+            const bool cached=s_profession_cache.count(profession)!=0;
+            auto& stamp=s_professionStamps[profession];
+            if(!manual&&cached&&!AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::PublicCatalog))return;
+            if(!P::Due(stamp,PublicCatalog::Now(),manual)||!s_professionPending.insert(profession).second)return;
         }
-
-        try {
-            AlterEgo::Background::Workers().Launch([prof]() {
-                try {
-                    const std::string url = "https://api.guildwars2.com/v2/professions/" + prof;
-                    const std::string response = HttpGet(url);
-                    Background::Checkpoint();
-                    if (!response.empty()) {
-                        json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                        if(!j.is_object()||j.value("id",std::string{})!=prof)throw std::runtime_error("Unexpected profession identity");
-                        ProfessionInfo info;
-                        info.name = j.value("name", prof);
-                        info.icon_url = j.value("icon", "");
-                        info.icon_big_url = j.value("icon_big", "");
-                        if (j.contains("specializations") && j["specializations"].is_array())
-                            for (const auto& spec : j["specializations"])
-                                if (spec.is_number_unsigned())
-                                    info.specialization_ids.push_back(spec.get<uint32_t>());
-
-                        const auto specIds = info.specialization_ids;
-                        {
-                            std::lock_guard<std::mutex> lock(s_mutex);
-                            s_profession_cache[prof]=std::make_shared<const ProfessionInfo>(std::move(info));
-                        }
-                        if (!specIds.empty()) FetchSpecDetailsAsync(specIds);
-                        if (s_api) {
-                            const std::string msg = "Loaded profession info for " + prof;
-                            s_api->Log(LOGL_INFO, "AlterEgo", msg.c_str());
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    if (s_api) s_api->Log(LOGL_WARNING, "AlterEgo",
-                        (std::string("Profession metadata request failed: ") + e.what()).c_str());
-                } catch (...) {}
-                // Permit retry after failures; the cache prevents new requests
-                // after a successful response. Always clear on worker exit.
+        const auto prof=profession;
+        Background::Workers().Launch([prof,manual]{
+            ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
+            const auto started=PublicCatalog::Now();
+            bool attempted=false,committed=false;
+            try{
+                const auto response=HttpGet("https://api.guildwars2.com/v2/professions/"+prof+"?v="+P::Schema,&attempted);
+                Background::Checkpoint();
+                auto record=P::Parse(prof,Untrusted::Parse(response,Untrusted::PublicApi));
+                const auto info=std::make_shared<const ProfessionInfo>(record.info);
+                const auto weapons=std::make_shared<const std::map<std::string,ProfessionWeaponData>>(record.weapons);
+                PublicCatalog::WithDb(GetDataDirectory(),[&](auto& db){
+                    Background::Checkpoint();Database::Transaction tx(db);P::Store(db,record,started);tx.Commit();
+                });
+                {
+                    std::lock_guard<std::mutex> lock(s_mutex);
+                    s_profession_cache[prof]=info;s_profession_weapons[prof]=weapons;
+                    s_palette_to_skill[prof]=std::move(record.paletteToSkill);s_skill_to_palette[prof]=std::move(record.skillToPalette);
+                    s_professionStamps[prof].success=started;
+                }
+                committed=true;
+                if(!info->specialization_ids.empty()&&!Background::Workers().Stopping())FetchSpecDetailsAsync(info->specialization_ids);
+            }catch(const Background::Cancelled&){throw;}catch(...){}
+            if(!committed&&attempted&&!Background::Workers().Stopping()){
+                try{PublicCatalog::WithDb(GetDataDirectory(),[&](auto& db){
+                    Background::Checkpoint();PublicCatalog::MarkAttempt(db,P::Key(prof)+"_attempt",started);
+                });}catch(const Background::Cancelled&){throw;}catch(...){}
                 std::lock_guard<std::mutex> lock(s_mutex);
-                inFlight.erase(prof);
-            }, [prof]() { std::lock_guard<std::mutex> lock(s_mutex); inFlight.erase(prof); });
-        } catch (...) {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            inFlight.erase(prof);
-        }
+                s_professionStamps[prof].attempt=started;
+            }
+            {std::lock_guard<std::mutex> lock(s_mutex);s_professionPending.erase(prof);}
+        },[prof]{std::lock_guard<std::mutex> lock(s_mutex);s_professionPending.erase(prof);});
     }
 
     // =========================================================================
@@ -3228,6 +3213,25 @@ namespace AlterEgo {
     }
 
     bool GW2API::LoadReferenceCaches() {
+        // Restore the nine small durable records without any startup HTTP.
+        try{PublicCatalog::WithDb(GetDataDirectory(),[&](auto& db){
+            std::map<std::string,ProfessionMetadata::Record> records;
+            std::map<std::string,ProfessionMetadata::Stamps> stamps;
+            for(const auto& prof:ProfessionMetadata::Names()){
+                stamps[prof]=ProfessionMetadata::ReadStamps(db,prof);
+                try{if(auto record=ProfessionMetadata::Read(db,prof))records.emplace(prof,std::move(*record));else stamps[prof].success=0;}
+                catch(...){stamps[prof].success=0;}
+            }
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_profession_cache.clear();s_profession_weapons.clear();s_palette_to_skill.clear();s_skill_to_palette.clear();
+            s_professionStamps=std::move(stamps);s_professionPending.clear();
+            for(auto& [prof,record]:records){
+                s_profession_cache[prof]=std::make_shared<const ProfessionInfo>(std::move(record.info));
+                s_profession_weapons[prof]=std::make_shared<const std::map<std::string,ProfessionWeaponData>>(std::move(record.weapons));
+                s_palette_to_skill[prof]=std::move(record.paletteToSkill);s_skill_to_palette[prof]=std::move(record.skillToPalette);
+            }
+        });}catch(...){}
+
         auto readReference = [](Cache::ReferenceDataset dataset, json& out) {
             auto snapshot=Cache::ReadReference(GetDataDirectory(),dataset);
             if(!snapshot)return false;
@@ -3411,111 +3415,7 @@ namespace AlterEgo {
     }
 
     void GW2API::FetchProfessionPaletteAsync(const std::string& profession) {
-        static const std::set<std::string> valid={"Guardian","Warrior","Engineer","Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"};
-        if(!valid.count(profession))return;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            // Already have data or already fetching
-            if (s_palette_to_skill.find(profession) != s_palette_to_skill.end()) return;
-            if (s_palette_fetching.count(profession)) return;
-            s_palette_fetching.insert(profession);
-        }
-
-        auto prof = profession;
-        AlterEgo::Background::Workers().Launch([prof]() {
-            // Fetch with v=latest to get skills_by_palette
-            std::string url = "https://api.guildwars2.com/v2/professions/" + prof + "?v=latest";
-            std::string response = HttpGet(url);
-            if (response.empty()) {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                s_palette_fetching.erase(prof);
-                return;
-            }
-
-            try {
-                Background::Checkpoint();
-                json j = Untrusted::Parse(response,Untrusted::PublicApi);
-                if(j.value("id",std::string{})!=prof)throw std::runtime_error("Unexpected profession palette identity");
-                if (j.contains("skills_by_palette") && j["skills_by_palette"].is_array() && !j["skills_by_palette"].empty()) {
-                    std::unordered_map<uint16_t, uint32_t> p2s;
-                    std::unordered_map<uint32_t, uint16_t> s2p;
-                    for (const auto& pair : j["skills_by_palette"]) {
-                        if (!pair.is_array() || pair.size() < 2) continue;
-                        const auto palette=Cache::ReferenceId(pair[0]);
-                        const auto skill_id=Cache::ReferenceId(pair[1]);
-                        if(palette>UINT16_MAX||!skill_id)throw std::runtime_error("Invalid palette mapping");
-                        const auto palette_id=static_cast<uint16_t>(palette);
-                        p2s[palette_id] = skill_id;
-                        s2p[skill_id] = palette_id;
-                    }
-
-                    // Parse weapon data
-                    std::map<std::string, ProfessionWeaponData> weapons;
-                    if (j.contains("weapons") && j["weapons"].is_object()) {
-                        for (auto it = j["weapons"].begin(); it != j["weapons"].end(); ++it) {
-                            ProfessionWeaponData wd;
-                            const auto& wj = it.value();
-                            if (wj.contains("flags") && wj["flags"].is_array()) {
-                                for (const auto& f : wj["flags"]) {
-                                    std::string flag = f.get<std::string>();
-                                    if (flag == "Mainhand") wd.mainhand = true;
-                                    else if (flag == "Offhand") wd.offhand = true;
-                                    else if (flag == "TwoHand") wd.two_handed = true;
-                                }
-                            }
-                            wd.specialization = wj.value("specialization", (uint32_t)0);
-                            if (wj.contains("skills") && wj["skills"].is_array()) {
-                                for (const auto& sk : wj["skills"]) {
-                                    std::string slot = sk.value("slot", "");
-                                    uint32_t sid = sk.value("id", (uint32_t)0);
-                                    std::string offhand = sk.value("offhand", "");
-                                    std::string attunement = sk.value("attunement", "");
-
-                                    int slotIdx = -1;
-                                    if (slot == "Weapon_1") slotIdx = 0;
-                                    else if (slot == "Weapon_2") slotIdx = 1;
-                                    else if (slot == "Weapon_3") slotIdx = 2;
-                                    else if (slot == "Weapon_4") slotIdx = 3;
-                                    else if (slot == "Weapon_5") slotIdx = 4;
-                                    if (slotIdx < 0) continue;
-
-                                    if (!attunement.empty()) {
-                                        // Elementalist: store per-attunement
-                                        wd.attunement_skills[attunement][slotIdx] = sid;
-                                    } else if (!offhand.empty() && slotIdx == 2) {
-                                        // Thief dual wield: Weapon_3 varies by offhand
-                                        wd.dual_wield[offhand] = sid;
-                                    } else {
-                                        // Default (no qualifier)
-                                        wd.skills[slotIdx] = sid;
-                                    }
-                                }
-                            }
-                            weapons[it.key()] = wd;
-                        }
-                    }
-
-                    Background::Checkpoint();
-                    if(p2s.empty())throw std::runtime_error("Empty palette mapping");
-                    const auto count=p2s.size();
-                    auto weaponData=std::make_shared<const std::map<std::string, ProfessionWeaponData>>(std::move(weapons));
-                    {
-                        std::lock_guard<std::mutex> lock(s_mutex);
-                        s_palette_to_skill[prof] = std::move(p2s);
-                        s_skill_to_palette[prof] = std::move(s2p);
-                        if(!weaponData->empty())s_profession_weapons[prof]=std::move(weaponData);
-                    }
-                    if (s_api) {
-                        std::string msg = "Loaded palette mapping for " + prof +
-                            " (" + std::to_string(count) + " skills)";
-                        s_api->Log(LOGL_INFO, "AlterEgo", msg.c_str());
-                    }
-                }
-            } catch (...) {}
-            // Even a syntactically valid but incomplete response must release admission.
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_palette_fetching.erase(prof);
-        }, [prof] { std::lock_guard<std::mutex> lock(s_mutex); s_palette_fetching.erase(prof); });
+        FetchProfessionInfoAsync(profession);
     }
 
 } // namespace AlterEgo

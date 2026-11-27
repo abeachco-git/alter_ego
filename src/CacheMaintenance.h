@@ -177,7 +177,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
         // Item identities are shared by metadata and Commerce. Invalidate them
         // together; account ownership remains independent of catalog records.
         db.Exec("DELETE FROM wiki_event_starts; DELETE FROM wiki_event_snapshot; DELETE FROM reference_freshness WHERE dataset IN ('wiki_event_timers','wiki_event_timers_attempt');"
-                "DELETE FROM public_vault_season; DELETE FROM public_item_index; DELETE FROM public_upgrade_items; DELETE FROM public_vault_objectives; DELETE FROM public_pets; DELETE FROM public_legends;"
+                "DELETE FROM public_vault_season; DELETE FROM public_item_index; DELETE FROM public_upgrade_items; DELETE FROM public_vault_objectives; DELETE FROM public_pets; DELETE FROM public_legends; DELETE FROM public_professions; DELETE FROM reference_freshness WHERE dataset GLOB 'public_profession_*';"
                 "DELETE FROM reference_freshness WHERE dataset IN ('public_upgrades','public_upgrades_attempt','public_vault','public_vault_attempt','public_pets','public_pets_attempt','public_legends','public_legends_attempt','public_stats','public_stats_attempt','public_dyes','public_dyes_attempt','public_item_discovery','public_item_discovery_attempt','public_skins','public_skins_attempt');"
                 "DELETE FROM commerce_skin_price_choices; DELETE FROM commerce_item_prices; DELETE FROM commerce_latest_prices;"
                 "DELETE FROM commerce_skin_items; DELETE FROM commerce_item_name_ids; DELETE FROM commerce_vendor_prices;"

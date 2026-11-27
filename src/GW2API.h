@@ -16,6 +16,7 @@
 #include "ComponentNameOrigin.h"
 #include "CharacterProvenance.h"
 #include "RefreshStatusCore.h"
+#include "ProfessionMetadataTypes.h"
 
 namespace AlterEgo {
 
@@ -81,18 +82,6 @@ namespace AlterEgo {
     };
 
     // Weapon skills for a profession+weapon combination
-    struct ProfessionWeaponData {
-        bool mainhand = false;
-        bool offhand = false;
-        bool two_handed = false;
-        uint32_t specialization = 0; // 0 = core, else elite spec ID
-        uint32_t skills[5] = {0};    // Weapon_1..Weapon_5 skill IDs (default/no qualifier)
-        // Thief dual wield: offhand weapon type -> Weapon_3 skill ID
-        std::map<std::string, uint32_t> dual_wield;
-        // Elementalist attunements: attunement name -> 5 skill IDs
-        std::map<std::string, std::array<uint32_t, 5>> attunement_skills;
-    };
-
     // A build template specialization line
     struct SpecLine {
         uint32_t spec_id = 0;       // /v2/specializations ID
@@ -203,13 +192,6 @@ namespace AlterEgo {
     };
 
     // Cached profession info from /v2/professions (public, no auth)
-    struct ProfessionInfo {
-        std::string name;
-        std::string icon_url;
-        std::string icon_big_url;
-        std::vector<uint32_t> specialization_ids; // /v2/professions[].specializations (core + elite)
-    };
-
     // Ranger pet info from /v2/pets (public, no auth). The build-template pet
     // byte is the /v2/pets id directly.
     struct PetInfo {
@@ -417,7 +399,7 @@ namespace AlterEgo {
         static void FetchAllItemStatsAsync(bool manual=false);
         static void AdoptPublicItems(const nlohmann::json& rows,bool recordAliases=false);
         static std::shared_ptr<const ProfessionInfo> GetProfessionInfo(const std::string& profession);
-        static void FetchProfessionInfoAsync(const std::string& profession);
+        static void FetchProfessionInfoAsync(const std::string& profession,bool manual=false);
         static std::shared_ptr<const std::map<std::string, ProfessionWeaponData>> GetProfessionWeapons(const std::string& profession);
 
         // Fetch detail data on-demand (direct HTTP — no auth needed)
@@ -637,7 +619,6 @@ namespace AlterEgo {
         // Palette ID mapping: profession -> (palette_id -> skill_id)
         static std::unordered_map<std::string, std::unordered_map<uint16_t, uint32_t>> s_palette_to_skill;
         static std::unordered_map<std::string, std::unordered_map<uint32_t, uint16_t>> s_skill_to_palette;
-        static std::unordered_set<std::string> s_palette_fetching; // professions currently being fetched
 
         static std::mutex s_mutex;
 

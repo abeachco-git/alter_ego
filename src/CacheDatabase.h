@@ -11,7 +11,7 @@
 
 namespace AlterEgo::Cache {
 constexpr int kApplicationId = 0x41454348; // AECH
-constexpr int kSchemaVersion = 29;
+constexpr int kSchemaVersion = 30;
 struct AchievementProgress {
     uint32_t id = 0;
     int current = 0, max = 0;
@@ -33,6 +33,17 @@ inline AchievementTables Tables(AchievementSnapshotKind kind) {
 }
 struct VaultSeasonSnapshot { int64_t verifiedAt=0, end=0; };
 inline void Upgrade(Database::Connection& db, int version) {
+    if(version==30){
+        db.Exec(R"SQL(
+CREATE TABLE public_professions(id TEXT PRIMARY KEY,code INTEGER NOT NULL CHECK(code BETWEEN 1 AND 9),name TEXT NOT NULL,icon TEXT NOT NULL,icon_big TEXT NOT NULL,schema_version TEXT NOT NULL) STRICT;
+CREATE TABLE public_profession_specs(profession TEXT NOT NULL REFERENCES public_professions(id) ON DELETE CASCADE,ordinal INTEGER NOT NULL,spec INTEGER NOT NULL CHECK(spec BETWEEN 1 AND 4294967295),PRIMARY KEY(profession,ordinal),UNIQUE(profession,spec)) STRICT;
+CREATE TABLE public_profession_palettes(profession TEXT NOT NULL REFERENCES public_professions(id) ON DELETE CASCADE,ordinal INTEGER NOT NULL,palette INTEGER NOT NULL CHECK(palette BETWEEN 0 AND 65535),skill INTEGER NOT NULL CHECK(skill BETWEEN 1 AND 4294967295),PRIMARY KEY(profession,ordinal)) STRICT;
+CREATE TABLE public_profession_weapons(profession TEXT NOT NULL REFERENCES public_professions(id) ON DELETE CASCADE,weapon TEXT NOT NULL,specialization INTEGER NOT NULL CHECK(specialization BETWEEN 0 AND 4294967295),PRIMARY KEY(profession,weapon)) STRICT;
+CREATE TABLE public_profession_weapon_flags(profession TEXT NOT NULL,weapon TEXT NOT NULL,ordinal INTEGER NOT NULL,flag TEXT NOT NULL,PRIMARY KEY(profession,weapon,ordinal),FOREIGN KEY(profession,weapon) REFERENCES public_profession_weapons(profession,weapon) ON DELETE CASCADE) STRICT;
+CREATE TABLE public_profession_weapon_skills(profession TEXT NOT NULL,weapon TEXT NOT NULL,ordinal INTEGER NOT NULL,skill INTEGER NOT NULL CHECK(skill BETWEEN 1 AND 4294967295),slot TEXT NOT NULL,offhand TEXT NOT NULL,attunement TEXT NOT NULL,PRIMARY KEY(profession,weapon,ordinal),FOREIGN KEY(profession,weapon) REFERENCES public_profession_weapons(profession,weapon) ON DELETE CASCADE) STRICT;
+)SQL");
+        return;
+    }
     if(version==29){
         db.Exec(R"SQL(
 CREATE TABLE cache_character_identity_state(account TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;

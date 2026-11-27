@@ -6999,10 +6999,10 @@ static bool RenderSpecializationChoices(const std::string& profession,
     const std::array<uint32_t,3>& ids,int slot,uint32_t& next) {
     if(slot<0||slot>=3)return false;
     bool changed=false;
+    if(!profession.empty())AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
     auto specIds=AlterEgo::GW2API::GetProfessionSpecIds(profession);
     if(specIds.empty()){
-        if(!profession.empty()){RenderSpinner("Loading specializations...");
-            AlterEgo::GW2API::FetchProfessionInfoAsync(profession);}
+        if(!profession.empty()){RenderSpinner("Loading specializations...");}
         else ImGui::TextDisabled("No profession selected.");
     }
     for(uint32_t sid:specIds){
@@ -7069,9 +7069,9 @@ static std::vector<uint32_t> SelectableBuildSkillIds(
     const std::vector<uint32_t>& specializationIds,
     bool allowAllSpecializations = false,bool aquatic=false,bool refreshEnvironment=false) {
     if (profession.empty()) return {};
+    AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
     const auto allIds = AlterEgo::GW2API::GetProfessionSkillIds(profession);
     if (allIds.empty()) {
-        AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
         return {};
     }
     std::vector<uint32_t> missing;
@@ -7884,9 +7884,9 @@ static void RenderGearCustomizeDialog() {
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 2 && isWeapon) {
             // --- Weapon type selector ---
+            AlterEgo::GW2API::FetchProfessionPaletteAsync(editBuild->profession);
             const auto profWeapons = AlterEgo::GW2API::GetProfessionWeapons(editBuild->profession);
             if (!profWeapons) {
-                AlterEgo::GW2API::FetchProfessionPaletteAsync(editBuild->profession);
                 RenderSpinner("Loading weapon data...");
             } else {
                 ImGui::BeginChild("##weaponTypeList",ImVec2(0,-30),true);
@@ -17587,6 +17587,10 @@ void AddonOptions() {
     referenceAction("Refresh dyes","public_dyes",[]{AlterEgo::GW2API::FetchDyeColorsAsync(true);});
     referenceAction("Refresh ranger pets","public_pets",[]{AlterEgo::PublicCatalog::RefreshPets(AlterEgo::GW2API::GetDataDirectory(),true);});
     referenceAction("Refresh revenant legends","public_legends",[]{AlterEgo::PublicCatalog::RefreshLegends(AlterEgo::GW2API::GetDataDirectory(),true);});
+    if(RenderActionButton("Refresh profession metadata")){
+        for(const auto* prof:{"Guardian","Warrior","Engineer","Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"})
+            AlterEgo::GW2API::FetchProfessionInfoAsync(prof,true);
+    }
     ImGui::Spacing();
     RenderSectionHeader("Wiki reference schedules", AlterEgo::UI::SectionGold);
     ImGui::TextDisabled("Build assets: 24 hours. Runtime event timers: 30 days; retry: 24h.");
