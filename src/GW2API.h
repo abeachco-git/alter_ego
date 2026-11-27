@@ -335,6 +335,7 @@ namespace AlterEgo {
         static void RequestCharacterRefreshAddresses(const std::vector<CharacterIdentity::Address>& addresses,
             CharacterScopes::Mask demand=CharacterScopes::All,bool refreshCrafting=true);
         static void RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual=false);
+        static void RequestCharacterActivityRefreshAddresses(const std::vector<CharacterIdentity::Address>& addresses);
 
         // native API cached queries (synchronous, from native API in-memory cache)
         static void QuerySkinUnlocks(const std::vector<uint32_t>& skin_ids);

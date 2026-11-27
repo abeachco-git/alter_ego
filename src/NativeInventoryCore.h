@@ -141,6 +141,16 @@ inline std::vector<Slot> ParseArray(const Json& j,const std::string& account,con
     }
     return out;
 }
+inline std::vector<Slot> ParseBags(const Json& j,const std::string& account,const std::string& character){
+    const auto& bags=j.at("bags");if(!bags.is_array())throw std::runtime_error("Invalid bags");
+    std::vector<Slot> slots;size_t i=0;
+    for(const auto& bag:bags){
+        auto prefix=std::to_string(i++)+"/";if(bag.is_null())continue;
+        auto rows=ParseArray(bag.at("inventory"),account,"Bags",character,prefix);
+        slots.insert(slots.end(),rows.begin(),rows.end());
+    }
+    return slots;
+}
 // The character equipment endpoint provides one physical item per record,
 // with a list of template references. Legendary references are not stock.
 inline std::vector<Slot> ParseEquipment(const Json& j,const std::string& account,const std::string& character){

@@ -6,6 +6,7 @@
 #include "GW2API.h"
 #include "CharacterRequest.h"
 #include "CharacterBatchCore.h"
+#include "NativeInventoryCore.h"
 #include "SkinDataCache.h"
 #include "SkinCache.h"
 #include "ReferenceMetadataCache.h"
@@ -308,6 +309,12 @@ namespace AlterEgo {
         for(const auto& address:addresses)names.push_back(address.name);
         RequestNativeCharacters(names,false,refreshCrafting,{},{},demand,true,addresses);
     }
+    void GW2API::RequestCharacterActivityRefreshAddresses(const std::vector<CharacterIdentity::Address>& addresses){
+        if(addresses.empty())return;
+        std::vector<std::string> names;names.reserve(addresses.size());
+        for(const auto& address:addresses)names.push_back(address.name);
+        RequestNativeCharacters(names,false,true,{},{},CharacterScopes::All,false,addresses);
+    }
     void GW2API::RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual){
         if(name.empty()||!demand)return;
         std::string owner=account;
@@ -417,15 +424,18 @@ namespace AlterEgo {
                 return;
             }
             namespace BS=CharacterScopes;
-            // Manual complete refreshes may share one combined response for
-            // up to eight exact admitted targets on the same account.
-            // Physical equipment retains its existing independent broker.
+            // Complete automatic/manual refreshes share bounded same-account
+            // summaries with the Inventory storage owner. Narrow manual
+            // requests retain the existing endpoint granularity.
             struct CombinedRow {
                 CharacterActivity::Key key;
                 CharacterIdentity::Address address;
                 std::array<CharacterActivity::Ticket,5> tickets{};
                 std::array<bool,5> used{};
                 json data;
+                NativeAccounts::PhysicalEquipmentResult physical;
+                bool bagsCommitted=false;
+                std::string failure;
                 int64_t stamp=0;
                 std::chrono::steady_clock::time_point received{};
                 ~CombinedRow(){
@@ -438,9 +448,10 @@ namespace AlterEgo {
             std::map<CharacterActivity::Key,std::unique_ptr<CombinedRow>> combinedRows;
             std::set<CharacterActivity::Key> combinedAttempted;
             std::set<std::string> combinedUnavailable;
+            std::set<uint32_t> metadataIds;
             const auto prepareCombined=[&](size_t start){
                 const auto& account=targets[start].first;
-                if(!manual||demand!=BS::All||!refreshCrafting||!account.permissions.count("builds")||
+                if(demand!=BS::All||!refreshCrafting||!account.permissions.count("builds")||
                    !account.permissions.count("inventories")||combinedUnavailable.count(account.id))return;
                 const CharacterActivity::Key first{account.id,targets[start].second};
                 if(combinedAttempted.count(first))return;
@@ -454,38 +465,63 @@ namespace AlterEgo {
                     const auto address=NativeAccounts::ResolveCharacterAddress(owner.id,name);
                     if(!address||!CharacterIdentity::AdmittedBinding(owner.bindings,name,address->binding)||
                        address->credentialGeneration!=owner.generation)continue;
+                    if(!manual){
+                        BS::Stamps stamps{};
+                        {std::lock_guard<std::mutex> lock(s_mutex);
+                            for(const auto& ch:s_characters)if(ch.account_name==owner.id&&ch.name==name){
+                                const auto evidence=CharacterIdentity::Normalize({ch.created,ch.profession,ch.race});
+                                if(evidence&&*evidence==address->binding.evidence)stamps=ch.scope_stamps;
+                                break;
+                            }}
+                        std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                        if(!BS::Due(CharacterActivity::State(),key,stamps,BS::All,CharacterActivity::Now(),CharacterActivity::SpecSignal().load()))continue;
+                    }
                     auto row=std::make_unique<CombinedRow>();
                     row->key=key;row->address=*address;
                     if(!NativeAccounts::CommitIfCharacterCurrent(owner,*address,[&]{
-                        for(auto s:BS::Ordered)if(s!=BS::Physical)
+                        for(auto s:BS::Ordered)
                             row->tickets[BS::Index(s)]=CharacterActivity::Begin(key,BS::Name(s));
                         return true;
                     }))continue;
                     names.push_back(name);admitted.emplace(name,std::move(row));
                 }
                 if(names.empty())return;
-                const auto path=CharacterBatch::Path(names,UrlEncode);
-                if(path.empty())return;
-                {std::lock_guard<std::mutex> lock(s_mutex);
-                    s_fetch_message="Retrieving combined character data ("+std::to_string(names.size())+")";}
-                auto response=NativeAccounts::Request(account,path,{"characters","builds","inventories"},"Cache-Control: no-cache\r\n");
-                const auto received=std::chrono::steady_clock::now();const auto stamp=CharacterActivity::Now();
-                Background::Checkpoint();
-                if(!response){
-                    if(response.status==400||response.status==403||response.status==501)
-                        combinedUnavailable.insert(account.id);
-                    return;
-                }
-                auto indexed=CharacterBatch::Index(names,std::move(response.data));
-                if(!indexed){combinedUnavailable.insert(account.id);return;}
-                for(auto& [name,data]:*indexed){
-                    auto& row=admitted.at(name);
-                    const auto evidence=CharacterBatch::Evidence(data);
-                    if(!evidence||!(*evidence==row->address.binding.evidence))continue;
-                    try{(void)ParseVerifiedCore(name,data);}catch(...){continue;}
-                    row->data=std::move(data);row->stamp=stamp;row->received=received;
-                    combinedRows.emplace(row->key,std::move(row));
-                }
+                std::function<void(const std::vector<std::string>&)> send;
+                send=[&](const std::vector<std::string>& batch){
+                    std::vector<CharacterIdentity::Address> addresses;
+                    for(const auto& name:batch)addresses.push_back(admitted.at(name)->address);
+                    {std::lock_guard<std::mutex> lock(s_mutex);
+                        s_fetch_message="Retrieving combined character data ("+std::to_string(batch.size())+")";}
+                    auto response=NativeAccounts::RequestCharacterSummaries(account,addresses);
+                    Background::Checkpoint();
+                    if(CharacterBatch::SplitRequired(response.status)&&batch.size()>1){
+                        const auto mid=batch.begin()+batch.size()/2;
+                        send(std::vector<std::string>(batch.begin(),mid));
+                        send(std::vector<std::string>(mid,batch.end()));
+                        return;
+                    }
+                    if(CharacterBatch::NarrowFallback(response.status)){
+                        combinedUnavailable.insert(account.id);return;
+                    }
+                    if(response.status!=200){
+                        for(const auto& name:batch){
+                            auto& row=admitted.at(name);
+                            row->failure=response.error.empty()?"Combined character request failed":response.error;
+                            combinedRows.emplace(row->key,std::move(row));
+                        }
+                        return;
+                    }
+                    metadataIds.insert(response.itemIds.begin(),response.itemIds.end());
+                    for(auto& [name,data]:response.rows){
+                        auto& row=admitted.at(name);
+                        try{(void)ParseVerifiedCore(name,data);}catch(...){continue;}
+                        row->data=std::move(data);row->stamp=response.stamp;row->received=response.received;
+                        if(auto physical=response.physical.find(name);physical!=response.physical.end())row->physical=std::move(physical->second);
+                        row->bagsCommitted=response.bags.count(name)!=0;
+                        combinedRows.emplace(row->key,std::move(row));
+                    }
+                };
+                send(names);
             };
             size_t ordinal=0;
             for(const auto& [a,name]:targets){
@@ -523,13 +559,29 @@ namespace AlterEgo {
                 auto requested=demand;
                 if(needsIdentity)requested|=S::Core;
                 if(!refreshCrafting&&ch.crafting_cached)requested&=~S::Crafting;
-                if(!manual){
+                if(!manual&&!combined){
                     std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
-                    requested=S::Due(CharacterActivity::State(),key,ch.scope_stamps,requested,
+                    requested=S::Due(CharacterActivity::State(),key,ch.scope_stamps,requested&
+                        S::Permitted(a.permissions.count("characters"),a.permissions.count("builds"),a.permissions.count("inventories")),
                         CharacterActivity::Now(),CharacterActivity::SpecSignal().load());
                 }
                 {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Start(key,a.generation,requested);}
                 if(!requested)continue;
+                if(combined&&!combined->failure.empty()){
+                    partial=true;
+                    NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{
+                        std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                        for(auto scope:S::Ordered){
+                            const auto i=S::Index(scope);
+                            if(!combined->tickets[i].serial)continue;
+                            CharacterActivity::State().Failure(key,S::Name(scope),combined->tickets[i],combined->failure);
+                            combined->used[i]=true;
+                        }
+                        return true;
+                    });
+                    std::lock_guard<std::mutex> lock(s_mutex);
+                    s_character_work.Finish(key,0,CharacterActivity::Now(),combined->failure);continue;
+                }
                 struct Verified { S::Scope scope; CharacterActivity::Ticket ticket; int64_t stamp; bool specVerified; };
                 std::vector<Verified> verified;
                 CharacterActivity::CancelOnShutdown attempts(key);
@@ -578,7 +630,8 @@ namespace AlterEgo {
                     {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Activate(key,scope);}
                     const auto si=S::Index(scope);
                     combinedField=combined&&combined->stamp>=ch.scope_stamps[si]&&combined->tickets[si].serial?
-                        CharacterBatch::Field(combined->data,scope):nullptr;
+                        (scope==S::Physical?(combined->physical.inventoryCommitted?&combined->physical.response.data:nullptr):
+                            CharacterBatch::Field(combined->data,scope)):nullptr;
                     // Parse through exactly the existing validators. Invalid
                     // or incomplete combined fields fall back to their narrow
                     // endpoint with a fresh attempt, not a fabricated stamp.
@@ -670,7 +723,7 @@ namespace AlterEgo {
                         }
                         case S::Physical:{
                             stage("Physical equipment");
-                            auto physical=NativeAccounts::RequestPhysicalEquipment(a,*address,manual);
+                            auto physical=combinedField?combined->physical:NativeAccounts::RequestPhysicalEquipment(a,*address,manual);
                             if(!physical.response){scopeError=physical.response.error;throw std::runtime_error("Physical equipment endpoint failed");}
                             const auto& supplement=physical.response.data;
                             if(!supplement.at("equipment").is_array())throw std::runtime_error("Invalid supplemental equipment");
@@ -743,6 +796,21 @@ namespace AlterEgo {
                     partial=true;
                     std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Finish(key,0,CharacterActivity::Now(),"No verified scopes committed");continue;
                 }
+                // A successful full refresh also satisfies bags. Repair only
+                // a missing storage field, never a failed whole transport.
+                if(demand==S::All&&a.permissions.count("inventories")&&(!combined||!combined->bagsCommitted)){
+                    stage("Character bags");
+                    const auto bags=NativeAccounts::RequestCharacterBags(a,*address,manual);
+                    if(!bags.inventoryCommitted)partial=true;
+                    else try{
+                        const auto slots=NativeInventory::ParseBags(bags.response.data,a.id,name);
+                        for(const auto& slot:slots){metadataIds.insert(slot.id);metadataIds.insert(slot.upgrades.begin(),slot.upgrades.end());metadataIds.insert(slot.infusions.begin(),slot.infusions.end());}
+                    }catch(...){}
+                }
+                for(const auto& item:ch.equipment){
+                    metadataIds.insert(item.id);metadataIds.insert(item.upgrades.begin(),item.upgrades.end());
+                    metadataIds.insert(item.infusions.begin(),item.infusions.end());
+                }
                 ch.data_refreshed=std::time(nullptr);
                 {std::lock_guard<std::mutex> lock(s_mutex);S::Mask saving=0;
                     for(const auto& v:verified)saving|=v.scope;s_character_work.Activate(key,saving);}
@@ -767,6 +835,13 @@ namespace AlterEgo {
                 s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;
                 s_fetch_message=std::to_string(s_chars_fetched)+"/"+std::to_string(s_chars_total)+(partial?" characters refreshed; failed data retained":" characters refreshed");
             }
+            // Collect across all admitted characters. The canonical item
+            // owner rechecks durable metadata/binding evidence and coalesces
+            // any simultaneous tooltip or Inventory demand.
+            metadataIds.erase(0);
+            if(!metadataIds.empty()&&!Background::Workers().Stopping())try{
+                EnrichInventoryItems(std::vector<uint32_t>(metadataIds.begin(),metadataIds.end()),false);
+            }catch(...){}
         },[listOnly]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=listOnly?"Character list refresh cancelled":"Character refresh cancelled";if(listOnly)s_roster_refresh={s_fetch_status,s_fetch_message};s_current_char={};s_character_work.Stop(CharacterActivity::Now(),s_fetch_message);});
     }
 

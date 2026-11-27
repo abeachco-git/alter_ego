@@ -73,6 +73,21 @@ Result Request(const std::string& accountId,const std::string& path,
 bool RefreshRoster(const LinkedAccount& account,std::set<std::string>& names,bool verifyAll=false);
 struct PhysicalEquipmentResult {Result response;int64_t started=0,success=0;bool inventoryCommitted=false;};
 PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& account,const CharacterIdentity::Address& address,bool manual);
+PhysicalEquipmentResult RequestCharacterBags(const LinkedAccount& account,const CharacterIdentity::Address& address,bool manual);
+struct CharacterSummaryResult {
+    int status=0;
+    std::string error;
+    int64_t stamp=0;
+    std::chrono::steady_clock::time_point received{};
+    std::map<std::string,nlohmann::json> rows;
+    std::map<std::string,PhysicalEquipmentResult> physical;
+    std::set<std::string> bags;
+    std::set<uint32_t> itemIds;
+};
+// Holds the same storage owner as targeted bags/equipment until publication.
+// Only exact admitted rows can satisfy Inventory; no credential lock spans HTTP.
+CharacterSummaryResult RequestCharacterSummaries(const LinkedAccount& account,
+    const std::vector<CharacterIdentity::Address>& addresses);
 void PollItemDemand(const std::string& selectedAccount);
 struct Location {std::string account,scope,character,position,binding;int64_t count=0;};
 std::vector<Location> Locations(uint32_t id);

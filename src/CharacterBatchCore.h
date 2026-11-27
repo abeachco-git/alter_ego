@@ -10,7 +10,7 @@ namespace AlterEgo::CharacterBatch {
 using Json=nlohmann::json;
 // Combined characters are much larger than public item records. Bound each
 // request conservatively, independently of the public 200-ID API limit.
-inline constexpr size_t Limit=8;
+inline constexpr size_t Limit=20;
 inline constexpr const char* Schema="2024-04-01T00:00:00.000Z";
 template<class Encode>
 inline std::string Path(const std::vector<std::string>& names,Encode encode){
@@ -43,10 +43,12 @@ inline std::optional<CharacterIdentity::Evidence> Evidence(const Json& row){
         row.at("profession").get<std::string>(),row.at("race").get<std::string>()});}
     catch(...){return std::nullopt;}
 }
+inline bool SplitRequired(int status){return status==413||status==414;}
+inline bool NarrowFallback(int status){return status==403||status==501;}
 inline const Json* Field(const Json& row,CharacterScopes::Scope scope){
     using namespace CharacterScopes;
     if(scope==Core)return &row;
-    if(scope==Physical)return nullptr; // independent physical broker owns publication
+    if(scope==Physical)return nullptr; // shared storage broker validates physical rows
     try{
         if(scope==Crafting){const auto& a=row.at("crafting");return a.is_array()?&a:nullptr;}
         if(scope!=Builds&&scope!=Tabs)return nullptr;

@@ -64,7 +64,7 @@ std::atomic<uint64_t> customOrderRevision{0};
 std::atomic<bool> busy{false};
 std::mutex physicalMutex,rosterMutex;
 struct PhysicalEntry {uint64_t epoch=0;PhysicalEquipmentResult value;std::chrono::steady_clock::time_point finished{};CharacterIdentity::Binding binding;};
-std::map<std::pair<std::string,std::string>,PhysicalEntry> physicalCache;
+std::map<std::pair<std::string,std::string>,PhysicalEntry> physicalCache,bagCache;
 // Identity mutations, admission checks and view publication use credentialMutex.
 // Never hold it across HTTP or broker acquisition.
 std::map<std::string,CharacterIdentity::State> identityStates;
@@ -116,7 +116,7 @@ void EndScope(ScopeState state){
     auto key=ScopeKey{state.account,state.scope,state.character};
     // Shared endpoint owners already published the authoritative outcome.
     // Do not let a delayed inventory consumer overlay a newer owner result.
-    if(state.scope=="Equipment"||state.scope=="Roster"){
+    if(state.scope=="Equipment"||state.scope=="Bags"||state.scope=="Roster"){
         liveScopes.erase(key);++processedScopes;activeScope.clear();activeScopeKey.reset();return;
     }
     auto prior=liveScopes.find(key);
@@ -698,7 +698,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
                     a.permissions.count("inventories")&&(!characterScope||a.permissions.count("characters"))&&
                     (name!="Legendary Armory"||a.permissions.count("unlocks"));
-                if(!permitted&&name!="Equipment"){
+                if(!permitted&&!characterScope){
                     state.status="Missing permissions";
                     const auto write=[&]{if(!Record(root,state))return false;EndScope(state);return true;};
                     if(address){if(!CommitIfCharacterCurrent(linked,*address,write))return;}
@@ -720,15 +720,15 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     }
                 };
                 try{
-                    if(name=="Equipment"){
-                        auto physical=RequestPhysicalEquipment(linked,*address,!automatic);
+                    if(characterScope){
+                        auto physical=bags?RequestCharacterBags(linked,*address,!automatic):RequestPhysicalEquipment(linked,*address,!automatic);
                         checkCurrent();
                         // The physical owner alone records success AND failure.
                         if(!physical.started)throw Background::Cancelled{};
                         state.attempted=physical.started;
                         if(physical.response&&physical.inventoryCommitted){
                             state.success=physical.success;
-                            auto slots=ParseEquipment(physical.response.data,a.id,character);
+                            auto slots=bags?ParseBags(physical.response.data,a.id,character):ParseEquipment(physical.response.data,a.id,character);
                             for(const auto& slot:slots){ids.insert(slot.id);ids.insert(slot.upgrades.begin(),slot.upgrades.end());ids.insert(slot.infusions.begin(),slot.infusions.end());}
                         }else state.status=physical.response?"Invalid or incomplete response":physical.response.error;
                         if(!CommitIfCharacterCurrent(linked,*address,[&]{EndScope(state);return true;}))
@@ -741,16 +741,8 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                                 throw Background::Cancelled{};
                         }else ticket=attempts.BeginScope(name);
                     }
-                    if(bags&&!VerifyCharacterAddress(linked,*address))
-                        throw std::runtime_error("Character identity not verified");
                     auto j=fetchAccount(path);std::vector<Slot> slots;
-                    if(bags){
-                        const auto& b=j.at("bags");if(!b.is_array())throw std::runtime_error("Invalid bags");
-                        size_t i=0;for(const auto& bag:b){auto prefix=std::to_string(i++)+"/";if(bag.is_null())continue;
-                            auto rows=ParseArray(bag.at("inventory"),a.id,name,character,prefix);
-                            slots.insert(slots.end(),rows.begin(),rows.end());}
-                    }else if(name=="Equipment")slots=ParseEquipment(j,a.id,character);
-                    else if(name=="Legendary Armory")slots=ParseArmory(j,a.id);
+                    if(name=="Legendary Armory")slots=ParseArmory(j,a.id);
                     else if(name=="Delivery box")slots=ParseArray(j.at("items"),a.id,name,{},{},false);
                     else slots=ParseArray(j,a.id,name,character,{},name!="Materials");
                     Background::Checkpoint();state.success=Now();
@@ -766,7 +758,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                     Background::Checkpoint();
                     const std::string what=e.what();
                     state.status=what.rfind("HTTP ",0)==0||what=="Invalid key or missing permission"||what=="Transport failed or cancelled"||what=="Rate limited; retry later"||what=="Character identity not verified"?what:"Invalid or incomplete response";
-                    if(name=="Equipment")throw;
+                    if(characterScope)throw;
                     scopeCommit([&]{if(!Record(root,state))throw Background::Cancelled{};});
                 }
                 if(address){
@@ -1172,62 +1164,159 @@ Result Request(const std::string& id,const std::string& path,const std::vector<s
     for(const auto& a:Linked())if(a.id==id)return Request(a,path,permissions);
     return {401,{},"No linked account"};
 }
-PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const CharacterIdentity::Address& address,bool manual){
+// Shared storage publication: caller holds physicalMutex. Both targeted
+// and combined responses go through the identical parsers and durable owner.
+static PhysicalEquipmentResult PublishCharacterStorage(const LinkedAccount& a,
+    const CharacterIdentity::Address& address,const std::string& scope,Result response,
+    const CharacterActivity::Ticket& ticket,int64_t success,bool publish,
+    std::set<uint32_t>* itemIds=nullptr,bool recordFailure=true){
+    const CharacterActivity::Key k{a.id,address.name};
+    auto& cache=scope=="Bags"?bagCache:physicalCache;
+    PhysicalEquipmentResult result{std::move(response),ticket.started,success};
+    std::vector<Slot> slots;bool complete=false;
+    if(result.response)try{
+        slots=scope=="Bags"?ParseBags(result.response.data,a.id,address.name):
+            ParseEquipment(result.response.data,a.id,address.name);complete=true;
+    }catch(...){}
+    const auto cancel=[&](const char* reason){
+        CharacterActivity::Cancel(k,scope,ticket);
+        return PhysicalEquipmentResult{{0,{},reason},0,0};
+    };
+    if(Background::Workers().Stopping())return cancel("Cancelled");
+    if(!complete&&!recordFailure){
+        CharacterActivity::Cancel(k,scope,ticket);
+        return result; // missing combined fields may be repaired by a targeted request
+    }
+    try{
+        const bool accepted=CommitIfCharacterCurrent(a,address,[&]{
+            ScopeState state{a.id,scope,address.name,complete?"Ready":
+                (result.response?"Invalid or incomplete response":result.response.error),ticket.started,complete?result.success:0};
+            if(!Record(root,state,complete?&slots:nullptr))return false;
+            if(complete){
+                CharacterActivity::Success(k,scope,ticket,result.success);
+                result.inventoryCommitted=true;
+                if(itemIds)for(const auto& slot:slots){
+                    itemIds->insert(slot.id);itemIds->insert(slot.upgrades.begin(),slot.upgrades.end());
+                    itemIds->insert(slot.infusions.begin(),slot.infusions.end());
+                }
+            }else{
+                std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                CharacterActivity::State().Failure(k,scope,ticket,state.status);
+            }
+            if(publish)Publish("",false);
+            return true;
+        });
+        if(!accepted)return cancel("Account or character roster changed");
+    }catch(...){
+        if(Background::Workers().Stopping())return cancel("Cancelled");
+        if(!CommitIfCharacterCurrent(a,address,[]{return true;}))return cancel("Account or character changed");
+    }
+    if(result.inventoryCommitted)cache[k]={a.generation,result,std::chrono::steady_clock::now(),address.binding};
+    else cache.erase(k);
+    return result;
+}
+static PhysicalEquipmentResult RequestCharacterStorage(const LinkedAccount& a,const CharacterIdentity::Address& address,bool manual,bool bags){
+    const std::string scope=bags?"Bags":"Equipment";
     const auto& character=address.name;
     using Clock=std::chrono::steady_clock;
     const auto queued=Clock::now();
-    BrokerWork observed(a.generation,ScopeKey{a.id,"Equipment",character});
+    BrokerWork observed(a.generation,ScopeKey{a.id,scope,character});
     std::unique_lock<std::mutex> lock(physicalMutex,std::defer_lock);
     while(!lock.try_lock()){if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};std::this_thread::sleep_for(std::chrono::milliseconds(25));}
     if(Background::Workers().Stopping()||!Current(a))return {{0,{},"Account changed"},0,0};
     if(!CommitIfCharacterCurrent(a,address,[]{return true;}))return {{0,{},"Character roster changed"},0,0};
     const CharacterActivity::Key k{a.id,character};
-    auto& e=physicalCache[k];
-    if(e.epoch==a.generation&&e.binding==address.binding&&e.value.response&&e.value.inventoryCommitted&&
-       (e.finished>=queued||(!manual&&Clock::now()-e.finished<std::chrono::seconds(15))))return e.value;
+    auto& cache=bags?bagCache:physicalCache;
+    const auto e=cache.find(k);
+    if(e!=cache.end()&&e->second.epoch==a.generation&&e->second.binding==address.binding&&
+       e->second.value.response&&e->second.value.inventoryCommitted&&
+       (e->second.finished>=queued||(!manual&&Clock::now()-e->second.finished<std::chrono::seconds(15))))return e->second.value;
     if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};
     CharacterActivity::CancelOnShutdown attempts(k);
     observed.Start();
     CharacterActivity::Ticket ticket;
-    if(!CommitIfCharacterCurrent(a,address,[&]{ticket=attempts.BeginScope("Equipment");return true;}))
+    if(!CommitIfCharacterCurrent(a,address,[&]{ticket=attempts.BeginScope(scope);return true;}))
         return {{0,{},"Character identity changed"},0,0};
-    const auto cancel=[&](const char* reason){
-        CharacterActivity::Cancel(k,"Equipment",ticket);
-        return PhysicalEquipmentResult{{0,{},reason},0,0};
-    };
     auto r=VerifyCharacterAddress(a,address)?
-        Request(a,"/v2/characters/"+Encode(character)+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"}):
+        Request(a,"/v2/characters/"+Encode(character)+(bags?"/inventory":"/equipment?v=2024-04-01T00:00:00.000Z"),{"characters","inventories"}):
         Result{0,{},"Character identity not verified"};
-    PhysicalEquipmentResult result{std::move(r),ticket.started,Now()};
-    // Parse before the credential gate, then publish both outcomes while the
-    // physical owner is still held. Consumers never record a delayed failure.
-    std::vector<Slot> slots;
-    bool complete=false;
-    if(result.response){
-        try{slots=ParseEquipment(result.response.data,a.id,character);complete=true;}catch(...){}
+    return PublishCharacterStorage(a,address,scope,std::move(r),ticket,Now(),true);
+}
+PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const CharacterIdentity::Address& address,bool manual){
+    return RequestCharacterStorage(a,address,manual,false);
+}
+PhysicalEquipmentResult RequestCharacterBags(const LinkedAccount& a,const CharacterIdentity::Address& address,bool manual){
+    return RequestCharacterStorage(a,address,manual,true);
+}
+CharacterSummaryResult RequestCharacterSummaries(const LinkedAccount& a,const std::vector<CharacterIdentity::Address>& addresses){
+    CharacterSummaryResult out;
+    using Clock=std::chrono::steady_clock;
+    struct Admission {
+        CharacterIdentity::Address address;
+        CharacterActivity::Ticket bags,physical;
+        bool keepBags=false,keepPhysical=false;
+        std::unique_ptr<BrokerWork> bagWork,physicalWork;
+        ~Admission(){
+            const CharacterActivity::Key key{address.account,address.name};
+            if(!keepBags&&bags.serial)CharacterActivity::Cancel(key,"Bags",bags);
+            if(!keepPhysical&&physical.serial)CharacterActivity::Cancel(key,"Equipment",physical);
+        }
+    };
+    std::map<std::string,std::unique_ptr<Admission>> admitted;
+    for(const auto& address:addresses){
+        if(address.account!=a.id||address.credentialGeneration!=a.generation)continue;
+        auto row=std::make_unique<Admission>();row->address=address;
+        row->bagWork=std::make_unique<BrokerWork>(a.generation,ScopeKey{a.id,"Bags",address.name});
+        row->physicalWork=std::make_unique<BrokerWork>(a.generation,ScopeKey{a.id,"Equipment",address.name});
+        admitted.emplace(address.name,std::move(row));
     }
-    if(Background::Workers().Stopping())return cancel("Cancelled");
-    try{
-        const bool accepted=CommitIfCharacterCurrent(a,address,[&]{
-            ScopeState state{a.id,"Equipment",character,complete?"Ready":
-                (result.response?"Invalid or incomplete response":result.response.error),ticket.started,complete?result.success:0};
-            if(!Record(root,state,complete?&slots:nullptr))return false;
-            if(complete){
-                CharacterActivity::Success(k,"Equipment",ticket,result.success);
-                result.inventoryCommitted=true;
+    std::unique_lock<std::mutex> lock(physicalMutex,std::defer_lock);
+    while(!lock.try_lock()){if(Background::Workers().Stopping())return out;std::this_thread::sleep_for(std::chrono::milliseconds(25));}
+    if(!Current(a)||Background::Workers().Stopping())return out;
+    std::vector<std::string> names;
+    for(auto& [name,row]:admitted){
+        if(!CommitIfCharacterCurrent(a,row->address,[&]{
+            const CharacterActivity::Key key{a.id,name};
+            row->bags=CharacterActivity::Begin(key,"Bags");
+            row->physical=CharacterActivity::Begin(key,"Equipment");return true;
+        }))continue;
+        row->bagWork->Start();row->physicalWork->Start();names.push_back(name);
+    }
+    const auto path=CharacterBatch::Path(names,Encode);
+    if(path.empty())return out;
+    auto response=Request(a,path,{"characters","builds","inventories"},"Cache-Control: no-cache\r\n");
+    out.status=response.status;out.error=response.error;out.stamp=Now();out.received=Clock::now();
+    if(Background::Workers().Stopping())return out;
+    bool changed=false;
+    if(!response){
+        // Do not turn a failed summary into a burst of narrow requests. A
+        // rejected size/unsupported permission path may still be repaired.
+        if(!CharacterBatch::SplitRequired(out.status)&&!CharacterBatch::NarrowFallback(out.status))
+            for(const auto& name:names){
+                auto& row=*admitted.at(name);
+                auto bags=PublishCharacterStorage(a,row.address,"Bags",response,row.bags,out.stamp,false);
+                auto physical=PublishCharacterStorage(a,row.address,"Equipment",response,row.physical,out.stamp,false);
+                row.keepBags=bags.started>0;row.keepPhysical=physical.started>0;changed=true;
             }
-            Publish("",false);return true;
-        });
-        if(!accepted)return cancel("Account or character roster changed");
-    }catch(...){
-        // Preserve the raw response for the character supplement consumer;
-        // only a committed physical projection advances Inventory freshness.
-        if(Background::Workers().Stopping())return cancel("Cancelled");
-        if(!CommitIfCharacterCurrent(a,address,[]{return true;}))return cancel("Account or character changed");
+    }else{
+        auto indexed=CharacterBatch::Index(names,std::move(response.data));
+        if(!indexed){out.status=0;out.error="Invalid combined character identity";return out;}
+        for(auto& [name,data]:*indexed){
+            auto& row=*admitted.at(name);
+            const auto evidence=CharacterBatch::Evidence(data);
+            if(!evidence||!(*evidence==row.address.binding.evidence))continue;
+            // Exact matching evidence only; conflicts use ordinary core
+            // reconciliation outside the storage lock.
+            if(!RecordIdentityObservation(a,row.address,evidence->created,evidence->profession,evidence->race,out.received))continue;
+            auto bags=PublishCharacterStorage(a,row.address,"Bags",{200,data,{}},row.bags,out.stamp,false,&out.itemIds,false);
+            auto physical=PublishCharacterStorage(a,row.address,"Equipment",{200,data,{}},row.physical,out.stamp,false,&out.itemIds,false);
+            if(bags.inventoryCommitted){out.bags.insert(name);row.keepBags=true;changed=true;}
+            if(physical.inventoryCommitted){out.physical.emplace(name,std::move(physical));row.keepPhysical=true;changed=true;}
+            out.rows.emplace(name,std::move(data));
+        }
     }
-    if(result.inventoryCommitted)e={a.generation,result,Clock::now(),address.binding};
-    else physicalCache.erase(k);
-    return result;
+    if(changed)CommitIfCurrent(a,[&]{Publish("",false);return true;});
+    return out;
 }
 bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names,bool verifyAll){
     auto result=FetchRoster(a,verifyAll);
@@ -1377,7 +1466,7 @@ void Initialize(const std::string& directory){
 }
 void Shutdown(){
     // Called only after managed workers join.
-    registryReady=false;++registryGeneration;physicalCache.clear();rosterCache.clear();
+    registryReady=false;++registryGeneration;physicalCache.clear();bagCache.clear();rosterCache.clear();
     identityStates.clear();identityRosterBlocked.clear();identityProofs.clear();identityConfirmation.clear();identityRecoveryAttempts.clear();
     std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();++loadoutPreferenceRevision;customOrder=std::make_shared<CharacterOrder::OrderProjection>();++customOrderRevision;renameNotices.clear();message.clear();root.clear();
 }

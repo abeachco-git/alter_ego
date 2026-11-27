@@ -14,7 +14,13 @@ int case_character_request(int,char**) {
         const auto encode=[](const std::string& name){return name=="Nul Sul"?std::string("Nul%20Sul"):name;};
         assert(B::Path({"Nul Sul","Other"},encode)=="/v2/characters?ids=Nul%20Sul,Other&v=2024-04-01T00:00:00.000Z");
         assert(B::Path({"Other","Other"},encode).empty());
+        assert(B::Limit==20);
         assert(B::Path(std::vector<std::string>(B::Limit+1,"Other"),encode).empty());
+        assert(B::SplitRequired(413)&&B::SplitRequired(414)&&!B::SplitRequired(429));
+        assert(B::NarrowFallback(403)&&B::NarrowFallback(501)&&!B::NarrowFallback(500)&&!B::NarrowFallback(0));
+        assert(S::Permitted(true,true,true)==S::All);
+        assert(S::Permitted(true,false,false)==(S::Core|S::Crafting));
+        assert(!S::Permitted(false,true,true));
         const J first={{"name","Nul Sul"},{"created","2020-01-01T00:00:00Z"},{"profession","Warrior"},{"race","Human"},
             {"build_tabs_unlocked",2},{"active_build_tab",1},{"build_tabs",J::array({J{{"tab",1},{"is_active",true}},J{{"tab",2},{"is_active",false}}})},
             {"crafting",J::array()}};

@@ -8,6 +8,9 @@ enum Scope : uint32_t { Core=1, Builds=2, Tabs=4, Physical=8, Crafting=16 };
 using Mask=uint32_t;
 inline constexpr Mask All=Core|Builds|Tabs|Physical|Crafting;
 inline constexpr Mask Compare=Core|Builds|Tabs|Physical;
+inline Mask Permitted(bool characters,bool builds,bool inventories){
+    return characters?(Core|Crafting|(builds?Builds|Tabs:0u)|(inventories?Physical:0u)):0u;
+}
 inline constexpr std::array<Scope,5> Ordered{{Core,Builds,Tabs,Physical,Crafting}};
 inline constexpr size_t Index(Scope s){return s==Core?0:s==Builds?1:s==Tabs?2:s==Physical?3:4;}
 inline const char* Name(Scope s){namespace N=RefreshEngine::ScopeName;return s==Core?N::Core:s==Builds?N::Builds:s==Tabs?N::Tabs:s==Physical?N::Physical:N::Crafting;}

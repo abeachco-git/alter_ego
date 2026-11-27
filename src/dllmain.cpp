@@ -843,7 +843,7 @@ static int64_t CharacterLastLogin(const AlterEgo::Character& ch){
     auto it=g_LoginHistory.find({ch.account_name,ch.name});
     return it==g_LoginHistory.end()?0:it->second;
 }
-static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand);
+static std::optional<AlterEgo::CharacterIdentity::Address> DueCharacterAddress(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand);
 
 // Build Library UI state
 static float g_LibListWidth = 220.0f; // Resizable build list column width
@@ -15508,15 +15508,18 @@ static void RenderCharactersStatusRow() {
     }
     // Keep an open selection stable; roster results never open the picker.
     const bool pickerPending=g_RefreshListFetching||ImGui::IsPopupOpen("Select Characters to Refresh");
-    if(selected&&!pickerPending)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
+    std::vector<AlterEgo::CharacterIdentity::Address> due;
+    if(selected&&!pickerPending)if(const auto address=DueCharacterAddress(selected->account_name,selected->name,selected->scope_stamps,S::All))due.push_back(*address);
     const auto active=AlterEgo::CharacterActivity::ActiveKey();
-    if(!pickerPending&&!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&(!selected||selected->name!=active.second)){
+    if(!pickerPending&&!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&
+       (!selected||selected->name!=active.second||selected->account_name!=active.first)){
         S::Stamps stamps{};for(const auto& ch:chars)if(ch.account_name==active.first&&ch.name==active.second){stamps=ch.scope_stamps;break;}
-        PollDemandCharacter(active.first,active.second,stamps,S::Core);
+        if(const auto address=DueCharacterAddress(active.first,active.second,stamps,S::All))due.push_back(*address);
     }
+    if(!due.empty())AlterEgo::GW2API::RequestCharacterActivityRefreshAddresses(due);
     const bool ready=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
     CharacterFooterInspection inspection;
-    if(selected)inspection=DescribeCharacterRefresh(*selected,demand,now);
+    if(selected)inspection=DescribeCharacterRefresh(*selected,S::All,now);
     else{
         const auto fetch=AlterEgo::GW2API::GetFetchStatus();
         inspection.busy=fetch==AlterEgo::FetchStatus::InProgress;
@@ -15563,12 +15566,14 @@ static void RenderCompareStatusRow() {
     }
     namespace S=AlterEgo::CharacterScopes;
     namespace R=AlterEgo::RefreshStatus;
-    if(target){PollDemandCharacter(target->account_name,target->name,target->scope_stamps,S::Compare);
+    if(target){
+        if(const auto address=DueCharacterAddress(target->account_name,target->name,target->scope_stamps,S::All))
+            AlterEgo::GW2API::RequestCharacterActivityRefreshAddresses({*address});
         AlterEgo::NativeAccounts::PollItemDemand(target->account_name);}
     const auto now=AlterEgo::CharacterActivity::Now();
     const bool ready=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
     CharacterFooterInspection inspection;
-    if(target)inspection=DescribeCharacterRefresh(*target,S::Compare,now);
+    if(target)inspection=DescribeCharacterRefresh(*target,S::All,now);
     else{
         inspection.busy=AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress;
         inspection.kind=ready?R::Kind::NoData:R::Kind::NoAPI;
@@ -15800,17 +15805,20 @@ static void ObserveCharacterActivity(){
     SyncLoginHistory();
     SaveCharacterActivity();
 }
-static void PollDemandCharacter(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand){
+static std::optional<AlterEgo::CharacterIdentity::Address> DueCharacterAddress(const std::string& account,const std::string& name,const AlterEgo::CharacterScopes::Stamps& stamps,AlterEgo::CharacterScopes::Mask demand){
     namespace A=AlterEgo::CharacterActivity;
+    namespace S=AlterEgo::CharacterScopes;
     if(account.empty()||name.empty()||!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters)||
        AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready||
-       AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress)return;
-    if(AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name)!=account||
-       !AlterEgo::NativeAccounts::HasCharacterBinding(account,name))return;
-    AlterEgo::CharacterScopes::Mask due=0;
-    {std::lock_guard<std::mutex> lock(A::Mutex());
-        due=AlterEgo::CharacterScopes::Due(A::State(),{account,name},stamps,demand,A::Now(),g_AutoRefreshOnSpecialization);}
-    if(due)AlterEgo::GW2API::RequestCharacterActivityRefresh(account,name,due);
+       AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress)return std::nullopt;
+    const auto access=AlterEgo::NativeAccounts::InspectCharacterAccess(account,name);
+    if(!access.linked||!access.verified||AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name)!=account)return std::nullopt;
+    const auto address=AlterEgo::NativeAccounts::ResolveCharacterAddress(account,name);
+    if(!address)return std::nullopt;
+    std::lock_guard<std::mutex> lock(A::Mutex());
+    if(!S::Due(A::State(),{account,name},stamps,demand&S::Permitted(access.characters,access.builds,access.inventories),
+        A::Now(),g_AutoRefreshOnSpecialization))return std::nullopt;
+    return address;
 }
 
 struct TabDropdownState {
