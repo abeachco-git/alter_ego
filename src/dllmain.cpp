@@ -3836,7 +3836,8 @@ static void ReferenceEntityActions(const std::string& name,AlterEgo::ChatLinkTyp
 // and Compare consumers. Unknown facts never fabricate character-specific values.
 static void RenderReferenceTooltip(const std::string& name,const std::string& description,
         const nlohmann::json& facts,const std::string& kind={},const char* role=nullptr,
-        std::optional<bool> noUnderwater=std::nullopt){
+        std::optional<bool> noUnderwater=std::nullopt,
+        const std::vector<std::string>& metadataLines={}){
     if(name.empty())return;
     using namespace AlterEgo;
     ImGui::BeginTooltip();
@@ -3845,15 +3846,25 @@ static void RenderReferenceTooltip(const std::string& name,const std::string& de
     if(!kind.empty()&&(!role||kind!=role))ImGui::TextDisabled("%s",kind.c_str());
     if(!description.empty())UI::TooltipLine(StripGW2Markup(description).c_str());
     if(noUnderwater.value_or(false))UI::TooltipLine("Not usable underwater",UI::WarningText);
+    for(const auto& line:metadataLines)UI::TooltipLine(StripGW2Markup(line).c_str());
     const auto lines=TooltipCore::FactLines(facts);
     if(!lines.empty()){ImGui::Separator();for(const auto& line:lines)UI::TooltipLine(StripGW2Markup(line).c_str());}
     ImGui::EndTooltip();
 }
 static void RenderSkillTooltip(const AlterEgo::SkillInfo& skill,const char* role=nullptr){
-    RenderReferenceTooltip(skill.name,skill.description,skill.facts,skill.type,role,skill.no_underwater);
+    RenderReferenceTooltip(skill.name,skill.description,skill.facts,skill.type,role,skill.no_underwater,
+        AlterEgo::TooltipCore::MetadataLines(skill.optional_metadata,skill.professions));
 }
 static void RenderTraitTooltip(const AlterEgo::TraitInfo& trait){
-    RenderReferenceTooltip(trait.name,trait.description,trait.facts,trait.slot.empty()?std::string{}:trait.slot+" Trait");
+    auto lines=AlterEgo::TooltipCore::MetadataLines(trait.optional_metadata);
+    if(trait.optional_metadata.is_object()&&trait.optional_metadata.contains("skills")){
+        for(const auto& related:trait.optional_metadata.at("skills")){
+            if(lines.size()>=12)break;
+            const auto name=related.value("name",std::string{});
+            if(!name.empty())lines.push_back("Triggered skill: "+name);
+        }
+    }
+    RenderReferenceTooltip(trait.name,trait.description,trait.facts,trait.slot.empty()?std::string{}:trait.slot+" Trait",nullptr,std::nullopt,lines);
 }
 // Helper: render a single trait icon with selected/dimmed state and tooltip
 // Returns the center screen position of the rendered icon

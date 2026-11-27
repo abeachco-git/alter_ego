@@ -752,6 +752,9 @@ int case_database_core(int, char**) {
         assert(!Cache::WriteReference(root,D::Skills,malformed,101));
         assert(Cache::ReadReference(root,D::Skills)==skills);
         auto flags=skills;flags[0]["no_underwater"]=true;
+        flags[0]["cost"]=0;flags[0]["slot"]="Utility";flags[0]["categories"]=J::array({"Legend"});
+        flags[0]["flip_skill"]=44;flags[0]["flags"]=J::array({"NoUnderwater"});
+        flags[0]["traited_facts"]=J::array({J{{"type","Recharge"},{"requires_trait",9},{"overrides",0},{"value",5}}});
         assert(Cache::WriteReference(root,D::Skills,flags,102));
         assert(Cache::ReadReference(root,D::Skills)==flags);
         flags[0]["no_underwater"]=false;
@@ -759,6 +762,9 @@ int case_database_core(int, char**) {
         assert(Cache::ReadReference(root,D::Skills)==flags);
         auto invalid=flags;invalid[0]["no_underwater"]="unknown";
         assert(!Cache::WriteReference(root,D::Skills,invalid,104));
+        assert(Cache::ReadReference(root,D::Skills)==flags);
+        auto badExtra=flags;badExtra[0]["cost"]=-1;
+        assert(!Cache::WriteReference(root,D::Skills,badExtra,105));
         assert(Cache::ReadReference(root,D::Skills)==flags);
         J specs=J::array({{{"id",2},{"name","Spec"},{"icon","i"},{"background","b"},{"profession","Engineer"},
             {"profession_icon","p"},{"profession_icon_big","P"},{"elite",true},
@@ -768,6 +774,9 @@ int case_database_core(int, char**) {
         J traits=J::array({{{"id",9},{"name","Trait"},{"icon","i"},{"description","d"},
             {"tier",1},{"order",2},{"slot","Major"}}});
         assert(Cache::WriteReference(root,D::Traits,traits,100));
+        assert(Cache::ReadReference(root,D::Traits)==traits);
+        traits[0]["specialization"]=2;traits[0]["skills"]=J::array({J{{"id",10},{"name","Triggered"},{"facts",J::array()}}});
+        assert(Cache::WriteReference(root,D::Traits,traits,101));
         assert(Cache::ReadReference(root,D::Traits)==traits);
         J stats=J::array({{{"id",1},{"name","Stat"},{"attributes",J::array({"Power","Precision"})}}});
         auto paths=AlterEgo::Storage::Paths(root);

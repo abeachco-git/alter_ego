@@ -60,6 +60,36 @@ template<class Json> std::vector<std::string> FactLines(const Json& facts){
     }
     return out;
 }
+// Resource labels must be qualified by the actual reported profession.
+// Warrior/Druid use the same cost field; never call all costs Revenant energy.
+template<class Json> std::vector<std::string> MetadataLines(const Json& extras,const std::vector<std::string>& professions={}){
+    std::vector<std::string> out;
+    if(!extras.is_object())return out;
+    auto number=[&](const char* key,const char* label){
+        auto it=extras.find(key);if(it!=extras.end()&&it->is_number_unsigned())out.push_back(std::string(label)+": "+it->dump());
+    };
+    number("cost",professions.size()==1&&professions.front()=="Revenant"?"Energy cost":"Resource cost (API)");
+    number("initiative","Initiative cost");
+    for(const char* key:{"weapon_type","attunement","dual_wield"}){
+        auto it=extras.find(key);if(it==extras.end()||!it->is_string())continue;
+        auto s=it->template get<std::string>();
+        if(s.empty()||s=="None")continue;
+        out.push_back(std::string(key==std::string("weapon_type")?"Weapon":key==std::string("attunement")?"Attunement":"Off-hand")+": "+s);
+    }
+    auto categories=extras.find("categories");
+    if(categories!=extras.end()&&categories->is_array()){
+        std::string line;
+        for(const auto& v:*categories)if(v.is_string()&&!v.template get<std::string>().empty()){
+            if(line.size()>240)break;
+            if(!line.empty())line+=", ";line+=v.template get<std::string>();
+        }
+        if(!line.empty())out.push_back("Categories: "+line);
+    }
+    auto conditional=extras.find("traited_facts");
+    if(conditional!=extras.end()&&conditional->is_array()&&!conditional->empty())
+        out.push_back("Additional trait-dependent facts available");
+    return out;
+}
 // Dye remover has its own API value; callers own evidence of channel presence.
 inline std::string DyeName(int id,const std::string& known){
     if(id==0)return "Empty";

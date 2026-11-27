@@ -167,6 +167,10 @@ int case_skill_edit_core(int,char**) {
         assert(!ResolveEliteContext(ids,[](uint32_t id)->EliteContext{return id==1?std::nullopt:EliteContext(std::string{});}));
         auto facts=J::array({J{{"type","Recharge"},{"value",10}},J{{"type","Damage"},{"text","Damage"},{"hit_count",2},{"dmg_multiplier",99}},J{{"type","Buff"},{"status","Might"},{"duration",5}},J{{"type","Unknown"},{"value",9}},J{{"type","Number"},{"text","Targets"},{"value","bad"}}});
         assert(AlterEgo::TooltipCore::FactLines(facts)==std::vector<std::string>({"Recharge: 10 s","Hits: 2","Might (5 s)"}));
+        J extra={{"cost",0u},{"initiative",2u},{"categories",J::array({"Stance"})}};
+        assert(AlterEgo::TooltipCore::MetadataLines(extra,{"Revenant"})==std::vector<std::string>({"Energy cost: 0","Initiative cost: 2","Categories: Stance"}));
+        assert(AlterEgo::TooltipCore::MetadataLines(extra,{"Warrior"})[0]=="Resource cost (API): 0");
+        assert(AlterEgo::TooltipCore::MetadataLines(J::object()).empty());
         auto canonical=[](uint32_t id){return id>=13&&id<=19?id-12:id;};
         auto required=[](uint32_t id)->std::optional<uint32_t>{return id==9?std::optional<uint32_t>(4):std::nullopt;};
         auto water=[](uint32_t id)->std::optional<bool>{return id==10?std::optional<bool>(true):std::nullopt;};

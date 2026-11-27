@@ -1,5 +1,6 @@
 #pragma once
 #include "CacheDatabase.h"
+#include "ReferenceExtras.h"
 #include <chrono>
 #include <atomic>
 #include <fstream>
@@ -105,7 +106,7 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
     case ReferenceDataset::Traits: {
         if(replaceAll)db.Exec("DELETE FROM reference_traits");
         auto erase=db.Prepare("DELETE FROM reference_traits WHERE id=?");
-        auto q=db.Prepare("INSERT INTO reference_traits VALUES(?,?,?,?,?,?,?,?)");
+        auto q=db.Prepare("INSERT INTO reference_traits VALUES(?,?,?,?,?,?,?,?,?)");
         for(const auto& row:rows) {
             if(!row.is_object())throw std::runtime_error("Invalid metadata row");
             const auto id=ReferenceId(row.at("id"));
@@ -118,6 +119,8 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
             q.Bind(6,ReferenceInteger(row,"order"));
             q.Bind(7,row.value("slot",std::string()));
             if(row.contains("facts")&&!row.at("facts").is_null())q.Bind(8,row.at("facts").dump());else q.BindNull(8);
+            const auto extras=ReferenceExtras::Project(row,false);
+            if(extras.empty())q.BindNull(9);else q.Bind(9,extras.dump());
             q.Execute();q.Reset();
         }
         if(db.Scalar("SELECT count(*) FROM reference_traits")==0)throw std::runtime_error("No usable metadata rows");
@@ -126,7 +129,7 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
     case ReferenceDataset::Skills: {
         if(replaceAll)db.Exec("DELETE FROM reference_skills");
         auto erase=db.Prepare("DELETE FROM reference_skills WHERE id=?");
-        auto q=db.Prepare("INSERT INTO reference_skills VALUES(?,?,?,?,?,?,?,?)");
+        auto q=db.Prepare("INSERT INTO reference_skills VALUES(?,?,?,?,?,?,?,?,?)");
         auto professions=db.Prepare("INSERT INTO reference_skills_professions VALUES(?,?,?)");
         for(const auto& row:rows) {
             if(!row.is_object())throw std::runtime_error("Invalid metadata row");
@@ -145,6 +148,8 @@ inline void WriteReferenceRows(Database::Connection& db,ReferenceDataset d,const
                 if(!row.at("no_underwater").is_boolean())throw std::runtime_error("Invalid underwater flag");
                 q.Bind(8,row.at("no_underwater").get<bool>()?1:0);
             }else q.BindNull(8);
+            const auto extras=ReferenceExtras::Project(row,true);
+            if(extras.empty())q.BindNull(9);else q.Bind(9,extras.dump());
             q.Execute();q.Reset();
             if(row.contains("professions")) {
                 const auto& values=row.at("professions");
@@ -254,6 +259,7 @@ inline ReferenceJson ReadReferenceRows(Database::Connection& db,ReferenceDataset
             row["order"]=q.Integer(5);
             row["slot"]=q.Text(6);
             if(!q.IsNull(7))row["facts"]=ReferenceJson::parse(q.Text(7));
+            if(!q.IsNull(8))ReferenceExtras::Merge(row,ReferenceExtras::Project(ReferenceJson::parse(q.Text(8)),false));
             out.push_back(std::move(row));
         }
         break;
@@ -272,6 +278,7 @@ inline ReferenceJson ReadReferenceRows(Database::Connection& db,ReferenceDataset
             if(!q.IsNull(6))row["facts"]=ReferenceJson::parse(q.Text(6));
             row["professions"]=ReferenceJson::array();
             if(!q.IsNull(7))row["no_underwater"]=q.Integer(7)!=0;
+            if(!q.IsNull(8))ReferenceExtras::Merge(row,ReferenceExtras::Project(ReferenceJson::parse(q.Text(8)),true));
             out.push_back(std::move(row));
         }
         {

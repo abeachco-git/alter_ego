@@ -149,7 +149,7 @@ inline void InvalidateDatabase(const fs::path& path,CacheOperation op) {
     // Do not migrate or edit a foreign, damaged or unsupported database.
     const auto version=db.Scalar("PRAGMA user_version");
     if(db.Scalar("PRAGMA application_id")!=Cache::kApplicationId ||
-       (version!=Cache::kSchemaVersion && version!=28 && version!=27 && version!=26 && version!=25 && version!=24 && version!=23 && version!=22 && version!=21 && version!=20 && version!=19 && version!=18 && version!=17 && version!=16 && version!=15 && version!=14 && version!=13 && version!=8))
+       (version!=Cache::kSchemaVersion && version!=31 && version!=30 && version!=29 && version!=28 && version!=27 && version!=26 && version!=25 && version!=24 && version!=23 && version!=22 && version!=21 && version!=20 && version!=19 && version!=18 && version!=17 && version!=16 && version!=15 && version!=14 && version!=13 && version!=8))
         throw std::runtime_error("Unsupported cache database; use Rebuild all cache to quarantine it");
     // Upgrade known older schemas before selective operations.
     Cache::Initialize(db);

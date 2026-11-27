@@ -19,6 +19,7 @@
 #include "ProfessionMetadataTypes.h"
 #include "ChatLink.h"
 #include "SkillEditCore.h"
+#include "ReferenceExtras.h"
 
 namespace AlterEgo {
 
@@ -188,6 +189,7 @@ namespace AlterEgo {
         std::string slot;           // "Major" or "Minor"
         nlohmann::json facts;       // Tooltip facts array
         int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
+        nlohmann::json optional_metadata; // validated public optional fields, never live effects
     };
 
     // Cached skill info from /v2/skills (public, no auth)
@@ -202,6 +204,7 @@ namespace AlterEgo {
         std::optional<bool> no_underwater; // Absent means eligibility is unverified.
         nlohmann::json facts;       // Tooltip facts array
         int64_t verified_at = 0; // durable request-start microseconds; zero is unverified
+        nlohmann::json optional_metadata; // validated public optional fields, never live effects
     };
 
     // Cached profession info from /v2/professions (public, no auth)

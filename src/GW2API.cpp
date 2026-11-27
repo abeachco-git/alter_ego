@@ -118,6 +118,7 @@ namespace AlterEgo {
         case D::Skills:
             row["description"]=StripHtmlTags(raw.value("description",std::string{}));
             if(raw.contains("facts"))row["facts"]=raw.at("facts");
+            ReferenceExtras::Merge(row,ReferenceExtras::Project(raw,dataset==D::Skills));
             if(dataset==D::Traits){
                 for(const char* key:{"tier","order"}){
                     const auto value=Cache::ReferenceInteger(raw,key);
@@ -3496,6 +3497,7 @@ namespace AlterEgo {
                 TraitInfo v;v.id=id;v.verified_at=stamp;v.name=name;v.icon_url=row.value("icon",std::string{});
                 v.description=row.value("description",std::string{});v.tier=row.value("tier",0);v.order=row.value("order",0);
                 v.slot=row.value("slot",std::string{});if(row.contains("facts"))v.facts=row.at("facts");
+                v.optional_metadata=ReferenceExtras::Project(row,false);
                 s_trait_cache[id]=std::make_shared<const TraitInfo>(std::move(v));break;
             }
             case D::Skills: {
@@ -3504,6 +3506,7 @@ namespace AlterEgo {
                 v.specialization=row.value("specialization",0u);v.professions=row.at("professions").get<std::vector<std::string>>();
                 if(row.contains("facts"))v.facts=row.at("facts");
                 if(row.contains("no_underwater")&&row.at("no_underwater").is_boolean())v.no_underwater=row.at("no_underwater").get<bool>();
+                v.optional_metadata=ReferenceExtras::Project(row,true);
                 s_skill_cache[id]=std::make_shared<const SkillInfo>(std::move(v));break;
             }
             case D::ItemStats: {
@@ -3623,6 +3626,7 @@ namespace AlterEgo {
                 info.order = it.value("order", 0);
                 info.slot = it.value("slot", "");
                 if (it.contains("facts")) info.facts = it["facts"];
+                info.optional_metadata=ReferenceExtras::Project(it,false);
                 s_trait_cache[info.id]=std::make_shared<const TraitInfo>(std::move(info));
             }
         }
@@ -3647,6 +3651,7 @@ namespace AlterEgo {
                         if (p.is_string()) info.professions.push_back(p.get<std::string>());
                 if (it.contains("facts")) info.facts = it["facts"];
                 if(it.contains("no_underwater")&&it.at("no_underwater").is_boolean())info.no_underwater=it.at("no_underwater").get<bool>();
+                info.optional_metadata=ReferenceExtras::Project(it,true);
                 s_skill_cache[info.id]=std::make_shared<const SkillInfo>(std::move(info));
             }
         }
