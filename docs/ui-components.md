@@ -29,7 +29,7 @@ This is the discoverable source of truth for developers and coding agents. Read 
 | Skill icons | RenderSkillIcon / RenderEditableSkillIcon → RenderSkillIconCore | dllmain.cpp |
 | Trait icons | RenderTraitIcon (read-only/editable) | dllmain.cpp |
 | Infusion totals | RenderInfusionTotals | InfusionTotalsView.h |
-| Refresh footer | RefreshUI::Row; UI::Button / UI::ActionButtonHeight | RefreshUI.h (standard button styling; both Refresh and optional ellipsis honor availability and explain disabled states) |
+| Refresh footer | RefreshUI::Row; UI::Button / UI::ActionButtonHeight | RefreshUI.h (standard button styling; both Refresh and optional ellipsis honor availability and explain disabled states; optional ellipsis anchor for popup placement) |
 | Gear summaries / ordering | Composable::Presentation::GearSlotSummary / SortedGearSlots | ComposableGearPresentation.h |
 | Equipment catalogs | RUNE_LIST / SIGIL_LIST / RELIC_LIST, GetSortedStatCombos | dllmain.cpp; reused in ComposableNativeEditor.h |
 
@@ -249,3 +249,5 @@ Inventory character filters use account-qualified stable references with current
 Character context menus expose Copy Portrait Filename for uniquely verified characters. The filename stem is stable across renames, and users append .png, .jpg or .jpeg. Confirmed live renames produce a concise Nexus alert; startup and unchanged observations do not emit alerts. No identity discovery runs merely from opening a context menu.
 
 Library Compare uses verified original source identity when available and keeps unresolved source selections until the user chooses another target. Fashion's Associated characters editor uses the shared ordered profession-aware picker; name-only text labels remain searchable but are not verified associations. Details and search resolve current character names, retain original capture labels, and display unavailable identities without substitution. Reuse of an existing appearance preserves its original source and adds the verified association.
+
+Character refresh picker: the footer ellipsis opens immediately above the button from the current verified roster/binding projection, using canonical character ordering and the selected account filter. Opening the picker does not fetch the roster. The explicit Refresh character list action performs the existing full roster/identity verification, reports progress/failures and updates the visible picker while retaining exact still-valid selections. Refresh Selected revalidates admitted addresses and runs the existing manual character scopes; no native Fast Load changes.

@@ -89,7 +89,7 @@ inline float RowHeight() {
 inline bool Row(const char* id, std::time_t stamp, const char* source,
                 State state, const std::string& detail, bool disabled = false,
                 bool* moreClicked = nullptr, const char* statusOverride = nullptr, bool timestampDetails = false,
-                int64_t sampledNow=0,const char* disabledReason=nullptr) {
+                int64_t sampledNow=0,const char* disabledReason=nullptr,ImVec2* moreAnchor=nullptr) {
     ImGui::PushID(id);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
@@ -108,6 +108,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*0.5f);
         }
         *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH))&&!disabled;
+        if(moreAnchor)*moreAnchor=ImGui::GetItemRectMin();
         if(disabled){
             ImGui::PopStyleVar();ImGui::PopItemFlag();
             UI::DisabledHint(disabledReason);
