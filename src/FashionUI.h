@@ -28,7 +28,8 @@ static std::string g_FashionError;
 static nlohmann::json g_FashionFormBaseline;
 static nlohmann::json FashionFormSnapshot(){
     return {{"name",std::string(g_FashionName)},{"notes",std::string(g_FashionNotes)},
-        {"characters",std::string(g_FashionCharacterNames)},{"weight",g_FashionWeightIndex}};
+        {"characters",std::string(g_FashionCharacterNames)},{"weight",g_FashionWeightIndex},
+        {"character_associations",AlterEgo::CharacterIdentity::EncodeAssociations(g_FashionDraft.associations)}};
 }
 static const char* kFashionWeights[] = {"Unknown", "Light", "Medium", "Heavy", "Any"};
 
@@ -106,7 +107,11 @@ static bool CaptureLiveFashion(const AlterEgo::Character& ch,int tab,
     const std::string& name,AlterEgo::Fashion::Look& look) {
     using namespace AlterEgo;
     const std::string link=BuildWardrobeLink(ch,tab);
-    if(!Fashion::MakeLiveLook(link,name,ch.name,tab,look))return false;
+    const auto address=CharacterAddressFor(ch);
+    if(!address||!Fashion::MakeLiveLook(link,name,ch.name,tab,look))return false;
+    look.source_identity=CharacterIdentity::CaptureProvenance(*address);
+    look.characters.clear(); // legacy labels are not live associations
+    if(!Fashion::AssociateVerified(look,*look.source_identity))return false;
     DecodedWardrobeLink w{};
     if(!Fashion::DecodeValid(look.wardrobe_link,w))return false;
     look.weight=FashionWeightFromSkins(w);
@@ -120,13 +125,15 @@ static bool CaptureLiveFashion(const AlterEgo::Character& ch,int tab,
     return true;
 }
 
-static bool SelectExistingFashion(int index,const std::string& character) {
+static bool SelectExistingFashion(int index,const AlterEgo::Fashion::Look& captured) {
     if(index<0||index>=static_cast<int>(g_FashionLibrary.looks.size()))return false;
     auto existing=g_FashionLibrary.looks[index];
-    if(!character.empty()) {
-        AlterEgo::Fashion::Associate(existing,character);
-        if(!g_FashionLibrary.UpdateDraft(g_FashionLibrary.looks[index],existing))return false;
-    }
+    // Reuse the appearance, not its source provenance. Add explicitly
+    // captured/selected identities without rewriting the original source.
+    for(const auto& p:captured.associations)AlterEgo::Fashion::AssociateVerified(existing,p);
+    for(const auto& label:captured.characters)AlterEgo::Fashion::Associate(existing,label);
+    if(AlterEgo::Fashion::ToJson(existing)!=AlterEgo::Fashion::ToJson(g_FashionLibrary.looks[index])&&
+       !g_FashionLibrary.UpdateDraft(g_FashionLibrary.looks[index],existing))return false;
     g_FashionSelectedId=existing.id;
     NavigateToLibraryCollection(1);
     return true;
@@ -141,6 +148,65 @@ static bool SaveNewFashion(const AlterEgo::Fashion::Look& look) {
     return true;
 }
 
+// The same profession-aware character row and account-qualified ordering as
+// Compare/Inventory. An association is an explicit selection, not a filter.
+static bool SelectProfessionCharacterEntry(const char*,bool,const std::string&,const std::string&,
+    const char*,ImGuiSelectableFlags,const std::string&);
+static void RenderFashionAssociations(AlterEgo::Fashion::Look& draft){
+    using namespace AlterEgo;
+    ImGui::TextUnformatted("Verified characters");
+    const auto preview=draft.associations.empty()?std::string("None"):
+        std::to_string(draft.associations.size())+" associated";
+    ImGui::SetNextItemWidth(-1);
+    if(RenderThemedCombo("##fashion_verified_characters",preview.c_str())){
+        std::map<CharacterOrder::Key,CharacterIdentity::Address> candidates;
+        std::map<std::string,std::string> accountLabels;
+        std::set<CharacterOrder::Key> keys;
+        const auto linked=NativeAccounts::Linked();
+        for(const auto& account:linked){
+            accountLabels.emplace(account.id,account.label.empty()?account.name:account.label);
+            for(const auto& [name,b]:account.bindings){
+                CharacterIdentity::Address address{account.id,name,b,account.generation};
+                const auto source=CharacterIdentity::CaptureProvenance(address);
+                const auto unique=ResolveSourceIdentity(source);
+                if(!unique||!CharacterIdentity::SameAddress(*unique,address))continue;
+                const CharacterOrder::Key key{account.id,name};keys.insert(key);candidates.emplace(key,address);
+            }
+        }
+        for(const auto& key:OrderedCharacterKeys(keys)){
+            const auto& address=candidates.at(key);
+            const auto source=CharacterIdentity::CaptureProvenance(address);
+            const auto it=std::find_if(draft.associations.begin(),draft.associations.end(),
+                [&](const auto& p){return p.SameEvidence(source);});
+            const bool selected=it!=draft.associations.end();
+            ImGui::PushID(address.account.c_str());ImGui::PushID(std::to_string(address.binding.id).c_str());
+            const auto prefix=linked.size()>1?accountLabels.at(address.account)+" / ":std::string{};
+            if(SelectProfessionCharacterEntry("##association",selected,address.binding.evidence.profession,address.name,
+                prefix.empty()?nullptr:prefix.c_str(),ImGuiSelectableFlags_DontClosePopups,address.account)){
+                if(selected)draft.associations.erase(it);
+                else Fashion::AssociateVerified(draft,source);
+            }
+            ImGui::PopID();ImGui::PopID();
+        }
+        // Archived or ambiguous associations remain removable. Their labels
+        // cannot create a new association through the current roster.
+        for(size_t i=0;i<draft.associations.size();){
+            const auto& p=draft.associations[i];
+            if(ResolveSourceIdentity(p)){++i;continue;}
+            ImGui::PushID(static_cast<int>(i));
+            const bool remove=ImGui::Selectable((p.name+" (unavailable)###unresolved_association").c_str(),true,ImGuiSelectableFlags_DontClosePopups);
+            ImGui::PopID();
+            if(remove)draft.associations.erase(draft.associations.begin()+i);else ++i;
+        }
+        ImGui::EndCombo();
+    }
+}
+static std::vector<std::string> CurrentFashionNames(const AlterEgo::Fashion::Look& look){
+    std::vector<std::string> names;
+    for(const auto& p:look.associations)if(const auto a=ResolveSourceIdentity(p))names.push_back(a->name);
+    if(look.source_identity)if(const auto a=ResolveSourceIdentity(*look.source_identity))names.push_back(a->name);
+    return names;
+}
 static void RenderFashionDialog() {
     if (!g_FashionDialog) return;
     // Fixed initial dimensions, user-resizable thereafter. Do not combine
@@ -166,7 +232,8 @@ static void RenderFashionDialog() {
     ImGui::TextUnformatted("Notes");
     AlterEgo::UI::InputTextMultiline("##fashion_notes", g_FashionNotes, sizeof(g_FashionNotes), ImVec2(-1, 60));
     if (ImGui::CollapsingHeader("Associated characters")) {
-        ImGui::TextDisabled("Optional comma-separated list (also searchable).");
+        RenderFashionAssociations(g_FashionDraft);
+        ImGui::TextDisabled("Optional text labels (not verified character links).");
         ImGui::SetNextItemWidth(-1);
         AlterEgo::UI::InputText("##fashion_chars", g_FashionCharacterNames, sizeof(g_FashionCharacterNames));
     }
@@ -177,7 +244,7 @@ static void RenderFashionDialog() {
     if (duplicate >= 0) {
         ImGui::TextWrapped("Same appearance saved as '%s'.", g_FashionLibrary.looks[duplicate].name.c_str());
         if (RenderActionButton("Select Existing")) {
-            if(SelectExistingFashion(duplicate,g_FashionDraft.source_character))
+            if(SelectExistingFashion(duplicate,g_FashionDraft))
                 g_FashionDialog=false;
             else g_FashionError="Could not save character association.";
         }
@@ -371,7 +438,7 @@ static void RenderFashionLibrary() {
     const auto searchWords=AlterEgo::Search::Words(g_FashionSearch);
     for (int i = 0; i < (int)g_FashionLibrary.looks.size(); ++i) {
         const auto& look = g_FashionLibrary.looks[i];
-        if (!AlterEgo::Fashion::MatchesSearch(look,searchWords)) continue;
+        if(!searchWords.empty()&&!AlterEgo::Fashion::MatchesSearch(look,searchWords,CurrentFashionNames(look)))continue;
         if (g_FashionFilter && look.weight != filters[g_FashionFilter]) continue;
         ImGui::PushID(look.id.c_str());
         const auto label=look.name+"###fashion_row";
@@ -441,12 +508,28 @@ static void RenderFashionLibrary() {
         ImGui::Separator();
         ImGui::BeginChild("##fashion_appearance",ImVec2(0,0),false);
         if (!look.notes.empty()) { ImGui::Spacing(); ImGui::TextWrapped("%s", look.notes.c_str()); }
-        const std::string assocLabel = "Associated characters (" + std::to_string(look.characters.size()) + ")";
-        if (ImGui::TreeNode(assocLabel.c_str())) {
-            for (const auto& ch : OrderedCharacterNames(std::vector<std::string>(look.characters.begin(),look.characters.end()))) ImGui::BulletText("%s", ch.c_str());
-            if (look.characters.empty()) ImGui::TextDisabled("(none)");
-            if (!look.source_character.empty()) ImGui::TextDisabled("Original: %s, equipment %d",
-                look.source_character.c_str(), look.source_tab);
+        const std::string assocLabel="Associated characters ("+std::to_string(look.associations.size())+")";
+        if(ImGui::TreeNode(assocLabel.c_str())){
+            std::set<AlterEgo::CharacterOrder::Key> keys;
+            std::vector<std::string> unavailable;
+            for(const auto& p:look.associations){
+                const auto address=ResolveSourceIdentity(p);
+                if(address)keys.emplace(address->account,address->name);
+                else unavailable.push_back(p.name);
+            }
+            const auto accounts=AlterEgo::NativeAccounts::Linked();
+            for(const auto& key:OrderedCharacterKeys(keys)){
+                std::string label=key.second;
+                if(accounts.size()>1)for(const auto& a:accounts)if(a.id==key.first){label+=" ("+(a.label.empty()?a.name:a.label)+")";break;}
+                ImGui::BulletText("%s",label.c_str());
+                ImGui::PushID(key.first.c_str());ImGui::PushID(key.second.c_str());
+                NameOptionContext(key.second);ImGui::PopID();ImGui::PopID();
+            }
+            for(const auto& name:unavailable)ImGui::TextDisabled("%s (unavailable)",name.c_str());
+            if(look.associations.empty())ImGui::TextDisabled("(none)");
+            for(const auto& name:look.characters)ImGui::TextDisabled("%s (label only)",name.c_str());
+            if(!look.source_character.empty())ImGui::TextDisabled("Original: %s, equipment %d",
+                look.source_character.c_str(),look.source_tab);
             ImGui::TreePop();
         }
         ImGui::Separator();

@@ -11,7 +11,7 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 - [ ] Part 7B: verify live rename, same-name replacement, swap, missing/partial core, interrupted adoption and account isolation in the running addon; offline fixtures and build verification are tracked in development status. Preserve native Fast Load.
 
 - [ ] Part 7C (approved): verify stable selection, Inventory filters/group expansion, Compare, capture, portraits, portable restore, ordering and rename notifications during live reconciliation (including visible non-character pages). Complete direct v3 ambiguity and larger-swap fixtures and verify exact refresh-selector admission and malformed-core fencing. Legacy name-only recovery is low priority (single tester; preserve archived records without dedicated recovery UI).
-- [ ] Part 7D: verified Library/Fashion associations and portable provenance; preserve original capture names and never infer ownership from historical name strings.
+- [ ] Part 7D live acceptance: verified Library/Fashion associations, source-target Compare, portable provenance, duplicate reuse and live rename. Original capture names remain historical.
 - [ ] Part 7E: extend fixtures to live integration and interrupted adoption across stores, missing/partial API data, deletion/recreation, repeated rename, collisions, name reuse and swaps; no changes to native Fast Load internals.
 
 ## Remaining refresh demand follow-up

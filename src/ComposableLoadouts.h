@@ -1,4 +1,5 @@
 #pragma once
+#include "CharacterProvenance.h"
 #include "UntrustedInput.h"
 #include "EquipmentChoiceCore.h"
 #include "InfusionTotalsCore.h"
@@ -167,6 +168,13 @@ inline bool Validate(const Document& doc, std::string& error) {
             !item.metadata.at("id").is_string() ||
             item.metadata.at("id").get<std::string>() != item.id)
             return Fail(error, "Loadout metadata ID mismatch.");
+        if(item.metadata.contains("source_identity")){
+            const auto provenance=CharacterIdentity::DecodeProvenance(item.metadata.at("source_identity"));
+            if(!provenance||!item.metadata.contains("source_character")||
+               !item.metadata.at("source_character").is_string()||
+               provenance->name!=item.metadata.at("source_character").get<std::string>())
+                return Fail(error,"Invalid Loadout source identity.");
+        }
         if(!item.equipment_set_id.empty()&&!FindEquipmentSet(doc,item.equipment_set_id))
             return Fail(error,"Unknown linked equipment set.");
         for (const auto& [kind, id] : item.refs) {
@@ -1402,7 +1410,7 @@ inline bool RemoveUnreferenced(Document& doc, const std::string& kind,
 // intentionally removed, so only unknown keys are inherited.
 inline const std::set<std::string>& KnownLegacyKeys() {
     static const std::set<std::string> keys = {
-        "id", "name", "source_character", "source_url", "import_warning",
+        "id", "name", "source_character", "source_identity", "source_url", "import_warning",
         "chat_link", "ae2_code", "profession", "game_mode", "game_modes",
         "notes", "created", "specializations", "skills", "aquatic_skills",
         "pets", "legend_codes", "weapons", "gear", "infusion_totals",

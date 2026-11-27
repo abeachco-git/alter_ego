@@ -1232,6 +1232,12 @@ static std::optional<AlterEgo::CharacterIdentity::Address> CharacterAddressFor(c
     if(!address||!evidence||!(address->binding.evidence==*evidence))return std::nullopt;
     return address;
 }
+static std::optional<AlterEgo::CharacterIdentity::Address> ResolveSourceIdentity(
+    const AlterEgo::CharacterIdentity::Provenance& provenance){
+    if(!provenance.Valid())return std::nullopt;
+    const auto address=AlterEgo::NativeAccounts::ResolveCharacterEvidence(provenance.account,provenance.evidence);
+    return address&&provenance.Matches(*address)?address:std::nullopt;
+}
 static AlterEgo::CharacterIdentity::Selection SelectCharacterIdentity(const AlterEgo::Character& ch){
     using namespace AlterEgo::CharacterIdentity;
     const auto evidence=Normalize({ch.created,ch.profession,ch.race});
@@ -4292,6 +4298,8 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
     const auto* capturedTab = &buildTab;
             sb.name = name;
             sb.source_character = capturedChar->name;
+            if(const auto address=CharacterAddressFor(*capturedChar))
+                sb.source_identity=AlterEgo::CharacterIdentity::CaptureProvenance(*address);
             sb.profession = capturedTab->profession.empty() ? capturedChar->profession : capturedTab->profession;
             sb.game_mode = gameMode;
             sb.chat_link = chatLink;
@@ -8499,7 +8507,7 @@ static void RenderSaveToLibraryDialog() {
         if(duplicate>=0) {
             ImGui::TextWrapped("Same appearance saved as '%s'.",g_FashionLibrary.looks[duplicate].name.c_str());
             if(UI::AvailableActionButton("Select Existing",UI::ButtonRole::Standard,sourceChar.has_value(),"Character source changed; reopen capture.")) {
-                if(SelectExistingFashion(duplicate,g_SaveLibPendingFashion.source_character))g_SaveLibDialogOpen=false;
+                if(SelectExistingFashion(duplicate,g_SaveLibPendingFashion))g_SaveLibDialogOpen=false;
                 else g_SaveLibFashionError="Could not save character association.";
                 ImGui::CloseCurrentPopup();
             }
@@ -9188,8 +9196,15 @@ static void PollBuildSource() {
 static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
     g_LibCompareSelection={};g_LibComparePreviousSelection={};
     g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;
-    // Historical capture names are provenance, not verified current ownership.
-    // Part 7D will supply explicit source associations.
+    // A portable association can be resolved only by unique retained
+    // evidence, never by the original capture name. Keep an unresolved
+    // source selected so it cannot silently substitute another character.
+    if(build.source_identity){
+        const auto& source=*build.source_identity;
+        g_LibCompareSelection={{source.account,0},source.evidence,source.name,false};
+        if(const auto address=ResolveSourceIdentity(source))g_LibCompareSelection.Accept(*address);
+        g_LibComparePreviousSelection=g_LibCompareSelection;
+    }
     g_LibCompareBuildId=build.id;g_LibCompareSavedManual=true;
     MarkNavigation();g_SwitchToCompare=true;
 }
@@ -9926,11 +9941,6 @@ static const char* GetSpecNameForWarning(uint32_t id) {
 }
 static int GetActiveEquipmentTab(const AlterEgo::Character& ch) {
     return ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1;
-}
-static bool MatchesLegacySourceName(const std::string& title, const std::string& name) {
-    return title == name || (title.size() > name.size() + 3 &&
-        title.compare(0, name.size(), name) == 0 &&
-        title.compare(name.size(), 3, " - ") == 0);
 }
 // GW2 API infusion attributes use internal names rather than the UI labels.
 // Only a known *positive* modifier satisfies an attribute requirement;
@@ -10917,12 +10927,15 @@ struct RankedRecognition {
 static RankedRecognition RankCharacterLoadouts(const AlterEgo::Character& ch,int buildIndex,int equipTab,bool credibleOnly){
     RankedRecognition best;
     if(buildIndex<0||buildIndex>=static_cast<int>(ch.build_tabs.size()))return best;
+    const auto address=CharacterAddressFor(ch);
+    const auto unique=address?AlterEgo::NativeAccounts::ResolveCharacterEvidence(address->account,address->binding.evidence):std::nullopt;
+    const bool verifiedSource=address&&unique&&AlterEgo::CharacterIdentity::SameAddress(*address,*unique);
     for(const auto& saved:AlterEgo::GW2API::GetSavedBuilds()){
         if(saved.profession!=ch.profession)continue;
         const auto compared=CalculateSavedVsLiveComparison(saved,ch,ch.build_tabs[buildIndex],equipTab,false);
         auto health=AlterEgo::SummarizeHealth(compared);
         const auto& e=health.evidence;
-        const bool source=saved.source_character==ch.name||(saved.source_character.empty()&&MatchesLegacySourceName(saved.name,ch.name));
+        const bool source=verifiedSource&&saved.source_identity&&saved.source_identity->Matches(*address);
         const auto type=AlterEgo::ClassifyTemplateMatch(compared);
         bool gearVerified=compared.EquipmentCovered();
         for(const auto& row:compared.Rows())

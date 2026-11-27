@@ -320,23 +320,51 @@ inline Json ReadPayload(Connection& db,const std::string& kind,const std::string
     return root;
 }
 
+inline CharacterIdentity::Provenance ReadProvenance(Statement& q,int first){
+    CharacterIdentity::Provenance p{q.Text(first),q.Text(first+1),
+        {q.Text(first+2),q.Text(first+3),q.Text(first+4)}};
+    if(!p.Valid())throw Database::Error(SQLITE_CORRUPT,"Invalid stored character provenance");
+    return p;
+}
+inline void AppendProvenance(Keys& keys,const CharacterIdentity::Provenance& p){
+    if(!p.Valid())throw Database::Error(SQLITE_CONSTRAINT,"Invalid character provenance");
+    keys.insert(keys.end(),{p.account,p.name,p.evidence.created,p.evidence.profession,p.evidence.race});
+}
 inline void WriteLoadout(Connection& db,const Composable::Loadout& l,size_t ordinal) {
     Run(db,"DELETE FROM loadouts WHERE id=?",{l.id});
     Json metadata=l.metadata; metadata.erase("id");
     auto modes=Strings(metadata,"game_modes");
+    std::optional<CharacterIdentity::Provenance> source;
+    if(metadata.contains("source_identity")){
+        source=CharacterIdentity::DecodeProvenance(metadata.at("source_identity"));
+        if(!source)throw Database::Error(SQLITE_CONSTRAINT,"Invalid Loadout source identity");
+        metadata.erase("source_identity");
+    }
     Value fashion=l.fashion_id.empty()?Value(nullptr):Value(l.fashion_id);
     Value set=l.equipment_set_id.empty()?Value(nullptr):Value(l.equipment_set_id);
     InsertRecord(db,"loadouts","id,ordinal,fashion_id,modes_present,equipment_set_id",
                  {l.id,Number(ordinal),fashion,Present(modes,1),set},metadataFields,std::move(metadata));
+    if(source){
+        Keys keys{l.id};AppendProvenance(keys,*source);
+        Run(db,"INSERT INTO loadout_source_identity VALUES(?,?,?,?,?,?)",keys);
+    }
     WriteStrings(db,"INSERT INTO loadout_game_modes VALUES(?,?,?)",{l.id},modes);
     for(const auto& ref:l.refs)
         Run(db,"INSERT INTO loadout_components VALUES(?,?,?)",{l.id,ref.first,ref.second});
 }
 
-inline Composable::Loadout ReadLoadout(Connection& db,Statement& q) {
+inline Composable::Loadout ReadLoadout(Connection& db,Statement& q,bool provenance=true) {
     Composable::Loadout l; l.id=q.Text(0); l.fashion_id=q.Text(1);
     l.equipment_set_id=q.Text(3);
     l.metadata=DecodeFields(q,4,metadataFields); l.metadata["id"]=l.id;
+    if(provenance){
+        auto p=db.Prepare("SELECT account,character,created,profession,race FROM loadout_source_identity WHERE loadout_id=?");
+        BindKeys(p,{l.id});
+        if(p.Step()){
+            if(l.metadata.contains("source_identity"))throw Database::Error(SQLITE_CORRUPT,"Conflicting source identity");
+            l.metadata["source_identity"]=CharacterIdentity::EncodeProvenance(ReadProvenance(p,0));
+        }
+    }
     if(q.Integer(2)) l.metadata["game_modes"]=ReadList(db,
         "SELECT ordinal,mode FROM loadout_game_modes WHERE loadout_id=? ORDER BY ordinal",{l.id},Type::Text);
     auto r=db.Prepare("SELECT kind,component_id FROM loadout_components WHERE loadout_id=?");
@@ -378,6 +406,13 @@ inline void WriteFashion(Connection& db,const Fashion::Look& l,size_t ordinal) {
          std::int64_t(l.source_tab),std::int64_t(l.complete),std::int64_t(l.created),std::int64_t(w.visibility_flags),l.extension.dump()});
     Run(db,"DELETE FROM fashion_skins WHERE fashion_id=?",{l.id});
     Run(db,"DELETE FROM fashion_characters WHERE fashion_id=?",{l.id});
+    Run(db,"DELETE FROM fashion_character_identity WHERE fashion_id=?",{l.id});
+    const auto writeIdentity=[&](int64_t role,size_t ordinal,const CharacterIdentity::Provenance& p){
+        Keys keys{l.id,role,Number(ordinal)};AppendProvenance(keys,p);
+        Run(db,"INSERT INTO fashion_character_identity VALUES(?,?,?,?,?,?,?,?)",keys);
+    };
+    if(l.source_identity)writeIdentity(0,0,*l.source_identity);
+    for(size_t i=0;i<l.associations.size();++i)writeIdentity(1,i,l.associations[i]);
     for(const auto& slot:wardrobeSlots) {
         const std::string name=slot.name;
         Run(db,"INSERT INTO fashion_skins VALUES(?,?,?)",{l.id,name,std::int64_t(w.*(slot.skin))});
@@ -387,7 +422,7 @@ inline void WriteFashion(Connection& db,const Fashion::Look& l,size_t ordinal) {
     }
     WriteStrings(db,"INSERT INTO fashion_characters VALUES(?,?,?)",{l.id},Json(l.characters));
 }
-inline Fashion::Look ReadFashion(Connection& db,Statement& q) {
+inline Fashion::Look ReadFashion(Connection& db,Statement& q,bool provenance=true) {
     Fashion::Look l; l.id=q.Text(0);l.name=q.Text(1);l.notes=q.Text(2);
     l.weight=q.Text(3);l.origin=q.Text(4);l.source_character=q.Text(5);
     l.source_tab=static_cast<int>(q.Integer(6));l.complete=q.Integer(7)!=0;
@@ -412,6 +447,20 @@ inline Fashion::Look ReadFashion(Connection& db,Statement& q) {
     l.wardrobe_link=ChatLink::EncodeWardrobe(w);
     l.characters=ReadList(db,"SELECT ordinal,character FROM fashion_characters WHERE fashion_id=? ORDER BY ordinal",
                           {l.id},Type::Text).get<std::vector<std::string>>();
+    if(provenance){
+        auto p=db.Prepare("SELECT role,ordinal,account,character,created,profession,race FROM fashion_character_identity WHERE fashion_id=? ORDER BY role,ordinal");
+        BindKeys(p,{l.id});
+        while(p.Step()){
+            auto source=ReadProvenance(p,2);
+            if(p.Integer(0)==0){
+                if(l.source_identity||p.Integer(1)!=0)throw Database::Error(SQLITE_CORRUPT,"Invalid Fashion source");
+                l.source_identity=std::move(source);
+            }else{
+                if(p.Integer(1)!=Number(l.associations.size())||!Fashion::AssociateVerified(l,source))
+                    throw Database::Error(SQLITE_CORRUPT,"Invalid Fashion character association");
+            }
+        }
+    }
     return l;
 }
 

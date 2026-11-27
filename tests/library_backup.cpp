@@ -33,9 +33,13 @@ int case_library_backup(int, char**) {
     f.id = "fashion-1"; f.name = "Saved Wardrobe";
     f.wardrobe_link = wardrobe; f.weight = "Heavy";
     AlterEgo::Fashion::Associate(f, "Warrior");
+    const CharacterIdentity::Provenance sourceIdentity{"account-a","Hero",{"2015-02-03T04:05:06Z","Warrior","Human"}};
+    f.source_character=sourceIdentity.name;f.source_identity=sourceIdentity;
+    assert(AlterEgo::Fashion::AssociateVerified(f,sourceIdentity));
     nlohmann::json fashion = {{"version", 1}, {"looks", nlohmann::json::array({AlterEgo::Fashion::ToJson(f)})}};
     nlohmann::json builds = {{"builds", nlohmann::json::array({
-        {{"id", "build-a"}, {"name", "Build A"}, {"profession", "Warrior"}}
+        {{"id", "build-a"}, {"name", "Build A"}, {"profession", "Warrior"},
+         {"source_character",sourceIdentity.name},{"source_identity",CharacterIdentity::EncodeProvenance(sourceIdentity)}}
     })}};
     Put(FilePath(src,"build_library.json"),builds.dump());
     Put(FilePath(src,"fashion_library.json"),fashion.dump());
@@ -124,6 +128,9 @@ int case_library_backup(int, char**) {
     assert(merged["builds"].size() == 2);
     assert(merged["builds"][0]["name"] == "Local version");
     assert(native.fashion.size()==1);
+    assert(native.fashion[0].source_identity&&*native.fashion[0].source_identity==sourceIdentity);
+    assert(native.fashion[0].associations.size()==1&&native.fashion[0].associations[0]==sourceIdentity);
+    assert(Composable::FindLoadout(native.loadouts,"build-a")->metadata.at("source_identity")==CharacterIdentity::EncodeProvenance(sourceIdentity));
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":false})");
     assert(Get(FilePath(dst,"portraits/a.png")) == portrait);
     assert(!Exists(FilePath(dst,"character_activity.json")));

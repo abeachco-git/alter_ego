@@ -436,6 +436,20 @@ int case_composable_loadouts(int, char**) {
 
     // A Loadout can travel with all of its independent components; import
     // creates fresh IDs and retains precise equipment/upgrade placement.
+    const AlterEgo::CharacterIdentity::Provenance source{"A","Hero",{"2020-01-02T03:04:05Z","Necromancer","Asura"}};
+    auto portableDoc=document;
+    auto* sourceLoadout=FindLoadout(portableDoc,"one");
+    assert(sourceLoadout&&sourceLoadout->metadata.at("source_character")=="Hero");
+    sourceLoadout->metadata["source_identity"]=AlterEgo::CharacterIdentity::EncodeProvenance(source);
+    Json identityPacket;
+    assert(ExportPortableLoadout(portableDoc,"one",identityPacket,error));
+    assert(!identityPacket["metadata"]["source_identity"].contains("local_id"));
+    assert(ImportPortableLoadout(portableDoc,identityPacket,"identity-copy",error));
+    assert(FindLoadout(portableDoc,"identity-copy")->metadata.at("source_identity")==AlterEgo::CharacterIdentity::EncodeProvenance(source));
+    const auto beforeBadIdentity=ToJson(portableDoc);
+    identityPacket["metadata"]["source_identity"]["created"]="not a date";
+    assert(!ImportPortableLoadout(portableDoc,identityPacket,"bad-identity",error));
+    assert(ToJson(portableDoc)==beforeBadIdentity);
     Json portablePacket;
     assert(ExportPortableLoadout(document, "one", portablePacket, error));
     assert(portablePacket["format"] == kPortableLoadoutFormat);

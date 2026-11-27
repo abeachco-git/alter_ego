@@ -39,6 +39,11 @@ int case_native_library(int,char**) {
          {"infusion_summary_present",true},{"infusion_stat_totals",{{"Power",5}}},
          {"infusion_totals",Json::array({{{"item_id",11},{"count",1},{"attribute","Power"}}})},
          {"extension",{{"unknown",true}}}}})}};
+    namespace CI=AlterEgo::CharacterIdentity;
+    const CI::Evidence creation{"2020-01-01T02:03:04Z","Necromancer","Human"};
+    const CI::Provenance source{"A","Original",creation};
+    legacy["builds"][0]["source_character"]=source.name;
+    legacy["builds"][0]["source_identity"]=CI::EncodeProvenance(source);
     Native::Snapshot expected;
     std::string error;
     assert(C::SplitLegacy(legacy,expected.loadouts,error));
@@ -46,8 +51,39 @@ int case_native_library(int,char**) {
     wardrobe.helm_skin=321;wardrobe.helm_dyes[2]=98;wardrobe.visibility_flags=7;
     AlterEgo::Fashion::Look look;
     look.id="fashion-one";look.name="Look";look.wardrobe_link=AlterEgo::ChatLink::EncodeWardrobe(wardrobe);
-    look.characters={"Character 1","Character 2"};expected.fashion.push_back(look);
+    look.characters={"Character 1","Character 2"};
+    look.source_character=source.name;look.source_identity=source;
+    assert(AlterEgo::Fashion::AssociateVerified(look,source));
+    assert(!AlterEgo::Fashion::AssociateVerified(look,{"A","Renamed",creation}));
+    assert(AlterEgo::Fashion::AssociateVerified(look,{"B","Original",creation}));
+    expected.fashion.push_back(look);
     expected.loadouts.loadouts[0].fashion_id=look.id;
+    // A populated v5 library migrates without losing legacy labels, content
+    // or revision. The two new typed tables are additive.
+    {
+        Scratch old;
+        Native::Snapshot prior=expected;
+        prior.loadouts.loadouts[0].metadata.erase("source_identity");
+        prior.fashion[0].source_identity.reset();prior.fashion[0].associations.clear();
+        {
+            Native::Repository repo(old.db(),DB::Connection::OpenMode::Create);
+            assert(repo.Commit(repo.Read(),prior)==1);
+        }
+        {
+            DB::Connection db(old.db(),DB::Connection::OpenMode::Existing);
+            db.Exec("DROP TABLE loadout_source_identity;DROP TABLE fashion_character_identity;PRAGMA user_version=5;");
+        }
+        {
+            Native::Repository migrated(old.db(),DB::Connection::OpenMode::Existing);
+            const auto read=migrated.Read();
+            assert(read.revision==1&&C::ToJson(read.loadouts)==C::ToJson(prior.loadouts));
+            assert(AlterEgo::Fashion::ToJson(read.fashion[0])==AlterEgo::Fashion::ToJson(prior.fashion[0]));
+            assert(migrated.Commit(read,expected)==2);
+            const auto actual=migrated.Read();
+            assert(C::ToJson(actual.loadouts)==C::ToJson(expected.loadouts));
+            assert(AlterEgo::Fashion::ToJson(actual.fashion[0])==AlterEgo::Fashion::ToJson(look));
+        }
+    }
     // Intentional duplicate and distinct physical placement are retained.
     auto sigil=expected.loadouts.components.at("sigils").front();
     sigil.id="identical";sigil.name="Intentional copy";

@@ -1,5 +1,6 @@
 #pragma once
 #include "SearchCore.h"
+#include "CharacterProvenance.h"
 // Persistent, profession-agnostic wardrobe snapshots for the Fashion collection.
 // Live equipment captures are explicitly marked partial: the character API does
 // not expose all Fashion Template visibility/outfit settings.
@@ -32,6 +33,8 @@ struct Look {
     std::vector<std::string> characters;
     std::time_t created = 0;
     nlohmann::json extension = nlohmann::json::object();
+    std::optional<CharacterIdentity::Provenance> source_identity{};
+    std::vector<CharacterIdentity::Provenance> associations{};
 };
 
 inline bool DecodeValid(const std::string& input, DecodedWardrobeLink& decoded) {
@@ -58,10 +61,13 @@ inline std::string CanonicalLink(const std::string& input) {
 inline bool ContainsIgnoreCase(std::string haystack,std::string needle){
     return AlterEgo::Search::LiteralContains(haystack,needle);
 }
-inline bool MatchesSearch(const Look& look,const std::vector<std::string>& query){
+inline bool MatchesSearch(const Look& look,const std::vector<std::string>& query,
+                          const std::vector<std::string>& currentNames={}){
     if(query.empty())return true;
     std::vector<std::string> fields{look.name,look.notes,look.weight,look.source_character};
     fields.insert(fields.end(),look.characters.begin(),look.characters.end());
+    fields.insert(fields.end(),currentNames.begin(),currentNames.end());
+    for(const auto& association:look.associations)fields.push_back(association.name);
     return AlterEgo::Search::MatchesFields(query,fields);
 }
 inline bool MatchesSearch(const Look& look,const std::string& query){
@@ -74,6 +80,14 @@ inline void Associate(Look& look, const std::string& character) {
         look.characters.push_back(character);
 }
 
+inline bool ValidProvenance(const Look& look){
+    if(look.source_identity&&(!look.source_identity->Valid()||
+        look.source_identity->name!=look.source_character))return false;
+    return CharacterIdentity::DecodeAssociations(CharacterIdentity::EncodeAssociations(look.associations)).has_value();
+}
+inline bool AssociateVerified(Look& look,const CharacterIdentity::Provenance& source){
+    return CharacterIdentity::AssociateProvenance(look.associations,source);
+}
 inline bool HasCapturedSkin(const DecodedWardrobeLink& w) {
     for(auto id:{w.helm_skin,w.shoulders_skin,w.chest_skin,w.gloves_skin,
         w.leggings_skin,w.boots_skin,w.backpack_skin,w.aquabreather_skin,
@@ -101,6 +115,8 @@ inline nlohmann::json ToJson(const Look& look) {
             {"origin", look.origin}, {"source_character", look.source_character},
             {"source_tab", look.source_tab}, {"complete", look.complete},
             {"characters", look.characters}, {"created", look.created}});
+    if(look.source_identity)out["source_identity"]=CharacterIdentity::EncodeProvenance(*look.source_identity);
+    if(!look.associations.empty())out["character_associations"]=CharacterIdentity::EncodeAssociations(look.associations);
     return out;
 }
 
@@ -123,9 +139,20 @@ inline bool FromJson(const nlohmann::json& j, Look& look) {
     if (j.contains("characters") && j["characters"].is_array())
         for (const auto& n : j["characters"])
             if (n.is_string()) Associate(look, n.get<std::string>());
+    look.source_identity.reset();look.associations.clear();
+    if(j.contains("source_identity")){
+        look.source_identity=CharacterIdentity::DecodeProvenance(j.at("source_identity"));
+        if(!look.source_identity)return false;
+    }
+    if(j.contains("character_associations")){
+        const auto associations=CharacterIdentity::DecodeAssociations(j.at("character_associations"));
+        if(!associations)return false;
+        look.associations=*associations;
+    }
+    if(!ValidProvenance(look))return false;
     look.extension = j;
     for (const char* key : {"id","name","notes","wardrobe_link","weight","origin",
-                            "source_character","source_tab","complete","characters","created"})
+                            "source_character","source_tab","complete","characters","created","source_identity","character_associations"})
         look.extension.erase(key);
     if (look.id.empty()) return false;
     return true;

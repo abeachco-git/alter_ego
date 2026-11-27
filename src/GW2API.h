@@ -13,7 +13,7 @@
 #include <nlohmann/json.hpp>
 #include "nexus/Nexus.h"
 #include "CharacterScopes.h"
-#include "CharacterIdentityRuntime.h"
+#include "CharacterProvenance.h"
 #include "RefreshStatusCore.h"
 
 namespace AlterEgo {
@@ -331,6 +331,7 @@ namespace AlterEgo {
         // names and palette data later if the GW2 API was unavailable or
         // rate-limited at import. Empty for plain chat-link imports.
         std::string ae2_code;
+        std::optional<CharacterIdentity::Provenance> source_identity{};
     };
 
     class GW2API {

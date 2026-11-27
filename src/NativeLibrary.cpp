@@ -28,7 +28,7 @@ void ValidateSnapshot(const Snapshot& snapshot) {
     for(const auto& look:snapshot.fashion) {
         DecodedWardrobeLink w{};
         if(look.id.empty()||look.name.empty()||!fashion.insert(look.id).second||
-           !Fashion::DecodeValid(look.wardrobe_link,w)||!look.extension.is_object())
+           !Fashion::DecodeValid(look.wardrobe_link,w)||!look.extension.is_object()||!Fashion::ValidProvenance(look))
             throw Database::Error(SQLITE_CONSTRAINT,"Invalid or duplicate Fashion record");
     }
     for(const auto& loadout:snapshot.loadouts.loadouts)
@@ -55,7 +55,7 @@ Repository::Repository(const std::string& path,Database::Connection::OpenMode mo
     if(id==kApplicationId&&version==4&&backedUpV4Revision>=0&&mode==Database::Connection::OpenMode::Existing){
         UpgradeBackedUpV4(backedUpV4Revision);return;
     }
-    if(id==kApplicationId&&version>0&&version!=kSchemaVersion)
+    if(id==kApplicationId&&version>0&&version!=5&&version!=kSchemaVersion)
         throw Database::Error(SQLITE_NOTADB,"Archive experimental library.db and migrate the original v2 library; schema is not supported.");
     if(id==kApplicationId&&version==kSchemaVersion) {
         if(verify) db_.Verify();
@@ -63,6 +63,7 @@ Repository::Repository(const std::string& path,Database::Connection::OpenMode mo
 }
 Snapshot Repository::ReadUnlocked() {
     Snapshot snapshot;
+    const bool provenance=db_.Scalar("PRAGMA user_version")>=6;
     snapshot.revision=db_.Scalar("SELECT revision FROM library_state WHERE singleton=1");
     {
         auto q=db_.Prepare("SELECT kind,id,name,fingerprint FROM components ORDER BY kind,ordinal,id");
@@ -75,12 +76,12 @@ Snapshot Repository::ReadUnlocked() {
     }
     {
         auto q=db_.Prepare("SELECT id,name,notes,weight,origin,source_character,source_tab,complete,created,visibility_flags,extension_json FROM fashion ORDER BY ordinal,id");
-        while(q.Step()) snapshot.fashion.push_back(ReadFashion(db_,q));
+        while(q.Step()) snapshot.fashion.push_back(ReadFashion(db_,q,provenance));
     }
     {
         auto q=db_.Prepare(("SELECT id,fashion_id,modes_present,equipment_set_id,"+Select(metadataFields)+
             " FROM loadouts ORDER BY ordinal,id").c_str());
-        while(q.Step()) snapshot.loadouts.loadouts.push_back(ReadLoadout(db_,q));
+        while(q.Step()) snapshot.loadouts.loadouts.push_back(ReadLoadout(db_,q,provenance));
     }
     {
         auto q=db_.Prepare("SELECT id,name FROM equipment_sets ORDER BY ordinal,id");
@@ -220,11 +221,12 @@ DROP TABLE component_payloads;
 DROP TABLE components;
 DROP TABLE library_state;
 )SQL");
-        UpgradeSchema(db_,kSchemaVersion);
+        UpgradeSchema(db_,5);
+        UpgradeSchema(db_,6);
+        db_.Exec("PRAGMA user_version=6");
         Snapshot empty;
         CommitUnlocked(empty,after);
         Run(db_,"UPDATE library_state SET revision=? WHERE singleton=1",{before.revision+1});
-        db_.Exec("PRAGMA user_version=5");
         const auto actual=ReadUnlocked();
         if(!ExactContent(Composable::ToJson(actual.loadouts),Composable::ToJson(after.loadouts))||
            actual.fashion.size()!=after.fashion.size())

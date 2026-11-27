@@ -4,12 +4,31 @@
 namespace AlterEgo::NativeLibrary {
 
 constexpr int kApplicationId = 0x41454c42; // AELB
-constexpr int kSchemaVersion = 5;
+constexpr int kSchemaVersion = 6;
 
 inline void UpgradeSchema(Database::Connection& db, int version) {
     // Existing v4 is rebuilt transactionally after a verified backup.
     // Earlier experimental schemas remain unsupported.
     if(version>=1&&version<5)return;
+    if(version==6){
+        db.Exec(R"SQL(
+CREATE TABLE loadout_source_identity(
+    loadout_id TEXT PRIMARY KEY REFERENCES loadouts(id) ON DELETE CASCADE,
+    account TEXT NOT NULL, character TEXT NOT NULL, created TEXT NOT NULL,
+    profession TEXT NOT NULL, race TEXT NOT NULL
+) STRICT;
+CREATE TABLE fashion_character_identity(
+    fashion_id TEXT NOT NULL REFERENCES fashion(id) ON DELETE CASCADE,
+    role INTEGER NOT NULL CHECK(role IN (0,1)),
+    ordinal INTEGER NOT NULL CHECK(ordinal>=0 AND (role=1 OR ordinal=0)),
+    account TEXT NOT NULL, character TEXT NOT NULL, created TEXT NOT NULL,
+    profession TEXT NOT NULL, race TEXT NOT NULL,
+    PRIMARY KEY(fashion_id,role,ordinal),
+    UNIQUE(fashion_id,role,account,created,profession,race)
+) STRICT;
+)SQL");
+        return;
+    }
     if(version!=5)throw Database::Error(SQLITE_ERROR,"Unknown library schema");
     // Category is part of each component FK. IDs are stable within a kind.
     // Fingerprints are deliberately nonunique; independent identical records

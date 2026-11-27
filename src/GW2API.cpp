@@ -2281,6 +2281,8 @@ namespace AlterEgo {
         bj["id"] = b.id;
         bj["name"] = b.name;
         if (!b.source_character.empty()) bj["source_character"] = b.source_character;
+        if(b.source_identity&&b.source_identity->Valid())
+            bj["source_identity"]=CharacterIdentity::EncodeProvenance(*b.source_identity);
         if (!b.source_url.empty()) bj["source_url"] = b.source_url;
         bj["chat_link"] = b.chat_link;
         if (!b.ae2_code.empty()) bj["ae2_code"] = b.ae2_code;
@@ -2388,6 +2390,11 @@ namespace AlterEgo {
         b.id = bj.value("id", "");
         b.name = bj.value("name", "");
         b.source_character = bj.value("source_character", "");
+        b.source_identity.reset();
+        if(bj.contains("source_identity")){
+            b.source_identity=CharacterIdentity::DecodeProvenance(bj.at("source_identity"));
+            if(!b.source_identity)return false;
+        }
         b.source_url = bj.value("source_url", "");
         b.chat_link = bj.value("chat_link", "");
         b.ae2_code = bj.value("ae2_code", "");
