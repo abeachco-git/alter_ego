@@ -16,7 +16,7 @@ struct Entry {
     std::string profession,created;
     int level=0,birthday=-1;
     int64_t login=0;
-    CharacterIdentity::Ref ref;
+    CharacterIdentity::Ref ref{};
 };
 inline std::vector<int> Indices(const std::vector<Entry>& rows,int mode,bool asc,
     const std::vector<std::string>& custom,const std::vector<std::string>& accounts,
