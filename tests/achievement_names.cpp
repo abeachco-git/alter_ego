@@ -23,6 +23,22 @@ int case_achievement_names(int,char**) {
     assert(rejects([&]{ValidateBatch({1,3},good);}));
     auto bad=good;bad[1]["id"]=2;assert(rejects([&]{ValidateBatch({1,2},bad);}));
     bad=good;bad[1]["name"]="";assert(rejects([&]{ValidateBatch({1,2},bad);}));
+    const auto categories=Json::array({{{"id",1},{"name","Category"},{"achievements",Json::array({5,6})}},
+        {{"id",2},{"name","Ungrouped"},{"achievements",Json::array()}}});
+    const auto groups=Json::array({{{"id","g"},{"name","Group"},{"categories",Json::array({1})}}});
+    ValidateGroupCatalog(groups,categories);
+    ValidateCatalogIdentities<uint32_t>(Json::array({2,1}),categories);
+    ValidateCatalogIdentities<std::string>(Json::array({"g"}),groups);
+    assert(rejects([&]{ValidateCatalogIdentities<uint32_t>(Json::array({1,3}),categories);}));
+    assert(rejects([&]{ValidateCatalogIdentities<uint32_t>(Json::array({1}),categories);}));
+    assert(rejects([&]{ValidateCatalogIdentities<std::string>(Json::array({"other"}),groups);}));
+    assert(rejects([&]{ValidateGroupCatalog(groups,Json::array());}));
+    auto brokenGroups=groups;brokenGroups[0]["categories"]=Json::array({3});
+    assert(rejects([&]{ValidateGroupCatalog(brokenGroups,categories);}));
+    auto brokenCategories=categories;brokenCategories[1]["id"]=1;
+    assert(rejects([&]{ValidateGroupCatalog(groups,brokenCategories);}));
+    brokenCategories=categories;brokenCategories[0]["achievements"]=Json::array({5,5});
+    assert(rejects([&]{ValidateGroupCatalog(groups,brokenCategories);}));
     assert(Due(0,100,0,false));
     assert(!Due(0,100,200,true));
     assert(!Due(100,100+RefreshInterval-1,0,true));

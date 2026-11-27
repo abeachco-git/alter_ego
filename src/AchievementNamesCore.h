@@ -4,6 +4,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include <nlohmann/json.hpp>
 
@@ -53,6 +54,55 @@ inline void ValidateBatch(const std::vector<uint32_t>& requested, const Json& re
             throw std::runtime_error("Invalid achievement definition");
     }
     if (!expected.empty()) throw std::runtime_error("Missing achievement IDs");
+}
+
+// Validate both complete public catalogs before replacing a working projection.
+// Categories can legitimately be ungrouped and membership can overlap.
+inline void ValidateGroupCatalog(const Json& groups, const Json& categories) {
+    if (!groups.is_array() || groups.empty() || !categories.is_array() || categories.empty())
+        throw std::runtime_error("Incomplete achievement group/category catalog");
+    std::set<uint32_t> categoryIds;
+    for (const auto& category : categories) {
+        if (!category.is_object() || !categoryIds.insert(Id(category.at("id"))).second ||
+            !category.at("name").is_string() || category.at("name").get<std::string>().empty() ||
+            !category.at("achievements").is_array())
+            throw std::runtime_error("Invalid achievement category");
+        std::set<uint32_t> members;
+        for (const auto& id : category.at("achievements"))
+            if (!members.insert(Id(id)).second) throw std::runtime_error("Duplicate achievement membership");
+    }
+    std::set<std::string> groupIds;
+    for (const auto& group : groups) {
+        const auto id = group.at("id").get<std::string>();
+        if (id.empty() || !groupIds.insert(id).second ||
+            !group.at("name").is_string() || group.at("name").get<std::string>().empty() ||
+            !group.at("categories").is_array())
+            throw std::runtime_error("Invalid achievement group");
+        std::set<uint32_t> members;
+        for (const auto& value : group.at("categories")) {
+            const auto categoryId = Id(value);
+            if (!categoryIds.count(categoryId) || !members.insert(categoryId).second)
+                throw std::runtime_error("Missing or duplicate group membership");
+        }
+    }
+}
+// Compare ids=all against the independently returned public ID list.
+template<class IdType>
+inline void ValidateCatalogIdentities(const Json& ids, const Json& rows) {
+    if (!ids.is_array() || ids.empty() || !rows.is_array() || ids.size()!=rows.size())
+        throw std::runtime_error("Incomplete catalog ID coverage");
+    std::set<IdType> expected;
+    const auto read=[](const Json& value)->IdType {
+        if constexpr (std::is_same_v<IdType,uint32_t>) return Id(value);
+        else {
+            auto id=value.get<std::string>();
+            if(id.empty()) throw std::runtime_error("Empty catalog ID");
+            return id;
+        }
+    };
+    for(const auto& id:ids) if(!expected.insert(read(id)).second) throw std::runtime_error("Duplicate catalog ID");
+    for(const auto& row:rows) if(!expected.erase(read(row.at("id")))) throw std::runtime_error("Unexpected catalog ID");
+    if(!expected.empty()) throw std::runtime_error("Missing catalog IDs");
 }
 
 inline bool Due(int64_t verifiedAt, int64_t now, int64_t retryAt, bool automatic) {

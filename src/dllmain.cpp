@@ -79,6 +79,7 @@
 #include "CacheDatabase.h"
 #include "AchievementCatalogCache.h"
 #include "AchievementNamesCore.h"
+#include "UntrustedInput.h"
 #include "RevisionSnapshot.h"
 #include "WikiFreshness.h"
 #include "StoragePaths.h"
@@ -812,7 +813,6 @@ static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_Ach
 static std::chrono::steady_clock::time_point g_LastAchProgressQuery{};
 static bool SaveAchTrackerState();
 static void LoadAchTrackerState();
-static void SaveAchGroupCache();
 static void LoadAchGroupCache();
 static bool SaveAchDefCache(int64_t verifiedAt = 0);
 static bool SaveAchNameIndex(int64_t verifiedAt = 0);
@@ -2059,18 +2059,12 @@ static void LoadAchTrackerState() {
     } catch (...) {}
 }
 
-static void SaveAchGroupCache() {
+// Persist the validated candidate, never a projection already published to readers.
+static bool SaveAchGroupCache(const decltype(g_AchGroups)& groupsCopy,
+                              const decltype(g_AchCategories)& catsCopy,
+                              int64_t epochSecs) {
     std::lock_guard<std::mutex> persist(g_AchGroupPersistMutex);
-    decltype(g_AchGroups) groupsCopy;
-    decltype(g_AchCategories) catsCopy;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-        groupsCopy=g_AchGroups;catsCopy=g_AchCategories;
-    }
-
     nlohmann::json j;
-    auto epochSecs = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
     j["fetch_time"] = epochSecs;
 
     {
@@ -2100,12 +2094,8 @@ static void SaveAchGroupCache() {
         j["categories"] = cats;
     }
 
-    if (AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(), AlterEgo::Cache::AchievementDataset::Groups, j)) {
-        g_AchGroupsCacheFetchedAt = epochSecs;
-    } else if (APIDefs) {
-        APIDefs->Log(LOGL_WARNING, "AlterEgo",
-                     "Unable to save achievement group/category cache");
-    }
+    return AlterEgo::Cache::WriteCatalog(AlterEgo::GW2API::GetDataDirectory(),
+        AlterEgo::Cache::AchievementDataset::Groups, j);
 }
 
 static void LoadAchGroupCache() {
@@ -2320,115 +2310,89 @@ static void PublishAchDefinition(AchDef def) {
 // =========================================================================
 
 static void FetchAchGroups() {
-    if (g_AchGroupsFetching) return;
-    g_AchGroupsFetching = true;
+    if (g_AchGroupsFetching.exchange(true)) return;
     {
         std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
         g_AchStatusMsg = "Fetching achievement groups...";
     }
-
     AlterEgo::Background::Workers().Launch([]() {
-        // Fetch all groups
-        std::string groupsJson = Skinventory::HttpClient::Get(
-            "https://api.guildwars2.com/v2/achievements/groups?ids=all");
-        if (groupsJson.empty()) {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchStatusMsg = "Failed to fetch achievement groups";
-            g_AchGroupsFetching = false;
-            return;
-        }
-
-        std::vector<AchGroupDef> groups;
+        namespace Names = AlterEgo::AchievementNames;
+        const int64_t started = std::time(nullptr);
         try {
-            auto j = nlohmann::json::parse(groupsJson);
-            if (j.is_array()) {
-                for (const auto& gj : j) {
-                    AchGroupDef g;
-                    g.id = gj.value("id", "");
-                    g.name = gj.value("name", "");
-                    g.description = gj.value("description", "");
-                    g.order = gj.value("order", 0);
-                    if (gj.contains("categories") && gj["categories"].is_array()) {
-                        for (const auto& cid : gj["categories"]) g.categories.push_back(cid.get<uint32_t>());
-                    }
-                    if (!g.id.empty()) groups.push_back(std::move(g));
-                }
+            const auto get=[](const std::string& path) {
+                AlterEgo::Background::Checkpoint();
+                auto body=Skinventory::HttpClient::Get("https://api.guildwars2.com/v2/achievements/"+path);
+                AlterEgo::Background::Checkpoint();
+                return AlterEgo::Untrusted::Parse(body,AlterEgo::Untrusted::PublicApi);
+            };
+            const auto groupIds=get("groups");
+            const auto groupRows=get("groups?ids=all");
+            Names::ValidateCatalogIdentities<std::string>(groupIds,groupRows);
+            {
+                std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+                g_AchStatusMsg = "Fetching achievement categories...";
             }
-        } catch (...) {}
-
-        if (groups.empty()) {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchStatusMsg = "Failed to parse achievement groups";
-            g_AchGroupsFetching = false;
-            return;
-        }
-
-        // Sort groups by order
-        std::sort(groups.begin(), groups.end(),
-            [](const AchGroupDef& a, const AchGroupDef& b) { return a.order < b.order; });
-
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchStatusMsg = "Fetching achievement categories...";
-        }
-
-        // Fetch all categories
-        std::string catsJson = Skinventory::HttpClient::Get(
-            "https://api.guildwars2.com/v2/achievements/categories?ids=all");
-        if (catsJson.empty()) {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchStatusMsg = "Failed to fetch categories";
-            g_AchGroupsFetching = false;
-            return;
-        }
-
-        std::unordered_map<uint32_t, AchCategoryDef> cats;
-        std::unordered_map<uint32_t, uint32_t> idToCat;
-        try {
-            auto j = nlohmann::json::parse(catsJson);
-            if (j.is_array()) {
-                for (const auto& cj : j) {
-                    AchCategoryDef c;
-                    c.id = cj.value("id", 0u);
-                    c.name = cj.value("name", "");
-                    c.description = cj.value("description", "");
-                    c.order = cj.value("order", 0);
-                    c.icon_url = cj.value("icon", "");
-                    if (cj.contains("achievements") && cj["achievements"].is_array()) {
-                        for (const auto& aid : cj["achievements"]) {
-                            uint32_t achId = aid.get<uint32_t>();
-                            c.achievements.push_back(achId);
-                            idToCat[achId] = c.id;
-                        }
-                    }
-                    if (c.id > 0) cats[c.id] = std::move(c);
-                }
+            const auto categoryIds=get("categories");
+            const auto categoryRows=get("categories?ids=all");
+            Names::ValidateCatalogIdentities<uint32_t>(categoryIds,categoryRows);
+            Names::ValidateGroupCatalog(groupRows,categoryRows);
+            std::vector<AchGroupDef> groups;
+            for(const auto& row:groupRows) {
+                AchGroupDef g;
+                g.id=row.at("id").get<std::string>();
+                g.name=row.at("name").get<std::string>();
+                g.description=row.value("description","");
+                g.order=row.value("order",0);
+                for(const auto& id:row.at("categories")) g.categories.push_back(Names::Id(id));
+                groups.push_back(std::move(g));
             }
-        } catch (...) {}
-
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
-            g_AchGroups = std::move(groups);
-            g_AchCategories = std::move(cats);
-            g_AchIdToCategory = std::move(idToCat);
-            // Relocate curated bonus-event categories the API misfiles
-            ApplyBonusEventOverrides();
-            // Build hidden category set
-            g_AchHiddenCatIds.clear();
-            for (const auto& g : g_AchGroups) {
-                if (g.name == "Character Adventure Guide") {
-                    for (uint32_t cid : g.categories) g_AchHiddenCatIds.insert(cid);
+            std::sort(groups.begin(),groups.end(),
+                [](const AchGroupDef& a,const AchGroupDef& b){return a.order<b.order;});
+            std::unordered_map<uint32_t,AchCategoryDef> cats;
+            std::unordered_map<uint32_t,uint32_t> idToCat;
+            for(const auto& row:categoryRows) {
+                AchCategoryDef c;
+                c.id=Names::Id(row.at("id"));
+                c.name=row.at("name").get<std::string>();
+                c.description=row.value("description","");
+                c.order=row.value("order",0);
+                c.icon_url=row.value("icon","");
+                for(const auto& id:row.at("achievements")){
+                    const auto achievement=Names::Id(id);
+                    c.achievements.push_back(achievement);
+                    idToCat[achievement]=c.id;
                 }
+                cats.emplace(c.id,std::move(c));
             }
-            g_AchGroupsFetched = true;
-            ++g_AchGroupsGeneration;
-            g_AchGroupsFetching = false;
-            g_AchStatusMsg = "";
+            AlterEgo::Background::Checkpoint();
+            if(!SaveAchGroupCache(groups,cats,started))
+                throw std::runtime_error("Could not save achievement group/category cache");
+            AlterEgo::Background::Checkpoint();
+            {
+                std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+                g_AchGroups=std::move(groups);
+                g_AchCategories=std::move(cats);
+                g_AchIdToCategory=std::move(idToCat);
+                ApplyBonusEventOverrides();
+                g_AchHiddenCatIds.clear();
+                for(const auto& g:g_AchGroups)
+                    if(g.name=="Character Adventure Guide")
+                        for(uint32_t cid:g.categories) g_AchHiddenCatIds.insert(cid);
+                g_AchGroupsCacheFetchedAt=started;
+                g_AchGroupsFetched=true;
+                ++g_AchGroupsGeneration;
+                g_AchGroupsFetching=false;
+                g_AchStatusMsg.clear();
+            }
+            FetchActiveSpecialEvent();
+        } catch(const AlterEgo::Background::Cancelled&) {
+            throw;
+        } catch(...) {
+            std::lock_guard<std::recursive_mutex> lock(g_AchMutex);
+            g_AchStatusMsg="Achievement group/category refresh incomplete; cached catalog retained";
+            g_AchGroupsFetching=false;
         }
-
-        SaveAchGroupCache();
-        FetchActiveSpecialEvent();
-    }, [] { g_AchGroupsFetching = false; });
+    }, [] { g_AchGroupsFetching=false; });
 }
 
 static void FetchActiveSpecialEvent() {
@@ -17491,7 +17455,7 @@ void AddonRender() {
                     chosen = true;
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Refresh Achievement Names", nullptr, false, !g_AchNameIndexFetching.load())) {
+                if (ImGui::MenuItem("Refresh Achievement Definitions", nullptr, false, !g_AchNameIndexFetching.load())) {
                     FetchAchNameIndex(true);
                     chosen = true;
                 }
