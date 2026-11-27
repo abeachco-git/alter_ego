@@ -150,6 +150,58 @@ int case_composable_loadouts(int, char**) {
         assert(companions.loadouts[0].refs.count("pets")&&!companions.loadouts[0].refs.count("legends"));
         assert(companions.loadouts[1].refs.count("legends")&&!companions.loadouts[1].refs.count("pets"));
         assert(!IsEquipmentKind("pets")&&!IsEquipmentKind("legends"));
+        // Standalone and composed interchange must preserve partial slots,
+        // explicit empty arrays and unknown extensions independently of identity.
+        for(const auto& kind:{std::string("pets"),std::string("legends")}){
+            const auto field=CompanionField(kind);
+            const auto owner=kind=="pets"?std::string("one"):std::string("two");
+            const auto other=kind=="pets"?std::string("two"):std::string("one");
+            auto graph=companions;
+            auto* source=FindLoadout(graph,owner);
+            assert(source);
+            auto* part=Find(graph,kind,source->refs.at(kind));
+            assert(part);
+            part->data["future_companion"]={{"source","fixture"},{"ordered",Json::array({3,0,1})}};
+            part->data[field]=Json::array({3,0,1});
+            const auto exact=part->data;
+            const auto packet=ExportComponent(kind,*part);
+            Component imported;std::string parsedKind;
+            assert(ImportComponent(packet,parsedKind,imported,error));
+            assert(parsedKind==kind&&imported.id.empty()&&imported.data==exact);
+            auto invalid=packet;invalid["data"][field]=Json::array({-1});
+            assert(!ImportComponent(invalid,parsedKind,imported,error));
+
+            Json loadoutPacket;
+            assert(ExportPortableLoadout(graph,owner,loadoutPacket,error));
+            Document destination;
+            assert(ImportPortableLoadout(destination,loadoutPacket,"roundtrip",error));
+            const auto* restored=FindLoadout(destination,"roundtrip");
+            assert(restored&&Find(destination,kind,restored->refs.at(kind))->data==exact);
+            const auto before=ToJson(destination);
+            auto incompatible=loadoutPacket;
+            incompatible["components"]["base_build"]["data"]["profession"]=
+                ProfessionOf(graph,*FindLoadout(graph,other));
+            assert(!ImportPortableLoadout(destination,incompatible,"wrong-profession",error));
+            assert(ToJson(destination)==before);
+            auto setPacket=loadoutPacket;
+            setPacket["equipment_set_name"]="Invalid companion set";
+            setPacket["equipment_set_kinds"]=Json::array({kind});
+            assert(!ImportPortableLoadout(destination,setPacket,"wrong-set",error));
+            assert(ToJson(destination)==before);
+
+            auto absent=loadoutPacket;absent["components"].erase(kind);
+            assert(ImportPortableLoadout(destination,absent,"omitted",error));
+            assert(!FindLoadout(destination,"omitted")->refs.count(kind));
+            auto explicitEmpty=loadoutPacket;
+            explicitEmpty["components"][kind]["data"][field]=Json::array();
+            assert(ImportPortableLoadout(destination,explicitEmpty,"empty",error));
+            const auto* emptyOwner=FindLoadout(destination,"empty");
+            assert(emptyOwner&&emptyOwner->refs.count(kind));
+            assert(Find(destination,kind,emptyOwner->refs.at(kind))->data.at(field)==Json::array());
+            Document reimported;
+            assert(FromJson(ToJson(destination),reimported,error));
+            assert(ToJson(reimported)==ToJson(destination));
+        }
         // An explicit empty component reference is still an exact reference;
         // unrelated metadata edits cannot silently detach it.
         auto empty=companions;
