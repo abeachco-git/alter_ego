@@ -13,6 +13,7 @@
 | --- | --- | --- |
 | [198ded0](https://github.com/abeachco-git/alter_ego/commit/198ded0d5128bb406fe5b635a30ac973df699bbd) | Vault directional period comparison in `ClearsReset.h` and existing `tests/clears_rotation.cpp`. | A new Vault daily/weekly/Special period is held too long or reset evidence is incorrectly accepted. |
 | [d9a4da6](https://github.com/abeachco-git/alter_ego/commit/d9a4da6bcc9f200aa5c9bf3f889f6bee4d2a5d82) | Vault deferred HTTP 429 retry admission/intent only, through the existing render dispatcher and shared policy; test in `section_refresh`. | Vault retries stop incorrectly while the view is open, or manual/automatic opt-out and view switching behave incorrectly. |
+| [56bc729](https://github.com/abeachco-git/alter_ego/commit/56bc7295e4290a73f392ce6cf73da2561c1fe3e7) | Shared rollover retry delay only: 30/60/120 seconds, 120 thereafter; existing saturated failure counter and fallback threshold retained. | Fractal/Vault/Clears rollover retries are too frequent or the shorter delay is suspected. |
 | [bc22c96](https://github.com/abeachco-git/alter_ego/commit/bc22c96d3ffe48bc15c09506ee8f2ea8f72cd505) | Achievement progress polling moves to actually rendered browser/nonempty tracker consumers. Separate from Vault/Fractal rollover. | Achievement browser or pinned tracker demand regresses. |
 
 ## What changed, and what did not
@@ -21,19 +22,20 @@ Vault comparison is directional: any changed objective ID set, a single complete
 
 Deferred Vault rate-limit retries still dispatch only from the rendered Vault view. A manual click bypasses automatic policy while the view remains open; leaving ends that manual retry consent. Reopening follows ordinary policy. A disallowed queued retry is recorded through the existing per-section failure path without dispatch; already dispatched requests can publish valid results. The bounded three short 429 retries and their timing are unchanged. No new background scheduler.
 
-**Daily Fractal and Raid Bounty runtime paths are unchanged.** In particular, 00:00 UTC daily reset, Monday 07:30 UTC weekly reset, 60-second propagation grace, reset marker initialization, cache-busting tokens/headers, both public category routes, prior ID-set validation, complete definition validation, account completion broker, 30/60/120/300-second rollover retry cadence, section persistence/fingerprints and generation fencing are preserved. Weekly Clears progress comparison is unchanged. Manual successful multi-stage continuation behavior is unchanged. No public catalog policy or unrelated timing changes.
+**Daily Fractal and Raid Bounty retrieval and validation paths are unchanged; the only shared runtime change affecting them is the separately revertible retry delay cap.** In particular, 00:00 UTC daily reset, Monday 07:30 UTC weekly reset, 60-second propagation grace, reset marker initialization, cache-busting tokens/headers, both public category routes, prior ID-set validation, complete definition validation, account completion broker, section persistence/fingerprints and generation fencing are preserved. Weekly Clears progress comparison is unchanged. Manual successful multi-stage continuation behavior is unchanged. The shared rollover cadence is now 30/60/120 seconds, capped at 120 seconds from the third failure, without an attempt limit. Permission-denial and ordinary broker cooldowns, short HTTP 429 retries and transport rate limits are unchanged. No public catalog policy or unrelated timing changes.
 
 ## Selective rollback
 
-On the experimental branch, prefer a new revert commit rather than resetting the branch or deleting caches. Revert only the suspected commit (and any conflicting later change after review). To roll back the two Vault changes together while preserving Achievement visibility and unrelated work:
+On the experimental branch, prefer a new revert commit rather than resetting the branch or deleting caches. Revert only the suspected commit (and any conflicting later change after review). To roll back the Vault changes and shared cadence change together while preserving Achievement visibility and unrelated work:
 
 ```sh
 git switch experiment/composable-loadouts
+git revert 56bc7295e4290a73f392ce6cf73da2561c1fe3e7
 git revert d9a4da6bcc9f200aa5c9bf3f889f6bee4d2a5d82
 git revert 198ded0d5128bb406fe5b635a30ac973df699bbd
 ```
 
-If only comparison is at fault, revert `198ded0` alone; if only retry admission is at fault, revert `d9a4da6` alone. Reconcile the Architecture and testing notes to the resulting behavior; rebuild, verify and deliver the matching DLL. Do not merge main, reset SQLite, or undo the working Fractal rollover implementation. Reverts can conflict if later work touches the same lines; review rather than force.
+If only the retry cadence is at fault, revert `56bc729` alone. If only comparison is at fault, revert `198ded0` alone; if only retry admission is at fault, revert `d9a4da6` alone. Reconcile the Architecture and testing notes to the resulting behavior; rebuild, verify and deliver the matching DLL. Do not merge main, reset SQLite, or undo the working Fractal rollover implementation. Reverts can conflict if later work touches the same lines; review rather than force.
 
 ## Live acceptance checklist
 
@@ -44,6 +46,6 @@ If only comparison is at fault, revert `198ded0` alone; if only retry admission 
 - [ ] Test a partial Vault section failure, weekly reset and Special; check independently verified sections and timestamps remain correct.
 - [ ] Compare actual game objectives and API activity; if a regression appears, record affected section, previous/current IDs and completion direction, reset time, visible demand and exact build before reverting.
 
-Current verification: [build #709](https://github.com/abeachco-git/alter_ego/actions/runs/45935811447), exact commit `e54638c615c7fe2f36db25012872455865e6a0da`, passed required offline regressions, sanitizers, Windows x64 UCRT build and binary verification. Live reset acceptance remains open.
+Current verification: baseline build #709 passed. The separately committed 120-second cap requires exact-commit build verification. Live reset acceptance remains open.
 
 Leaving and reopening a page does not reset elapsed retry cooldowns or create a manual request. Reopening resumes ordinary demand eligibility; only an explicit Refresh bypasses ordinary cooldown. Existing Vault batch timeout remains independent.
