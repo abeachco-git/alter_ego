@@ -44,6 +44,49 @@ int case_skill_edit_core(int,char**) {
         assert(rev&&rev->legends[3]==16&&rev->inactive_rev_skills[2]==65535);
         b.profession="Unknown";assert(!project());
     }
+    {
+        using namespace AlterEgo;
+        // Synthetic shared palettes: exact positive membership in a role
+        // disambiguates, never arbitrary last occurrence.
+        const PalettePairs pairs={{11,100},{11,200},{11,201},{12,202},{13,202},{11,200}};
+        assert(ResolveLegendPalette(pairs,11,{100})==100);
+        assert(ResolveLegendPalette(pairs,11,{100},true)==0);
+        assert(ResolveLegendPalette(pairs,12,{202},true)==202);
+        assert(ResolveLegendPalette(pairs,11,{200,201})==0);
+        assert(ResolveLegendPalette(pairs,11,{999})==0);
+        assert(ResolveLegendPalette(pairs,11,{})==0);
+        assert(UniqueSkillPalette(pairs,100)==11);
+        assert(UniqueSkillPalette(pairs,202)==0);
+        DecodedBuildLink packet{};packet.profession=PROF_REVENANT;
+        packet.active_palettes_known=true;packet.companion_choices_known=true;
+        packet.specs[2].spec_id=42;
+        packet.legends[0]=7;packet.legends[1]=8;
+        packet.legends[2]=2;packet.legends[3]=3;
+        packet.terrestrial_skills[0]=11;packet.terrestrial_skills[1]=12;
+        packet.aquatic_skills[4]=65535;
+        auto evidence=RecordRevenantActivePalettes(packet,[&](uint16_t p,uint32_t legend,int env,int slot){
+            return env==0&&slot==0&&legend==7?ResolveLegendPalette(pairs,p,{100}):0u;
+        });
+        assert(evidence&&ValidRevenantActivePaletteEvidence(*evidence));
+        assert((*evidence)[0][1]==100&&(*evidence)[1][0]==12&&(*evidence)[1][1]==0);
+        assert((*evidence)[9][0]==65535);
+        auto reverse=[&](uint32_t id){return UniqueSkillPalette(pairs,id);};
+        assert(ProjectRevenantPalette(evidence,100,0,0,packet,reverse)==11);
+        assert(ProjectRevenantPalette(evidence,0,0,1,packet,reverse)==12);
+        assert(ProjectRevenantPalette(evidence,0,1,4,packet,reverse)==65535);
+        packet.legends[1]=2;
+        assert(!ProjectRevenantPalette(evidence,0,0,1,packet,reverse));
+        assert(ProjectRevenantPalette(evidence,0,1,4,packet,reverse)==65535);
+        assert(ProjectRevenantPalette(evidence,200,0,1,packet,reverse)==11);
+        assert(!ProjectRevenantPalette(evidence,202,0,1,packet,reverse));
+        packet.companion_choices_known=false;
+        auto partial=RecordRevenantActivePalettes(packet,[](auto...){return 100u;});
+        assert(partial&&(*partial)[0][0]==11&&(*partial)[0][1]==0&&(*partial)[0][2]==256);
+        assert(ValidRevenantActivePaletteEvidence(*partial));
+        assert(!ProjectRevenantPalette(partial,0,0,0,packet,reverse));
+        packet.active_palettes_known=false;
+        assert(!RecordRevenantActivePalettes(packet,[](auto...){return 0u;}));
+    }
     using namespace AlterEgo::SkillEdit;
     TestBar land{1,{2,3,4},5},water{6,{7,8,9},10};
     assert(SetSlot(land,2,4));

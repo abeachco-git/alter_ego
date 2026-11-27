@@ -175,6 +175,19 @@ int case_snowcrows_import(int, char**) {
         }else{
             assert(merged.legend_codes[0]==5&&merged.legend_codes[1]==2&&merged.legend_codes[2]==3);
             assert(merged.inactive_rev_skills==local.inactive_rev_skills);
+            code.legends[1]=2;
+            code.inactive_rev_skills[1]=98;code.inactive_rev_skills[2]=97;
+            guide.templateCode=ChatLink::EncodeBuild(code);
+            auto land=SR::FromPage(guide,tier);
+            assert(SR::Apply(local,land,merged,report,error,two));
+            assert((merged.inactive_rev_skills==InactiveLegendPalettes{99,98,97,40,50,60}));
+            auto absent=local;absent.inactive_rev_skills.reset();
+            assert(SR::Apply(absent,land,merged,report,error,two)&&!merged.inactive_rev_skills);
+            code.legends[2]=3;code.legends[3]=4;
+            code.inactive_rev_skills[3]=96;code.inactive_rev_skills[4]=95;code.inactive_rev_skills[5]=94;
+            guide.templateCode=ChatLink::EncodeBuild(code);
+            assert(SR::Apply(absent,SR::FromPage(guide,tier),merged,report,error,two));
+            assert((merged.inactive_rev_skills==InactiveLegendPalettes{99,98,97,96,95,94}));
             code.legends[0]=2;
         }
         guide.templateCode=ChatLink::EncodeBuild(code);

@@ -199,6 +199,7 @@ namespace AlterEgo {
     std::unordered_map<std::string, uint32_t> GW2API::s_item_name_id_cache;
     bool GW2API::s_item_name_cache_dirty = false;
     std::unordered_map<std::string, std::unordered_map<uint16_t, uint32_t>> GW2API::s_palette_to_skill;
+    PalettePairs GW2API::s_revenant_palette_pairs;
     std::unordered_map<std::string, std::unordered_map<uint32_t, uint16_t>> GW2API::s_skill_to_palette;
     // Both public entry points share this per-profession owner, protected by s_mutex.
     static std::map<std::string,ProfessionMetadata::Stamps> s_professionStamps;
@@ -1526,6 +1527,7 @@ namespace AlterEgo {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     s_profession_cache[prof]=info;s_profession_weapons[prof]=weapons;
                     s_palette_to_skill[prof]=std::move(record.paletteToSkill);s_skill_to_palette[prof]=std::move(record.skillToPalette);
+                    if(prof=="Revenant")s_revenant_palette_pairs=std::move(record.palettes);
                     s_professionStamps[prof]={started,0};
                 }
                 committed=true;
@@ -2445,8 +2447,8 @@ namespace AlterEgo {
     }
 
     std::string GW2API::EncodeSavedBuildToChatLink(const SavedBuild& b) {
-        if((b.profession=="Ranger"&&b.CompanionSlots(false).unresolved)||
-           (b.profession=="Revenant"&&b.CompanionSlots(true).unresolved))return {};
+        if((b.profession=="Ranger"&&(b.CompanionSlots(false).unresolved||b.CompanionPayload(false).size()>4))||
+           (b.profession=="Revenant"&&(b.CompanionSlots(true).unresolved||b.CompanionPayload(true).size()>4)))return {};
         const auto link=ProjectDerivedBuildLink(b,
             [](uint32_t specId,int tier,int traitId)->std::optional<int>{
                 if(!traitId)return 0;
@@ -2458,7 +2460,13 @@ namespace AlterEgo {
                         if(si->major_traits[tier*3+r]==static_cast<uint32_t>(traitId))return r+1;
                 return std::nullopt;
             },
-            [&](uint32_t id){return GetPaletteIdFromSkill(b.profession,id);},
+            [&](uint32_t id,int env,int slot,const DecodedBuildLink& decoded)->std::optional<uint32_t>{
+                if(b.profession=="Revenant")return ProjectRevenantPalette(b.rev_active_palettes,id,env,slot,decoded,
+                    [&](uint32_t skill){return GetPaletteIdFromSkill(b.profession,skill);});
+                if(!id)return 0u;
+                const auto value=GetPaletteIdFromSkill(b.profession,id);
+                return value?std::optional<uint32_t>(value):std::nullopt;
+            },
             [&](int i)->std::optional<uint32_t>{return b.legend_codes[i];},
             b.inactive_rev_skills);
         return link?ChatLink::EncodeBuild(*link):std::string{};
@@ -2477,7 +2485,8 @@ namespace AlterEgo {
         auto it = s_palette_to_skill.find(profession);
         if (it == s_palette_to_skill.end()) return out;
         out.reserve(it->second.size());
-        for (const auto& kv : it->second) out.push_back(kv.second);
+        if(profession=="Revenant")for(const auto& pair:s_revenant_palette_pairs)out.push_back(pair.second);
+        else for (const auto& kv : it->second) out.push_back(kv.second);
         std::sort(out.begin(), out.end());
         out.erase(std::unique(out.begin(), out.end()), out.end());
         return out;
@@ -2601,6 +2610,7 @@ namespace AlterEgo {
         if(b.pets_recorded||Composable::HasCompanionSelection(pets))bj["pets"]=b.CompanionPayload(false);
         if(b.legends_recorded||Composable::HasCompanionSelection(legends))bj["legend_codes"]=b.CompanionPayload(true);
         if(b.inactive_rev_skills)bj["inactive_rev_skills"]=*b.inactive_rev_skills;
+        if(b.rev_active_palettes)bj["rev_active_palettes"]=*b.rev_active_palettes;
         if (!b.weapons.empty()) bj["weapons"] = b.weapons;
 
         if (!b.gear.empty()) {
@@ -2747,6 +2757,12 @@ namespace AlterEgo {
         for(size_t i=0;i<4;++i){
             if(i<2)b.pets.terrestrial[i]=pets[i];else b.pets.aquatic[i-2]=pets[i];
             b.legend_codes[i]=static_cast<uint8_t>(legends[i]);
+        }
+        b.rev_active_palettes.reset();
+        if(const auto it=bj.find("rev_active_palettes");it!=bj.end()){
+            std::string fieldError;
+            if(Composable::ValidatePortablePayload("skills",json{{"rev_active_palettes",*it}},fieldError))
+                b.rev_active_palettes=it->get<RevenantActivePaletteEvidence>();
         }
         b.inactive_rev_skills.reset();
         if(const auto it=bj.find("inactive_rev_skills");it!=bj.end()){
@@ -3583,12 +3599,13 @@ namespace AlterEgo {
                 catch(...){stamps[prof].success=0;}
             }
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_profession_cache.clear();s_profession_weapons.clear();s_palette_to_skill.clear();s_skill_to_palette.clear();
+            s_profession_cache.clear();s_profession_weapons.clear();s_palette_to_skill.clear();s_skill_to_palette.clear();s_revenant_palette_pairs.clear();
             s_professionStamps=std::move(stamps);s_professionPending.clear();
             for(auto& [prof,record]:records){
                 s_profession_cache[prof]=std::make_shared<const ProfessionInfo>(std::move(record.info));
                 s_profession_weapons[prof]=std::make_shared<const std::map<std::string,ProfessionWeaponData>>(std::move(record.weapons));
                 s_palette_to_skill[prof]=std::move(record.paletteToSkill);s_skill_to_palette[prof]=std::move(record.skillToPalette);
+                    if(prof=="Revenant")s_revenant_palette_pairs=std::move(record.palettes);
             }
         });}catch(...){}
 
@@ -3766,8 +3783,35 @@ namespace AlterEgo {
         return (it != pit->second.end()) ? it->second : 0;
     }
 
+    uint32_t GW2API::ResolveRevenantPalette(uint16_t palette,uint32_t legend,int environment,int slot){
+        if(!palette||!legend||slot<0||slot>4||environment<0||environment>1)return 0;
+        const auto catalog=PublicCatalog::Get();
+        const auto* def=PublicCatalog::FindLegend(catalog->legends,legend);
+        if(!def)return 0;
+        std::vector<uint32_t> candidates;
+        if(slot==0&&def->heal)candidates.push_back(*def->heal);
+        else if(slot==4&&def->elite)candidates.push_back(*def->elite);
+        else if(slot>0&&slot<4&&def->utilities)candidates=*def->utilities;
+        // The public legend list does not enumerate all aquatic and
+        // Alliance/Entity variants. Do not infer a default from membership
+        // when the palette still has multiple published skill candidates.
+        const auto canonical=PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(legend));
+        uint32_t resolved=0;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            resolved=ResolveLegendPalette(s_revenant_palette_pairs,palette,candidates,
+                environment!=0||canonical==7||canonical==8);
+        }
+        if(environment&&resolved){
+            const auto skill=GetSkillInfo(resolved);
+            if(skill&&skill->no_underwater.value_or(false))return 0;
+        }
+        return resolved;
+    }
+
     uint16_t GW2API::GetPaletteIdFromSkill(const std::string& profession, uint32_t skill_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
+        if(profession=="Revenant")return UniqueSkillPalette(s_revenant_palette_pairs,skill_id);
         auto pit = s_skill_to_palette.find(profession);
         if (pit == s_skill_to_palette.end()) return 0;
         auto it = pit->second.find(skill_id);

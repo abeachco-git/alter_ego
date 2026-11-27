@@ -6,6 +6,9 @@
 #include <array>
 #include <optional>
 #include <cstddef>
+#include <algorithm>
+#include <type_traits>
+#include <utility>
 
 namespace AlterEgo {
 
@@ -94,6 +97,7 @@ namespace AlterEgo {
         // Revenant legends
         uint8_t legends[4] = {0};   // terr1, terr2, aqua1, aqua2
         uint16_t inactive_rev_skills[6] = {0}; // inactive utility palette IDs, exact wire order
+        bool active_palettes_known = false; // complete ten-value skill block decoded
         bool companion_choices_known = false; // complete four-byte pair block decoded
         bool inactive_rev_skills_known = false; // complete six-value block decoded
         // Weapons (SotO+)
@@ -113,6 +117,76 @@ namespace AlterEgo {
     inline void ApplyInactiveLegendPalettes(DecodedBuildLink& link,const std::optional<InactiveLegendPalettes>& values) {
         if(link.profession!=PROF_REVENANT||!values)return;
         for(std::size_t i=0;i<values->size();++i)link.inactive_rev_skills[i]=(*values)[i];
+    }
+
+    // Palette IDs are not unique for Revenant. Only exact positive catalog
+    // membership in the active legend's role can disambiguate the public pairs.
+    // Missing or multiple candidates remain unresolved, never API-order guesses.
+    using PalettePairs=std::vector<std::pair<uint16_t,uint32_t>>;
+    inline uint32_t ResolveLegendPalette(const PalettePairs& pairs,uint16_t palette,
+                                        const std::vector<uint32_t>& roleSkills,bool requireUniqueGlobal=false) {
+        if(!palette)return 0;
+        uint32_t found=0;
+        for(const auto& [p,id]:pairs)if(p==palette&&id&&
+            std::find(roleSkills.begin(),roleSkills.end(),id)!=roleSkills.end()){
+            if(found&&found!=id)return 0;
+            found=id;
+        }
+        if(requireUniqueGlobal&&found)
+            for(const auto& [p,id]:pairs)if(p==palette&&id!=found)return 0;
+        return found;
+    }
+    inline uint16_t UniqueSkillPalette(const PalettePairs& pairs,uint32_t id){
+        uint16_t found=0;
+        for(const auto& [p,skill]:pairs)if(p&&skill==id){
+            if(found&&found!=p)return 0;
+            found=p;
+        }
+        return found;
+    }
+    // Wire evidence is conditional, not a second editable skill bar.
+    // For each environment/slot retain the exact palette, its original
+    // typed projection (zero if unresolved), exact two legend codes and
+    // third specialization. Never reuse it after a contextual mismatch.
+    using RevenantActivePaletteEvidence=std::array<std::array<uint32_t,5>,10>;
+    inline bool ValidRevenantActivePaletteEvidence(const RevenantActivePaletteEvidence& evidence){
+        for(const auto& row:evidence)
+            if(row[0]>65535||row[2]>256||row[3]>256||row[4]>255||(!row[0]&&row[1])||
+               ((row[2]==256||row[3]==256)&&row[1]))return false;
+        return true;
+    }
+    template<class Resolver> std::optional<RevenantActivePaletteEvidence> RecordRevenantActivePalettes(
+        const DecodedBuildLink& link,Resolver resolve){
+        if(link.profession!=PROF_REVENANT||!link.active_palettes_known)return std::nullopt;
+        RevenantActivePaletteEvidence evidence{};
+        for(int env=0;env<2;++env)for(int slot=0;slot<5;++slot){
+            const auto palette=env?link.aquatic_skills[slot]:link.terrestrial_skills[slot];
+            // 256 is an out-of-wire sentinel for missing companion context.
+            // Complete active bytes are still preserved, but cannot be
+            // regenerated as a different or fabricated legend selection.
+            const uint32_t first=link.companion_choices_known?link.legends[env*2]:256u;
+            const uint32_t second=link.companion_choices_known?link.legends[env*2+1]:256u;
+            evidence[env*5+slot]={palette,palette&&first<=255?resolve(palette,first,env,slot):0u,
+                first,second,link.specs[2].spec_id};
+        }
+        return evidence;
+    }
+    template<class Reverse> std::optional<uint32_t> ProjectRevenantPalette(
+        const std::optional<RevenantActivePaletteEvidence>& evidence,
+        uint32_t id,int env,int slot,const DecodedBuildLink& link,Reverse reverse){
+        if(evidence){
+            const auto& row=(*evidence)[env*5+slot];
+            if(row[1]==id){
+                if(row[2]==link.legends[env*2]&&row[3]==link.legends[env*2+1]&&row[4]==link.specs[2].spec_id)
+                    return row[0];
+                // A still-unresolved nonzero imported palette cannot safely
+                // become an empty slot just because another reference changed.
+                if(!id&&row[0])return std::nullopt;
+            }
+        }
+        if(!id)return 0u;
+        const auto value=reverse(id);
+        return value?std::optional<uint32_t>(value):std::nullopt;
     }
 
     // Shared checked projection from a live or saved typed build. The low-level
@@ -138,19 +212,7 @@ namespace AlterEgo {
                 link.specs[i].traits[t]=static_cast<uint8_t>(*choice);
             }
         }
-        auto bar=[&](const auto& source,uint16_t (&target)[5]){
-            const uint32_t ids[]={source.heal,source.utilities[0],source.utilities[1],
-                source.utilities[2],source.elite};
-            for(int i=0;i<5;++i){
-                if(!ids[i])continue;
-                const auto value=palette(ids[i]);
-                if(!value||value>65535)return false;
-                target[i]=static_cast<uint16_t>(value);
-            }
-            return true;
-        };
-        if(!bar(b.terrestrial_skills,link.terrestrial_skills)||
-           !bar(b.aquatic_skills,link.aquatic_skills))return std::nullopt;
+        // Resolve companion identities before slot-aware palette projection.
         if(link.profession==PROF_RANGER){
             for(int i=0;i<4;++i){
                 const auto id=i<2?b.pets.terrestrial[i]:b.pets.aquatic[i-2];
@@ -165,6 +227,25 @@ namespace AlterEgo {
             }
             ApplyInactiveLegendPalettes(link,inactive);
         }
+        auto bar=[&](const auto& source,uint16_t (&target)[5],int env){
+            const uint32_t ids[]={source.heal,source.utilities[0],source.utilities[1],
+                source.utilities[2],source.elite};
+            for(int i=0;i<5;++i){
+                if constexpr(std::is_invocable_v<Palette,uint32_t,int,int,const DecodedBuildLink&>){
+                    const auto value=palette(ids[i],env,i,link);
+                    if(!value||*value>65535||(ids[i]&&!*value))return false;
+                    target[i]=static_cast<uint16_t>(*value);
+                }else{
+                    if(!ids[i])continue;
+                    const auto value=palette(ids[i]);
+                    if(!value||value>65535)return false;
+                    target[i]=static_cast<uint16_t>(value);
+                }
+            }
+            return true;
+        };
+        if(!bar(b.terrestrial_skills,link.terrestrial_skills,0)||
+           !bar(b.aquatic_skills,link.aquatic_skills,1))return std::nullopt;
         for(auto w:b.weapons){
             if(w>65535)return std::nullopt;
             link.weapons.push_back(static_cast<uint16_t>(w));

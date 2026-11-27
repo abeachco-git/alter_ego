@@ -295,6 +295,7 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             else RenderSkillBarPreview(AlterEgo::SkillEdit::JsonDisplayBar(data[bar]),ICON_SIZE);
             ImGui::PopID();
         }
+        if(data.contains("rev_active_palettes"))ImGui::TextDisabled("Original Revenant palette evidence retained");
         if(data.contains("inactive_rev_skills"))
             ImGui::TextDisabled("Inactive Revenant utility order recorded");
     }

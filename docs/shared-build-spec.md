@@ -247,3 +247,7 @@ The AE2 shared build format originated with [PieOrCake's Alter Ego](https://gith
 
 - **Repository:** [github.com/abeachco-git/alter_ego](https://github.com/PieOrCake/alter_ego)
 - **Homepage:** [pie.rocks.cc/projects/alter-ego](https://pie.rocks.cc/projects/alter-ego/)
+
+Native Library Skills components may additionally carry `rev_active_palettes`: ten bounded evidence rows (terrestrial five, aquatic five), each `[palette, original projected skill ID, legend 1 code, legend 2 code, third specialization ID]`. Zero projected skill ID with nonzero palette indicates unresolved reference evidence, not an empty skill. Regeneration uses the raw palette only when the typed slot and context still match; the AE2 wire format is unchanged.
+
+The two legend context fields allow 256 only as a missing-source sentinel (never written to GW2 wire); its projected skill ID must be zero. A truncated active block supplies no complete evidence.

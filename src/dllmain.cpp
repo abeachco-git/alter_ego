@@ -5570,23 +5570,26 @@ static bool DecodeBuildLink(const std::string& link, const std::string& name,
         }
     }
 
-    // Resolve skill palette IDs to skill IDs
-    auto resolveSkill = [&](uint16_t palette_id) -> uint32_t {
-        if (palette_id == 0) return 0;
-        return AlterEgo::GW2API::GetSkillIdFromPalette(profession, palette_id);
+    // Preserve the exact original Revenant palette per physical slot.
+    // The catalog may not yet resolve a contextual alias; never substitute
+    // a skill from an unrelated legend just because its palette matches.
+    out.rev_active_palettes=AlterEgo::RecordRevenantActivePalettes(decoded,
+        [](uint16_t palette,uint32_t legend,int env,int slot){
+            return AlterEgo::GW2API::ResolveRevenantPalette(palette,legend,env,slot);
+        });
+    auto resolveSkill = [&](uint16_t palette,int env,int slot) -> uint32_t {
+        if(!palette)return 0;
+        if(profession=="Revenant")
+            return out.rev_active_palettes?(*out.rev_active_palettes)[env*5+slot][1]:0;
+        return AlterEgo::GW2API::GetSkillIdFromPalette(profession,palette);
     };
-
-    out.terrestrial_skills.heal = resolveSkill(decoded.terrestrial_skills[0]);
-    out.terrestrial_skills.utilities[0] = resolveSkill(decoded.terrestrial_skills[1]);
-    out.terrestrial_skills.utilities[1] = resolveSkill(decoded.terrestrial_skills[2]);
-    out.terrestrial_skills.utilities[2] = resolveSkill(decoded.terrestrial_skills[3]);
-    out.terrestrial_skills.elite = resolveSkill(decoded.terrestrial_skills[4]);
-
-    out.aquatic_skills.heal = resolveSkill(decoded.aquatic_skills[0]);
-    out.aquatic_skills.utilities[0] = resolveSkill(decoded.aquatic_skills[1]);
-    out.aquatic_skills.utilities[1] = resolveSkill(decoded.aquatic_skills[2]);
-    out.aquatic_skills.utilities[2] = resolveSkill(decoded.aquatic_skills[3]);
-    out.aquatic_skills.elite = resolveSkill(decoded.aquatic_skills[4]);
+    auto bar=[&](AlterEgo::SkillBar& target,const uint16_t (&palettes)[5],int env){
+        target.heal=resolveSkill(palettes[0],env,0);
+        for(int i=0;i<3;++i)target.utilities[i]=resolveSkill(palettes[i+1],env,i+1);
+        target.elite=resolveSkill(palettes[4],env,4);
+    };
+    bar(out.terrestrial_skills,decoded.terrestrial_skills,0);
+    bar(out.aquatic_skills,decoded.aquatic_skills,1);
 
     // Pets (Ranger)
     out.pets.terrestrial[0] = decoded.pets[0];
@@ -9120,6 +9123,15 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src,float sz,bool ed
     ImGui::PushID(aquatic?"aquatic_bar":"terrestrial_bar");
     if(!editable){
         RenderSkillBarPreview(SE::DisplayBar(bar),sz);
+        if(src.profession=="Revenant"&&src.rev_active_palettes){
+            const auto display=SE::DisplayBar(bar);
+            bool unresolved=false;
+            for(size_t i=0;i<display.size();++i){
+                const auto& row=(*src.rev_active_palettes)[(aquatic?5:0)+i];
+                if(row[0]&&!row[1]&&!display[i].id)unresolved=true;
+            }
+            if(unresolved)ImGui::TextDisabled("Unresolved imported skill selection (original palette retained)");
+        }
     }else{
         std::vector<uint32_t> specs;
         for(const auto& spec:src.specializations)if(spec.spec_id)specs.push_back(spec.spec_id);
@@ -9989,7 +10001,9 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
 
     const auto& aquaticBar=skillSrc.aquatic_skills;
     const bool recordedAquatic=aquaticBar.heal||aquaticBar.elite||
-        aquaticBar.utilities[0]||aquaticBar.utilities[1]||aquaticBar.utilities[2];
+        aquaticBar.utilities[0]||aquaticBar.utilities[1]||aquaticBar.utilities[2]||
+        (skillSrc.rev_active_palettes&&std::any_of(skillSrc.rev_active_palettes->begin()+5,
+            skillSrc.rev_active_palettes->end(),[](const auto& row){return row[0]!=0;}));
     if((g_LibEditMode||recordedAquatic)&&ImGui::TreeNode("Aquatic skills##loadout")){
         RenderBuildSkillRow(skillSrc,skillSz,skillEditable,true);ImGui::TreePop();
     }

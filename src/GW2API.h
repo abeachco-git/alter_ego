@@ -321,6 +321,7 @@ namespace AlterEgo {
             return result;
         }
         std::optional<InactiveLegendPalettes> inactive_rev_skills; // exact wire order; absent if not reported
+        std::optional<RevenantActivePaletteEvidence> rev_active_palettes; // conditional imported wire evidence
         std::vector<uint32_t> weapons;
         // Gear (user-entered)
         std::map<std::string, BuildGearSlot> gear; // slot name -> gear data
@@ -604,6 +605,7 @@ namespace AlterEgo {
 
         // --- Palette ID mapping ---
         static uint32_t GetSkillIdFromPalette(const std::string& profession, uint16_t palette_id);
+        static uint32_t ResolveRevenantPalette(uint16_t palette,uint32_t legend,int environment,int slot);
         static uint16_t GetPaletteIdFromSkill(const std::string& profession, uint32_t skill_id);
         static bool HasPaletteData(const std::string& profession);
         static void FetchProfessionPaletteAsync(const std::string& profession);
@@ -656,6 +658,7 @@ namespace AlterEgo {
 
         // Palette ID mapping: profession -> (palette_id -> skill_id)
         static std::unordered_map<std::string, std::unordered_map<uint16_t, uint32_t>> s_palette_to_skill;
+        static PalettePairs s_revenant_palette_pairs; // published with existing profession snapshot
         static std::unordered_map<std::string, std::unordered_map<uint32_t, uint16_t>> s_skill_to_palette;
 
         static std::mutex s_mutex;

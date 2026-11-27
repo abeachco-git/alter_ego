@@ -337,6 +337,7 @@ bool ChatLink::DecodeBuild(const std::string& link, DecodedBuildLink& out) {
     out.aquatic_skills[3]     = ReadU16LE(&bytes[offset]);      offset += 2;
     out.terrestrial_skills[4] = ReadU16LE(&bytes[offset]);      offset += 2; // elite
     out.aquatic_skills[4]     = ReadU16LE(&bytes[offset]);      offset += 2;
+    out.active_palettes_known = true;
 
     // Profession-specific: 16 bytes
     if (out.profession == PROF_RANGER) {

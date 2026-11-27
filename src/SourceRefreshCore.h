@@ -145,7 +145,7 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
     // displace an omitted local slot or create an illegal duplicate.
     if(b.profession=="Ranger"||b.profession=="Revenant"){
         const bool legend=b.profession=="Revenant";
-        bool allPublished=true;
+        std::array<bool,2> acceptedEnvironment{};
         for(size_t env=0;env<2;++env){
             const size_t first=env*2;
             auto current=[&](size_t i)->uint32_t{
@@ -153,27 +153,41 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
             };
             const auto a=p.companions[first].value_or(current(0));
             const auto c=p.companions[first+1].value_or(current(1));
-            if(!p.companions[first]||!p.companions[first+1])allPublished=false;
+            const bool complete=p.companions[first]&&p.companions[first+1]&&
+                *p.companions[first]&&*p.companions[first+1];
             if(!p.companions[first]&&!p.companions[first+1])continue;
             if(a&&a==c){
                 report.notes.push_back("Companion pair conflicts with a retained slot; pair left unchanged for review.");
-                allPublished=false;continue;
+                continue;
             }
             if(legend){
-                if(a>UINT8_MAX||c>UINT8_MAX){allPublished=false;continue;}
+                if(a>UINT8_MAX||c>UINT8_MAX)continue;
                 b.legend_codes[first]=static_cast<uint8_t>(a);
                 b.legend_codes[first+1]=static_cast<uint8_t>(c);
+                acceptedEnvironment[env]=complete;
             }else{
                 auto* pair=env?b.pets.aquatic:b.pets.terrestrial;
                 pair[0]=a;pair[1]=c;
             }
         }
-        // Initial imports retain the full protocol block including zeros.
-        // Refresh only replaces the complete order when all corresponding
-        // choices and nonzero palette values were supplied.
-        if(legend&&p.inactivePalettes&&(initial||(allPublished&&
-            std::all_of(p.inactivePalettes->begin(),p.inactivePalettes->end(),[](uint16_t id){return id!=0;}))))
-            b.inactive_rev_skills=p.inactivePalettes;
+        // The wire block is two independent three-slot groups. Refresh
+        // each only when its two legend choices and all three positive
+        // palettes were supplied and accepted. An absent prior six-slot
+        // block cannot represent one known group without inventing zeros.
+        if(legend&&p.inactivePalettes){
+            if(initial)b.inactive_rev_skills=p.inactivePalettes;
+            else{
+                for(size_t env=0;env<2;++env){
+                    const auto first=p.inactivePalettes->begin()+env*3;
+                    acceptedEnvironment[env]=acceptedEnvironment[env]&&
+                        std::all_of(first,first+3,[](uint16_t id){return id!=0;});
+                }
+                if(acceptedEnvironment[0]&&acceptedEnvironment[1])b.inactive_rev_skills=p.inactivePalettes;
+                else if(b.inactive_rev_skills)
+                    for(size_t env=0;env<2;++env)if(acceptedEnvironment[env])
+                        std::copy_n(p.inactivePalettes->begin()+env*3,3,b.inactive_rev_skills->begin()+env*3);
+            }
+        }
     }
     const bool runePatch=p.rune||std::any_of(p.gear.begin(),p.gear.end(),[](const auto& e){return e.second.rune.has_value();});
     if(runePatch&&(b.rune_id||!b.rune_name.empty())){

@@ -321,7 +321,7 @@ inline const std::map<std::string, std::string>& RootOwnership() {
         {"profession","base_build"}, {"specializations","base_build"},
         {"pets","pets"}, {"legend_codes","legends"},
         {"weapons","base_build"}, // In-game Build Template weapon skills, NOT equipped items.
-        {"skills","skills"}, {"aquatic_skills","skills"}, {"inactive_rev_skills","skills"},
+        {"skills","skills"}, {"aquatic_skills","skills"}, {"inactive_rev_skills","skills"}, {"rev_active_palettes","skills"},
         {"rune_name","runes"}, {"rune_id","runes"},
         {"relic_name","relic"}, {"relic_id","relic"},
         {"infusion_totals","infusions"},
@@ -1168,6 +1168,15 @@ inline bool ValidatePortablePayload(const std::string& kind,
                             return Fail(error, "Invalid trait selection.");
                 }
             }
+        } else if (field == "rev_active_palettes") {
+            if(!value.is_array()||value.size()!=10)return Fail(error,"Invalid active legend palette evidence.");
+            for(const auto& row:value){
+                if(!row.is_array()||row.size()!=5)return Fail(error,"Invalid active legend palette evidence row.");
+                for(const auto& entry:row)if(!NonNegativeInteger(entry))return Fail(error,"Invalid active legend palette evidence value.");
+                if(row[0].get<uint64_t>()>UINT16_MAX||row[2].get<uint64_t>()>256||
+                   row[3].get<uint64_t>()>256||row[4].get<uint64_t>()>UINT8_MAX||
+                   (row[0]==0&&row[1]!=0)||((row[2]==256||row[3]==256)&&row[1]!=0))return Fail(error,"Invalid active legend palette evidence range.");
+            }
         } else if (field == "inactive_rev_skills") {
             if(!value.is_array()||value.size()!=6)return Fail(error,"Invalid inactive legend palette array.");
             for(const auto& palette:value){
@@ -1519,7 +1528,7 @@ inline Json ReplaceCapturedFieldsPreservingExtensions(const Json& previous,
                         result["gear"][slot.key()][field.key()] = field.value();
                 }
             }
-        } else if ((!RootOwnership().count(it.key())||it.key()=="inactive_rev_skills") &&
+        } else if ((!RootOwnership().count(it.key())||it.key()=="inactive_rev_skills"||it.key()=="rev_active_palettes") &&
                    !result.contains(it.key())) {
             result[it.key()] = it.value();
         }
@@ -1659,7 +1668,7 @@ inline const std::set<std::string>& KnownLegacyKeys() {
         "id", "name", "source_character", "source_identity", "source_url", "import_warning",
         "chat_link", "ae2_code", "profession", "game_mode", "game_modes",
         "notes", "created", "specializations", "skills", "aquatic_skills",
-        "pets", "legend_codes", "inactive_rev_skills", "weapons", "gear", "infusion_totals",
+        "pets", "legend_codes", "inactive_rev_skills", "rev_active_palettes", "weapons", "gear", "infusion_totals",
         "infusion_summary_present", "infusion_ar_total", "infusion_stat_totals",
         "rune_name", "rune_id", "relic_name", "relic_id"
     };

@@ -120,6 +120,10 @@ int case_native_library(int,char**) {
             {{"id","omitted"},{"name","Omitted"},{"profession","Ranger"}},
             {{"id","empty"},{"name","Empty"},{"profession","Ranger"},{"pets",Json::array()}}
         })}};
+        AlterEgo::RevenantActivePaletteEvidence active{};
+        active[0]={4572,0,2,1,42};
+        active[9]={65535,123,0,3,42};
+        input["builds"][1]["rev_active_palettes"]=active;
         Native::Snapshot source;
         assert(C::SplitLegacy(input,source.loadouts,error));
         auto* ranger=C::FindLoadout(source.loadouts,"ranger");
@@ -154,10 +158,14 @@ int case_native_library(int,char**) {
         const auto* rev=C::FindLoadout(restored.loadouts,"revenant");
         const auto* revSkills=C::Find(restored.loadouts,"skills",rev->refs.at("skills"));
         assert(revSkills&&revSkills->data.at("inactive_rev_skills")==input["builds"][1]["inactive_rev_skills"]);
+        assert(revSkills->data.at("rev_active_palettes")==input["builds"][1]["rev_active_palettes"]);
         auto invalidPalettes=C::ExportComponent("skills",*revSkills);
         invalidPalettes["data"]["inactive_rev_skills"][0]=65536;
         std::string importedKind;C::Component imported;
         assert(!C::ImportComponent(invalidPalettes,importedKind,imported,error));
+        auto invalidActive=C::ExportComponent("skills",*revSkills);
+        invalidActive["data"]["rev_active_palettes"][0][0]=65536;
+        assert(!C::ImportComponent(invalidActive,importedKind,imported,error));
 
         auto bad=stored;
         C::FindLoadout(bad.loadouts,"ranger")->refs["pets"]="does-not-exist";
@@ -205,7 +213,7 @@ int case_native_library(int,char**) {
         for(int i=0;i<6;++i)assert(decoded.inactive_rev_skills[i]==original.inactive_rev_skills[i]);
         assert(AlterEgo::ChatLink::EncodeBuild(decoded)==encoded);
         const auto recorded=AlterEgo::RecordedInactiveLegendPalettes(decoded);
-        assert(decoded.companion_choices_known);
+        assert(decoded.companion_choices_known&&decoded.active_palettes_known);
         assert(recorded.has_value()==(profession==AlterEgo::PROF_REVENANT));
         if(recorded){
             AlterEgo::DecodedBuildLink regenerated{};regenerated.profession=profession;
