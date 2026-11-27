@@ -114,30 +114,20 @@ static std::pair<std::vector<uint32_t>, bool> ComponentNativeSkillSpecs(
 
 static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const char* label,
         const char* role,const std::string& profession,const std::vector<uint32_t>& specs,bool allowAnySpec,bool aquatic){
+    namespace SE=AlterEgo::SkillEdit;
     ImGui::PushID(key);
-    const uint32_t id=parent.contains(key)&&parent[key].is_number_integer()?parent[key].get<uint32_t>():0;
+    const auto slot=parent.contains(key)?SE::JsonDisplaySlot(parent[key]):SE::DisplaySlot{};
+    const uint32_t id=slot.id;
     bool changed=false;
     ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(label);ImGui::SameLine(140.0f);
-    if(RenderEditableSkillIcon(id,38.0f,false))ImGui::OpenPopup("##component_skill_palette");
-    auto apply=[&](uint32_t next){
-        const auto info=AlterEgo::GW2API::GetSkillInfo(next);
-        if(next!=id&&(!info||AlterEgo::SkillEdit::EnvironmentChoiceAllowed(aquatic,info->no_underwater))){parent[key]=next;changed=true;}
-    };
-    if(ImGui::BeginPopupContextItem("##component_skill_id")){
-        const auto skill=AlterEgo::GW2API::GetSkillInfo(id);
-        CopyEntityMenu(skill?skill->name:std::string{},AlterEgo::LINK_SKILL,id);
-        if(ImGui::MenuItem("Clear Skill",nullptr,false,id!=0))apply(0);
-        ImGui::TextDisabled("Advanced: exact skill ID");
-        uint32_t exact=id;
-        ImGui::SetNextItemWidth(150.0f);
-        if(ImGui::InputScalar("Skill ID",ImGuiDataType_U32,&exact))apply(exact);
-        if(aquatic&&skill&&skill->no_underwater.value_or(false))ImGui::TextDisabled("Existing skill is marked NoUnderwater.");
-        ImGui::EndPopup();
-    }
     uint32_t next=id;
-    if(RenderSkillPickerPopup("##component_skill_palette",profession,role,specs,allowAnySpec,id,next,aquatic))apply(next);
-    ImGui::SameLine();ImGui::TextDisabled("%s",ComponentNativeSkillName(id).c_str());
-    const auto info=AlterEgo::GW2API::GetSkillInfo(id);
+    if(RenderSkillEditorSlot(id,38.0f,profession,role,specs,allowAnySpec,aquatic,true,next,label)){
+        parent[key]=next;changed=true;
+    }
+    const auto info=id?AlterEgo::GW2API::GetSkillInfo(id):nullptr;
+    if(id&&!info)AlterEgo::GW2API::FetchSkillDetailsAsync({id});
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s",id?(info&&!info->name.empty()?info->name.c_str():"Metadata pending"):SE::MissingSlotLabel(slot.evidence));
     if(aquatic&&id&&(!info||!info->no_underwater.has_value()||info->no_underwater.value_or(false))){
         ImGui::SameLine();ImGui::TextDisabled("%s",info&&info->no_underwater.value_or(false)?"[NoUnderwater]":"[eligibility unknown]");
     }
@@ -311,19 +301,15 @@ static void ComponentNativeProfessionPair(ComponentJson& data,const char* key,
         ImGui::TextDisabled("Unrecognized array format; preserved.");ImGui::TreePop();return;
     }
     ComponentJson values=data.contains(key)?data[key]:ComponentJson::array();
-    auto get=[&](size_t i)->uint32_t{
-        if(i>=values.size()||!values[i].is_number_integer())return 0;
-        auto n=values[i].get<int64_t>();return n>=0&&n<=UINT32_MAX?static_cast<uint32_t>(n):0;
-    };
     auto set=[&](size_t i,uint32_t value){
         while(values.size()<=i)values.push_back(0);
         values[i]=value;data[key]=values;
     };
     if(eligible){
-        std::array<uint32_t,4> projected{};
-        for(size_t i=0;i<projected.size();++i)projected[i]=get(i);
+        auto projected=AlterEgo::Composable::ProjectCompanionSlots(values,legend?255u:UINT32_MAX);
         const auto original=projected;
-        if(RenderProfessionPairSection(legend,projected,true,values.size()==4))
+        const auto mask=AlterEgo::SkillEdit::RecordedCompanionSlots(values,legend?255u:UINT32_MAX);
+        if(RenderProfessionPairSection(legend,projected,true,mask))
             for(size_t i=0;i<projected.size();++i)if(projected[i]!=original[i])set(i,projected[i]);
     }else ImGui::TextDisabled("Not applicable to this profession; exact fields preserved.");
     if(ImGui::TreeNode("##advanced_ids","Advanced exact IDs")){

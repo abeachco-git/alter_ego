@@ -235,33 +235,26 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             ImGui::Text("Specialization entries: %d", (int)data["specializations"].size());
     }
     if(AlterEgo::Composable::IsCompanionKind(kind)){
-            const bool legend=kind=="legends";
-            const auto field=data.find(AlterEgo::Composable::CompanionField(kind));
-            std::array<uint32_t,4> values{};
-            bool known=field!=data.end()&&field->is_array()&&field->size()==4;
-            if(field!=data.end()&&field->is_array())for(size_t i=0;i<values.size()&&i<field->size();++i){
-                const auto& entry=(*field)[i];
-                if(!entry.is_number_integer()){known=false;continue;}
-                const auto n=entry.get<int64_t>();
-                if(n>=0&&n<=(legend?255:UINT32_MAX))values[i]=static_cast<uint32_t>(n);
-                else known=false;
-            }
-            RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
-            RenderProfessionPairSection(legend,values,false,known);
+        const bool legend=kind=="legends";
+        const auto field=data.find(AlterEgo::Composable::CompanionField(kind));
+        const auto payload=field==data.end()?nlohmann::json():*field;
+        auto values=AlterEgo::Composable::ProjectCompanionSlots(payload,legend?255u:UINT32_MAX);
+        const auto mask=AlterEgo::SkillEdit::RecordedCompanionSlots(payload,legend?255u:UINT32_MAX);
+        RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
+        RenderProfessionPairSection(legend,values,false,mask);
     }
     if (kind == "skills") {
-        for (const auto& bar : {"skills", "aquatic_skills"}) {
-            if (!data.contains(bar) || !data[bar].is_object()) continue;
+        for (const auto* bar : {"skills", "aquatic_skills"}) {
+            ImGui::PushID(bar);
             ImGui::TextDisabled("%s", std::string(bar) == "skills"
                 ? "Terrestrial skills" : "Aquatic skills");
-            const auto& skills = data[bar];
-            for (const auto& field : {"heal", "elite", "utilities"}) {
-                if (!skills.contains(field)) continue;
-                const std::string value = skills[field].is_array()
-                    ? skills[field].dump() : skills[field].dump();
-                ImGui::TextWrapped("%s: %s", field, value.c_str());
-            }
+            if(!data.contains(bar))ImGui::TextDisabled("Not recorded");
+            else if(!data[bar].is_object())ImGui::TextDisabled("Unrecognized skill data");
+            else RenderSkillBarPreview(AlterEgo::SkillEdit::JsonDisplayBar(data[bar]),ICON_SIZE);
+            ImGui::PopID();
         }
+        if(data.contains("inactive_rev_skills"))
+            ImGui::TextDisabled("Inactive Revenant utility order recorded");
     }
     if (data.contains("gear") && data["gear"].is_object() &&
         !data["gear"].empty()) {

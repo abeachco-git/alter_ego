@@ -29,6 +29,21 @@ int case_skill_edit_core(int,char**) {
     assert(SpecializationChoiceAllowed(specs,2,3,true));
     assert(SpecializationChoiceAllowed(specs,0,0,false));
     using J=nlohmann::json;
+    {
+        const auto bar=DisplayBar(TestBar{0,{2,0,4},0},1u|16u);
+        assert(bar[0].evidence==SlotEvidence::Empty&&bar[1].id==2);
+        assert(bar[2].evidence==SlotEvidence::Unrecorded&&bar[4].evidence==SlotEvidence::Empty);
+        const auto partial=JsonDisplayBar(J{{"heal",0},{"utilities",J::array({17,-1})}});
+        assert(partial[0].evidence==SlotEvidence::Empty&&partial[1].id==17);
+        assert(partial[2].evidence==SlotEvidence::Unrecorded&&partial[3].evidence==SlotEvidence::Unrecorded);
+        assert(JsonDisplaySlot(J(256),255).evidence==SlotEvidence::Unrecorded);
+        assert(RecordedCompanionSlots(J::array({0,3,-1,256}),255)==3);
+        assert(RecordedCompanionSlots(J::array({1,0}),255)==3);
+        assert(RecordedCompanionSlots(J::object(),255)==0);
+        assert(IconColumns(214,40,4,5)==4&&IconColumns(216,40,4,5)==5);
+        assert(IconColumns(0,40,4,5)==1&&IconColumns(800,40,4,5)==5);
+    }
+
     assert(!NoUnderwaterFlag(J::object()).has_value());
     assert(!NoUnderwaterFlag(J{{"flags",J::array({"NoUnderwater",4})}}).has_value());
     assert(NoUnderwaterFlag(J{{"flags",J::array()}})==false);

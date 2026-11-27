@@ -3887,7 +3887,8 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
 // Clickable skill icon for the build editor (icon cache = skill_id + 5000000).
 // Returns true when clicked. skill_id 0 draws an empty slot.
 static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,bool nameMenu=true,
-                                const std::string& fallbackIconUrl={}) {
+                                const std::string& fallbackIconUrl={},
+                                const char* slotLabel=nullptr,bool emptyKnown=false) {
     const auto sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 max(pos.x + size, pos.y + size);
@@ -3912,7 +3913,9 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,boo
     }
     if(ImGui::IsItemHovered()){
         if(sinfo&&!sinfo->name.empty())AlterEgo::UI::DetailTooltip(sinfo->name.c_str(),StripGW2Markup(sinfo->description).c_str());
-        else if(editable&&!skill_id)AlterEgo::UI::Hint("Click to choose a skill");
+        else if(skill_id)AlterEgo::UI::DetailTooltip(slotLabel?slotLabel:"Skill","Recorded skill; metadata not retrieved.");
+        else if(slotLabel)AlterEgo::UI::DetailTooltip(slotLabel,emptyKnown?"Empty slot":editable?"Not recorded. Click to choose.":"Not recorded.");
+        else if(editable)AlterEgo::UI::Hint("Click to choose a skill");
     }
     if(nameMenu&&skill_id&&ImGui::BeginPopupContextItem("##skill_name")) {
         CopyEntityMenu(sinfo?sinfo->name:std::string{},AlterEgo::LINK_SKILL,skill_id);ImGui::EndPopup();
@@ -3925,6 +3928,34 @@ static bool RenderEditableSkillIcon(uint32_t skill_id, float size,bool nameMenu=
 }
 
 static void RenderSkillIcon(uint32_t skill_id, float size);
+// Shared display-only strip. Metadata admission remains with the ordinary
+// visible skill owner; no per-view cache, timer or request policy.
+static void RenderSkillBarPreview(const std::array<AlterEgo::SkillEdit::DisplaySlot,5>& slots,float size) {
+    namespace SE=AlterEgo::SkillEdit;
+    std::vector<uint32_t> missing;
+    for(const auto& slot:slots)if(slot.id&&!AlterEgo::GW2API::GetSkillInfo(slot.id))missing.push_back(slot.id);
+    if(!missing.empty()){
+        std::sort(missing.begin(),missing.end());missing.erase(std::unique(missing.begin(),missing.end()),missing.end());
+        AlterEgo::GW2API::FetchSkillDetailsAsync(missing);
+    }
+    const auto columns=SE::IconColumns(ImGui::GetContentRegionAvail().x,size,ImGui::GetStyle().ItemSpacing.x,5);
+    ImGui::PushID("skill_bar_preview");
+    for(size_t i=0;i<slots.size();++i){
+        if(i%columns)ImGui::SameLine();
+        ImGui::PushID(static_cast<int>(i));
+        RenderSkillIconCore(slots[i].id,size,false,true,{},SE::SlotLabel(i),slots[i].evidence==SE::SlotEvidence::Empty);
+        if(!slots[i].id){
+            const auto p=ImGui::GetItemRectMin();
+            const auto max=ImGui::GetItemRectMax();
+            const char* marker=slots[i].evidence==SE::SlotEvidence::Empty?"-":"?";
+            const auto text=ImGui::CalcTextSize(marker);
+            ImGui::GetWindowDrawList()->AddText(ImVec2(p.x+(max.x-p.x-text.x)*.5f,p.y+(max.y-p.y-text.y)*.5f),
+                ImGui::GetColorU32(ImGuiCol_TextDisabled),marker);
+        }
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+}
 static bool DecodeBuildLink(const std::string& link, const std::string& name,
                             AlterEgo::GameMode mode, AlterEgo::SavedBuild& out);
 
@@ -4651,29 +4682,17 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
 
     ImGui::Spacing();
 
-    // Skill bar: Heal / Utility / Elite
-    {
-        // Fetch skill details if needed
-        std::vector<uint32_t> toFetch;
-        auto MaybeFetch = [&](uint32_t id) {
-            if (id && !AlterEgo::GW2API::GetSkillInfo(id)) toFetch.push_back(id);
-        };
-        MaybeFetch(bt.terrestrial_skills.heal);
-        for (int i = 0; i < 3; i++) MaybeFetch(bt.terrestrial_skills.utilities[i]);
-        MaybeFetch(bt.terrestrial_skills.elite);
-        if (!toFetch.empty()) AlterEgo::GW2API::FetchSkillDetailsAsync(toFetch);
-
-        float skillSz = ICON_SIZE;
-        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Heal / Utility / Elite");
-        ImGui::BeginGroup();
-        RenderSkillIcon(bt.terrestrial_skills.heal, skillSz);
-        ImGui::SameLine();
-        for (int i = 0; i < 3; i++) {
-            RenderSkillIcon(bt.terrestrial_skills.utilities[i], skillSz);
-            ImGui::SameLine();
+    // The live API reports only recorded skills and explicit null slots.
+    ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Heal / Utility / Elite");
+    ImGui::PushID("live_land_skills");
+    RenderSkillBarPreview(AlterEgo::SkillEdit::DisplayBar(bt.terrestrial_skills,bt.terrestrial_skills.empty_slots),ICON_SIZE);
+    ImGui::PopID();
+    const auto& water=bt.aquatic_skills;
+    if(water.heal||water.elite||water.utilities[0]||water.utilities[1]||water.utilities[2]||water.empty_slots){
+        if(ImGui::TreeNode("Aquatic skills##live")){
+            RenderSkillBarPreview(AlterEgo::SkillEdit::DisplayBar(water,water.empty_slots),ICON_SIZE);
+            ImGui::TreePop();
         }
-        RenderSkillIcon(bt.terrestrial_skills.elite, skillSz);
-        ImGui::EndGroup();
     }
 
     RenderLiveProfessionPairs(bt);
@@ -7184,6 +7203,40 @@ static bool RenderSkillPickerPopup(const char* popup,const std::string& professi
     return selected;
 }
 
+// Both editors share the slot icon, context actions and picker; the
+// caller owns its draft and the standalone editor alone exposes exact IDs.
+static bool RenderSkillEditorSlot(uint32_t current,float size,const std::string& profession,
+        const char* role,const std::vector<uint32_t>& specs,bool allowAnySpec,bool aquatic,
+        bool advanced,uint32_t& next,const char* label=nullptr){
+    const auto pos=ImGui::GetCursorScreenPos();
+    if(RenderSkillIconCore(current,size,true,false,{},label))ImGui::OpenPopup("##skill_picker");
+    const bool hovered=ImGui::IsItemHovered();
+    bool changed=false;
+    auto choose=[&](uint32_t id){
+        const auto info=id?AlterEgo::GW2API::GetSkillInfo(id):nullptr;
+        if(id!=current&&(!info||AlterEgo::SkillEdit::EnvironmentChoiceAllowed(aquatic,info->no_underwater))){
+            next=id;changed=true;
+        }
+    };
+    if(ImGui::BeginPopupContextItem("##skill_edit_context")){
+        const auto info=AlterEgo::GW2API::GetSkillInfo(current);
+        CopyEntityMenu(info?info->name:std::string{},AlterEgo::LINK_SKILL,current);
+        if(AlterEgo::UI::MenuAction("Clear Skill",AlterEgo::UI::MenuIcon::Delete,current!=0))choose(0);
+        if(advanced){
+            ImGui::TextDisabled("Advanced: exact skill ID");
+            uint32_t exact=current;
+            ImGui::SetNextItemWidth(150.0f);
+            if(ImGui::InputScalar("Skill ID",ImGuiDataType_U32,&exact))choose(exact);
+        }
+        if(aquatic&&info&&info->no_underwater.value_or(false))ImGui::TextDisabled("Existing skill is marked NoUnderwater.");
+        ImGui::EndPopup();
+    }
+    if(hovered)ImGui::GetWindowDrawList()->AddRect(pos,ImVec2(pos.x+size,pos.y+size),IM_COL32(227,196,122,255),0,0,2.0f);
+    uint32_t chosen=current;
+    if(RenderSkillPickerPopup("##skill_picker",profession,role,specs,allowAnySpec,current,chosen,aquatic))choose(chosen);
+    return changed;
+}
+
 // Both native editors use this field-scoped selector. The catalog does not
 // record environment eligibility, so never invent an aquatic restriction.
 // Selected slots share geometry and exact entity actions in read and edit modes.
@@ -7195,21 +7248,29 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     if(!legend&&catalog->pets.empty())AlterEgo::GW2API::FetchPetsAsync();
     const auto& pets=catalog->pets;
     auto display=ResolveProfessionChoice(legend,current);
-    if(!current&&!editable)display.name=known?"Empty":"Not recorded";
+    if(!current)display.name=known?"Empty":editable?"Choose (not recorded)":"Not recorded";
     auto* texture=AlterEgo::IconManager::GetOrRequestIcon(display.key,display.icon);
-    ImGui::BeginGroup();
+    // A single hit target spans icon and wrapped label. Center the label
+    // against the icon, retaining the existing icon geometry.
     const ImVec2 pos=ImGui::GetCursorScreenPos(), size(ICON_SIZE,ICON_SIZE);
-    const ImVec2 end(pos.x+size.x,pos.y+size.y);
-    const bool clicked=ImGui::InvisibleButton("##profession_slot",size);
+    const float gap=ImGui::GetStyle().ItemInnerSpacing.x;
+    const float wrap=std::max(1.0f,ImGui::GetContentRegionAvail().x-size.x-gap);
+    const auto labelSize=ImGui::CalcTextSize(display.name.c_str(),nullptr,false,wrap);
+    const float rowHeight=std::max(size.y,labelSize.y);
+    const bool clicked=ImGui::InvisibleButton("##profession_slot",ImVec2(size.x+gap+std::min(wrap,labelSize.x),rowHeight));
     auto* draw=ImGui::GetWindowDrawList();
-    if(texture&&texture->Resource)draw->AddImage(texture->Resource,pos,end);
-    else draw->AddRectFilled(pos,end,IM_COL32(40,40,60,200));
-    if(editable)draw->AddRect(pos,end,IM_COL32(90,80,50,200));
-    ImGui::TextUnformatted(display.name.c_str());
-    ImGui::EndGroup();
+    const ImVec2 iconPos(pos.x,pos.y+(rowHeight-size.y)*.5f);
+    const ImVec2 end(iconPos.x+size.x,iconPos.y+size.y);
+    if(texture&&texture->Resource)draw->AddImage(texture->Resource,iconPos,end);
+    else draw->AddRectFilled(iconPos,end,IM_COL32(40,40,60,200));
+    if(editable)draw->AddRect(iconPos,end,IM_COL32(90,80,50,200));
+    draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),
+        ImVec2(end.x+gap,pos.y+(rowHeight-labelSize.y)*.5f),
+        ImGui::GetColorU32(current||editable?ImGuiCol_Text:ImGuiCol_TextDisabled),
+        display.name.c_str(),nullptr,wrap);
     if(ImGui::IsItemHovered()){
         const auto details=display.description.empty()&&editable?
-            std::string("Click the icon to choose; right-click for actions."):display.description;
+            std::string("Click to choose; right-click for actions."):display.description;
         AlterEgo::UI::DetailTooltip(display.name.c_str(),details.empty()?nullptr:details.c_str());
     }
     if(clicked&&editable)ImGui::OpenPopup("##pair_choice");
@@ -7276,8 +7337,7 @@ static void RenderCompanionAssociatedSkills(const ProfessionChoiceDisplay& choic
     }
     ImGui::TextDisabled("%s",choice.skillsKnown?"Catalog skills":"Catalog skills (partial)");
     ImGui::PushID("associated_skills");
-    const float pitch=size+ImGui::GetStyle().ItemSpacing.x;
-    const int columns=std::max(1,static_cast<int>((ImGui::GetContentRegionAvail().x+ImGui::GetStyle().ItemSpacing.x)/pitch));
+    const int columns=AlterEgo::SkillEdit::IconColumns(ImGui::GetContentRegionAvail().x,size,ImGui::GetStyle().ItemSpacing.x,static_cast<int>(choice.skills.size()));
     for(size_t i=0;i<choice.skills.size();++i){
         if(i%static_cast<size_t>(columns))ImGui::SameLine();
         ImGui::PushID(static_cast<int>(i));
@@ -7289,7 +7349,7 @@ static void RenderCompanionAssociatedSkills(const ProfessionChoiceDisplay& choic
 // Four positional values: terrestrial 1/2, aquatic 1/2. Each caller owns
 // its source projection and commit boundary; rendering does not save data.
 static bool RenderProfessionPairSection(bool legend,std::array<uint32_t,4>& values,
-                                        bool editable,bool known) {
+                                        bool editable,uint8_t recordedMask) {
     ImGui::PushID(legend?"legend_pairs":"pet_pairs");
     // Demand only the selected companions' skills; the canonical skill owner
     // handles cache hits, deduplication, existing claims and retry policy.
@@ -7311,7 +7371,7 @@ static bool RenderProfessionPairSection(bool legend,std::array<uint32_t,4>& valu
             auto next=values[slot];
             const auto otherId=legend&&values[other]<=255?static_cast<uint32_t>(
                 AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(values[other]))):values[other];
-            if(RenderProfessionPairChoice(legend,values[slot],values[other],next,editable,known)&&
+            if(RenderProfessionPairChoice(legend,values[slot],values[other],next,editable,(recordedMask&(1u<<slot))!=0)&&
                 AlterEgo::SkillEdit::SetPairChoice(values[slot],otherId,next))changed=true;
             if(values[slot]){
                 const auto choice=ResolveProfessionChoice(legend,values[slot]);
@@ -7439,17 +7499,16 @@ static void RenderLiveProfessionPairs(const AlterEgo::BuildTemplate& bt) {
     const bool legend=bt.profession=="Revenant";
     ImGui::Spacing();RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
     std::array<uint32_t,4> values{};
-    bool known=legend?bt.legends_known:bt.pets_known;
+    // The live pair-level flag does not establish empty evidence per slot.
+    // Keep zero/unknown slots unrecorded until a typed source says otherwise.
     if(legend){
         const auto catalog=AlterEgo::PublicCatalog::Get();
         for(int i=0;i<2;++i){
             values[i]=AlterEgo::PublicCatalog::LegendCode(catalog->legends,bt.legends.terrestrial[i]);
             values[i+2]=AlterEgo::PublicCatalog::LegendCode(catalog->legends,bt.legends.aquatic[i]);
-            if((!bt.legends.terrestrial[i].empty()&&!values[i])||
-               (!bt.legends.aquatic[i].empty()&&!values[i+2]))known=false;
         }
     }else for(int i=0;i<2;++i){values[i]=bt.pets.terrestrial[i];values[i+2]=bt.pets.aquatic[i];}
-    RenderProfessionPairSection(legend,values,false,known);
+    RenderProfessionPairSection(legend,values,false,0);
 }
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
@@ -8986,36 +9045,28 @@ static void ResolveBuildTraitPlaceholders(AlterEgo::SavedBuild& build) {
 // Heal/Utility/Elite icon row for a build. When `editable`, each icon opens the skill
 // picker for its slot (0=heal, 1-3=util, 4=elite) and draws a gold hover outline.
 static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src,float sz,bool editable,bool aquatic=false) {
+    namespace SE=AlterEgo::SkillEdit;
     const auto& bar=aquatic?src.aquatic_skills:src.terrestrial_skills;
-    std::vector<uint32_t> specs;
-    if(editable)for(const auto& spec:src.specializations)if(spec.spec_id)specs.push_back(spec.spec_id);
     ImGui::PushID(aquatic?"aquatic_bar":"terrestrial_bar");
-    auto cell=[&](uint32_t sid,int slot){
-        if(!editable){RenderSkillIcon(sid,sz);return;}
-        ImGui::PushID(slot+700);
-        const auto p=ImGui::GetCursorScreenPos();
-        if(RenderEditableSkillIcon(sid,sz,false))ImGui::OpenPopup("##skill_picker");
-        const bool hovered=ImGui::IsItemHovered();
-        auto apply=[&](uint32_t id){
-            auto& draft=aquatic?g_EditDraft.aquatic_skills:g_EditDraft.terrestrial_skills;
-            if(AlterEgo::SkillEdit::SetSlot(draft,slot,id))MarkEditDirty();
-        };
-        if(ImGui::BeginPopupContextItem("##skill_edit_context")){
-            const auto skill=AlterEgo::GW2API::GetSkillInfo(sid);
-            CopyEntityMenu(skill?skill->name:std::string{},AlterEgo::LINK_SKILL,sid);
-            if(ImGui::MenuItem("Clear Skill",nullptr,false,sid!=0))apply(0);
-            ImGui::EndPopup();
+    if(!editable){
+        RenderSkillBarPreview(SE::DisplayBar(bar),sz);
+    }else{
+        std::vector<uint32_t> specs;
+        for(const auto& spec:src.specializations)if(spec.spec_id)specs.push_back(spec.spec_id);
+        const auto columns=SE::IconColumns(ImGui::GetContentRegionAvail().x,sz,ImGui::GetStyle().ItemSpacing.x,5);
+        const auto slots=SE::DisplayBar(bar);
+        for(size_t i=0;i<slots.size();++i){
+            if(i%columns)ImGui::SameLine();
+            ImGui::PushID(static_cast<int>(i)+700);
+            uint32_t next=slots[i].id;
+            if(RenderSkillEditorSlot(next,sz,src.profession,SE::SlotRole(i),specs,false,aquatic,false,next,SE::SlotLabel(i))){
+                auto& draft=aquatic?g_EditDraft.aquatic_skills:g_EditDraft.terrestrial_skills;
+                if(SE::SetSlot(draft,static_cast<int>(i),next))MarkEditDirty();
+            }
+            ImGui::PopID();
         }
-        if(hovered)ImGui::GetWindowDrawList()->AddRect(p,ImVec2(p.x+sz,p.y+sz),
-            IM_COL32(227,196,122,255),0,0,2.0f);
-        uint32_t next=sid;
-        if(RenderSkillPickerPopup("##skill_picker",src.profession,
-            slot==0?"Heal":slot==4?"Elite":"Utility",specs,false,sid,next,aquatic))apply(next);
-        ImGui::PopID();
-    };
-    cell(bar.heal,0);ImGui::SameLine();
-    for(int i=0;i<3;++i){cell(bar.utilities[i],i+1);ImGui::SameLine();}
-    cell(bar.elite,4);ImGui::PopID();
+    }
+    ImGui::PopID();
 }
 
 // The saved-build game mode should be legible against both dark and bright
@@ -9802,14 +9853,17 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     if (!wpnSkillsB.empty() && wpnSkillsB.size() > (size_t)maxWpnCount)
         maxWpnCount = (int)wpnSkillsB.size();
     float utilOffset = (maxWpnCount + 1) * (skillSz + 4.0f);
+    const bool sideBySide=ImGui::GetContentRegionAvail().x>=utilOffset+5*skillSz+4*ImGui::GetStyle().ItemSpacing.x;
 
     // Skills layout: weapon skills on the left, utility skills on the right
     if (!wpnSkillsA.empty() || !wpnSkillsB.empty()) {
         // Weapon Set A
         if (!wpnSkillsA.empty()) {
             ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "%s", wpnLabelA.c_str());
-            ImGui::SameLine(utilOffset);
-            ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Heal / Utility / Elite");
+            if(sideBySide){
+                ImGui::SameLine(utilOffset);
+                ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Heal / Utility / Elite");
+            }
 
             ImGui::BeginGroup();
             for (size_t i = 0; i < wpnSkillsA.size(); i++) {
@@ -9818,7 +9872,8 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
             }
             ImGui::EndGroup();
 
-            ImGui::SameLine(utilOffset);
+            if(sideBySide)ImGui::SameLine(utilOffset);
+            else ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Heal / Utility / Elite");
             ImGui::BeginGroup();
             RenderBuildSkillRow(skillSrc, skillSz, skillEditable);
             ImGui::EndGroup();
@@ -9874,7 +9929,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
         std::array<uint32_t,4> values{};
         for(int i=0;i<4;++i)values[i]=legend?skillSrc.legend_codes[i]:
             (i<2?skillSrc.pets.terrestrial[i]:skillSrc.pets.aquatic[i-2]);
-        if(RenderProfessionPairSection(legend,values,g_LibEditMode,false)){
+        if(RenderProfessionPairSection(legend,values,g_LibEditMode,0)){
             if(legend)g_EditDraft.legends_recorded=true;else g_EditDraft.pets_recorded=true;
             for(int i=0;i<4;++i){
                 if(legend)g_EditDraft.legend_codes[i]=static_cast<uint8_t>(values[i]);
