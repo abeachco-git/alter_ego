@@ -27,7 +27,8 @@ inline Json Project(const Json& row,bool skill){
         Json result=Json::array();for(const auto& v:values)result.push_back(validate(v));return result;
     };
     auto facts=[&](const Json& values){return list(values,[](const Json& v){
-        if(!v.is_object()||v.dump().size()>16384)throw std::runtime_error("Invalid conditional fact");return v;
+        if(!v.is_object()||v.dump().size()>16384)throw std::runtime_error("Invalid conditional fact");
+        return v;
     });};
     copy("traited_facts",facts);
     if(skill){

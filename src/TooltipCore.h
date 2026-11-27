@@ -81,7 +81,8 @@ template<class Json> std::vector<std::string> MetadataLines(const Json& extras,c
         std::string line;
         for(const auto& v:*categories)if(v.is_string()&&!v.template get<std::string>().empty()){
             if(line.size()>240)break;
-            if(!line.empty())line+=", ";line+=v.template get<std::string>();
+            if(!line.empty())line+=", ";
+            line+=v.template get<std::string>();
         }
         if(!line.empty())out.push_back("Categories: "+line);
     }
