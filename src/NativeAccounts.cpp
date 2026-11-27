@@ -59,6 +59,11 @@ std::map<std::pair<std::string,std::string>,PhysicalEntry> physicalCache;
 // Never hold it across HTTP or broker acquisition.
 std::map<std::string,CharacterIdentity::State> identityStates;
 std::set<std::string> identityRosterBlocked;
+struct IdentityProof {CharacterIdentity::Binding binding;uint64_t generation=0;std::chrono::steady_clock::time_point retrieved;};
+std::map<std::pair<std::string,std::string>,IdentityProof> identityProofs;
+struct AbsenceConfirmation {std::set<CharacterIdentity::Id> pending;std::chrono::steady_clock::time_point since;};
+std::map<std::string,AbsenceConfirmation> identityConfirmation;
+std::map<std::string,std::chrono::steady_clock::time_point> identityRecoveryAttempts;
 std::string message;
 RefreshUI::State messageState=RefreshUI::State::Ready;
 using ScopeKey=std::tuple<std::string,std::string,std::string>;
@@ -156,20 +161,59 @@ CharacterIdentity::State BootstrapIdentity(Database::Connection& db,const std::s
     return plan->next;
 }
 // Caller holds credentialMutex. Cache adoption is independently replayable.
+void ReindexView(View& next){
+    next.index.clear();next.scopes.clear();
+    for(size_t i=0;i<next.inventory.rows.size();++i)next.index[next.inventory.rows[i].slot.id].push_back(i);
+    for(auto& entry:next.index)std::sort(entry.second.begin(),entry.second.end(),[&](size_t a,size_t b){
+        return LocationLess(next.inventory.rows[a].slot,next.inventory.rows[b].slot);
+    });
+    for(const auto& s:next.inventory.states)next.scopes[{s.account,s.scope,s.character}]=s;
+}
+void FilterIdentityView(View& next){
+    const auto safe=[&](const std::string& account,const std::string& name){
+        if(name.empty())return true;
+        const auto it=next.bindings.find(account);
+        return it!=next.bindings.end()&&it->second.count(name);
+    };
+    auto& rows=next.inventory.rows;
+    rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& r){
+        return (r.slot.scope=="Bags"||r.slot.scope=="Equipment")&&!safe(r.slot.account,r.slot.character);
+    }),rows.end());
+    auto& states=next.inventory.states;
+    states.erase(std::remove_if(states.begin(),states.end(),[&](const auto& s){
+        return (s.scope=="Bags"||s.scope=="Equipment")&&!safe(s.account,s.character);
+    }),states.end());
+    ReindexView(next);
+}
 void InvalidateIdentityProjection(const std::string& account,const std::set<std::string>& affected,bool all=false){
     GW2API::DiscardIdentityCache(account,affected,all);
+    for(auto it=identityProofs.begin();it!=identityProofs.end();){
+        if(it->first.first==account&&(all||affected.count(it->first.second)))it=identityProofs.erase(it);
+        else ++it;
+    }
     std::lock_guard<std::mutex> lock(viewMutex);
+    // Fail closed even if the subsequent disk reread fails.
+    if(all||!affected.empty()){
+        auto next=std::make_shared<View>(*view);
+        auto binding=next->bindings.find(account);
+        if(binding!=next->bindings.end()){
+            if(all)next->bindings.erase(binding);
+            else for(const auto& name:affected)binding->second.erase(name);
+        }
+        FilterIdentityView(*next);view=std::move(next);++inventoryGeneration;
+    }
     for(auto it=liveScopes.begin();it!=liveScopes.end();){
         if(std::get<0>(it->first)==account&&!std::get<2>(it->first).empty()&&
            (all||affected.count(std::get<2>(it->first))))it=liveScopes.erase(it);
         else ++it;
     }
 }
-bool AdoptIdentity(const CharacterIdentity::State& state){
+bool AdoptIdentity(const CharacterIdentity::State& state,
+    const std::optional<CharacterIdentity::RosterEvidence>& roster=std::nullopt){
     const auto account=state.account;
     identityRosterBlocked.insert(account);
     try{
-        const auto affected=CharacterIdentity::AdoptCache(root,state);
+        const auto affected=CharacterIdentity::AdoptCache(root,state,roster);
         if(!affected)throw std::runtime_error("Character identity cache recovery failed");
         InvalidateIdentityProjection(account,*affected);
         {
@@ -200,26 +244,8 @@ void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State st
     auto next=std::make_shared<View>();next->credentialEpoch=registryGeneration.load();next->accounts=Accounts();next->inventory=Read(root);
     for(const auto& [account,state]:identityStates)
         if(!identityRosterBlocked.count(account))next->bindings.emplace(account,CharacterIdentity::CurrentBindings(state));
-    // Preserve the raw roster for native Fast Load. Filter only character-owned cache rows.
-    const auto safe=[&](const std::string& account,const std::string& name){
-        if(name.empty())return true;
-        const auto it=next->bindings.find(account);
-        return it!=next->bindings.end()&&it->second.count(name);
-    };
-    auto& rows=next->inventory.rows;
-    rows.erase(std::remove_if(rows.begin(),rows.end(),[&](const auto& r){
-        return (r.slot.scope=="Bags"||r.slot.scope=="Equipment")&&!safe(r.slot.account,r.slot.character);
-    }),rows.end());
-    auto& states=next->inventory.states;
-    states.erase(std::remove_if(states.begin(),states.end(),[&](const auto& s){
-        return (s.scope=="Bags"||s.scope=="Equipment")&&!safe(s.account,s.character);
-    }),states.end());
-    for(size_t i=0;i<next->inventory.rows.size();++i)next->index[next->inventory.rows[i].slot.id].push_back(i);
-    // All location consumers share this order; do not reorder row identities.
-    for(auto& entry:next->index)std::sort(entry.second.begin(),entry.second.end(),[&](size_t a,size_t b){
-        return LocationLess(next->inventory.rows[a].slot,next->inventory.rows[b].slot);
-    });
-    for(const auto& s:next->inventory.states)next->scopes[{s.account,s.scope,s.character}]=s;
+    // Preserve the raw roster for native Fast Load. Filter only cache rows.
+    FilterIdentityView(*next);
     std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);++inventoryGeneration;if(replaceMessage){message=msg;messageState=state;}registryReady=true;
 }
 std::shared_ptr<const View> Snapshot(){std::lock_guard<std::mutex> lock(viewMutex);return view;}
@@ -287,8 +313,13 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
        (!verifyAll||previous->second.result.full))return previous->second.result;
     observed.Start();
     result.state.attempted=Now();
+    CharacterIdentity::State before;
     try{
-        const auto response=Request(a,"/v2/characters",{"characters"});
+        if(!CommitIfCurrent(a,[&]{
+            Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+            before=BootstrapIdentity(db,a.id);return true;
+        }))return result;
+        const auto response=Request(a,"/v2/characters",{"characters"},"Cache-Control: no-cache\r\n");
         if(!response||!response.data.is_array()){
             if(!a.permissions.count("characters"))result.state.status="Missing permissions";
             throw std::runtime_error("Roster request failed");
@@ -302,11 +333,6 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
     }catch(...){result.names.clear();result.state.success=0;if(result.state.status=="Ready")result.state.status="Roster retrieval failed";}
     try{
         if(result.state.status=="Ready"){
-            CharacterIdentity::State before;
-            if(!CommitIfCurrent(a,[&]{
-                Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
-                before=BootstrapIdentity(db,a.id);return true;
-            }))return result;
             std::vector<CharacterIdentity::Observation> evidence;
             std::set<std::string> attempted;
             auto readCore=[&](const std::string& name){
@@ -332,19 +358,31 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
             // Expand only for unresolved ownership or retirement.
             if(missing||!before.pendingAbsence.empty()||(plan&&!plan.next.blocked.empty()))
                 for(const auto& name:result.names)readCore(name);
-            result.full=attempted.size()==result.names.size();
+            result.full=evidence.size()==result.names.size()&&
+                std::all_of(evidence.begin(),evidence.end(),[](const auto& row){return CharacterIdentity::Normalize(row.evidence).has_value();});
             result.accepted=CommitIfCurrent(a,[&]{
                 Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
-                // Coalesced results never reach here; the planner itself
-                // requires complete valid evidence for retirement.
-                const auto updated=CharacterIdentity::Commit(db,a.id,before.revision,result.names,evidence,result.full);
+                const auto now=Clock::now();
+                const auto prior=identityConfirmation.find(a.id);
+                // Full scans must be separated by the existing propagation
+                // grace. Restart/replay cannot confirm a retirement.
+                const bool confirm=result.full&&prior!=identityConfirmation.end()&&
+                    prior->second.pending==before.pendingAbsence&&
+                    now-prior->second.since>=std::chrono::seconds(RefreshEngine::LogoutGraceSeconds);
+                const CharacterIdentity::RosterEvidence verified{result.names,result.state.attempted,result.state.success};
+                const auto updated=CharacterIdentity::Commit(db,a.id,before.revision,result.names,evidence,confirm,verified);
                 if(!updated||!*updated)return false;
-                if(!AdoptIdentity(updated->next)){
+                if(!AdoptIdentity(updated->next,verified)){
                     Publish("",false);return false;
                 }
-                if(!StoreRoster(root,a.id,result.names,result.state.success,result.state.attempted)){
-                    identityRosterBlocked.insert(a.id);InvalidateIdentityProjection(a.id,{},true);
-                    Publish("",false);return false;
+                if(updated->next.pendingAbsence.empty())identityConfirmation.erase(a.id);
+                else if(result.full&&(prior==identityConfirmation.end()||prior->second.pending!=updated->next.pendingAbsence))
+                    identityConfirmation[a.id]={updated->next.pendingAbsence,now};
+                for(const auto& row:evidence){
+                    const auto e=CharacterIdentity::Normalize(row.evidence);
+                    const auto* bound=updated->next.Current(row.name);
+                    if(e&&bound&&bound->evidence==*e)
+                        identityProofs[{a.id,row.name}]={{bound->id,bound->evidence,bound->bindingRevision},a.generation,now};
                 }
                 Publish("",false);return true;
             });
@@ -378,6 +416,10 @@ void Link(const std::shared_ptr<Secret>& key,const std::string& label,const std:
             if(!SaveKey(a.id,key->value)){Message("Windows Credential Manager rejected the key.");return;}
             try{tx.Commit();}catch(...){if(previous.value.empty())CredDeleteA(Target(a.id).c_str(),CRED_TYPE_GENERIC,0);else SaveKey(a.id,previous.value);throw;}
             ++registryGeneration;
+            try{
+                const auto state=BootstrapIdentity(db,a.id);
+                if(state.initialized)(void)AdoptIdentity(state,CharacterIdentity::ReadVerifiedRoster(db,a.id));
+            }catch(...){identityRosterBlocked.insert(a.id);InvalidateIdentityProjection(a.id,{},true);}
             Publish("Account linked. Inventory can now be refreshed.",true,RefreshUI::State::Success);
             credentialLock.unlock();
             // Network admission never runs under the credential gate.
@@ -400,6 +442,8 @@ void Remove(const std::string& id){
         Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
         Database::Transaction tx(db);auto q=db.Prepare("DELETE FROM accounts WHERE id=?");q.Bind(1,id);q.Execute();
         tx.Commit();++registryGeneration;
+        identityStates.erase(id);identityRosterBlocked.erase(id);identityConfirmation.erase(id);
+        InvalidateIdentityProjection(id,{},true);
         const bool removed=CredDeleteA(Target(id).c_str(),CRED_TYPE_GENERIC,0)!=FALSE||GetLastError()==ERROR_NOT_FOUND;
         Publish(removed?"Account unlinked. Library unchanged.":"Account unlinked; remove its remaining credential in Windows Credential Manager.",true,removed?RefreshUI::State::Success:RefreshUI::State::Error);
     });
@@ -522,6 +566,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 const bool characterScope=bags||name=="Equipment";
                 const auto address=characterScope?EnsureCharacterAddress(linked,character):std::optional<CharacterIdentity::Address>{};
                 if(characterScope&&!address)return;
+                if(bags&&!VerifyCharacterAddress(linked,*address))return;
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
                 BeginScope(state,(accounts.size()>1?a.name+" / ":"")+name+(character.empty()?"":" / "+character));
                 const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
@@ -560,9 +605,16 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                             auto slots=ParseEquipment(physical.response.data,a.id,character);
                             for(const auto& slot:slots){ids.insert(slot.id);ids.insert(slot.upgrades.begin(),slot.upgrades.end());ids.insert(slot.infusions.begin(),slot.infusions.end());}
                         }else state.status=physical.response?"Invalid or incomplete response":physical.response.error;
-                        EndScope(state);publishProgress();return;
+                        if(!CommitIfCharacterCurrent(linked,*address,[&]{EndScope(state);return true;}))
+                            throw Background::Cancelled{};
+                        publishProgress();return;
                     }
-                    ticket=ActivityScope(name)?attempts.BeginScope(name):CharacterActivity::Ticket{};
+                    if(ActivityScope(name)){
+                        if(address){
+                            if(!CommitIfCharacterCurrent(linked,*address,[&]{ticket=attempts.BeginScope(name);return true;}))
+                                throw Background::Cancelled{};
+                        }else ticket=attempts.BeginScope(name);
+                    }
                     auto j=fetchAccount(path);std::vector<Slot> slots;
                     if(bags){
                         const auto& b=j.at("bags");if(!b.is_array())throw std::runtime_error("Invalid bags");
@@ -789,7 +841,9 @@ bool RecordIdentityObservation(const LinkedAccount& a,const CharacterIdentity::A
     const auto evidence=CharacterIdentity::Normalize({created,profession,race});
     if(!evidence)return false;
     if(*evidence==address.binding.evidence)
-        return CommitIfCharacterCurrent(a,address,[]{return true;});
+        return CommitIfCharacterCurrent(a,address,[&]{
+            identityProofs[{a.id,address.name}]={address.binding,a.generation,std::chrono::steady_clock::now()};return true;
+        });
     // Block conflicting ownership before collecting further evidence. Never
     // redirect an already admitted character request.
     try{
@@ -801,12 +855,42 @@ bool RecordIdentityObservation(const LinkedAccount& a,const CharacterIdentity::A
             const auto updated=CharacterIdentity::Commit(db,a.id,state.revision,*names,
                 {{address.name,*evidence}});
             if(!updated||!*updated)return false;
-            const bool adopted=AdoptIdentity(updated->next);
+            const bool adopted=AdoptIdentity(updated->next,CharacterIdentity::ReadVerifiedRoster(db,a.id));
             Publish("",false);return adopted;
         });
         if(isolated)(void)FetchRoster(a,true,false);
     }catch(...){}
     return false;
+}
+void RecoverCharacterAddress(const LinkedAccount& a,const CharacterIdentity::Address& address){
+    // A 404 triggers roster verification, not immediate deletion.
+    try{
+        const bool due=CommitIfCharacterCurrent(a,address,[&]{
+            const auto now=std::chrono::steady_clock::now();
+            auto& last=identityRecoveryAttempts[a.id];
+            if(now-last<std::chrono::seconds(120))return false;
+            last=now;return true;
+        });
+        if(due)(void)FetchRoster(a,false,true);
+    }catch(...){}
+}
+bool VerifyCharacterAddress(const LinkedAccount& a,const CharacterIdentity::Address& address){
+    try{
+        bool recent=false;
+        if(!CommitIfCharacterCurrent(a,address,[&]{
+            const auto it=identityProofs.find({a.id,address.name});
+            recent=it!=identityProofs.end()&&it->second.generation==a.generation&&
+                it->second.binding==address.binding&&
+                std::chrono::steady_clock::now()-it->second.retrieved<std::chrono::seconds(30);
+            return true;
+        }))return false;
+        if(recent)return true;
+        const auto response=Request(a,"/v2/characters/"+Encode(address.name)+"/core",{"characters"},"Cache-Control: no-cache\r\n");
+        if(response.status==404){RecoverCharacterAddress(a,address);return false;}
+        if(!response||!response.data.is_object()||response.data.at("name").get<std::string>()!=address.name)return false;
+        return RecordIdentityObservation(a,address,response.data.at("created").get<std::string>(),
+            response.data.at("profession").get<std::string>(),response.data.at("race").get<std::string>());
+    }catch(...){return false;}
 }
 Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions,const std::string& headers){
     if(!Current(a))return {0,{},"Account changed"};
@@ -832,6 +916,7 @@ Result Request(const std::string& id,const std::string& path,const std::vector<s
 }
 PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const CharacterIdentity::Address& address,bool manual){
     const auto& character=address.name;
+    if(!VerifyCharacterAddress(a,address))return {{0,{},"Character identity not verified"},0,0};
     using Clock=std::chrono::steady_clock;
     const auto queued=Clock::now();
     BrokerWork observed(a.generation,ScopeKey{a.id,"Equipment",character});
@@ -846,7 +931,9 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const Ch
     if(Background::Workers().Stopping())return {{0,{},"Cancelled"},0,0};
     CharacterActivity::CancelOnShutdown attempts(k);
     observed.Start();
-    const auto ticket=attempts.BeginScope("Equipment");
+    CharacterActivity::Ticket ticket;
+    if(!CommitIfCharacterCurrent(a,address,[&]{ticket=attempts.BeginScope("Equipment");return true;}))
+        return {{0,{},"Character identity changed"},0,0};
     const auto cancel=[&](const char* reason){
         CharacterActivity::Cancel(k,"Equipment",ticket);
         return PhysicalEquipmentResult{{0,{},reason},0,0};
@@ -887,6 +974,31 @@ bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names,bool veri
     auto result=FetchRoster(a,verifyAll);
     if(!result.accepted||result.state.status!="Ready")return false;
     names=std::move(result.names);return true;
+}
+void PollObservedIdentity(const std::string& name,bool inventory){
+    using D=AutoRefreshPolicy::Dataset;
+    if(!CharacterIdentity::Text(name)||!Ready()||busy.load()||
+        !(inventory?(AutoRefreshPolicy::Enabled(D::Bags)||AutoRefreshPolicy::Enabled(D::Equipment)):
+                    AutoRefreshPolicy::Enabled(D::Characters)))return;
+    auto accounts=Linked();
+    size_t matches=0;
+    for(const auto& account:accounts)if(account.characters.count(name)&&account.bindings.count(name))++matches;
+    if(matches==1)return;
+    accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[](const auto& a){return !a.permissions.count("characters");}),accounts.end());
+    if(accounts.empty())return;
+    // Called only from visible character/inventory demand. The gameplay
+    // observer itself remains network-free.
+    using Clock=std::chrono::steady_clock;
+    static std::string priorName;
+    static Clock::time_point last{};
+    const auto now=Clock::now();
+    if(now-last<std::chrono::seconds(priorName==name?120:30))return;
+    priorName=name;last=now;
+    Launch([accounts]{
+        ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);
+        for(const auto& account:accounts){Background::Checkpoint();(void)FetchRoster(account,false,true);}
+        Message("Character identity checked.",RefreshUI::State::Ready);
+    });
 }
 // Keep the published index immutable. Order only the requested presentation
 // subset, with numeric stack order retained inside each storage group.
@@ -970,7 +1082,7 @@ void Initialize(const std::string& directory){
             try{
                 Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
                 const auto state=BootstrapIdentity(db,account.id);
-                if(state.initialized){(void)AdoptIdentity(state);}
+                if(state.initialized){(void)AdoptIdentity(state,CharacterIdentity::ReadVerifiedRoster(db,account.id));}
                 else{identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
             }catch(...){identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
         }
@@ -982,7 +1094,7 @@ void Initialize(const std::string& directory){
 void Shutdown(){
     // Called only after managed workers join.
     registryReady=false;++registryGeneration;physicalCache.clear();rosterCache.clear();
-    identityStates.clear();identityRosterBlocked.clear();
+    identityStates.clear();identityRosterBlocked.clear();identityProofs.clear();identityConfirmation.clear();identityRecoveryAttempts.clear();
     std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();
 }
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}

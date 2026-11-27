@@ -34,6 +34,9 @@ bool CommitIfCurrent(const std::vector<LinkedAccount>& accounts,const std::funct
 bool CommitIfRosterCurrent(const std::vector<LinkedAccount>& accounts,const std::map<std::string,std::set<std::string>>& roster,const std::function<bool()>& commit);
 bool CommitIfCharacterCurrent(const LinkedAccount& account,const CharacterIdentity::Address& address,const std::function<bool()>& commit);
 std::optional<CharacterIdentity::Address> EnsureCharacterAddress(const LinkedAccount& account,const std::string& name);
+bool VerifyCharacterAddress(const LinkedAccount& account,const CharacterIdentity::Address& address);
+void RecoverCharacterAddress(const LinkedAccount& account,const CharacterIdentity::Address& address);
+void PollObservedIdentity(const std::string& name,bool inventory=false);
 bool RecordIdentityObservation(const LinkedAccount& account,const CharacterIdentity::Address& address,
     const std::string& created,const std::string& profession,const std::string& race);
 Result Request(const LinkedAccount& account,const std::string& path,

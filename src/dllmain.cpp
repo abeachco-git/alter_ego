@@ -17010,6 +17010,8 @@ void AddonRender() {
             g_MainTab=7;
             ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
             TickCharacterLoad();
+            if(AlterEgo::NativeAccounts::InventorySubview()==0)
+                AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName,true);
             AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings,g_InventoryListWidth);
             ImGui::EndChild();
             AlterEgo::NativeAccounts::RenderInventoryStatusRow(g_SelectedAccountFilter);

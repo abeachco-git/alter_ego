@@ -444,7 +444,10 @@ namespace AlterEgo {
                     if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[]{return true;})){partial=true;break;}
                     if(scope!=S::Core&&!identityVerified){partial=true;continue;}
                     {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Activate(key,scope);}
-                    const auto ticket=attempts.BeginScope(S::Name(scope));
+                    CharacterActivity::Ticket ticket;
+                    if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{ticket=attempts.BeginScope(S::Name(scope));return true;})){
+                        partial=true;break;
+                    }
                     bool specVerified=true;
                     scopeError.clear();
                     try{
