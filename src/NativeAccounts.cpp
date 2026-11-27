@@ -441,8 +441,13 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
                     std::vector<std::string> batch;
                     for(size_t j=i;j<end;++j)if(!attempted.count(names[j]))batch.push_back(names[j]);
                     if(batch.size()>1){
-                        const auto response=Request(a,CharacterBatch::Path(batch,Encode),{"characters"},"Cache-Control: no-cache\r\n");
+                        const auto response=Request(a,CharacterBatch::Path(batch,Encode),{"characters"},"Cache-Control: no-cache\r\n",true);
                         const auto received=Clock::now();const auto stamp=Now();
+                        if(!response&&!CharacterBatch::NarrowFallback(response.status)&&!CharacterBatch::SplitRequired(response.status)){
+                            // A transport failure is not evidence of absence;
+                            // do not fan out to individual core requests.
+                            attempted.insert(batch.begin(),batch.end());continue;
+                        }
                         if(response){
                             auto indexed=CharacterBatch::Index(batch,response.data);
                             if(indexed)for(auto& [name,row]:*indexed){
@@ -1142,7 +1147,7 @@ bool VerifyCharacterAddress(const LinkedAccount& a,const CharacterIdentity::Addr
         }catch(...){return RecordIdentityObservation(a,address,{},{},{});}
     }catch(...){return false;}
 }
-Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions,const std::string& headers){
+Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions,const std::string& headers,bool allowPartial){
     if(!Current(a))return {0,{},"Account changed"};
     for(const auto& p:permissions)if(!a.permissions.count(p))return {403,{},"Missing API permission: "+p};
     std::unique_lock<std::mutex> lock(credentialMutex);
@@ -1152,7 +1157,7 @@ Result Request(const LinkedAccount& a,const std::string& path,const std::vector<
     auto r=ArenaNet::Get(path,key.value,headers);
     if(Background::Workers().Stopping())return {0,{},"Cancelled"};
     if(!Current(a))return {0,{},"Account changed"};
-    if(r.status_code!=200)return {r.status_code,{},Error(r.status_code)};
+    if(!CharacterBatch::AcceptStatus(r.status_code,allowPartial))return {r.status_code,{},Error(r.status_code)};
     try{
         auto parsed=Untrusted::Parse(r.body,Untrusted::PublicApi);
         if(Background::Workers().Stopping())return {0,{},"Cancelled"};
@@ -1284,7 +1289,7 @@ CharacterSummaryResult RequestCharacterSummaries(const LinkedAccount& a,const st
     }
     const auto path=CharacterBatch::Path(names,Encode);
     if(path.empty())return out;
-    auto response=Request(a,path,{"characters","builds","inventories"},"Cache-Control: no-cache\r\n");
+    auto response=Request(a,path,{"characters","builds","inventories"},"Cache-Control: no-cache\r\n",true);
     out.status=response.status;out.error=response.error;out.stamp=Now();out.received=Clock::now();
     if(Background::Workers().Stopping())return out;
     bool changed=false;
@@ -1308,8 +1313,11 @@ CharacterSummaryResult RequestCharacterSummaries(const LinkedAccount& a,const st
             // Exact matching evidence only; conflicts use ordinary core
             // reconciliation outside the storage lock.
             if(!RecordIdentityObservation(a,row.address,evidence->created,evidence->profession,evidence->race,out.received))continue;
-            auto bags=PublishCharacterStorage(a,row.address,"Bags",{200,data,{}},row.bags,out.stamp,false,&out.itemIds,false);
-            auto physical=PublishCharacterStorage(a,row.address,"Equipment",{200,data,{}},row.physical,out.stamp,false,&out.itemIds,false);
+            // Only the relevant endpoint-shaped payload lives in each cache.
+            auto bags=PublishCharacterStorage(a,row.address,"Bags",
+                {200,Json{{"bags",data.value("bags",Json{})}},{}},row.bags,out.stamp,false,&out.itemIds,false);
+            auto physical=PublishCharacterStorage(a,row.address,"Equipment",
+                {200,Json{{"equipment",data.value("equipment",Json{})}},{}},row.physical,out.stamp,false,&out.itemIds,false);
             if(bags.inventoryCommitted){out.bags.insert(name);row.keepBags=true;changed=true;}
             if(physical.inventoryCommitted){out.physical.emplace(name,std::move(physical));row.keepPhysical=true;changed=true;}
             out.rows.emplace(name,std::move(data));

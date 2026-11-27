@@ -491,6 +491,11 @@ namespace AlterEgo {
                     std::vector<CharacterIdentity::Address> addresses;
                     for(const auto& name:batch)addresses.push_back(admitted.at(name)->address);
                     {std::lock_guard<std::mutex> lock(s_mutex);
+                        for(const auto& address:addresses){
+                            const CharacterActivity::Key key{address.account,address.name};
+                            s_character_work.Start(key,address.credentialGeneration,BS::All);
+                            s_character_work.Activate(key,BS::All);
+                        }
                         s_fetch_message="Retrieving combined character data ("+std::to_string(batch.size())+")";}
                     auto response=NativeAccounts::RequestCharacterSummaries(account,addresses);
                     Background::Checkpoint();

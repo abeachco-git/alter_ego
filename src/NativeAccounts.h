@@ -67,7 +67,7 @@ bool RecordIdentityObservation(const LinkedAccount& account,const CharacterIdent
     const std::string& created,const std::string& profession,const std::string& race,
     std::chrono::steady_clock::time_point retrieved={});
 Result Request(const LinkedAccount& account,const std::string& path,
-               const std::vector<std::string>& permissions,const std::string& headers={});
+               const std::vector<std::string>& permissions,const std::string& headers={},bool allowPartial=false);
 Result Request(const std::string& accountId,const std::string& path,
                const std::vector<std::string>& permissions);
 bool RefreshRoster(const LinkedAccount& account,std::set<std::string>& names,bool verifyAll=false);

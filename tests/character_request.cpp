@@ -17,7 +17,8 @@ int case_character_request(int,char**) {
         assert(B::Limit==20);
         assert(B::Path(std::vector<std::string>(B::Limit+1,"Other"),encode).empty());
         assert(B::SplitRequired(413)&&B::SplitRequired(414)&&!B::SplitRequired(429));
-        assert(B::NarrowFallback(403)&&B::NarrowFallback(501)&&!B::NarrowFallback(500)&&!B::NarrowFallback(0));
+        assert(B::NarrowFallback(403)&&B::NarrowFallback(404)&&B::NarrowFallback(501)&&!B::NarrowFallback(500)&&!B::NarrowFallback(0));
+        assert(B::AcceptStatus(200,false)&&B::AcceptStatus(206,true)&&!B::AcceptStatus(206,false)&&!B::AcceptStatus(429,true));
         assert(S::Permitted(true,true,true)==S::All);
         assert(S::Permitted(true,false,false)==(S::Core|S::Crafting));
         assert(!S::Permitted(false,true,true));

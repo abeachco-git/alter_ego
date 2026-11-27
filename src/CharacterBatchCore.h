@@ -44,7 +44,8 @@ inline std::optional<CharacterIdentity::Evidence> Evidence(const Json& row){
     catch(...){return std::nullopt;}
 }
 inline bool SplitRequired(int status){return status==413||status==414;}
-inline bool NarrowFallback(int status){return status==403||status==501;}
+inline bool NarrowFallback(int status){return status==403||status==404||status==501;}
+inline bool AcceptStatus(int status,bool bulk){return status==200||(bulk&&status==206);}
 inline const Json* Field(const Json& row,CharacterScopes::Scope scope){
     using namespace CharacterScopes;
     if(scope==Core)return &row;
