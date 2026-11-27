@@ -15796,7 +15796,8 @@ static void PollDemandCharacter(const std::string& account,const std::string& na
     if(account.empty()||name.empty()||!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::Characters)||
        AlterEgo::GW2API::GetAccountStatus()!=AlterEgo::AccountStatus::Ready||
        AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress)return;
-    if(AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name)!=account)return;
+    if(AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name)!=account||
+       !AlterEgo::NativeAccounts::HasCharacterBinding(account,name))return;
     AlterEgo::CharacterScopes::Mask due=0;
     {std::lock_guard<std::mutex> lock(A::Mutex());
         due=AlterEgo::CharacterScopes::Due(A::State(),{account,name},stamps,demand,A::Now(),g_AutoRefreshOnSpecialization);}

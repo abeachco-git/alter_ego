@@ -26,6 +26,7 @@ std::vector<LinkedAccount> Linked();
 // Capture the credential generation at request admission, not after queueing.
 LinkedAccount FindLinked(const std::string& accountId);
 bool Ready();
+bool HasCharacterBinding(const std::string& account,const std::string& name);
 bool Current(const LinkedAccount& account);
 // Worker-only final publication guard. Commit must not perform HTTP, call Nexus,
 // acquire the credential mutex again, or wait for another worker.

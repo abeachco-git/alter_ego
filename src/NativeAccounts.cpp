@@ -449,7 +449,8 @@ void Remove(const std::string& id){
         Database::Transaction tx(db);auto q=db.Prepare("DELETE FROM accounts WHERE id=?");q.Bind(1,id);q.Execute();
         tx.Commit();++registryGeneration;
         identityStates.erase(id);identityRosterBlocked.erase(id);identityConfirmation.erase(id);
-        InvalidateIdentityProjection(id,{},true);
+        for(auto it=identityProofs.begin();it!=identityProofs.end();)
+            if(it->first.first==id)it=identityProofs.erase(it);else ++it;
         const bool removed=CredDeleteA(Target(id).c_str(),CRED_TYPE_GENERIC,0)!=FALSE||GetLastError()==ERROR_NOT_FOUND;
         Publish(removed?"Account unlinked. Library unchanged.":"Account unlinked; remove its remaining credential in Windows Credential Manager.",true,removed?RefreshUI::State::Success:RefreshUI::State::Error);
     });
@@ -509,6 +510,10 @@ RefreshStatus::Scope InspectStorageScope(const std::string& account,const std::s
 bool ScopeDue(const View& v,const std::string& account,const std::string& scope,const std::string& character={}){
     auto it=v.scopes.find({account,scope,character});
     if(!AutoScope(scope))return false;
+    if(!character.empty()&&(scope=="Bags"||scope=="Equipment")){
+        const auto binding=v.bindings.find(account);
+        if(binding==v.bindings.end()||!binding->second.count(character))return false;
+    }
     const auto a=std::find_if(v.accounts.begin(),v.accounts.end(),[&](const Account& row){return row.id==account;});
     if(a==v.accounts.end()||!ScopePermitted(*a,scope))return false;
     return InspectStorageScope(account,scope,character,it==v.scopes.end()?nullptr:&it->second,true,Now()).eligibility.due;
@@ -787,6 +792,10 @@ LinkedAccount FindLinked(const std::string& id){
     return {};
 }
 bool Ready(){return registryReady.load();}
+bool HasCharacterBinding(const std::string& account,const std::string& name){
+    const auto v=Snapshot();const auto it=v->bindings.find(account);
+    return it!=v->bindings.end()&&it->second.count(name);
+}
 bool Current(const LinkedAccount& a){
     if(a.id.empty()||a.generation!=registryGeneration.load())return false;
     auto v=Snapshot();
@@ -1085,7 +1094,25 @@ void Initialize(const std::string& directory){
             try{
                 Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
                 const auto state=BootstrapIdentity(db,account.id);
-                if(state.initialized){(void)AdoptIdentity(state,CharacterIdentity::ReadVerifiedRoster(db,account.id));}
+                if(state.initialized){
+                    const auto historical=GW2API::GetCharacters();
+                    if(AdoptIdentity(state,CharacterIdentity::ReadVerifiedRoster(db,account.id))){
+                        // First adoption invalidates unbound dependent scopes.
+                        // Retain matching historical core fields and their
+                        // original verification stamp, never invent freshness.
+                        for(const auto& ch:*historical){
+                            if(ch.account_name!=account.id||ch.scope_stamps[CharacterScopes::Index(CharacterScopes::Core)]<=0)continue;
+                            const auto* binding=state.Current(ch.name);
+                            const auto evidence=CharacterIdentity::Normalize({ch.created,ch.profession,ch.race});
+                            if(!binding||!evidence||!(binding->evidence==*evidence))continue;
+                            const Json core={{"name",ch.name},{"created",ch.created},{"profession",ch.profession},
+                                {"race",ch.race},{"gender",ch.gender},{"level",ch.level},{"age",ch.age},
+                                {"deaths",ch.deaths},{"last_modified",ch.last_modified}};
+                            (void)GW2API::PublishDiscoveredCore(account.id,ch.name,core,
+                                ch.scope_stamps[CharacterScopes::Index(CharacterScopes::Core)]);
+                        }
+                    }
+                }
                 else{identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
             }catch(...){identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
         }

@@ -6,10 +6,10 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 ## Approved character identity reconciliation
 
-- [ ] Part 7A follow-up verification: add populated pre-v4 registry migration, history-limit and multi-way swap fixtures. Verify the live caller establishes independent observation freshness before confirming absence. Do not activate live adoption until request fencing and recovery are integrated.
+- [ ] Part 7A follow-up verification: add populated pre-v4 registry migration, history-limit and multi-way swap fixtures.
 
-- [ ] Finish live identity adoption: historical evidence capture and revision/roster-epoch-fenced ordinary core observations are wired before name-only pruning; do not treat this as live identity-aware ownership. Collect sufficient fresh targeted/full evidence for conflicts and independently confirmed retirement, including unchanged-name-set swaps and same-name replacements. Preserve existing refresh cadence, admission and Fast Load.
-- [ ] Part 7B: wire and verify the durable per-address binding fence and replayable cache adoption primitives in the shared live owner, then integrate crash-recoverable identity adoption with cache pruning and stale request rejection, including physical inventory and character detail publications; preserve account isolation, old verified evidence and historical provenance, never redirect queued Fast Load.
+- [ ] Part 7B: verify live rename, same-name replacement, swap, missing/partial core, interrupted adoption and account isolation in the running addon; offline fixtures and build verification are tracked in development status. Preserve native Fast Load.
+
 - [ ] Parts 7C–7D: migrate expected Loadout, activity, custom ordering, session/navigation, Inventory filters/group expansion and verified Fashion associations to stable local IDs or safely reconcile them. Preserve original capture names and never infer ownership from historical name strings. Establish notification and unresolved-match behavior; complete migration/backup/recovery and regression/live acceptance.
 - [ ] Part 7E: extend fixtures to live integration and interrupted adoption across stores, missing/partial API data, deletion/recreation, repeated rename, collisions, name reuse and swaps; no changes to native Fast Load internals.
 
