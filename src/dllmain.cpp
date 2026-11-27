@@ -457,7 +457,6 @@ static char g_SkinSearchFilter[256] = "";
 static bool g_SkinShowOwned = true;
 static bool g_SkinShowUnowned = true;
 static int  g_SkinViewMode = 0; // 0 = List, 1 = Grid
-static bool g_SkinRefreshOwned = false;
 static bool g_SkinInitialized = false;
 static bool g_SwitchToInventory = false;
 static void OpenInventoryItem(uint32_t id);
@@ -15590,8 +15589,8 @@ static void RenderCompareStatusRow() {
 }
 
 static void RenderSkinventoryStatusRow() {
-    // Run the same ownership refresh scheduler as before; the only change is
-    // that the action, result and timestamp are drawn together at the bottom.
+    // Ownership admission and timing belong to OwnedSkins. This footer
+    // supplies visible demand.
     static bool s_refreshPending = false;
     static uint64_t s_refreshStartingGeneration = 0;
     static auto s_successUntil = std::chrono::steady_clock::time_point{};
@@ -15603,20 +15602,14 @@ static void RenderSkinventoryStatusRow() {
         s_successUntil = {};
     }
     Skinventory::OwnedSkins::SetAccountName(visibleAccount);
-    if (Skinventory::OwnedSkins::ConsumeDataUpdatedFlag() &&
-        AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))
-        g_SkinRefreshOwned = true;
     bool querying = Skinventory::OwnedSkins::IsQuerying();
     bool canRefresh = Skinventory::OwnedSkins::IsAccountAvailable() && !querying;
     if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership) &&
         canRefresh && Skinventory::OwnedSkins::RefreshDue()) {
-        g_SkinRefreshOwned = false;
         s_refreshPending = true;
         s_refreshStartingGeneration = Skinventory::OwnedSkins::GetGeneration();
         Skinventory::OwnedSkins::RequestOwnedSkinsViaApi(false);
     }
-    // Account selection and cache notifications are not force-refresh consent.
-    g_SkinRefreshOwned = false;
     querying = Skinventory::OwnedSkins::IsQuerying();
     if (s_refreshPending && !querying) {
         s_refreshPending = false;
@@ -15649,7 +15642,6 @@ static void RenderSkinventoryStatusRow() {
     if (AlterEgo::RefreshUI::Row("skinventory", Skinventory::OwnedSkins::GetLastSuccessTime(),
              "owned skins", state, detail, !canRefresh))
     {
-        g_SkinRefreshOwned=false;
         s_refreshPending=true;s_refreshStartingGeneration=Skinventory::OwnedSkins::GetGeneration();
         Skinventory::OwnedSkins::RequestOwnedSkinsViaApi();
     }
@@ -16062,8 +16054,6 @@ void AddonRender() {
                 }
                 if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
                     Skinventory::OwnedSkins::SetAccountName(g_SelectedAccountFilter);
-                    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))
-                        g_SkinRefreshOwned = true;
                     g_ClearsNeedRequery = true;
                     g_VaultNeedRequery = true;
                     g_AchNeedRequery = true;
@@ -17543,9 +17533,7 @@ void AddonOptions() {
     RenderSectionHeader("Automatic API Refresh", AlterEgo::UI::SectionGold);
     if (ImGui::Checkbox("Automatically refresh API data##ae_auto", &g_AutoRefreshEnabled)) {
         AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
-        if (!g_AutoRefreshEnabled) {
-            g_SkinRefreshOwned = false;
-        } else {
+        if (g_AutoRefreshEnabled) {
             // Account data is refreshed by its visible consumer, not the
             // remembered tab in settings. Keep existing public-catalog policy.
             if (AlterEgo::AutoRefreshPolicy::Included(AlterEgo::AutoRefreshPolicy::Dataset::PublicCatalog) && g_SkinInitialized && Skinventory::SkinCache::GetStatus() == Skinventory::CacheStatus::Ready)
@@ -17598,7 +17586,6 @@ void AddonOptions() {
                     AlterEgo::PublicCatalog::RefreshVault(AlterEgo::GW2API::GetDataDirectory(),false);
                     AlterEgo::WikiEvents::Refresh(AlterEgo::GW2API::GetDataDirectory());
                 }
-                if(!included&&dataset==Dataset::SkinOwnership)g_SkinRefreshOwned=false;
                 SaveSettings();
             }
         }

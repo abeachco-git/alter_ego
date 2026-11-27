@@ -258,7 +258,7 @@ public:
             (scope==Core||scope==Builds||scope==Tabs||scope==Physical||scope==Crafting);
         if(characterDetail&&(success<=0||success>now)){
             result={WaitReason::Due,now,true};
-        }else if(Active(k)&&k.second.empty()&&SharedActivityStorage(scope)){
+        }else if(Active(k)&&k.second.empty()&&RefreshEngine::SharedActivityStorage(scope)){
             return RefreshEngine::ActiveSharedStorageEligibility(success,attempt,now,e.login,
                 RefreshEngine::ActivitySeconds(true,scope),RefreshEngine::Offset(k.first+"//"+scope));
         }else if(Active(k)){
