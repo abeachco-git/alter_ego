@@ -150,6 +150,15 @@ int case_composable_loadouts(int, char**) {
         assert(companions.loadouts[0].refs.count("pets")&&!companions.loadouts[0].refs.count("legends"));
         assert(companions.loadouts[1].refs.count("legends")&&!companions.loadouts[1].refs.count("pets"));
         assert(!IsEquipmentKind("pets")&&!IsEquipmentKind("legends"));
+        // An explicit empty component reference is still an exact reference;
+        // unrelated metadata edits cannot silently detach it.
+        auto empty=companions;
+        auto* pet=Find(empty,"pets",empty.loadouts[0].refs.at("pets"));pet->data=Json::object();
+        Json emptyFlat;assert(ToLegacy(empty,emptyFlat,error));
+        emptyFlat["builds"][0]["notes"]="Metadata only";
+        Document reconciled;
+        assert(ReconcileLegacy(empty,emptyFlat,reconciled,error));
+        assert(reconciled.loadouts[0].refs.at("pets")==empty.loadouts[0].refs.at("pets"));
         assert(!Assign(companions,"two","pets",companions.loadouts[0].refs.at("pets"),error));
         Json flat;assert(ToLegacy(companions,flat,error)&&flat["builds"]==legacy["builds"]);
         // Reconstruct the pre-split graph, retaining shared and unused base IDs.

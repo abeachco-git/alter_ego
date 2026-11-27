@@ -238,6 +238,17 @@ inline uint8_t CanonicalLegendCode(uint8_t code) {
     // explicit display/edit/export, never rewrite durable library records.
     return code>=13&&code<=19?static_cast<uint8_t>(code-12):code;
 }
+// Resolve immutable catalog identities, never use display names as IDs.
+inline const Pet* FindPet(const std::vector<Pet>& rows,uint32_t id){
+    for(const auto& row:rows)if(row.id==id)return &row;
+    return nullptr;
+}
+inline const Legend* FindLegend(const std::vector<Legend>& rows,uint32_t code){
+    if(code>255||!code)return nullptr;
+    const auto canonical=CanonicalLegendCode(static_cast<uint8_t>(code));
+    for(const auto& row:rows)if(row.code==canonical)return &row;
+    return nullptr;
+}
 struct Snapshot {
     int64_t upgrades=0,upgradeAttempt=0,vault=0,vaultAttempt=0;
     std::set<uint32_t> index,upgradeIds;

@@ -2688,10 +2688,11 @@ namespace AlterEgo {
         } else if (category == "skill") {
             if (const auto info = GW2API::GetSkillInfo(id)) return info->name;
         } else if(category=="pet"){
-            for(const auto& pet:PublicCatalog::Get()->pets)if(pet.id==id)return pet.name;
+            const auto catalog=PublicCatalog::Get();
+            if(const auto* pet=PublicCatalog::FindPet(catalog->pets,id))return pet->name;
         } else if(category=="legend"){
-            if(id<=255)for(const auto& legend:PublicCatalog::Get()->legends)
-                if(legend.code==PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(id)))return legend.name;
+            const auto catalog=PublicCatalog::Get();
+            if(const auto* legend=PublicCatalog::FindLegend(catalog->legends,id))return legend->name;
         } else if (category == "stat") {
             if (const auto info = GW2API::GetItemStatInfo(id)) return info->name;
         } else {

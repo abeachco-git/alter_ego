@@ -1696,7 +1696,6 @@ inline bool Reconcile(const Document& original, const Json& legacy,
         }
         for (const auto& [kind, data] : parts) {
             if(SetOwns(next,updated,kind))continue;
-            if(IsCompanionKind(kind)&&data.empty()){updated.refs.erase(kind);continue;}
             const auto oldRef = updated.refs.find(kind);
             if (oldRef == updated.refs.end()) {
                 if(IsOptionalKind(kind)&&data.empty())continue;

@@ -6791,9 +6791,41 @@ static std::vector<LegendOption> LegendOptions() {
     return out;
 }
 static LegendOption LegendOptionForCode(uint8_t code) {
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    if(const auto* l=AlterEgo::PublicCatalog::FindLegend(catalog->legends,code))
+        return {l->code,l->name,l->swap,l->icon};
     code=AlterEgo::PublicCatalog::CanonicalLegendCode(code);
     for (const auto& l : LegendOptions()) if (l.code == code) return l;
     return {code,code?"Unknown legend ("+std::to_string(code)+")":"Choose legend",0,{}};
+}
+struct ProfessionChoiceDisplay {
+    std::string name,icon;
+    uint32_t key=0,swap=0;
+};
+// Cache-only presentation resolution shared by slots and Compare. Requests
+// remain at the existing visible picker/slot demand boundary.
+static ProfessionChoiceDisplay ResolveProfessionChoice(bool legend,uint32_t current) {
+    ProfessionChoiceDisplay result;
+    if(legend){
+        const auto option=current<=255?LegendOptionForCode(static_cast<uint8_t>(current)):
+            LegendOption{0,"Unknown legend ("+std::to_string(current)+")",0,{}};
+        result.name=option.name;result.swap=option.swap;result.icon=option.icon;
+        if(const auto skill=result.swap?AlterEgo::GW2API::GetSkillInfo(result.swap):nullptr)
+            if(!skill->icon_url.empty())result.icon=skill->icon_url;
+        result.key=AlterEgo::ArtworkRequest::SkillKey(result.swap);
+    }else{
+        const auto catalog=AlterEgo::PublicCatalog::Get();
+        result.name=current?"Unknown pet ("+std::to_string(current)+")":"Choose pet";
+        if(const auto* pet=AlterEgo::PublicCatalog::FindPet(catalog->pets,current)){
+            result.name=pet->name;result.icon=pet->icon;
+        }
+        result.key=AlterEgo::ArtworkRequest::PetKey(current);
+    }
+    return result;
+}
+static void ProfessionChoiceActions(bool legend,const ProfessionChoiceDisplay& value){
+    if(legend&&value.swap)CopyEntityMenu(value.name,AlterEgo::LINK_SKILL,value.swap);
+    else CopyNameMenuItem(value.name);
 }
 
 // Render the same GW2 profession image used in the Characters roster in
@@ -7143,26 +7175,13 @@ static bool RenderSkillPickerPopup(const char* popup,const std::string& professi
 static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t other,uint32_t& next,
                                        bool editable=true,bool known=true) {
     using AlterEgo::SkillEdit::PairChoiceAllowed;
-    const auto pets=legend?std::vector<AlterEgo::PetInfo>{}:AlterEgo::GW2API::GetPets();
-    std::string name;
-    std::string url;
-    uint32_t key=0,swap=0;
-    if(legend){
-        if(AlterEgo::PublicCatalog::Get()->legends.empty())AlterEgo::GW2API::FetchLegendsAsync();
-        const auto option=current<=255?LegendOptionForCode(static_cast<uint8_t>(current)):
-            LegendOption{0,"Unknown legend ("+std::to_string(current)+")",0,{}};
-        name=option.name;swap=option.swap;url=option.icon;
-        if(const auto skill=swap?AlterEgo::GW2API::GetSkillInfo(swap):nullptr)
-            if(!skill->icon_url.empty())url=skill->icon_url;
-        key=AlterEgo::ArtworkRequest::SkillKey(swap);
-    }else{
-        if(pets.empty())AlterEgo::GW2API::FetchPetsAsync();
-        name=current?"Unknown pet ("+std::to_string(current)+")":"Choose pet";
-        for(const auto& p:pets)if(p.id==current){name=p.name;url=p.icon_url;break;}
-        key=AlterEgo::ArtworkRequest::PetKey(current);
-    }
-    if(!current&&!editable)name=known?"Empty":"Not recorded";
-    auto* texture=AlterEgo::IconManager::GetOrRequestIcon(key,url);
+    const auto catalog=AlterEgo::PublicCatalog::Get();
+    if(legend&&catalog->legends.empty())AlterEgo::GW2API::FetchLegendsAsync();
+    if(!legend&&catalog->pets.empty())AlterEgo::GW2API::FetchPetsAsync();
+    const auto& pets=catalog->pets;
+    auto display=ResolveProfessionChoice(legend,current);
+    if(!current&&!editable)display.name=known?"Empty":"Not recorded";
+    auto* texture=AlterEgo::IconManager::GetOrRequestIcon(display.key,display.icon);
     ImGui::BeginGroup();
     const ImVec2 pos=ImGui::GetCursorScreenPos(), size(ICON_SIZE,ICON_SIZE);
     const ImVec2 end(pos.x+size.x,pos.y+size.y);
@@ -7171,26 +7190,25 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     if(texture&&texture->Resource)draw->AddImage(texture->Resource,pos,end);
     else draw->AddRectFilled(pos,end,IM_COL32(40,40,60,200));
     if(editable)draw->AddRect(pos,end,IM_COL32(90,80,50,200));
-    if(ImGui::IsItemHovered())AlterEgo::UI::Hint(name.c_str());
-    ImGui::TextUnformatted(name.c_str());
+    ImGui::TextUnformatted(display.name.c_str());
     ImGui::EndGroup();
+    if(ImGui::IsItemHovered())AlterEgo::UI::DetailTooltip(display.name.c_str(),editable?"Click the icon to choose; right-click for actions.":nullptr);
     if(clicked&&editable)ImGui::OpenPopup("##pair_choice");
     bool changed=false;
-    if(ImGui::BeginPopupContextItem("##pair_context")){
-        if(current){
-            if(legend&&swap)CopyEntityMenu(name,AlterEgo::LINK_SKILL,swap);
-            else CopyNameMenuItem(name);
+    AlterEgo::UI::EntityContext("##pair_context",[&]{
+        if(current)ProfessionChoiceActions(legend,display);
+        if(editable&&AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete,current!=0)){
+            next=0;changed=true;
         }
-        if(editable&&ImGui::MenuItem("Clear",nullptr,false,current!=0)){next=0;changed=true;}
-        ImGui::EndPopup();
-    }
+    });
     if(!editable)return false;
     if(!ImGui::BeginPopup("##pair_choice"))return changed;
     ImGui::TextDisabled("Environment eligibility not verified by catalog.");
-    if(ImGui::Selectable("(None)",current==0)){next=0;changed=true;ImGui::CloseCurrentPopup();}
+    if(AlterEgo::UI::SelectableOption("(None)",current==0)){next=0;changed=true;ImGui::CloseCurrentPopup();}
     auto row=[&](uint32_t id,const std::string& label,uint32_t iconId,
                  const std::string& url,bool disabled,bool selected){
         ImGui::PushID(static_cast<int>(id));
+        ImGui::BeginGroup();
         auto* icon=AlterEgo::IconManager::GetOrRequestIcon(iconId,url);
         constexpr float size=30.0f;
         if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(size,size),ImVec2(0,0),ImVec2(1,1),
@@ -7198,12 +7216,15 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
         else ImGui::Dummy(ImVec2(size,size));
         ImGui::SameLine();
         if(disabled)ImGui::TextDisabled("%s",label.c_str());
-        else if(ImGui::Selectable(label.c_str(),selected)){
+        else if(AlterEgo::UI::SelectableOption(label.c_str(),selected)){
             next=id;changed=true;ImGui::CloseCurrentPopup();
         }
+        ImGui::EndGroup();
         if(disabled&&ImGui::IsItemHovered())AlterEgo::UI::Hint("Already selected in the other slot.");
-        else if(ImGui::IsItemHovered())AlterEgo::UI::Hint(label.c_str());
-        NameOptionContext(label);
+        else if(ImGui::IsItemHovered())AlterEgo::UI::DetailTooltip(label.c_str());
+        AlterEgo::UI::EntityContext("##pair_option_actions",[&]{
+            ProfessionChoiceActions(legend,ResolveProfessionChoice(legend,id));
+        });
         ImGui::PopID();
     };
     if(legend){
@@ -7216,7 +7237,7 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
         RenderSpinner("Loading pets...");AlterEgo::GW2API::FetchPetsAsync();
     }else{
         ImGui::BeginChild("##petlist",ImVec2(280,360),true);
-        for(const auto& p:pets)row(p.id,p.name,AlterEgo::ArtworkRequest::PetKey(p.id),p.icon_url,!PairChoiceAllowed(other,p.id),current==p.id);
+        for(const auto& p:pets)row(p.id,p.name,AlterEgo::ArtworkRequest::PetKey(p.id),p.icon,!PairChoiceAllowed(other,p.id),current==p.id);
         ImGui::EndChild();
     }
     ImGui::EndPopup();
@@ -9879,28 +9900,35 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     if(waterSkills.heal||waterSkills.elite||waterSkills.utilities[0]||waterSkills.utilities[1]||waterSkills.utilities[2])
         compareSkills("Aquatic skills", waterSkills, live.aquatic_skills);
     if (saved.profession == "Ranger") {
+        const auto petName=[](uint32_t id){return id?ResolveProfessionChoice(false,id).name:std::string("Unknown");};
         for (int i = 0; i < 2; ++i) {
-            if(saved.pets.terrestrial[i]&&live.pets.terrestrial[i])addId("Ranger pets","Terrestrial "+std::to_string(i+1),saved.pets.terrestrial[i],live.pets.terrestrial[i],numberLabel);
-            else result.AddUnverified("Ranger pets","Terrestrial "+std::to_string(i+1),numberLabel(saved.pets.terrestrial[i]),numberLabel(live.pets.terrestrial[i]));
+            if(saved.pets.terrestrial[i]&&live.pets_known&&live.pets.terrestrial[i])
+                addId("Ranger pets","Terrestrial "+std::to_string(i+1),saved.pets.terrestrial[i],live.pets.terrestrial[i],petName);
+            else if(saved.pets.terrestrial[i])
+                result.AddUnverified("Ranger pets","Terrestrial "+std::to_string(i+1),petName(saved.pets.terrestrial[i]),petName(live.pets.terrestrial[i]));
             if(saved.pets.aquatic[i]){
-                if(!live.pets.aquatic[i])result.AddUnverified("Ranger pets","Aquatic "+std::to_string(i+1),numberLabel(saved.pets.aquatic[i]),"Unknown");
-                else addId("Ranger pets","Aquatic "+std::to_string(i+1),saved.pets.aquatic[i],live.pets.aquatic[i],numberLabel);
+                if(!live.pets_known||!live.pets.aquatic[i])
+                    result.AddUnverified("Ranger pets","Aquatic "+std::to_string(i+1),petName(saved.pets.aquatic[i]),"Unknown");
+                else addId("Ranger pets","Aquatic "+std::to_string(i+1),saved.pets.aquatic[i],live.pets.aquatic[i],petName);
             }
         }
     }
     if (saved.profession == "Revenant") {
-        auto legendCode = [](const std::string& value) -> uint32_t {
-            return value.rfind("Legend", 0) == 0 ? (uint32_t)std::atoi(value.c_str() + 6) : 0;
+        const auto catalog=AlterEgo::PublicCatalog::Get();
+        auto legendCode=[&](const std::string& value){
+            return AlterEgo::PublicCatalog::LegendCode(catalog->legends,value);
         };
-        for (int i = 0; i < 2; ++i) {
-            const auto land=legendCode(live.legends.terrestrial[i]);
-            if(saved.legend_codes[i]&&land)addId("Revenant legends","Terrestrial "+std::to_string(i+1),saved.legend_codes[i],land,numberLabel);
-            else result.AddUnverified("Revenant legends","Terrestrial "+std::to_string(i+1),numberLabel(saved.legend_codes[i]),numberLabel(land));
-            if(saved.legend_codes[i+2]){
-                const auto observed=legendCode(live.legends.aquatic[i]);
-                if(!observed)result.AddUnverified("Revenant legends","Aquatic "+std::to_string(i+1),numberLabel(saved.legend_codes[i+2]),"Unknown");
-                else addId("Revenant legends","Aquatic "+std::to_string(i+1),saved.legend_codes[i+2],observed,numberLabel);
-            }
+        const auto legendName=[](uint32_t id){return id?ResolveProfessionChoice(true,id).name:std::string("Unknown");};
+        for(int i=0;i<4;++i){
+            const auto expected=AlterEgo::PublicCatalog::CanonicalLegendCode(saved.legend_codes[i]);
+            if(!expected)continue;
+            const auto observed=legendCode(i<2?live.legends.terrestrial[i]:live.legends.aquatic[i-2]);
+            const auto field=std::string(i<2?"Terrestrial ":"Aquatic ")+std::to_string(i%2+1);
+            if(live.legends_known&&observed){
+                addId("Revenant legends",field,expected,observed,legendName);
+                const auto a=ResolveProfessionChoice(true,expected),b=ResolveProfessionChoice(true,observed);
+                result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.swap,0,0},{b.swap,0,0});
+            }else result.AddUnverified("Revenant legends",field,legendName(expected),"Unknown");
         }
     }
     auto weaponList = [](const std::vector<uint32_t>& ids) {

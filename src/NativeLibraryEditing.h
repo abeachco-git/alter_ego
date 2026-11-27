@@ -185,7 +185,6 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
     for(const auto& [kind,data]:parts) {
         if(Composable::SetOwns(doc,next,kind))continue;
         const auto ref=next.refs.find(kind);
-        if(Composable::IsCompanionKind(kind)&&data.empty()){next.refs.erase(kind);continue;}
         if(Composable::IsOptionalKind(kind)&&data.empty()&&ref==next.refs.end())continue;
         auto* previous=ref==next.refs.end()?nullptr:Composable::Find(doc,kind,ref->second);
         if(existing&&oldParts.count(kind)&&ExactContent(oldParts.at(kind),data)) {
@@ -459,7 +458,6 @@ inline bool PutUnifiedLoadout(Composable::Document& doc,const Json& raw,
             const auto& data=change.data;
             const auto& oldId=change.oldId;
             auto* part=oldId.empty()?nullptr:Composable::Find(next,kind,oldId);
-            if(Composable::IsCompanionKind(kind)&&data.empty()){l->refs.erase(kind);continue;}
             const bool inherited=Composable::SetOwns(next,*l,kind);
             const bool shared=part&&sharedKinds.count(kind);
             if(shared){

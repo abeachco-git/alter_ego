@@ -31,6 +31,10 @@ def schema(path):
             return version, blocks
         if version in (6, 7) and len(blocks) == version - 4:
             return version, list(reversed(blocks))
+        # v8 expands the v5 baseline CHECK constraints and uses the same
+        # two additive SQL blocks; the populated rebuild is a native test.
+        if version == 8 and len(blocks) == 3:
+            return version, list(reversed(blocks))
         raise RuntimeError("Native library schema layout changed; update benchmark")
     if len(blocks) != version:
         raise RuntimeError("Schema migration layout changed; update benchmark")
