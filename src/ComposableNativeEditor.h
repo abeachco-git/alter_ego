@@ -744,8 +744,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             }
             if(id)ImGui::TextWrapped("%s (#%u)",info&&!info->name.empty()?info->name.c_str():"Item metadata pending",id);
             else ImGui::TextDisabled("No exact item selected");
-            if (id && !info && RenderActionButton("Fetch item details##component"))
-                AlterEgo::GW2API::FetchItemDetailsAsync({id});
+            if(info&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*info);
             if (ImGui::TreeNode("##exact_item", "Exact equipment item")) {
                 uint32_t exact=id;ImGui::SetNextItemWidth(150);
                 if(ImGui::InputScalar("Item ID",ImGuiDataType_U32,&exact)){
@@ -970,6 +969,7 @@ static void RenderComponentNativeEditor(const std::string& kind,
                                         const std::string& id,
                                         ComponentJson& data) {
     if (!data.is_object()) data = ComponentJson::object();
+    DemandComponentItemMetadata(kind,data);
     std::string profession = ComponentNativeProfession(kind, id, data);
     if (kind == "skills") {
         if (profession.empty()) {

@@ -113,6 +113,10 @@ std::string CharacterLoadUnavailable(const std::string& character,const std::str
 bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account);
 void ProcessCharacterLoad();
 std::string PlainItemDescription(const std::string& text);
+namespace AlterEgo { struct ItemInfo; }
+// Shared cached definition rendering, not equipped-instance evidence.
+void RenderItemDefinitionDetails(const AlterEgo::ItemInfo& info,unsigned parts=AlterEgo::TooltipCore::ItemAll,bool tooltip=true);
+void RenderItemDefinitionTooltip(const AlterEgo::ItemInfo& info);
 
 // Returns the account GUID to use for per-account API queries.
 // Returns an empty string when "All Accounts" is selected.

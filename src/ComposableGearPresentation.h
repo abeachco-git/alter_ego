@@ -46,6 +46,42 @@ inline std::string SafeNameOrId(const Json& value, const char* nameKey,
     return {};
 }
 
+// Exact positive typed item fields only. Never treat names, stat IDs, palette
+// IDs or unknown extension fields as item identities.
+inline std::vector<uint32_t> ComponentItemIds(const std::string& kind,const Json& data){
+    std::vector<uint32_t> ids;
+    auto add=[&](const Json& value){
+        if(value.is_number_unsigned()){
+            const auto v=value.get<uint64_t>();if(v&&v<=UINT32_MAX)ids.push_back(static_cast<uint32_t>(v));
+        }else if(value.is_number_integer()){
+            const auto v=value.get<int64_t>();if(v>0&&static_cast<uint64_t>(v)<=UINT32_MAX)ids.push_back(static_cast<uint32_t>(v));
+        }
+    };
+    auto field=[&](const Json& obj,const char* key){
+        if(obj.is_object()){auto i=obj.find(key);if(i!=obj.end())add(*i);}
+    };
+    if(!data.is_object())return ids;
+    if(kind=="relic")field(data,"relic_id");
+    if(kind=="runes")field(data,"rune_id");
+    if(kind=="infusions"){
+        auto totals=data.find("infusion_totals");
+        if(totals!=data.end()&&totals->is_array())for(const auto& row:*totals)field(row,"item_id");
+    }
+    auto gear=data.find("gear");
+    if(gear!=data.end()&&gear->is_object())for(const auto& slot:*gear){
+        if(!slot.is_object())continue;
+        if(kind=="armor"||kind=="weapons"||kind=="trinkets"||kind=="aquatic")field(slot,"item_id");
+        if(kind=="runes"||kind=="aquatic")field(slot,"rune_id");
+        if(kind=="sigils"||kind=="aquatic"){field(slot,"sigil_id");field(slot,"sigil2_id");}
+        if(kind=="infusions"||kind=="aquatic"){
+            auto inf=slot.find("infusion_ids");
+            if(inf!=slot.end()&&inf->is_array())for(const auto& v:*inf)add(v);
+        }
+    }
+    std::sort(ids.begin(),ids.end());ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
+    return ids;
+}
+
 inline std::string GearSlotSummary(const std::string& kind, const Json& slot) {
     if (!slot.is_object()) return "Unknown imported representation (preserved)";
     std::vector<std::string> pieces;

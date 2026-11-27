@@ -1592,9 +1592,7 @@ static std::string StripGW2Markup(const std::string& text) {
 
 // GW2 API weapon type → current in-game display name
 static const char* WeaponDisplayName(const std::string& apiName) {
-    if (apiName == "Harpoon") return "Spear";
-    if (apiName == "Speargun") return "Harpoon Gun";
-    return apiName.c_str();
+    return AlterEgo::TooltipCore::WeaponTypeLabel(apiName);
 }
 
 // GW2 rarity colors
@@ -3001,23 +2999,32 @@ static void RenderSpecializationTooltip(const std::string& name,ImVec4 color,con
     if(editable)TooltipLine("(click to change specialization)",ImVec4(.7f,.62f,.35f,1.f));
     ImGui::EndTooltip();
 }
-static void RenderUpgradeTooltipDetails(const AlterEgo::ItemInfo& info){
-    using namespace AlterEgo::UI;
-    const auto color=ImVec4(.4f,.7f,.9f,1.f);
-    const auto& details=info.details;
-    if(!details.is_object())return;
-    if(details.contains("bonuses")&&details["bonuses"].is_array()){
-        int idx=1;
-        for(const auto& bonus:details["bonuses"]){
-            if(bonus.is_string())TooltipLine(("("+std::to_string(idx)+"): "+StripGW2Markup(bonus.get<std::string>())).c_str(),color);
-            ++idx;
+void RenderItemDefinitionDetails(const AlterEgo::ItemInfo& info,unsigned parts,bool tooltip){
+    using namespace AlterEgo;
+    using namespace TooltipCore;
+    for(const auto& line:ItemDefinitionLines(info.type,info.rarity,info.description,info.details,parts)){
+        const auto text=PlainItemDescription(line.text);
+        if(text.empty())continue;
+        const auto color=line.part==ItemAttributes?ImVec4(.4f,.9f,.4f,1.f):
+            line.part==ItemEffects?ImVec4(.4f,.7f,.9f,1.f):
+            line.part==ItemDescription?ImVec4(.6f,.8f,.6f,1.f):UI::TooltipBody;
+        if(tooltip)UI::TooltipLine(text.c_str(),color);
+        else{
+            ImGui::PushStyleColor(ImGuiCol_Text,color);
+            ImGui::TextWrapped("%s",text.c_str());
+            ImGui::PopStyleColor();
         }
     }
-    if(details.contains("infix_upgrade")&&details["infix_upgrade"].is_object()){
-        const auto& infix=details["infix_upgrade"];
-        if(infix.contains("buff")&&infix["buff"].is_object()&&infix["buff"].contains("description")&&infix["buff"]["description"].is_string())
-            TooltipLine(StripGW2Markup(infix["buff"]["description"].get<std::string>()).c_str(),color);
-    }
+}
+void RenderItemDefinitionTooltip(const AlterEgo::ItemInfo& info){
+    if(info.name.empty())return;
+    ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
+    AlterEgo::UI::TooltipLine(info.name.c_str(),GetRarityColor(info.rarity));
+    RenderItemDefinitionDetails(info);
+    ImGui::EndTooltip();
+}
+static void RenderUpgradeTooltipDetails(const AlterEgo::ItemInfo& info){
+    RenderItemDefinitionDetails(info,AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription);
 }
 static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
@@ -3120,18 +3127,8 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
 
             if(eq->charges>=0)ImGui::Text("Charges: %lld",static_cast<long long>(eq->charges));
 
-            // Defense or weapon strength from item details
-            if (item_info && item_info->details.is_object()) {
-                const auto& det = item_info->details;
-                if (det.contains("defense") && det["defense"].get<int>() > 0) {
-                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Defense: %d",
-                        det["defense"].get<int>());
-                }
-                if (det.contains("min_power") && det.contains("max_power")) {
-                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Weapon Strength: %d - %d",
-                        det["min_power"].get<int>(), det["max_power"].get<int>());
-                }
-            }
+            // Public definition facts remain separate from the equipped instance.
+            if(item_info)RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemCombat);
 
             // Stat type name (e.g. "Berserker's", "Minstrel's")
             if (eq->stat_id != 0) {
@@ -3156,18 +3153,8 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                     std::string displayAttr = AlterEgo::UI::FriendlyAttribute(attr);
                     ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "+%d %s", val, displayAttr.c_str());
                 }
-            } else if (item_info && item_info->details.is_object() &&
-                       item_info->details.contains("infix_upgrade") &&
-                       item_info->details["infix_upgrade"].contains("attributes")) {
-                // Fallback: use fixed stats from item details
-                for (const auto& attr : item_info->details["infix_upgrade"]["attributes"]) {
-                    std::string name = attr.value("attribute", "");
-                    int mod = attr.value("modifier", 0);
-                    if (mod > 0 && !name.empty()) {
-                        std::string displayAttr = AlterEgo::UI::FriendlyAttribute(name);
-                        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "+%d %s", mod, displayAttr.c_str());
-                    }
-                }
+            } else if(item_info) {
+                RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemAttributes);
             }
 
             // Show the recorded infusion slots, including IDs whose public
@@ -3204,41 +3191,10 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", item_info->name.c_str());
             }
 
-            // Rarity + type
-            if (item_info) {
+            if(item_info){
                 ImGui::Spacing();
-                ImGui::TextColored(GetRarityColor(rarity), "%s", item_info->rarity.c_str());
-                if (item_info->details.is_object()) {
-                    std::string subtype;
-                    if (item_info->details.contains("weight_class"))
-                        subtype = item_info->details["weight_class"].get<std::string>() + " ";
-                    if (item_info->details.contains("type"))
-                        subtype += WeaponDisplayName(item_info->details["type"].get<std::string>());
-                    else
-                        subtype += WeaponDisplayName(item_info->type);
-                    if (!subtype.empty())
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", subtype.c_str());
-                } else {
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", WeaponDisplayName(item_info->type));
-                }
-            }
-
-            // Description (skip for legendary relics — API returns a stale emulated effect)
-            bool isLegendaryRelic = item_info && item_info->type == "Relic" && item_info->rarity == "Legendary";
-            if (item_info && !item_info->description.empty() && !isLegendaryRelic) {
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(300.0f));
-                std::string idesc = StripGW2Markup(item_info->description);
-                ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f), "%s", idesc.c_str());
-                ImGui::PopTextWrapPos();
-            }
-
-            // Legendary relic API limitation note
-            if (isLegendaryRelic) {
-                ImGui::Spacing();
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(300.0f));
-                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.4f, 1.0f),
-                    "The API does not expose which relic effect\nthis legendary relic is emulating.");
-                ImGui::PopTextWrapPos();
+                ImGui::TextColored(GetRarityColor(item_info->rarity),"%s",item_info->rarity.c_str());
+                RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription);
             }
 
             // Skin unlock status — only show if locked (unlocked is implied for equipped items)
@@ -8834,18 +8790,16 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     ImVec2 pos = ImGui::GetCursorScreenPos();
 
     // Try to render a real item icon
-    static std::set<uint32_t> s_requestedItemIds; // dedup: only fetch once
     uint32_t iconItemId = GetGearSlotIconItemId(build, slot);
     Texture_t* tex = nullptr;
     if (iconItemId != 0) {
+        // The display icon's representative item is not the saved exact item.
+        // Let the existing owner retry and revalidate rather than a permanent UI latch.
+        AlterEgo::GW2API::FetchItemDetailsAsync({iconItemId});
         const auto itemInfo = AlterEgo::GW2API::GetItemInfo(iconItemId);
         if (itemInfo && !itemInfo->icon_url.empty()) {
             AlterEgo::IconManager::RequestIcon(iconItemId, itemInfo->icon_url);
             tex = AlterEgo::IconManager::GetIcon(iconItemId);
-        } else if (s_requestedItemIds.find(iconItemId) == s_requestedItemIds.end()) {
-            // Fetch item details only once per item ID
-            s_requestedItemIds.insert(iconItemId);
-            AlterEgo::GW2API::FetchItemDetailsAsync({iconItemId});
         }
     }
 
@@ -8989,9 +8943,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         if(!label.empty()){
         ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
         AlterEgo::UI::TooltipLine(label.c_str(),ImVec4(.5f,.8f,.8f,1.f));
-        if(info&&!info->description.empty())AlterEgo::UI::TooltipLine(StripGW2Markup(info->description).c_str());
+        if(info)RenderItemDefinitionDetails(*info);
         for (const auto& entry : GearCatalog("Relic")) {
-            if ((!info||info->description.empty())&&build.relic_name == entry.name) {
+            if ((!info||(info->description.empty()&&!(info->type=="Relic"&&info->rarity=="Legendary")))&&build.relic_name == entry.name) {
                 AlterEgo::UI::TooltipLine(entry.bonus.c_str());
                 break;
             }
@@ -9003,6 +8957,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         const auto cachedItem=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
         if(cachedItem&&!cachedItem->name.empty())AlterEgo::UI::TooltipLine(cachedItem->name.c_str(),GetRarityColor(cachedItem->rarity));
         else AlterEgo::UI::TooltipLine(GearSlotDisplayName(slot),AlterEgo::UI::TooltipTitle);
+        if(cachedItem)RenderItemDefinitionDetails(*cachedItem,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemCombat|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription);
         if(gearSlot){
             const auto upgrade=[](const char* label,uint32_t id,const std::string& stored){
                 if(!id&&stored.empty())return;
@@ -11119,7 +11074,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                             const auto id=*unique.begin();
                             if(row->linkType==AlterEgo::LINK_SKILL){const auto v=AlterEgo::GW2API::GetSkillInfo(id);if(v)RenderSkillTooltip(*v);}
                             else if(row->linkType==AlterEgo::LINK_TRAIT){const auto v=AlterEgo::GW2API::GetTraitInfo(id);if(v)RenderTraitTooltip(*v);}
-                            else if(row->linkType==AlterEgo::LINK_ITEM){const auto v=AlterEgo::GW2API::GetItemInfo(id);if(v)AlterEgo::UI::DetailTooltip(v->name.c_str(),StripGW2Markup(v->description).c_str(),GetRarityColor(v->rarity));}
+                            else if(row->linkType==AlterEgo::LINK_ITEM){const auto v=AlterEgo::GW2API::GetItemInfo(id);if(v)RenderItemDefinitionTooltip(*v);}
                         }
                         ImGui::PushID(row->group.c_str());ImGui::PushID(row->field.c_str());
                         for(auto id:unique)ImGui::PushID(static_cast<int>(id));

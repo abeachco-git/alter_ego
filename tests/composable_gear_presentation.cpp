@@ -44,6 +44,24 @@ int case_composable_gear_presentation(int, char**) {
     assert(Presentation::GearSlotSummary("weapons", Json("unexpected")).find("preserved") != std::string::npos);
     assert(Presentation::GearSlotSummary("armor", Json("unexpected")) != empty);
     assert(gear == before);
+    const Json component={{"gear",{{"Helm",{{"item_id",123},{"stat_id",999},{"rune_id",7},{"infusion_ids",Json::array({4,4,0,-1,4294967296ull,"9"})},{"sigil_id",2},{"future_item_id",12}}}}},{"rune_id",7}};
+    assert((Presentation::ComponentItemIds("armor",component)==std::vector<uint32_t>{123}));
+    assert((Presentation::ComponentItemIds("aquatic",component)==std::vector<uint32_t>{2,4,7,123}));
+    assert((Presentation::ComponentItemIds("runes",component)==std::vector<uint32_t>{7}));
+    assert(Presentation::ComponentItemIds("skills",component).empty());
+    assert((Presentation::ComponentItemIds("infusions",Json{{"infusion_totals",Json::array({Json{{"item_id",6}},Json{{"item_id",-6}},Json{{"item_id",0}}})}})==std::vector<uint32_t>{6}));
+    const Json details={{"type","Harpoon"},{"weight_class","Heavy"},{"defense",42},{"min_power",10},{"max_power",20},{"infix_upgrade",{{"attributes",Json::array({Json{{"attribute","CritDamage"},{"modifier",5}},Json{{"attribute","Power"},{"modifier",-2}},Json{{"attribute","Unknown"},{"modifier",18446744073709551615ull}},Json{{"attribute","Bad"},{"modifier","9"}}})},{"buff",{{"description","Buff"}}}}},{"bonuses",Json::array({"First",nullptr,"Third"})}};
+    auto lines=ItemDefinitionLines("Weapon","Exotic","Description",details);
+    auto contains=[&](const std::string& expected){for(const auto& line:lines)if(line.text==expected)return true;return false;};
+    assert(contains("Heavy Spear")&&contains("Defense: 42")&&contains("Weapon Strength: 10 - 20"));
+    assert(contains("+5 Ferocity")&&contains("-2 Power")&&contains("Buff")&&contains("(3): Third")&&contains("Description"));
+    assert(lines.size()==10);
+    lines=ItemDefinitionLines("Weapon","Exotic","Description",details,ItemCombat);
+    assert(lines.size()==2&&!contains("Fixed definition attributes"));
+    lines=ItemDefinitionLines("Relic","Legendary","Misleading effect",details,ItemEffects|ItemDescription);
+    assert(lines.size()==1&&!contains("Misleading effect")&&!contains("Buff"));
+    lines=ItemDefinitionLines("Armor","Rare","",Json{{"defense","bad"},{"min_power",9},{"max_power",2}},ItemCombat|ItemAttributes);
+    assert(lines.empty());
     std::cout << "Composable gear presentation PASS\n";
     return 0;
 }

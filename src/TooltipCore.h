@@ -3,6 +3,9 @@
 #include <vector>
 #include <cstddef>
 #include <utility>
+#include <cstdint>
+#include <limits>
+#include <optional>
 namespace AlterEgo::TooltipCore {
 // Pure, display-only helpers. Never infer exact identities or empty slots.
 inline const char* FriendlyAttribute(const std::string& attr){
@@ -15,6 +18,75 @@ inline const char* FriendlyAttribute(const std::string& attr){
 }
 inline std::string EntityName(const std::string& known,const std::string& stored={}){
     return known.empty()?stored:known;
+}
+// Definition-only facts. No instance ownership, binding, selected stats or
+// inferred effective effects. Consumers choose the parts appropriate to context.
+enum ItemDefinitionPart : unsigned {
+    ItemType=1u, ItemCombat=2u, ItemAttributes=4u, ItemEffects=8u,
+    ItemDescription=16u, ItemAll=31u
+};
+struct ItemDefinitionLine { unsigned part; std::string text; };
+inline const char* WeaponTypeLabel(const std::string& name){
+    if(name=="Harpoon")return "Spear";
+    if(name=="Speargun")return "Harpoon Gun";
+    return name.c_str();
+}
+template<class Json> std::vector<ItemDefinitionLine> ItemDefinitionLines(
+    const std::string& type,const std::string& rarity,const std::string& description,
+    const Json& details,unsigned parts=ItemAll){
+    std::vector<ItemDefinitionLine> out;
+    auto add=[&](unsigned part,std::string line){if((parts&part)&&!line.empty())out.push_back({part,std::move(line)});};
+    auto str=[](const Json& j,const char* key){
+        if(!j.is_object())return std::string{};
+        auto it=j.find(key);return it!=j.end()&&it->is_string()?it->template get<std::string>():std::string{};
+    };
+    auto integer=[](const Json& j,const char* key)->std::optional<int64_t>{
+        if(!j.is_object())return std::nullopt;
+        auto it=j.find(key);if(it==j.end())return std::nullopt;
+        if(it->is_number_unsigned()){
+            const auto v=it->template get<uint64_t>();
+            if(v>static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))return std::nullopt;
+            return static_cast<int64_t>(v);
+        }
+        if(it->is_number_integer())return it->template get<int64_t>();
+        return std::nullopt;
+    };
+    auto subtype=str(details,"type"),weight=str(details,"weight_class");
+    if(subtype.empty())subtype=type;
+    if(!subtype.empty())subtype=WeaponTypeLabel(subtype);
+    add(ItemType,weight.empty()?subtype:subtype.empty()?weight:weight+" "+subtype);
+    const auto defense=integer(details,"defense"),lo=integer(details,"min_power"),hi=integer(details,"max_power");
+    if(defense&&*defense>0)add(ItemCombat,"Defense: "+std::to_string(*defense));
+    if(lo&&hi&&*lo>=0&&*hi>=*lo)add(ItemCombat,"Weapon Strength: "+std::to_string(*lo)+" - "+std::to_string(*hi));
+    const bool legendaryRelic=type=="Relic"&&rarity=="Legendary";
+    if(details.is_object()){
+        auto infix=details.find("infix_upgrade");
+        if(infix!=details.end()&&infix->is_object()){
+            auto attrs=infix->find("attributes");
+            if((parts&ItemAttributes)&&attrs!=infix->end()&&attrs->is_array()){
+                bool first=true;
+                for(const auto& attr:*attrs){
+                    const auto name=str(attr,"attribute");const auto mod=integer(attr,"modifier");
+                    if(name.empty()||!mod||!*mod)continue;
+                    if(first){add(ItemAttributes,"Fixed definition attributes");first=false;}
+                    add(ItemAttributes,(*mod>0?"+":"")+std::to_string(*mod)+" "+FriendlyAttribute(name));
+                }
+            }
+            auto buff=infix->find("buff");
+            if(!legendaryRelic&&buff!=infix->end())add(ItemEffects,str(*buff,"description"));
+        }
+        auto bonuses=details.find("bonuses");
+        if(!legendaryRelic&&(parts&ItemEffects)&&bonuses!=details.end()&&bonuses->is_array()){
+            size_t index=0;
+            for(const auto& bonus:*bonuses){
+                ++index;if(bonus.is_string()&&!bonus.template get_ref<const std::string&>().empty())
+                    add(ItemEffects,"("+std::to_string(index)+"): "+bonus.template get<std::string>());
+            }
+        }
+    }
+    if(legendaryRelic)add(ItemDescription,"The API does not expose which relic effect this legendary relic is emulating.");
+    else add(ItemDescription,description);
+    return out;
 }
 // Known public skill/trait fact shapes only. No inferred damage, character
 // attributes, trait application, competitive-mode values or unknown facts.

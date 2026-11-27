@@ -2155,9 +2155,13 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         ImGui::PopID();ImGui::PopID();ImGui::EndChild();return;
     }
     const auto& representative=*group.locations.front();
-    const auto name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
+    const auto definition=GW2API::GetItemInfo(group.id);
+    const auto name=definition&&!definition->name.empty()?definition->name:group.name.empty()?"Item #"+std::to_string(group.id):group.name;
     const auto* meta=metaFor(group.id);
-    UI::CatalogBanner(name,representative.rarity+"  /  "+representative.type,representative.rarity);
+    const auto& rarity=definition?definition->rarity:representative.rarity;
+    const auto& type=definition?definition->type:representative.type;
+    UI::CatalogBanner(name,rarity+"  /  "+type,rarity);
+    std::vector<uint32_t> definitionDemand{group.id};
     ImGui::PushID(static_cast<int>(group.id));ItemMenu(group.id,name,representative.chat,loadTargets(group.id));ImGui::PopID();
     ImGui::TextDisabled("ID: %u",group.id);
     int64_t total=0;const auto locations=v->index.find(group.id);
@@ -2186,10 +2190,15 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         if(slot.stat>0)ImGui::TextDisabled("Selected stat ID: %lld",static_cast<long long>(slot.stat));
         const bool glyph=slot.scope=="Equipment"&&(slot.position.find("/Pick")!=std::string::npos||slot.position.find("/Axe")!=std::string::npos||slot.position.find("/Sickle")!=std::string::npos);
         if(glyph&&slot.upgrades.empty())ImGui::TextDisabled("Glyph: Unknown (not reported)");
-        for(auto id:slot.upgrades){const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("%s: %s",glyph?"Glyph":"Upgrade",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
-        for(auto id:slot.infusions){const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("Infusion: %s",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
+        for(auto id:slot.upgrades){if(id)definitionDemand.push_back(id);const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("%s: %s",glyph?"Glyph":"Upgrade",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
+        for(auto id:slot.infusions){if(id)definitionDemand.push_back(id);const auto item = GW2API::GetItemInfo(id);ImGui::TextWrapped("Infusion: %s",item&&!item->name.empty()?item->name.c_str():std::to_string(id).c_str());}
         ImGui::Separator();ImGui::PopID();
     }
+    // Only the selected item and its displayed sockets demand public definitions.
+    // Do not refresh authenticated storage or list/filter results.
+    std::sort(definitionDemand.begin(),definitionDemand.end());
+    definitionDemand.erase(std::unique(definitionDemand.begin(),definitionDemand.end()),definitionDemand.end());
+    GW2API::FetchItemDetailsAsync(definitionDemand);
     RenderSectionHeader("Trading Post",UI::SectionGold);
     {
         using Skinventory::Commerce;
@@ -2266,18 +2275,12 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         if(flags->second.soulbound)ImGui::TextUnformatted("Character bound on acquire");
         if(flags->second.bindOnUse)ImGui::TextUnformatted("Binds on use");
     }
-    if(meta&&meta->complete){
-        const auto& details=meta->details;
-        if(details.contains("type")&&details["type"].is_string())ImGui::TextWrapped("Subtype: %s",details["type"].get<std::string>().c_str());
-        if(details.contains("weight_class")&&details["weight_class"].is_string())ImGui::TextWrapped("Weight: %s",details["weight_class"].get<std::string>().c_str());
-        if(details.contains("infix_upgrade")&&details["infix_upgrade"].is_object()){
-            const auto& infix=details["infix_upgrade"];
-            if(infix.contains("attributes")&&infix["attributes"].is_array())for(const auto& attr:infix["attributes"])
-                if(attr.is_object()&&attr.contains("attribute")&&attr["attribute"].is_string()&&attr.contains("modifier")&&attr["modifier"].is_number_integer())
-                    ImGui::Text("+%lld %s",static_cast<long long>(attr["modifier"].get<int64_t>()),UI::FriendlyAttribute(attr["attribute"].get<std::string>()));
-        }
-        if(!meta->description.empty())ImGui::TextWrapped("%s",PlainItemDescription(meta->description).c_str());
-    }else ImGui::TextDisabled("Detailed metadata not retrieved. Refresh inventory to populate it.");
+    if(definition)RenderItemDefinitionDetails(*definition,TooltipCore::ItemAll,false);
+    else if(meta&&meta->complete){
+        // Retain a verified snapshot fallback without making it a competing owner.
+        ItemInfo prior;prior.type=type;prior.rarity=rarity;prior.description=meta->description;prior.details=meta->details;
+        RenderItemDefinitionDetails(prior,TooltipCore::ItemAll,false);
+    }else ImGui::TextDisabled("Detailed metadata not retrieved.");
     ImGui::EndChild();
 }
 void RenderInventoryStatusRow(const std::string& selectedAccount){

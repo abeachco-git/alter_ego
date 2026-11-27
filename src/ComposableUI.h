@@ -240,8 +240,13 @@ static std::string ComponentUIShortDescription(const std::string& kind,
 // interpreting missing item names as empty slots.
 static void ComponentStoredNameActions(const ComponentJson& item);
 static bool ComponentInfusionProjection(const ComponentJson& data,AlterEgo::SavedBuild& b);
+static void DemandComponentItemMetadata(const std::string& kind,const ComponentJson& data){
+    const auto ids=AlterEgo::Composable::Presentation::ComponentItemIds(kind,data);
+    if(!ids.empty())AlterEgo::GW2API::FetchItemDetailsAsync(ids);
+}
 static void RenderComponentInventory(const std::string& kind, const ComponentJson& data) {
     if (!data.is_object()) return;
+    DemandComponentItemMetadata(kind,data);
     if(kind=="infusions"){
         AlterEgo::SavedBuild projection;
         if(ComponentInfusionProjection(data,projection)){
@@ -295,7 +300,7 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             else if(data.contains(bar)&&!data[bar].is_object())ImGui::TextDisabled("Unrecognized skill data");
             else RenderSkillBarPreview(AlterEgo::SkillEdit::WithPaletteBar(
                 AlterEgo::SkillEdit::JsonDisplayBar(data.value(bar,ComponentJson::object())),evidence,
-                std::string(bar)=="aquatic_skills"),ICON_SIZE);
+                std::string(bar)=="aquatic_skills"),ICON_SIZE,std::string(bar)=="aquatic_skills");
             ImGui::PopID();
         }
         if(data.contains("rev_active_palettes"))ImGui::TextDisabled("Original Revenant palette evidence retained");
@@ -318,6 +323,10 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
                 ImGui::TableSetColumnIndex(1);
                 ImGui::PushID(slotName.c_str());
                 const bool expanded=ImGui::TreeNodeEx("##component_slot",ImGuiTreeNodeFlags_NoTreePushOnOpen|ImGuiTreeNodeFlags_SpanAvailWidth,"%s",AlterEgo::Composable::Presentation::GearSlotSummary(kind,item).c_str());
+                if(ImGui::IsItemHovered()){
+                    const auto ids=AlterEgo::Composable::Presentation::ComponentItemIds(kind,ComponentJson{{"gear",{{slotName,item}}}});
+                    if(ids.size()==1){const auto info=AlterEgo::GW2API::GetItemInfo(ids.front());if(info)RenderItemDefinitionTooltip(*info);}
+                }
                 if(ImGui::BeginPopupContextItem("##component_item_names")){
                     ComponentStoredNameActions(item);ImGui::EndPopup();
                 }
