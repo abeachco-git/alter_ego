@@ -75,12 +75,8 @@ inline bool Record(const std::string& root,const ScopeState& state,const std::ve
     }
     tx.Commit();return true;
 }
-inline bool StoreRoster(const std::string& root,const std::string& account,const std::set<std::string>& names,int64_t stamp,int64_t attempted=0){
+inline bool StoreRosterInTransaction(Database::Connection& db,const std::string& account,const std::set<std::string>& names,int64_t stamp,int64_t attempted){
     if(!attempted)attempted=stamp;
-    std::lock_guard<std::mutex> lock(Cache::Mutex());
-    const auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
-    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
-    Cache::Initialize(db);Database::Transaction tx(db);
     auto old=db.Prepare("SELECT fetched_at FROM native_roster_state WHERE account=?");
     old.Bind(1,account);if(old.Step()&&old.Integer(0)>stamp)return false;
     auto prior=db.Prepare("SELECT attempted FROM native_inventory_scopes WHERE account=? AND scope='Roster' AND character=''");
@@ -96,6 +92,14 @@ inline bool StoreRoster(const std::string& root,const std::string& account,const
     // The verified set, pruning and freshness are one commit.
     auto status=db.Prepare("INSERT INTO native_inventory_scopes VALUES(?,'Roster','','Ready',?,?) ON CONFLICT(account,scope,character) DO UPDATE SET status='Ready',attempted=excluded.attempted,success=excluded.success");
     status.Bind(1,account);status.Bind(2,attempted);status.Bind(3,stamp);status.Execute();
+    return true;
+}
+inline bool StoreRoster(const std::string& root,const std::string& account,const std::set<std::string>& names,int64_t stamp,int64_t attempted=0){
+    std::lock_guard<std::mutex> lock(Cache::Mutex());
+    const auto path=Storage::Paths(root).Cache();std::filesystem::create_directories(path.parent_path());
+    Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+    Cache::Initialize(db);Database::Transaction tx(db);
+    if(!StoreRosterInTransaction(db,account,names,stamp,attempted))return false;
     tx.Commit();return true;
 }
 // Native enrichment uses the same item-detail transaction and watermark as

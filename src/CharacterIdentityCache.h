@@ -1,6 +1,7 @@
 #pragma once
 #include "CharacterIdentityRuntime.h"
 #include "CacheDatabase.h"
+#include "NativeInventoryStore.h"
 namespace AlterEgo::CharacterIdentity {
 // Exact-account verified core data is historical evidence, not a fresh
 // roster observation. Preserve it before the existing cache can be pruned.
@@ -44,7 +45,8 @@ inline HistoricalCore ReadHistoricalCore(const std::string& root,const std::stri
 // after interruption. The caller MUST gate readers and publications until
 // adoption succeeds and discard the affected in-memory projections before
 // releasing the gate. No transport or UI calls here.
-inline std::optional<std::set<std::string>> AdoptCache(Database::Connection& db,const State& state){
+inline std::optional<std::set<std::string>> AdoptCache(Database::Connection& db,const State& state,
+    const std::optional<RosterEvidence>& roster=std::nullopt){
     if(!state.initialized||!Valid(state))return std::nullopt;
     Database::Transaction tx(db);
     auto revision=db.Prepare("SELECT revision FROM cache_character_identity_state WHERE account=?");
@@ -91,16 +93,31 @@ inline std::optional<std::set<std::string>> AdoptCache(Database::Connection& db,
             put.Bind(7,b.revision);put.Execute();put.Reset();
         }
     }
+    if(roster){
+        if(!ValidRoster(*roster))return std::nullopt;
+        auto mark=db.Prepare("SELECT fetched_at FROM native_roster_state WHERE account=?");
+        mark.Bind(1,state.account);
+        const bool knownRoster=mark.Step();
+        const int64_t stamp=knownRoster?mark.Integer(0):0;
+        if(stamp>roster->success)return std::nullopt;
+        const auto names=NativeInventory::ReadRoster(db,state.account);
+        // Replay preserves the original freshness and any subsequent failure.
+        if(stamp!=roster->success||!names||*names!=roster->names){
+            if(!NativeInventory::StoreRosterInTransaction(db,state.account,roster->names,roster->success,roster->attempted))
+                return std::nullopt;
+        }
+    }
     tx.Commit();return affected;
 }
-inline std::optional<std::set<std::string>> AdoptCache(const std::string& root,const State& state){
+inline std::optional<std::set<std::string>> AdoptCache(const std::string& root,const State& state,
+    const std::optional<RosterEvidence>& roster=std::nullopt){
     if(root.empty())return std::nullopt;
     try{
         std::lock_guard<std::mutex> lock(Cache::Mutex());
         const auto path=Storage::Paths(root).Cache();
         std::filesystem::create_directories(path.parent_path());
         Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
-        Cache::Initialize(db);return AdoptCache(db,state);
+        Cache::Initialize(db);return AdoptCache(db,state,roster);
     }catch(...){return std::nullopt;}
 }
 } // namespace AlterEgo::CharacterIdentity

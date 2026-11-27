@@ -34,6 +34,10 @@ CREATE TABLE character_identity_pending(account TEXT NOT NULL,local_id INTEGER N
 ALTER TABLE character_identities ADD COLUMN binding_revision INTEGER NOT NULL DEFAULT 0 CHECK(binding_revision>=0);
 UPDATE character_identities SET binding_revision=(SELECT revision FROM character_identity_state WHERE account=character_identities.account);
 )SQL");
+        else if(version==5)c.Exec(R"SQL(
+CREATE TABLE character_identity_roster_state(account TEXT PRIMARY KEY REFERENCES character_identity_state(account) ON DELETE CASCADE,attempted INTEGER NOT NULL CHECK(attempted>0),success INTEGER NOT NULL CHECK(success>=attempted)) STRICT;
+CREATE TABLE character_identity_roster(account TEXT NOT NULL REFERENCES character_identity_roster_state(account) ON DELETE CASCADE,name TEXT NOT NULL,PRIMARY KEY(account,name)) STRICT;
+)SQL");
     });
 }
 // Caller owns a consistent transaction or serial account-registry access.
@@ -73,19 +77,48 @@ inline State Read(Database::Connection& db,const std::string& account){
     if(!Valid(s))throw std::runtime_error("Invalid character identity registry");
     return s;
 }
+inline std::optional<RosterEvidence> ReadVerifiedRoster(Database::Connection& db,const std::string& account){
+    auto q=db.Prepare("SELECT attempted,success FROM character_identity_roster_state WHERE account=?");
+    q.Bind(1,account);if(!q.Step())return std::nullopt;
+    RosterEvidence r{{},q.Integer(0),q.Integer(1)};
+    auto names=db.Prepare("SELECT name FROM character_identity_roster WHERE account=?");
+    names.Bind(1,account);
+    while(names.Step()){
+        if(r.names.size()>=MaxRoster||!r.names.insert(names.Text(0)).second)
+            throw std::runtime_error("Invalid durable character roster");
+    }
+    if(!ValidRoster(r))throw std::runtime_error("Invalid durable character roster");
+    return r;
+}
 // This is the durable commit primitive, NOT a live roster publisher. The
 // future owner must hold the credential/roster generation gate and stage
 // dependent migration/recovery before publishing a changed identity.
 inline std::optional<Plan> Commit(Database::Connection& db,const std::string& account,
     int64_t expectedRevision,const std::set<std::string>& roster,
-    const std::vector<Observation>& observations,bool confirmAbsences=false){
+    const std::vector<Observation>& observations,bool confirmAbsences=false,
+    const std::optional<RosterEvidence>& verifiedRoster=std::nullopt){
     Database::Transaction tx(db);
     const auto old=Read(db,account);
     if(old.revision!=expectedRevision)return std::nullopt;
+    if(verifiedRoster){
+        if(!ValidRoster(*verifiedRoster)||verifiedRoster->names!=roster)return std::nullopt;
+        const auto prior=ReadVerifiedRoster(db,account);
+        if(prior&&(prior->attempted>verifiedRoster->attempted||prior->success>verifiedRoster->success))
+            return std::nullopt;
+    }
     auto p=Reconcile(old,roster,observations,confirmAbsences);
     if(!p)return p;
     // Revision zero is also a legitimate initialized empty mapping.
-    if(old.initialized&&p.next.revision==old.revision){tx.Commit();return p;}
+    const auto writeRoster=[&]{
+        if(!verifiedRoster)return;
+        auto mark=db.Prepare("INSERT INTO character_identity_roster_state VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET attempted=excluded.attempted,success=excluded.success");
+        mark.Bind(1,account);mark.Bind(2,verifiedRoster->attempted);mark.Bind(3,verifiedRoster->success);mark.Execute();
+        auto clear=db.Prepare("DELETE FROM character_identity_roster WHERE account=?");
+        clear.Bind(1,account);clear.Execute();
+        auto put=db.Prepare("INSERT INTO character_identity_roster VALUES(?,?)");
+        for(const auto& name:roster){put.Bind(1,account);put.Bind(2,name);put.Execute();put.Reset();}
+    };
+    if(old.initialized&&p.next.revision==old.revision){writeRoster();tx.Commit();return p;}
     auto state=db.Prepare("INSERT INTO character_identity_state VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET revision=excluded.revision,next_id=excluded.next_id");
     state.Bind(1,account);state.Bind(2,p.next.revision);state.Bind(3,p.next.nextId);state.Execute();
     // Free all present-name claims in the same transaction before swaps. Do
@@ -110,6 +143,6 @@ inline std::optional<Plan> Commit(Database::Connection& db,const std::string& ac
     clearPending.Bind(1,account);clearPending.Execute();
     auto pending=db.Prepare("INSERT INTO character_identity_pending VALUES(?,?)");
     for(auto id:p.next.pendingAbsence){pending.Bind(1,account);pending.Bind(2,id);pending.Execute();pending.Reset();}
-    tx.Commit();return p;
+    writeRoster();tx.Commit();return p;
 }
 } // namespace AlterEgo::CharacterIdentity

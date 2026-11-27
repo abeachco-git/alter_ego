@@ -102,6 +102,15 @@ inline bool Valid(const State& s){
     }
     return current.size()<=MaxRoster;
 }
+// Raw roster membership is independent of identity certainty.
+struct RosterEvidence {
+    std::set<std::string> names;
+    int64_t attempted=0,success=0;
+};
+inline bool ValidRoster(const RosterEvidence& r){
+    return r.attempted>0&&r.success>=r.attempted&&r.names.size()<=MaxRoster&&
+        std::all_of(r.names.begin(),r.names.end(),[](const auto& n){return Text(n);});
+}
 struct Observation {std::string name;Evidence evidence;};
 enum class Kind { Added,Renamed,Removed };
 struct Change {Id id;Kind kind;std::string from,to;};

@@ -32,7 +32,7 @@ int case_native_inventory(int,char**){
                 conn.Exec("INSERT INTO accounts VALUES('A','Example.1234','','[]')");
             });
             CI::InitializeAccountRegistry(db);
-            assert(db.Scalar("PRAGMA user_version")==4&&db.Scalar("SELECT count(*) FROM accounts")==1);
+            assert(db.Scalar("PRAGMA user_version")==5&&db.Scalar("SELECT count(*) FROM accounts")==1);
             auto initial=CI::Commit(db,"A",0,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
             assert(initial&&*initial&&initial->changes.size()==2);
             alice=initial->next.Current("Alice")->id;bob=initial->next.Current("Bob")->id;
