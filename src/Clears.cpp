@@ -1632,7 +1632,7 @@ static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
                             ") " + name;
                     }
                 }
-                ImGui::SetTooltip("%s", info.c_str());
+                AlterEgo::UI::Hint(info.c_str());
             }
         }
         for (int tier = 0; tier < slots; ++tier) {
@@ -1682,7 +1682,7 @@ static void RenderDailyFractalCards(const std::vector<DailyFractalCard>& cards,
                 info += !entry ? "\nNo objective data" :
                     !fetched ? "\nProgress unknown" :
                     done ? "\nCompleted" : "\nRemaining";
-                ImGui::SetTooltip("%s", info.c_str());
+                AlterEgo::UI::Hint(info.c_str());
             }
             ImGui::PopID();
         }
@@ -2108,7 +2108,7 @@ static void RenderVaultAssistance(AlterEgo::VaultAssist::Options options, float 
         ImGui::BeginTooltip();
         ImGui::TextUnformatted(first.label.c_str());
         if (!first.map.empty()) ImGui::TextDisabled("%s",first.map.c_str());
-        ImGui::PushTextWrapPos(340.0f);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(340.f));
         ImGui::TextUnformatted(first.note.c_str());
         ImGui::PopTextWrapPos();
         if (next >= 0) ImGui::TextDisabled("Scheduled start; actual map progress can vary.");
@@ -2783,7 +2783,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                         if (ImGui::IsItemHovered()) {
                             const std::string info =
                                 FractalScales::DailyTooltip(next->dailies[i]);
-                            ImGui::SetTooltip("%s", info.c_str());
+                            AlterEgo::UI::Hint(info.c_str());
                         }
                     }
                     ImGui::TableNextRow();
@@ -2799,7 +2799,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
                         if (ImGui::IsItemHovered()) {
                             const std::string info = "Recommended\n" + label +
                                 "\nSpecific scale required";
-                            ImGui::SetTooltip("%s", info.c_str());
+                            AlterEgo::UI::Hint(info.c_str());
                         }
                     }
                     ImGui::PopStyleColor();

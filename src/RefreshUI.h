@@ -28,9 +28,23 @@ inline std::string Age(std::time_t stamp,int64_t now=0) {
     return RefreshStatus::Age(stamp>current?current:stamp,current);
 }
 inline void DiagnosticsTooltip(const char* title,const std::string& body){
-    ImGui::BeginTooltip();
-    UI::TooltipText(title,body.c_str());
-    ImGui::EndTooltip();
+    UI::DetailTooltip(title,body.c_str());
+}
+inline void RetrievalTooltip(std::time_t stamp,const char* source,const std::string& detail={}){
+    std::string body=source;
+    if(stamp>0){
+        std::tm local{};
+#ifdef _WIN32
+        localtime_s(&local,&stamp);
+#else
+        localtime_r(&stamp,&local);
+#endif
+        char when[64]={};
+        std::strftime(when,sizeof(when),"%b %d, %Y at %I:%M:%S %p",&local);
+        body+=": ";body+=when;body+=" (local time)";
+    }
+    if(!detail.empty())body+="\n\n"+detail;
+    DiagnosticsTooltip(stamp>0?"Last confirmed retrieval":"No confirmed complete retrieval",body);
 }
 
 inline void Timestamp(std::time_t stamp, const char* source = "data") {
@@ -41,21 +55,7 @@ inline void Timestamp(std::time_t stamp, const char* source = "data") {
     if (x > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(x);
     ImGui::AlignTextToFramePadding(); // Align with adjacent full-height button.
     ImGui::TextDisabled("%s", label.c_str());
-    if (ImGui::IsItemHovered()) {
-        if (stamp > 0) {
-            std::tm local{};
-#ifdef _WIN32
-            localtime_s(&local, &stamp);
-#else
-            localtime_r(&stamp, &local);
-#endif
-            char when[64] = {};
-            std::strftime(when, sizeof(when), "%b %d, %Y at %I:%M:%S %p", &local);
-            ImGui::SetTooltip("Last successful %s retrieval:\n%s (local time)", source, when);
-        } else {
-            ImGui::SetTooltip("No confirmed successful %s retrieval time", source);
-        }
-    }
+    if(ImGui::IsItemHovered())RetrievalTooltip(stamp,source);
 }
 
 inline void Status(State state, const std::string& message) {
@@ -100,13 +100,12 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     }
     const bool clicked = UI::Button("Refresh", ImVec2(0, buttonH));
     if (disabled) { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
-    if(disabled&&disabledReason&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        DiagnosticsTooltip("Refresh unavailable",disabledReason);
+    if(disabled)UI::DisabledHint(disabledReason);
     if (moreClicked) {
         ImGui::SameLine(0.0f, 5.0f);
         *moreClicked = UI::Button("...", ImVec2(29.0f, buttonH));
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Choose one or more characters to refresh");
+            UI::Hint("Choose one or more characters to refresh");
     }
 
     ImGui::SameLine(0.0f, 9.0f);
@@ -136,8 +135,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(statusColor, "%s", statusText.c_str());
     if (ImGui::IsItemHovered()){
-        if(sampledNow)DiagnosticsTooltip(shortStatus,detail);
-        else ImGui::SetTooltip("%s", detail.empty() ? shortStatus : detail.c_str());
+        DiagnosticsTooltip(shortStatus,detail);
     }
 
     // Keep timestamp in the same row even when a long API status is reported.
@@ -145,25 +143,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     ImGui::SetCursorScreenPos(ImVec2(stampX,
         start.y + (buttonH - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::TextDisabled("%s", stampLabel.c_str());
-    if (ImGui::IsItemHovered()) {
-        if (stamp > 0) {
-            std::tm local{};
-#ifdef _WIN32
-            localtime_s(&local, &stamp);
-#else
-            localtime_r(&stamp, &local);
-#endif
-            char when[64] = {};
-            std::strftime(when, sizeof(when), "%b %d, %Y at %I:%M:%S %p", &local);
-            if(sampledNow)DiagnosticsTooltip("Last confirmed retrieval",std::string(source)+": "+when+" (local time)"+(timestampDetails&&!detail.empty()?"\n\n"+detail:std::string{}));
-            else ImGui::SetTooltip("Last successful %s retrieval:\n%s (local time)%s%s", source, when,
-                timestampDetails&&!detail.empty()?"\n\n":"",timestampDetails?detail.c_str():"");
-        } else {
-            if(sampledNow)DiagnosticsTooltip("No confirmed complete retrieval",timestampDetails?detail:std::string(source));
-            else ImGui::SetTooltip("No confirmed successful %s retrieval time%s%s", source,
-                timestampDetails&&!detail.empty()?"\n\n":"",timestampDetails?detail.c_str():"");
-        }
-    }
+    if(ImGui::IsItemHovered())RetrievalTooltip(stamp,source,(timestampDetails||statusText.empty())?detail:std::string{});
     ImGui::PopID();
     return clicked;
 }

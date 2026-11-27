@@ -2,6 +2,7 @@
 #include "AddonShared.h"
 #include "IconManager.h"
 #include "CatalogRowCore.h"
+#include "UIControls.h"
 #include <algorithm>
 namespace AlterEgo::UI {
 // A fixed-height list row; caller owns stable ID, selection, context menu,
@@ -27,7 +28,7 @@ inline bool PinButton(const char* id,bool pinned,const char* pinTip,const char* 
         draw->AddText(ImVec2(p.x+(size-text.x)*.5f,p.y+(size-text.y)*.5f),
             IM_COL32(245,220,150,255),"*");
     }
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",pinned?unpinTip:pinTip);
+    if(ImGui::IsItemHovered())Hint(pinned?unpinTip:pinTip);
     return clicked;
 }
 // Catalog item and currency artwork share the existing cache and visible
@@ -64,7 +65,7 @@ inline void CatalogScrollToRow(int row,float pitch){
 }
 inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
     const std::string& url,const std::string& name,const std::string& rarity,
-    const std::string& trailing={},bool dim=false,int ownership=-1) {
+    const std::string& trailing={},bool dim=false,int ownership=-1,const std::function<void()>& details={}) {
     const float pitch=CatalogRowHeight(),height=pitch;
     const ImVec2 p=ImGui::GetCursorScreenPos();
     const float w=ImMax(1.f,ImGui::GetContentRegionAvail().x);
@@ -95,7 +96,8 @@ inline CatalogRowResult CatalogRow(int row,bool selected,uint32_t iconId,
             dl->AddLine(ImVec2(dot.x-2,dot.y),ImVec2(dot.x-.5f,dot.y+1.5f),IM_COL32(180,240,190,255),1.5f);
             dl->AddLine(ImVec2(dot.x-.5f,dot.y+1.5f),ImVec2(dot.x+2.5f,dot.y-2),IM_COL32(180,240,190,255),1.5f);}
         else dl->AddCircle(dot,3.5f,IM_COL32(120,110,90,200),14,1.2f);}
-    if(hovered&&ImGui::CalcTextSize(name.c_str()).x>right-left)ImGui::SetTooltip("%s",name.c_str());
+    if(hovered&&details)details();
+    else ClippedTextHint(hovered,name,right-left);
     return hit;
 }
 // Pin and currency content have separate native hit targets; the label
@@ -116,11 +118,8 @@ inline void WalletCatalogLabel(uint32_t id,const std::string& url,const std::str
     const float left=ie.x+6.f,ty=p.y+(pitch-ImGui::GetTextLineHeight())*.5f;
     draw->AddText(ImVec2(left,ty),ImGui::GetColorU32(ImGuiCol_Text),name.c_str());
     draw->PopClipRect();
-    if(hit.hovered&&(!description.empty()||ImGui::CalcTextSize(name.c_str()).x>p.x+width-left)){
-        ImGui::BeginTooltip();ImGui::TextUnformatted(name.c_str());
-        if(!description.empty())ImGui::TextWrapped("%s",description.c_str());
-        ImGui::EndTooltip();
-    }
+    if(hit.hovered&&!description.empty())DetailTooltip(name.c_str(),description.c_str());
+    else ClippedTextHint(hit.hovered,name,p.x+width-left);
 }
 // Fixed-pitch collapsible header for hierarchical catalogs. Native hit target
 // and clipper geometry are the same as ordinary catalog rows.
@@ -148,8 +147,7 @@ inline bool CatalogBranchRow(int row,bool expanded,const std::string& name,
         else draw->AddText(ImVec2(left.x,p.y+(h-ImGui::GetTextLineHeight())*.5f),color,name.c_str());
         draw->PopClipRect();
     }
-    if(hit.hovered&&ImGui::CalcTextSize(name.c_str()).x+(decorated?32.f:0.f)>end.x-left.x)
-        ImGui::SetTooltip("%s",name.c_str());
+    ClippedTextHint(hit.hovered,name,end.x-left.x-(decorated?32.f:0.f));
     return hit.clicked;
 }
 inline void CatalogBanner(const std::string& name,const std::string& subtitle,

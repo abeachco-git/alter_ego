@@ -1305,7 +1305,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         const auto name=group.name.empty()?"Item #"+std::to_string(group.id):group.name;
         const auto* meta=metaFor(group.id);
         ImGui::PushID(static_cast<int>(group.id));
-        auto hit=UI::CatalogRow(rowIndex,on,group.id,meta?meta->icon:"",name,row.rarity,std::to_string(count));
+        auto hit=UI::CatalogRow(rowIndex,on,group.id,meta?meta->icon:"",name,row.rarity,std::to_string(count),false,-1,[&]{if(!group.name.empty())UI::DetailTooltip(name.c_str(),meta?PlainItemDescription(meta->description).c_str():nullptr,GetSkinRarityColor(row.rarity));});
         select(hit.clicked);
         const bool popup=ImGui::IsPopupOpen("##inventory_item_actions")||ImGui::IsItemClicked(ImGuiMouseButton_Right);
         ItemMenu(group.id,name,row.chat,popup?loadTargets(group.id):std::map<std::pair<std::string,std::string>,int64_t>{});
@@ -1464,7 +1464,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                     ImGui::Text("%s:",label);ImGui::SameLine();ImGui::TextDisabled("Estimate unavailable");
                 }
                 ImGui::EndGroup();
-                if(ImGui::IsItemHovered())ImGui::SetTooltip("Potentially sellable items in fresh storage at the best cached buy price. Bound and unverified stock excluded. Order depth and actual fees may differ.");
+                if(ImGui::IsItemHovered())UI::Hint("Potentially sellable items in fresh storage at the best cached buy price. Bound and unverified stock excluded. Order depth and actual fees may differ.");
             };
             renderEstimate("All locations",all);
             if(all.count!=matching.count)renderEstimate("Matching filters",matching);
@@ -1475,7 +1475,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         else if(status.price&&(now<status.price->fetched_at_unix||now-status.price->fetched_at_unix>=Commerce::PriceTTL))ImGui::TextDisabled("Price stale");
         if(status.pending){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*0.5f);}
         if(UI::Button("Refresh price",ImVec2(0,UI::ActionButtonHeight()))&&!status.pending)Commerce::RequestItemPrices({group.id},true);
-        if(status.pending){ImGui::PopStyleVar();ImGui::PopItemFlag();}
+        if(status.pending){UI::DisabledHint("Price request queued or refreshing.");ImGui::PopStyleVar();ImGui::PopItemFlag();}
         RefreshUI::Timestamp(status.price?static_cast<std::time_t>(status.price->fetched_at_unix):0,"Trading Post price");
     }
     RenderSectionHeader("Item Information",UI::SectionGold);
@@ -1493,7 +1493,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             const auto& infix=details["infix_upgrade"];
             if(infix.contains("attributes")&&infix["attributes"].is_array())for(const auto& attr:infix["attributes"])
                 if(attr.is_object()&&attr.contains("attribute")&&attr["attribute"].is_string()&&attr.contains("modifier")&&attr["modifier"].is_number_integer())
-                    ImGui::Text("+%lld %s",static_cast<long long>(attr["modifier"].get<int64_t>()),attr["attribute"].get<std::string>().c_str());
+                    ImGui::Text("+%lld %s",static_cast<long long>(attr["modifier"].get<int64_t>()),UI::FriendlyAttribute(attr["attribute"].get<std::string>()));
         }
         if(!meta->description.empty())ImGui::TextWrapped("%s",PlainItemDescription(meta->description).c_str());
     }else ImGui::TextDisabled("Detailed metadata not retrieved. Refresh inventory to populate it.");

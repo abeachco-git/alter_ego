@@ -715,8 +715,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         }
         if (ImGui::IsItemHovered()) {
             const auto& entry = data["gear"].at(slot);
-            ImGui::SetTooltip("%s", AlterEgo::Composable::Presentation::
-                GearSlotSummary(kind, entry).c_str());
+            AlterEgo::UI::Hint(AlterEgo::Composable::Presentation::GearSlotSummary(kind, entry).c_str());
         }
         ImGui::PopID();
     }

@@ -3255,12 +3255,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             if (!eq->attributes.empty()) {
                 for (const auto& [attr, val] : eq->attributes) {
                     // Format attribute name for display (CamelCase → spaced)
-                    std::string displayAttr = attr;
-                    if (attr == "BoonDuration") displayAttr = "Concentration";
-                    else if (attr == "ConditionDuration") displayAttr = "Expertise";
-                    else if (attr == "ConditionDamage") displayAttr = "Condition Damage";
-                    else if (attr == "CritDamage") displayAttr = "Ferocity";
-                    else if (attr == "HealingPower") displayAttr = "Healing Power";
+                    std::string displayAttr = AlterEgo::UI::FriendlyAttribute(attr);
                     ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "+%d %s", val, displayAttr.c_str());
                 }
             } else if (item_info && item_info->details.is_object() &&
@@ -3271,12 +3266,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                     std::string name = attr.value("attribute", "");
                     int mod = attr.value("modifier", 0);
                     if (mod > 0 && !name.empty()) {
-                        std::string displayAttr = name;
-                        if (name == "BoonDuration") displayAttr = "Concentration";
-                        else if (name == "ConditionDuration") displayAttr = "Expertise";
-                        else if (name == "ConditionDamage") displayAttr = "Condition Damage";
-                        else if (name == "CritDamage") displayAttr = "Ferocity";
-                        else if (name == "HealingPower") displayAttr = "Healing Power";
+                        std::string displayAttr = AlterEgo::UI::FriendlyAttribute(name);
                         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "+%d %s", mod, displayAttr.c_str());
                     }
                 }
@@ -3318,7 +3308,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                     if (uinfo->details.is_object() && uinfo->details.contains("infix_upgrade") &&
                         uinfo->details["infix_upgrade"].contains("buff") &&
                         uinfo->details["infix_upgrade"]["buff"].contains("description")) {
-                        ImGui::PushTextWrapPos(300.0f);
+                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(300.0f));
                         std::string udesc = StripGW2Markup(uinfo->details["infix_upgrade"]["buff"]["description"].get<std::string>());
                         ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "%s", udesc.c_str());
                         ImGui::PopTextWrapPos();
@@ -3355,7 +3345,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             // Description (skip for legendary relics — API returns a stale emulated effect)
             bool isLegendaryRelic = item_info && item_info->type == "Relic" && item_info->rarity == "Legendary";
             if (item_info && !item_info->description.empty() && !isLegendaryRelic) {
-                ImGui::PushTextWrapPos(300.0f);
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(300.0f));
                 std::string idesc = StripGW2Markup(item_info->description);
                 ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f), "%s", idesc.c_str());
                 ImGui::PopTextWrapPos();
@@ -3364,7 +3354,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             // Legendary relic API limitation note
             if (isLegendaryRelic) {
                 ImGui::Spacing();
-                ImGui::PushTextWrapPos(300.0f);
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(300.0f));
                 ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.4f, 1.0f),
                     "The API does not expose which relic effect\nthis legendary relic is emulating.");
                 ImGui::PopTextWrapPos();
@@ -3991,11 +3981,11 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
 
     if (ImGui::IsItemHovered() && tinfo) {
         ImGui::BeginTooltip();
-        ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.5f, 1.0f), "%s", tinfo->name.c_str());
+        AlterEgo::UI::TooltipLine(tinfo->name.c_str(),AlterEgo::UI::TooltipTitle);
         if (isMinor)
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Minor Trait");
         if (!tinfo->description.empty()) {
-            ImGui::PushTextWrapPos(300.0f);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(300.0f));
             std::string tdesc = StripGW2Markup(tinfo->description);
             ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s", tdesc.c_str());
             ImGui::PopTextWrapPos();
@@ -4042,7 +4032,7 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,boo
         if (sinfo && !sinfo->icon_url.empty())
             AlterEgo::IconManager::RequestIcon(skill_id + 5000000, sinfo->icon_url);
     }
-    if (ImGui::IsItemHovered() && (sinfo || editable)) {
+    if (ImGui::IsItemHovered() && (sinfo || (editable&&!skill_id))) {
         ImGui::BeginTooltip();
         if (sinfo) {
             const std::string desc = StripGW2Markup(sinfo->description);
@@ -4685,7 +4675,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                         ImGui::TextColored(ImVec4(0.7f, 0.85f, 0.9f, 1.0f),
                             "\"%s\"", specDesc->flavor);
                         ImGui::Spacing();
-                        ImGui::PushTextWrapPos(350.0f);
+                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(350.0f));
                         ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f),
                             "%s", specDesc->description);
                         ImGui::PopTextWrapPos();
@@ -6266,14 +6256,7 @@ static void RenderSkillIcon(uint32_t skill_id, float size) {
 // =========================================================================
 
 // Friendly attribute name mapping
-static const char* FriendlyAttrName(const std::string& attr) {
-    if (attr == "CritDamage") return "Ferocity";
-    if (attr == "ConditionDamage") return "Condition Damage";
-    if (attr == "ConditionDuration") return "Expertise";
-    if (attr == "BoonDuration") return "Concentration";
-    if (attr == "Healing") return "Healing Power";
-    return attr.c_str();
-}
+static const char* FriendlyAttrName(const std::string& attr) {return AlterEgo::UI::FriendlyAttribute(attr);}
 
 // Curated rune list (name + item_id (offline bootstrap only)). IDs from GW2 API.
 struct RuneEntry { const char* name; uint32_t item_id; };
@@ -9462,7 +9445,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
                         ImGui::TextColored(ImVec4(0.7f, 0.85f, 0.9f, 1.0f),
                             "\"%s\"", specDesc->flavor);
                         ImGui::Spacing();
-                        ImGui::PushTextWrapPos(350.0f);
+                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+AlterEgo::UI::TooltipWrapWidth(350.0f));
                         ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f),
                             "%s", specDesc->description);
                         ImGui::PopTextWrapPos();
@@ -12926,7 +12909,7 @@ std::string CharacterLoadUnavailable(const std::string& character,const std::str
 bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account){
     const auto reason=CharacterLoadUnavailable(character,account);
     const bool clicked=ImGui::MenuItem(label,nullptr,false,reason.empty());
-    if(!reason.empty()&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",reason.c_str());
+    AlterEgo::UI::DisabledHint(reason.c_str());
     if(clicked)g_QueuedCharacterLoad={character,AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character)};
     return clicked;
 }
@@ -13114,7 +13097,7 @@ static void RenderSkinList(float width) {
             if(!skinOpt){ImGui::Dummy(ImVec2(0,rowH));return;}
             const auto& skin=*skinOpt;
             ImGui::PushID((int)entry.id);
-            const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,entry.id+5000000,skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1);
+            const auto hit=AlterEgo::UI::CatalogRow(row,g_SkinSelectedId==entry.id,entry.id+5000000,skin.icon_url,skin.name,skin.rarity,{},hasOwnerData&&!entry.owned,hasOwnerData?int(entry.owned):-1,[&]{AlterEgo::UI::DetailTooltip(skin.name.c_str(),hasOwnerData?(entry.owned?"Owned":"Not owned"):nullptr,GetSkinRarityColor(skin.rarity));});
             RenderSkinContextMenu(skin);ImGui::PopID();
             if(hit.clicked)selectSkin(skin);
         });
@@ -14338,15 +14321,9 @@ static void RenderAchEntry(const AchFrame& frame,uint32_t achId, bool showPinBut
     }
 
     // Hover tooltip with requirement text (so the row stays one line)
-    if (rowHovered && !def.requirement.empty()) {
+    if (rowHovered) {
         std::string cleanReq = StripGW2Markup(def.requirement);
-        ImGui::BeginTooltip();
-        ImGui::TextUnformatted(def.name.c_str());
-        ImGui::Separator();
-        ImGui::PushTextWrapPos(360.0f);
-        ImGui::TextWrapped("%s", cleanReq.c_str());
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
+        AlterEgo::UI::DetailTooltip(def.name.c_str(),cleanReq.c_str());
     }
 
     // Position the pin button
@@ -15069,6 +15046,7 @@ struct PopoutBitDisplay {
 struct PopoutAchDisplay {
     uint32_t achId = 0;
     std::string name;
+    std::string requirement;
     std::string loadingName;
     bool hasDef = false;
     bool done = false;
@@ -15105,6 +15083,7 @@ static void RebuildPopoutCache(const AchFrame& frame) {
             const AchDef& def = *defIt->second;
             disp.hasDef = true;
             disp.name = def.name;
+            disp.requirement = StripGW2Markup(def.requirement);
             disp.max = def.max_count > 0 ? def.max_count : ((progIt != (*frame.progress).end()) ? progIt->second.max : 0);
             disp.hasBits = !def.bits.empty() && !disp.done;
 
@@ -15235,6 +15214,7 @@ static void RenderAchPopout() {
                 ImGui::InvisibleButton("##poprow", ImVec2(rowHitW, rowH));
                 bool rowHovered = ImGui::IsItemHovered();
                 bool rowClicked = ImGui::IsItemClicked();
+                if(rowHovered&&disp.hasDef)AlterEgo::UI::DetailTooltip(disp.name.c_str(),disp.requirement.c_str());
                 AchievementNameContextMenu(disp.name);
                 if (rowHovered)
                     dl->AddRect(cmin, cmax, IM_COL32(197, 161, 85, 130), 3.0f, 0, 1.0f);
@@ -16227,7 +16207,7 @@ void AddonRender() {
                         : (28.0f + extraLines * lineH);
                     // Show mismatch even when no library build happens to match.
                     const bool recognizeActive=!memoryAccount.empty()&&ch.account_name==memoryAccount&&ch.name==g_CurrentCharName;
-                    if (!g_CompactCharList && recognizeActive) {
+                    if (recognizeActive) {
                         const auto& match = GetLoggedInSavedBuildMatch(ch);
                         if (match.show)rowHeight+=(match.warnings.empty()?1.f:2.f)*lineH;
                         if (HasLiveSpecCacheMismatch(ch))
@@ -16343,7 +16323,7 @@ void AddonRender() {
                         uint32_t profIconId = GetProfessionIconId(ch.profession);
                         const char* profIconUrl = GetProfessionIconUrl(ch.profession);
                         ImVec2 cpos = ImGui::GetCursorPos();
-                        float yOff = (extraLines > 0) ? 2.0f : (rowHeight - iconSz) * 0.5f;
+                        float yOff = (extraLines > 0 || recognizeActive) ? 2.0f : (rowHeight - iconSz) * 0.5f;
                         if (profIconId) {
                             if (!profIconUrl)
                                 AlterEgo::GW2API::FetchProfessionInfoAsync(ch.profession);
@@ -16361,7 +16341,7 @@ void AddonRender() {
                             ImGui::Dummy(ImVec2(iconSz, iconSz));
                         }
                         ImGui::SameLine(0, 4);
-                        float textYOff = (extraLines > 0) ? 2.0f : (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
+                        float textYOff = (extraLines > 0 || recognizeActive) ? 2.0f : (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
                         ImGui::SetCursorPosY(cpos.y + textYOff);
                     }
                     // First line: name + level + green dot
@@ -16417,7 +16397,7 @@ void AddonRender() {
                         }
                         ImGui::Dummy(ImVec2(iconR * 2.0f + 2.0f, 0));
                     }
-                    if (isLoggedIn && !g_CompactCharList) {
+                    if (recognizeActive) {
                         if (HasLiveSpecCacheMismatch(ch)) {
                             ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
                                 "Live spec differs - refresh");
@@ -16435,7 +16415,7 @@ void AddonRender() {
                                 const auto draw=[&](const std::string& label,ImVec4 tint){
                                     const float width=ImMax(0.f,rMax.x-ImGui::GetCursorScreenPos().x-6.f);
                                     ImGui::TextColored(tint,"%s",width>=ImGui::CalcTextSize("...").x?TruncateToWidth(label,width).c_str():"");
-                                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",match.tooltip.c_str());
+                                    if(ImGui::IsItemHovered())AlterEgo::UI::DetailTooltip("Configuration health",match.tooltip.c_str());
                                 };
                                 draw(match.full?match.name+" - Matches":match.name,color);
                                 if(!match.warnings.empty()){

@@ -24,6 +24,40 @@ inline const ImVec4 TooltipTitle(1.0f, 0.9f, 0.5f, 1.0f);
 inline const ImVec4 TooltipBody(0.8f, 0.8f, 0.8f, 1.0f);
 inline const ImVec4 SectionGold(0.70f, 0.58f, 0.20f, 1.0f);
 
+// Presentation only: caller owns the native hit target and all data.
+inline float TooltipWrapWidth(float base=TooltipWidth){
+    return std::max(1.f,std::min(base*ImGui::GetFontSize()/13.f,ImGui::GetIO().DisplaySize.x-2.f*ImGui::GetStyle().WindowPadding.x-16.f));
+}
+inline void TooltipLine(const char* text,ImVec4 color=TooltipBody,float width=TooltipWidth){
+    if(!text||!*text)return;
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+TooltipWrapWidth(width));
+    ImGui::TextColored(color,"%s",text);
+    ImGui::PopTextWrapPos();
+}
+inline void TooltipText(const char* title,const char* body){
+    TooltipLine(title,TooltipTitle);TooltipLine(body);
+}
+inline void DetailTooltip(const char* title,const char* body=nullptr,ImVec4 color=TooltipTitle){
+    if((!title||!*title)&&(!body||!*body))return;
+    ImGui::BeginTooltip();
+    TooltipLine(title,color);TooltipLine(body);
+    ImGui::EndTooltip();
+}
+inline void Hint(const char* text){DetailTooltip(text,nullptr,TooltipBody);}
+inline void DisabledHint(const char* reason){
+    if(reason&&*reason&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))Hint(reason);
+}
+inline void ClippedTextHint(bool hovered,const std::string& label,float available){
+    if(hovered&&!label.empty()&&ImGui::CalcTextSize(label.c_str()).x>available)Hint(label.c_str());
+}
+inline const char* FriendlyAttribute(const std::string& attr){
+    if(attr=="CritDamage")return "Ferocity";
+    if(attr=="ConditionDamage")return "Condition Damage";
+    if(attr=="ConditionDuration")return "Expertise";
+    if(attr=="BoonDuration")return "Concentration";
+    if(attr=="Healing"||attr=="HealingPower")return "Healing Power";
+    return attr.c_str();
+}
 inline float ActionButtonHeight() { return std::max(ActionHeight, ImGui::GetFrameHeight()); }
 
 enum class ButtonRole { Standard, Compact, Destructive, CompactDestructive };
@@ -57,7 +91,7 @@ inline EditAction ActionFooter(const char* scope,bool enabled,const char* primar
         if(!available){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
         const bool clicked=Button(label,ImVec2(w,0),style)&&available;
         if(!available){
-            if(why&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",why);
+            DisabledHint(why);
             ImGui::PopStyleVar();ImGui::PopItemFlag();
         }
         return clicked;
@@ -155,22 +189,23 @@ inline bool MenuAction(const char* label,MenuIcon icon,bool enabled=true,const c
     const bool destructive=icon==MenuIcon::Delete;
     const bool clicked=destructive?DestructiveMenuItem(padded.c_str(),enabled):ImGui::MenuItem(padded.c_str(),nullptr,false,enabled);
     DrawMenuIcon(draw,pos,icon,enabled?(destructive?ImGui::GetColorU32(DestructiveText):ImGui::GetColorU32(ImGuiCol_Text)):ImGui::GetColorU32(ImGuiCol_TextDisabled),size);
-    if(!enabled&&reason&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",reason);
+    if(!enabled)DisabledHint(reason);
     return clicked;
 }
-inline bool BeginActionMenu(const char* label,MenuIcon icon,bool enabled=true){
+inline bool BeginActionMenu(const char* label,MenuIcon icon,bool enabled=true,const char* reason=nullptr){
     const auto pos=ImGui::GetCursorScreenPos();auto* draw=ImGui::GetWindowDrawList();
     const auto size=ImGui::GetFontSize();const auto color=ImGui::GetColorU32(enabled?ImGuiCol_Text:ImGuiCol_TextDisabled);
     const auto padded=MenuIconLabel(label);
     const bool open=ImGui::BeginMenu(padded.c_str(),enabled);
     DrawMenuIcon(draw,pos,icon,color,size);
+    if(!enabled)DisabledHint(reason);
     return open;
 }
 inline bool AvailableActionButton(const char* label,ButtonRole role,bool enabled=true,const char* reason=nullptr){
     if(!enabled){ImGui::PushItemFlag(ImGuiItemFlags_Disabled,true);ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*.45f);}
     const bool clicked=Button(label,ImVec2(0,0),role)&&enabled;
     if(!enabled){
-        if(reason&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",reason);
+        DisabledHint(reason);
         ImGui::PopStyleVar();ImGui::PopItemFlag();
     }
     return clicked;
@@ -233,7 +268,7 @@ inline bool SortDirectionButton(const char* id,bool& ascending,float width=24.f)
     auto* draw=ImGui::GetWindowDrawList();
     if(ascending)draw->AddTriangleFilled(ImVec2(x,y-r),ImVec2(x-r,y+r),ImVec2(x+r,y+r),color);
     else draw->AddTriangleFilled(ImVec2(x-r,y-r),ImVec2(x+r,y-r),ImVec2(x,y+r),color);
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ascending?"Ascending; reverse sort":"Descending; reverse sort");
+    if(ImGui::IsItemHovered())Hint(ascending?"Ascending; reverse sort":"Descending; reverse sort");
     return changed;
 }
 inline bool SelectableOption(const char* label, bool selected = false) {
@@ -346,7 +381,7 @@ inline bool SearchFieldCore(const char* id, float width, Edit edit, Clear clear,
         clear(); changed = true;
     }
     if (!populated) ImGui::PopStyleVar();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear search");
+    if (ImGui::IsItemHovered()) Hint("Clear search");
     ImGui::PopID();
     return changed;
 }
@@ -547,7 +582,7 @@ inline void RenderFilterChips(const FilterChips& chips, const std::function<void
         const float width = std::min(avail, CompactButtonWidth("Clear all"));
         place(width);
         if (Button("Clear all##filters", ImVec2(width, 0), ButtonRole::Compact)) reset();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear all filters (keep search text)");
+        if (ImGui::IsItemHovered()) Hint("Clear all filters (keep search text)");
     }
 }
 template<class Query, class CollectFilters, class DrawFilters, class ResetFilters>
@@ -576,7 +611,7 @@ inline bool SearchToolbar(const char* id, const char* hint, Query& query,
     if (sameRow) ImGui::SameLine();
     if (Button(filterLabel.c_str(), ImVec2(0, 0), ButtonRole::Compact))
         ImGui::OpenPopup("##filters");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Search and filter options");
+    if (ImGui::IsItemHovered()) Hint("Search and filter options");
     if (actionLabel) {
         if (sameRow || avail >= fw + gap + aw) ImGui::SameLine();
         const bool clicked = Button(actionLabel);
@@ -591,7 +626,7 @@ inline bool SearchToolbar(const char* id, const char* hint, Query& query,
         const bool resetClicked=Button("Reset filters",ImVec2(0,0),ButtonRole::Compact);
         if(!canReset)ImGui::PopStyleVar();
         if(resetClicked&&canReset)resetFilters();
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",canReset?"Reset filters (keep search text)":"No active filters");
+        if(ImGui::IsItemHovered())Hint(canReset?"Reset filters (keep search text)":"No active filters");
         ImGui::EndPopup();
     }
     RenderFilterChips(collectFilters(), resetFilters);
@@ -617,31 +652,16 @@ inline bool CatalogCard(const char* id, const char* name, const char* descriptio
     dl->AddText(ImVec2(pos.x+6, pos.y+2), IM_COL32(200,180,255,255), name);
     dl->AddText(ImVec2(pos.x+6, pos.y+2+line), IM_COL32(150,150,150,220), description);
     dl->PopClipRect();
-    if (ImGui::IsItemHovered()) {
-        ImGui::BeginTooltip();
-        ImGui::TextUnformatted(name);
-        ImGui::PushTextWrapPos(TooltipWidth);
-        ImGui::TextUnformatted(description);
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
-    }
+    if(ImGui::IsItemHovered())DetailTooltip(name,description);
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y+height+2));
     return clicked;
 }
 inline bool CatalogOption(const char* name, const char* description, bool selected) {
     const bool clicked = SelectableOption(name, selected);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", description);
+    if(ImGui::IsItemHovered())DetailTooltip(name,description);
     return clicked;
 }
 inline void ActiveIndicator(ImDrawList* draw, ImVec2 center) {
     draw->AddCircleFilled(center, ActiveRadius, IM_COL32(60, 200, 80, 255));
-}
-inline void TooltipText(const char* title, const char* body) {
-    ImGui::TextColored(TooltipTitle, "%s", title);
-    if (body && *body) {
-        ImGui::PushTextWrapPos(TooltipWidth);
-        ImGui::TextColored(TooltipBody, "%s", body);
-        ImGui::PopTextWrapPos();
-    }
 }
 } // namespace AlterEgo::UI
