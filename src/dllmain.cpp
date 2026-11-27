@@ -3100,6 +3100,26 @@ static void CopyCachedItemLinksMenu(const std::vector<uint32_t>& ids,const char*
         ImGui::EndMenu();
     }
 }
+static void RenderEquipmentContextActions(const AlterEgo::EquipmentItem* eq){
+    if(!eq||!eq->id)return;
+    const auto item_info=AlterEgo::GW2API::GetItemInfo(eq->id);
+    const auto skin_info=eq->skin?AlterEgo::GW2API::GetSkinInfo(eq->skin):nullptr;
+    if(item_info)CopyNameMenuItem(item_info->name);
+    CopyEntityChatLink(AlterEgo::LINK_ITEM,eq->id,"Copy Item Chat Link",eq->skin,eq->upgrades.size()>0?eq->upgrades[0]:0,eq->upgrades.size()>1?eq->upgrades[1]:0);
+    if(item_info&&!item_info->chat_link.empty())CopyNativeLinkMenuItem(item_info->chat_link,"Copy API Chat Link");
+    if(skin_info)CopyNameMenuItem(skin_info->name,"Copy Skin Name");
+    CopyEntityChatLink(AlterEgo::LINK_SKIN,eq->skin,"Copy Skin Chat Link");
+    CopyCachedItemNamesMenu(eq->upgrades,"Copy Upgrade Name");
+    CopyCachedItemLinksMenu(eq->upgrades,"Copy Upgrade Chat Link");
+    CopyCachedItemNamesMenu(eq->infusions,"Copy Infusion Name");
+    CopyCachedItemLinksMenu(eq->infusions,"Copy Infusion Chat Link");
+    ImGui::Separator();
+    if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(eq->id);
+    if(ImGui::BeginMenu("Item Locations")){
+        AlterEgo::NativeAccounts::RenderItemAvailability(eq->id,AlterEgo::GW2API::GetCurrentAccountName(),g_CurrentCharName);
+        ImGui::EndMenu();
+    }
+}
 static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
 
@@ -3387,34 +3407,7 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
             ImGui::EndTooltip();
         }
 
-        // Right-click context menu
-        if (ImGui::BeginPopupContextItem("##eq_ctx")) {
-            if (item_info) {
-                CopyNameMenuItem(item_info->name);
-                CopyEntityChatLink(AlterEgo::LINK_ITEM,eq->id,"Copy Item Chat Link",eq->skin,
-                    eq->upgrades.size()>0?eq->upgrades[0]:0,eq->upgrades.size()>1?eq->upgrades[1]:0);
-                if (!item_info->chat_link.empty()) {
-                    if (ImGui::MenuItem("Copy API Chat Link")) {
-                        CopyToClipboard(item_info->chat_link);
-                    }
-                }
-            }
-            if (skin_info) {
-                CopyNameMenuItem(skin_info->name,"Copy Skin Name");
-                CopyEntityChatLink(AlterEgo::LINK_SKIN,eq->skin,"Copy Skin Chat Link");
-            }
-            CopyCachedItemNamesMenu(eq->upgrades,"Copy Upgrade Name");
-        CopyCachedItemLinksMenu(eq->upgrades,"Copy Upgrade Chat Link");
-            CopyCachedItemNamesMenu(eq->infusions,"Copy Infusion Name");
-        CopyCachedItemLinksMenu(eq->infusions,"Copy Infusion Chat Link");
-            ImGui::Separator();
-            if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(eq->id);
-            if(ImGui::BeginMenu("Item Locations")){
-                AlterEgo::NativeAccounts::RenderItemAvailability(eq->id,AlterEgo::GW2API::GetCurrentAccountName(),g_CurrentCharName);
-                ImGui::EndMenu();
-            }
-            ImGui::EndPopup();
-        }
+        ImGui::PushID(static_cast<int>(eq->id));AlterEgo::UI::EntityContext("##eq_ctx",[&]{RenderEquipmentContextActions(eq);});ImGui::PopID();
     }
 
     ImGui::PopID();
@@ -3482,6 +3475,7 @@ static void RenderEquipRow(const AlterEgo::Character& ch, const char* slot, int 
     if(eq&&eq->id){
         text.Line(name,ImGui::ColorConvertFloat4ToU32(GetRarityColor(rarity)));
         text.Line(BuildEquipSubtitle(eq),IM_COL32(150,142,120,230));
+        ImGui::PushID(slot);ImGui::PushID(static_cast<int>(eq->id));text.ContextTarget();AlterEgo::UI::EntityContext("##eq_text_actions",[&]{RenderEquipmentContextActions(eq);});ImGui::PopID();ImGui::PopID();
     }else text.Line(name,ImGui::GetColorU32(ImGuiCol_TextDisabled));
     text.Finish();
 }
@@ -7025,7 +7019,7 @@ static bool SelectProfessionCharacterEntry(const char* id, bool selected,
     const bool clicked=ImGui::Selectable(id,selected,flags,size);
     DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),
         ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),profession,name,prefix);
-    AlterEgo::UI::EntityContext("##character_name",[&]{CharacterSelectorActions(name,account);});
+    AlterEgo::UI::EntityContext("##character_name",[&]{CharacterSelectorActions(name,account.empty()?AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name):account);});
     return clicked;
 }
 
@@ -7056,7 +7050,7 @@ bool RenderCharacterMultiFilter(const char* label,std::set<std::string>& selecte
             const bool on=selected.count(name)!=0;
             const auto it=professions.find(name);
             if(SelectProfessionCharacterEntry("##character",on,it==professions.end()?std::string{}:it->second,
-                name,nullptr,ImGuiSelectableFlags_DontClosePopups,NativeAccounts::VerifiedAccountForCharacter(name))){
+                name,nullptr,ImGuiSelectableFlags_DontClosePopups)){
                 if(on)selected.erase(name);else selected.insert(name);
                 changed=true;
             }
@@ -7161,7 +7155,7 @@ static bool RenderSpecializationChoices(const std::string& profession,
         ImGui::SameLine(0,8);ImGui::AlignTextToFramePadding();
         if(!allowed)ImGui::TextDisabled("%s",label.c_str());
         else if(ImGui::Selectable(label.c_str(),ids[slot]==sid)){next=sid;changed=true;}
-        NameOptionContext(label);
+        NameOptionContext(si->name);
         ImGui::PopID();
     }
     ImGui::Separator();
@@ -8256,7 +8250,7 @@ static void RenderSaveToLibraryDialog() {
                 ImGui::PopID();
             }
             ImGui::EndCombo();
-        }
+        }else if(bt){ImGui::PushID(bt->tab);UI::EntityContext("##save_build_context",[&]{CopyNameMenuItem(bt->name);CopyNativeLinkMenuItem(EncodeBuildTabChatLink(*bt),"Copy Build Chat Link");});ImGui::PopID();}
     }
     if(needsEquipment) {
         field("Equipment tab");
@@ -8270,7 +8264,7 @@ static void RenderSaveToLibraryDialog() {
                 ImGui::PopID();
             }
             ImGui::EndCombo();
-        }
+        }else if(sourceChar&&g_SaveLibEquipTab>0)NameOptionContext(shown);
     }
     if(g_SaveLibTarget==0) {
         field("Equipment storage");
@@ -8616,7 +8610,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         snprintf(line1, sizeof(line1), "%s", GearSlotDisplayName(slot));
         line1Col = IM_COL32(128, 128, 128, 255);
     }
-    if(!editable&&!disabled&&hasData&&ImGui::BeginPopupContextItem("##saved_gear_name")){
+    auto savedGearActions=[&]{
         const auto actual=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
         CopyEntityMenu(actual&&!actual->name.empty()?actual->name:std::string(line1),AlterEgo::LINK_ITEM,isRelicSlot?build.relic_id:gearSlot?gearSlot->item_id:0);
         if(gearSlot){
@@ -8629,14 +8623,15 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
             CopyCachedItemNamesMenu(gearSlot->infusion_ids,"Copy Infusion Name");
         CopyCachedItemLinksMenu(gearSlot->infusion_ids,"Copy Infusion Chat Link");
         }
-        ImGui::EndPopup();
-    }
+    };
+    if(!editable&&!disabled&&hasData)AlterEgo::UI::EntityContext("##saved_gear_name",savedGearActions);
     text.Line(line1,line1Col);
     if (!isRelicSlot && it != build.gear.end()) {
         text.Line(it->second.rune,IM_COL32(153,153,255,255));
         text.Line(it->second.sigil,IM_COL32(153,153,255,255));
         text.Line(it->second.sigil2,IM_COL32(153,153,255,255));
     }
+    if(!disabled&&hasData){text.ContextTarget();AlterEgo::UI::EntityContext("##saved_gear_text",savedGearActions);}
     text.Finish();
 
     // Tooltip
@@ -9927,6 +9922,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         if(group=="Traits")result.SetLastRowLinks(AlterEgo::LINK_TRAIT,{a,0,0},{b,0,0});
         else if(group=="Relic"||group=="Exact item IDs"||group=="Aquatic")result.SetLastRowLinks(AlterEgo::LINK_ITEM,{a,0,0},{b,0,0});
     };
+    auto gearLinks=[](const nlohmann::json& gear,std::initializer_list<const char*> fields){
+        std::vector<uint32_t> ids;
+        for(const auto& entry:gear.at("gear"))for(const auto* field:fields){auto i=entry.find(field);if(i!=entry.end()&&i->is_number_unsigned())ids.push_back(i->get<uint32_t>());}
+        return ids;
+    };
     auto traitId = [&](uint32_t spec, int tier, int id) -> uint32_t {
         if (id >= 0) return (uint32_t)id;
         // Negative values in older imports encode an unresolved trait choice.
@@ -10156,6 +10156,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 result.AddUnverified("Runes", "Types / counts",
                     label(expected) + " (incomplete requirement)", label(observed));
             else result.AddVerdict("Runes","Types / counts",verdict==AlterEgo::Composable::Semantics::Verdict::Match?AlterEgo::BuildComparison::Verdict::Match:AlterEgo::BuildComparison::Verdict::Different,label(expected),label(observed));
+            result.SetLastRowLinks(AlterEgo::LINK_ITEM,gearLinks(savedRunes,{"rune_id"}),gearLinks(liveRunes,{"rune_id"}));
         }
 
         // Sigils are interchangeable between hands in a weapon set, but
@@ -10213,6 +10214,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 verdict == AlterEgo::Composable::Semantics::Verdict::Unverified)
                 result.AddUnverified("Sigils", "By weapon set", label(expected), label(observed));
             else result.AddVerdict("Sigils","By weapon set",verdict==AlterEgo::Composable::Semantics::Verdict::Match?AlterEgo::BuildComparison::Verdict::Match:AlterEgo::BuildComparison::Verdict::Different,label(expected),label(observed));
+            result.SetLastRowLinks(AlterEgo::LINK_ITEM,gearLinks(savedSigils,{"sigil_id","sigil2_id"}),gearLinks(liveSigils,{"sigil_id","sigil2_id"}));
         }
 
         // Aquatic runes use five shared armor pieces plus the breather.
@@ -10240,6 +10242,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                             std::string text;for(const auto& [key,count]:summary.counts){if(!text.empty())text+=", ";text+=std::to_string(count)+" x "+key;}return text;
                         };
                         result.AddVerdict("Aquatic","Underwater rune configuration",verdict==AlterEgo::Composable::Semantics::Verdict::Match?AlterEgo::BuildComparison::Verdict::Match:AlterEgo::BuildComparison::Verdict::Different,label(e),label(a));
+                        result.SetLastRowLinks(AlterEgo::LINK_ITEM,gearLinks(expected,{"rune_id"}),gearLinks(actual,{"rune_id"}));
                     }
                 }
             }
@@ -10262,6 +10265,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             if((!g.sigil.empty()&&!g.sigil_id)||(!g.sigil2.empty()&&!g.sigil2_id)||!eq||(observed.empty()&&!eq->upgrades_observed))
                 result.AddUnverified("Aquatic",field,label(expected),label(observed));
             else result.AddVerdict("Aquatic",field,expected==observed?AlterEgo::BuildComparison::Verdict::Match:AlterEgo::BuildComparison::Verdict::Different,label(expected),observed.empty()?"(empty)":label(observed));
+            result.SetLastRowLinks(AlterEgo::LINK_ITEM,expected,observed);
         }
 
         // Slot mode is authoritative: compare only recorded physical requirements.
@@ -10302,6 +10306,8 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                     result.AddUnverified(infusionGroup,infusionField,expected,actual+" (metadata pending)");
                 else result.Add(infusionGroup,infusionField,"equivalent",
                     verdict==AlterEgo::InfusionMatchVerdict::Matches?"equivalent":"different",expected,actual);
+                std::vector<uint32_t> exact;for(const auto& requirement:wanted)if(requirement.attribute.empty()&&requirement.exactId)exact.push_back(requirement.exactId);
+                result.SetLastRowLinks(AlterEgo::LINK_ITEM,std::move(exact),eq->infusions);
             }
         }
 
@@ -10733,21 +10739,26 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                                            row->field.c_str());
                     ImGui::TableSetColumnIndex(1);
                     ImGui::TextWrapped("%s", row->saved.c_str());
-                    auto linkMenu=[&](const std::array<uint32_t,3>& ids,const char* popup){
-                        if(!row->linkType||std::none_of(ids.begin(),ids.end(),ChatLinkIdValid))return;
-                        AlterEgo::UI::EntityContext(popup,[&]{for(auto id:ids)if(ChatLinkIdValid(id)){
+                    auto linkMenu=[&](const std::vector<uint32_t>& ids,const char* popup){
+                        if(!row->linkType)return;
+                        std::set<uint32_t> unique;for(auto id:ids)if(ChatLinkIdValid(id))unique.insert(id);
+                        if(unique.empty())return;
+                        ImGui::PushID(row->group.c_str());ImGui::PushID(row->field.c_str());
+                        for(auto id:unique)ImGui::PushID(static_cast<int>(id));
+                        AlterEgo::UI::EntityContext(popup,[&]{for(auto id:unique){
                             const auto type=static_cast<AlterEgo::ChatLinkType>(row->linkType);
                             std::string name;
                             if(type==AlterEgo::LINK_SKILL){const auto info=AlterEgo::GW2API::GetSkillInfo(id);if(info)name=info->name;}
                             else if(type==AlterEgo::LINK_TRAIT){const auto info=AlterEgo::GW2API::GetTraitInfo(id);if(info)name=info->name;}
                             else if(type==AlterEgo::LINK_ITEM){const auto info=AlterEgo::GW2API::GetItemInfo(id);if(info)name=info->name;}
                             ImGui::PushID(static_cast<int>(id));
-                            if(std::count_if(ids.begin(),ids.end(),ChatLinkIdValid)>1){if(AlterEgo::UI::BeginActionMenu(name.empty()?("#"+std::to_string(id)).c_str():name.c_str(),AlterEgo::UI::MenuIcon::Copy)){CopyEntityMenu(name,type,id);ImGui::EndMenu();}}
+                            if(unique.size()>1){if(AlterEgo::UI::BeginActionMenu(name.empty()?("#"+std::to_string(id)).c_str():name.c_str(),AlterEgo::UI::MenuIcon::Copy)){CopyEntityMenu(name,type,id);ImGui::EndMenu();}}
                             else CopyEntityMenu(name,type,id);
                             ImGui::PopID();
                         }});
+                        for(size_t i=0;i<unique.size();++i)ImGui::PopID();ImGui::PopID();ImGui::PopID();
                     };
-                    ImGui::PushID(static_cast<int>(displayed));linkMenu(row->savedLinks,"##saved_link_actions");ImGui::PopID();
+                    linkMenu(row->savedLinks,"##saved_link_actions");
                     ImGui::TableSetColumnIndex(2);
                     if (!row->verified)
                         ImGui::PushStyleColor(ImGuiCol_Text,
@@ -10757,7 +10768,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                             ImVec4(1, 0.58f, 0.50f, 1));
                     ImGui::TextWrapped("%s", row->current.c_str());
                     if (!row->verified || !row->matches) ImGui::PopStyleColor();
-                    ImGui::PushID(static_cast<int>(displayed));linkMenu(row->liveLinks,"##live_link_actions");ImGui::PopID();
+                    linkMenu(row->liveLinks,"##live_link_actions");
                 }
                 if (!displayed) {
                     ImGui::TableNextRow();
@@ -10932,8 +10943,7 @@ static void CharacterSelectorActions(const std::string& name,const std::string& 
         MarkNavigation();g_LibCompareChar=name;g_LibCompareAccount=account;g_LibComparePreviousTarget=name;g_LibComparePreviousAccount=account;
         g_LibCompareSavedManual=false;g_LibCompareBuildId.clear();g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;g_SwitchToCompare=true;
     }
-    ImGui::Separator();
-    RenderCharacterLoadMenu("Load Character",name,account);
+    if(!LibraryDraftOpen()&&!g_SaveLibDialogOpen){ImGui::Separator();RenderCharacterLoadMenu("Load Character",name,account);}
 }
 static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
     using namespace AlterEgo::CharacterLoadout;
@@ -10961,10 +10971,10 @@ static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
         ImGui::EndCombo();
     }else{
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Expected Loadout for this character, independent of in-game tabs.\nAutomatic recognizes a saved Loadout; None disables warnings.\nRight-click for actions.");
-    if(ImGui::BeginPopupContextItem("##expected_context")){
-        RenderCharacterLoadoutContext(ch,CharacterContextLoadout(ch),true);
-        ImGui::EndPopup();
-    }
+    const auto* contextLoadout=CharacterContextLoadout(ch);
+    ImGui::PushID(static_cast<int>(choice.mode));ImGui::PushID(contextLoadout?contextLoadout->id.c_str():"");
+    AlterEgo::UI::EntityContext("##expected_context",[&]{RenderCharacterLoadoutContext(ch,contextLoadout,true);});
+    ImGui::PopID();ImGui::PopID();
     }
     ImGui::PopID();ImGui::PopID();ImGui::PopID();
 }
@@ -11184,7 +11194,7 @@ static void RenderCompareTab() {
                     ImGui::PopID();
                 }
                 ImGui::EndCombo();
-            }else{AlterEgo::UI::EntityContext("##compare_build_tab_actions",[&]{CopyNameMenuItem(live.name,"Copy Name",true);CopyNativeLinkMenuItem(EncodeBuildTabChatLink(live),"Copy Build Chat Link");});}
+            }else{ImGui::PushID(character->account_name.c_str());ImGui::PushID(character->name.c_str());ImGui::PushID(live.tab);AlterEgo::UI::EntityContext("##compare_build_tab_actions",[&]{CopyNameMenuItem(live.name,"Copy Name",true);CopyNativeLinkMenuItem(EncodeBuildTabChatLink(live),"Copy Build Chat Link");});ImGui::PopID();ImGui::PopID();ImGui::PopID();}
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1.0f);
             if (AlterEgo::UI::BeginCombo("##compareEquipTab", equipmentLabel.c_str())) {

@@ -32,7 +32,7 @@ extern AddonAPI_t* APIDefs;
 // Copy text through the Nexus-owned ImGui clipboard callbacks.
 void CopyToClipboard(const std::string& text);
 // Copy plain names without IDs, formatting or chat-link encoding.
-inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Name",bool icon=false){
+inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Name",bool icon=true){
     if(!name.empty()&&(icon?AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Copy):ImGui::MenuItem(label)))CopyToClipboard(name);
 }
 
@@ -40,7 +40,7 @@ inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Nam
 // existing item/simple encoders represent 24-bit IDs; never truncate a target.
 inline bool ChatLinkIdValid(uint32_t id) { return AlterEgo::ChatLink::EntityIdValid(id); }
 inline void CopyNativeLinkMenuItem(const std::string& link,const char* label="Copy Chat Link"){
-    if(!link.empty()&&AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Copy))CopyToClipboard(link);
+    if(!link.empty()&&AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Link))CopyToClipboard(link);
 }
 inline void CopyEntityChatLink(AlterEgo::ChatLinkType kind,uint32_t id,const char* label="Copy Chat Link",
                               uint32_t skin=0,uint32_t upgrade1=0,uint32_t upgrade2=0){
@@ -51,7 +51,8 @@ inline void CopyEntityMenu(const std::string& name,AlterEgo::ChatLinkType kind,u
     CopyEntityChatLink(kind,id);
 }
 inline void NameOptionContext(const std::string& name){
-    AlterEgo::UI::EntityContext("##name_actions",[&]{CopyNameMenuItem(name,"Copy Name",true);});
+    if(name.empty())return;
+    ImGui::PushID(name.c_str());AlterEgo::UI::EntityContext("##name_actions",[&]{CopyNameMenuItem(name,"Copy Name",true);});ImGui::PopID();
 }
 // Draw a gradient-backed section header with a colored accent underline.
 // Used by equipment panel, clears, and other tabs.

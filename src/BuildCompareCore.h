@@ -153,7 +153,7 @@ struct ComparisonRow {
     bool verified = true; // NotVerified rows are neither matches nor differences
     bool completeSkillIds = false; // typed evidence, never inferred from display labels
     uint8_t linkType=0; // optional presentation only, never participates in verdicts
-    std::array<uint32_t,3> savedLinks{},liveLinks{};
+    std::vector<uint32_t> savedLinks{},liveLinks{};
 };
 
 class BuildComparison {
@@ -185,9 +185,9 @@ public:
         Add(group,field,savedKey,currentKey,savedDisplay,currentDisplay);
         rows.back().completeSkillIds=completeIds;
     }
-    void SetLastRowLinks(uint8_t type,std::array<uint32_t,3> saved,std::array<uint32_t,3> live){
+    void SetLastRowLinks(uint8_t type,std::vector<uint32_t> saved,std::vector<uint32_t> live){
         if(rows.empty())return;
-        rows.back().linkType=type;rows.back().savedLinks=saved;rows.back().liveLinks=live;
+        rows.back().linkType=type;rows.back().savedLinks=std::move(saved);rows.back().liveLinks=std::move(live);
     }
     void SetCoverage(bool build,bool equipment,bool partialAquatic=false) { buildCoverage=build; equipmentCoverage=equipment; aquaticPartial=partialAquatic; }
     bool AquaticPartial() const {return aquaticPartial;}

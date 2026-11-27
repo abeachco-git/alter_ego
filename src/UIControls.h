@@ -115,7 +115,7 @@ inline bool DestructiveMenuItem(const char* label, bool enabled = true) {
 // Original vector menu icons, compiled into the DLL. Keep native MenuItem/
 // BeginMenu responsible for navigation, selection, focus and popup closing.
 // A font-responsive text gutter reserves space; drawing is non-interactive.
-enum class MenuIcon { New, Paste, Edit, Rename, Duplicate, Copy, Share, Compare, Preview, Delete, Regenerate, Open, Detach };
+enum class MenuIcon { New, Paste, Edit, Rename, Duplicate, Copy, Share, Compare, Preview, Delete, Regenerate, Open, Detach, Link };
 inline std::string MenuIconLabel(const char* label){
     std::string gutter;
     const float width=ImGui::GetFontSize()*1.35f;
@@ -144,6 +144,7 @@ inline void DrawMenuIcon(ImDrawList* draw,ImVec2 pos,MenuIcon icon,ImU32 color,f
     case MenuIcon::Regenerate:draw->PathArcTo(p(.5f,.5f),s*.35f,.1f,5.3f,12);draw->PathStroke(color,0,thick);line(.7f,.14f,.92f,.14f);line(.92f,.14f,.92f,.36f);break;
     case MenuIcon::Open:rect(.1f,.32f,.7f,.9f);line(.42f,.55f,.9f,.08f);line(.58f,.08f,.9f,.08f);line(.9f,.08f,.9f,.4f);break;
     case MenuIcon::Detach:line(.08f,.76f,.38f,.46f);line(.62f,.54f,.92f,.24f);line(.18f,.18f,.82f,.82f);break;
+        case MenuIcon::Link:line(.12f,.60f,.12f,.80f);line(.12f,.80f,.32f,.88f);line(.32f,.88f,.63f,.57f);line(.37f,.43f,.68f,.12f);line(.68f,.12f,.88f,.20f);line(.88f,.20f,.88f,.40f);line(.88f,.40f,.60f,.68f);line(.32f,.68f,.68f,.32f);break;
     }
 }
 inline bool MenuAction(const char* label,MenuIcon icon,bool enabled=true,const char* reason=nullptr){
@@ -244,7 +245,9 @@ inline bool SelectableOption(const char* label, bool selected = false) {
 // widget or popup changes the current item/window. Callers scope by stable entity ID.
 template<class Render>
 inline void EntityContext(const char* id, Render render) {
+    ImGui::PushID(static_cast<int>(ImGui::GetCurrentWindow()->DC.LastItemId));
     if (ImGui::BeginPopupContextItem(id)) { render(); ImGui::EndPopup(); }
+    ImGui::PopID();
 }
 template<class Render>
 inline bool EntityOption(const char* label, bool selected, Render render) {

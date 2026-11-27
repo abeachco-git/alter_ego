@@ -22,7 +22,7 @@ removed after demonstrating that the behavior is no longer supported; Git histor
 is the archive. Do not remove tests solely because they fail.
 
 The Windows workflow gates DLL packaging on all offline cases and binary checks.
-The existing persistence suite includes chat_link_entities: exact skill/trait/outfit/recipe wire fixtures, item overrides round-trip, unsupported types and ID truncation rejection. In-game selector right-click isolation, popup stack and navigation remain required manual checks.
+The existing persistence suite includes chat_link_entities: exact skill/trait/outfit/recipe wire fixtures, item overrides round-trip, unsupported types and ID truncation rejection. The presentation selector_context case exercises the shared native ImGui control with synthetic right-button input, duplicate names, unselected entry and closed-value context targeting. In-game host input routing, navigation and complex nested editors still require manual checks.
 
 MetaBattle is excluded from automated regression testing by explicit user request:
 neither the offline parser case nor the live website workflow runs. The runtime

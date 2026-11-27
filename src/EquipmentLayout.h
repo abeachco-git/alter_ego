@@ -17,6 +17,10 @@ struct EquipmentText {
             ImVec2(x,y),color,value.c_str(),nullptr,width);
         y+=ImGui::CalcTextSize(value.c_str(),nullptr,false,width).y;
     }
+    void ContextTarget() const {
+        ImGui::SetCursorScreenPos(ImVec2(x,origin.y));
+        ImGui::Dummy(ImVec2(width,std::max(1.f,y-origin.y)));
+    }
     void Finish() const{
         const auto bottom=std::max(origin.y+icon,y);
         ImGui::SetCursorScreenPos(ImVec2(origin.x,bottom));
