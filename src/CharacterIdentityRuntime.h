@@ -70,6 +70,29 @@ inline bool Matches(const State& state,const Address& address,uint64_t generatio
     const auto current=Capture(state,address.name,generation);
     return current&&current->binding==address.binding;
 }
+struct RenameNotice {Ref ref;std::string before,after;};
+inline std::vector<RenameNotice> VerifiedRenames(const State& prior,const State& next){
+    std::vector<RenameNotice> out;
+    if(!prior.initialized||!next.initialized||prior.account!=next.account)return out;
+    for(const auto& [id,r]:next.records){
+        const auto old=prior.records.find(id);
+        if(old!=prior.records.end()&&old->second.present&&r.present&&old->second.name!=r.name&&
+           old->second.evidence==r.evidence&&next.Current(r.name)==&r)
+            out.push_back({{next.account,id},old->second.name,r.name});
+    }
+    return out;
+}
+// Evidence-qualified filenames are portable across installations. The caller
+// must establish unique retained evidence before displaying or assigning one.
+inline std::string PortraitStem(const Address& address){
+    const auto evidence=Normalize(address.binding.evidence);
+    if(!address.Reference().Valid()||!evidence||!(*evidence==address.binding.evidence))return {};
+    for(unsigned char c:address.account)if(!((c>='0'&&c<='9')||(c>='a'&&c<='z')||(c>='A'&&c<='Z')||c=='-'))return {};
+    if(address.account.size()>64)return {};
+    auto created=evidence->created;
+    created.erase(std::remove(created.begin(),created.end(),':'),created.end());
+    return "character-"+address.account+"-"+created+"-"+evidence->profession+"-"+evidence->race;
+}
 inline std::set<std::string> ChangedAddresses(const Bindings& prior,const Bindings& next){
     std::set<std::string> result;
     for(const auto& [name,binding]:prior){

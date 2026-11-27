@@ -237,6 +237,13 @@ INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',1,'Former Alice'
         CI::Selection selected{alice->Reference(),alice->binding.evidence,alice->name,false};
         const auto renamedAddress=CI::Capture(rename.next,"Renamed",10);
         assert(renamedAddress&&selected.Accept(*renamedAddress)&&selected.name=="Renamed");
+        const auto notices=CI::VerifiedRenames(first.next,rename.next);
+        assert(notices.size()==1&&notices[0].ref==alice->Reference()&&notices[0].before=="Alice"&&notices[0].after=="Renamed");
+        assert(CI::VerifiedRenames(rename.next,rename.next).empty());
+        assert(CI::VerifiedRenames(initial,first.next).empty());
+        assert(!CI::PortraitStem(*alice).empty()&&CI::PortraitStem(*alice)==CI::PortraitStem(*renamedAddress));
+        assert(CI::PortraitStem(*alice)!=CI::PortraitStem(*bob));
+        auto invalid=*alice;invalid.account="../escape";assert(CI::PortraitStem(invalid).empty());
         assert(selected.Matches(*renamedAddress)&&!selected.Matches(*bob));
         assert(!CI::SameAddress(*alice,*renamedAddress));
         const auto portable=CI::EncodeSelection(selected,true);

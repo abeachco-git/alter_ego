@@ -2949,47 +2949,43 @@ static void FetchDetailsForCharacter(const AlterEgo::Character& ch) {
     if (!ch.profession.empty()) AlterEgo::GW2API::FetchProfessionInfoAsync(ch.profession);
 }
 
-// Reject any string that contains path-traversal characters before joining
-// it into a filesystem path. Character names come from MumbleLink / native API and
-// SHOULD never contain these, but we don't want a malformed source to escape
-// the portrait directory.
-static bool IsSafePathComponent(const std::string& s) {
-    if (s.empty()) return false;
-    if (s == "." || s == "..") return false;
-    for (char c : s) {
-        if (c == '/' || c == '\\' || c == ':' || c == '\0') return false;
-    }
-    return true;
+// A portrait has a portable evidence-qualified filename; never interpret an
+// old character-name file as the current owner's portrait.
+static std::string CharacterPortraitStem(const AlterEgo::Character& ch){
+    const auto address=CharacterAddressFor(ch);
+    if(!address)return {};
+    const auto unique=AlterEgo::NativeAccounts::ResolveCharacterEvidence(address->account,address->binding.evidence);
+    if(!unique||!AlterEgo::CharacterIdentity::SameAddress(*unique,*address))return {};
+    return AlterEgo::CharacterIdentity::PortraitStem(*address);
 }
-
-// Resolve and load a per-character portrait texture (PNG/JPG from AlterEgo/portraits/<name>.<ext>)
-// Returns nullptr if not present; caches result. Same backing data as the Equipment-panel overlay.
+// PNG/JPG/JPEG assets are ordinary user-managed files, not cache records.
 static Texture_t* GetCharacterPortraitTexture(const AlterEgo::Character& ch) {
-    if (!IsSafePathComponent(ch.name)) return nullptr;
-    auto cacheIt = s_portraitPathCache.find(ch.name);
+    const auto stem=CharacterPortraitStem(ch);
+    if(stem.empty())return nullptr;
+    auto cacheIt = s_portraitPathCache.find(stem);
     if (cacheIt == s_portraitPathCache.end()) {
-        if (s_portraitMissing.find(ch.name) != s_portraitMissing.end()) return nullptr;
+        if (s_portraitMissing.find(stem) != s_portraitMissing.end()) return nullptr;
         std::string portraitDir = AlterEgo::GW2API::GetDataDirectory() + "/portraits";
         std::filesystem::create_directories(portraitDir);
         static const char* exts[] = { ".png", ".jpg", ".jpeg" };
         bool found = false;
         for (const char* ext : exts) {
-            std::string path = portraitDir + "/" + ch.name + ext;
+            std::string path = portraitDir + "/" + stem + ext;
             std::error_code ec;
             if (std::filesystem::is_regular_file(std::filesystem::u8path(path), ec)) {
                 int64_t modTime = GetFileModTime(path);
-                s_portraitPathCache[ch.name] = { path, modTime };
+                s_portraitPathCache[stem] = { path, modTime };
                 found = true;
                 break;
             }
         }
         if (!found) {
-            s_portraitMissing.insert(ch.name);
+            s_portraitMissing.insert(stem);
             return nullptr;
         }
-        cacheIt = s_portraitPathCache.find(ch.name);
+        cacheIt = s_portraitPathCache.find(stem);
     }
-    std::string texId = "AE_PORTRAIT_" + ch.name + "_" + std::to_string(cacheIt->second.modTime);
+    std::string texId = "AE_PORTRAIT_" + stem + "_" + std::to_string(cacheIt->second.modTime)+"_"+cacheIt->second.path.substr(cacheIt->second.path.find_last_of('.')+1);
     Texture_t* tex = APIDefs->Textures_Get(texId.c_str());
     if (!tex || !tex->Resource) {
         try {
@@ -2997,7 +2993,7 @@ static Texture_t* GetCharacterPortraitTexture(const AlterEgo::Character& ch) {
             std::ifstream ifs(fspath, std::ios::binary | std::ios::ate);
             if (ifs.is_open()) {
                 auto sz = ifs.tellg();
-                if (sz > 0) {
+                if (sz > 0 && sz <= 32*1024*1024) {
                     std::vector<uint8_t> buf((size_t)sz);
                     ifs.seekg(0);
                     ifs.read(reinterpret_cast<char*>(buf.data()), sz);
@@ -15669,7 +15665,6 @@ static void RenderCharactersStatusRow() {
     namespace S=AlterEgo::CharacterScopes;
     namespace R=AlterEgo::RefreshStatus;
     const auto demand=S::Visible(g_SelectedTab);
-    AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName);
     if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
     const auto active=AlterEgo::CharacterActivity::ActiveKey();
     if(!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&(!selected||selected->name!=active.second)){
@@ -15704,7 +15699,6 @@ static void RenderCharactersStatusRow() {
 }
 
 static void RenderCompareStatusRow() {
-    AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName);
     const auto charsSnapshot=AlterEgo::GW2API::GetCharacters();
     const AlterEgo::Character* target=nullptr;
     for(const auto& ch:*charsSnapshot)if(MatchesSelection(g_LibCompareRenderedSelection,ch)){
@@ -16108,6 +16102,11 @@ void AddonRender() {
         }
     }
     ObserveCharacterActivity(); // local only, no character HTTP while hidden
+    for(const auto& notice:AlterEgo::NativeAccounts::TakeRenameNotices())
+        if(APIDefs&&notice.before!=notice.after){
+            const auto message="Character renamed: "+notice.before+" -> "+notice.after+". Preferences preserved.";
+            APIDefs->GUI_SendAlert(message.c_str());
+        }
     // No host callback or inbox lock is held while decoding, fetching or drawing.
     for(const auto& input:g_ChatBuildInbox.Take())HandleChatBuildInput(input);
     // Explicit Pie clicks take precedence over automatic notifications.
@@ -16411,8 +16410,9 @@ void AddonRender() {
                         g_SelectedEquipTab = 0;
                         g_SelectedBuildTab = -1;
                         // Refresh portrait detection for this character
-                        s_portraitPathCache.erase(ch.name);
-                        s_portraitMissing.erase(ch.name);
+                        if(const auto stem=CharacterPortraitStem(ch);!stem.empty()){
+                            s_portraitPathCache.erase(stem);s_portraitMissing.erase(stem);
+                        }
                     }
 
                     // Context actions resolve against the right-clicked character, not
@@ -16420,6 +16420,8 @@ void AddonRender() {
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
                         CopyNameMenuItem(ch.name);
+                        if(const auto stem=CharacterPortraitStem(ch);!stem.empty())
+                            CopyNameMenuItem(stem,"Copy Portrait Filename");
                         RenderCharacterLoadMenu("Load Character",ch.name,ch.account_name);
                         if(const auto* loadout=CharacterContextLoadout(ch)){
                             ImGui::Separator();RenderCharacterLoadoutContext(ch,loadout,false);ImGui::Separator();
@@ -17167,8 +17169,6 @@ void AddonRender() {
             g_MainTab=7;
             ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
             TickCharacterLoad();
-            if(AlterEgo::NativeAccounts::InventorySubview()==0)
-                AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName,true);
             AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings,g_InventoryListWidth);
             ImGui::EndChild();
             AlterEgo::NativeAccounts::RenderInventoryStatusRow(g_SelectedAccountFilter);
@@ -17289,6 +17289,11 @@ void AddonRender() {
             s_previousVisibleMainTab = g_MainTab;
         }
         ImGui::EndTabBar();
+        // Live identity discovery is visible-window demand, independent of
+        // which page is open. Retain the existing opt-in and retry gate.
+        if(g_MainTab==7&&AlterEgo::NativeAccounts::InventorySubview()==0)
+            AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName,true);
+        AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName);
 
         if(inventoryMenu.requestOpen)ImGui::OpenPopup("Inventory menu##ae_main");
         ImGui::SetNextWindowPos(inventoryMenu.anchor,ImGuiCond_Appearing);

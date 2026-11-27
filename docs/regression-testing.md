@@ -323,3 +323,5 @@ Portable history regression covers two owners of one name, pending round-trip, u
 Stable custom order fixtures exercise transactional account-local ranks, portable round-trip and idempotent adoption; live verify drag/drop, roster rename/replacement, partial visibility, ordering parity across all character consumers and portable restore. Name-only legacy order remains archived for explicit recovery.
 
 Inventory identity fixtures cover account separation, unresolved nonempty filters, rename/replacement, credential and binding fencing of explicit refresh targets, and stable group keys across a rename. Live verify a rename while Inventory, Characters and Compare are open, including temporarily missing cache rows.
+
+Identity presentation fixtures cover rename notification generation and startup/replay suppression, stable portrait filenames across renames, different evidence, and rejection of unsafe account path components. Live acceptance includes rename while another main page is visible, portrait file replacement and rename during temporary API propagation. Legacy name-only portrait files are preserved but not automatically associated.

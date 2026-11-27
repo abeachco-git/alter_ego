@@ -55,6 +55,7 @@ std::optional<CharacterIdentity::Address> EnsureCharacterAddress(const LinkedAcc
 bool VerifyCharacterAddress(const LinkedAccount& account,const CharacterIdentity::Address& address);
 void RecoverCharacterAddress(const LinkedAccount& account,const CharacterIdentity::Address& address);
 void PollObservedIdentity(const std::string& name,bool inventory=false);
+std::vector<CharacterIdentity::RenameNotice> TakeRenameNotices();
 void AdoptPendingLoginHistory();
 CharacterOrder::RanksByRef CustomOrderRanks();
 uint64_t CustomOrderRevision();

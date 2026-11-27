@@ -51,6 +51,7 @@ bool groupRevealPending=false;
 std::set<uint32_t> walletPins;
 std::string root;
 std::mutex viewMutex,publishMutex,credentialMutex;
+std::vector<CharacterIdentity::RenameNotice> renameNotices; // viewMutex; consumed outside locks on render thread
 std::atomic<uint64_t> registryGeneration{1};
 std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
@@ -251,6 +252,18 @@ bool AdoptIdentity(const CharacterIdentity::State& state,
             std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
             CharacterActivity::State().FenceBindings(account,CharacterIdentity::CurrentBindings(state));
             CharacterActivity::State().AdoptPortableHistory(state);
+        }
+        // A successful cache adoption, not a raw roster change, authorizes
+        // a single live rename notification. Startup has no previous state.
+        const auto previous=identityStates.find(account);
+        if(previous!=identityStates.end()&&registryReady.load()){
+            const auto changes=CharacterIdentity::VerifiedRenames(previous->second,state);
+            std::lock_guard<std::mutex> lock(viewMutex);
+            for(const auto& change:changes){
+                const auto queued=std::find_if(renameNotices.begin(),renameNotices.end(),[&](const auto& n){return n.ref==change.ref;});
+                if(queued!=renameNotices.end())queued->after=change.after;
+                else if(renameNotices.size()<CharacterIdentity::MaxRoster)renameNotices.push_back(change);
+            }
         }
         identityStates[account]=state;
         identityRosterBlocked.erase(account);
@@ -1188,6 +1201,10 @@ bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names,bool veri
     if(!result.accepted||result.state.status!="Ready")return false;
     names=std::move(result.names);return true;
 }
+std::vector<CharacterIdentity::RenameNotice> TakeRenameNotices(){
+    std::lock_guard<std::mutex> lock(viewMutex);
+    std::vector<CharacterIdentity::RenameNotice> out;out.swap(renameNotices);return out;
+}
 void PollObservedIdentity(const std::string& name,bool inventory){
     using D=AutoRefreshPolicy::Dataset;
     static CharacterIdentity::DiscoveryGate discovery;
@@ -1331,7 +1348,7 @@ void Shutdown(){
     // Called only after managed workers join.
     registryReady=false;++registryGeneration;physicalCache.clear();rosterCache.clear();
     identityStates.clear();identityRosterBlocked.clear();identityProofs.clear();identityConfirmation.clear();identityRecoveryAttempts.clear();
-    std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();++loadoutPreferenceRevision;message.clear();root.clear();
+    std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();++loadoutPreferenceRevision;customOrder=std::make_shared<CharacterOrder::OrderProjection>();++customOrderRevision;renameNotices.clear();message.clear();root.clear();
 }
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
 std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}
