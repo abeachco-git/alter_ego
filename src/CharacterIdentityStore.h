@@ -38,6 +38,10 @@ UPDATE character_identities SET binding_revision=(SELECT revision FROM character
 CREATE TABLE character_identity_roster_state(account TEXT PRIMARY KEY REFERENCES character_identity_state(account) ON DELETE CASCADE,attempted INTEGER NOT NULL CHECK(attempted>0),success INTEGER NOT NULL CHECK(success>=attempted)) STRICT;
 CREATE TABLE character_identity_roster(account TEXT NOT NULL REFERENCES character_identity_roster_state(account) ON DELETE CASCADE,name TEXT NOT NULL,PRIMARY KEY(account,name)) STRICT;
 )SQL");
+        else if(version==6)c.Exec(R"SQL(
+CREATE TABLE character_loadout_preferences(account TEXT NOT NULL,local_id INTEGER NOT NULL,mode INTEGER NOT NULL CHECK(mode IN (1,2)),loadout_id TEXT NOT NULL,CHECK((mode=1 AND loadout_id='') OR (mode=2 AND length(loadout_id)>0)),PRIMARY KEY(account,local_id),FOREIGN KEY(account,local_id) REFERENCES character_identities(account,local_id) ON DELETE CASCADE) STRICT;
+CREATE TABLE character_loadout_pending(account TEXT NOT NULL,name TEXT NOT NULL,created TEXT NOT NULL,profession TEXT NOT NULL,race TEXT NOT NULL,mode INTEGER NOT NULL CHECK(mode IN (1,2)),loadout_id TEXT NOT NULL,CHECK((mode=1 AND loadout_id='') OR (mode=2 AND length(loadout_id)>0)),resolved INTEGER NOT NULL DEFAULT 0 CHECK(resolved IN (0,1)),PRIMARY KEY(account,name,created,profession,race,mode,loadout_id)) STRICT;
+)SQL");
     });
 }
 // Caller owns a consistent transaction or serial account-registry access.

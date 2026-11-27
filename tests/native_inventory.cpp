@@ -1,4 +1,5 @@
 #include "../src/CharacterIdentityStore.h"
+#include "../src/CharacterPreferenceStore.h"
 #include "../src/CharacterIdentityCache.h"
 #include "../src/CharacterActivity.h"
 #include "../src/NativeInventoryStore.h"
@@ -33,7 +34,7 @@ int case_native_inventory(int,char**){
                 conn.Exec("INSERT INTO accounts VALUES('A','Example.1234','','[]')");
             });
             CI::InitializeAccountRegistry(db);
-            assert(db.Scalar("PRAGMA user_version")==5&&db.Scalar("SELECT count(*) FROM accounts")==1);
+            assert(db.Scalar("PRAGMA user_version")==Storage::kAccountRegistrySchemaVersion&&db.Scalar("SELECT count(*) FROM accounts")==1);
             auto initial=CI::Commit(db,"A",0,{"Alice","Bob"},{{"Alice",a},{"Bob",b}});
             assert(initial&&*initial&&initial->changes.size()==2);
             alice=initial->next.Current("Alice")->id;bob=initial->next.Current("Bob")->id;
@@ -99,6 +100,108 @@ int case_native_inventory(int,char**){
         assert(CI::Creation("2015-02-03T04:05:06.000Z")==CI::Creation(a.created));
         assert(CI::Creation("2024-02-29T00:00:00Z")&&!CI::Creation("2023-02-29T00:00:00Z"));
         assert(!CI::Creation("2015-02-03")&&!CI::Creation("2015-02-03T24:00:00Z"));
+        std::filesystem::remove_all(root);
+    }
+    // A populated v2 identity registry must survive v3-v6 migrations.
+    {
+        namespace CI=AlterEgo::CharacterIdentity;
+        namespace CL=AlterEgo::CharacterLoadout;
+        const auto root=std::filesystem::temp_directory_path()/("ae-preferences-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        const auto path=(root/"accounts.db").string();
+        const CI::Evidence a{"2015-02-03T04:05:06Z","Necromancer","Asura"},
+            b{"2020-01-02T03:04:05Z","Engineer","Human"},c{"2026-01-02T03:04:05Z","Necromancer","Asura"};
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Create);
+            Database::Migrate(db,Storage::kAccountRegistryApplicationId,2,[](Database::Connection& conn,int version){
+                if(version==1)conn.Exec("CREATE TABLE accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,label TEXT NOT NULL,permissions TEXT NOT NULL) STRICT");
+                else conn.Exec(R"SQL(
+CREATE TABLE character_identity_state(account TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>=0),next_id INTEGER NOT NULL CHECK(next_id>0)) STRICT;
+CREATE TABLE character_identities(account TEXT NOT NULL REFERENCES character_identity_state(account) ON DELETE CASCADE,local_id INTEGER NOT NULL CHECK(local_id>0),created TEXT NOT NULL,profession TEXT NOT NULL,race TEXT NOT NULL,name TEXT NOT NULL,present INTEGER NOT NULL CHECK(present IN (0,1)),PRIMARY KEY(account,local_id),UNIQUE(account,created,profession,race)) STRICT;
+CREATE UNIQUE INDEX character_identity_current_name ON character_identities(account,name) WHERE present=1;
+CREATE TABLE character_identity_names(account TEXT NOT NULL,local_id INTEGER NOT NULL,name TEXT NOT NULL,PRIMARY KEY(account,local_id,name),FOREIGN KEY(account,local_id) REFERENCES character_identities(account,local_id) ON DELETE CASCADE) STRICT;
+INSERT INTO accounts VALUES('A','Account.1234','','[]');
+INSERT INTO character_identity_state VALUES('A',7,2);
+INSERT INTO character_identities VALUES('A',1,'2015-02-03T04:05:06Z','Necromancer','Asura','Alice',1);
+INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',1,'Former Alice');
+)SQL");
+            });
+            CI::InitializeAccountRegistry(db);
+            const auto migrated=CI::Read(db,"A");
+            assert(migrated.revision==7&&migrated.Current("Alice")->id==1&&migrated.Current("Alice")->bindingRevision==7);
+            assert(migrated.Current("Alice")->names.count("Former Alice"));
+            const CI::Ref alice{"A",1};
+            const CL::Choice explicitChoice{CL::Mode::Explicit,"loadout-a"},none{CL::Mode::None,{}};
+            const CL::PortableChoice legacy{"A","Former Alice",{},none};
+            const CL::PortableChoice portable{"A","Old name",a,explicitChoice};
+            assert(CL::DecodePortable(CL::EncodePortable({legacy,portable})).size()==2);
+            {
+                Database::Transaction tx(db);
+                CL::Stage(db,{legacy,portable});CL::AdoptPortable(db,migrated);tx.Commit();
+            }
+            assert(CL::ReadProjection(db).Get(alice)==explicitChoice);
+            assert(CL::ReadProjection(db).pending.count(legacy));
+            auto renamed=CI::Commit(db,"A",7,{"Renamed"},{{"Renamed",a}});
+            assert(renamed&&renamed->next.Current("Renamed")->id==alice.id);
+            assert(CL::ReadProjection(db).Get(alice)==explicitChoice);
+            {
+                Database::Transaction tx(db);
+                assert(CL::Recover(db,renamed->next,alice,legacy));
+                tx.Commit();
+            }
+            assert(CL::ReadProjection(db).Get(alice)==none);
+            // A failed transaction cannot consume a pending choice or
+            // overwrite the committed assignment.
+            const CL::PortableChoice conflict{"A","Renamed",a,explicitChoice};
+            {
+                Database::Transaction tx(db);CL::Stage(db,{conflict});CL::AdoptPortable(db,renamed->next);tx.Commit();
+            }
+            assert(CL::ReadProjection(db).pending.count(conflict));
+            {
+                Database::Transaction tx(db);
+                assert(CL::Recover(db,renamed->next,alice,conflict));
+                // deliberate rollback
+            }
+            assert(CL::ReadProjection(db).Get(alice)==none&&CL::ReadProjection(db).pending.count(conflict));
+            auto add=CI::Commit(db,"A",renamed->next.revision,{"Renamed","Alice"},{{"Renamed",a},{"Alice",b}});
+            assert(add&&add->next.Current("Alice")->id!=alice.id);
+            assert(CL::ReadProjection(db).Get({"A",add->next.Current("Alice")->id}).mode==CL::Mode::Automatic);
+            assert(CI::Commit(db,"B",0,{"Renamed"},{{"Renamed",a}}));
+            assert(CL::ReadProjection(db).Get({"B",1}).mode==CL::Mode::Automatic);
+            const auto exported=CL::ExportPortable(db);
+            assert(exported.count({"A","Renamed",a,none})&&exported.count(conflict));
+            // Replaying a consumed legacy migration never restores the old choice.
+            {
+                Database::Transaction tx(db);CL::Stage(db,{legacy,portable});tx.Commit();
+            }
+            assert(!CL::ReadProjection(db).pending.count(legacy));
+            assert(CL::ReadProjection(db).Get(alice)==none);
+            db.Exec("DELETE FROM accounts WHERE id='A'");
+        }
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Existing);
+            CI::InitializeAccountRegistry(db);
+            assert(CL::ReadProjection(db).Get({"A",1}).mode==CL::Mode::None);
+        }
+        // Three-way swap and bounded history must preserve stable IDs.
+        CI::State initial;initial.account="A";
+        auto first=CI::Reconcile(initial,{"Alice","Bob","Charlie"},{{"Alice",a},{"Bob",b},{"Charlie",c}});
+        assert(first.FullyResolved());
+        auto swapped=CI::Reconcile(first.next,{"Alice","Bob","Charlie"},{{"Alice",c},{"Bob",a},{"Charlie",b}});
+        assert(swapped.FullyResolved()&&swapped.next.Current("Bob")->id==first.next.Current("Alice")->id&&
+            swapped.next.Current("Charlie")->id==first.next.Current("Bob")->id&&swapped.next.Current("Alice")->id==first.next.Current("Charlie")->id);
+        CI::State full;full.account="A";full.initialized=true;full.revision=1;full.nextId=CI::MaxRecords+1;
+        for(size_t i=1;i<=CI::MaxRecords;++i){
+            const auto id=static_cast<CI::Id>(i);
+            const auto name="Historical "+std::to_string(i);
+            CI::Evidence evidence{std::to_string(2000+i)+"-01-01T00:00:00Z","Guardian","Human"};
+            full.records.emplace(id,CI::Record{id,evidence,name,i==1,{name},1});
+        }
+        auto& active=full.records.at(1);
+        for(size_t i=1;i<CI::MaxAliases;++i)active.names.insert("Alias "+std::to_string(i));
+        assert(CI::Valid(full));
+        auto bounded=CI::Reconcile(full,{"New","Renamed"},{{"New",a},{"Renamed",active.evidence}});
+        assert(bounded&&bounded.next.Current("Renamed")->id==1&&!bounded.next.Current("New")&&bounded.next.records.at(1).names.size()==CI::MaxAliases);
         std::filesystem::remove_all(root);
     }
     // Address fences and interrupted cache adoption use independent durable revisions.

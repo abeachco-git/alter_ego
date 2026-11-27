@@ -9,7 +9,7 @@
 
 namespace AlterEgo::Storage {
 inline constexpr int kAccountRegistryApplicationId=0x41454143;
-inline constexpr int kAccountRegistrySchemaVersion=5;
+inline constexpr int kAccountRegistrySchemaVersion=6;
 struct Paths {
     explicit Paths(const std::string& root) : base(std::filesystem::u8path(root)) {}
     std::filesystem::path base;
@@ -28,7 +28,7 @@ struct Paths {
 };
 inline bool ConfigName(const std::string& name) {
     return name=="settings.json" || name=="session.json" ||
-           name=="char_sort.json" || name=="clears_ui.json" || name=="character_activity.json";
+           name=="char_sort.json" || name=="clears_ui.json" || name=="character_activity.json" || name=="character_loadouts.json";
 }
 inline bool DurableName(const std::string& name) {
     return name=="ach_tracked.json" || name=="login_times.json" || name=="character_logins.json";

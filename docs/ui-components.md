@@ -230,6 +230,8 @@ For every new feature or context-menu audit that presents a character or charact
 
 ### Character Loadout expectation
 
+Expected Loadout choices follow verified character identity. Unresolved legacy choices are not applied by name. The existing selector context offers Recover Previous Assignment only for relevant pending records; selecting a named compatible Loadout or None explicitly associates it with the current character. Unverified character rows cannot save an assignment. No database read or network request occurs from hover/render.
+
 The compact Loadout dropdown in the Character header uses existing combo/option controls. Automatic recognizes a credible candidate; None suppresses recognition warnings; a saved Loadout selection remains the expectation across in-game tab changes. Right-click offers contextual Compare, Open in Library, Automatic and None; the Character context menu exposes the relevant target actions. The Character list displays high-level health only: single categories retain their label, multiple distinct build or equipment categories collapse to Check Build / Check Equipment, and aggregate infusion warnings stay independent. Detailed evidence and expected/matched distinction are available through tooltips and Compare. Other entity selectors use the shared opt-in context controls; tooltip presentation follows the shared conventions below.
 
 ### Tooltip presentation

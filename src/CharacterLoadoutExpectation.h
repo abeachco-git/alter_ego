@@ -18,7 +18,7 @@ inline bool ValidKey(const Key& k){
     return !k.first.empty()&&!k.second.empty()&&k.first.size()<=256&&k.second.size()<=256;
 }
 inline bool ValidChoice(const Choice& c){
-    return c.mode==Mode::Explicit?!c.id.empty()&&c.id.size()<=1024:c.id.empty();
+    return c.mode==Mode::Explicit?!c.id.empty()&&c.id.size()<=1024:(c.mode==Mode::Automatic||c.mode==Mode::None)&&c.id.empty();
 }
 class Preferences {
     std::map<Key,Choice> rows;

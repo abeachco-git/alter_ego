@@ -10,6 +10,7 @@
 #include "NativeLibraryPortable.h"
 #include "ComposableLoadouts.h"
 #include "CharacterActivity.h"
+#include "CharacterPreferenceStore.h"
 #include <nlohmann/json.hpp>
 #include <ctime>
 #include <filesystem>
@@ -29,7 +30,7 @@ using FileMap = BackupZip::Entries;
 inline bool IsOtherJson(const std::string& name) {
     static const std::set<std::string> names = {
         "settings.json", "session.json", "char_sort.json",
-        "ach_tracked.json", "login_times.json", "character_logins.json", "clears_ui.json"};
+        "ach_tracked.json", "login_times.json", "character_logins.json", "character_loadouts.json", "clears_ui.json"};
     return names.count(name) != 0;
 }
 inline bool EndsWithIgnoreCase(std::string value, std::string suffix) {
@@ -99,6 +100,10 @@ inline bool ValidateCollection(const std::string& name, const std::string& bytes
         error = name + ": invalid JSON: " + e.what(); return false;
     }
     if (!j.is_object()) { error = name + ": expected a JSON object."; return false; }
+    if(name=="character_loadouts.json"){
+        try{count=CharacterLoadout::DecodePortable(j).size();return true;}
+        catch(const std::exception& e){error=name+": "+e.what();return false;}
+    }
     if(name=="character_logins.json"){
         try{count=CharacterActivity::DecodeLoginHistory(j).size();return true;}
         catch(const std::exception& e){error=name+": "+e.what();return false;}
@@ -188,6 +193,31 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
                 CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(pending)));
             if(!logins.empty())files["character_logins.json"]=CharacterActivity::EncodeLoginHistory(logins).dump(2);
         }catch(const std::exception& e){error=std::string("Cannot export login history: ")+e.what();return false;}
+        // Export only portable preferences, never the account registry or
+        // credentials. Local numeric IDs are not installation-independent.
+        try{
+            CharacterLoadout::PortableChoices preferences;
+            const auto accountDb=Storage::Paths(dir).Accounts();
+            if(std::filesystem::exists(accountDb)){
+                Database::Connection db(accountDb.u8string(),Database::Connection::OpenMode::ReadOnly);
+                const auto version=db.Scalar("PRAGMA user_version");
+                if(db.Scalar("PRAGMA application_id")!=Storage::kAccountRegistryApplicationId||
+                    version<1||version>Storage::kAccountRegistrySchemaVersion)
+                    throw std::runtime_error("Invalid account registry");
+                if(version>=6){
+                    db.Exec("BEGIN");
+                    preferences=CharacterLoadout::ExportPortable(db);
+                    db.Exec("COMMIT");
+                }
+            }
+            std::string pending;
+            if(!ReadExisting(dir,"character_loadouts.json",pending,error))return false;
+            if(!pending.empty()){
+                const auto records=CharacterLoadout::DecodePortable(Untrusted::Parse(pending,Untrusted::Library));
+                preferences.insert(records.begin(),records.end());
+            }
+            if(!preferences.empty())files["character_loadouts.json"]=CharacterLoadout::EncodePortable(preferences).dump(2);
+        }catch(const std::exception& e){error=std::string("Cannot export character Loadout preferences: ")+e.what();return false;}
         for (const auto& subfolder : {"portraits", "fonts"}) {
             const auto folder = std::filesystem::u8path(dir) / subfolder;
             std::error_code ec;
@@ -264,6 +294,7 @@ inline std::string DetectOtherJsonType(const nlohmann::json& j) {
     // Individual backups may have been manually renamed. Prefer unmistakable
     // structural markers before falling back to the historical filename.
     if(j.value("format",std::string())=="alter_ego_character_logins")return "character_logins.json";
+    if(j.value("format",std::string())=="alter_ego_character_loadouts")return "character_loadouts.json";
     if (j.contains("show_qa_icon") || j.contains("auto_refresh_enabled") ||
         j.contains("font")) return "settings.json";
     if (j.contains("pinned") && j["pinned"].is_array()) return "ach_tracked.json";
@@ -388,6 +419,18 @@ inline bool Prepare(const std::string& dir, const Package& package,
     }
     for(const auto& [name,bytes]:package.files) {
         if(!(selected&Other)||GroupForName(name)!=Other)continue;
+        if(name=="character_loadouts.json"){
+            try{
+                auto preferences=CharacterLoadout::DecodePortable(Untrusted::Parse(bytes,Untrusted::Library));
+                std::string pending;if(!ReadExisting(dir,name,pending,error))return false;
+                if(!pending.empty()){
+                    const auto records=CharacterLoadout::DecodePortable(Untrusted::Parse(pending,Untrusted::Library));
+                    preferences.insert(records.begin(),records.end());
+                }
+                plan.writeFiles[name]=CharacterLoadout::EncodePortable(preferences).dump(2);++plan.otherWritten;
+            }catch(const std::exception& e){error=std::string("Cannot import character Loadout preferences: ")+e.what();return false;}
+            continue;
+        }
         if(name=="character_logins.json"){
             // Preserve even pending history if another restore is applied before
             // its durable activity-ledger write succeeds.

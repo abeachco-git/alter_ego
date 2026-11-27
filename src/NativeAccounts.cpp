@@ -36,6 +36,7 @@ struct View {
     std::vector<Account> accounts;Projection inventory;
     uint64_t credentialEpoch=1;
     std::map<std::string,CharacterIdentity::Bindings> bindings;
+    std::map<CharacterIdentity::Ref,std::set<std::string>> aliases;
     std::map<uint32_t,std::vector<size_t>> index;
     std::map<std::tuple<std::string,std::string,std::string>,ScopeState> scopes;
 };
@@ -51,6 +52,8 @@ std::mutex viewMutex,publishMutex,credentialMutex;
 std::atomic<uint64_t> registryGeneration{1};
 std::atomic<bool> registryReady{false};
 std::shared_ptr<const View> view=std::make_shared<View>();
+std::shared_ptr<const CharacterLoadout::Projection> loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();
+std::atomic<uint64_t> loadoutPreferenceRevision{0};
 std::atomic<bool> busy{false};
 std::mutex physicalMutex,rosterMutex;
 struct PhysicalEntry {uint64_t epoch=0;PhysicalEquipmentResult value;std::chrono::steady_clock::time_point finished{};CharacterIdentity::Binding binding;};
@@ -148,6 +151,23 @@ bool SaveKey(const std::string& id,const std::string& key){
 }
 std::filesystem::path AccountPath(){return Storage::Paths(root).Accounts();}
 void InitAccounts(Database::Connection& db){CharacterIdentity::InitializeAccountRegistry(db);}
+std::shared_ptr<const CharacterLoadout::Projection> PreferenceSnapshot(){
+    std::lock_guard<std::mutex> lock(viewMutex);return loadoutPreferences;
+}
+void PublishPreferences(std::shared_ptr<const CharacterLoadout::Projection> next){
+    std::lock_guard<std::mutex> lock(viewMutex);loadoutPreferences=std::move(next);++loadoutPreferenceRevision;
+}
+// Caller holds the credential gate; no transport or callbacks. Only
+// evidence-qualified pending records are eligible for automatic adoption.
+void RefreshLoadoutPreferences(){
+    if(!std::filesystem::exists(AccountPath()))return;
+    Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+    Database::Transaction tx(db);
+    for(const auto& [account,state]:identityStates)
+        if(!identityRosterBlocked.count(account))CharacterLoadout::AdoptPortable(db,state);
+    auto next=std::make_shared<CharacterLoadout::Projection>(CharacterLoadout::ReadProjection(db));
+    tx.Commit();PublishPreferences(std::move(next));
+}
 // Credential gate is already held. Bootstrap only once, using exact GUID
 // and independently verified cached core data. Never replay old cache
 // evidence over an initialized durable registry.
@@ -222,6 +242,12 @@ bool AdoptIdentity(const CharacterIdentity::State& state,
         }
         identityStates[account]=state;
         identityRosterBlocked.erase(account);
+        // Preferences never make authenticated cache adoption fail.
+        try{
+            const auto pending=PreferenceSnapshot();
+            if(std::any_of(pending->pending.begin(),pending->pending.end(),[&](const auto& p){return p.account==account&&p.HasEvidence();}))
+                RefreshLoadoutPreferences();
+        }catch(...){}
         return true;
     }catch(...){
         InvalidateIdentityProjection(account,{},true);
@@ -243,7 +269,12 @@ void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State st
     std::lock_guard<std::mutex> serial(publishMutex);
     auto next=std::make_shared<View>();next->credentialEpoch=registryGeneration.load();next->accounts=Accounts();next->inventory=Read(root);
     for(const auto& [account,state]:identityStates)
-        if(!identityRosterBlocked.count(account))next->bindings.emplace(account,CharacterIdentity::CurrentBindings(state));
+        if(!identityRosterBlocked.count(account)){
+            next->bindings.emplace(account,CharacterIdentity::CurrentBindings(state));
+            for(const auto& [id,r]:state.records)if(state.Current(r.name)==&r){
+                auto names=r.names;names.insert(r.name);next->aliases.emplace(CharacterIdentity::Ref{account,id},std::move(names));
+            }
+        }
     // Preserve the raw roster for native Fast Load. Filter only cache rows.
     FilterIdentityView(*next);
     std::lock_guard<std::mutex> lock(viewMutex);view=std::move(next);++inventoryGeneration;if(replaceMessage){message=msg;messageState=state;}registryReady=true;
@@ -827,6 +858,54 @@ std::optional<CharacterIdentity::Address> ResolveObservedCharacter(const std::st
     if(b==it->second.end())return std::nullopt;
     return CharacterIdentity::Address{account,name,b->second,v->credentialEpoch};
 }
+CharacterLoadout::Choice ExpectedLoadout(const CharacterIdentity::Ref& ref){return PreferenceSnapshot()->Get(ref);}
+uint64_t LoadoutPreferenceRevision(){return loadoutPreferenceRevision.load();}
+bool StageLoadoutPreferences(const CharacterLoadout::PortableChoices& records){
+    if(records.empty())return true;
+    try{
+        std::lock_guard<std::mutex> gate(credentialMutex);
+        if(root.empty())return false;
+        std::filesystem::create_directories(AccountPath().parent_path());
+        Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Create);InitAccounts(db);
+        Database::Transaction tx(db);CharacterLoadout::Stage(db,records);
+        for(const auto& [account,state]:identityStates)
+            if(!identityRosterBlocked.count(account))CharacterLoadout::AdoptPortable(db,state);
+        auto next=std::make_shared<CharacterLoadout::Projection>(CharacterLoadout::ReadProjection(db));
+        tx.Commit();PublishPreferences(std::move(next));return true;
+    }catch(...){return false;}
+}
+bool SetExpectedLoadout(const CharacterIdentity::Address& address,const CharacterLoadout::Choice& choice){
+    try{return CommitIfCharacterCurrent(FindLinked(address.account),address,[&]{
+        Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+        Database::Transaction tx(db);
+        if(!CharacterLoadout::SaveChoice(db,address.Reference(),choice))return false;
+        auto next=std::make_shared<CharacterLoadout::Projection>(CharacterLoadout::ReadProjection(db));
+        tx.Commit();PublishPreferences(std::move(next));return true;
+    });}catch(...){return false;}
+}
+CharacterLoadout::PortableChoices RecoverableLoadoutPreferences(const CharacterIdentity::Address& address){
+    CharacterLoadout::PortableChoices out;
+    const auto current=ResolveCharacterAddress(address.Reference());
+    if(!current||current->binding!=address.binding||current->name!=address.name)return out;
+    const auto v=Snapshot();const auto aliases=v->aliases.find(address.Reference());
+    const auto preferences=PreferenceSnapshot();
+    for(const auto& record:preferences->pending)if(record.account==address.account){
+        if(record.HasEvidence()?record.evidence==address.binding.evidence:
+           (record.name==address.name||(aliases!=v->aliases.end()&&aliases->second.count(record.name))))
+            out.insert(record);
+    }
+    return out;
+}
+bool RecoverLoadoutPreference(const CharacterIdentity::Address& address,const CharacterLoadout::PortableChoice& record){
+    try{return CommitIfCharacterCurrent(FindLinked(address.account),address,[&]{
+        Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+        Database::Transaction tx(db);
+        const auto it=identityStates.find(address.account);
+        if(it==identityStates.end()||!CharacterLoadout::Recover(db,it->second,address.Reference(),record))return false;
+        auto next=std::make_shared<CharacterLoadout::Projection>(CharacterLoadout::ReadProjection(db));
+        tx.Commit();PublishPreferences(std::move(next));return true;
+    });}catch(...){return false;}
+}
 bool Current(const LinkedAccount& a){
     if(a.id.empty()||a.generation!=registryGeneration.load())return false;
     auto v=Snapshot();
@@ -1147,6 +1226,7 @@ void Initialize(const std::string& directory){
                 else{identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
             }catch(...){identityRosterBlocked.insert(account.id);InvalidateIdentityProjection(account.id,{},true);}
         }
+        try{RefreshLoadoutPreferences();}catch(...){}
         Publish("");
     }catch(...){
         GW2API::DiscardIdentityCache("",{},true);registryReady=false;
@@ -1156,7 +1236,7 @@ void Shutdown(){
     // Called only after managed workers join.
     registryReady=false;++registryGeneration;physicalCache.clear();rosterCache.clear();
     identityStates.clear();identityRosterBlocked.clear();identityProofs.clear();identityConfirmation.clear();identityRecoveryAttempts.clear();
-    std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();message.clear();root.clear();
+    std::lock_guard<std::mutex> lock(viewMutex);view=std::make_shared<View>();loadoutPreferences=std::make_shared<CharacterLoadout::Projection>();++loadoutPreferenceRevision;message.clear();root.clear();
 }
 bool HasLinkedAccounts(){return !Snapshot()->accounts.empty();}
 std::string VerifiedAccountForCharacter(const std::string& character){return Active(*Snapshot(),character);}

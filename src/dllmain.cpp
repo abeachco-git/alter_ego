@@ -1222,6 +1222,13 @@ std::vector<std::string> OrderedCharacterAccounts(){
         if(acct.name!=current)out.push_back(acct.name);
     return out;
 }
+// A stale cached character row must never resolve to a new owner of its name.
+static std::optional<AlterEgo::CharacterIdentity::Address> CharacterAddressFor(const AlterEgo::Character& ch){
+    const auto address=AlterEgo::NativeAccounts::ResolveCharacterAddress(ch.account_name,ch.name);
+    const auto evidence=AlterEgo::CharacterIdentity::Normalize({ch.created,ch.profession,ch.race});
+    if(!address||!evidence||!(address->binding.evidence==*evidence))return std::nullopt;
+    return address;
+}
 static AlterEgo::CharacterOrder::Entry CharacterOrderEntry(const AlterEgo::Character& ch){
     return {{ch.account_name,ch.name},ch.profession,ch.created,ch.level,
         g_CharSortMode==Sort_Birthday?DaysUntilBirthday(ch.created):-1,CharacterLastLogin(ch)};
@@ -1437,8 +1444,8 @@ static nlohmann::json CaptureFormSnapshot(){
 static std::string g_LibCompareBuildId;
 static std::string g_LibCompareChar; // empty = active character (auto)
 static std::string g_LibCompareAccount,g_LibComparePreviousAccount;
-static AlterEgo::CharacterLoadout::Preferences g_CharacterLoadoutPreferences;
-static uint64_t g_CharacterLoadoutRevision=0;
+// Retained only until legacy settings have been transactionally staged.
+static nlohmann::json g_LegacyLoadoutExpectations=nlohmann::json::array();
 static bool g_LibCompareSavedManual = false;
 static std::string g_LibComparePreviousTarget;
 static int g_LibCompareBuildTab = -1;    // -1 follows active build tab
@@ -1632,7 +1639,7 @@ void CopyToClipboard(const std::string& text) {
 static bool SaveSettings() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "settings.json");
     nlohmann::json j;
-    j["character_loadout_expectations"]=g_CharacterLoadoutPreferences.Encode();
+    if(!g_LegacyLoadoutExpectations.empty())j["character_loadout_expectations"]=g_LegacyLoadoutExpectations;
     j["show_qa_icon"] = g_ShowQAIcon;
     j["compact_char_list"] = g_CompactCharList;
     j["fast_load_mode"] = AlterEgo::FastLoadUI::ModeName(g_FastLoadMode);
@@ -1686,8 +1693,14 @@ static void LoadSettings() {
     auto getFloat = [&](const char* k, float& dst) {
         if (j.contains(k) && j[k].is_number()) dst = j[k].get<float>();
     };
-    if(j.contains("character_loadout_expectations"))
-        g_CharacterLoadoutPreferences.Decode(j["character_loadout_expectations"]);
+    g_LegacyLoadoutExpectations=nlohmann::json::array();
+    if(j.contains("character_loadout_expectations")){
+        g_LegacyLoadoutExpectations=j["character_loadout_expectations"];
+        try{
+            if(AlterEgo::NativeAccounts::StageLoadoutPreferences(AlterEgo::CharacterLoadout::LegacyChoices(g_LegacyLoadoutExpectations)))
+                g_LegacyLoadoutExpectations=nlohmann::json::array();
+        }catch(...){/* keep original input for recovery */}
+    }
     getBool("show_qa_icon", g_ShowQAIcon);
     getBool("compact_char_list", g_CompactCharList);
     if(j.contains("fast_load_mode")&&j["fast_load_mode"].is_string())
@@ -1753,6 +1766,20 @@ static void LoadSettings() {
             if(std::isfinite(size))g_FontConfig.px=static_cast<float>(std::max(10.0,std::min(32.0,size)));
         }
     }
+}
+
+// Portable restores are staged separately from ordinary settings saves. The
+// registry is authoritative; a stale settings file cannot reapply a choice.
+static void ImportPortableLoadoutPreferences(){
+    const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_loadouts.json");
+    try{
+        std::ifstream file(std::filesystem::u8path(path),std::ios::binary);if(!file)return;
+        const std::string bytes((std::istreambuf_iterator<char>(file)),{});file.close();
+        const auto records=AlterEgo::CharacterLoadout::DecodePortable(AlterEgo::Untrusted::Parse(bytes,AlterEgo::Untrusted::Library));
+        if(AlterEgo::NativeAccounts::StageLoadoutPreferences(records)){
+            std::error_code ec;std::filesystem::remove(std::filesystem::u8path(path),ec);
+        }
+    }catch(...){/* preserve pending file */}
 }
 
 // Character sort persistence
@@ -10765,23 +10792,19 @@ static const AlterEgo::SavedBuild* FindCompatibleLoadout(const AlterEgo::Charact
 }
 static AlterEgo::CharacterLoadout::Choice ExpectedLoadout(const AlterEgo::Character& ch){
     using namespace AlterEgo::CharacterLoadout;
-    if(!ValidKey({ch.account_name,ch.name}))return {};
-    return Resolve(g_CharacterLoadoutPreferences.Get({ch.account_name,ch.name}),[&](const auto& id){
+    const auto address=CharacterAddressFor(ch);
+    if(!address)return {};
+    return Resolve(AlterEgo::NativeAccounts::ExpectedLoadout(address->Reference()),[&](const auto& id){
         return FindCompatibleLoadout(ch,id)!=nullptr;
     });
 }
 static void SetExpectedLoadout(const AlterEgo::Character& ch,const AlterEgo::CharacterLoadout::Choice& choice){
-    const auto key=std::make_pair(ch.account_name,ch.name);
-    const auto old=g_CharacterLoadoutPreferences.Get(key);
-    if(old==choice)return;
+    const auto address=CharacterAddressFor(ch);
+    if(!address){if(APIDefs)APIDefs->GUI_SendAlert("Character identity unavailable. Refresh and try again.");return;}
+    if(AlterEgo::NativeAccounts::ExpectedLoadout(address->Reference())==choice)return;
     if(choice.mode==AlterEgo::CharacterLoadout::Mode::Explicit&&!FindCompatibleLoadout(ch,choice.id))return;
-    if(!g_CharacterLoadoutPreferences.Set(key,choice))return;
-    if(!SaveSettings()){
-        g_CharacterLoadoutPreferences.Set(key,old);
+    if(!AlterEgo::NativeAccounts::SetExpectedLoadout(*address,choice))
         if(APIDefs)APIDefs->GUI_SendAlert("Could not save Loadout assignment.");
-        return;
-    }
-    ++g_CharacterLoadoutRevision;
 }
 struct RankedRecognition {
     std::string candidateId,matchedId;
@@ -10825,11 +10848,12 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch(const AlterEgo::C
     static std::chrono::steady_clock::time_point updated{};
     const auto currentKey=std::make_pair(ch.account_name,ch.name);
     const auto cr=AlterEgo::GW2API::GetCharacterDataRevision(),lr=AlterEgo::GW2API::GetBuildLibraryRevision();
+    const auto ar=AlterEgo::NativeAccounts::LoadoutPreferenceRevision();
     const int bi=GetActiveBuildIndex(ch),et=GetActiveEquipmentTab(ch);
     const auto now=std::chrono::steady_clock::now();
-    if(key==currentKey&&charRevision==cr&&libraryRevision==lr&&assignmentRevision==g_CharacterLoadoutRevision&&
+    if(key==currentKey&&charRevision==cr&&libraryRevision==lr&&assignmentRevision==ar&&
         buildTab==bi&&equipTab==et&&now-updated<std::chrono::milliseconds(500))return cached;
-    key=currentKey;charRevision=cr;libraryRevision=lr;assignmentRevision=g_CharacterLoadoutRevision;
+    key=currentKey;charRevision=cr;libraryRevision=lr;assignmentRevision=ar;
     buildTab=bi;equipTab=et;updated=now;cached={};
     using Mode=AlterEgo::CharacterLoadout::Mode;
     const auto choice=ExpectedLoadout(ch);
@@ -10885,6 +10909,27 @@ static void RenderCharacterLoadoutContext(const AlterEgo::Character& ch,const Al
         using namespace AlterEgo::CharacterLoadout;
         if(MenuAction("Reset to Automatic",MenuIcon::Regenerate))SetExpectedLoadout(ch,{});
         if(MenuAction("None",MenuIcon::Detach))SetExpectedLoadout(ch,{Mode::None,{}});
+        if(const auto address=CharacterAddressFor(ch)){
+            const auto pending=AlterEgo::NativeAccounts::RecoverableLoadoutPreferences(*address);
+            if(!pending.empty()){
+                ImGui::Separator();
+                if(BeginActionMenu("Recover Previous Assignment",MenuIcon::Regenerate)){
+                    int index=0;
+                    for(const auto& record:pending){
+                        const auto* target=FindCompatibleLoadout(ch,record.choice.id);
+                        const bool available=record.choice.mode==Mode::None||target;
+                        std::string label=record.name+" / "+(record.choice.mode==Mode::None?"None":target?target->name:"Unavailable Loadout");
+                        ImGui::PushID(index++);
+                        if(MenuAction(label.c_str(),MenuIcon::Open,available,"The referenced Loadout is missing or incompatible.")){
+                            if(!AlterEgo::NativeAccounts::RecoverLoadoutPreference(*address,record)&&APIDefs)
+                                APIDefs->GUI_SendAlert("Could not recover Loadout assignment.");
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndMenu();
+                }
+            }
+        }
     }
 }
 static const AlterEgo::SavedBuild* CharacterContextLoadout(const AlterEgo::Character& ch){
@@ -10921,6 +10966,11 @@ static void CharacterSelectorActions(const std::string& name,const std::string& 
 static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
     using namespace AlterEgo::CharacterLoadout;
     if(!ValidKey({ch.account_name,ch.name}))return;
+    if(!CharacterAddressFor(ch)){
+        ImGui::TextDisabled("Loadout: Unavailable");
+        if(ImGui::IsItemHovered())AlterEgo::UI::DetailTooltip("Expected Loadout","Character identity is not verified yet.");
+        return;
+    }
     const auto choice=ExpectedLoadout(ch);
     const auto* assigned=FindCompatibleLoadout(ch,choice.id);
     const std::string preview=assigned?assigned->name:choice.mode==Mode::None?"None":"Automatic";
@@ -12274,6 +12324,7 @@ void AddonLoad(AddonAPI_t* aApi) {
 
     // Load settings, session, and cached data
     LoadSettings();
+    ImportPortableLoadoutPreferences();
     AlterEgo::AutoRefreshPolicy::SetEnabled(g_AutoRefreshEnabled);
     LoadSession();
     // Restore the selected account's achievement progress during addon startup.

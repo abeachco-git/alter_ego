@@ -46,6 +46,19 @@ int case_library_backup(int, char**) {
     history.Observe(hero.first,hero.second,34,true,2000);
     history.Begin(hero,"Bags",2010);
     Put(FilePath(src,"character_activity.json"),history.Save().dump());
+    const CharacterIdentity::Evidence creation{"2015-02-03T04:05:06Z","Warrior","Human"};
+    const CharacterLoadout::PortableChoice preference{hero.first,hero.second,creation,{CharacterLoadout::Mode::Explicit,"build-a"}};
+    {
+        const auto path=Storage::Paths(src).Accounts();
+        fs::create_directories(path.parent_path());
+        Database::Connection db(path.u8string(),Database::Connection::OpenMode::Create);
+        CharacterIdentity::InitializeAccountRegistry(db);
+        const auto registry=CharacterIdentity::Commit(db,hero.first,0,{hero.second},{{hero.second,creation}});
+        assert(registry&&*registry);
+        Database::Transaction tx(db);
+        assert(CharacterLoadout::SaveChoice(db,{hero.first,registry->next.Current(hero.second)->id},preference.choice));
+        tx.Commit();
+    }
     const std::string portrait("\x89PNG\r\n\0test", 11);
     Put(FilePath(src,"portraits/a.png"),portrait);
     std::string err;
@@ -59,6 +72,9 @@ int case_library_backup(int, char**) {
     assert(full.files.count("settings.json") == 1);
     assert(!full.files.count("character_activity.json"));
     assert(!full.files.count("accounts.db"));
+    const auto choices=CharacterLoadout::DecodePortable(nlohmann::json::parse(full.files.at("character_loadouts.json")));
+    assert(choices.size()==1&&choices.count(preference));
+    assert(!nlohmann::json::parse(full.files.at("character_loadouts.json")).at("entries")[0].contains("local_id"));
     assert(!Export(src,Builds,Storage::Paths(src).Library().u8string(),false,err));
     assert(!Export(src,Builds,(Storage::Paths(src).ConfigDirectory()/"settings.json").u8string(),false,err));
     assert(!Export(src,Builds,(Storage::Paths(src).Recovery()/"original.json").u8string(),false,err));
@@ -108,6 +124,7 @@ int case_library_backup(int, char**) {
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":false})");
     assert(Get(FilePath(dst,"portraits/a.png")) == portrait);
     assert(!Exists(FilePath(dst,"character_activity.json")));
+    assert(CharacterLoadout::DecodePortable(nlohmann::json::parse(Get(FilePath(dst,"character_loadouts.json")))).count(preference));
     assert(CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at(hero)==2000);
     Put(FilePath(dst,"character_logins.json"),CharacterActivity::EncodeLoginHistory({{hero,3000}}).dump());
 

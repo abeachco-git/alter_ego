@@ -6,11 +6,11 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 ## Approved character identity reconciliation
 
-- [ ] Part 7A follow-up verification: add populated pre-v4 registry migration, history-limit and multi-way swap fixtures.
+- [ ] Part 7A follow-up verification: extend populated registry migration to a direct v3 ambiguity fixture and exercise larger address-swap groups/live integration; populated v2, three-way swaps and history-limit fixtures are implemented.
 
 - [ ] Part 7B: verify live rename, same-name replacement, swap, missing/partial core, interrupted adoption and account isolation in the running addon; offline fixtures and build verification are tracked in development status. Preserve native Fast Load.
 
-- [ ] Part 7C (approved): finish shared identity-reference adoption, evidence-qualified portable login history, durable preference storage/recovery, Expected Loadout, custom ordering, session/navigation, Compare and capture targets, Inventory filters/group expansion, portraits and live notification. Activity ledger v2 isolates legacy history and projects bound gameplay history by stable ID; verify runtime build and unresolved-history recovery. Review unbound request admission and malformed core observations.
+- [ ] Part 7C (approved): finish evidence-qualified portable login history and contextual history recovery; migrate custom ordering, session/navigation, Compare and capture targets, Inventory filters/group expansion, portraits and live notification. Expected Loadout preferences use account registry schema v6 with pending legacy/portable recovery; verify live interaction and portable restore. Review unbound request admission and malformed core observations before changing request policy.
 - [ ] Part 7D: verified Library/Fashion associations and portable provenance; preserve original capture names and never infer ownership from historical name strings.
 - [ ] Part 7E: extend fixtures to live integration and interrupted adoption across stores, missing/partial API data, deletion/recreation, repeated rename, collisions, name reuse and swaps; no changes to native Fast Load internals.
 

@@ -8,6 +8,7 @@
 #include <optional>
 #include <nlohmann/json.hpp>
 #include "CharacterIdentityRuntime.h"
+#include "CharacterPreferenceStore.h"
 namespace AlterEgo::NativeAccounts {
 struct LinkedAccount {
     std::string id,name,label;
@@ -31,6 +32,12 @@ bool HasCharacterBinding(const std::string& account,const std::string& name);
 std::optional<CharacterIdentity::Address> ResolveCharacterAddress(const std::string& account,const std::string& name);
 std::optional<CharacterIdentity::Address> ResolveCharacterAddress(const CharacterIdentity::Ref& ref);
 std::optional<CharacterIdentity::Address> ResolveObservedCharacter(const std::string& name);
+CharacterLoadout::Choice ExpectedLoadout(const CharacterIdentity::Ref& ref);
+uint64_t LoadoutPreferenceRevision();
+bool SetExpectedLoadout(const CharacterIdentity::Address& address,const CharacterLoadout::Choice& choice);
+bool StageLoadoutPreferences(const CharacterLoadout::PortableChoices& records);
+CharacterLoadout::PortableChoices RecoverableLoadoutPreferences(const CharacterIdentity::Address& address);
+bool RecoverLoadoutPreference(const CharacterIdentity::Address& address,const CharacterLoadout::PortableChoice& record);
 bool Current(const LinkedAccount& account);
 // Worker-only final publication guard. Commit must not perform HTTP, call Nexus,
 // acquire the credential mutex again, or wait for another worker.
