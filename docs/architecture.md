@@ -29,6 +29,13 @@ eligibility. Map IDs are resolved from public API data in owned worker batches
 with session caching; only the row tooltip presents location. Neither map
 lookup nor hover performs synchronous HTTP or SQL. On an unsupported game
 build, loading fails closed; roster location availability is independent.
+The Nexus Fast Load preference controls UI admission only (Disabled, Enabled,
+Enabled with confirmation); missing settings preserve Enabled. Characters,
+Inventory and Compare use the same existing page-visible Tick and deferred
+Process handlers. Confirmation is scoped to the active identity, verified
+account and browsing account; cancellation never submits a native request.
+Disabled hides load actions but intentionally retains native roster sampling and
+location retrieval. No native memory or switch implementation is changed.
 
 ## Development safety and ownership
 

@@ -36,6 +36,8 @@ Previously approved program; the current intervals, coverage watermarks and owne
 
 ## Known defect / investigation
 
+- [ ] Part 6: verify approved Fast Load UI preference/confirmation, Compare processing and fallback picker, grouped Inventory targets and additional character context menus. Native memory scanning and switch implementation are protected; do not change their behavior. Disabling native roster sampling remains a separate unapproved design decision.
+
 - [ ] Intermittent Inventory/Skins row activation: user observed missed clicks with ArcDPS behind affected screen regions; narrowing search or navigating sometimes recovered selection. Shared pitch/hit-target corrections are implemented. Isolate host/overlay input routing by moving/hiding ArcDPS and reproducing in another Nexus window; no native-input bypass or speculative picker rewrite. Exact root cause remains unconfirmed.
 - [ ] Reported Windows Defender detection: investigate against exact tested DLL and detection details if reproduced; do not claim malware clearance from CI or clipboard refactoring.
 

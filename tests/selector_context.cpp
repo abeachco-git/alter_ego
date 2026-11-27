@@ -1,7 +1,25 @@
 #include "../src/UIControls.h"
+#include "../src/FastLoadUIState.h"
 #include <cassert>
 int case_selector_context(int, char**) {
     using namespace AlterEgo::UI;
+    using namespace AlterEgo::FastLoadUI;
+    assert(ParseMode("")==Mode::Enabled&&ParseMode("invalid")==Mode::Enabled);
+    for(auto mode:{Mode::Disabled,Mode::Enabled,Mode::Confirm})assert(ParseMode(ModeName(mode))==mode);
+    Confirmation request;assert(!request.Pending());
+    request.Begin({"Other","account"},"Active","account","scope");
+    assert(request.Pending()&&request.needsOpen);
+    assert(request.Matches(Mode::Confirm,"Active","account","scope"));
+    assert(!request.Matches(Mode::Disabled,"Active","account","scope"));
+    assert(!request.Matches(Mode::Enabled,"Active","account","scope"));
+    assert(!request.Matches(Mode::Confirm,"Other","account","scope"));
+    assert(!request.Matches(Mode::Confirm,"Active","other-account","scope"));
+    assert(!request.Matches(Mode::Confirm,"Active","account","other-scope"));
+    request.Clear();assert(!request.Pending()&&!request.needsOpen);
+    assert(IsActive("Active","account","Active","account"));
+    assert(!IsActive("Other","account","Active","account"));
+    assert(!IsActive("Active","other","Active","account"));
+    assert(!IsActive("Active","","Active",""));
     ImGui::CreateContext();
     auto& io=ImGui::GetIO();
     io.IniFilename=nullptr;io.DisplaySize=ImVec2(800,600);

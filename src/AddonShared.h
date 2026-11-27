@@ -107,6 +107,7 @@ ImVec4 GetSkinRarityColor(const std::string& rarity);
 float CoinAmountWidth(int64_t copper);
 void RenderCoins(int64_t copper);
 void MarkInventoryNavigation();
+bool FastLoadActionsEnabled();
 std::string CharacterLoadUnavailable(const std::string& character,const std::string& account);
 bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account);
 void ProcessCharacterLoad();

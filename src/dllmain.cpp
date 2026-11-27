@@ -82,6 +82,7 @@
 #include "WikiFreshness.h"
 #include "StoragePaths.h"
 #include "GameMemory.h"
+#include "FastLoadUIState.h"
 #include "NativeAccounts.h"
 #include "BuildInfo.h"
 
@@ -421,6 +422,7 @@ static int g_BuildMenuTab = -1;        // Right-clicked build tab chip (0-based)
 static bool g_ShowQAIcon = true;
 static AlterEgo::Font::Config g_FontConfig; // default = {NexusDefault, "", 16}
 static bool g_CompactCharList = false;
+static AlterEgo::FastLoadUI::Mode g_FastLoadMode=AlterEgo::FastLoadUI::Mode::Enabled;
 static bool g_ShowCraftingIcons = false;
 static bool g_ShowAge = false;
 static bool g_ShowPlaytime = false;
@@ -1633,6 +1635,7 @@ static bool SaveSettings() {
     j["character_loadout_expectations"]=g_CharacterLoadoutPreferences.Encode();
     j["show_qa_icon"] = g_ShowQAIcon;
     j["compact_char_list"] = g_CompactCharList;
+    j["fast_load_mode"] = AlterEgo::FastLoadUI::ModeName(g_FastLoadMode);
     j["show_crafting_icons"] = g_ShowCraftingIcons;
     j["show_age"] = g_ShowAge;
     j["show_playtime"] = g_ShowPlaytime;
@@ -1687,6 +1690,8 @@ static void LoadSettings() {
         g_CharacterLoadoutPreferences.Decode(j["character_loadout_expectations"]);
     getBool("show_qa_icon", g_ShowQAIcon);
     getBool("compact_char_list", g_CompactCharList);
+    if(j.contains("fast_load_mode")&&j["fast_load_mode"].is_string())
+        g_FastLoadMode=AlterEgo::FastLoadUI::ParseMode(j["fast_load_mode"].get<std::string>());
     getBool("show_crafting_icons", g_ShowCraftingIcons);
     getBool("show_age", g_ShowAge);
     getBool("show_playtime", g_ShowPlaytime);
@@ -10911,7 +10916,7 @@ static void CharacterSelectorActions(const std::string& name,const std::string& 
         MarkNavigation();g_LibCompareChar=name;g_LibCompareAccount=account;g_LibComparePreviousTarget=name;g_LibComparePreviousAccount=account;
         g_LibCompareSavedManual=false;g_LibCompareBuildId.clear();g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;g_SwitchToCompare=true;
     }
-    if(!LibraryDraftOpen()&&!g_SaveLibDialogOpen){ImGui::Separator();RenderCharacterLoadMenu("Load Character",name,account);}
+    if(FastLoadActionsEnabled()&&!LibraryDraftOpen()&&!g_SaveLibDialogOpen){ImGui::Separator();RenderCharacterLoadMenu("Load Character",name,account);}
 }
 static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
     using namespace AlterEgo::CharacterLoadout;
@@ -11044,17 +11049,20 @@ static void RenderCompareTab() {
         ImGui::SetNextItemWidth(-1.0f);
         // Keep native ImGui popup/keyboard behavior, but draw profession names in
         // the same colors as the character list, including the closed preview.
-        const char* autoPrefix = "Active: ";
+        const auto currentAccount=AlterEgo::GW2API::GetCurrentAccountName();
+        const auto isActive=[&](const AlterEgo::Character& ch){return AlterEgo::FastLoadUI::IsActive(ch.name,ch.account_name,g_CurrentCharName,currentAccount);};
+        const char* autoPrefix = isActive(*character)?"Active: ":"Fallback: ";
         const ImVec2 previewMin = ImGui::GetCursorScreenPos();
         const float previewWidth = ImGui::GetContentRegionAvail().x;
         const float previewHeight = ImGui::GetFrameHeight();
         ImDrawList* previewDraw = ImGui::GetWindowDrawList();
         if (AlterEgo::UI::BeginCombo("##compareCharacter", "")) {
-            const AlterEgo::Character* autoCharacter = character;
+            const AlterEgo::Character* autoCharacter = compareMatches.front();
             for (const auto* ch : compareMatches)
-                if (ch->name == g_CurrentCharName&&ch->account_name==AlterEgo::GW2API::GetCurrentAccountName()) { autoCharacter = ch; break; }
+                if (isActive(*ch)) { autoCharacter = ch; break; }
+            const char* automaticPrefix=isActive(*autoCharacter)?"Active: ":"Fallback: ";
             const bool autoClicked = SelectProfessionCharacterEntry("##compareAutoCharacter",
-                g_LibCompareChar.empty(),autoCharacter->profession,autoCharacter->name,autoPrefix,ImGuiSelectableFlags_None,autoCharacter->account_name);
+                g_LibCompareChar.empty(),autoCharacter->profession,autoCharacter->name,automaticPrefix,ImGuiSelectableFlags_None,autoCharacter->account_name);
             if (autoClicked) {
                 MarkNavigation();g_LibCompareChar.clear();g_LibCompareAccount.clear();
                 g_LibCompareSavedManual = false;
@@ -12878,6 +12886,9 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t sto
 // Shared Fast Load entry points. All UI actions enqueue exact account/name;
 // only execute after the active page and its popup have unwound.
 static std::pair<std::string,std::string> g_QueuedCharacterLoad;
+static AlterEgo::FastLoadUI::Confirmation g_FastLoadConfirmation;
+bool FastLoadActionsEnabled(){return g_FastLoadMode!=AlterEgo::FastLoadUI::Mode::Disabled;}
+static void CancelFastLoadUI(){g_QueuedCharacterLoad={};g_FastLoadConfirmation.Clear();}
 std::string CharacterLoadUnavailable(const std::string& character,const std::string& account){
     using namespace AlterEgo;
     if(!g_CurrentCharName.empty()&&character==g_CurrentCharName)return "Character already active.";
@@ -12888,10 +12899,17 @@ std::string CharacterLoadUnavailable(const std::string& character,const std::str
     return GameMemory::LoadUnavailableReason(g_CurrentCharName,character,GW2API::GetCurrentAccountName(),target);
 }
 bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account){
+    if(!FastLoadActionsEnabled())return false;
     const auto reason=CharacterLoadUnavailable(character,account);
-    const bool clicked=ImGui::MenuItem(label,nullptr,false,reason.empty());
-    AlterEgo::UI::DisabledHint(reason.c_str());
-    if(clicked)g_QueuedCharacterLoad={character,AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character)};
+    const bool clicked=AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Open,reason.empty(),reason.c_str());
+    if(clicked){
+        const auto verified=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character);
+        if(g_FastLoadMode==AlterEgo::FastLoadUI::Mode::Confirm){
+            if(!g_FastLoadConfirmation.Pending())
+                g_FastLoadConfirmation.Begin({character,verified},g_CurrentCharName,
+                    AlterEgo::GW2API::GetCurrentAccountName(),g_SelectedAccountFilter);
+        }else g_QueuedCharacterLoad={character,verified};
+    }
     return clicked;
 }
 static void TickCharacterLoad(){
@@ -12904,6 +12922,32 @@ void ProcessCharacterLoad(){
     auto reason=CharacterLoadUnavailable(request.first,request.second);
     if(reason.empty())reason=AlterEgo::GameMemory::Load(g_CurrentCharName,request.first,AlterEgo::GW2API::GetCurrentAccountName(),request.second);
     if(APIDefs)APIDefs->GUI_SendAlert(reason.c_str());
+}
+// Stable root-window modal after the page and its popup have unwound.
+static void RenderFastLoadConfirmation(){
+    using namespace AlterEgo;
+    constexpr const char* popup="Load Character?##fast_load_confirm";
+    auto& request=g_FastLoadConfirmation;
+    const auto currentAccount=GW2API::GetCurrentAccountName();
+    if(!request.Matches(g_FastLoadMode,g_CurrentCharName,currentAccount,g_SelectedAccountFilter)||
+       LibraryDraftOpen()||g_SaveLibDialogOpen)request.Clear();
+    if(request.needsOpen){ImGui::OpenPopup(popup);request.needsOpen=false;}
+    bool submit=false;
+    if(ImGui::BeginPopupModal(popup,nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        if(!request.Pending())ImGui::CloseCurrentPopup();
+        else{
+            ImGui::TextWrapped("Switch to %s?",request.target.first.c_str());
+            const auto reason=CharacterLoadUnavailable(request.target.first,request.target.second);
+            const auto action=UI::ConfirmCancel("fast_load",reason.empty(),"Load",reason.c_str());
+            if(action==UI::EditAction::Cancel||UI::EditorEscape()){request.Clear();ImGui::CloseCurrentPopup();}
+            else if(action==UI::EditAction::Save&&reason.empty()){
+                g_QueuedCharacterLoad=request.target;
+                request.Clear();submit=true;ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndPopup();
+    }else if(request.Pending())request.Clear();
+    if(submit)ProcessCharacterLoad();
 }
 std::string PlainItemDescription(const std::string& text){return StripGW2Markup(text);}
 
@@ -15941,13 +15985,13 @@ void AddonRender() {
     RenderAchPopout();
 
     g_NavInputMask.store(0);
-    if (!g_WindowVisible) { g_NavRequest.store(0); return; }
+    if (!g_WindowVisible) { CancelFastLoadUI();g_NavRequest.store(0); return; }
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Alter Ego", &g_WindowVisible,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse)) {
-        ImGui::End();
+        CancelFastLoadUI();ImGui::End();
         return;
     }
 
@@ -16220,7 +16264,7 @@ void AddonRender() {
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
                         CopyNameMenuItem(ch.name);
-                        RenderCharacterLoadMenu("Load",ch.name,ch.account_name);
+                        RenderCharacterLoadMenu("Load Character",ch.name,ch.account_name);
                         if(const auto* loadout=CharacterContextLoadout(ch)){
                             ImGui::Separator();RenderCharacterLoadoutContext(ch,loadout,false);ImGui::Separator();
                         }
@@ -16633,6 +16677,12 @@ void AddonRender() {
                         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + middleW);
                         ImGui::SetCursorPosY(startY + 2.0f);
                         RenderProfessionCharacterName(ch.name, ch.profession);
+                        ImGui::PushID(ch.account_name.c_str());ImGui::PushID(ch.name.c_str());
+                        AlterEgo::UI::EntityContext("##character_header_actions",[&]{
+                            CopyNameMenuItem(ch.name);
+                            if(FastLoadActionsEnabled()){ImGui::Separator();RenderCharacterLoadMenu("Load Character",ch.name,ch.account_name);}
+                        });
+                        ImGui::PopID();ImGui::PopID();
 
                         char meta[160];
                         std::string raceUp = ch.race;
@@ -16934,11 +16984,13 @@ void AddonRender() {
         }
         if (ImGui::BeginTabItem("Compare", nullptr, compareTabFlags)) {
             g_MainTab = 5; // Do not renumber existing session tab IDs.
+            TickCharacterLoad();
             ImGui::BeginChild("##compare_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderCompareTab();
             ImGui::EndChild();
             RenderCompareStatusRow();
             ImGui::EndTabItem();
+            ProcessCharacterLoad();
         }
 
         auto inventoryFlags=NavigationTabFlags(7);
@@ -17282,6 +17334,7 @@ void AddonRender() {
     RenderLoadoutSaveReview();
     ProcessComponentUICommand();
     EndNavigationFrame();
+    if(g_WindowVisible)RenderFastLoadConfirmation();else CancelFastLoadUI();
 
     ImGui::End();
     if (g_EditSavePending) {
@@ -17591,6 +17644,20 @@ void AddonOptions() {
     if(!wikiStatus.empty())ImGui::TextDisabled("%s",wikiStatus.c_str());
     ImGui::Spacing();
     RenderSectionHeader("UI Settings", AlterEgo::UI::SectionGold);
+    {
+        using AlterEgo::FastLoadUI::Mode;
+        const char* labels[]={"Disabled","Enabled","Enabled with confirmation"};
+        const Mode modes[]={Mode::Disabled,Mode::Enabled,Mode::Confirm};
+        const int selected=g_FastLoadMode==Mode::Disabled?0:g_FastLoadMode==Mode::Confirm?2:1;
+        ImGui::TextUnformatted("Fast Load");
+        if(RenderThemedCombo("##ae_fast_load_mode",labels[selected],230.f)){
+            for(int i=0;i<3;++i)if(AlterEgo::UI::SelectableOption(labels[i],selected==i)&&i!=selected){
+                g_FastLoadMode=modes[i];CancelFastLoadUI();SaveSettings();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::TextDisabled("Controls load actions only; character location sampling remains available.");
+    }
     if (ImGui::Checkbox("Show Quick Access icon", &g_ShowQAIcon)) {
         if (g_ShowQAIcon) {
             APIDefs->QuickAccess_Add(QA_ID, TEX_ICON, TEX_ICON_HOVER, "KB_ALTER_EGO_TOGGLE", "Alter Ego");

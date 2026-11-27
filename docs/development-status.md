@@ -30,3 +30,5 @@ User-led in-game testing and discretionary benchmarks were deferred; the followi
 Independent release gates remain in the [release checklist](release-checklist.md).
 
 Historical implementation and verification evidence is in [Git history](https://github.com/abeachco-git/alter_ego/commits/experiment/composable-loadouts/) and Actions, including the [prior status ledger](https://github.com/abeachco-git/alter_ego/blob/aa94826e0dfeb6f019976ad78a941a4a060c10d1/docs/development-status.md).
+
+- [ ] **Part 6 (unverified runtime changes):** Fast Load preference persistence and confirmation cancellation, Compare picker fallback and immediate deferred processing, group-scoped Inventory holder quantities, character header/group/location right-click behavior; verify in-game across accounts and all three modes. Memory scanning and switch implementation unchanged.

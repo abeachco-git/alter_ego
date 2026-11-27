@@ -768,6 +768,14 @@ void RenderItemAvailability(uint32_t id,const std::string& account,const std::st
         else if(s.binding==Binding::Account||s.binding==Binding::Character)status="Restricted or stat mismatch";
         else status="Accessibility unverified";
         ImGui::TextWrapped("%s x%lld - %s",label.c_str(),static_cast<long long>(s.count),status.c_str());
+        if(!s.character.empty()){
+            ImGui::PushID(static_cast<int>(i));
+            UI::EntityContext("##item_location_character",[&]{
+                CopyNameMenuItem(s.character,"Copy Character Name");
+                if(FastLoadActionsEnabled()){ImGui::Separator();RenderCharacterLoadMenu("Load Character",s.character,s.account);}
+            });
+            ImGui::PopID();
+        }
     }
 }
 void Initialize(const std::string& directory){
@@ -809,12 +817,12 @@ void ItemMenu(uint32_t id,const std::string& name,const std::string& chat,const 
         auto url="https://wiki.guildwars2.com/wiki/Special:Search/"+Encode(name);
         ShellExecuteA(nullptr,"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
     }
-    if(!targets.empty()){
+    if(FastLoadActionsEnabled()&&!targets.empty()){
         ImGui::Separator();
         if(targets.size()==1){
             const auto& [key,count]=*targets.begin();(void)count;
             RenderCharacterLoadMenu(("Load Character - "+key.second).c_str(),key.second,key.first);
-        }else if(ImGui::BeginMenu("Load Character")){
+        }else if(UI::BeginActionMenu("Load Character",UI::MenuIcon::Open)){
             std::set<CharacterOrder::Key> keys;
             for(const auto& target:targets)keys.insert(target.first);
             for(const auto& key:OrderedCharacterKeys(keys)){
@@ -1308,7 +1316,16 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         auto hit=UI::CatalogRow(rowIndex,on,group.id,meta?meta->icon:"",name,row.rarity,std::to_string(count),false,-1,[&]{if(!group.name.empty())UI::DetailTooltip(name.c_str(),meta?PlainItemDescription(meta->description).c_str():nullptr,GetSkinRarityColor(row.rarity));});
         select(hit.clicked);
         const bool popup=ImGui::IsPopupOpen("##inventory_item_actions")||ImGui::IsItemClicked(ImGuiMouseButton_Right);
-        ItemMenu(group.id,name,row.chat,popup?loadTargets(group.id):std::map<std::pair<std::string,std::string>,int64_t>{});
+        std::map<std::pair<std::string,std::string>,int64_t> targets;
+        if(popup&&FastLoadActionsEnabled()){
+            if(!nav.grouped)targets=loadTargets(group.id);
+            else for(const auto* location:group.locations){
+                const auto& slot=location->slot;
+                if(!slot.character.empty()&&GroupKey({slot.account,slot.character,slot.scope})==path)
+                    targets[{slot.account,slot.character}]+=slot.count;
+            }
+        }
+        ItemMenu(group.id,name,row.chat,targets);
         ImGui::PopID();
     };
     if(!nav.grouped){
@@ -1330,6 +1347,10 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                 if(!profession.empty())decorate=[&](ImDrawList* d,ImVec2 a,ImVec2 b){DrawInventoryCharacterLabel(d,a,b,profession,node.label);};
                 const bool open=GroupBrowse::Expanded(expandedInventoryGroups,node.key,false,forceExpand);
                 if(UI::CatalogBranchRow(i,open,node.label,decorate)&&GroupBrowse::Toggle(expandedInventoryGroups,node.key,forceExpand))expansionChanged=true;
+                if(!node.character.empty())UI::EntityContext("##inventory_character_group",[&]{
+                    CopyNameMenuItem(node.character,"Copy Character Name");
+                    if(FastLoadActionsEnabled()){ImGui::Separator();RenderCharacterLoadMenu("Load Character",node.character,node.account);}
+                });
             }
             ImGui::PopID();
             if(indent>0)ImGui::Unindent(indent);
