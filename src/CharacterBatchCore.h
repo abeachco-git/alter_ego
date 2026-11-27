@@ -11,6 +11,27 @@ using Json=nlohmann::json;
 // Combined characters are much larger than public item records. Bound each
 // request conservatively, independently of the public 200-ID API limit.
 inline constexpr size_t Limit=20;
+// Expand an already-triggered automatic request, never originate a job.
+// Every account keeps its original demand first. Extras can fill only its
+// first batch; explicit targets are never truncated.
+inline std::vector<CharacterActivity::Key> OpportunisticTargets(
+    const std::vector<CharacterActivity::Key>& seeds,
+    const std::vector<CharacterActivity::Key>& eligible,
+    const std::set<std::string>& batchAccounts){
+    std::vector<CharacterActivity::Key> result;
+    std::set<CharacterActivity::Key> seen;
+    std::map<std::string,size_t> counts;
+    for(const auto& key:seeds)if(!key.first.empty()&&!key.second.empty()&&seen.insert(key).second){
+        ++counts[key.first];result.push_back(key);
+    }
+    for(const auto& key:eligible){
+        const auto count=counts.find(key.first);
+        if(key.second.empty()||!batchAccounts.count(key.first)||count==counts.end()||
+           count->second>=Limit||!seen.insert(key).second)continue;
+        ++count->second;result.push_back(key);
+    }
+    return result;
+}
 inline constexpr const char* Schema="2024-04-01T00:00:00.000Z";
 template<class Encode>
 inline std::string Path(const std::vector<std::string>& names,Encode encode){

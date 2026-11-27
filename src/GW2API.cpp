@@ -311,9 +311,58 @@ namespace AlterEgo {
     }
     void GW2API::RequestCharacterActivityRefreshAddresses(const std::vector<CharacterIdentity::Address>& addresses){
         if(addresses.empty())return;
-        std::vector<std::string> names;names.reserve(addresses.size());
-        for(const auto& address:addresses)names.push_back(address.name);
-        RequestNativeCharacters(names,false,true,{},{},CharacterScopes::All,false,addresses);
+        namespace S=CharacterScopes;
+        using Key=CharacterActivity::Key;
+        const auto accounts=NativeAccounts::Linked();
+        std::map<Key,CharacterIdentity::Address> exact;
+        std::vector<Key> seeds,eligible;
+        std::set<std::string> batchAccounts;
+        for(const auto& address:addresses){
+            const auto owner=std::find_if(accounts.begin(),accounts.end(),[&](const auto& a){
+                return a.id==address.account&&a.generation==address.credentialGeneration&&a.rosterKnown&&
+                    a.characters.count(address.name)&&CharacterIdentity::AdmittedBinding(a.bindings,address.name,address.binding);
+            });
+            if(owner==accounts.end())continue;
+            const Key key{address.account,address.name};
+            if(!exact.emplace(key,address).second)continue;
+            seeds.push_back(key);
+            if(S::Permitted(owner->permissions.count("characters"),owner->permissions.count("builds"),
+                            owner->permissions.count("inventories"))==S::All)batchAccounts.insert(owner->id);
+        }
+        if(seeds.empty())return;
+        // Only existing verified character data is opportunistically
+        // revalidated; do not bootstrap every unvisited roster member.
+        std::map<Key,std::pair<CharacterIdentity::Address,S::Stamps>> candidates;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if(s_fetch_status==FetchStatus::InProgress)return;
+            for(const auto& ch:s_characters){
+                if(!batchAccounts.count(ch.account_name)||
+                   std::none_of(ch.scope_stamps.begin(),ch.scope_stamps.end(),[](auto stamp){return stamp>0;}))continue;
+                const Key key{ch.account_name,ch.name};
+                if(exact.count(key))continue;
+                const auto owner=std::find_if(accounts.begin(),accounts.end(),[&](const auto& a){return a.id==key.first;});
+                if(owner==accounts.end()||!owner->characters.count(key.second))continue;
+                const auto binding=owner->bindings.find(key.second);
+                const auto evidence=CharacterIdentity::Normalize({ch.created,ch.profession,ch.race});
+                if(binding==owner->bindings.end()||!evidence||!(*evidence==binding->second.evidence))continue;
+                candidates.emplace(key,std::make_pair(CharacterIdentity::Address{key.first,key.second,binding->second,owner->generation},ch.scope_stamps));
+            }
+        }
+        {
+            const auto now=CharacterActivity::Now();const auto spec=CharacterActivity::SpecSignal().load();
+            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+            for(const auto& [key,candidate]:candidates)
+                if(S::Due(CharacterActivity::State(),key,candidate.second,S::All,now,spec)){
+                    eligible.push_back(key);exact.emplace(key,candidate.first);
+                }
+        }
+        std::vector<CharacterIdentity::Address> admitted;
+        std::vector<std::string> names;
+        for(const auto& key:CharacterBatch::OpportunisticTargets(seeds,eligible,batchAccounts)){
+            admitted.push_back(exact.at(key));names.push_back(key.second);
+        }
+        RequestNativeCharacters(names,false,true,{},{},S::All,false,admitted,std::set<Key>(seeds.begin(),seeds.end()));
     }
     void GW2API::RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual){
         if(name.empty()||!demand)return;
@@ -347,7 +396,7 @@ namespace AlterEgo {
     }
 
 
-    void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly,CharacterScopes::Mask demand,bool manual,const std::vector<CharacterIdentity::Address>& expected){
+    void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly,CharacterScopes::Mask demand,bool manual,const std::vector<CharacterIdentity::Address>& expected,const std::set<CharacterActivity::Key>& automaticSeeds){
         auto accounts=NativeAccounts::Linked();
         if(!accountOnly.empty())accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[&](const auto& a){return a.id!=accountOnly;}),accounts.end());
         if(listOnly)accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[](const auto& a){return !a.permissions.count("characters");}),accounts.end());
@@ -381,7 +430,7 @@ namespace AlterEgo {
                 for(const auto& n:selected)if(a.rosterKnown&&a.characters.count(n))
                     s_character_work.Queue({a.id,n},a.generation,demand);
         }
-        Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual,expected]{
+        Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual,expected,automaticSeeds]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
             auto fail=[listOnly](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;if(listOnly)s_roster_refresh={s_fetch_status,s_fetch_message};s_current_char={};s_character_work.Stop(CharacterActivity::Now(),message);};
             std::vector<std::pair<NativeAccounts::LinkedAccount,std::string>> targets;
@@ -409,6 +458,41 @@ namespace AlterEgo {
             if(!selected.empty())for(const auto& n:selected)if(!counts.count(n))partial=true;
             if(!expected.empty()&&targets.size()!=expected.size())partial=true;
             if(!priority.empty())std::stable_partition(targets.begin(),targets.end(),[&](const auto& x){return x.second==priority;});
+            const auto automaticDue=[&](const NativeAccounts::LinkedAccount& owner,const std::string& name){
+                namespace S=CharacterScopes;
+                const CharacterActivity::Key key{owner.id,name};
+                const auto address=NativeAccounts::ResolveCharacterAddress(owner.id,name);
+                if(!address||address->credentialGeneration!=owner.generation||
+                   !CharacterIdentity::AdmittedBinding(owner.bindings,name,address->binding))return false;
+                S::Stamps stamps{};
+                {
+                    std::lock_guard<std::mutex> lock(s_mutex);
+                    for(const auto& ch:s_characters)if(ch.account_name==owner.id&&ch.name==name){
+                        const auto evidence=CharacterIdentity::Normalize({ch.created,ch.profession,ch.race});
+                        if(evidence&&*evidence==address->binding.evidence)stamps=ch.scope_stamps;
+                        break;
+                    }
+                }
+                std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                return S::Due(CharacterActivity::State(),key,stamps,
+                    S::Permitted(owner.permissions.count("characters"),owner.permissions.count("builds"),
+                        owner.permissions.count("inventories")),
+                    CharacterActivity::Now(),CharacterActivity::SpecSignal().load())!=0;
+            };
+            if(!manual&&!automaticSeeds.empty()){
+                std::map<CharacterActivity::Key,size_t> rank;
+                for(size_t i=0;i<expected.size();++i)rank.emplace(CharacterActivity::Key{expected[i].account,expected[i].name},i);
+                // Preserve selected/active demand before opportunistic rows.
+                std::stable_sort(targets.begin(),targets.end(),[&](const auto& x,const auto& y){
+                    return rank.at({x.first.id,x.second})<rank.at({y.first.id,y.second});
+                });
+                std::set<std::string> triggered;
+                for(const auto& [owner,name]:targets)
+                    if(automaticSeeds.count({owner.id,name})&&automaticDue(owner,name))triggered.insert(owner.id);
+                targets.erase(std::remove_if(targets.begin(),targets.end(),[&](const auto& x){
+                    return !triggered.count(x.first.id)||!automaticDue(x.first,x.second);
+                }),targets.end());
+            }
             if(std::any_of(accounts.begin(),accounts.end(),[](const auto& a){return !NativeAccounts::Current(a);})){fail("Account configuration changed; refresh again.");return;}
             {
                 std::lock_guard<std::mutex> lock(s_mutex);
@@ -447,7 +531,7 @@ namespace AlterEgo {
             };
             std::map<CharacterActivity::Key,std::unique_ptr<CombinedRow>> combinedRows;
             std::set<CharacterActivity::Key> combinedAttempted;
-            std::set<std::string> combinedUnavailable;
+            std::set<std::string> combinedUnavailable,automaticStarted;
             std::set<uint32_t> metadataIds;
             const auto prepareCombined=[&](size_t start){
                 const auto& account=targets[start].first;
@@ -455,6 +539,17 @@ namespace AlterEgo {
                    !account.permissions.count("inventories")||combinedUnavailable.count(account.id))return;
                 const CharacterActivity::Key first{account.id,targets[start].second};
                 if(combinedAttempted.count(first))return;
+                if(!manual&&!automaticSeeds.empty()&&!automaticStarted.count(account.id)){
+                    bool triggered=false;
+                    for(const auto& [owner,name]:targets)
+                        if(owner.id==account.id&&automaticSeeds.count({owner.id,name})&&automaticDue(owner,name)){
+                            triggered=true;break;
+                        }
+                    // If demand ceased while queued, an opportunistic row
+                    // cannot become a new independent automatic trigger.
+                    if(!triggered){combinedUnavailable.insert(account.id);return;}
+                    automaticStarted.insert(account.id);
+                }
                 std::vector<std::string> names;
                 std::map<std::string,std::unique_ptr<CombinedRow>> admitted;
                 for(size_t i=start;i<targets.size()&&names.size()<CharacterBatch::Limit;++i){
@@ -465,17 +560,7 @@ namespace AlterEgo {
                     const auto address=NativeAccounts::ResolveCharacterAddress(owner.id,name);
                     if(!address||!CharacterIdentity::AdmittedBinding(owner.bindings,name,address->binding)||
                        address->credentialGeneration!=owner.generation)continue;
-                    if(!manual){
-                        BS::Stamps stamps{};
-                        {std::lock_guard<std::mutex> lock(s_mutex);
-                            for(const auto& ch:s_characters)if(ch.account_name==owner.id&&ch.name==name){
-                                const auto evidence=CharacterIdentity::Normalize({ch.created,ch.profession,ch.race});
-                                if(evidence&&*evidence==address->binding.evidence)stamps=ch.scope_stamps;
-                                break;
-                            }}
-                        std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
-                        if(!BS::Due(CharacterActivity::State(),key,stamps,BS::All,CharacterActivity::Now(),CharacterActivity::SpecSignal().load()))continue;
-                    }
+                    if(!manual&&!automaticDue(owner,name))continue;
                     auto row=std::make_unique<CombinedRow>();
                     row->key=key;row->address=*address;
                     if(!NativeAccounts::CommitIfCharacterCurrent(owner,*address,[&]{
@@ -542,6 +627,12 @@ namespace AlterEgo {
                 std::unique_ptr<CombinedRow> combined;
                 if(auto it=combinedRows.find(key);it!=combinedRows.end()){
                     combined=std::move(it->second);combinedRows.erase(it);
+                }
+                // Unsupported combined requests may fall back for original
+                // demand, not fan out into unrelated opportunistic requests.
+                if(!manual&&!automaticSeeds.empty()&&!automaticSeeds.count(key)&&!combined&&combinedUnavailable.count(a.id)){
+                    std::lock_guard<std::mutex> lock(s_mutex);
+                    s_character_work.Start(key,a.generation,0);continue;
                 }
                 const auto address=NativeAccounts::EnsureCharacterAddress(a,name);
                 if(combined&&(!address||!CharacterIdentity::SameAddress(combined->address,*address)))combined.reset();

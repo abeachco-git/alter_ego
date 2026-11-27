@@ -650,7 +650,8 @@ namespace AlterEgo {
 
         // Sub-endpoint fetch for current character (phase 0/1/2)
         static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly={},CharacterScopes::Mask demand=CharacterScopes::All,bool manual=true,
-            const std::vector<CharacterIdentity::Address>& expected={});
+            const std::vector<CharacterIdentity::Address>& expected={},
+            const std::set<CharacterActivity::Key>& automaticSeeds={});
     };
 
 }
