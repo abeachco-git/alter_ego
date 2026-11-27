@@ -36,6 +36,7 @@ static std::string ComponentNativeProfession(const std::string& kind,
                                               const std::string& id,
                                               const ComponentJson& data) {
     if (kind == "base_build") return data.value("profession", std::string());
+    if(AlterEgo::Composable::IsCompanionKind(kind))return AlterEgo::Composable::CompanionProfession(kind);
     const auto& doc = ComponentUISnapshot();
     std::string profession;
     if (!doc.contains("loadouts") || !doc["loadouts"].is_array()) return {};
@@ -1014,8 +1015,7 @@ static void RenderComponentNativeEditor(const std::string& kind,
             ComponentNativeText(data, "profession", "Profession");
         }
         ComponentNativeSpecializations(data, data.value("profession", std::string()));
-        ComponentNativeProfessionPair(data,"pets","Ranger pets",false,profession=="Ranger");
-        ComponentNativeProfessionPair(data,"legend_codes","Revenant legends",true,profession=="Revenant");
+        // Inapplicable legacy pair fields remain lossless but are not editable here.
         if (ImGui::TreeNode("##weapon_proficiency", "Build template weapon IDs")) {
             if (data.contains("weapons") && !data["weapons"].is_array()) {
                 ImGui::TextDisabled("Unrecognized weapon definition; preserved.");
@@ -1041,6 +1041,8 @@ static void RenderComponentNativeEditor(const std::string& kind,
             ImGui::TreePop();
             }
         }
+    } else if (AlterEgo::Composable::IsCompanionKind(kind)) {
+        ComponentNativeProfessionPair(data,AlterEgo::Composable::CompanionField(kind),kind=="pets"?"Pets":"Legends",kind=="legends",true);
     } else if (kind == "skills") {
         if (profession.empty())
             ImGui::TextDisabled("Assign to a Loadout to enable profession-filtered skill choices.");

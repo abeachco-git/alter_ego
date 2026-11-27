@@ -1463,7 +1463,7 @@ static AddonWindowFocusRequest g_SaveLibDialogFocus;
 static char g_SaveLibName[128] = "";
 static std::vector<AlterEgo::GameMode> g_SaveLibModes{AlterEgo::GameMode::PvE};
 static bool g_SaveLibNameManuallyEdited = false;
-static constexpr int kSaveEntireEquipmentSet = 10;
+static constexpr int kSaveEntireEquipmentSet = 12;
 static std::string g_EquipmentSetSelectedId, g_SaveLibAccount;
 static constexpr int kSaveFashionTarget=3;
 static int g_SaveLibEquipmentMode=0; // offer exact match, independent, new named set
@@ -8031,9 +8031,9 @@ static void RenderSaveToLibraryDialog() {
         ImGui::EndCombo();
     }
     static const char* kinds[]={"Base Build","Skills","Weapons","Sigils","Armor","Runes",
-        "Trinkets","Relic","Infusions","Aquatic","Equipment Set"};
+        "Trinkets","Relic","Infusions","Aquatic","Pets","Legends","Equipment Set"};
     static const char* keys[]={"base_build","skills","weapons","sigils","armor","runes",
-        "trinkets","relic","infusions","aquatic"};
+        "trinkets","relic","infusions","aquatic","pets","legends"};
     const bool fashion=g_SaveLibTarget==kSaveFashionTarget;
     if(g_SaveLibTarget!=0&&!fashion) {
         field("Component");
@@ -8045,6 +8045,8 @@ static void RenderSaveToLibraryDialog() {
                 }
             };
             ImGui::TextDisabled("BUILD COMPONENTS");option(0);option(1);
+            if(sourceChar&&Composable::KindApplies("pets",sourceChar->profession))option(10);
+            if(sourceChar&&Composable::KindApplies("legends",sourceChar->profession))option(11);
             ImGui::Separator();ImGui::TextDisabled("EQUIPMENT COMPONENTS");
             if(g_SaveLibTarget==1)option(kSaveEntireEquipmentSet);
             for(int i:{2,4,6,5,3,8,7,9})option(i);
@@ -8052,8 +8054,9 @@ static void RenderSaveToLibraryDialog() {
         }
     }
     const bool entireSet=g_SaveLibTarget==1&&g_SaveLibComponentKind==kSaveEntireEquipmentSet;
-    const bool needsBuild=!fashion&&(g_SaveLibTarget==0||g_SaveLibComponentKind<2);
-    const bool needsEquipment=fashion||g_SaveLibTarget==0||g_SaveLibComponentKind>=2;
+    const bool componentBuild=g_SaveLibComponentKind<2||g_SaveLibComponentKind==10||g_SaveLibComponentKind==11;
+    const bool needsBuild=!fashion&&(g_SaveLibTarget==0||componentBuild);
+    const bool needsEquipment=fashion||g_SaveLibTarget==0||!componentBuild;
     auto nameForBuild=[](const BuildTemplate& bt) {
         return bt.name.empty()?"Tab "+std::to_string(bt.tab):bt.name;
     };
@@ -10434,14 +10437,14 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         size_t differences = 0, unverified = 0, matches = 0;
     };
     const struct { const char* kind; const char* label; } categories[] = {
-        {"base_build", "Base Build"}, {"skills", "Skills"},
+        {"base_build", "Base Build"}, {"skills", "Skills"}, {"pets", "Pets"}, {"legends", "Legends"},
         {"weapons", "Weapons"}, {"armor", "Armor"},
         {"trinkets", "Trinkets"}, {"runes", "Runes"},
         {"sigils", "Sigils"}, {"infusions", "Infusions"}, {"relic", "Relic"}, {"aquatic", "Aquatic"}
     };
     std::vector<CompareSection> sections;
     for (const auto& kind : categories)
-        sections.push_back({kind.kind, kind.label});
+        if(AlterEgo::Composable::KindApplies(kind.kind,saved.profession))sections.push_back({kind.kind, kind.label});
 
     // Resolve linked Equipment Set ownership using the canonical graph helper.
     // Cache this projection by the same library revision rather than parsing
@@ -10493,7 +10496,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     size_t unknownComponents = 0, optionalComponents=0, actionableComponents = 0;
     for (const auto& section : sections) {
         if (section.differences) ++differentComponents;
-        else if(section.kind=="aquatic"&&!section.recorded&&section.rows.empty())++optionalComponents;
+        else if(AlterEgo::Composable::IsOptionalKind(section.kind)&&!section.recorded&&section.rows.empty())++optionalComponents;
         else if ((section.kind != "other" && !section.recorded) ||
                  section.unverified || section.rows.empty()||(section.kind=="aquatic"&&result.AquaticPartial())) ++unknownComponents;
         else ++matchingComponents;

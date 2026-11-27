@@ -30,7 +30,9 @@ static const struct { const char* kind; const char* label; } kComponentKinds[] =
     {"trinkets", "Trinkets"},
     {"relic", "Relics"},
     {"infusions", "Infusions"},
-    {"aquatic", "Aquatic"}
+    {"aquatic", "Aquatic"},
+    {"pets", "Pets"},
+    {"legends", "Legends"}
 };
 
 static const char* ComponentLabel(const std::string& kind) {
@@ -161,6 +163,7 @@ static std::string ComponentUIShortDescription(const std::string& kind,
         return profession.empty() ? "Specializations and traits" : profession;
     }
     if (kind == "skills") return "Heal, utility and elite skills";
+    if (AlterEgo::Composable::IsCompanionKind(kind)) return "Terrestrial and aquatic selections";
     if(kind=="infusions"){
         const auto mode=AlterEgo::Composable::InfusionPayloadMode(data);
         return mode==AlterEgo::InfusionMode::Conflict?"Mixed legacy requirements":
@@ -230,10 +233,10 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             ImGui::Text("Profession: %s", data["profession"].get<std::string>().c_str());
         if (data.contains("specializations") && data["specializations"].is_array())
             ImGui::Text("Specialization entries: %d", (int)data["specializations"].size());
-        const auto profession=data.value("profession",std::string());
-        if(profession=="Ranger"||profession=="Revenant"){
-            const bool legend=profession=="Revenant";
-            const auto field=data.find(legend?"legend_codes":"pets");
+    }
+    if(AlterEgo::Composable::IsCompanionKind(kind)){
+            const bool legend=kind=="legends";
+            const auto field=data.find(AlterEgo::Composable::CompanionField(kind));
             std::array<uint32_t,4> values{};
             bool known=field!=data.end()&&field->is_array()&&field->size()==4;
             if(field!=data.end()&&field->is_array())for(size_t i=0;i<values.size()&&i<field->size();++i){
@@ -245,7 +248,6 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             }
             RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
             RenderProfessionPairSection(legend,values,false,known);
-        }
     }
     if (kind == "skills") {
         for (const auto& bar : {"skills", "aquatic_skills"}) {
@@ -634,6 +636,7 @@ static bool ComponentUICompatible(const ComponentJson& doc,
     if (!base || !base->contains("data")) return true;
     const std::string profession =
         (*base)["data"].value("profession", std::string());
+    if(AlterEgo::Composable::IsCompanionKind(kind))return AlterEgo::Composable::KindApplies(kind,profession);
     if (profession.empty()) return true;
     if (kind == "base_build")
         return candidate.contains("data") &&
@@ -820,7 +823,7 @@ static std::string ComponentUIFashionName(const std::string& id){
     return "(missing saved appearance)";
 }
 static constexpr int kEquipmentReferenceOrder[]={2,4,6,5,3,8,7,9};
-static constexpr int kBuildReferenceOrder[]={0,1};
+static constexpr int kBuildReferenceOrder[]={0,1,10,11};
 static void ReferenceTableColumns(){
     ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,116.f);
     ImGui::TableSetupColumn("Selection",ImGuiTableColumnFlags_WidthStretch);
@@ -835,6 +838,10 @@ static void RenderEditableReferenceRows(const ComponentJson& doc,const Component
     ComponentJson candidate=owner?*owner:ComponentJson::object();
     for(int j=0;j<count;++j){
         const std::string kind=kComponentKinds[kinds[j]].kind;
+        if(AlterEgo::Composable::IsCompanionKind(kind)){
+            const auto* base=ComponentUIFind(doc,"base_build",ComponentUIRef(e.refs,"base_build"));
+            if(!base||!AlterEgo::Composable::KindApplies(kind,base->at("data").value("profession",std::string())))continue;
+        }
         ImGui::PushID(kind.c_str());
         if(linked&&linked->at("refs").contains(kind)){
             const auto original=linked->at("refs").value(kind,std::string());
@@ -852,7 +859,7 @@ static void RenderEditableReferenceRows(const ComponentJson& doc,const Component
         }else{
             ReferenceLabel(ComponentLabel(kind));
             candidate["refs"]=e.refs;
-            if(RenderReferencePicker(doc,e.isSet?nullptr:&candidate,kind,e.refs,e.isSet))e.confirmed=false;
+            if(RenderReferencePicker(doc,e.isSet?nullptr:&candidate,kind,e.refs,e.isSet||AlterEgo::Composable::IsCompanionKind(kind)))e.confirmed=false;
         }
         ImGui::PopID();
     }
@@ -1002,6 +1009,10 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
         ReferenceTableColumns();
         for(int i:kBuildReferenceOrder){
             const std::string kind=kComponentKinds[i].kind;
+            if(AlterEgo::Composable::IsCompanionKind(kind)){
+                const auto* base=ComponentUIFind(doc,"base_build",ComponentUIRef(direct,"base_build"));
+                if(!base||!AlterEgo::Composable::KindApplies(kind,base->at("data").value("profession",std::string())))continue;
+            }
             RenderReferencePreviewRow(doc,kind,ComponentUIRef(direct,kind),loadoutId,false,actions);
         }
         ImGui::EndTable();
@@ -1202,7 +1213,7 @@ static void ImportComponentClipboard(){
         }
     }catch(const std::exception& e){g_ComponentStatus="Invalid or oversized component clipboard.";}
 }
-static constexpr int kComponentGroupOrder[]={0,1,4,2,6,5,3,8,7,9};
+static constexpr int kComponentGroupOrder[]={0,1,10,11,4,2,6,5,3,8,7,9};
 static void ComponentCreationMenu(const std::string& category={}){
     using namespace AlterEgo::UI;
     if(category.empty()){

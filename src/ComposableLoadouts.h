@@ -29,10 +29,10 @@ using Json = nlohmann::json;
 constexpr int kVersion = 2;
 constexpr const char* kFormat = "alter_ego_component_graph";
 
-inline const std::array<std::string, 10>& Kinds() {
-    static const std::array<std::string, 10> values = {{
+inline const std::array<std::string, 12>& Kinds() {
+    static const std::array<std::string, 12> values = {{
         "base_build", "skills", "weapons", "sigils", "armor",
-        "runes", "trinkets", "relic", "infusions", "aquatic"
+        "runes", "trinkets", "relic", "infusions", "aquatic", "pets", "legends"
     }};
     return values;
 }
@@ -86,8 +86,25 @@ struct Document {
     std::vector<Loadout> loadouts;
     std::vector<EquipmentSet> equipment_sets;
 };
+// A companion kind has an intrinsic profession, unlike Skills whose context
+// comes from its owners. Keep the same policy for capture, assign and UI.
+inline std::string CompanionProfession(const std::string& kind) {
+    return kind=="pets"?"Ranger":kind=="legends"?"Revenant":"";
+}
+inline const char* CompanionField(const std::string& kind) {
+    return kind=="pets"?"pets":kind=="legends"?"legend_codes":"";
+}
+inline bool IsCompanionKind(const std::string& kind) {
+    return !CompanionProfession(kind).empty();
+}
+inline bool KindApplies(const std::string& kind,const std::string& profession) {
+    return !IsCompanionKind(kind)||CompanionProfession(kind)==profession;
+}
+inline bool IsOptionalKind(const std::string& kind) {
+    return kind=="aquatic"||IsCompanionKind(kind);
+}
 inline bool IsEquipmentKind(const std::string& kind) {
-    return IsKind(kind) && kind != "base_build" && kind != "skills";
+    return IsKind(kind) && kind != "base_build" && kind != "skills" && !IsCompanionKind(kind);
 }
 inline EquipmentSet* FindEquipmentSet(Document& doc,const std::string& id) {
     for(auto& set:doc.equipment_sets) if(set.id==id)return &set;
@@ -208,6 +225,10 @@ inline bool Validate(const Document& doc, std::string& error) {
         }
         if (!item.refs.count("base_build") || !item.refs.count("skills"))
             return Fail(error, "Loadout lacks a Build or skill-selection component.");
+        const auto* base=Find(doc,"base_build",item.refs.at("base_build"));
+        const auto profession=base?base->data.value("profession",std::string()):std::string();
+        for(const auto& [kind,id]:item.refs)
+            if(!KindApplies(kind,profession))return Fail(error,"Companion component belongs to another profession: "+kind);
     }
     std::set<std::string> setIds;
     for(const auto& set:doc.equipment_sets) {
@@ -297,7 +318,7 @@ inline std::string UpgradeKind(const std::string& key) {
 inline const std::map<std::string, std::string>& RootOwnership() {
     static const std::map<std::string, std::string> owners = {
         {"profession","base_build"}, {"specializations","base_build"},
-        {"pets","base_build"}, {"legend_codes","base_build"},
+        {"pets","pets"}, {"legend_codes","legends"},
         {"weapons","base_build"}, // In-game Build Template weapon skills, NOT equipped items.
         {"skills","skills"}, {"aquatic_skills","skills"},
         {"rune_name","runes"}, {"rune_id","runes"},
@@ -310,6 +331,20 @@ inline const std::map<std::string, std::string>& RootOwnership() {
     return owners;
 }
 
+// Flat legacy formats may explicitly store the unused profession's pair
+// (usually zeroes). Preserve those exact fields in Base Build for round-trip,
+// without creating an inapplicable component or treating them as selections.
+inline std::string RootFieldOwner(const std::string& field,const Json& root) {
+    const auto it=RootOwnership().find(field);
+    if(it==RootOwnership().end())return {};
+    if(IsCompanionKind(it->second)){
+        const auto profession=root.find("profession");
+        if(profession!=root.end()&&profession->is_string()&&
+           KindApplies(it->second,profession->get<std::string>()))return it->second;
+        return "base_build";
+    }
+    return it->second;
+}
 // A legacy SavedBuild is split without discarding unknown root/slot fields.
 // Per-slot upgrades retain their exact physical position for inspection and
 // export; comparisons use independently derived functional requirements.
@@ -317,7 +352,7 @@ inline std::map<std::string, Json> Split(const Json& old) {
     std::map<std::string, Json> parts;
     for (const auto& kind : Kinds()) parts[kind] = Json::object();
     for (const auto& [field, kind] : RootOwnership())
-        if (old.contains(field)) parts[kind][field] = old.at(field);
+        if (old.contains(field)) parts[RootFieldOwner(field,old)][field] = old.at(field);
     if (old.contains("gear") && old.at("gear").is_object()) {
         for (auto it = old["gear"].begin(); it != old["gear"].end(); ++it) {
             const auto& slot = it.key();
@@ -436,6 +471,18 @@ inline std::string SuggestComponentName(const std::string& kind, const Json& dat
                 if (!id.empty()) profession += " / " + id;
             }
         return finish(profession.empty() ? "Base Build" : profession);
+    }
+    if(IsCompanionKind(kind)){
+        const auto values=data.find(CompanionField(kind));
+        std::string name;
+        if(values!=data.end()&&values->is_array())for(const auto& id:*values){
+            if(!id.is_number_integer()||id==0)continue;
+            auto label=field(Json{{"id",id}},"name","id",kind=="pets"?"pet":"legend");
+            if(label.empty())continue;
+            if(!name.empty())name+=" / ";
+            name+=label;
+        }
+        return finish(name.empty()?(kind=="pets"?"Pets":"Legends"):name);
     }
     if (kind == "skills") {
         const auto describe=[&](const Json& bar){
@@ -691,7 +738,7 @@ inline bool SplitLegacy(const Json& legacy, Document& output, std::string& error
         loadout.metadata = Metadata(old);
         const auto parts = Split(old);
         for (const auto& [kind, data] : parts) {
-            if(kind=="aquatic"&&data.empty())continue;
+            if(IsOptionalKind(kind)&&data.empty())continue;
             Component part;
             part.id = kind + ":" + loadout.id;
             part.name = UniqueComponentName(next, kind, SuggestComponentName(kind, data));
@@ -839,6 +886,55 @@ inline bool NormalizeAquatic(Document& doc,std::string& error) {
     }
     doc=std::move(next);return true;
 }
+// Extract each old Base Build's applicable pair exactly once, retaining the
+// original identity and sharing relationships, including unused Base Builds.
+// The projection comparison prevents accidental field loss or duplicate ownership.
+inline bool NormalizeCompanions(Document& doc,std::string& error) {
+    const auto group=doc.components.find("base_build");
+    if(group==doc.components.end())return true;
+    bool needed=false;
+    for(const auto& base:group->second)
+        for(const auto& kind:{std::string("pets"),std::string("legends")})
+            if(KindApplies(kind,base.data.value("profession",std::string()))&&
+               base.data.contains(CompanionField(kind)))needed=true;
+    if(!needed)return true;
+    Document next=doc;
+    for(auto& base:next.components.at("base_build")){
+        const auto profession=base.data.value("profession",std::string());
+        for(const auto& kind:{std::string("pets"),std::string("legends")}){
+            const auto field=CompanionField(kind);
+            if(!KindApplies(kind,profession)||!base.data.contains(field))continue;
+            std::string id=kind+":migrated:"+base.id;
+            for(unsigned n=1;Find(next,kind,id);++n)id=kind+":migrated:"+base.id+":"+std::to_string(n);
+            Json data={{field,base.data.at(field)}};
+            const auto name=UniqueComponentName(next,kind,base.name+(kind=="pets"?" - Pets":" - Legends"));
+            next.components[kind].push_back({id,name,std::move(data)});
+            base.data.erase(field);
+            for(auto& l:next.loadouts){
+                const auto source=l.refs.find("base_build");
+                if(source==l.refs.end()||source->second!=base.id)continue;
+                if(l.refs.count(kind))return Fail(error,"Conflicting old and new companion fields.");
+                l.refs[kind]=id;
+            }
+        }
+    }
+    if(!Validate(next,error))return false;
+    for(size_t i=0;i<doc.loadouts.size();++i){
+        Json before,after;
+        if(!Resolve(doc,doc.loadouts[i],before,error)||!Resolve(next,next.loadouts[i],after,error)||
+            before.dump()!=after.dump())return Fail(error,"Companion migration would change a Loadout projection.");
+    }
+    doc=std::move(next);return true;
+}
+inline bool ValidateCurrentCompanionOwnership(const Document& doc,std::string& error){
+    const auto group=doc.components.find("base_build");
+    if(group!=doc.components.end())for(const auto& base:group->second)
+        for(const auto& kind:{std::string("pets"),std::string("legends")})
+            if(KindApplies(kind,base.data.value("profession",std::string()))&&
+               base.data.contains(CompanionField(kind)))
+                return Fail(error,"Applicable companion fields belong to their independent component.");
+    return true;
+}
 inline bool ToLegacy(const Document& doc, Json& legacy, std::string& error) {
     if (!Validate(doc, error)) return false;
     Json next = Json::object();
@@ -925,7 +1021,7 @@ inline bool FromJson(const Json& input, Document& output, std::string& error) {
     } catch (const std::exception& e) {
         return Fail(error, std::string("Invalid Loadout fields: ") + e.what());
     }
-    if (!Validate(next, error)||!ValidateCurrentAquaticOwnership(next,error)) return false;
+    if (!Validate(next, error)||!ValidateCurrentAquaticOwnership(next,error)||!ValidateCurrentCompanionOwnership(next,error)) return false;
     output = std::move(next);
     return true;
 }
@@ -1095,8 +1191,10 @@ inline bool ImportComponent(const Json& input, std::string& kind,
                 }
             }
         } else {
-            const auto owner = RootOwnership().find(it.key());
-            if (owner != RootOwnership().end() && owner->second != parsedKind)
+            auto owner = RootOwnership().find(it.key());
+            const auto expected=owner==RootOwnership().end()?std::string{}:
+                (parsedKind=="base_build"?RootFieldOwner(it.key(),data):owner->second);
+            if (!expected.empty() && expected != parsedKind)
                 return Fail(error, "Field belongs to another component: " + it.key());
         }
     }
@@ -1242,6 +1340,8 @@ inline std::string ProfessionOf(const Document& doc, const Loadout& loadout) {
 inline bool AssignCompatible(const Document& doc, const Loadout& target,
                              const std::string& kind, const std::string& id,
                              std::string& error) {
+    if(IsCompanionKind(kind))
+        return KindApplies(kind,ProfessionOf(doc,target))||Fail(error,"Companion component belongs to another profession.");
     if (kind != "base_build" && kind != "skills") return true;
     const auto* incoming = Find(doc, kind, id);
     if (!incoming) return Fail(error, "Component does not exist.");
@@ -1305,6 +1405,8 @@ inline bool CaptureProfessionCompatible(const Document& doc,
                                          const std::string& id,
                                          const std::string& profession,
                                          std::string& error) {
+    if(IsCompanionKind(kind))
+        return KindApplies(kind,profession)||Fail(error,"Captured profession is not compatible with this companion component.");
     if (kind != "base_build" && kind != "skills") return true;
     if (profession.empty()) return Fail(error, "Captured profession is unknown.");
     const auto* target = Find(doc, kind, id);
@@ -1563,7 +1665,7 @@ inline bool Reconcile(const Document& original, const Json& legacy,
             created.metadata = Metadata(item);
             const auto parts = Split(item);
             for (const auto& [kind, data] : parts) {
-                if(kind=="aquatic"&&data.empty())continue;
+                if(IsOptionalKind(kind)&&data.empty())continue;
                 std::string componentId = kind + ":" + id;
                 unsigned sequence = 1;
                 while (Find(next, kind, componentId))
@@ -1594,9 +1696,10 @@ inline bool Reconcile(const Document& original, const Json& legacy,
         }
         for (const auto& [kind, data] : parts) {
             if(SetOwns(next,updated,kind))continue;
+            if(IsCompanionKind(kind)&&data.empty()){updated.refs.erase(kind);continue;}
             const auto oldRef = updated.refs.find(kind);
             if (oldRef == updated.refs.end()) {
-                if(kind=="aquatic"&&data.empty())continue;
+                if(IsOptionalKind(kind)&&data.empty())continue;
                 if (const auto* match = ReusableForLoadout(next, kind, data,
                         item.value("profession", std::string()))) {
                     updated.refs[kind] = match->id;

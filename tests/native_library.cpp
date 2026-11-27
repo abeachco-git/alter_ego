@@ -58,6 +58,42 @@ int case_native_library(int,char**) {
     assert(AlterEgo::Fashion::AssociateVerified(look,{"B","Original",creation}));
     expected.fashion.push_back(look);
     expected.loadouts.loadouts[0].fashion_id=look.id;
+    // Exercise a populated v7 companion migration. Use the old ownership
+    // representation via direct relational rows and exact old fingerprint,
+    // then check backed-up migration, shared identities and flat round-trip.
+    {
+        Scratch old;
+        auto prior=expected;
+        const auto baseId=prior.loadouts.loadouts[0].refs.at("base_build");
+        auto* base=C::Find(prior.loadouts,"base_build",baseId);
+        base->data["profession"]="Ranger";base->data.erase("pets");
+        prior.loadouts.loadouts[0].metadata.erase("source_identity");
+        prior.loadouts.loadouts[0].metadata.erase("source_character");
+        {
+            Native::Repository repo(old.db(),DB::Connection::OpenMode::Create);
+            assert(repo.Commit(repo.Read(),prior)==1);
+        }
+        base->data["pets"]={1,2,3,4};
+        {
+            DB::Connection db(old.db(),DB::Connection::OpenMode::Existing);
+            db.Exec("PRAGMA user_version=7");
+            auto q=db.Prepare("UPDATE components SET fingerprint=? WHERE kind='base_build' AND id=?");
+            q.Bind(1,Native::ExactFingerprint(base->data));q.Bind(2,baseId);q.Step();
+            auto flags=db.Prepare("UPDATE component_payloads SET flags=flags|2 WHERE kind='base_build' AND component_id=?");
+            flags.Bind(1,baseId);flags.Step();
+            for(int i=0;i<4;++i){
+                auto row=db.Prepare("INSERT INTO build_choices VALUES('base_build',?,'pets',?,?)");
+                row.Bind(1,baseId);row.Bind(2,static_cast<std::int64_t>(i));row.Bind(3,static_cast<std::int64_t>(i+1));row.Step();
+            }
+        }
+        Json before;assert(C::ToLegacy(prior.loadouts,before,error));
+        Native::Repository migrated(old.db(),DB::Connection::OpenMode::Existing);
+        const auto actual=migrated.Read();
+        assert(actual.revision==2&&actual.loadouts.loadouts[0].refs.count("pets"));
+        assert(C::Find(actual.loadouts,"base_build",baseId));
+        Json after;assert(C::ToLegacy(actual.loadouts,after,error)&&before==after);
+        assert(C::ValidateCurrentCompanionOwnership(actual.loadouts,error));
+    }
     // A populated v5 library migrates without losing legacy labels, content
     // or revision. The two new typed tables are additive.
     {

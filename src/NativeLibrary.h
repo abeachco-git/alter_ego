@@ -46,7 +46,7 @@ private:
     Fingerprint fingerprint_;
     Snapshot ReadUnlocked();
     std::int64_t CommitUnlocked(const Snapshot& before,const Snapshot& after);
-    void UpgradeBackedUpV4(std::int64_t expectedRevision);
+    void UpgradeBackedUpLibrary(int version,std::int64_t expectedRevision);
 };
 
 } // namespace AlterEgo::NativeLibrary

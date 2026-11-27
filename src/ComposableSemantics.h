@@ -140,8 +140,9 @@ inline Summary Sigils(const Json& sigils,bool observedComplete=false) {
 // have separate source components and separate match states.
 inline std::string ComparisonComponent(const std::string& group,
                                        const std::string& field) {
-    if (group == "Specializations" || group == "Traits" || group == "Build" ||
-        group == "Ranger pets" || group == "Revenant legends")
+    if (group == "Ranger pets") return "pets";
+    if (group == "Revenant legends") return "legends";
+    if (group == "Specializations" || group == "Traits" || group == "Build")
         return "base_build";
     if (group == "Terrestrial skills" || group == "Aquatic skills") return "skills";
     if (group == "Aquatic") return "aquatic";

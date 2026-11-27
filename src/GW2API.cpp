@@ -2687,6 +2687,11 @@ namespace AlterEgo {
             if (const auto info = GW2API::GetSpecInfo(id)) return info->name;
         } else if (category == "skill") {
             if (const auto info = GW2API::GetSkillInfo(id)) return info->name;
+        } else if(category=="pet"){
+            for(const auto& pet:PublicCatalog::Get()->pets)if(pet.id==id)return pet.name;
+        } else if(category=="legend"){
+            if(id<=255)for(const auto& legend:PublicCatalog::Get()->legends)
+                if(legend.code==PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(id)))return legend.name;
         } else if (category == "stat") {
             if (const auto info = GW2API::GetItemStatInfo(id)) return info->name;
         } else {
@@ -2910,6 +2915,7 @@ namespace AlterEgo {
                 if(oldRef==oldRefs.end()&&newRef==newRefs.end())continue;
                 if (oldRef == oldRefs.end() || newRef == newRefs.end()) {
                     changed = true;
+                    if(!Composable::IsEquipmentKind(kind))buildChanged=true;
                     continue;
                 }
                 const auto* oldPart = Composable::Find(before, kind, oldRef->second);
@@ -2919,7 +2925,7 @@ namespace AlterEgo {
                 // Only a semantic payload change does.
                 if (!oldPart || !newPart || !NativeLibrary::ExactContent(oldPart->data,newPart->data)) {
                     changed = true;
-                    if (kind == "base_build" || kind == "skills") buildChanged = true;
+                    if (!Composable::IsEquipmentKind(kind)) buildChanged = true;
                 }
             }
             if(previous->equipment_set_id!=loadout.equipment_set_id||previous->fashion_id!=loadout.fashion_id||oldRefs!=newRefs)affected.insert(loadout.id);
@@ -3316,7 +3322,8 @@ namespace AlterEgo {
         if (!Composable::IsKind(kind) || name.empty()) return false;
         const auto fields = Composable::Split(SerializeSavedBuild(capture));
         auto selected = fields.find(kind);
-        if (selected == fields.end()||(kind=="aquatic"&&selected->second.empty())) return false;
+        if (selected == fields.end()||!Composable::KindApplies(kind,capture.profession)||
+            (Composable::IsOptionalKind(kind)&&selected->second.empty())) return false;
         return CreateLoadoutComponent(kind,name,selected->second,savedId,reuseExact,capture.profession,
             reuseExact?Composable::NameOrigin::Automatic:Composable::NameOrigin::Manual,reuseExact);
     }
@@ -3427,7 +3434,8 @@ namespace AlterEgo {
         if (!Composable::IsKind(kind) || componentId.empty()) return false;
         const auto parts = Composable::Split(SerializeSavedBuild(capture));
         const auto selected = parts.find(kind);
-        if (selected == parts.end()) return false;
+        if (selected == parts.end()||!Composable::KindApplies(kind,capture.profession)||
+            (Composable::IsCompanionKind(kind)&&selected->second.empty())) return false;
         return CommitComposableEdit([&](Composable::Document& doc, std::string& error) {
             const auto* existing = Composable::Find(doc, kind, componentId);
             if (!existing) return Composable::Fail(error, "Component not found.");

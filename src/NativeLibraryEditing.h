@@ -29,7 +29,7 @@ public:
                               const std::string& profession={})const {
         std::vector<Match> out;
         const auto group=hashes_.find(kind);
-        if(group==hashes_.end())return out;
+        if(group==hashes_.end()||(!profession.empty()&&!Composable::KindApplies(kind,profession)))return out;
         const auto bucket=group->second.find(ExactFingerprint(data));
         if(bucket==group->second.end())return out;
         for(const auto& id:bucket->second) {
@@ -185,7 +185,8 @@ inline bool PutLoadout(Composable::Document& doc,const Json& raw,std::string& er
     for(const auto& [kind,data]:parts) {
         if(Composable::SetOwns(doc,next,kind))continue;
         const auto ref=next.refs.find(kind);
-        if(kind=="aquatic"&&data.empty()&&ref==next.refs.end())continue;
+        if(Composable::IsCompanionKind(kind)&&data.empty()){next.refs.erase(kind);continue;}
+        if(Composable::IsOptionalKind(kind)&&data.empty()&&ref==next.refs.end())continue;
         auto* previous=ref==next.refs.end()?nullptr:Composable::Find(doc,kind,ref->second);
         if(existing&&oldParts.count(kind)&&ExactContent(oldParts.at(kind),data)) {
             if(previous)for(auto it=previous->data.begin();it!=previous->data.end();++it)
@@ -458,6 +459,7 @@ inline bool PutUnifiedLoadout(Composable::Document& doc,const Json& raw,
             const auto& data=change.data;
             const auto& oldId=change.oldId;
             auto* part=oldId.empty()?nullptr:Composable::Find(next,kind,oldId);
+            if(Composable::IsCompanionKind(kind)&&data.empty()){l->refs.erase(kind);continue;}
             const bool inherited=Composable::SetOwns(next,*l,kind);
             const bool shared=part&&sharedKinds.count(kind);
             if(shared){

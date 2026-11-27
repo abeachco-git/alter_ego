@@ -105,8 +105,8 @@ Snapshot OpenOrMigrate(const Paths& paths) {
         {
             Database::Connection source(target.u8string(),Mode::ReadOnly);
             const auto version=source.Scalar("PRAGMA user_version");
-            if(source.Scalar("PRAGMA application_id")==kApplicationId&&(version==4||version==5||version==6)) {
-                const auto backup=CreateUniqueDirectory(paths.Migration(),version==4?"sqlite-v4-":version==5?"sqlite-v5-":"sqlite-v6-")/"library.db";
+            if(source.Scalar("PRAGMA application_id")==kApplicationId&&(version>=4&&version<kSchemaVersion)) {
+                const auto backup=CreateUniqueDirectory(paths.Migration(),"sqlite-v"+std::to_string(version)+"-")/"library.db";
                 Database::Connection out(backup.u8string(),Mode::Create);
                 source.BackupTo(out);
                 backupRevision=out.Scalar("SELECT revision FROM library_state WHERE singleton=1");

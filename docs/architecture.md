@@ -72,7 +72,9 @@ Ten component categories:
 
 | Component | Fields | Semantic comparison |
 | --- | --- | --- |
-| base_build | Profession, traits, specialization, pets, legends, Build Template weapon picks | GW2 Build Template meaning |
+| base_build | Profession, traits, specialization, Build Template weapon picks | GW2 Build Template meaning |
+| pets | Ranger terrestrial and aquatic pairs | Optional profession-gated component |
+| legends | Revenant terrestrial and aquatic pairs | Optional profession-gated component |
 | skills | Heal, three utility slots, elite, aquatic skills | Utilities are unordered for matching but slot order is preserved for export |
 | weapons | Physical weapon sets, weapon type, item ID, stats | Compare by weapon set |
 | armor | Armor slots, stats, item IDs | Compare base stats by slot |
@@ -428,3 +430,5 @@ The documented [character summary API](https://wiki.guildwars2.com/wiki/API:2/ch
 **Item metadata.** Collect known item IDs, upgrades and infusions from committed character/storage results across the job; deduplicate and pass missing complete detail/binding metadata to the existing per-ID ItemMetadata owner, using the shared 200-ID bulk limit. Targeted tooltips/imports and Inventory enrichment retain their existing demand and claim/coalescing behavior. Do not generate extra catalog sweeps, refresh unrelated definitions just to fill capacity, or fetch Trading Post prices merely because character ownership changed. Price TTL remains independent.
 
 Native Fast Load, transport timeout and throttling, ordinary intervals, propagation grace, cache schemas and independent account storage policies are unchanged. Authenticated user testing verified field equivalence for two characters and successful exact coverage through 12 characters; this supports summary retrieval but does not establish 20-character latency or in-game concurrency behavior. See [regression testing](regression-testing.md) and [development status](development-status.md) for remaining acceptance.
+
+Library schema v8 separates applicable pet and legend selections from Base Build using `Composable::NormalizeCompanions`. The verified backup/rebuild path preserves original Base Build IDs, sharing, unused records, exact flat projections, Fashion and equipment sets; applicable pairs obtain independent component IDs. Non-applicable legacy fields remain in Base Build for exact flat interchange but do not appear as components. `KindApplies` gates companion assignment/capture/validation and `IsEquipmentKind` excludes them from Equipment Sets. Companion changes invalidate derived build links through the existing commit owner. Public metadata and artwork ownership are unchanged.

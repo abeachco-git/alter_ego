@@ -132,10 +132,46 @@ int case_composable_loadouts(int, char**) {
     assert(document.loadouts.size() == 2);
     assert(document.components.size() == 9);
     for (const auto& kind : Kinds()) {
-        if(kind=="aquatic") {
+        if(IsOptionalKind(kind)) {
             assert(!document.components.count(kind));
             for(const auto& l:document.loadouts)assert(!l.refs.count(kind));
         } else assert(document.components.at(kind).size()==2);
+    }
+    // Exact independent companion choices, including unused Base Builds,
+    // shared owners and wrong-profession legacy fields.
+    {
+        Json legacy=kExample;
+        legacy["builds"][0]["profession"]="Ranger";
+        legacy["builds"][0]["pets"]={1,2,3,4};
+        legacy["builds"][1]["profession"]="Revenant";
+        legacy["builds"][1]["legend_codes"]={1,2,0,3};
+        Document companions;
+        assert(SplitLegacy(legacy,companions,error));
+        assert(companions.loadouts[0].refs.count("pets")&&!companions.loadouts[0].refs.count("legends"));
+        assert(companions.loadouts[1].refs.count("legends")&&!companions.loadouts[1].refs.count("pets"));
+        assert(!IsEquipmentKind("pets")&&!IsEquipmentKind("legends"));
+        assert(!Assign(companions,"two","pets",companions.loadouts[0].refs.at("pets"),error));
+        Json flat;assert(ToLegacy(companions,flat,error)&&flat["builds"]==legacy["builds"]);
+        // Reconstruct the pre-split graph, retaining shared and unused base IDs.
+        auto old=companions;
+        for(auto& l:old.loadouts)for(const auto& kind:{std::string("pets"),std::string("legends")}){
+            const auto r=l.refs.find(kind);if(r==l.refs.end())continue;
+            const auto* part=Find(old,kind,r->second);
+            Find(old,"base_build",l.refs.at("base_build"))->data[CompanionField(kind)]=part->data.at(CompanionField(kind));
+            l.refs.erase(r);
+        }
+        old.components.erase("pets");old.components.erase("legends");
+        auto unused=*Find(old,"base_build","base_build:one");unused.id="unused";old.components["base_build"].push_back(unused);
+        auto shared=old.loadouts[0];shared.id="shared";shared.metadata["id"]="shared";old.loadouts.push_back(shared);
+        Json prior;assert(ToLegacy(old,prior,error));
+        assert(NormalizeCompanions(old,error));
+        assert(ValidateCurrentCompanionOwnership(old,error));
+        assert(old.loadouts[0].refs.at("pets")==old.loadouts[2].refs.at("pets"));
+        assert(old.components.at("pets").size()==2&&Find(old,"base_build","unused"));
+        assert(ToLegacy(old,flat,error)&&prior==flat);
+        const auto exact=ToJson(old);assert(NormalizeCompanions(old,error)&&ToJson(old)==exact);
+        assert(Semantics::ComparisonComponent("Ranger pets","Terrestrial 1")=="pets");
+        assert(Semantics::ComparisonComponent("Revenant legends","Aquatic 2")=="legends");
     }
     Json reconstructed;
     assert(ToLegacy(document, reconstructed, error));

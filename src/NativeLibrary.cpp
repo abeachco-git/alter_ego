@@ -20,9 +20,10 @@ std::string ExactFingerprint(const Json& data) {
 bool ExactContent(const Json& a,const Json& b) {return a.dump()==b.dump();}
 
 namespace {
-void ValidateSnapshot(const Snapshot& snapshot) {
+void ValidateSnapshot(const Snapshot& snapshot,bool current=true) {
     std::string error;
-    if(!Composable::Validate(snapshot.loadouts,error))
+    if(!Composable::Validate(snapshot.loadouts,error)||
+       (current&&!Composable::ValidateCurrentCompanionOwnership(snapshot.loadouts,error)))
         throw Database::Error(SQLITE_CONSTRAINT,error);
     std::set<std::string> fashion;
     for(const auto& look:snapshot.fashion) {
@@ -52,10 +53,11 @@ Repository::Repository(const std::string& path,Database::Connection::OpenMode mo
     const auto version=db_.Scalar("PRAGMA user_version");
     if(mode==Database::Connection::OpenMode::Existing && (id!=kApplicationId||version<=0))
         throw Database::Error(SQLITE_NOTADB,"Existing library is not an initialized Alter Ego database");
-    if(id==kApplicationId&&version==4&&backedUpV4Revision>=0&&mode==Database::Connection::OpenMode::Existing){
-        UpgradeBackedUpV4(backedUpV4Revision);return;
+    if(id==kApplicationId&&version>=4&&version<kSchemaVersion&&
+        (version!=4||backedUpV4Revision>=0)){
+        UpgradeBackedUpLibrary(static_cast<int>(version),backedUpV4Revision);return;
     }
-    if(id==kApplicationId&&version>0&&version!=5&&version!=6&&version!=kSchemaVersion)
+    if(id==kApplicationId&&version>0&&version!=kSchemaVersion)
         throw Database::Error(SQLITE_NOTADB,"Archive experimental library.db and migrate the original v2 library; schema is not supported.");
     if(id==kApplicationId&&version==kSchemaVersion) {
         if(verify) db_.Verify();
@@ -105,7 +107,7 @@ Snapshot Repository::ReadUnlocked() {
             snapshot.loadouts.equipment_sets.push_back(std::move(set));
         }
     }
-    ValidateSnapshot(snapshot);
+    ValidateSnapshot(snapshot,schema>=8);
     return snapshot;
 }
 Snapshot Repository::Read() {
@@ -200,16 +202,20 @@ std::int64_t Repository::CommitUnlocked(const Snapshot& before,const Snapshot& a
 // Rebuild old kind CHECK constraints and graph in one rollback-journal
 // transaction. Foreign keys are disabled for the rebuild only, explicitly
 // verified before commit, and re-enabled before returning.
-void Repository::UpgradeBackedUpV4(std::int64_t expectedRevision) {
+void Repository::UpgradeBackedUpLibrary(int version,std::int64_t expectedRevision) {
     db_.Verify();db_.Exec("PRAGMA foreign_keys=OFF");
     try {
         Database::Transaction tx(db_);
         const auto before=ReadUnlocked();
-        if(before.revision!=expectedRevision)
-            throw Database::Error(SQLITE_BUSY,"Library changed after v4 backup; reopen.");
+        if(expectedRevision>=0&&before.revision!=expectedRevision)
+            throw Database::Error(SQLITE_BUSY,"Library changed after schema backup; reopen.");
         auto after=before;std::string error;
-        if(!Composable::NormalizeAquatic(after.loadouts,error))
+        if((version==4&&!Composable::NormalizeAquatic(after.loadouts,error))||
+           !Composable::NormalizeCompanions(after.loadouts,error))
             throw Database::Error(SQLITE_CONSTRAINT,error);
+        const bool graphChanged=version==4||
+            !ExactContent(Composable::ToJson(before.loadouts),Composable::ToJson(after.loadouts));
+        if(version>=6)db_.Exec("DROP TABLE loadout_source_identity;DROP TABLE fashion_character_identity;");
         db_.Exec(R"SQL(
 DROP TABLE loadout_components;
 DROP TABLE loadout_game_modes;
@@ -237,14 +243,15 @@ DROP TABLE library_state;
         UpgradeSchema(db_,5);
         UpgradeSchema(db_,6);
         UpgradeSchema(db_,7);
-        db_.Exec("PRAGMA user_version=7");
+        UpgradeSchema(db_,8);
+        db_.Exec("PRAGMA user_version=8");
         Snapshot empty;
         CommitUnlocked(empty,after);
-        Run(db_,"UPDATE library_state SET revision=? WHERE singleton=1",{before.revision+1});
+        Run(db_,"UPDATE library_state SET revision=? WHERE singleton=1",{before.revision+(graphChanged?1:0)});
         const auto actual=ReadUnlocked();
         if(!ExactContent(Composable::ToJson(actual.loadouts),Composable::ToJson(after.loadouts))||
            actual.fashion.size()!=after.fashion.size())
-            throw Database::Error(SQLITE_CONSTRAINT,"Aquatic schema round-trip failed");
+            throw Database::Error(SQLITE_CONSTRAINT,"Library schema round-trip failed");
         for(size_t i=0;i<after.fashion.size();++i)
             if(!ExactContent(Fashion::ToJson(actual.fashion[i]),Fashion::ToJson(after.fashion[i])))
                 throw Database::Error(SQLITE_CONSTRAINT,"Fashion schema round-trip failed");

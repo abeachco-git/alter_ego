@@ -4,12 +4,15 @@
 namespace AlterEgo::NativeLibrary {
 
 constexpr int kApplicationId = 0x41454c42; // AELB
-constexpr int kSchemaVersion = 7;
+constexpr int kSchemaVersion = 8;
 
 inline void UpgradeSchema(Database::Connection& db, int version) {
     // Existing v4 is rebuilt transactionally after a verified backup.
     // Earlier experimental schemas remain unsupported.
     if(version>=1&&version<5)return;
+    // Version 8 uses the expanded constraints in the fresh schema below.
+    // Existing versions are rebuilt by Repository after snapshot validation.
+    if(version==8)return;
     if(version==7){
         db.Exec(R"SQL(
 ALTER TABLE components ADD COLUMN name_origin INTEGER NOT NULL DEFAULT 0 CHECK(name_origin IN (0,1,2,3));
@@ -47,7 +50,7 @@ CREATE TABLE library_state(
 INSERT INTO library_state VALUES(1,0);
 CREATE TABLE components(
     kind TEXT NOT NULL CHECK(kind IN ('base_build','skills','weapons','armor',
-        'trinkets','runes','sigils','infusions','relic','aquatic')),
+        'trinkets','runes','sigils','infusions','relic','aquatic','pets','legends')),
     id TEXT NOT NULL CHECK(length(id)>0),
     name TEXT NOT NULL,
     ordinal INTEGER NOT NULL CHECK(ordinal>=0),
@@ -80,8 +83,9 @@ CREATE TABLE build_traits(
         REFERENCES build_specializations(kind,component_id,ordinal) ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE build_choices(
-    kind TEXT NOT NULL CHECK(kind='base_build'), component_id TEXT NOT NULL,
-    field TEXT NOT NULL CHECK(field IN ('pets','legend_codes','weapons')),
+    kind TEXT NOT NULL CHECK(kind IN ('base_build','pets','legends')), component_id TEXT NOT NULL,
+    field TEXT NOT NULL CHECK((kind='base_build' AND field IN ('pets','legend_codes','weapons')) OR
+        (kind='pets' AND field='pets') OR (kind='legends' AND field='legend_codes')),
     ordinal INTEGER NOT NULL CHECK(ordinal>=0), value INTEGER NOT NULL,
     PRIMARY KEY(kind,component_id,field,ordinal),
     FOREIGN KEY(kind,component_id) REFERENCES component_payloads(kind,component_id)
