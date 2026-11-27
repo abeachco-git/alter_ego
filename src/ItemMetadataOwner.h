@@ -115,7 +115,7 @@ inline void Fetch(Work& job,Send&& send,Persist&& persist,Adopt&& adopt){
     if(!job.claim)return;
     const auto& ids=job.claim->ids;
     auto& state=State();
-    constexpr size_t batchSize=200;
+    constexpr size_t batchSize=RefreshEngine::PublicBulkIdLimit;
     for(size_t start=0;start<ids.size();start+=batchSize){
         Background::Checkpoint();
         const auto end=std::min(start+batchSize,ids.size());

@@ -109,10 +109,10 @@ namespace Skinventory {
         };
         Background::Workers().Launch([claim,manual,explicitDemand,finish]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
-            for(size_t i=0;i<claim->ids.size();i+=200){
+            for(size_t i=0;i<claim->ids.size();i+=RefreshEngine::PublicBulkIdLimit){
                 Background::Checkpoint();
                 if(!explicitDemand&&!AutoRefreshPolicy::Enabled(AutoRefreshPolicy::Dataset::TradingPrices))break;
-                const auto end=std::min(i+200,claim->ids.size());
+                const auto end=std::min(i+RefreshEngine::PublicBulkIdLimit,claim->ids.size());
                 std::vector<uint32_t> batch(claim->ids.begin()+i,claim->ids.begin()+end),needed;
                 // Recheck after acquiring ownership to close the read/claim race.
                 {std::lock_guard<std::mutex> lock(s_mutex);

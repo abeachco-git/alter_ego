@@ -5,6 +5,7 @@
 #include "BackgroundWorkers.h"
 #include "GW2API.h"
 #include "CharacterRequest.h"
+#include "CharacterBatchCore.h"
 #include "SkinDataCache.h"
 #include "SkinCache.h"
 #include "ReferenceMetadataCache.h"
@@ -415,6 +416,77 @@ namespace AlterEgo {
                 {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;s_fetch_message=partial?"Some rosters could not be verified or saved":targets.empty()?"Character list received (empty)":"Character list received";s_roster_refresh={s_fetch_status,s_fetch_message};}
                 return;
             }
+            namespace BS=CharacterScopes;
+            // Manual complete refreshes may share one combined response for
+            // up to eight exact admitted targets on the same account.
+            // Physical equipment retains its existing independent broker.
+            struct CombinedRow {
+                CharacterActivity::Key key;
+                CharacterIdentity::Address address;
+                std::array<CharacterActivity::Ticket,5> tickets{};
+                std::array<bool,5> used{};
+                json data;
+                int64_t stamp=0;
+                std::chrono::steady_clock::time_point received{};
+                ~CombinedRow(){
+                    for(auto s:BS::Ordered){const auto i=BS::Index(s);
+                        if(tickets[i].serial&&(!used[i]||Background::Workers().Stopping()))
+                            CharacterActivity::Cancel(key,BS::Name(s),tickets[i]);
+                    }
+                }
+            };
+            std::map<CharacterActivity::Key,std::unique_ptr<CombinedRow>> combinedRows;
+            std::set<CharacterActivity::Key> combinedAttempted;
+            std::set<std::string> combinedUnavailable;
+            const auto prepareCombined=[&](size_t start){
+                const auto& account=targets[start].first;
+                if(!manual||demand!=BS::All||!refreshCrafting||!account.permissions.count("builds")||
+                   !account.permissions.count("inventories")||combinedUnavailable.count(account.id))return;
+                const CharacterActivity::Key first{account.id,targets[start].second};
+                if(combinedAttempted.count(first))return;
+                std::vector<std::string> names;
+                std::map<std::string,std::unique_ptr<CombinedRow>> admitted;
+                for(size_t i=start;i<targets.size()&&names.size()<CharacterBatch::Limit;++i){
+                    const auto& [owner,name]=targets[i];
+                    if(owner.id!=account.id||owner.generation!=account.generation)continue;
+                    const CharacterActivity::Key key{owner.id,name};
+                    if(!combinedAttempted.insert(key).second)continue;
+                    const auto address=NativeAccounts::ResolveCharacterAddress(owner.id,name);
+                    if(!address||!CharacterIdentity::AdmittedBinding(owner.bindings,name,address->binding)||
+                       address->credentialGeneration!=owner.generation)continue;
+                    auto row=std::make_unique<CombinedRow>();
+                    row->key=key;row->address=*address;
+                    if(!NativeAccounts::CommitIfCharacterCurrent(owner,*address,[&]{
+                        for(auto s:BS::Ordered)if(s!=BS::Physical)
+                            row->tickets[BS::Index(s)]=CharacterActivity::Begin(key,BS::Name(s));
+                        return true;
+                    }))continue;
+                    names.push_back(name);admitted.emplace(name,std::move(row));
+                }
+                if(names.empty())return;
+                const auto path=CharacterBatch::Path(names,UrlEncode);
+                if(path.empty())return;
+                {std::lock_guard<std::mutex> lock(s_mutex);
+                    s_fetch_message="Retrieving combined character data ("+std::to_string(names.size())+")";}
+                auto response=NativeAccounts::Request(account,path,{"characters","builds","inventories"},"Cache-Control: no-cache\r\n");
+                const auto received=std::chrono::steady_clock::now();const auto stamp=CharacterActivity::Now();
+                Background::Checkpoint();
+                if(!response){
+                    if(response.status==400||response.status==403||response.status==501)
+                        combinedUnavailable.insert(account.id);
+                    return;
+                }
+                auto indexed=CharacterBatch::Index(names,std::move(response.data));
+                if(!indexed){combinedUnavailable.insert(account.id);return;}
+                for(auto& [name,data]:*indexed){
+                    auto& row=admitted.at(name);
+                    const auto evidence=CharacterBatch::Evidence(data);
+                    if(!evidence||!(*evidence==row->address.binding.evidence))continue;
+                    try{(void)ParseVerifiedCore(name,data);}catch(...){continue;}
+                    row->data=std::move(data);row->stamp=stamp;row->received=received;
+                    combinedRows.emplace(row->key,std::move(row));
+                }
+            };
             size_t ordinal=0;
             for(const auto& [a,name]:targets){
                 Background::Checkpoint();++ordinal;
@@ -425,7 +497,13 @@ namespace AlterEgo {
                 }
                 namespace S=CharacterScopes;
                 const CharacterActivity::Key key{a.id,name};
+                prepareCombined(ordinal-1);
+                std::unique_ptr<CombinedRow> combined;
+                if(auto it=combinedRows.find(key);it!=combinedRows.end()){
+                    combined=std::move(it->second);combinedRows.erase(it);
+                }
                 const auto address=NativeAccounts::EnsureCharacterAddress(a,name);
+                if(combined&&(!address||!CharacterIdentity::SameAddress(combined->address,*address)))combined.reset();
                 if(!address){
                     partial=true;std::lock_guard<std::mutex> lock(s_mutex);
                     s_character_work.Finish(key,0,CharacterActivity::Now(),"Character identity unresolved or changed");continue;
@@ -461,8 +539,11 @@ namespace AlterEgo {
                     s_fetch_message=RefreshProgress::Character(ordinal,targets.size(),name,label);
                 };
                 std::string scopeError;
+                const json* combinedField=nullptr;
                 const auto require=[&](const std::string& endpoint,const std::vector<std::string>& perms,const char* label){
-                    stage(label);auto r=NativeAccounts::Request(a,endpoint,perms,
+                    stage(label);
+                    if(combinedField)return *combinedField;
+                    auto r=NativeAccounts::Request(a,endpoint,perms,
                         endpoint==path+"/core"?"Cache-Control: no-cache\r\n":"");
                     if(!r){
                         if(endpoint==path+"/core"){
@@ -495,10 +576,19 @@ namespace AlterEgo {
                     if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[]{return true;})){partial=true;break;}
                     if(scope!=S::Core&&!identityVerified){partial=true;continue;}
                     {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Activate(key,scope);}
+                    const auto si=S::Index(scope);
+                    combinedField=combined&&combined->stamp>=ch.scope_stamps[si]&&combined->tickets[si].serial?
+                        CharacterBatch::Field(combined->data,scope):nullptr;
+                    // Parse through exactly the existing validators. Invalid
+                    // or incomplete combined fields fall back to their narrow
+                    // endpoint with a fresh attempt, not a fabricated stamp.
+                    for(;;){
                     CharacterActivity::Ticket ticket;
-                    if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{ticket=attempts.BeginScope(S::Name(scope));return true;})){
-                        partial=true;break;
-                    }
+                    if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{
+                        if(combinedField){ticket=combined->tickets[si];combined->used[si]=true;}
+                        else ticket=attempts.BeginScope(S::Name(scope));
+                        return true;
+                    })){partial=true;break;}
                     bool specVerified=true;
                     scopeError.clear();
                     try{
@@ -514,10 +604,11 @@ namespace AlterEgo {
                             catch(...){
                                 // A malformed successful core response cannot
                                 // leave a previously verified address usable.
-                                (void)NativeAccounts::RecordIdentityObservation(a,*address,{},{},{});
+                                if(!combinedField)(void)NativeAccounts::RecordIdentityObservation(a,*address,{},{},{});
                                 throw;
                             }
-                            if(!NativeAccounts::RecordIdentityObservation(a,*address,c.created,c.profession,c.race))
+                            if(!NativeAccounts::RecordIdentityObservation(a,*address,c.created,c.profession,c.race,
+                                combinedField?combined->received:std::chrono::steady_clock::time_point{}))
                                 throw std::runtime_error("Character identity evidence changed");
                             next.race=c.race;next.gender=c.gender;next.profession=c.profession;
                             next.level=c.level;next.age=c.age;next.created=c.created;next.deaths=c.deaths;
@@ -608,7 +699,7 @@ namespace AlterEgo {
                             next.scope_stamps[S::Index(scope)]=stamp;
                             auto actual=ticket;actual.verificationStarted=physical.started;
                             verified.push_back({scope,actual,stamp,true});
-                            ch=std::move(next);continue;
+                            ch=std::move(next);break;
                         }
                         case S::Crafting:{
                             auto craft=require(path+"/crafting",{"characters"},"Crafting");
@@ -621,12 +712,19 @@ namespace AlterEgo {
                             next.crafting_active=std::move(c.crafting_active);next.crafting_cached=true;break;
                         }
                         }
-                        const auto stamp=CharacterActivity::Now();
+                        if(scope==S::Physical)break;
+                        const auto stamp=combinedField?combined->stamp:CharacterActivity::Now();
                         next.scope_stamps[S::Index(scope)]=stamp;
                         verified.push_back({scope,ticket,stamp,specVerified});
                         ch=std::move(next);
                         if(scope==S::Core)identityVerified=true;
+                        break;
                     }catch(const Background::Cancelled&){throw;}catch(...){
+                        if(combinedField){
+                            CharacterActivity::Cancel(key,S::Name(scope),ticket);
+                            combinedField=nullptr;
+                            continue;
+                        }
                         partial=true;
                         if(!Background::Workers().Stopping()){
                             if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{
@@ -635,7 +733,10 @@ namespace AlterEgo {
                                     scopeError.empty()?"Invalid or incomplete endpoint response":scopeError);return true;
                             }))CharacterActivity::Cancel(key,S::Name(scope),ticket);
                         }
+                        break;
                     }
+                    }
+                    combinedField=nullptr;
                 }
                 Background::Checkpoint();
                 if(verified.empty()||!identityVerified||!NativeAccounts::Current(a)){

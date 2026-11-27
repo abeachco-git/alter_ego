@@ -1,5 +1,6 @@
 #include "CharacterIdentityStore.h"
 #include "CharacterIdentityCache.h"
+#include "CharacterBatchCore.h"
 #include "NativeAccounts.h"
 #include "UntrustedInput.h"
 #include "AccountCommitGate.h"
@@ -414,7 +415,8 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
     try{
         if(result.state.status=="Ready"){
             std::vector<CharacterIdentity::Observation> evidence;
-            std::map<std::string,std::pair<Json,int64_t>> coreResponses;
+            struct CoreObservation {Json data;int64_t stamp;Clock::time_point retrieved;};
+            std::map<std::string,CoreObservation> coreResponses;
             std::set<std::string> attempted;
             auto readCore=[&](const std::string& name){
                 if(!attempted.insert(name).second)return;
@@ -428,9 +430,36 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
                             response.data.at("profession").get<std::string>(),response.data.at("race").get<std::string>()});
                 }catch(...){}
                 evidence.push_back({name,observed.value_or(CharacterIdentity::Evidence{})});
-                if(observed)coreResponses.emplace(name,std::make_pair(response.data,Now()));
+                if(observed)coreResponses.emplace(name,CoreObservation{response.data,Now(),Clock::now()});
             };
-            for(const auto& name:result.names)if(verifyAll||!before.Current(name))readCore(name);
+            // The name-only roster remains the sole presence/absence authority.
+            // Bulk summaries supply identity evidence, never new roster names.
+            auto readCores=[&](const std::vector<std::string>& names){
+                for(size_t i=0;i<names.size();i+=CharacterBatch::Limit){
+                    Background::Checkpoint();
+                    const auto end=std::min(i+CharacterBatch::Limit,names.size());
+                    std::vector<std::string> batch;
+                    for(size_t j=i;j<end;++j)if(!attempted.count(names[j]))batch.push_back(names[j]);
+                    if(batch.size()>1){
+                        const auto response=Request(a,CharacterBatch::Path(batch,Encode),{"characters"},"Cache-Control: no-cache\r\n");
+                        const auto received=Clock::now();const auto stamp=Now();
+                        if(response){
+                            auto indexed=CharacterBatch::Index(batch,response.data);
+                            if(indexed)for(auto& [name,row]:*indexed){
+                                const auto observed=CharacterBatch::Evidence(row);
+                                if(!observed)continue; // targeted core preserves existing conflict/failure semantics
+                                attempted.insert(name);
+                                evidence.push_back({name,*observed});
+                                coreResponses.emplace(name,CoreObservation{std::move(row),stamp,received});
+                            }
+                        }
+                    }
+                    for(const auto& name:batch)readCore(name);
+                }
+            };
+            std::vector<std::string> initial;
+            for(const auto& name:result.names)if(verifyAll||!before.Current(name))initial.push_back(name);
+            readCores(initial);
             auto plan=CharacterIdentity::Reconcile(before,result.names,evidence);
             const bool missing=std::any_of(before.records.begin(),before.records.end(),[&](const auto& entry){
                 const auto& old=entry.second;
@@ -441,7 +470,7 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
             });
             // Expand only for unresolved ownership or retirement.
             if(missing||!before.pendingAbsence.empty()||(plan&&!plan.next.blocked.empty()))
-                for(const auto& name:result.names)readCore(name);
+                readCores(std::vector<std::string>(result.names.begin(),result.names.end()));
             result.full=evidence.size()==result.names.size()&&
                 std::all_of(evidence.begin(),evidence.end(),[](const auto& row){return CharacterIdentity::Normalize(row.evidence).has_value();});
             result.accepted=CommitIfCurrent(a,[&]{
@@ -466,10 +495,11 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
                     const auto e=CharacterIdentity::Normalize(row.evidence);
                     const auto* bound=updated->next.Current(row.name);
                     if(e&&bound&&bound->evidence==*e){
-                        identityProofs[{a.id,row.name}]={{bound->id,bound->evidence,bound->bindingRevision},a.generation,now};
                         const auto core=coreResponses.find(row.name);
-                        if(core!=coreResponses.end())
-                            (void)GW2API::PublishDiscoveredCore(a.id,row.name,core->second.first,core->second.second);
+                        if(core!=coreResponses.end()){
+                            identityProofs[{a.id,row.name}]={{bound->id,bound->evidence,bound->bindingRevision},a.generation,core->second.retrieved};
+                            (void)GW2API::PublishDiscoveredCore(a.id,row.name,core->second.data,core->second.stamp);
+                        }
                     }
                 }
                 Publish("",false);return true;
@@ -840,7 +870,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
             catch(const Background::Cancelled&){throw;}catch(...){Background::Checkpoint();}
             metadataDone+=batch.size();batch.clear();publishProgress();
         };
-        for(auto id:ids){Background::Checkpoint();if(batch.size()==100)flush();batch.push_back(id);}flush();
+        for(auto id:ids){Background::Checkpoint();if(batch.size()==RefreshEngine::PublicBulkIdLimit)flush();batch.push_back(id);}flush();
         {std::lock_guard<std::mutex> gate(credentialMutex);
         Publish("Refresh finished. Check individual storage status for failures or stale data.");}
     },std::move(pending),epoch);
@@ -1071,11 +1101,13 @@ static bool IsolateCharacterAddress(const LinkedAccount& a,const CharacterIdenti
     });}catch(...){return false;}
 }
 bool RecordIdentityObservation(const LinkedAccount& a,const CharacterIdentity::Address& address,
-    const std::string& created,const std::string& profession,const std::string& race){
+    const std::string& created,const std::string& profession,const std::string& race,
+    std::chrono::steady_clock::time_point retrieved){
+    if(retrieved==std::chrono::steady_clock::time_point{})retrieved=std::chrono::steady_clock::now();
     const auto evidence=CharacterIdentity::Normalize({created,profession,race});
     if(evidence&&*evidence==address.binding.evidence)
         return CommitIfCharacterCurrent(a,address,[&]{
-            identityProofs[{a.id,address.name}]={address.binding,a.generation,std::chrono::steady_clock::now()};return true;
+            identityProofs[{a.id,address.name}]={address.binding,a.generation,retrieved};return true;
         });
     if(IsolateCharacterAddress(a,address,evidence.value_or(CharacterIdentity::Evidence{})))
         (void)FetchRoster(a,true,false);

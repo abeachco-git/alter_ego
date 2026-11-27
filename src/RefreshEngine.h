@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 namespace AlterEgo::RefreshEngine {
+inline constexpr size_t PublicBulkIdLimit=200;
 inline std::atomic<int>& ObjectiveMinutesValue(){static std::atomic<int> n{15};return n;}
 inline int ObjectiveMinutes(){return ObjectiveMinutesValue().load();}
 inline void SetObjectiveMinutes(int n){ObjectiveMinutesValue()=std::max(5,std::min(60,n));}

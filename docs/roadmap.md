@@ -50,3 +50,5 @@ Remaining approved batch: targeted 9B.3. Verify each with relevant regressions a
 ## Verification and release
 
 Parts 7–8 and other completed implementation acceptance, discretionary performance measurements and non-live verification remain in [development status](development-status.md); release-only gates remain in [release checklist](release-checklist.md). Do not duplicate those lists here. No approved implementation is complete without exact-commit required build gates and verified DLL delivery per AGENTS.md.
+
+- [ ] **Character summary follow-up:** authenticated live parity of summary physical equipment and Inventory bags with existing schema-pinned endpoints; only then consider integrating them through the existing shared physical owner (never bypass publication fences). See Architecture and regression testing. No broader scheduling changes.

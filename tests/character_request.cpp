@@ -3,10 +3,41 @@
 #include <future>
 #include "../src/AccountIdentity.h"
 #include "../src/CharacterRequest.h"
+#include "../src/CharacterBatchCore.h"
 #include "../src/GameMemoryCore.h"
 #include <cassert>
 int case_character_request(int,char**) {
     using namespace AlterEgo::CharacterRequest;
+    {
+        namespace B=AlterEgo::CharacterBatch;namespace S=AlterEgo::CharacterScopes;
+        using J=nlohmann::json;
+        const auto encode=[](const std::string& name){return name=="Nul Sul"?std::string("Nul%20Sul"):name;};
+        assert(B::Path({"Nul Sul","Other"},encode)=="/v2/characters?ids=Nul%20Sul,Other&v=2024-04-01T00:00:00.000Z");
+        assert(B::Path({"Other","Other"},encode).empty());
+        assert(B::Path(std::vector<std::string>(B::Limit+1,"Other"),encode).empty());
+        const J first={{"name","Nul Sul"},{"created","2020-01-01T00:00:00Z"},{"profession","Warrior"},{"race","Human"},
+            {"build_tabs_unlocked",2},{"active_build_tab",1},{"build_tabs",J::array({J{{"tab",1},{"is_active",true}},J{{"tab",2},{"is_active",false}}})},
+            {"crafting",J::array()}};
+        const J other={{"name","Other"}};
+        auto indexed=B::Index({"Nul Sul","Other"},J::array({other,first}));
+        assert(indexed&&indexed->size()==2&&indexed->at("Nul Sul")==first);
+        assert(B::Evidence(first));
+        assert(B::Field(first,S::Core)&&B::Field(first,S::Builds)&&B::Field(first,S::Crafting));
+        assert(!B::Field(first,S::Tabs)&&!B::Field(first,S::Physical));
+        assert(!B::Evidence(other));
+        assert(B::Index({"Nul Sul","Other"},J::array({first}))->size()==1);
+        assert(!B::Index({"Nul Sul","Other"},J::array({first,first})));
+        assert(!B::Index({"Nul Sul"},J::array({other})));
+        assert(!B::Index({"Nul Sul"},first));
+        auto invalid=first;invalid["build_tabs"].erase(1);
+        assert(!B::Field(invalid,S::Builds));
+        invalid=first;invalid["active_build_tab"]=2;
+        assert(!B::Field(invalid,S::Builds));
+        invalid=first;invalid["build_tabs"][1]["tab"]=1;
+        assert(!B::Field(invalid,S::Builds));
+        invalid=first;invalid["crafting"]=nullptr;
+        assert(!B::Field(invalid,S::Crafting));
+    }
     ReplyGate gate;
     gate.Arm("A.B","/core");
     assert(!gate.Claim("A_B","/core",true,false));
