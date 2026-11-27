@@ -23,11 +23,15 @@ def schema(path):
     source = (ROOT / path).read_text(encoding="utf-8")
     version = int(re.search(r"kSchemaVersion\s*=\s*(\d+)", source)[1])
     blocks = re.findall(r'R"SQL\((.*?)\)SQL"', source, re.S)
-    # The native library has one fresh-schema block. V4 migration to v5
-    # is a separate backed-up graph rebuild, exercised by native regression tests.
+    # The native library starts at the v5 baseline and applies v6 provenance
+    # tables afterward. The backed-up v4 graph rebuild is tested separately.
     # Cache migrations remain ordered one block per version.
-    if path == "src/NativeLibrarySchema.h" and version == 5 and len(blocks) == 1:
-        return version, blocks
+    if path == "src/NativeLibrarySchema.h":
+        if version == 5 and len(blocks) == 1:
+            return version, blocks
+        if version == 6 and len(blocks) == 2:
+            return version, list(reversed(blocks))
+        raise RuntimeError("Native library schema layout changed; update benchmark")
     if len(blocks) != version:
         raise RuntimeError("Schema migration layout changed; update benchmark")
     return version, list(reversed(blocks))
@@ -90,6 +94,8 @@ def seed(cache, library, mode, sync, scale):
             linked = n % 2 == 0
             db.execute("INSERT INTO loadouts(id,ordinal,modes_present,name,extension_json,equipment_set_id) VALUES(?,?,0,?,'{}',?)",
                        (loadout,n,loadout,"set-0" if linked else None))
+            db.execute("INSERT INTO loadout_source_identity VALUES(?,?,?,?,?,?)",
+                       (loadout, "Fixture.1001", f"Hero {n % 20}", "2020-01-01T00:00:00Z", "Necromancer", "Human"))
             db.execute("INSERT INTO loadout_components VALUES(?,'base_build',?)", (loadout,ident))
             db.execute("INSERT INTO loadout_components VALUES(?,'skills','skills-0')", (loadout,))
             db.executemany("INSERT INTO loadout_components VALUES(?,?,?)", ((loadout,kind,kind+"-0") for kind in gear_kinds if not linked or kind == "relic"))
@@ -130,6 +136,8 @@ def exercise(directory, mode, sync, scale, repeats):
             l.execute("SELECT * FROM component_payloads").fetchall()
             l.execute("SELECT * FROM loadouts ORDER BY ordinal").fetchall()
             l.execute("SELECT * FROM loadout_components").fetchall()
+            l.execute("SELECT * FROM loadout_source_identity").fetchall()
+            l.execute("SELECT * FROM fashion_character_identity").fetchall()
             l.execute("SELECT * FROM equipment_sets ORDER BY ordinal").fetchall()
             l.execute("SELECT * FROM equipment_set_components").fetchall()
 
