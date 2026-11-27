@@ -240,6 +240,18 @@ inline bool SelectableOption(const char* label, bool selected = false) {
     if (selected) ImGui::SetItemDefaultFocus();
     return clicked;
 }
+// Attach an opt-in menu immediately after the native hit target, before another
+// widget or popup changes the current item/window. Callers scope by stable entity ID.
+template<class Render>
+inline void EntityContext(const char* id, Render render) {
+    if (ImGui::BeginPopupContextItem(id)) { render(); ImGui::EndPopup(); }
+}
+template<class Render>
+inline bool EntityOption(const char* label, bool selected, Render render) {
+    const bool clicked = SelectableOption(label, selected);
+    EntityContext("##entity_option_actions", render);
+    return clicked;
+}
 // InputTextEx in our vendored ImGui 1.80 already owns the clipboard context
 // menu, selection, UTF-8 filtering and callbacks. Never add a second menu here.
 inline bool InputText(const char* label, char* buffer, size_t capacity,

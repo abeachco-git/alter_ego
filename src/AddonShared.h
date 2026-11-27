@@ -11,6 +11,7 @@
 #include "nexus/Nexus.h"
 #include "imgui.h"
 #include "UIControls.h"
+#include "ChatLink.h"
 
 // A non-modal window can remain open behind its launcher. Request focus at
 // the launch site and consume it immediately before that window's Begin(),
@@ -28,13 +29,40 @@ struct AddonWindowFocusRequest {
 // The Nexus API handle — defined as a non-static global in dllmain.cpp
 extern AddonAPI_t* APIDefs;
 
-// Copy text to the Windows clipboard
+// Copy text through the Nexus-owned ImGui clipboard callbacks.
 void CopyToClipboard(const std::string& text);
 // Copy plain names without IDs, formatting or chat-link encoding.
 inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Name",bool icon=false){
     if(!name.empty()&&(icon?AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Copy):ImGui::MenuItem(label)))CopyToClipboard(name);
 }
 
+// Native link copy is distinct from typed equipment/configuration copy. The
+// existing item/simple encoders represent 24-bit IDs; never truncate a target.
+inline bool ChatLinkIdValid(uint32_t id) { return id != 0 && id <= 0xFFFFFFu; }
+inline void CopyNativeLinkMenuItem(const std::string& link,const char* label="Copy Chat Link"){
+    if(!link.empty()&&AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Copy))CopyToClipboard(link);
+}
+inline void CopyEntityChatLink(AlterEgo::ChatLinkType kind,uint32_t id,const char* label="Copy Chat Link",
+                              uint32_t skin=0,uint32_t upgrade1=0,uint32_t upgrade2=0){
+    using namespace AlterEgo;
+    if(!ChatLinkIdValid(id)||skin>0xFFFFFFu||upgrade1>0xFFFFFFu||upgrade2>0xFFFFFFu)return;
+    std::string link;
+    switch(kind){
+        case LINK_ITEM:link=ChatLink::EncodeItem(id,1,skin,upgrade1,upgrade2);break;
+        case LINK_SKILL:link=ChatLink::EncodeSkill(id);break;
+        case LINK_TRAIT:link=ChatLink::EncodeTrait(id);break;
+        case LINK_SKIN:link=ChatLink::EncodeSkin(id);break;
+        default:return;
+    }
+    CopyNativeLinkMenuItem(link,label);
+}
+inline void CopyEntityMenu(const std::string& name,AlterEgo::ChatLinkType kind,uint32_t id){
+    CopyNameMenuItem(name,"Copy Name",true);
+    CopyEntityChatLink(kind,id);
+}
+inline void NameOptionContext(const std::string& name){
+    AlterEgo::UI::EntityContext("##name_actions",[&]{CopyNameMenuItem(name,"Copy Name",true);});
+}
 // Draw a gradient-backed section header with a colored accent underline.
 // Used by equipment panel, clears, and other tabs.
 void RenderSectionHeader(const char* label, ImVec4 color, const char* suffix = nullptr);

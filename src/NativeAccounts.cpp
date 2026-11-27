@@ -804,7 +804,7 @@ void ItemMenu(uint32_t id,const std::string& name,const std::string& chat,const 
     if(!ImGui::BeginPopupContextItem("##inventory_item_actions"))return;
     ImGui::TextDisabled("%s",name.c_str());ImGui::Separator();
     CopyNameMenuItem(name);
-    if(!currency&&ImGui::MenuItem("Copy Item Chat Link"))CopyToClipboard(chat.empty()?AlterEgo::ChatLink::EncodeItem(id):chat);
+    if(!currency){if(!chat.empty())CopyNativeLinkMenuItem(chat,"Copy Item Chat Link");else CopyEntityChatLink(AlterEgo::LINK_ITEM,id,"Copy Item Chat Link");}
     if(ImGui::MenuItem("Open Wiki Page")){
         auto url="https://wiki.guildwars2.com/wiki/Special:Search/"+Encode(name);
         ShellExecuteA(nullptr,"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);

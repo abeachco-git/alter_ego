@@ -210,7 +210,9 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             const auto name=data["relic_name"].get<std::string>();
             ImGui::Text("Relic: %s",name.c_str());
             if(ImGui::BeginPopupContextItem("##component_relic_name")){
-                CopyNameMenuItem(name);ImGui::EndPopup();
+                CopyNameMenuItem(name,"Copy Name",true);
+                if(data.contains("relic_id")&&data["relic_id"].is_number_integer()&&data["relic_id"]>0&&data["relic_id"]<=0xFFFFFFu)CopyEntityChatLink(AlterEgo::LINK_ITEM,data["relic_id"].get<uint32_t>());
+                ImGui::EndPopup();
             }
         }
         if (data.contains("relic_id") && data["relic_id"].is_number_integer())
@@ -771,9 +773,11 @@ static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* 
         if(group!=doc.at("components").end())for(const auto& part:*group){
             if(loadout&&!ComponentUICompatible(doc,*loadout,kind,part))continue;
             const auto id=part.value("id",std::string());
-            if(AlterEgo::UI::SelectableOption((part.value("name",id)+"##"+id).c_str(),id==ref)&&id!=ref){
+            ImGui::PushID(id.c_str());
+            if(AlterEgo::UI::EntityOption((part.value("name",id)+"##"+id).c_str(),id==ref,[&]{ComponentRowMenu(doc,kind,part,true,false);})&&id!=ref){
                 refs[kind]=id;changed=true;
             }
+            ImGui::PopID();
         }
         ImGui::EndCombo();
     }else ReferenceComponentActions(doc,kind,ref,false);
@@ -818,7 +822,9 @@ static void RenderSetReferencePicker(const ComponentJson& doc,ReferenceEditorDra
         if(AlterEgo::UI::SelectableOption("Independent components",e.setId.empty()))SelectDraftEquipmentSet(e,doc,"");
         if(doc.contains("equipment_sets"))for(const auto& set:doc.at("equipment_sets")){
             const auto id=set.value("id",std::string());
-            if(AlterEgo::UI::SelectableOption((set.value("name",id)+"##"+id).c_str(),id==e.setId))SelectDraftEquipmentSet(e,doc,id);
+            ImGui::PushID(id.c_str());
+            if(AlterEgo::UI::EntityOption((set.value("name",id)+"##"+id).c_str(),id==e.setId,[&]{CopyNameMenuItem(set.value("name",std::string{}),"Copy Name",true);}))SelectDraftEquipmentSet(e,doc,id);
+            ImGui::PopID();
         }
         ImGui::EndCombo();
     }else if(linked&&ImGui::BeginPopupContextItem("##set_ref_copy")){
@@ -829,11 +835,14 @@ static void RenderFashionReferencePicker(ReferenceEditorDraft& e){
     ImGui::SetNextItemWidth(-1);
     if(AlterEgo::UI::BeginCombo("##draft_fashion",ComponentUIFashionName(e.fashionId).c_str())){
         if(AlterEgo::UI::SelectableOption("None",e.fashionId.empty()))e.fashionId.clear();
-        for(const auto& look:g_FashionLibrary.looks)
-            if(AlterEgo::UI::SelectableOption((look.name+"##"+look.id).c_str(),look.id==e.fashionId))e.fashionId=look.id;
+        for(const auto& look:g_FashionLibrary.looks){
+            ImGui::PushID(look.id.c_str());
+            if(AlterEgo::UI::EntityOption((look.name+"##"+look.id).c_str(),look.id==e.fashionId,[&]{CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");}))e.fashionId=look.id;
+            ImGui::PopID();
+        }
         ImGui::EndCombo();
     }else if(!e.fashionId.empty()&&ImGui::BeginPopupContextItem("##fashion_ref_copy")){
-        CopyNameMenuItem(ComponentUIFashionName(e.fashionId));ImGui::EndPopup();
+        for(const auto& look:g_FashionLibrary.looks)if(look.id==e.fashionId){CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");break;}ImGui::EndPopup();
     }
 }
 static void RenderEditableReferences(const ComponentJson& doc,const ComponentJson* owner,ReferenceEditorDraft& e){

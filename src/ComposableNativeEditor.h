@@ -124,7 +124,7 @@ static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const cha
     };
     if(ImGui::BeginPopupContextItem("##component_skill_id")){
         const auto skill=AlterEgo::GW2API::GetSkillInfo(id);
-        if(skill)CopyNameMenuItem(skill->name);
+        CopyEntityMenu(skill?skill->name:std::string{},AlterEgo::LINK_SKILL,id);
         if(ImGui::MenuItem("Clear Skill",nullptr,false,id!=0))apply(0);
         ImGui::TextDisabled("Advanced: exact skill ID");
         uint32_t exact=id;
@@ -384,7 +384,8 @@ static void ComponentNativeInfusionSlots(ComponentJson& part,const std::string& 
         bool remove=false;
         if(ImGui::BeginPopupContextItem("##component_infusion_context")){
             const auto item=req.exactId?GW2API::GetItemInfo(req.exactId):nullptr;
-            if(item){CopyNameMenuItem(item->name);ImGui::Separator();}
+            CopyEntityMenu(item?item->name:std::string{},AlterEgo::LINK_ITEM,req.exactId);
+            if(req.exactId)ImGui::Separator();
             if(AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete))remove=true;
             ImGui::EndPopup();
         }
@@ -443,7 +444,7 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
     }
     if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
         const auto info=selectedId?AlterEgo::GW2API::GetItemInfo(selectedId):nullptr;
-        CopyNameMenuItem(info&&!info->name.empty()?info->name:selected);
+        CopyEntityMenu(info&&!info->name.empty()?info->name:selected,AlterEgo::LINK_ITEM,selectedId);
         using AlterEgo::UI::MenuAction;
         using AlterEgo::UI::MenuIcon;
         const bool rune=std::strcmp(family,"runes")==0,sigil=std::strcmp(family,"sigils")==0;
@@ -609,15 +610,21 @@ static void ComponentStoredNameActions(const ComponentJson& item){
         }
         return text(field);
     };
+    const auto copyLink=[&](const char* field,const char* label){auto id=item.find(field);if(id!=item.end()&&id->is_number_integer()&&*id>0&&*id<=0xFFFFFFu)CopyEntityChatLink(AlterEgo::LINK_ITEM,id->get<uint32_t>(),label);};
     CopyNameMenuItem(name("item_name","item_id"));
+    copyLink("item_id","Copy Item Chat Link");
     CopyNameMenuItem(name("rune","rune_id"),"Copy Rune Name");
+    copyLink("rune_id","Copy Rune Chat Link");
     CopyNameMenuItem(name("sigil","sigil_id"),"Copy Sigil Name");
+    copyLink("sigil_id","Copy Sigil Chat Link");
     CopyNameMenuItem(name("sigil2","sigil2_id"),"Copy Second Sigil Name");
+    copyLink("sigil2_id","Copy Second Sigil Chat Link");
     auto infusions=item.find("infusion_ids");
     if(infusions!=item.end()&&infusions->is_array()){
         std::vector<uint32_t> ids;
         for(const auto& id:*infusions)if(id.is_number_integer())ids.push_back(id.get<uint32_t>());
         CopyCachedItemNamesMenu(ids,"Copy Infusion Name");
+        CopyCachedItemLinksMenu(ids,"Copy Infusion Chat Link");
     }
 }
 static void ComponentNativeGear(ComponentJson& data, const std::string& kind,

@@ -3085,6 +3085,20 @@ static void CopyCachedItemNamesMenu(const std::vector<uint32_t>& ids,const char*
         ImGui::EndMenu();
     }
 }
+static void CopyCachedItemLinksMenu(const std::vector<uint32_t>& ids,const char* label){
+    std::set<uint32_t> unique;
+    for(auto id:ids)if(ChatLinkIdValid(id))unique.insert(id);
+    if(!unique.empty()&&AlterEgo::UI::BeginActionMenu(label,AlterEgo::UI::MenuIcon::Copy)){
+        for(auto id:unique){
+            const auto info=AlterEgo::GW2API::GetItemInfo(id);
+            const auto name=info&&!info->name.empty()?info->name:"#"+std::to_string(id);
+            ImGui::PushID(static_cast<int>(id));
+            CopyEntityChatLink(AlterEgo::LINK_ITEM,id,name.c_str());
+            ImGui::PopID();
+        }
+        ImGui::EndMenu();
+    }
+}
 static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
 
@@ -3376,12 +3390,8 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
         if (ImGui::BeginPopupContextItem("##eq_ctx")) {
             if (item_info) {
                 CopyNameMenuItem(item_info->name);
-                if (ImGui::MenuItem("Copy Item Chat Link")) {
-                    std::string link = AlterEgo::ChatLink::EncodeItem(eq->id, 1, eq->skin,
-                        eq->upgrades.size() > 0 ? eq->upgrades[0] : 0,
-                        eq->upgrades.size() > 1 ? eq->upgrades[1] : 0);
-                    CopyToClipboard(link);
-                }
+                CopyEntityChatLink(AlterEgo::LINK_ITEM,eq->id,"Copy Item Chat Link",eq->skin,
+                    eq->upgrades.size()>0?eq->upgrades[0]:0,eq->upgrades.size()>1?eq->upgrades[1]:0);
                 if (!item_info->chat_link.empty()) {
                     if (ImGui::MenuItem("Copy API Chat Link")) {
                         CopyToClipboard(item_info->chat_link);
@@ -3390,13 +3400,12 @@ static void RenderEquipmentSlot(const AlterEgo::EquipmentItem* eq, const char* s
             }
             if (skin_info) {
                 CopyNameMenuItem(skin_info->name,"Copy Skin Name");
-                if (ImGui::MenuItem("Copy Skin Chat Link")) {
-                    std::string link = AlterEgo::ChatLink::EncodeSkin(eq->skin);
-                    CopyToClipboard(link);
-                }
+                CopyEntityChatLink(AlterEgo::LINK_SKIN,eq->skin,"Copy Skin Chat Link");
             }
             CopyCachedItemNamesMenu(eq->upgrades,"Copy Upgrade Name");
+        CopyCachedItemLinksMenu(eq->upgrades,"Copy Upgrade Chat Link");
             CopyCachedItemNamesMenu(eq->infusions,"Copy Infusion Name");
+        CopyCachedItemLinksMenu(eq->infusions,"Copy Infusion Chat Link");
             ImGui::Separator();
             if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(eq->id);
             if(ImGui::BeginMenu("Item Locations")){
@@ -3996,8 +4005,8 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
     }
 
     const bool canClear=clearRequested&&selected&&!isMinor;
-    if((tinfo||canClear)&&ImGui::BeginPopupContextItem("##trait_name")) {
-        if(tinfo)CopyNameMenuItem(tinfo->name);
+    if((trait_id||canClear)&&ImGui::BeginPopupContextItem("##trait_name")) {
+        CopyEntityMenu(tinfo?tinfo->name:std::string{},AlterEgo::LINK_TRAIT,trait_id);
         if(canClear){
             if(tinfo)ImGui::Separator();
             if(AlterEgo::UI::MenuAction("Clear Trait",AlterEgo::UI::MenuIcon::Delete))
@@ -4044,8 +4053,8 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,boo
         }
         ImGui::EndTooltip();
     }
-    if(nameMenu&&sinfo&&ImGui::BeginPopupContextItem("##skill_name")) {
-        CopyNameMenuItem(sinfo->name);ImGui::EndPopup();
+    if(nameMenu&&skill_id&&ImGui::BeginPopupContextItem("##skill_name")) {
+        CopyEntityMenu(sinfo?sinfo->name:std::string{},AlterEgo::LINK_SKILL,skill_id);ImGui::EndPopup();
     }
     ImGui::PopID();
     return clicked;
@@ -6609,6 +6618,7 @@ static void RenderGearCatalogChoices(const std::string& family,const std::string
         const bool selected=currentId?currentId==e.item_id:currentName==e.name;
         bool clicked=cards?AlterEgo::UI::CatalogCard("##gear_option",e.name.c_str(),e.bonus.c_str(),selected):
             AlterEgo::UI::CatalogOption(e.name.c_str(),e.bonus.c_str(),selected);
+        AlterEgo::UI::EntityContext("##catalog_item_actions",[&]{CopyEntityMenu(e.name,AlterEgo::LINK_ITEM,e.item_id);});
         if(clicked)choose(e.item_id,e.name);
         ImGui::PopID();
     }
@@ -6694,6 +6704,7 @@ static void RenderWeaponTypeChoices(const std::string& profession,const std::str
         const bool selected=current==name;
         const bool clicked=cards?AlterEgo::UI::CatalogCard("##weapon_option",label,desc.c_str(),selected):
             AlterEgo::UI::CatalogOption(label,desc.c_str(),selected);
+        NameOptionContext(label);
         if(clicked&&!selected)choose(name,wd);
         ImGui::PopID();
     }
@@ -6867,6 +6878,7 @@ template<class OnChoose> static void RenderGearStatChoices(const char* filter,
                 ImGui::EndTooltip();
             }
         }
+        NameOptionContext(stat->name);
         ImGui::PopID();
     }
 }
@@ -7149,6 +7161,7 @@ static bool RenderSpecializationChoices(const std::string& profession,
         ImGui::SameLine(0,8);ImGui::AlignTextToFramePadding();
         if(!allowed)ImGui::TextDisabled("%s",label.c_str());
         else if(ImGui::Selectable(label.c_str(),ids[slot]==sid)){next=sid;changed=true;}
+        NameOptionContext(label);
         ImGui::PopID();
     }
     ImGui::Separator();
@@ -7296,6 +7309,7 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
         else if(ImGui::Selectable(label.c_str(),selected)){
             next=id;changed=true;ImGui::CloseCurrentPopup();
         }
+        NameOptionContext(label);
         ImGui::PopID();
     };
     if(legend){
@@ -7375,6 +7389,7 @@ static void RenderInfusionPositionPicker(AlterEgo::GearEdit::InfusionPosition re
             ImGui::PushID(static_cast<int>(entry.second));
             const std::string label=entry.first+" (#"+std::to_string(entry.second)+")";
             if(ImGui::Selectable(label.c_str(),requirement.exactId==entry.second))setExact(entry.second);
+            AlterEgo::UI::EntityContext("##infusion_catalog_actions",[&]{CopyEntityMenu(entry.first,AlterEgo::LINK_ITEM,entry.second);});
             ImGui::PopID();
         }
         if(entries.empty())ImGui::TextDisabled("No cached matches. Enter an item ID instead.");
@@ -7586,16 +7601,20 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
     if (!ImGui::BeginPopupContextItem("##gear_edit_context")) return;
     const bool relic = slot == "Relic";
     const auto saved=b.gear.find(slot);
-    if(relic)CopyNameMenuItem(b.relic_name);
+    if(relic)CopyEntityMenu(b.relic_name,AlterEgo::LINK_ITEM,b.relic_id);
     else if(saved!=b.gear.end()){
         const auto& gear=saved->second;
         const auto actual=gear.item_id?AlterEgo::GW2API::GetItemInfo(gear.item_id):nullptr;
         const auto name=actual&&!actual->name.empty()?actual->name:gear.stat_name.empty()?std::string{}:gear.stat_name+" "+GearSlotDisplayName(slot);
-        CopyNameMenuItem(name);
+        CopyEntityMenu(name,AlterEgo::LINK_ITEM,gear.item_id);
         CopyNameMenuItem(gear.rune,"Copy Rune Name");
+        CopyEntityChatLink(AlterEgo::LINK_ITEM,gear.rune_id,"Copy Rune Chat Link");
         CopyNameMenuItem(gear.sigil,"Copy Sigil Name");
+        CopyEntityChatLink(AlterEgo::LINK_ITEM,gear.sigil_id,"Copy Sigil Chat Link");
         CopyNameMenuItem(gear.sigil2,"Copy Second Sigil Name");
+        CopyEntityChatLink(AlterEgo::LINK_ITEM,gear.sigil2_id,"Copy Second Sigil Chat Link");
         CopyCachedItemNamesMenu(gear.infusion_ids,"Copy Infusion Name");
+        CopyCachedItemLinksMenu(gear.infusion_ids,"Copy Infusion Chat Link");
     }
     auto capture = [&](GearCopyField field) { return CaptureGearClipboard(b,slot,field); };
     ImGui::Separator();
@@ -7728,7 +7747,7 @@ static void RenderGearCustomizeDialog() {
             }
 
             if(ImGui::BeginPopupContextItem("##relic_name")){
-                CopyNameMenuItem(editBuild->relic_name);ImGui::EndPopup();
+                CopyEntityMenu(editBuild->relic_name,AlterEgo::LINK_ITEM,editBuild->relic_id);ImGui::EndPopup();
             }
             ImVec2 tp(p.x + 6, p.y + 3);
             if (!editBuild->relic_name.empty()) {
@@ -7829,6 +7848,7 @@ static void RenderGearCustomizeDialog() {
 
                 if (ImGui::BeginPopupContextItem("##single_upgrade_edit")) {
                     if(upgradeName)CopyNameMenuItem(*upgradeName);
+                    CopyEntityChatLink(AlterEgo::LINK_ITEM,isArmor?gs.rune_id:sigilIdx==1?gs.sigil2_id:gs.sigil_id);
                     auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Upgrade);
                     if (isWeapon) {
                         if (sigilIdx == 1) {
@@ -7899,7 +7919,7 @@ static void RenderGearCustomizeDialog() {
                 }
                 bool removeInfusion = false;
                 if (ImGui::BeginPopupContextItem("##single_infusion_edit")) {
-                    if(item)CopyNameMenuItem(item->name);
+                    CopyEntityMenu(item?item->name:std::string{},AlterEgo::LINK_ITEM,id);
                     auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Infusions);
                     snapshot.data.infusion_ids = {id};
                     snapshot.data.infusion_attributes = {attr};
@@ -8591,12 +8611,16 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     }
     if(!editable&&!disabled&&hasData&&ImGui::BeginPopupContextItem("##saved_gear_name")){
         const auto actual=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
-        CopyNameMenuItem(actual&&!actual->name.empty()?actual->name:std::string(line1));
+        CopyEntityMenu(actual&&!actual->name.empty()?actual->name:std::string(line1),AlterEgo::LINK_ITEM,isRelicSlot?build.relic_id:gearSlot?gearSlot->item_id:0);
         if(gearSlot){
             CopyNameMenuItem(gearSlot->rune,"Copy Rune Name");
+            CopyEntityChatLink(AlterEgo::LINK_ITEM,gearSlot->rune_id,"Copy Rune Chat Link");
             CopyNameMenuItem(gearSlot->sigil,"Copy Sigil Name");
+            CopyEntityChatLink(AlterEgo::LINK_ITEM,gearSlot->sigil_id,"Copy Sigil Chat Link");
             CopyNameMenuItem(gearSlot->sigil2,"Copy Second Sigil Name");
+            CopyEntityChatLink(AlterEgo::LINK_ITEM,gearSlot->sigil2_id,"Copy Second Sigil Chat Link");
             CopyCachedItemNamesMenu(gearSlot->infusion_ids,"Copy Infusion Name");
+        CopyCachedItemLinksMenu(gearSlot->infusion_ids,"Copy Infusion Chat Link");
         }
         ImGui::EndPopup();
     }
@@ -8842,7 +8866,7 @@ static void RenderBuildSkillRow(const AlterEgo::SavedBuild& src,float sz,bool ed
         };
         if(ImGui::BeginPopupContextItem("##skill_edit_context")){
             const auto skill=AlterEgo::GW2API::GetSkillInfo(sid);
-            if(skill)CopyNameMenuItem(skill->name);
+            CopyEntityMenu(skill?skill->name:std::string{},AlterEgo::LINK_SKILL,sid);
             if(ImGui::MenuItem("Clear Skill",nullptr,false,sid!=0))apply(0);
             ImGui::EndPopup();
         }
@@ -10823,17 +10847,24 @@ static void NavigateToCharacterLoadoutCompare(const AlterEgo::Character& ch,cons
     g_LibComparePreviousTarget=ch.name;g_LibComparePreviousAccount=ch.account_name;
     g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;
 }
+static void SavedLoadoutSelectorActions(const AlterEgo::SavedBuild& saved,const AlterEgo::Character* ch){
+    using namespace AlterEgo::UI;
+    CopyNameMenuItem(saved.name,"Copy Name",true);
+    CopyNativeLinkMenuItem(saved.chat_link,"Copy Build Chat Link");
+    if(MenuAction("Copy Portable Loadout",MenuIcon::Copy))ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy,saved);
+    ImGui::Separator();
+    if(MenuAction("Compare",MenuIcon::Compare,!LibraryDraftOpen(),"Finish the current Library draft first.")){
+        if(ch)NavigateToCharacterLoadoutCompare(*ch,saved);else ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare,saved);
+    }
+    if(MenuAction("Open in Library",MenuIcon::Open,!LibraryDraftOpen(),"Finish the current Library draft first.")){
+        g_LibSelectedId=saved.id;g_LibRevealId=saved.id;g_LibDetailsFetched=false;NavigateToLibraryCollection(0);
+    }
+}
 static void RenderCharacterLoadoutContext(const AlterEgo::Character& ch,const AlterEgo::SavedBuild* saved,bool preferenceActions){
     using namespace AlterEgo::UI;
-    if(MenuAction("Compare",MenuIcon::Compare,saved!=nullptr)&&saved)NavigateToCharacterLoadoutCompare(ch,*saved);
-    if(MenuAction("Open in Library",MenuIcon::Open,saved!=nullptr)&&saved){
-        if(!g_LibEditMode){
-            g_LibSelectedId=saved->id;g_LibRevealId=saved->id;g_LibDetailsFetched=false;
-            NavigateToLibraryCollection(0);
-        }else if(APIDefs)APIDefs->GUI_SendAlert("Save or cancel the current Loadout edit first.");
-    }
+    if(saved)SavedLoadoutSelectorActions(*saved,&ch);
     if(preferenceActions){
-        ImGui::Separator();
+        if(saved)ImGui::Separator();
         using namespace AlterEgo::CharacterLoadout;
         if(MenuAction("Reset to Automatic",MenuIcon::Regenerate))SetExpectedLoadout(ch,{});
         if(MenuAction("None",MenuIcon::Detach))SetExpectedLoadout(ch,{Mode::None,{}});
@@ -10854,6 +10885,7 @@ static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
     const auto* assigned=FindCompatibleLoadout(ch,choice.id);
     const std::string preview=assigned?assigned->name:choice.mode==Mode::None?"None":"Automatic";
     ImGui::PushID("character_expected_loadout");
+    ImGui::PushID(ch.account_name.c_str());ImGui::PushID(ch.name.c_str());
     ImGui::TextUnformatted("Loadout");ImGui::SameLine();
     ImGui::SetNextItemWidth(ImMax(1.f,ImMin(290.f,ImGui::GetContentRegionAvail().x)));
     const bool open=AlterEgo::UI::BeginCombo("##expected",preview.c_str());
@@ -10864,17 +10896,20 @@ static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
         for(const auto& saved:AlterEgo::GW2API::GetSavedBuilds()){
             if(saved.profession!=ch.profession)continue;
             const auto label=saved.name+" ("+GameModeLabel(saved.game_mode)+")##"+saved.id;
-            if(AlterEgo::UI::SelectableOption(label.c_str(),assigned&&assigned->id==saved.id))
+            ImGui::PushID(saved.id.c_str());
+            if(AlterEgo::UI::EntityOption(label.c_str(),assigned&&assigned->id==saved.id,[&]{SavedLoadoutSelectorActions(saved,&ch);}))
                 SetExpectedLoadout(ch,{Mode::Explicit,saved.id});
+            ImGui::PopID();
         }
         ImGui::EndCombo();
-    }
+    }else{
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Expected Loadout for this character, independent of in-game tabs.\nAutomatic recognizes a saved Loadout; None disables warnings.\nRight-click for actions.");
     if(ImGui::BeginPopupContextItem("##expected_context")){
         RenderCharacterLoadoutContext(ch,CharacterContextLoadout(ch),true);
         ImGui::EndPopup();
     }
-    ImGui::PopID();
+    }
+    ImGui::PopID();ImGui::PopID();ImGui::PopID();
 }
 
 // Dedicated top-level Compare tab. Keep the selection by saved build ID so
@@ -11025,14 +11060,16 @@ static void RenderCompareTab() {
                 if (b.profession != target->profession) continue;
                 const bool selected = saved && b.id == saved->id;
                 const std::string label = b.name + " (" + GameModeLabel(b.game_mode) + ")";
-                if (AlterEgo::UI::SelectableOption((label + "##" + b.id).c_str(), selected)) {
+                ImGui::PushID(b.id.c_str());
+                if (AlterEgo::UI::EntityOption((label + "##" + b.id).c_str(), selected,[&]{SavedLoadoutSelectorActions(b,character);})) {
                     MarkNavigation();g_LibCompareBuildId = b.id;
                     g_LibCompareSavedManual = true;
                     saved = &b;
                 }
+                ImGui::PopID();
             }
             ImGui::EndCombo();
-        }
+        }else if(saved){ImGui::PushID(saved->id.c_str());AlterEgo::UI::EntityContext("##saved_compare_context",[&]{SavedLoadoutSelectorActions(*saved,character);});ImGui::PopID();}
         ImGui::EndTable();
     }
     auto tabLabel = [](const AlterEgo::BuildTemplate& bt) {
@@ -11661,6 +11698,7 @@ static void RenderBuildLibrary() {
                 if(MenuAction("Rename",MenuIcon::Rename))ExecuteSavedLoadoutAction(SavedLoadoutAction::Rename,b);
                 if(MenuAction("Duplicate",MenuIcon::Duplicate))ExecuteSavedLoadoutAction(SavedLoadoutAction::Duplicate,b);
                 ImGui::Separator();CopyNameMenuItem(b.name,"Copy Name",true);
+                CopyNativeLinkMenuItem(b.chat_link,"Copy Build Chat Link");
                 if(MenuAction("Copy Portable Loadout",MenuIcon::Copy))ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy,b);
                 if(BeginActionMenu("Share",MenuIcon::Share)){
                     RenderBuildShareMenuItems(b);ImGui::EndMenu();
@@ -12771,7 +12809,7 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t sto
     ImGui::TextDisabled("%s",skin.name.c_str());
     ImGui::Separator();
     CopyNameMenuItem(skin.name);
-    if(ImGui::MenuItem("Copy Skin Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeSkin(skin.id));
+    CopyEntityChatLink(AlterEgo::LINK_SKIN,skin.id,"Copy Skin Chat Link");
     // Pie UI documents native skin-link preview through EV_PIEUI_OPEN_CHATLINK.
     if(g_PieUIPresent.load() && ImGui::MenuItem("Preview in Game"))
         PieUI_PreviewChatLink(AlterEgo::ChatLink::EncodeSkin(skin.id));
@@ -12782,7 +12820,7 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t sto
             CopyNameMenuItem(name,"Copy Trading Post Item Name");
             if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",name.c_str());
         }
-        if(ImGui::MenuItem("Copy Item Chat Link")) CopyToClipboard(AlterEgo::ChatLink::EncodeItem(price->item_id));
+        CopyEntityChatLink(AlterEgo::LINK_ITEM,price->item_id,"Copy Item Chat Link");
         if(!stockItem&&ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(price->item_id);
     }
     ImGui::Separator();
@@ -15918,7 +15956,7 @@ void AddonRender() {
                 for (const auto& acct : accounts) {
                     bool selected = (g_SelectedAccountFilter == acct.name);
                     ImGui::PushID(acct.name.c_str());
-                    if (AlterEgo::UI::SelectableOption(acct.display_name.c_str(), selected)) g_SelectedAccountFilter = acct.name;
+                    if (AlterEgo::UI::EntityOption(acct.display_name.c_str(), selected,[&]{CopyNameMenuItem(acct.name,"Copy Account Name",true);})) g_SelectedAccountFilter = acct.name;
                     ImGui::PopID();
                 }
                 if (g_SelectedAccountFilter != prevFilter && !g_SelectedAccountFilter.empty()) {
@@ -15930,6 +15968,8 @@ void AddonRender() {
                     g_AchNeedRequery = true;
                 }
                 ImGui::EndCombo();
+            }else if(!g_SelectedAccountFilter.empty()){
+                ImGui::PushID(g_SelectedAccountFilter.c_str());AlterEgo::UI::EntityContext("##account_copy",[&]{CopyNameMenuItem(g_SelectedAccountFilter,"Copy Account Name",true);});ImGui::PopID();
             }
         }
 
