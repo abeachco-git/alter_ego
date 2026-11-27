@@ -12246,7 +12246,6 @@ void AddonLoad(AddonAPI_t* aApi) {
 
     // Initialize subsystems
     AlterEgo::GW2API::Initialize(APIDefs);
-    AlterEgo::NativeAccounts::Initialize(AlterEgo::GW2API::GetDataDirectory());
     AlterEgo::FontManager::Initialize(APIDefs);
     AlterEgo::IconManager::Initialize(APIDefs);
 
@@ -12260,6 +12259,8 @@ void AddonLoad(AddonAPI_t* aApi) {
     AlterEgo::WikiEvents::Load(AlterEgo::GW2API::GetDataDirectory());
     if(!AlterEgo::PublicCatalog::Get()->upgrades)SeedItemNameCache();
     LoadCharacterActivity();
+    // Replay any interrupted identity/cache adoption before exposing character data.
+    AlterEgo::NativeAccounts::Initialize(AlterEgo::GW2API::GetDataDirectory());
     LoadLegacyLoginHistory();
     MigrateLegacyLoginHistory();
     ImportPortableLoginHistory();
@@ -15513,6 +15514,7 @@ static void RenderCharactersStatusRow() {
     namespace S=AlterEgo::CharacterScopes;
     namespace R=AlterEgo::RefreshStatus;
     const auto demand=S::Visible(g_SelectedTab);
+    AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName);
     if(selected)PollDemandCharacter(selected->account_name,selected->name,selected->scope_stamps,demand);
     const auto active=AlterEgo::CharacterActivity::ActiveKey();
     if(!active.first.empty()&&(g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==active.first)&&(!selected||selected->name!=active.second)){
@@ -15547,6 +15549,7 @@ static void RenderCharactersStatusRow() {
 }
 
 static void RenderCompareStatusRow() {
+    AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName);
     const auto charsSnapshot=AlterEgo::GW2API::GetCharacters();
     const AlterEgo::Character* target=nullptr;
     for(const auto& ch:*charsSnapshot)if(ch.account_name==g_LibCompareRenderedTarget.first&&ch.name==g_LibCompareRenderedTarget.second&&!ch.name.empty()){

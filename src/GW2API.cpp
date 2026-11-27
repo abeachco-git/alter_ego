@@ -343,7 +343,6 @@ namespace AlterEgo {
         Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
             auto fail=[](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;s_current_char={};s_character_work.Stop(CharacterActivity::Now(),message);};
-            std::map<std::string,std::set<std::string>> roster;
             std::vector<std::pair<NativeAccounts::LinkedAccount,std::string>> targets;
             bool partial=false;
             // A manual roster fetch verifies every configured account; selective
@@ -351,14 +350,17 @@ namespace AlterEgo {
             size_t rosterOrdinal=0;
             for(const auto& a:accounts){
                 Background::Checkpoint();++rosterOrdinal;std::set<std::string> names=a.characters;
+                auto targetAccount=a;
                 if(listOnly||selected.empty()||!a.rosterKnown){
                     if(!manual){partial=true;continue;} // automatic demand never discovers unrelated rosters
                     {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_message="Checking roster "+std::to_string(rosterOrdinal)+"/"+std::to_string(accounts.size())+(accounts.size()>1?" - "+a.name:"");}
-                    if(!NativeAccounts::RefreshRoster(a,names)){partial=true;continue;}
-                    roster[a.id]=names;
+                    if(!NativeAccounts::RefreshRoster(a,names,listOnly)){partial=true;continue;}
+                    // A whole-roster operation targets the newly verified roster;
+                    // an individual selection must retain its admitted binding.
+                    if(selected.empty())targetAccount=NativeAccounts::FindLinked(a.id);
                 }
                 for(const auto& n:names)if(selected.empty()||std::find(selected.begin(),selected.end(),n)!=selected.end())
-                    targets.emplace_back(a,n);
+                    targets.emplace_back(targetAccount,n);
             }
             std::map<std::string,int> counts;for(const auto& x:targets)++counts[x.second];
             targets.erase(std::remove_if(targets.begin(),targets.end(),[&](const auto& x){if(counts[x.second]>1){partial=true;return true;}return false;}),targets.end());
@@ -372,17 +374,9 @@ namespace AlterEgo {
                 s_character_work.Reset();
                 if(!listOnly)for(const auto& x:targets)s_character_work.Queue({x.first.id,x.second},x.first.generation,demand);
             }
-            // Reconcile the roster owned by this request, before releasing
-            // the busy flag. No stale worker can consume a replacement roster.
-            auto reconcile=[&]{
-                if(partial||roster.empty())return;
-                if(!NativeAccounts::CommitIfRosterCurrent(accounts,roster,[&]{return ReconcileCharactersWithRoster(roster);})){
-                    partial=true;
-                    if(s_api&&!Background::Workers().Stopping())s_api->Log(LOGL_WARNING,"AlterEgo","Character roster changed or could not be persisted; previous cache retained.");
-                }
-            };
+            // The shared roster owner adopts both caches before publication.
+            // No second name-only pruning pass.
             if(listOnly){
-                reconcile();
                 {std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;s_fetch_message=partial?"Some rosters could not be verified or saved":"Character list received";}
                 return;
             }
@@ -396,15 +390,22 @@ namespace AlterEgo {
                 }
                 namespace S=CharacterScopes;
                 const CharacterActivity::Key key{a.id,name};
+                const auto address=NativeAccounts::EnsureCharacterAddress(a,name);
+                if(!address){
+                    partial=true;std::lock_guard<std::mutex> lock(s_mutex);
+                    s_character_work.Finish(key,0,CharacterActivity::Now(),"Character identity unresolved or changed");continue;
+                }
                 std::optional<Character> old;
                 {std::lock_guard<std::mutex> lock(s_mutex);
                     for(const auto& existing:s_characters)
-                        if(existing.name==name&&(existing.account_name==a.id||existing.account_name==a.name||existing.account_name.empty())){
-                            old=existing;if(existing.account_name==a.id)break;
+                        if(existing.name==name&&existing.account_name==a.id){
+                            const auto e=CharacterIdentity::Normalize({existing.created,existing.profession,existing.race});
+                            if(e&&*e==address->binding.evidence)old=existing;
+                            break;
                         }
                 }
                 Character ch=old.value_or(Character{});
-                const bool needsIdentity=!old||old->account_name!=a.id;
+                const bool needsIdentity=!old;
                 ch.name=name;ch.account_name=a.id;
                 auto requested=demand;
                 if(needsIdentity)requested|=S::Core;
@@ -427,13 +428,20 @@ namespace AlterEgo {
                 std::string scopeError;
                 const auto require=[&](const std::string& endpoint,const std::vector<std::string>& perms,const char* label){
                     stage(label);auto r=NativeAccounts::Request(a,endpoint,perms);
-                    if(!r){scopeError=r.error;throw std::runtime_error("Character endpoint failed");}return std::move(r.data);
+                    if(!r){
+                        if(r.status==404&&endpoint==path+"/core")NativeAccounts::RecoverCharacterAddress(a,*address);
+                        scopeError=r.error;throw std::runtime_error("Character endpoint failed");
+                    }return std::move(r.data);
                 };
                 bool identityVerified=!needsIdentity;
+                if(!(requested&S::Core)&&!NativeAccounts::VerifyCharacterAddress(a,*address)){
+                    partial=true;std::lock_guard<std::mutex> lock(s_mutex);
+                    s_character_work.Finish(key,0,CharacterActivity::Now(),"Character identity not verified");continue;
+                }
                 for(auto scope:S::Ordered){
                     if(!(requested&scope))continue;
                     Background::Checkpoint();
-                    if(!NativeAccounts::Current(a)){partial=true;break;}
+                    if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[]{return true;})){partial=true;break;}
                     if(scope!=S::Core&&!identityVerified){partial=true;continue;}
                     {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Activate(key,scope);}
                     const auto ticket=attempts.BeginScope(S::Name(scope));
@@ -445,8 +453,7 @@ namespace AlterEgo {
                         Character next=ch;
                         switch(scope){
                         case S::Core:{
-                            const auto identityObservation=NativeAccounts::BeginIdentityObservation(a,name);
-                            if(!identityObservation)throw std::runtime_error("Character identity evidence unavailable");
+                            identityVerified=false;
                             auto core=require(path+"/core",{"characters"},"Character details");
                             if(!core.is_object()||core.value("name",std::string{})!=name||
                                 !core.contains("profession")||!core.contains("race")||!core.contains("gender")||
@@ -455,7 +462,7 @@ namespace AlterEgo {
                             auto c=ParseCharacterJson(core);
                             if(c.profession.empty()||c.race.empty()||c.gender.empty()||c.created.empty()||c.level<1||c.level>80)
                                 throw std::runtime_error("Incomplete character core");
-                            if(!NativeAccounts::RecordIdentityObservation(a,name,*identityObservation,c.created,c.profession,c.race))
+                            if(!NativeAccounts::RecordIdentityObservation(a,*address,c.created,c.profession,c.race))
                                 throw std::runtime_error("Character identity evidence changed");
                             next.race=c.race;next.gender=c.gender;next.profession=c.profession;
                             next.level=c.level;next.age=c.age;next.created=c.created;next.deaths=c.deaths;
@@ -517,7 +524,7 @@ namespace AlterEgo {
                         }
                         case S::Physical:{
                             stage("Physical equipment");
-                            auto physical=NativeAccounts::RequestPhysicalEquipment(a,name,manual);
+                            auto physical=NativeAccounts::RequestPhysicalEquipment(a,*address,manual);
                             if(!physical.response){scopeError=physical.response.error;throw std::runtime_error("Physical equipment endpoint failed");}
                             const auto& supplement=physical.response.data;
                             if(!supplement.at("equipment").is_array())throw std::runtime_error("Invalid supplemental equipment");
@@ -567,9 +574,11 @@ namespace AlterEgo {
                     }catch(const Background::Cancelled&){throw;}catch(...){
                         partial=true;
                         if(!Background::Workers().Stopping()){
-                            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
-                            CharacterActivity::State().Failure(key,S::Name(scope),ticket,
-                                scopeError.empty()?"Invalid or incomplete endpoint response":scopeError);
+                            if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{
+                                std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                                CharacterActivity::State().Failure(key,S::Name(scope),ticket,
+                                    scopeError.empty()?"Invalid or incomplete endpoint response":scopeError);return true;
+                            }))CharacterActivity::Cancel(key,S::Name(scope),ticket);
                         }
                     }
                 }
@@ -582,14 +591,13 @@ namespace AlterEgo {
                 {std::lock_guard<std::mutex> lock(s_mutex);S::Mask saving=0;
                     for(const auto& v:verified)saving|=v.scope;s_character_work.Activate(key,saving);}
                 stage("Saving verified scopes");
-                if(!NativeAccounts::CommitIfCharacterCurrent(a,name,[&]{
+                if(!NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{
                     if(!SaveCharacterData(a.id,name,&ch,a.name))return false;
                     for(const auto& v:verified)CharacterActivity::Success(key,S::Name(v.scope),v.ticket,v.stamp,v.specVerified);
                     return true;
                 })){ 
                     partial=true;
-                    {std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
-                    for(const auto& v:verified)CharacterActivity::State().Failure(key,S::Name(v.scope),v.ticket,"Could not save verified data");}
+                    for(const auto& v:verified)CharacterActivity::Cancel(key,S::Name(v.scope),v.ticket);
                     {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Finish(key,0,CharacterActivity::Now(),"Could not save verified data");}
                     continue;
                 }
@@ -597,7 +605,6 @@ namespace AlterEgo {
                     S::Mask verifiedMask=0;for(const auto& v:verified)verifiedMask|=v.scope;
                     s_character_work.Finish(key,verifiedMask,CharacterActivity::Now());}
             }
-            reconcile();
             {
                 std::lock_guard<std::mutex> lock(s_mutex);s_current_char={};
                 s_character_work.Stop(CharacterActivity::Now(),"Refresh stopped before completion");
@@ -885,6 +892,18 @@ namespace AlterEgo {
     std::vector<std::string> GW2API::GetPendingCharNames() {
         std::lock_guard<std::mutex> lock(s_mutex);
         return s_pending_char_names;
+    }
+
+    void GW2API::DiscardIdentityCache(const std::string& account,const std::set<std::string>& names,bool all){
+        std::lock_guard<std::mutex> saveLock(g_characterSaveMutex);
+        std::lock_guard<std::mutex> lock(s_mutex);
+        const auto count=s_characters.size();
+        s_characters.erase(std::remove_if(s_characters.begin(),s_characters.end(),[&](const Character& c){
+            return (account.empty()||c.account_name==account)&&(all||names.count(c.name));
+        }),s_characters.end());
+        if(count!=s_characters.size()){
+            s_has_character_data=!s_characters.empty();++g_characterDataRevision;
+        }
     }
 
     bool GW2API::ReconcileCharactersWithRoster(const CharacterRequest::Roster& roster) {

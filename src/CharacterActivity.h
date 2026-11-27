@@ -1,5 +1,6 @@
 #pragma once
 #include "RefreshEngine.h"
+#include "CharacterIdentityRuntime.h"
 #include "BackgroundWorkers.h"
 #include <nlohmann/json.hpp>
 #include <tuple>
@@ -16,6 +17,7 @@ struct Entry {
     int64_t lastSeen=0,login=0,specChanged=0;
     uint32_t spec=0;
     std::map<std::string,Scope> scopes;
+    int64_t bindingId=0,bindingRevision=0;
 };
 struct Ticket {int64_t started=0,seen=0,login=0,specChanged=0;bool active=false;int64_t verificationStarted=0;uint64_t serial=0;};
 using RefreshEngine::WaitReason;
@@ -177,6 +179,26 @@ public:
             it->second.attempt=0;it->second.attemptSerial=0;it->second.error.clear();Dirty();
         }
     }
+    // Name-keyed historical login records remain intact for Part 7C.
+    // Only verification/attempt coverage belongs to this binding.
+    void FenceBindings(const std::string& account,const CharacterIdentity::Bindings& bindings){
+        for(auto& [key,e]:rows_){
+            if(key.first!=account||key.second.empty())continue;
+            const auto it=bindings.find(key.second);
+            const auto id=it==bindings.end()?int64_t(0):it->second.id;
+            const auto revision=it==bindings.end()?int64_t(0):it->second.revision;
+            if(e.bindingId==id&&e.bindingRevision==revision&&id)continue;
+            if(!e.scopes.empty()||e.bindingId!=id||e.bindingRevision!=revision){
+                e.scopes.clear();e.bindingId=id;e.bindingRevision=revision;Dirty();
+            }
+        }
+        for(const auto& [name,b]:bindings){
+            auto& e=rows_[{account,name}];
+            if(e.bindingId!=b.id||e.bindingRevision!=b.revision){
+                e.scopes.clear();e.bindingId=b.id;e.bindingRevision=b.revision;Dirty();
+            }
+        }
+    }
     bool DirtyState()const{return dirty_;}
     uint64_t Revision()const{return revision_;}
     void Saved(uint64_t rev){if(rev==revision_)dirty_=false;}
@@ -185,7 +207,7 @@ public:
         for(const auto& [k,e]:rows_){
             Json scopes=Json::object();
             for(const auto& [name,s]:e.scopes)scopes[name]={{"success",s.success},{"attempt",s.attempt},{"covered",s.covered},{"spec_covered",s.specCovered}};
-            out.push_back({{"account",k.first},{"character",k.second},{"last_seen",e.lastSeen},{"login",e.login},{"spec",e.spec},{"spec_changed",e.specChanged},{"scopes",scopes}});
+            out.push_back({{"account",k.first},{"character",k.second},{"last_seen",e.lastSeen},{"login",e.login},{"spec",e.spec},{"spec_changed",e.specChanged},{"scopes",scopes},{"binding_id",e.bindingId},{"binding_revision",e.bindingRevision}});
         }
         return {{"version",1},{"entries",out}};
     }
@@ -197,6 +219,8 @@ public:
             if(k.first.empty()||next.rows_.count(k))throw std::runtime_error("Invalid activity identity");
             Entry e;e.lastSeen=row.at("last_seen").get<int64_t>();e.login=row.at("login").get<int64_t>();
             e.spec=row.value("spec",0u);e.specChanged=row.value("spec_changed",int64_t(0));
+            e.bindingId=row.value("binding_id",int64_t(0));e.bindingRevision=row.value("binding_revision",int64_t(0));
+            if(e.bindingId<0||e.bindingRevision<0)throw std::runtime_error("Invalid activity identity binding");
             if(e.lastSeen<0||e.login<0||e.specChanged<0)throw std::runtime_error("Invalid activity timestamp");
             for(auto it=row.at("scopes").begin();it!=row.at("scopes").end();++it){
                 Scope s{it.value().at("success").get<int64_t>(),it.value().at("attempt").get<int64_t>(),
