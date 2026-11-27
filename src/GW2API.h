@@ -380,9 +380,6 @@ namespace AlterEgo {
         static std::shared_ptr<const std::vector<Character>> GetCharacters();
         static std::optional<Character> GetCharacter(const std::string& name);
         static std::vector<std::string> GetPendingCharNames();
-        // Worker-only reconciliation from its own verified roster, before
-        // releasing refresh ownership; caller holds the account commit gate.
-        static bool ReconcileCharactersWithRoster(const std::map<std::string,std::set<std::string>>& roster);
         // Cache adoption already committed on disk; discard only affected in-memory rows.
         static void DiscardIdentityCache(const std::string& account,const std::set<std::string>& names,bool all=false);
         // Caller holds the account gate after verified identity/cache adoption.

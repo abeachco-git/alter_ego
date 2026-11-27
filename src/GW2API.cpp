@@ -427,7 +427,8 @@ namespace AlterEgo {
                 };
                 std::string scopeError;
                 const auto require=[&](const std::string& endpoint,const std::vector<std::string>& perms,const char* label){
-                    stage(label);auto r=NativeAccounts::Request(a,endpoint,perms);
+                    stage(label);auto r=NativeAccounts::Request(a,endpoint,perms,
+                        endpoint==path+"/core"?"Cache-Control: no-cache\r\n":"");
                     if(!r){
                         if(r.status==404&&endpoint==path+"/core")NativeAccounts::RecoverCharacterAddress(a,*address);
                         scopeError=r.error;throw std::runtime_error("Character endpoint failed");
@@ -435,7 +436,19 @@ namespace AlterEgo {
                 };
                 bool identityVerified=!needsIdentity;
                 if(!(requested&S::Core)&&!NativeAccounts::VerifyCharacterAddress(a,*address)){
-                    partial=true;std::lock_guard<std::mutex> lock(s_mutex);
+                    partial=true;
+                    // Apply the ordinary per-scope retry policy rather than
+                    // repeatedly admitting identity-only network requests.
+                    NativeAccounts::CommitIfCharacterCurrent(a,*address,[&]{
+                        std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                        for(auto scope:S::Ordered)if(requested&scope){
+                            const auto stamp=CharacterActivity::Now();
+                            const auto ticket=CharacterActivity::State().Begin(key,S::Name(scope),stamp);
+                            CharacterActivity::State().Failure(key,S::Name(scope),ticket,"Character identity not verified");
+                        }
+                        return true;
+                    });
+                    std::lock_guard<std::mutex> lock(s_mutex);
                     s_character_work.Finish(key,0,CharacterActivity::Now(),"Character identity not verified");continue;
                 }
                 for(auto scope:S::Ordered){
@@ -937,30 +950,6 @@ namespace AlterEgo {
         if(count!=s_characters.size()){
             s_has_character_data=!s_characters.empty();++g_characterDataRevision;
         }
-    }
-
-    bool GW2API::ReconcileCharactersWithRoster(const CharacterRequest::Roster& roster) {
-        // Worker owns immutable roster; credential gate excludes replacement
-        // credentials through commit. Keep SQL outside the render data mutex.
-        std::lock_guard<std::mutex> saveLock(g_characterSaveMutex);
-        const auto absent=[&](const Character& c) {
-            return CharacterRequest::VerifiedAbsent(roster,c.account_name,c.name);
-        };
-        std::vector<Character> candidate;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            if(std::none_of(s_characters.begin(),s_characters.end(),absent))return true;
-            candidate=s_characters;
-        }
-        candidate.erase(std::remove_if(candidate.begin(),candidate.end(),absent),candidate.end());
-        if(!Cache::DeleteAbsentCharacters(GetDataDirectory(),roster))return false;
-        {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            s_characters=std::move(candidate);
-            s_has_character_data=!s_characters.empty();
-            ++g_characterDataRevision;
-        }
-        return true;
     }
 
     // =========================================================================

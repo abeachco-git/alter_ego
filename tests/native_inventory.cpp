@@ -167,6 +167,14 @@ int case_native_inventory(int,char**){
         CI::State oldState,newState;
         CA::Tracker activity;
         CA::Ticket stale;
+        CI::DiscoveryGate discovery;
+        assert(discovery.Admit("New",false,100));
+        assert(!discovery.Admit("New",false,219)&&discovery.Admit("New",false,220));
+        assert(!discovery.Admit("New",false,819)&&discovery.Admit("New",false,820));
+        assert(!discovery.Admit("New",false,2000));
+        assert(!discovery.Admit("New",true,2001));
+        assert(discovery.Admit("New",false,2002));
+        assert(!discovery.Admit("Different",false,2003)&&discovery.Admit("Different",false,2032));
         {
             Database::Connection db(accounts,Database::Connection::OpenMode::Create);CI::InitializeAccountRegistry(db);
             auto initial=CI::Commit(db,"A",0,{"Alice","Bob"},{{"Alice",a},{"Bob",b}},false,

@@ -14,6 +14,25 @@ struct Binding {
     bool operator!=(const Binding& other)const{return !(*this==other);}
 };
 using Bindings=std::map<std::string,Binding>;
+// Visible demand may admit an unknown gameplay name, but never create an
+// indefinite new polling loop. A new observed name or resolved->unresolved
+// transition rearms discovery. All times are monotonic seconds.
+class DiscoveryGate {
+    std::string name_;
+    int attempts_=0;
+    bool resolved_=false,hasAttempt_=false;
+    int64_t last_=0;
+public:
+    bool Admit(const std::string& name,bool resolved,int64_t now){
+        if(name_!=name||resolved_!=resolved){
+            name_=name;resolved_=resolved;attempts_=0;
+        }
+        if(name.empty()||resolved||attempts_>=3)return false;
+        const int64_t wait=attempts_==0?30:attempts_==1?120:600;
+        if(hasAttempt_&&(now<last_||now-last_<wait))return false;
+        ++attempts_;last_=now;hasAttempt_=true;return true;
+    }
+};
 inline Bindings CurrentBindings(const State& state){
     Bindings result;
     if(!state.initialized)return result;

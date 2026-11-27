@@ -572,7 +572,6 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 const bool characterScope=bags||name=="Equipment";
                 const auto address=characterScope?EnsureCharacterAddress(linked,character):std::optional<CharacterIdentity::Address>{};
                 if(characterScope&&!address)return;
-                if(bags&&!VerifyCharacterAddress(linked,*address))return;
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
                 BeginScope(state,(accounts.size()>1?a.name+" / ":"")+name+(character.empty()?"":" / "+character));
                 const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
@@ -621,6 +620,8 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                                 throw Background::Cancelled{};
                         }else ticket=attempts.BeginScope(name);
                     }
+                    if(bags&&!VerifyCharacterAddress(linked,*address))
+                        throw std::runtime_error("Character identity not verified");
                     auto j=fetchAccount(path);std::vector<Slot> slots;
                     if(bags){
                         const auto& b=j.at("bags");if(!b.is_array())throw std::runtime_error("Invalid bags");
@@ -643,7 +644,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 }catch(const std::exception& e){
                     Background::Checkpoint();
                     const std::string what=e.what();
-                    state.status=what.rfind("HTTP ",0)==0||what=="Invalid key or missing permission"||what=="Transport failed or cancelled"||what=="Rate limited; retry later"?what:"Invalid or incomplete response";
+                    state.status=what.rfind("HTTP ",0)==0||what=="Invalid key or missing permission"||what=="Transport failed or cancelled"||what=="Rate limited; retry later"||what=="Character identity not verified"?what:"Invalid or incomplete response";
                     if(name=="Equipment")throw;
                     scopeCommit([&]{if(!Record(root,state))throw Background::Cancelled{};});
                 }
@@ -800,15 +801,6 @@ bool CommitIfCurrent(const std::vector<LinkedAccount>& accounts,const std::funct
             std::all_of(accounts.begin(),accounts.end(),[](const auto& a){return Current(a);});
     },commit);
 }
-bool CommitIfRosterCurrent(const std::vector<LinkedAccount>& accounts,const std::map<std::string,std::set<std::string>>& roster,const std::function<bool()>& commit){
-    return CommitIfCurrent(accounts,[&]{
-        for(const auto& [account,names]:roster){
-            auto current=ReadRoster(root,account);
-            if(!current||*current!=names)return false;
-        }
-        return commit();
-    });
-}
 bool CommitIfCharacterCurrent(const LinkedAccount& a,const CharacterIdentity::Address& address,const std::function<bool()>& commit){
     return CommitIfCurrent(a,[&]{
         const auto it=identityStates.find(a.id);
@@ -922,7 +914,6 @@ Result Request(const std::string& id,const std::string& path,const std::vector<s
 }
 PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const CharacterIdentity::Address& address,bool manual){
     const auto& character=address.name;
-    if(!VerifyCharacterAddress(a,address))return {{0,{},"Character identity not verified"},0,0};
     using Clock=std::chrono::steady_clock;
     const auto queued=Clock::now();
     BrokerWork observed(a.generation,ScopeKey{a.id,"Equipment",character});
@@ -944,7 +935,9 @@ PhysicalEquipmentResult RequestPhysicalEquipment(const LinkedAccount& a,const Ch
         CharacterActivity::Cancel(k,"Equipment",ticket);
         return PhysicalEquipmentResult{{0,{},reason},0,0};
     };
-    auto r=Request(a,"/v2/characters/"+Encode(character)+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"});
+    auto r=VerifyCharacterAddress(a,address)?
+        Request(a,"/v2/characters/"+Encode(character)+"/equipment?v=2024-04-01T00:00:00.000Z",{"characters","inventories"}):
+        Result{0,{},"Character identity not verified"};
     PhysicalEquipmentResult result{std::move(r),ticket.started,Now()};
     // Parse before the credential gate, then publish both outcomes while the
     // physical owner is still held. Consumers never record a delayed failure.
@@ -983,27 +976,31 @@ bool RefreshRoster(const LinkedAccount& a,std::set<std::string>& names,bool veri
 }
 void PollObservedIdentity(const std::string& name,bool inventory){
     using D=AutoRefreshPolicy::Dataset;
-    if(!CharacterIdentity::Text(name)||!Ready()||busy.load()||
+    static CharacterIdentity::DiscoveryGate discovery;
+    using Clock=std::chrono::steady_clock;
+    const auto now=std::chrono::duration_cast<std::chrono::seconds>(Clock::now().time_since_epoch()).count();
+    if(!CharacterIdentity::Text(name)){
+        (void)discovery.Admit({},false,now);return;
+    }
+    if(!Ready()||busy.load()||
         !(inventory?(AutoRefreshPolicy::Enabled(D::Bags)||AutoRefreshPolicy::Enabled(D::Equipment)):
                     AutoRefreshPolicy::Enabled(D::Characters)))return;
     auto accounts=Linked();
     size_t matches=0;
     for(const auto& account:accounts)if(account.characters.count(name)&&account.bindings.count(name))++matches;
-    if(matches==1)return;
+    if(matches==1){(void)discovery.Admit(name,true,now);return;}
     accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[](const auto& a){return !a.permissions.count("characters");}),accounts.end());
-    if(accounts.empty())return;
-    // Called only from visible character/inventory demand. The gameplay
-    // observer itself remains network-free.
-    using Clock=std::chrono::steady_clock;
-    static std::string priorName;
-    static Clock::time_point last{};
-    const auto now=Clock::now();
-    if(now-last<std::chrono::seconds(priorName==name?120:30))return;
-    priorName=name;last=now;
+    if(accounts.empty()||!discovery.Admit(name,false,now))return;
+    // Called only from visible demand. The gameplay observer stays local.
     Launch([accounts]{
         ApiActivity::ReasonScope reason(ApiActivity::Reason::Visible);
-        for(const auto& account:accounts){Background::Checkpoint();(void)FetchRoster(account,false,true);}
-        Message("Character identity checked.",RefreshUI::State::Ready);
+        bool complete=true;
+        for(const auto& account:accounts){
+            Background::Checkpoint();const auto result=FetchRoster(account,false,true);
+            if(!result.accepted||result.state.status!="Ready")complete=false;
+        }
+        Message(complete?"Character identity checked.":"Character identity check incomplete; refresh again.",
+            complete?RefreshUI::State::Ready:RefreshUI::State::Error);
     });
 }
 // Keep the published index immutable. Order only the requested presentation
