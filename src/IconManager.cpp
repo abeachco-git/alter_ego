@@ -146,15 +146,18 @@ static std::string ArtworkDigest(const std::string& url){
 }
 std::string IconManager::ResolveKey(uint32_t id,const std::string& url){
     if(!id)return {};
-    if(EmbeddedResource(id))return std::to_string(id);
-    {
+    // The memo contains only non-embedded IDs. Avoid repeatedly probing the
+    // DLL resource table and hashing the same URL on every visible frame.
+    if(!url.empty()){
         std::lock_guard<std::mutex> lock(s_Mutex);
-        if(url.empty()){
-            const auto it=s_LatestKeys.find(id);
-            return ArtworkRequest::OfflineKey(id,it==s_LatestKeys.end()?std::string{}:it->second);
-        }
         const auto it=s_KeyMemo.find(id);
         if(it!=s_KeyMemo.end()&&it->second.first==url)return it->second.second;
+    }
+    if(EmbeddedResource(id))return std::to_string(id);
+    if(url.empty()){
+        std::lock_guard<std::mutex> lock(s_Mutex);
+        const auto it=s_LatestKeys.find(id);
+        return ArtworkRequest::OfflineKey(id,it==s_LatestKeys.end()?std::string{}:it->second);
     }
     if(!ExternalResource::ArtworkUrl(url))return {};
     auto key=ArtworkRequest::VersionKey(id,ArtworkDigest(url));
@@ -295,7 +298,9 @@ Texture_t* IconManager::GetIcon(uint32_t id){
     return GetByKey(ResolveKey(id,{}),id);
 }
 Texture_t* IconManager::GetOrRequestIcon(uint32_t id,const std::string& iconUrl,bool priority){
-    if(!s_API||s_StopWorker)return nullptr;
+    // A stopped or unavailable download worker must not hide already cached
+    // artwork or linked resources. RequestKey alone gates new downloads.
+    if(!s_API)return nullptr;
     const auto key=ResolveKey(id,iconUrl);
     return ArtworkRequest::Resolve(id,iconUrl,priority,
         [&](uint32_t,const std::string&){return GetByKey(key,id);},
