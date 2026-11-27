@@ -79,6 +79,8 @@ AE2:<base64-encoded-binary>
 | 2 | 1 | `build_link_len` | Length of the raw build link bytes. |
 | 3 | N | `build_link` | Raw bytes of the GW2 build chat link (the base64-decoded `[&...]` payload, excluding the `[&` prefix and `]` suffix). |
 
+The embedded native link carries companion pairs and, for Revenant, the six ordered inactive utility palette IDs when supplied. Alter Ego preserves recorded values through native import and regeneration; unknown values cannot be reconstructed from a live character or the public legend catalog. AE2 v2/v3 wire layouts are unchanged; native portable Library interchange additionally preserves field presence, independent component identity and unknown extensions.
+
 After `build_link`, optional sections follow based on `flags`:
 
 #### Flags Byte
