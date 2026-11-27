@@ -350,6 +350,8 @@ Live acceptance matrix (use API Activity counts, not merely footer timestamps):
 | Other characters fresh, in logout grace, in retry cooldown, unvisited, ambiguous, or on an unrelated account | No opportunistic admission unless independently eligible; unvisited/unverified/unrelated account targets excluded. |
 | More than 20 eligible characters | No extra batch solely for overflow opportunistic targets. Explicit multi-character manual work may use multiple batches. |
 | Original automatic trigger becomes current or invalid while queued | Recheck trigger and binding; extras must not initiate a standalone job. |
+| Original seed loses eligibility or binding while waiting for the shared storage mutex; an extra remains eligible | No extras-only HTTP, no false successful coverage or cooldown for cancelled tickets; preserve valid original targets. Pending 9B.3 regression, not established by current pure planner fixtures. |
+| Opportunistic candidate becomes invalid or ineligible before dispatch, or combined request is unsupported | No accidental narrow fetch for a skipped extra; repair only admitted valid partial rows or original demand as appropriate. Pending 9B.3 regression. |
 | Manual footer / Compare / row Refresh Character / Refresh Selected | Respect original scope or explicit full targets; no opportunistic expansion. |
 | Automatic refresh disabled or main window hidden | No new character job solely from cached stale characters; no display-only or tooltip HTTP. |
 | Complete response overlaps Inventory bags/equipment | Shared owner publishes validated data and original activity coverage; overlapping successful storage work coalesces. |
@@ -358,7 +360,7 @@ Live acceptance matrix (use API Activity counts, not merely footer timestamps):
 | Credential/binding replacement, logout/spec change during retrieval | Reject obsolete identity publication; old response cannot cover newer activity. |
 | Batch metadata enrichment | Known missing detail/binding IDs deduplicated across committed targets, up to 200 per public item request; no automatic price retrieval. |
 
-Compare schema-pinned combined data with individual core/buildtabs/equipmenttabs/crafting/physical/inventory endpoints, including all tabs, tools, relics, armory and empty data. User probe confirmed field equality for two characters and exact named batch coverage through 12; validate 20, actual latency, selected/active publication order, partial failures and concurrent in-game behavior. Roster retirement still requires independent full reconciliations. Reuse of roster payloads beyond identity evidence remains open. Native Fast Load must remain untouched.
+Compare schema-pinned combined data with individual core/buildtabs/equipmenttabs/crafting/physical/inventory endpoints, including all tabs, tools, relics, armory and empty data. User probe confirmed field equality for two characters and exact named batch coverage through 12; validate 20, actual latency, selected/active publication order, partial failures and concurrent in-game behavior. Roster retirement still requires independent full reconciliations. For future roster payload reuse, test exact reconciled binding and credential, independent scope validation, original request-start activity tickets, no storage lock acquired under the roster broker, and no extra HTTP for already verified fields; this is pending 9B.3 work, not existing coverage. Native Fast Load must remain untouched.
 
 ### Shared account freshness
 
