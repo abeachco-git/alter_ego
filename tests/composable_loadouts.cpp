@@ -76,7 +76,7 @@ int case_composable_loadouts(int, char**) {
                                                        {"sigil2","Superior Sigil of Accuracy"}}}}}};
     const Json sampleRunes = {{"gear", {{"Helm", {{"rune","Superior Rune of the Scholar"}}},
                                         {"Coat", {{"rune","Superior Rune of the Scholar"}}}}}};
-    assert(SuggestComponentName("armor", sampleArmor) == "Berserker");
+    assert(SuggestComponentName("armor", sampleArmor) == "Berserker Armor");
     assert(SuggestComponentName("sigils", sampleSigils) == "Accuracy / Force");
     assert(SuggestComponentName("runes", sampleRunes) == "Scholar x2");
     Document named;

@@ -101,6 +101,8 @@ Startup maintenance regression covers exclusive scheduling, no live deletion, ta
 
 Background worker coverage additionally verifies throwing failure-handler containment, repeated launches, reopening and complete joining. Windows artwork queue behavior and unload latency require in-game validation.
 
+Part 8 extends native editing with exact inherited-reference replacement, private/shared and mixed selection, one fork per set, single-owner replacement, invalid-reference rollback, and separate payload identity. Native name tests cover pending-only repair, complete-name stability, manual/unknown protection, portable component and Loadout provenance, malformed provenance rejection and v6-to-v7 migration with preservation of existing names/revision and backup. Live acceptance: inline and popup rebase, reverting selection, set switches, mixed private/shared review and cancellation, overlapping edits, automatic naming modes and deferred repair after metadata arrival and restart.
+
 Equipment set coverage in `persistence.native_library` verifies direct exclusive set links, exact capture matching, shared membership changes, copy/detach isolation, rejection of implicit aggregate gear edits, persistence, portable graph round-trip, duplicate consolidation and merge. Experimental SQLite schemas 1–3 are not supported migration sources; original v2 migration and the backed-up v4-to-v5 Aquatic migration remain covered by the native migration suite. Signed SQLite infusion IDs must survive conversion to unsigned GW2 IDs in SavedBuild projections.
 
 ### Equipment Set category ownership

@@ -4,10 +4,10 @@ Experimental branch, continuing after Part 7. Only unresolved implementation, in
 
 **Approval:** "Approved remainder" retains the previous scope; a design decision or proposed item requires discussion before implementation. Changes to refresh lifecycles, scheduling, retries, caching or transport require specific approval under [AGENTS.md](../AGENTS.md). Split work into independently testable batches. Do not reopen an implemented capability solely because its live acceptance is deferred; reopen on evidence of a defect.
 
-## Part 8 — Library: remaining design decisions
+## Part 8 — Library: approved implementation awaiting verification
 
-- [ ] **8A — Approved remainder, design decision:** direct replacement of an inherited component reference in the parent Loadout editor. The current picker is read-only for inherited references; switching/detaching the set and private-by-default payload edits with explicit shared consent already work. Decide whether the existing explicit set operations suffice or whether to offer a staged private reference override. Preserve atomic parent Save, effective ownership and unchanged other owners.
-- [ ] **8B — Approved remainder, design decision:** persist auto-name provenance and decide safe deferred repair/naming formats. Explicit Regenerate Name, metadata-aware suggestions and manual-name preservation exist; the persisted component schema does not distinguish automatic from custom/imported names. Never infer legacy provenance from a name alone; preserve identity and use existing metadata owners.
+- [ ] **8A — Approved:** direct inherited reference replacement using the parent draft and private/shared Save review, without persisted overrides. Implementation committed; retain until required exact-commit verification and DLL delivery.
+- [ ] **8B — Approved:** typed automatic/manual/unknown naming provenance, protected migration and portable round-trip, cached-metadata-only deferred repair at safe existing transaction/startup boundaries. Implementation committed; retain until required exact-commit verification and DLL delivery.
 
 ## Part 9 — Metadata and request ownership
 

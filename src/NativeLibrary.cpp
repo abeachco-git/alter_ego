@@ -76,7 +76,9 @@ Snapshot Repository::ReadUnlocked() {
             "SELECT kind,id,name,fingerprint,0 FROM components ORDER BY kind,ordinal,id");
         while(q.Step()) {
             const auto kind=q.Text(0); Component c{q.Text(1),q.Text(2),ReadPayload(db_,kind,q.Text(1))};
-            c.nameOrigin=static_cast<Composable::NameOrigin>(q.Int(4));
+            const auto nameOrigin=q.Integer(4);
+            if(nameOrigin<0||nameOrigin>3)throw Database::Error(SQLITE_CORRUPT,"Invalid component name provenance");
+            c.nameOrigin=static_cast<Composable::NameOrigin>(nameOrigin);
             if(!Composable::ValidNameOrigin(c.nameOrigin))
                 throw Database::Error(SQLITE_CORRUPT,"Invalid component name provenance");
             if(fingerprint_(c.data)!=q.Text(3))

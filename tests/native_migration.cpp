@@ -110,6 +110,21 @@ int case_native_migration(int,char**) {
     assert(backupFound);store.Close();
     assert(store.Open(v4root.u8string(),error));assert(store.Read(snapshot,error));
     assert(snapshot.revision==migrated.revision);store.Close();
+    // Reopen a populated v6 library through the real Store path: the backup
+    // must precede the additive provenance migration and preserve its graph.
+    {
+        DB::Connection db(v4paths.Library().u8string(),DB::Connection::OpenMode::Existing);
+        db.Exec("ALTER TABLE components DROP COLUMN name_origin;PRAGMA user_version=6;");
+    }
+    assert(store.Open(v4root.u8string(),error));assert(store.Read(snapshot,error));
+    assert(snapshot.revision==migrated.revision);
+    assert(C::ToJson(snapshot.loadouts)==C::ToJson(migrated.loadouts));
+    bool v6Backup=false;
+    for(const auto& entry:fs::directory_iterator(v4paths.Migration())){
+        DB::Connection backup((entry.path()/"library.db").u8string(),DB::Connection::OpenMode::ReadOnly);
+        if(backup.Scalar("PRAGMA user_version")==6)v6Backup=true;
+    }
+    assert(v6Backup);store.Close();
     const auto freshParts=C::Split(beforeWater.at("builds")[0]);
     assert(freshParts.at("aquatic").at("gear").at("HelmAquatic").at("rune_id")==9);
     assert(freshParts.at("aquatic").at("gear").at("WeaponAquaticA").at("infusion_ids")==Json::array({42,43}));

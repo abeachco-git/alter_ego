@@ -230,6 +230,19 @@ int case_native_editing(int,char**) {
         Find(edited,"relic","custom")->data["relic_id"]=43;
         RefreshEditedAutomaticNames(graph,edited,lookup);
         assert(Find(edited,"relic","custom")->name=="Keep me");
+        Document loadout,importedGraph;
+        assert(PutLoadout(loadout,a,error));
+        const auto armorId=FindLoadout(loadout,"a")->refs.at("armor");
+        assert(Find(loadout,"armor",armorId)->nameOrigin==NameOrigin::AutomaticPending);
+        Json portable;
+        assert(ExportPortableLoadout(loadout,"a",portable,error));
+        assert(ImportPortableLoadout(importedGraph,portable,"imported",error));
+        const auto importedArmor=FindLoadout(importedGraph,"imported")->refs.at("armor");
+        assert(Find(importedGraph,"armor",importedArmor)->nameOrigin==NameOrigin::AutomaticPending);
+        portable["components"]["armor"]["name_origin"]=true;
+        const auto prior=ToJson(importedGraph);
+        assert(!ImportPortableLoadout(importedGraph,portable,"invalid",error));
+        assert(ToJson(importedGraph)==prior);
     }
     // Standalone creation reuses exact components and never modifies a Loadout.
     {
