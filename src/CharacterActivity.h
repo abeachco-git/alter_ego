@@ -237,6 +237,8 @@ public:
         const auto& e=i->second;auto it=e.scopes.find(scope);const Scope s=it==e.scopes.end()?Scope{}:it->second;
         if(Active(k)){
             const auto interval=RefreshEngine::ActivitySeconds(k.second.empty(),scope);
+            if(k.second.empty()&&RefreshEngine::SharedActivityStorage(scope))
+                return RefreshEngine::TimedFresh(success,now,interval);
             const bool specDue=specSignal&&e.specChanged>s.specCovered&&e.specChanged>=e.login;
             return !specDue&&now-std::max(e.login,success)<interval;
         }
@@ -248,13 +250,17 @@ public:
         auto it=e.scopes.find(scope);const Scope s=it==e.scopes.end()?Scope{}:it->second;
         const auto attempt=std::max(externalAttempt,s.attempt);
         Eligibility result;
-        // Bootstrap only independently verified character-detail scopes.
-        // Inventory and account-level activity policies are unchanged.
+        // Bootstrap independently verified character-detail scopes.
+        // Shared account storage uses its actual retrieval clock when active;
+        // character-specific propagation and offline coverage remain separate.
         using namespace RefreshEngine::ScopeName;
         const bool characterDetail=!k.second.empty()&&
             (scope==Core||scope==Builds||scope==Tabs||scope==Physical||scope==Crafting);
         if(characterDetail&&(success<=0||success>now)){
             result={WaitReason::Due,now,true};
+        }else if(Active(k)&&k.second.empty()&&SharedActivityStorage(scope)){
+            return RefreshEngine::ActiveSharedStorageEligibility(success,attempt,now,e.login,
+                RefreshEngine::ActivitySeconds(true,scope),RefreshEngine::Offset(k.first+"//"+scope));
         }else if(Active(k)){
             const bool missing=success<=0||success>now;
             const auto interval=RefreshEngine::ActivitySeconds(k.second.empty(),scope);

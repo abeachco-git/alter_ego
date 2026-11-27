@@ -26,10 +26,7 @@ inline int64_t Offset(const std::string& key){
 inline bool Due(int64_t success,int64_t attempt,int64_t now,int64_t interval,
                 bool manual=false,int64_t minimumEpoch=0,int64_t offset=0,
                 int64_t retry=FailureSeconds){
-    if(manual)return true;
-    if(RetryUntil(success,attempt,now,retry))return false;
-    if(success<=0||success>now||success<minimumEpoch)return true;
-    return now-success>=interval+offset;
+    return TimedEligibility(success,attempt,now,interval,manual,minimumEpoch,offset,retry).due;
 }
 // A request started during the propagation window cannot verify the final
 // logged-out state, even when a manual request completes successfully.

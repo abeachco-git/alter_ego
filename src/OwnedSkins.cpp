@@ -5,6 +5,8 @@
 #include "SkinDataCache.h"
 #include "SkinCache.h"
 #include "NativeAccounts.h"
+#include "RefreshPolicy.h"
+#include <map>
 
 #include <algorithm>
 #include <cctype>
@@ -37,6 +39,10 @@ namespace Skinventory {
 
     namespace {
     uint64_t accountEpoch=0;
+    // Per-account failed attempts belong to the credential generation, not
+    // the currently selected account. Protected by OwnedSkins::s_mutex.
+    struct OwnershipAttempt {uint64_t generation=0;int64_t attempted=0;};
+    std::map<std::string,OwnershipAttempt> attempts;
     // Serialize capture and persistence of updates, not browsing-account changes.
     // A write must keep the identity and IDs captured together at publication.
     std::mutex ownershipSaveMutex;
@@ -51,7 +57,7 @@ namespace Skinventory {
     void OwnedSkins::Tick(){}
     void OwnedSkins::SetDataDirectory(const std::string& dir){s_data_dir=dir;}
     void OwnedSkins::Initialize(AddonAPI_t* api){s_API=api;}
-    void OwnedSkins::Shutdown(){s_API=nullptr;}
+    void OwnedSkins::Shutdown(){std::lock_guard<std::mutex> lock(s_mutex);attempts.clear();s_API=nullptr;}
     void OwnedSkins::SetAccountName(const std::string& name){
         uint64_t epoch=0;
         {
@@ -80,14 +86,32 @@ namespace Skinventory {
         });
     }
     bool OwnedSkins::ConsumeDataUpdatedFlag(){return s_data_updated.exchange(false);}
-    void OwnedSkins::RequestOwnedSkinsViaApi(){
+    bool OwnedSkins::RefreshDue(){
+        std::string account;
+        {std::lock_guard<std::mutex> lock(s_mutex);account=s_account_name;}
+        const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if(account.empty()||account!=s_account_name||credential.id!=account||!credential.permissions.count("unlocks")||s_querying)return false;
+        const auto it=attempts.find(account);
+        const auto failed=it!=attempts.end()&&it->second.generation==credential.generation?it->second.attempted:0;
+        return AlterEgo::RefreshEngine::TimedEligibility(s_last_success_time,failed,std::time(nullptr),
+            AlterEgo::RefreshEngine::SkinOwnershipSeconds).due;
+    }
+    void OwnedSkins::RequestOwnedSkinsViaApi(bool manual){
         std::string account;uint64_t epoch;
+        {std::lock_guard<std::mutex> lock(s_mutex);account=s_account_name;}
+        const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            if(s_querying||s_account_name.empty())return;
-            account=s_account_name;epoch=++accountEpoch;s_querying=true;s_status_message="Retrieving skin ownership...";
+            if(s_querying||account.empty()||account!=s_account_name||credential.id!=account||!credential.permissions.count("unlocks"))return;
+            auto& attempt=attempts[account];
+            if(attempt.generation!=credential.generation)attempt={credential.generation,0};
+            const auto now=std::time(nullptr);
+            if(!AlterEgo::RefreshEngine::TimedEligibility(s_last_success_time,attempt.attempted,now,
+                AlterEgo::RefreshEngine::SkinOwnershipSeconds,manual).due)return;
+            attempt.attempted=now;
+            epoch=++accountEpoch;s_querying=true;s_status_message="Retrieving skin ownership...";
         }
-        const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
         AlterEgo::Background::Workers().Launch([account,epoch,credential]{
             auto result=AlterEgo::NativeAccounts::Request(credential,"/v2/account/skins",{"unlocks"});
             AlterEgo::Background::Checkpoint();
@@ -110,6 +134,8 @@ namespace Skinventory {
                 if(!valid){s_status_message=result.error.empty()?"Invalid skin ownership response":result.error;return true;}
                 parsed.insert(s_locally_marked.begin(),s_locally_marked.end());s_owned_skins=std::move(parsed);
                 s_has_data=true;s_last_success_time=std::time(nullptr);++s_generation;
+                auto& attempt=attempts[account];
+                if(attempt.generation==credential.generation)attempt.attempted=0;
                 s_status_message="Owned: "+std::to_string(s_owned_skins.size());
                 snapshot.fetchedAt=static_cast<int64_t>(s_last_success_time);
                 snapshot.ids.insert(s_owned_skins.begin(),s_owned_skins.end());
@@ -165,7 +191,10 @@ namespace Skinventory {
     }
 
     bool OwnedSkins::IsAccountAvailable() {
-        return AlterEgo::NativeAccounts::HasLinkedAccounts();
+        std::string account;
+        {std::lock_guard<std::mutex> lock(s_mutex);account=s_account_name;}
+        const auto credential=AlterEgo::NativeAccounts::FindLinked(account);
+        return !account.empty()&&credential.id==account&&credential.permissions.count("unlocks");
     }
 
     bool OwnedSkins::IsQuerying() {

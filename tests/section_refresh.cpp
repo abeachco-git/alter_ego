@@ -66,6 +66,19 @@ int case_section_refresh(int, char**) {
     assert(F::TimedEligibility(now-1799,0,now,1800).at==now+1);
     assert(F::TimedEligibility(now+1,0,now,1800).due);
     assert(F::TimedEligibility(0,now-899,now,1800).reason==F::WaitReason::Retry);
+    for(const auto interval:{600,900,1800})for(const auto age:{0,599,600,900,1800,90000})
+        for(const auto offset:{0,30})for(const auto attempt:{int64_t(0),int64_t(now-10)}){
+            const auto success=now-age;
+            assert(F::Due(success,attempt,now,interval,false,0,offset)==
+                F::TimedEligibility(success,attempt,now,interval,false,0,offset).due);
+        }
+    assert(!F::TimedFresh(now+1,now,900)&&!F::TimedFresh(0,now,900));
+    assert(!F::TimedFresh(now-1800,now,1800));
+    assert(F::TimedEligibility(now-1800,0,now,1800,false,0,30).reason==F::WaitReason::Stagger);
+    assert(F::TimedEligibility(now-10,0,now,1800,false,now-5,30).due);
+    assert(F::TimedEligibility(now-900,now-10,now,F::SkinOwnershipSeconds,true).due);
+    assert(!F::TimedEligibility(now-900,now-10,now,F::SkinOwnershipSeconds).due);
+    assert(F::InventorySeconds("Wallet")==1800);
     {
         namespace R=AlterEgo::RefreshStatus;
         R::Scope current;current.success=now-60;current.fresh=true;current.automatic=true;
@@ -174,6 +187,19 @@ int case_section_refresh(int, char**) {
             if(interval==600)offsets.insert(offset);
             assert(F::ActivitySeconds(true,scope)==interval);
             assert(storage.Due(account,scope,0,0,now+1,false)); // first retrieval unchanged
+            // Login must not renew yesterday's verified shared storage or
+            // postpone an already-due request; failure cooldown still wins.
+            const auto old=now-86400;
+            const auto stale=storage.Inspect(account,scope,old,now+1,false);
+            assert(!stale.fresh&&stale.eligibility.due&&stale.eligibility.reason==F::WaitReason::Due);
+            assert(!storage.Due(account,scope,old,now,now+1,false));
+            const auto recent=now-interval+100;
+            assert(storage.Fresh(account,scope,recent,now+1,false));
+            assert(storage.Eligible(account,scope,recent,0,now+1,false).at==recent+interval+offset);
+            assert(!storage.Fresh(account,scope,recent,now+100,false));
+            const A::Key otherAccount{"account-b",{}};
+            assert(storage.Fresh(otherAccount,scope,old,now+1,false));
+            assert(!storage.Due(otherAccount,scope,old,0,now+1,false));
             assert(storage.Fresh(account,scope,now,now+interval-1,false));
             assert(!storage.Fresh(account,scope,now,now+interval,false));
             const auto eligible=storage.Eligible(account,scope,now,0,now+interval,false);

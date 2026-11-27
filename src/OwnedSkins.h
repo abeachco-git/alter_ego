@@ -31,7 +31,9 @@ namespace Skinventory {
         // Ping native API to check availability
 
         // Request owned skins via native API API proxy (/v2/account/skins) — single request
-        static void RequestOwnedSkinsViaApi();
+        static void RequestOwnedSkinsViaApi(bool manual=true);
+        // Read-only, account/credential-qualified ordinary freshness policy.
+        static bool RefreshDue();
 
         // Request owned skin data from native API (batched, up to 200 at a time)
         // Fallback if API proxy response is truncated.

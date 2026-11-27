@@ -26,6 +26,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 
 - Track character activity locally and refresh character/inventory snapshots on visible demand; 10-minute active interval and post-logout grace, 10-minute active Bank/shared inventory/material storage and 30-minute Legendary Armory.
 - Batch complete automatic character refreshes with eligible cached characters from the same account, up to 20 per request; reuse bags and equipment in Inventory and batch missing item definitions. Manual refresh remains targeted or explicitly selected, and roster verification remains separate.
+- Logging in no longer postpones already-due Bank, Shared Inventory, Materials or Legendary Armory retrieval. Wardrobe ownership refresh and retry eligibility are account-qualified.
 
 - Start unified freshness scheduling: configurable objective tracking, shared achievement progress, per-section Vault refresh and automatic failure cooldowns, pre-dispatch public metadata deduplication, and 30-minute Legendary Armory freshness.
 

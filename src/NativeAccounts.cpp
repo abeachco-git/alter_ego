@@ -593,7 +593,7 @@ bool AutoScope(const std::string& scope){
 bool ActivityScope(const std::string& scope){return RefreshEngine::ActivityInventoryScope(scope);}
 bool ScopeFresh(const std::string& account,const std::string& scope,const std::string& character,int64_t success){
     if(ActivityScope(scope))return CharacterActivity::Fresh({account,character},scope,success,scope=="Equipment"&&CharacterActivity::SpecSignal().load());
-    const auto now=Now();return success>0&&now>=success&&now-success<FreshSeconds(scope);
+    return RefreshEngine::TimedFresh(success,Now(),FreshSeconds(scope));
 }
 bool ScopePermitted(const Account& a,const std::string& scope){
     return RefreshEngine::InventoryPermitted(a.permissions,scope);
@@ -619,7 +619,7 @@ RefreshStatus::Scope InspectStorageScope(const std::string& account,const std::s
         result.attempt=std::max(result.attempt,inspection.attempt);
         result.error=inspection.error;
     }else{
-        result.fresh=result.success>0&&result.success<=now&&now-result.success<FreshSeconds(scope);
+        result.fresh=RefreshEngine::TimedFresh(result.success,now,FreshSeconds(scope));
         result.eligibility=RefreshEngine::TimedEligibility(result.success,unresolved,now,FreshSeconds(scope));
     }
     if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing"){
@@ -700,9 +700,7 @@ void Refresh(const std::vector<Account>& accounts,uint64_t epoch,const std::stri
                 if(characterScope&&(!address||!characterFilter.Accepts(*address)))return;
                 ScopeState state{a.id,name,character,"Ready",Now(),0};
                 BeginScope(state,(accounts.size()>1?a.name+" / ":"")+name+(character.empty()?"":" / "+character));
-                const bool permitted=name=="Delivery box"?a.permissions.count("tradingpost")!=0:
-                    a.permissions.count("inventories")&&(!characterScope||a.permissions.count("characters"))&&
-                    (name!="Legendary Armory"||a.permissions.count("unlocks"));
+                const bool permitted=ScopePermitted(a,name);
                 if(!permitted&&!characterScope){
                     state.status="Missing permissions";
                     const auto write=[&]{if(!Record(root,state))return false;EndScope(state);return true;};

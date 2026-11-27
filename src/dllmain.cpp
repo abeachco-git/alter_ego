@@ -15608,28 +15608,15 @@ static void RenderSkinventoryStatusRow() {
         g_SkinRefreshOwned = true;
     bool querying = Skinventory::OwnedSkins::IsQuerying();
     bool canRefresh = Skinventory::OwnedSkins::IsAccountAvailable() && !querying;
-    {
-        static std::string s_autoRefreshAccount;
-        static auto s_lastOwnershipAttempt=std::chrono::steady_clock::time_point{};
-        const std::string currentAccount = GetEffectiveAccountName();
-        const std::time_t lastSuccess = Skinventory::OwnedSkins::GetLastSuccessTime();
-        const std::time_t now = std::time(nullptr);
-        const bool stale = !Skinventory::OwnedSkins::HasData() ||
-            lastSuccess <= 0 || (now > lastSuccess && now - lastSuccess > 15 * 60);
-        if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership) && canRefresh &&
-            !currentAccount.empty() && stale &&
-            (s_autoRefreshAccount != currentAccount||std::chrono::steady_clock::now()-s_lastOwnershipAttempt>=std::chrono::seconds(AlterEgo::RefreshEngine::FailureSeconds))) {
-            s_autoRefreshAccount = currentAccount;s_lastOwnershipAttempt=std::chrono::steady_clock::now();
-            g_SkinRefreshOwned = true;
-        }
-    }
-    if(g_SkinRefreshOwned&&!AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership))g_SkinRefreshOwned=false;
-    if (g_SkinRefreshOwned && canRefresh) {
+    if (AlterEgo::AutoRefreshPolicy::Enabled(AlterEgo::AutoRefreshPolicy::Dataset::SkinOwnership) &&
+        canRefresh && Skinventory::OwnedSkins::RefreshDue()) {
         g_SkinRefreshOwned = false;
         s_refreshPending = true;
         s_refreshStartingGeneration = Skinventory::OwnedSkins::GetGeneration();
-        Skinventory::OwnedSkins::RequestOwnedSkinsViaApi();
+        Skinventory::OwnedSkins::RequestOwnedSkinsViaApi(false);
     }
+    // Account selection and cache notifications are not force-refresh consent.
+    g_SkinRefreshOwned = false;
     querying = Skinventory::OwnedSkins::IsQuerying();
     if (s_refreshPending && !querying) {
         s_refreshPending = false;

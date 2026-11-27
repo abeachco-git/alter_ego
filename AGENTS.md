@@ -5,7 +5,7 @@
 - Requests to discuss or suggest are discussion only. Implement when approved; do not ask again for routine in-scope decisions.
 - Work on the requested branch. Never modify or merge into main or another branch without approval.
 - Preserve existing local libraries, supported original Pie or Cake external import/export, GW2 build links, Snow Crows and MetaBattle runtime import/refresh, current Alter Ego portable round-trips, exact native component identity and independent functional Compare semantics, and the Nexus ImGui 1.80 ABI. Older experimental Alter Ego portable formats have no compatibility requirement; this does not authorize discarding local database data. Do not upgrade ImGui or change its allocator/context contract independently.
-- Prefer existing modules and canonical helpers over parallel implementations. Keep changes cohesive; extract a focused helper when useful rather than growing `dllmain.cpp` unnecessarily. Avoid unrelated refactors.
+- Use canonical implementations and focused reusable helpers, not parallel implementations or page-local copies. Avoid unrelated refactors.
 
 ## Read only the relevant references
 
@@ -19,6 +19,15 @@ This is the authoritative agent instruction file; `CLAUDE.md` delegates here. Do
 | Tests, CI or build changes | [Regression testing](docs/regression-testing.md) |
 | AE2 share/import format | [Shared build specification](docs/shared-build-spec.md) |
 | Dataset or asset generation | [Tool inventory](tools/README.md) |
+
+## Canonical implementation and portability — required
+
+- Before changing functionality, audit existing implementations, helpers, owners and all materially equivalent consumers. Identify the canonical implementation and document demonstrated inconsistencies before changing policy.
+- Functionally equivalent behavior must share one implementation. Express legitimate dataset/context differences through explicit policy parameters, not copied logic, hardcoded page timers or new competing owners. Correct defects at the common source and review affected callers; do not force different semantics into a common abstraction.
+- Keep domain calculations, validation and policy portable, independently testable standard C++. Separate Windows/Nexus/ImGui, HTTP, persistence and rendering adapters from domain logic. Reuse existing pure helpers and tests; justify necessary platform-specific or specialized exceptions near the owning code/reference.
+- Ownership, freshness, visible demand, admission, retrieval and verified publication are distinct. Keep exact account/character/guild/public identity and credentials qualified throughout. Scheduler, status/tooltip and availability must derive equivalent decisions from the same authoritative policy and evidence. A login cannot renew stale shared account data. Do not bypass reset/propagation, cooldown, permission or identity guards for consistency.
+- Apply this requirement across the application, including UI controls/actions, comparison, searches/filters, imports, persistence and request/metadata owners. Regression tests must exercise common behavior across consumers and preserve intentionally distinct policies. Report the canonical helper, reviewed consumers, exceptions and unresolved inconsistencies in the completion summary.
+- These rules do not authorize unapproved lifecycle changes; raise material policy differences for discussion under the guardrails below.
 
 ## Non-negotiable guardrails
 
@@ -37,7 +46,7 @@ This is the authoritative agent instruction file; `CLAUDE.md` delegates here. Do
 
 An approved implementation request is not complete until the verified DLL has been delivered, or a genuine blocker requiring the user's involvement has been explained.
 
-1. Implement and commit on the designated branch.
+1. Audit equivalent consumers and shared implementations, record the approved policy and necessary exceptions, implement at the canonical source, extend cross-consumer regression coverage and reconcile affected architecture/UI/testing guidance. Commit on the designated branch.
 2. Trigger or locate the Windows DLL workflow for the exact implementation commit. Follow it through required offline regression tests, compilation, binary verification and packaging.
 3. If a required step fails, inspect logs, diagnose, apply safe in-scope fixes or retry transient failures, and rebuild. Do not stop at a failure you can resolve.
 4. Confirm GitHub Actions succeeded for the exact final implementation commit. Retrieve the matching artifact, extract `AlterEgo.dll`, verify Windows x64 UCRT and confirm the delivered file actually exists.
