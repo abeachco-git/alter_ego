@@ -37,6 +37,10 @@ git revert 198ded0d5128bb406fe5b635a30ac973df699bbd
 
 If only the retry cadence is at fault, revert `56bc729` alone. If only comparison is at fault, revert `198ded0` alone; if only retry admission is at fault, revert `d9a4da6` alone. Reconcile the Architecture and testing notes to the resulting behavior; rebuild, verify and deliver the matching DLL. Do not merge main, reset SQLite, or undo the working Fractal rollover implementation. Reverts can conflict if later work touches the same lines; review rather than force.
 
+## Isolated shared Clears epoch cache (Part 9B.2)
+
+The later Clears-only change adds a session public epoch cache without altering the existing account completion storage or Vault behavior. It is isolated to [d9fa527](https://github.com/abeachco-git/alter_ego/commit/d9fa527d10976d2424e6649e033996e145fe4c1f) and its follow-up [9e7c89e](https://github.com/abeachco-git/alter_ego/commit/9e7c89ebf52471b032bb8a0ccbe92f2f60f4a75f). If the new sharing is suspected, revert `9e7c89e` first, then `d9fa527`; retain the intervening unrelated character picker commit `156a1dd` and all existing Vault/reset-cadence fixes. Resolve conflicts selectively and rebuild/verify. No cache database rollback is required. Test switching accounts across the reset, prior-ID and alternate-route rejection, independent weekly progress, manual revalidation, and cold-start behavior; compare requests and actual objective IDs before and after.
+
 ## Live acceptance checklist
 
 - [ ] Before reset, capture yesterday's verified Vault objectives including claimed/completed and partially progressed examples, and daily Fractal IDs/names. Keep these as local observations; no secrets.
