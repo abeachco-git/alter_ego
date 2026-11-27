@@ -6,8 +6,6 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 ## Refresh demand follow-up — D2.5
 
-Approved scope: remove hidden account refresh dispatch from Nexus automatic-refresh settings and retire demonstrably obsolete BUSY timers without changing active retry behavior. Close this approved item after exact-commit verification and DLL delivery.
-
 - [ ] **Discussion only:** confirm actual visible demand for Vault retry dispatch (including master/dataset opt-out), achievement browser and nonempty pinned tracker. Neither manual nor automatic failed requests should retry without current demand. Retain cooldown, verified results and in-flight requests; distinguish retry from bounded successful multi-stage continuations. Discuss whether leaving a page should defer those continuations before changing them. Keep current account/credential/generation and reset safeguards.
 - [ ] **Separate discussion:** decide which public catalogs genuinely require startup/settings-triggered retrieval. Do not change that policy as part of the approved account settings fix.
 
