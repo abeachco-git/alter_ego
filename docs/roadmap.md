@@ -1,13 +1,8 @@
 # Roadmap — outstanding work
 
-Experimental branch, continuing after Part 7. Only unresolved implementation, investigation and design decisions belong here. [Development status](development-status.md) owns live and deferred verification; [Architecture](architecture.md), [UI reference](ui-components.md) and [regression testing](regression-testing.md) own established behavior and test procedures. [Release checklist](release-checklist.md) owns release gates. Git history is the archive.
+Experimental branch, continuing after Part 8. Only unresolved implementation, investigation and design decisions belong here. [Development status](development-status.md) owns live and deferred verification; [Architecture](architecture.md), [UI reference](ui-components.md) and [regression testing](regression-testing.md) own established behavior and test procedures. [Release checklist](release-checklist.md) owns release gates. Git history is the archive.
 
 **Approval:** "Approved remainder" retains the previous scope; a design decision or proposed item requires discussion before implementation. Changes to refresh lifecycles, scheduling, retries, caching or transport require specific approval under [AGENTS.md](../AGENTS.md). Split work into independently testable batches. Do not reopen an implemented capability solely because its live acceptance is deferred; reopen on evidence of a defect.
-
-## Part 8 — Library: approved implementation awaiting verification
-
-- [ ] **8A — Approved:** direct inherited reference replacement using the parent draft and private/shared Save review, without persisted overrides. Implementation committed; retain until required exact-commit verification and DLL delivery.
-- [ ] **8B — Approved:** typed automatic/manual/unknown naming provenance, protected migration and portable round-trip, cached-metadata-only deferred repair at safe existing transaction/startup boundaries. Implementation committed; retain until required exact-commit verification and DLL delivery.
 
 ## Part 9 — Metadata and request ownership
 
@@ -52,4 +47,4 @@ Previously approved program; approve specific lifecycle changes before implement
 
 ## Verification and release
 
-Part 7 and other completed implementation acceptance, discretionary performance measurements and non-live verification remain in [development status](development-status.md); release-only gates remain in [release checklist](release-checklist.md). Do not duplicate those lists here. No approved implementation is complete without exact-commit required build gates and verified DLL delivery per AGENTS.md.
+Parts 7–8 and other completed implementation acceptance, discretionary performance measurements and non-live verification remain in [development status](development-status.md); release-only gates remain in [release checklist](release-checklist.md). Do not duplicate those lists here. No approved implementation is complete without exact-commit required build gates and verified DLL delivery per AGENTS.md.
