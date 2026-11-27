@@ -171,6 +171,7 @@ namespace AlterEgo {
     AddonAPI_t* GW2API::s_api = nullptr;
     FetchStatus GW2API::s_fetch_status = FetchStatus::Idle;
     std::string GW2API::s_fetch_message;
+    RefreshStatus::CharacterBatch GW2API::s_character_work;
     std::string GW2API::s_active_character;
     std::vector<Character> GW2API::s_characters;
     bool GW2API::s_has_character_data = false;
@@ -331,13 +332,17 @@ namespace AlterEgo {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             if(s_fetch_status==FetchStatus::InProgress)return;
+            s_character_work.Reset();
             if(accounts.empty()){s_fetch_status=FetchStatus::Error;s_fetch_message="Link an account in Nexus options";return;}
             s_fetch_status=FetchStatus::InProgress;s_fetch_message="Checking character roster...";
             s_current_char={};s_chars_fetched=0;s_chars_total=0;
+            if(!listOnly&&!accountOnly.empty())for(const auto& a:accounts)
+                for(const auto& n:selected)if(a.rosterKnown&&a.characters.count(n))
+                    s_character_work.Queue({a.id,n},a.generation,demand);
         }
         Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
-            auto fail=[](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;s_current_char={};};
+            auto fail=[](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;s_current_char={};s_character_work.Stop(CharacterActivity::Now(),message);};
             std::map<std::string,std::set<std::string>> roster;
             std::vector<std::pair<NativeAccounts::LinkedAccount,std::string>> targets;
             bool partial=false;
@@ -364,6 +369,8 @@ namespace AlterEgo {
                 std::lock_guard<std::mutex> lock(s_mutex);
                 s_pending_char_names.clear();for(const auto& x:targets)s_pending_char_names.push_back(x.second);
                 s_chars_total=static_cast<int>(targets.size());
+                s_character_work.Reset();
+                if(!listOnly)for(const auto& x:targets)s_character_work.Queue({x.first.id,x.second},x.first.generation,demand);
             }
             // Reconcile the roster owned by this request, before releasing
             // the busy flag. No stale worker can consume a replacement roster.
@@ -407,6 +414,7 @@ namespace AlterEgo {
                     requested=S::Due(CharacterActivity::State(),key,ch.scope_stamps,requested,
                         CharacterActivity::Now(),CharacterActivity::SpecSignal().load());
                 }
+                {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Start(key,a.generation,requested);}
                 if(!requested)continue;
                 struct Verified { S::Scope scope; CharacterActivity::Ticket ticket; int64_t stamp; bool specVerified; };
                 std::vector<Verified> verified;
@@ -561,7 +569,10 @@ namespace AlterEgo {
                     }
                 }
                 Background::Checkpoint();
-                if(verified.empty()||!identityVerified||!NativeAccounts::Current(a)){partial=true;continue;}
+                if(verified.empty()||!identityVerified||!NativeAccounts::Current(a)){
+                    partial=true;
+                    std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Finish(key,0,CharacterActivity::Now(),"No verified scopes committed");continue;
+                }
                 ch.data_refreshed=std::time(nullptr);
                 stage("Saving verified scopes");
                 if(!NativeAccounts::CommitIfCharacterCurrent(a,name,[&]{
@@ -570,19 +581,23 @@ namespace AlterEgo {
                     return true;
                 })){ 
                     partial=true;
-                    std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
-                    for(const auto& v:verified)CharacterActivity::State().Failure(key,S::Name(v.scope),v.ticket,"Could not save verified data");
+                    {std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+                    for(const auto& v:verified)CharacterActivity::State().Failure(key,S::Name(v.scope),v.ticket,"Could not save verified data");}
+                    {std::lock_guard<std::mutex> lock(s_mutex);s_character_work.Finish(key,0,CharacterActivity::Now(),"Could not save verified data");}
                     continue;
                 }
-                {std::lock_guard<std::mutex> lock(s_mutex);++s_chars_fetched;}
+                {std::lock_guard<std::mutex> lock(s_mutex);++s_chars_fetched;
+                    S::Mask verifiedMask=0;for(const auto& v:verified)verifiedMask|=v.scope;
+                    s_character_work.Finish(key,verifiedMask,CharacterActivity::Now());}
             }
             reconcile();
             {
                 std::lock_guard<std::mutex> lock(s_mutex);s_current_char={};
+                s_character_work.Stop(CharacterActivity::Now(),"Refresh stopped before completion");
                 s_fetch_status=partial?FetchStatus::Error:FetchStatus::Success;
                 s_fetch_message=std::to_string(s_chars_fetched)+"/"+std::to_string(s_chars_total)+(partial?" characters refreshed; failed data retained":" characters refreshed");
             }
-        },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message="Character refresh cancelled";s_current_char={};});
+        },[]{std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message="Character refresh cancelled";s_current_char={};s_character_work.Stop(CharacterActivity::Now(),s_fetch_message);});
     }
 
     // --- Parse helpers ---
@@ -802,6 +817,11 @@ namespace AlterEgo {
     FetchStatus GW2API::GetFetchStatus() {
         std::lock_guard<std::mutex> lock(s_mutex);
         return s_fetch_status;
+    }
+
+    GW2API::CharacterRefreshInspection GW2API::InspectCharacterRefresh(const std::string& account,const std::string& name,uint64_t generation) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        return {s_fetch_status==FetchStatus::InProgress,s_character_work.Get({account,name},generation),s_fetch_message};
     }
 
     std::string GW2API::GetFetchStatusMessage() {

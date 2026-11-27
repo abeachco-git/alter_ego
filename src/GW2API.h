@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 #include "nexus/Nexus.h"
 #include "CharacterScopes.h"
+#include "RefreshStatusCore.h"
 
 namespace AlterEgo {
 
@@ -364,6 +365,8 @@ namespace AlterEgo {
 
         // --- Fetch state ---
         static FetchStatus GetFetchStatus();
+        struct CharacterRefreshInspection { bool busy=false; RefreshStatus::CharacterWork work; std::string message; };
+        static CharacterRefreshInspection InspectCharacterRefresh(const std::string& account,const std::string& name,uint64_t generation);
         static std::string GetFetchStatusMessage();
         static std::string GetCurrentFetchCharName();
 
@@ -575,6 +578,7 @@ namespace AlterEgo {
         static AddonAPI_t* s_api;
         static FetchStatus s_fetch_status;
         static std::string s_fetch_message;
+        static RefreshStatus::CharacterBatch s_character_work;
 
         // Multi-account state
         static std::string s_active_character;
