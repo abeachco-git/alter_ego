@@ -79,6 +79,14 @@ int case_section_refresh(int, char**) {
     assert(F::TimedEligibility(now-900,now-10,now,F::SkinOwnershipSeconds,true).due);
     assert(!F::TimedEligibility(now-900,now-10,now,F::SkinOwnershipSeconds).due);
     assert(F::InventorySeconds("Wallet")==600&&F::InventorySeconds("Delivery box")==600);
+    for(const auto* scope:F::AccountStorageScopes){
+        const auto interval=std::string(scope)=="Legendary Armory"?1800:600;
+        assert(F::ActivitySeconds(true,scope)==interval&&F::InventorySeconds(scope)==interval);
+        assert(F::ActiveEligibility(now-interval,0,now,now,interval,45).due);
+        assert(!F::ActiveEligibility(now-interval,now-1,now,now,interval,45).due);
+    }
+    for(const auto* scope:{"Bags","Equipment"})
+        assert(F::InventorySeconds(scope)==F::ActivitySeconds(false,scope));
     {
         namespace R=AlterEgo::RefreshStatus;
         R::Scope current;current.success=now-60;current.fresh=true;current.automatic=true;

@@ -620,8 +620,16 @@ RefreshStatus::Scope InspectStorageScope(const std::string& account,const std::s
         result.error=inspection.error;
     }else{
         result.fresh=RefreshEngine::TimedFresh(result.success,now,FreshSeconds(scope));
-        result.eligibility=RefreshEngine::TimedEligibility(result.success,unresolved,now,FreshSeconds(scope),false,0,
-            RefreshEngine::SharedAccountStorage(scope)?RefreshEngine::Offset(account+"//"+scope):0);
+        if(RefreshEngine::SharedAccountStorage(scope)){
+            // Wallet/Delivery can change independently of observed gameplay;
+            // keep timed demand offline, but share active admission and age.
+            namespace A=CharacterActivity;
+            int64_t login=0;
+            {std::lock_guard<std::mutex> lock(A::Mutex());
+                if(A::State().ActiveKey().first==account)login=A::State().LastLogin({account,{}});}
+            result.eligibility=RefreshEngine::ActiveEligibility(result.success,unresolved,now,login,
+                FreshSeconds(scope),RefreshEngine::Offset(account+"//"+scope));
+        }else result.eligibility=RefreshEngine::TimedEligibility(result.success,unresolved,now,FreshSeconds(scope));
     }
     if(status!="Ready"&&status!="Not retrieved"&&status!="Refreshing"){
         result.error=status;result.failed=true;
@@ -643,7 +651,7 @@ bool ScopeDue(const View& v,const std::string& account,const std::string& scope,
 // This is the only account-storage planner for the UI trigger and worker admission.
 std::set<std::string> AccountStoragePlan(const View& v,const Account& a,const std::string& requested,bool includeWallet,int64_t now){
     std::vector<RefreshEngine::AccountStorageCandidate> rows;
-    for(const auto* name:{"Wallet","Bank","Shared inventory","Materials","Legendary Armory","Delivery box"}){
+    for(const auto* name:RefreshEngine::AccountStorageScopes){
         const std::string scope=name;
         const bool seed=requested==scope||(requested=="Items"&&(scope!="Wallet"||includeWallet));
         const auto it=v.scopes.find({a.id,scope,{}});

@@ -779,7 +779,7 @@ INSERT INTO character_identity_pending VALUES('A',1);
     assert(!UsableLoose(g.slots.front(),"account-a","B",{},true));
     assert(UsableLoose(rows.front(),"account-a","B",{},true)&&!UsableLoose(rows.front(),"account-a","B",{},false));
     for(const auto* scope:{"Wallet","Bags","Shared inventory","Bank","Equipment","Delivery box","Materials","Guild bank","Guild access","Legendary Armory"}){
-        const auto interval=std::string(scope)=="Wallet"||std::string(scope)=="Delivery box"?600:1800;
+        const auto interval=std::string(scope)=="Legendary Armory"||std::string(scope)=="Guild bank"||std::string(scope)=="Guild access"?1800:600;
         assert(FreshSeconds(scope)==interval);
         assert(!Due(scope,100,0,999)&&Due(scope,100,0,1000));
         const auto next=100+std::max(interval,900);

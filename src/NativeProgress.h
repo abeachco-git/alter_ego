@@ -9,6 +9,7 @@
 #include <ctime>
 #include <memory>
 #include <thread>
+#include <optional>
 namespace AlterEgo::NativeProgress {
 struct AchievementResult {
     int status=0;std::string error;
@@ -27,23 +28,28 @@ inline std::mutex& AchievementMutex(){static std::mutex m;return m;}
 inline std::map<std::string,AchievementEntry>& AchievementEntries(){static std::map<std::string,AchievementEntry> e;return e;}
 // Only after joining all refresh workers, before a subsequent addon load.
 inline void Reset(){std::lock_guard<std::mutex> lock(AchievementMutex());AchievementEntries().clear();}
-inline bool AchievementDue(const std::string& account,int64_t localSuccess,int64_t interval,int64_t minimumEpoch=0){
+// A failed try-lock is unknown shared-owner state, not proof of stale data.
+inline std::optional<RefreshEngine::Eligibility> InspectAchievementEligibility(const std::string& account,
+        int64_t localSuccess,int64_t interval,int64_t minimumEpoch,int64_t now){
     std::unique_lock<std::mutex> lock(AchievementMutex(),std::try_to_lock);
-    if(!lock.owns_lock())return false;
+    if(!lock.owns_lock())return std::nullopt;
     auto it=AchievementEntries().find(account);
-    const auto now=static_cast<int64_t>(std::time(nullptr));
     if(it!=AchievementEntries().end()){
         bool current=false;
         for(const auto& a:NativeAccounts::Linked())if(a.id==account&&a.generation==it->second.epoch){current=true;break;}
-        if(!current)return true;
+        if(!current)return RefreshEngine::Eligibility{RefreshEngine::WaitReason::Due,now,true};
         // Adopt a sufficiently current shared snapshot; a failed refresh must
         // not cause repeated workers trying to adopt an expired one.
         if(it->second.snapshot&&it->second.snapshot->fetchedAt>localSuccess&&
            !RefreshEngine::Due(it->second.snapshot->fetchedAt,0,now,interval,false,minimumEpoch,
-               RefreshEngine::Offset(account+"/achievements")))return true;
-        return RefreshEngine::Due(localSuccess,it->second.failedAt,now,interval,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements"));
+               RefreshEngine::Offset(account+"/achievements")))return RefreshEngine::Eligibility{RefreshEngine::WaitReason::Due,now,true};
+        return RefreshEngine::TimedEligibility(localSuccess,it->second.failedAt,now,interval,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements"));
     }
-    return RefreshEngine::Due(localSuccess,0,now,interval,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements"));
+    return RefreshEngine::TimedEligibility(localSuccess,0,now,interval,false,minimumEpoch,RefreshEngine::Offset(account+"/achievements"));
+}
+inline bool AchievementDue(const std::string& account,int64_t localSuccess,int64_t interval,int64_t minimumEpoch=0){
+    const auto inspected=InspectAchievementEligibility(account,localSuccess,interval,minimumEpoch,std::time(nullptr));
+    return inspected&&inspected->due;
 }
 inline AchievementResult FetchAchievements(const std::string& root,const NativeAccounts::LinkedAccount& a,bool force=false,
         int64_t maxAge=RefreshEngine::BrowseSeconds,int64_t minimumEpoch=0){

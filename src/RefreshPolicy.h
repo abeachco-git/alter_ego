@@ -26,14 +26,15 @@ inline bool ActivityInventoryScope(const std::string& scope){
     using namespace ScopeName;
     return scope==Bags||scope==Equipment||SharedActivityStorage(scope);
 }
-inline int64_t ActivitySeconds(bool accountWide,const std::string& scope){
-    using namespace ScopeName;
-    return !accountWide||scope==Bank||scope==Shared||scope==Materials?CharacterSeconds:BrowseSeconds;
-}
 inline bool SharedAccountStorage(const std::string& scope){return SharedActivityStorage(scope)||scope=="Wallet"||scope=="Delivery box";}
+inline constexpr const char* AccountStorageScopes[]={"Wallet",ScopeName::Bank,ScopeName::Shared,ScopeName::Materials,ScopeName::Armory,"Delivery box"};
+inline int64_t ActivitySeconds(bool accountWide,const std::string& scope){
+    return !accountWide||(SharedAccountStorage(scope)&&scope!=ScopeName::Armory)?CharacterSeconds:BrowseSeconds;
+}
 inline int64_t InventorySeconds(const std::string& scope){
-    return scope==ScopeName::Roster?RosterSeconds:
-        scope=="Wallet"||scope=="Delivery box"?CharacterSeconds:BrowseSeconds;
+    using namespace ScopeName;
+    if(scope==Roster)return RosterSeconds;
+    return ActivitySeconds(scope!=Bags&&scope!=Equipment,scope);
 }
 inline bool InventoryPermitted(const std::set<std::string>& permissions,const std::string& scope){
     using namespace ScopeName;
