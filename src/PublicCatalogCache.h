@@ -171,13 +171,13 @@ inline std::string Summary(const Json& details,const std::string& description) {
 }
 struct Pet {
     uint32_t id=0;std::string name,icon;
-    std::optional<std::string> description;
-    std::optional<std::vector<uint32_t>> skills;
+    std::optional<std::string> description{};
+    std::optional<std::vector<uint32_t>> skills{};
 };
 struct Legend {
     uint8_t code=0;std::string apiId,name,icon;uint32_t swap=0;
-    std::optional<uint32_t> heal,elite;
-    std::optional<std::vector<uint32_t>> utilities;
+    std::optional<uint32_t> heal{},elite{};
+    std::optional<std::vector<uint32_t>> utilities{};
 };
 // API-defined order, not a character's recorded utility order. Unknown and
 // explicit empty values remain distinct even when read from an older cache.
