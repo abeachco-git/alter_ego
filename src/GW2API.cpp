@@ -1189,6 +1189,23 @@ namespace AlterEgo {
         return (it != s_profession_weapons.end()) ? it->second : nullptr;
     }
 
+    void GW2API::RefreshProfessionMetadataAsync(){
+        for(const auto& prof:ProfessionMetadata::Names())FetchProfessionInfoAsync(prof,true);
+    }
+    std::string GW2API::ProfessionMetadataStatus(){
+        std::lock_guard<std::mutex> lock(s_mutex);
+        size_t cached=0,failed=0;
+        for(const auto& prof:ProfessionMetadata::Names()){
+            if(s_profession_cache.count(prof))++cached;
+            const auto it=s_professionStamps.find(prof);
+            if(it!=s_professionStamps.end()&&it->second.attempt>0&&
+               it->second.attempt>=it->second.success&&!s_professionPending.count(prof))++failed;
+        }
+        std::string out=std::to_string(cached)+"/9 professions cached";
+        if(!s_professionPending.empty())out+="; "+std::to_string(s_professionPending.size())+" refreshing";
+        if(failed)out+="; "+std::to_string(failed)+" refresh failed";
+        return out;
+    }
     void GW2API::FetchProfessionInfoAsync(const std::string& profession,bool manual) {
         namespace P=ProfessionMetadata;
         if(!P::Code(profession))return;
@@ -1217,7 +1234,7 @@ namespace AlterEgo {
                     std::lock_guard<std::mutex> lock(s_mutex);
                     s_profession_cache[prof]=info;s_profession_weapons[prof]=weapons;
                     s_palette_to_skill[prof]=std::move(record.paletteToSkill);s_skill_to_palette[prof]=std::move(record.skillToPalette);
-                    s_professionStamps[prof].success=started;
+                    s_professionStamps[prof]={started,0};
                 }
                 committed=true;
                 if(!info->specialization_ids.empty()&&!Background::Workers().Stopping())FetchSpecDetailsAsync(info->specialization_ids);

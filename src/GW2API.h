@@ -400,6 +400,8 @@ namespace AlterEgo {
         static void AdoptPublicItems(const nlohmann::json& rows,bool recordAliases=false);
         static std::shared_ptr<const ProfessionInfo> GetProfessionInfo(const std::string& profession);
         static void FetchProfessionInfoAsync(const std::string& profession,bool manual=false);
+        static void RefreshProfessionMetadataAsync();
+        static std::string ProfessionMetadataStatus();
         static std::shared_ptr<const std::map<std::string, ProfessionWeaponData>> GetProfessionWeapons(const std::string& profession);
 
         // Fetch detail data on-demand (direct HTTP — no auth needed)

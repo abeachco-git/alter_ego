@@ -204,8 +204,10 @@ static void ComponentNativeSpecializations(ComponentJson& data,
         return;
     }
     auto& specs = data["specializations"];
+    if(!profession.empty())AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
     const auto candidates = profession.empty()
         ? std::vector<uint32_t>() : AlterEgo::GW2API::GetProfessionSpecIds(profession);
+    if(!candidates.empty())AlterEgo::GW2API::FetchSpecDetailsAsync(candidates);
     const int count = std::min<int>(3, static_cast<int>(specs.size()));
     for (int i = 0; i < count; ++i) {
         ImGui::PushID(i);
@@ -295,7 +297,7 @@ static void ComponentNativeSpecializations(ComponentJson& data,
     if (candidates.empty() && !profession.empty()) {
         ImGui::TextDisabled("Specialization metadata has not loaded.");
         if (RenderActionButton("Fetch profession data##component"))
-            AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
+            AlterEgo::GW2API::FetchProfessionInfoAsync(profession,true);
     }
     ImGui::TreePop();
 }
@@ -524,11 +526,12 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,ComponentJson& gear,
         ImGui::TextDisabled("Assign to a Loadout for profession-filtered weapons.");
         return;
     }
+    AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
     const auto weapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
     if (!weapons || weapons->empty()) {
         ImGui::TextDisabled("Weapon definitions not available.");
         if (RenderActionButton("Fetch weapon data##component"))
-            AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+            AlterEgo::GW2API::FetchProfessionInfoAsync(profession,true);
         return;
     }
     const std::string current = item.value("weapon_type", std::string());
@@ -999,11 +1002,12 @@ static void RenderComponentNativeEditor(const std::string& kind,
             ImGui::TextDisabled("Skill profession: %s (inferred from Loadout)",
                                 profession.c_str());
         }
+        if(!profession.empty())AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
         if (!profession.empty() &&
             AlterEgo::GW2API::GetProfessionSkillIds(profession).empty()) {
             ImGui::SameLine();
             if (RenderActionButton("Fetch skill options##component"))
-                AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+                AlterEgo::GW2API::FetchProfessionInfoAsync(profession,true);
         }
     }
     if (kind == "base_build") {

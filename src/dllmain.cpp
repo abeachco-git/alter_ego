@@ -7001,6 +7001,8 @@ static bool RenderSpecializationChoices(const std::string& profession,
     bool changed=false;
     if(!profession.empty())AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
     auto specIds=AlterEgo::GW2API::GetProfessionSpecIds(profession);
+    // A durable membership record does not prove its dependent detail cache.
+    if(!specIds.empty())AlterEgo::GW2API::FetchSpecDetailsAsync(specIds);
     if(specIds.empty()){
         if(!profession.empty()){RenderSpinner("Loading specializations...");}
         else ImGui::TextDisabled("No profession selected.");
@@ -17587,10 +17589,8 @@ void AddonOptions() {
     referenceAction("Refresh dyes","public_dyes",[]{AlterEgo::GW2API::FetchDyeColorsAsync(true);});
     referenceAction("Refresh ranger pets","public_pets",[]{AlterEgo::PublicCatalog::RefreshPets(AlterEgo::GW2API::GetDataDirectory(),true);});
     referenceAction("Refresh revenant legends","public_legends",[]{AlterEgo::PublicCatalog::RefreshLegends(AlterEgo::GW2API::GetDataDirectory(),true);});
-    if(RenderActionButton("Refresh profession metadata")){
-        for(const auto* prof:{"Guardian","Warrior","Engineer","Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"})
-            AlterEgo::GW2API::FetchProfessionInfoAsync(prof,true);
-    }
+    if(RenderActionButton("Refresh profession metadata"))AlterEgo::GW2API::RefreshProfessionMetadataAsync();
+    ImGui::TextDisabled("%s",AlterEgo::GW2API::ProfessionMetadataStatus().c_str());
     ImGui::Spacing();
     RenderSectionHeader("Wiki reference schedules", AlterEgo::UI::SectionGold);
     ImGui::TextDisabled("Build assets: 24 hours. Runtime event timers: 30 days; retry: 24h.");

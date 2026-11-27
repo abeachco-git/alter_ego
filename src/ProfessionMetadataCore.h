@@ -3,6 +3,7 @@
 #include "PublicCatalogCache.h"
 #include <array>
 #include <unordered_map>
+#include <tuple>
 #include "ProfessionMetadataTypes.h"
 namespace AlterEgo {
 namespace ProfessionMetadata {
@@ -46,13 +47,14 @@ struct Record{
     std::unordered_map<uint32_t,uint16_t> skillToPalette;
     std::set<uint16_t> ambiguousPalettes;
     std::set<uint32_t> ambiguousSkills;
+    std::set<std::tuple<std::string,std::string,std::string,int>> ambiguousWeaponSlots;
 };
 inline void Project(Record& r){
     if(!Code(r.id)||r.code!=Code(r.id)||r.info.name.empty()||r.info.specialization_ids.empty()||
        r.palettes.empty()||r.weaponRows.empty())throw std::runtime_error("Incomplete profession");
     std::set<uint32_t> specs;
     for(auto id:r.info.specialization_ids)if(!id||!specs.insert(id).second)throw std::runtime_error("Invalid specialization membership");
-    r.paletteToSkill.clear();r.skillToPalette.clear();r.ambiguousPalettes.clear();r.ambiguousSkills.clear();r.weapons.clear();
+    r.paletteToSkill.clear();r.skillToPalette.clear();r.ambiguousPalettes.clear();r.ambiguousSkills.clear();r.ambiguousWeaponSlots.clear();r.weapons.clear();
     for(const auto& [palette,skill]:r.palettes){
         if(!skill)throw std::runtime_error("Invalid skill mapping");
         const auto forward=r.paletteToSkill.find(palette);
@@ -78,9 +80,13 @@ inline void Project(Record& r){
             const auto& slot=skill.slot;
             if(slot.size()!=8||slot.compare(0,7,"Weapon_")!=0||slot[7]<'1'||slot[7]>'5')continue;
             const int index=slot[7]-'1';hasSlot=true;
-            if(!skill.attunement.empty())d.attunement_skills[skill.attunement][index]=skill.id;
-            else if(!skill.offhand.empty()&&index==2)d.dual_wield[skill.offhand]=skill.id;
-            else d.skills[index]=skill.id;
+            auto put=[&](uint32_t& projected,const std::string& attunement,const std::string& offhand){
+                if(projected&&projected!=skill.id)r.ambiguousWeaponSlots.emplace(name,attunement,offhand,index);
+                projected=skill.id;
+            };
+            if(!skill.attunement.empty())put(d.attunement_skills[skill.attunement][index],skill.attunement,{});
+            else if(!skill.offhand.empty()&&index==2)put(d.dual_wield[skill.offhand],{},skill.offhand);
+            else put(d.skills[index],{},{});
         }
         if(!hasSlot)throw std::runtime_error("Missing weapon slots");
         r.weapons.emplace(name,std::move(d));
@@ -132,6 +138,8 @@ inline void Store(Database::Connection& db,const Record& record,int64_t stamp){
         for(const auto& s:w.skills){skill.Bind(1,r.id);skill.Bind(2,name);skill.Bind(3,ordinal++);skill.Bind(4,s.id);skill.Bind(5,s.slot);skill.Bind(6,s.offhand);skill.Bind(7,s.attunement);skill.Execute();skill.Reset();}
     }
     PublicCatalog::Mark(db,Key(r.id),stamp);
+    auto clearAttempt=db.Prepare("DELETE FROM reference_freshness WHERE dataset=?");
+    clearAttempt.Bind(1,Key(r.id)+"_attempt");clearAttempt.Execute();
 }
 inline std::optional<Record> Read(Database::Connection& db,const std::string& id){
     auto p=db.Prepare("SELECT code,name,icon,icon_big,schema_version FROM public_professions WHERE id=?");p.Bind(1,id);

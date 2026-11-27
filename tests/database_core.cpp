@@ -61,7 +61,11 @@ int case_database_core(int, char**) {
             assert(r.paletteToSkill.at(100)==11&&r.skillToPalette.at(11)==101&&r.ambiguousPalettes.count(100)&&r.ambiguousSkills.count(11));
             assert(r.weapons.at("Dagger").attunement_skills.at("Fire")[0]==1001&&r.weapons.at("Dagger").attunement_skills.at("Water")[0]==1002);
             assert(r.weapons.at("Dagger").dual_wield.at("Pistol")==1003);
-            {AlterEgo::Database::Transaction tx(db);P::Store(db,r,100);tx.Commit();}
+            auto alias=raw;alias["weapons"]["Dagger"]["skills"].push_back({{"id",1004},{"slot","Weapon_1"},{"attunement","Fire"}});
+            const auto projected=P::Parse("Elementalist",alias);
+            assert(projected.weapons.at("Dagger").attunement_skills.at("Fire")[0]==1004&&projected.ambiguousWeaponSlots.size()==1);
+            {AlterEgo::Database::Transaction tx(db);AlterEgo::PublicCatalog::MarkAttempt(db,P::Key("Elementalist")+"_attempt",100);P::Store(db,r,100);tx.Commit();}
+            assert(P::ReadStamps(db,"Elementalist").attempt==0);
             auto stored=P::Read(db,"Elementalist");
             assert(stored&&stored->palettes==r.palettes&&stored->paletteToSkill==r.paletteToSkill&&stored->skillToPalette==r.skillToPalette);
             assert(stored->weapons.at("Dagger").dual_wield.at("Pistol")==1003&&P::ReadStamps(db,"Elementalist").success==100);
