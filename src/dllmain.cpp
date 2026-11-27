@@ -1394,7 +1394,8 @@ static void EnsureCharDisplayOrder(const std::shared_ptr<const std::vector<Alter
 static bool g_RefreshPopupOpen = false;
 static bool g_RefreshListFetching = false;     // waiting for char list from native API
 static bool g_AutoCharListRequested = false;   // auto-fetched char list on native API connect
-static std::vector<std::string> g_RefreshNames; // all character names from API
+static std::vector<std::string> g_RefreshNames; // display labels at admission
+static std::vector<AlterEgo::CharacterIdentity::Address> g_RefreshAddresses;
 static std::vector<bool> g_RefreshSelection;    // parallel checkbox state
 
 // Multi-account selector state
@@ -15689,7 +15690,7 @@ static void RenderCharactersStatusRow() {
     if(AlterEgo::RefreshUI::Row("characters",static_cast<std::time_t>(inspection.aggregate.Timestamp()),"selected character",
         AlterEgo::RefreshUI::StatusState(inspection.kind),inspection.detail,!ready||inspection.busy,&more,label.c_str(),true,now,disabledReason)){
         if(selected){
-            AlterEgo::GW2API::RequestCharacterActivityRefresh(selected->account_name,selected->name,demand,true);
+            if(const auto address=CharacterAddressFor(*selected))AlterEgo::GW2API::RequestCharacterRefreshAddresses({*address},demand);
             g_DetailsFetched=false;
         }else{
             g_RefreshListFetching=true;AlterEgo::GW2API::RequestCharacterList();
@@ -15723,7 +15724,7 @@ static void RenderCompareStatusRow() {
         !target?"Select a retrieved character.":inspection.busy?"A character or roster request is already in progress.":nullptr;
     if(AlterEgo::RefreshUI::Row("compare",static_cast<std::time_t>(inspection.aggregate.Timestamp()),"character build/equipment",
         AlterEgo::RefreshUI::StatusState(inspection.kind),inspection.detail,inspection.busy||!target||!ready,nullptr,label.c_str(),true,now,disabledReason)){
-        if(target)AlterEgo::GW2API::RequestCharacterActivityRefresh(target->account_name,target->name,S::Compare,true);
+        if(target)if(const auto address=CharacterAddressFor(*target))AlterEgo::GW2API::RequestCharacterRefreshAddresses({*address},S::Compare);
     }
 }
 
@@ -16429,7 +16430,7 @@ void AddonRender() {
                         const int activeBuild = ActiveBuildIndex(ch);
                         const int activeEquip = ActiveEquipmentTab(ch);
                         if (ImGui::MenuItem("Refresh")) {
-                            AlterEgo::GW2API::RequestCharacterRefreshSelected({ch.name});
+                            if(const auto address=CharacterAddressFor(ch))AlterEgo::GW2API::RequestCharacterRefreshAddresses({*address});
                             if(MatchesSelection(g_SelectedCharacter,ch))g_DetailsFetched=false;
                         }
                         if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild>=0||!ch.equipment.empty()))
@@ -16978,25 +16979,27 @@ void AddonRender() {
                 // must not wipe the cache.
                 const auto& names = AlterEgo::GW2API::GetPendingCharNames();
                 if (!names.empty()) {
-                    // Filter by selected account if applicable
-                    if (!g_SelectedAccountFilter.empty()) {
-                        g_RefreshNames.clear();
-                        for (const auto& n : names) {
-                            if (AlterEgo::GW2API::GetAccountForCharacter(n) == g_SelectedAccountFilter)
-                                g_RefreshNames.push_back(n);
-                        }
-                    } else {
-                        g_RefreshNames = names;
+                    g_RefreshNames.clear();g_RefreshAddresses.clear();
+                    std::set<AlterEgo::CharacterOrder::Key> keys;
+                    std::map<AlterEgo::CharacterOrder::Key,AlterEgo::CharacterIdentity::Address> addresses;
+                    for(const auto& account:AlterEgo::NativeAccounts::Linked()){
+                        if(!g_SelectedAccountFilter.empty()&&account.id!=g_SelectedAccountFilter)continue;
+                        for(const auto& [name,binding]:account.bindings)
+                            if(std::find(names.begin(),names.end(),name)!=names.end()){
+                                const AlterEgo::CharacterOrder::Key key{account.id,name};
+                                keys.insert(key);addresses.emplace(key,AlterEgo::CharacterIdentity::Address{account.id,name,binding,account.generation});
+                            }
                     }
-                    g_RefreshNames=OrderedCharacterNames(g_RefreshNames);
+                    for(const auto& key:OrderedCharacterKeys(keys)){
+                        g_RefreshNames.push_back(key.second);g_RefreshAddresses.push_back(addresses.at(key));
+                    }
                     g_RefreshSelection.assign(g_RefreshNames.size(), false);
                     const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
                     const auto& chars = *charsSnapshot;
-                    std::string currentName;
                     const int ri=SelectedCharacterIndex(chars);
-                    if(ri>=0)currentName=chars[ri].name;
+                    const auto current=ri>=0?CharacterAddressFor(chars[ri]):std::nullopt;
                     for (size_t i = 0; i < g_RefreshNames.size(); i++) {
-                        if (g_RefreshNames[i] == currentName)
+                        if(current&&AlterEgo::CharacterIdentity::SameAddress(*current,g_RefreshAddresses[i]))
                             g_RefreshSelection[i] = true;
                     }
                     g_RefreshPopupOpen = true;
@@ -17029,7 +17032,8 @@ void AddonRender() {
                     for (size_t i = 0; i < g_RefreshNames.size(); i++) {
                         g_RefreshSelection[i] = false;
                         for (const auto& cc : cachedChars) {
-                            if (cc.name == g_RefreshNames[i] && cc.level == 80) {
+                            const auto address=CharacterAddressFor(cc);
+                            if(address&&AlterEgo::CharacterIdentity::SameAddress(*address,g_RefreshAddresses[i])&&cc.level==80){
                                 g_RefreshSelection[i] = true;
                                 break;
                             }
@@ -17048,11 +17052,14 @@ void AddonRender() {
 
                     const AlterEgo::Character* cached = nullptr;
                     for (const auto& cc : cachedChars) {
-                        if (cc.name == g_RefreshNames[i]) { cached = &cc; break; }
+                        const auto address=CharacterAddressFor(cc);
+                        if(address&&AlterEgo::CharacterIdentity::SameAddress(*address,g_RefreshAddresses[i])){cached=&cc;break;}
                     }
 
-                    if (ImGui::Checkbox("##cb", &checked))
-                        g_RefreshSelection[i] = checked;
+                    const auto current=AlterEgo::NativeAccounts::ResolveCharacterAddress(g_RefreshAddresses[i].Reference());
+                    const bool valid=current&&AlterEgo::CharacterIdentity::SameAddress(*current,g_RefreshAddresses[i]);
+                    if(!valid){checked=false;g_RefreshSelection[i]=false;}
+                    if(ImGui::Checkbox("##cb",&checked)&&valid)g_RefreshSelection[i]=checked;
                     ImGui::SameLine();
                     if (cached) {
                         ImGui::TextColored(GetProfessionColor(cached->profession), "%s", g_RefreshNames[i].c_str());
@@ -17060,7 +17067,7 @@ void AddonRender() {
                         ImGui::SameLine();
                         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Lv%d", cached->level);
                     } else {
-                        ImGui::Text("%s", g_RefreshNames[i].c_str());
+                        ImGui::Text("%s%s",g_RefreshNames[i].c_str(),valid?"":" (unavailable)");
                         NameOptionContext(g_RefreshNames[i]);
                     }
                     ImGui::PopID();
@@ -17076,25 +17083,13 @@ void AddonRender() {
                 bool canRefresh = (selCount > 0);
                 if (!canRefresh) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
                 if (RenderActionButton(btnLabel) && canRefresh) {
-                    std::vector<std::string> selected;
-                    const auto charsSnapshot = AlterEgo::GW2API::GetCharacters();
-                    const auto& chars = *charsSnapshot;
-                    std::string currentName;
-                    const int ri=SelectedCharacterIndex(chars);
-                    if(ri>=0)currentName=chars[ri].name;
-
-                    for (size_t i = 0; i < g_RefreshNames.size(); i++) {
-                        if (g_RefreshSelection[i] && g_RefreshNames[i] == currentName) {
-                            selected.push_back(g_RefreshNames[i]);
-                            break;
-                        }
-                    }
-                    for (size_t i = 0; i < g_RefreshNames.size(); i++) {
-                        if (g_RefreshSelection[i] && g_RefreshNames[i] != currentName)
-                            selected.push_back(g_RefreshNames[i]);
-                    }
-
-                    AlterEgo::GW2API::RequestCharacterRefreshSelected(selected);
+                    std::vector<AlterEgo::CharacterIdentity::Address> selected;
+                    for(size_t i=0;i<g_RefreshAddresses.size();++i)if(g_RefreshSelection[i])
+                        selected.push_back(g_RefreshAddresses[i]);
+                    std::stable_partition(selected.begin(),selected.end(),[&](const auto& address){
+                        return g_SelectedCharacter.Matches(address);
+                    });
+                    AlterEgo::GW2API::RequestCharacterRefreshAddresses(selected);
                     g_DetailsFetched = false;
                     g_RefreshPopupOpen = false;
                     ImGui::CloseCurrentPopup();

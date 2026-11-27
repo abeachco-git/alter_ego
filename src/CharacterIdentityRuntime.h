@@ -56,6 +56,10 @@ struct Address {
     uint64_t credentialGeneration=0;
     Ref Reference()const{return {account,binding.id};}
 };
+inline bool AdmittedBinding(const Bindings& admitted,const std::string& name,const Binding& current){
+    const auto it=admitted.find(name);
+    return it!=admitted.end()&&it->second==current;
+}
 inline bool SameAddress(const Address& a,const Address& b){
     return a.account==b.account&&a.name==b.name&&a.binding==b.binding&&a.credentialGeneration==b.credentialGeneration;
 }

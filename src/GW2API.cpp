@@ -294,6 +294,13 @@ namespace AlterEgo {
     void GW2API::RequestCharacterRefreshSelected(const std::vector<std::string>& names,bool crafting){
         if(!names.empty())RequestNativeCharacters(names,false,crafting,{});
     }
+    void GW2API::RequestCharacterRefreshAddresses(const std::vector<CharacterIdentity::Address>& addresses,
+            CharacterScopes::Mask demand,bool refreshCrafting){
+        if(addresses.empty()||!demand)return;
+        std::vector<std::string> names;names.reserve(addresses.size());
+        for(const auto& address:addresses)names.push_back(address.name);
+        RequestNativeCharacters(names,false,refreshCrafting,{},{},demand,true,addresses);
+    }
     void GW2API::RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual){
         if(name.empty()||!demand)return;
         std::string owner=account;
@@ -326,9 +333,22 @@ namespace AlterEgo {
     }
 
 
-    void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly,CharacterScopes::Mask demand,bool manual){
+    void GW2API::RequestNativeCharacters(const std::vector<std::string>& selected,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly,CharacterScopes::Mask demand,bool manual,const std::vector<CharacterIdentity::Address>& expected){
         auto accounts=NativeAccounts::Linked();
         if(!accountOnly.empty())accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[&](const auto& a){return a.id!=accountOnly;}),accounts.end());
+        if(!expected.empty()){
+            // Freeze only the exact addresses selected in the UI. A newly
+            // bound character with a matching name is not an admitted target.
+            for(auto& a:accounts){
+                CharacterIdentity::Bindings retained;
+                for(const auto& address:expected)if(address.account==a.id&&address.credentialGeneration==a.generation&&
+                    CharacterIdentity::AdmittedBinding(a.bindings,address.name,address.binding))
+                    retained.emplace(address.name,address.binding);
+                a.bindings=std::move(retained);
+            }
+            accounts.erase(std::remove_if(accounts.begin(),accounts.end(),[](const auto& a){return a.bindings.empty();}),accounts.end());
+            if(accounts.empty())return;
+        }
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             if(s_fetch_status==FetchStatus::InProgress)return;
@@ -340,7 +360,7 @@ namespace AlterEgo {
                 for(const auto& n:selected)if(a.rosterKnown&&a.characters.count(n))
                     s_character_work.Queue({a.id,n},a.generation,demand);
         }
-        Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual]{
+        Background::Workers().Launch([accounts,selected,listOnly,refreshCrafting,priority,accountOnly,demand,manual,expected]{
             ApiActivity::ReasonScope reason(manual?ApiActivity::Reason::Manual:ApiActivity::Reason::Visible);
             auto fail=[](const std::string& message){std::lock_guard<std::mutex> lock(s_mutex);s_fetch_status=FetchStatus::Error;s_fetch_message=message;s_current_char={};s_character_work.Stop(CharacterActivity::Now(),message);};
             std::vector<std::pair<NativeAccounts::LinkedAccount,std::string>> targets;
@@ -359,12 +379,14 @@ namespace AlterEgo {
                     // an individual selection must retain its admitted binding.
                     if(selected.empty())targetAccount=NativeAccounts::FindLinked(a.id);
                 }
-                for(const auto& n:names)if(selected.empty()||std::find(selected.begin(),selected.end(),n)!=selected.end())
+                for(const auto& n:names)if((selected.empty()||std::find(selected.begin(),selected.end(),n)!=selected.end())&&
+                    (expected.empty()||targetAccount.bindings.count(n)))
                     targets.emplace_back(targetAccount,n);
             }
             std::map<std::string,int> counts;for(const auto& x:targets)++counts[x.second];
-            targets.erase(std::remove_if(targets.begin(),targets.end(),[&](const auto& x){if(counts[x.second]>1){partial=true;return true;}return false;}),targets.end());
+            targets.erase(std::remove_if(targets.begin(),targets.end(),[&](const auto& x){if(expected.empty()&&counts[x.second]>1){partial=true;return true;}return false;}),targets.end());
             if(!selected.empty())for(const auto& n:selected)if(!counts.count(n))partial=true;
+            if(!expected.empty()&&targets.size()!=expected.size())partial=true;
             if(!priority.empty())std::stable_partition(targets.begin(),targets.end(),[&](const auto& x){return x.second==priority;});
             if(std::any_of(accounts.begin(),accounts.end(),[](const auto& a){return !NativeAccounts::Current(a);})){fail("Account configuration changed; refresh again.");return;}
             {
@@ -430,7 +452,10 @@ namespace AlterEgo {
                     stage(label);auto r=NativeAccounts::Request(a,endpoint,perms,
                         endpoint==path+"/core"?"Cache-Control: no-cache\r\n":"");
                     if(!r){
-                        if(r.status==404&&endpoint==path+"/core")NativeAccounts::RecoverCharacterAddress(a,*address);
+                        if(endpoint==path+"/core"){
+                            if(r.status==404)NativeAccounts::RecoverCharacterAddress(a,*address);
+                            else if(r.malformed)(void)NativeAccounts::RecordIdentityObservation(a,*address,{},{},{});
+                        }
                         scopeError=r.error;throw std::runtime_error("Character endpoint failed");
                     }return std::move(r.data);
                 };
@@ -471,7 +496,14 @@ namespace AlterEgo {
                         case S::Core:{
                             identityVerified=false;
                             auto core=require(path+"/core",{"characters"},"Character details");
-                            auto c=ParseVerifiedCore(name,core);
+                            Character c;
+                            try{c=ParseVerifiedCore(name,core);}
+                            catch(...){
+                                // A malformed successful core response cannot
+                                // leave a previously verified address usable.
+                                (void)NativeAccounts::RecordIdentityObservation(a,*address,{},{},{});
+                                throw;
+                            }
                             if(!NativeAccounts::RecordIdentityObservation(a,*address,c.created,c.profession,c.race))
                                 throw std::runtime_error("Character identity evidence changed");
                             next.race=c.race;next.gender=c.gender;next.profession=c.profession;

@@ -23,6 +23,7 @@ struct Result {
     int status=0;
     nlohmann::json data;
     std::string error;
+    bool malformed=false; // successful HTTP response rejected by bounded parser
     explicit operator bool() const {return status==200;}
 };
 std::vector<LinkedAccount> Linked();

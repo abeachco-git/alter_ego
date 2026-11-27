@@ -232,6 +232,11 @@ INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',1,'Former Alice'
         assert(first.FullyResolved());
         const auto alice=CI::Capture(first.next,"Alice",10),bob=CI::Capture(first.next,"Bob",10);
         assert(alice&&bob&&CI::Matches(first.next,*alice,10)&&!CI::Matches(first.next,*alice,11));
+        assert(CI::AdmittedBinding(CI::CurrentBindings(first.next),"Alice",alice->binding));
+        assert(!CI::AdmittedBinding({},"Alice",alice->binding));
+        const auto malformed=CI::Reconcile(first.next,{"Alice","Bob"},{{"Alice",{}}});
+        assert(malformed&&!malformed.next.Current("Alice")&&malformed.next.Current("Bob"));
+        assert(!CI::Matches(malformed.next,*alice,10)&&CI::Matches(malformed.next,*bob,10));
         auto rename=CI::Reconcile(first.next,{"Renamed","Bob"},{{"Renamed",a}});
         assert(rename&&rename.next.Current("Renamed")&&!CI::Matches(rename.next,*alice,10)&&CI::Matches(rename.next,*bob,10));
         CI::Selection selected{alice->Reference(),alice->binding.evidence,alice->name,false};

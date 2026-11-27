@@ -419,13 +419,15 @@ RosterResult FetchRoster(const LinkedAccount& a,bool verifyAll=false,bool recove
                 if(!attempted.insert(name).second)return;
                 Background::Checkpoint();
                 const auto response=Request(a,"/v2/characters/"+Encode(name)+"/core",{"characters"},"Cache-Control: no-cache\r\n");
+                if(!response&&!response.malformed&&response.status!=404)return;
+                std::optional<CharacterIdentity::Evidence> observed;
                 try{
-                    if(!response||!response.data.is_object()||response.data.at("name").get<std::string>()!=name)return;
-                    const auto e=CharacterIdentity::Normalize({response.data.at("created").get<std::string>(),
-                        response.data.at("profession").get<std::string>(),response.data.at("race").get<std::string>()});
-                    evidence.push_back({name,e.value_or(CharacterIdentity::Evidence{})});
-                    if(e)coreResponses.emplace(name,std::make_pair(response.data,Now()));
+                    if(response&&response.data.is_object()&&response.data.at("name").get<std::string>()==name)
+                        observed=CharacterIdentity::Normalize({response.data.at("created").get<std::string>(),
+                            response.data.at("profession").get<std::string>(),response.data.at("race").get<std::string>()});
                 }catch(...){}
+                evidence.push_back({name,observed.value_or(CharacterIdentity::Evidence{})});
+                if(observed)coreResponses.emplace(name,std::make_pair(response.data,Now()));
             };
             for(const auto& name:result.names)if(verifyAll||!before.Current(name))readCore(name);
             auto plan=CharacterIdentity::Reconcile(before,result.names,evidence);
@@ -1052,45 +1054,46 @@ std::optional<CharacterIdentity::Address> EnsureCharacterAddress(const LinkedAcc
         });
     };
     try{
-        if(!capture()){
-            if(admitted!=a.bindings.end())return std::nullopt;
-            const auto roster=FetchRoster(a,true,true);
-            if(!roster.accepted||!capture())return std::nullopt;
-        }
-        if(admitted!=a.bindings.end()&&admitted->second!=address->binding)return std::nullopt;
+        // Discovery can establish a future target but must never authorize
+        // work admitted without an exact binding. Whole-roster callers take
+        // a new admission snapshot after their verified roster operation.
+        if(admitted==a.bindings.end())return std::nullopt;
+        if(!capture()||!CharacterIdentity::AdmittedBinding(a.bindings,name,address->binding))return std::nullopt;
         return address;
     }catch(...){return std::nullopt;}
+}
+// The old address must become unusable before recovery discovers a new
+// owner. Failed transport by itself is not conflicting identity evidence.
+static bool IsolateCharacterAddress(const LinkedAccount& a,const CharacterIdentity::Address& address,
+                                    const CharacterIdentity::Evidence& observed){
+    try{return CommitIfCharacterCurrent(a,address,[&]{
+        const auto names=ReadRoster(root,a.id);
+        if(!names)return false;
+        Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
+        const auto& state=identityStates.at(a.id);
+        const auto updated=CharacterIdentity::Commit(db,a.id,state.revision,*names,{{address.name,observed}});
+        if(!updated||!*updated)return false;
+        const bool adopted=AdoptIdentity(updated->next,CharacterIdentity::ReadVerifiedRoster(db,a.id));
+        Publish("",false);return adopted;
+    });}catch(...){return false;}
 }
 bool RecordIdentityObservation(const LinkedAccount& a,const CharacterIdentity::Address& address,
     const std::string& created,const std::string& profession,const std::string& race){
     const auto evidence=CharacterIdentity::Normalize({created,profession,race});
-    if(!evidence)return false;
-    if(*evidence==address.binding.evidence)
+    if(evidence&&*evidence==address.binding.evidence)
         return CommitIfCharacterCurrent(a,address,[&]{
             identityProofs[{a.id,address.name}]={address.binding,a.generation,std::chrono::steady_clock::now()};return true;
         });
-    // Block conflicting ownership before collecting further evidence. Never
-    // redirect an already admitted character request.
-    try{
-        const bool isolated=CommitIfCharacterCurrent(a,address,[&]{
-            const auto names=ReadRoster(root,a.id);
-            if(!names)return false;
-            Database::Connection db(AccountPath().u8string(),Database::Connection::OpenMode::Existing);InitAccounts(db);
-            const auto& state=identityStates.at(a.id);
-            const auto updated=CharacterIdentity::Commit(db,a.id,state.revision,*names,
-                {{address.name,*evidence}});
-            if(!updated||!*updated)return false;
-            const bool adopted=AdoptIdentity(updated->next,CharacterIdentity::ReadVerifiedRoster(db,a.id));
-            Publish("",false);return adopted;
-        });
-        if(isolated)(void)FetchRoster(a,true,false);
-    }catch(...){}
+    if(IsolateCharacterAddress(a,address,evidence.value_or(CharacterIdentity::Evidence{})))
+        (void)FetchRoster(a,true,false);
     return false;
 }
 void RecoverCharacterAddress(const LinkedAccount& a,const CharacterIdentity::Address& address){
-    // A 404 triggers roster verification, not immediate deletion.
+    // Preserve the existing recovery cooldown, but a verified 404 must
+    // immediately fence the stale address even when recovery is cooling down.
     try{
-        const bool due=CommitIfCharacterCurrent(a,address,[&]{
+        if(!IsolateCharacterAddress(a,address,{}))return;
+        const bool due=CommitIfCurrent(a,[&]{
             const auto now=std::chrono::steady_clock::now();
             auto& last=identityRecoveryAttempts[a.id];
             if(now-last<std::chrono::seconds(120))return false;
@@ -1112,9 +1115,14 @@ bool VerifyCharacterAddress(const LinkedAccount& a,const CharacterIdentity::Addr
         if(recent)return true;
         const auto response=Request(a,"/v2/characters/"+Encode(address.name)+"/core",{"characters"},"Cache-Control: no-cache\r\n");
         if(response.status==404){RecoverCharacterAddress(a,address);return false;}
-        if(!response||!response.data.is_object()||response.data.at("name").get<std::string>()!=address.name)return false;
-        return RecordIdentityObservation(a,address,response.data.at("created").get<std::string>(),
-            response.data.at("profession").get<std::string>(),response.data.at("race").get<std::string>());
+        if(response.malformed)return RecordIdentityObservation(a,address,{},{},{});
+        if(!response)return false;
+        try{
+            if(!response.data.is_object()||response.data.at("name").get<std::string>()!=address.name)
+                return RecordIdentityObservation(a,address,{},{},{});
+            return RecordIdentityObservation(a,address,response.data.at("created").get<std::string>(),
+                response.data.at("profession").get<std::string>(),response.data.at("race").get<std::string>());
+        }catch(...){return RecordIdentityObservation(a,address,{},{},{});}
     }catch(...){return false;}
 }
 Result Request(const LinkedAccount& a,const std::string& path,const std::vector<std::string>& permissions,const std::string& headers){
@@ -1133,7 +1141,7 @@ Result Request(const LinkedAccount& a,const std::string& path,const std::vector<
         if(Background::Workers().Stopping())return {0,{},"Cancelled"};
         if(!Current(a))return {0,{},"Account changed"};
         return {200,std::move(parsed),{}};
-    }catch(...){return {0,{},"Invalid API response"};}
+    }catch(...){return {0,{},"Invalid API response",true};}
 }
 Result Request(const std::string& id,const std::string& path,const std::vector<std::string>& permissions){
     for(const auto& a:Linked())if(a.id==id)return Request(a,path,permissions);

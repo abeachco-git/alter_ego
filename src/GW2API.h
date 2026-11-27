@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 #include "nexus/Nexus.h"
 #include "CharacterScopes.h"
+#include "CharacterIdentityRuntime.h"
 #include "RefreshStatusCore.h"
 
 namespace AlterEgo {
@@ -347,6 +348,8 @@ namespace AlterEgo {
         static void RequestCharacterList();              // Fetch just the character name list
         static void RequestCharacterRefreshSelected(
             const std::vector<std::string>& names, bool refreshCrafting = true);
+        static void RequestCharacterRefreshAddresses(const std::vector<CharacterIdentity::Address>& addresses,
+            CharacterScopes::Mask demand=CharacterScopes::All,bool refreshCrafting=true);
         static void RequestCharacterActivityRefresh(const std::string& account,const std::string& name,CharacterScopes::Mask demand,bool manual=false);
 
         // native API cached queries (synchronous, from native API in-memory cache)
@@ -643,7 +646,8 @@ namespace AlterEgo {
         static BuildTemplate ParseBuildTemplate(const nlohmann::json& tab_json);
 
         // Sub-endpoint fetch for current character (phase 0/1/2)
-        static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly={},CharacterScopes::Mask demand=CharacterScopes::All,bool manual=true);
+        static void RequestNativeCharacters(const std::vector<std::string>& names,bool listOnly,bool refreshCrafting,const std::string& priority,const std::string& accountOnly={},CharacterScopes::Mask demand=CharacterScopes::All,bool manual=true,
+            const std::vector<CharacterIdentity::Address>& expected={});
     };
 
 }
