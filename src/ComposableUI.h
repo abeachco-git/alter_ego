@@ -142,6 +142,49 @@ static const ComponentJson* ComponentUIFind(const ComponentJson& doc,
         if (item.is_object() && item.value("id", std::string()) == id) return &item;
     return nullptr;
 }
+// Build references are always direct. Only the three contextual Build
+// payloads are needed for preview; no gear or database access.
+static ComponentJson ComponentUIRevenantContext(const ComponentJson& doc,const ComponentJson& refs,
+    const std::string& overrideKind={},const ComponentJson* overrideData=nullptr){
+    ComponentJson raw=ComponentJson::object();
+    if(!refs.is_object())return raw;
+    for(const auto* kind:{"base_build","skills","legends"}){
+        const ComponentJson* payload=nullptr;
+        if(overrideData&&overrideKind==kind)payload=overrideData;
+        else if(const auto* part=ComponentUIFind(doc,kind,refs.value(kind,std::string())))payload=&part->at("data");
+        if(payload&&payload->is_object())for(auto field=payload->begin();field!=payload->end();++field)
+            raw[field.key()]=field.value();
+    }
+    return raw;
+}
+static std::vector<AlterEgo::SkillEdit::EliteContext> ComponentUIEliteContexts(const std::string& kind,const std::string& id){
+    std::vector<AlterEgo::SkillEdit::EliteContext> out;
+    if(kind!="legends"||id.empty()||(g_ComponentEditorMode!="edit"&&g_ComponentEditorMode!="copy_for_loadout"))return out;
+    const auto& doc=ComponentUISnapshot();
+    if(!doc.contains("loadouts"))return out;
+    for(const auto& owner:doc.at("loadouts")){
+        if(g_ComponentEditorMode=="copy_for_loadout"&&owner.value("id",std::string())!=g_ComponentEditorPrivateLoadoutId)continue;
+        const auto refs=owner.value("refs",ComponentJson::object());
+        if(refs.value(kind,std::string())!=id)continue;
+        const auto* base=ComponentUIFind(doc,"base_build",refs.value("base_build",std::string()));
+        out.push_back(base?AlterEgo::GW2API::RevenantEliteContext(AlterEgo::SkillEdit::ThirdSpecialization(base->at("data"))):std::nullopt);
+    }
+    return out;
+}
+static void RenderComponentContextImpact(){
+    if(!AlterEgo::Composable::IsRevenantContextKind(g_ComponentEditorKind)||
+       (g_ComponentEditorMode!="edit"&&g_ComponentEditorMode!="copy_for_loadout")||
+       g_ComponentEditorDraft==g_ComponentEditorBaseline)return;
+    const auto& doc=ComponentUISnapshot();
+    if(!doc.contains("loadouts"))return;
+    for(const auto& owner:doc.at("loadouts")){
+        if(g_ComponentEditorMode=="copy_for_loadout"&&owner.value("id",std::string())!=g_ComponentEditorPrivateLoadoutId)continue;
+        const auto refs=owner.value("refs",ComponentJson::object());
+        if(refs.value(g_ComponentEditorKind,std::string())!=g_ComponentEditorId)continue;
+        const auto raw=ComponentUIRevenantContext(doc,refs,g_ComponentEditorKind,&g_ComponentEditorDraft);
+        RenderRevenantContextWarnings(raw,owner.at("metadata").value("name",owner.value("id",std::string())));
+    }
+}
 static int ComponentUIUsage(const ComponentJson& doc, const std::string& kind,
                              const std::string& id) {
     (void)doc;
@@ -563,6 +606,7 @@ static void RenderComponentUIEditor() {
         ImGui::BeginChild("##component_native_editor", ImVec2(0, -110.0f), false);
         RenderComponentNativeEditor(g_ComponentEditorKind, g_ComponentEditorId,
                                     g_ComponentEditorDraft);
+        RenderComponentContextImpact();
         ImGui::EndChild();
     }
     if (!g_ComponentEditorError.empty())
@@ -798,6 +842,14 @@ static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* 
             if(AlterEgo::UI::EntityOption((part.value("name",id)+"##"+id).c_str(),id==ref,[&]{ComponentRowMenu(doc,kind,part,true,false);})&&id!=ref){
                 refs[kind]=id;changed=true;
             }
+            if(loadout&&AlterEgo::Composable::IsRevenantContextKind(kind)&&part.contains("data")&&ImGui::IsItemHovered()){
+                const auto projected=ComponentUIRevenantContext(doc,loadout->at("refs"),kind,&part.at("data"));
+                const auto warnings=AlterEgo::GW2API::RevenantContextWarnings(projected);
+                if(!warnings.empty()){
+                    std::string detail;for(const auto& warning:warnings){if(!detail.empty())detail+="\n";detail+=warning;}
+                    AlterEgo::UI::DetailTooltip("Context warning",detail.c_str());
+                }
+            }
             ImGui::PopID();
         }
         ImGui::EndCombo();
@@ -931,6 +983,7 @@ static void RenderReferenceEditor(){
     ImGui::BeginChild("##reference_editor_fields",ImVec2(0,-110),false);
     if(e.isSet){ImGui::SetNextItemWidth(-1);UI::InputText("Name",e.name);}
     if((owner||e.newSet)&&doc.contains("components"))RenderEditableReferences(doc,owner,e);
+    if(!e.isSet)RenderRevenantContextWarnings(ComponentUIRevenantContext(doc,ComponentJson(e.refs)));
     int users=0;bool adding=false;
     if(e.isSet&&owner){
         for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==e.id)++users;
@@ -982,6 +1035,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     if(editing&&!g_GearDialogOpen){
         ReferenceEditorDraft e;e.parentDraft=true;e.id=loadoutId;e.revision=g_EditDraftRevision;e.refs=g_EditRefs;e.inherited=g_EditInheritedRefs;e.setId=g_EditSetId;e.fashionId=g_EditFashionId;
         RenderEditableReferences(doc,l,e);
+        RenderRevenantContextWarnings(ComponentUIRevenantContext(doc,ComponentJson(e.refs)));
         if(e.refs!=g_EditRefs||e.inherited!=g_EditInheritedRefs||e.setId!=g_EditSetId||e.fashionId!=g_EditFashionId){
             if(ApplyParentReferenceDraft(e))inlineError.clear();
             else inlineError=e.error.empty()?"Cannot apply reference change; review the selected component.":e.error;
@@ -1132,6 +1186,14 @@ static void RenderLoadoutSaveReview(){
         ImGui::TextWrapped("Private changes affect only this Loadout. Choose shared editing only if every listed owner should change.");
         for(const auto& row:review){
             const auto kind=row.value("kind",std::string()),name=row.value("name",std::string()),reuse=row.value("reuse",std::string());
+            if(kind=="revenant_context"){
+                for(const auto& warning:row.at("warnings")){
+                    ImGui::PushStyleColor(ImGuiCol_Text,UI::WarningText);
+                    ImGui::TextWrapped("%s",warning.get<std::string>().c_str());
+                    ImGui::PopStyleColor();
+                }
+                continue;
+            }
             const bool shared=row.value("shared",false);
             ImGui::PushID(kind.c_str());
             RenderSectionHeader(ComponentLabel(kind),UI::SectionGold);
@@ -1146,8 +1208,9 @@ static void RenderLoadoutSaveReview(){
                     ?"Replace shared set reference ("+std::to_string(row.value("loadouts",0))+" Loadouts)"
                     :"Edit shared ("+std::to_string(row.value("loadouts",0))+" Loadouts, "+std::to_string(row.value("owners",0))+" direct owners)";
                 if(ImGui::RadioButton((label+"##shared").c_str(),useShared))sharedChoices.insert(kind);
-                if(reference&&useShared&&row.contains("affected"))for(const auto& owner:row.at("affected"))
-                    ImGui::BulletText("%s",owner.get<std::string>().c_str());
+                if(useShared&&row.contains("affected"))for(const auto& owner:row.at("affected")){
+                    ImGui::Bullet();ImGui::TextWrapped("%s",owner.get<std::string>().c_str());
+                }
                 if(row.value("set_users",0)>1&&!useShared)
                     ImGui::TextDisabled("Private changes may copy the linked Equipment Set.");
             }else if(reference)ImGui::TextWrapped("Replace reference for this Loadout.");

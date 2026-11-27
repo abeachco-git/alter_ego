@@ -796,6 +796,27 @@ inline bool Resolve(const Document& doc, const Loadout& loadout,
     legacy = std::move(result);
     return true;
 }
+
+// A prospective edit affects the same canonical resolved Build projection
+// without changing references, exact identity, or committing another component.
+inline bool IsRevenantContextKind(const std::string& kind){
+    return kind=="base_build"||kind=="skills"||kind=="legends";
+}
+inline bool ProjectComponentContext(const Document& doc,const Loadout& owner,
+    const std::string& kind,const Json& candidate,Json& projection,std::string& error){
+    if(!Resolve(doc,owner,projection,error))return false;
+    if(!IsRevenantContextKind(kind))return true;
+    const auto refs=EffectiveRefs(doc,owner);
+    const auto ref=refs.find(kind);
+    if(ref!=refs.end()){
+        const auto* prior=Find(doc,kind,ref->second);
+        if(!prior)return Fail(error,"Missing component context.");
+        for(auto i=prior->data.begin();i!=prior->data.end();++i)
+            projection.erase(i.key());
+    }
+    for(auto i=candidate.begin();i!=candidate.end();++i)projection[i.key()]=i.value();
+    return true;
+}
 // Preserve resolved projections, original terrestrial IDs and independent
 // source identities. Mixed partial sets retain aquatic data directly on
 // their Loadouts; unused aquatic fragments remain available in the library.

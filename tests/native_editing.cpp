@@ -7,6 +7,26 @@ using namespace AlterEgo::NativeLibrary;
 using Json=Composable::Json;
 
 int case_native_editing(int,char**) {
+    {
+        Composable::Document graph;std::string error;
+        Json first={{"id","rev-a"},{"name","Rev A"},{"profession","Revenant"},
+            {"specializations",Json::array({Json{{"id",1}},Json{{"id",2}},Json{{"id",3}}})},
+            {"legend_codes",{2,8}},{"skills",{{"heal",101}}}};
+        Json second=first;second["id"]="rev-b";second["name"]="Rev B";second["specializations"][2]["id"]=4;
+        assert(PutLoadout(graph,first,error));assert(PutLoadout(graph,second,error));
+        const auto id=graph.loadouts[0].refs.at("legends");
+        assert(graph.loadouts[1].refs.at("legends")==id);
+        assert(Composable::EffectiveComponentUsers(graph,"legends",id).size()==2);
+        Json projected;
+        const Json candidate={{"legend_codes",{2,7,0,8,999}}};
+        assert(Composable::ProjectComponentContext(graph,graph.loadouts[1],"legends",candidate,projected,error));
+        assert(projected["legend_codes"]==candidate["legend_codes"]&&projected["specializations"][2]["id"]==4);
+        assert(projected["skills"]["heal"]==101);
+        assert(Composable::Find(graph,"legends",id)->data["legend_codes"]==first["legend_codes"]);
+        assert(Composable::ProjectComponentContext(graph,graph.loadouts[0],"skills",Json{{"aquatic_skills",{{"heal",102}}}},projected,error));
+        assert(!projected.contains("skills")&&projected["aquatic_skills"]["heal"]==102);
+        assert(projected["legend_codes"]==first["legend_codes"]);
+    }
     Composable::Document doc;
     std::string err;
     Json a={{"id","a"},{"name","A"},{"profession","Engineer"},

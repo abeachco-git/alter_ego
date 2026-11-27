@@ -69,6 +69,35 @@ int case_skill_edit_core(int,char**) {
     assert(SpecializationChoiceAllowed(specs,2,3,true));
     assert(SpecializationChoiceAllowed(specs,0,0,false));
     using J=nlohmann::json;
+    {
+        using V=ContextVerdict;
+        assert(LegendSpecialization(1,EliteContext("Herald"))==V::Compatible);
+        assert(LegendSpecialization(5,EliteContext("Herald"))==V::Incompatible);
+        assert(LegendSpecialization(7,EliteContext("Vindicator"))==V::Compatible);
+        assert(LegendSpecialization(8,EliteContext("Conduit"))==V::Compatible);
+        assert(LegendSpecialization(8,EliteContext(std::string{}))==V::Incompatible);
+        assert(LegendSpecialization(8,std::nullopt)==V::Unknown);
+        assert(LegendSpecialization(99,EliteContext("Herald"))==V::Unknown);
+        assert(LegendChoiceAllowed(8,{EliteContext("Conduit"),std::nullopt}));
+        assert(!LegendChoiceAllowed(8,{EliteContext("Conduit"),EliteContext("Vindicator")}));
+        assert(LegendChoiceAllowed(2,{EliteContext("Conduit"),EliteContext("Vindicator")}));
+        assert(SkillSpecialization(5,5)==V::Compatible);
+        assert(SkillSpecialization(5,0)==V::Incompatible);
+        assert(SkillSpecialization(5,std::nullopt)==V::Unknown);
+        J raw={{"profession","Revenant"},{"specializations",J::array({J{{"id",1}},J{{"id",2}},J{{"id",3}}})},
+            {"legend_codes",J::array({13,8,7,2})},{"skills",J{{"heal",9}}},{"aquatic_skills",J{{"utilities",{10,11,12}}}}};
+        assert(ThirdSpecialization(raw)==3);
+        auto canonical=[](uint32_t id){return id>=13&&id<=19?id-12:id;};
+        auto required=[](uint32_t id)->std::optional<uint32_t>{return id==9?std::optional<uint32_t>(4):std::nullopt;};
+        auto water=[](uint32_t id)->std::optional<bool>{return id==10?std::optional<bool>(true):std::nullopt;};
+        auto warnings=RevenantContextWarnings(raw,EliteContext("Conduit"),3,canonical,required,water);
+        assert(warnings.size()==4);
+        assert(warnings[0]=="Terrestrial legend 1: Legend requires Herald");
+        assert(warnings[1]=="Aquatic legend 1: Legend requires Vindicator");
+        assert(warnings[3]=="Aquatic Utility 1: skill is marked NoUnderwater");
+        assert(RevenantContextWarnings(raw,std::nullopt,std::nullopt,canonical,required,water).size()==1);
+        raw["profession"]="Ranger";assert(RevenantContextWarnings(raw,EliteContext("Conduit"),3,canonical,required,water).empty());
+    }
     assert(AlterEgo::UI::CatalogRowPitch(14,30)==36);
     assert(AlterEgo::UI::CatalogRowPitch(20)==26);
     assert(AlterEgo::UI::CatalogGridColumns(127,40,4)==2);

@@ -299,7 +299,8 @@ static void ComponentNativeSpecializations(ComponentJson& data,
 }
 
 static void ComponentNativeProfessionPair(ComponentJson& data,const char* key,
-                                           const char* label,bool legend,bool eligible) {
+                                           const char* label,bool legend,bool eligible,
+                                           const std::vector<AlterEgo::SkillEdit::EliteContext>& contexts) {
     if(!eligible&&!data.contains(key))return;
     if(!ImGui::TreeNode(key,"%s",label))return;
     if(data.contains(key)&&!data[key].is_array()){
@@ -311,7 +312,7 @@ static void ComponentNativeProfessionPair(ComponentJson& data,const char* key,
     };
     if(eligible){
         auto slots=AlterEgo::SkillEdit::JsonCompanionSlots(values,legend?255u:UINT32_MAX);
-        if(const auto changed=RenderProfessionPairSection(legend,slots,true))
+        if(const auto changed=RenderProfessionPairSection(legend,slots,true,contexts))
             for(size_t i=0;i<slots.values.size();++i)if(changed&(1u<<i))set(i,slots.values[i]);
     }else ImGui::TextDisabled("Not applicable to this profession; exact fields preserved.");
     if(ImGui::TreeNode("##advanced_ids","Advanced exact IDs")){
@@ -1030,7 +1031,7 @@ static void RenderComponentNativeEditor(const std::string& kind,
             }
         }
     } else if (AlterEgo::Composable::IsCompanionKind(kind)) {
-        ComponentNativeProfessionPair(data,AlterEgo::Composable::CompanionField(kind),kind=="pets"?"Pets":"Legends",kind=="legends",true);
+        ComponentNativeProfessionPair(data,AlterEgo::Composable::CompanionField(kind),kind=="pets"?"Pets":"Legends",kind=="legends",true,ComponentUIEliteContexts(kind,id));
     } else if (kind == "skills") {
         if (profession.empty())
             ImGui::TextDisabled("Assign to a Loadout to enable profession-filtered skill choices.");

@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <limits>
 #include <cstddef>
+#include <string>
+#include <vector>
+#include <functional>
 namespace AlterEgo::SkillEdit {
 enum class SlotEvidence { Unrecorded, Empty, Recorded };
 struct DisplaySlot {
@@ -99,6 +102,78 @@ template<class Canonical> PairContext CompanionPairContext(const CompanionProjec
     const auto a=slots.values[env*2],b=slots.values[env*2+1];
     if(a&&b&&canonical(a)==canonical(b))return PairContext::Incompatible;
     return PairContext::Unknown;
+}
+// Specialization compatibility is independent of habitat and stance order.
+enum class ContextVerdict { Compatible, Incompatible, Unknown };
+// Canonical native wire codes, not guessed from display names or API suffixes.
+// Documented build template codes and profession specialization mechanics.
+inline const char* LegendRequiredElite(uint32_t canonicalCode) {
+    switch(canonicalCode){
+    case 1:return "Herald";
+    case 5:return "Renegade";
+    case 7:return "Vindicator";
+    case 8:return "Conduit";
+    default:return nullptr;
+    }
+}
+// Empty string is a verified non-elite specialization; nullopt is unknown.
+using EliteContext=std::optional<std::string>;
+inline ContextVerdict LegendSpecialization(uint32_t canonicalCode,const EliteContext& context) {
+    if(canonicalCode==2||canonicalCode==3||canonicalCode==4||canonicalCode==6)
+        return ContextVerdict::Compatible; // specialization dimension only
+    const auto* required=LegendRequiredElite(canonicalCode);
+    if(!required||!context)return ContextVerdict::Unknown;
+    return *context==required?ContextVerdict::Compatible:ContextVerdict::Incompatible;
+}
+inline bool LegendChoiceAllowed(uint32_t canonicalCode,const std::vector<EliteContext>& contexts) {
+    return std::none_of(contexts.begin(),contexts.end(),[&](const auto& context){
+        return LegendSpecialization(canonicalCode,context)==ContextVerdict::Incompatible;
+    });
+}
+inline ContextVerdict SkillSpecialization(uint32_t required,std::optional<uint32_t> selected) {
+    if(!required||!selected)return ContextVerdict::Unknown;
+    return required==*selected?ContextVerdict::Compatible:ContextVerdict::Incompatible;
+}
+template<class Json> uint32_t ThirdSpecialization(const Json& raw) {
+    if(!raw.is_object()||!raw.contains("specializations"))return 0;
+    const auto& specs=raw.at("specializations");
+    if(!specs.is_array()||specs.size()<3||!specs[2].is_object()||!specs[2].contains("id"))return 0;
+    return JsonDisplaySlot(specs[2].at("id")).id;
+}
+inline std::string LegendContextWarning(uint32_t canonicalCode,const EliteContext& context) {
+    if(LegendSpecialization(canonicalCode,context)!=ContextVerdict::Incompatible)return {};
+    return std::string("Legend requires ")+LegendRequiredElite(canonicalCode);
+}
+template<class Json> std::vector<std::string> RevenantContextWarnings(const Json& raw,
+    const EliteContext& elite,std::optional<uint32_t> selectedElite,
+    const std::function<uint32_t(uint32_t)>& canonical,
+    const std::function<std::optional<uint32_t>(uint32_t)>& requiredElite,
+    const std::function<std::optional<bool>(uint32_t)>& noUnderwater) {
+    std::vector<std::string> out;
+    if(!raw.is_object()||!raw.contains("profession")||raw.at("profession")!="Revenant")return out;
+    auto label=[](bool aquatic){return aquatic?"Aquatic":"Terrestrial";};
+    if(raw.contains("legend_codes")){
+        const auto slots=JsonCompanionSlots(raw.at("legend_codes"),255);
+        for(int i=0;i<4;++i){
+            const auto warning=LegendContextWarning(canonical(slots.values[i]),elite);
+            if(!warning.empty())out.push_back(std::string(label(i>=2))+" legend "+std::to_string(i%2+1)+": "+warning);
+        }
+    }
+    for(int env=0;env<2;++env){
+        const char* key=env?"aquatic_skills":"skills";
+        if(!raw.contains(key))continue;
+        const auto slots=JsonDisplayBar(raw.at(key));
+        for(std::size_t i=0;i<slots.size();++i)if(slots[i].id){
+            const auto id=slots[i].id;
+            const auto prefix=std::string(label(env!=0))+" "+SlotLabel(i)+": ";
+            const auto spec=requiredElite(id);
+            if(spec&&SkillSpecialization(*spec,selectedElite)==ContextVerdict::Incompatible)
+                out.push_back(prefix+"requires a different elite specialization");
+            if(env&&noUnderwater(id).value_or(false))
+                out.push_back(prefix+"skill is marked NoUnderwater");
+        }
+    }
+    return out;
 }
 // One width policy for read-only bars, editable bars and catalog strips.
 inline int IconColumns(float available,float size,float spacing,int maximum) {

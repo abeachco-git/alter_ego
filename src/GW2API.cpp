@@ -2996,6 +2996,27 @@ namespace AlterEgo {
         draft=std::move(rebased);return true;
     }
 
+    std::optional<std::string> GW2API::RevenantEliteContext(uint32_t thirdSpec){
+        const auto spec=thirdSpec?GetSpecInfo(thirdSpec):nullptr;
+        if(!spec||spec->profession!="Revenant"||spec->name.empty())return std::nullopt;
+        return spec->elite?spec->name:std::string{};
+    }
+    std::vector<std::string> GW2API::RevenantContextWarnings(const json& raw){
+        if(!raw.is_object()||raw.value("profession",std::string())!="Revenant")return {};
+        const auto third=SkillEdit::ThirdSpecialization(raw);
+        const auto context=RevenantEliteContext(third);
+        const auto elite=context?std::optional<uint32_t>(context->empty()?0:third):std::nullopt;
+        return SkillEdit::RevenantContextWarnings(raw,context,elite,
+            [](uint32_t id){return id<=255?uint32_t(PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(id))):id;},
+            [](uint32_t id)->std::optional<uint32_t>{
+                const auto skill=GetSkillInfo(id);
+                if(!skill||!skill->specialization)return std::nullopt;
+                const auto spec=GetSpecInfo(skill->specialization);
+                if(!spec||!spec->elite||spec->profession!="Revenant")return std::nullopt;
+                return spec->id;
+            },
+            [](uint32_t id)->std::optional<bool>{const auto skill=GetSkillInfo(id);return skill?skill->no_underwater:std::nullopt;});
+    }
     bool GW2API::ReviewUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
         const std::map<std::string,std::string>& refs,uint64_t revision,json& review,std::string& error,bool includeAll,
         const std::map<std::string,std::string>& inherited){
@@ -3031,14 +3052,35 @@ namespace AlterEgo {
         json raw;SavedBuild baseline;
         if(!l||!Composable::Resolve(doc,*l,raw,error)||!DeserializeSavedBuild(raw,baseline))return false;
         const auto edited=NativeLibrary::PatchDraft(raw,SerializeSavedBuild(baseline),SerializeSavedBuild(draft));
+        const auto warnings=RevenantContextWarnings(edited);
+        if(!warnings.empty())review.push_back({{"kind","revenant_context"},{"warnings",warnings}});
         for(const auto& change:NativeLibrary::UnifiedChanges(doc,*l,raw,edited)){
             if(inherited.count(change.kind))return Composable::Fail(error,"Save the selected "+change.kind+" reference before editing its contents.");
             const bool shared=!change.oldId.empty()&&(change.owners>1||change.loadouts>1||change.setUsers>1);
             if(!includeAll&&!shared&&change.matches.empty())continue;
             std::string reuse;
             if(!change.matches.empty())reuse=change.matches.front().name;
-            review.push_back({{"kind",change.kind},{"name",change.name},{"shared",shared},
-                {"owners",change.owners},{"loadouts",change.loadouts},{"set_users",change.setUsers},{"reuse",reuse}});
+            json row={{"kind",change.kind},{"name",change.name},{"shared",shared},
+                {"owners",change.owners},{"loadouts",change.loadouts},{"set_users",change.setUsers},{"reuse",reuse}};
+            if(shared){
+                json affected=json::array();
+                for(const auto& id:Composable::EffectiveComponentUsers(doc,change.kind,change.oldId)){
+                    if(id==draft.id)continue;
+                    const auto* owner=Composable::FindLoadout(doc,id);
+                    if(!owner)continue;
+                    auto label=owner->metadata.value("name",id);
+                    if(Composable::IsRevenantContextKind(change.kind)){
+                        json projected;
+                        if(Composable::ProjectComponentContext(doc,*owner,change.kind,change.data,projected,error)){
+                            const auto issues=RevenantContextWarnings(projected);
+                            for(const auto& issue:issues)label+="; "+issue;
+                        }else return false;
+                    }
+                    affected.push_back(label);
+                }
+                row["affected"]=std::move(affected);
+            }
+            review.push_back(std::move(row));
         }
         return true;
     }

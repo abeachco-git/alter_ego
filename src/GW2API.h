@@ -581,6 +581,9 @@ namespace AlterEgo {
             const std::map<std::string,std::string>& oldRefs,const std::string& newSet,const std::string& newFashion,
             const std::map<std::string,std::string>& newRefs,uint64_t revision,std::string& error,
             const std::map<std::string,std::string>& oldInherited={},const std::map<std::string,std::string>& newInherited={});
+        // Cache-only, evidence-qualified context; no catalog demand here.
+        static std::optional<std::string> RevenantEliteContext(uint32_t thirdSpec);
+        static std::vector<std::string> RevenantContextWarnings(const nlohmann::json& raw);
         static bool ReviewUnifiedLoadout(const SavedBuild& draft,const std::string& setId,const std::string& fashionId,
             const std::map<std::string,std::string>& refs,uint64_t revision,nlohmann::json& review,std::string& error,bool includeAll=false,
             const std::map<std::string,std::string>& inherited={});

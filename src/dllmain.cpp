@@ -7204,7 +7204,8 @@ static bool RenderSkillEditorSlot(uint32_t current,float size,const std::string&
 // record environment eligibility, so never invent an aquatic restriction.
 // Selected slots share geometry and exact entity actions in read and edit modes.
 static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t other,uint32_t& next,
-                                       bool editable,bool known,bool unresolved) {
+                                       bool editable,bool known,bool unresolved,
+                                       const std::vector<AlterEgo::SkillEdit::EliteContext>& contexts) {
     using AlterEgo::SkillEdit::PairChoiceAllowed;
     const auto catalog=AlterEgo::PublicCatalog::Get();
     if(legend&&catalog->legends.empty())AlterEgo::GW2API::FetchLegendsAsync();
@@ -7252,17 +7253,25 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     if(ImGui::IsWindowAppearing())query.clear();
     AlterEgo::UI::SearchField("companion_picker_search",legend?"Search legends...":"Search pets...",query,280.f);
     const auto words=AlterEgo::Search::Words(query);
-    struct Option {uint32_t id;std::string label;uint32_t artwork;std::string url;bool disabled,selected;};
+    struct Option {uint32_t id;std::string label;uint32_t artwork;std::string url;bool disabled,selected;std::string reason;};
     std::vector<Option> options;
-    auto add=[&](uint32_t id,const std::string& label,uint32_t artwork,const std::string& url,bool disabled,bool selected){
-        if(AlterEgo::Search::Matches(label,words))options.push_back({id,label,artwork,url,disabled,selected});
+    auto add=[&](uint32_t id,const std::string& label,uint32_t artwork,const std::string& url,bool disabled,bool selected,const std::string& reason={}){
+        if(AlterEgo::Search::Matches(label,words))options.push_back({id,label,artwork,url,disabled,selected,reason});
     };
     if(legend){
         AlterEgo::GW2API::FetchLegendsAsync();
         auto canonical=[](uint32_t value){return value<=255?static_cast<uint32_t>(
             AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(value))):value;};
-        for(const auto& l:LegendOptions())add(l.code,l.name,AlterEgo::ArtworkRequest::SkillKey(l.swap),l.icon,
-            !PairChoiceAllowed(canonical(other),l.code),canonical(current)==l.code);
+        for(const auto& l:LegendOptions()){
+            const bool selected=canonical(current)==l.code;
+            const bool duplicate=!PairChoiceAllowed(canonical(other),l.code);
+            const bool incompatible=!AlterEgo::SkillEdit::LegendChoiceAllowed(l.code,contexts);
+            const auto* required=AlterEgo::SkillEdit::LegendRequiredElite(l.code);
+            const std::string reason=duplicate?"Already selected in the other slot.":
+                incompatible&&required?std::string("Requires ")+required+" in every affected Loadout.":"";
+            add(l.code,l.name,AlterEgo::ArtworkRequest::SkillKey(l.swap),l.icon,
+                duplicate||(!selected&&incompatible),selected,reason);
+        }
     }else if(pets.empty()){
         RenderSpinner("Loading pets...");AlterEgo::GW2API::FetchPetsAsync();
     }else for(const auto& p:pets)add(p.id,p.name,AlterEgo::ArtworkRequest::PetKey(p.id),p.icon,
@@ -7277,11 +7286,11 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
                 const auto hit=UI::CatalogRow(index,option.selected,option.artwork,option.url,option.label,"",
                     {},option.disabled,-1,[&]{
                         const auto value=ResolveProfessionChoice(legend,option.id);
-                        UI::DetailTooltip(option.label.c_str(),option.disabled?"Already selected in the other slot.":
-                            value.description.empty()?nullptr:value.description.c_str());
+                        UI::DetailTooltip(option.label.c_str(),!option.reason.empty()?option.reason.c_str():
+                            option.disabled?"Already selected in the other slot.":value.description.empty()?nullptr:value.description.c_str());
                     },iconSize,true);
                 UI::EntityContext("##pair_option_actions",[&]{ProfessionChoiceActions(legend,ResolveProfessionChoice(legend,option.id));});
-                if(hit.clicked&&!option.disabled){next=option.id;changed=true;ImGui::CloseCurrentPopup();}
+                if(hit.clicked&&!option.disabled){if(!option.selected){next=option.id;changed=true;}ImGui::CloseCurrentPopup();}
                 ImGui::PopID();
             });
         }
@@ -7336,7 +7345,7 @@ static AlterEgo::SkillEdit::CompanionProjection LiveCompanionSlots(const AlterEg
     return slots;
 }
 static uint8_t RenderProfessionPairSection(bool legend,AlterEgo::SkillEdit::CompanionProjection& slots,
-                                        bool editable) {
+                                        bool editable,const std::vector<AlterEgo::SkillEdit::EliteContext>& contexts={}) {
     auto& values=slots.values;
     ImGui::PushID(legend?"legend_pairs":"pet_pairs");
     // Demand only the selected companions' skills; the canonical skill owner
@@ -7360,8 +7369,9 @@ static uint8_t RenderProfessionPairSection(bool legend,AlterEgo::SkillEdit::Comp
             ImGui::PushID(slot);
             auto next=values[slot];
             const auto otherId=CanonicalCompanionIdentity(legend,values[other]);
-            if(RenderProfessionPairChoice(legend,values[slot],values[other],next,editable,slots.Known(slot),slots.Unresolved(slot))&&
+            if(RenderProfessionPairChoice(legend,values[slot],values[other],next,editable,slots.Known(slot),slots.Unresolved(slot),contexts)&&
                 AlterEgo::SkillEdit::PairChoiceAllowed(otherId,CanonicalCompanionIdentity(legend,next))&&
+                (!legend||AlterEgo::SkillEdit::LegendChoiceAllowed(CanonicalCompanionIdentity(legend,next),contexts))&&
                 (values[slot]!=next||!slots.Known(slot)||slots.Unresolved(slot))){
                 slots.Set(slot,next);changed|=static_cast<uint8_t>(1u<<slot);
             }
@@ -7546,12 +7556,29 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
     }
     ImGui::EndChild();
 }
+// Same cache-only validator for typed live/saved and resolved component views.
+template<class Build>
+static nlohmann::json RevenantTypedContext(const Build& build,const AlterEgo::SkillEdit::CompanionProjection& slots){
+    using J=nlohmann::json;
+    auto bar=[](const auto& b){return J{{"heal",b.heal},{"utilities",{b.utilities[0],b.utilities[1],b.utilities[2]}},{"elite",b.elite}};};
+    return J{{"profession",build.profession},{"specializations",J::array({J{{"id",build.specializations[0].spec_id}},
+        J{{"id",build.specializations[1].spec_id}},J{{"id",build.specializations[2].spec_id}}})},
+        {"legend_codes",slots.values},{"skills",bar(build.terrestrial_skills)},{"aquatic_skills",bar(build.aquatic_skills)}};
+}
+static void RenderRevenantContextWarnings(const nlohmann::json& raw,const std::string& owner={}){
+    for(const auto& issue:AlterEgo::GW2API::RevenantContextWarnings(raw)){
+        ImGui::PushStyleColor(ImGuiCol_Text,AlterEgo::UI::WarningText);
+        ImGui::TextWrapped("%s%s%s",owner.c_str(),owner.empty()?"":": ",issue.c_str());
+        ImGui::PopStyleColor();
+    }
+}
 static void RenderLiveProfessionPairs(const AlterEgo::BuildTemplate& bt) {
     if(bt.profession!="Ranger"&&bt.profession!="Revenant")return;
     const bool legend=bt.profession=="Revenant";
     ImGui::Spacing();RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
     auto slots=LiveCompanionSlots(bt,legend);
     RenderProfessionPairSection(legend,slots,false);
+    if(legend)RenderRevenantContextWarnings(RevenantTypedContext(bt,slots));
 }
 
 static const char* InfusionAttributeLabel(const std::string& attribute);
@@ -9970,7 +9997,10 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
         const bool legend=skillSrc.profession=="Revenant";
         ImGui::Spacing();RenderSectionHeader(legend?"Legends":"Pets",AlterEgo::UI::SectionGold);
         auto slots=skillSrc.CompanionSlots(legend);
-        if(const auto changed=RenderProfessionPairSection(legend,slots,g_LibEditMode)){
+        const std::vector<AlterEgo::SkillEdit::EliteContext> contexts=legend?
+            std::vector<AlterEgo::SkillEdit::EliteContext>{AlterEgo::GW2API::RevenantEliteContext(skillSrc.specializations[2].spec_id)}:
+            std::vector<AlterEgo::SkillEdit::EliteContext>{};
+        if(const auto changed=RenderProfessionPairSection(legend,slots,g_LibEditMode,contexts)){
             auto payload=skillSrc.CompanionPayload(legend);
             for(int i=0;i<4;++i)if(changed&(1u<<i)){
                 const auto id=slots.values[i];
@@ -9983,6 +10013,7 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
             else{g_EditDraft.pets_recorded=true;g_EditDraft.pets_source_slots=std::move(payload);}
             MarkEditDirty();
         }
+        if(legend)RenderRevenantContextWarnings(RevenantTypedContext(skillSrc,slots));
     }
 
     ImGui::Spacing();
@@ -10716,6 +10747,10 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     if(saved.profession=="Ranger"||saved.profession=="Revenant"){
         const bool legend=saved.profession=="Revenant";
         const auto expected=saved.CompanionSlots(legend),observed=LiveCompanionSlots(live,legend);
+        if(legend){
+            RenderRevenantContextWarnings(RevenantTypedContext(saved,expected),"Saved");
+            RenderRevenantContextWarnings(RevenantTypedContext(live,observed),"Retrieved");
+        }
         for(int env=0;env<2;++env){
             const bool a=CompanionPairConflict(legend,expected,env),b=CompanionPairConflict(legend,observed,env);
             if(a||b)ImGui::TextColored(AlterEgo::UI::WarningText,"%s duplicate companion choices (%s)",
