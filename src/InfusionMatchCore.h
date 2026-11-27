@@ -64,7 +64,8 @@ inline bool HasCompleteInfusionMatching(
 
 inline InfusionMatchVerdict CompareInfusionRequirements(
     const std::vector<InfusionRequirement>& saved,
-    const std::vector<ObservedInfusion>& live) {
+    const std::vector<ObservedInfusion>& live, bool observedKnown=true) {
+    if (!observedKnown) return InfusionMatchVerdict::NotVerified;
     if (saved.size() != live.size()) return InfusionMatchVerdict::Different;
     if (HasCompleteInfusionMatching(saved, live, false))
         return InfusionMatchVerdict::Matches;

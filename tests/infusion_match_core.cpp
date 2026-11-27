@@ -52,5 +52,7 @@ int case_infusion_match_core(int, char**) {
     const std::vector<InfusionRequirement> retained = {{111, "Power"}};
     assert(CompareInfusionRequirements(retained,
         {{222, {"Power"}, true}}) == InfusionMatchVerdict::Matches);
+    assert(AlterEgo::CompareInfusionRequirements({}, {},false)==AlterEgo::InfusionMatchVerdict::NotVerified);
+    assert(AlterEgo::CompareInfusionRequirements({}, {},true)==AlterEgo::InfusionMatchVerdict::Matches);
     return 0;
 }

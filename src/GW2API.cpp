@@ -601,10 +601,12 @@ namespace AlterEgo {
         }
 
         if (item_json.contains("upgrades") && item_json["upgrades"].is_array()) {
+            eq.upgrades_observed=true;
             for (const auto& u : item_json["upgrades"])
                 eq.upgrades.push_back(u.get<uint32_t>());
         }
         if (item_json.contains("infusions") && item_json["infusions"].is_array()) {
+            eq.infusions_observed=true;
             for (const auto& inf : item_json["infusions"])
                 eq.infusions.push_back(inf.get<uint32_t>());
         }
@@ -647,12 +649,13 @@ namespace AlterEgo {
                 int idx = 0;
                 for (const auto& spec : build["specializations"]) {
                     if (idx >= 3) break;
-                    if (spec.is_null()) { idx++; continue; }
+                    if (spec.is_null()) { bt.specializations[idx].explicitly_empty=true;idx++;continue; }
                     bt.specializations[idx].spec_id = SafeUint(spec, "id");
                     if (spec.contains("traits") && spec["traits"].is_array()) {
                         int ti = 0;
                         for (const auto& t : spec["traits"]) {
                             if (ti >= 3) break;
+                            if(t.is_null())bt.specializations[idx].empty_traits|=uint8_t(1u<<ti);
                             bt.specializations[idx].traits[ti] = t.is_null() ? 0 : t.get<int>();
                             ti++;
                         }
@@ -665,15 +668,18 @@ namespace AlterEgo {
                 SkillBar sb;
                 if (skills_json.is_null()) return sb;
                 sb.heal = SafeUint(skills_json, "heal");
+                if(skills_json.contains("heal")&&skills_json["heal"].is_null())sb.empty_slots|=1;
                 if (skills_json.contains("utilities") && skills_json["utilities"].is_array()) {
                     int i = 0;
                     for (const auto& u : skills_json["utilities"]) {
                         if (i >= 3) break;
+                        if(u.is_null())sb.empty_slots|=uint8_t(2u<<i);
                         sb.utilities[i] = u.is_null() ? 0 : u.get<uint32_t>();
                         i++;
                     }
                 }
                 sb.elite = SafeUint(skills_json, "elite");
+                if(skills_json.contains("elite")&&skills_json["elite"].is_null())sb.empty_slots|=16;
                 return sb;
             };
 

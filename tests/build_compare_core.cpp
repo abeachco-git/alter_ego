@@ -172,7 +172,7 @@ int case_build_compare_core(int, char**) {
     health.Add("Infusion totals","AR","enough","low","150","140");
     auto summary=AlterEgo::SummarizeHealth(health);
     assert((summary.warnings==std::vector<std::string>{"Check Build","Check Equipment","Check Infusions"}));
-    AlterEgo::BuildComparison armor;
+    AlterEgo::BuildComparison armor;armor.SetCoverage(true,true);
     armor.Add("Equipment stats","Helm","1","2","A","B");
     armor.Add("Equipment stats","Coat","1","2","A","B");
     assert((AlterEgo::SummarizeHealth(armor).warnings==std::vector<std::string>{"Check Armor"}));
@@ -183,5 +183,17 @@ int case_build_compare_core(int, char**) {
     assert(AlterEgo::PreferRecognition(AlterEgo::Recognize(exact),AlterEgo::Recognize(armor)));
     exact.AddUnverified("Aquatic","Breather rune","A","Unknown");
     assert(!AlterEgo::Recognize(exact).Full());
+    AlterEgo::BuildComparison knownEmpty;
+    knownEmpty.AddSkill("Terrestrial skills","Utilities","1,2,3","0,2,3","A,B,C","Empty,B,C",false,true);
+    assert(knownEmpty.DifferenceCount()==1 && knownEmpty.UnverifiedCount()==0);
+    assert(ClassifyTemplateMatch(knownEmpty)==TemplateMatchStatus::Different);
+    AlterEgo::BuildComparison aquaticPartial;aquaticPartial.SetCoverage(true,true,true);
+    aquaticPartial.Add("Aquatic","Breather rune","1","1","A","A");
+    assert(!AlterEgo::Recognize(aquaticPartial).Full());
+    struct Equipment{std::string slot;int tab;};
+    std::vector<Equipment> slots={{"Helm",0},{"Relic",0},{"AquaticA",2},{"WeaponAquaticA",1}};
+    assert(!AlterEgo::FindComparisonEquipment(slots,"Helm",2));
+    assert(AlterEgo::FindComparisonEquipment(slots,"Relic",2)==&slots[1]);
+    assert(AlterEgo::FindComparisonEquipment(slots,"WeaponAquaticA",2)==&slots[2]);
     return 0;
 }

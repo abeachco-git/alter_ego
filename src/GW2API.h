@@ -36,6 +36,9 @@ namespace AlterEgo {
         uint32_t skin = 0;          // Skin ID (transmuted appearance)
         std::vector<uint32_t> upgrades;    // Sigil/Rune IDs
         std::vector<uint32_t> infusions;
+        // Live response explicitly contained the array, including empty.
+        // Legacy cached defaults do not establish this provenance.
+        bool upgrades_observed=false,infusions_observed=false;
         std::vector<int> dyes;      // Dye color IDs (up to 4)
         std::string binding;        // "Character" or "Account"
         std::string bound_to;       // Character name if character-bound
@@ -91,6 +94,8 @@ namespace AlterEgo {
     struct SpecLine {
         uint32_t spec_id = 0;       // /v2/specializations ID
         int traits[3] = {0, 0, 0};  // Selected major trait indices (0=none, 1=top, 2=mid, 3=bottom)
+        bool explicitly_empty=false;
+        uint8_t empty_traits=0;
     };
 
     // A build template's skill loadout
@@ -98,6 +103,7 @@ namespace AlterEgo {
         uint32_t heal = 0;
         uint32_t utilities[3] = {0, 0, 0};
         uint32_t elite = 0;
+        uint8_t empty_slots=0; // live explicit nulls: heal=1, utilities=2/4/8, elite=16
     };
 
     // Ranger pets

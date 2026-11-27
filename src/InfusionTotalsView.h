@@ -20,7 +20,7 @@ static std::vector<InfusionConfig> SavedInfusionConfigurations(const AlterEgo::S
 }
 static std::vector<InfusionConfig> LiveInfusionConfigurations(const AlterEgo::Character& ch,int tab) {
     return AlterEgo::InfusionConfigurations([&](const char* slot){
-        const auto* eq=FindEquipment(ch,slot,tab);return eq&&eq->id;
+        const auto* eq=AlterEgo::FindComparisonEquipment(ch.equipment,slot,tab);return eq&&eq->id;
     });
 }
 static bool CountSavedInfusionSlot(const AlterEgo::SavedBuild& b,const std::string& slot,InfusionConfig config) {
@@ -54,10 +54,7 @@ static std::vector<uint32_t> GetLiveGearInfusions(const AlterEgo::Character& ch,
     };
     for (const char* slot : slots) {
         if(!AlterEgo::InfusionSlotInConfiguration(slot,config))continue;
-        const auto* gear=FindEquipment(ch,slot,tab);
-        if(!gear&&std::string(slot)=="WeaponAquaticA")gear=FindEquipment(ch,"AquaticA",tab);
-        if(!gear&&std::string(slot)=="WeaponAquaticB")gear=FindEquipment(ch,"AquaticB",tab);
-        if(!gear&&std::string(slot)=="HelmAquatic")gear=FindEquipment(ch,"Breather",tab);
+        const auto* gear=AlterEgo::FindComparisonEquipment(ch.equipment,slot,tab);
         if (gear) for (uint32_t id : gear->infusions) if (id) ids.push_back(id);
     }
     return ids;

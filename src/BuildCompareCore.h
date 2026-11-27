@@ -25,6 +25,14 @@ inline std::string CanonicalComparisonSlot(const std::string& slot) {
     if(slot=="Breather")return "HelmAquatic";
     return slot;
 }
+// Exact tab first; only relic is a shared equipment requirement. Alias lookup
+// is read-only and never rewrites stored physical identity.
+template<class Items> inline const typename Items::value_type* FindComparisonEquipment(const Items& items,const std::string& slot,int tab){
+    const auto key=CanonicalComparisonSlot(slot);
+    for(const auto& eq:items)if(CanonicalComparisonSlot(eq.slot)==key&&eq.tab==tab)return &eq;
+    if(key=="Relic")for(const auto& eq:items)if(eq.slot=="Relic"&&eq.tab==0)return &eq;
+    return nullptr;
+}
 inline bool IsAquaticComparisonSlot(const std::string& slot) {
     const auto key=CanonicalComparisonSlot(slot);
     return key=="WeaponAquaticA"||key=="WeaponAquaticB"||key=="HelmAquatic";
@@ -162,15 +170,21 @@ public:
         ++unverified;
     }
 
+    enum class Verdict { Match, Different, Unverified };
+    void AddVerdict(const std::string& group,const std::string& field,Verdict verdict,const std::string& saved,const std::string& current){
+        if(verdict==Verdict::Unverified)AddUnverified(group,field,saved,current);
+        else Add(group,field,"match",verdict==Verdict::Match?"match":"different",saved,current);
+    }
     void AddSkill(const std::string& group,const std::string& field,
                   const std::string& savedKey,const std::string& currentKey,
                   const std::string& savedDisplay,const std::string& currentDisplay,
-                  bool completeIds) {
-        if (!completeIds) { AddUnverified(group,field,savedDisplay,currentDisplay); return; }
+                  bool completeIds,bool knownEmptyEvidence=false) {
+        if (!completeIds&&!knownEmptyEvidence) { AddUnverified(group,field,savedDisplay,currentDisplay); return; }
         Add(group,field,savedKey,currentKey,savedDisplay,currentDisplay);
-        rows.back().completeSkillIds=true;
+        rows.back().completeSkillIds=completeIds;
     }
-    void SetCoverage(bool build,bool equipment) { buildCoverage=build; equipmentCoverage=equipment; }
+    void SetCoverage(bool build,bool equipment,bool partialAquatic=false) { buildCoverage=build; equipmentCoverage=equipment; aquaticPartial=partialAquatic; }
+    bool AquaticPartial() const {return aquaticPartial;}
     bool BuildCovered() const { return buildCoverage; }
     bool EquipmentCovered() const { return equipmentCoverage; }
     size_t DifferenceCount() const { return differences; }
@@ -181,7 +195,7 @@ private:
     std::vector<ComparisonRow> rows;
     size_t differences = 0;
     size_t unverified = 0;
-    bool buildCoverage=false, equipmentCoverage=false;
+    bool buildCoverage=false, equipmentCoverage=false, aquaticPartial=false;
 };
 
 /* Classify the saved-vs-retrieved build template separately from equipment.
@@ -226,8 +240,8 @@ inline TemplateMatchStatus ClassifyTemplateMatch(const BuildComparison& comparis
 struct RecognitionEvidence {
     size_t matches=0, differences=0, unverified=0;
     size_t buildMatches=0, buildDifferences=0;
-    bool buildCovered=false,equipmentCovered=false;
-    bool Full() const {return buildCovered&&equipmentCovered&&matches>0&&!differences&&!unverified;}
+    bool buildCovered=false,equipmentCovered=false,aquaticPartial=false;
+    bool Full() const {return buildCovered&&equipmentCovered&&!aquaticPartial&&matches>0&&!differences&&!unverified;}
     bool Meaningful() const {return matches>0;}
     int Rank() const {
         if(Full())return 0;
@@ -237,7 +251,7 @@ struct RecognitionEvidence {
 };
 inline RecognitionEvidence Recognize(const BuildComparison& comparison) {
     RecognitionEvidence r;
-    r.buildCovered=comparison.BuildCovered();r.equipmentCovered=comparison.EquipmentCovered();
+    r.buildCovered=comparison.BuildCovered();r.equipmentCovered=comparison.EquipmentCovered();r.aquaticPartial=comparison.AquaticPartial();
     for(const auto& row:comparison.Rows()){
         const bool build=!IsGearComparisonGroup(row.group);
         if(!row.verified)++r.unverified;
@@ -300,7 +314,9 @@ inline ConfigurationHealth SummarizeHealth(const BuildComparison& comparison) {
     for(const auto& part:unknown)h.details.push_back("Unverified: "+part);
     if(!h.evidence.buildCovered)h.details.push_back("Build coverage incomplete");
     if(!h.evidence.equipmentCovered)h.details.push_back("Equipment coverage incomplete");
-    if(h.warnings.empty()&&!h.evidence.Full())h.warnings.push_back("Not verified");
+    if(h.evidence.aquaticPartial)h.details.push_back("Aquatic coverage partial");
+    if(h.evidence.unverified||!h.evidence.buildCovered||!h.evidence.equipmentCovered||h.evidence.aquaticPartial)
+        h.warnings.push_back("Not verified");
     return h;
 }
 } // namespace AlterEgo

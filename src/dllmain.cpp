@@ -9919,20 +9919,21 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         const auto& s = saved.specializations[i];
         const auto& l = live.specializations[i];
         std::string slot = "Line " + std::to_string(i + 1);
-        addId("Specializations", slot, s.spec_id, l.spec_id, specName);
+        if(!s.spec_id||(!l.spec_id&&!l.explicitly_empty))result.AddUnverified("Specializations",slot,s.spec_id?specName(s.spec_id):"Unknown",l.spec_id?specName(l.spec_id):"Unknown");
+        else addId("Specializations",slot,s.spec_id,l.spec_id,specName);
         if (s.spec_id != l.spec_id || !s.spec_id) continue;
         const char* tiers[] = {"Adept", "Master", "Grandmaster"};
         for (int t = 0; t < 3; ++t) {
             uint32_t a = traitId(s.spec_id, t, s.traits[t]);
             uint32_t b = traitId(l.spec_id, t, l.traits[t]);
             const auto field=slot + " " + tiers[t];
-            if (!a || !b) result.AddUnverified("Traits",field, a?traitName(a):"Unknown", b?traitName(b):"Unknown");
+            if (!a || (!b&&!(l.traits[t]==0&&(l.empty_traits&(1u<<t))))) result.AddUnverified("Traits",field, a?traitName(a):"Unknown", b?traitName(b):"Unknown");
             else addId("Traits",field,a,b,traitName);
         }
     }
     auto compareSkills = [&](const char* group, const AlterEgo::SkillBar& a,
                               const AlterEgo::SkillBar& b) {
-        result.AddSkill(group,"Heal",idKey(a.heal),idKey(b.heal),skillName(a.heal),skillName(b.heal),a.heal&&b.heal);
+        result.AddSkill(group,"Heal",idKey(a.heal),idKey(b.heal),skillName(a.heal),skillName(b.heal),a.heal&&b.heal,a.heal&&(b.empty_slots&1));
         // Utility order is a control-layout preference, not a combat
         // configuration difference. Keep original order on disk/export.
         auto sortedUtilities = [&](const AlterEgo::SkillBar& bar) {
@@ -9946,10 +9947,13 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             return std::make_pair(key, names);
         };
         const auto sa = sortedUtilities(a), sb = sortedUtilities(b);
+        const bool savedComplete=AlterEgo::CompleteUtilityIds({a.utilities[0],a.utilities[1],a.utilities[2]});
+        const bool liveComplete=AlterEgo::CompleteUtilityIds({b.utilities[0],b.utilities[1],b.utilities[2]});
+        bool liveKnown=true;
+        for(int i=0;i<3;++i)liveKnown=liveKnown&&(b.utilities[i]||(b.empty_slots&(2u<<i)));
         result.AddSkill(group,"Utilities",sa.first,sb.first,sa.second,sb.second,
-            AlterEgo::CompleteUtilityIds({a.utilities[0],a.utilities[1],a.utilities[2]}) &&
-            AlterEgo::CompleteUtilityIds({b.utilities[0],b.utilities[1],b.utilities[2]}));
-        result.AddSkill(group,"Elite",idKey(a.elite),idKey(b.elite),skillName(a.elite),skillName(b.elite),a.elite&&b.elite);
+            savedComplete&&liveComplete,savedComplete&&liveKnown);
+        result.AddSkill(group,"Elite",idKey(a.elite),idKey(b.elite),skillName(a.elite),skillName(b.elite),a.elite&&b.elite,a.elite&&(b.empty_slots&16));
     };
     compareSkills("Terrestrial skills", saved.terrestrial_skills, live.terrestrial_skills);
     const auto& waterSkills=saved.aquatic_skills;
@@ -9957,8 +9961,8 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         compareSkills("Aquatic skills", waterSkills, live.aquatic_skills);
     if (saved.profession == "Ranger") {
         for (int i = 0; i < 2; ++i) {
-            addId("Ranger pets", "Terrestrial " + std::to_string(i + 1),
-                  saved.pets.terrestrial[i], live.pets.terrestrial[i], numberLabel);
+            if(saved.pets.terrestrial[i]&&live.pets.terrestrial[i])addId("Ranger pets","Terrestrial "+std::to_string(i+1),saved.pets.terrestrial[i],live.pets.terrestrial[i],numberLabel);
+            else result.AddUnverified("Ranger pets","Terrestrial "+std::to_string(i+1),numberLabel(saved.pets.terrestrial[i]),numberLabel(live.pets.terrestrial[i]));
             if(saved.pets.aquatic[i]){
                 if(!live.pets.aquatic[i])result.AddUnverified("Ranger pets","Aquatic "+std::to_string(i+1),numberLabel(saved.pets.aquatic[i]),"Unknown");
                 else addId("Ranger pets","Aquatic "+std::to_string(i+1),saved.pets.aquatic[i],live.pets.aquatic[i],numberLabel);
@@ -9970,8 +9974,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             return value.rfind("Legend", 0) == 0 ? (uint32_t)std::atoi(value.c_str() + 6) : 0;
         };
         for (int i = 0; i < 2; ++i) {
-            addId("Revenant legends", "Terrestrial " + std::to_string(i + 1),
-                  saved.legend_codes[i], legendCode(live.legends.terrestrial[i]), numberLabel);
+            const auto land=legendCode(live.legends.terrestrial[i]);
+            if(saved.legend_codes[i]&&land)addId("Revenant legends","Terrestrial "+std::to_string(i+1),saved.legend_codes[i],land,numberLabel);
+            else result.AddUnverified("Revenant legends","Terrestrial "+std::to_string(i+1),numberLabel(saved.legend_codes[i]),numberLabel(land));
             if(saved.legend_codes[i+2]){
                 const auto observed=legendCode(live.legends.aquatic[i]);
                 if(!observed)result.AddUnverified("Revenant legends","Aquatic "+std::to_string(i+1),numberLabel(saved.legend_codes[i+2]),"Unknown");
@@ -9994,12 +9999,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
 
     if (!saved.gear.empty() || !saved.infusion_totals.empty() || saved.relic_id || !saved.relic_name.empty()) {
         auto getEquipped = [&](const std::string& slot) -> const AlterEgo::EquipmentItem* {
-            const auto key=AlterEgo::CanonicalComparisonSlot(slot);
-            for(const auto& eq:liveCharacter.equipment)
-                if(AlterEgo::CanonicalComparisonSlot(eq.slot)==key && eq.tab==equipmentTab)return &eq;
-            if(key=="Relic")for(const auto& eq:liveCharacter.equipment)
-                if(eq.slot=="Relic"&&eq.tab==0)return &eq;
-            return nullptr;
+            return AlterEgo::FindComparisonEquipment(liveCharacter.equipment,slot,equipmentTab);
         };
         for (const auto& entry : saved.gear) {
             const std::string& slot = entry.first;
@@ -10127,8 +10127,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 verdict == AlterEgo::Composable::Semantics::Verdict::Unverified)
                 result.AddUnverified("Runes", "Types / counts",
                     label(expected) + " (incomplete requirement)", label(observed));
-            else result.Add("Runes", "Types / counts", label(expected), label(observed),
-                            label(expected), label(observed));
+            else result.AddVerdict("Runes","Types / counts",verdict==AlterEgo::Composable::Semantics::Verdict::Match?AlterEgo::BuildComparison::Verdict::Match:AlterEgo::BuildComparison::Verdict::Different,label(expected),label(observed));
         }
 
         // Sigils are interchangeable between hands in a weapon set, but
@@ -10184,8 +10183,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             if (unknownSigilIdentity || missingLiveSigilData ||
                 verdict == AlterEgo::Composable::Semantics::Verdict::Unverified)
                 result.AddUnverified("Sigils", "By weapon set", label(expected), label(observed));
-            else result.Add("Sigils", "By weapon set",
-                            label(expected), label(observed), label(expected), label(observed));
+            else result.AddVerdict("Sigils","By weapon set",verdict==AlterEgo::Composable::Semantics::Verdict::Match?AlterEgo::BuildComparison::Verdict::Match:AlterEgo::BuildComparison::Verdict::Different,label(expected),label(observed));
         }
 
         // Aquatic runes use five shared armor pieces plus the breather.
@@ -10195,7 +10193,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             const auto& g=waterHelm->second;
             if(g.rune_id||!g.rune.empty()){
                 const auto* observed=getEquipped("HelmAquatic");
-                if(!g.rune_id||!observed||observed->upgrades.empty()||!observed->upgrades[0])
+                if(g.rune_id&&observed&&observed->upgrades_observed&&observed->upgrades.empty())
+                    addId("Aquatic","Breather rune",g.rune_id,0,itemName);
+                else if(!g.rune_id||!observed||observed->upgrades.empty()||!observed->upgrades[0])
                     result.AddUnverified("Aquatic","Breather rune",g.rune_id?numberLabel(g.rune_id):g.rune,"Unverified");
                 else {
                     auto expected=savedRunes,actual=liveRunes;
@@ -10209,7 +10209,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                         const auto label=[](const auto& summary){
                             std::string text;for(const auto& [key,count]:summary.counts){if(!text.empty())text+=", ";text+=std::to_string(count)+" x "+key;}return text;
                         };
-                        result.Add("Aquatic","Underwater rune configuration",label(e),label(a),label(e),label(a));
+                        result.AddVerdict("Aquatic","Underwater rune configuration",verdict==AlterEgo::Composable::Semantics::Verdict::Match?AlterEgo::BuildComparison::Verdict::Match:AlterEgo::BuildComparison::Verdict::Different,label(e),label(a));
                     }
                 }
             }
@@ -10229,9 +10229,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             expected=AlterEgo::CanonicalUtilitySequence(std::move(expected));
             observed=AlterEgo::CanonicalUtilitySequence(std::move(observed));
             const auto field=AlterEgo::CanonicalComparisonSlot(slot)+" sigils";
-            if((!g.sigil.empty()&&!g.sigil_id)||(!g.sigil2.empty()&&!g.sigil2_id)||!eq||observed.empty())
+            if((!g.sigil.empty()&&!g.sigil_id)||(!g.sigil2.empty()&&!g.sigil2_id)||!eq||(observed.empty()&&!eq->upgrades_observed))
                 result.AddUnverified("Aquatic",field,label(expected),label(observed));
-            else result.Add("Aquatic",field,expected==observed?"equal":"different","equal",label(expected),label(observed));
+            else result.AddVerdict("Aquatic",field,expected==observed?AlterEgo::BuildComparison::Verdict::Match:AlterEgo::BuildComparison::Verdict::Different,label(expected),observed.empty()?"(empty)":label(observed));
         }
 
         // Slot mode is authoritative: compare only recorded physical requirements.
@@ -10254,7 +10254,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 }
                 std::vector<AlterEgo::ObservedInfusion> installed;
                 for(auto id:eq->infusions)if(id)installed.push_back(GetObservedInfusion(id));
-                const auto verdict=AlterEgo::CompareInfusionRequirements(wanted,installed);
+                const auto capacity=ResolveGearInfusionCapacity(slot,saved.profession,gear.weapon_type,eq->id,false);
+                const bool observedKnown=eq->infusions_observed||!installed.empty()||(capacity.verified&&capacity.limit==0);
+                const auto verdict=AlterEgo::CompareInfusionRequirements(wanted,installed,observedKnown);
                 std::string expected,actual;
                 for(const auto& item:wanted){
                     if(!expected.empty())expected+=", ";
@@ -10290,10 +10292,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     // Compare the *total bonuses* as minimum requirements. AR caps at 150.
     // Source-wide imported infusion counts and per-slot snapshots use the same
     // calculator; unknown metadata is never reported as a mismatch.
-    const auto requiredTotals = GetSavedInfusionSummary(saved);
-    if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Conflict) {
+    const auto mode=AlterEgo::GetInfusionMode(saved);
+    if (mode==AlterEgo::InfusionMode::Conflict) {
         result.AddUnverified("Infusions", "Mode", "Mixed legacy requirements", "Resolve in Loadout Edit");
-    } else if (AlterEgo::GetInfusionMode(saved)==AlterEgo::InfusionMode::Totals && requiredTotals.present) {
+    } else if (mode==AlterEgo::InfusionMode::Totals) {
+        const auto requiredTotals=GetSavedInfusionSummary(saved);
         // Aggregate guide targets are terrestrial. Compare each configured land
         // weapon set independently; never add the alternate set or aquatic gear.
         const auto available=LiveInfusionConfigurations(liveCharacter,equipmentTab);
@@ -10349,7 +10352,14 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
         hasLand=true;
         if(!recorded.count(slot))completeGear=false;
     }
-    result.SetCoverage(completeBuild,completeGear&&hasLand&&!recorded.empty());
+    bool aquaticPartial=false;
+    if(std::any_of(recorded.begin(),recorded.end(),[](const auto& slot){return AlterEgo::IsAquaticComparisonSlot(slot);})){
+        for(const auto& e:liveCharacter.equipment){
+            const auto slot=AlterEgo::CanonicalComparisonSlot(e.slot);
+            if(e.id&&e.tab==equipmentTab&&AlterEgo::IsAquaticComparisonSlot(slot)&&!recorded.count(slot))aquaticPartial=true;
+        }
+    }
+    result.SetCoverage(completeBuild,completeGear&&hasLand&&!recorded.empty(),aquaticPartial);
     return result;
 }
 
@@ -10443,8 +10453,10 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         now - cache.updated >= std::chrono::milliseconds(500)) {
         cache.result = CalculateSavedVsLiveComparison(
             saved, *character, live, equipmentTab, g_LibCompareExactItems);
-        cache.componentDoc = nlohmann::json::object();
-        AlterEgo::GW2API::GetComposableLoadouts(cache.componentDoc);
+        if(cache.libraryRevision!=libraryRevision||cache.savedBuildId!=saved.id){
+            cache.componentDoc=nlohmann::json::object();
+            AlterEgo::GW2API::GetComposableLoadouts(cache.componentDoc);
+        }
         cache.savedBuildId = saved.id;
         cache.characterName = character->name;
         cache.characterAccount=character->account_name;
@@ -10475,35 +10487,32 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     for (const auto& kind : categories)
         sections.push_back({kind.kind, kind.label});
 
-    // Resolve names and whether a component has actual saved fields. An
-    // empty component is NOT evidence of a match, even if no rows differ.
-    if (cache.componentDoc.is_object() &&
-        cache.componentDoc.contains("loadouts") &&
-        cache.componentDoc["loadouts"].is_array() &&
-        cache.componentDoc.contains("components") &&
-        cache.componentDoc["components"].is_object()) {
-        for (const auto& loadout : cache.componentDoc["loadouts"]) {
-            if (!loadout.is_object() ||
-                loadout.value("id", std::string()) != saved.id ||
-                !loadout.contains("refs") || !loadout["refs"].is_object()) continue;
-            for (auto& section : sections) {
-                const std::string id = loadout["refs"].value(section.kind, std::string());
-                if (id.empty()) continue;
-                const auto group = cache.componentDoc["components"].find(section.kind);
-                if (group == cache.componentDoc["components"].end() ||
-                    !group->is_array()) continue;
-                for (const auto& part : *group) {
-                    if (!part.is_object() ||
-                        part.value("id", std::string()) != id) continue;
-                    section.sourceName = part.value("name", std::string());
-                    section.sourceId = id;
-                    section.recorded = part.contains("data") &&
-                        part["data"].is_object() && !part["data"].empty();
-                    break;
+    // Resolve linked Equipment Set ownership using the canonical graph helper.
+    // Cache this projection by the same library revision rather than parsing
+    // the graph or touching storage for every render frame.
+    struct SectionSources {
+        uint64_t revision=0;std::string id;
+        std::map<std::string,std::pair<std::string,std::string>> records;
+    };
+    static SectionSources sources;
+    if(sources.revision!=libraryRevision||sources.id!=saved.id){
+        sources={};sources.revision=libraryRevision;sources.id=saved.id;
+        AlterEgo::Composable::Document doc;std::string error;
+        if(AlterEgo::Composable::FromJson(cache.componentDoc,doc,error)){
+            for(const auto& loadout:doc.loadouts){
+                if(loadout.id!=saved.id)continue;
+                for(const auto& [kind,id]:AlterEgo::Composable::EffectiveRefs(doc,loadout)){
+                    const auto* part=AlterEgo::Composable::Find(doc,kind,id);
+                    if(part&&!part->data.empty())sources.records[kind]={id,part->name};
                 }
+                break;
             }
-            break;
         }
+    }
+    for(auto& section:sections){
+        auto found=sources.records.find(section.kind);
+        if(found==sources.records.end())continue;
+        section.sourceId=found->second.first;section.sourceName=found->second.second;section.recorded=true;
     }
 
     for (const auto& row : result.Rows()) {
@@ -10525,11 +10534,12 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         else ++found->matches;
     }
     size_t matchingComponents = 0, differentComponents = 0;
-    size_t unknownComponents = 0, actionableComponents = 0;
+    size_t unknownComponents = 0, optionalComponents=0, actionableComponents = 0;
     for (const auto& section : sections) {
         if (section.differences) ++differentComponents;
+        else if(section.kind=="aquatic"&&!section.recorded&&section.rows.empty())++optionalComponents;
         else if ((section.kind != "other" && !section.recorded) ||
-                 section.unverified || section.rows.empty()) ++unknownComponents;
+                 section.unverified || section.rows.empty()||(section.kind=="aquatic"&&result.AquaticPartial())) ++unknownComponents;
         else ++matchingComponents;
         if (section.differences || section.unverified) ++actionableComponents;
     }
@@ -10594,7 +10604,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         for(const auto& [id,count]:upgradesWanted)if(count>upgradesHave[id])missing.emplace_back(id,count-upgradesHave[id]);
         if(!missing.empty()&&ImGui::TreeNode("Exact saved item and upgrade locations")){
             ImGui::TextWrapped("Exact gear and upgrade ID deficits only; equivalent gear or attribute-based infusions may already match. Verify stats, restrictions and template reuse before moving items.");
-            const auto owner=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character->name);
+            const auto verifiedOwner=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(character->name);
+            const auto owner=verifiedOwner==character->account_name?verifiedOwner:std::string{};
             std::map<uint32_t,int> totals;
             for(const auto& [id,count]:missing)totals[id]+=count;
             for(const auto& [id,count]:totals){
@@ -10602,7 +10613,8 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                 const auto item = AlterEgo::GW2API::GetItemInfo(id);
                 std::string label=(item&&!item->name.empty()?item->name:"Item #"+std::to_string(id))+" x"+std::to_string(count)+"###acquisition";
                 if(ImGui::TreeNode(label.c_str())){
-                    AlterEgo::NativeAccounts::RenderItemAvailability(id,owner,character->name);
+                    if(!owner.empty())AlterEgo::NativeAccounts::RenderItemAvailability(id,owner,character->name);
+                    else ImGui::TextDisabled("Personal stock ownership unverified");
                     if(AlterEgo::UI::Button("Find in Inventory",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact))OpenInventoryItem(id);
                     ImGui::TreePop();
                 }
@@ -10613,7 +10625,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     }
 
     for (const auto& section : sections) {
-        if (!g_LibCompareShowMatches && !section.differences && !section.unverified)
+        if (!g_LibCompareShowMatches && !section.differences && !section.unverified && !(section.kind=="aquatic"&&result.AquaticPartial()))
             continue;
         ImGui::PushID(section.kind.c_str());
         const std::string status =
@@ -10624,7 +10636,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
             : (section.kind != "other" && !section.recorded) ? "Not recorded"
             : section.rows.empty()
                 ? "Not checked"
-                : "Matches";
+                : section.kind=="aquatic"&&result.AquaticPartial()?"Partial match":"Matches";
         const std::string title = section.label + "  -  " + status +
             "###component_compare_section";
         const ImGuiTreeNodeFlags flags = section.differences
@@ -10792,6 +10804,7 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch(const AlterEgo::C
         else health=AlterEgo::SummarizeHealth(AlterEgo::BuildComparison{});
     }else health=ranked.health;
     cached.full=health.evidence.Full();
+    if(cached.full)cached.matchedId=cached.id;
     cached.warnings=health.warnings;
     cached.tooltip=(cached.explicitChoice?"Expected: ":"Automatic candidate: ")+cached.name;
     if(cached.full)cached.tooltip+="\nVerified functional match";

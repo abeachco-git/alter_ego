@@ -31,8 +31,9 @@ inline void Add(Summary& s, const std::string& id, int count = 1) {
 }
 inline Json Part(const Document& doc, const Loadout& loadout,
                  const std::string& kind) {
-    auto it = loadout.refs.find(kind);
-    if (it == loadout.refs.end()) return Json::object();
+    const auto refs=EffectiveRefs(doc,loadout);
+    auto it = refs.find(kind);
+    if (it == refs.end()) return Json::object();
     const Component* item = Find(doc, kind, it->second);
     return item ? item->data : Json::object();
 }
