@@ -82,7 +82,12 @@ int case_native_inventory(int,char**){
     {
         namespace CI=AlterEgo::CharacterIdentity;
         namespace PO=AlterEgo::PetOwnership;
-        Database::Connection db(":memory:",Database::Connection::OpenMode::Create);
+        const auto root=std::filesystem::temp_directory_path()/("ae-pets-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        const auto path=(root/"accounts.db").string();
+        CI::Ref saved;
+        {
+        Database::Connection db(path,Database::Connection::OpenMode::Create);
         CI::InitializeAccountRegistry(db);
         const CI::Evidence ranger{"2020-01-01T01:02:03Z","Ranger","Human"};
         const CI::Evidence ranger2{"2020-01-02T01:02:03Z","Ranger","Human"};
@@ -110,6 +115,23 @@ int case_native_inventory(int,char**){
         assert(PO::Get(PO::Read(db).at(one),4).State()==PO::Status::Observed);
         assert(PO::Get(PO::Read(db).at(one),5).State()==PO::Status::Unknown);
         assert(AlterEgo::CharacterScopes::Visible(3)==AlterEgo::CharacterScopes::Visible(1));
+        struct FixtureTab {
+            std::string profession;int tab;bool pets_known;
+            struct Pair {uint32_t terrestrial[2],aquatic[2];} pets;
+        };
+        const std::vector<FixtureTab> tabs={{"Ranger",1,true,{{4,0},{6,4}}},{"Ranger",2,true,{{8,0},{0,0}}},
+            {"Ranger",3,false,{{99,0},{0,0}}},{"Revenant",4,true,{{77,0},{0,0}}}};
+        assert(PO::Selected(tabs)==std::set<uint32_t>({4,6,8}));
+        assert(PO::Selected(tabs,1)==std::set<uint32_t>({4,6}));
+        saved=one;
+        }
+        {
+            Database::Connection db(path,Database::Connection::OpenMode::Existing);
+            CI::InitializeAccountRegistry(db);
+            assert(PO::Get(PO::Read(db).at(saved),4).State()==PO::Status::Observed);
+            assert(PO::Get(PO::Read(db).at(saved),5).State()==PO::Status::Unknown);
+        }
+        std::filesystem::remove_all(root);
     }
     // Durable local character identity: rename, same-name reuse, swaps,
     // account isolation, complete observation, v1 migration and rollback.
