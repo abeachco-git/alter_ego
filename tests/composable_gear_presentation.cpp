@@ -79,6 +79,7 @@ int case_composable_gear_presentation(int, char**) {
     assert(CalculatedStatLines(Json{{"infix_upgrade",{{"id",161}}}},161,stat["formulas"]).empty());
     assert(CalculatedStatLines(physical,161,Json()).empty());
     assert(FixedStatId(Json{{"infix_upgrade",{{"id",4294967297ull}}}})==0);
+    assert(FixedStatId(Json{{"infix_upgrade",{{"id",161}}},{"stat_choices",Json::array({161,162})}})==0);
     auto partial=raw;partial["attributes"][0].erase("value");assert(!AlterEgo::ReferenceExtras::StatObservation(partial).contains("formulas"));
     auto malformed=raw;malformed["attributes"][0]["value"]="3";
     bool rejected=false;try{AlterEgo::ReferenceExtras::StatObservation(malformed);}catch(...){rejected=true;}assert(rejected);

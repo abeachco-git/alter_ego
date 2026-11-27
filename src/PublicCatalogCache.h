@@ -1,4 +1,5 @@
 #pragma once
+#include "TooltipCore.h"
 #include "ItemMetadataCache.h"
 #include <algorithm>
 #include <chrono>
@@ -154,21 +155,14 @@ inline void StoreObjectives(Database::Connection& db,const std::map<uint32_t,Obj
     Mark(db,"public_vault",stamp);
 }
 struct Entry {std::string name,bonus,kind,rarity;uint32_t item_id=0;};
-inline std::string Summary(const Json& details,const std::string& description) {
+inline std::string Summary(const Json& details,const std::string& description,const std::string& type={},const std::string& rarity={}){
+    using namespace TooltipCore;
     std::string out;
-    auto append=[&](const std::string& s){if(s.empty())return;if(!out.empty())out+="; ";out+=s;};
-    if(details.is_object()) {
-        if(details.contains("bonuses")&&details.at("bonuses").is_array())
-            for(const auto& v:details.at("bonuses"))if(v.is_string())append(v.get<std::string>());
-        if(details.contains("infix_upgrade")&&details.at("infix_upgrade").is_object()) {
-            const auto& infix=details.at("infix_upgrade");
-            if(infix.contains("buff")&&infix.at("buff").is_object())append(infix.at("buff").value("description",std::string{}));
-            if(infix.contains("attributes")&&infix.at("attributes").is_array())
-                for(const auto& a:infix.at("attributes"))if(a.contains("modifier")&&a.at("modifier").is_number_integer())
-                    append("+"+std::to_string(a.at("modifier").get<int>())+" "+a.value("attribute",std::string{}));
-        }
+    for(const auto& line:ItemDefinitionLines(type,rarity,description,details,ItemAttributes|ItemEffects|ItemDescription)){
+        if(line.text=="Fixed definition attributes")continue;
+        if(!out.empty())out+="; ";
+        out+=line.text;
     }
-    if(out.empty())out=description;
     return out;
 }
 struct Pet {
@@ -353,11 +347,11 @@ inline Snapshot Read(Database::Connection& db) {
     out.upgrades=Fresh(db,"public_upgrades");out.upgradeAttempt=Fresh(db,"public_upgrades_attempt");
     out.vault=Fresh(db,"public_vault");out.vaultAttempt=Fresh(db,"public_vault_attempt");
     auto ids=db.Prepare("SELECT id FROM public_item_index");while(ids.Step())out.index.insert(static_cast<uint32_t>(ids.Integer(0)));
-    auto items=db.Prepare("SELECT i.id,i.name,i.description,i.details,u.kind,i.rarity FROM public_upgrade_items u JOIN reference_items i ON i.id=u.id ORDER BY i.name,i.id");
+    auto items=db.Prepare("SELECT i.id,i.name,i.description,i.details,u.kind,i.rarity,i.type FROM public_upgrade_items u JOIN reference_items i ON i.id=u.id ORDER BY i.name,i.id");
     while(items.Step()){
         const auto id=static_cast<uint32_t>(items.Integer(0));out.upgradeIds.insert(id);
         auto details=items.IsNull(3)?Json::object():Json::parse(items.Text(3));
-        out.entries.push_back({items.Text(1),Summary(details,items.Text(2)),items.Text(4),items.Text(5),id});
+        out.entries.push_back({items.Text(1),Summary(details,items.Text(2),items.Text(6),items.Text(5)),items.Text(4),items.Text(5),id});
     }
     auto q=db.Prepare("SELECT id,title,track,acclaim FROM public_vault_objectives");
     while(q.Step())out.objectives.emplace(static_cast<uint32_t>(q.Integer(0)),Objective{q.Text(1),q.Text(2),q.Integer(3)});

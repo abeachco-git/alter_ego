@@ -3183,7 +3183,8 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             } else if(item_info) {
                 // A selectable item's fixed definition is not the actual selection.
                 if(eq->stat_id)RenderSelectedItemStatDetails(eq->id,eq->stat_id);
-                else RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemAttributes);
+                else if(AlterEgo::TooltipCore::FixedStatId(item_info->details)||!item_info->details.contains("stat_choices"))
+                    RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemAttributes);
             }
 
             // Show the recorded infusion slots, including IDs whose public
@@ -4147,10 +4148,7 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
                         gs.stat_id = eq.stat_id;
                         if (!gs.stat_id && eq.id) {
                             const auto item = AlterEgo::GW2API::GetItemInfo(eq.id);
-                            if (item && item->details.contains("infix_upgrade") &&
-                                item->details["infix_upgrade"].contains("id") &&
-                                item->details["infix_upgrade"]["id"].is_number_unsigned())
-                                gs.stat_id = item->details["infix_upgrade"]["id"].get<uint32_t>();
+                            if(item)gs.stat_id=AlterEgo::TooltipCore::FixedStatId(item->details);
                         }
                         if (gs.stat_id) {
                             const auto statInfo = AlterEgo::GW2API::GetItemStatInfo(gs.stat_id);
@@ -6489,11 +6487,14 @@ static void RenderGearCatalogChoices(const std::string& family,const std::string
     uint32_t currentId,const std::string& currentName,bool cards,OnChoose choose){
     const auto searchWords=AlterEgo::Search::Words(filter);
     for(const auto& e:GearCatalog(family)){
-        if(!AlterEgo::Search::MatchesFields(searchWords,{e.name,e.bonus}))continue;
+        const auto info=AlterEgo::GW2API::GetItemInfo(e.item_id);
+        const auto bonus=info?AlterEgo::PublicCatalog::Summary(info->details,info->description,info->type,info->rarity):e.bonus;
+        if(!AlterEgo::Search::MatchesFields(searchWords,{e.name,bonus}))continue;
         ImGui::PushID(static_cast<int>(e.item_id));
         const bool selected=currentId?currentId==e.item_id:currentName==e.name;
-        bool clicked=cards?AlterEgo::UI::CatalogCard("##gear_option",e.name.c_str(),e.bonus.c_str(),selected):
-            AlterEgo::UI::CatalogOption(e.name.c_str(),e.bonus.c_str(),selected);
+        bool clicked=cards?AlterEgo::UI::CatalogCard("##gear_option",e.name.c_str(),bonus.c_str(),selected):
+            AlterEgo::UI::CatalogOption(e.name.c_str(),bonus.c_str(),selected);
+        if(info&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*info);
         AlterEgo::UI::EntityContext("##catalog_item_actions",[&]{CopyEntityMenu(e.name,AlterEgo::LINK_ITEM,e.item_id);});
         if(clicked)choose(e.item_id,e.name);
         ImGui::PopID();
@@ -9087,12 +9088,7 @@ static void ResolveBuildItemNames(AlterEgo::SavedBuild& build) {
             const auto item = AlterEgo::GW2API::GetItemInfo(gs.item_id);
             if (!item) {
                 missingItems.push_back(gs.item_id);
-            } else if (item->details.is_object() &&
-                       item->details.contains("infix_upgrade") &&
-                       item->details["infix_upgrade"].is_object() &&
-                       item->details["infix_upgrade"].contains("id") &&
-                       item->details["infix_upgrade"]["id"].is_number_unsigned()) {
-                const uint32_t id = item->details["infix_upgrade"]["id"].get<uint32_t>();
+            } else if (const auto id=AlterEgo::TooltipCore::FixedStatId(item->details)) {
                 const auto info = AlterEgo::GW2API::GetItemStatInfo(id);
                 if (!info) missingStats.push_back(id);
                 // A fixed item's public stats verify the text prefix. If the
@@ -9241,9 +9237,8 @@ static AlterEgo::SourceRefresh::ItemCompatibility SourceItemCompatibility(const 
         if(next.stat&&std::find(choices->begin(),choices->end(),nlohmann::json(*next.stat))!=choices->end())return C::Compatible;
         return C::Unknown; // alternate itemstat IDs may represent the same family
     }
-    const auto fixed=details.find("infix_upgrade");
-    if(fixed==details.end()||!fixed->is_object()||!fixed->contains("id")||!fixed->at("id").is_number_unsigned())return C::Unknown;
-    const uint32_t id=fixed->at("id").get<uint32_t>();
+    const auto id=TooltipCore::FixedStatId(details);
+    if(!id)return C::Unknown;
     if(next.stat&&id==*next.stat)return C::Compatible;
     const auto info=GW2API::GetItemStatInfo(id);
     const auto target=next.stat?GW2API::GetItemStatInfo(*next.stat):nullptr;
@@ -10309,10 +10304,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             uint32_t liveStat = eq->stat_id;
             if (!liveStat && eq->id) {
                 const auto info = AlterEgo::GW2API::GetItemInfo(eq->id);
-                if (info && info->details.contains("infix_upgrade") &&
-                    info->details["infix_upgrade"].contains("id") &&
-                    info->details["infix_upgrade"]["id"].is_number_unsigned())
-                    liveStat = info->details["infix_upgrade"]["id"].get<uint32_t>();
+                if(info)liveStat=AlterEgo::TooltipCore::FixedStatId(info->details);
             }
             // A MetaBattle tile may supply a fixed ascended item ID and
             // canonical text but no selected itemstat ID. Resolve the saved
@@ -10321,12 +10313,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             uint32_t savedStat = gs.stat_id;
             if (!savedStat && gs.item_id) {
                 const auto savedItem = AlterEgo::GW2API::GetItemInfo(gs.item_id);
-                if (savedItem && savedItem->details.is_object() &&
-                    savedItem->details.contains("infix_upgrade") &&
-                    savedItem->details["infix_upgrade"].is_object() &&
-                    savedItem->details["infix_upgrade"].contains("id") &&
-                    savedItem->details["infix_upgrade"]["id"].is_number_unsigned()) {
-                    const uint32_t possible = savedItem->details["infix_upgrade"]["id"].get<uint32_t>();
+                if (const auto possible=savedItem?AlterEgo::TooltipCore::FixedStatId(savedItem->details):0u) {
                     const auto definition = AlterEgo::GW2API::GetItemStatInfo(possible);
                     if (definition && (gs.stat_name.empty() ||
                         AlterEgo::NamedStats::SameCanonicalStat(gs.stat_name, definition->name)))

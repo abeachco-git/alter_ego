@@ -41,6 +41,9 @@ template<class Json> uint32_t FieldId(const Json& value,const char* field){
 }
 template<class Json> uint32_t FixedStatId(const Json& details){
     if(!details.is_object())return 0;
+    auto choices=details.find("stat_choices");
+    // A default infix on a selectable item is not proof of its selected stat.
+    if(choices!=details.end()&&(!choices->is_array()||!choices->empty()))return 0;
     auto it=details.find("infix_upgrade");return it==details.end()?0:FieldId(*it,"id");
 }
 template<class Json> bool SupportsStat(const Json& details,uint32_t stat){

@@ -2163,7 +2163,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     const auto& itemRarity=definition?definition->rarity:representative.rarity;
     const auto& itemType=definition?definition->type:representative.type;
     UI::CatalogBanner(name,itemRarity+"  /  "+itemType,itemRarity);
-    std::vector<uint32_t> definitionDemand{group.id};
+    std::vector<uint32_t> definitionDemand{group.id},statDemand;
     ImGui::PushID(static_cast<int>(group.id));ItemMenu(group.id,name,representative.chat,loadTargets(group.id));ImGui::PopID();
     ImGui::TextDisabled("ID: %u",group.id);
     int64_t total=0;const auto locations=v->index.find(group.id);
@@ -2189,7 +2189,15 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         ImGui::TextDisabled("%s%s",BindingName(slot.binding),Fresh(*v,row)?"":" | Stale or failed");
         if(!slot.boundTo.empty())ImGui::TextWrapped("Bound to %s",slot.boundTo.c_str());
         if(slot.charges>=0)ImGui::Text("Remaining charges: %lld",static_cast<long long>(slot.charges));
-        if(slot.stat>0)ImGui::TextDisabled("Selected stat ID: %lld",static_cast<long long>(slot.stat));
+        if(slot.stat>0&&slot.stat<=UINT32_MAX){
+            const auto id=static_cast<uint32_t>(slot.stat);statDemand.push_back(id);
+            const auto stat=GW2API::GetItemStatInfo(id);
+            if(stat&&!stat->name.empty())ImGui::TextWrapped("Selected stat: %s",stat->name.c_str());
+            else ImGui::TextDisabled("Selected stat ID: %u",id);
+            if(ImGui::IsItemHovered()&&stat){
+                ImGui::BeginTooltip();RenderSelectedItemStatDetails(group.id,id);ImGui::EndTooltip();
+            }
+        }
         const bool glyph=slot.scope=="Equipment"&&(slot.position.find("/Pick")!=std::string::npos||slot.position.find("/Axe")!=std::string::npos||slot.position.find("/Sickle")!=std::string::npos);
         if(glyph&&slot.upgrades.empty())ImGui::TextDisabled("Glyph: Unknown (not reported)");
         const auto socket=[&](const char* label,uint32_t id,int index){
@@ -2211,6 +2219,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     std::sort(definitionDemand.begin(),definitionDemand.end());
     definitionDemand.erase(std::unique(definitionDemand.begin(),definitionDemand.end()),definitionDemand.end());
     GW2API::FetchItemDetailsAsync(definitionDemand);
+    if(!statDemand.empty())GW2API::FetchItemStatDetailsAsync(statDemand);
     RenderSectionHeader("Trading Post",UI::SectionGold);
     {
         using Skinventory::Commerce;

@@ -790,11 +790,11 @@ int case_database_core(int, char**) {
         richer[0]["formulas"]=J::array({J{{"attribute","Power"},{"multiplier",0.35},{"value",0}},J{{"attribute","Precision"},{"multiplier",0.25},{"value",3}}});
         assert(Cache::WriteReference(root,D::ItemStats,richer,101));
         assert(Cache::ReadReference(root,D::ItemStats)==richer);
-        auto malformed=richer;malformed[0]["formulas"][0]["multiplier"]="bad";
-        assert(!Cache::WriteReference(root,D::ItemStats,malformed,102));
+        auto badFormula=richer;badFormula[0]["formulas"][0]["multiplier"]="bad";
+        assert(!Cache::WriteReference(root,D::ItemStats,badFormula,102));
         assert(Cache::ReadReference(root,D::ItemStats)==richer);
-        malformed=richer;malformed[0]["formulas"][0]["attribute"]="Vitality";
-        assert(!Cache::WriteReference(root,D::ItemStats,malformed,103));
+        badFormula=richer;badFormula[0]["formulas"][0]["attribute"]="Vitality";
+        assert(!Cache::WriteReference(root,D::ItemStats,badFormula,103));
         assert(Cache::ReadReference(root,D::ItemStats)==richer);
         J dyes=J::array({{{"id",0},{"name","Dye"},{"base",J::array({1,2,3})},
             {"cloth",J::array({4,5,6})},{"leather",J::array({7,8,9})},{"metal",J::array({10,11,12})}}});
