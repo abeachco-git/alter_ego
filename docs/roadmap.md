@@ -10,6 +10,8 @@ Experimental branch, continuing after Part 8. Only unresolved implementation, in
 
 - [ ] **9B.3 — Approved audit and narrowly evidenced corrections only.** Examine upstream roster/physical/achievement broker contention, cross-consumer dedup, priority inheritance for remaining queued work, cancellation-aware delays, cooldown worker occupancy and stable staggering only where missing. Preserve existing logical ownership and publication/credential/binding fences. Do not blanket-convert roster or physical equipment owners or rewrite transport/worker pool; demonstrate concrete contention and regression-safe solution before changing sensitive owners; seek approval for material additional lifecycle changes. No preemption of admitted requests.
 
+- [ ] **Character summary follow-up:** authenticated live parity of summary physical equipment and Inventory bags with existing schema-pinned endpoints; only then consider integrating them through the existing shared physical owner (never bypass publication fences). See Architecture and regression testing. No broader scheduling changes.
+
 Remaining approved batch: targeted 9B.3. Verify each with relevant regressions and exact-commit DLL workflow. Keep live acceptance in development status. 9C–9F are outside this approval.
 
 - [ ] **9C — Public catalog demand and retirement (design + live investigation):** decide which public catalogs actually require startup/settings-triggered retrieval; validate completeness and duplicate identities before removing static upgrade identities. Confirm remaining definition freshness and reviewed build snapshot promotion; retain manual seed promotion where CI access fails.
@@ -51,4 +53,3 @@ Remaining approved batch: targeted 9B.3. Verify each with relevant regressions a
 
 Parts 7–8 and other completed implementation acceptance, discretionary performance measurements and non-live verification remain in [development status](development-status.md); release-only gates remain in [release checklist](release-checklist.md). Do not duplicate those lists here. No approved implementation is complete without exact-commit required build gates and verified DLL delivery per AGENTS.md.
 
-- [ ] **Character summary follow-up:** authenticated live parity of summary physical equipment and Inventory bags with existing schema-pinned endpoints; only then consider integrating them through the existing shared physical owner (never bypass publication fences). See Architecture and regression testing. No broader scheduling changes.
