@@ -1,5 +1,6 @@
 #include "../src/ComposableGearPresentation.h"
 #include "../src/TooltipCore.h"
+#include "../src/ReferenceExtras.h"
 #include <cassert>
 #include <iostream>
 
@@ -62,6 +63,12 @@ int case_composable_gear_presentation(int, char**) {
     assert(lines.size()==1&&!contains("Misleading effect")&&!contains("Buff"));
     lines=ItemDefinitionLines("Armor","Rare","",Json{{"defense","bad"},{"min_power",9},{"max_power",2}},ItemCombat|ItemAttributes);
     assert(lines.empty());
+    const auto extras=AlterEgo::ReferenceExtras::ProjectItem(Json{{"level",80},{"vendor_value",0},{"restrictions",Json::array({"Human","Norn"})},{"flags",Json::array({"NoSell"})}});
+    auto acquisition=ItemAcquisitionLines(extras);
+    assert(acquisition.size()==3&&acquisition[0].text=="Item level: 80"&&acquisition[1].text=="API vendor value: 0 copper"&&acquisition[2].text=="Restrictions: Human, Norn");
+    assert(ItemAcquisitionLines(Json::object()).empty());
+    assert(ItemAcquisitionLines(Json{{"restrictions",Json::array()}}).empty());
+    assert(!extras.contains("flags"));
     std::cout << "Composable gear presentation PASS\n";
     return 0;
 }

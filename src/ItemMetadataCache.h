@@ -34,13 +34,13 @@ inline void StoreItemSnapshot(Database::Connection& db,ItemDataset d,const Refer
     if(d==ItemDataset::Details) {
         if(!data.is_array()||data.empty())throw std::runtime_error("Invalid item detail snapshot");
         auto q=db.Prepare(R"SQL(
-INSERT INTO reference_items(id,name,icon,rarity,type,description,chat_link,default_skin,details,complete,verified_at)
-VALUES(?,?,?,?,?,?,?,?,?,1,?)
+INSERT INTO reference_items(id,name,icon,rarity,type,description,chat_link,default_skin,details,complete,verified_at,optional_metadata)
+VALUES(?,?,?,?,?,?,?,?,?,1,?,?)
 ON CONFLICT(id) DO UPDATE SET
  name=COALESCE(NULLIF(excluded.name,''),reference_items.name),
  icon=excluded.icon,rarity=excluded.rarity,type=excluded.type,description=excluded.description,
  chat_link=excluded.chat_link,default_skin=excluded.default_skin,details=excluded.details,complete=1,
- verified_at=excluded.verified_at
+ verified_at=excluded.verified_at,optional_metadata=excluded.optional_metadata
 WHERE reference_items.complete=0 OR excluded.verified_at>reference_items.verified_at
 RETURNING id
 )SQL");
@@ -60,6 +60,8 @@ RETURNING id
             const auto verified=requestStamps?requestStamps->at(id):stamp;
             if(verified<0)throw std::runtime_error("Invalid item request stamp");
             q.Bind(10,verified);
+            const auto extras=ReferenceExtras::ProjectItem(row);
+            if(extras.empty())q.BindNull(11);else q.Bind(11,extras.dump());
             if(q.Step()){
                 if(accepted){auto projected=row;projected["verified_at"]=verified;accepted->push_back(std::move(projected));}
                 if(q.Step())throw std::runtime_error("Unexpected duplicate item result");
@@ -103,7 +105,7 @@ inline ReferenceJson ReadItemRows(Database::Connection& db,ItemDataset d,bool wi
         return out;
     }
     ReferenceJson out=ReferenceJson::array();
-    auto q=db.Prepare("SELECT id,name,icon,rarity,type,description,chat_link,default_skin,details,verified_at FROM reference_items WHERE complete=1 ORDER BY id");
+    auto q=db.Prepare("SELECT id,name,icon,rarity,type,description,chat_link,default_skin,details,verified_at,optional_metadata FROM reference_items WHERE complete=1 ORDER BY id");
     while(q.Step()) {
         ReferenceJson row={{"id",q.Integer(0)},{"name",q.Text(1)},{"icon",q.Text(2)},{"rarity",q.Text(3)},{"type",q.Text(4)}};
         if(!q.Text(5).empty())row["description"]=q.Text(5);
@@ -111,6 +113,7 @@ inline ReferenceJson ReadItemRows(Database::Connection& db,ItemDataset d,bool wi
         if(q.Integer(7))row["default_skin"]=q.Integer(7);
         if(!q.IsNull(8))row["details"]=ReferenceJson::parse(q.Text(8));
         if(withWatermarks)row["verified_at"]=q.Integer(9);
+        if(!q.IsNull(10))ReferenceExtras::Merge(row,ReferenceExtras::ProjectItem(ReferenceJson::parse(q.Text(10))));
         out.push_back(std::move(row));
     }
     return out;

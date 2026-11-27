@@ -854,7 +854,35 @@ int case_database_core(int, char**) {
         assert(foundNew&&foundOther);
         assert(!Cache::WriteItemObservations(orderRoot,J::array({row(99,"invalid"),row(99,"duplicate")}),Cache::ReferenceSnapshotTime(),accepted));
         assert(Cache::ReadItems(orderRoot,D::Details)==ordered);
-
+        auto rich=row(99,"new rich");
+        rich["level"]=80;rich["vendor_value"]=0;rich["restrictions"]=J::array({"Human"});
+        const auto richStamp=Cache::ReferenceSnapshotTime();
+        assert(Cache::WriteItemObservations(orderRoot,J::array({rich}),richStamp,accepted));
+        assert(accepted.size()==1&&accepted[0]["vendor_value"]==0);
+        auto durable=Cache::ReadItems(orderRoot,D::Details,true);
+        assert(durable&&durable->at(0)["level"]==80&&durable->at(0)["vendor_value"]==0&&durable->at(0)["restrictions"]==J::array({"Human"}));
+        assert(!durable->at(1).contains("level")&&!durable->at(1).contains("vendor_value"));
+        auto rejected=rich;rejected["level"]=-1;
+        assert(!Cache::WriteItemObservations(orderRoot,J::array({rejected}),Cache::ReferenceSnapshotTime(),accepted));
+        rejected=rich;rejected["restrictions"]=J::array({1});
+        assert(!Cache::WriteItemObservations(orderRoot,J::array({rejected}),Cache::ReferenceSnapshotTime(),accepted));
+        assert(Cache::ReadItems(orderRoot,D::Details,true)==durable);
+        rich["restrictions"]=J::array();
+        assert(Cache::WriteItemObservations(orderRoot,J::array({rich}),Cache::ReferenceSnapshotTime(),accepted));
+        assert(Cache::ReadItems(orderRoot,D::Details)->at(0)["restrictions"].empty());
+    }
+    {
+        // Migration preserves a complete v32 item, timestamp and unknown fields.
+        namespace Cache=AlterEgo::Cache;
+        const auto path=temp.dir/"item-extras-v32.db";
+        DB::Connection db(path.u8string(),DB::Connection::OpenMode::Create);
+        DB::Migrate(db,Cache::kApplicationId,32,Cache::Upgrade);
+        db.Exec("INSERT INTO reference_items(id,name,complete,verified_at) VALUES(77,'Prior',1,12345)");
+        Cache::Initialize(db);
+        assert(db.Scalar("PRAGMA user_version")==Cache::kSchemaVersion);
+        assert(db.Scalar("SELECT count(*) FROM reference_items WHERE id=77 AND name='Prior' AND complete=1 AND verified_at=12345 AND optional_metadata IS NULL")==1);
+        const auto rows=Cache::ReadItemRows(db,Cache::ItemDataset::Details,true);
+        assert(rows.size()==1&&!rows[0].contains("level")&&!rows[0].contains("vendor_value")&&!rows[0].contains("restrictions"));
     }
     {
         namespace Storage=AlterEgo::Storage;

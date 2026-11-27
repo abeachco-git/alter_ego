@@ -1567,6 +1567,7 @@ namespace AlterEgo {
             info.default_skin=item.value("default_skin",0u);
             info.description=StripHtmlTags(item.value("description",std::string{}));
             if(item.contains("details"))info.details=item.at("details");
+            info.optional_metadata=ReferenceExtras::ProjectItem(item);
             staged[info.id]=std::make_shared<const ItemInfo>(std::move(info));
         }
         std::lock_guard<std::mutex> lock(s_mutex);
@@ -3561,6 +3562,7 @@ namespace AlterEgo {
                 info.chat_link = it.value("chat_link", "");
                 info.default_skin = it.value("default_skin", 0u);
                 if (it.contains("details")) info.details = it["details"];
+                info.optional_metadata=ReferenceExtras::ProjectItem(it);
                 if(!info.name.empty())s_item_name_id_cache.emplace(info.name,info.id);
                 s_item_cache[info.id]=std::make_shared<const ItemInfo>(std::move(info));
             }

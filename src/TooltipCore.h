@@ -23,7 +23,7 @@ inline std::string EntityName(const std::string& known,const std::string& stored
 // inferred effective effects. Consumers choose the parts appropriate to context.
 enum ItemDefinitionPart : unsigned {
     ItemType=1u, ItemCombat=2u, ItemAttributes=4u, ItemEffects=8u,
-    ItemDescription=16u, ItemAll=31u
+    ItemDescription=16u, ItemAcquisition=32u, ItemAll=63u
 };
 struct ItemDefinitionLine { unsigned part; std::string text; };
 inline const char* WeaponTypeLabel(const std::string& name){
@@ -86,6 +86,29 @@ template<class Json> std::vector<ItemDefinitionLine> ItemDefinitionLines(
     }
     if(legendaryRelic)add(ItemDescription,"The API does not expose which relic effect this legendary relic is emulating.");
     else add(ItemDescription,description);
+    return out;
+}
+// These are definition facts, not market value, sellability or proof that
+// a particular character can equip or acquire the item.
+template<class Json> std::vector<ItemDefinitionLine> ItemAcquisitionLines(const Json& extras){
+    std::vector<ItemDefinitionLine> out;
+    if(!extras.is_object())return out;
+    auto number=[&](const char* key,const char* label,const char* unit){
+        auto it=extras.find(key);if(it==extras.end()||!it->is_number_unsigned()||it->template get<uint64_t>()>UINT32_MAX)return;
+        out.push_back({ItemAcquisition,std::string(label)+it->dump()+unit});
+    };
+    number("level","Item level: ","");
+    number("vendor_value","API vendor value: "," copper");
+    auto restrictions=extras.find("restrictions");
+    if(restrictions!=extras.end()&&restrictions->is_array()&&!restrictions->empty()){
+        std::string line;
+        for(const auto& value:*restrictions){
+            if(!value.is_string()||value.template get_ref<const std::string&>().empty())continue;
+            if(!line.empty())line+=", ";
+            line+=value.template get<std::string>();
+        }
+        if(!line.empty())out.push_back({ItemAcquisition,"Restrictions: "+line});
+    }
     return out;
 }
 // Known public skill/trait fact shapes only. No inferred damage, character

@@ -55,5 +55,22 @@ inline Json Project(const Json& row,bool skill){
     if(out.dump().size()>262144)throw std::runtime_error("Reference extras too large");
     return out;
 }
+// Item acquisition fields belong to the canonical item record, not Commerce
+// membership, account binding or a derived tooltip. Explicit zero and an empty
+// restriction array remain distinct from missing/legacy fields.
+inline Json ProjectItem(const Json& row){
+    Json out=Json::object();
+    for(const char* key:{"level","vendor_value"}){
+        auto it=row.find(key);if(it!=row.end()&&!it->is_null())out[key]=Unsigned(*it);
+    }
+    auto restrictions=row.find("restrictions");
+    if(restrictions!=row.end()&&!restrictions->is_null()){
+        if(!restrictions->is_array()||restrictions->size()>256)throw std::runtime_error("Invalid item restrictions");
+        Json list=Json::array();
+        for(const auto& value:*restrictions){auto name=Text(value);if(name.empty())throw std::runtime_error("Empty item restriction");list.push_back(std::move(name));}
+        out["restrictions"]=std::move(list);
+    }
+    return out;
+}
 inline void Merge(Json& row,const Json& extras){for(auto it=extras.begin();it!=extras.end();++it)row[it.key()]=it.value();}
 }

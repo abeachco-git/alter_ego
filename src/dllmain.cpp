@@ -3002,7 +3002,12 @@ static void RenderSpecializationTooltip(const std::string& name,ImVec4 color,con
 void RenderItemDefinitionDetails(const AlterEgo::ItemInfo& info,unsigned parts,bool tooltip){
     using namespace AlterEgo;
     using namespace TooltipCore;
-    for(const auto& line:ItemDefinitionLines(info.type,info.rarity,info.description,info.details,parts)){
+    auto lines=ItemDefinitionLines(info.type,info.rarity,info.description,info.details,parts);
+    if(parts&ItemAcquisition){
+        auto extra=ItemAcquisitionLines(info.optional_metadata);
+        lines.insert(lines.end(),extra.begin(),extra.end());
+    }
+    for(const auto& line:lines){
         const auto text=PlainItemDescription(line.text);
         if(text.empty())continue;
         const auto color=line.part==ItemAttributes?ImVec4(.4f,.9f,.4f,1.f):
@@ -3194,7 +3199,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
             if(item_info){
                 ImGui::Spacing();
                 ImGui::TextColored(GetRarityColor(item_info->rarity),"%s",item_info->rarity.c_str());
-                RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription);
+                RenderItemDefinitionDetails(*item_info,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription|AlterEgo::TooltipCore::ItemAcquisition);
             }
 
             // Skin unlock status — only show if locked (unlocked is implied for equipped items)
@@ -8957,7 +8962,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         const auto cachedItem=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
         if(cachedItem&&!cachedItem->name.empty())AlterEgo::UI::TooltipLine(cachedItem->name.c_str(),GetRarityColor(cachedItem->rarity));
         else AlterEgo::UI::TooltipLine(GearSlotDisplayName(slot),AlterEgo::UI::TooltipTitle);
-        if(cachedItem)RenderItemDefinitionDetails(*cachedItem,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemCombat|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription);
+        if(cachedItem)RenderItemDefinitionDetails(*cachedItem,AlterEgo::TooltipCore::ItemType|AlterEgo::TooltipCore::ItemCombat|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription|AlterEgo::TooltipCore::ItemAcquisition);
         if(gearSlot){
             const auto upgrade=[](const char* label,uint32_t id,const std::string& stored){
                 if(!id&&stored.empty())return;
