@@ -35,7 +35,12 @@ Inventory and Compare use the same existing page-visible Tick and deferred
 Process handlers. Confirmation is scoped to the active identity, verified
 account and browsing account; cancellation never submits a native request.
 Disabled hides load actions but intentionally retains native roster sampling and
-location retrieval. No native memory or switch implementation is changed.
+location retrieval. Native signatures, scanning cadence, structural validation,
+thread ownership, switch invocation and pending-outcome handling are protected:
+no refactor or lifecycle change without specific approval. Future character
+context menus must follow the [Fast Load action policy](ui-components.md#fast-load-actions)
+and reuse the existing admission and deferred handlers; a new page that needs
+additional native integration requires separate review.
 
 ## Development safety and ownership
 
