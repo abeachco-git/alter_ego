@@ -677,6 +677,12 @@ INSERT INTO character_identity_pending VALUES('A',1);
     Record(root,{"account-a","Bank","","Ready",100,100},&rows);
     StoreNames(root,Json::array({Json{{"id",10},{"name","Item"},{"icon","https://example.test/icon.png"},{"description","Test description"},{"details",{{"type","Focus"}}},{"flags",Json::array()}}}));
     auto presentation=Read(root).metadata.at(10);assert(presentation.complete&&presentation.icon=="https://example.test/icon.png"&&presentation.description=="Test description"&&presentation.details.at("type")=="Focus");
+    assert(Cache::MissingInventoryItemMetadata(root,{10,999})==std::vector<uint32_t>{999});
+    // Full details without binding evidence remain incomplete for Inventory.
+    auto unbound=Json::array({Json{{"id",998},{"name","Flags unknown"}}});
+    auto initialAccepted=Json::array();
+    assert(Cache::WriteItemObservations(root,unbound,Cache::ReferenceSnapshotTime(),initialAccepted));
+    assert(Cache::MissingInventoryItemMetadata(root,{10,998})==std::vector<uint32_t>{998});
     // The Native Inventory producer shares item row ownership with direct and Commerce writers.
     const auto newer=Cache::ReferenceSnapshotTime(),older=newer-1;
     auto observations=Json::array({Json{{"id",10},{"name","New item"},{"flags",Json::array({"AccountBound"})}}});

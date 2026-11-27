@@ -7,6 +7,7 @@
 #include "UntrustedInput.h"
 #include "HttpClient.h"
 #include <condition_variable>
+#include <functional>
 #include <memory>
 namespace AlterEgo::ItemMetadata {
 using Json=nlohmann::json;
@@ -53,7 +54,10 @@ struct Work {
 };
 // Claims are acquired before dispatch. Only the existing per-ID registry
 // admits network owners; this exchange retains raw responses for their joiners.
-inline std::shared_ptr<Work> Admit(const std::vector<uint32_t>& ids,Demand demand,bool bypassCooldown){
+inline std::shared_ptr<Work> Admit(const std::vector<uint32_t>& ids,Demand demand,bool bypassCooldown,
+                                   const std::function<bool(uint32_t)>& stillNeeded={}){
+    // stillNeeded is an optional in-memory recheck, never a SQL/HTTP callback.
+    // The active exchange lock closes the cache-check/admission race.
     auto job=std::make_shared<Work>();auto& s=State();
     std::lock_guard<std::mutex> lock(s.mutex);
     std::vector<uint32_t> candidates;
@@ -61,7 +65,7 @@ inline std::shared_ptr<Work> Admit(const std::vector<uint32_t>& ids,Demand deman
         const auto it=s.active.find(id);
         if(it!=s.active.end()){
             MergeDemand(*it->second,demand);job->wanted.emplace(id,it->second);
-        }else candidates.push_back(id);
+        }else if(!stillNeeded||stillNeeded(id))candidates.push_back(id);
     }
     // Still count joined IDs through the common registry's diagnostics.
     std::vector<uint32_t> claimIds=candidates;

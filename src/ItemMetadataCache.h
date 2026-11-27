@@ -141,6 +141,17 @@ inline bool WriteItemObservations(const std::string& root,const ReferenceJson& r
         tx.Commit();accepted=std::move(committed);return true;
     }catch(...){return false;}
 }
+// Worker-only check: a verified detail row alone is not enough for
+// Inventory's binding/transfer semantics. Missing flags remain unknown.
+inline std::vector<uint32_t> MissingInventoryItemMetadata(const std::string& root,const std::vector<uint32_t>& ids){
+    std::lock_guard<std::mutex> lock(Mutex());
+    Database::Connection db(Storage::Paths(root).Cache().u8string(),Database::Connection::OpenMode::Existing);
+    Initialize(db);
+    auto q=db.Prepare("SELECT i.complete,f.item_id FROM reference_items i LEFT JOIN native_item_flags f ON f.item_id=i.id WHERE i.id=?");
+    std::vector<uint32_t> missing;
+    for(auto id:ids)if(id){q.Bind(1,id);if(!q.Step()||!q.Integer(0)||q.IsNull(1))missing.push_back(id);q.Reset();}
+    return missing;
+}
 inline std::optional<ReferenceJson> ReadItems(const std::string& root,ItemDataset d) {
     if(root.empty())return std::nullopt;
     try {

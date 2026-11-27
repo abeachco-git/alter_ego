@@ -1300,11 +1300,15 @@ namespace AlterEgo {
         std::vector<uint32_t> missing;
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
         if(missing.empty())return;
-        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Details,forceRefetch);
+        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Details,forceRefetch,
+            [forceRefetch](uint32_t id){return forceRefetch||!GW2API::GetItemInfo(id);});
         FetchOwnedItems(*job);(void)ItemMetadata::Await(*job);
     }
     void GW2API::EnrichInventoryItems(const std::vector<uint32_t>& ids,bool manual){
-        auto job=ItemMetadata::Admit(ids,ItemMetadata::Demand::Inventory,manual);
+        // Recheck the durable full-detail AND binding evidence before each
+        // small worker batch; prior batches/other consumers may have filled it.
+        const auto missing=Cache::MissingInventoryItemMetadata(GetDataDirectory(),ids);
+        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Inventory,manual);
         FetchOwnedItems(*job);(void)ItemMetadata::Await(*job);
     }
     nlohmann::json GW2API::AcquireCatalogItemBatch(const std::vector<uint32_t>& ids,bool incremental,
@@ -1389,7 +1393,8 @@ namespace AlterEgo {
         std::vector<uint32_t> missing;
         {std::lock_guard<std::mutex> lock(s_mutex);for(auto id:item_ids)if(id&&(forceRefetch||!s_item_cache.count(id)))missing.push_back(id);}
         if(missing.empty())return;
-        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Details,forceRefetch);
+        auto job=ItemMetadata::Admit(missing,ItemMetadata::Demand::Details,forceRefetch,
+            [forceRefetch](uint32_t id){return forceRefetch||!GW2API::GetItemInfo(id);});
         // Coalesced asynchronous consumers merge persistence demand into the
         // active observation. They do not need an additional waiting worker.
         if(job->owned.empty())return;

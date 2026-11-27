@@ -7,6 +7,9 @@
 #include "../src/AchievementCatalogCache.h"
 #include "../src/ProfessionMetadataCore.h"
 #include "../src/ItemMetadataOwner.h"
+#include "../src/PublicCurrencyOwner.h"
+#include <thread>
+#include <atomic>
 #include "../src/SkinDataCache.h"
 #include "../src/CommerceCache.h"
 #include "../src/ReferenceMetadataCache.h"
@@ -102,7 +105,22 @@ int case_database_core(int, char**) {
         auto abandoned=I::Admit({8},I::Demand::Details,true);
         auto joined=I::Admit({8},I::Demand::Discovery,true);
         abandoned.reset();assert(I::Await(*joined).rows.empty()&&!R::InspectId(I::Dataset,8).pending);
-        joined.reset();R::ResetMetadata();B::Workers().RequestStop();B::Workers().JoinAll();
+        joined.reset();
+        // Late cache publication between a caller's initial miss and
+        // admission does not issue another request.
+        auto satisfied=I::Admit({9},I::Demand::Details,false,[](uint32_t){return false;});
+        assert(satisfied->owned.empty()&&satisfied->wanted.empty());satisfied.reset();
+        auto invalid=I::Admit({10},I::Demand::Discovery,true);
+        I::Fetch(*invalid,[](const std::string&){return Skinventory::HttpResponse{200,R"([{"id":10,"name":"A"},{"id":10,"name":"B"}])",true};},save,adopt);
+        assert(I::Await(*invalid).rows.empty()&&!persisted.count(10));invalid.reset();
+        auto failed=I::Admit({11},I::Demand::Details,true);
+        I::Fetch(*failed,[](const std::string&){return Skinventory::HttpResponse{200,R"([{"id":11,"name":"A"}])",true};},
+            [](const J&,int64_t,J&){return false;},adopt);
+        assert(I::Await(*failed).rows.empty()&&R::InspectId(I::Dataset,11).retrySeconds>0);failed.reset();
+        auto cooldown=I::Admit({11},I::Demand::Inventory,false);
+        assert(cooldown->owned.empty());cooldown.reset();
+        auto manual=I::Admit({11},I::Demand::Inventory,true);assert(manual->owned.size()==1);manual.reset();
+        R::ResetMetadata();B::Workers().RequestStop();B::Workers().JoinAll();
     }
 
     {
@@ -239,6 +257,32 @@ int case_database_core(int, char**) {
     }
 
     Scratch temp;
+    {
+        namespace N=AlterEgo::NativeInventory;
+        namespace B=AlterEgo::Background;
+        namespace R=AlterEgo::RefreshEngine;
+        const auto root=std::filesystem::temp_directory_path()/("ae-currency-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        const auto path=AlterEgo::Storage::Paths(root.string()).Cache();
+        std::filesystem::create_directories(path.parent_path());
+        {AlterEgo::Database::Connection db(path.string(),AlterEgo::Database::Connection::OpenMode::Create);AlterEgo::Cache::Initialize(db);}
+        assert(B::Workers().Open());R::ResetMetadata();
+        std::atomic<int> requests{0},completed{0};std::atomic<bool> entered{false},release{false};
+        auto send=[&](const std::string& path){
+            assert(path=="/v2/currencies?ids=all");++requests;entered=true;
+            while(!release.load())std::this_thread::yield();
+            return Skinventory::HttpResponse{200,R"([{"id":1,"name":"Coin","order":1,"icon":"coin"},{"id":2,"name":"Empty icon","order":2,"icon":""}])",true};
+        };
+        std::thread first([&]{N::RefreshCurrencyDefinitionsWith(root.string(),{1},send);++completed;});
+        while(!entered.load())std::this_thread::yield();
+        std::thread second([&]{N::RefreshCurrencyDefinitionsWith(root.string(),{2},send);++completed;});
+        release=true;first.join();second.join();
+        assert(requests==1&&completed==2&&!N::MissingCurrencyDefinitions(root.string(),{1,2}));
+        assert(N::MissingCurrencyDefinitions(root.string(),{3}));
+        N::RefreshCurrencyDefinitionsWith(root.string(),{2},send);assert(requests==1);
+        R::ResetMetadata();B::Workers().RequestStop();B::Workers().JoinAll();
+        std::filesystem::remove_all(root);
+    }
     {
         namespace P=AlterEgo::PublicCatalog;
         DB::Connection db(temp.path("public-catalog.db"),DB::Connection::OpenMode::Create);
