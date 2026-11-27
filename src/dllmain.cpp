@@ -4531,8 +4531,6 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
                             IM_COL32(15, 17, 23, 200));
                     }
                     dl->PopClipRect();
-                } else {
-                    // The shared resolver has already queued the exact source.
                 }
             }
 
@@ -6891,7 +6889,6 @@ static void DrawCompareCharacterProfessionIcon(ImDrawList* dl,
             return;
         }
         // The DLL image and disk cache both work without metadata.
-        AlterEgo::IconManager::RequestIcon(iconId, "");
     }
     // Keep a readable fallback if the embedded texture is not yet available.
     if (!profession.empty()) {
@@ -9711,8 +9708,6 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
                             IM_COL32(15, 17, 23, 200));
                     }
                     dl->PopClipRect();
-                } else {
-                    // The shared resolver has already queued the exact source.
                 }
             }
 

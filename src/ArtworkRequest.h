@@ -38,10 +38,11 @@ inline std::string OfflineKey(uint32_t id,const std::string& last){
     return VersionOwner(last)==id?last:std::to_string(id);
 }
 // A known key can resolve offline even before its metadata URL arrives.
+// A supplied URL is part of lookup identity, not just a download argument.
 // Request owns admission, validation, retries, publication and deduplication.
 template<class Lookup, class Request>
 auto Resolve(uint32_t key, const std::string& url, bool priority,
-             Lookup lookup, Request request) -> decltype(lookup(key)) {
+             Lookup lookup, Request request) -> decltype(lookup(key,url)) {
     if (!key) return {};
     auto texture = lookup(key,url);
     if (!texture && !url.empty()) request(key, url, priority);

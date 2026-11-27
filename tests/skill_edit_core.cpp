@@ -2,6 +2,7 @@
 #include "../src/TooltipCore.h"
 #include "../src/ChatLink.h"
 #include "../src/ArtworkRequest.h"
+#include <set>
 #include "../src/CatalogRowCore.h"
 #include <cassert>
 #include <nlohmann/json.hpp>
@@ -274,6 +275,18 @@ int case_skill_edit_core(int,char**) {
     std::set<std::string> failed{oldKey},ready{oldKey};
     assert(!failed.count(newKey)&&!ready.count(newKey));
     assert(ready.count(oldKey)); // late old publication cannot satisfy new URL
+    int exactTexture=2,exactRequests=0;
+    auto exactLookup=[&](uint32_t id,const std::string& url)->int*{
+        auto key=VersionKey(id,std::string(64,url=="old"?'a':'b'));
+        return ready.count(key)?&exactTexture:nullptr;
+    };
+    auto exactRequest=[&](uint32_t id,const std::string& url,bool){
+        assert(id==skillKey&&url=="new");++exactRequests;
+    };
+    assert(Resolve(skillKey,"old",false,exactLookup,exactRequest)==&exactTexture);
+    assert(Resolve(skillKey,"new",false,exactLookup,exactRequest)==nullptr&&exactRequests==1);
+    ready.insert(newKey);
+    assert(Resolve(skillKey,"new",false,exactLookup,exactRequest)==&exactTexture&&exactRequests==1);
     int texture=1,lookups=0,requests=0;uint32_t requestedKey=0;bool requestedPriority=false;
     uint32_t cachedKey=skillKey;
     auto lookup=[&](uint32_t key,const std::string&)->int*{++lookups;return key==cachedKey?&texture:nullptr;};

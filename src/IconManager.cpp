@@ -295,6 +295,7 @@ Texture_t* IconManager::GetIcon(uint32_t id){
     return GetByKey(ResolveKey(id,{}),id);
 }
 Texture_t* IconManager::GetOrRequestIcon(uint32_t id,const std::string& iconUrl,bool priority){
+    if(!s_API||s_StopWorker)return nullptr;
     const auto key=ResolveKey(id,iconUrl);
     return ArtworkRequest::Resolve(id,iconUrl,priority,
         [&](uint32_t,const std::string&){return GetByKey(key,id);},
