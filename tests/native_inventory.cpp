@@ -1,4 +1,5 @@
 #include "../src/CharacterIdentityStore.h"
+#include "../src/CharacterSelectionCore.h"
 #include "../src/CharacterPreferenceStore.h"
 #include "../src/CharacterIdentityCache.h"
 #include "../src/CharacterActivity.h"
@@ -216,6 +217,15 @@ INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',1,'Former Alice'
         assert(alice&&bob&&CI::Matches(first.next,*alice,10)&&!CI::Matches(first.next,*alice,11));
         auto rename=CI::Reconcile(first.next,{"Renamed","Bob"},{{"Renamed",a}});
         assert(rename&&rename.next.Current("Renamed")&&!CI::Matches(rename.next,*alice,10)&&CI::Matches(rename.next,*bob,10));
+        CI::Selection selected{alice->Reference(),alice->binding.evidence,alice->name,false};
+        const auto renamedAddress=CI::Capture(rename.next,"Renamed",10);
+        assert(renamedAddress&&selected.Accept(*renamedAddress)&&selected.name=="Renamed");
+        assert(selected.Matches(*renamedAddress)&&!selected.Matches(*bob));
+        assert(!CI::SameAddress(*alice,*renamedAddress));
+        const auto portable=CI::EncodeSelection(selected,true);
+        assert(!portable.contains("local_id"));
+        const auto imported=CI::DecodeSelection(portable);
+        assert(imported&&!imported->ref.Valid()&&imported->evidence==a);
         auto back=CI::Reconcile(rename.next,{"Alice","Bob"},{{"Alice",a}});
         assert(back&&back.next.Current("Alice")->id==alice->binding.id&&!CI::Matches(back.next,*alice,10)&&CI::Matches(back.next,*bob,10));
         const auto changed=CI::ChangedAddresses(CI::CurrentBindings(first.next),CI::CurrentBindings(back.next));

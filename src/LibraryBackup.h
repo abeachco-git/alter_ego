@@ -150,6 +150,12 @@ inline bool ValidateCollection(const std::string& name, const std::string& bytes
     }
     return true;
 }
+inline std::string PortableSession(const std::string& bytes) {
+    auto j=Untrusted::Parse(bytes,Untrusted::Library);
+    for(const auto* key:{"selected_character_ref","compare_character_ref","compare_previous_ref"})
+        if(j.contains(key)&&j[key].is_object())j[key].erase("local_id");
+    return j.dump(2);
+}
 inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
                     std::string& error) {
     files.clear();
@@ -163,6 +169,7 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
         if (!data.empty()) {
             size_t count = 0;
             if (!ValidateCollection(name, data, count, error)) return false;
+            if(name=="session.json")data=PortableSession(data);
             files.emplace(name, std::move(data));
         }
         return true;
@@ -443,7 +450,8 @@ inline bool Prepare(const std::string& dir, const Package& package,
             continue;
         }
         if(!replace&&Exists(FilePath(dir,name))){++plan.otherSkipped;continue;}
-        plan.writeFiles[name]=bytes;++plan.otherWritten;
+        try{plan.writeFiles[name]=name=="session.json"?PortableSession(bytes):bytes;++plan.otherWritten;}
+        catch(const std::exception& e){error=std::string("Cannot import settings: ")+e.what();return false;}
     }
     return true;
 }

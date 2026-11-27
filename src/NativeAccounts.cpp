@@ -37,6 +37,8 @@ struct View {
     uint64_t credentialEpoch=1;
     std::map<std::string,CharacterIdentity::Bindings> bindings;
     std::map<CharacterIdentity::Ref,std::set<std::string>> aliases;
+    struct IdentitySummary {CharacterIdentity::Evidence evidence;std::string name;bool present;};
+    std::map<CharacterIdentity::Ref,IdentitySummary> identityRecords;
     std::map<uint32_t,std::vector<size_t>> index;
     std::map<std::tuple<std::string,std::string,std::string>,ScopeState> scopes;
 };
@@ -271,8 +273,12 @@ void Publish(const std::string& msg,bool replaceMessage=true,RefreshUI::State st
     for(const auto& [account,state]:identityStates)
         if(!identityRosterBlocked.count(account)){
             next->bindings.emplace(account,CharacterIdentity::CurrentBindings(state));
-            for(const auto& [id,r]:state.records)if(state.Current(r.name)==&r){
-                auto names=r.names;names.insert(r.name);next->aliases.emplace(CharacterIdentity::Ref{account,id},std::move(names));
+            for(const auto& [id,r]:state.records){
+                const CharacterIdentity::Ref ref{account,id};
+                next->identityRecords.emplace(ref,View::IdentitySummary{r.evidence,r.name,r.present});
+                if(state.Current(r.name)==&r){
+                    auto names=r.names;names.insert(r.name);next->aliases.emplace(ref,std::move(names));
+                }
             }
         }
     // Preserve the raw roster for native Fast Load. Filter only cache rows.
@@ -857,6 +863,27 @@ std::optional<CharacterIdentity::Address> ResolveObservedCharacter(const std::st
     const auto b=it->second.find(name);
     if(b==it->second.end())return std::nullopt;
     return CharacterIdentity::Address{account,name,b->second,v->credentialEpoch};
+}
+std::optional<CharacterIdentity::Address> ResolveCharacterEvidence(const std::string& account,const CharacterIdentity::Evidence& evidence){
+    const auto v=Snapshot();const View::IdentitySummary* match=nullptr;CharacterIdentity::Id id=0;
+    for(const auto& [ref,r]:v->identityRecords)if(ref.account==account&&r.evidence==evidence){
+        if(match)return std::nullopt;match=&r;id=ref.id;
+    }
+    if(!match||!match->present)return std::nullopt;
+    const auto bindings=v->bindings.find(account);
+    const auto roster=v->inventory.rosters.find(account);
+    if(bindings==v->bindings.end()||roster==v->inventory.rosters.end()||!roster->second.count(match->name))return std::nullopt;
+    const auto b=bindings->second.find(match->name);
+    if(b==bindings->second.end()||b->second.id!=id||!(b->second.evidence==evidence))return std::nullopt;
+    return CharacterIdentity::Address{account,match->name,b->second,v->credentialEpoch};
+}
+bool CharacterReferenceRetired(const CharacterIdentity::Ref& ref,const CharacterIdentity::Evidence& evidence){
+    const auto v=Snapshot();const auto it=v->identityRecords.find(ref);
+    return it!=v->identityRecords.end()&&it->second.evidence==evidence&&!it->second.present;
+}
+bool CharacterAccountLinked(const std::string& account){
+    const auto v=Snapshot();
+    return std::any_of(v->accounts.begin(),v->accounts.end(),[&](const auto& a){return a.id==account;});
 }
 CharacterLoadout::Choice ExpectedLoadout(const CharacterIdentity::Ref& ref){return PreferenceSnapshot()->Get(ref);}
 uint64_t LoadoutPreferenceRevision(){return loadoutPreferenceRevision.load();}

@@ -40,6 +40,7 @@ int case_library_backup(int, char**) {
     Put(FilePath(src,"build_library.json"),builds.dump());
     Put(FilePath(src,"fashion_library.json"),fashion.dump());
     Put(FilePath(src,"settings.json"),R"({"show_age":true})");
+    Put(FilePath(src,"session.json"),R"({"main_tab":0,"selected_character_ref":{"account":"A","local_id":42,"name":"Alice"},"compare_character_ref":{"account":"B","local_id":3}})");
     Put(FilePath(src,"ach_tracked.json"),R"({"pinned":[1,3,5]})");
     CharacterActivity::Tracker history;
     const CharacterActivity::Key hero{"account-a","Hero"};
@@ -70,6 +71,8 @@ int case_library_backup(int, char**) {
     assert(full.buildCount == 1 && full.fashionCount == 1);
     assert(full.files.at("portraits/a.png") == portrait);
     assert(full.files.count("settings.json") == 1);
+    const auto session=nlohmann::json::parse(full.files.at("session.json"));
+    assert(!session["selected_character_ref"].contains("local_id")&&!session["compare_character_ref"].contains("local_id"));
     assert(!full.files.count("character_activity.json"));
     assert(!full.files.count("accounts.db"));
     const auto choices=CharacterLoadout::DecodePortable(nlohmann::json::parse(full.files.at("character_loadouts.json")));

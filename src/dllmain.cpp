@@ -42,6 +42,7 @@
 #include "BuildRelayPolicy.h"
 #include "CharacterActivity.h"
 #include "CharacterOrderCore.h"
+#include "CharacterSelectionCore.h"
 #include "AutoRefreshPolicy.h"
 #include "FontResolve.h"
 #include "FontManager.h"
@@ -403,7 +404,7 @@ AddonAPI_t* APIDefs = nullptr;
 bool g_WindowVisible = false;
 
 // UI State
-static std::pair<std::string,std::string> g_SelectedCharKey;
+static AlterEgo::CharacterIdentity::Selection g_SelectedCharacter;
 static int g_SelectedTab = 0;          // 0 = Equipment, 1 = Build
 static bool RenderChipStrip(const std::vector<std::string>& labels,
                             const std::vector<bool>& activeMarkers,
@@ -1229,6 +1230,44 @@ static std::optional<AlterEgo::CharacterIdentity::Address> CharacterAddressFor(c
     if(!address||!evidence||!(address->binding.evidence==*evidence))return std::nullopt;
     return address;
 }
+static AlterEgo::CharacterIdentity::Selection SelectCharacterIdentity(const AlterEgo::Character& ch){
+    using namespace AlterEgo::CharacterIdentity;
+    const auto evidence=Normalize({ch.created,ch.profession,ch.race});
+    if(!evidence)return {};
+    Selection selected{{ch.account_name,0},*evidence,ch.name,true};
+    if(const auto address=CharacterAddressFor(ch))selected.Accept(*address);
+    return selected;
+}
+static bool ResolveSelection(AlterEgo::CharacterIdentity::Selection& selected){
+    using namespace AlterEgo;
+    if(selected.Empty()||selected.ref.account.empty())return false;
+    const auto address=selected.ref.Valid()?NativeAccounts::ResolveCharacterAddress(selected.ref):
+        NativeAccounts::ResolveCharacterEvidence(selected.ref.account,selected.evidence);
+    return address&&selected.Accept(*address);
+}
+static bool MatchesSelection(const AlterEgo::CharacterIdentity::Selection& selected,const AlterEgo::Character& ch){
+    using namespace AlterEgo::CharacterIdentity;
+    if(selected.Empty())return false;
+    if(selected.ref.Valid()){
+        const auto address=CharacterAddressFor(ch);
+        return address&&selected.Matches(*address);
+    }
+    const auto evidence=Normalize({ch.created,ch.profession,ch.race});
+    return evidence&&selected.MatchesPreview(ch.account_name,ch.name,*evidence);
+}
+static bool SelectionRetired(const AlterEgo::CharacterIdentity::Selection& selected){
+    using namespace AlterEgo;
+    return selected.ref.Valid()&&NativeAccounts::CharacterReferenceRetired(selected.ref,selected.evidence);
+}
+static std::optional<AlterEgo::Character> BoundCharacter(const std::optional<AlterEgo::CharacterIdentity::Address>& target){
+    if(!target)return std::nullopt;
+    const auto chars=AlterEgo::GW2API::GetCharacters();
+    for(const auto& ch:*chars)if(ch.account_name==target->account&&ch.name==target->name){
+        const auto current=CharacterAddressFor(ch);
+        if(current&&AlterEgo::CharacterIdentity::SameAddress(*target,*current))return ch;
+    }
+    return std::nullopt;
+}
 static AlterEgo::CharacterOrder::Entry CharacterOrderEntry(const AlterEgo::Character& ch){
     return {{ch.account_name,ch.name},ch.profession,ch.created,ch.level,
         g_CharSortMode==Sort_Birthday?DaysUntilBirthday(ch.created):-1,CharacterLastLogin(ch)};
@@ -1289,16 +1328,27 @@ static int CharacterDisplayIndex(const std::pair<std::string,std::string>& key){
         const auto& ch=(*g_CharOrderRoster)[i];return std::make_pair(ch.account_name,ch.name);
     });
 }
-static int SelectedCharacterDisplayIndex(){return CharacterDisplayIndex(g_SelectedCharKey);}
+static void ReconcileSelectedCharacter(){
+    const auto old=g_SelectedCharacter.name;
+    if(ResolveSelection(g_SelectedCharacter)&&old!=g_SelectedCharacter.name)g_DetailsFetched=false;
+}
 static int SelectedCharacterIndex(const std::vector<AlterEgo::Character>& chars){
-    if(g_SelectedCharKey.second.empty())return -1;
-    return AlterEgo::RecordSelection::IndexOf(chars,g_SelectedCharKey,[](const auto& ch){return std::make_pair(ch.account_name,ch.name);});
+    ReconcileSelectedCharacter();
+    for(size_t i=0;i<chars.size();++i)if(MatchesSelection(g_SelectedCharacter,chars[i]))return static_cast<int>(i);
+    return -1;
+}
+static int SelectedCharacterDisplayIndex(){
+    if(!g_CharOrderRoster)return -1;
+    const int index=SelectedCharacterIndex(*g_CharOrderRoster);
+    if(index<0)return -1;
+    const auto it=std::find(g_CharDisplayOrder.begin(),g_CharDisplayOrder.end(),index);
+    return it==g_CharDisplayOrder.end()?-1:static_cast<int>(it-g_CharDisplayOrder.begin());
 }
 static void SelectCharacterAt(int displayIndex){
-    g_SelectedCharKey={};
+    g_SelectedCharacter={};
     if(!g_CharOrderRoster||displayIndex<0||displayIndex>=(int)g_CharDisplayOrder.size())return;
     const int i=g_CharDisplayOrder[displayIndex];
-    if(i>=0&&i<(int)g_CharOrderRoster->size()){const auto& ch=(*g_CharOrderRoster)[i];g_SelectedCharKey={ch.account_name,ch.name};}
+    if(i>=0&&i<(int)g_CharOrderRoster->size())g_SelectedCharacter=SelectCharacterIdentity((*g_CharOrderRoster)[i]);
 }
 static void RebuildCharDisplayOrder(const std::shared_ptr<const std::vector<AlterEgo::Character>>& charsSnapshot = AlterEgo::GW2API::GetCharacters()) {
     std::vector<AlterEgo::CharacterOrder::Entry> entries;
@@ -1431,7 +1481,8 @@ static int g_ComponentPendingKind = -1; // typed capture reveal, never a filter
 static std::string g_ComponentSelectNamePending; // Newly captured component to highlight
 
 static int g_SaveLibEquipTab = 0;          // Selected equipment tab number (1-based)
-static std::string g_SaveLibCharName;      // Character name (to find equipment)
+static std::string g_SaveLibCharName;      // Original capture label
+static std::optional<AlterEgo::CharacterIdentity::Address> g_SaveLibAddress;
 static int g_SaveLibBuildTab = 0;       // Live build tab ID being captured
 static nlohmann::json CaptureFormSnapshot(){
     return {{"target",g_SaveLibTarget},{"kind",g_SaveLibComponentKind},{"update",g_SaveLibUpdateId},
@@ -1442,18 +1493,17 @@ static nlohmann::json CaptureFormSnapshot(){
 
 // Saved vs. retrieved character comparison state (never mutates a saved build).
 static std::string g_LibCompareBuildId;
-static std::string g_LibCompareChar; // empty = active character (auto)
-static std::string g_LibCompareAccount,g_LibComparePreviousAccount;
+static AlterEgo::CharacterIdentity::Selection g_LibCompareSelection; // empty = active (auto)
 // Retained only until legacy settings have been transactionally staged.
 static nlohmann::json g_LegacyLoadoutExpectations=nlohmann::json::array();
 static bool g_LibCompareSavedManual = false;
-static std::string g_LibComparePreviousTarget;
+static AlterEgo::CharacterIdentity::Selection g_LibComparePreviousSelection;
 static int g_LibCompareBuildTab = -1;    // -1 follows active build tab
 static int g_LibCompareEquipTab = 0;     // 0 follows active equipment tab
 static bool g_LibCompareShowMatches = false;
 static bool g_LibCompareExactItems = false;
-// Exact account/name displayed by the Compare renderer in this frame.
-static AlterEgo::CharacterActivity::Key g_LibCompareRenderedTarget;
+// Stable character displayed by the Compare renderer in this frame.
+static AlterEgo::CharacterIdentity::Selection g_LibCompareRenderedSelection;
 
 // Compute days until next character birthday from ISO date string (e.g. "2013-06-25T...")
 // Returns -1 if the date can't be parsed. Returns 0 on the birthday itself.
@@ -1809,7 +1859,7 @@ static void LoadCharSortConfig() {
 }
 
 // Session restore persistence
-static std::string g_SessionSelectedCharName; // deferred: resolve to index after chars load
+static nlohmann::json g_LegacySessionSelection=nullptr;
 
 static bool SaveSession() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "session.json");
@@ -1817,10 +1867,9 @@ static bool SaveSession() {
     nlohmann::json j;
     j["main_tab"] = g_MainTab;
 
-    if(!g_SelectedCharKey.second.empty()){
-        j["selected_char"]=g_SelectedCharKey.second;
-        j["selected_char_account"]=g_SelectedCharKey.first;
-    }
+    const auto selection=AlterEgo::CharacterIdentity::EncodeSelection(g_SelectedCharacter);
+    if(!selection.is_null())j["selected_character_ref"]=selection;
+    if(!g_LegacySessionSelection.is_null())j["legacy_selected_character"]=g_LegacySessionSelection;
     j["detail_tab"] = g_SelectedTab;
     j["equip_tab"] = g_SelectedEquipTab;
     j["build_tab"] = g_SelectedBuildTab;
@@ -1830,6 +1879,13 @@ static bool SaveSession() {
     j["lib_collapsed_professions"] = g_LibCollapsedProfessions;
     j["component_collapsed_kinds"] = g_ComponentCollapsedKinds;
     if (!g_LibCompareBuildId.empty()) j["compare_saved_id"] = g_LibCompareBuildId;
+    const auto compare=AlterEgo::CharacterIdentity::EncodeSelection(g_LibCompareSelection);
+    const auto previous=AlterEgo::CharacterIdentity::EncodeSelection(g_LibComparePreviousSelection);
+    if(!compare.is_null())j["compare_character_ref"]=compare;
+    if(!previous.is_null())j["compare_previous_ref"]=previous;
+    j["compare_manual"]=g_LibCompareSavedManual;
+    j["compare_build_tab"]=g_LibCompareBuildTab;
+    j["compare_equip_tab"]=g_LibCompareEquipTab;
 
     // Account selector
     j["selected_account"] = g_SelectedAccountFilter;
@@ -1859,13 +1915,14 @@ static void LoadSession() {
             if (g_MainTab == 1) g_SwitchToLibrary = true;
         }
 
-        // Defer character selection — store name, resolve after chars load
-        if(j.contains("selected_char")){
-            g_SessionSelectedCharName=j["selected_char"].get<std::string>();
-            if(j.contains("selected_char_account")&&j["selected_char_account"].is_string()){
-                g_SelectedCharKey={j["selected_char_account"].get<std::string>(),g_SessionSelectedCharName};
-                g_SessionSelectedCharName.clear();
-            }
+        // Legacy name-only choices are archived, never rebound to a new owner.
+        g_SelectedCharacter={};g_LegacySessionSelection=j.value("legacy_selected_character",nlohmann::json(nullptr));
+        if(j.contains("selected_character_ref")){
+            const auto selected=AlterEgo::CharacterIdentity::DecodeSelection(j["selected_character_ref"]);
+            if(selected)g_SelectedCharacter=*selected;
+            else g_LegacySessionSelection=j["selected_character_ref"];
+        }else if(j.contains("selected_char")){
+            g_LegacySessionSelection={{"character",j["selected_char"]},{"account",j.value("selected_char_account",std::string{})}};
         }
         if (j.contains("detail_tab")) g_SelectedTab = j["detail_tab"].get<int>();
         if (j.contains("equip_tab")) g_SelectedEquipTab = j["equip_tab"].get<int>();
@@ -1891,6 +1948,12 @@ static void LoadSession() {
         }
         if (j.contains("compare_saved_id"))
             g_LibCompareBuildId = j["compare_saved_id"].get<std::string>();
+        g_LibCompareSelection={};g_LibComparePreviousSelection={};
+        if(j.contains("compare_character_ref"))if(const auto v=AlterEgo::CharacterIdentity::DecodeSelection(j["compare_character_ref"]))g_LibCompareSelection=*v;
+        if(j.contains("compare_previous_ref"))if(const auto v=AlterEgo::CharacterIdentity::DecodeSelection(j["compare_previous_ref"]))g_LibComparePreviousSelection=*v;
+        g_LibCompareSavedManual=j.value("compare_manual",false);
+        g_LibCompareBuildTab=std::clamp(j.value("compare_build_tab",-1),-1,100);
+        g_LibCompareEquipTab=std::clamp(j.value("compare_equip_tab",0),0,100);
 
         // Account selector
         if (j.contains("selected_account"))
@@ -4170,11 +4233,11 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
         (ch.active_equipment_tab > 0 ? ch.active_equipment_tab : 1);
     // Compare the original launch context, not the user's edited form fields.
     // Reopening the same dialog should reveal it without discarding its draft.
-    static std::string launchCharacter,launchAccount;
+    const auto address=CharacterAddressFor(ch);
     static int launchBuildTab = 0, launchEquipmentTab = 0, launchKind = -1;
     g_SaveLibDialogFocus.Request();
     if(g_SaveLibDialogOpen){
-        if(launchCharacter!=ch.name||launchAccount!=ch.account_name||launchBuildTab!=bt.tab||
+        if(!address||!g_SaveLibAddress||!AlterEgo::CharacterIdentity::SameAddress(*address,*g_SaveLibAddress)||launchBuildTab!=bt.tab||
            launchEquipmentTab!=requestedEquipment||launchKind!=componentKind)
             g_SaveLibError="Save or cancel the current capture before starting another.";
         return;
@@ -4183,8 +4246,8 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
         if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");
         return;
     }
-    launchCharacter = ch.name;
-    launchAccount=ch.account_name;
+    if(!address){if(APIDefs)APIDefs->GUI_SendAlert("Character identity unavailable. Refresh and try again.");return;}
+    g_SaveLibAddress=address;
     g_SaveLibAccount=ch.account_name;
     launchBuildTab = bt.tab;
     launchEquipmentTab = requestedEquipment;
@@ -4387,7 +4450,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
     // similarly named entry from the saved library.
     static AlterEgo::SavedBuild shareSnapshot;
     static int shareBuildIdx = -1;
-    static std::string shareCharacter;
+    static std::optional<AlterEgo::Character> shareSource;
 
     const bool hasBuilds = !ch.build_tabs.empty();
     int buildIdx = g_SelectedBuildTab;
@@ -4420,7 +4483,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         const int equipTab = preferredEquipTab > 0 ? preferredEquipTab :
             (g_SelectedEquipTab > 0 ? g_SelectedEquipTab : ActiveEquipmentTab(ch));
         shareSnapshot = MakeLiveShareSnapshot(ch, buildIdx, equipTab);
-        shareCharacter = ch.name;
+        shareSource=ch;
         shareBuildIdx = buildIdx;
         ImGui::OpenPopup("##live_share_menu");
     }
@@ -4428,10 +4491,10 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         ImGui::SetTooltip("Share the selected character's retrieved build and equipment, not a saved build.");
 
     if (ImGui::BeginPopup("##live_share_menu")) {
-        if (shareSnapshot.chat_link.empty() && shareCharacter == ch.name &&
-            shareBuildIdx >= 0 && shareBuildIdx < static_cast<int>(ch.build_tabs.size())) {
-            const auto& bt = ch.build_tabs[shareBuildIdx];
-            const std::string profession = bt.profession.empty() ? ch.profession : bt.profession;
+        if (shareSnapshot.chat_link.empty() && shareSource &&
+            shareBuildIdx >= 0 && shareBuildIdx < static_cast<int>(shareSource->build_tabs.size())) {
+            const auto& bt = shareSource->build_tabs[shareBuildIdx];
+            const std::string profession = bt.profession.empty() ? shareSource->profession : bt.profession;
             if (AlterEgo::GW2API::HasPaletteData(profession))
                 shareSnapshot.chat_link = EncodeBuildTabChatLink(bt);
         }
@@ -4439,7 +4502,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
             ImGui::TextDisabled("Build-link data is loading. Build sharing may be unavailable.");
         // Fashion sharing uses the character's active equipment tab and stays
         // available even while the build palette is still loading.
-        RenderBuildShareMenuItems(shareSnapshot, &ch);
+        RenderBuildShareMenuItems(shareSnapshot,shareSource?&*shareSource:nullptr);
         ImGui::EndPopup();
     }
 }
@@ -8085,8 +8148,7 @@ static void RenderSaveToLibraryDialog() {
     }
 
     using namespace AlterEgo;
-    auto sourceChar=GW2API::GetCharacter(g_SaveLibCharName);
-    if(sourceChar&&sourceChar->account_name!=g_SaveLibAccount)sourceChar.reset();
+    auto sourceChar=BoundCharacter(g_SaveLibAddress);
     ImGui::Text("Character: %s (%s)",g_SaveLibCharName.c_str(),
         sourceChar?sourceChar->profession.c_str():"unavailable");
     auto field=[](const char* label) {
@@ -8309,7 +8371,7 @@ static void RenderSaveToLibraryDialog() {
         (g_SaveLibTarget==2?!existingComponentName.empty():!Composable::ComponentNameKey(g_SaveLibName).empty())&&
         (g_SaveLibTarget!=0||g_SaveLibEquipmentMode!=2||!Composable::ComponentNameKey(g_SaveLibSetName).empty())&&
         (!(entireSet||(g_SaveLibTarget==0&&g_SaveLibEquipmentMode==2))||!g_SaveLibSetKinds.empty());
-    if(!sourceChar)ImGui::TextDisabled("Character snapshot unavailable.");
+    if(!sourceChar)ImGui::TextDisabled("Character source changed or is unavailable. Cancel and reopen capture.");
     else if(needsBuild&&!currentBuild())ImGui::TextDisabled("Select a retrieved build tab.");
     else if(needsEquipment&&!hasEquipment(g_SaveLibEquipTab))ImGui::TextDisabled("No retrieved equipment in this tab.");
     ImGui::Spacing();
@@ -8399,9 +8461,9 @@ static void RenderSaveToLibraryDialog() {
             if(UI::EntityOption((set.second+"##"+set.first).c_str(),set.first==g_SaveLibSelectedSet,[&]{CopyNameMenuItem(set.second,"Copy Name",true);}))g_SaveLibSelectedSet=set.first;
             ImGui::PopID();
         }
-        if(RenderActionButton("Link & Save")&&finishLoadout(g_SaveLibPendingCapture,g_SaveLibSelectedSet,""))ImGui::CloseCurrentPopup();
+        if(UI::AvailableActionButton("Link & Save",UI::ButtonRole::Standard,sourceChar.has_value(),"Character source changed; reopen capture.")&&finishLoadout(g_SaveLibPendingCapture,g_SaveLibSelectedSet,""))ImGui::CloseCurrentPopup();
         ImGui::SameLine();
-        if(RenderActionButton("Use independent components")&&finishLoadout(g_SaveLibPendingCapture,"",""))ImGui::CloseCurrentPopup();
+        if(UI::AvailableActionButton("Use independent components",UI::ButtonRole::Standard,sourceChar.has_value(),"Character source changed; reopen capture.")&&finishLoadout(g_SaveLibPendingCapture,"",""))ImGui::CloseCurrentPopup();
         ImGui::SameLine();if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
@@ -8409,14 +8471,14 @@ static void RenderSaveToLibraryDialog() {
         const int duplicate=g_FashionLibrary.FindExact(g_SaveLibPendingFashion.wardrobe_link);
         if(duplicate>=0) {
             ImGui::TextWrapped("Same appearance saved as '%s'.",g_FashionLibrary.looks[duplicate].name.c_str());
-            if(RenderActionButton("Select Existing")) {
+            if(UI::AvailableActionButton("Select Existing",UI::ButtonRole::Standard,sourceChar.has_value(),"Character source changed; reopen capture.")) {
                 if(SelectExistingFashion(duplicate,g_SaveLibPendingFashion.source_character))g_SaveLibDialogOpen=false;
                 else g_SaveLibFashionError="Could not save character association.";
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
         }
-        if(RenderActionButton("Save Separate Copy")) {
+        if(UI::AvailableActionButton("Save Separate Copy",UI::ButtonRole::Standard,sourceChar.has_value(),"Character source changed; reopen capture.")) {
             if(SaveNewFashion(g_SaveLibPendingFashion))g_SaveLibDialogOpen=false;
             else g_SaveLibFashionError="Could not save Fashion.";
             ImGui::CloseCurrentPopup();
@@ -8436,7 +8498,7 @@ static void RenderSaveToLibraryDialog() {
             g_SaveLibPendingKind.c_str(), g_SaveLibPendingName.c_str());
         ImGui::TextWrapped("This replaces saved fields for ALL Loadouts and equipment sets using "
                            "the component. It does not create a private copy.");
-        const auto action=UI::ConfirmCancel("replace_shared",!g_SaveLibPendingId.empty(),"Confirm Update","Select the component to replace.",g_SaveLibError.c_str());
+        const auto action=UI::ConfirmCancel("replace_shared",sourceChar.has_value()&&!g_SaveLibPendingId.empty(),"Confirm Update",sourceChar?"Select the component to replace.":"Character source changed; reopen capture.",g_SaveLibError.c_str());
         if (action==UI::EditAction::Save) {
             const bool applied = AlterEgo::GW2API::ReplaceCapturedLoadoutComponent(
                 g_SaveLibPendingCapture, g_SaveLibPendingKind, g_SaveLibPendingId);
@@ -9097,19 +9159,12 @@ static void PollBuildSource() {
 }
 
 static void ActivateSavedBuildCompare(const AlterEgo::SavedBuild& build) {
-    if (g_LibCompareBuildId != build.id) {
-        g_LibCompareChar.clear();
-        g_LibCompareBuildTab = -1;
-        g_LibCompareEquipTab = 0;
-    }
-    g_LibCompareBuildId = build.id;
-    g_LibCompareSavedManual = true;
-    g_LibCompareChar = build.source_character;
-    g_LibCompareAccount=AlterEgo::GW2API::GetAccountForCharacter(build.source_character);
-    g_LibComparePreviousTarget = build.source_character;
-    g_LibComparePreviousAccount=g_LibCompareAccount;
-    MarkNavigation();
-    g_SwitchToCompare = true;
+    g_LibCompareSelection={};g_LibComparePreviousSelection={};
+    g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;
+    // Historical capture names are provenance, not verified current ownership.
+    // Part 7D will supply explicit source associations.
+    g_LibCompareBuildId=build.id;g_LibCompareSavedManual=true;
+    MarkNavigation();g_SwitchToCompare=true;
 }
 
 namespace { static void CopyPortableLoadout(const std::string& loadoutId); }
@@ -10418,10 +10473,10 @@ static void ComponentUIOpenLibrary(const std::string& kind, const std::string& i
 static const AlterEgo::Character* ResolveComparisonCharacter(
     const std::vector<const AlterEgo::Character*>& matches) {
     if (matches.empty()) return nullptr;
-    if (!g_LibCompareChar.empty()) {
-        for (const auto* ch : matches)
-            if (ch->name == g_LibCompareChar && ch->account_name==g_LibCompareAccount) return ch;
-        g_LibCompareChar.clear();g_LibCompareAccount.clear(); // stale character override
+    if (!g_LibCompareSelection.Empty()) {
+        ResolveSelection(g_LibCompareSelection);
+        for(const auto* ch:matches)if(MatchesSelection(g_LibCompareSelection,*ch))return ch;
+        return nullptr; // keep manual target through incomplete adoption
     }
     const auto account=AlterEgo::GW2API::GetCurrentAccountName();
     for (const auto* ch : matches)
@@ -10429,6 +10484,26 @@ static const AlterEgo::Character* ResolveComparisonCharacter(
     return matches.front();
 }
 
+static void RenderUnavailableCompareTarget(const std::vector<const AlterEgo::Character*>& matches){
+    if(g_LibCompareSelection.Empty()){ImGui::TextDisabled("No retrieved characters. Refresh characters first.");return;}
+    ImGui::TextDisabled("Selected character unavailable.");
+    ImGui::SetNextItemWidth(ImMax(1.f,ImMin(290.f,ImGui::GetContentRegionAvail().x)));
+    if(AlterEgo::UI::BeginCombo("##unavailableCompareTarget",g_LibCompareSelection.name.c_str())){
+        if(AlterEgo::UI::SelectableOption("Automatic",false)){
+            MarkNavigation();g_LibCompareSelection={};g_LibCompareSavedManual=false;
+            g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;
+        }
+        for(const auto* ch:matches){
+            ImGui::PushID(ch->account_name.c_str());ImGui::PushID(ch->name.c_str());
+            if(SelectProfessionCharacterEntry("##availableCompareTarget",false,ch->profession,ch->name,nullptr,ImGuiSelectableFlags_None,ch->account_name)){
+                MarkNavigation();g_LibCompareSelection=SelectCharacterIdentity(*ch);
+                g_LibCompareSavedManual=false;g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;
+            }
+            ImGui::PopID();ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+}
 static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
     const auto charactersSnapshot = AlterEgo::GW2API::GetCharacters();
     const auto& characters = *charactersSnapshot;
@@ -10442,6 +10517,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         return;
     }
     const AlterEgo::Character* character = ResolveComparisonCharacter(matches);
+    if(!character){RenderUnavailableCompareTarget(matches);return;}
     if (g_LibCompareBuildTab >= (int)character->build_tabs.size())
         g_LibCompareBuildTab = -1;
     const int activeBuildIndex = GetActiveBuildIndex(*character);
@@ -10883,8 +10959,8 @@ static const ActiveSavedBuildMatch& GetLoggedInSavedBuildMatch(const AlterEgo::C
 }
 static void NavigateToCharacterLoadoutCompare(const AlterEgo::Character& ch,const AlterEgo::SavedBuild& saved){
     ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare,saved);
-    g_LibCompareChar=ch.name;g_LibCompareAccount=ch.account_name;
-    g_LibComparePreviousTarget=ch.name;g_LibComparePreviousAccount=ch.account_name;
+    g_LibCompareSelection=SelectCharacterIdentity(ch);
+    g_LibComparePreviousSelection=g_LibCompareSelection;
     g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;
 }
 static void SavedLoadoutSelectorActions(const AlterEgo::SavedBuild& saved,const AlterEgo::Character* ch){
@@ -10952,13 +11028,13 @@ static void CharacterSelectorActions(const std::string& name,const std::string& 
     const bool canNavigate=!LibraryDraftOpen()&&!g_SaveLibDialogOpen&&inScope;
     ImGui::Separator();
     if(MenuAction("Open in Characters",MenuIcon::Open,canNavigate,"Finish the current draft or select the character's account first.")){
-        MarkNavigation();g_SelectedCharKey={account,name};g_SessionSelectedCharName.clear();
+        MarkNavigation();g_SelectedCharacter=SelectCharacterIdentity(*target);
         g_CharSearchBuf[0]=0;g_DetailsFetched=false;g_SelectedBuildTab=-1;g_SelectedEquipTab=0;g_ForceCharactersTab=true;
     }
     if(const auto* loadout=CharacterContextLoadout(*target)){
         if(MenuAction("Compare",MenuIcon::Compare,canNavigate,"Finish the current draft or select the character's account first."))NavigateToCharacterLoadoutCompare(*target,*loadout);
     }else if(MenuAction("Compare",MenuIcon::Compare,canNavigate&&!target->build_tabs.empty(),"Requires retrieved build data and no open draft.")){
-        MarkNavigation();g_LibCompareChar=name;g_LibCompareAccount=account;g_LibComparePreviousTarget=name;g_LibComparePreviousAccount=account;
+        MarkNavigation();g_LibCompareSelection=SelectCharacterIdentity(*target);g_LibComparePreviousSelection=g_LibCompareSelection;
         g_LibCompareSavedManual=false;g_LibCompareBuildId.clear();g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;g_SwitchToCompare=true;
     }
     if(FastLoadActionsEnabled()&&!LibraryDraftOpen()&&!g_SaveLibDialogOpen){ImGui::Separator();RenderCharacterLoadMenu("Load Character",name,account);}
@@ -11005,7 +11081,7 @@ static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
 // Dedicated top-level Compare tab. Keep the selection by saved build ID so
 // reordering or deleting entries in Build Library doesn't select a wrong build.
 static void RenderCompareTab() {
-    g_LibCompareRenderedTarget={};
+    g_LibCompareRenderedSelection={};
     const auto& builds = AlterEgo::GW2API::GetSavedBuilds();
     // Live selectors remain useful even with an empty saved-build library.
     // Use the exact character ordering selected on the Characters tab:
@@ -11032,15 +11108,12 @@ static void RenderCompareTab() {
             compareMatches.push_back(&compareRoster[i]);
 
     const AlterEgo::Character* target = ResolveComparisonCharacter(compareMatches);
-    if (!target) {
-        ImGui::TextDisabled("No retrieved characters. Refresh characters first.");
-        return;
-    }
-    g_LibCompareRenderedTarget={target->account_name,target->name};
-    if (g_LibComparePreviousTarget != target->name || g_LibComparePreviousAccount!=target->account_name) {
-        if (!g_LibComparePreviousTarget.empty()) g_LibCompareSavedManual = false;
-        g_LibComparePreviousTarget = target->name;
-        g_LibComparePreviousAccount=target->account_name;
+    if(!target){RenderUnavailableCompareTarget(compareMatches);return;}
+    g_LibCompareRenderedSelection=SelectCharacterIdentity(*target);
+    ResolveSelection(g_LibComparePreviousSelection);
+    if(!g_LibComparePreviousSelection.SameIdentity(g_LibCompareRenderedSelection)){
+        if(!g_LibComparePreviousSelection.Empty())g_LibCompareSavedManual=false;
+        g_LibComparePreviousSelection=g_LibCompareRenderedSelection;
         g_LibCompareBuildTab = -1;
         g_LibCompareEquipTab = 0;
     }
@@ -11112,18 +11185,18 @@ static void RenderCompareTab() {
                 if (isActive(*ch)) { autoCharacter = ch; break; }
             const char* automaticPrefix=isActive(*autoCharacter)?"Active: ":"Fallback: ";
             const bool autoClicked = SelectProfessionCharacterEntry("##compareAutoCharacter",
-                g_LibCompareChar.empty(),autoCharacter->profession,autoCharacter->name,automaticPrefix,ImGuiSelectableFlags_None,autoCharacter->account_name);
+                g_LibCompareSelection.Empty(),autoCharacter->profession,autoCharacter->name,automaticPrefix,ImGuiSelectableFlags_None,autoCharacter->account_name);
             if (autoClicked) {
-                MarkNavigation();g_LibCompareChar.clear();g_LibCompareAccount.clear();
+                MarkNavigation();g_LibCompareSelection={};
                 g_LibCompareSavedManual = false;
             }
             for (const auto* ch : compareMatches) {
                 ImGui::PushID(ch->account_name.c_str());ImGui::PushID(ch->name.c_str());
-                const bool selected = ch->name == g_LibCompareChar&&ch->account_name==g_LibCompareAccount;
+                const bool selected=MatchesSelection(g_LibCompareSelection,*ch);
                 const bool clicked = SelectProfessionCharacterEntry("##compareCharacterEntry",
                     selected,ch->profession,ch->name,nullptr,ImGuiSelectableFlags_None,ch->account_name);
                 if (clicked) {
-                    MarkNavigation();g_LibCompareChar = ch->name;g_LibCompareAccount=ch->account_name;
+                    MarkNavigation();g_LibCompareSelection=SelectCharacterIdentity(*ch);
                     g_LibCompareSavedManual = false;
                     g_LibCompareBuildTab = -1;
                     g_LibCompareEquipTab = 0;
@@ -11136,7 +11209,7 @@ static void RenderCompareTab() {
         DrawProfessionCharacterEntry(previewDraw, previewMin,
             ImVec2(previewMin.x+previewWidth, previewMin.y+previewHeight),
             character->profession, character->name,
-            g_LibCompareChar.empty() ? autoPrefix : nullptr, true);
+            g_LibCompareSelection.Empty() ? autoPrefix : nullptr, true);
         ImGui::TableNextColumn();
         const std::string chosenName = saved ?
             (g_LibCompareSavedManual ? "" : "Auto: ") +
@@ -15604,7 +15677,7 @@ static void RenderCompareStatusRow() {
     AlterEgo::NativeAccounts::PollObservedIdentity(g_CurrentCharName);
     const auto charsSnapshot=AlterEgo::GW2API::GetCharacters();
     const AlterEgo::Character* target=nullptr;
-    for(const auto& ch:*charsSnapshot)if(ch.account_name==g_LibCompareRenderedTarget.first&&ch.name==g_LibCompareRenderedTarget.second&&!ch.name.empty()){
+    for(const auto& ch:*charsSnapshot)if(MatchesSelection(g_LibCompareRenderedSelection,ch)){
         target=&ch;break;
     }
     namespace S=AlterEgo::CharacterScopes;
@@ -16166,18 +16239,12 @@ void AddonRender() {
             if (!characters.empty()) {
                 EnsureCharDisplayOrder(charactersSnapshot);
 
-                if(SelectedCharacterDisplayIndex()<0){
-                    int chosen=g_CharDisplayOrder.empty()?-1:0;
-                    if(!g_SessionSelectedCharName.empty()){
-                        int found=-1;
-                        for(int di=0;di<(int)g_CharDisplayOrder.size();++di){
-                            const auto& row=characters[g_CharDisplayOrder[di]];
-                            if(row.name==g_SessionSelectedCharName){if(found>=0){found=-1;break;}found=di;}
-                        }
-                        if(found>=0)chosen=found;
-                        g_SessionSelectedCharName.clear();
-                    }else g_SelectedBuildTab=-1;
-                    SelectCharacterAt(chosen);g_DetailsFetched=false;
+                if(SelectedCharacterDisplayIndex()<0&&
+                    (g_SelectedCharacter.Empty()||g_SelectedCharacter.preview||SelectionRetired(g_SelectedCharacter)||
+                     (AlterEgo::NativeAccounts::Ready()&&!g_SelectedCharacter.ref.account.empty()&&
+                      !AlterEgo::NativeAccounts::CharacterAccountLinked(g_SelectedCharacter.ref.account)))){
+                    const int chosen=g_CharDisplayOrder.empty()?-1:0;
+                    g_SelectedBuildTab=-1;SelectCharacterAt(chosen);g_DetailsFetched=false;
                 }
                 // Character list (left) + Detail panel (right)
                 // Clamp width to reasonable bounds
@@ -16268,7 +16335,7 @@ void AddonRender() {
                     const auto rowIdentity=ch.account_name+"\x1f"+ch.name;
                     ImGui::PushID(rowIdentity.c_str());
 
-                    bool selected=(g_SelectedCharKey==std::make_pair(ch.account_name,ch.name));
+                    bool selected=MatchesSelection(g_SelectedCharacter,ch);
                     bool isLoggedIn = (!g_CurrentCharName.empty() && ch.name == g_CurrentCharName);
                     ImVec4 profColor = GetProfessionColor(ch.profession);
 
@@ -16331,7 +16398,7 @@ void AddonRender() {
                         const int activeEquip = ActiveEquipmentTab(ch);
                         if (ImGui::MenuItem("Refresh")) {
                             AlterEgo::GW2API::RequestCharacterRefreshSelected({ch.name});
-                            if (g_SelectedCharKey==std::make_pair(ch.account_name,ch.name)) g_DetailsFetched = false;
+                            if(MatchesSelection(g_SelectedCharacter,ch))g_DetailsFetched=false;
                         }
                         if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild>=0||!ch.equipment.empty()))
                             OpenSaveLiveBuildDialog(ch,activeBuild>=0?ch.build_tabs[activeBuild]:AlterEgo::BuildTemplate{},
@@ -16802,7 +16869,8 @@ void AddonRender() {
                         ImGui::EndTabBar();
                     }
                 } else {
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Select a character from the list.");
+                    if(!g_SelectedCharacter.Empty())ImGui::TextDisabled("Selected character temporarily unavailable.");
+                    else ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Select a character from the list.");
                 }
                 ImGui::EndChild();
             } else {

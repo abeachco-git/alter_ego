@@ -56,6 +56,9 @@ struct Address {
     uint64_t credentialGeneration=0;
     Ref Reference()const{return {account,binding.id};}
 };
+inline bool SameAddress(const Address& a,const Address& b){
+    return a.account==b.account&&a.name==b.name&&a.binding==b.binding&&a.credentialGeneration==b.credentialGeneration;
+}
 inline std::optional<Address> Capture(const State& state,const std::string& name,uint64_t generation){
     if(!state.initialized)return std::nullopt;
     const auto* r=state.Current(name);

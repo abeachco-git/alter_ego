@@ -8,14 +8,15 @@
 struct NavigationSnapshot {
     int page=0,collection=0,sub=0,buildTab=0,equipTab=0,category=0,sort=0,view=0;
     uint32_t record=0,achievement=0;
-    std::string id,kind,second,search,account,compareTarget,compareAccount;
+    std::string id,kind,second,search,account;
+    AlterEgo::CharacterIdentity::Selection character,comparePrevious;
     bool first=false,other=false,manual=false;
     std::set<std::string> modes,componentKinds;
     Skinventory::SkinFilters skins;
     AlterEgo::NativeAccounts::InventoryNavigation inventory;
     std::map<ImGuiID,float> scroll;
     bool SameDestination(const NavigationSnapshot& o) const {
-        return std::tie(page,collection,sub,buildTab,equipTab,id,kind,second,record,achievement)==
+        return ((page!=0&&page!=5)||character.SameIdentity(o.character))&&std::tie(page,collection,sub,buildTab,equipTab,id,kind,second,record,achievement)==
                std::tie(o.page,o.collection,o.sub,o.buildTab,o.equipTab,o.id,o.kind,o.second,o.record,o.achievement);
     }
 };
@@ -31,7 +32,7 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
     s.page=g_MainTab;s.account=g_SelectedAccountFilter;
     switch(s.page) {
         case 0: {
-            s.id=g_SelectedCharKey.second;s.kind=g_SelectedCharKey.first;
+            s.character=g_SelectedCharacter;
             s.sub=g_SelectedTab;s.buildTab=g_SelectedBuildTab;s.equipTab=g_SelectedEquipTab;
             s.search=g_CharSearchBuf;break; // Character ordering is a global preference, not history.
         }
@@ -62,9 +63,9 @@ static NavigationSnapshot CaptureNavigation(bool withScroll=true) {
             s.search=g_AchSearchBuf;s.first=g_AchHideEmptyCats;s.other=g_AchHideCompletedCats;break;
         case 7:s.inventory=AlterEgo::NativeAccounts::CaptureInventoryNavigation();s.sub=s.inventory.subview;s.record=s.inventory.item;s.kind=s.inventory.currency?"currency":"item";
             if(s.sub==0){s.id=s.inventory.grouped?"groups":"list";s.second=s.inventory.grouped?s.inventory.group:std::string{};}break;
-        case 5:s.id=g_LibCompareChar;s.kind=g_LibCompareAccount;s.manual=g_LibCompareSavedManual;
+        case 5:s.character=g_LibCompareSelection;s.manual=g_LibCompareSavedManual;
             if(s.manual)s.second=g_LibCompareBuildId;
-            s.compareTarget=g_LibComparePreviousTarget;s.compareAccount=g_LibComparePreviousAccount;s.buildTab=g_LibCompareBuildTab;s.equipTab=g_LibCompareEquipTab;
+            s.comparePrevious=g_LibComparePreviousSelection;s.buildTab=g_LibCompareBuildTab;s.equipTab=g_LibCompareEquipTab;
             s.first=g_LibCompareShowMatches;s.other=g_LibCompareExactItems;break;
     }
     if(withScroll){
@@ -93,8 +94,8 @@ static void RestoreNavigation(const NavigationSnapshot& s){
     switch(s.page){
         case 0:{
             // Preserve the current global sort and direction, including Custom.
-            g_SelectedCharKey={s.kind,s.id};RebuildCharDisplayOrder();
-            g_SessionSelectedCharName.clear();g_DetailsFetched=false;
+            g_SelectedCharacter=s.character;ResolveSelection(g_SelectedCharacter);RebuildCharDisplayOrder();
+            g_DetailsFetched=false;
             g_SelectedBuildTab=s.buildTab;g_SelectedEquipTab=s.equipTab;
             snprintf(g_CharSearchBuf,sizeof(g_CharSearchBuf),"%s",s.search.c_str());break;
         }
@@ -135,8 +136,8 @@ static void RestoreNavigation(const NavigationSnapshot& s){
             break;
         }
         case 7:AlterEgo::NativeAccounts::RestoreInventoryNavigation(s.inventory);break;
-        case 5:g_LibCompareChar=s.id;g_LibCompareAccount=s.kind;g_LibCompareBuildId=s.second;
-            g_LibCompareSavedManual=s.manual;g_LibComparePreviousTarget=s.compareTarget;g_LibComparePreviousAccount=s.compareAccount;
+        case 5:g_LibCompareSelection=s.character;ResolveSelection(g_LibCompareSelection);g_LibCompareBuildId=s.second;
+            g_LibCompareSavedManual=s.manual;g_LibComparePreviousSelection=s.comparePrevious;ResolveSelection(g_LibComparePreviousSelection);
             g_LibCompareBuildTab=s.buildTab;g_LibCompareEquipTab=s.equipTab;
             g_LibCompareShowMatches=s.first;g_LibCompareExactItems=s.other;break;
     }

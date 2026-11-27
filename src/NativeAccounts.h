@@ -32,6 +32,11 @@ bool HasCharacterBinding(const std::string& account,const std::string& name);
 std::optional<CharacterIdentity::Address> ResolveCharacterAddress(const std::string& account,const std::string& name);
 std::optional<CharacterIdentity::Address> ResolveCharacterAddress(const CharacterIdentity::Ref& ref);
 std::optional<CharacterIdentity::Address> ResolveObservedCharacter(const std::string& name);
+// Evidence-only references are portable; resolution requires uniqueness
+// across the retained registry, not merely across currently visible rows.
+std::optional<CharacterIdentity::Address> ResolveCharacterEvidence(const std::string& account,const CharacterIdentity::Evidence& evidence);
+bool CharacterReferenceRetired(const CharacterIdentity::Ref& ref,const CharacterIdentity::Evidence& evidence);
+bool CharacterAccountLinked(const std::string& account);
 CharacterLoadout::Choice ExpectedLoadout(const CharacterIdentity::Ref& ref);
 uint64_t LoadoutPreferenceRevision();
 bool SetExpectedLoadout(const CharacterIdentity::Address& address,const CharacterLoadout::Choice& choice);
