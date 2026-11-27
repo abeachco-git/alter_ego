@@ -1,59 +1,55 @@
 # Roadmap — outstanding work
 
-Forward-looking tracker for the experimental branch. This file contains only unresolved implementation, investigation and design decisions. [Development status](development-status.md) owns current verification gaps; [Architecture](architecture.md) and [UI reference](ui-components.md) own established behavior; [release checklist](release-checklist.md) owns release gates. Git history is the archive. Historical source audit and verification details remain available in [the pre-cleanup revision](https://github.com/abeachco-git/alter_ego/blob/aa94826e0dfeb6f019976ad78a941a4a060c10d1/docs/roadmap.md).
+Experimental branch, continuing after Part 7. Only unresolved implementation, investigation and design decisions belong here. [Development status](development-status.md) owns live and deferred verification; [Architecture](architecture.md), [UI reference](ui-components.md) and [regression testing](regression-testing.md) own established behavior and test procedures. [Release checklist](release-checklist.md) owns release gates. Git history is the archive.
 
-**Approval:** proposed means discussion only; previously approved outstanding work is identified below. No new implementation is authorized by this documentation cleanup. Priorities are relative, not a mandate to implement unrelated work. Split broad items into explicitly approved, independently testable batches.
+**Approval:** "Approved remainder" retains the previous scope; a design decision or proposed item requires discussion before implementation. Changes to refresh lifecycles, scheduling, retries, caching or transport require specific approval under [AGENTS.md](../AGENTS.md). Split work into independently testable batches. Do not reopen an implemented capability solely because its live acceptance is deferred; reopen on evidence of a defect.
 
-## Character identity — final live acceptance
+## Part 8 — Library: remaining design decisions
 
-- [ ] Parts 7A–7E: validate live rename while the addon is open (including non-character pages and API propagation gaps), same-name replacement, repeated rename, collisions, swaps, interrupted adoption, unlink/relink and account isolation; verify selections, Inventory, Compare, Loadout assignments/order/history, portraits, Library/Fashion provenance and portable restoration. See development status and regression testing. Legacy name-only recovery is deliberately deprioritized; preserve archives without a dedicated recovery UI. Preserve native Fast Load.
+- [ ] **8A — Approved remainder, design decision:** direct replacement of an inherited component reference in the parent Loadout editor. The current picker is read-only for inherited references; switching/detaching the set and private-by-default payload edits with explicit shared consent already work. Decide whether the existing explicit set operations suffice or whether to offer a staged private reference override. Preserve atomic parent Save, effective ownership and unchanged other owners.
+- [ ] **8B — Approved remainder, design decision:** persist auto-name provenance and decide safe deferred repair/naming formats. Explicit Regenerate Name, metadata-aware suggestions and manual-name preservation exist; the persisted component schema does not distinguish automatic from custom/imported names. Never infer legacy provenance from a name alone; preserve identity and use existing metadata owners.
 
-## Remaining refresh demand follow-up
+## Part 9 — Metadata and request ownership
 
-- [ ] **Separate discussion:** decide which public catalogs genuinely require startup/settings-triggered retrieval. Do not change that policy as part of the approved account settings fix.
+Previously approved program; approve specific lifecycle changes before implementation. Preserve established character scope coverage, shared roster/physical/progress owners, item/skin/stat/dye/skill/trait/spec/currency publication ordering, reset fingerprints, independent Clears/Vault section commits, intervals, and visible-demand policy.
 
-## Remaining Library work
+- [ ] **9A — Remaining metadata owners:** achievement definitions/catalog, profession/palette, pets/legends and remaining Commerce/account paths. Identify missing durable per-ID success/negative/attempt evidence, request-start ordering, cross-consumer claims and generation/cancellation/error fences. Do not duplicate existing claims, snapshot guards or publication gates; include shared lock/publication review for these owners.
+- [ ] **9B — Dataset scheduling gaps:** remaining category/pinned continuation and cross-account public Clears definition ownership, cross-consumer dataset deduplication, upstream lock contention/priority propagation, cooldown worker occupancy and stable staggering only where missing. Preserve current transport admission, independent section publication and no all-account startup sweep.
+- [ ] **9C — Public catalog demand and retirement (design + live investigation):** decide which public catalogs actually require startup/settings-triggered retrieval; validate completeness and duplicate identities before removing static upgrade identities. Confirm remaining definition freshness and reviewed build snapshot promotion; retain manual seed promotion where CI access fails.
+- [ ] **9D — Wiki ownership:** remaining image/metadata/currency coalescing and startup currency work; preserve verified snapshots, reviewed seeds, cadence and host limits. No bulk per-skin crawl or unreviewed datasets.
+- [ ] **9E — Diagnostic gaps:** attribute remaining unclassified endpoints/reasons and cache/dedup outcomes. Existing API activity and metadata claim counters are not new work. No sensitive data or telemetry; audit before changing rate limits.
+- [ ] **9F — Investigation only:** validate authenticated schema-pinned character core `last_modified` for possible corroboration. Already parsed/stored; no proven basis to infer external play or replace local activity/coverage.
 
-- [ ] **Approved remainder:** inline inherited-category editing: review whether replacing an inherited category should require switching/detaching the set or a deliberate private override; do not silently mutate shared sets. Preserve the existing atomic parent Save review and explicit shared consent. Preserve the existing equipment ownership and draft rules; do not reopen completed Part 1 work.
-- [ ] **Approved remainder, design decision needed:** auto-name provenance and deferred safe repair. Explicit Regenerate Name and readable suggestions already exist. Persist provenance only with a reviewed compatibility design; never rename custom/imported names or change identity. Resolve missing metadata through existing owners, not render-time SQL/HTTP. Agree naming formats and how confidently identified legacy auto-names can be repaired.
-- [ ] **Audit remainder:** verify all create/edit/capture/import/migration, exact-reuse, compatibility, explicit-sharing and revision paths; reuse the established comparison and exact-identity helpers rather than duplicate semantic engines.
+## Part 10 — Security and lifecycle
 
-## Remaining freshness, metadata and request ownership
+- [ ] **10A — Remaining trust boundaries:** settings and legacy-import fields/schema, imported/on-disk assets and decoder safety beyond image header checks, residual raw SQL execution guard and expanded adversarial cases. Retain existing bounded parsing, prepared bindings, deterministic sanitizer corpus and supported interchange.
+- [ ] **10B — Remaining concurrency boundaries:** audit render/event globals, immutable getters and selection/order revisions, cross-domain lock ordering and credential/request/completion publication not already covered by 9A–9B or the character identity work. Only fix demonstrated gaps; preserve canonical owners.
+- [ ] **10C — Host contract investigation:** Nexus post-deregistration callback quiescence, raw Escape pointer lifetime, texture/atlas ownership and shutdown ordering. Local admission/drain and worker joining exist; host guarantees require evidence beyond local tests.
+- [ ] **10D — Transport design decision:** synchronous WinINet is cooperatively bounded but not strictly interruptible. Review a single-owner asynchronous cancellation/drain state machine, including final callback quiescence, before approving transport changes.
+- [ ] **10E — Deferred decision:** optional full native TSan CI integration. Existing required sanitizer coverage and focused TSan configuration remain; see development status for execution gaps.
 
-Previously approved program; the current intervals, coverage watermarks and ownership rules are documented in Architecture. Independent character scopes, raw achievement progress, durable season metadata, independent Clears/Vault section commits, priority transport admission and item/skin/reference publication ordering are already implemented. Remaining changes to scheduling, retries, transport or caching require specific scope approval under AGENTS.md.
+## Part 11 — Storage resilience
 
-- [ ] Audit remaining metadata owners (achievement definitions/catalog, professions/palettes, pets/legends, remaining Commerce/Wiki and account-specific paths) for durable per-ID freshness/negative observations, verified request ordering, cross-consumer coalescing, generation fences and cancellation/error publication. Do not reimplement completed item/skin/stat/dye/skill/trait/spec ordering.
-- [ ] Complete outstanding dataset request deduplication and priority propagation; avoid worker waits during cooldown, audit upstream locks, extend stable staggering only where needed, preserve visible demand and no all-account startup sweep. Audit remaining category/pinned continuation ownership and shared public Clears definitions across accounts; preserve independent section commits and reset fingerprints.
-- [ ] Expand diagnostic attribution for remaining endpoints/reasons and cache/dedup outcomes without sensitive data or telemetry. Audit before changing rate limits.
-- [ ] Investigate schema-pinned character core `last_modified` as corroboration only; validate authenticated data before use. External play not observed locally cannot be inferred; do not replace the local activity/coverage model.
-- [ ] Wiki owner audit: remaining image/metadata/currency coalescing and startup currency work; preserve known-good snapshots, reviewed seeds, cadence and host rate limits. Review practical need and rights before adding datasets; no bulk per-skin crawl.
-- [ ] Public catalog cleanup: validate live completeness and duplicate identities before removing legacy static upgrade identities. Confirm remaining definition freshness and promotion of reviewed build snapshots; retain manual seed promotion where CI access fails.
+- [ ] **11A — Recovery:** failed initial migration recovery and failed-character-write retry policy; preserve originals and authoritative data, including account identity and library.
+- [ ] **11B — Cache maintenance residuals:** identify specific uncovered datasets/obsolete paths within existing selective rebuild operations and improve quarantine cleanup usability. Existing startup-only full/selective quarantine and preservation safeguards are implemented; do not rebuild that mechanism.
+- [ ] **11C — Diagnostics:** per-dataset byte-size reporting beyond existing file sizes/counts, and integrity-check versus quick-check policy. Keep inspection explicit and off ordinary render paths.
+- [ ] **11D — Deferred decision:** journal policy review only after native contention measurements (development status).
 
-## Security, thread safety and storage — outstanding
+## Part 12 — Defect investigations and separate decisions
 
-- [ ] Finish untrusted field/schema validation (settings, legacy imports, imported assets), remaining SQL raw-execution guard, decoder safety and broader parser fuzzing. Keep the existing bounded parser, deterministic sanitizer corpus and original library compatibility.
-- [ ] Audit remaining render/event globals, immutable getter and selection/order revision boundaries, cross-domain lock ordering, remaining credential/request correlation, completion provenance and metadata failure/cancellation paths. Reuse the metadata work above; do not repeat verified owner migrations.
-- [ ] Host callback/resource lifetime: establish Nexus callback quiescence before unmapping, raw Escape pointer lifetime, asynchronous texture/atlas ownership and shutdown ordering; never infer host guarantees from local tests.
-- [ ] Strict cancellable HTTP transport design: synchronous WinINet calls remain non-interruptible despite cooperative bounds; review single-owner async state machine and cancellation/drain before implementation. No incidental transport changes.
-- [ ] Storage recovery gaps: failed initial migration and failed-character-write retry policy; selective rebuild coverage, per-dataset size reporting, integrity check versus quick check, obsolete-path review and quarantine cleanup usability. Preserve originals and authoritative data.
-- [ ] Optional automated TSan CI and journal policy review are deferred decisions; execution/measurement gaps are tracked in [development status](development-status.md), not required for the current consistency discussion.
+- [ ] **12A — Inventory/Skins row activation:** intermittent missed clicks correlated with ArcDPS overlapping affected regions. Shared pitch/hit-target corrections already exist; reproduce with ArcDPS moved/hidden and another Nexus window before changes. No speculative picker rewrite or native-input bypass.
+- [ ] **12B — Windows Defender:** investigate if reproduced, using the exact DLL and detection details; CI does not establish antivirus clearance.
+- [ ] **12C — Fast Load (separate decision only):** whether Disabled should also disable native roster sampling. Currently sampling and location remain available intentionally; no changes to native loading, memory scanning or switch lifecycle without explicit approval.
 
-## Known defect / investigation
+## Part 13 — Proposed features (discussion before implementation)
 
-- [ ] **Separate decision only:** whether disabling Fast Load should also disable native roster sampling. Current behavior intentionally retains sampling and character location retrieval; no change to native lifecycle without explicit approval.
-
-- [ ] Intermittent Inventory/Skins row activation: user observed missed clicks with ArcDPS behind affected screen regions; narrowing search or navigating sometimes recovered selection. Shared pitch/hit-target corrections are implemented. Isolate host/overlay input routing by moving/hiding ArcDPS and reproducing in another Nexus window; no native-input bypass or speculative picker rewrite. Exact root cause remains unconfirmed.
-- [ ] Reported Windows Defender detection: investigate against exact tested DLL and detection details if reproduced; do not claim malware clearance from CI or clipboard refactoring.
-
-## Proposed or deferred features — discussion before implementation
-
-- [ ] Inventory facets: wallet categories, armor weight, weapon subtype, level and tradeability where supported; retain typed currency/item distinctions and existing search-first/List versus Groups behavior.
-- [ ] Acquisition aids: semantic alternatives, full Loadout eligibility, broader Shopping mappings, legendary material/currency requirements and unused ascended gear/upgrades; distinguish ownership from verified usability.
-- [ ] Gathering tools/glyphs: existing tool display/storage remains; verify authenticated installed glyph/socket fields with explicit schema and fixtures before extending coverage. Track loose glyphs, distinguish homestead unlocks from stock, unknown vs empty, charges/binding and owner navigation; character-wide tools never counted per equipment tab or included in Equipment Sets.
-- [ ] Trading Post: discuss order-depth-aware estimates, optional visible-row batching and price sorting. No market listing requests, automatic full-result price fetching or fee-policy change approved.
-- [ ] Contextual achievement objective assistance: useful verified hints/chat links without external-page dependency or guessed matches; scope and sources require review.
-- [ ] Wiki/resource additions (weekly effect/festival mappings, specialization prose, bounded skin/currency/vendor data, optional core specialization icon embedding) deferred until a practical need and rights review; existing embedded raid and companion icons are not new work.
+- [ ] **13A — Inventory facets:** wallet categories, armor weight, weapon subtype, level and tradeability where supported. Preserve typed currency/item distinctions and List versus Groups behavior.
+- [ ] **13B — Acquisition aids:** extend existing exact-item/stock aids with semantic alternatives, full Loadout eligibility, broader Shopping mappings, legendary materials/currencies and unused ascended gear/upgrades. Distinguish ownership from verified usability; reuse canonical comparison and Inventory.
+- [ ] **13C — Gathering tools/glyphs:** verify authenticated installed glyph/socket fields before extending existing tool display/storage. Loose glyphs, homestead unlocks versus stock, unknown versus empty, charges/binding and owner navigation; character-wide tools are not per-equipment-tab or Equipment Set data.
+- [ ] **13D — Trading Post:** order-depth-aware estimates, optional visible-row batching and price sorting. No market listing requests, automatic full-result price fetching or fee-policy changes approved.
+- [ ] **13E — Achievement assistance:** verified contextual hints/chat links without guessed matches or external-page dependency; review scope/sources.
+- [ ] **13F — Wiki/resource additions:** weekly effects/festivals, specialization prose, bounded skin/currency/vendor data and optional core specialization icon embedding, deferred until practical need and rights review.
 
 ## Verification and release
 
-See [development status](development-status.md) for the current unresolved validation checklist, including catalog clicks, Wiki previews, live rollover, authenticated multi-account behavior, clipboard, migration/recovery, Library editing and storage. Keep release-only requirements in [release checklist](release-checklist.md). No implementation completion without the exact-commit required build gates and verified DLL delivery as specified in AGENTS.md.
+Part 7 and other completed implementation acceptance, discretionary performance measurements and non-live verification remain in [development status](development-status.md); release-only gates remain in [release checklist](release-checklist.md). Do not duplicate those lists here. No approved implementation is complete without exact-commit required build gates and verified DLL delivery per AGENTS.md.
