@@ -14,6 +14,15 @@ struct Binding {
     bool operator!=(const Binding& other)const{return !(*this==other);}
 };
 using Bindings=std::map<std::string,Binding>;
+// Durable local reference; never use this as an API address or portable ID.
+struct Ref {
+    std::string account;
+    Id id=0;
+    bool Valid()const{return !account.empty()&&id>0;}
+    bool operator==(const Ref& o)const{return account==o.account&&id==o.id;}
+    bool operator!=(const Ref& o)const{return !(*this==o);}
+    bool operator<(const Ref& o)const{return std::tie(account,id)<std::tie(o.account,o.id);}
+};
 // Visible demand may admit an unknown gameplay name, but never create an
 // indefinite new polling loop. A new observed name or resolved->unresolved
 // transition rearms discovery. All times are monotonic seconds.
@@ -45,6 +54,7 @@ struct Address {
     std::string account,name;
     Binding binding;
     uint64_t credentialGeneration=0;
+    Ref Reference()const{return {account,binding.id};}
 };
 inline std::optional<Address> Capture(const State& state,const std::string& name,uint64_t generation){
     if(!state.initialized)return std::nullopt;

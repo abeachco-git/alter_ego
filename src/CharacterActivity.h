@@ -18,6 +18,8 @@ struct Entry {
     uint32_t spec=0;
     std::map<std::string,Scope> scopes;
     int64_t bindingId=0,bindingRevision=0;
+    CharacterIdentity::Evidence evidence;
+    int64_t historicalLogin=0;
 };
 struct Ticket {int64_t started=0,seen=0,login=0,specChanged=0;bool active=false;int64_t verificationStarted=0;uint64_t serial=0;};
 using RefreshEngine::WaitReason;
@@ -25,6 +27,12 @@ using RefreshEngine::Eligibility;
 struct Inspection { bool active=false, fresh=false; int64_t login=0,lastSeen=0,attempt=0,success=0; Eligibility eligibility; std::string error; };
 class Tracker {
     std::map<Key,Entry> rows_;
+    // Address-keyed live projection; histories of unavailable characters
+    // remain keyed by stable local identity and corroborating evidence.
+    struct Detached {std::string name;Entry entry;};
+    std::map<CharacterIdentity::Ref,Detached> detached_;
+    std::map<Key,int64_t> unresolvedLogins_;
+    Json legacyEntries_=Json::array();
     Key active_;
     int64_t missingSince_=0;
     bool dirty_=false;
@@ -77,17 +85,45 @@ public:
         }else if(spec&&!rows_[k].spec){rows_[k].spec=spec;Dirty();}
         Touch(k,now);Touch({account,{}},now);
     }
+    void ObserveBound(const std::optional<CharacterIdentity::Address>& address,uint32_t spec,bool gameplay,int64_t now){
+        if(address){
+            const Key key{address->account,address->name};
+            const auto it=rows_.find(key);
+            // Reject a superseded view after acquiring the activity mutex.
+            if(it!=rows_.end()&&it->second.bindingId==address->binding.id&&
+               it->second.bindingRevision==address->binding.revision&&it->second.evidence==address->binding.evidence){
+                Observe(key.first,key.second,spec,gameplay,now);return;
+            }
+        }
+        Observe({},{},0,false,now);
+    }
+    void RetainUnresolvedLogin(const Key& k,int64_t stamp){
+        if(k.second.empty()||stamp<=0)return;
+        auto& prior=unresolvedLogins_[k];
+        if(stamp>prior){prior=stamp;Dirty();}
+    }
     void Finish(int64_t now){End(missingSince_?std::min(now,missingSince_):now);missingSince_=0;}
     Key ActiveKey()const{return active_;}
     uint64_t LoginRevision()const{return loginRevision_;}
-    int64_t LastLogin(const Key& k)const{auto i=rows_.find(k);return i==rows_.end()?0:i->second.login;}
+    int64_t LastLogin(const Key& k)const{auto i=rows_.find(k);return i==rows_.end()?0:std::max(i->second.login,i->second.historicalLogin);}
     std::map<Key,int64_t> LoginTimes()const{
-        std::map<Key,int64_t> out;for(const auto& [k,e]:rows_)if(!k.second.empty()&&e.login>0)out.emplace(k,e.login);return out;
+        std::map<Key,int64_t> out;for(const auto& [k,e]:rows_)if(!k.second.empty()&&std::max(e.login,e.historicalLogin)>0)out.emplace(k,std::max(e.login,e.historicalLogin));return out;
+    }
+    // Legacy portable format remains name-only, and its restoration is
+    // quarantined. Do not export freshness or verification coverage.
+    std::map<Key,int64_t> HistoricalLogins()const{
+        auto out=LoginTimes();
+        for(const auto& [ref,d]:detached_){
+            const auto stamp=std::max(d.entry.login,d.entry.historicalLogin);
+            if(stamp>0){const Key key{ref.account,d.name};out[key]=std::max(out[key],stamp);}
+        }
+        for(const auto& [key,stamp]:unresolvedLogins_)if(!key.first.empty())out[key]=std::max(out[key],stamp);
+        return out;
     }
     // Historical login information is not evidence of logout or API activity.
     bool ImportLogin(const Key& k,int64_t stamp){
         if(k.first.empty()||k.second.empty()||stamp<=0||stamp<=LastLogin(k)||Active(k))return false;
-        rows_[k].login=stamp;++loginRevision_;Dirty();return true;
+        rows_[k].historicalLogin=stamp;++loginRevision_;Dirty();return true;
     }
     bool SpecMatches(const Key& k,uint32_t spec)const{auto it=rows_.find(k);return it==rows_.end()||!it->second.spec||it->second.spec==spec;}
     int64_t LastSeen(const Key& k)const{auto i=rows_.find(k);return i==rows_.end()?0:i->second.lastSeen;}
@@ -142,7 +178,7 @@ public:
         Inspection out;out.active=Active(k);out.fresh=Fresh(k,scope,success,now,specSignal);out.success=success;
         out.eligibility=Eligible(k,scope,success,externalAttempt,now,specSignal);out.attempt=externalAttempt;
         auto i=rows_.find(k);if(i!=rows_.end()){
-            out.login=i->second.login;out.lastSeen=i->second.lastSeen;
+            out.login=std::max(i->second.login,i->second.historicalLogin);out.lastSeen=i->second.lastSeen;
             auto s=i->second.scopes.find(scope);
             if(s!=i->second.scopes.end()){out.attempt=std::max(externalAttempt,s->second.attempt);out.error=s->second.error;}
         }
@@ -159,7 +195,9 @@ public:
         return {now,e.lastSeen,e.login,e.specChanged,Active(k),0,s.attemptSerial};
     }
     void Success(const Key& k,const std::string& scope,const Ticket& t,int64_t success,bool specVerified=true){
-        auto& e=rows_[k];auto& s=e.scopes[scope];
+        auto row=rows_.find(k);if(row==rows_.end()||!t.serial)return;
+        auto scopeRow=row->second.scopes.find(scope);if(scopeRow==row->second.scopes.end())return;
+        auto& e=row->second;auto& s=scopeRow->second;
         if(s.success>success||s.attempt>t.started||s.attemptSerial!=t.serial)return;
         s.success=success;s.attempt=0;s.attemptSerial=0;s.error.clear();
         const auto verifiedStart=t.verificationStarted>0?std::min(t.started,t.verificationStarted):t.started;
@@ -179,25 +217,38 @@ public:
             it->second.attempt=0;it->second.attemptSerial=0;it->second.error.clear();Dirty();
         }
     }
-    // Name-keyed historical login records remain intact for Part 7C.
-    // Only verification/attempt coverage belongs to this binding.
+    // Stage all old owners before claiming new addresses; swaps are
+    // order-independent. Verification never crosses a changed binding.
     void FenceBindings(const std::string& account,const CharacterIdentity::Bindings& bindings){
-        for(auto& [key,e]:rows_){
-            if(key.first!=account||key.second.empty())continue;
-            const auto it=bindings.find(key.second);
-            const auto id=it==bindings.end()?int64_t(0):it->second.id;
-            const auto revision=it==bindings.end()?int64_t(0):it->second.revision;
-            if(e.bindingId==id&&e.bindingRevision==revision&&id)continue;
-            if(!e.scopes.empty()||e.bindingId!=id||e.bindingRevision!=revision){
-                e.scopes.clear();e.bindingId=id;e.bindingRevision=revision;Dirty();
-            }
+        CharacterIdentity::Id activeId=0;
+        CharacterIdentity::Evidence activeEvidence;
+        bool activeDetached=false,changed=false;
+        for(auto it=rows_.begin();it!=rows_.end();){
+            const auto& key=it->first;auto& entry=it->second;
+            if(key.first!=account||key.second.empty()){++it;continue;}
+            const auto b=bindings.find(key.second);
+            if(b!=bindings.end()&&entry.bindingId==b->second.id&&entry.bindingRevision==b->second.revision&&entry.evidence==b->second.evidence){++it;continue;}
+            if(active_==key){activeId=entry.bindingId;activeEvidence=entry.evidence;activeDetached=true;}
+            if(entry.bindingId>0&&CharacterIdentity::Normalize(entry.evidence)){
+                entry.scopes.clear();
+                detached_[{account,entry.bindingId}]={key.second,std::move(entry)};
+            }else RetainUnresolvedLogin(key,std::max(entry.login,entry.historicalLogin));
+            it=rows_.erase(it);changed=true;
         }
+        if(activeDetached)active_={};
         for(const auto& [name,b]:bindings){
-            auto& e=rows_[{account,name}];
-            if(e.bindingId!=b.id||e.bindingRevision!=b.revision){
-                e.scopes.clear();e.bindingId=b.id;e.bindingRevision=b.revision;Dirty();
+            const Key key{account,name};
+            if(rows_.count(key))continue;
+            Entry entry;
+            const auto prior=detached_.find({account,b.id});
+            if(prior!=detached_.end()&&prior->second.entry.evidence==b.evidence){
+                entry=std::move(prior->second.entry);detached_.erase(prior);
             }
+            entry.scopes.clear();entry.bindingId=b.id;entry.bindingRevision=b.revision;entry.evidence=b.evidence;
+            rows_.emplace(key,std::move(entry));changed=true;
+            if(activeDetached&&activeId==b.id&&activeEvidence==b.evidence)active_=key;
         }
+        if(changed){++loginRevision_;Dirty();}
     }
     bool DirtyState()const{return dirty_;}
     uint64_t Revision()const{return revision_;}
@@ -207,20 +258,32 @@ public:
         for(const auto& [k,e]:rows_){
             Json scopes=Json::object();
             for(const auto& [name,s]:e.scopes)scopes[name]={{"success",s.success},{"attempt",s.attempt},{"covered",s.covered},{"spec_covered",s.specCovered}};
-            out.push_back({{"account",k.first},{"character",k.second},{"last_seen",e.lastSeen},{"login",e.login},{"spec",e.spec},{"spec_changed",e.specChanged},{"scopes",scopes},{"binding_id",e.bindingId},{"binding_revision",e.bindingRevision}});
+            out.push_back({{"account",k.first},{"character",k.second},{"last_seen",e.lastSeen},{"login",e.login},{"spec",e.spec},{"spec_changed",e.specChanged},{"scopes",scopes},{"binding_id",e.bindingId},{"binding_revision",e.bindingRevision},{"created",e.evidence.created},{"profession",e.evidence.profession},{"race",e.evidence.race},{"historical_login",e.historicalLogin}});
         }
-        return {{"version",1},{"entries",out}};
+        Json detached=Json::array(),unresolved=Json::array();
+        for(const auto& [ref,d]:detached_)detached.push_back({{"account",ref.account},{"character",d.name},
+            {"binding_id",ref.id},{"binding_revision",d.entry.bindingRevision},{"last_seen",d.entry.lastSeen},
+            {"login",d.entry.login},{"spec",d.entry.spec},{"spec_changed",d.entry.specChanged},
+            {"created",d.entry.evidence.created},{"profession",d.entry.evidence.profession},{"race",d.entry.evidence.race},
+            {"historical_login",d.entry.historicalLogin}});
+        for(const auto& [k,stamp]:unresolvedLogins_)unresolved.push_back({{"account",k.first},{"character",k.second},{"login",stamp}});
+        return {{"version",2},{"entries",out},{"detached",detached},{"unresolved_logins",unresolved},{"legacy_entries",legacyEntries_}};
     }
-    void Load(const Json& j){
+    void Load(const Json& j,bool isolateLegacy=false){
         Tracker next;
-        if(j.at("version")!=1||!j.at("entries").is_array())throw std::runtime_error("Invalid activity data");
+        const auto version=j.at("version").get<int>();
+        if((version!=1&&version!=2)||!j.at("entries").is_array())throw std::runtime_error("Invalid activity data");
         for(const auto& row:j.at("entries")){
             Key k{row.at("account").get<std::string>(),row.at("character").get<std::string>()};
             if(k.first.empty()||next.rows_.count(k))throw std::runtime_error("Invalid activity identity");
             Entry e;e.lastSeen=row.at("last_seen").get<int64_t>();e.login=row.at("login").get<int64_t>();
             e.spec=row.value("spec",0u);e.specChanged=row.value("spec_changed",int64_t(0));
             e.bindingId=row.value("binding_id",int64_t(0));e.bindingRevision=row.value("binding_revision",int64_t(0));
-            if(e.bindingId<0||e.bindingRevision<0)throw std::runtime_error("Invalid activity identity binding");
+            e.historicalLogin=row.value("historical_login",int64_t(0));
+            e.evidence={row.value("created",std::string{}),row.value("profession",std::string{}),row.value("race",std::string{})};
+            if(e.bindingId<0||e.bindingRevision<0||e.historicalLogin<0||
+               (version==2&&e.bindingId>0&&!CharacterIdentity::Normalize(e.evidence)))
+                throw std::runtime_error("Invalid activity identity binding");
             if(e.lastSeen<0||e.login<0||e.specChanged<0)throw std::runtime_error("Invalid activity timestamp");
             for(auto it=row.at("scopes").begin();it!=row.at("scopes").end();++it){
                 Scope s{it.value().at("success").get<int64_t>(),it.value().at("attempt").get<int64_t>(),
@@ -228,7 +291,35 @@ public:
                 if(s.success<0||s.attempt<0||s.covered<0||s.specCovered<0)throw std::runtime_error("Invalid activity scope");
                 e.scopes[it.key()]=s;
             }
-            next.rows_[k]=std::move(e);
+            // v1 binding IDs were overwritten without fencing activity.
+            // Keep the original row, not just the historical login.
+            if(version==1&&isolateLegacy&&!k.second.empty()){
+                next.legacyEntries_.push_back(row);
+                next.RetainUnresolvedLogin(k,e.login);next.Dirty();
+            }else next.rows_[k]=std::move(e);
+        }
+        if(version==2){
+            next.legacyEntries_=j.at("legacy_entries");
+            if(!next.legacyEntries_.is_array()||!j.at("detached").is_array()||!j.at("unresolved_logins").is_array())
+                throw std::runtime_error("Invalid activity archives");
+            for(const auto& row:j.at("detached")){
+                CharacterIdentity::Ref ref{row.at("account").get<std::string>(),row.at("binding_id").get<int64_t>()};
+                Entry e;e.bindingId=ref.id;e.bindingRevision=row.at("binding_revision").get<int64_t>();
+                e.lastSeen=row.at("last_seen").get<int64_t>();e.login=row.at("login").get<int64_t>();
+                e.spec=row.at("spec").get<uint32_t>();e.specChanged=row.at("spec_changed").get<int64_t>();
+                e.historicalLogin=row.value("historical_login",int64_t(0));
+                e.evidence={row.at("created").get<std::string>(),row.at("profession").get<std::string>(),row.at("race").get<std::string>()};
+                const auto name=row.at("character").get<std::string>();
+                if(!ref.Valid()||name.empty()||e.bindingRevision<0||e.lastSeen<0||e.login<0||e.specChanged<0||e.historicalLogin<0||
+                   !CharacterIdentity::Normalize(e.evidence)||!next.detached_.emplace(ref,Detached{name,std::move(e)}).second)
+                    throw std::runtime_error("Invalid detached activity");
+            }
+            for(const auto& row:j.at("unresolved_logins")){
+                Key k{row.at("account").get<std::string>(),row.at("character").get<std::string>()};
+                const auto stamp=row.at("login").get<int64_t>();
+                if(k.second.empty()||stamp<=0||!next.unresolvedLogins_.emplace(k,stamp).second)
+                    throw std::runtime_error("Invalid unresolved login");
+            }
         }
         next.loginRevision_=loginRevision_+1;
         *this=std::move(next); // no active identity survives restart

@@ -449,6 +449,10 @@ void Remove(const std::string& id){
         Database::Transaction tx(db);auto q=db.Prepare("DELETE FROM accounts WHERE id=?");q.Bind(1,id);q.Execute();
         tx.Commit();++registryGeneration;
         identityStates.erase(id);identityRosterBlocked.erase(id);identityConfirmation.erase(id);
+        {
+            std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
+            CharacterActivity::State().FenceBindings(id,{});
+        }
         for(auto it=identityProofs.begin();it!=identityProofs.end();)
             if(it->first.first==id)it=identityProofs.erase(it);else ++it;
         const bool removed=CredDeleteA(Target(id).c_str(),CRED_TYPE_GENERIC,0)!=FALSE||GetLastError()==ERROR_NOT_FOUND;
@@ -795,6 +799,33 @@ bool Ready(){return registryReady.load();}
 bool HasCharacterBinding(const std::string& account,const std::string& name){
     const auto v=Snapshot();const auto it=v->bindings.find(account);
     return it!=v->bindings.end()&&it->second.count(name);
+}
+std::optional<CharacterIdentity::Address> ResolveCharacterAddress(const std::string& account,const std::string& name){
+    const auto v=Snapshot();const auto it=v->bindings.find(account);
+    if(it==v->bindings.end())return std::nullopt;
+    const auto roster=v->inventory.rosters.find(account);
+    if(roster==v->inventory.rosters.end()||!roster->second.count(name))return std::nullopt;
+    const auto binding=it->second.find(name);
+    if(binding==it->second.end())return std::nullopt;
+    return CharacterIdentity::Address{account,name,binding->second,v->credentialEpoch};
+}
+std::optional<CharacterIdentity::Address> ResolveCharacterAddress(const CharacterIdentity::Ref& ref){
+    const auto v=Snapshot();const auto it=v->bindings.find(ref.account);
+    if(!ref.Valid()||it==v->bindings.end())return std::nullopt;
+    const auto roster=v->inventory.rosters.find(ref.account);
+    if(roster==v->inventory.rosters.end())return std::nullopt;
+    for(const auto& [name,b]:it->second)if(b.id==ref.id&&roster->second.count(name))
+        return CharacterIdentity::Address{ref.account,name,b,v->credentialEpoch};
+    return std::nullopt;
+}
+std::optional<CharacterIdentity::Address> ResolveObservedCharacter(const std::string& name){
+    const auto v=Snapshot();const auto account=Active(*v,name);
+    if(account.empty())return std::nullopt;
+    const auto it=v->bindings.find(account);
+    if(it==v->bindings.end())return std::nullopt;
+    const auto b=it->second.find(name);
+    if(b==it->second.end())return std::nullopt;
+    return CharacterIdentity::Address{account,name,b->second,v->credentialEpoch};
 }
 bool Current(const LinkedAccount& a){
     if(a.id.empty()||a.generation!=registryGeneration.load())return false;

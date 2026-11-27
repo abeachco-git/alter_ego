@@ -182,7 +182,7 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
                !ReadExisting(dir,"character_logins.json",pending,error))return false;
             if(!ledger.empty()){
                 CharacterActivity::Tracker tracker;
-                tracker.Load(nlohmann::json::parse(ledger));logins=tracker.LoginTimes();
+                tracker.Load(nlohmann::json::parse(ledger));logins=tracker.HistoricalLogins();
             }
             if(!pending.empty())CharacterActivity::MergeLoginHistory(logins,
                 CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(pending)));

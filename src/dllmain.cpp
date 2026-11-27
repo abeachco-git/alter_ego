@@ -12461,7 +12461,7 @@ static void LoadCharacterActivity(){
         if(ec)throw std::runtime_error("Cannot inspect login history");
         if(exists){
             const auto bytes=AlterEgo::Storage::ReadMigrationBytes(std::filesystem::u8path(path));
-            A::State().Load(AlterEgo::Untrusted::Parse(bytes,AlterEgo::Untrusted::Library));
+            A::State().Load(AlterEgo::Untrusted::Parse(bytes,AlterEgo::Untrusted::Library),true);
         }
     }catch(...){g_ActivityLoadValid=false;}
     g_LoginProjectionRevision=~uint64_t(0);
@@ -12504,10 +12504,11 @@ static void MigrateLegacyLoginHistory(){
     namespace A=AlterEgo::CharacterActivity;
     if(!g_ActivityLoadValid)return;
     for(auto it=g_LegacyLoginHistory.begin();it!=g_LegacyLoginHistory.end();){
-        const auto account=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(it->first);
-        if(account.empty()){++it;continue;} // retain original file until all identities resolve
+        // Name-only history has no verified owner. Keep the original file
+        // available for portable backup and retain the unresolved timestamp.
         {std::lock_guard<std::mutex> lock(A::Mutex());
-            A::State().ImportLogin({account,it->first},it->second);}
+            A::State().RetainUnresolvedLogin({{},it->first},it->second);}
+        g_LegacyLoginArchivePending=false;
         it=g_LegacyLoginHistory.erase(it);
     }
     if(g_LegacyLoginArchivePending&&g_LegacyLoginHistory.empty()&&SaveCharacterActivity(true)){
@@ -12527,7 +12528,7 @@ static void ImportPortableLoginHistory(){
         std::map<A::Key,int64_t> logins;
         {std::ifstream f(path);if(!f)return;logins=A::DecodeLoginHistory(nlohmann::json::parse(f));}
         {std::lock_guard<std::mutex> lock(A::Mutex());
-            for(const auto& [key,stamp]:logins)A::State().ImportLogin(key,stamp);}
+            for(const auto& [key,stamp]:logins)A::State().RetainUnresolvedLogin(key,stamp);}
         if(SaveCharacterActivity(true)){
             std::error_code ec;std::filesystem::remove(std::filesystem::u8path(path),ec);
         } // on a failed write, leave the staged file for the next startup
@@ -15774,8 +15775,11 @@ static void ObserveCharacterActivity(){
         for(unsigned char c:name)if(c!=' '&&c!='-'&&!isalpha(c)&&c<0x80){name.clear();break;}
     }
     if(nexus->IsGameplay&&!name.empty())AlterEgo::GW2API::SetCurrentAccountFromCharacter(name);
-    const auto account=AlterEgo::NativeAccounts::VerifiedAccountForCharacter(name);
-    A::Observe(account,name,spec,nexus->IsGameplay);
+    const auto address=AlterEgo::NativeAccounts::ResolveObservedCharacter(name);
+    {
+        std::lock_guard<std::mutex> lock(A::Mutex());
+        A::State().ObserveBound(address,spec,nexus->IsGameplay,A::Now());
+    }
     const auto active=A::ActiveKey();
     // The live identity remains useful without an API key, but unverified
     // ownership must never create account-scoped login history.

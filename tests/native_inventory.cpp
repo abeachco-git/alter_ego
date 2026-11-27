@@ -190,6 +190,7 @@ int case_native_inventory(int,char**){
             assert(CI::AdoptCache(cached,oldState,CI::ReadVerifiedRoster(db,"A")));
             cached.Exec("INSERT INTO native_inventory_scopes VALUES('A','Bags','Alice','Ready',22,22),('A','Bank','','Ready',22,22),('A','Equipment','Bob','Ready',22,22);");
             activity.FenceBindings("A",CI::CurrentBindings(oldState));
+            activity.ObserveBound(CI::Capture(oldState,"Alice",1),42,true,21);
             stale=activity.Begin({"A","Alice"},"Bags",22);
             auto bobTicket=activity.Begin({"A","Bob"},"Equipment",22);
             activity.Success({"A","Bob"},"Equipment",bobTicket,23);
@@ -214,12 +215,38 @@ int case_native_inventory(int,char**){
             assert(cached.Scalar("SELECT count(*) FROM native_inventory_scopes WHERE scope='Bags'")==0);
             assert(CI::AdoptCache(cached,newState,CI::ReadVerifiedRoster(db,"A"))->empty());
             activity.FenceBindings("A",CI::CurrentBindings(newState));
+            assert(activity.LastLogin({"A","Renamed"})==21);
+            assert(activity.LastLogin({"A","Alice"})==0);
+            assert(activity.ActiveKey()==CA::Key("A","Renamed"));
+            activity.ObserveBound(CI::Capture(oldState,"Alice",1),99,true,32);
+            assert(activity.LastSeen({"A","Alice"})==0);
             activity.Success({"A","Alice"},"Bags",stale,40);
             const auto saved=activity.Save();CA::Tracker restored;restored.Load(saved);
             restored.FenceBindings("A",CI::CurrentBindings(newState));
             assert(restored.Inspect({"A","Alice"},"Bags",0,40).attempt==0);
             assert(restored.Inspect({"A","Bob"},"Equipment",23,40).success==23);
             assert(!CI::Matches(newState,*CI::Capture(oldState,"Alice",1),1));
+            assert(restored.LastLogin({"A","Renamed"})==21);
+            // Ambiguous/unlinked bindings retain history but never expose it
+            // through an old address. Reattaching the same ID restores it.
+            restored.FenceBindings("A",{});
+            assert(restored.LastLogin({"A","Renamed"})==0);
+            CA::Tracker detached;detached.Load(restored.Save());
+            detached.FenceBindings("A",CI::CurrentBindings(newState));
+            assert(detached.LastLogin({"A","Renamed"})==21);
+            auto replacement=CI::CurrentBindings(newState);
+            replacement["Renamed"].id=12345;replacement["Renamed"].revision++;
+            replacement["Renamed"].evidence.created="2026-01-02T03:04:05Z";
+            detached.FenceBindings("A",replacement);
+            assert(detached.LastLogin({"A","Renamed"})==0);
+            assert(detached.LastSeen({"A","Renamed"})==0);
+            assert(detached.SpecMatches({"A","Renamed"},999));
+            assert(detached.HistoricalLogins().at({"A","Renamed"})==21);
+            CA::Tracker legacy;auto old=activity.Save();old["version"]=1;
+            legacy.Load(old,true);
+            legacy.FenceBindings("A",CI::CurrentBindings(newState));
+            assert(legacy.LastLogin({"A","Renamed"})==0);
+            assert(legacy.HistoricalLogins().at({"A","Renamed"})==21);
         }
         std::filesystem::remove_all(root);
     }

@@ -27,6 +27,10 @@ std::vector<LinkedAccount> Linked();
 LinkedAccount FindLinked(const std::string& accountId);
 bool Ready();
 bool HasCharacterBinding(const std::string& account,const std::string& name);
+// Read-only identity projection; no SQL, transport, or native Fast Load changes.
+std::optional<CharacterIdentity::Address> ResolveCharacterAddress(const std::string& account,const std::string& name);
+std::optional<CharacterIdentity::Address> ResolveCharacterAddress(const CharacterIdentity::Ref& ref);
+std::optional<CharacterIdentity::Address> ResolveObservedCharacter(const std::string& name);
 bool Current(const LinkedAccount& account);
 // Worker-only final publication guard. Commit must not perform HTTP, call Nexus,
 // acquire the credential mutex again, or wait for another worker.

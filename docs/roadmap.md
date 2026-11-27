@@ -10,7 +10,8 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 - [ ] Part 7B: verify live rename, same-name replacement, swap, missing/partial core, interrupted adoption and account isolation in the running addon; offline fixtures and build verification are tracked in development status. Preserve native Fast Load.
 
-- [ ] Parts 7C–7D: migrate expected Loadout, activity, custom ordering, session/navigation, Inventory filters/group expansion and verified Fashion associations to stable local IDs or safely reconcile them. Preserve original capture names and never infer ownership from historical name strings. Establish notification and unresolved-match behavior; complete migration/backup/recovery and regression/live acceptance.
+- [ ] Part 7C (approved): finish shared identity-reference adoption, evidence-qualified portable login history, durable preference storage/recovery, Expected Loadout, custom ordering, session/navigation, Compare and capture targets, Inventory filters/group expansion, portraits and live notification. Activity ledger v2 isolates legacy history and projects bound gameplay history by stable ID; verify runtime build and unresolved-history recovery. Review unbound request admission and malformed core observations.
+- [ ] Part 7D: verified Library/Fashion associations and portable provenance; preserve original capture names and never infer ownership from historical name strings.
 - [ ] Part 7E: extend fixtures to live integration and interrupted adoption across stores, missing/partial API data, deletion/recreation, repeated rename, collisions, name reuse and swaps; no changes to native Fast Load internals.
 
 ## Remaining refresh demand follow-up
