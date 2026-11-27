@@ -8,6 +8,50 @@
 namespace AlterEgo::CharacterActivity {
 using Json=nlohmann::json;
 using Key=std::pair<std::string,std::string>;
+struct PortableLogin {
+    Key key;
+    CharacterIdentity::Evidence evidence;
+    bool operator<(const PortableLogin& o)const{
+        return std::tie(key,evidence)<std::tie(o.key,o.evidence);
+    }
+    bool HasEvidence()const{return CharacterIdentity::Normalize(evidence).has_value();}
+};
+using PortableLogins=std::map<PortableLogin,int64_t>;
+inline void MergePortableLogins(PortableLogins& to,const PortableLogins& from){
+    for(const auto& [key,stamp]:from)to[key]=std::max(to[key],stamp);
+}
+inline Json EncodePortableLogins(const PortableLogins& logins){
+    Json entries=Json::array();
+    for(const auto& [p,stamp]:logins){
+        if(!CharacterIdentity::Text(p.key.second)||stamp<=0)continue;
+        Json row={{"account",p.key.first},{"character",p.key.second},{"login",stamp}};
+        if(p.HasEvidence()){
+            row["created"]=p.evidence.created;row["profession"]=p.evidence.profession;row["race"]=p.evidence.race;
+        }
+        entries.push_back(std::move(row));
+    }
+    return {{"format","alter_ego_character_logins"},{"version",2},{"entries",entries}};
+}
+inline PortableLogins DecodePortableLogins(const Json& j){
+    const int version=j.at("version").get<int>();
+    if(j.at("format")!="alter_ego_character_logins"||(version!=1&&version!=2)||!j.at("entries").is_array())
+        throw std::runtime_error("Invalid login history");
+    PortableLogins out;
+    for(const auto& row:j.at("entries")){
+        PortableLogin p{{row.at("account").get<std::string>(),row.at("character").get<std::string>()},{}};
+        if(!CharacterIdentity::Text(p.key.second)||(!p.key.first.empty()&&!CharacterIdentity::Text(p.key.first))||
+            !row.at("login").is_number_integer())throw std::runtime_error("Invalid login record");
+        if(version==2&&(row.contains("created")||row.contains("profession")||row.contains("race"))){
+            const auto e=CharacterIdentity::Normalize({row.at("created").get<std::string>(),row.at("profession").get<std::string>(),row.at("race").get<std::string>()});
+            if(!e||p.key.first.empty())throw std::runtime_error("Invalid login evidence");
+            p.evidence=*e;
+        }
+        const auto stamp=row.at("login").get<int64_t>();
+        if(stamp<=0||!out.emplace(p,stamp).second)throw std::runtime_error("Invalid or duplicate login record");
+    }
+    return out;
+}
+
 struct Scope {
     int64_t success=0,attempt=0,covered=0,specCovered=0;
     uint64_t attemptSerial=0; // local only; distinct even within the same second
@@ -32,6 +76,7 @@ class Tracker {
     struct Detached {std::string name;Entry entry;};
     std::map<CharacterIdentity::Ref,Detached> detached_;
     std::map<Key,int64_t> unresolvedLogins_;
+    PortableLogins pendingPortable_;
     Json legacyEntries_=Json::array();
     Key active_;
     int64_t missingSince_=0;
@@ -109,8 +154,8 @@ public:
     std::map<Key,int64_t> LoginTimes()const{
         std::map<Key,int64_t> out;for(const auto& [k,e]:rows_)if(!k.second.empty()&&std::max(e.login,e.historicalLogin)>0)out.emplace(k,std::max(e.login,e.historicalLogin));return out;
     }
-    // Legacy portable format remains name-only, and its restoration is
-    // quarantined. Do not export freshness or verification coverage.
+    // A portable login is historical only. Preserve distinct owners even
+    // when their last known name is the same.
     std::map<Key,int64_t> HistoricalLogins()const{
         auto out=LoginTimes();
         for(const auto& [ref,d]:detached_){
@@ -119,6 +164,37 @@ public:
         }
         for(const auto& [key,stamp]:unresolvedLogins_)if(!key.first.empty())out[key]=std::max(out[key],stamp);
         return out;
+    }
+    PortableLogins PortableHistory()const{
+        auto out=pendingPortable_;
+        const auto add=[&](const Key& key,const Entry& e){
+            const auto stamp=std::max(e.login,e.historicalLogin);
+            if(key.second.empty()||stamp<=0)return;
+            PortableLogin p{key,e.bindingId>0?e.evidence:CharacterIdentity::Evidence{}};
+            out[p]=std::max(out[p],stamp);
+        };
+        for(const auto& [key,e]:rows_)add(key,e);
+        for(const auto& [ref,d]:detached_)add({ref.account,d.name},d.entry);
+        for(const auto& [key,stamp]:unresolvedLogins_){PortableLogin p{key,{}};out[p]=std::max(out[p],stamp);}
+        return out;
+    }
+    void StagePortableHistory(const PortableLogins& logins){
+        for(const auto& [p,stamp]:logins){
+            if(!p.HasEvidence()){RetainUnresolvedLogin(p.key,stamp);continue;}
+            auto& prior=pendingPortable_[p];if(stamp>prior){prior=stamp;Dirty();}
+        }
+    }
+    void AdoptPortableHistory(const CharacterIdentity::State& state){
+        for(auto it=pendingPortable_.begin();it!=pendingPortable_.end();){
+            const auto& p=it->first;if(p.key.first!=state.account){++it;continue;}
+            const CharacterIdentity::Record* match=nullptr;bool ambiguous=false;
+            for(const auto& [id,r]:state.records)if(r.evidence==p.evidence){if(match){ambiguous=true;break;}match=&r;}
+            if(ambiguous||!match||!match->present||state.Current(match->name)!=match){++it;continue;}
+            const auto row=rows_.find({state.account,match->name});
+            if(row==rows_.end()||row->second.bindingId!=match->id||row->second.bindingRevision!=match->bindingRevision||!(row->second.evidence==match->evidence)){++it;continue;}
+            if(it->second>row->second.historicalLogin){row->second.historicalLogin=it->second;++loginRevision_;}
+            it=pendingPortable_.erase(it);Dirty();
+        }
     }
     // Historical login information is not evidence of logout or API activity.
     bool ImportLogin(const Key& k,int64_t stamp){
@@ -267,7 +343,7 @@ public:
             {"created",d.entry.evidence.created},{"profession",d.entry.evidence.profession},{"race",d.entry.evidence.race},
             {"historical_login",d.entry.historicalLogin}});
         for(const auto& [k,stamp]:unresolvedLogins_)unresolved.push_back({{"account",k.first},{"character",k.second},{"login",stamp}});
-        return {{"version",2},{"entries",out},{"detached",detached},{"unresolved_logins",unresolved},{"legacy_entries",legacyEntries_}};
+        return {{"version",2},{"entries",out},{"detached",detached},{"unresolved_logins",unresolved},{"legacy_entries",legacyEntries_},{"pending_portable",EncodePortableLogins(pendingPortable_)}};
     }
     void Load(const Json& j,bool isolateLegacy=false){
         Tracker next;
@@ -314,6 +390,7 @@ public:
                    !CharacterIdentity::Normalize(e.evidence)||!next.detached_.emplace(ref,Detached{name,std::move(e)}).second)
                     throw std::runtime_error("Invalid detached activity");
             }
+            if(j.contains("pending_portable"))next.pendingPortable_=DecodePortableLogins(j.at("pending_portable"));
             for(const auto& row:j.at("unresolved_logins")){
                 Key k{row.at("account").get<std::string>(),row.at("character").get<std::string>()};
                 const auto stamp=row.at("login").get<int64_t>();

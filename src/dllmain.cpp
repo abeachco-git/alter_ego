@@ -12649,10 +12649,10 @@ static void ImportPortableLoginHistory(){
     if(!g_ActivityLoadValid)return;
     const auto path=AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(),"character_logins.json");
     try{
-        std::map<A::Key,int64_t> logins;
-        {std::ifstream f(path);if(!f)return;logins=A::DecodeLoginHistory(nlohmann::json::parse(f));}
-        {std::lock_guard<std::mutex> lock(A::Mutex());
-            for(const auto& [key,stamp]:logins)A::State().RetainUnresolvedLogin(key,stamp);}
+        A::PortableLogins logins;
+        {std::ifstream f(path);if(!f)return;logins=A::DecodePortableLogins(nlohmann::json::parse(f));}
+        {std::lock_guard<std::mutex> lock(A::Mutex());A::State().StagePortableHistory(logins);}
+        AlterEgo::NativeAccounts::AdoptPendingLoginHistory();
         if(SaveCharacterActivity(true)){
             std::error_code ec;std::filesystem::remove(std::filesystem::u8path(path),ec);
         } // on a failed write, leave the staged file for the next startup

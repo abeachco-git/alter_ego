@@ -91,7 +91,7 @@ int case_library_backup(int, char**) {
     assert(!Storage::ReplaceFile(base/"source","bad",err));
     assert(fs::is_directory(base/"source"));
     const auto portable=nlohmann::json::parse(full.files.at("character_logins.json"));
-    assert(CharacterActivity::DecodeLoginHistory(portable).at(hero)==2000);
+    assert(CharacterActivity::DecodePortableLogins(portable).at({hero,{}})==2000);
     assert(!portable.at("entries")[0].contains("scopes"));
     assert(!portable.at("entries")[0].contains("last_seen"));
 
@@ -128,7 +128,7 @@ int case_library_backup(int, char**) {
     assert(Get(FilePath(dst,"portraits/a.png")) == portrait);
     assert(!Exists(FilePath(dst,"character_activity.json")));
     assert(CharacterLoadout::DecodePortable(nlohmann::json::parse(Get(FilePath(dst,"character_loadouts.json")))).count(preference));
-    assert(CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at(hero)==2000);
+    assert(CharacterActivity::DecodePortableLogins(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at({hero,{}})==2000);
     Put(FilePath(dst,"character_logins.json"),CharacterActivity::EncodeLoginHistory({{hero,3000}}).dump());
 
     // Replace a selected collection, never touch unchecked collections.
@@ -141,7 +141,7 @@ int case_library_backup(int, char**) {
     assert(Prepare(dst, full, Other, true, plan, err));
     assert(Apply(dst, plan, recovery, err));
     assert(Get(FilePath(dst,"settings.json")) == R"({"show_age":true})");
-    assert(CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at(hero)==3000);
+    assert(CharacterActivity::DecodePortableLogins(nlohmann::json::parse(Get(FilePath(dst,"character_logins.json")))).at({hero,{}})==3000);
 
     // Empty collection files are valid backups and may clear a selected collection.
     Put((base/"empty.json").u8string(), R"({"builds":[]})");

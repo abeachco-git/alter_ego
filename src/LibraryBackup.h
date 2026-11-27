@@ -105,7 +105,7 @@ inline bool ValidateCollection(const std::string& name, const std::string& bytes
         catch(const std::exception& e){error=name+": "+e.what();return false;}
     }
     if(name=="character_logins.json"){
-        try{count=CharacterActivity::DecodeLoginHistory(j).size();return true;}
+        try{count=CharacterActivity::DecodePortableLogins(j).size();return true;}
         catch(const std::exception& e){error=name+": "+e.what();return false;}
     }
     if (name == "library.json") {
@@ -188,17 +188,17 @@ inline bool Collect(const std::string& dir, unsigned selected, FileMap& files,
         // Generate a portable projection from the flushed authoritative ledger;
         // never include the activity/verification ledger itself in a backup.
         try{
-            std::map<CharacterActivity::Key,int64_t> logins;
+            CharacterActivity::PortableLogins logins;
             std::string ledger,pending;
             if(!ReadExisting(dir,"character_activity.json",ledger,error)||
                !ReadExisting(dir,"character_logins.json",pending,error))return false;
             if(!ledger.empty()){
                 CharacterActivity::Tracker tracker;
-                tracker.Load(nlohmann::json::parse(ledger));logins=tracker.HistoricalLogins();
+                tracker.Load(nlohmann::json::parse(ledger),true);logins=tracker.PortableHistory();
             }
-            if(!pending.empty())CharacterActivity::MergeLoginHistory(logins,
-                CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(pending)));
-            if(!logins.empty())files["character_logins.json"]=CharacterActivity::EncodeLoginHistory(logins).dump(2);
+            if(!pending.empty())CharacterActivity::MergePortableLogins(logins,
+                CharacterActivity::DecodePortableLogins(nlohmann::json::parse(pending)));
+            if(!logins.empty())files["character_logins.json"]=CharacterActivity::EncodePortableLogins(logins).dump(2);
         }catch(const std::exception& e){error=std::string("Cannot export login history: ")+e.what();return false;}
         // Export only portable preferences, never the account registry or
         // credentials. Local numeric IDs are not installation-independent.
@@ -442,10 +442,10 @@ inline bool Prepare(const std::string& dir, const Package& package,
             // Preserve even pending history if another restore is applied before
             // its durable activity-ledger write succeeds.
             try{
-                auto logins=CharacterActivity::DecodeLoginHistory(Untrusted::Parse(bytes,Untrusted::Library));
+                auto logins=CharacterActivity::DecodePortableLogins(Untrusted::Parse(bytes,Untrusted::Library));
                 std::string pending;if(!ReadExisting(dir,name,pending,error))return false;
-                if(!pending.empty())CharacterActivity::MergeLoginHistory(logins,CharacterActivity::DecodeLoginHistory(nlohmann::json::parse(pending)));
-                plan.writeFiles[name]=CharacterActivity::EncodeLoginHistory(logins).dump(2);++plan.otherWritten;
+                if(!pending.empty())CharacterActivity::MergePortableLogins(logins,CharacterActivity::DecodePortableLogins(nlohmann::json::parse(pending)));
+                plan.writeFiles[name]=CharacterActivity::EncodePortableLogins(logins).dump(2);++plan.otherWritten;
             }catch(const std::exception& e){error=std::string("Cannot import login history: ")+e.what();return false;}
             continue;
         }

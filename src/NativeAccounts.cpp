@@ -241,6 +241,7 @@ bool AdoptIdentity(const CharacterIdentity::State& state,
         {
             std::lock_guard<std::mutex> lock(CharacterActivity::Mutex());
             CharacterActivity::State().FenceBindings(account,CharacterIdentity::CurrentBindings(state));
+            CharacterActivity::State().AdoptPortableHistory(state);
         }
         identityStates[account]=state;
         identityRosterBlocked.erase(account);
@@ -884,6 +885,12 @@ bool CharacterReferenceRetired(const CharacterIdentity::Ref& ref,const Character
 bool CharacterAccountLinked(const std::string& account){
     const auto v=Snapshot();
     return std::any_of(v->accounts.begin(),v->accounts.end(),[&](const auto& a){return a.id==account;});
+}
+void AdoptPendingLoginHistory(){
+    std::lock_guard<std::mutex> gate(credentialMutex);
+    std::lock_guard<std::mutex> activity(CharacterActivity::Mutex());
+    for(const auto& [account,state]:identityStates)
+        if(!identityRosterBlocked.count(account))CharacterActivity::State().AdoptPortableHistory(state);
 }
 CharacterLoadout::Choice ExpectedLoadout(const CharacterIdentity::Ref& ref){return PreferenceSnapshot()->Get(ref);}
 uint64_t LoadoutPreferenceRevision(){return loadoutPreferenceRevision.load();}

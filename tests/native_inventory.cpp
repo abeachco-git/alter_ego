@@ -355,6 +355,18 @@ INSERT INTO character_identity_names VALUES('A',1,'Alice'),('A',1,'Former Alice'
             assert(detached.LastSeen({"A","Renamed"})==0);
             assert(detached.SpecMatches({"A","Renamed"},999));
             assert(detached.HistoricalLogins().at({"A","Renamed"})==21);
+            detached.ObserveBound(CI::Address{"A","Renamed",replacement.at("Renamed"),1},99,true,200);
+            const auto portable=CA::DecodePortableLogins(CA::EncodePortableLogins(detached.PortableHistory()));
+            assert(portable.at({{"A","Renamed"},a})==21);
+            assert(portable.at({{"A","Renamed"},replacement.at("Renamed").evidence})==200);
+            CA::Tracker imported;imported.StagePortableHistory(portable);
+            CA::Tracker pending;pending.Load(imported.Save());
+            pending.FenceBindings("A",CI::CurrentBindings(newState));
+            pending.AdoptPortableHistory(newState);
+            assert(pending.LastLogin({"A","Renamed"})==21&&pending.LastSeen({"A","Renamed"})==0);
+            assert(pending.ActiveKey()==CA::Key{});
+            assert(!pending.Fresh({"A","Renamed"},"Bags",0,500));
+            assert(pending.PortableHistory().count({{"A","Renamed"},replacement.at("Renamed").evidence}));
             CA::Tracker legacy;auto old=activity.Save();old["version"]=1;
             legacy.Load(old,true);
             legacy.FenceBindings("A",CI::CurrentBindings(newState));

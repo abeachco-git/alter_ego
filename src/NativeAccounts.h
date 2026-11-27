@@ -53,6 +53,7 @@ std::optional<CharacterIdentity::Address> EnsureCharacterAddress(const LinkedAcc
 bool VerifyCharacterAddress(const LinkedAccount& account,const CharacterIdentity::Address& address);
 void RecoverCharacterAddress(const LinkedAccount& account,const CharacterIdentity::Address& address);
 void PollObservedIdentity(const std::string& name,bool inventory=false);
+void AdoptPendingLoginHistory();
 bool RecordIdentityObservation(const LinkedAccount& account,const CharacterIdentity::Address& address,
     const std::string& created,const std::string& profession,const std::string& race);
 Result Request(const LinkedAccount& account,const std::string& path,
