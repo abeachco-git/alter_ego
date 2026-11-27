@@ -127,14 +127,14 @@ inline void RefreshLegends(const std::string& root,bool manual=false,bool initia
         if(!raw.is_array()||raw.empty())throw std::runtime_error("Empty legend API");
         std::set<uint32_t> swaps;
         for(const auto& row:raw)swaps.insert(Id(row.at("swap")));
-        std::string query;
-        for(auto id:swaps){if(!query.empty())query+=',';query+=std::to_string(id);}
-        auto skills=Fetch("/v2/skills?ids="+query);
+        const std::vector<uint32_t> swapIds(swaps.begin(),swaps.end());
+        auto skills=GW2API::AcquireLegendSwapSkills(swapIds,manual);
+        if(skills.size()!=swapIds.size())throw std::runtime_error("Incomplete verified legend swap skills");
         auto rows=ParseLegends(raw,skills);
         Background::Checkpoint();
         WithDb(root,[&](auto& db){Background::Checkpoint();Database::Transaction tx(db);StoreLegends(db,rows,Now());tx.Commit();Publish(db);});
-        // Swap skills use the existing icon/skill cache owner; no repeat
-        // lookup is needed to display the legend icon itself.
+        // Names/icons come from the committed canonical skill projection.
+        // Template identity remains the schema-pinned legend code.
         attempt.Finish();
         EndDataset("public_legends",true);
     },[]{EndDataset("public_legends",false);});

@@ -409,6 +409,8 @@ namespace AlterEgo {
         static void FetchSpecDetailsAsync(const std::vector<uint32_t>& spec_ids);
         static void FetchTraitDetailsAsync(const std::vector<uint32_t>& trait_ids);
         static void FetchSkillDetailsAsync(const std::vector<uint32_t>& skill_ids, bool requireEnvironmentMetadata=false);
+        // Worker-only complete legend enrichment; joins the existing skill owner.
+        static nlohmann::json AcquireLegendSwapSkills(const std::vector<uint32_t>& skillIds,bool manual);
         static void FetchItemStatDetailsAsync(const std::vector<uint32_t>& stat_ids);
         static void FetchDyeColorsAsync(bool manual=false);
 
@@ -630,6 +632,7 @@ namespace AlterEgo {
         static void FetchItemDetailsClaimed(RefreshEngine::IdBatch& claim, bool forceRefetch);
         static void FetchSkinDetails(RefreshEngine::IdBatch& claim);
         static void FetchTraitDetails(RefreshEngine::IdBatch& claim);
+        static void FetchClaimedSkillDetails(RefreshEngine::IdBatch& claim,const std::vector<uint32_t>& ids);
 
         // Parse helpers
         static Character ParseCharacterJson(const nlohmann::json& cj);

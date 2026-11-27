@@ -135,7 +135,7 @@ jobs:
                   print(f"FAILED: {type(exc).__name__}: {exc}")
           PY
       - name: Verify public catalog API payloads
-        if: (github.event_name == 'workflow_dispatch' && inputs.public_api_diagnostic) || github.event.head_commit.message == 'Persist companion catalogs and refresh reference metadata'
+        if: (github.event_name == 'workflow_dispatch' && inputs.public_api_diagnostic) || contains(github.event.head_commit.message, '[public-api-probe]')
         continue-on-error: true
         run: |
           python3 - <<'PY'
@@ -147,6 +147,15 @@ jobs:
                   data = json.load(r)
                   print(path, "HTTP", r.status, "records", len(data))
                   return data
+          professions = get("/v2/professions?ids=all&v=2019-12-19T00:00:00.000Z")
+          expected = ["Guardian","Warrior","Engineer","Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"]
+          assert len(professions) == 9 and {p["id"] for p in professions} == set(expected)
+          for p in professions:
+              assert p["code"] == expected.index(p["id"]) + 1
+              assert p["name"] and p["specializations"] and p["skills_by_palette"] and p["weapons"]
+              assert all(len(pair)==2 and 0<=pair[0]<=65535 and pair[1]>0 for pair in p["skills_by_palette"])
+              assert all(w["flags"] and w["skills"] for w in p["weapons"].values())
+              print(p["id"],"specializations",len(p["specializations"]),"palettes",len(p["skills_by_palette"]),"weapons",len(p["weapons"]))
           legends = get("/v2/legends?ids=all&v=2019-12-19T00:00:00.000Z")
           assert all({"id","code","swap"} <= l.keys() for l in legends)
           print("Legend identities:", [(l["id"], l["code"], l["swap"]) for l in legends])

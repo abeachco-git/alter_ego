@@ -171,6 +171,16 @@ inline std::string Summary(const Json& details,const std::string& description) {
 }
 struct Pet {uint32_t id=0;std::string name,icon;};
 struct Legend {uint8_t code=0;std::string apiId,name,icon;uint32_t swap=0;};
+// Skill records share the reference request-start watermark (microseconds).
+// An ordinary legend refresh can reuse complete recent skill observations;
+// manual refresh or stale/missing metadata requires a newer observation.
+inline bool LegendSkillNeedsRefresh(int64_t stamp,bool complete,int64_t now,bool manual){
+    const auto seconds=stamp/1000000;
+    return manual||!complete||seconds<=0||seconds>now||now-seconds>=Month;
+}
+inline bool LegendSkillCovered(int64_t baseline,int64_t observed,bool complete){
+    return complete&&observed>baseline&&observed>0;
+}
 inline std::vector<Pet> ParsePets(const Json& rows) {
     if(!rows.is_array()||rows.empty())throw std::runtime_error("Empty pet catalog");
     std::set<uint32_t> seen;std::vector<Pet> out;

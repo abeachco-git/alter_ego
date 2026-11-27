@@ -206,6 +206,19 @@ int case_database_core(int, char**) {
         assert(P::LegendCode(saved.legends,"Legend8")==8);
         assert(P::LegendCode(saved.legends,"Legend9")==0);
         assert(P::CanonicalLegendCode(13)==1&&P::CanonicalLegendCode(19)==7&&P::CanonicalLegendCode(8)==8);
+        const auto skillStamp=100LL*1000000;
+        assert(!P::LegendSkillNeedsRefresh(skillStamp,true,100+P::Month-1,false));
+        assert(P::LegendSkillNeedsRefresh(skillStamp,true,100+P::Month,false));
+        assert(P::LegendSkillNeedsRefresh(skillStamp,true,101,true));
+        assert(P::LegendSkillNeedsRefresh(skillStamp,false,101,false));
+        assert(P::LegendSkillNeedsRefresh(0,true,101,false));
+        assert(!P::LegendSkillCovered(skillStamp,skillStamp,true));
+        assert(!P::LegendSkillCovered(skillStamp,skillStamp+1,false));
+        assert(P::LegendSkillCovered(skillStamp,skillStamp+1,true));
+        bool missingSwap=false;
+        try{(void)P::ParseLegends(P::Json::parse(R"([{"id":"Legend8","code":8,"swap":500}])"),P::Json::array());}
+        catch(...){missingSwap=true;}
+        assert(missingSwap&&P::Read(db).legends[0].swap==500);
         assert(!P::DatasetDue(saved,"public_pets",101,false));
         assert(saved.upgrades==100&&saved.vault==100&&saved.index.size()==6&&saved.entries.size()==5);
         assert(saved.objectives.at(20).title=="Combo");
