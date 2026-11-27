@@ -4045,15 +4045,9 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,boo
         if (sinfo && !sinfo->icon_url.empty())
             AlterEgo::IconManager::RequestIcon(skill_id + 5000000, sinfo->icon_url);
     }
-    if (ImGui::IsItemHovered() && (sinfo || (editable&&!skill_id))) {
-        ImGui::BeginTooltip();
-        if (sinfo) {
-            const std::string desc = StripGW2Markup(sinfo->description);
-            AlterEgo::UI::TooltipText(sinfo->name.c_str(), desc.c_str());
-        } else {
-            ImGui::TextDisabled("Click to choose a skill");
-        }
-        ImGui::EndTooltip();
+    if(ImGui::IsItemHovered()){
+        if(sinfo&&!sinfo->name.empty())AlterEgo::UI::DetailTooltip(sinfo->name.c_str(),StripGW2Markup(sinfo->description).c_str());
+        else if(editable&&!skill_id)AlterEgo::UI::Hint("Click to choose a skill");
     }
     if(nameMenu&&skill_id&&ImGui::BeginPopupContextItem("##skill_name")) {
         CopyEntityMenu(sinfo?sinfo->name:std::string{},AlterEgo::LINK_SKILL,skill_id);ImGui::EndPopup();
@@ -7136,6 +7130,10 @@ static bool RenderSpecializationChoices(const std::string& profession,
         ImGui::SameLine(0,8);ImGui::AlignTextToFramePadding();
         if(!allowed)ImGui::TextDisabled("%s",label.c_str());
         else if(ImGui::Selectable(label.c_str(),ids[slot]==sid)){next=sid;changed=true;}
+        if(ImGui::IsItemHovered()){
+            if(!allowed)AlterEgo::UI::Hint("Already selected in another specialization slot.");
+            else RenderSpecializationTooltip(si->name,AlterEgo::UI::TooltipTitle,si->profession,false);
+        }
         NameOptionContext(si->name);
         ImGui::PopID();
     }
@@ -7284,6 +7282,8 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
         else if(ImGui::Selectable(label.c_str(),selected)){
             next=id;changed=true;ImGui::CloseCurrentPopup();
         }
+        if(disabled&&ImGui::IsItemHovered())AlterEgo::UI::Hint("Already selected in the other slot.");
+        else if(ImGui::IsItemHovered())AlterEgo::UI::Hint(label.c_str());
         NameOptionContext(label);
         ImGui::PopID();
     };
@@ -8617,9 +8617,10 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
 
     // Tooltip
     if (hovered && isRelicSlot && (!build.relic_name.empty()||build.relic_id)) {
-        ImGui::BeginTooltip();
         const auto info=AlterEgo::GW2API::GetItemInfo(build.relic_id);
         const auto label=AlterEgo::TooltipCore::EntityName(info?info->name:std::string{},build.relic_name);
+        if(!label.empty()){
+        ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
         AlterEgo::UI::TooltipLine(label.c_str(),ImVec4(.5f,.8f,.8f,1.f));
         if(info&&!info->description.empty())AlterEgo::UI::TooltipLine(StripGW2Markup(info->description).c_str());
         for (const auto& entry : GearCatalog("Relic")) {
@@ -8629,12 +8630,12 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
             }
         }
         ImGui::EndTooltip();
-    } else if (hovered && (hasData || infusionCount > 0 || (gearSlot&&gearSlot->item_id))) {
-        ImGui::BeginTooltip();
-        if(gearSlot&&gearSlot->item_id){
-            const auto info=AlterEgo::GW2API::GetItemInfo(gearSlot->item_id);
-            if(info)AlterEgo::UI::TooltipLine(info->name.c_str(),GetRarityColor(info->rarity));
         }
+    } else if (hovered && (hasData || infusionCount > 0 || (gearSlot&&gearSlot->item_id))) {
+        ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
+        const auto cachedItem=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
+        if(cachedItem&&!cachedItem->name.empty())AlterEgo::UI::TooltipLine(cachedItem->name.c_str(),GetRarityColor(cachedItem->rarity));
+        else AlterEgo::UI::TooltipLine(GearSlotDisplayName(slot),AlterEgo::UI::TooltipTitle);
         if(gearSlot){
             const auto upgrade=[](const char* label,uint32_t id,const std::string& stored){
                 if(!id&&stored.empty())return;
@@ -8664,7 +8665,8 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
                 "Infusions (%zu)", infusionCount);
             for(size_t i=0;i<AlterEgo::GearEdit::InfusionPositionCount(*gearSlot);++i){
                 const auto req=AlterEgo::GearEdit::InfusionPositionAt(*gearSlot,i);
-                if(req.exactId||!req.attribute.empty())ImGui::BulletText("%s",InfusionPositionLabel(req).c_str());
+                if(!req.attribute.empty())ImGui::BulletText("Stat: %s",InfusionAttributeLabel(req.attribute));
+                else if(req.exactId){const auto info=AlterEgo::GW2API::GetItemInfo(req.exactId);if(info&&!info->name.empty())ImGui::BulletText("%s",info->name.c_str());}
             }
         }
         ImGui::EndTooltip();
@@ -10425,9 +10427,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.34f, 1.0f),
             "Cached specialization may be outdated (hover for details)");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Live: %s (#%u) | Retrieved: %s (#%u)\nRefresh character data to update.",
-                GetSpecNameForWarning(currentId), currentId,
-                GetSpecNameForWarning(cachedId), cachedId);
+            AlterEgo::UI::DetailTooltip("Cached specialization may be outdated",(std::string("Live: ")+GetSpecNameForWarning(currentId)+"\nRetrieved: "+GetSpecNameForWarning(cachedId)+"\nRefresh character data to update.").c_str());
     }
 
     // A detailed comparison can perform many metadata lookups. Reuse its result
@@ -10568,18 +10568,18 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         ImGui::TextColored(warningColor, "| %zu unverified", unverified);
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Compared against retrieved character data. Unverified fields lack sufficient API data.");
+        AlterEgo::UI::Hint("Compared against retrieved character data. Unverified fields lack sufficient API data.");
     ImGui::TextDisabled("%zu matching / %zu different / %zu not fully checked",
         matchingComponents, differentComponents, unknownComponents);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Components with no saved data, no comparison rows, or unverified fields are not counted as matches.");
+        AlterEgo::UI::Hint("Components with no saved data, no comparison rows, or unverified fields are not counted as matches.");
     if (saved.gear.empty())
         ImGui::TextDisabled("No saved equipment snapshot.");
     else if (character->equipment.empty())
         ImGui::TextDisabled("No retrieved equipment data.");
     ImGui::Checkbox("Show all components##compare", &g_LibCompareShowMatches);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Include matching fields and components with no recorded data.");
+        AlterEgo::UI::Hint("Include matching fields and components with no recorded data.");
     ImGui::Separator();
     if (!actionableComponents && !g_LibCompareShowMatches)
         ImGui::TextDisabled("Nothing to change in the verified fields.");
@@ -10938,7 +10938,7 @@ static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
         }
         ImGui::EndCombo();
     }else{
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("Expected Loadout for this character, independent of in-game tabs.\nAutomatic recognizes a saved Loadout; None disables warnings.\nRight-click for actions.");
+    if(ImGui::IsItemHovered())AlterEgo::UI::DetailTooltip("Expected Loadout","Independent of in-game tabs. Automatic recognizes a saved Loadout; None disables warnings. Right-click for actions.");
     const auto* contextLoadout=CharacterContextLoadout(ch);
     ImGui::PushID(static_cast<int>(choice.mode));ImGui::PushID(contextLoadout?contextLoadout->id.c_str():"");
     AlterEgo::UI::EntityContext("##expected_context",[&]{RenderCharacterLoadoutContext(ch,contextLoadout,true);});
@@ -12907,6 +12907,14 @@ void ProcessCharacterLoad(){
 }
 std::string PlainItemDescription(const std::string& text){return StripGW2Markup(text);}
 
+static void RenderSkinEntityTooltip(const std::string& name,const std::string& rarity,bool hasOwnerData,bool owned){
+    using namespace AlterEgo::UI;
+    ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
+    TooltipLine(name.c_str(),GetSkinRarityColor(rarity));
+    if(hasOwnerData)TooltipLine(owned?"Owned":"Not owned",owned?ImVec4(.35f,.82f,.35f,1.f):ImVec4(.55f,.55f,.55f,1.f));
+    ImGui::EndTooltip();
+}
+
 static void RenderSkinList(float width) {
     ImGui::BeginChild("SkinList", ImVec2(width, 0), true);
     const auto& data=GetSkinBrowserData();
@@ -12929,14 +12937,7 @@ static void RenderSkinList(float width) {
                 }
             } else ImGui::TextDisabled("Ownership data not loaded");
         },[&]{g_SkinBrowserFilters={};g_SkinShowOwned=g_SkinShowUnowned=true;changed();});
-    static void RenderSkinEntityTooltip(const std::string& name,const std::string& rarity,bool hasOwnerData,bool owned){
-    using namespace AlterEgo::UI;
-    ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
-    TooltipLine(name.c_str(),GetSkinRarityColor(rarity));
-    if(hasOwnerData)TooltipLine(owned?"Owned":"Not owned",owned?ImVec4(.35f,.82f,.35f,1.f):ImVec4(.55f,.55f,.55f,1.f));
-    ImGui::EndTooltip();
-}
-struct SkinDisplayEntry {uint32_t id;bool owned;};
+    struct SkinDisplayEntry {uint32_t id;bool owned;};
     static std::vector<SkinDisplayEntry> displaySkins;
     static Skinventory::FilterResult result;
     static Skinventory::SkinFilters previous;
@@ -13326,7 +13327,7 @@ static void RenderSkinDetailPanel() {
         if(ImGui::MenuItem("Copy Local File Path",nullptr,false,!links.localPath.empty()))CopyToClipboard(links.localPath);
         ImGui::EndPopup();
     }
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("Right-click for preview refresh and copy actions.");
+    if(ImGui::IsItemHovered())AlterEgo::UI::Hint("Right-click for preview refresh and copy actions.");
     ImGui::PopID();
 
     // Action buttons
@@ -16975,7 +16976,7 @@ void AddonRender() {
             ImGui::TabItemButton("Skins", ImGuiTabItemFlags_NoReorder);
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", acctTabTooltip);
+                AlterEgo::UI::Hint(acctTabTooltip);
         } else if (g_SkinInitialized) {
             ImGuiTabBar* skinBar=GImGui->CurrentTabBar;
             ImGuiID beforeSkin=skinBar?skinBar->SelectedTabId:0;
@@ -16998,7 +16999,7 @@ void AddonRender() {
             ImGui::TabItemButton("Clears", ImGuiTabItemFlags_NoReorder);
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", acctTabTooltip);
+                AlterEgo::UI::Hint(acctTabTooltip);
         } else {
             ImGuiTabBar* accountTabBar = GImGui->CurrentTabBar;
             ImGuiID beforeVault = accountTabBar ? accountTabBar->SelectedTabId : 0;
@@ -17037,7 +17038,7 @@ void AddonRender() {
             ImGui::TabItemButton("Achievements", ImGuiTabItemFlags_NoReorder);
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", acctTabTooltip);
+                AlterEgo::UI::Hint(acctTabTooltip);
         } else {
             ImGuiTabBar* achTabBar = GImGui->CurrentTabBar;
             const ImGuiID beforeAchievements = achTabBar ? achTabBar->SelectedTabId : 0;
@@ -17363,7 +17364,7 @@ static void RenderStorageDiagnostics() {
         if(sameRow)ImGui::SameLine();
         if(RenderActionButton(rebuildLabel))
             ImGui::OpenPopup("Confirm cache maintenance##ae_cache_confirm");
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("Rebuild the selected cache at next addon startup.");
+        if(ImGui::IsItemHovered())AlterEgo::UI::Hint("Rebuild the selected cache at next addon startup.");
         if(ImGui::BeginPopupModal("Confirm cache maintenance##ae_cache_confirm",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("%s",labels[selected]);
             ImGui::TextWrapped("Runs at next addon startup, before cache readers and workers. Saved library, settings, pins, login history and backups are untouched.");
@@ -17516,7 +17517,7 @@ void AddonOptions() {
     if(ImGui::InputInt("Objective tracking (minutes)##ae_objective_interval",&objectiveMinutes,1,5)){
         AlterEgo::RefreshEngine::SetObjectiveMinutes(objectiveMinutes);SaveSettings();
     }
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("Pinned achievements, Clears and daily/weekly Wizard\'s Vault. General browsing and Special: 30 minutes.");
+    if(ImGui::IsItemHovered())AlterEgo::UI::Hint("Pinned achievements, Clears and daily/weekly Wizard\'s Vault. General browsing and Special: 30 minutes.");
     if (!g_AutoRefreshEnabled) {
         ImGui::PopStyleVar();
         ImGui::PopItemFlag();

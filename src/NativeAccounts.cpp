@@ -1297,7 +1297,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         if(group.currency){
             const auto& w=*group.balances.front();
             ImGui::PushID("currency");ImGui::PushID(static_cast<int>(group.id));
-            auto hit=UI::CatalogRow(rowIndex,on,0x40000000u|group.id,w.icon,group.name,"",quantityText(group.id,true,count));
+            auto hit=UI::CatalogRow(rowIndex,on,0x40000000u|group.id,w.icon,group.name,"",quantityText(group.id,true,count),false,-1,[&]{if(!w.name.empty())UI::DetailTooltip(w.name.c_str(),PlainItemDescription(w.description).c_str());});
             select(hit.clicked);ItemMenu(group.id,group.name,{}, {},true);
             ImGui::PopID();ImGui::PopID();return;
         }

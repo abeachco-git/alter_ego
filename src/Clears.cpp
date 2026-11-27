@@ -2254,7 +2254,7 @@ static void RenderVaultObjectiveRow(const VaultObjective& obj, float width) {
     ImGui::InvisibleButton("##vobj", ImVec2(width, h));
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
-        ImGui::TextUnformatted(obj.title.c_str());
+        AlterEgo::UI::TooltipLine(obj.title.c_str(),AlterEgo::UI::TooltipTitle);
         if (claimed)
             ImGui::TextColored(ImVec4(0.55f, 0.88f, 0.58f, 1.0f), "Completed - reward claimed");
         else if (done)
