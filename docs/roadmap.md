@@ -8,10 +8,6 @@ Forward-looking tracker for the experimental branch. This file contains only unr
 
 - [ ] **Separate discussion:** decide which public catalogs genuinely require startup/settings-triggered retrieval. Do not change that policy as part of the approved account settings fix.
 
-## Application-wide consistency — Part 5B (approved)
-
-- [ ] Finish runtime verification and DLL delivery for approved tooltip presentation, hover, entity, diagnostic and coverage work. Confirm remaining application coverage and live Nexus hover/narrow-layout behavior; preserve native chat links, refresh policy, comparison evidence and account-qualified character location.
-
 ## Remaining Library work
 
 - [ ] **Approved remainder:** inline inherited-category editing: review whether replacing an inherited category should require switching/detaching the set or a deliberate private override; do not silently mutate shared sets. Preserve the existing atomic parent Save review and explicit shared consent. Preserve the existing equipment ownership and draft rules; do not reopen completed Part 1 work.
