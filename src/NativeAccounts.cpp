@@ -2158,9 +2158,9 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     const auto definition=GW2API::GetItemInfo(group.id);
     const auto name=definition&&!definition->name.empty()?definition->name:group.name.empty()?"Item #"+std::to_string(group.id):group.name;
     const auto* meta=metaFor(group.id);
-    const auto& rarity=definition?definition->rarity:representative.rarity;
-    const auto& type=definition?definition->type:representative.type;
-    UI::CatalogBanner(name,rarity+"  /  "+type,rarity);
+    const auto& itemRarity=definition?definition->rarity:representative.rarity;
+    const auto& itemType=definition?definition->type:representative.type;
+    UI::CatalogBanner(name,itemRarity+"  /  "+itemType,itemRarity);
     std::vector<uint32_t> definitionDemand{group.id};
     ImGui::PushID(static_cast<int>(group.id));ItemMenu(group.id,name,representative.chat,loadTargets(group.id));ImGui::PopID();
     ImGui::TextDisabled("ID: %u",group.id);
@@ -2278,7 +2278,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     if(definition)RenderItemDefinitionDetails(*definition,TooltipCore::ItemAll,false);
     else if(meta&&meta->complete){
         // Retain a verified snapshot fallback without making it a competing owner.
-        ItemInfo prior;prior.type=type;prior.rarity=rarity;prior.description=meta->description;prior.details=meta->details;
+        ItemInfo prior;prior.type=itemType;prior.rarity=itemRarity;prior.description=meta->description;prior.details=meta->details;
         RenderItemDefinitionDetails(prior,TooltipCore::ItemAll,false);
     }else ImGui::TextDisabled("Detailed metadata not retrieved.");
     ImGui::EndChild();
