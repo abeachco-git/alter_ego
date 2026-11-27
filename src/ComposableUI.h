@@ -753,25 +753,6 @@ static void RenderReferenceGroupLabel(const char* label) {
     ImGui::Spacing();ImGui::TextUnformatted(label);ImGui::Separator();
 }
 static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,const ComponentJson& item,bool reference=false,bool mutableActions=true);
-static bool ReferenceHitRow(const std::string& name,bool inherited,const char* hint){
-    const float width=std::max(1.f,ImGui::GetContentRegionAvail().x);
-    const float reserve=inherited?18.f:0.f;
-    const float wrap=std::max(1.f,width-reserve);
-    const auto start=ImGui::GetCursorScreenPos();
-    const float height=std::max(ImGui::GetTextLineHeight(),ImGui::CalcTextSize(name.c_str(),nullptr,false,wrap).y);
-    const bool clicked=ImGui::Selectable("##reference",false,ImGuiSelectableFlags_SpanAllColumns,ImVec2(width,height));
-    auto* draw=ImGui::GetWindowDrawList();
-    draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),start,ImGui::GetColorU32(ImGuiCol_Text),name.c_str(),nullptr,wrap);
-    if(inherited){
-        const float x=start.x+width-11.f,y=start.y+ImGui::GetTextLineHeight()*0.5f;
-        const auto color=ImGui::GetColorU32(ImGuiCol_TextDisabled);
-        draw->AddCircle(ImVec2(x-3.f,y+2.f),3.f,color,12,1.2f);
-        draw->AddCircle(ImVec2(x+3.f,y-2.f),3.f,color,12,1.2f);
-        draw->AddLine(ImVec2(x-1.f,y+1.f),ImVec2(x+1.f,y-1.f),color,1.2f);
-    }
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",name.c_str(),hint);
-    return clicked;
-}
 static void ReferenceComponentActions(const ComponentJson& doc,const std::string& kind,const std::string& id,bool mutableActions){
     if(const auto* part=ComponentUIFind(doc,kind,id))
         if(ImGui::BeginPopupContextItem("##ref_actions")){
@@ -781,9 +762,11 @@ static void ReferenceComponentActions(const ComponentJson& doc,const std::string
 }
 static void RenderReferenceValue(const ComponentJson& doc,const std::string& kind,const std::string& id,bool inherited,bool mutableActions,const char* empty="Not set"){
     const auto name=ComponentUIRefName(doc,kind,id,empty);
-    if(!ComponentUIFind(doc,kind,id)){ImGui::TextDisabled("%s",name.c_str());return;}
+    const bool exists=ComponentUIFind(doc,kind,id)!=nullptr;
     const char* hint=inherited?"From Equipment Set. Right-click for actions.":"Right-click for actions.";
-    if(ReferenceHitRow(name,inherited,hint)&&mutableActions)ComponentUIOpenLibrary(kind,id);
+    if(AlterEgo::UI::ReferencePreviewRow("##reference",ComponentLabel(kind),name,inherited&&exists,hint,exists)&&mutableActions)
+        ComponentUIOpenLibrary(kind,id);
+    if(!exists)return;
     ReferenceComponentActions(doc,kind,id,mutableActions);
 }
 static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* loadout,
@@ -836,10 +819,11 @@ static void RenderEditableReferenceRows(const ComponentJson& doc,const Component
     ComponentJson candidate=owner?*owner:ComponentJson::object();
     for(int j=0;j<count;++j){
         const std::string kind=kComponentKinds[kinds[j]].kind;
-        ImGui::PushID(kind.c_str());ReferenceLabel(ComponentLabel(kind));
+        ImGui::PushID(kind.c_str());
         if(linked&&linked->at("refs").contains(kind)){
             const auto original=linked->at("refs").value(kind,std::string());
             if(e.parentDraft){
+                ReferenceLabel(ComponentLabel(kind));
                 const auto staged=e.inherited.find(kind);
                 ReferenceMap selection{{kind,staged==e.inherited.end()?original:staged->second}};
                 candidate["refs"]=e.refs;
@@ -850,6 +834,7 @@ static void RenderEditableReferenceRows(const ComponentJson& doc,const Component
                 }
             }else RenderReferenceValue(doc,kind,original,true,false);
         }else{
+            ReferenceLabel(ComponentLabel(kind));
             candidate["refs"]=e.refs;
             if(RenderReferencePicker(doc,e.isSet?nullptr:&candidate,kind,e.refs,e.isSet))e.confirmed=false;
         }
@@ -962,7 +947,7 @@ static void RenderReferenceEditor(){
 // Read-only references share the same menu/action dispatcher as the Components collection.
 static void RenderReferencePreviewRow(const ComponentJson& doc,const std::string& kind,const std::string& ref,
     const std::string&,bool inherited,bool actions,const char* empty="Not set"){
-    ImGui::PushID(kind.c_str());ReferenceLabel(ComponentLabel(kind));
+    ImGui::PushID(kind.c_str());
     RenderReferenceValue(doc,kind,ref,inherited,actions,empty);
     ImGui::PopID();
 }
@@ -1012,9 +997,9 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
     bool nameSet=false;
     if(ImGui::BeginTable("##loadout_equipment_refs",2,ImGuiTableFlags_SizingStretchProp)){
         ReferenceTableColumns();
-        ImGui::PushID("equipment_set");ReferenceLabel("Equipment Set");
+        ImGui::PushID("equipment_set");
         const std::string setLabel=linked?linked->value("name",linkedId):"Independent components";
-        if(ReferenceHitRow(setLabel,false,"Right-click for Equipment Set actions.")&&actions&&linked){
+        if(UI::ReferencePreviewRow("##reference","Equipment Set",setLabel,false,"Right-click for Equipment Set actions.")&&actions&&linked){
             g_EquipmentSetSelectedId=linkedId;NavigateToLibraryCollection(3);
         }
         if(ImGui::BeginPopupContextItem("##set_actions")){
@@ -1038,14 +1023,14 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             const bool shared=inherited.count(kind)!=0;
             RenderReferencePreviewRow(doc,kind,ComponentUIRef(shared?inherited:direct,kind),loadoutId,shared,actions);
         }
-        ImGui::PushID("fashion_ref");ReferenceLabel("Fashion");
+        ImGui::PushID("fashion_ref");
         const auto fashionId=editing?g_EditFashionId:l->value("fashion_id",std::string());
         int index=-1;
         for(int i=0;i<(int)g_FashionLibrary.looks.size();++i)if(g_FashionLibrary.looks[i].id==fashionId){index=i;break;}
-        if(index<0)ImGui::TextDisabled("%s",ComponentUIFashionName(fashionId).c_str());
+        if(index<0)UI::ReferencePreviewRow("##reference","Fashion",ComponentUIFashionName(fashionId),false,nullptr,false);
         else{
             const auto& look=g_FashionLibrary.looks[index];
-            if(ReferenceHitRow(look.name,false,"Right-click for Fashion actions.")&&actions){g_FashionSelectedId=look.id;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
+            if(UI::ReferencePreviewRow("##reference","Fashion",look.name,false,"Right-click for Fashion actions.")&&actions){g_FashionSelectedId=look.id;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
             if(ImGui::BeginPopupContextItem("##fashion_actions")){
                 if(actions&&AlterEgo::UI::MenuAction("Open in Fashion",AlterEgo::UI::MenuIcon::Open)){g_FashionSelectedId=look.id;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
                 if(actions&&AlterEgo::UI::MenuAction("Edit Fashion",AlterEgo::UI::MenuIcon::Edit,!g_FashionDialog,"Save or cancel the current Fashion draft first."))RunFashionAction(FashionAction::Edit,look);
@@ -1639,8 +1624,7 @@ static void RenderEquipmentSetLibrary() {
     for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==id)
         ImGui::BulletText("%s",l.at("metadata").value("name",l.value("id",std::string())).c_str());
     if(ImGui::BeginTable("##equipment_set_refs",2,ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,110.f);
-        ImGui::TableSetupColumn("Selection",ImGuiTableColumnFlags_WidthStretch);
+        ReferenceTableColumns();
         const auto refs=ComponentUIRefs(*selected);
         for(int i:kEquipmentReferenceOrder){
             const std::string kind=kComponentKinds[i].kind;

@@ -656,6 +656,57 @@ inline bool CatalogOption(const char* name, const char* description, bool select
     if(ImGui::IsItemHovered())DetailTooltip(name,description);
     return clicked;
 }
+// A read-only two-column reference row is one native hit target. Measure both
+// cells before submission, and keep the editable frame-padding convention out
+// of this path. Table work bounds come from the pinned ImGui 1.80 layout.
+struct ReferenceRowLayout {
+    float height, labelY, valueY, linkY, wrap;
+};
+inline ReferenceRowLayout MeasureReferenceRow(float labelHeight,float valueHeight,float lineHeight,float wrap) {
+    const float height=std::max(lineHeight,std::max(labelHeight,valueHeight));
+    return {height,(height-labelHeight)*.5f,(height-valueHeight)*.5f,height*.5f,wrap};
+}
+inline bool ReferencePreviewRow(const char* id,const char* label,const std::string& value,
+                                bool inherited,const char* hint,bool interactive=true) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    const auto* table=ImGui::GetCurrentContext()->CurrentTable;
+    const float line=ImGui::GetTextLineHeight();
+    const float labelWidth=std::max(1.f,ImGui::GetContentRegionAvail().x);
+    const float width=std::max(1.f,table->Columns[1].WorkMaxX-table->Columns[1].WorkMinX);
+    const float reserve=inherited?line*1.4f:0.f;
+    const float wrap=std::max(1.f,width-reserve);
+    const auto layout=MeasureReferenceRow(
+        ImGui::CalcTextSize(label,nullptr,false,labelWidth).y,
+        ImGui::CalcTextSize(value.c_str(),nullptr,false,wrap).y,line,wrap);
+    const auto start=ImGui::GetCursorScreenPos();
+    auto* draw=ImGui::GetWindowDrawList();
+    if(!ImGui::GetCurrentWindow()->SkipItems)
+        draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),ImVec2(start.x,start.y+layout.labelY),
+                      ImGui::GetColorU32(ImGuiCol_Text),label,nullptr,labelWidth);
+    ImGui::TableSetColumnIndex(1);
+    const auto pos=ImGui::GetCursorScreenPos();
+    // Zero width is essential: SpanAllColumns then uses the entire table
+    // work rectangle, not a value-cell-sized rectangle starting at column 0.
+    const bool clicked=interactive
+        ? ImGui::Selectable(id,false,ImGuiSelectableFlags_SpanAllColumns,ImVec2(0,layout.height))
+        : (ImGui::Dummy(ImVec2(width,layout.height)),false);
+    if(!ImGui::GetCurrentWindow()->SkipItems){
+        draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),ImVec2(pos.x,pos.y+layout.valueY),
+                      ImGui::GetColorU32(interactive?ImGuiCol_Text:ImGuiCol_TextDisabled),
+                      value.c_str(),nullptr,layout.wrap);
+        if(inherited&&width>=reserve){
+            const float scale=line/13.f;
+            const float x=pos.x+width-reserve*.5f,y=pos.y+layout.linkY;
+            const auto color=ImGui::GetColorU32(ImGuiCol_TextDisabled);
+            draw->AddCircle(ImVec2(x-3.f*scale,y+2.f*scale),3.f*scale,color,12,1.2f*scale);
+            draw->AddCircle(ImVec2(x+3.f*scale,y-2.f*scale),3.f*scale,color,12,1.2f*scale);
+            draw->AddLine(ImVec2(x-scale,y+scale),ImVec2(x+scale,y-scale),color,1.2f*scale);
+        }
+    }
+    if(interactive&&hint&&ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",value.c_str(),hint);
+    return clicked;
+}
 inline void ActiveIndicator(ImDrawList* draw, ImVec2 center) {
     draw->AddCircleFilled(center, ActiveRadius, IM_COL32(60, 200, 80, 255));
 }

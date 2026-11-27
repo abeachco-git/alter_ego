@@ -60,6 +60,54 @@ int case_selector_context(int, char**) {
     context=-1;const auto closed=preview;
     frame(false,closed,true);frame(false,closed,false);frame(false,closed,false);
     assert(selected==0);assert(context==10);
+    // The actual native reference row must cover both columns and retain one
+    // right-click target, including a wrapped value and the inherited glyph.
+    frame(false,outside,false,true);frame(false,outside,false);
+    const auto one=MeasureReferenceRow(13,13,13,200);
+    const auto wrapped=MeasureReferenceRow(13,39,13,100);
+    const auto narrow=MeasureReferenceRow(39,13,13,30);
+    assert(one.labelY==one.valueY&&one.linkY==one.height*.5f);
+    assert(wrapped.height==39&&wrapped.labelY==13&&wrapped.valueY==0&&wrapped.linkY==19.5f);
+    assert(narrow.height==39&&narrow.labelY==0&&narrow.valueY==13);
+    ImVec2 labelHit,linkHit,valueHit;int rowContext=0;bool hovered=false,clicked=false;
+    auto referenceFrame=[&](ImVec2 mouse,bool right,bool left=false,bool dismiss=false,float w=400.f){
+        io.DeltaTime=1.f/60.f;io.MousePos=mouse;io.MouseDown[1]=right;io.MouseDown[0]=left;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(40,40));ImGui::SetNextWindowSize(ImVec2(w,300));
+        ImGui::Begin("Reference test");
+        if(dismiss)ImGui::ClosePopupToLevel(0,true);
+        if(ImGui::BeginTable("refs",2,ImGuiTableFlags_SizingStretchProp)){
+            ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,116.f);
+            ImGui::TableSetupColumn("Selection",ImGuiTableColumnFlags_WidthStretch);
+            clicked=ReferencePreviewRow("##ref","Weapons",
+                "Long weapon description with a second and third wrapped line for narrow view",true,"Linked");
+            const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();
+            const auto* table=ImGui::GetCurrentContext()->CurrentTable;
+            assert(a.x<=table->Columns[0].WorkMinX&&b.x>=table->Columns[1].WorkMaxX);
+            assert(b.y-a.y>ImGui::GetTextLineHeight());
+            labelHit=ImVec2(table->Columns[0].WorkMinX+5,(a.y+b.y)*.5f);
+            valueHit=ImVec2(table->Columns[1].WorkMinX+5,(a.y+b.y)*.5f);
+            linkHit=ImVec2(table->Columns[1].WorkMaxX-7,(a.y+b.y)*.5f);
+            hovered=ImGui::IsItemHovered();
+            EntityContext("##ref_actions",[&]{++rowContext;ImGui::TextUnformatted("Actions");});
+            ImGui::PushID("missing");
+            ReferencePreviewRow("##ref","Fashion","Not set",false,nullptr,false);
+            assert(ImGui::GetItemRectMin().y>=b.y-ImGui::GetStyle().ItemSpacing.y);
+            ImGui::PopID();
+            ImGui::EndTable();
+        }
+        ImGui::End();ImGui::Render();
+    };
+    referenceFrame(outside,false);referenceFrame(outside,false);
+    referenceFrame(labelHit,false);assert(hovered);
+    referenceFrame(valueHit,false);assert(hovered);
+    referenceFrame(linkHit,false);assert(hovered);
+    referenceFrame(linkHit,true);referenceFrame(linkHit,false);referenceFrame(linkHit,false);
+    assert(rowContext>0&&!clicked);
+    referenceFrame(outside,false,false,true);referenceFrame(outside,false);
+    referenceFrame(labelHit,false,true);referenceFrame(labelHit,false,false);assert(clicked);
+    referenceFrame(outside,false,false,false,260.f);referenceFrame(outside,false,false,false,260.f);
+    referenceFrame(linkHit,false,false,false,260.f);assert(hovered);
     ImGui::DestroyContext();
     return 0;
 }

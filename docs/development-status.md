@@ -8,6 +8,8 @@ CI is not in-game validation, host-contract proof, antivirus clearance or a nati
 
 ## Outstanding live verification
 
+- [ ] **Library reference alignment:** confirm category, wrapped value and inherited chain glyph are centered together; hover/right-click spans the complete row in Loadout and Equipment Set views, including inherited read-only rows in reference editing. Check narrow widths and custom fonts; editable selectors retain their frame alignment.
+
 - [ ] **Companion artwork:** on a cold texture cache, open both Loadout and standalone Base Build pet/legend selectors and view a saved Revenant build. Verify placeholder-to-icon publication, shared skill/legend identity and no duplicate in-flight downloads, persistent reuse after restart/offline, missing metadata/failed HTTP recovery with existing artwork cooldowns, and unchanged pet/legend selection semantics.
 
 - [ ] **Shared account freshness:** verify old Bank/Shared Inventory/Materials/Armory snapshots do not become current on login, fresh data retains its remaining interval, account switching and retry suppression remain isolated, and recurring staggering/offline coverage are preserved. Check Wardrobe A→B→A failure cooldown, fresh account cache reuse and manual override. Wallet and Delivery now use 10 minutes; test grouped same-account demand, per-endpoint outcomes and metadata reuse; Armory remains 30 minutes. Verify active character detail/bags/equipment immediately eligible when overdue at login. Vault/Clears per-section eligibility and coverage are changed; reset fingerprints, retry durations and reset grace are retained. Live rollover, claimed/completed period suppression, partial retries and shared achievement adoption must be revalidated.
