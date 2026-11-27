@@ -7,9 +7,6 @@ import sys
 import struct
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "icons"
-LEGEND_ICONS = {5028085, 5028134, 5028195, 5028419, 5028494, 5041858, 5062749, 5076610}
-PET_ICONS = {9400000+i for i in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 51, 52, 54, 55, 57, 59, 61, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74)}
-COMPANION_ICONS = LEGEND_ICONS | PET_ICONS
 
 
 def read_icons(folder=ASSETS):
@@ -31,9 +28,6 @@ def read_icons(folder=ASSETS):
         if asset_id in (9300001, 9300002):
             if not name.endswith('.png') or len(content) < 33 or struct.unpack_from('>IIBB', content, 16) != (32, 32, 8, 6):
                 raise ValueError(f'Raid modifier must be 32x32 8-bit RGBA PNG: {name}')
-        if asset_id in COMPANION_ICONS:
-            if not name.endswith('.png') or len(content) < 33 or struct.unpack_from('>IIBB', content, 16) != (64, 64, 8, 6):
-                raise ValueError(f'Companion must be 64x64 RGBA PNG: {name}')
         images[asset_id] = (name, content)
     expected = set(range(9000001, 9000010)) | set(range(9200001, 9200010))
     expected |= set(range(9100001, 9100010)) | {43766, 98501, 68326, 9300001, 9300002}
@@ -42,7 +36,6 @@ def read_icons(folder=ASSETS):
     if small != large or len(small) < 36:
         raise ValueError("Incomplete elite icon pairs")
     expected |= {1500000+i for i in small} | {2000000+i for i in large}
-    expected |= COMPANION_ICONS
     if set(images) != expected:
         raise ValueError("Unexpected or missing fixed icon resource IDs")
     files = {p.name for p in folder.iterdir() if p.suffix.lower() in (".png", ".jpg")}

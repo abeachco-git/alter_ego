@@ -29,4 +29,4 @@ The generator emits WikiEventMetadata.inc from the manifest and verified snapsho
 
 Fixed raid modifier IDs 9300001/9300002 are 32x32 RGBA PNGs retained during manual asset staging. Normal resource generation and verification remain offline.
 
-`stage_companion_icons.py` is a manual acquisition/review tool for bounded legend-swap and pet icons; it is not invoked by normal builds. The manual staging workflow is read-only and uploads a review artifact. Reviewed assets are preserved by update_embedded_icons.py; new companion IDs require a reviewed manifest/generator update.
+`stage_companion_icons.py` is retained for manual companion artwork research only; its read-only workflow uploads a review artifact. Companion icons are runtime-cached and must not be added to the fixed artwork manifest or generator. Normal builds do not fetch them.

@@ -305,8 +305,8 @@ int case_database_core(int, char**) {
             P::Json::parse(R"([{"id":500,"name":"Legendary Entity Stance","icon":"url"}])"));
         {DB::Transaction tx(db);P::StorePets(db,pets,100);P::StoreLegends(db,legends,100);tx.Commit();}
         auto saved=P::Read(db);
-        assert(saved.pets.size()==1&&saved.pets[0].id==4);
-        assert(saved.legends.size()==1&&saved.legends[0].swap==500);
+        assert(saved.pets.size()==1&&saved.pets[0].id==4&&saved.pets[0].icon=="url");
+        assert(saved.legends.size()==1&&saved.legends[0].swap==500&&saved.legends[0].icon=="url");
         assert(P::LegendCode(saved.legends,"Legend8")==8);
         assert(P::LegendCode(saved.legends,"Legend9")==0);
         assert(P::CanonicalLegendCode(13)==1&&P::CanonicalLegendCode(19)==7&&P::CanonicalLegendCode(8)==8);

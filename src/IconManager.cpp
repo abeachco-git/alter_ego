@@ -299,6 +299,10 @@ Texture_t* IconManager::GetIcon(uint32_t id) {
     return nullptr;
 }
 
+Texture_t* IconManager::GetOrRequestIcon(uint32_t id, const std::string& iconUrl, bool priority) {
+    return ArtworkRequest::Resolve(id, iconUrl, priority, GetIcon, RequestIcon);
+}
+
 void IconManager::RequestIcon(uint32_t id, const std::string& iconUrl, bool priority) {
     if (!s_API || s_StopWorker) return;
     // Embedded assets can be resolved without a URL; this also avoids queuing

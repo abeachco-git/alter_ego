@@ -178,7 +178,7 @@ Nexus refresh no longer exposes an unconditional login refresh option. Character
 
 Storage & Cache includes a collapsed API Activity tree. It samples the in-memory transport counters once per second while expanded, independent of Inspect Storage. Show rolling 10-minute/hour and session request totals, outcome/429, active/waiting and peak starts per second, with endpoint groups under a nested tree. No filesystem, SQL or network access is triggered by this diagnostic.
 
-The Ranger pet picker displays 32px pet artwork from the existing IconManager; known IDs use embedded PNGs. Preserve the existing selection/disabled semantics and use stable pet ID scopes.
+The shared Ranger pet and Revenant legend picker displays 30px artwork through IconManager::GetOrRequestIcon, the same offline-first resolver as the ordinary skill renderer. Legends share the swap skill cache key; pets use their existing separate ID namespace. Retain placeholders while artwork is unavailable, selection/disabled semantics and stable ID scopes.
 
 API Activity shows separate ArenaNet API, Wiki and ArenaNet artwork rows and compact fixed initiation-reason counts. Queue waiting is shown only for hosts with shared admission, and metadata ID counts remain distinct from HTTP requests.
 

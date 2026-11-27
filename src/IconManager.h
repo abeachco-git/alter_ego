@@ -11,6 +11,7 @@
 #include <thread>
 #include <chrono>
 #include "nexus/Nexus.h"
+#include "ArtworkRequest.h"
 
 namespace AlterEgo {
 
@@ -25,6 +26,10 @@ public:
 
     // Get icon texture for a given identifier (returns nullptr if not loaded yet)
     static Texture_t* GetIcon(uint32_t id);
+
+    // Shared offline-first artwork resolution for callers with a metadata URL.
+    static Texture_t* GetOrRequestIcon(uint32_t id, const std::string& iconUrl,
+                                       bool priority = false);
 
     // Request icon to be loaded (async) - uses GW2 API icon URL.
     // When priority=true, the request jumps to the front of the queue —

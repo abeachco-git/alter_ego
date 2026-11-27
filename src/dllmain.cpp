@@ -3886,12 +3886,15 @@ static ImVec2 RenderTraitIcon(uint32_t trait_id, bool selected, bool isMinor, fl
 
 // Clickable skill icon for the build editor (icon cache = skill_id + 5000000).
 // Returns true when clicked. skill_id 0 draws an empty slot.
-static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,bool nameMenu=true) {
+static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,bool nameMenu=true,
+                                const std::string& fallbackIconUrl={}) {
     const auto sinfo = skill_id ? AlterEgo::GW2API::GetSkillInfo(skill_id) : nullptr;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 max(pos.x + size, pos.y + size);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    Texture_t* tex = skill_id ? AlterEgo::IconManager::GetIcon(skill_id + 5000000) : nullptr;
+    const auto iconKey=AlterEgo::ArtworkRequest::SkillKey(skill_id);
+    const auto& iconUrl=sinfo&&!sinfo->icon_url.empty()?sinfo->icon_url:fallbackIconUrl;
+    Texture_t* tex = AlterEgo::IconManager::GetOrRequestIcon(iconKey,iconUrl);
     ImGui::PushID((int)(skill_id + 5000000));
     bool clicked = false;
     if (editable) {
@@ -3906,8 +3909,6 @@ static bool RenderSkillIconCore(uint32_t skill_id, float size, bool editable,boo
         dl->AddRectFilled(pos, max, editable ? IM_COL32(35,35,35,180) :
             skill_id ? IM_COL32(40,40,60,200) : IM_COL32(30,30,30,200));
         if (editable) dl->AddRect(pos, max, IM_COL32(90,80,50,200));
-        if (sinfo && !sinfo->icon_url.empty())
-            AlterEgo::IconManager::RequestIcon(skill_id + 5000000, sinfo->icon_url);
     }
     if(ImGui::IsItemHovered()){
         if(sinfo&&!sinfo->name.empty())AlterEgo::UI::DetailTooltip(sinfo->name.c_str(),StripGW2Markup(sinfo->description).c_str());
@@ -6787,10 +6788,10 @@ static std::vector<LegendOption> LegendOptions() {
         {7,"Alliance (Vindicator)",0,{}},{8,"Entity (Conduit)",0,{}}};
     return out;
 }
-static std::string LegendNameForCode(uint8_t code) {
+static LegendOption LegendOptionForCode(uint8_t code) {
     code=AlterEgo::PublicCatalog::CanonicalLegendCode(code);
-    for (const auto& l : LegendOptions()) if (l.code == code) return l.name;
-    return code?"Unknown legend ("+std::to_string(code)+")":"Choose legend";
+    for (const auto& l : LegendOptions()) if (l.code == code) return l;
+    return {code,code?"Unknown legend ("+std::to_string(code)+")":"Choose legend",0,{}};
 }
 
 // Render the same GW2 profession image used in the Characters roster in
@@ -7140,7 +7141,7 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     using AlterEgo::SkillEdit::PairChoiceAllowed;
     const auto pets=legend?std::vector<AlterEgo::PetInfo>{}:AlterEgo::GW2API::GetPets();
     std::string name;
-    if(legend)name=current<=255?LegendNameForCode(static_cast<uint8_t>(current)):
+    if(legend)name=current<=255?LegendOptionForCode(static_cast<uint8_t>(current)).name:
         "Unknown legend ("+std::to_string(current)+")";
     else {
         name=current?"Unknown pet ("+std::to_string(current)+")":"Choose pet";
@@ -7159,11 +7160,11 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     auto row=[&](uint32_t id,const std::string& label,uint32_t iconId,
                  const std::string& url,bool disabled,bool selected){
         ImGui::PushID(static_cast<int>(id));
-        auto* icon=iconId?AlterEgo::IconManager::GetIcon(iconId):nullptr;
+        auto* icon=AlterEgo::IconManager::GetOrRequestIcon(iconId,url);
         constexpr float size=30.0f;
         if(icon&&icon->Resource)ImGui::Image(icon->Resource,ImVec2(size,size),ImVec2(0,0),ImVec2(1,1),
             disabled?ImVec4(1,1,1,0.4f):ImVec4(1,1,1,1));
-        else {ImGui::Dummy(ImVec2(size,size));if(iconId&&!url.empty())AlterEgo::IconManager::RequestIcon(iconId,url);}
+        else ImGui::Dummy(ImVec2(size,size));
         ImGui::SameLine();
         if(disabled)ImGui::TextDisabled("%s",label.c_str());
         else if(ImGui::Selectable(label.c_str(),selected)){
@@ -7178,13 +7179,13 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
         AlterEgo::GW2API::FetchLegendsAsync();
         auto canonical=[](uint32_t value){return value<=255?static_cast<uint32_t>(
             AlterEgo::PublicCatalog::CanonicalLegendCode(static_cast<uint8_t>(value))):value;};
-        for(const auto& l:LegendOptions())row(l.code,l.name,l.swap?l.swap+5000000u:0,l.icon,
+        for(const auto& l:LegendOptions())row(l.code,l.name,AlterEgo::ArtworkRequest::SkillKey(l.swap),l.icon,
             !PairChoiceAllowed(canonical(other),l.code),canonical(current)==l.code);
     }else if(pets.empty()){
         RenderSpinner("Loading pets...");AlterEgo::GW2API::FetchPetsAsync();
     }else{
         ImGui::BeginChild("##petlist",ImVec2(280,360),true);
-        for(const auto& p:pets)row(p.id,p.name,9400000u+p.id,p.icon_url,!PairChoiceAllowed(other,p.id),current==p.id);
+        for(const auto& p:pets)row(p.id,p.name,AlterEgo::ArtworkRequest::PetKey(p.id),p.icon_url,!PairChoiceAllowed(other,p.id),current==p.id);
         ImGui::EndChild();
     }
     ImGui::EndPopup();
@@ -9620,8 +9621,9 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
                                AlterEgo::PublicCatalog::CanonicalLegendCode(values[other]),next))MarkEditDirty();
                     }else{
                         ImGui::BeginGroup();
-                        RenderSkillIcon(values[slot]?AlterEgo::GW2API::GetLegendSwapSkill(values[slot]):0,40.0f);
-                        ImGui::TextUnformatted(LegendNameForCode(values[slot]).c_str());ImGui::EndGroup();
+                        const auto legend=LegendOptionForCode(values[slot]);
+                        RenderSkillIconCore(legend.swap,40.0f,false,true,legend.icon);
+                        ImGui::TextUnformatted(legend.name.c_str());ImGui::EndGroup();
                     }
                     ImGui::PopID();
                 }

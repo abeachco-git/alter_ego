@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manual, bounded acquisition of companion artwork into a review directory.
+"""Manual, bounded companion artwork research into a review directory (not for embedding).
 
 Normal builds never invoke this tool. No repository files are modified.
 Optionally stage immutable Git blobs (not commits/refs) for later review.
@@ -103,7 +103,7 @@ def main():
                 raise ValueError("Unexpected staged blob SHA")
             row["git_blob"] = expected
     (args.output / "manifest.json").write_text(json.dumps({"icons": rows}, indent=2) + "\n", encoding="utf-8")
-    print(f"Staged {len(skills)} legend swap icons and {len(pets)} pet icons ({sum(r['size'] for r in rows)} bytes). Review before updating asset manifest.")
+    print(f"Staged {len(skills)} legend swap icons and {len(pets)} pet icons ({sum(r['size'] for r in rows)} bytes). Runtime-cached artwork; do not add to the fixed asset manifest.")
 
 if __name__ == "__main__":
     main()

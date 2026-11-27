@@ -1,4 +1,5 @@
 #include "../src/SkillEditCore.h"
+#include "../src/ArtworkRequest.h"
 #include <cassert>
 #include <nlohmann/json.hpp>
 struct TestBar { uint32_t heal=0, utilities[3]={0,0,0}, elite=0; };
@@ -35,5 +36,24 @@ int case_skill_edit_core(int,char**) {
     assert(EnvironmentChoiceAllowed(false,true));
     assert(!EnvironmentChoiceAllowed(true,true));
     assert(EnvironmentChoiceAllowed(true,false)&&EnvironmentChoiceAllowed(true,std::nullopt));
+    using namespace AlterEgo::ArtworkRequest;
+    const auto skillKey=SkillKey(28085),legendKey=SkillKey(28085),petKey=PetKey(4);
+    assert(skillKey==5028085&&legendKey==skillKey&&petKey==9400004);
+    assert(!SkillKey(0)&&!SkillKey(UINT32_MAX)&&!PetKey(0)&&!PetKey(256));
+    int texture=1,lookups=0,requests=0;uint32_t requestedKey=0;bool requestedPriority=false;
+    uint32_t cachedKey=skillKey;
+    auto lookup=[&](uint32_t key)->int*{++lookups;return key==cachedKey?&texture:nullptr;};
+    auto request=[&](uint32_t key,const std::string& url,bool priority){
+        assert(url=="artwork");++requests;requestedKey=key;requestedPriority=priority;
+    };
+    assert(Resolve(skillKey,"",false,lookup,request)==&texture);
+    assert(Resolve(legendKey,"artwork",true,lookup,request)==&texture&&requests==0);
+    assert(Resolve(petKey,"",false,lookup,request)==nullptr&&requests==0);
+    assert(Resolve(petKey,"artwork",true,lookup,request)==nullptr&&requests==1&&requestedKey==petKey&&requestedPriority);
+    cachedKey=petKey;
+    assert(Resolve(petKey,"",false,lookup,request)==&texture&&requests==1);
+    assert(Resolve(skillKey,"artwork",false,lookup,request)==nullptr&&requests==2&&requestedKey==skillKey&&!requestedPriority);
+    const int priorLookups=lookups;
+    assert(Resolve(0,"artwork",true,lookup,request)==nullptr&&lookups==priorLookups&&requests==2);
     return 0;
 }
