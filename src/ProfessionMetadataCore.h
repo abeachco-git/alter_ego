@@ -115,7 +115,7 @@ inline Record Parse(const std::string& expected,const Json& raw){
     Project(r);return r;
 }
 struct Stamps{int64_t success=0,attempt=0;};
-inline bool Due(const Stamps& s,int64_t now,bool manual){return PublicCatalog::Due(s.success,s.attempt,now,manual,PublicCatalog::Month);}
+inline bool Due(const Stamps& s,int64_t now,bool manual){return PublicCatalog::Due(s.success,s.attempt,now,manual,PublicCatalog::BalanceMetadataAge);}
 inline Stamps ReadStamps(Database::Connection& db,const std::string& prof){const auto key=Key(prof);return {PublicCatalog::Fresh(db,key),PublicCatalog::Fresh(db,key+"_attempt")};}
 // Call within the cache transaction. Existing snapshots survive any failure.
 inline void Store(Database::Connection& db,const Record& record,int64_t stamp){

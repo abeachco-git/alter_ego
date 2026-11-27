@@ -6,6 +6,8 @@
 namespace AlterEgo::PublicCatalog {
 using Json = nlohmann::json;
 inline constexpr int64_t Week = 7 * 86400, Month = 30 * 86400, Retry = 86400;
+// Shared successful-observation lifetime for balance-sensitive public metadata.
+inline constexpr int64_t BalanceMetadataAge = Week;
 inline int64_t Now() {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -211,7 +213,7 @@ inline std::vector<uint32_t> AssociatedSkills(const Legend& legend){
 // manual refresh or stale/missing metadata requires a newer observation.
 inline bool LegendSkillNeedsRefresh(int64_t stamp,bool complete,int64_t now,bool manual){
     const auto seconds=stamp/1000000;
-    return manual||!complete||seconds<=0||seconds>now||now-seconds>=Month;
+    return manual||!complete||seconds<=0||seconds>now||now-seconds>=BalanceMetadataAge;
 }
 inline bool LegendSkillCovered(int64_t baseline,int64_t observed,bool complete){
     return complete&&observed>baseline&&observed>0;
@@ -363,7 +365,8 @@ inline Snapshot Read(Database::Connection& db) {
 }
 inline bool DatasetDue(const Snapshot& s,const std::string& name,int64_t now,bool manual) {
     auto it=s.freshness.find(name);
-    const auto interval=(name=="public_pets"||name=="public_legends"||name=="public_stats"||name=="public_dyes")?Month:Week;
+    const auto interval=name=="public_dyes"?Month:
+        (name=="public_pets"||name=="public_legends"||name=="public_stats")?BalanceMetadataAge:Week;
     return it==s.freshness.end()||Due(it->second.first,it->second.second,now,manual,interval);
 }
 } // namespace AlterEgo::PublicCatalog

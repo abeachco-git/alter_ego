@@ -18007,7 +18007,7 @@ void AddonOptions() {
     ImGui::TextDisabled("Manual Refresh bypasses ordinary freshness/cooldown; offline automatic refresh waits 10 minutes.");
     ImGui::TextDisabled("The GW2 API may still return cached equipment/build data.");
     RenderSectionHeader("Public reference catalogs", AlterEgo::UI::SectionGold);
-    ImGui::TextDisabled("Items/skins/Wizard's Vault: 7 days. Other reference catalogs: 30 days. Retry: 24h.");
+    ImGui::TextDisabled("Item/skin discovery, Vault, pets, legends, stats, professions: 7 days. Upgrades/dyes: 30 days. Retry: 24h.");
     const auto publicData=AlterEgo::PublicCatalog::Get();
     ImGui::Text("Equipment upgrades: %zu",publicData->entries.size());
     if(publicData->upgrades)ImGui::TextDisabled("Last refreshed: %lld day(s) ago",static_cast<long long>(std::max<int64_t>(0,AlterEgo::PublicCatalog::Now()-publicData->upgrades)/86400));
