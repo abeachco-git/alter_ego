@@ -90,7 +90,7 @@ int case_native_library(int,char**) {
         // Stale recovery evidence must reject the migration without altering
         // old schema, revision or raw companion records.
         bool staleBackup=false;
-        try{Native::Repository stale(old.db(),DB::Connection::OpenMode::Existing,{},true,999);}
+        try{Native::Repository stale(old.db(),DB::Connection::OpenMode::Existing,Native::ExactFingerprint,true,999);}
         catch(const DB::Error&){staleBackup=true;}
         assert(staleBackup);
         {
