@@ -149,7 +149,7 @@ int case_snowcrows_import(int argc, char** argv) {
         assert((Parse(revUrl,guide,rev,error)&&rev.skills==std::array<uint32_t,5>{}));
         assert((rev.legendInvocationSkills==std::array<uint32_t,2>{76610,28134}));
         assert(!Parse(url,guide,rev,error)); // non-Revenant never treats pair as a skill bar
-        auto tier=[](uint32_t,uint32_t){return -1;};
+        auto tier=[](uint32_t,uint32_t id){return id==1995?0:id==1913?2:-1;};
         auto invocation=[](uint32_t id)->uint32_t{return id==8?76610:id==2?28134:0;};
         auto patch=AlterEgo::SourceRefresh::FromPage(rev,tier,false,AlterEgo::SourceRefresh::UnknownPaletteResolver{},
             AlterEgo::SourceRefresh::UnknownPalettePair{},invocation);
