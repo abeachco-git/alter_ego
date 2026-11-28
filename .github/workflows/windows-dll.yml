@@ -177,6 +177,31 @@ jobs:
           print("Companion skill types:", sorted({s.get("type", "<missing>") for s in associated}))
           print("Companion skills with NoUnderwater:", sum("NoUnderwater" in s.get("flags",[]) for s in associated))
           print("Legend roles:", [(l["code"],l.get("heal"),l.get("utilities"),l.get("elite")) for l in legends])
+          # Diagnostic only: inspect actual repeated Revenant palette candidates,
+          # including variants not present in the public legend role lists.
+          rev = next(p for p in professions if p["id"] == "Revenant")
+          palettes = {}
+          for palette, skill in rev["skills_by_palette"]:
+              if palette:
+                  palettes.setdefault(palette, set()).add(skill)
+          roles = {}
+          for legend in legends:
+              for role, ids in (("heal", [legend.get("heal")]), ("utilities", legend.get("utilities", [])), ("elite", [legend.get("elite")])):
+                  for skill in ids:
+                      if isinstance(skill, int) and skill > 0:
+                          roles.setdefault(skill, []).append((legend["code"], role))
+          candidates = {i for ids in palettes.values() if len(ids) > 1 for i in ids}
+          candidates.update(i for ids in palettes.values() if ids.intersection(roles) for i in ids)
+          candidates = sorted(candidates)
+          details = {s["id"]:s for s in associated}
+          missing = [i for i in candidates if i not in details]
+          for i in range(0, len(missing), 200):
+              details.update((s["id"],s) for s in get("/v2/skills?ids="+",".join(map(str,missing[i:i+200]))))
+          print("Revenant candidate detail coverage:", sum(i in details for i in candidates), "/", len(candidates))
+          for palette, ids in sorted(palettes.items()):
+              if len(ids) <= 1 and not ids.intersection(roles):
+                  continue
+              print("Revenant palette",palette,[(i,details.get(i,{}).get("name"),details.get(i,{}).get("slot"),details.get(i,{}).get("specialization"),details.get(i,{}).get("flags"),roles.get(i,[])) for i in sorted(ids)])
           stats = get("/v2/itemstats?ids=all")
           print("Stat sample:",stats[0])
           dyes = get("/v2/colors?ids=all")
@@ -218,6 +243,10 @@ jobs:
           cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build-tests --parallel "$AE_BUILD_JOBS"
           ctest --test-dir build-tests --output-on-failure
+      - name: Probe real Snow Crows markup (optional, no retained source)
+        if: (github.event_name == 'workflow_dispatch' && inputs.public_api_diagnostic) || contains(github.event.head_commit.message, '[public-api-probe]')
+        continue-on-error: true
+        run: python3 tools/probe_snowcrows.py build-tests/ae_imports
       - name: Exercise untrusted parsers under ASan and UBSan
         run: |
           flags="-std=c++17 -O1 -g -fno-omit-frame-pointer -fno-pie -fsanitize=address,undefined -fno-sanitize-recover=all -Ilib"

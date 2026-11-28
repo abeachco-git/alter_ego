@@ -2,6 +2,8 @@
 #include "../src/SourceRefreshCore.h"
 #include <cassert>
 #include <string>
+#include <fstream>
+#include <iostream>
 using namespace AlterEgo::SnowCrows;
 
 static std::string row(unsigned id, const std::string& label,
@@ -20,7 +22,41 @@ static std::string row(unsigned id, const std::string& label,
         label + "<span class=\"text-neutral-400 text-sm ml-2\">" +
         hint + "</span></p></td></tr>";
 }
-int case_snowcrows_import(int, char**) {
+int case_snowcrows_import(int argc, char** argv) {
+    // Explicit manual probe, never part of normal CTest. Read a bounded
+    // transient provider page, run the exact runtime parser, emit only IDs.
+    if(argc==4&&std::string(argv[1])=="--probe"){
+        std::ifstream in(argv[3],std::ios::binary|std::ios::ate);
+        if(!in||in.tellg()<0||in.tellg()>3*1024*1024)return 2;
+        const auto size=static_cast<size_t>(in.tellg());
+        std::string html(size,'\0');in.seekg(0);
+        if(!in.read(html.data(),static_cast<std::streamsize>(size)))return 2;
+        Page parsed;std::string error;
+        if(!Parse(argv[2],html,parsed,error)){std::cout<<"Runtime parser rejected: "<<error<<"\n";return 1;}
+        std::cout<<"Runtime parser accepted "<<parsed.profession<<"; skills";
+        for(auto id:parsed.skills)std::cout<<" "<<id;
+        std::cout<<"; gear slots "<<parsed.gear.size()<<"\n";
+        AlterEgo::DecodedBuildLink decoded{};
+        if(!parsed.templateCode.empty()&&AlterEgo::ChatLink::DecodeBuild(parsed.templateCode,decoded)){
+            std::cout<<"Template profession "<<static_cast<unsigned>(decoded.profession)
+                <<"; companion block "<<decoded.companion_choices_known<<"; active palettes "<<decoded.active_palettes_known
+                <<"; inactive block "<<decoded.inactive_rev_skills_known<<"\n";
+            if(decoded.companion_choices_known){
+                std::cout<<"Companion codes";
+                if(decoded.profession==AlterEgo::PROF_RANGER)for(auto id:decoded.pets)std::cout<<" "<<static_cast<unsigned>(id);
+                if(decoded.profession==AlterEgo::PROF_REVENANT)for(auto id:decoded.legends)std::cout<<" "<<static_cast<unsigned>(id);
+                std::cout<<"\n";
+            }
+            if(decoded.active_palettes_known){
+                std::cout<<"Terrestrial palettes";
+                for(auto id:decoded.terrestrial_skills)std::cout<<" "<<id;
+                std::cout<<"\nAquatic palettes";
+                for(auto id:decoded.aquatic_skills)std::cout<<" "<<id;
+                std::cout<<"\n";
+            }
+        }else std::cout<<"No unique decodable header template\n";
+        return 0;
+    }
     const std::string url = "https://snowcrows.com/builds/raids/mesmer/"
         "condition-boon-chronomancer-dueling-staff-scepter-pistol";
     assert(NormalizeUrl("http://www.snowcrows.com/builds/raids/mesmer/build") ==
