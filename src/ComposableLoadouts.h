@@ -1547,19 +1547,24 @@ inline Json ReplaceCapturedFieldsPreservingExtensions(const Json& previous,
     return result;
 }
 
-// Live replacement provides actual skill IDs and explicit API empties,
-// not wire aliases. Preserve unresolved zero projections when the live
-// slot is omitted, but retire evidence for changed typed slots and
-// confirmed clears. Keep the established capture-replacement policy.
+// Retire old evidence on changed typed slots and confirmed clears. A
+// captured unresolved API role is positive evidence, not an omission:
+// replace only its physical row with the new qualified evidence.
 inline void MergeCapturedRevenantSkillEvidence(const Json& previous,Json& replacement,
-    uint8_t landEmpty,uint8_t waterEmpty){
+    uint8_t landEmpty,uint8_t waterEmpty,
+    const std::optional<RevenantActivePaletteEvidence>& captured=std::nullopt){
     auto evidence=SkillEdit::ReadPaletteEvidence(previous);
-    if(!evidence)return;
+    if(!evidence&&!captured)return;
+    if(!evidence)evidence=RevenantActivePaletteEvidence{};
     for(int env=0;env<2;++env){
         const char* key=env?"aquatic_skills":"skills";
         const auto before=SkillEdit::JsonDisplayBar(previous.value(key,Json::object()));
         const auto after=SkillEdit::JsonDisplayBar(replacement.value(key,Json::object()));
         SkillEdit::RetirePaletteEdits(evidence,env!=0,before,after,env?waterEmpty:landEmpty);
+        if(captured)for(size_t i=0;i<5;++i){
+            const auto& row=(*captured)[env*5+i];
+            if(row[0]&&row[1]==after[i].id)(*evidence)[env*5+i]=row;
+        }
     }
     replacement["rev_active_palettes"]=*evidence;
 }

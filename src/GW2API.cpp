@@ -3406,7 +3406,7 @@ namespace AlterEgo {
             auto replacement=Composable::ReplaceCapturedFieldsPreservingExtensions(existing->data,selected->second);
             if(kind=="skills"&&capture.profession=="Revenant")
                 Composable::MergeCapturedRevenantSkillEvidence(existing->data,replacement,
-                    capture.terrestrial_skills.empty_slots,capture.aquatic_skills.empty_slots);
+                    capture.terrestrial_skills.empty_slots,capture.aquatic_skills.empty_slots,capture.rev_active_palettes);
             return Composable::UpdateShared(doc,kind,componentId,replacement,error);
         });
     }
@@ -3781,7 +3781,7 @@ namespace AlterEgo {
             auto& bar=env?saved.aquatic_skills:saved.terrestrial_skills;
             SkillEdit::ApplyRetrievedSkillProjection(bar,projection);
             if(build.profession!="Revenant")continue;
-             for(size_t i=0;i<5;++i){
+            for(size_t i=0;i<5;++i){
                 if(projection.slots[i].evidence!=SkillEdit::SlotEvidence::Unresolved||!projection.sharedPalettes[i])continue;
                 if(!saved.rev_active_palettes)saved.rev_active_palettes=RevenantActivePaletteEvidence{};
                 // An unresolved API role is not a verified native export.

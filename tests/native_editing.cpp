@@ -31,6 +31,13 @@ int case_native_editing(int,char**) {
         Composable::MergeCapturedRevenantSkillEvidence(previous,replacement,1,16);
         retained=SkillEdit::ReadPaletteEvidence(replacement);
         assert(retained&&(*retained)[0][0]==0&&(*retained)[9][0]==0);
+        RevenantActivePaletteEvidence incoming{};incoming[0]={4572,0,256,256,42};
+        Composable::MergeCapturedRevenantSkillEvidence(previous,replacement,0,0,incoming);
+        retained=SkillEdit::ReadPaletteEvidence(replacement);
+        assert(retained&&(*retained)[0]==incoming[0]&&(*retained)[1][0]==0&&(*retained)[9][0]==13);
+        Json fresh={{"skills",{{"heal",0}}}};
+        Composable::MergeCapturedRevenantSkillEvidence(Json::object(),fresh,0,0,incoming);
+        assert(SkillEdit::ReadPaletteEvidence(fresh)==incoming);
     }
     {
         Composable::Document graph;std::string error;
