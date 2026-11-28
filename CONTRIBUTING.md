@@ -19,7 +19,7 @@ cmake --build build-tests --parallel 2
 ctest --test-dir build-tests --output-on-failure
 ```
 
-Extend the relevant regression cases. For runtime changes, verify the Windows x64 UCRT workflow and perform relevant in-game checks. State clearly which checks were performed and which remain outstanding. Follow [Regression testing](docs/regression-testing.md) for details.
+Extend the relevant regression cases. For runtime changes, verify the exact-commit Windows x64 UCRT workflow and perform relevant in-game checks. Deliver the matching verified DLL and notices as specified in [AGENTS.md](AGENTS.md); documentation-only changes do not require a new DLL. State clearly which checks were performed and which remain outstanding. Follow [Regression testing](docs/regression-testing.md) for details.
 
 ## Submit changes
 

@@ -2,11 +2,18 @@
 
 This is the discoverable source of truth for developers and coding agents. Read it before editing any UI. Preserve the current visuals and behavior: reuse is the goal, not blindly restyling every widget.
 
-Nexus Appearance > Window Transparency is an additional 0–80% background transparency, default 0% (existing theme). Persist `window_transparency` in settings.json on slider release or reset; bound loaded values. Ordinary main, modeless editor, toast and tracker windows and child panels use `UI::BeginWindow` / `UI::BeginChild`, scaling their current theme background alpha only. Native popups, modal confirmations, tooltip windows and their child panels retain current theme opacity. Do not change global style alpha, controls, text, artwork, title bars, input behavior or the host style. New ordinary window/child consumers use these same helpers. `UI::BackgroundRole::Protected` limits additional transparency of a selected critical window to at least 82% effective background opacity (never increases its original theme opacity); `UI::DrawProtectedBackground` composites a local backing over an ordinary window with the same policy, without changing layout or hit targets. The shared RefreshUI::Row uses this backing and `UI::ReadableMetadataColor` for neutral status and timestamps only; semantic status colors and disabled controls remain unchanged. The Build Detected toast uses the protected window role. At 0% the original visuals are unchanged. Achievement tracker, ordinary browsing panels, editor bodies and completion cards remain ordinary or retain their existing custom backgrounds; popups/modal/tooltips remain excluded. Avoid blanket protection of ordinary content.
+## Window appearance and contrast
+
+Nexus Appearance > Window Transparency is an additional 0–80% background transparency, default 0% (existing theme). Persist `window_transparency` in settings.json on slider release or reset; bound loaded values. Ordinary main, modeless editor, toast and tracker windows and child panels use `UI::BeginWindow` / `UI::BeginChild`, scaling their current theme background alpha only. Native popups, modal confirmations, tooltip windows and their child panels retain current theme opacity. Do not change global style alpha, controls, text, artwork, title bars, input behavior or the host style. New ordinary window/child consumers use these same helpers.
+
+`UI::BackgroundRole::Protected` limits additional transparency of a selected critical window to at least 82% effective background opacity, capped at its original theme opacity. `UI::DrawProtectedBackground` composites a local backing over an ordinary window with the same policy, without changing layout or hit targets. The shared `RefreshUI::Row` uses this backing and `UI::ReadableMetadataColor` for neutral status and timestamps only; semantic status colors and disabled controls remain unchanged. The Build Detected toast uses the protected window role. At 0% the original visuals are unchanged. Achievement tracker, ordinary browsing panels, editor bodies and completion cards remain ordinary or retain their existing custom backgrounds; popups/modal/tooltips remain excluded. Avoid blanket protection of ordinary content.
+
+## Canonical control inventory
 
 | Need | Canonical entry point | Source |
 |---|---|---|
 | Ordinary window and child background | UI::BeginWindow / UI::BeginChild | UIControls.h |
+| Protected window/region and neutral metadata | UI::BackgroundRole::Protected / UI::DrawProtectedBackground / UI::ReadableMetadataColor | UIControls.h |
 | Standard action | RenderActionButton(label, size) | AddonShared.h → dllmain.cpp → UIControls.h |
 | Primary gold action | RenderGoldButton | AddonShared.h |
 | Filter or toggle chip | RenderChipButton | AddonShared.h |

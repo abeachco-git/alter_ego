@@ -1,8 +1,10 @@
 # Alter Ego Shared Build Template Specification
 
-**Version:** 3  
-**Status:** Stable  
-**Last updated:** April 2026
+**AE2 wire version:** 3 (v2 import also supported)  
+**Status:** Existing external interchange; independent addon development is experimental  
+**Original specification:** April 2026
+
+AE2 is separate from the native SQLite library and current portable JSON/ZIP formats. The native companion evidence extensions described below do not change the external AE2 wire layout.
 
 ## Overview
 
@@ -224,7 +226,7 @@ The recommended approach — no binary packing required:
 2. Call `encodeAE2()` with the build's chat link, gear stat IDs, rune/relic/sigil item IDs, and weapon types
 3. Verify your output with the [AE2 Build Viewer](https://pie.rocks.cc/tools/ae2-playground/) — paste the code to see the full build rendered visually
 4. Present the resulting string as a "Copy to clipboard" button
-5. The user pastes the code into Alter Ego's Build Library → Import Build field, or shares it in GW2 chat
+5. The user pastes the code into Alter Ego's Library → Import from Link / URL dialog, or shares it in GW2 chat
 
 ### For other languages (manual encoding)
 
@@ -245,8 +247,10 @@ To implement AE2 without the JS library:
 
 The AE2 shared build format originated with [PieOrCake's Alter Ego](https://github.com/PieOrCake/alter_ego). This document is maintained for the independent fork.
 
-- **Repository:** [github.com/abeachco-git/alter_ego](https://github.com/PieOrCake/alter_ego)
-- **Homepage:** [pie.rocks.cc/projects/alter-ego](https://pie.rocks.cc/projects/alter-ego/)
+- **Independent repository:** [github.com/abeachco-git/alter_ego](https://github.com/abeachco-git/alter_ego)
+- **Original project homepage:** [pie.rocks.cc/projects/alter-ego](https://pie.rocks.cc/projects/alter-ego/)
+
+## Native library companion evidence (not AE2 wire extensions)
 
 Native Library Skills components may additionally carry `rev_inactive_context`: two rows [legend 1 code, legend 2 code, third specialization ID], terrestrial then aquatic, exact wire bytes or an all-256 unknown row. The independent six-value `inactive_rev_skills` block remains unchanged, including older unqualified records. The original packet remains available; no AE2 wire layout change. Native Library Skills components may additionally carry `rev_active_palettes`: ten bounded evidence rows (terrestrial five, aquatic five), each `[palette, original projected skill ID, legend 1 code, legend 2 code, third specialization ID]`. Zero projected skill ID with nonzero palette indicates unresolved reference evidence, not an empty skill. Regeneration uses the raw palette only when the typed slot and context still match; the AE2 wire format is unchanged.
 
