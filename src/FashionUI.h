@@ -216,7 +216,7 @@ static void RenderFashionDialog() {
     ImGui::SetNextWindowSizeConstraints(ImVec2(475, 310), ImVec2(FLT_MAX, FLT_MAX));
     g_FashionDialogFocus.ApplyBeforeBegin();
     bool windowOpen=true;
-    if (!ImGui::Begin("Save Fashion##ae_fashion", &windowOpen,
+    if (!AlterEgo::UI::BeginWindow("Save Fashion##ae_fashion", &windowOpen,
         ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
@@ -419,7 +419,7 @@ static void RenderFashionLibrary() {
     const char* filters[] = {"All weights", "Light", "Medium", "Heavy", "Any", "Unknown"};
     float avail = ImGui::GetContentRegionAvail().x;
     const AlterEgo::UI::SplitPanel split(g_FashionListWidth,220.f,130.f,220.f);
-    ImGui::BeginChild("##fashion_list", ImVec2(split.left, 0), true);
+    AlterEgo::UI::BeginChild("##fashion_list", ImVec2(split.left, 0), true);
     g_FashionFilter = std::max(0, std::min(g_FashionFilter, IM_ARRAYSIZE(filters)-1));
     AlterEgo::UI::SearchToolbar("fashion", "Search looks / characters...", g_FashionSearch,
         [&] {
@@ -467,7 +467,7 @@ static void RenderFashionLibrary() {
     }
     ImGui::EndChild();
     if(split.Divider("##fashion_split",g_FashionListWidth))SaveSettings();
-    ImGui::BeginChild("##fashion_detail", ImVec2(0, 0), true);
+    AlterEgo::UI::BeginChild("##fashion_detail", ImVec2(0, 0), true);
     const int selectedIndex=AlterEgo::RecordSelection::ById(g_FashionLibrary.looks,g_FashionSelectedId);
     if(selectedIndex<0){g_FashionSelectedId.clear();ImGui::TextDisabled("Select a saved appearance.");}
     else{
@@ -505,7 +505,7 @@ static void RenderFashionLibrary() {
         SameLineIfActionFits("Delete");
         if(AvailableActionButton("Delete##fashion",ButtonRole::Destructive,ready,reason))RunFashionAction(FashionAction::Delete,look);
         ImGui::Separator();
-        ImGui::BeginChild("##fashion_appearance",ImVec2(0,0),false);
+        AlterEgo::UI::BeginChild("##fashion_appearance",ImVec2(0,0),false);
         if (!look.notes.empty()) { ImGui::Spacing(); ImGui::TextWrapped("%s", look.notes.c_str()); }
         const std::string assocLabel="Associated characters ("+std::to_string(look.associations.size())+")";
         if(ImGui::TreeNode(assocLabel.c_str())){
@@ -603,7 +603,7 @@ static void RenderFashionLibrary() {
             ImGui::TextWrapped("Delete '%s' from the Fashion Library?",target.name.c_str());
             if(!g_FashionDeleteUsers.empty()){
                 ImGui::TextWrapped("This appearance will be detached from %d Loadout(s). Builds and equipment will remain unchanged.",static_cast<int>(g_FashionDeleteUsers.size()));
-                ImGui::BeginChild("##fashion_delete_users",ImVec2(0,std::min(140.f,ImGui::GetTextLineHeightWithSpacing()*static_cast<float>(g_FashionDeleteUsers.size())+8.f)),true);
+                AlterEgo::UI::BeginChild("##fashion_delete_users",ImVec2(0,std::min(140.f,ImGui::GetTextLineHeightWithSpacing()*static_cast<float>(g_FashionDeleteUsers.size())+8.f)),true);
                 for(const auto& user:g_FashionDeleteUsers)ImGui::BulletText("%s",user.second.c_str());
                 ImGui::EndChild();
             }

@@ -2552,7 +2552,7 @@ static void RenderVaultTab(const std::string& dailyResetStr, const std::string& 
 
     RenderGw2ServerDay();
     ImGui::Separator();
-    ImGui::BeginChild("##VaultContentScroll", ImVec2(0, 0), false);
+    AlterEgo::UI::BeginChild("##VaultContentScroll", ImVec2(0, 0), false);
 
     VaultPeriod daily,weekly,special;
     std::chrono::system_clock::time_point seasonEnd;
@@ -2734,7 +2734,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
 
     RenderGw2ServerDay();
     ImGui::Separator();
-    ImGui::BeginChild("##ClearsContentScroll", ImVec2(0, 0), false);
+    AlterEgo::UI::BeginChild("##ClearsContentScroll", ImVec2(0, 0), false);
 
     std::vector<ClearEntry> dailyFractals,dailyBounties,weeklyWings;
     ClearEntry weeklyStrikes;
@@ -2861,7 +2861,7 @@ static void RenderClearsTabContent(const std::string& dailyResetStr, const std::
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.13f, 0.16f, 0.92f));
         // The preview is a fixed-height read-only card, not a scroll area.
         // Forward mouse-wheel scrolling to the surrounding Clears page.
-        if (ImGui::BeginChild("##nextFractalPreview", ImVec2(0, 79.0f),
+        if (AlterEgo::UI::BeginChild("##nextFractalPreview", ImVec2(0, 79.0f),
                               true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
             ImGui::TextColored(ImVec4(0.64f, 0.74f, 0.86f, 1.0f),
                 "Next Reset - %s", date.c_str());

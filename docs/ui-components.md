@@ -2,8 +2,11 @@
 
 This is the discoverable source of truth for developers and coding agents. Read it before editing any UI. Preserve the current visuals and behavior: reuse is the goal, not blindly restyling every widget.
 
+Nexus Appearance > Window Transparency is an additional 0–80% background transparency, default 0% (existing theme). Persist `window_transparency` in settings.json on slider release or reset; bound loaded values. Ordinary main, modeless editor, toast and tracker windows and child panels use `UI::BeginWindow` / `UI::BeginChild`, scaling their current theme background alpha only. Native popups, modal confirmations, tooltip windows and their child panels retain current theme opacity. Do not change global style alpha, controls, text, artwork, title bars, input behavior or the host style. New ordinary window/child consumers use these same helpers.
+
 | Need | Canonical entry point | Source |
 |---|---|---|
+| Ordinary window and child background | UI::BeginWindow / UI::BeginChild | UIControls.h |
 | Standard action | RenderActionButton(label, size) | AddonShared.h → dllmain.cpp → UIControls.h |
 | Primary gold action | RenderGoldButton | AddonShared.h |
 | Filter or toggle chip | RenderChipButton | AddonShared.h |

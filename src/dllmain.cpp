@@ -1676,6 +1676,7 @@ static bool SaveSettings() {
     std::string path = AlterEgo::Storage::Resolve(AlterEgo::GW2API::GetDataDirectory(), "settings.json");
     nlohmann::json j;
     if(!g_LegacyLoadoutExpectations.empty())j["character_loadout_expectations"]=g_LegacyLoadoutExpectations;
+    j["window_transparency"] = AlterEgo::UI::WindowTransparencyPercent;
     j["show_qa_icon"] = g_ShowQAIcon;
     j["compact_char_list"] = g_CompactCharList;
     j["fast_load_mode"] = AlterEgo::FastLoadUI::ModeName(g_FastLoadMode);
@@ -1737,6 +1738,9 @@ static void LoadSettings() {
                 g_LegacyLoadoutExpectations=nlohmann::json::array();
         }catch(...){/* keep original input for recovery */}
     }
+    AlterEgo::UI::WindowTransparencyPercent=0;
+    if(j.contains("window_transparency")&&j["window_transparency"].is_number())
+        AlterEgo::UI::WindowTransparencyPercent=AlterEgo::UI::ClampWindowTransparency(j["window_transparency"].get<double>());
     getBool("show_qa_icon", g_ShowQAIcon);
     getBool("compact_char_list", g_CompactCharList);
     if(j.contains("fast_load_mode")&&j["fast_load_mode"].is_string())
@@ -5977,7 +5981,6 @@ static void RenderBuildToast() {
         ImGui::SetNextWindowPos(ImVec2(posX, posY), ImGuiCond_Appearing);
     }
     ImGui::SetNextWindowSize(ImVec2(toastWidth, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.96f);
     if (g_ToastNeedsFocus) {
         ImGui::SetNextWindowFocus();
         g_ToastNeedsFocus = false;
@@ -5994,7 +5997,7 @@ static void RenderBuildToast() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14, 12));
 
     bool open = true;
-    if (ImGui::Begin("Build Detected##AE_Toast", &open, flags)) {
+    if (AlterEgo::UI::BeginWindow("Build Detected##AE_Toast", &open, flags)) {
         // Track position for drag-to-reposition
         ImVec2 wp = ImGui::GetWindowPos();
         if (wp.x != posX || wp.y != posY) {
@@ -6842,7 +6845,7 @@ static bool RenderCardSelector(const char* searchBuf, const char* childId,
     bool changed = false;
     const auto searchWords=AlterEgo::Search::Words(searchBuf?searchBuf:"");
 
-    ImGui::BeginChild(childId, ImVec2(0, -30), true);
+    AlterEgo::UI::BeginChild(childId, ImVec2(0, -30), true);
     for (int i = 0; i < count; i++) {
         if(!AlterEgo::Search::MatchesFields(searchWords,{names[i],descs[i]}))continue;
 
@@ -7300,7 +7303,7 @@ static bool RenderSkillPickerPopup(const char* popup,const std::string& professi
         constexpr float cell=42.0f,gap=4.0f;
         const float width=columns*(cell+gap)+gap*2+ImGui::GetStyle().ScrollbarSize;
         const float height=ImMin(360.0f,ImMax(80.0f,ImGui::GetIO().DisplaySize.y-100.0f));
-        if(ImGui::BeginChild("##skill_grid",ImVec2(width,height),true)) {
+        if(AlterEgo::UI::BeginChild("##skill_grid",ImVec2(width,height),true)) {
             for(size_t i=0;i<choices.size();++i) {
                 if(i%columns)ImGui::SameLine(0,gap);
                 ImGui::PushID(static_cast<int>(choices[i]));
@@ -7437,7 +7440,7 @@ static bool RenderProfessionPairChoice(bool legend,uint32_t current,uint32_t oth
     if(!options.empty()){
         namespace UI=AlterEgo::UI;
         const float iconSize=30.f,pitch=UI::CatalogRowHeight(iconSize);
-        if(ImGui::BeginChild("##companion_options",ImVec2(280.f,std::min(360.f,pitch*options.size())),true)){
+        if(AlterEgo::UI::BeginChild("##companion_options",ImVec2(280.f,std::min(360.f,pitch*options.size())),true)){
             UI::CatalogLines(static_cast<int>(options.size()),pitch,0.f,[&](int index){
                 const auto& option=options[index];
                 ImGui::PushID(static_cast<int>(option.id));
@@ -7664,7 +7667,7 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
         if(active(pet.id))body+="\nSummoned pet is not reported.";
         RenderCompanionTooltip(ResolveProfessionChoice(false,pet.id),body);
     };
-    ImGui::BeginChild("##ranger_pet_catalog",ImVec2(0,0),false);
+    AlterEgo::UI::BeginChild("##ranger_pet_catalog",ImVec2(0,0),false);
     if(mode==1){
         const float size=40.f,gap=4.f;
         const float pitch=UI::CatalogGridPitch(size,gap);
@@ -7771,7 +7774,7 @@ static void RenderInfusionPositionPicker(AlterEgo::GearEdit::InfusionPosition re
     }
     if(!requirement.attribute.empty()){
         ImGui::TextWrapped("Matches any positive amount of this attribute. Agony resistance and cosmetic appearance are ignored.");
-        ImGui::BeginChild("##infusionAttributes",ImVec2(0,resultsHeight),true);
+        AlterEgo::UI::BeginChild("##infusionAttributes",ImVec2(0,resultsHeight),true);
         const auto searchWords=AlterEgo::Search::Words(query?query:"");
         for(const auto* key:kInfusionStatNames){
             const auto* label=InfusionAttributeLabel(key);
@@ -7791,7 +7794,7 @@ static void RenderInfusionPositionPicker(AlterEgo::GearEdit::InfusionPosition re
     if(exactInput&&RenderActionButton("Set exact ID"))setExact(exactInput);
     if(query&&*query){
         const auto entries=AlterEgo::GW2API::SearchKnownInfusions(query,100,false);
-        ImGui::BeginChild("##knownInfusions",ImVec2(0,resultsHeight),true);
+        AlterEgo::UI::BeginChild("##knownInfusions",ImVec2(0,resultsHeight),true);
         for(const auto& entry:entries){
             ImGui::PushID(static_cast<int>(entry.second));
             const std::string label=entry.first+" (#"+std::to_string(entry.second)+")";
@@ -8081,7 +8084,7 @@ static void RenderGearCustomizeDialog() {
     ImGui::SetNextWindowSize(ImVec2(540, 440), ImGuiCond_FirstUseEver);
     g_GearDialogFocus.ApplyBeforeBegin();
     bool windowOpen=true;
-    if (!ImGui::Begin("Customize##GearDialog", &windowOpen, ImGuiWindowFlags_NoCollapse)) {
+    if (!AlterEgo::UI::BeginWindow("Customize##GearDialog", &windowOpen, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
@@ -8098,7 +8101,7 @@ static void RenderGearCustomizeDialog() {
     bool isRelic = (g_GearDialogSlot == "Relic");
 
     ImGui::TextDisabled("Save applies to the Loadout draft; save the Loadout to persist.");
-    ImGui::BeginChild("##gear_customize_body",ImVec2(0,-AlterEgo::UI::ActionButtonHeight()-ImGui::GetStyle().ItemSpacing.y*2),false);
+    AlterEgo::UI::BeginChild("##gear_customize_body",ImVec2(0,-AlterEgo::UI::ActionButtonHeight()-ImGui::GetStyle().ItemSpacing.y*2),false);
     // Two-column layout: left = current item, right = selector
     if (ImGui::BeginTable("##custLayout", 2, ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("##custLeft", ImGuiTableColumnFlags_WidthFixed, 220.0f);
@@ -8397,18 +8400,18 @@ static void RenderGearCustomizeDialog() {
         AlterEgo::UI::SearchField("gear_catalog", "Search...", g_GearStatSearch);
 
         if (g_GearSelectorTab == 0 && isRelic) {
-            ImGui::BeginChild("##relicList",ImVec2(0,-30),true);
+            AlterEgo::UI::BeginChild("##relicList",ImVec2(0,-30),true);
             RenderGearCatalogChoices("Relic",g_GearStatSearch,editBuild->relic_id,editBuild->relic_name,true,
                 [&](uint32_t id,const std::string& name){editBuild->relic_id=id;editBuild->relic_name=name;commitGear();});
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 0) {
-            ImGui::BeginChild("##statList",ImVec2(0,-30),true);
+            AlterEgo::UI::BeginChild("##statList",ImVec2(0,-30),true);
             RenderGearStatChoices(g_GearStatSearch,g_GearSelectedStatId,true,[&](uint32_t id,const std::string& name){
                 g_GearSelectedStatId=id;gs.stat_id=id;gs.stat_name=name;commitGear();
             });
             ImGui::EndChild();
         } else if (g_GearSelectorTab == 1) {
-            ImGui::BeginChild("##upgradeList",ImVec2(0,-30),true);
+            AlterEgo::UI::BeginChild("##upgradeList",ImVec2(0,-30),true);
             if(isArmor)RenderGearCatalogChoices("Rune",g_GearStatSearch,gs.rune_id,gs.rune,true,
                 [&](uint32_t id,const std::string& name){ExpandSharedRune(*editBuild);gs.rune_id=id;gs.rune=name;commitGear();});
             else if(isWeapon)RenderGearCatalogChoices("Sigil",g_GearStatSearch,
@@ -8426,7 +8429,7 @@ static void RenderGearCustomizeDialog() {
             if (!profWeapons) {
                 RenderSpinner("Loading weapon data...");
             } else {
-                ImGui::BeginChild("##weaponTypeList",ImVec2(0,-30),true);
+                AlterEgo::UI::BeginChild("##weaponTypeList",ImVec2(0,-30),true);
                 RenderWeaponTypeChoices(editBuild->profession,g_GearDialogSlot,gs.weapon_type,g_GearStatSearch,true,
                     [&](const std::string& name,const auto& wd){
                         const auto plan=AlterEgo::EquipmentChoice::PlanWeaponChange(g_GearDialogSlot,gs.weapon_type,name,wd.two_handed);
@@ -8473,7 +8476,7 @@ static void RenderSaveToLibraryDialog() {
     ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
     g_SaveLibDialogFocus.ApplyBeforeBegin();
     bool windowOpen=true;
-    if (!ImGui::Begin("Save to Library##SaveLibDialog", &windowOpen,
+    if (!AlterEgo::UI::BeginWindow("Save to Library##SaveLibDialog", &windowOpen,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
@@ -11652,7 +11655,7 @@ static void RenderCompareTab() {
         return;
     }
     ImGui::Spacing();
-    ImGui::BeginChild("##CompareResultScroll", ImVec2(0, 0), false);
+    AlterEgo::UI::BeginChild("##CompareResultScroll", ImVec2(0, 0), false);
     RenderSavedVsLiveComparison(*saved);
     ImGui::EndChild();
 }
@@ -11875,7 +11878,7 @@ static void RenderBuildLibrary() {
     std::string pendingItemId, pendingItemTarget;
     bool pendingGroupAfter = false, pendingItemAfter = false;
     bool selectedMatches=false;
-    ImGui::BeginChild("LibList", ImVec2(split.left, 0), true);
+    AlterEgo::UI::BeginChild("LibList", ImVec2(split.left, 0), true);
     {
         AlterEgo::UI::SearchToolbar("loadouts", "Search loadouts...", g_LibSearchBuf,
             [&] {
@@ -12246,7 +12249,7 @@ static void RenderBuildLibrary() {
     if(split.Divider("##liblist_splitter",g_LibListWidth))SaveSettings();
 
     // Right panel: preview
-    ImGui::BeginChild("LibDetail", ImVec2(0, 0), true);
+    AlterEgo::UI::BeginChild("LibDetail", ImVec2(0, 0), true);
     const int selectedIndex=AlterEgo::RecordSelection::ById(builds,g_LibSelectedId);
     if(selectedIndex>=0){
         const auto& build=builds[selectedIndex];
@@ -12341,7 +12344,7 @@ static void RenderBuildLibrary() {
         // Keep a persistent inner gutter so labels, icons and input controls
         // never run under that outline, including in the read-only view.
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
-        ImGui::BeginChild("##LibDetailScroll", ImVec2(0, 0), false,
+        AlterEgo::UI::BeginChild("##LibDetailScroll", ImVec2(0, 0), false,
                           ImGuiWindowFlags_AlwaysUseWindowPadding);
         ImGui::PopStyleVar();
 
@@ -13407,7 +13410,7 @@ static void RenderSkinEntityTooltip(const std::string& name,const std::string& r
 }
 
 static void RenderSkinList(float width) {
-    ImGui::BeginChild("SkinList", ImVec2(width, 0), true);
+    AlterEgo::UI::BeginChild("SkinList", ImVec2(width, 0), true);
     const auto& data=GetSkinBrowserData();
     const bool hasOwnerData=data.hasOwnership;
     const auto changed=[] {SaveSession();};
@@ -13452,7 +13455,7 @@ static void RenderSkinList(float width) {
     float statusHeight = showStatus ? (ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y) : 0;
     float scrollHeight = ImGui::GetContentRegionAvail().y - statusHeight;
 
-    ImGui::BeginChild("SkinListScroll", ImVec2(0, scrollHeight));
+    AlterEgo::UI::BeginChild("SkinListScroll", ImVec2(0, scrollHeight));
     // Grid and compact list share stable activation semantics and domain action.
     const auto selectSkin=[&](const Skinventory::SkinInfo& skin){
         MarkNavigation();g_SkinSelectedId=skin.id;
@@ -13559,7 +13562,7 @@ static void RenderSkinList(float width) {
 }
 
 static void RenderSkinDetailPanel() {
-    ImGui::BeginChild("SkinDetailPanel", ImVec2(0, 0), true);
+    AlterEgo::UI::BeginChild("SkinDetailPanel", ImVec2(0, 0), true);
 
     if (g_SkinSelectedId == 0) {
         ImGui::TextWrapped("Select a skin to view details.");
@@ -14413,7 +14416,7 @@ void RenderEmptyCard(Texture_t* iconTex,
     dl->AddRect(cardOrigin, ImVec2(cardOrigin.x + cardW, cardOrigin.y + cardH),
                 IM_COL32(178, 148, 51, 255), 6.0f, 0, 1.5f);
 
-    ImGui::BeginChild("##empty_card_inner", ImVec2(cardW, cardH), false,
+    AlterEgo::UI::BeginChild("##empty_card_inner", ImVec2(cardW, cardH), false,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::Dummy(ImVec2(0, 12));
 
@@ -15022,7 +15025,7 @@ static void RenderAchievements() {
             }
         }
 
-        ImGui::BeginChild("AchSearchResults", ImVec2(0, 0), true);
+        AlterEgo::UI::BeginChild("AchSearchResults", ImVec2(0, 0), true);
         for (uint32_t id : s_achSearchResults) {
             // Show category hint
             auto catIt = frame.groups->idToCategory.find(id);
@@ -15067,7 +15070,7 @@ static void RenderAchievements() {
     float availHeight=split.height;
 
     // Left panel: Group/Category tree
-    ImGui::BeginChild("AchTree", ImVec2(split.left, availHeight), true);
+    AlterEgo::UI::BeginChild("AchTree", ImVec2(split.left, availHeight), true);
 
     if (g_AchRestoreScroll) {
         ImGui::SetScrollY(g_AchTreeScrollY);
@@ -15281,7 +15284,7 @@ static void RenderAchievements() {
     if(split.Divider("##achtree_splitter",g_AchTreeWidth))SaveAchTrackerState();
 
     // Right panel: split into category list (top) + pinned section (bottom)
-    ImGui::BeginChild("##AchRight", ImVec2(0, availHeight), false);
+    AlterEgo::UI::BeginChild("##AchRight", ImVec2(0, availHeight), false);
     {
         float rightWidth = ImGui::GetContentRegionAvail().x;
         bool hasPinned = !frame.pinned.empty();
@@ -15331,7 +15334,7 @@ static void RenderAchievements() {
             }
         }
 
-        ImGui::BeginChild("AchList", ImVec2(rightWidth, topHeight - catHeaderH), true);
+        AlterEgo::UI::BeginChild("AchList", ImVec2(rightWidth, topHeight - catHeaderH), true);
         if (g_AchRestoreScroll) {
             ImGui::SetScrollY(g_AchListScrollY);
             g_AchRestoreScroll = false;
@@ -15402,7 +15405,7 @@ static void RenderAchievements() {
                 ImGui::Separator();
                 pinnedHeaderH = ImGui::GetCursorPosY() - startY;
             }
-            ImGui::BeginChild("AchPinned", ImVec2(rightWidth, g_AchPinnedHeight - pinnedHeaderH), true);
+            AlterEgo::UI::BeginChild("AchPinned", ImVec2(rightWidth, g_AchPinnedHeight - pinnedHeaderH), true);
             {
                 int pinnedCount = (int)frame.pinned.size();
                 int moveFrom = -1, moveTo = -1;
@@ -15591,7 +15594,7 @@ static void RenderAchPopout() {
     }
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(250, 100), ImVec2(500, 800));
-    const bool rendered=ImGui::Begin("Achievement Tracker", &g_AchPopoutVisible,
+    const bool rendered=AlterEgo::UI::BeginWindow("Achievement Tracker", &g_AchPopoutVisible,
                      ImGuiWindowFlags_NoCollapse);
     const bool demand=rendered&&g_AchPopoutVisible&&!frame.pinned.empty();
     if(demand){
@@ -16492,7 +16495,7 @@ void AddonRender() {
     if (!g_WindowVisible) { CancelFastLoadUI();g_NavRequest.store(0); return; }
 
     ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(FLT_MAX, FLT_MAX));
-    if (!ImGui::Begin("Alter Ego", &g_WindowVisible,
+    if (!AlterEgo::UI::BeginWindow("Alter Ego", &g_WindowVisible,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse)) {
         CancelFastLoadUI();ImGui::End();
@@ -16577,7 +16580,7 @@ void AddonRender() {
             g_MainTab = 0;
             const std::string memoryAccount=AlterEgo::GW2API::GetCurrentAccountName();
             TickCharacterLoad();
-            ImGui::BeginChild("##characters_page",
+            AlterEgo::UI::BeginChild("##characters_page",
                 ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
 
             // Re-trigger detail fetch when character data finishes loading
@@ -16618,7 +16621,7 @@ void AddonRender() {
                 // Clamp width to reasonable bounds
                 const AlterEgo::UI::SplitPanel split(g_CharListWidth,200.f);
 
-                ImGui::BeginChild("CharList", ImVec2(split.left, 0), true);
+                AlterEgo::UI::BeginChild("CharList", ImVec2(split.left, 0), true);
 
                 // Sort mode selector + direction toggle (inside the list child)
                 {
@@ -17144,7 +17147,7 @@ void AddonRender() {
                 // Detail panel — resolve through display order
                 const int selRealIdx=SelectedCharacterIndex(characters);
 
-                ImGui::BeginChild("CharDetail", ImVec2(0, 0), true);
+                AlterEgo::UI::BeginChild("CharDetail", ImVec2(0, 0), true);
                 if (selRealIdx >= 0 && selRealIdx < (int)characters.size()) {
                     const auto& ch = characters[selRealIdx];
 
@@ -17233,7 +17236,7 @@ void AddonRender() {
                     if (ImGui::BeginTabBar("##detail_tabs")) {
                         if (ImGui::BeginTabItem("Equipment",nullptr,NavigationDetailFlags(0))) {
                             if(g_SelectedTab!=0)MarkNavigation();g_SelectedTab = 0;
-                            ImGui::BeginChild("EquipScroll", ImVec2(0, 0), false);
+                            AlterEgo::UI::BeginChild("EquipScroll", ImVec2(0, 0), false);
                             RenderEquipmentPanel(ch);
                             ImGui::EndChild();
                             ImGui::EndTabItem();
@@ -17243,21 +17246,21 @@ void AddonRender() {
                                 MarkNavigation();g_SelectedBuildTab=petBuildIndex;g_PetBuildNavigation.reset();
                             }
                             if(g_SelectedTab!=1)MarkNavigation();g_SelectedTab = 1;
-                            ImGui::BeginChild("BuildScroll", ImVec2(0, 0), false);
+                            AlterEgo::UI::BeginChild("BuildScroll", ImVec2(0, 0), false);
                             RenderBuildPanel(ch);
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
                         if (ImGui::BeginTabItem("Tools",nullptr,NavigationDetailFlags(2))) {
                             if(g_SelectedTab!=2)MarkNavigation();g_SelectedTab=2;
-                            ImGui::BeginChild("ToolsScroll", ImVec2(0, 0), false);
+                            AlterEgo::UI::BeginChild("ToolsScroll", ImVec2(0, 0), false);
                             RenderCharacterToolsPanel(ch);
                             ImGui::EndChild();
                             ImGui::EndTabItem();
                         }
                         if(ch.profession=="Ranger"&&ImGui::BeginTabItem("Pets",nullptr,NavigationDetailFlags(3))){
                             if(g_SelectedTab!=3)MarkNavigation();g_SelectedTab=3;
-                            ImGui::BeginChild("PetsScroll",ImVec2(0,0),false);
+                            AlterEgo::UI::BeginChild("PetsScroll",ImVec2(0,0),false);
                             RenderCharacterPetsPanel(ch);
                             ImGui::EndChild();ImGui::EndTabItem();
                         }
@@ -17273,7 +17276,7 @@ void AddonRender() {
                 // Use same width as normal character list panel
                 const AlterEgo::UI::SplitPanel split(g_CharListWidth,200.f);
 
-                ImGui::BeginChild("CharListEmpty", ImVec2(split.left, 0), true);
+                AlterEgo::UI::BeginChild("CharListEmpty", ImVec2(split.left, 0), true);
 
                 // Show pending character names grouped by account
                 if (!pendingNames.empty() && AlterEgo::GW2API::IsMultiAccount()) {
@@ -17317,7 +17320,7 @@ void AddonRender() {
 
                 // Detail panel placeholder (right side)
                 if(split.Divider("##charlist_empty_splitter",g_CharListWidth))SaveSettings();
-                ImGui::BeginChild("CharDetailEmpty", ImVec2(0, 0), true);
+                AlterEgo::UI::BeginChild("CharDetailEmpty", ImVec2(0, 0), true);
                 if (!pendingNames.empty()) {
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
                         "Click ... to select characters to refresh.");
@@ -17374,7 +17377,7 @@ void AddonRender() {
 
                 ImGui::Separator();
 
-                ImGui::BeginChild("##charCheckList", ImVec2(280, 300), true);
+                AlterEgo::UI::BeginChild("##charCheckList", ImVec2(280, 300), true);
                 const auto cachedCharsSnapshot = AlterEgo::GW2API::GetCharacters();
                 const auto& cachedChars = *cachedCharsSnapshot;
                 for (size_t i = 0; i < g_RefreshNames.size(); i++) {
@@ -17476,7 +17479,7 @@ void AddonRender() {
         if (ImGui::BeginTabItem("Compare", nullptr, compareTabFlags)) {
             g_MainTab = 5; // Do not renumber existing session tab IDs.
             TickCharacterLoad();
-            ImGui::BeginChild("##compare_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
+            AlterEgo::UI::BeginChild("##compare_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderCompareTab();
             ImGui::EndChild();
             RenderCompareStatusRow();
@@ -17496,7 +17499,7 @@ void AddonRender() {
         }
         if(inventoryVisible){
             g_MainTab=7;
-            ImGui::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
+            AlterEgo::UI::BeginChild("##inventory_page",ImVec2(0,-AlterEgo::RefreshUI::RowHeight()),false);
             TickCharacterLoad();
             AlterEgo::NativeAccounts::RenderInventory(g_SelectedAccountFilter,SaveSettings,g_InventoryListWidth);
             ImGui::EndChild();
@@ -17528,7 +17531,7 @@ void AddonRender() {
             HandleTabDropdown(skinMenu,skinBar,beforeSkin,skinId,ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
             if(skinVisible) {
             g_MainTab = 2;
-            ImGui::BeginChild("##skinventory_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
+            AlterEgo::UI::BeginChild("##skinventory_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderSkinventory();
             ImGui::EndChild();
             RenderSkinventoryStatusRow();
@@ -17554,7 +17557,7 @@ void AddonRender() {
             if (vaultVisible) {
                 vaultDemand.visible=g_WindowVisible;
                 g_MainTab = 3; // Keep original session tab ID.
-                ImGui::BeginChild("##vault_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
+                AlterEgo::UI::BeginChild("##vault_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
                 RenderVault();
                 ImGui::EndChild();
                 RenderVaultStatusRow();
@@ -17568,7 +17571,7 @@ void AddonRender() {
                 ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
             if (clearsVisible) {
                 g_MainTab = 6; // New session ID; do not renumber older tabs.
-                ImGui::BeginChild("##clears_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
+                AlterEgo::UI::BeginChild("##clears_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
                 RenderClears();
                 ImGui::EndChild();
                 RenderClearsStatusRow();
@@ -17592,7 +17595,7 @@ void AddonRender() {
                 achievementsId, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
             if (achievementsVisible) {
             g_MainTab = 4;
-            ImGui::BeginChild("##achievements_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
+            AlterEgo::UI::BeginChild("##achievements_page", ImVec2(0, -AlterEgo::RefreshUI::RowHeight()), false);
             RenderAchievements();
             ImGui::EndChild();
             RenderAchievementsStatusRow();
@@ -18229,6 +18232,18 @@ void AddonOptions() {
     ImGui::Unindent(16.0f);
 
     ImGui::Separator();
+    RenderSectionHeader("Appearance", AlterEgo::UI::SectionGold);
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SliderInt("Window Transparency##ae_window_transparency", &AlterEgo::UI::WindowTransparencyPercent,
+        0, AlterEgo::UI::MaxWindowTransparency, "%d%%", ImGuiSliderFlags_AlwaysClamp);
+    const bool transparencyEdited=ImGui::IsItemDeactivatedAfterEdit();
+    if(ImGui::IsItemHovered())AlterEgo::UI::Hint("Additional background transparency. Text, controls, tooltips and popups retain their theme opacity.");
+    ImGui::SameLine();
+    if(AlterEgo::UI::Button("Reset##ae_window_transparency",ImVec2(0,0),AlterEgo::UI::ButtonRole::Compact)){
+        AlterEgo::UI::WindowTransparencyPercent=0;
+        SaveSettings();
+    }else if(transparencyEdited)SaveSettings();
+    ImGui::Spacing();
     ImGui::TextColored(ImVec4(0.85f, 0.78f, 0.55f, 1.0f), "Font");
 
     std::string fontsDir;

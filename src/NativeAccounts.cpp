@@ -1870,7 +1870,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         return;
     }
     const UI::SplitPanel split(listWidth,420.f,200.f,240.f);
-    ImGui::BeginChild("InventoryList",ImVec2(split.left,0),true);
+    AlterEgo::UI::BeginChild("InventoryList",ImVec2(split.left,0),true);
     ProjectCharacters(characterFilter,v->bindings,v->credentialEpoch);
     const auto previousQuery=query;
     UI::SearchToolbar("native_inventory","Search items, currencies or ID",query,
@@ -2050,7 +2050,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             visibleLines=tree.Flatten(expandedInventoryGroups,forceExpand);
         }
     }
-    ImGui::BeginChild("InventoryListScroll",ImVec2(0,0),false);
+    AlterEgo::UI::BeginChild("InventoryListScroll",ImVec2(0,0),false);
     if(nav.grouped&&groupRevealPending&&nav.item&&selected!=groups.end()){
         const size_t i=static_cast<size_t>(selected-groups.begin());
         for(size_t n=0;n<visibleLines.size();++n){
@@ -2122,7 +2122,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
     }
     ImGui::EndChild();ImGui::EndChild();
     if(split.Divider("##inventory_split",listWidth))saveSettings();
-    ImGui::BeginChild("InventoryDetailPanel",ImVec2(0,0),true);
+    AlterEgo::UI::BeginChild("InventoryDetailPanel",ImVec2(0,0),true);
     selected=std::find_if(groups.begin(),groups.end(),[&](const Group& x){return x.id==nav.item&&x.currency==nav.currency;});
     if(selected==groups.end()){ImGui::TextWrapped("Select an item or currency to view details.");ImGui::EndChild();return;}
     const auto& group=*selected;

@@ -25,6 +25,37 @@ inline const ImVec4 TooltipTitle(1.0f, 0.9f, 0.5f, 1.0f);
 inline const ImVec4 TooltipBody(0.8f, 0.8f, 0.8f, 1.0f);
 inline const ImVec4 SectionGold(0.70f, 0.58f, 0.20f, 1.0f);
 
+// Ordinary window backgrounds only; never mutate the host style or popup opacity.
+// Percentage is additional transparency relative to the current theme.
+inline constexpr int MaxWindowTransparency=80;
+inline int WindowTransparencyPercent=0;
+inline int ClampWindowTransparency(double value){
+    if(!(value>=0.0))return 0;
+    if(value>=MaxWindowTransparency)return MaxWindowTransparency;
+    return static_cast<int>(value);
+}
+inline float BackgroundAlpha(float base,int percent){
+    return base*(1.f-ClampWindowTransparency(percent)/100.f);
+}
+inline bool PreserveChildBackground(const ImGuiWindow* parent){
+    for(auto* w=parent;w;w=w->ParentWindow)
+        if(w->Flags&(ImGuiWindowFlags_Popup|ImGuiWindowFlags_Tooltip|ImGuiWindowFlags_Modal))return true;
+    return false;
+}
+inline void ApplyWindowBackground(ImGuiCol color){
+    if(WindowTransparencyPercent)
+        ImGui::SetNextWindowBgAlpha(BackgroundAlpha(ImGui::GetStyleColorVec4(color).w*ImGui::GetStyle().Alpha,WindowTransparencyPercent));
+}
+inline bool BeginWindow(const char* name,bool* open=nullptr,ImGuiWindowFlags flags=0){
+    ApplyWindowBackground(ImGuiCol_WindowBg);
+    return ImGui::Begin(name,open,flags);
+}
+inline bool BeginChild(const char* id,ImVec2 size=ImVec2(0,0),bool border=false,ImGuiWindowFlags flags=0){
+    if(!PreserveChildBackground(ImGui::GetCurrentWindowRead()))
+        ApplyWindowBackground(ImGuiCol_ChildBg);
+    return ImGui::BeginChild(id,size,border,flags);
+}
+
 // Presentation only: caller owns the native hit target and all data.
 inline float TooltipWrapWidth(float base=TooltipWidth){
     return std::max(1.f,std::min(base*ImGui::GetFontSize()/13.f,ImGui::GetIO().DisplaySize.x-2.f*ImGui::GetStyle().WindowPadding.x-16.f));

@@ -10,6 +10,8 @@ This is a draft for the experimental branch, not a published or fully validated 
 
 ### Added
 
+- Nexus Appearance setting for adjustable Alter Ego window background transparency with reset and persistent preference; text, controls and popup backgrounds retain their theme opacity.
+
 - Reusable loadout components, shared Equipment Sets and independent Fashion records.
 - Source refresh for Snow Crows and MetaBattle now stages presence-aware changes for review, preserves omitted local values and supports private or explicitly shared saves.
 - Optional Aquatic equipment components, separate underwater skill selections, and mutually exclusive slot-based or aggregate infusion requirements with reversible editor drafts.

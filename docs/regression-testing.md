@@ -22,6 +22,7 @@ removed after demonstrating that the behavior is no longer supported; Git histor
 is the archive. Do not remove tests solely because they fail.
 
 The Windows workflow gates DLL packaging on all offline cases and binary checks.
+Appearance regression: selector_context checks transparency bounds, theme-relative background alpha, ordinary native window/child versus modal ancestry and unchanged host style. In game, verify Nexus Appearance slider at 0%, intermediate and 80%, reset, restart persistence, main and modeless windows, toast, achievement tracker, nested panels, popups, tooltips and confirmation readability; other addons and Fast Load remain unchanged.
 The existing persistence suite includes chat_link_entities: exact skill/trait/outfit/recipe wire fixtures, item overrides round-trip, unsupported types and ID truncation rejection. The presentation selector_context case exercises the shared native ImGui control with synthetic right-button input, duplicate names, unselected entry and closed-value context targeting. The same presentation selector_context case checks wrapped reference-row center geometry, full-column hit bounds, label/value/link hover, right-click without selection, left click and narrow-width layout. In-game host input routing, navigation and complex nested editors still require manual checks.
 
 MetaBattle is excluded from automated regression testing by explicit user request:

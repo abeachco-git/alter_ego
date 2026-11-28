@@ -582,7 +582,7 @@ static void RenderComponentUIEditor() {
         }
         if (!matches.empty()) {
             ImGui::TextDisabled("Exact existing component%s", matches.size() == 1 ? "" : "s");
-            if (ImGui::BeginChild("##component_matches", ImVec2(0, std::min(96.0f,
+            if (AlterEgo::UI::BeginChild("##component_matches", ImVec2(0, std::min(96.0f,
                     ImGui::GetFrameHeightWithSpacing() * static_cast<float>(matches.size()) + 4.0f)), false)) {
                 for (const auto& match : matches) {
                     ImGui::PushID(match.id.c_str());
@@ -628,7 +628,7 @@ static void RenderComponentUIEditor() {
     }
     if (g_ComponentEditorMode != "rename") {
         ImGui::Separator();
-        ImGui::BeginChild("##component_native_editor", ImVec2(0, -110.0f), false);
+        AlterEgo::UI::BeginChild("##component_native_editor", ImVec2(0, -110.0f), false);
         RenderComponentNativeEditor(g_ComponentEditorKind, g_ComponentEditorId,
                                     g_ComponentEditorDraft);
         RenderComponentContextImpact();
@@ -1195,7 +1195,7 @@ static void RenderLoadoutSaveReview(){
         if(g_SourceRefreshDraft){
             ImGui::TextWrapped("Confirm the staged source refresh. Omitted fields are retained; no data has been saved yet.");
             ImGui::Text("%zu changed fields",sourceChanges.size());
-            if(ImGui::BeginChild("##source_review_diff",ImVec2(520,180),true)){
+            if(AlterEgo::UI::BeginChild("##source_review_diff",ImVec2(520,180),true)){
                 for(const auto& row:sourceChanges){
                     ImGui::TextWrapped("%s",row[0].c_str());
                     ImGui::TextDisabled("Before: %s",row[1].c_str());ImGui::TextWrapped("After: %s",row[2].c_str());
@@ -1366,7 +1366,7 @@ static void RenderComponentLibrary() {
         g_ComponentSelectIdPending.clear();g_ComponentSelectNamePending.clear();
     }
     const UI::SplitPanel split(g_ComponentListWidth,270.f,160.f,220.f);
-    ImGui::BeginChild("##component_list",ImVec2(split.left,0),true);
+    AlterEgo::UI::BeginChild("##component_list",ImVec2(split.left,0),true);
     UI::SearchToolbar("components","Search components...",g_ComponentSearch,
         [&]{
             UI::FilterChips chips;
@@ -1462,7 +1462,7 @@ static void RenderComponentLibrary() {
     }
     ImGui::EndChild();
     if(split.Divider("##component_split",g_ComponentListWidth))SaveSettings();
-    ImGui::BeginChild("##component_detail",ImVec2(0,0),true);
+    AlterEgo::UI::BeginChild("##component_detail",ImVec2(0,0),true);
     const std::string kind=g_ComponentSelectedKind;
     const auto* item=ComponentUIFind(doc,kind,g_ComponentSelectedId);
     const auto group=doc["components"].find(kind);
@@ -1489,7 +1489,7 @@ static void RenderComponentLibrary() {
         if(UI::AvailableActionButton("Delete",UI::ButtonRole::CompactDestructive,usage==0,reason.c_str()))
             RunComponentAction(ComponentAction::Delete,kind,*item);
         ImGui::Separator();
-        ImGui::BeginChild("##component_detail_scroll",ImVec2(0,0),false);
+        AlterEgo::UI::BeginChild("##component_detail_scroll",ImVec2(0,0),false);
         if (ImGui::CollapsingHeader("Exact duplicates##component_duplicates")) {
             static uint64_t duplicateRevision=0;
             static std::string duplicateKind,duplicateId;
@@ -1673,7 +1673,7 @@ static void RenderEquipmentSetLibrary() {
     std::map<std::string,int> usage;
     for(const auto& l:doc.at("loadouts"))++usage[l.value("equipment_set_id",std::string())];
     const UI::SplitPanel split(g_EquipmentSetListWidth,220.f,130.f,220.f);
-    ImGui::BeginChild("##equipment_set_list",ImVec2(split.left,0),true);
+    AlterEgo::UI::BeginChild("##equipment_set_list",ImVec2(split.left,0),true);
     UI::SearchField("equipment_sets_search","Search equipment sets...",search);ImGui::Separator();
     bool selectedVisible=false;
     if(sets.empty())ImGui::TextDisabled("No equipment sets. Right-click to create one.");
@@ -1706,7 +1706,7 @@ static void RenderEquipmentSetLibrary() {
     }
     ImGui::EndChild();
     if(split.Divider("##equipment_set_split",g_EquipmentSetListWidth))SaveSettings();
-    ImGui::BeginChild("##equipment_set_detail",ImVec2(0,0),true);
+    AlterEgo::UI::BeginChild("##equipment_set_detail",ImVec2(0,0),true);
     if(!selected){g_EquipmentSetSelectedId.clear();ImGui::TextDisabled("Select an equipment set.");}
     else{
     const auto id=selected->value("id",std::string()),name=selected->value("name",id);
@@ -1724,7 +1724,7 @@ static void RenderEquipmentSetLibrary() {
     if(UI::AvailableActionButton("Delete##equipment_set",UI::ButtonRole::Destructive,users==0,reason.c_str()))
         RunEquipmentSetAction(EquipmentSetAction::Delete,*selected,users);
     ImGui::Separator();
-    ImGui::BeginChild("##equipment_set_detail_scroll",ImVec2(0,0),false);
+    AlterEgo::UI::BeginChild("##equipment_set_detail_scroll",ImVec2(0,0),false);
     for(const auto& l:doc.at("loadouts"))if(l.value("equipment_set_id",std::string())==id)
         ImGui::BulletText("%s",l.at("metadata").value("name",l.value("id",std::string())).c_str());
     if(ImGui::BeginTable("##equipment_set_refs",2,ImGuiTableFlags_SizingStretchProp)) {

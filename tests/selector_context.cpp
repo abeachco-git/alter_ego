@@ -138,6 +138,34 @@ int case_selector_context(int, char**) {
         const float gap=grouped[i].Min.x-grouped[i-1].Max.x;
         assert(std::abs(gap-base-(i==2?TabGroupExtraGap:0.f))<1.f);
     }
+    // Exercise the shared background policy in the native ImGui context.
+    assert(ClampWindowTransparency(-1)==0&&ClampWindowTransparency(100)==80);
+    assert(ClampWindowTransparency(25)==25);
+    assert(BackgroundAlpha(.96f,0)==.96f);
+    assert(std::abs(BackgroundAlpha(.96f,80)-.192f)<.0001f);
+    assert(std::abs(BackgroundAlpha(.80f,50)-.4f)<.0001f);
+    const auto base=ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    const auto child=ImGui::GetStyleColorVec4(ImGuiCol_ChildBg);
+    WindowTransparencyPercent=50;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowSize(ImVec2(400,300));
+    BeginWindow("Background test");
+    assert(!PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+    BeginChild("Panel",ImVec2(100,80),true);
+    assert(!PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+    ImGui::EndChild();
+    ImGui::OpenPopup("Modal");
+    if(ImGui::BeginPopupModal("Modal")){
+        assert(PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+        BeginChild("Modal panel",ImVec2(100,80),true);
+        assert(PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+        ImGui::EndChild();
+        ImGui::CloseCurrentPopup();ImGui::EndPopup();
+    }
+    ImGui::End();ImGui::Render();
+    assert(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).w==base.w);
+    assert(ImGui::GetStyleColorVec4(ImGuiCol_ChildBg).w==child.w);
+    WindowTransparencyPercent=0;
     ImGui::DestroyContext();
     return 0;
 }
