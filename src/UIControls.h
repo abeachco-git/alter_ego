@@ -471,9 +471,63 @@ inline bool MultiFilterChoice(const char* label,std::set<std::string>& selected,
     ImGui::PopID();
     return changed;
 }
-// Decorative group dividers in the gaps between central tabs. Draw after
-// submitting all tabs (the layout is current), without adding any ImGui item,
-// hit target, selection, keyboard stop or width to the tab bar.
+// Reference editors have a stable responsive width but natural content height.
+// At small display heights the modal scrolls, including its footer; no
+// unconditional child-height or hidden-message reserve is needed.
+inline void ContentSizedModal(float preferredWidth,float margin=24.f){
+    const auto display=ImGui::GetIO().DisplaySize;
+    const float width=std::max(1.f,std::min(preferredWidth,display.x-margin));
+    const float height=std::max(1.f,display.y-margin);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width,0),ImVec2(width,height));
+}
+// Group boundaries alone receive 3 extra pixels on each side. The native
+// resize-down layout owns width calculation and clipping. Reserve the group
+// width before the first tab submits its layout, then restore the available
+// rectangle and shift subsequent native offsets before they are submitted.
+// No spacer item, additional ID, style mutation or vendored ABI change.
+inline constexpr float TabGroupExtraGap=6.f;
+struct TabGroupGaps {
+    ImGuiTabBar* bar=nullptr;
+    std::vector<ImGuiID> boundaries;
+    float reserved=0.f;
+    float originalMaxX=0.f;
+    TabGroupGaps(ImGuiTabBar* current,std::initializer_list<ImGuiID> before):bar(current){
+        if(!bar||!bar->WantLayout||!(bar->Flags&ImGuiTabBarFlags_FittingPolicyResizeDown))return;
+        int live=0;
+        for(const auto& tab:bar->Tabs){
+            if(tab.LastFrameVisible<bar->PrevFrameVisible||tab.WantClose)continue;
+            if(tab.Flags&(ImGuiTabItemFlags_Leading|ImGuiTabItemFlags_Trailing)){boundaries.clear();return;}
+            if(live++&&std::find(before.begin(),before.end(),tab.ID)!=before.end())boundaries.push_back(tab.ID);
+        }
+        reserved=TabGroupExtraGap*static_cast<float>(boundaries.size());
+        if(reserved<=0.f||bar->BarRect.GetWidth()<=reserved+1.f){reserved=0;return;}
+        originalMaxX=bar->BarRect.Max.x;
+        bar->BarRect.Max.x-=reserved;
+    }
+    TabGroupGaps(const TabGroupGaps&)=delete;
+    TabGroupGaps& operator=(const TabGroupGaps&)=delete;
+    void AfterFirstTab(){
+        if(reserved<=0.f)return;
+        bar->BarRect.Max.x=originalMaxX;
+        if(!bar->WantLayout){
+            float offset=0.f;
+            for(auto& tab:bar->Tabs){
+                if(std::find(boundaries.begin(),boundaries.end(),tab.ID)!=boundaries.end())offset+=TabGroupExtraGap;
+                tab.Offset+=offset;
+            }
+            bar->ScrollingRectMaxX+=reserved;
+            bar->WidthAllTabs+=reserved;
+            bar->WidthAllTabsIdeal+=reserved;
+            auto* window=ImGui::GetCurrentWindow();
+            window->DC.CursorMaxPos.x=std::max(window->DC.CursorMaxPos.x,bar->BarRect.Min.x+bar->WidthAllTabs);
+            window->DC.IdealMaxPos.x=std::max(window->DC.IdealMaxPos.x,bar->BarRect.Min.x+bar->WidthAllTabsIdeal);
+        }
+        reserved=0.f;
+    }
+    ~TabGroupGaps(){if(reserved>0.f)bar->BarRect.Max.x=originalMaxX;}
+};
+// Decorative group dividers in the actual enlarged central-tab gaps. Draw
+// after all tabs have submitted, with no hit target or navigation stop.
 inline void TabGroupDividerBefore(const ImGuiTabBar* bar,ImGuiID following){
     if(!bar||!following)return;
     for(int i=1;i<bar->Tabs.Size;++i){

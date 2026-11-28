@@ -16557,13 +16557,11 @@ void AddonRender() {
 
     // Top-level tab bar: Characters | Build Library
     PollBuildSource();
-    // The main tab layout is calculated by the first submitted tab. Add
-    // six pixels to its gaps (three on either side of each group divider).
-    const auto mainInnerSpacing=ImGui::GetStyle().ItemInnerSpacing;
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,ImVec2(mainInnerSpacing.x+6.f,mainInnerSpacing.y));
-    const bool mainTabBarOpen=ImGui::BeginTabBar("##main_tabs");
-    if(!mainTabBarOpen)ImGui::PopStyleVar();
-    if (mainTabBarOpen) {
+    if (ImGui::BeginTabBar("##main_tabs")) {
+        AlterEgo::UI::TabGroupGaps groupGaps(GImGui->CurrentTabBar,{
+            ImGui::GetID("Inventory    ##ae_inventory_dropdown"),
+            ImGui::GetID("Wizard's Vault    ##ae_vault_dropdown"),
+            ImGui::GetID("Wizard's Vault")});
         static TabDropdownState libraryMenu, vaultMenu, clearsMenu, achievementsMenu, skinMenu, inventoryMenu;
 
         ImGuiTabItemFlags charTabFlags = NavigationTabFlags(0);
@@ -16572,7 +16570,7 @@ void AddonRender() {
             g_ForceCharactersTab = false;
         }
         const bool charactersTabVisible = ImGui::BeginTabItem("Characters", nullptr, charTabFlags);
-        ImGui::PopStyleVar(); // content and nested tabs keep their existing spacing
+        groupGaps.AfterFirstTab(); // only the two group boundaries get extra width
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Live and cached character data from your GW2 account");
         if (charactersTabVisible) {

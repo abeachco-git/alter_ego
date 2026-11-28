@@ -108,6 +108,36 @@ int case_selector_context(int, char**) {
     referenceFrame(labelHit,false,true);referenceFrame(labelHit,false,false);assert(clicked);
     referenceFrame(outside,false,false,false,260.f);referenceFrame(outside,false,false,false,260.f);
     referenceFrame(linkHit,false,false,false,260.f);assert(hovered);
+    // Compare the actual native tab rectangles, including the grouped
+    // boundary, at the same style used by an ordinary detail strip.
+    auto tabFrame=[&](float w,bool grouped){
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(30,30));ImGui::SetNextWindowSize(ImVec2(w,200));
+        ImGui::Begin(grouped?"Grouped tabs":"Ordinary tabs");
+        std::vector<ImRect> rects;
+        if(ImGui::BeginTabBar("tabs")){
+            auto* bar=GImGui->CurrentTabBar;
+            const auto next=ImGui::GetID("Third");
+            TabGroupGaps gaps(bar,{grouped?next:0u});
+            for(const char* name:{"First","Second","Third","Fourth"}){
+                const bool visible=ImGui::BeginTabItem(name);
+                if(rects.empty())gaps.AfterFirstTab();
+                rects.emplace_back(ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+                if(visible)ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+        ImGui::End();ImGui::Render();return rects;
+    };
+    tabFrame(700,true);tabFrame(700,false);
+    tabFrame(700,true);tabFrame(700,false);
+    const auto grouped=tabFrame(700,true),ordinary=tabFrame(700,false);
+    assert(grouped.size()==4&&ordinary.size()==4);
+    for(size_t i=1;i<4;++i){
+        const float base=ordinary[i].Min.x-ordinary[i-1].Max.x;
+        const float gap=grouped[i].Min.x-grouped[i-1].Max.x;
+        assert(std::abs(gap-base-(i==2?TabGroupExtraGap:0.f))<1.f);
+    }
     ImGui::DestroyContext();
     return 0;
 }

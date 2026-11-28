@@ -993,10 +993,9 @@ static void RenderReferenceEditor(){
     if(!e.open)return;
     const char* popup=e.newSet?"New Equipment Set###ae_reference_editor":e.isSet?"Edit Equipment Set###ae_reference_editor":"Edit Loadout Components###ae_reference_editor";
     if(!ImGui::IsPopupOpen(popup))ImGui::OpenPopup(popup);
-    const auto display=ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowSize(ImVec2(std::min(580.f,display.x-24.f),std::min(620.f,display.y-24.f)),ImGuiCond_Appearing);
+    UI::ContentSizedModal(580.f);
     bool windowOpen=true;
-    if(!ImGui::BeginPopupModal(popup,&windowOpen)){
+    if(!ImGui::BeginPopupModal(popup,&windowOpen,ImGuiWindowFlags_AlwaysAutoResize)){
         if(!windowOpen)e.closeRequested=true;
         return;
     }
@@ -1005,7 +1004,6 @@ static void RenderReferenceEditor(){
     const bool stale=e.revision!=GW2API::GetBuildLibraryRevision()||(!e.newSet&&!owner);
     if(!e.isSet)ImGui::TextWrapped("%s",e.name.c_str());
     if(stale)ImGui::TextWrapped("Library changed. Cancel and reopen to avoid overwriting newer changes.");
-    ImGui::BeginChild("##reference_editor_fields",ImVec2(0,-110),false);
     if(e.isSet){ImGui::SetNextItemWidth(-1);UI::InputText("Name",e.name);}
     if((owner||e.newSet)&&doc.contains("components"))RenderEditableReferences(doc,owner,e);
     if(!e.isSet)RenderRevenantContextWarnings(ComponentUIRevenantContext(doc,ComponentJson(e.refs)));
@@ -1016,7 +1014,6 @@ static void RenderReferenceEditor(){
         ImGui::Spacing();ImGui::TextWrapped("Save changes the shared set for %d linked Loadout(s). Removing a category preserves its previous selection on each Loadout.",users);
         if(adding&&users)ImGui::Checkbox("Replace independent selections in linked Loadouts",&e.confirmed);
     }
-    ImGui::EndChild();
     const bool dirty=e.refs!=e.originalRefs||e.inherited!=e.originalInherited||(e.isSet?e.name!=e.originalName:e.setId!=e.originalSet||e.fashionId!=e.originalFashion);
     const bool valid=!stale&&dirty&&(!e.isSet||(!e.refs.empty()&&!Composable::ComponentNameKey(e.name).empty()&&(!adding||!users||e.confirmed)));
     if(e.isSet&&e.refs.empty())ImGui::TextDisabled("Include at least one equipment category.");
