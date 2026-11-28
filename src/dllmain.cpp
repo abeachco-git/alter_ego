@@ -1566,28 +1566,7 @@ static int CharacterAgeYears(const std::string& created) {
 // Strip GW2 markup tags from description text
 // Converts <br> to newline, removes <c=@...> and </c> tags
 static std::string StripGW2Markup(const std::string& text) {
-    std::string result;
-    result.reserve(text.size());
-    size_t i = 0;
-    while (i < text.size()) {
-        if (text[i] == '<') {
-            // Find closing >
-            size_t end = text.find('>', i);
-            if (end != std::string::npos) {
-                std::string tag = text.substr(i, end - i + 1);
-                // Convert <br> to newline
-                if (tag == "<br>" || tag == "<br/>" || tag == "<br />") {
-                    result += '\n';
-                }
-                // Skip all other tags (<c=@...>, </c>, etc.)
-                i = end + 1;
-                continue;
-            }
-        }
-        result += text[i];
-        i++;
-    }
-    return result;
+    return AlterEgo::TooltipCore::StripGW2Markup(text);
 }
 
 // GW2 API weapon type → current in-game display name
@@ -2995,10 +2974,11 @@ static void RenderSpecializationTooltip(const std::string& name,ImVec4 color,con
     if(editable)TooltipLine("(click to change specialization)",ImVec4(.7f,.62f,.35f,1.f));
     ImGui::EndTooltip();
 }
-void RenderItemDefinitionDetails(const AlterEgo::ItemInfo& info,unsigned parts,bool tooltip){
+static void RenderItemDefinitionDetailsForContext(const AlterEgo::ItemInfo& info,unsigned parts,bool tooltip,
+    AlterEgo::TooltipCore::ItemContext context){
     using namespace AlterEgo;
     using namespace TooltipCore;
-    auto lines=ItemDefinitionLines(info.type,info.rarity,info.description,info.details,parts);
+    auto lines=ItemDefinitionLines(info.type,info.rarity,info.description,info.details,parts,context);
     if(parts&ItemAcquisition){
         auto extra=ItemAcquisitionLines(info.optional_metadata);
         lines.insert(lines.end(),extra.begin(),extra.end());
@@ -3016,6 +2996,20 @@ void RenderItemDefinitionDetails(const AlterEgo::ItemInfo& info,unsigned parts,b
             ImGui::PopStyleColor();
         }
     }
+}
+void RenderItemDefinitionDetails(const AlterEgo::ItemInfo& info,unsigned parts,bool tooltip){
+    RenderItemDefinitionDetailsForContext(info,parts,tooltip,AlterEgo::TooltipCore::ItemContext::Standalone);
+}
+static void RenderInstalledUpgradeDetails(const AlterEgo::ItemInfo& info){
+    using namespace AlterEgo::TooltipCore;
+    RenderItemDefinitionDetailsForContext(info,ItemAttributes|ItemEffects|ItemDescription,true,ItemContext::InstalledUpgrade);
+}
+static void RenderInstalledUpgradeTooltip(const AlterEgo::ItemInfo& info){
+    if(info.name.empty())return;
+    ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
+    AlterEgo::UI::TooltipLine(info.name.c_str(),GetRarityColor(info.rarity));
+    RenderInstalledUpgradeDetails(info);
+    ImGui::EndTooltip();
 }
 void RenderItemDefinitionTooltip(const AlterEgo::ItemInfo& info){
     if(info.name.empty())return;
@@ -3050,9 +3044,6 @@ void RenderSavedItemTooltip(uint32_t itemId,uint32_t statId){
     RenderItemDefinitionDetails(*info,TooltipCore::ItemAll&~TooltipCore::ItemAttributes);
     RenderSelectedItemStatDetails(itemId,statId);
     ImGui::EndTooltip();
-}
-static void RenderUpgradeTooltipDetails(const AlterEgo::ItemInfo& info){
-    RenderItemDefinitionDetails(info,AlterEgo::TooltipCore::ItemAttributes|AlterEgo::TooltipCore::ItemEffects|AlterEgo::TooltipCore::ItemDescription|AlterEgo::TooltipCore::ItemUtility);
 }
 static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::EquipmentItem* eq, const char* slotName) {
     ImGui::PushID(slotName);
@@ -3198,7 +3189,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                     const auto info = AlterEgo::GW2API::GetItemInfo(id);
                     if (info && !info->name.empty()){
                         ImGui::BulletText("%s", info->name.c_str());
-                        RenderUpgradeTooltipDetails(*info);
+                        RenderInstalledUpgradeDetails(*info);
                     }else ImGui::BulletText("Infusion details unavailable");
                 }
             }
@@ -3210,7 +3201,7 @@ static void RenderEquipmentSlot(const AlterEgo::Character& ch,const AlterEgo::Eq
                 ImGui::Spacing();
                 if(uinfo){
                     ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.9f, 1.0f), "%s", uinfo->name.c_str());
-                    RenderUpgradeTooltipDetails(*uinfo);
+                    RenderInstalledUpgradeDetails(*uinfo);
                 }else ImGui::TextDisabled("Upgrade details unavailable");
             }
 
@@ -3649,7 +3640,7 @@ static void RenderCharacterToolsPanel(const AlterEgo::Character& ch) {
                 const auto glyph = GW2API::GetItemInfo(id);
                 const auto glyphName=glyph&&!glyph->name.empty()?glyph->name:"Item #"+std::to_string(id);
                 ImGui::TextWrapped("Glyph: %s",glyphName.c_str());
-                if(glyph&&ImGui::IsItemHovered())RenderItemDefinitionTooltip(*glyph);
+                if(glyph&&ImGui::IsItemHovered())RenderInstalledUpgradeTooltip(*glyph);
                 ImGui::PushID(static_cast<int>(id));UI::EntityContext("##tool_glyph",[&]{CopyEntityMenu(glyph?glyph->name:std::string{},LINK_ITEM,id);});ImGui::PopID();
             }
             if(!reported){
@@ -9019,7 +9010,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         if(!label.empty()){
         ImGui::BeginTooltipEx(ImGuiWindowFlags_None,ImGuiTooltipFlags_OverridePreviousTooltip);
         AlterEgo::UI::TooltipLine(label.c_str(),ImVec4(.5f,.8f,.8f,1.f));
-        if(info)RenderItemDefinitionDetails(*info);
+        if(info)RenderInstalledUpgradeDetails(*info);
         // A name-only catalog entry cannot verify a relic effect.
         ImGui::EndTooltip();
         }
@@ -9035,7 +9026,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
                 const auto info=AlterEgo::GW2API::GetItemInfo(id);
                 const auto name=AlterEgo::TooltipCore::EntityName(info?info->name:std::string{},stored);
                 if(!name.empty())AlterEgo::UI::TooltipLine((std::string(label)+": "+name).c_str());
-                if(info)RenderUpgradeTooltipDetails(*info);
+                if(info)RenderInstalledUpgradeDetails(*info);
             };
             upgrade("Rune",gearSlot->rune_id,gearSlot->rune);upgrade("Sigil",gearSlot->sigil_id,gearSlot->sigil);upgrade("Second sigil",gearSlot->sigil2_id,gearSlot->sigil2);
         }
@@ -9056,7 +9047,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
                 if(!req.attribute.empty())ImGui::BulletText("Stat: %s",InfusionAttributeLabel(req.attribute));
                 else if(req.exactId){
                     const auto info=AlterEgo::GW2API::GetItemInfo(req.exactId);
-                    if(info&&!info->name.empty()){ImGui::BulletText("%s",info->name.c_str());RenderUpgradeTooltipDetails(*info);}
+                    if(info&&!info->name.empty()){ImGui::BulletText("%s",info->name.c_str());RenderInstalledUpgradeDetails(*info);}
                     else ImGui::BulletText("Infusion details unavailable");
                 }
             }
@@ -11113,7 +11104,13 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                             const auto id=*unique.begin();
                             if(row->linkType==AlterEgo::LINK_SKILL){const auto v=AlterEgo::GW2API::GetSkillInfo(id);if(v)RenderSkillTooltip(*v);}
                             else if(row->linkType==AlterEgo::LINK_TRAIT){const auto v=AlterEgo::GW2API::GetTraitInfo(id);if(v)RenderTraitTooltip(*v);}
-                            else if(row->linkType==AlterEgo::LINK_ITEM){const auto v=AlterEgo::GW2API::GetItemInfo(id);if(v)RenderItemDefinitionTooltip(*v);}
+                            else if(row->linkType==AlterEgo::LINK_ITEM){
+                                const auto v=AlterEgo::GW2API::GetItemInfo(id);
+                                if(v){
+                                    if(v->type=="UpgradeComponent"||v->type=="Relic")RenderInstalledUpgradeTooltip(*v);
+                                    else RenderItemDefinitionTooltip(*v);
+                                }
+                            }
                         }
                         ImGui::PushID(row->group.c_str());ImGui::PushID(row->field.c_str());
                         for(auto id:unique)ImGui::PushID(static_cast<int>(id));

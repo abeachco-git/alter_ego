@@ -30,6 +30,73 @@ enum ItemDefinitionPart : unsigned {
     ItemDescription=16u, ItemAcquisition=32u, ItemUtility=64u, ItemAll=127u
 };
 struct ItemDefinitionLine { unsigned part; std::string text; };
+enum class ItemContext { Standalone, InstalledUpgrade };
+inline std::string StripGW2Markup(const std::string& text) {
+    std::string result;
+    result.reserve(text.size());
+    size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == '<') {
+            // Find closing >
+            size_t end = text.find('>', i);
+            if (end != std::string::npos) {
+                std::string tag = text.substr(i, end - i + 1);
+                // Convert <br> to newline
+                if (tag == "<br>" || tag == "<br/>" || tag == "<br />") {
+                    result += '\n';
+                }
+                // Skip all other tags (<c=@...>, </c>, etc.)
+                i = end + 1;
+                continue;
+            }
+        }
+        result += text[i];
+        i++;
+    }
+    return result;
+}
+// Only remove known nonfunctional instructions/classification. Preserve
+// unknown descriptions and effects, even when mixed with known boilerplate.
+inline std::string InstalledUpgradeDescription(const std::string& raw){
+    auto text=StripGW2Markup(raw);
+    const auto trim=[](std::string value){
+        const auto first=value.find_first_not_of(" \t\r\n");
+        if(first==std::string::npos)return std::string{};
+        return value.substr(first,value.find_last_not_of(" \t\r\n")-first+1);
+    };
+    const char* boilerplate[]={
+        "Double-click to apply to an unused infusion slot.",
+        "Used by artificers to craft more powerful agony infusions.",
+        "Double-click to apply to a piece of armor.",
+        "Double-click to apply to a weapon.",
+        "Double-click to apply to an unused upgrade slot.",
+        "Double-click to apply to a gathering tool."
+    };
+    for(const auto* sentence:boilerplate){
+        const std::string known=sentence;
+        size_t at=0;
+        while((at=text.find(known,at))!=std::string::npos){
+            const auto end=at+known.size();
+            if((at==0||text[at-1]==' '||text[at-1]=='\n')&&
+               (end==text.size()||text[end]==' '||text[end]=='\r'||text[end]=='\n')){
+                text.erase(at,known.size());
+            }else at=end;
+        }
+    }
+    std::string result;
+    size_t start=0;
+    while(start<text.size()){
+        const auto end=text.find('\n',start);
+        const auto line=trim(text.substr(start,end==std::string::npos?end:end-start));
+        if(!line.empty()&&line!="Element: Potence"&&line!="Element: Skill"&&line!="Element: Control"){
+            if(!result.empty())result+='\n';
+            result+=line;
+        }
+        if(end==std::string::npos)break;
+        start=end+1;
+    }
+    return result;
+}
 template<class Json> uint32_t PositiveId(const Json& value){
     if(value.is_number_unsigned()){const auto v=value.template get<uint64_t>();return v&&v<=UINT32_MAX?static_cast<uint32_t>(v):0;}
     if(value.is_number_integer()){const auto v=value.template get<int64_t>();return v>0&&v<=UINT32_MAX?static_cast<uint32_t>(v):0;}
@@ -87,7 +154,7 @@ inline const char* WeaponTypeLabel(const std::string& name){
 }
 template<class Json> std::vector<ItemDefinitionLine> ItemDefinitionLines(
     const std::string& type,const std::string& rarity,const std::string& description,
-    const Json& details,unsigned parts=ItemAll){
+    const Json& details,unsigned parts=ItemAll,ItemContext context=ItemContext::Standalone){
     std::vector<ItemDefinitionLine> out;
     auto add=[&](unsigned part,std::string line){
         if(!(parts&part)||line.empty())return;
@@ -140,7 +207,7 @@ template<class Json> std::vector<ItemDefinitionLine> ItemDefinitionLines(
                 for(const auto& attr:*attrs){
                     const auto name=str(attr,"attribute");const auto mod=integer(attr,"modifier");
                     if(name.empty()||!mod||!*mod)continue;
-                    if(first){add(ItemAttributes,"Fixed definition attributes");first=false;}
+                    if(first){if(context==ItemContext::Standalone)add(ItemAttributes,"Fixed definition attributes");first=false;}
                     add(ItemAttributes,(*mod>0?"+":"")+std::to_string(*mod)+" "+FriendlyAttribute(name));
                 }
             }
@@ -157,7 +224,7 @@ template<class Json> std::vector<ItemDefinitionLine> ItemDefinitionLines(
         }
     }
     if(legendaryRelic)add(ItemDescription,"The API does not expose which relic effect this legendary relic is emulating.");
-    else add(ItemDescription,description);
+    else add(ItemDescription,context==ItemContext::InstalledUpgrade?InstalledUpgradeDescription(description):description);
     return out;
 }
 // These are definition facts, not market value, sellability or proof that
