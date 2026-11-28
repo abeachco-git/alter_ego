@@ -297,6 +297,14 @@ inline bool MenuAction(const char* label,MenuIcon icon,bool enabled=true,const c
     else if(description&&*description&&ImGui::IsItemHovered())Hint(description);
     return clicked;
 }
+// Optional native preview: never submit an item or its group divider when unavailable.
+inline constexpr const char* NativePreviewLabel="Preview in Game";
+inline constexpr const char* NativePreviewHint="Open the native game preview using Pie UI.";
+inline bool NativePreviewMenuAction(bool available,bool separate=false){
+    if(!available)return false;
+    if(separate)ImGui::Separator();
+    return MenuAction(NativePreviewLabel,MenuIcon::Preview,true,nullptr,NativePreviewHint);
+}
 inline bool BeginActionMenu(const char* label,MenuIcon icon,bool enabled=true,const char* reason=nullptr){
     const auto pos=ImGui::GetCursorScreenPos();auto* draw=ImGui::GetWindowDrawList();
     const auto size=ImGui::GetFontSize();const auto color=ImGui::GetColorU32(enabled?ImGuiCol_Text:ImGuiCol_TextDisabled);
@@ -494,6 +502,14 @@ inline float CompactButtonWidth(const char* label) {
 }
 inline void SameLineIfActionFits(const char* label){
     if(ImGui::GetWindowPos().x+ImGui::GetContentRegionMax().x-ImGui::GetItemRectMax().x>=CompactButtonWidth(label)+ImGui::GetStyle().ItemSpacing.x)ImGui::SameLine();
+}
+inline bool NativePreviewButton(bool available,const char* id="##native_preview"){
+    if(!available)return false;
+    SameLineIfActionFits(NativePreviewLabel);
+    const auto label=std::string(NativePreviewLabel)+id;
+    const bool clicked=Button(label.c_str());
+    if(ImGui::IsItemHovered())Hint(NativePreviewHint);
+    return clicked;
 }
 template<class Edit, class Clear, class HasText>
 inline bool SearchFieldCore(const char* id, float width, Edit edit, Clear clear, HasText hasText) {

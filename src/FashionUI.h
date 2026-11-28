@@ -370,7 +370,7 @@ static void RequestFashionDelete(const AlterEgo::Fashion::Look& look){
 enum class FashionAction {Edit,Rename,Duplicate,Copy,Preview,Delete};
 static void RunFashionAction(FashionAction action,const AlterEgo::Fashion::Look& look){
     if(action==FashionAction::Copy){CopyFashionWardrobeLink(look);return;}
-    if(action==FashionAction::Preview){if(g_PieUIPresent.load())PieUI_PreviewChatLink(look.wardrobe_link);return;}
+    if(action==FashionAction::Preview){PieUI_PreviewChatLink(look.wardrobe_link);return;}
     if(LibraryDraftOpen()){if(APIDefs)APIDefs->GUI_SendAlert("Finish the current Library editor first.");return;}
     const int index=AlterEgo::RecordSelection::ById(g_FashionLibrary.looks,look.id);
     if(index<0)return;
@@ -459,8 +459,7 @@ static void RenderFashionLibrary() {
             if(MenuAction("Rename",MenuIcon::Rename,ready,reason))RunFashionAction(FashionAction::Rename,look);
             if(MenuAction("Duplicate",MenuIcon::Duplicate,ready,reason))RunFashionAction(FashionAction::Duplicate,look);
             ImGui::Separator();RenderFashionClipboardActions(look);
-            ImGui::Separator();
-            if(MenuAction("Preview",MenuIcon::Preview,g_PieUIPresent.load(),"Requires the existing PieOrCake UI integration."))RunFashionAction(FashionAction::Preview,look);
+            if(NativePreviewMenuAction(CanPreviewInGame(),true))RunFashionAction(FashionAction::Preview,look);
             ImGui::Separator();
             if(MenuAction("Delete",MenuIcon::Delete,ready,reason))RunFashionAction(FashionAction::Delete,look);
             ImGui::EndPopup();
@@ -505,8 +504,7 @@ static void RenderFashionLibrary() {
         SameLineIfActionFits("Copy");
         if(RenderActionButton("Copy##fashion"))RunFashionAction(FashionAction::Copy,look);
         if(ImGui::IsItemHovered())ImGui::SetTooltip("Copy Wardrobe Link");
-        SameLineIfActionFits("Preview");
-        if(AvailableActionButton("Preview##fashion",ButtonRole::Standard,g_PieUIPresent.load(),"Requires the existing PieOrCake UI integration."))RunFashionAction(FashionAction::Preview,look);
+        if(NativePreviewButton(CanPreviewInGame(),"##fashion"))RunFashionAction(FashionAction::Preview,look);
         SameLineIfActionFits("Delete");
         if(AvailableActionButton("Delete##fashion",ButtonRole::Destructive,ready,reason))RunFashionAction(FashionAction::Delete,look);
         ImGui::Separator();

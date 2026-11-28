@@ -192,6 +192,35 @@ int case_selector_context(int, char**) {
         ImGui::CloseCurrentPopup();ImGui::EndPopup();
     }else assert(false);
     ImGui::End();ImGui::Render();
+    // Optional preview shared by Characters, Skinventory and Fashion.
+    // Hidden controls must leave the previous item and layout untouched.
+    io.MousePos=outside;io.MouseDown[0]=io.MouseDown[1]=false;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(40,40));
+    ImGui::SetNextWindowSize(ImVec2(400,300));
+    ImGui::Begin("Native preview test");
+    Button("Copy");
+    const auto beforePreview=ImGui::GetCursorScreenPos();
+    const auto previousItem=ImGui::GetItemRectMin();
+    assert(!NativePreviewButton(false));
+    assert(ImGui::GetCursorScreenPos().x==beforePreview.x&&ImGui::GetCursorScreenPos().y==beforePreview.y);
+    assert(ImGui::GetItemRectMin().x==previousItem.x&&ImGui::GetItemRectMin().y==previousItem.y);
+    NativePreviewButton(true);
+    assert(ImGui::GetItemRectMin().x>previousItem.x);
+    assert(ImGui::GetItemRectSize().x>=CompactButtonWidth(NativePreviewLabel)-1.f);
+    ImGui::OpenPopup("preview actions");
+    if(ImGui::BeginPopup("preview actions")){
+        MenuAction("Copy",MenuIcon::Copy);
+        const auto beforeMenuPreview=ImGui::GetCursorScreenPos();
+        for(bool separate:{false,true}){
+            assert(!NativePreviewMenuAction(false,separate));
+            assert(ImGui::GetCursorScreenPos().x==beforeMenuPreview.x&&ImGui::GetCursorScreenPos().y==beforeMenuPreview.y);
+        }
+        NativePreviewMenuAction(true,true);
+        assert(ImGui::GetCursorScreenPos().y>beforeMenuPreview.y);
+        ImGui::CloseCurrentPopup();ImGui::EndPopup();
+    }else assert(false);
+    ImGui::End();ImGui::Render();
     // Exercise the shared background policy in the native ImGui context.
     assert(ClampWindowTransparency(-1)==0&&ClampWindowTransparency(100)==80);
     assert(ClampWindowTransparency(25)==25);

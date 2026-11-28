@@ -26,6 +26,7 @@ Nexus Appearance > Window Transparency is an additional 0–80% background trans
 | Compact character identity actions | RenderCharacterIdentityMenuActions / RenderCharacterLoadMenu | AddonShared.h / dllmain.cpp |
 | Gear entity copy groups | EntityMenuCore.h / RenderGearEntityMenu / RenderSavedGearEntityMenu | dllmain.cpp, component adapters |
 | Fashion clipboard actions and Wiki search | RenderFashionClipboardActions / ReferenceWikiSearchAction | FashionUI.h / AddonShared.h |
+| Optional native game preview | UI::NativePreviewMenuAction / UI::NativePreviewButton / CanPreviewInGame / PieUI_PreviewChatLink | UIControls.h / dllmain.cpp / FashionUI.h |
 | Gear catalog entry | UI::CatalogMatches, CatalogCard, CatalogOption; RenderWeaponTypeChoices | UIControls.h / dllmain.cpp (full gear editor and standalone component dropdowns share filtering and descriptions) |
 | Native dropdown | UI::BeginCombo(id, preview, flags, width), UI::Combo | UIControls.h |
 | Gold dropdown | RenderThemedCombo or UI::BeginCombo with ComboRole::Gold | UIControls.h |
@@ -82,7 +83,7 @@ Use stable IDs (not a display name or mutable row index when a persistent ID exi
 
 - Keep cached shopping candidate metadata and sort keys separate from local filters. Never scan or reprice all candidates per keystroke. Price snapshots are returned by value under the Commerce lock. A failed price batch must not publish a partial winner as the cheapest.
 
-- Preview in Game is optional, using existing `PieUI_PreviewChatLink` when Pie UI is present. Its documented native action supports skin links (see https://github.com/PieOrCake/pie_ui/blob/master/INTEGRATION.md).
+- Preview in Game is optional across Characters (equipment tab), Fashion (detail button and context menu) and Skinventory (skin context menu). Use the shared UI helpers with `CanPreviewInGame`; hide the action and any preview-only separator entirely when Pie UI is unavailable. The shared tooltip is "Open the native game preview using Pie UI." The existing `PieUI_PreviewChatLink` dispatches wardrobe or skin chat links through the optional Nexus event integration; no hard dependency, import changes or game-state mutation (see https://github.com/PieOrCake/pie_ui/blob/master/INTEGRATION.md).
 
 ## Search and filter conventions
 - `UI::SearchField(id, hint, query)` supports fixed char arrays and std::string; themed input, stable ID, clear-query button and width-aware layout. Use it in plain lists and searchable pickers, not ordinary edit fields.

@@ -1169,9 +1169,11 @@ static void OnPieUIReady(void* eventArgs);
 // Ask Pie UI to preview a chatcode natively. No-op if Pie isn't loaded or the
 // code is empty. Nexus dispatches synchronously, so c_str() is valid for the
 // raise; Pie copies the string immediately.
+static bool CanPreviewInGame() {
+    return APIDefs && APIDefs->Events_Raise && g_PieUIPresent.load();
+}
 static void PieUI_PreviewChatLink(const std::string& chatCode) {
-    if (!APIDefs || !APIDefs->Events_Raise || chatCode.empty()) return;
-    if (!g_PieUIPresent.load()) return;
+    if (!CanPreviewInGame() || chatCode.empty()) return;
     APIDefs->Events_Raise(EV_PIEUI_OPEN_CHATLINK, (void*)chatCode.c_str());
 }
 static void OnAlterEgoPing(void* eventArgs);
@@ -3825,9 +3827,8 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
                 APIDefs->GUI_SendAlert("Could not build a wardrobe code for this tab.");
             }
         }
-        // Preview opens Pie UI's native Wardrobe Template window for this look.
-        // Only offered when Pie UI is loaded (it performs the native action).
-        if (g_PieUIPresent.load() && AlterEgo::UI::MenuAction("Preview in Pie UI",AlterEgo::UI::MenuIcon::Preview)) {
+        // Pie UI performs the optional native Wardrobe Template action.
+        if (AlterEgo::UI::NativePreviewMenuAction(CanPreviewInGame())) {
             PieUI_PreviewChatLink(BuildWardrobeLink(ch, fTab));
         }
         }
@@ -13351,7 +13352,7 @@ static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t sto
         MenuSection section("skin",grouped?heading.c_str():nullptr);
         CopyNameMenuItem(skin.name);
         CopyEntityChatLink(AlterEgo::LINK_SKIN,skin.id);
-        if(g_PieUIPresent.load()&&MenuAction("Preview in Game",MenuIcon::Preview))
+        if(NativePreviewMenuAction(CanPreviewInGame()))
             PieUI_PreviewChatLink(AlterEgo::ChatLink::EncodeSkin(skin.id));
         ReferenceWikiSearchAction(skin.name);
     }
