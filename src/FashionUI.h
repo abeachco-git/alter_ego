@@ -594,7 +594,8 @@ static void RenderFashionLibrary() {
             g_FashionNameTarget.reset();MarkNavigation();return true;
         });
     if(g_FashionDeletePending){g_FashionDeletePending=false;ImGui::OpenPopup("Delete appearance##fashion");}
-    if(ImGui::BeginPopupModal("Delete appearance##fashion",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+    const char* deleteLabel=g_FashionDeleteUsers.empty()?"Delete":"Delete & Detach";
+    if(AlterEgo::UI::BeginConfirmationModal("Delete appearance##fashion",deleteLabel)){
         if(g_FashionDeleteTarget){
             const auto target=*g_FashionDeleteTarget;
             const int index=AlterEgo::RecordSelection::ById(g_FashionLibrary.looks,target.id);
@@ -607,7 +608,6 @@ static void RenderFashionLibrary() {
                 ImGui::EndChild();
             }
             if(!valid)ImGui::TextWrapped("Saved Fashion changed. Cancel and review again.");
-            const char* deleteLabel=g_FashionDeleteUsers.empty()?"Delete":"Delete & Detach";
             const auto action=AlterEgo::UI::ConfirmCancel("fashion_delete",valid,deleteLabel,"Fashion changed; review again.",g_FashionDeleteError.c_str());
             if(action==AlterEgo::UI::EditAction::Save){
                 if(g_FashionLibrary.RemoveDraft(target,g_FashionDeleteUsers)){

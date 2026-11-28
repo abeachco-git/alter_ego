@@ -1633,7 +1633,7 @@ void RenderOptions(){
             editing=a.id;snprintf(label,sizeof(label),"%s",a.label.c_str());SecureZeroMemory(key,sizeof(key));
         }
         ImGui::SameLine();if(EnabledAction("Unlink",!busy.load(),UI::ButtonRole::Destructive)){removing=a.id;ImGui::OpenPopup("Unlink account?");}
-        if(ImGui::BeginPopupModal("Unlink account?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        if(UI::BeginConfirmationModal("Unlink account?","Unlink account")){
             ImGui::TextWrapped("Remove %s and its stored credential? Saved Library data is unaffected.",Display(a).c_str());
             const bool valid=removing==a.id;
             const auto action=UI::ConfirmCancel("unlink",valid,"Unlink account","Account changed; review again.",nullptr,busy.load());

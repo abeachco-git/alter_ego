@@ -8827,8 +8827,7 @@ static void RenderSaveToLibraryDialog() {
         ImGui::OpenPopup("Replace shared component?##save_component");
         g_SaveLibUpdateConfirmPending = false;
     }
-    if (ImGui::BeginPopupModal("Replace shared component?##save_component",
-                              nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (UI::BeginConfirmationModal("Replace shared component?##save_component","Confirm Update")) {
         ImGui::TextWrapped("Replace saved %s: %s",
             g_SaveLibPendingKind.c_str(), g_SaveLibPendingName.c_str());
         ImGui::TextWrapped("This updates saved fields for ALL Loadouts and equipment sets using "
@@ -17917,11 +17916,12 @@ static void RenderStorageDiagnostics() {
         if(RenderActionButton(rebuildLabel))
             ImGui::OpenPopup("Confirm cache maintenance##ae_cache_confirm");
         if(ImGui::IsItemHovered())AlterEgo::UI::Hint("Rebuild the selected cache at next addon startup.");
-        if(ImGui::BeginPopupModal("Confirm cache maintenance##ae_cache_confirm",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+        if(UI::BeginConfirmationModal("Confirm cache maintenance##ae_cache_confirm","Schedule")) {
             ImGui::Text("%s",labels[selected]);
             ImGui::TextWrapped("Runs at next addon startup, before cache readers and workers. Saved library, settings, pins, login history and backups are untouched.");
             ImGui::TextWrapped("Moved files are quarantined, not deleted. Missing data is rebuilt by normal refreshes.");
-            if(UI::Button("Schedule",ImVec2(0,0),UI::ButtonRole::Destructive)) {
+            const auto action=UI::ConfirmCancel("cache_maintenance",true,"Schedule");
+            if(action==UI::EditAction::Save) {
                 std::string error;
                 g_StorageMaintenancePending=Storage::ScheduleMaintenance(GW2API::GetDataDirectory(),
                     Storage::kCacheOperations[static_cast<size_t>(selected)],error);
@@ -17929,8 +17929,7 @@ static void RenderStorageDiagnostics() {
                     "Scheduled. Restart the game to apply.":error;
                 ImGui::CloseCurrentPopup();
             }
-            ImGui::SameLine();
-            if(RenderActionButton("Cancel##ae_cache_confirm"))ImGui::CloseCurrentPopup();
+            if(action==UI::EditAction::Cancel)ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
     }

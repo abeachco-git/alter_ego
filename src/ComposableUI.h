@@ -1523,7 +1523,7 @@ static void RenderComponentLibrary() {
                     pendingSource=other;pendingSurvivor=id;pendingKind=kind;pendingRevision=revision;
                     ImGui::OpenPopup("Confirm consolidation");
                 }
-                if(ImGui::BeginPopupModal("Confirm consolidation",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+                if(AlterEgo::UI::BeginConfirmationModal("Confirm consolidation","Confirm")) {
                     ImGui::TextWrapped("Remove %s and keep %s?",candidate->value("name",other).c_str(),name.c_str());
                     ImGui::TextDisabled("Affected Loadouts / equipment sets:");
                     for(const auto& l:doc.at("loadouts")) {
@@ -1534,12 +1534,12 @@ static void RenderComponentLibrary() {
                         if(set.at("refs").value(kind,std::string())==other)
                             ImGui::BulletText("%s (Equipment Set)",set.value("name",std::string()).c_str());
                     if(pendingRevision!=revision) ImGui::TextDisabled("Library changed; cancel and review again.");
-                    else if(AlterEgo::UI::Button("Confirm",ImVec2(0,0),AlterEgo::UI::ButtonRole::Destructive)) {
+                    const auto action=AlterEgo::UI::ConfirmCancel("consolidate",pendingRevision==revision,"Confirm","Library changed; review again.");
+                    if(action==AlterEgo::UI::EditAction::Save) {
                         g_ComponentCommand={ComponentUICommand::Consolidate,pendingSurvivor,pendingKind,pendingSource,"",ComponentJson::object(),pendingRevision};
                         ImGui::CloseCurrentPopup();
                     }
-                    ImGui::SameLine();
-                    if(RenderActionButton("Cancel"))ImGui::CloseCurrentPopup();
+                    if(action==AlterEgo::UI::EditAction::Cancel)ImGui::CloseCurrentPopup();
                     ImGui::EndPopup();
                 }
                 ImGui::PopID();
