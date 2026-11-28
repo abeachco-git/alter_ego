@@ -23,6 +23,7 @@ struct Patch {
     std::array<Field<uint32_t>,5> skills;
     std::array<Field<uint32_t>,4> companions;
     std::optional<InactiveLegendPalettes> inactivePalettes;
+    std::optional<RevenantActivePaletteEvidence> activePalettes;
     std::string verifiedTemplate;
     std::map<std::string,GearPatch> gear;
     std::set<std::string> removedSlots;
@@ -43,7 +44,14 @@ inline std::string WeaponKey(std::string s){
 }
 // A partial specialization line has no reliable positional identity unless
 // all three lines are present or the existing specialization ID matches.
-template<class Tier> Patch FromPage(const SnowCrows::Page& page,Tier tier,bool initial=false){
+struct UnknownPaletteResolver {
+    uint32_t operator()(uint16_t,uint32_t,int,int)const{return 0;}
+};
+struct UnknownPalettePair {
+    bool operator()(uint16_t,uint32_t)const{return false;}
+};
+template<class Tier,class Resolve=UnknownPaletteResolver,class Match=UnknownPalettePair>
+Patch FromPage(const SnowCrows::Page& page,Tier tier,bool initial=false,Resolve resolve={},Match match={}){
     Patch p;p.profession=page.profession;p.sourceUrl=page.sourceUrl;p.warning=page.importWarning;
     std::set<uint32_t> ids;
     if(!page.templateCode.empty()){
@@ -56,6 +64,23 @@ template<class Tier> Patch FromPage(const SnowCrows::Page& page,Tier tier,bool i
                     if(id)p.companions[i]=id; // guide zero is ambiguous, never a deletion
                 }
                 p.inactivePalettes=RecordedInactiveLegendPalettes(decoded);
+            }
+            p.activePalettes=RecordRevenantActivePalettes(decoded,resolve);
+            // Published exact skill IDs are independent positive evidence.
+            // Keep wire evidence alongside one only if a cached contextual
+            // resolution agrees, or an otherwise unresolved exact pair is
+            // positively present in the published profession palette pairs.
+            if(p.activePalettes)for(size_t i=0;i<5;++i){
+                auto& row=(*p.activePalettes)[i];
+                if(!page.skills[i])continue;
+                if(row[0]&&row[2]<256&&row[3]<256&&
+                   (row[1]==page.skills[i]||(!row[1]&&match(static_cast<uint16_t>(row[0]),page.skills[i]))))
+                    row[1]=page.skills[i];
+                else{
+                    row={};
+                    p.warning+=" Published "+std::string(SkillEdit::SlotLabel(i))+
+                        " ID and template palette could not be reconciled; guide skill retained.";
+                }
             }
         }else p.warning+=" Published build link could not be validated for this profession; ignored.";
     }
@@ -107,6 +132,68 @@ struct UnknownCompatibility {
     template<class Slot> ItemCompatibility operator()(const Slot&,const GearPatch&)const{return ItemCompatibility::Unknown;}
 };
 struct Report { std::vector<std::string> notes; bool offerInfusions=false; };
+// Both environment bars use the same positional merge: an omitted slot is
+// never a swap or deletion. A conflicting utility group is left untouched.
+template<class Bar> uint8_t ApplyGuideBar(Bar& bar,const std::array<Field<uint32_t>,5>& skills,Report& report){
+    uint8_t supplied=0;
+    if(skills[0]){bar.heal=*skills[0];supplied|=1;}
+    if(skills[4]){bar.elite=*skills[4];supplied|=16;}
+    std::array<uint32_t,3> utilities{};
+    for(size_t i=0;i<3;++i)utilities[i]=skills[i+1].value_or(bar.utilities[i]);
+    std::set<uint32_t> unique;bool ambiguous=false;
+    for(auto id:utilities)if(id&&!unique.insert(id).second)ambiguous=true;
+    if(ambiguous)report.notes.push_back("Utility changes conflict with a retained slot; utility bar left unchanged for review.");
+    else{
+        std::copy(utilities.begin(),utilities.end(),bar.utilities);
+        for(size_t i=1;i<=3;++i)if(skills[i])supplied|=static_cast<uint8_t>(1u<<i);
+    }
+    return supplied;
+}
+template<class Build> void MergeGuideSkillEvidence(Build& b,const Patch& p,Report& report){
+    for(size_t env=0;env<2;++env){
+        auto& bar=env?b.aquatic_skills:b.terrestrial_skills;
+        const auto oldBar=SkillEdit::DisplayBar(bar);
+        auto skills=env?std::array<Field<uint32_t>,5>{}:p.skills;
+        std::array<bool,5> adopt{};
+        if(b.profession=="Revenant"&&p.activePalettes){
+            for(size_t i=0;i<5;++i){
+                const auto& row=(*p.activePalettes)[env*5+i];
+                if(!row[0])continue; // guide zero never clears
+                // All exact context values must have been supplied by the
+                // template and must match the resulting composed build.
+                if(!p.companions[env*2]||!p.companions[env*2+1]||
+                   !row[2]||!row[3]||row[2]==row[3]||
+                   row[2]!=b.legend_codes[env*2]||row[3]!=b.legend_codes[env*2+1]||
+                   row[4]!=b.specializations[2].spec_id){
+                    report.notes.push_back(std::string(env?"Aquatic ":"Terrestrial ")+SkillEdit::SlotLabel(i)+
+                        ": template palette context differs; local evidence retained.");
+                    continue;
+                }
+                if(skills[i]&&*skills[i]!=row[1])continue;
+                if(row[1]){
+                    skills[i]=row[1];adopt[i]=true;
+                }else if(!skills[i]&&!oldBar[i].id){
+                    // Exact nonzero wire evidence can describe an unresolved
+                    // slot, but cannot replace an existing positive typed ID.
+                    adopt[i]=true;
+                }
+            }
+        }
+        const uint8_t supplied=ApplyGuideBar(bar,skills,report);
+        if(b.profession!="Revenant")continue;
+        const auto after=SkillEdit::DisplayBar(bar);
+        uint8_t explicitClears=0;
+        for(size_t i=0;i<5;++i)if((supplied&(1u<<i))&&skills[i]&&!*skills[i])
+            explicitClears|=static_cast<uint8_t>(1u<<i);
+        SkillEdit::RetirePaletteEdits(b.rev_active_palettes,env!=0,oldBar,after,explicitClears);
+        for(size_t i=0;i<5;++i)if(adopt[i]){
+            const auto& row=(*p.activePalettes)[env*5+i];
+            if((row[1]&&!(supplied&(1u<<i)))||after[i].id!=row[1])continue;
+            if(!b.rev_active_palettes)b.rev_active_palettes=RevenantActivePaletteEvidence{};
+            (*b.rev_active_palettes)[env*5+i]=row;
+        }
+    }
+}
 template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> bool Apply(const Build& before,const Patch& p,Build& result,Report& report,std::string& error,TwoHanded twoHanded,Compatibility compatibility={},bool initial=false){
     report={};error.clear();
     if(before.profession!=p.profession||before.source_url.empty()||before.source_url!=p.sourceUrl){
@@ -131,26 +218,6 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
         }
         for(size_t t=0;t<3;++t)if(spec.traits[t])line.traits[t]=*spec.traits[t];
         b.specializations[target]=line;
-    }
-    auto& bar=b.terrestrial_skills;
-    const auto oldBar=SkillEdit::DisplayBar(bar);
-    uint8_t suppliedSlots=0;
-    if(p.skills[0]){bar.heal=*p.skills[0];suppliedSlots|=1;}
-    if(p.skills[4]){bar.elite=*p.skills[4];suppliedSlots|=16;}
-    std::array<uint32_t,3> utilities{};
-    for(size_t i=0;i<3;++i)utilities[i]=p.skills[i+1].value_or(bar.utilities[i]);
-    std::set<uint32_t> unique;bool ambiguous=false;
-    for(auto id:utilities)if(id&&!unique.insert(id).second)ambiguous=true;
-    if(ambiguous)report.notes.push_back("Utility changes conflict with a retained slot; utility bar left unchanged for review.");
-    else {
-        std::copy(utilities.begin(),utilities.end(),bar.utilities);
-        for(size_t i=1;i<=3;++i)if(p.skills[i])suppliedSlots|=static_cast<uint8_t>(1u<<i);
-    }
-    if(b.profession=="Revenant"){
-        uint8_t explicitClears=0;
-        for(size_t i=0;i<5;++i)if((suppliedSlots&(1u<<i))&&p.skills[i]&&!*p.skills[i])
-            explicitClears|=static_cast<uint8_t>(1u<<i);
-        SkillEdit::RetirePaletteEdits(b.rev_active_palettes,false,oldBar,SkillEdit::DisplayBar(bar),explicitClears);
     }
     // Companion selection is positional. A partially supplied pair must not
     // displace an omitted local slot or create an illegal duplicate.
@@ -200,6 +267,7 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
             }
         }
     }
+    MergeGuideSkillEvidence(b,p,report);
     const bool runePatch=p.rune||std::any_of(p.gear.begin(),p.gear.end(),[](const auto& e){return e.second.rune.has_value();});
     if(runePatch&&(b.rune_id||!b.rune_name.empty())){
         // The legacy global rune is a terrestrial fallback. Keep every
@@ -273,7 +341,7 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
             report.notes.push_back("Local infusion configuration retained. Guide totals can be adopted explicitly.");
         }else AdoptInfusions(b,*p.infusions);
     }
-    if(!initial)report.notes.push_back("Omitted fields, aquatic skills and companion choices are retained. Local aquatic equipment is retained unless you explicitly adopt guide-wide infusion totals.");
+    if(!initial)report.notes.push_back("Omitted fields, including aquatic skills and companion choices, are retained. Local aquatic equipment is retained unless you explicitly adopt guide-wide infusion totals.");
     result=std::move(b);return true;
 }
 }

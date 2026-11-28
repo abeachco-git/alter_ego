@@ -158,6 +158,44 @@ int case_snowcrows_import(int, char**) {
         assert(SR::Apply(local,patch,merged,report,error,two));
         assert((*merged.rev_active_palettes)[0][0]==0&&(*merged.rev_active_palettes)[1][0]==0&&(*merged.rev_active_palettes)[9][0]==13);
     }
+    {
+        // Guide IDs and wire palettes are independent; retain both only
+        // with exact positive agreement and the accepted legend context.
+        Build local;local.profession="Revenant";local.source_url=url;
+        Page guide;guide.profession=local.profession;guide.sourceUrl=url;
+        guide.specs[0].id=1;guide.specs[1].id=2;guide.specs[2].id=42;
+        DecodedBuildLink code{};code.profession=PROF_REVENANT;code.specs[2].spec_id=42;
+        code.legends[0]=7;code.legends[1]=2;code.legends[2]=3;code.legends[3]=4;
+        code.terrestrial_skills[0]=11;code.terrestrial_skills[1]=12;
+        code.terrestrial_skills[2]=13;code.aquatic_skills[4]=14;
+        guide.skills={100,200,300,0,0};guide.templateCode=ChatLink::EncodeBuild(code);
+        auto tier=[](uint32_t,uint32_t){return -1;};
+        auto resolve=[](uint16_t p,uint32_t,int,int)->uint32_t{
+            return p==11?100:p==13?301:0;
+        };
+        const PalettePairs pairs={{12,200},{12,201}};
+        auto match=[&](uint16_t p,uint32_t id){return ContainsPalettePair(pairs,p,id);};
+        auto patch=SR::FromPage(guide,tier,true,resolve,match);
+        assert(patch.activePalettes&&(*patch.activePalettes)[0][1]==100&&(*patch.activePalettes)[1][1]==200);
+        assert((*patch.activePalettes)[2][0]==0&&!patch.warning.empty());
+        assert(SR::Apply(local,patch,merged,report,error,two,SR::UnknownCompatibility{},true));
+        assert(merged.terrestrial_skills.heal==100&&merged.terrestrial_skills.utilities[0]==200&&merged.terrestrial_skills.utilities[1]==300);
+        assert(merged.rev_active_palettes&&(*merged.rev_active_palettes)[0][0]==11&&(*merged.rev_active_palettes)[1][0]==12);
+        assert((*merged.rev_active_palettes)[2][0]==0&&(*merged.rev_active_palettes)[9][0]==14);
+        local=merged;local.aquatic_skills.elite=900;
+        assert(SR::Apply(local,patch,merged,report,error,two));
+        assert(merged.aquatic_skills.elite==900);
+        // Omitted/zero guide values cannot erase a prior positive skill.
+        guide.skills={};code.terrestrial_skills[0]=0;guide.templateCode=ChatLink::EncodeBuild(code);
+        patch=SR::FromPage(guide,tier,false,resolve,match);
+        assert(SR::Apply(local,patch,merged,report,error,two)&&merged.terrestrial_skills.heal==100);
+        assert(merged.terrestrial_skills.utilities[1]==301&&(*merged.rev_active_palettes)[2][0]==13);
+        // Partial or rejected companion pair cannot qualify new wire evidence.
+        code.legends[1]=7;guide.templateCode=ChatLink::EncodeBuild(code);
+        patch=SR::FromPage(guide,tier,false,resolve,match);
+        assert(SR::Apply(local,patch,merged,report,error,two));
+        assert(merged.terrestrial_skills.utilities[1]==300&&(*merged.rev_active_palettes)[2][0]==0);
+    }
     // Exercise the shared provider-neutral template projection, not the
     // excluded MetaBattle parser. Omission and duplicate-pair protection
     // apply equally to both profession-specific components.

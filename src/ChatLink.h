@@ -136,6 +136,9 @@ namespace AlterEgo {
             for(const auto& [p,id]:pairs)if(p==palette&&id!=found)return 0;
         return found;
     }
+    inline bool ContainsPalettePair(const PalettePairs& pairs,uint16_t palette,uint32_t id){
+        return palette&&id&&std::find(pairs.begin(),pairs.end(),std::make_pair(palette,id))!=pairs.end();
+    }
     inline uint16_t UniqueSkillPalette(const PalettePairs& pairs,uint32_t id){
         uint16_t found=0;
         for(const auto& [p,skill]:pairs)if(p&&skill==id){

@@ -624,6 +624,7 @@ namespace AlterEgo {
         // --- Palette ID mapping ---
         static uint32_t GetSkillIdFromPalette(const std::string& profession, uint16_t palette_id);
         static uint32_t ResolveRevenantPalette(uint16_t palette,uint32_t legend,int environment,int slot);
+        static bool HasRevenantPalettePair(uint16_t palette,uint32_t skill);
         static uint16_t GetPaletteIdFromSkill(const std::string& profession, uint32_t skill_id);
         static bool HasPaletteData(const std::string& profession);
         static void FetchProfessionPaletteAsync(const std::string& profession);

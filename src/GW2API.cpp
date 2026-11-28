@@ -3745,6 +3745,11 @@ namespace AlterEgo {
         return resolved;
     }
 
+    bool GW2API::HasRevenantPalettePair(uint16_t palette,uint32_t skill){
+        std::lock_guard<std::mutex> lock(s_mutex);
+        return ContainsPalettePair(s_revenant_palette_pairs,palette,skill);
+    }
+
     uint16_t GW2API::GetPaletteIdFromSkill(const std::string& profession, uint32_t skill_id) {
         std::lock_guard<std::mutex> lock(s_mutex);
         if(profession=="Revenant")return UniqueSkillPalette(s_revenant_palette_pairs,skill_id);

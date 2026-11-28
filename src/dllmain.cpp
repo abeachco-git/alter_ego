@@ -9247,13 +9247,18 @@ static AlterEgo::SourceRefresh::ItemCompatibility SourceItemCompatibility(const 
         return NamedStats::SameCanonicalStat(info->name,name)?C::Compatible:C::Incompatible;
     return C::Unknown;
 }
+static AlterEgo::SourceRefresh::Patch ProjectSourcePage(const AlterEgo::SnowCrows::Page& page,bool initial=false){
+    using namespace AlterEgo;
+    return SourceRefresh::FromPage(page,SourceTraitTier,initial,
+        GW2API::ResolveRevenantPalette,GW2API::HasRevenantPalettePair);
+}
 static bool SourcePageToSavedBuild(const AlterEgo::SnowCrows::Page& page,AlterEgo::SavedBuild& result,std::string& error){
     using namespace AlterEgo;
     GameMode mode=page.gameMode=="Raid"?GameMode::Raid:page.gameMode=="Fractal"?GameMode::Fractal:
         page.gameMode=="WvW"?GameMode::WvW:page.gameMode=="PvP"?GameMode::PvP:GameMode::PvE;
     auto blank=GW2API::CreateBlankBuild(page.profession,mode);
     blank.name=page.name;blank.source_url=page.sourceUrl;
-    const auto patch=SourceRefresh::FromPage(page,SourceTraitTier,true);
+    const auto patch=ProjectSourcePage(page,true);
     blank.chat_link=patch.verifiedTemplate;
     SourceRefresh::Report report;
     return SourceRefresh::Apply(blank,patch,result,report,error,
@@ -9353,7 +9358,7 @@ static void PollBuildSource() {
         const auto it=std::find_if(builds.begin(),builds.end(),[&](const auto& b){return b.id==received.targetId;});
         if(it==builds.end()){reject("The source Loadout no longer exists.");return;}
         const auto old=*it;
-        const auto patch=SourceRefresh::FromPage(received.page,SourceTraitTier);
+        const auto patch=ProjectSourcePage(received.page);
         SavedBuild merged;SourceRefresh::Report report;std::string error;
         if(!SourceRefresh::Apply(old,patch,merged,report,error,[&](const auto& type){return IsWeaponTwoHanded(old.profession,type);},SourceItemCompatibility)){
             reject(error);return;
