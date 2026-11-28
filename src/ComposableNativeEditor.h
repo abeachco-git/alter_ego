@@ -51,12 +51,6 @@ static std::string ComponentNativeProfession(const std::string& kind,
     return ComponentUIProfession(kind,data,id);
 }
 
-static std::string ComponentNativeSpecName(uint32_t id) {
-    if (!id) return "(empty)";
-    const auto spec = AlterEgo::GW2API::GetSpecInfo(id);
-    return spec ? spec->name : "#" + std::to_string(id);
-}
-
 // Determine which elite specs *all* referencing Loadouts have equipped.
 // An unassigned Skills component has no known spec context, so its editor
 // explicitly offers all profession skills. Shared components use the
@@ -128,127 +122,26 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
     ImGui::PopID();
 }
 
-static void ComponentNativeSpecializations(ComponentJson& data,
-                                             const std::string& profession) {
-    if (!ImGui::TreeNodeEx("##component_specs", ImGuiTreeNodeFlags_DefaultOpen,
-                            "Specializations and traits")) return;
-    if (!data.contains("specializations")) {
-        if (RenderActionButton("Add specialization lines##component"))
-            data["specializations"] = ComponentJson::array();
-    }
-    if (!data.contains("specializations")) {
-        ImGui::TreePop();
-        return;
-    }
-    if (!data["specializations"].is_array()) {
-        ImGui::TextDisabled("Unrecognized specialization format; preserved.");
-        ImGui::TreePop();
-        return;
-    }
-    auto& specs = data["specializations"];
+static void ComponentNativeSpecializations(ComponentJson& data,const std::string& profession){
+    namespace SE=AlterEgo::SkillEdit;
+    const auto lines=SE::JsonSpecializationLines<AlterEgo::SpecLine>(data);
+    AlterEgo::GW2API::FetchSpecDetailsAsync({lines[0].spec_id,lines[1].spec_id,lines[2].spec_id});
     if(!profession.empty())AlterEgo::GW2API::FetchProfessionInfoAsync(profession);
-    const auto candidates = profession.empty()
-        ? std::vector<uint32_t>() : AlterEgo::GW2API::GetProfessionSpecIds(profession);
-    if(!candidates.empty())AlterEgo::GW2API::FetchSpecDetailsAsync(candidates);
-    const int count = std::min<int>(3, static_cast<int>(specs.size()));
-    for (int i = 0; i < count; ++i) {
-        ImGui::PushID(i);
-        if (!specs[i].is_object()) {
-            ImGui::TextDisabled("Unrecognized specialization line; preserved.");
-            ImGui::PopID();
-            continue;
-        }
-        auto& spec = specs[i];
-        const uint32_t priorId = spec.value("id", uint32_t(0));
-        ImGui::Separator();
-        ImGui::Text("Line %d", i + 1);
-        ComponentNativeNumber(spec, "id", "Specialization ID");
-        if(!profession.empty()){
-            ImGui::SameLine();
-            if(AlterEgo::UI::BeginCombo("##specialization",ComponentNativeSpecName(priorId).c_str())){
-                std::array<uint32_t,3> ids{};
-                for(int j=0;j<count;++j)if(specs[j].is_object())ids[j]=specs[j].value("id",uint32_t(0));
-                uint32_t next=ids[i];
-                if(RenderSpecializationChoices(profession,ids,i,next)&&next!=ids[i]){
-                    spec["id"]=next;
-                    auto info=AlterEgo::GW2API::GetSpecInfo(next);
-                    if(info&&info->elite)for(int j=0;j<count;++j)if(j!=i&&specs[j].is_object()){
-                        auto other=AlterEgo::GW2API::GetSpecInfo(ids[j]);
-                        if(other&&other->elite){specs[j]["id"]=0;specs[j]["traits"]=ComponentJson::array({0,0,0});}
-                    }
-                }
-                ImGui::EndCombo();
-            }else if(priorId){const auto info=AlterEgo::GW2API::GetSpecInfo(priorId);if(info)NameOptionContext(info->name);}
-        }
-        const uint32_t specId = spec.value("id", uint32_t(0));
-        if (specId != priorId) spec["traits"] = ComponentJson::array({0, 0, 0});
-        ComponentJson traits = spec.contains("traits") && spec["traits"].is_array()
-            ? spec["traits"] : ComponentJson::array();
-        while (traits.size() < 3) traits.push_back(0);
-        const auto definition = AlterEgo::GW2API::GetSpecInfo(specId);
-        const char* tiers[] = {"Adept", "Master", "Grandmaster"};
-        for (int tier = 0; tier < 3; ++tier) {
-            ImGui::PushID(tier);
-            const int choice = traits[tier].is_number_integer()
-                ? traits[tier].get<int>() : 0;
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(tiers[tier]);
-            ImGui::SameLine(140.0f);
-            if (definition && definition->major_traits.size() >= 9) {
-                // Same trait icons and selection treatment as the full
-                // Loadout editor, not a separate text-only trait picker.
-                if (definition->minor_traits.size() > static_cast<size_t>(tier)) {
-                    RenderTraitIcon(definition->minor_traits[tier], true, true, 34);
-                    ImGui::SameLine(0, 8);
-                }
-                for (int option = 0; option < 3; ++option) {
-                    if (option) ImGui::SameLine(0, 6);
-                    const uint32_t tid = definition->major_traits[tier * 3 + option];
-                    const bool selected = choice == static_cast<int>(tid) ||
-                        (choice < 0 && -choice == option + 1);
-                    bool clicked = false, clearRequested=false;
-                    RenderTraitIcon(tid, selected, false, 34, true, &clicked,&clearRequested);
-                    if (clicked||clearRequested) {
-                        traits[tier] = clearRequested?0:tid;
-                        spec["traits"] = traits;
-                    }
-                }
-            } else {
-                ImGui::TextDisabled("Trait metadata pending");
-            }
-            ImGui::SameLine();
-            if (AlterEgo::UI::SmallButton("Clear")) {
-                traits[tier] = 0;
-                spec["traits"] = traits;
-            }
-            if (ImGui::TreeNode("##advanced_trait", "Advanced trait ID")) {
-                int entered = choice;
-                ImGui::SetNextItemWidth(160);
-                if (ImGui::InputInt("Trait ID", &entered)) {
-                    traits[tier] = entered; // retain negative import placeholders
-                    spec["traits"] = traits;
-                }
-                ImGui::TreePop();
-            }
-            ImGui::PopID();
-        }
-        ImGui::PopID();
+    if(data.contains("specializations")&&!data.at("specializations").is_array()){
+        ImGui::TextDisabled("Unsupported specialization data; preserved.");return;
     }
-    if (specs.size() < 3 && RenderActionButton("Add specialization line##component"))
-        specs.push_back({{"id", 0}, {"traits", ComponentJson::array({0,0,0})}});
-    if (candidates.empty() && !profession.empty()) {
-        ImGui::TextDisabled("Specialization metadata has not loaded.");
-        if (RenderActionButton("Fetch profession data##component"))
-            AlterEgo::GW2API::FetchProfessionInfoAsync(profession,true);
-    }
-    ImGui::TreePop();
+    RenderSpecializationGrid(lines.data(),profession,true,[&](int slot,uint32_t next){
+        SE::SetJsonSpecialization(data,slot,next,[](uint32_t id){
+            const auto info=AlterEgo::GW2API::GetSpecInfo(id);return info&&info->elite;
+        });
+    },[&](int slot,int tier,int value){SE::SetJsonTrait(data,slot,tier,value);});
 }
 
 static void ComponentNativeProfessionPair(ComponentJson& data,const char* key,
                                            const char* label,bool legend,bool eligible,
                                            const std::vector<AlterEgo::SkillEdit::EliteContext>& contexts) {
     if(!eligible&&!data.contains(key))return;
-    if(!ImGui::TreeNode(key,"%s",label))return;
+    if(!ImGui::TreeNodeEx(key,ImGuiTreeNodeFlags_DefaultOpen,"%s",label))return;
     if(data.contains(key)&&!data[key].is_array()){
         ImGui::TextDisabled("Unrecognized array format; preserved.");ImGui::TreePop();return;
     }
@@ -909,17 +802,8 @@ static void RenderComponentNativeEditor(const std::string& kind,
         }
         const bool editable=fixed.empty()&&(inferred.profession.empty()||inferred.profession!=profession);
         if(conflictingOwner)ImGui::TextWrapped("Conflicting or unknown Loadout ownership. Review the affected Loadouts first.");
-        if(editable){
-            ImGui::TextUnformatted("Profession");
-            ImGui::SetNextItemWidth(210);
-            if(UI::BeginCombo("##skill_profession",profession.empty()?"Choose profession...":profession.c_str())){
-                for(const auto& candidate:ProfessionMetadata::Names())
-                    if(UI::SelectableOption(candidate.c_str(),profession==candidate)){
-                        profession=candidate;data["profession"]=candidate;
-                    }
-                ImGui::EndCombo();
-            }
-        }else RenderComponentProfessionLabel(profession);
+        if(editable)RenderComponentProfessionChoice(profession,[&](const std::string& choice){profession=choice;data["profession"]=choice;});
+        else RenderComponentProfessionLabel(profession);
         if(Composable::InferSkillsProfession(data,GW2API::CachedSkillProfessions,profession).conflict)
             ImGui::TextWrapped("Recorded skills disagree with the selected profession. Review the skill selections.");
         if(!profession.empty())AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
@@ -931,39 +815,11 @@ static void RenderComponentNativeEditor(const std::string& kind,
         }
     }
     if (kind == "base_build") {
-        if (!id.empty() && ComponentUIUsage(ComponentUISnapshot(), "base_build", id)) {
-            ImGui::TextDisabled("Profession: %s (fixed while referenced)",
-                data.value("profession", std::string()).c_str());
-        } else {
-            ComponentNativeText(data, "profession", "Profession");
-        }
-        ComponentNativeSpecializations(data, data.value("profession", std::string()));
-        // Inapplicable legacy pair fields remain lossless but are not editable here.
-        if (ImGui::TreeNode("##weapon_proficiency", "Build template weapon IDs")) {
-            if (data.contains("weapons") && !data["weapons"].is_array()) {
-                ImGui::TextDisabled("Unrecognized weapon definition; preserved.");
-                ImGui::TreePop();
-            } else {
-            ComponentJson none = ComponentJson::array();
-            auto& weapons = data.contains("weapons") ? data["weapons"] : none;
-            int remove = -1;
-            for (size_t i = 0; i < weapons.size(); ++i) {
-                ImGui::PushID(static_cast<int>(i));
-                ComponentJson temp = {{"id", weapons[i]}};
-                ComponentNativeNumber(temp, "id", "Weapon ID");
-                if (weapons[i] != temp["id"])
-                    data["weapons"][i] = temp["id"];
-                ImGui::SameLine();
-                if (RenderActionButton("Remove##template_weapon"))
-                    remove = static_cast<int>(i);
-                ImGui::PopID();
-            }
-            if (remove >= 0) data["weapons"].erase(remove);
-            if (RenderActionButton("Add weapon ID##template"))
-                data["weapons"].push_back(0);
-            ImGui::TreePop();
-            }
-        }
+        const auto fixed=ComponentNativeProfession(kind,id,g_ComponentEditorBaseline);
+        if(fixed.empty()&&(!data.contains("specializations")||data.at("specializations").empty())){
+            RenderComponentProfessionChoice(profession,[&](const std::string& choice){profession=choice;data["profession"]=choice;});
+        }else RenderComponentProfessionLabel(profession);
+        ComponentNativeSpecializations(data,profession);
     } else if (AlterEgo::Composable::IsCompanionKind(kind)) {
         ComponentNativeProfessionPair(data,AlterEgo::Composable::CompanionField(kind),kind=="pets"?"Pets":"Legends",kind=="legends",true,ComponentUIEliteContexts(kind,id));
     } else if (kind == "skills") {

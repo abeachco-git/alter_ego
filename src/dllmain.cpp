@@ -874,7 +874,6 @@ static std::string g_EditBaselineSet,g_EditBaselineFashion,g_EditError;
 static uint64_t g_DiscardNewBuildRevision=0;
 static bool g_EditIsNewBuild = false;      // true while editing a freshly-created build (cancel discards it)
 static std::string g_DiscardNewBuildId;    // deferred: id of a new build to delete after the render pass
-static int g_SpecPickerSlot = -1;          // 0..2 while spec picker open, else -1
 static std::set<std::string> g_LibFilterModes; // empty = All; selected modes are ORed
 static char g_LibSearchBuf[128] = "";
 static char g_LibImportBuf[4096] = "";
@@ -4535,6 +4534,267 @@ static void RenderCharacterHeaderActions(const AlterEgo::Character& ch, float bu
 }
 
 static void RenderLiveProfessionPairs(const AlterEgo::BuildTemplate& bt);
+// Canonical specialization presentation for Characters, Library and native Base Build.
+static bool RenderSpecializationChoices(const std::string&,const std::array<uint32_t,3>&,int,uint32_t&);
+template<class ChooseSpec,class ChooseTrait>
+static void RenderSpecializationGrid(const AlterEgo::SpecLine* lines,const std::string& profession,
+        bool editable,ChooseSpec specEdit,ChooseTrait traitEdit){
+    std::array<uint32_t,3> ids{};
+    for(int i=0;i<3;++i)ids[i]=lines[i].spec_id;
+    auto picker=[&](int i){
+        if(editable&&ImGui::BeginPopup("##spec_picker")){
+            uint32_t next=ids[i];
+            if(RenderSpecializationChoices(profession,ids,i,next)){
+                if(next!=ids[i])specEdit(i,next);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    };
+    auto nameActions=[&](int i,const std::string& name,ImVec4 color,const std::string& fallback){
+        if(editable&&ImGui::IsItemClicked())ImGui::OpenPopup("##spec_picker");
+        const bool hovered=ImGui::IsItemHovered();
+        if(ImGui::BeginPopupContextItem("##spec_context")){
+            CopyNameMenuItem(name);
+            if(editable&&ImGui::MenuItem("Clear Specialization"))specEdit(i,0);
+            ImGui::EndPopup();
+        }
+        if(hovered)RenderSpecializationTooltip(name,color,fallback,editable);
+    };
+    const float iconSz = TRAIT_ICON_SIZE;
+
+
+    for (int i = 0; i < 3; i++) {
+        const auto& spec = lines[i];
+        ImGui::PushID(i);
+        if (spec.spec_id == 0) {
+            if(editable){
+                if(RenderChipButton("+ Choose specialization",false))ImGui::OpenPopup("##spec_picker");
+                picker(i);
+            }else ImGui::TextDisabled("(not selected)");
+            ImGui::PopID();ImGui::Spacing();continue;
+        }
+
+        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
+        std::string specName = specInfo ? specInfo->name : ("Spec " + std::to_string(spec.spec_id));
+        bool isElite = specInfo ? specInfo->elite : false;
+        ImVec4 specColor = isElite ? ImVec4(1.0f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+
+        const float available=ImGui::GetContentRegionAvail().x;
+        const float colW=std::min(iconSz*2.f,std::max(iconSz,(available-SPEC_NAME_BADGE_WIDTH-60.f)/6.f));
+
+        if (specInfo && specInfo->major_traits.size() >= 9 && available>=SPEC_NAME_BADGE_WIDTH+6*iconSz+64.f) {
+            ImVec2 specCenter(0, 0);
+            ImVec2 minorCenters[3] = {};
+            ImVec2 selectedCenters[3] = {};
+            bool hasSelected[3] = {false, false, false};
+
+            ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
+            float rowW = ImGui::GetContentRegionAvail().x;
+            float rowH = iconSz * 3 + ImGui::GetStyle().CellPadding.y * 6;
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            // Spec background banner behind the trait grid (panoramic art,
+            // native aspect, anchored left, fade to dark on the right).
+            if (!specInfo->background_url.empty()) {
+                uint32_t bgKey = spec.spec_id + 1000000;
+                Texture_t* bgTex = AlterEgo::IconManager::GetOrRequestIcon(bgKey,specInfo->background_url);
+                if (bgTex && bgTex->Resource && bgTex->Height > 0) {
+                    // Zoom the banner and anchor it to the row's bottom-left.
+                    // 15 specs ship with banners whose top ~66% is transparent
+                    // (opaque art lives only in the bottom band). Those need a
+                    // much higher zoom so the opaque content fills the row;
+                    // everyone else gets the standard 1.4x.
+                    auto IsTransparentTopSpec = [](uint32_t id) {
+                        switch (id) {
+                            case 4: case 7: case 11: case 20: case 22:
+                            case 28: case 35: case 36: case 44: case 51:
+                            case 54: case 68: case 70: case 71: case 72:
+                            case 73: case 74: case 75: case 76: case 77:
+                            case 78: case 79: case 80: case 81:
+                                return true;
+                            default:
+                                return false;
+                        }
+                    };
+                    const float zoom = IsTransparentTopSpec(spec.spec_id) ? 2.94f : 1.4f;
+                    float drawH = rowH * zoom;
+                    float scale = drawH / (float)bgTex->Height;
+                    float drawW = (float)bgTex->Width * scale;
+                    float bannerLeft = rowOrigin.x;
+                    float bannerTop  = rowOrigin.y + rowH - drawH;
+                    dl->PushClipRect(rowOrigin,
+                        ImVec2(rowOrigin.x + rowW, rowOrigin.y + rowH), true);
+                    dl->AddImage(bgTex->Resource,
+                        ImVec2(bannerLeft, bannerTop),
+                        ImVec2(bannerLeft + drawW, bannerTop + drawH),
+                        ImVec2(0, 0), ImVec2(1, 1),
+                        IM_COL32(255, 255, 255, 200));
+                    // Fade-to-dark anchored to where the trait grid begins,
+                    // not the banner. Trait icons start just past column 0.
+                    float fadeStart = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 12.0f;
+                    float fadeEnd   = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 72.0f;
+                    dl->AddRectFilledMultiColor(
+                        ImVec2(fadeStart, rowOrigin.y),
+                        ImVec2(fadeEnd,   rowOrigin.y + rowH),
+                        IM_COL32(15, 17, 23, 0),   IM_COL32(15, 17, 23, 200),
+                        IM_COL32(15, 17, 23, 200), IM_COL32(15, 17, 23, 0));
+                    if (fadeEnd < rowOrigin.x + rowW) {
+                        dl->AddRectFilled(
+                            ImVec2(fadeEnd, rowOrigin.y),
+                            ImVec2(rowOrigin.x + rowW, rowOrigin.y + rowH),
+                            IM_COL32(15, 17, 23, 200));
+                    }
+                    dl->PopClipRect();
+                }
+            }
+
+            // Spec name overlay on the banner's left.
+            {
+                ImVec2 nameAnchor;
+                ImVec2 prevPos = ImGui::GetCursorScreenPos();
+                const ImVec2 hitSz = DrawSpecializationNameBadge(
+                    dl, specName, specColor, rowOrigin, rowH, nameAnchor);
+                ImGui::SetCursorScreenPos(nameAnchor);
+                ImGui::InvisibleButton("##specname", hitSz);
+                nameActions(i,specName,specColor,specInfo->profession+(isElite?" (Elite)":""));
+                if(editable&&ImGui::IsItemHovered())
+                    dl->AddRect(nameAnchor,ImVec2(nameAnchor.x+hitSz.x,nameAnchor.y+hitSz.y),IM_COL32(227,196,122,200),2.f);
+                ImGui::SetCursorScreenPos(prevPos);
+            }
+
+            char outerId[32];
+            snprintf(outerId, sizeof(outerId), "##lso_%u", spec.spec_id);
+            if (ImGui::BeginTable(outerId, 2,
+                    ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed,
+                    SPEC_NAME_BADGE_WIDTH);
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableNextRow();
+
+                ImGui::TableNextColumn();
+                ImGui::Dummy(ImVec2(SPEC_NAME_BADGE_WIDTH - 8.0f, rowH - 2.0f));
+
+                ImGui::TableNextColumn();
+                char innerId[32];
+                snprintf(innerId, sizeof(innerId), "##ltr_%u", spec.spec_id);
+                if (ImGui::BeginTable(innerId, 6,
+                        ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
+                    for (int c = 0; c < 6; c++)
+                        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, colW);
+
+                    for (int row = 0; row < 3; row++) {
+                        ImGui::TableNextRow();
+                        for (int tier = 0; tier < 3; tier++) {
+                            ImGui::TableNextColumn();
+                            if (row == 1 && tier < (int)specInfo->minor_traits.size()) {
+                                minorCenters[tier] = RenderTraitIcon(
+                                    specInfo->minor_traits[tier], true, true, iconSz);
+                            }
+
+                            ImGui::TableNextColumn();
+                            int majorIdx = tier * 3 + row;
+                            uint32_t tid = specInfo->major_traits[majorIdx];
+                            const bool selected=AlterEgo::SkillEdit::TraitSelectionMatches(spec.traits[tier],tid,row);
+                            bool tClicked=false,clearRequested=false;
+                            ImVec2 c=RenderTraitIcon(tid,selected,false,iconSz,editable,&tClicked,editable?&clearRequested:nullptr);
+                            if(clearRequested)traitEdit(i,tier,0);
+                            else if(tClicked&&!selected)traitEdit(i,tier,static_cast<int>(tid));
+                            if (selected) {
+                                selectedCenters[tier] = c;
+                                hasSelected[tier] = true;
+                            }
+                        }
+                    }
+                    ImGui::EndTable();
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImU32 lineCol = IM_COL32(180, 230, 255, 180);
+            float minorR = MINOR_TRAIT_SIZE * 0.5f;
+            float majorR = iconSz * 0.5f;
+            (void)specCenter;
+
+            auto InsetLine = [](ImVec2 a, ImVec2 b, float rA, float rB, ImVec2& outA, ImVec2& outB) {
+                float dx = b.x - a.x, dy = b.y - a.y;
+                float len = sqrtf(dx * dx + dy * dy);
+                if (len < rA + rB) return false;
+                float nx = dx / len, ny = dy / len;
+                outA = ImVec2(a.x + nx * rA, a.y + ny * rA);
+                outB = ImVec2(b.x - nx * rB, b.y - ny * rB);
+                return true;
+            };
+
+            // Skip the first connector — the hex spec icon is gone.
+            ImVec2 prev;
+            float prevR = 0;
+            bool havePrev = false;
+            for (int tier = 0; tier < 3; tier++) {
+                if (minorCenters[tier].x > 0) {
+                    if (havePrev) {
+                        ImVec2 la, lb;
+                        if (InsetLine(prev, minorCenters[tier], prevR, minorR, la, lb))
+                            DrawDottedLine(dl, la, lb, lineCol);
+                    }
+                    prev = minorCenters[tier]; prevR = minorR; havePrev = true;
+                }
+                if (hasSelected[tier]) {
+                    if (havePrev) {
+                        ImVec2 la, lb;
+                        if (InsetLine(prev, selectedCenters[tier], prevR, majorR, la, lb))
+                            DrawDottedLine(dl, la, lb, lineCol);
+                    }
+                    prev = selectedCenters[tier]; prevR = majorR; havePrev = true;
+                }
+            }
+        }else{
+            if(editable){
+                RenderChipButton(specName.c_str(),false);
+                nameActions(i,specName,specColor,specInfo?specInfo->profession:std::string{});
+            }else{
+                ImGui::TextColored(specColor,"%s",specName.c_str());
+                nameActions(i,specName,specColor,specInfo?specInfo->profession:std::string{});
+            }
+            if(specInfo&&specInfo->major_traits.size()>=9){
+                for(int tier=0;tier<3;++tier){
+                    ImGui::PushID(tier);
+                    const float size=std::min(iconSz,std::max(12.f,(available-3*ImGui::GetStyle().ItemSpacing.x)/4.f));
+                    if(tier<static_cast<int>(specInfo->minor_traits.size()))RenderTraitIcon(specInfo->minor_traits[tier],true,true,size);
+                    else ImGui::Dummy(ImVec2(size,size));
+                    for(int row=0;row<3;++row){
+                        ImGui::SameLine();
+                        const auto tid=specInfo->major_traits[tier*3+row];
+                        const bool selected=AlterEgo::SkillEdit::TraitSelectionMatches(spec.traits[tier],tid,row);
+                        bool clicked=false,clear=false;
+                        RenderTraitIcon(tid,selected,false,size,editable,&clicked,editable?&clear:nullptr);
+                        if(clear)traitEdit(i,tier,0);
+                        else if(clicked&&!selected)traitEdit(i,tier,static_cast<int>(tid));
+                    }
+                    ImGui::PopID();
+                }
+            }else ImGui::TextDisabled("Specialization metadata pending");
+        }
+        for(int tier=0;tier<3;++tier){
+            const int value=spec.traits[tier];bool shown=value==0;
+            if(specInfo&&specInfo->major_traits.size()>=9)
+                for(int row=0;row<3;++row)shown=shown||AlterEgo::SkillEdit::TraitSelectionMatches(value,specInfo->major_traits[tier*3+row],row);
+            if(!shown){
+                ImGui::PushID(tier);
+                ImGui::TextDisabled("Tier %d: recorded trait %d (unresolved)",tier+1,value);
+                if(editable&&ImGui::BeginPopupContextItem("##unresolved_trait")){
+                    if(ImGui::MenuItem("Clear Trait"))traitEdit(i,tier,0);
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
+            }
+        }
+        picker(i);ImGui::PopID();ImGui::Spacing();
+    }
+
+}
+
 static void RenderBuildPanel(const AlterEgo::Character& ch) {
     if (ch.build_tabs.empty()) {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No build tabs available.");
@@ -4596,215 +4856,7 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
     // Record start position for profession/elite spec overlay
     ImVec2 buildPanelStart = ImGui::GetCursorScreenPos();
 
-    // Specializations — game-like trait grid with dotted lines
-    const float iconSz = TRAIT_ICON_SIZE; // uniform size for all trait icons
-    const float colW = iconSz * 2.0f;
-
-    for (int i = 0; i < 3; i++) {
-        const auto& spec = bt.specializations[i];
-        if (spec.spec_id == 0) {
-            ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "  (empty)");
-            continue;
-        }
-
-        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
-        std::string specName = specInfo ? specInfo->name : ("Spec " + std::to_string(spec.spec_id));
-        bool isElite = specInfo ? specInfo->elite : false;
-        ImVec4 specColor = isElite ? ImVec4(1.0f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
-
-        ImGui::PushID(spec.spec_id);
-
-        if (specInfo && specInfo->major_traits.size() >= 9) {
-            // Positions for dotted lines. specCenter stays at (0,0) — the hex
-            // icon has been replaced by the spec name overlay on the banner.
-            ImVec2 specCenter(0, 0);
-            ImVec2 minorCenters[3] = {};
-            ImVec2 selectedCenters[3] = {};
-            bool hasSelected[3] = {false, false, false};
-
-            // Row geometry — used for banner backdrop and name overlay.
-            ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
-            float rowW = ImGui::GetContentRegionAvail().x;
-            float rowH = iconSz * 3 + ImGui::GetStyle().CellPadding.y * 6;
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-
-            // Spec background banner (panoramic art) behind the trait grid.
-            // Scaled to fit row height, native aspect preserved, anchored left,
-            // with a fade-to-dark overlay on the right so trait icons stay readable.
-            if (!specInfo->background_url.empty()) {
-                uint32_t bgKey = spec.spec_id + 1000000;
-                Texture_t* bgTex = AlterEgo::IconManager::GetOrRequestIcon(bgKey,specInfo->background_url);
-                if (bgTex && bgTex->Resource && bgTex->Height > 0) {
-                    // Zoom the banner and anchor it to the row's bottom-left.
-                    // 15 specs ship with banners whose top ~66% is transparent
-                    // (opaque art lives only in the bottom band). Those need a
-                    // much higher zoom so the opaque content fills the row;
-                    // everyone else gets the standard 1.4x.
-                    auto IsTransparentTopSpec = [](uint32_t id) {
-                        switch (id) {
-                            case 4: case 7: case 11: case 20: case 22:
-                            case 28: case 35: case 36: case 44: case 51:
-                            case 54: case 68: case 70: case 71: case 72:
-                            case 73: case 74: case 75: case 76: case 77:
-                            case 78: case 79: case 80: case 81:
-                                return true;
-                            default:
-                                return false;
-                        }
-                    };
-                    const float zoom = IsTransparentTopSpec(spec.spec_id) ? 2.94f : 1.4f;
-                    float drawH = rowH * zoom;
-                    float scale = drawH / (float)bgTex->Height;
-                    float drawW = (float)bgTex->Width * scale;
-                    float bannerLeft = rowOrigin.x;
-                    float bannerTop  = rowOrigin.y + rowH - drawH;
-                    dl->PushClipRect(rowOrigin,
-                        ImVec2(rowOrigin.x + rowW, rowOrigin.y + rowH), true);
-                    dl->AddImage(bgTex->Resource,
-                        ImVec2(bannerLeft, bannerTop),
-                        ImVec2(bannerLeft + drawW, bannerTop + drawH),
-                        ImVec2(0, 0), ImVec2(1, 1),
-                        IM_COL32(255, 255, 255, 200));
-                    // Fade-to-dark anchored to where the trait grid begins,
-                    // not the banner. Trait icons start just past column 0.
-                    float fadeStart = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 12.0f;
-                    float fadeEnd   = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 72.0f;
-                    dl->AddRectFilledMultiColor(
-                        ImVec2(fadeStart, rowOrigin.y),
-                        ImVec2(fadeEnd,   rowOrigin.y + rowH),
-                        IM_COL32(15, 17, 23, 0),   IM_COL32(15, 17, 23, 200),
-                        IM_COL32(15, 17, 23, 200), IM_COL32(15, 17, 23, 0));
-                    if (fadeEnd < rowOrigin.x + rowW) {
-                        dl->AddRectFilled(
-                            ImVec2(fadeEnd, rowOrigin.y),
-                            ImVec2(rowOrigin.x + rowW, rowOrigin.y + rowH),
-                            IM_COL32(15, 17, 23, 200));
-                    }
-                    dl->PopClipRect();
-                }
-            }
-
-            // Spec name overlay on the banner's left. Drop shadow underneath
-            // for legibility against bright banner art. Tooltip is attached
-            // to an invisible button covering the same area.
-            {
-                ImVec2 nameAnchor;
-                ImVec2 prevPos = ImGui::GetCursorScreenPos();
-                const ImVec2 hitSz = DrawSpecializationNameBadge(
-                    dl, specName, specColor, rowOrigin, rowH, nameAnchor);
-                ImGui::SetCursorScreenPos(nameAnchor);
-                ImGui::InvisibleButton("##specname", hitSz);
-                if(!g_LibEditMode&&ImGui::BeginPopupContextItem("##spec_name")){
-                    CopyNameMenuItem(specName);ImGui::EndPopup();
-                }
-                if(ImGui::IsItemHovered())RenderSpecializationTooltip(specName,specColor,specInfo->profession+(isElite?" (Elite)":""),false);
-                ImGui::SetCursorScreenPos(prevPos);
-            }
-
-            // Outer 2-column table: [reserved left gutter] [6-col trait grid]
-            char outerId[32];
-            snprintf(outerId, sizeof(outerId), "##so_%u", spec.spec_id);
-            if (ImGui::BeginTable(outerId, 2,
-                    ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
-                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed,
-                    SPEC_NAME_BADGE_WIDTH);
-                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableNextRow();
-
-                // Column 0: left gutter (banner art shows through; spec name
-                // is overlaid above via the drawlist).
-                ImGui::TableNextColumn();
-                ImGui::Dummy(ImVec2(SPEC_NAME_BADGE_WIDTH - 8.0f, rowH - 2.0f));
-
-                // Column 1: 6-column × 3-row trait grid
-                ImGui::TableNextColumn();
-                char innerId[32];
-                snprintf(innerId, sizeof(innerId), "##tr_%u", spec.spec_id);
-                if (ImGui::BeginTable(innerId, 6,
-                        ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
-                    for (int c = 0; c < 6; c++)
-                        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, colW);
-
-                    for (int row = 0; row < 3; row++) {
-                        ImGui::TableNextRow();
-                        for (int tier = 0; tier < 3; tier++) {
-                            // Minor trait column: render only in middle row
-                            ImGui::TableNextColumn();
-                            if (row == 1 && tier < (int)specInfo->minor_traits.size()) {
-                                minorCenters[tier] = RenderTraitIcon(
-                                    specInfo->minor_traits[tier], true, true, iconSz);
-                            }
-
-                            // Major trait column
-                            ImGui::TableNextColumn();
-                            int majorIdx = tier * 3 + row;
-                            uint32_t tid = specInfo->major_traits[majorIdx];
-                            bool selected = ((uint32_t)spec.traits[tier] == tid);
-                            bool clearRequested=false;
-                            ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz,false,nullptr,
-                                                       g_LibEditMode?&clearRequested:nullptr);
-                            if(clearRequested){
-                                g_EditDraft.specializations[i].traits[tier] = 0;
-                                MarkEditDirty();
-                            }
-                            if (selected) {
-                                selectedCenters[tier] = c;
-                                hasSelected[tier] = true;
-                            }
-                        }
-                    }
-                    ImGui::EndTable();
-                }
-
-                ImGui::EndTable();
-            }
-
-            // Draw dotted lines connecting traits (spec→minor0 is skipped
-            // because the hex icon is gone). Lines stop at icon edges.
-            ImU32 lineCol = IM_COL32(180, 230, 255, 180);
-            float minorR = MINOR_TRAIT_SIZE * 0.5f;
-            float majorR = iconSz * 0.5f;
-
-            auto InsetLine = [](ImVec2 a, ImVec2 b, float rA, float rB, ImVec2& outA, ImVec2& outB) {
-                float dx = b.x - a.x, dy = b.y - a.y;
-                float len = sqrtf(dx * dx + dy * dy);
-                if (len < rA + rB) return false;
-                float nx = dx / len, ny = dy / len;
-                outA = ImVec2(a.x + nx * rA, a.y + ny * rA);
-                outB = ImVec2(b.x - nx * rB, b.y - ny * rB);
-                return true;
-            };
-
-            // Skip the first connector — the hex spec icon is gone, so there
-            // is no anchor on the left for a leading dotted line.
-            ImVec2 prev;
-            float prevR = 0;
-            bool havePrev = false;
-            (void)specCenter;
-            for (int tier = 0; tier < 3; tier++) {
-                if (minorCenters[tier].x > 0) {
-                    if (havePrev) {
-                        ImVec2 la, lb;
-                        if (InsetLine(prev, minorCenters[tier], prevR, minorR, la, lb))
-                            DrawDottedLine(dl, la, lb, lineCol);
-                    }
-                    prev = minorCenters[tier]; prevR = minorR; havePrev = true;
-                }
-                if (hasSelected[tier]) {
-                    if (havePrev) {
-                        ImVec2 la, lb;
-                        if (InsetLine(prev, selectedCenters[tier], prevR, majorR, la, lb))
-                            DrawDottedLine(dl, la, lb, lineCol);
-                    }
-                    prev = selectedCenters[tier]; prevR = majorR; havePrev = true;
-                }
-            }
-        }
-
-        ImGui::PopID();
-        ImGui::Spacing();
-    }
-
+    RenderSpecializationGrid(bt.specializations,bt.profession,false,[](int,uint32_t){},[](int,int,int){});
     ImGui::Spacing();
 
     // The live API reports only recorded skills and explicit null slots.
@@ -7268,36 +7320,6 @@ static bool RenderSpecializationChoices(const std::string& profession,
     if(ImGui::Selectable("(None)",ids[slot]==0)){next=0;changed=true;}
     return changed;
 }
-static void RenderSpecPickerDialog() {
-    if(g_SpecPickerSlot<0)return;
-    const char* POPUP="Choose Specialization##specpick";
-    if(!ImGui::IsPopupOpen(POPUP))ImGui::OpenPopup(POPUP);
-    const auto size=ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(size.x*0.5f,size.y*0.5f),ImGuiCond_Appearing,ImVec2(0.5f,0.5f));
-    bool open=true;
-    if(ImGui::BeginPopupModal(POPUP,&open,ImGuiWindowFlags_AlwaysAutoResize)){
-        const int slot=g_SpecPickerSlot;
-        std::array<uint32_t,3> ids{};
-        for(int i=0;i<3;++i)ids[i]=g_EditDraft.specializations[i].spec_id;
-        uint32_t next=ids[slot];
-        if(RenderSpecializationChoices(g_EditDraft.profession,ids,slot,next)){
-            if(next!=ids[slot]){
-                const auto info=AlterEgo::GW2API::GetSpecInfo(next);
-                if(info&&info->elite)for(int i=0;i<3;++i)if(i!=slot){
-                    const auto other=AlterEgo::GW2API::GetSpecInfo(ids[i]);
-                    if(other&&other->elite)g_EditDraft.specializations[i]={};
-                }
-                g_EditDraft.specializations[slot]={};
-                g_EditDraft.specializations[slot].spec_id=next;
-                MarkEditDirty();
-            }
-            g_SpecPickerSlot=-1;ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-    if(!open)g_SpecPickerSlot=-1;
-}
-
 // Shared eligibility policy for both the monolithic Loadout editor and the
 // v3 standalone Skills component editor. Keep the GW2 skill-type, profession
 // and selected elite-spec checks in ONE place.
@@ -9771,230 +9793,15 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
     AlterEgo::GW2API::FetchProfessionInfoAsync(metadataSource.profession);
     ImGui::Spacing();
 
-    // Specializations with trait grid (same logic as RenderBuildPanel)
-    const float iconSz = TRAIT_ICON_SIZE;
-    const float colW = iconSz * 2.0f;
-
-    for (int i = 0; i < 3; i++) {
-        // When editing, the grid reflects the mutable draft; otherwise the saved build.
-        const auto& spec = g_LibEditMode ? g_EditDraft.specializations[i] : build.specializations[i];
-        if (spec.spec_id == 0) {
-            if (g_LibEditMode) {
-                ImGui::PushID(i);
-                if (RenderChipButton("+ Choose specialization", false)) g_SpecPickerSlot = i;
-                ImGui::PopID();
-                ImGui::Dummy(ImVec2(0, 4));
-            } else {
-                ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "  (empty)");
-            }
-            continue;
-        }
-
-        const auto specInfo = AlterEgo::GW2API::GetSpecInfo(spec.spec_id);
-        std::string specName = specInfo ? specInfo->name : ("Spec " + std::to_string(spec.spec_id));
-        bool isElite = specInfo ? specInfo->elite : false;
-        ImVec4 specColor = isElite ? ImVec4(1.0f, 0.8f, 0.2f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
-
-        ImGui::PushID(spec.spec_id);
-
-        if (specInfo && specInfo->major_traits.size() >= 9) {
-            ImVec2 specCenter(0, 0);
-            ImVec2 minorCenters[3] = {};
-            ImVec2 selectedCenters[3] = {};
-            bool hasSelected[3] = {false, false, false};
-
-            ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
-            float rowW = ImGui::GetContentRegionAvail().x;
-            float rowH = iconSz * 3 + ImGui::GetStyle().CellPadding.y * 6;
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-
-            // Spec background banner behind the trait grid (panoramic art,
-            // native aspect, anchored left, fade to dark on the right).
-            if (!specInfo->background_url.empty()) {
-                uint32_t bgKey = spec.spec_id + 1000000;
-                Texture_t* bgTex = AlterEgo::IconManager::GetOrRequestIcon(bgKey,specInfo->background_url);
-                if (bgTex && bgTex->Resource && bgTex->Height > 0) {
-                    // Zoom the banner and anchor it to the row's bottom-left.
-                    // 15 specs ship with banners whose top ~66% is transparent
-                    // (opaque art lives only in the bottom band). Those need a
-                    // much higher zoom so the opaque content fills the row;
-                    // everyone else gets the standard 1.4x.
-                    auto IsTransparentTopSpec = [](uint32_t id) {
-                        switch (id) {
-                            case 4: case 7: case 11: case 20: case 22:
-                            case 28: case 35: case 36: case 44: case 51:
-                            case 54: case 68: case 70: case 71: case 72:
-                            case 73: case 74: case 75: case 76: case 77:
-                            case 78: case 79: case 80: case 81:
-                                return true;
-                            default:
-                                return false;
-                        }
-                    };
-                    const float zoom = IsTransparentTopSpec(spec.spec_id) ? 2.94f : 1.4f;
-                    float drawH = rowH * zoom;
-                    float scale = drawH / (float)bgTex->Height;
-                    float drawW = (float)bgTex->Width * scale;
-                    float bannerLeft = rowOrigin.x;
-                    float bannerTop  = rowOrigin.y + rowH - drawH;
-                    dl->PushClipRect(rowOrigin,
-                        ImVec2(rowOrigin.x + rowW, rowOrigin.y + rowH), true);
-                    dl->AddImage(bgTex->Resource,
-                        ImVec2(bannerLeft, bannerTop),
-                        ImVec2(bannerLeft + drawW, bannerTop + drawH),
-                        ImVec2(0, 0), ImVec2(1, 1),
-                        IM_COL32(255, 255, 255, 200));
-                    // Fade-to-dark anchored to where the trait grid begins,
-                    // not the banner. Trait icons start just past column 0.
-                    float fadeStart = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 12.0f;
-                    float fadeEnd   = rowOrigin.x + SPEC_NAME_BADGE_WIDTH + 72.0f;
-                    dl->AddRectFilledMultiColor(
-                        ImVec2(fadeStart, rowOrigin.y),
-                        ImVec2(fadeEnd,   rowOrigin.y + rowH),
-                        IM_COL32(15, 17, 23, 0),   IM_COL32(15, 17, 23, 200),
-                        IM_COL32(15, 17, 23, 200), IM_COL32(15, 17, 23, 0));
-                    if (fadeEnd < rowOrigin.x + rowW) {
-                        dl->AddRectFilled(
-                            ImVec2(fadeEnd, rowOrigin.y),
-                            ImVec2(rowOrigin.x + rowW, rowOrigin.y + rowH),
-                            IM_COL32(15, 17, 23, 200));
-                    }
-                    dl->PopClipRect();
-                }
-            }
-
-            // Spec name overlay on the banner's left.
-            {
-                ImVec2 nameAnchor;
-                ImVec2 prevPos = ImGui::GetCursorScreenPos();
-                const ImVec2 hitSz = DrawSpecializationNameBadge(
-                    dl, specName, specColor, rowOrigin, rowH, nameAnchor);
-                ImGui::SetCursorScreenPos(nameAnchor);
-                ImGui::InvisibleButton("##specname", hitSz);
-                if (g_LibEditMode) {
-                    if (ImGui::IsItemClicked()) g_SpecPickerSlot = i;
-                    if (ImGui::BeginPopupContextItem("##spec_edit_context")) {
-                        CopyNameMenuItem(specName);
-                        if (ImGui::MenuItem("Clear Specialization")) {
-                            g_EditDraft.specializations[i] = {};
-                            MarkEditDirty();
-                        }
-                        ImGui::EndPopup();
-                    }
-                    if (ImGui::IsItemHovered())
-                        dl->AddRect(nameAnchor,
-                            ImVec2(nameAnchor.x + hitSz.x, nameAnchor.y + hitSz.y),
-                            IM_COL32(227, 196, 122, 200), 2.0f);
-                }
-                if(ImGui::IsItemHovered())RenderSpecializationTooltip(specName,specColor,{},g_LibEditMode);
-                ImGui::SetCursorScreenPos(prevPos);
-            }
-
-            char outerId[32];
-            snprintf(outerId, sizeof(outerId), "##lso_%u", spec.spec_id);
-            if (ImGui::BeginTable(outerId, 2,
-                    ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
-                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed,
-                    SPEC_NAME_BADGE_WIDTH);
-                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableNextRow();
-
-                ImGui::TableNextColumn();
-                ImGui::Dummy(ImVec2(SPEC_NAME_BADGE_WIDTH - 8.0f, rowH - 2.0f));
-
-                ImGui::TableNextColumn();
-                char innerId[32];
-                snprintf(innerId, sizeof(innerId), "##ltr_%u", spec.spec_id);
-                if (ImGui::BeginTable(innerId, 6,
-                        ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
-                    for (int c = 0; c < 6; c++)
-                        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, colW);
-
-                    for (int row = 0; row < 3; row++) {
-                        ImGui::TableNextRow();
-                        for (int tier = 0; tier < 3; tier++) {
-                            ImGui::TableNextColumn();
-                            if (row == 1 && tier < (int)specInfo->minor_traits.size()) {
-                                minorCenters[tier] = RenderTraitIcon(
-                                    specInfo->minor_traits[tier], true, true, iconSz);
-                            }
-
-                            ImGui::TableNextColumn();
-                            int majorIdx = tier * 3 + row;
-                            uint32_t tid = specInfo->major_traits[majorIdx];
-                            bool selected;
-                            if (spec.traits[tier] < 0) {
-                                // Placeholder: negative = -(choice) where 1=top,2=mid,3=bot
-                                int choice = -(spec.traits[tier]);
-                                selected = (choice >= 1 && choice <= 3 && (choice - 1) == row);
-                            } else {
-                                selected = ((uint32_t)spec.traits[tier] == tid);
-                            }
-                            bool tClicked = false, clearRequested=false;
-                            ImVec2 c = RenderTraitIcon(tid, selected, false, iconSz,
-                                                       g_LibEditMode, &tClicked,
-                                                       g_LibEditMode?&clearRequested:nullptr);
-                            if(clearRequested){
-                                g_EditDraft.specializations[i].traits[tier] = 0;
-                                MarkEditDirty();
-                            }else if (tClicked) {
-                                g_EditDraft.specializations[i].traits[tier] = (int)tid;
-                                MarkEditDirty();
-                            }
-                            if (selected) {
-                                selectedCenters[tier] = c;
-                                hasSelected[tier] = true;
-                            }
-                        }
-                    }
-                    ImGui::EndTable();
-                }
-
-                ImGui::EndTable();
-            }
-
-            ImU32 lineCol = IM_COL32(180, 230, 255, 180);
-            float minorR = MINOR_TRAIT_SIZE * 0.5f;
-            float majorR = iconSz * 0.5f;
-            (void)specCenter;
-
-            auto InsetLine = [](ImVec2 a, ImVec2 b, float rA, float rB, ImVec2& outA, ImVec2& outB) {
-                float dx = b.x - a.x, dy = b.y - a.y;
-                float len = sqrtf(dx * dx + dy * dy);
-                if (len < rA + rB) return false;
-                float nx = dx / len, ny = dy / len;
-                outA = ImVec2(a.x + nx * rA, a.y + ny * rA);
-                outB = ImVec2(b.x - nx * rB, b.y - ny * rB);
-                return true;
-            };
-
-            // Skip the first connector — the hex spec icon is gone.
-            ImVec2 prev;
-            float prevR = 0;
-            bool havePrev = false;
-            for (int tier = 0; tier < 3; tier++) {
-                if (minorCenters[tier].x > 0) {
-                    if (havePrev) {
-                        ImVec2 la, lb;
-                        if (InsetLine(prev, minorCenters[tier], prevR, minorR, la, lb))
-                            DrawDottedLine(dl, la, lb, lineCol);
-                    }
-                    prev = minorCenters[tier]; prevR = minorR; havePrev = true;
-                }
-                if (hasSelected[tier]) {
-                    if (havePrev) {
-                        ImVec2 la, lb;
-                        if (InsetLine(prev, selectedCenters[tier], prevR, majorR, la, lb))
-                            DrawDottedLine(dl, la, lb, lineCol);
-                    }
-                    prev = selectedCenters[tier]; prevR = majorR; havePrev = true;
-                }
-            }
-        }
-
-        ImGui::PopID();
-        ImGui::Spacing();
-    }
+    const auto& specSource=g_LibEditMode?g_EditDraft:build;
+    RenderSpecializationGrid(specSource.specializations,specSource.profession,g_LibEditMode,
+        [&](int slot,uint32_t next){
+            if(AlterEgo::SkillEdit::SetSpecialization(g_EditDraft.specializations,slot,next,
+                [](uint32_t id){const auto info=AlterEgo::GW2API::GetSpecInfo(id);return info&&info->elite;}))MarkEditDirty();
+        },[&](int slot,int tier,int next){
+            auto& prior=g_EditDraft.specializations[slot].traits[tier];
+            if(prior!=next){prior=next;MarkEditDirty();}
+        });
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -16535,7 +16342,6 @@ void AddonRender() {
     // Render gear customize dialog (separate window, always checked)
     RenderGearCustomizeDialog();
     RenderNewBuildDialog();
-    RenderSpecPickerDialog();
     RenderSaveToLibraryDialog();
     RenderFashionDialog();
 

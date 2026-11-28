@@ -426,6 +426,69 @@ template<class Value> bool SetPairChoice(Value& current,uint32_t other,uint32_t 
     if(!PairChoiceAllowed(other,next)||current==next)return false;
     current=next;return true;
 }
+inline bool TraitSelectionMatches(int value,uint32_t id,int row){
+    return value<0?(value>=-3&&value==-(row+1)):(static_cast<uint32_t>(value)==id);
+}
+template<class IsElite> std::array<uint32_t,3> PlanSpecializationSelection(
+    std::array<uint32_t,3> ids,int slot,uint32_t next,IsElite elite){
+    if(slot<0||slot>=3||ids[slot]==next||!SpecializationChoiceAllowed(ids,slot,next,next&&elite(next)))return ids;
+    if(next&&elite(next))for(int i=0;i<3;++i)if(i!=slot&&ids[i]&&elite(ids[i]))ids[i]=0;
+    ids[slot]=next;return ids;
+}
+template<class Lines,class IsElite> bool SetSpecialization(Lines& lines,int slot,uint32_t next,IsElite elite){
+    std::array<uint32_t,3> before{};
+    for(int i=0;i<3;++i)before[i]=lines[i].spec_id;
+    const auto after=PlanSpecializationSelection(before,slot,next,elite);
+    for(int i=0;i<3;++i)if(before[i]!=after[i]){lines[i]={};lines[i].spec_id=after[i];}
+    return before!=after;
+}
+template<class Line,class Json> std::array<Line,3> JsonSpecializationLines(const Json& data){
+    std::array<Line,3> result{};
+    if(!data.is_object()||!data.contains("specializations")||!data.at("specializations").is_array())return result;
+    const auto& lines=data.at("specializations");
+    for(size_t i=0;i<3&&i<lines.size();++i){
+        if(!lines[i].is_object())continue;
+        if(lines[i].contains("id"))result[i].spec_id=JsonDisplaySlot(lines[i].at("id")).id;
+        if(lines[i].contains("traits")&&lines[i].at("traits").is_array()){
+            const auto& traits=lines[i].at("traits");
+            for(size_t t=0;t<3&&t<traits.size();++t)
+                if(traits[t].is_number_integer()&&traits[t]>=std::numeric_limits<int>::min()&&traits[t]<=std::numeric_limits<int>::max())
+                    result[i].traits[t]=traits[t].template get<int>();
+        }
+    }
+    return result;
+}
+template<class Json,class IsElite> bool SetJsonSpecialization(Json& data,int slot,uint32_t next,IsElite elite){
+    if(slot<0||slot>=3||!data.is_object()||(data.contains("specializations")&&!data.at("specializations").is_array()))return false;
+    Json lines=data.value("specializations",Json::array());
+    auto before=ContextSpecializations(data);
+    auto after=PlanSpecializationSelection(before,slot,next,elite);
+    if(before==after)return false;
+    for(int i=0;i<3;++i)if(before[i]!=after[i]){
+        while(lines.size()<=static_cast<size_t>(i))lines.push_back(Json::object());
+        if(!lines[i].is_object())return false;
+        auto& line=lines[i];
+        if(line.contains("traits")&&!line.at("traits").is_array())return false;
+        line["id"]=after[i];
+        auto traits=line.value("traits",Json::array());
+        while(traits.size()<3)traits.push_back(0);
+        for(int t=0;t<3;++t)traits[t]=0;
+        line["traits"]=std::move(traits);
+    }
+    data["specializations"]=std::move(lines);return true;
+}
+template<class Json> bool SetJsonTrait(Json& data,int slot,int tier,int value){
+    if(slot<0||slot>=3||tier<0||tier>=3||!data.contains("specializations")||!data.at("specializations").is_array())return false;
+    auto& lines=data["specializations"];
+    if(lines.size()<=static_cast<size_t>(slot)||!lines[slot].is_object())return false;
+    auto& line=lines[slot];
+    if(line.contains("traits")&&!line.at("traits").is_array())return false;
+    auto traits=line.value("traits",Json::array());
+    if(traits.size()>static_cast<size_t>(tier)&&traits[tier]==value)return false;
+    while(traits.size()<=static_cast<size_t>(tier))traits.push_back(0);
+    traits[tier]=value;line["traits"]=std::move(traits);return true;
+}
+
 template<class Utilities> bool SetUtility(Utilities& u,int index,uint32_t next) {
     if(index<0||index>=3)return false;
     const auto previous=u[index];

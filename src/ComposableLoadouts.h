@@ -1556,6 +1556,7 @@ inline bool UpdateShared(Document& doc, const std::string& kind,
         if (kind == "base_build") {
             const auto previous = item->data.value("profession", std::string());
             const auto nextProfession = data.value("profession", std::string());
+            if (!previous.empty()&&previous!=nextProfession)return Fail(err,"Cannot change saved Base Build profession.");
             if (previous != nextProfession)
                 for (const auto& loadout : next.loadouts) {
                     auto ref = loadout.refs.find("base_build");
@@ -1673,6 +1674,7 @@ inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
         if (kind == "base_build" &&
             item->data.value("profession", std::string()) !=
             data.value("profession", std::string())) {
+            if(!item->data.value("profession",std::string()).empty())return Fail(err,"Cannot change saved Base Build profession.");
             for (const auto& loadout : next.loadouts) {
                 const auto ref = loadout.refs.find("base_build");
                 if (ref != loadout.refs.end() && ref->second == id)

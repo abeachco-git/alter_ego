@@ -211,7 +211,7 @@ static std::string ComponentUIProfession(const std::string& kind,const Component
 }
 static std::string ComponentUIProfessionName(const std::string& kind,const ComponentJson& item) {
     const auto name=item.value("name",item.value("id",std::string()));
-    if(kind!="skills")return name;
+    if(kind!="skills"&&kind!="base_build"&&!AlterEgo::Composable::IsCompanionKind(kind))return name;
     const auto profession=ComponentUIProfession(kind,item.at("data"),item.value("id",std::string()));
     return "["+(profession.empty()?std::string("Unknown profession"):profession)+"] "+name;
 }
@@ -221,7 +221,7 @@ static bool ComponentUISelectable(const std::string& kind,const ComponentJson& i
     const std::string& suffix,const std::string& stableId,bool selected,bool defaultFocus=false){
     const auto profession=ComponentUIProfession(kind,item.at("data"),item.value("id",std::string()));
     const auto visible=ComponentUIProfessionName(kind,item)+suffix;
-    const bool withIcon=kind=="skills"&&!profession.empty();
+    const bool withIcon=!profession.empty()&&(kind=="skills"||kind=="base_build"||AlterEgo::Composable::IsCompanionKind(kind));
     const auto label=withIcon?stableId:visible+stableId;
     const bool clicked=ImGui::Selectable(label.c_str(),selected,0,ImVec2(0,withIcon?std::max(20.f,ImGui::GetTextLineHeight()):0.f));
     if(withIcon)DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),profession,visible);
@@ -234,6 +234,25 @@ static void RenderComponentProfessionLabel(const std::string& profession){
     auto* texture=icon?AlterEgo::IconManager::GetIcon(icon):nullptr;
     if(texture&&texture->Resource){const float size=ImGui::GetTextLineHeight();ImGui::Image(texture->Resource,ImVec2(size,size));ImGui::SameLine();}
     RenderProfessionCharacterName(profession,profession);
+}
+template<class Choose> static void RenderComponentProfessionChoice(const std::string& profession,Choose choose){
+    ImGui::TextUnformatted("Profession");ImGui::SetNextItemWidth(210);
+    if(AlterEgo::UI::BeginCombo("##component_profession",profession.empty()?"Choose profession...":profession.c_str())){
+        for(const auto& candidate:AlterEgo::ProfessionMetadata::Names()){
+            const auto icon=GetProfessionIconId(candidate);
+            auto* texture=icon?AlterEgo::IconManager::GetIcon(icon):nullptr;
+            if(texture&&texture->Resource){const float size=ImGui::GetTextLineHeight();ImGui::Image(texture->Resource,ImVec2(size,size));ImGui::SameLine();}
+            if(AlterEgo::UI::SelectableOption(candidate.c_str(),profession==candidate))choose(candidate);
+        }
+        ImGui::EndCombo();
+    }
+}
+static bool ComponentBaseDraftReady(const ComponentJson& data){
+    const auto profession=data.value("profession",std::string());
+    const auto baseline=g_ComponentEditorBaseline.value("profession",std::string());
+    if(!baseline.empty())return profession==baseline;
+    const auto names=AlterEgo::ProfessionMetadata::Names();
+    return std::find(names.begin(),names.end(),profession)!=names.end();
 }
 static bool ComponentSkillsDraftReady(const ComponentJson& data){
     const auto profession=AlterEgo::Composable::StoredSkillsProfession(data);
@@ -325,12 +344,10 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             ImGui::Text("Item ID: %lld",
                 static_cast<long long>(data["relic_id"].get<int64_t>()));
     }
-    if (kind == "base_build") {
-        ImGui::TextDisabled("Profession, specialization and trait definition");
-        if (data.contains("profession") && data["profession"].is_string())
-            ImGui::Text("Profession: %s", data["profession"].get<std::string>().c_str());
-        if (data.contains("specializations") && data["specializations"].is_array())
-            ImGui::Text("Specialization entries: %d", (int)data["specializations"].size());
+    if(kind=="base_build"){
+        const auto lines=AlterEgo::SkillEdit::JsonSpecializationLines<AlterEgo::SpecLine>(data);
+        AlterEgo::GW2API::FetchSpecDetailsAsync({lines[0].spec_id,lines[1].spec_id,lines[2].spec_id});
+        RenderSpecializationGrid(lines.data(),data.value("profession",std::string()),false,[](int,uint32_t){},[](int,int,int){});
     }
     if(AlterEgo::Composable::IsCompanionKind(kind)){
         const bool legend=kind=="legends";
@@ -472,6 +489,9 @@ static bool ComponentUIEditorCanCommit() {
     if (!g_ComponentEditorDraft.is_object()) {
         g_ComponentEditorError = "Component data must be an object.";
         return false;
+    }
+    if(g_ComponentEditorKind=="base_build"&&!ComponentBaseDraftReady(g_ComponentEditorDraft)){
+        g_ComponentEditorError="Choose a profession for this Base Build.";return false;
     }
     if(g_ComponentEditorKind=="skills"&&!ComponentSkillsDraftReady(g_ComponentEditorDraft)){
         g_ComponentEditorError="Choose a profession compatible with the recorded skills and Loadout owners.";return false;
@@ -717,10 +737,11 @@ static void RenderComponentUIEditor() {
         (!g_ComponentEditorAutoName&&g_ComponentEditorName!=g_ComponentEditorInitialName)||
         (!creating&&g_ComponentEditorName!=g_ComponentEditorInitialName);
     const bool named=!AlterEgo::Composable::ComponentNameKey(g_ComponentEditorName).empty();
-    const bool skillReady=g_ComponentEditorKind!="skills"||ComponentSkillsDraftReady(g_ComponentEditorDraft);
+    const bool skillReady=(g_ComponentEditorKind!="skills"||ComponentSkillsDraftReady(g_ComponentEditorDraft))&&
+        (g_ComponentEditorKind!="base_build"||ComponentBaseDraftReady(g_ComponentEditorDraft));
     const bool canSave=AlterEgo::EditorLifecycle::CanSave(!editorStale&&named&&g_ComponentEditorDraft.is_object()&&skillReady,dirty,creating,g_ComponentEditorSaveQueued);
     const auto editAction=AlterEgo::UI::SaveCancel("component_editor",canSave,"Save",
-        editorStale?"Library changed. Cancel and reopen.":!named?"Enter a component name.":!skillReady?"Choose a profession compatible with the recorded skills and owners.":"No changes to save.",
+        editorStale?"Library changed. Cancel and reopen.":!named?"Enter a component name.":!skillReady?"Choose a profession compatible with the recorded component and owners.":"No changes to save.",
         g_ComponentEditorSaveQueued,footerError.c_str());
     if (editAction==AlterEgo::UI::EditAction::Save) {
         if (ComponentUIEditorCanCommit()) {
@@ -1540,6 +1561,7 @@ static void RenderComponentLibrary() {
         if(!selectedMatches)ImGui::TextDisabled("Selected component is outside current filters.");
         ImGui::TextWrapped("%s",name.c_str());
         ImGui::TextDisabled("%s | %d reference%s | %d affected Loadout(s)",ComponentLabel(kind),usage,usage==1?"":"s",ComponentUIEffectiveLoadoutCount(kind,id));
+        if(kind=="base_build"||AlterEgo::Composable::IsCompanionKind(kind))RenderComponentProfessionLabel(ComponentUIProfession(kind,item->at("data"),id));
         if(kind=="skills"){
             auto profession=ComponentUIProfession(kind,item->at("data"),id);
             const auto owner=g_ComponentSkillOwners.find(id);

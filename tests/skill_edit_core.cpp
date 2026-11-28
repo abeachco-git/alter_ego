@@ -180,6 +180,20 @@ int case_skill_edit_core(int,char**) {
     assert(SpecializationChoiceAllowed(specs,0,0,false));
     using J=nlohmann::json;
     {
+        auto elite=[](uint32_t id){return id==90||id==91;};
+        J raw={{"profession","Ranger"},{"weapons",J::array({7,8})},{"specializations",J::array({J{{"id",10},{"traits",J::array({-1,22,33,999})},{"extension",true}},J{{"id",11}},J{{"id",90}},J{{"id",99}}})}};
+        const auto original=raw;
+        assert(!SetJsonSpecialization(raw,0,10,elite)&&raw==original);
+        assert(!SetJsonSpecialization(raw,0,11,elite)&&raw==original);
+        assert(!SetJsonSpecialization(raw,1,91,elite)&&raw==original);
+        assert(TraitSelectionMatches(-1,99,0)&&!TraitSelectionMatches(-1,99,1));
+        assert(SetJsonTrait(raw,0,1,55)&&raw["specializations"][0]["traits"]==J::array({-1,55,33,999}));
+        assert(SetJsonSpecialization(raw,0,12,elite));
+        assert(raw["specializations"][0]["traits"]==J::array({0,0,0,999}));
+        assert(raw["specializations"][0]["extension"]==true&&raw["specializations"][3]==original["specializations"][3]&&raw["weapons"]==original["weapons"]);
+        assert(SetJsonSpecialization(raw,2,91,elite));
+    }
+    {
         using namespace AlterEgo;
         std::optional<RevenantActivePaletteEvidence> evidence=RevenantActivePaletteEvidence{};
         (*evidence)[0]={123,0,7,2,42};
