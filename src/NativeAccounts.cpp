@@ -1561,13 +1561,10 @@ std::vector<Account> SelectedAccounts(const View& v,const std::string& account){
 }
 void ItemMenu(uint32_t id,const std::string& name,const std::string& chat,const std::map<std::pair<std::string,std::string>,int64_t>& targets={},bool currency=false){
     if(!ImGui::BeginPopupContextItem("##inventory_item_actions"))return;
-    ImGui::TextDisabled("%s",name.c_str());ImGui::Separator();
+    UI::MenuSectionHeading(name.c_str());ImGui::Separator();
     CopyNameMenuItem(name);
     if(!currency){if(!chat.empty())CopyNativeLinkMenuItem(chat,"Copy Item Chat Link");else CopyEntityChatLink(AlterEgo::LINK_ITEM,id,"Copy Item Chat Link");}
-    if(ImGui::MenuItem("Open Wiki Page")){
-        auto url="https://wiki.guildwars2.com/wiki/Special:Search/"+Encode(name);
-        ShellExecuteA(nullptr,"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
-    }
+    ReferenceWikiSearchAction(name);
     if(FastLoadActionsEnabled()&&!targets.empty()){
         ImGui::Separator();
         if(targets.size()==1){
@@ -2186,6 +2183,8 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                 const auto heading=UI::MenuObjectHeading("Item",name);
                 UI::MenuSection itemSection("item",slot.character.empty()?nullptr:heading.c_str(),!slot.character.empty());
                 CopyNameMenuItem(name);
+                if(!row.chat.empty())CopyNativeLinkMenuItem(row.chat);
+                else CopyEntityChatLink(AlterEgo::LINK_ITEM,group.id);
             }
             ImGui::EndPopup();
         }

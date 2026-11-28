@@ -2917,55 +2917,93 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
     return out;
 }
 
-// Render a single equipment slot with icon and tooltip
-// Exact cached names only: never copy an ID or trigger metadata retrieval
-// merely because the user opens a menu. Reused by all equipment editors.
-static void CopyCachedItemNamesMenu(const std::vector<uint32_t>& ids,const char* label){
-    std::vector<std::string> names;
-    for(auto id:ids){
-        const auto info=id?AlterEgo::GW2API::GetItemInfo(id):nullptr;
-        if(info&&!info->name.empty()&&std::find(names.begin(),names.end(),info->name)==names.end())
-            names.push_back(info->name);
-    }
-    if(!names.empty()&&ImGui::BeginMenu(label)){
-        for(const auto& name:names)CopyNameMenuItem(name,name.c_str());
-        ImGui::EndMenu();
-    }
+// Cached names and exact native link evidence, shared by live gear, saved
+// projections and standalone component views/editors. No menu-open fetch.
+using MenuEntity=AlterEgo::EntityMenu::Entity;
+static MenuEntity ItemMenuEntity(const char* role,uint32_t id,const std::string& stored={}){
+    const auto info=id?AlterEgo::GW2API::GetItemInfo(id):nullptr;
+    return {role,info&&!info->name.empty()?info->name:stored,
+        AlterEgo::ChatLink::EncodeEntity(AlterEgo::LINK_ITEM,id)};
 }
-static void CopyCachedItemLinksMenu(const std::vector<uint32_t>& ids,const char* label){
-    std::set<uint32_t> unique;
-    for(auto id:ids)if(ChatLinkIdValid(id))unique.insert(id);
-    if(!unique.empty()&&AlterEgo::UI::BeginActionMenu(label,AlterEgo::UI::MenuIcon::Copy)){
-        for(auto id:unique){
-            const auto info=AlterEgo::GW2API::GetItemInfo(id);
-            const auto name=info&&!info->name.empty()?info->name:"#"+std::to_string(id);
-            ImGui::PushID(static_cast<int>(id));
-            CopyEntityChatLink(AlterEgo::LINK_ITEM,id,name.c_str());
+static void RenderMenuEntityCopy(const MenuEntity& entity){
+    CopyNameMenuItem(entity.name);
+    CopyNativeLinkMenuItem(entity.link);
+}
+static void AddMenuUpgrade(std::vector<MenuEntity>& rows,const char* role,uint32_t id,const std::string& stored={}){
+    AlterEgo::EntityMenu::AppendUnique(rows,ItemMenuEntity(role,id,stored));
+}
+// Optional specialized item actions stay inside the item section. Only
+// present actual nonempty sections; duplicate native links share one submenu.
+static bool RenderGearEntityMenu(const MenuEntity& item,const MenuEntity& skin,
+    const std::vector<MenuEntity>& upgrades,const std::string& apiLink={},
+    const std::function<void()>& itemActions={},bool configuration=false){
+    using namespace AlterEgo::UI;
+    const bool hasItem=item.Visible()||!apiLink.empty()||bool(itemActions);
+    const bool hasSkin=skin.Visible(),hasUpgrades=!upgrades.empty();
+    const bool grouped=static_cast<int>(hasItem)+static_cast<int>(hasSkin)+static_cast<int>(hasUpgrades)+(configuration?1:0)>1;
+    bool rendered=false;
+    if(hasItem){
+        const auto heading=MenuObjectHeading(item.role.c_str(),item.name);
+        MenuSection section("item",grouped?heading.c_str():nullptr);
+        RenderMenuEntityCopy(item);
+        // API-provided link is preserved verbatim; it need not equal the
+        // generated equipped-instance link with skin and upgrades.
+        CopyNativeLinkMenuItem(apiLink,"Copy API Chat Link");
+        if(itemActions)itemActions();
+        rendered=true;
+    }
+    if(hasSkin){
+        const auto heading=MenuObjectHeading("Skin",skin.name);
+        MenuSection section("skin",grouped?heading.c_str():nullptr,rendered);
+        RenderMenuEntityCopy(skin);rendered=true;
+    }
+    if(hasUpgrades){
+        MenuSection section("upgrades","Installed upgrades",rendered);
+        for(size_t i=0;i<upgrades.size();++i){
+            const auto& entity=upgrades[i];
+            ImGui::PushID(static_cast<int>(i));
+            const auto label=entity.Label()+"###installed_entity";
+            if(BeginActionMenu(label.c_str(),MenuIcon::Copy)){
+                RenderMenuEntityCopy(entity);ImGui::EndMenu();
+            }
             ImGui::PopID();
         }
-        ImGui::EndMenu();
+        rendered=true;
     }
+    return rendered;
+}
+static bool RenderSavedGearEntityMenu(const AlterEgo::BuildGearSlot* gear,
+    bool relic,uint32_t relicId,const std::string& relicName,bool configuration=false){
+    if(relic)return RenderGearEntityMenu(ItemMenuEntity("Relic",relicId,relicName),{}, {},{}, {},configuration);
+    if(!gear)return false;
+    std::vector<MenuEntity> upgrades;
+    AddMenuUpgrade(upgrades,"Rune",gear->rune_id,gear->rune);
+    AddMenuUpgrade(upgrades,"Sigil",gear->sigil_id,gear->sigil);
+    AddMenuUpgrade(upgrades,"Second sigil",gear->sigil2_id,gear->sigil2);
+    for(auto id:gear->infusion_ids)AddMenuUpgrade(upgrades,"Infusion",id);
+    return RenderGearEntityMenu(ItemMenuEntity("Item",gear->item_id),{},upgrades,{}, {},configuration);
 }
 static void RenderEquipmentContextActions(const AlterEgo::Character& ch,const AlterEgo::EquipmentItem* eq){
     if(!eq||!eq->id)return;
+    using namespace AlterEgo::UI;
     const auto item_info=AlterEgo::GW2API::GetItemInfo(eq->id);
     const auto skin_info=eq->skin?AlterEgo::GW2API::GetSkinInfo(eq->skin):nullptr;
-    if(item_info)CopyNameMenuItem(item_info->name);
-    CopyEntityChatLink(AlterEgo::LINK_ITEM,eq->id,"Copy Item Chat Link",eq->skin,eq->upgrades.size()>0?eq->upgrades[0]:0,eq->upgrades.size()>1?eq->upgrades[1]:0);
-    if(item_info&&!item_info->chat_link.empty())CopyNativeLinkMenuItem(item_info->chat_link,"Copy API Chat Link");
-    if(skin_info)CopyNameMenuItem(skin_info->name,"Copy Skin Name");
-    CopyEntityChatLink(AlterEgo::LINK_SKIN,eq->skin,"Copy Skin Chat Link");
-    CopyCachedItemNamesMenu(eq->upgrades,"Copy Upgrade Name");
-    CopyCachedItemLinksMenu(eq->upgrades,"Copy Upgrade Chat Link");
-    CopyCachedItemNamesMenu(eq->infusions,"Copy Infusion Name");
-    CopyCachedItemLinksMenu(eq->infusions,"Copy Infusion Chat Link");
-    ImGui::Separator();
-    if(ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(eq->id);
-    const bool verifiedOwner=!ch.account_name.empty()&&AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name)==ch.account_name;
-    if(ImGui::BeginMenu("Item Locations",verifiedOwner)){
-        AlterEgo::NativeAccounts::RenderItemAvailability(eq->id,ch.account_name,ch.name);
-        ImGui::EndMenu();
-    }
+    MenuEntity item{"Item",item_info?item_info->name:std::string{},
+        AlterEgo::ChatLink::EncodeEntity(AlterEgo::LINK_ITEM,eq->id,eq->skin,
+            eq->upgrades.size()>0?eq->upgrades[0]:0,eq->upgrades.size()>1?eq->upgrades[1]:0)};
+    MenuEntity skin{"Skin",skin_info?skin_info->name:std::string{},
+        AlterEgo::ChatLink::EncodeEntity(AlterEgo::LINK_SKIN,eq->skin)};
+    std::vector<MenuEntity> upgrades;
+    for(auto id:eq->upgrades)AddMenuUpgrade(upgrades,"Upgrade",id);
+    for(auto id:eq->infusions)AddMenuUpgrade(upgrades,"Infusion",id);
+    RenderGearEntityMenu(item,skin,upgrades,item_info?item_info->chat_link:std::string{},[&]{
+        if(MenuAction("Find in Inventory",MenuIcon::Search))OpenInventoryItem(eq->id);
+        const bool verifiedOwner=!ch.account_name.empty()&&AlterEgo::NativeAccounts::VerifiedAccountForCharacter(ch.name)==ch.account_name;
+        if(BeginActionMenu("Item Locations",MenuIcon::Open,verifiedOwner,"Character ownership is not verified.")){
+            AlterEgo::NativeAccounts::RenderItemAvailability(eq->id,ch.account_name,ch.name);
+            ImGui::EndMenu();
+        }
+    });
 }
 // Shared cached entity detail sections. Context-specific equipment evidence stays with its owner.
 static void RenderSpecializationTooltip(const std::string& name,ImVec4 color,const std::string& fallback,bool editable){
@@ -3760,6 +3798,8 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Fashion menu: share the right-clicked tab's look as a wardrobe template chat link.
     if (ImGui::BeginPopup("##fashion_menu")) {
         int fTab = (g_FashionTab > 0) ? g_FashionTab : tab;
+        {
+        AlterEgo::UI::MenuSection section("equipment","Equipment");
         if (AlterEgo::UI::MenuAction("Save to Library...",AlterEgo::UI::MenuIcon::Save,!ch.build_tabs.empty()||!ch.equipment.empty())) {
             int idx = 0;
             for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
@@ -3769,7 +3809,10 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         }
         if(AlterEgo::UI::MenuAction("Save Equipment Set...",AlterEgo::UI::MenuIcon::Save,!ch.equipment.empty()))
             OpenSaveLiveBuildDialog(ch,AlterEgo::BuildTemplate{},fTab,kSaveEntireEquipmentSet);
-        if (ImGui::Selectable("Copy Wardrobe Template chat link")) {
+        }
+        {
+        AlterEgo::UI::MenuSection section("fashion","Fashion",true);
+        if (AlterEgo::UI::MenuAction("Copy Wardrobe Template chat link",AlterEgo::UI::MenuIcon::Link)) {
             std::string link = BuildWardrobeLink(ch, fTab);
             if (!link.empty()) {
                 CopyToClipboard(link);
@@ -3780,8 +3823,9 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
         }
         // Preview opens Pie UI's native Wardrobe Template window for this look.
         // Only offered when Pie UI is loaded (it performs the native action).
-        if (g_PieUIPresent.load() && ImGui::Selectable("Preview in Pie UI")) {
+        if (g_PieUIPresent.load() && AlterEgo::UI::MenuAction("Preview in Pie UI",AlterEgo::UI::MenuIcon::Preview)) {
             PieUI_PreviewChatLink(BuildWardrobeLink(ch, fTab));
+        }
         }
         ImGui::EndPopup();
     }
@@ -3848,7 +3892,7 @@ static void DrawDottedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, floa
 
 // Explicit context actions use the existing verified-name Wiki search URL;
 // opening a browser is user-initiated and never fetches addon metadata.
-static void ReferenceWikiSearchAction(const std::string& name){
+void ReferenceWikiSearchAction(const std::string& name){
     using namespace AlterEgo;
     if(!name.empty()&&UI::MenuAction("Search Wiki",UI::MenuIcon::Open)){
         const auto url=UI::CatalogWikiSearchUrl(name);
@@ -4523,12 +4567,13 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
             AlterEgo::GW2API::FetchProfessionPaletteAsync(mbt.profession);
 
         const auto link=hasPalette?EncodeBuildTabChatLink(mbt):std::string{};
-        if (AlterEgo::UI::MenuAction("Copy Build Chat Link",AlterEgo::UI::MenuIcon::Copy,!link.empty())) {
+        CopyNameMenuItem(mbt.name);
+        if (AlterEgo::UI::MenuAction("Copy Build Chat Link",AlterEgo::UI::MenuIcon::Link,!link.empty())) {
             CopyToClipboard(link);
             if (APIDefs) APIDefs->GUI_SendAlert("Build link copied!");
         }
         if(link.empty())ImGui::TextDisabled("%s",hasPalette?"Build link unavailable for retrieved data.":"Build-link palette loading.");
-        if (ImGui::Selectable("Save to Library..."))
+        if (AlterEgo::UI::MenuAction("Save to Library...",AlterEgo::UI::MenuIcon::Save))
             OpenSaveLiveBuildDialog(ch, mbt);
         ImGui::EndPopup();
     }
@@ -8011,28 +8056,15 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
     if (!ImGui::BeginPopupContextItem("##gear_edit_context")) return;
     const bool relic = slot == "Relic";
     const auto saved=b.gear.find(slot);
-    if(relic)CopyEntityMenu(b.relic_name,AlterEgo::LINK_ITEM,b.relic_id);
-    else if(saved!=b.gear.end()){
-        const auto& gear=saved->second;
-        const auto actual=gear.item_id?AlterEgo::GW2API::GetItemInfo(gear.item_id):nullptr;
-        const auto name=actual&&!actual->name.empty()?actual->name:gear.stat_name.empty()?std::string{}:gear.stat_name+" "+GearSlotDisplayName(slot);
-        CopyEntityMenu(name,AlterEgo::LINK_ITEM,gear.item_id);
-        CopyNameMenuItem(gear.rune,"Copy Rune Name");
-        CopyEntityChatLink(AlterEgo::LINK_ITEM,gear.rune_id,"Copy Rune Chat Link");
-        CopyNameMenuItem(gear.sigil,"Copy Sigil Name");
-        CopyEntityChatLink(AlterEgo::LINK_ITEM,gear.sigil_id,"Copy Sigil Chat Link");
-        CopyNameMenuItem(gear.sigil2,"Copy Second Sigil Name");
-        CopyEntityChatLink(AlterEgo::LINK_ITEM,gear.sigil2_id,"Copy Second Sigil Chat Link");
-        CopyCachedItemNamesMenu(gear.infusion_ids,"Copy Infusion Name");
-        CopyCachedItemLinksMenu(gear.infusion_ids,"Copy Infusion Chat Link");
-    }
+    const bool entities=RenderSavedGearEntityMenu(saved!=b.gear.end()?&saved->second:nullptr,
+        relic,b.relic_id,b.relic_name,true);
+    {
+    AlterEgo::UI::MenuSection config("configuration",entities?"Configuration":nullptr,entities);
     auto capture = [&](GearCopyField field) { return CaptureGearClipboard(b,slot,field); };
-    ImGui::Separator();
     if (AlterEgo::UI::MenuAction("Edit",AlterEgo::UI::MenuIcon::Edit)) {
         auto c = capture(GearCopyField::All); c.data.slot = slot;
         OpenGearDialog(b.id,slot,c.data);
     }
-    ImGui::Separator();
     if (AlterEgo::UI::BeginActionMenu("Copy",AlterEgo::UI::MenuIcon::Copy)) {
         if (ImGui::MenuItem(relic ? "Relic" : "Configuration")) g_GearClipboard = capture(relic ? GearCopyField::Relic : GearCopyField::All);
         if (!relic) {
@@ -8060,7 +8092,6 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
             ImGui::EndMenu();
         }
     }
-    ImGui::Separator();
     if (AlterEgo::UI::BeginActionMenu("Clear",AlterEgo::UI::MenuIcon::Delete)) {
         if (ImGui::MenuItem(relic ? "Relic" : "Entire slot")) clearAfter = true;
         if (!relic) {
@@ -8070,6 +8101,7 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
         }
         ImGui::EndMenu();
     }
+    } // configuration ID scope
     ImGui::EndPopup();
 }
 
@@ -9022,18 +9054,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         line1Col = IM_COL32(128, 128, 128, 255);
     }
     auto savedGearActions=[&]{
-        const auto actual=gearSlot&&gearSlot->item_id?AlterEgo::GW2API::GetItemInfo(gearSlot->item_id):nullptr;
-        CopyEntityMenu(actual&&!actual->name.empty()?actual->name:std::string(line1),AlterEgo::LINK_ITEM,isRelicSlot?build.relic_id:gearSlot?gearSlot->item_id:0);
-        if(gearSlot){
-            CopyNameMenuItem(gearSlot->rune,"Copy Rune Name");
-            CopyEntityChatLink(AlterEgo::LINK_ITEM,gearSlot->rune_id,"Copy Rune Chat Link");
-            CopyNameMenuItem(gearSlot->sigil,"Copy Sigil Name");
-            CopyEntityChatLink(AlterEgo::LINK_ITEM,gearSlot->sigil_id,"Copy Sigil Chat Link");
-            CopyNameMenuItem(gearSlot->sigil2,"Copy Second Sigil Name");
-            CopyEntityChatLink(AlterEgo::LINK_ITEM,gearSlot->sigil2_id,"Copy Second Sigil Chat Link");
-            CopyCachedItemNamesMenu(gearSlot->infusion_ids,"Copy Infusion Name");
-        CopyCachedItemLinksMenu(gearSlot->infusion_ids,"Copy Infusion Chat Link");
-        }
+        RenderSavedGearEntityMenu(gearSlot,isRelicSlot,build.relic_id,build.relic_name);
     };
     if(!editable&&!disabled&&hasData)AlterEgo::UI::EntityContext("##saved_gear_name",savedGearActions);
     text.Line(line1,line1Col);
@@ -10737,6 +10758,10 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
 // namespace so this call resolves to that implementation at link time.
 namespace {
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id);
+static void RenderComponentOpenAction(const std::string& kind,const std::string& id){
+    if(AlterEgo::UI::MenuAction("Open in Components",AlterEgo::UI::MenuIcon::Open))
+        ComponentUIOpenLibrary(kind,id);
+}
 }
 
 // Selection is character-first: empty means follow the active MumbleLink
@@ -11061,8 +11086,7 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
         if (!section.sourceId.empty() &&
             ImGui::BeginPopupContextItem("##component_actions")) {
             CopyNameMenuItem(section.sourceName);
-            if (ImGui::MenuItem("Open saved component"))
-                ComponentUIOpenLibrary(section.kind, section.sourceId);
+            RenderComponentOpenAction(section.kind,section.sourceId);
             ImGui::EndPopup();
         }
         if (expanded) {
@@ -11314,16 +11338,20 @@ static void SavedLoadoutSelectorActions(const AlterEgo::SavedBuild& saved,const 
 }
 static void RenderCharacterLoadoutContext(const AlterEgo::Character& ch,const AlterEgo::SavedBuild* saved,bool preferenceActions){
     using namespace AlterEgo::UI;
-    if(saved)SavedLoadoutSelectorActions(*saved,&ch);
+    if(saved){
+        const auto heading=MenuObjectHeading("Loadout",saved->name);
+        MenuSection section("loadout",preferenceActions?heading.c_str():nullptr);
+        SavedLoadoutSelectorActions(*saved,&ch,!preferenceActions);
+    }
     if(preferenceActions){
-        if(saved)ImGui::Separator();
+        const auto heading=MenuObjectHeading("Assignment",ch.name);
+        MenuSection section("assignment",saved?heading.c_str():nullptr,saved!=nullptr);
         using namespace AlterEgo::CharacterLoadout;
         if(MenuAction("Reset to Automatic",MenuIcon::Regenerate))SetExpectedLoadout(ch,{});
         if(MenuAction("None",MenuIcon::Detach))SetExpectedLoadout(ch,{Mode::None,{}});
         if(const auto address=CharacterAddressFor(ch)){
             const auto pending=AlterEgo::NativeAccounts::RecoverableLoadoutPreferences(*address);
             if(!pending.empty()){
-                ImGui::Separator();
                 if(BeginActionMenu("Recover Previous Assignment",MenuIcon::Regenerate)){
                     int index=0;
                     for(const auto& record:pending){
@@ -11354,11 +11382,11 @@ static const AlterEgo::SavedBuild* CharacterContextLoadout(const AlterEgo::Chara
 static void CharacterSelectorActions(const std::string& name,const std::string& account){
     using namespace AlterEgo;
     using namespace AlterEgo::UI;
-    CopyNameMenuItem(name,"Copy Name",true);
-    if(account.empty())return;
+    if(account.empty()){RenderCharacterIdentityMenuActions(name,account,false,"Copy Name",false);return;}
     const auto roster=GW2API::GetCharacters();
     const auto target=std::find_if(roster->begin(),roster->end(),[&](const auto& ch){return ch.name==name&&ch.account_name==account;});
-    if(target==roster->end())return;
+    if(target==roster->end()){RenderCharacterIdentityMenuActions(name,account,false,"Copy Name",false);return;}
+    RenderCharacterIdentityMenuActions(name,account,true,"Copy Name",!LibraryDraftOpen()&&!g_SaveLibDialogOpen);
     const bool inScope=g_SelectedAccountFilter.empty()||g_SelectedAccountFilter==account;
     const bool canNavigate=!LibraryDraftOpen()&&!g_SaveLibDialogOpen&&inScope;
     ImGui::Separator();
@@ -11372,7 +11400,6 @@ static void CharacterSelectorActions(const std::string& name,const std::string& 
         MarkNavigation();g_LibCompareSelection=SelectCharacterIdentity(*target);g_LibComparePreviousSelection=g_LibCompareSelection;
         g_LibCompareSavedManual=false;g_LibCompareBuildId.clear();g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;g_SwitchToCompare=true;
     }
-    if(FastLoadActionsEnabled()&&!LibraryDraftOpen()&&!g_SaveLibDialogOpen){ImGui::Separator();RenderCharacterLoadMenu("Load Character",name,account);}
 }
 static void RenderCharacterLoadoutSelector(const AlterEgo::Character& ch){
     using namespace AlterEgo::CharacterLoadout;
@@ -13302,32 +13329,40 @@ static void RevealSkinInBrowser(uint32_t id) {
 // All Skinventory surfaces use this same menu, scoped to the actual row/skin.
 static void RenderSkinContextMenu(const Skinventory::SkinInfo& skin,uint32_t stockItem=0) {
     if (!ImGui::BeginPopupContextItem("##skin_actions")) return;
-    ImGui::TextDisabled("%s",skin.name.c_str());
-    ImGui::Separator();
-    CopyNameMenuItem(skin.name);
-    CopyEntityChatLink(AlterEgo::LINK_SKIN,skin.id,"Copy Skin Chat Link");
-    // Pie UI documents native skin-link preview through EV_PIEUI_OPEN_CHATLINK.
-    if(g_PieUIPresent.load() && ImGui::MenuItem("Preview in Game"))
-        PieUI_PreviewChatLink(AlterEgo::ChatLink::EncodeSkin(skin.id));
+    using namespace AlterEgo::UI;
     const auto price=Skinventory::Commerce::GetPrice(skin.id);
-    if(price && price->tradeable && price->item_id) {
-        const auto name=Skinventory::Commerce::GetItemName(price->item_id);
-        if(!name.empty()) {
-            CopyNameMenuItem(name,"Copy Trading Post Item Name");
-            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",name.c_str());
-        }
-        CopyEntityChatLink(AlterEgo::LINK_ITEM,price->item_id,"Copy Item Chat Link");
-        if(!stockItem&&ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(price->item_id);
-    }
-    ImGui::Separator();
-
-    if(stockItem&&ImGui::MenuItem("Find in Inventory"))OpenInventoryItem(stockItem);
+    const uint32_t priced=price&&price->tradeable?price->item_id:0;
+    const bool separateStock=stockItem&&stockItem!=priced;
     const auto wiki=Skinventory::WikiImage::GetWikiData(skin.id);
-    if(!wiki.vendor_waypoint.empty() && ImGui::MenuItem("Copy Vendor Waypoint")) CopyToClipboard(wiki.vendor_waypoint);
-    if(ImGui::MenuItem("Open Wiki Page")) {
-        std::string url="https://wiki.guildwars2.com/wiki/"+skin.name;
-        std::replace(url.begin(),url.end(),' ','_');
-        ShellExecuteA(NULL,"open",url.c_str(),NULL,NULL,SW_SHOWNORMAL);
+    const bool vendor=!wiki.vendor_waypoint.empty();
+    const bool grouped=priced||separateStock||vendor;
+    {
+        const auto heading=MenuObjectHeading("Skin",skin.name);
+        MenuSection section("skin",grouped?heading.c_str():nullptr);
+        CopyNameMenuItem(skin.name);
+        CopyEntityChatLink(AlterEgo::LINK_SKIN,skin.id);
+        if(g_PieUIPresent.load()&&MenuAction("Preview in Game",MenuIcon::Preview))
+            PieUI_PreviewChatLink(AlterEgo::ChatLink::EncodeSkin(skin.id));
+        ReferenceWikiSearchAction(skin.name);
+    }
+    if(priced){
+        const auto name=Skinventory::Commerce::GetItemName(priced);
+        const auto heading=MenuObjectHeading("Trading Post Item",name);
+        MenuSection section("tradingpost",heading.c_str(),true);
+        CopyNameMenuItem(name);
+        CopyEntityChatLink(AlterEgo::LINK_ITEM,priced);
+        if(MenuAction("Find in Inventory",MenuIcon::Search))OpenInventoryItem(priced);
+    }
+    if(separateStock){
+        const auto item=ItemMenuEntity("Owned Item",stockItem);
+        const auto heading=MenuObjectHeading("Owned Item",item.name);
+        MenuSection section("owned",heading.c_str(),true);
+        RenderMenuEntityCopy(item);
+        if(MenuAction("Find in Inventory",MenuIcon::Search))OpenInventoryItem(stockItem);
+    }
+    if(vendor){
+        MenuSection section("vendor","Vendor",true);
+        CopyNativeLinkMenuItem(wiki.vendor_waypoint,"Copy Waypoint");
     }
     ImGui::EndPopup();
 }
@@ -13780,13 +13815,13 @@ static void RenderSkinDetailPanel() {
     }
     ImGui::EndGroup();
     if(ImGui::BeginPopupContextItem("##preview_actions")){
-        if(ImGui::MenuItem("Refresh Preview",nullptr,false,!WikiImage::IsLoading(g_SkinSelectedId)))
+        if(AlterEgo::UI::MenuAction("Refresh Preview",AlterEgo::UI::MenuIcon::Regenerate,!WikiImage::IsLoading(g_SkinSelectedId)))
             WikiImage::RequestImage(g_SkinSelectedId,skin.name,skin.weight_class,true);
         ImGui::Separator();
         const auto links=WikiImage::GetPreviewLinks(g_SkinSelectedId,skin.name);
-        if(ImGui::MenuItem("Copy Image URL",nullptr,false,!links.imageUrl.empty()))CopyToClipboard(links.imageUrl);
-        if(ImGui::MenuItem("Copy Wiki URL",nullptr,false,!links.wikiUrl.empty()))CopyToClipboard(links.wikiUrl);
-        if(ImGui::MenuItem("Copy Local File Path",nullptr,false,!links.localPath.empty()))CopyToClipboard(links.localPath);
+        if(AlterEgo::UI::MenuAction("Copy Image URL",AlterEgo::UI::MenuIcon::Link,!links.imageUrl.empty()))CopyToClipboard(links.imageUrl);
+        if(AlterEgo::UI::MenuAction("Copy Wiki URL",AlterEgo::UI::MenuIcon::Link,!links.wikiUrl.empty()))CopyToClipboard(links.wikiUrl);
+        if(AlterEgo::UI::MenuAction("Copy Local File Path",AlterEgo::UI::MenuIcon::Copy,!links.localPath.empty()))CopyToClipboard(links.localPath);
         ImGui::EndPopup();
     }
     if(ImGui::IsItemHovered())AlterEgo::UI::Hint("Right-click for preview refresh and copy actions.");
@@ -14624,11 +14659,7 @@ static void RenderAchProgressBar(float fraction, const ImVec4& color, float heig
 static void AchievementNameContextMenu(const std::string& name){
     if(ImGui::BeginPopupContextItem("##ach_name_actions")){
         CopyNameMenuItem(name);
-        if(ImGui::MenuItem("Open in Wiki")){
-            std::string url="https://wiki.guildwars2.com/wiki/"+name;
-            std::replace(url.begin(),url.end(),' ','_');
-            ShellExecuteA(NULL,"open",url.c_str(),NULL,NULL,SW_SHOWNORMAL);
-        }
+        ReferenceWikiSearchAction(name);
         ImGui::EndPopup();
     }
 }

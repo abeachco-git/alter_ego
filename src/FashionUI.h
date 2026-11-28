@@ -349,6 +349,12 @@ static void CopyFashionWardrobeLink(const AlterEgo::Fashion::Look& look) {
     if (APIDefs) APIDefs->GUI_SendAlert("Wardrobe link copied.");
 }
 
+static void RenderFashionClipboardActions(const AlterEgo::Fashion::Look& look){
+    CopyNameMenuItem(look.name);
+    if(!look.wardrobe_link.empty()&&AlterEgo::UI::MenuAction("Copy Wardrobe Link",AlterEgo::UI::MenuIcon::Link))
+        CopyFashionWardrobeLink(look);
+}
+
 static bool ReadFashionUsers(const std::string& id,std::map<std::string,std::string>& users){
     nlohmann::json snapshot;AlterEgo::Composable::Document doc;std::string error;
     if(!AlterEgo::GW2API::GetComposableLoadouts(snapshot)||!AlterEgo::Composable::FromJson(snapshot,doc,error))return false;
@@ -452,8 +458,7 @@ static void RenderFashionLibrary() {
             if(MenuAction("Edit",MenuIcon::Edit,ready,reason))RunFashionAction(FashionAction::Edit,look);
             if(MenuAction("Rename",MenuIcon::Rename,ready,reason))RunFashionAction(FashionAction::Rename,look);
             if(MenuAction("Duplicate",MenuIcon::Duplicate,ready,reason))RunFashionAction(FashionAction::Duplicate,look);
-            ImGui::Separator();CopyNameMenuItem(look.name,"Copy Name",true);
-            if(MenuAction("Copy Wardrobe Link",MenuIcon::Copy))RunFashionAction(FashionAction::Copy,look);
+            ImGui::Separator();RenderFashionClipboardActions(look);
             ImGui::Separator();
             if(MenuAction("Preview",MenuIcon::Preview,g_PieUIPresent.load(),"Requires the existing PieOrCake UI integration."))RunFashionAction(FashionAction::Preview,look);
             ImGui::Separator();

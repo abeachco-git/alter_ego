@@ -598,36 +598,23 @@ static bool ComponentGearApply(ComponentJson& part,const std::string& kind,const
 // stat, item, rune/sigil and relic metadata; all writes target only the draft.
 // Read-only presentation action, shared by the editor and component viewer.
 // Resolve exact stored names without mutating imported data or inventing IDs.
-static void ComponentStoredNameActions(const ComponentJson& item){
-    if(!item.is_object())return;
+static bool ComponentStoredNameActions(const ComponentJson& item,bool configuration){
+    if(!item.is_object())return false;
     const auto text=[&](const char* field){
         auto it=item.find(field);
         return it!=item.end()&&it->is_string()?it->get<std::string>():std::string{};
     };
-    const auto name=[&](const char* field,const char* idField){
-        auto id=item.find(idField);
-        if(id!=item.end()&&id->is_number_integer()){
-            const auto info=AlterEgo::GW2API::GetItemInfo(id->get<uint32_t>());
-            if(info&&!info->name.empty())return info->name;
-        }
-        return text(field);
-    };
-    const auto copyLink=[&](const char* field,const char* label){auto id=item.find(field);if(id!=item.end()&&id->is_number_integer()&&*id>0&&*id<=0xFFFFFFu)CopyEntityChatLink(AlterEgo::LINK_ITEM,id->get<uint32_t>(),label);};
-    CopyNameMenuItem(name("item_name","item_id"));
-    copyLink("item_id","Copy Item Chat Link");
-    CopyNameMenuItem(name("rune","rune_id"),"Copy Rune Name");
-    copyLink("rune_id","Copy Rune Chat Link");
-    CopyNameMenuItem(name("sigil","sigil_id"),"Copy Sigil Name");
-    copyLink("sigil_id","Copy Sigil Chat Link");
-    CopyNameMenuItem(name("sigil2","sigil2_id"),"Copy Second Sigil Name");
-    copyLink("sigil2_id","Copy Second Sigil Chat Link");
-    auto infusions=item.find("infusion_ids");
+    const auto id=[&](const char* field){return AlterEgo::TooltipCore::FieldId(item,field);};
+    std::vector<MenuEntity> upgrades;
+    AddMenuUpgrade(upgrades,"Rune",id("rune_id"),text("rune"));
+    AddMenuUpgrade(upgrades,"Sigil",id("sigil_id"),text("sigil"));
+    AddMenuUpgrade(upgrades,"Second sigil",id("sigil2_id"),text("sigil2"));
+    const auto infusions=item.find("infusion_ids");
     if(infusions!=item.end()&&infusions->is_array()){
-        std::vector<uint32_t> ids;
-        for(const auto& id:*infusions)if(id.is_number_integer())ids.push_back(id.get<uint32_t>());
-        CopyCachedItemNamesMenu(ids,"Copy Infusion Name");
-        CopyCachedItemLinksMenu(ids,"Copy Infusion Chat Link");
+        for(const auto& value:*infusions)if(value.is_number_integer()&&value>0&&value<=UINT32_MAX)
+            AddMenuUpgrade(upgrades,"Infusion",value.get<uint32_t>());
     }
+    return RenderGearEntityMenu(ItemMenuEntity("Item",id("item_id"),text("item_name")),{},upgrades,{}, {},configuration);
 }
 static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                                 const std::string& profession) {
@@ -681,8 +668,9 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
             g_ComponentStatSearch.clear();
         }
         if (ImGui::BeginPopupContextItem("##native_slot_context")) {
-            ComponentStoredNameActions(data["gear"].at(slot));
-            ImGui::Separator();
+            const bool entities=ComponentStoredNameActions(data["gear"].at(slot),true);
+            {
+            AlterEgo::UI::MenuSection config("configuration",entities?"Configuration":nullptr,entities);
             auto capture=[&](GearCopyField field){return ComponentGearCapture(data["gear"].at(slot),kind,slot,field);};
             if(AlterEgo::UI::BeginActionMenu("Copy",AlterEgo::UI::MenuIcon::Copy)){
                 if(ImGui::MenuItem("Exact slot")){
@@ -710,11 +698,11 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                 }
                 ImGui::EndMenu();
             }
-            ImGui::Separator();
             if (AlterEgo::UI::MenuAction("Clear Slot",AlterEgo::UI::MenuIcon::Delete)) {
                 g_ComponentGearSelectedSlot = slot;
                 g_ComponentGearRemovalPending = slot;
             }
+            } // configuration ID scope
             ImGui::EndPopup();
         }
         if (ImGui::IsItemHovered()) {

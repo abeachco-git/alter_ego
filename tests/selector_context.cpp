@@ -1,4 +1,5 @@
 #include "../src/UIControls.h"
+#include "../src/EntityMenuCore.h"
 #include "../src/FastLoadUIState.h"
 #include <cassert>
 int case_selector_context(int, char**) {
@@ -138,6 +139,19 @@ int case_selector_context(int, char**) {
         const float gap=grouped[i].Min.x-grouped[i-1].Max.x;
         assert(std::abs(gap-base-(i==2?TabGroupExtraGap:0.f))<1.f);
     }
+    // Entity grouping deduplicates exact links, not equal display names.
+    std::vector<AlterEgo::EntityMenu::Entity> entities;
+    using AlterEgo::EntityMenu::AppendUnique;
+    AppendUnique(entities,{"Rune","",""});
+    assert(entities.empty());
+    AppendUnique(entities,{"Rune","","link-a"});
+    AppendUnique(entities,{"Rune","Equal","link-a"});
+    AppendUnique(entities,{"Sigil","Equal","link-b"});
+    AppendUnique(entities,{"Infusion","Stored only",""});
+    AppendUnique(entities,{"Infusion","Stored only",""});
+    assert(entities.size()==3&&entities[0].name=="Equal"&&entities[1].link=="link-b");
+    assert(entities[2].link.empty()&&entities[2].Label()=="Stored only");
+    assert((AlterEgo::EntityMenu::Entity{"Unknown","","link-c"}.Label()=="Unknown"));
     // Native menu IDs are independent of visible name and action label.
     ImGui::NewFrame();
     ImGui::SetNextWindowSize(ImVec2(400,300));

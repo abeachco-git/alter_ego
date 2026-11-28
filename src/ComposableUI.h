@@ -238,7 +238,7 @@ static std::string ComponentUIShortDescription(const std::string& kind,
 // Human-readable inventory before the advanced JSON representation. This
 // remains deliberately lossless: it reads the same component payload, without
 // interpreting missing item names as empty slots.
-static void ComponentStoredNameActions(const ComponentJson& item);
+static bool ComponentStoredNameActions(const ComponentJson& item,bool configuration=false);
 static bool ComponentInfusionProjection(const ComponentJson& data,AlterEgo::SavedBuild& b);
 static void DemandComponentItemMetadata(const std::string& kind,const ComponentJson& data){
     const auto ids=AlterEgo::Composable::Presentation::ComponentItemIds(kind,data);
@@ -954,12 +954,12 @@ static void RenderFashionReferencePicker(ReferenceEditorDraft& e){
         if(AlterEgo::UI::SelectableOption("None",e.fashionId.empty()))e.fashionId.clear();
         for(const auto& look:g_FashionLibrary.looks){
             ImGui::PushID(look.id.c_str());
-            if(AlterEgo::UI::EntityOption((look.name+"##"+look.id).c_str(),look.id==e.fashionId,[&]{CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");}))e.fashionId=look.id;
+            if(AlterEgo::UI::EntityOption((look.name+"##"+look.id).c_str(),look.id==e.fashionId,[&]{RenderFashionClipboardActions(look);}))e.fashionId=look.id;
             ImGui::PopID();
         }
         ImGui::EndCombo();
     }else if(!e.fashionId.empty()){
-        ImGui::PushID(e.fashionId.c_str());AlterEgo::UI::EntityContext("##fashion_ref_copy",[&]{for(const auto& look:g_FashionLibrary.looks)if(look.id==e.fashionId){CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");break;}ImGui::Separator();if(AlterEgo::UI::MenuAction("None",AlterEgo::UI::MenuIcon::Detach))e.fashionId.clear();});ImGui::PopID();
+        ImGui::PushID(e.fashionId.c_str());AlterEgo::UI::EntityContext("##fashion_ref_copy",[&]{for(const auto& look:g_FashionLibrary.looks)if(look.id==e.fashionId){RenderFashionClipboardActions(look);break;}ImGui::Separator();if(AlterEgo::UI::MenuAction("None",AlterEgo::UI::MenuIcon::Detach))e.fashionId.clear();});ImGui::PopID();
     }
 }
 static void RenderEditableReferences(const ComponentJson& doc,const ComponentJson* owner,ReferenceEditorDraft& e){
@@ -1129,7 +1129,7 @@ static void RenderLoadoutComponentSelectors(const std::string& loadoutId) {
             if(ImGui::BeginPopupContextItem("##fashion_actions")){
                 if(actions&&AlterEgo::UI::MenuAction("Open in Fashion",AlterEgo::UI::MenuIcon::Open)){g_FashionSelectedId=look.id;g_FashionSearch[0]=0;NavigateToLibraryCollection(1);}
                 if(actions&&AlterEgo::UI::MenuAction("Edit Fashion",AlterEgo::UI::MenuIcon::Edit,!g_FashionDialog,"Save or cancel the current Fashion draft first."))RunFashionAction(FashionAction::Edit,look);
-                CopyNameMenuItem(look.name,"Copy Name",true);CopyNativeLinkMenuItem(look.wardrobe_link,"Copy Wardrobe Link");ImGui::EndPopup();
+                RenderFashionClipboardActions(look);ImGui::EndPopup();
             }
         }
         ImGui::PopID();ImGui::EndTable();
@@ -1307,7 +1307,7 @@ static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,co
     const auto id=item.value("id",std::string()),name=item.value("name",id);
     if(!reference&&mutableActions){ComponentCreationMenu(kind);ImGui::Separator();}
     if(mutableActions){
-        if(reference&&MenuAction("Open in Components",MenuIcon::Open))ComponentUIOpenLibrary(kind,id);
+        if(reference)RenderComponentOpenAction(kind,id);
         if(MenuAction(reference?"Edit Shared":"Edit",MenuIcon::Edit))RunComponentAction(ComponentAction::Edit,kind,item);
         if(MenuAction("Rename",MenuIcon::Rename))RunComponentAction(ComponentAction::Rename,kind,item);
         if(MenuAction("Duplicate",MenuIcon::Duplicate))RunComponentAction(ComponentAction::Duplicate,kind,item);

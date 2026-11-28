@@ -11,6 +11,7 @@
 #include "nexus/Nexus.h"
 #include "imgui.h"
 #include "UIControls.h"
+#include "EntityMenuCore.h"
 #include "ChatLink.h"
 #include "InventoryGroupCore.h"
 
@@ -32,6 +33,8 @@ extern AddonAPI_t* APIDefs;
 
 // Copy text through the Nexus-owned ImGui clipboard callbacks.
 void CopyToClipboard(const std::string& text);
+// Explicit verified-name search, shared across game entity menus.
+void ReferenceWikiSearchAction(const std::string& name);
 // Copy plain names without IDs, formatting or chat-link encoding.
 inline void CopyNameMenuItem(const std::string& name,const char* label="Copy Name",bool icon=true){
     if(!name.empty()&&(icon?AlterEgo::UI::MenuAction(label,AlterEgo::UI::MenuIcon::Copy):ImGui::MenuItem(label)))CopyToClipboard(name);
@@ -114,9 +117,9 @@ bool RenderCharacterLoadMenu(const char* label,const std::string& character,cons
 // Compact identity actions for character headers, rows and inventory holders.
 // The caller owns the surrounding menu and chooses whether a local divider is useful.
 inline void RenderCharacterIdentityMenuActions(const std::string& character,const std::string& account,
-    bool separateLoad=false,const char* copyLabel="Copy Name"){
+    bool separateLoad=false,const char* copyLabel="Copy Name",bool allowLoad=true){
     CopyNameMenuItem(character,copyLabel);
-    if(FastLoadActionsEnabled()){
+    if(allowLoad&&FastLoadActionsEnabled()){
         if(separateLoad&&!character.empty())ImGui::Separator();
         RenderCharacterLoadMenu("Load Character",character,account);
     }

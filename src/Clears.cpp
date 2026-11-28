@@ -2221,7 +2221,7 @@ static void RenderVaultAssistance(AlterEgo::VaultAssist::Options options, float 
     if (hasLink) {
         ImGui::SetCursorScreenPos(ImVec2(p.x+width-actionW*2,p.y));
         if (ImGui::InvisibleButton("##assist_copy",ImVec2(actionW,lineH))) {
-            ImGui::SetClipboardText(first.link.c_str());
+            CopyToClipboard(first.link);
             if (APIDefs) APIDefs->GUI_SendAlert("Location chat link copied.");
         }
         const ImVec2 q(p.x+width-actionW*1.5f,p.y+lineH*0.5f);
@@ -2247,7 +2247,7 @@ static void RenderVaultAssistance(AlterEgo::VaultAssist::Options options, float 
             const int time = NextSeconds(option,utc);
             if (!option.link.empty()) {
                 if (ImGui::Selectable(option.label.c_str())) {
-                    ImGui::SetClipboardText(option.link.c_str());
+                    CopyToClipboard(option.link);
                     if (APIDefs) APIDefs->GUI_SendAlert("Location chat link copied.");
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy %s",option.link.c_str());

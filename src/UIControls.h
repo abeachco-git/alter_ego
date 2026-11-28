@@ -241,7 +241,7 @@ public:
     MenuSection(const MenuSection&)=delete;
     MenuSection& operator=(const MenuSection&)=delete;
 };
-enum class MenuIcon { New, Paste, Edit, Rename, Duplicate, Copy, Share, Compare, Preview, Delete, Regenerate, Open, Detach, Link, Save };
+enum class MenuIcon { New, Paste, Edit, Rename, Duplicate, Copy, Share, Compare, Preview, Delete, Regenerate, Open, Detach, Link, Save, Search };
 inline std::string MenuIconLabel(const char* label){
     std::string gutter;
     const float width=ImGui::GetFontSize()*1.35f;
@@ -257,6 +257,7 @@ inline void DrawMenuIcon(ImDrawList* draw,ImVec2 pos,MenuIcon icon,ImU32 color,f
     auto rect=[&](float a,float b,float c,float d){draw->AddRect(p(a,b),p(c,d),color,s*.08f,0,thick);};
     auto circle=[&](float x,float y,float r){draw->AddCircle(p(x,y),s*r,color,12,thick);};
     switch(icon){
+    case MenuIcon::Search:circle(.42f,.42f,.29f);line(.63f,.63f,.91f,.91f);break;
     case MenuIcon::Save:rect(.12f,.08f,.88f,.92f);rect(.27f,.08f,.72f,.36f);rect(.29f,.56f,.71f,.92f);line(.62f,.14f,.62f,.29f);break;
     case MenuIcon::New:line(.12f,.5f,.88f,.5f);line(.5f,.12f,.5f,.88f);break;
     case MenuIcon::Paste:rect(.18f,.2f,.82f,.94f);rect(.35f,.04f,.65f,.27f);line(.34f,.48f,.66f,.48f);line(.34f,.68f,.66f,.68f);break;
