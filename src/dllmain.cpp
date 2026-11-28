@@ -4565,7 +4565,7 @@ static void RenderSpecializationGrid(const AlterEgo::SpecLine* lines,const std::
 
 
     for (int i = 0; i < 3; i++) {
-        const auto& spec = lines[i];
+        const auto spec = lines[i];
         ImGui::PushID(i);
         if (spec.spec_id == 0) {
             if(editable){
@@ -6744,7 +6744,17 @@ static bool IsWeaponTwoHanded(const std::string& profession, const std::string& 
 template<class OnChoose>
 static void RenderWeaponTypeChoices(const std::string& profession,const std::string& slot,
     const std::string& current,const std::string& filter,bool cards,OnChoose choose){
-    const auto weapons=AlterEgo::GW2API::GetProfessionWeapons(profession);
+    auto weapons=AlterEgo::GW2API::GetProfessionWeapons(profession);
+    if(profession.empty()){
+        // The map's value type is shared with the profession-qualified path;
+        // no profession, specialization or skill identity is invented.
+        using Map=std::remove_const_t<typename decltype(weapons)::element_type>;
+        auto physical=std::make_shared<Map>();
+        for(const auto& type:AlterEgo::EquipmentChoice::PhysicalWeaponTypes){
+            auto& wd=(*physical)[type.name];wd.mainhand=type.mainhand;wd.offhand=type.offhand;wd.two_handed=type.twoHanded;
+        }
+        weapons=physical;
+    }
     if(!weapons)return;
     const auto searchWords=AlterEgo::Search::Words(filter);
     for(const auto& [name,wd]:*weapons){
@@ -8153,6 +8163,14 @@ static void RenderGearEditContext(AlterEgo::SavedBuild& b,const std::string& slo
 }
 
 
+static bool RenderGearFieldCard(const char* id,ImVec2 pos,float width,float height,bool selected){
+    auto* draw=ImGui::GetWindowDrawList();
+    const ImVec2 end(pos.x+width,pos.y+height);
+    draw->AddRectFilled(pos,end,selected?IM_COL32(50,60,70,200):IM_COL32(35,35,40,150),3.f);
+    draw->AddRect(pos,end,selected?IM_COL32(100,160,220,255):IM_COL32(60,60,60,180),3.f);
+    ImGui::SetCursorScreenPos(pos);
+    return ImGui::InvisibleButton(id,ImVec2(width,height));
+}
 static void RenderGearCustomizeDialog() {
     if (!g_GearDialogOpen) return;
     if (!g_LibEditMode || g_GearDialogBuildId != g_EditDraft.id) {
@@ -8197,13 +8215,7 @@ static void RenderGearCustomizeDialog() {
             ImVec2 p = ImGui::GetCursorScreenPos();
             float w = ImGui::GetContentRegionAvail().x;
             float h = 30.0f;
-            ImU32 bg = (g_GearSelectorTab == 2) ? IM_COL32(50, 60, 70, 200) : IM_COL32(35, 35, 40, 150);
-            ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + w, p.y + h), bg, 3.0f);
-            ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + w, p.y + h),
-                (g_GearSelectorTab == 2) ? IM_COL32(100, 160, 220, 255) : IM_COL32(60, 60, 60, 180), 3.0f);
-
-            ImGui::SetCursorScreenPos(p);
-            if (ImGui::InvisibleButton("##weaponTypeArea", ImVec2(w, h))) {
+            if(RenderGearFieldCard("##weaponTypeArea",p,w,h,g_GearSelectorTab==2)){
                 g_GearSelectorTab = 2;
                 memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
             }
@@ -8224,13 +8236,7 @@ static void RenderGearCustomizeDialog() {
             ImVec2 p = ImGui::GetCursorScreenPos();
             float w = ImGui::GetContentRegionAvail().x;
             float h = 44.0f;
-            ImU32 bg = (g_GearSelectorTab == 0) ? IM_COL32(50, 60, 70, 200) : IM_COL32(35, 35, 40, 150);
-            ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + w, p.y + h), bg, 3.0f);
-            ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + w, p.y + h),
-                (g_GearSelectorTab == 0) ? IM_COL32(100, 160, 220, 255) : IM_COL32(60, 60, 60, 180), 3.0f);
-
-            ImGui::SetCursorScreenPos(p);
-            if (ImGui::InvisibleButton("##relicArea", ImVec2(w, h))) {
+            if(RenderGearFieldCard("##relicArea",p,w,h,g_GearSelectorTab==0)){
                 g_GearSelectorTab = 0;
                 memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
             }
@@ -8260,13 +8266,7 @@ static void RenderGearCustomizeDialog() {
             }
             float h = 6.0f + 16.0f + numAttrs * 13.0f;
             if (h < 30.0f) h = 30.0f;
-            ImU32 bg = (g_GearSelectorTab == 0) ? IM_COL32(50, 60, 70, 200) : IM_COL32(35, 35, 40, 150);
-            ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + w, p.y + h), bg, 3.0f);
-            ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + w, p.y + h),
-                (g_GearSelectorTab == 0) ? IM_COL32(100, 160, 220, 255) : IM_COL32(60, 60, 60, 180), 3.0f);
-
-            ImGui::SetCursorScreenPos(p);
-            if (ImGui::InvisibleButton("##statArea", ImVec2(w, h))) {
+            if(RenderGearFieldCard("##statArea",p,w,h,g_GearSelectorTab==0)){
                 g_GearSelectorTab = 0;
                 memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
             }
@@ -8316,15 +8316,9 @@ static void RenderGearCustomizeDialog() {
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 float w = ImGui::GetContentRegionAvail().x;
                 float h = 30.0f;
-                ImU32 bg = isActiveCard ? IM_COL32(50, 60, 70, 200) : IM_COL32(35, 35, 40, 150);
-                ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + w, p.y + h), bg, 3.0f);
-                ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + w, p.y + h),
-                    isActiveCard ? IM_COL32(100, 160, 220, 255) : IM_COL32(60, 60, 60, 180), 3.0f);
-
                 char btnId[32];
                 snprintf(btnId, sizeof(btnId), "##upgradeArea%d", sigilIdx);
-                ImGui::SetCursorScreenPos(p);
-                if (ImGui::InvisibleButton(btnId, ImVec2(w, h))) {
+                if(RenderGearFieldCard(btnId,p,w,h,isActiveCard)){
                     g_GearSelectorTab = 1;
                     g_GearEditingSigil2 = (sigilIdx == 1);
                     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
@@ -8994,7 +8988,8 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build,const char* slot,boo
     ImVec2 pos = ImGui::GetCursorScreenPos();
 
     // Try to render a real item icon
-    uint32_t iconItemId = component&&(component->icon||component->upgradeOnly)?component->icon:GetGearSlotIconItemId(build, slot);
+    uint32_t iconItemId = component&&(component->icon||component->upgradeOnly||
+        (build.profession.empty()&&IsArmorSlot(slot)))?component->icon:GetGearSlotIconItemId(build, slot);
     Texture_t* tex = nullptr;
     if (iconItemId != 0) {
         // The display icon's representative item is not the saved exact item.

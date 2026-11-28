@@ -28,6 +28,17 @@ inline bool WeaponTypeEligible(const std::string& slot,const std::string& type,
     if(!WeaponEnvironmentAllowed(slot,type))return false;
     return WeaponEligible(slot,mainhand,offhand,twoHanded);
 }
+// Physical weapon families are independent of profession eligibility.
+struct PhysicalWeaponType {const char* name;bool mainhand,offhand,twoHanded;};
+inline constexpr PhysicalWeaponType PhysicalWeaponTypes[]={
+    {"Axe",true,true,false},{"Dagger",true,true,false},{"Focus",false,true,false},
+    {"Greatsword",false,false,true},{"Hammer",false,false,true},{"Harpoon",false,false,true},
+    {"Longbow",false,false,true},{"Mace",true,true,false},{"Pistol",true,true,false},
+    {"Rifle",false,false,true},{"Scepter",true,false,false},{"Shield",false,true,false},
+    {"Shortbow",false,false,true},{"Spear",false,false,true},{"Speargun",false,false,true},
+    {"Staff",false,false,true},{"Sword",true,true,false},{"Torch",false,true,false},
+    {"Trident",false,false,true},{"Warhorn",false,true,false}
+};
 // A deliberate weapon type change invalidates the old exact physical item.
 // Aquatic weapons never remove a terrestrial offhand. A repeated selection
 // must not discard captured IDs, upgrades or other recorded fields.

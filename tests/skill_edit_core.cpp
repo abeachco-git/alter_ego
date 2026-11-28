@@ -192,6 +192,11 @@ int case_skill_edit_core(int,char**) {
         assert(raw["specializations"][0]["traits"]==J::array({0,0,0,999}));
         assert(raw["specializations"][0]["extension"]==true&&raw["specializations"][3]==original["specializations"][3]&&raw["weapons"]==original["weapons"]);
         assert(SetJsonSpecialization(raw,2,91,elite));
+        J sparse=J::object();assert(SetJsonSpecialization(sparse,2,90,elite));
+        assert(sparse["specializations"][2]["id"]==90);
+        assert(SetJsonSpecialization(sparse,0,10,elite));
+        assert(!SetJsonSpecialization(sparse,1,10,elite));
+        assert(sparse["specializations"][2]["id"]==90);
     }
     {
         using namespace AlterEgo;

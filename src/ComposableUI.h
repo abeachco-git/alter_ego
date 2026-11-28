@@ -381,7 +381,10 @@ static void RenderComponentGearCards(const std::string& kind,const ComponentJson
         }
         if(actions.upgradeOnly)actions.label=GearSlotDisplayName(slot);
         if(recorded&&!gear->at(slot).is_object())actions.label=std::string(GearSlotDisplayName(slot))+" (unresolved)";
-        if(kind=="relic")actions.icon=build.relic_id;
+        if(kind=="relic"){
+            actions.icon=build.relic_id;
+            if(build.relic_id||!build.relic_name.empty())actions.context=[&]{RenderSavedGearEntityMenu(nullptr,true,build.relic_id,build.relic_name);};
+        }
         RenderBuildGearSlot(build,slot.c_str(),false,&actions);
     },[](const char* title,int){RenderSectionHeader(title,AlterEgo::UI::SectionGold);},ComponentEquipmentSections(kind));
 }
@@ -436,8 +439,10 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
         else if(data.contains("inactive_rev_skills"))ImGui::TextDisabled("Unrecognized inactive utility order; retained");
     }
     if(ComponentEquipmentSections(kind)&&kind!="relic"&&
-       (kind!="infusions"||AlterEgo::Composable::InfusionPayloadMode(data)!=AlterEgo::InfusionMode::Totals))
+       (kind!="infusions"||AlterEgo::Composable::InfusionPayloadMode(data)!=AlterEgo::InfusionMode::Totals)){
         RenderComponentGearCards(kind,data,ComponentUIProfession(kind,data));
+        if(data.contains("gear")&&!data.at("gear").is_object())ImGui::TextDisabled("Unsupported recorded gear; retained.");
+    }
 }
 
 #include "ComposableNativeEditor.h"

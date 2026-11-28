@@ -461,7 +461,9 @@ template<class Line,class Json> std::array<Line,3> JsonSpecializationLines(const
 template<class Json,class IsElite> bool SetJsonSpecialization(Json& data,int slot,uint32_t next,IsElite elite){
     if(slot<0||slot>=3||!data.is_object()||(data.contains("specializations")&&!data.at("specializations").is_array()))return false;
     Json lines=data.value("specializations",Json::array());
-    auto before=ContextSpecializations(data);
+    std::array<uint32_t,3> before{};
+    for(size_t i=0;i<before.size()&&i<lines.size();++i)
+        if(lines[i].is_object()&&lines[i].contains("id"))before[i]=JsonDisplaySlot(lines[i].at("id")).id;
     auto after=PlanSpecializationSelection(before,slot,next,elite);
     if(before==after)return false;
     for(int i=0;i<3;++i)if(before[i]!=after[i]){

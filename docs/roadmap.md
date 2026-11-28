@@ -68,4 +68,4 @@ Parts 7–8 and other completed implementation acceptance, discretionary perform
 
 ## Part 15 — First-class graphical components (approved)
 
-- Verify category-scoped graphical equipment cards, shared specialization and Skills renderers and native ownership through the required DLL workflow and live checks. Remaining consolidation: replace residual field-specific standalone gear forms with canonical Gear Customize field panel adapters (preserving independent ownership), refine upgrade-only graphical pickers and inspect narrow layouts and unknown imported fields.
+- Verify category-scoped graphical equipment cards, shared specialization and Skills renderers and native ownership through the required DLL workflow and live checks. Remaining verification: inspect the shared current-field and catalog cards, unqualified physical weapon choices, category-only selectors, narrow layouts, unknown imported fields and independent ownership. Keep the native field popup and aggregate draft transaction distinct; review remaining advanced ID recovery and any in-game visual deficiencies.

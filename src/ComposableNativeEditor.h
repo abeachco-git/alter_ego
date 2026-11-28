@@ -246,6 +246,28 @@ static void ComponentNativeInfusionSlots(ComponentJson& part,const std::string& 
 // imported items remain editable via the exact-ID fallback fields.
 static std::string g_ComponentCatalogSearch;
 static std::string g_ComponentStatSearch;
+// Same current-field card as Gear Customize. The standalone popup owns
+// its catalog and retains native JSON-only mutation and clipboard actions.
+static bool BeginNativeGearField(const char* popup,const std::string& label,uint32_t icon=0){
+    const auto pos=ImGui::GetCursorScreenPos();
+    const float width=std::max(1.f,ImGui::GetContentRegionAvail().x);
+    const float iconSize=icon?24.f:0.f;
+    const float wrap=std::max(1.f,width-12.f-(iconSize?iconSize+6.f:0.f));
+    const float height=std::max(30.f,std::max(iconSize,ImGui::CalcTextSize(label.c_str(),nullptr,false,wrap).y)+8.f);
+    const bool selected=ImGui::IsPopupOpen(popup);
+    if(RenderGearFieldCard("##native_field",pos,width,height,selected))ImGui::OpenPopup(popup);
+    auto* draw=ImGui::GetWindowDrawList();
+    if(icon){
+        const auto info=AlterEgo::GW2API::GetItemInfo(icon);
+        auto* texture=info?AlterEgo::IconManager::GetOrRequestIcon(icon,info->icon_url):nullptr;
+        const ImVec2 at(pos.x+4.f,pos.y+(height-iconSize)*.5f);
+        if(texture&&texture->Resource)draw->AddImage(texture->Resource,at,ImVec2(at.x+iconSize,at.y+iconSize));
+        else draw->AddRectFilled(at,ImVec2(at.x+iconSize,at.y+iconSize),IM_COL32(55,55,65,220));
+    }
+    draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),ImVec2(pos.x+6.f+(iconSize?iconSize+6.f:0.f),pos.y+4.f),
+        IM_COL32(220,200,170,255),label.c_str(),nullptr,wrap);
+    return ImGui::BeginPopup(popup);
+}
 static void ComponentNativeCatalogChoice(ComponentJson& item,
                                           const char* idField,
                                           const char* nameField,
@@ -255,19 +277,18 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
     const auto storedId = item.find(idField);
     const uint32_t selectedId = storedId != item.end() && storedId->is_number_integer()
         ? storedId->get<uint32_t>() : 0;
-    const std::string shown = !selected.empty() ? selected :
-        (storedId != item.end() && storedId->is_number_integer() && *storedId != 0)
-            ? ("#" + storedId->dump() + " (not in catalog)") : "(choose item)";
-    if (AlterEgo::UI::BeginCombo("##catalog", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
+    const auto info=selectedId?AlterEgo::GW2API::GetItemInfo(selectedId):nullptr;
+    const std::string shown=info&&!info->name.empty()?info->name:!selected.empty()?selected:selectedId?"Item metadata pending":"Choose item";
+    if(BeginNativeGearField("##catalog",shown,selectedId)){
         AlterEgo::UI::SearchField("catalog", "Search items...", g_ComponentCatalogSearch);
         if (ImGui::Selectable("(none)")) {
             item.erase(idField);
-            item.erase(nameField);
+            item.erase(nameField);ImGui::CloseCurrentPopup();
         }
         const char* kind=std::strcmp(family,"runes")==0?"Rune":std::strcmp(family,"sigils")==0?"Sigil":"Relic";
-        RenderGearCatalogChoices(kind,g_ComponentCatalogSearch,selectedId,selected,false,
-            [&](uint32_t id,const std::string& name){item[idField]=id;item[nameField]=name;g_ComponentCatalogSearch.clear();});
-        ImGui::EndCombo();
+        RenderGearCatalogChoices(kind,g_ComponentCatalogSearch,selectedId,selected,true,
+            [&](uint32_t id,const std::string& name){if(id!=selectedId||!selectedId){item[idField]=id;item[nameField]=name;}g_ComponentCatalogSearch.clear();ImGui::CloseCurrentPopup();});
+        ImGui::EndPopup();
     }else if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
         using AlterEgo::UI::MenuAction;
         using AlterEgo::UI::MenuIcon;
@@ -311,16 +332,16 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
     const std::string storedName = item.value("stat_name", std::string());
     const std::string shown = !storedName.empty() ? storedName :
         info ? info->name : id ? "#" + std::to_string(id) : "(choose stats)";
-    if (AlterEgo::UI::BeginCombo("##stats", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
+    if(BeginNativeGearField("##stats",shown)){
         AlterEgo::UI::SearchField("stats", "Search stats...", g_ComponentStatSearch);
         if (ImGui::Selectable("(none)")) {
             item.erase("stat_id");
             item.erase("stat_name");
         }
-        RenderGearStatChoices(g_ComponentStatSearch.c_str(),id,false,[&](uint32_t next,const std::string& name){
-            item["stat_id"]=next;item["stat_name"]=name;g_ComponentStatSearch.clear();
+        RenderGearStatChoices(g_ComponentStatSearch.c_str(),id,true,[&](uint32_t next,const std::string& name){
+            if(next!=id||!id){item["stat_id"]=next;item["stat_name"]=name;}g_ComponentStatSearch.clear();ImGui::CloseCurrentPopup();
         });
-        ImGui::EndCombo();
+        ImGui::EndPopup();
     }else if(ImGui::BeginPopupContextItem("##native_stat_context")){
         using AlterEgo::UI::MenuAction;
         using AlterEgo::UI::MenuIcon;
@@ -350,13 +371,9 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
 static void ComponentNativeWeaponChoice(ComponentJson& item,ComponentJson& gear,
                                         const std::string& profession,
                                         const std::string& slot) {
-    if (profession.empty()) {
-        ImGui::TextDisabled("Assign to a Loadout for profession-filtered weapons.");
-        return;
-    }
-    AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
-    const auto weapons = AlterEgo::GW2API::GetProfessionWeapons(profession);
-    if (!weapons || weapons->empty()) {
+    if(!profession.empty())AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
+    const auto weapons=AlterEgo::GW2API::GetProfessionWeapons(profession);
+    if(!profession.empty()&&(!weapons||weapons->empty())){
         ImGui::TextDisabled("Weapon definitions not available.");
         if (RenderActionButton("Fetch weapon data##component"))
             AlterEgo::GW2API::FetchProfessionInfoAsync(profession,true);
@@ -366,15 +383,17 @@ static void ComponentNativeWeaponChoice(ComponentJson& item,ComponentJson& gear,
     auto apply=[&](const std::string& next,bool twoHanded){
         AlterEgo::GearEdit::ApplyComponentWeaponChange(gear,slot,next,twoHanded);
     };
-    if (AlterEgo::UI::BeginCombo("Weapon type##native_weapon",current.empty()?"(choose type)":WeaponDisplayName(current))) {
+    ImGui::TextUnformatted("Weapon type");
+    if(profession.empty())ImGui::TextDisabled("Profession eligibility not verified");
+    if(BeginNativeGearField("##native_weapon",current.empty()?"Choose weapon type":WeaponDisplayName(current))){
         static std::string filter;
         if(ImGui::IsWindowAppearing())filter.clear();
         AlterEgo::UI::SearchField("component_weapon_search","Search...",filter);
         if(ImGui::Selectable("(none)",current.empty())&&!current.empty())apply("",false);
-        RenderWeaponTypeChoices(profession,slot,current,filter,false,[&](const auto& name,const auto& wd){
-            apply(name,wd.two_handed);FetchChosenWeaponMetadata(wd);ImGui::CloseCurrentPopup();
+        RenderWeaponTypeChoices(profession,slot,current,filter,true,[&](const auto& name,const auto& wd){
+            apply(name,wd.two_handed);if(!profession.empty())FetchChosenWeaponMetadata(wd);ImGui::CloseCurrentPopup();
         });
-        ImGui::EndCombo();
+        ImGui::EndPopup();
     }else if(!current.empty())NameOptionContext(WeaponDisplayName(current));
 }
 
