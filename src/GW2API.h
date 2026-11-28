@@ -440,6 +440,11 @@ namespace AlterEgo {
         static std::shared_ptr<const SpecializationInfo> GetSpecInfo(uint32_t spec_id);
         static std::shared_ptr<const TraitInfo> GetTraitInfo(uint32_t trait_id);
         static std::shared_ptr<const SkillInfo> GetSkillInfo(uint32_t skill_id);
+        static std::optional<std::vector<std::string>> CachedSkillProfessions(uint32_t id) {
+            const auto skill=GetSkillInfo(id);
+            if(!skill)return std::nullopt;
+            return skill->professions;
+        }
         static std::shared_ptr<const DyeColor> GetDyeColor(int color_id);
         static std::shared_ptr<const ItemStatInfo> GetItemStatInfo(uint32_t stat_id);
         static std::unordered_map<uint32_t, std::shared_ptr<const ItemStatInfo>> GetAllItemStats();

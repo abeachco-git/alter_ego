@@ -77,7 +77,6 @@ static AlterEgo::Composable::NameOrigin g_ComponentEditorNameOrigin=AlterEgo::Co
     g_ComponentEditorInitialNameOrigin=AlterEgo::Composable::NameOrigin::Unknown;
 static ComponentJson g_ComponentNameRequestedDraft;
 static bool g_ComponentNameRequested=false;
-static std::string g_ComponentSkillProfessionHint; // UI-only skill picker filter
 static ComponentJson g_ComponentEditorDraft = ComponentJson::object();
 static std::optional<ComponentJson> g_ComponentInfusionSlotDraft,g_ComponentInfusionTotalsDraft;
 static std::string g_ComponentEditorError;
@@ -96,6 +95,7 @@ static AlterEgo::RecordSelection::RevisionTarget g_ComponentNameTarget;
 static std::string g_ComponentNameKind;
 static std::map<std::pair<std::string,std::string>,int> g_ComponentUsageIndex;
 static std::map<std::pair<std::string,std::string>,int> g_ComponentEffectiveLoadouts;
+static std::map<std::string,AlterEgo::Composable::SkillProfessionEvidence> g_ComponentSkillOwners;
 
 
 static const ComponentJson& ComponentUISnapshot() {
@@ -109,9 +109,14 @@ static const ComponentJson& ComponentUISnapshot() {
         else cached = ComponentJson::object();
         g_ComponentUsageIndex.clear();g_ComponentEffectiveLoadouts.clear();
         AlterEgo::Composable::Document graph;std::string error;
-        if(AlterEgo::Composable::FromJson(cached,graph,error))
+        g_ComponentSkillOwners.clear();
+        if(AlterEgo::Composable::FromJson(cached,graph,error)){
             for(const auto& l:graph.loadouts)for(const auto& [kind,id]:AlterEgo::Composable::EffectiveRefs(graph,l))
                 ++g_ComponentEffectiveLoadouts[{kind,id}];
+            const auto group=graph.components.find("skills");
+            if(group!=graph.components.end())for(const auto& part:group->second)
+                g_ComponentSkillOwners[part.id]=AlterEgo::Composable::SkillsOwnerEvidence(graph,part.id);
+        }
         if (cached.contains("loadouts")) for (const auto& l : cached.at("loadouts"))
             if (l.contains("refs") && l.at("refs").is_object())
                 for (auto ref=l.at("refs").begin(); ref!=l.at("refs").end(); ++ref)
@@ -153,7 +158,7 @@ static ComponentJson ComponentUIRevenantContext(const ComponentJson& doc,const C
         if(overrideData&&overrideKind==kind)payload=overrideData;
         else if(const auto* part=ComponentUIFind(doc,kind,refs.value(kind,std::string())))payload=&part->at("data");
         if(payload&&payload->is_object())for(auto field=payload->begin();field!=payload->end();++field)
-            raw[field.key()]=field.value();
+            if(std::string(kind)!="skills"||field.key()!="profession")raw[field.key()]=field.value();
     }
     return raw;
 }
@@ -194,6 +199,49 @@ static int ComponentUIUsage(const ComponentJson& doc, const std::string& kind,
 static int ComponentUIEffectiveLoadoutCount(const std::string& kind,const std::string& id) {
     const auto it=g_ComponentEffectiveLoadouts.find({kind,id});
     return it==g_ComponentEffectiveLoadouts.end()?0:it->second;
+}
+static std::string ComponentUIProfession(const std::string& kind,const ComponentJson& data,const std::string& id={}){
+    if(AlterEgo::Composable::IsCompanionKind(kind))return AlterEgo::Composable::CompanionProfession(kind);
+    if(kind=="base_build")return data.value("profession",std::string());
+    if(kind!="skills")return {};
+    const auto stored=AlterEgo::Composable::StoredSkillsProfession(data);
+    if(!stored.empty())return stored;
+    const auto it=g_ComponentSkillOwners.find(id);
+    return it==g_ComponentSkillOwners.end()?std::string{}:it->second.profession;
+}
+static std::string ComponentUIProfessionName(const std::string& kind,const ComponentJson& item) {
+    const auto name=item.value("name",item.value("id",std::string()));
+    if(kind!="skills")return name;
+    const auto profession=ComponentUIProfession(kind,item.at("data"),item.value("id",std::string()));
+    return "["+(profession.empty()?std::string("Unknown profession"):profession)+"] "+name;
+}
+// Native selectable owns keyboard, click and context-menu behavior. The
+// profession artwork and name use the existing shared entry renderer.
+static bool ComponentUISelectable(const std::string& kind,const ComponentJson& item,
+    const std::string& suffix,const std::string& stableId,bool selected,bool defaultFocus=false){
+    const auto profession=ComponentUIProfession(kind,item.at("data"),item.value("id",std::string()));
+    const auto visible=ComponentUIProfessionName(kind,item)+suffix;
+    const bool withIcon=kind=="skills"&&!profession.empty();
+    const auto label=withIcon?stableId:visible+stableId;
+    const bool clicked=ImGui::Selectable(label.c_str(),selected,0,ImVec2(0,withIcon?std::max(20.f,ImGui::GetTextLineHeight()):0.f));
+    if(withIcon)DrawProfessionCharacterEntry(ImGui::GetWindowDrawList(),ImGui::GetItemRectMin(),ImGui::GetItemRectMax(),profession,visible);
+    if(defaultFocus&&selected)ImGui::SetItemDefaultFocus();
+    return clicked;
+}
+static void RenderComponentProfessionLabel(const std::string& profession){
+    if(profession.empty()){ImGui::TextDisabled("Profession unknown");return;}
+    const auto icon=GetProfessionIconId(profession);
+    auto* texture=icon?AlterEgo::IconManager::GetIcon(icon):nullptr;
+    if(texture&&texture->Resource){const float size=ImGui::GetTextLineHeight();ImGui::Image(texture->Resource,ImVec2(size,size));ImGui::SameLine();}
+    RenderProfessionCharacterName(profession,profession);
+}
+static bool ComponentSkillsDraftReady(const ComponentJson& data){
+    const auto profession=AlterEgo::Composable::StoredSkillsProfession(data);
+    const auto owner=g_ComponentSkillOwners.find(g_ComponentEditorId);
+    if(g_ComponentEditorMode=="edit"&&owner!=g_ComponentSkillOwners.end()&&
+       (owner->second.conflict||owner->second.incomplete||
+        (!owner->second.profession.empty()&&owner->second.profession!=profession)))return false;
+    return !profession.empty()&&!AlterEgo::Composable::InferSkillsProfession(data,AlterEgo::GW2API::CachedSkillProfessions,profession).conflict;
 }
 static std::string ComponentUIShortDescription(const std::string& kind,
                                                 const ComponentJson& data) {
@@ -385,7 +433,6 @@ static bool ComponentUIStartEditor(const std::string& mode,
     g_ComponentEditorKind = kind;
     g_ComponentEditorId = id;
     g_ComponentEditorPrivateLoadoutId.clear();
-    g_ComponentSkillProfessionHint.clear();
     g_ComponentCatalogSearch.clear();
     g_ComponentStatSearch.clear();
     g_ComponentGearSelectedSlot.clear();
@@ -425,6 +472,9 @@ static bool ComponentUIEditorCanCommit() {
     if (!g_ComponentEditorDraft.is_object()) {
         g_ComponentEditorError = "Component data must be an object.";
         return false;
+    }
+    if(g_ComponentEditorKind=="skills"&&!ComponentSkillsDraftReady(g_ComponentEditorDraft)){
+        g_ComponentEditorError="Choose a profession compatible with the recorded skills and Loadout owners.";return false;
     }
     if(g_ComponentEditorMode=="edit"&&(g_ComponentEditorKind=="infusions"||g_ComponentEditorKind=="aquatic")){
         AlterEgo::Composable::Document before;
@@ -486,17 +536,21 @@ static void RenderComponentUIEditor() {
         return;
     }
 
+    const int uses = ComponentUIUsage(ComponentUISnapshot(), g_ComponentEditorKind,g_ComponentEditorId);
+    const int effective=ComponentUIEffectiveLoadoutCount(g_ComponentEditorKind,g_ComponentEditorId);
+    const bool shared=uses>1||effective>1;
     ImGui::Text("%s - %s", ComponentLabel(g_ComponentEditorKind),
-                g_ComponentEditorMode == "edit" ? "Edit shared data" :
+                g_ComponentEditorMode == "edit" ? (shared?"Edit shared data":"Edit") :
                 g_ComponentEditorMode == "duplicate" ? "Duplicate & edit" :
                 g_ComponentEditorMode == "copy_for_loadout" ? "Edit private copy" :
                 "Create");
-    const int uses = ComponentUIUsage(ComponentUISnapshot(), g_ComponentEditorKind,
-                                      g_ComponentEditorId);
     if (g_ComponentEditorMode == "edit") {
-        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.40f, 1.0f),
-            "SHARED EDIT: %d direct owner(s), %d effective Loadout(s). Make a private copy for an independent edit.",
-            uses,ComponentUIEffectiveLoadoutCount(g_ComponentEditorKind,g_ComponentEditorId));
+        if(shared)ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.40f, 1.0f),
+            "SHARED EDIT: %d direct owner(s), %d affected Loadout(s). Make a private copy for an independent edit.",
+            uses,effective);
+        else if(uses==0&&effective==0)ImGui::TextDisabled("Unused");
+        else if(effective==1)ImGui::TextDisabled("Used by 1 Loadout");
+        else ImGui::TextDisabled("Used by 1 Equipment Set");
         if (uses > 0 && ImGui::TreeNode("Affected Loadouts / equipment sets##component_shared_users")) {
             const auto& snapshot = ComponentUISnapshot();
             if (snapshot.contains("loadouts") && snapshot["loadouts"].is_array())
@@ -582,7 +636,8 @@ static void RenderComponentUIEditor() {
                     if (const auto* l = Composable::FindLoadout(document, matchedLoadout))
                         profession = Composable::ProfessionOf(document, *l);
                 } else if (matchedKind == "skills") {
-                    profession = NativeLibrary::VerifiedSkillsProfession(document, matchedId);
+                    profession = Composable::StoredSkillsProfession(matchedDraft);
+                    if(profession.empty())profession=NativeLibrary::VerifiedSkillsProfession(document, matchedId);
                 }
                 matches = NativeLibrary::EditIndex(document).Matches(matchedKind, matchedDraft, profession);
                 matches.erase(std::remove_if(matches.begin(), matches.end(),
@@ -644,28 +699,27 @@ static void RenderComponentUIEditor() {
                 AlterEgo::UI::Hint("Exact saved fields differ. Both records remain independent.");
         }
     }
+    const bool editorStale=g_ComponentEditorMode!="create"&&g_ComponentEditorRevision!=AlterEgo::GW2API::GetBuildLibraryRevision();
+    const std::string footerError=editorStale?"Library changed. Cancel and reopen this editor before saving.":g_ComponentEditorError;
     {
         ImGui::Separator();
-        AlterEgo::UI::BeginChild("##component_native_editor", ImVec2(0, -110.0f), false);
+        AlterEgo::UI::BeginChild("##component_native_editor", ImVec2(0,-AlterEgo::UI::ActionFooterReserve("Save","Cancel",g_ComponentEditorSaveQueued,footerError.c_str())), false);
         RenderComponentNativeEditor(g_ComponentEditorKind, g_ComponentEditorId,
                                     g_ComponentEditorDraft);
         RenderComponentContextImpact();
         ImGui::EndChild();
     }
-    if (!g_ComponentEditorError.empty())
-        ImGui::TextWrapped("%s", g_ComponentEditorError.c_str());
-    const bool editorStale=g_ComponentEditorMode!="create"&&g_ComponentEditorRevision!=AlterEgo::GW2API::GetBuildLibraryRevision();
-    if(editorStale)ImGui::TextWrapped("Library changed. Cancel and reopen this editor before saving.");
     const bool creating=g_ComponentEditorMode=="create"||g_ComponentEditorMode=="duplicate"||g_ComponentEditorMode=="copy_for_loadout";
     const bool dirty=g_ComponentEditorNameOrigin!=g_ComponentEditorInitialNameOrigin||
         g_ComponentEditorDraft!=g_ComponentEditorBaseline||
         (!g_ComponentEditorAutoName&&g_ComponentEditorName!=g_ComponentEditorInitialName)||
         (!creating&&g_ComponentEditorName!=g_ComponentEditorInitialName);
     const bool named=!AlterEgo::Composable::ComponentNameKey(g_ComponentEditorName).empty();
-    const bool canSave=AlterEgo::EditorLifecycle::CanSave(!editorStale&&named&&g_ComponentEditorDraft.is_object(),dirty,creating,g_ComponentEditorSaveQueued);
+    const bool skillReady=g_ComponentEditorKind!="skills"||ComponentSkillsDraftReady(g_ComponentEditorDraft);
+    const bool canSave=AlterEgo::EditorLifecycle::CanSave(!editorStale&&named&&g_ComponentEditorDraft.is_object()&&skillReady,dirty,creating,g_ComponentEditorSaveQueued);
     const auto editAction=AlterEgo::UI::SaveCancel("component_editor",canSave,"Save",
-        editorStale?"Library changed. Cancel and reopen.":!named?"Enter a component name.":"No changes to save.",
-        g_ComponentEditorSaveQueued,g_ComponentEditorError.c_str());
+        editorStale?"Library changed. Cancel and reopen.":!named?"Enter a component name.":!skillReady?"Choose a profession compatible with the recorded skills and owners.":"No changes to save.",
+        g_ComponentEditorSaveQueued,footerError.c_str());
     if (editAction==AlterEgo::UI::EditAction::Save) {
         if (ComponentUIEditorCanCommit()) {
             ComponentUICommand cmd;
@@ -704,8 +758,8 @@ static bool ComponentUICompatible(const ComponentJson& doc,
                                   const ComponentJson& target,
                                   const std::string& kind,
                                   const ComponentJson& candidate) {
-    // Restrict cross-profession Build selection. Skill components do not have
-    // an encoded profession, so infer it from existing Loadouts that use them.
+    // Restrict cross-profession Build and Skills selection using the same
+    // persisted or legacy owner evidence as the native assignment guard.
     const auto& refs = target["refs"];
     auto current = refs.find("base_build");
     if (current == refs.end() || !current->is_string()) return true;
@@ -719,18 +773,8 @@ static bool ComponentUICompatible(const ComponentJson& doc,
         return candidate.contains("data") &&
                candidate["data"].value("profession", std::string()) == profession;
     if (kind != "skills") return true;
-    for (const auto& other : doc["loadouts"]) {
-        if (!other.contains("refs") || !other["refs"].is_object()) continue;
-        const auto& otherRefs = other["refs"];
-        if (!otherRefs.contains("skills") ||
-            otherRefs["skills"] != candidate["id"] ||
-            !otherRefs.contains("base_build")) continue;
-        const auto* otherBuild = ComponentUIFind(doc, "base_build",
-            otherRefs["base_build"].get<std::string>());
-        if (otherBuild && (*otherBuild)["data"].value("profession", std::string()) != profession)
-            return false;
-    }
-    return true;
+    const auto owner=g_ComponentSkillOwners.find(candidate.value("id",std::string()));
+    return owner!=g_ComponentSkillOwners.end()&&!owner->second.conflict&&!owner->second.incomplete&&owner->second.profession==profession;
 }
 
 static void ComponentUIOpenLibrary(const std::string& kind, const std::string& id) {
@@ -801,7 +845,7 @@ static std::string ComponentUIRef(const ReferenceMap& refs,const std::string& ki
 static std::string ComponentUIRefName(const ComponentJson& doc,const std::string& kind,const std::string& id,const char* empty="Not set") {
     if(id.empty())return empty;
     const auto* part=ComponentUIFind(doc,kind,id);
-    return part?part->value("name",id):"(missing)";
+    return part?ComponentUIProfessionName(kind,*part):"(missing)";
 }
 static bool BeginReferenceEditor(const ComponentJson& owner,bool isSet) {
     const bool parent=g_LibEditMode&&!isSet&&g_EditRefsReady&&owner.value("id",std::string())==g_EditDraftId;
@@ -880,7 +924,9 @@ static bool RenderReferencePicker(const ComponentJson& doc,const ComponentJson* 
             if(loadout&&!ComponentUICompatible(doc,*loadout,kind,part))continue;
             const auto id=part.value("id",std::string());
             ImGui::PushID(id.c_str());
-            if(AlterEgo::UI::EntityOption((part.value("name",id)+"##"+id).c_str(),id==ref,[&]{ComponentRowMenu(doc,kind,part,true,false);})&&id!=ref){
+            const bool clicked=ComponentUISelectable(kind,part,"","##"+id,id==ref,true);
+            AlterEgo::UI::EntityContext("##entity_option_actions",[&]{ComponentRowMenu(doc,kind,part,true,false);});
+            if(clicked&&id!=ref){
                 refs[kind]=id;changed=true;
             }
             if(loadout&&AlterEgo::Composable::IsRevenantContextKind(kind)&&part.contains("data")&&ImGui::IsItemHovered()){
@@ -1429,7 +1475,7 @@ static void RenderComponentLibrary() {
             const auto id=item.value("id",std::string()),name=item.value("name",id);
             const int references=ComponentUIUsage(doc,kind,id);
             if(g_ComponentUnusedOnly&&references>0)continue;
-            if(!AlterEgo::Search::MatchesFields(searchWords,{name,id,ComponentUIShortDescription(kind,item["data"])}))continue;
+            if(!AlterEgo::Search::MatchesFields(searchWords,{name,id,ComponentUIProfession(kind,item["data"],id),ComponentUIShortDescription(kind,item["data"])}))continue;
             g.items.push_back({&item,ComponentBrowse::Key(name,id,references)});
         }
         if(filtered&&g.items.empty())continue;
@@ -1463,9 +1509,8 @@ static void RenderComponentLibrary() {
             const auto id=item->value("id",std::string()),name=item->value("name",id);
             const int users=entry.key.references;
             ImGui::PushID(id.c_str());
-            const std::string shown=name+"  ["+std::to_string(users)+"]###row";
             const bool selected=g_ComponentSelectedKind==kind&&g_ComponentSelectedId==id;
-            const bool clicked=ImGui::Selectable(shown.c_str(),selected);
+            const bool clicked=ComponentUISelectable(kind,*item,"  ["+std::to_string(users)+"]","###row",selected);
             if(selected&&AlterEgo::GroupBrowse::ConsumeReveal(g_ComponentRevealId,AlterEgo::GroupBrowse::PathKey({kind,id})))ImGui::SetScrollHereY(.5f);
             if((clicked||ImGui::IsItemClicked(ImGuiMouseButton_Right))&&!selected){
                 MarkNavigation();g_ComponentSelectedKind=kind;g_ComponentSelectedId=id;selectedMatches=true;
@@ -1493,6 +1538,16 @@ static void RenderComponentLibrary() {
         if(!selectedMatches)ImGui::TextDisabled("Selected component is outside current filters.");
         ImGui::TextWrapped("%s",name.c_str());
         ImGui::TextDisabled("%s | %d reference%s | %d affected Loadout(s)",ComponentLabel(kind),usage,usage==1?"":"s",ComponentUIEffectiveLoadoutCount(kind,id));
+        if(kind=="skills"){
+            auto profession=ComponentUIProfession(kind,item->at("data"),id);
+            const auto owner=g_ComponentSkillOwners.find(id);
+            if(profession.empty()&&owner!=g_ComponentSkillOwners.end()&&!owner->second.conflict&&!owner->second.incomplete){
+                const auto inferred=AlterEgo::Composable::InferSkillsProfession(item->at("data"),AlterEgo::GW2API::CachedSkillProfessions);
+                profession=inferred.profession;
+                if(!profession.empty())ImGui::TextDisabled("Inferred from cached skills; open Edit to confirm.");
+            }
+            RenderComponentProfessionLabel(profession);
+        }
         ImGui::TextWrapped("%s",ComponentUIShortDescription(kind,item->at("data")).c_str());
         ImGui::Separator();
         const auto action=[&](const char* label,ComponentAction command,bool sameLine){

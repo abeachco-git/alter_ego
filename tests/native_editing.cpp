@@ -126,6 +126,47 @@ int case_native_editing(int,char**) {
     assert(PutLoadout(doc,wrongLoadout,err));
     assert(doc.loadouts.back().refs.at("skills")!=skills);
     assert(VerifiedSkillsProfession(doc,"missing").empty());
+    assert(Composable::Find(doc,"skills",skills)->data.at("profession")=="Engineer");
+    // Profession identity survives loss of all owners and protects unused components.
+    {
+        auto graph=doc;
+        auto independent=*Composable::Find(graph,"skills",skills);
+        independent.id="unused-skills";independent.name="Unused Engineer";
+        graph.components["skills"].push_back(independent);
+        assert(VerifiedSkillsProfession(graph,independent.id)=="Engineer");
+        assert(!Composable::Assign(graph,"new-profession","skills",independent.id,err));
+        assert(Composable::Assign(graph,"a","skills",independent.id,err));
+        auto wrong=independent.data;wrong["profession"]="Necromancer";
+        assert(!Composable::UpdateShared(graph,"skills",independent.id,wrong,err));
+        const auto packet=Composable::ExportComponent("skills",independent);
+        std::string kind;Composable::Component parsed;
+        assert(Composable::ImportComponent(packet,kind,parsed,err)&&kind=="skills"&&parsed.data==independent.data);
+        graph.components["skills"].push_back({"legacy","Legacy",Json{{"skills",{{"heal",100}}},{"aquatic_skills",{{"elite",101}}}}});
+        const auto lookup=[](uint32_t id)->std::optional<std::vector<std::string>>{
+            if(id==100||id==101)return std::vector<std::string>{"Elementalist"};
+            if(id==102)return std::vector<std::string>{"Necromancer"};
+            if(id==103)return std::vector<std::string>{};
+            return std::nullopt;
+        };
+        assert(Composable::RepairSkillsProfessions(graph,lookup));
+        const auto& legacy=*Composable::Find(graph,"skills","legacy");
+        assert(legacy.data.at("profession")=="Elementalist");
+        auto missing=legacy.data;missing.erase("profession");missing["skills"]["heal"]=999;
+        assert(Composable::InferSkillsProfession(missing,lookup).profession.empty());
+        assert(Composable::InferSkillsProfession(legacy.data,lookup,"Engineer").conflict);
+        auto mixed=legacy.data;mixed["aquatic_skills"]["elite"]=102;
+        assert(Composable::InferSkillsProfession(mixed,lookup).conflict);
+        mixed["aquatic_skills"]["elite"]=103;
+        assert(Composable::InferSkillsProfession(mixed,lookup).profession=="Elementalist");
+        assert(!Composable::RepairSkillsProfessions(graph,lookup));
+        Json flat;
+        assert(Composable::Resolve(graph,*Composable::FindLoadout(graph,"a"),flat,err)&&flat.at("profession")=="Engineer");
+        auto legacyGraph=doc;
+        Composable::Find(legacyGraph,"skills",skills)->data.erase("profession");
+        assert(Composable::RepairSkillsProfessions(legacyGraph,lookup));
+        assert(Composable::Find(legacyGraph,"skills",skills)->data.at("profession")=="Engineer");
+        assert(Composable::Resolve(legacyGraph,*Composable::FindLoadout(legacyGraph,"a"),flat,err)&&flat.at("profession")=="Engineer");
+    }
     // Functional utility equivalence does not authorize exact native reuse.
     // Exercise both explicit editing decisions and the unified aggregate Save.
     {

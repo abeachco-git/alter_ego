@@ -155,6 +155,17 @@ inline bool BeginConfirmationModal(const char* popup,const char* primary,const c
     ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth,0),ImVec2(FLT_MAX,FLT_MAX));
     return ImGui::BeginPopupModal(popup,nullptr,flags|ImGuiWindowFlags_AlwaysAutoResize);
 }
+// Reserve only the actual footer content plus the gap after a scrolling child.
+inline float ActionFooterReserve(const char* primary="Save",const char* secondary="Cancel",
+    bool pending=false,const char* error=nullptr) {
+    const float spacing=ImGui::GetStyle().ItemSpacing.y;
+    const float width=std::max(1.f,ImGui::GetContentRegionAvail().x);
+    const int rows=width>=ActionPairWidth(primary,secondary)?1:2;
+    float height=rows*(ActionButtonHeight()+spacing);
+    if(pending)height+=ImGui::CalcTextSize("Working...",nullptr,false,width).y+spacing;
+    if(error&&*error)height+=ImGui::CalcTextSize(error,nullptr,false,width).y+spacing;
+    return height;
+}
 inline EditAction ActionFooter(const char* scope,bool enabled,const char* primary,
     const char* secondary="Cancel",ButtonRole role=ButtonRole::Standard,
     const char* reason=nullptr,bool pending=false,const char* error=nullptr){

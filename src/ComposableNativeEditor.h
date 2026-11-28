@@ -37,25 +37,18 @@ static std::string ComponentNativeProfession(const std::string& kind,
                                               const ComponentJson& data) {
     if (kind == "base_build") return data.value("profession", std::string());
     if(AlterEgo::Composable::IsCompanionKind(kind))return AlterEgo::Composable::CompanionProfession(kind);
-    const auto& doc = ComponentUISnapshot();
-    std::string profession;
-    if (!doc.contains("loadouts") || !doc["loadouts"].is_array()) return {};
-    for (const auto& loadout : doc["loadouts"]) {
-        if (!loadout.is_object() || !loadout.contains("refs") ||
-            !loadout["refs"].is_object()) continue;
-        if (g_ComponentEditorMode == "copy_for_loadout" &&
-            loadout.value("id", std::string()) != g_ComponentEditorPrivateLoadoutId)
-            continue;
-        const auto& refs = loadout["refs"];
-        if (refs.value(kind, std::string()) != id) continue;
-        const auto* base = ComponentUIFind(doc, "base_build",
-                                            refs.value("base_build", std::string()));
-        if (!base || !base->contains("data")) continue;
-        const auto name = base->at("data").value("profession", std::string());
-        if (profession.empty()) profession = name;
-        else if (profession != name) return {}; // ambiguous shared skill bar
+    if(kind!="skills")return {};
+    const auto stored=AlterEgo::Composable::StoredSkillsProfession(data);
+    if(!stored.empty())return stored;
+    const auto& doc=ComponentUISnapshot();
+    if(g_ComponentEditorMode=="copy_for_loadout"){
+        const auto* owner=ComponentUIFindLoadout(doc,g_ComponentEditorPrivateLoadoutId);
+        if(owner){
+            const auto* base=ComponentUIFind(doc,"base_build",owner->at("refs").value("base_build",std::string()));
+            if(base)return base->at("data").value("profession",std::string());
+        }
     }
-    return profession;
+    return ComponentUIProfession(kind,data,id);
 }
 
 static std::string ComponentNativeSkillName(uint32_t id) {
@@ -972,29 +965,31 @@ static void RenderComponentNativeEditor(const std::string& kind,
     DemandComponentItemMetadata(kind,data);
     std::string profession = ComponentNativeProfession(kind, id, data);
     if (kind == "skills") {
-        if (profession.empty()) {
-            // New/unattached Skills have no profession ownership encoded.
-            // This is intentionally a UI-only filter, never a stored root field.
-            static const char* professions[] = {
-                "Elementalist","Engineer","Guardian","Mesmer","Necromancer",
-                "Ranger","Revenant","Thief","Warrior"
-            };
-            ImGui::TextDisabled("Skill picker profession (UI-only; not saved)");
+        using namespace AlterEgo;
+        const auto owner=g_ComponentSkillOwners.find(id);
+        const bool conflictingOwner=g_ComponentEditorMode=="edit"&&owner!=g_ComponentSkillOwners.end()&&
+            (owner->second.conflict||owner->second.incomplete);
+        const auto fixed=ComponentNativeProfession(kind,id,g_ComponentEditorBaseline);
+        const auto inferred=Composable::InferSkillsProfession(data,GW2API::CachedSkillProfessions);
+        if(!conflictingOwner&&!data.contains("profession")){
+            const auto resolved=!fixed.empty()?fixed:inferred.profession;
+            if(!resolved.empty()){profession=resolved;data["profession"]=resolved;}
+        }
+        const bool editable=fixed.empty()&&(inferred.profession.empty()||inferred.profession!=profession);
+        if(conflictingOwner)ImGui::TextWrapped("Conflicting or unknown Loadout ownership. Review the affected Loadouts first.");
+        if(editable){
+            ImGui::TextUnformatted("Profession");
             ImGui::SetNextItemWidth(210);
-            const char* preview = g_ComponentSkillProfessionHint.empty()
-                ? "Choose profession..." : g_ComponentSkillProfessionHint.c_str();
-            if (AlterEgo::UI::BeginCombo("##skill_profession_hint", preview)) {
-                for (const char* candidate : professions)
-                    if (ImGui::Selectable(candidate,
-                            g_ComponentSkillProfessionHint == candidate))
-                        g_ComponentSkillProfessionHint = candidate;
+            if(UI::BeginCombo("##skill_profession",profession.empty()?"Choose profession...":profession.c_str())){
+                for(const auto& candidate:ProfessionMetadata::Names())
+                    if(UI::SelectableOption(candidate.c_str(),profession==candidate)){
+                        profession=candidate;data["profession"]=candidate;
+                    }
                 ImGui::EndCombo();
             }
-            profession = g_ComponentSkillProfessionHint;
-        } else {
-            ImGui::TextDisabled("Skill profession: %s (inferred from Loadout)",
-                                profession.c_str());
-        }
+        }else RenderComponentProfessionLabel(profession);
+        if(Composable::InferSkillsProfession(data,GW2API::CachedSkillProfessions,profession).conflict)
+            ImGui::TextWrapped("Recorded skills disagree with the selected profession. Review the skill selections.");
         if(!profession.empty())AlterEgo::GW2API::FetchProfessionPaletteAsync(profession);
         if (!profession.empty() &&
             AlterEgo::GW2API::GetProfessionSkillIds(profession).empty()) {
@@ -1041,7 +1036,7 @@ static void RenderComponentNativeEditor(const std::string& kind,
         ComponentNativeProfessionPair(data,AlterEgo::Composable::CompanionField(kind),kind=="pets"?"Pets":"Legends",kind=="legends",true,ComponentUIEliteContexts(kind,id));
     } else if (kind == "skills") {
         if (profession.empty())
-            ImGui::TextDisabled("Assign to a Loadout to enable profession-filtered skill choices.");
+            ImGui::TextDisabled("Choose the profession to enable its skill choices.");
         const auto specContext = ComponentNativeSkillSpecs(id);
         if (specContext.second && specContext.first.empty())
             ImGui::TextDisabled("Shared skill choices are limited to specs common to referencing Loadouts.");

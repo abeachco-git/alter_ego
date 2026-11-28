@@ -8138,7 +8138,7 @@ static void RenderGearCustomizeDialog() {
     bool isRelic = (g_GearDialogSlot == "Relic");
 
     ImGui::TextDisabled("Save applies to the Loadout draft; save the Loadout to persist.");
-    AlterEgo::UI::BeginChild("##gear_customize_body",ImVec2(0,-AlterEgo::UI::ActionButtonHeight()-ImGui::GetStyle().ItemSpacing.y*2),false);
+    AlterEgo::UI::BeginChild("##gear_customize_body",ImVec2(0,-AlterEgo::UI::ActionFooterReserve("Apply")),false);
     // Two-column layout: left = current item, right = selector
     if (ImGui::BeginTable("##custLayout", 2, ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("##custLeft", ImGuiTableColumnFlags_WidthFixed, 220.0f);

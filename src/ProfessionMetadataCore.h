@@ -9,14 +9,6 @@ namespace AlterEgo {
 namespace ProfessionMetadata {
 using Json=nlohmann::json;
 inline constexpr const char* Schema="2019-12-19T00:00:00.000Z";
-inline const std::array<std::string,9>& Names(){
-    static const std::array<std::string,9> names={"Guardian","Warrior","Engineer","Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"};
-    return names;
-}
-inline uint32_t Code(const std::string& profession){
-    const auto& names=Names();const auto it=std::find(names.begin(),names.end(),profession);
-    return it==names.end()?0:static_cast<uint32_t>(it-names.begin()+1);
-}
 inline std::string Key(const std::string& profession){return "public_profession_"+profession;}
 inline uint32_t Number(const Json& value,bool allowZero=false){
     if(!value.is_number_integer()||(!value.is_number_unsigned()&&value.get<int64_t>()<0))

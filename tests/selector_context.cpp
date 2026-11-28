@@ -221,6 +221,20 @@ int case_selector_context(int, char**) {
         ImGui::CloseCurrentPopup();ImGui::EndPopup();
     }else assert(false);
     ImGui::End();ImGui::Render();
+    // Footer reserve follows actual buttons and messages, not a fixed blank band.
+    ImGui::NewFrame();
+    ImGui::SetNextWindowSize(ImVec2(400,300));
+    ImGui::Begin("Footer reserve test");
+    const float ordinary=ActionFooterReserve();
+    assert(std::abs(ordinary-ActionButtonHeight()-ImGui::GetStyle().ItemSpacing.y)<.01f);
+    assert(ActionFooterReserve("Save","Cancel",true)>ordinary);
+    assert(ActionFooterReserve("Save","Cancel",false,"A validation error")>ordinary);
+    const float y=ImGui::GetCursorScreenPos().y;
+    const float available=ImGui::GetContentRegionAvail().y;
+    BeginChild("body",ImVec2(0,-ordinary),false);ImGui::EndChild();
+    SaveCancel("footer-reserve");
+    assert(std::abs(ImGui::GetItemRectMax().y-(y+available))<=3.f+ImGui::GetStyle().ItemSpacing.y);
+    ImGui::End();ImGui::Render();
     // Exercise the shared background policy in the native ImGui context.
     assert(ClampWindowTransparency(-1)==0&&ClampWindowTransparency(100)==80);
     assert(ClampWindowTransparency(25)==25);

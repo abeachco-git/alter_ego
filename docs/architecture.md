@@ -76,7 +76,7 @@ Twelve component categories:
 | base_build | Profession, traits, specialization, Build Template weapon picks | GW2 Build Template meaning |
 | pets | Ranger terrestrial and aquatic pairs | Optional profession-gated component |
 | legends | Revenant terrestrial and aquatic pairs | Optional profession-gated component |
-| skills | Heal, three utility slots, elite, aquatic skills, optional recorded inactive Revenant palette block | Ordinary utilities are unordered for functional matching; exact slot and raw protocol ordering are preserved for export |
+| skills | Profession (native component identity), heal, three utility slots, elite, aquatic skills, optional recorded inactive Revenant palette block | Ordinary utilities are unordered for functional matching; exact slot and raw protocol ordering are preserved for export |
 | weapons | Physical weapon sets, weapon type, item ID, stats | Compare by weapon set |
 | armor | Armor slots, stats, item IDs | Compare base stats by slot |
 | trinkets | Rings, amulet, backpack, accessories and unknown future slots | Compare base stats by slot |
@@ -131,6 +131,10 @@ AE2 interchange is separate from the internal native data model: see [shared bui
 
 Keep the experimental branch separate from main until explicitly approved. Before merging, validate real-library migration, restart, component editing and comparison, imports, Fashion, ZIP restore and normal in-game behavior. CI compilation and unit tests do not replace in-game validation.
 
+### Skills profession ownership
+
+Skills carry a canonical profession in their existing typed SQLite `component_payloads.profession` field, included in exact component identity and portable component/graph packets. The flat game/build representation still gets its profession exclusively from Base Build; Skills ownership is omitted from flat projection and cannot invalidate derived links by itself. Live/guide/legacy capture and portable Loadout import populate profession from the verified build. The existing startup/explicit library transaction owner repairs missing fields using consistent Loadout owners or the intersection of complete cached positive terrestrial/aquatic skill definitions. Racial skills do not establish a profession; missing or conflicting evidence stays unresolved, and no render-time persistence, network sweep, schema bump or destructive migration occurs. Assignment, capture replacement, reuse and consolidation enforce the persisted or verified legacy profession, independently of current owner count. Unknown legacy records remain readable; new assignment requires resolved ownership. Existing saved profession cannot be erased or changed by shared payload edit. Contextual elite specialization restrictions remain independent.
+
 ### Explicit component consolidation
 
 The Components detail pane offers exact duplicate consolidation into the selected survivor, with affected Loadout names and confirmation. The native transaction revalidates equality, revision and skill profession compatibility before rewriting references and deleting the redundant record. Independent duplicates remain valid until explicitly consolidated. Usage counts are indexed per library revision; existing editor drafts reject a changed library revision rather than overwriting newly saved data.
@@ -143,7 +147,7 @@ Cache schema v6 consolidates item details and Commerce item names in reference_i
 
 Storage & Cache diagnostics are available in Nexus addon options on explicit inspection. A read-only SQLite connection checks identity, schema, quick integrity and foreign keys, and reports database sizes, reference counts and freshness plus downloaded artwork size. Diagnostics do not create, migrate, repair, delete, or fetch anything. Full and selective rebuilds are scheduled explicitly and executed before subsystem startup, not against active in-memory projections; see [startup cache maintenance](#startup-cache-maintenance).
 
-Native graph merges reuse a colliding ID only when both name and exact payload match; Skills additionally require independently verified matching professions. Conflicts are remapped without consuming another incoming component's original ID. Unused independent components remain intact.
+Native graph merges reuse a colliding ID only when both name and exact payload match; Skills additionally require independently verified matching professions, including explicitly qualified unused records. Conflicts are remapped without consuming another incoming component's original ID. Unused independent components remain intact.
 
 Inherited category reference replacements use the parent draft and the same reference picker/rebase machinery. The staged replacement map is never persisted as a competing direct reference. The existing parent Save review separates shared reference replacement (changes only set membership, not either component payload) from shared payload editing. Private changes fork a shared set once, single-owner changes reuse the set, and explicit shared choices affect its linked owners. Other categories remain intact. Conflicting unsaved content edits require saving or undoing that category before replacement; a staged replacement must be saved before editing that category's payload. Exact selected IDs, including equivalent independent copies, are preserved.
 

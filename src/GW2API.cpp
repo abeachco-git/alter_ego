@@ -2797,6 +2797,7 @@ namespace AlterEgo {
         // Already an explicit library transaction: name-only metadata changes
         // share its revision, durable commit and publication. No new SQL/HTTP
         // is triggered by ordinary rendering.
+        Composable::RepairSkillsProfessions(next,GW2API::CachedSkillProfessions);
         Composable::RefreshEditedAutomaticNames(before,next,LookupComponentDisplayName);
         Composable::RepairPendingNames(next,LookupComponentDisplayName);
         if(!Composable::ValidateNoNewInfusionConflicts(before,next,error)){
@@ -2828,7 +2829,9 @@ namespace AlterEgo {
                 // Reassignment/copy of an identical component does not
                 // invalidate cached codes or require palette re-encoding.
                 // Only a semantic payload change does.
-                if (!oldPart || !newPart || !NativeLibrary::ExactContent(oldPart->data,newPart->data)) {
+                if (!oldPart || !newPart || (!NativeLibrary::ExactContent(oldPart->data,newPart->data)&&
+                    (kind!="skills"||!NativeLibrary::ExactContent(Composable::SkillSelectionPayload(oldPart->data),
+                                                                 Composable::SkillSelectionPayload(newPart->data))))) {
                     changed = true;
                     if (!Composable::IsEquipmentKind(kind)) buildChanged = true;
                 }
@@ -3244,7 +3247,8 @@ namespace AlterEgo {
         // The existing persistence owner revalidates the current durable graph.
         // A no-op does not publish a revision or write the database.
         CommitComposableEdit([&](Composable::Document& doc,std::string&){
-            return Composable::RepairPendingNames(doc,LookupComponentDisplayName);
+            const bool skills=Composable::RepairSkillsProfessions(doc,GW2API::CachedSkillProfessions);
+            return Composable::RepairPendingNames(doc,LookupComponentDisplayName)||skills;
         });
     }
 

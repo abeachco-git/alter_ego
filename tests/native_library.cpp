@@ -58,12 +58,24 @@ int case_native_library(int,char**) {
     assert(AlterEgo::Fashion::AssociateVerified(look,{"B","Original",creation}));
     expected.fashion.push_back(look);
     expected.loadouts.loadouts[0].fashion_id=look.id;
+    {
+        Scratch standalone;
+        Native::Repository repo(standalone.db(),DB::Connection::OpenMode::Create);
+        auto draft=repo.Read();
+        draft.loadouts.components["skills"].push_back({"standalone","Standalone Elementalist",Json{{"profession","Elementalist"},{"skills",{{"heal",100}}}}});
+        assert(repo.Commit(repo.Read(),draft)==1);
+        const auto restored=repo.Read();
+        assert(C::Find(restored.loadouts,"skills","standalone")->data==draft.loadouts.components["skills"][0].data);
+        assert(C::VerifiedSkillsProfession(restored.loadouts,"standalone")=="Elementalist");
+    }
     // Exercise a populated v7 companion migration. Use the old ownership
     // representation via direct relational rows and exact old fingerprint,
     // then check backed-up migration, shared identities and flat round-trip.
     {
         Scratch old;
         auto prior=expected;
+        // Schema v7 predates independent Skills profession ownership.
+        for(auto& skill:prior.loadouts.components["skills"])skill.data.erase("profession");
         const auto baseId=prior.loadouts.loadouts[0].refs.at("base_build");
         auto* base=C::Find(prior.loadouts,"base_build",baseId);
         base->data["profession"]="Ranger";base->data.erase("pets");

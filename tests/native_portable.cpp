@@ -65,6 +65,8 @@ int case_native_portable(int,char**) {
     auto compatible=remote;
     auto baseId=compatible.loadouts[0].refs.at("base_build");
     Composable::Find(compatible,"base_build",baseId)->data["profession"]="Engineer";
+    assert(!Composable::Merge(local,compatible,false,merged,added,skipped,error)); // contradictory explicit Skills identity
+    Composable::Find(compatible,"skills",skillId)->data["profession"]="Engineer";
     assert(Composable::Merge(local,compatible,false,merged,added,skipped,error));
     assert(merged.loadouts[1].refs.at("skills")==skillId);
     using AlterEgo::InfusionMode;

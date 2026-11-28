@@ -38,13 +38,10 @@ public:
             const auto& users=Users(kind,id);
             // Do not share profession-sensitive skills across professions.
             if(kind=="skills") {
-                bool compatible=!profession.empty()&&!users.empty();
-                for(const auto& owner:users) {
-                    auto l=std::find_if(doc_.loadouts.begin(),doc_.loadouts.end(),
-                        [&](const auto& item){return item.id==owner;});
-                    if(l==doc_.loadouts.end()||Composable::ProfessionOf(doc_,*l)!=profession)compatible=false;
-                }
-                if(!compatible)continue;
+                const auto declared=Composable::StoredSkillsProfession(data);
+                const auto expected=profession.empty()?declared:profession;
+                if(expected.empty()||(!declared.empty()&&declared!=expected)||
+                   Composable::VerifiedSkillsProfession(doc_,id)!=expected)continue;
             }
             out.push_back({id,part->name,static_cast<std::int64_t>(users.size())});
         }
@@ -52,19 +49,8 @@ public:
     }
 };
 
-// Derive Skills context from verified owners, not a picker hint.
-inline std::string VerifiedSkillsProfession(const Composable::Document& doc,
-                                              const std::string& id) {
-    std::string profession;
-    for (const auto& l : doc.loadouts) {
-        const auto ref=l.refs.find("skills");
-        if(ref==l.refs.end()||ref->second!=id)continue;
-        const auto p=Composable::ProfessionOf(doc,l);
-        if(p.empty()||(!profession.empty()&&p!=profession))return {};
-        profession=p;
-    }
-    return profession;
-}
+// Native callers use the same persisted/legacy ownership evidence.
+using Composable::VerifiedSkillsProfession;
 
 // An explicit choice in Copy & Edit changes only one reference. Check
 // source identity, exact payload and profession again inside the transaction.
@@ -89,19 +75,10 @@ inline bool ConsolidateExact(Composable::Document& doc,const std::string& kind,
     if(source==survivor||!a||!b||!ExactContent(a->data,b->data))
         return Composable::Fail(error,"Components are not exact duplicates.");
     if(kind=="skills") {
-        std::string profession;
-        bool hasSource=false,hasSurvivor=false;
-        for(const auto& l:doc.loadouts) {
-            auto ref=l.refs.find(kind);
-            if(ref==l.refs.end()||(ref->second!=source&&ref->second!=survivor))continue;
-            auto p=Composable::ProfessionOf(doc,l);
-            if(p.empty()||(!profession.empty()&&p!=profession))
-                return Composable::Fail(error,"Skills profession is ambiguous.");
-            profession=p;
-            hasSource|=ref->second==source;hasSurvivor|=ref->second==survivor;
-        }
-        if(!hasSource||!hasSurvivor)
-            return Composable::Fail(error,"Skills profession is unverified.");
+        const auto first=Composable::VerifiedSkillsProfession(doc,source);
+        const auto second=Composable::VerifiedSkillsProfession(doc,survivor);
+        if(first.empty()||first!=second)
+            return Composable::Fail(error,"Skills profession is unverified or incompatible.");
     }
     return Composable::Transaction(doc,[&](Composable::Document& next,std::string& err) {
         for(auto& l:next.loadouts) {
@@ -447,6 +424,7 @@ inline std::vector<UnifiedChange> UnifiedChanges(const Composable::Document& doc
         if(Composable::SetOwns(doc,l,kind))
             change.setUsers=Composable::EquipmentSetUsers(doc,l.equipment_set_id).size();
         change.data=part?PatchDraft(part->data,prior.at(kind),data):data;
+        if(kind=="skills"&&data.contains("profession"))change.data["profession"]=data.at("profession");
         change.matches=index.Matches(kind,change.data,profession);
         changes.push_back(std::move(change));
     }

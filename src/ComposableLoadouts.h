@@ -6,6 +6,7 @@
 #include "InfusionTotalsCore.h"
 #include "BuildCompareCore.h"
 #include "SkillEditCore.h"
+#include "ProfessionMetadataTypes.h"
 // Alter Ego v3 composable Loadout model.
 //
 // This is a pure, platform-independent data layer. Build templates, physical
@@ -87,8 +88,8 @@ struct Document {
     std::vector<Loadout> loadouts;
     std::vector<EquipmentSet> equipment_sets;
 };
-// A companion kind has an intrinsic profession, unlike Skills whose context
-// comes from its owners. Keep the same policy for capture, assign and UI.
+// Companion kinds have an intrinsic profession. Skills carry their own typed
+// profession when known; legacy unqualified payloads remain readable.
 inline std::string CompanionProfession(const std::string& kind) {
     return kind=="pets"?"Ranger":kind=="legends"?"Revenant":"";
 }
@@ -189,6 +190,102 @@ inline std::map<std::string,std::string> FashionUsers(const Document& doc,const 
         if(l.fashion_id==id)result.emplace(l.id,l.metadata.value("name",l.id));
     return result;
 }
+// Skills profession is native component identity, not another flat build field.
+inline std::string StoredSkillsProfession(const Json& data) {
+    if(!data.is_object())return {};
+    const auto it=data.find("profession");
+    if(it==data.end()||!it->is_string())return {};
+    const auto p=it->get<std::string>();
+    return ProfessionMetadata::Code(p)?p:std::string{};
+}
+inline bool ValidSkillsProfession(const Json& data) {
+    return !data.contains("profession")||!StoredSkillsProfession(data).empty();
+}
+struct SkillProfessionEvidence {
+    std::string profession;
+    bool conflict=false, incomplete=false;
+};
+inline SkillProfessionEvidence SkillsOwnerEvidence(const Document& doc,const std::string& id) {
+    SkillProfessionEvidence result;
+    const auto* part=Find(doc,"skills",id);
+    if(!part)return result;
+    result.profession=StoredSkillsProfession(part->data);
+    if(!ValidSkillsProfession(part->data))result.conflict=true;
+    for(const auto& l:doc.loadouts){
+        const auto ref=l.refs.find("skills");
+        if(ref==l.refs.end()||ref->second!=id)continue;
+        const auto base=l.refs.find("base_build");
+        const auto* build=base==l.refs.end()?nullptr:Find(doc,"base_build",base->second);
+        const auto p=build?build->data.value("profession",std::string()):std::string{};
+        if(!ProfessionMetadata::Code(p)){result.incomplete=true;continue;}
+        if(!result.profession.empty()&&result.profession!=p)result.conflict=true;
+        else result.profession=p;
+    }
+    if(result.conflict||result.incomplete)result.profession.clear();
+    return result;
+}
+inline std::string VerifiedSkillsProfession(const Document& doc,const std::string& id) {
+    return SkillsOwnerEvidence(doc,id).profession;
+}
+using SkillProfessionLookup=std::function<std::optional<std::vector<std::string>>(uint32_t)>;
+inline SkillProfessionEvidence InferSkillsProfession(const Json& data,const SkillProfessionLookup& lookup,
+    const std::string& expected={}) {
+    SkillProfessionEvidence result;
+    std::set<std::string> candidates;
+    if(ProfessionMetadata::Code(expected))candidates.insert(expected);
+    else candidates.insert(ProfessionMetadata::Names().begin(),ProfessionMetadata::Names().end());
+    bool qualified=!expected.empty()&&ProfessionMetadata::Code(expected);
+    std::set<uint32_t> ids;
+    for(const char* key:{"skills","aquatic_skills"}){
+        const auto bar=data.find(key);
+        if(bar==data.end())continue;
+        for(const auto& slot:SkillEdit::JsonDisplayBar(*bar))if(slot.id)ids.insert(slot.id);
+    }
+    for(auto id:ids){
+        const auto professions=lookup?lookup(id):std::nullopt;
+        if(!professions){result.incomplete=true;continue;}
+        if(professions->empty())continue; // racial skills are not profession evidence
+        qualified=true;
+        for(auto it=candidates.begin();it!=candidates.end();){
+            if(std::find(professions->begin(),professions->end(),*it)==professions->end())it=candidates.erase(it);
+            else ++it;
+        }
+    }
+    result.conflict=qualified&&candidates.empty();
+    // An independently verified owner is sufficient despite missing metadata;
+    // metadata-only recovery requires complete positive recorded skill evidence.
+    if(qualified&&candidates.size()==1&&(!result.incomplete||!expected.empty()))
+        result.profession=*candidates.begin();
+    return result;
+}
+inline bool RepairSkillsProfessions(Document& doc,const SkillProfessionLookup& lookup) {
+    bool changed=false;
+    auto group=doc.components.find("skills");
+    if(group==doc.components.end())return false;
+    for(auto& part:group->second){
+        if(part.data.contains("profession"))continue;
+        const auto owner=SkillsOwnerEvidence(doc,part.id);
+        if(owner.conflict||owner.incomplete)continue;
+        const auto inferred=InferSkillsProfession(part.data,lookup,owner.profession);
+        if(!inferred.conflict&&!inferred.profession.empty()){
+            part.data["profession"]=inferred.profession;changed=true;
+        }
+    }
+    return changed;
+}
+inline Json SkillSelectionPayload(Json data) {
+    data.erase("profession");return data;
+}
+inline bool PreserveSkillsProfession(const Json& prior,Json& draft,std::string& error) {
+    const auto known=StoredSkillsProfession(prior);
+    if(!ValidSkillsProfession(draft))return Fail(error,"Invalid Skills profession.");
+    if(!known.empty()){
+        if(draft.contains("profession")&&StoredSkillsProfession(draft)!=known)
+            return Fail(error,"Cannot change the profession of a saved Skills component.");
+        draft["profession"]=known;
+    }
+    return true;
+}
 inline bool Validate(const Document& doc, std::string& error) {
     error.clear();
     for (const auto& [kind, list] : doc.components) {
@@ -198,6 +295,7 @@ inline bool Validate(const Document& doc, std::string& error) {
             if (item.id.empty() || !ids.insert(item.id).second ||
                 !item.data.is_object() || !ValidNameOrigin(item.nameOrigin))
                 return Fail(error, "Invalid or duplicate component: " + kind);
+            if(kind=="skills"&&!ValidSkillsProfession(item.data))return Fail(error,"Invalid Skills profession.");
         }
     }
     std::set<std::string> loadoutIds;
@@ -228,6 +326,10 @@ inline bool Validate(const Document& doc, std::string& error) {
             return Fail(error, "Loadout lacks a Build or skill-selection component.");
         const auto* base=Find(doc,"base_build",item.refs.at("base_build"));
         const auto profession=base?base->data.value("profession",std::string()):std::string();
+        const auto* skills=Find(doc,"skills",item.refs.at("skills"));
+        const auto declared=skills?StoredSkillsProfession(skills->data):std::string{};
+        if(!declared.empty()&&!profession.empty()&&declared!=profession)
+            return Fail(error,"Skills component belongs to another profession.");
         for(const auto& [kind,id]:item.refs)
             if(!KindApplies(kind,profession))return Fail(error,"Companion component belongs to another profession: "+kind);
     }
@@ -354,6 +456,8 @@ inline std::map<std::string, Json> Split(const Json& old) {
     for (const auto& kind : Kinds()) parts[kind] = Json::object();
     for (const auto& [field, kind] : RootOwnership())
         if (old.contains(field)) parts[RootFieldOwner(field,old)][field] = old.at(field);
+    const auto profession=StoredSkillsProfession(old);
+    if(!profession.empty())parts["skills"]["profession"]=profession;
     if (old.contains("gear") && old.at("gear").is_object()) {
         for (auto it = old["gear"].begin(); it != old["gear"].end(); ++it) {
             const auto& slot = it.key();
@@ -635,22 +739,7 @@ inline const Component* ReusableForLoadout(const Document& doc, const std::strin
     const auto key = data.dump();
     for (const auto& candidate : group->second) {
         if (candidate.data.dump() != key) continue;
-        if (kind == "skills") {
-            // Unattached legacy skills lack ownership; only reuse when a
-            // same-profession owner proves their context and none conflicts.
-            bool known = false, conflict = false;
-            for (const auto& loadout : doc.loadouts) {
-                auto ref = loadout.refs.find(kind);
-                if (ref == loadout.refs.end() || ref->second != candidate.id) continue;
-                auto base = loadout.refs.find("base_build");
-                const auto* part = base == loadout.refs.end() ? nullptr :
-                    Find(doc, "base_build", base->second);
-                const std::string owner = part ? part->data.value("profession", std::string()) : "";
-                if (!profession.empty() && owner == profession) known = true;
-                else conflict = true;
-            }
-            if (!known || conflict) continue;
-        }
+        if (kind == "skills" && (profession.empty()||VerifiedSkillsProfession(doc,candidate.id)!=profession)) continue;
         return &candidate;
     }
     return nullptr;
@@ -767,6 +856,7 @@ inline bool Resolve(const Document& doc, const Loadout& loadout,
         const auto* part = Find(doc, kind, id);
         if (!part) return Fail(error, "Missing component during Resolve: " + kind);
         for (auto it = part->data.begin(); it != part->data.end(); ++it) {
+            if(kind=="skills"&&it.key()=="profession")continue;
             if (it.key() != "gear") {
                 if (result.contains(it.key()))
                     return Fail(error, "Conflicting root ownership: " + it.key());
@@ -812,9 +902,10 @@ inline bool ProjectComponentContext(const Document& doc,const Loadout& owner,
         const auto* prior=Find(doc,kind,ref->second);
         if(!prior)return Fail(error,"Missing component context.");
         for(auto i=prior->data.begin();i!=prior->data.end();++i)
-            projection.erase(i.key());
+            if(kind!="skills"||i.key()!="profession")projection.erase(i.key());
     }
-    for(auto i=candidate.begin();i!=candidate.end();++i)projection[i.key()]=i.value();
+    for(auto i=candidate.begin();i!=candidate.end();++i)
+        if(kind!="skills"||i.key()!="profession")projection[i.key()]=i.value();
     return true;
 }
 // Preserve resolved projections, original terrestrial IDs and independent
@@ -1124,8 +1215,8 @@ inline bool ValidPortableGearField(const std::string& field, const Json& value) 
 }
 inline bool ValidatePortablePayload(const std::string& kind,
                                     const Json& data, std::string& error) {
-    (void)kind;
     if (!data.is_object()) return Fail(error, "Component data must be an object.");
+    if(kind=="skills"&&!ValidSkillsProfession(data))return Fail(error,"Invalid Skills profession.");
     for (auto it = data.begin(); it != data.end(); ++it) {
         const auto& field = it.key();
         const auto& value = it.value();
@@ -1273,7 +1364,7 @@ inline bool ImportComponent(const Json& input, std::string& kind,
             auto owner = RootOwnership().find(it.key());
             const auto expected=owner==RootOwnership().end()?std::string{}:
                 (parsedKind=="base_build"?RootFieldOwner(it.key(),data):owner->second);
-            if (!expected.empty() && expected != parsedKind)
+            if (!expected.empty() && expected != parsedKind && !(parsedKind=="skills"&&it.key()=="profession"))
                 return Fail(error, "Field belongs to another component: " + it.key());
         }
     }
@@ -1371,6 +1462,8 @@ inline bool ImportPortableLoadout(Document& doc, const Json& packet,
         loadout.fashion_id = fashion == packet.end()
             ? std::string() : fashion->get<std::string>();
         const auto profession = imported.at("base_build").data.value("profession", std::string());
+        auto& skillData=imported.at("skills").data;
+        if(!skillData.contains("profession")&&ProfessionMetadata::Code(profession))skillData["profession"]=profession;
         for (auto& [kind, part] : imported) {
             if (const auto* match = ReusableForLoadout(next, kind, part.data, profession)) {
                 loadout.refs[kind] = match->id;
@@ -1432,13 +1525,11 @@ inline bool AssignCompatible(const Document& doc, const Loadout& target,
             incomingProfession != targetProfession)
             return Fail(error, "Cannot assign a Base Build from another profession.");
     } else if (!targetProfession.empty()) {
-        for (const auto& loadout : doc.loadouts) {
-            const auto ref = loadout.refs.find("skills");
-            if (ref == loadout.refs.end() || ref->second != id) continue;
-            const std::string usedBy = ProfessionOf(doc, loadout);
-            if (!usedBy.empty() && usedBy != targetProfession)
-                return Fail(error, "Skills component is used by another profession.");
-        }
+        const auto context=SkillsOwnerEvidence(doc,id);
+        if(context.conflict||context.incomplete||context.profession.empty())
+            return Fail(error,"Resolve the Skills profession before assignment.");
+        if(context.profession!=targetProfession)
+            return Fail(error,"Skills component belongs to another profession.");
     }
     return true;
 }
@@ -1472,12 +1563,13 @@ inline bool UpdateShared(Document& doc, const std::string& kind,
                         return Fail(err, "Cannot change profession of a referenced Base Build.");
                 }
         }
-        item->data = data;
+        Json replacement=data;
+        if(kind=="skills"&&!PreserveSkillsProfession(item->data,replacement,err))return false;
+        item->data = std::move(replacement);
         return true;
     }, error);
 }
-// A captured skill bar is profession-specific even though the Skills payload
-// intentionally has no profession root field. Verify ALL current users before
+// A captured skill bar is profession-specific. Verify stored identity and ALL current users before
 // replacing an existing shared component from live character data.
 inline bool CaptureProfessionCompatible(const Document& doc,
                                          const std::string& kind,
@@ -1490,10 +1582,10 @@ inline bool CaptureProfessionCompatible(const Document& doc,
     if (profession.empty()) return Fail(error, "Captured profession is unknown.");
     const auto* target = Find(doc, kind, id);
     if (!target) return Fail(error, "Target component does not exist.");
-    if (kind == "base_build") {
+    if (kind == "base_build" || kind=="skills") {
         const std::string prior = target->data.value("profession", std::string());
         if (!prior.empty() && prior != profession)
-            return Fail(error, "Captured Build profession differs from saved profession.");
+            return Fail(error, "Captured profession differs from saved component profession.");
     }
     for (const auto& loadout : doc.loadouts) {
         const auto ref = loadout.refs.find(kind);
@@ -1592,7 +1684,9 @@ inline bool UpdateSharedNamed(Document& doc, const std::string& kind,
             return Fail(err, "A component with this name already exists.");
         if(item->name!=name)item->nameOrigin=NameOrigin::Manual;
         item->name = name;
-        item->data = data;
+        Json replacement=data;
+        if(kind=="skills"&&!PreserveSkillsProfession(item->data,replacement,err))return false;
+        item->data = std::move(replacement);
         return true;
     }, error);
 }
@@ -1645,6 +1739,7 @@ inline bool CopyEditedForLoadout(Document& doc, const std::string& loadoutId,
         copy.name = UniqueComponentName(next, kind, name);
         copy.nameOrigin=NameOrigin::Manual;
         copy.data = editedData;
+        if(kind=="skills"&&!PreserveSkillsProfession(source->data,copy.data,err))return false;
         next.components[kind].push_back(std::move(copy));
         loadout->refs[kind] = newId;
         return true;
@@ -1878,19 +1973,8 @@ inline bool Merge(const Document& current, const Document& incoming,
         return true;
     }
     Document merged = current;
-    // Skill payloads do not carry a profession. A collision can be shared
-    // only if both original graphs independently prove the same context.
-    auto verifiedProfession=[](const Document& doc,const std::string& id) {
-        std::string profession;
-        for(const auto& l:doc.loadouts) {
-            const auto ref=l.refs.find("skills");
-            if(ref==l.refs.end()||ref->second!=id)continue;
-            const auto p=ProfessionOf(doc,l);
-            if(p.empty()||(!profession.empty()&&profession!=p))return std::string();
-            profession=p;
-        }
-        return profession;
-    };
+    // A Skills collision requires independently verified matching professions,
+    // including explicitly qualified unused records.
     std::map<std::string, std::map<std::string,std::string>> remap;
     for (const auto& [kind, list] : incoming.components) {
         for (const auto& incomingPart : list) {
@@ -1899,8 +1983,8 @@ inline bool Merge(const Document& current, const Document& incoming,
                 bool same=existing->name==incomingPart.name &&
                     existing->data.dump()==incomingPart.data.dump();
                 if(same&&kind=="skills") {
-                    const auto local=verifiedProfession(current,targetId);
-                    const auto remote=verifiedProfession(incoming,incomingPart.id);
+                    const auto local=VerifiedSkillsProfession(current,targetId);
+                    const auto remote=VerifiedSkillsProfession(incoming,incomingPart.id);
                     same=!local.empty()&&local==remote;
                 }
                 if (!same) {

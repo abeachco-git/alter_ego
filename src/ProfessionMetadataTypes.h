@@ -1,10 +1,21 @@
 #pragma once
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
 namespace AlterEgo {
+namespace ProfessionMetadata {
+inline const std::array<std::string,9>& Names(){
+    static const std::array<std::string,9> names={"Guardian","Warrior","Engineer","Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"};
+    return names;
+}
+inline uint32_t Code(const std::string& profession){
+    const auto& names=Names();const auto it=std::find(names.begin(),names.end(),profession);
+    return it==names.end()?0:static_cast<uint32_t>(it-names.begin()+1);
+}
+} // namespace ProfessionMetadata
     struct ProfessionWeaponData {
         bool mainhand = false;
         bool offhand = false;
