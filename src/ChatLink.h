@@ -177,6 +177,56 @@ namespace AlterEgo {
         }
         return found;
     }
+    // Shared wire role identities, not physical equipped utility positions.
+    // Corroborated against the current API role lists and documented protocol:
+    // https://wiki.guildwars2.com/wiki/Chat_link_format/skill_palette_table
+    inline constexpr std::array<uint16_t,5> RevenantRolePalettes={4572,4614,4651,4564,4554};
+    using LegendRoleSkills=std::array<uint32_t,5>;
+    inline std::optional<LegendRoleSkills> CompleteLegendRoles(
+        const std::optional<uint32_t>& heal,const std::optional<std::vector<uint32_t>>& utilities,
+        const std::optional<uint32_t>& elite){
+        if(!heal||!elite||!utilities||utilities->size()!=3)return std::nullopt;
+        LegendRoleSkills ids={*heal,(*utilities)[0],(*utilities)[1],(*utilities)[2],*elite};
+        auto sorted=ids;std::sort(sorted.begin(),sorted.end());
+        if(!sorted[0]||std::adjacent_find(sorted.begin(),sorted.end())!=sorted.end())return std::nullopt;
+        return ids;
+    }
+    inline int RevenantSharedRole(uint16_t palette,int slot){
+        const auto it=std::find(RevenantRolePalettes.begin(),RevenantRolePalettes.end(),palette);
+        if(it==RevenantRolePalettes.end()||slot<0||slot>4)return -1;
+        const int role=static_cast<int>(it-RevenantRolePalettes.begin());
+        return (slot==0?role==0:slot==4?role==4:role>=1&&role<=3)?role:-1;
+    }
+    // Require the complete current positive Entity role anchor and no
+    // contrary explicit candidate mapping. Centaur healing has conflicting
+    // ID evidence; Alliance, Entity alternate and aquatic variants are not
+    // inferred. Exact published contextual matches still win.
+    inline uint32_t ResolveSharedTerrestrialLegendRole(const PalettePairs& pairs,uint16_t palette,
+        uint32_t canonicalLegend,int environment,int slot,const std::optional<LegendRoleSkills>& target,
+        const std::optional<LegendRoleSkills>& anchor){
+        const int role=RevenantSharedRole(palette,slot);
+        if(role<0||environment!=0||canonicalLegend<1||canonicalLegend>6||
+           (canonicalLegend==6&&role==0)||!target||!anchor)return 0;
+        for(size_t i=0;i<RevenantRolePalettes.size();++i)
+            if(!(*anchor)[i]||ResolveLegendPalette(pairs,RevenantRolePalettes[i],{(*anchor)[i]},true)!=(*anchor)[i])return 0;
+        const auto id=(*target)[static_cast<size_t>(role)];
+        if(!id)return 0;
+        for(const auto& [p,skill]:pairs)if(skill==id&&p&&p!=palette)return 0;
+        return id;
+    }
+    template<class Resolve> uint16_t ContextualRevenantReverse(uint32_t id,uint16_t direct,Resolve resolve){
+        if(!id)return 0;
+        if(direct){
+            const auto contextual=resolve(direct);
+            return !contextual||contextual==id?direct:0;
+        }
+        uint16_t found=0;
+        for(auto palette:RevenantRolePalettes)if(resolve(palette)==id){
+            if(found)return 0;
+            found=palette;
+        }
+        return found;
+    }
     // Wire evidence is conditional, not a second editable skill bar.
     // For each environment/slot retain the exact palette, its original
     // typed projection (zero if unresolved), exact two legend codes and

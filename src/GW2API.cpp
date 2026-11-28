@@ -2380,7 +2380,7 @@ namespace AlterEgo {
             },
             [&](uint32_t id,int env,int slot,const DecodedBuildLink& decoded)->std::optional<uint32_t>{
                 if(b.profession=="Revenant")return ProjectRevenantPalette(b.rev_active_palettes,id,env,slot,decoded,
-                    [&](uint32_t skill){return GetPaletteIdFromSkill(b.profession,skill);});
+                    [&](uint32_t skill){return ResolveRevenantSkillPalette(skill,decoded.legends[env*2],env,slot);});
                 if(!id)return 0u;
                 const auto value=GetPaletteIdFromSkill(b.profession,id);
                 return value?std::optional<uint32_t>(value):std::nullopt;
@@ -3734,12 +3734,29 @@ namespace AlterEgo {
             std::lock_guard<std::mutex> lock(s_mutex);
             resolved=ResolveLegendPalette(s_revenant_palette_pairs,palette,candidates,
                 environment!=0||canonical==7||canonical==8);
+            if(!resolved&&environment==0&&canonical>=1&&canonical<=6){
+                const auto* anchor=PublicCatalog::FindLegend(catalog->legends,8);
+                if(anchor)resolved=ResolveSharedTerrestrialLegendRole(s_revenant_palette_pairs,palette,canonical,environment,slot,
+                    CompleteLegendRoles(def->heal,def->utilities,def->elite),
+                    CompleteLegendRoles(anchor->heal,anchor->utilities,anchor->elite));
+            }
         }
         if(environment&&resolved){
             const auto skill=GetSkillInfo(resolved);
             if(skill&&skill->no_underwater.value_or(false))return 0;
         }
         return resolved;
+    }
+
+    uint16_t GW2API::ResolveRevenantSkillPalette(uint32_t skill,uint32_t legend,int environment,int slot){
+        const auto direct=GetPaletteIdFromSkill("Revenant",skill);
+        if(environment&&skill){
+            const auto info=GetSkillInfo(skill);
+            if(info&&info->no_underwater.value_or(false))return 0;
+        }
+        return ContextualRevenantReverse(skill,direct,[&](uint16_t palette){
+            return ResolveRevenantPalette(palette,legend,environment,slot);
+        });
     }
 
     bool GW2API::HasRevenantPalettePair(uint16_t palette,uint32_t skill){

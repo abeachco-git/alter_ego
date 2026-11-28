@@ -4043,7 +4043,13 @@ static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
     const auto catalog=AlterEgo::PublicCatalog::Get();
     const auto link=AlterEgo::ProjectDerivedBuildLink(bt,
         [](uint32_t,int,int choice)->std::optional<int>{return choice;},
-        [&](uint32_t id){return AlterEgo::GW2API::GetPaletteIdFromSkill(bt.profession,id);},
+        [&](uint32_t id,int env,int slot,const AlterEgo::DecodedBuildLink& decoded)->std::optional<uint32_t>{
+            if(!id)return 0u;
+            const auto value=bt.profession=="Revenant"?
+                AlterEgo::GW2API::ResolveRevenantSkillPalette(id,decoded.legends[env*2],env,slot):
+                AlterEgo::GW2API::GetPaletteIdFromSkill(bt.profession,id);
+            return value?std::optional<uint32_t>(value):std::nullopt;
+        },
         [&](int i)->std::optional<uint32_t>{
             const auto& name=i<2?bt.legends.terrestrial[i]:bt.legends.aquatic[i-2];
             if(name.empty())return 0;

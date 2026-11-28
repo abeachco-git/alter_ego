@@ -74,6 +74,25 @@ int case_skill_edit_core(int,char**) {
         assert(ResolveLegendPalette(pairs,11,{})==0);
         assert(UniqueSkillPalette(pairs,100)==11);
         assert(UniqueSkillPalette(pairs,202)==0);
+        const LegendRoleSkills anchor={100,101,102,103,104},target={200,201,202,203,204};
+        PalettePairs anchored;
+        for(size_t i=0;i<anchor.size();++i)anchored.emplace_back(RevenantRolePalettes[i],anchor[i]);
+        auto contextual=[&](uint16_t p,int slot=1,uint32_t code=2,int env=0){
+            return ResolveSharedTerrestrialLegendRole(anchored,p,code,env,slot,target,anchor);
+        };
+        assert(contextual(4564,1)==203&&contextual(4614,3)==201&&contextual(4651,2)==202);
+        assert(contextual(4572,0)==200&&contextual(4554,4)==204);
+        assert(!contextual(4572,1)&&!contextual(4564,0)&&!contextual(4554,2));
+        assert(!contextual(4614,1,7)&&!contextual(4614,1,8)&&!contextual(4614,1,2,1));
+        assert(!contextual(4572,0,6)&&contextual(4614,1,6)==201);
+        assert(ContextualRevenantReverse(203,0,[&](uint16_t p){return contextual(p);})==4564);
+        assert(!ContextualRevenantReverse(999,4564,[&](uint16_t p){return contextual(p);}));
+        assert(!CompleteLegendRoles(200,std::vector<uint32_t>{201,201,203},204));
+        assert(!CompleteLegendRoles(200,std::vector<uint32_t>{201,202},204));
+        assert(CompleteLegendRoles(200,std::vector<uint32_t>{201,202,203},204)==target);
+        anchored.emplace_back(999,203);assert(!contextual(4564));anchored.pop_back();
+        anchored.emplace_back(4564,999);assert(!contextual(4564));anchored.pop_back();
+        anchored.pop_back();assert(!contextual(4614));
         DecodedBuildLink packet{};packet.profession=PROF_REVENANT;
         packet.active_palettes_known=true;packet.companion_choices_known=true;
         packet.specs[2].spec_id=42;
