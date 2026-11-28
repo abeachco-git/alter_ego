@@ -44,6 +44,33 @@ int case_build_compare_core(int, char**) {
             assert(!observed.Rows().back().verified&&observed.UnverifiedCount()==2);
         }
     }
+    {
+        using namespace AlterEgo;
+        using namespace AlterEgo::SkillEdit;
+        auto name=[](uint32_t id){return std::to_string(id);};
+        struct Bar{uint32_t heal=0,utilities[3]={},elite=0;};
+        const auto live=DisplayBar(Bar{10,{1,2,3},20});
+        BuildComparison absent;
+        assert(!AddSkillBarComparison(absent,"Aquatic skills",DisplayBar(Bar{}),live,name,false));
+        std::optional<RevenantActivePaletteEvidence> evidence=RevenantActivePaletteEvidence{};
+        (*evidence)[7]={123,0,3,4,42};
+        const auto sparse=WithPaletteBar(DisplayBar(Bar{}),evidence,true,false);
+        BuildComparison unresolved;
+        unresolved.SetCoverage(true,true);
+        assert(AddSkillBarComparison(unresolved,"Aquatic skills",sparse,live,name,false));
+        assert(unresolved.Rows().size()==3&&unresolved.UnverifiedCount()==3);
+        assert(unresolved.Rows()[1].saved=="Not recorded, Unresolved selection, Not recorded");
+        assert(unresolved.Rows()[1].savedLinks==std::vector<uint32_t>({0,0,0}));
+        assert(!Recognize(unresolved).Full()&&ClassifyTemplateMatch(unresolved)==TemplateMatchStatus::Different);
+        BuildComparison reordered;
+        assert(AddSkillBarComparison(reordered,"Terrestrial skills",DisplayBar(Bar{10,{3,1,2},20}),live,name));
+        assert(reordered.DifferenceCount()==0&&reordered.UnverifiedCount()==0);
+        assert(reordered.Rows()[1].saved=="3, 1, 2"&&reordered.Rows()[1].savedLinks==std::vector<uint32_t>({3,1,2}));
+        BuildComparison empty;
+        assert(AddSkillBarComparison(empty,"Terrestrial skills",live,DisplayBar(Bar{0,{1,0,3},20},1|4),name));
+        assert(empty.DifferenceCount()==2&&empty.UnverifiedCount()==0&&!empty.Rows()[1].completeSkillIds);
+        assert(empty.Rows()[0].current=="Empty"&&empty.Rows()[1].current=="1, Empty, 3");
+    }
     using AlterEgo::StatEquivalence;
     using AlterEgo::CompareStatDefinitions;
     const std::vector<std::string> assassinStats = {"Power", "Precision", "CritDamage"};

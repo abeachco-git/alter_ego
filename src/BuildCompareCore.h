@@ -8,6 +8,7 @@
 #include <array>
 #include <set>
 #include "AscendedStatNames.h"
+#include "SkillEditCore.h"
 
 // UI-independent comparison results. Keys are the canonical values (IDs etc.);
 // labels are resolved names and may differ when cache lookups are incomplete.
@@ -218,6 +219,46 @@ private:
     size_t unverified = 0;
     bool buildCoverage=false, equipmentCoverage=false, aquaticPartial=false;
 };
+
+// Compare, Character health and recognition use identical slot evidence.
+template<class Name> bool AddSkillBarComparison(BuildComparison& result,const char* group,
+        const std::array<SkillEdit::DisplaySlot,5>& saved,
+        const std::array<SkillEdit::DisplaySlot,5>& live,Name name,bool required=true){
+    using namespace SkillEdit;
+    if(!required&&!HasSkillSelection(saved))return false;
+    const auto label=[&](const DisplaySlot& slot){
+        return slot.id?std::string(name(slot.id)):std::string(MissingSlotLabel(slot.evidence));
+    };
+    const auto single=[&](size_t i){
+        const auto& a=saved[i];const auto& b=live[i];
+        result.AddSkill(group,SlotLabel(i),std::to_string(a.id),std::to_string(b.id),
+            label(a),label(b),a.id&&b.id,a.id&&b.evidence==SlotEvidence::Empty);
+        result.SetLastRowLinks(LINK_SKILL,{a.id,0,0},{b.id,0,0});
+    };
+    single(0);
+    const auto utilityIds=[](const auto& slots){
+        return std::array<uint32_t,3>{slots[1].id,slots[2].id,slots[3].id};
+    };
+    const auto key=[](const auto& ids){
+        const auto sorted=CanonicalUtilityIds(ids);
+        return std::to_string(sorted[0])+","+std::to_string(sorted[1])+","+std::to_string(sorted[2]);
+    };
+    // Match on unordered utility identities, but present the actual slot
+    // order so labels and corresponding icon/context-menu targets agree.
+    const auto names=[&](const auto& slots){
+        return label(slots[1])+", "+label(slots[2])+", "+label(slots[3]);
+    };
+    const auto a=utilityIds(saved),b=utilityIds(live);
+    const bool savedComplete=CompleteUtilityIds(a),liveComplete=CompleteUtilityIds(b);
+    const bool liveKnown=std::all_of(live.begin()+1,live.begin()+4,[](const auto& slot){
+        return slot.id||slot.evidence==SlotEvidence::Empty;
+    });
+    result.AddSkill(group,"Utilities",key(a),key(b),names(saved),names(live),
+        savedComplete&&liveComplete,savedComplete&&liveKnown);
+    result.SetLastRowLinks(LINK_SKILL,{a[0],a[1],a[2]},{b[0],b[1],b[2]});
+    single(4);
+    return true;
+}
 
 /* Classify the saved-vs-retrieved build template separately from equipment.
    A near-match is credible only when all non-skill fields agree and every

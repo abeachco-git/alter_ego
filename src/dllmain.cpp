@@ -10041,11 +10041,9 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
         }
     }
 
-    const auto& aquaticBar=skillSrc.aquatic_skills;
-    const bool recordedAquatic=aquaticBar.heal||aquaticBar.elite||
-        aquaticBar.utilities[0]||aquaticBar.utilities[1]||aquaticBar.utilities[2]||
-        (skillSrc.rev_active_palettes&&std::any_of(skillSrc.rev_active_palettes->begin()+5,
-            skillSrc.rev_active_palettes->end(),[](const auto& row){return row[0]!=0;}));
+    const bool recordedAquatic=AlterEgo::SkillEdit::HasSkillSelection(
+        AlterEgo::SkillEdit::WithPaletteBar(AlterEgo::SkillEdit::DisplayBar(skillSrc.aquatic_skills),
+            skillSrc.rev_active_palettes,true,false));
     if((g_LibEditMode||recordedAquatic)&&ImGui::TreeNode("Aquatic skills##loadout")){
         RenderBuildSkillRow(skillSrc,skillSz,skillEditable,true);ImGui::TreePop();
     }
@@ -10227,37 +10225,15 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
             result.SetLastRowLinks(AlterEgo::LINK_TRAIT,{a,0,0},{b,0,0});
         }
     }
-    auto compareSkills = [&](const char* group, const AlterEgo::SkillBar& a,
-                              const AlterEgo::SkillBar& b) {
-        result.AddSkill(group,"Heal",idKey(a.heal),idKey(b.heal),skillName(a.heal),skillName(b.heal),a.heal&&b.heal,a.heal&&(b.empty_slots&1));
-        result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.heal,0,0},{b.heal,0,0});
-        // Utility order is a control-layout preference, not a combat
-        // configuration difference. Keep original order on disk/export.
-        auto sortedUtilities = [&](const AlterEgo::SkillBar& bar) {
-            const auto ids=AlterEgo::CanonicalUtilityIds({bar.utilities[0],bar.utilities[1],bar.utilities[2]});
-            std::string key, names;
-            for (uint32_t id : ids) {
-                if (!key.empty()) { key += ","; names += ", "; }
-                key += std::to_string(id);
-                names += skillName(id);
-            }
-            return std::make_pair(key, names);
-        };
-        const auto sa = sortedUtilities(a), sb = sortedUtilities(b);
-        const bool savedComplete=AlterEgo::CompleteUtilityIds({a.utilities[0],a.utilities[1],a.utilities[2]});
-        const bool liveComplete=AlterEgo::CompleteUtilityIds({b.utilities[0],b.utilities[1],b.utilities[2]});
-        bool liveKnown=true;
-        for(int i=0;i<3;++i)liveKnown=liveKnown&&(b.utilities[i]||(b.empty_slots&(2u<<i)));
-        result.AddSkill(group,"Utilities",sa.first,sb.first,sa.second,sb.second,
-            savedComplete&&liveComplete,savedComplete&&liveKnown);
-        result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.utilities[0],a.utilities[1],a.utilities[2]},{b.utilities[0],b.utilities[1],b.utilities[2]});
-        result.AddSkill(group,"Elite",idKey(a.elite),idKey(b.elite),skillName(a.elite),skillName(b.elite),a.elite&&b.elite,a.elite&&(b.empty_slots&16));
-        result.SetLastRowLinks(AlterEgo::LINK_SKILL,{a.elite,0,0},{b.elite,0,0});
+    namespace SE=AlterEgo::SkillEdit;
+    const auto compareSkills=[&](bool aquatic){
+        const auto& a=aquatic?saved.aquatic_skills:saved.terrestrial_skills;
+        const auto& b=aquatic?live.aquatic_skills:live.terrestrial_skills;
+        const auto slots=SE::WithPaletteBar(SE::DisplayBar(a),saved.rev_active_palettes,aquatic,false);
+        AlterEgo::AddSkillBarComparison(result,aquatic?"Aquatic skills":"Terrestrial skills",
+            slots,SE::DisplayBar(b,b.empty_slots),skillName,!aquatic);
     };
-    compareSkills("Terrestrial skills", saved.terrestrial_skills, live.terrestrial_skills);
-    const auto& waterSkills=saved.aquatic_skills;
-    if(waterSkills.heal||waterSkills.elite||waterSkills.utilities[0]||waterSkills.utilities[1]||waterSkills.utilities[2])
-        compareSkills("Aquatic skills", waterSkills, live.aquatic_skills);
+    compareSkills(false);compareSkills(true);
     if(saved.profession=="Ranger"||saved.profession=="Revenant"){
         const bool legend=saved.profession=="Revenant";
         const auto group=legend?"Revenant legends":"Ranger pets";

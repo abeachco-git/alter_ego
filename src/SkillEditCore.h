@@ -34,6 +34,13 @@ template<class Bar> std::array<DisplaySlot,5> DisplayBar(const Bar& bar,uint8_t 
     for(std::size_t i=0;i<ids.size();++i)result[i]=SlotDisplay(ids[i],(emptyMask&(1u<<i))!=0);
     return result;
 }
+// Optional aquatic coverage follows recorded selections, including unresolved
+// nonzero palette evidence, not an empty or retired row.
+inline bool HasSkillSelection(const std::array<DisplaySlot,5>& slots){
+    return std::any_of(slots.begin(),slots.end(),[](const auto& slot){
+        return slot.id||slot.evidence==SlotEvidence::Unresolved;
+    });
+}
 // Request only exact recorded IDs; unresolved palette evidence is not a skill ID.
 inline std::vector<uint32_t> RecordedSkillIds(const std::array<DisplaySlot,5>& slots) {
     std::vector<uint32_t> ids;
