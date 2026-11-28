@@ -7510,9 +7510,10 @@ static void RenderCharacterPetsPanel(const AlterEgo::Character& ch){
     using namespace AlterEgo;
     namespace PO=PetOwnership;
     const auto address=CharacterAddressFor(ch);
-    const auto ownership=address?NativeAccounts::CharacterPets(address->Reference()):PO::Collection{};
     const bool buildsVerified=address.has_value()&&ch.scope_stamps[CharacterScopes::Index(CharacterScopes::Builds)]>0;
     const auto membership=buildsVerified?PO::BuildMemberships(ch.build_tabs):PO::Memberships{};
+    const auto ownership=PO::WithVerifiedMembership(
+        address?NativeAccounts::CharacterPets(address->Reference()):PO::Collection{},membership);
     const auto active=[&](uint32_t id){return PO::InTab(membership,id,ch.active_build_tab);};
     const int viewedTab=g_SelectedBuildTab>=0&&g_SelectedBuildTab<static_cast<int>(ch.build_tabs.size())
         ?ch.build_tabs[g_SelectedBuildTab].tab:0;

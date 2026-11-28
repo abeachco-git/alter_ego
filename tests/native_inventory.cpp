@@ -128,6 +128,19 @@ int case_native_inventory(int,char**){
         assert(membership.at(4)[0].tab==1&&!membership.at(4)[0].aquatic&&membership.at(4)[0].slot==1);
         assert(membership.at(4)[1].aquatic&&membership.at(4)[1].slot==2);
         assert(!membership.count(99)&&!membership.count(77));
+        // A verified current build is itself observed evidence, even before
+        // a successful registry write; history/manual state is not overwritten.
+        const PO::Collection prior={{4,{false,PO::Manual::NotOwned}},{6,{false,PO::Manual::Owned}},{9,{true,PO::Manual::Unknown}}};
+        const auto effective=PO::WithVerifiedMembership(prior,membership);
+        assert(PO::Get(effective,4).State()==PO::Status::Observed);
+        assert(PO::Get(effective,6).observed&&PO::Get(effective,6).State()==PO::Status::Owned);
+        assert(PO::Get(effective,8).State()==PO::Status::Observed&&PO::Get(effective,9).observed);
+        assert(!PO::Get(effective,99).observed&&!PO::Get(effective,77).observed);
+        assert(!PO::Get(prior,4).observed&&!PO::Get(prior,8).observed);
+        assert(!PO::Get(PO::WithVerifiedMembership(prior,{}),8).observed);
+        PO::Counts effectiveCounts;
+        for(const auto& entry:effective)effectiveCounts.Add(entry.second);
+        assert(effectiveCounts.confirmed==4&&effectiveCounts.observed==4&&effectiveCounts.manualOwned==1);
         assert(PO::InTab(membership,4,1)&&!PO::InTab(membership,4,2)&&!PO::InTab(membership,4,0));
         auto reordered=tabs;std::reverse(reordered.begin(),reordered.end());
         assert(PO::TabIndex(reordered,1)==3&&PO::TabIndex(reordered,2)==2);

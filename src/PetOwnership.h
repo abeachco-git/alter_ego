@@ -60,6 +60,14 @@ template<class Tabs> Memberships BuildMemberships(const Tabs& tabs){
     }
     return result;
 }
+// Only pass membership from an identity-qualified, verified Builds scope.
+// Current positive selections are evidence even if the durable registry
+// predates them or its observation write failed. Never mutate it here.
+inline Collection WithVerifiedMembership(Collection collection,const Memberships& membership){
+    for(const auto& [id,slots]:membership)if(id&&!slots.empty())
+        collection[id].observed=true;
+    return collection;
+}
 inline bool InTab(const Memberships& membership,uint32_t id,int tab){
     if(tab<=0)return false;
     const auto it=membership.find(id);
