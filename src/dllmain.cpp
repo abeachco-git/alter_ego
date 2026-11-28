@@ -3615,7 +3615,7 @@ static void OpenSaveLiveBuildDialog(const AlterEgo::Character& ch,
 static void RenderLiveComponentSaveMenu(const AlterEgo::Character& ch, int tab,
                                         int kind, const char* label) {
     if (ImGui::BeginPopupContextItem(label)) {
-        if (ImGui::MenuItem("Save to Library...", nullptr, false, !ch.equipment.empty())) {
+        if (AlterEgo::UI::MenuAction("Save to Library...",AlterEgo::UI::MenuIcon::Save,!ch.equipment.empty())) {
             int idx = 0;
             for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
                 if (ch.build_tabs[i].is_active) { idx = i; break; }
@@ -3760,14 +3760,14 @@ static void RenderEquipmentPanel(const AlterEgo::Character& ch) {
     // Fashion menu: share the right-clicked tab's look as a wardrobe template chat link.
     if (ImGui::BeginPopup("##fashion_menu")) {
         int fTab = (g_FashionTab > 0) ? g_FashionTab : tab;
-        if (ImGui::MenuItem("Save to Library...", nullptr, false, !ch.build_tabs.empty()||!ch.equipment.empty())) {
+        if (AlterEgo::UI::MenuAction("Save to Library...",AlterEgo::UI::MenuIcon::Save,!ch.build_tabs.empty()||!ch.equipment.empty())) {
             int idx = 0;
             for (int i = 0; i < (int)ch.build_tabs.size(); ++i)
                 if (ch.build_tabs[i].is_active) { idx = i; break; }
             OpenSaveLiveBuildDialog(ch,ch.build_tabs.empty()?AlterEgo::BuildTemplate{}:ch.build_tabs[idx],
                 fTab,ch.build_tabs.empty()?kSaveEntireEquipmentSet:-1);
         }
-        if(ImGui::MenuItem("Save Equipment Set...",nullptr,false,!ch.equipment.empty()))
+        if(AlterEgo::UI::MenuAction("Save Equipment Set...",AlterEgo::UI::MenuIcon::Save,!ch.equipment.empty()))
             OpenSaveLiveBuildDialog(ch,AlterEgo::BuildTemplate{},fTab,kSaveEntireEquipmentSet);
         if (ImGui::Selectable("Copy Wardrobe Template chat link")) {
             std::string link = BuildWardrobeLink(ch, fTab);
@@ -4322,6 +4322,17 @@ static AlterEgo::SavedBuild MakeLiveShareSnapshot(
         ch.name + " - " + (bt.name.empty() ? "Tab " + std::to_string(bt.tab) : bt.name),
         AlterEgo::GameMode::PvE, link);
 }
+// Header and row share the same immutable captured source and export contents.
+// Late palette availability can resolve the link without replacing the captured build.
+static void RenderLiveShareMenuItems(AlterEgo::SavedBuild& snapshot,const AlterEgo::Character* source,int buildIndex){
+    if(snapshot.chat_link.empty()&&source&&buildIndex>=0&&buildIndex<static_cast<int>(source->build_tabs.size())){
+        const auto& bt=source->build_tabs[buildIndex];
+        const auto& profession=bt.profession.empty()?source->profession:bt.profession;
+        if(AlterEgo::GW2API::HasPaletteData(profession))snapshot.chat_link=EncodeBuildTabChatLink(bt);
+    }
+    if(snapshot.chat_link.empty())ImGui::TextDisabled("Build link unavailable: missing or unrepresentable data.");
+    RenderBuildShareMenuItems(snapshot,source);
+}
 static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferredEquipTab,
     bool stacked, float buttonWidth) {
     // Keep a snapshot for the Share popup so it never accidentally uses a
@@ -4369,18 +4380,7 @@ static void RenderSaveLiveBuildAction(const AlterEgo::Character& ch, int preferr
         ImGui::SetTooltip("Share the selected character's retrieved build and equipment, not a saved build.");
 
     if (ImGui::BeginPopup("##live_share_menu")) {
-        if (shareSnapshot.chat_link.empty() && shareSource &&
-            shareBuildIdx >= 0 && shareBuildIdx < static_cast<int>(shareSource->build_tabs.size())) {
-            const auto& bt = shareSource->build_tabs[shareBuildIdx];
-            const std::string profession = bt.profession.empty() ? shareSource->profession : bt.profession;
-            if (AlterEgo::GW2API::HasPaletteData(profession))
-                shareSnapshot.chat_link = EncodeBuildTabChatLink(bt);
-        }
-        if (shareSnapshot.chat_link.empty())
-            ImGui::TextDisabled("Build link unavailable: missing or unrepresentable data.");
-        // Fashion sharing uses the character's active equipment tab and stays
-        // available even while the build palette is still loading.
-        RenderBuildShareMenuItems(shareSnapshot,shareSource?&*shareSource:nullptr);
+        RenderLiveShareMenuItems(shareSnapshot,shareSource?&*shareSource:nullptr,shareBuildIdx);
         ImGui::EndPopup();
     }
 }
@@ -5566,7 +5566,7 @@ static void SendBuildToRelay(const AlterEgo::SavedBuild& build) {
 // export actions. The caller owns the popup and supplies the exact build data.
 static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
     const AlterEgo::Character* liveCharacter) {
-                if (AlterEgo::UI::MenuAction("Copy build-only chat link",AlterEgo::UI::MenuIcon::Copy,!build.chat_link.empty())) {
+                if (AlterEgo::UI::MenuAction("Copy build-only chat link",AlterEgo::UI::MenuIcon::Link,!build.chat_link.empty())) {
                     CopyToClipboard(build.chat_link);
                     if (APIDefs) APIDefs->GUI_SendAlert("Build link copied to clipboard!");
                 }
@@ -5582,7 +5582,7 @@ static void RenderBuildShareMenuItems(const AlterEgo::SavedBuild& build,
                     }
                 }
                 if (liveCharacter) {
-                    if (ImGui::Selectable("Copy active fashion chat link")) {
+                    if (AlterEgo::UI::MenuAction("Copy active fashion chat link",AlterEgo::UI::MenuIcon::Link)) {
                         // "Active Fashion" is always the active in-game tab,
                         // independent of the equipment tab being viewed.
                         const int tab = liveCharacter->active_equipment_tab > 0
@@ -8514,10 +8514,10 @@ static void RenderSaveToLibraryDialog() {
                     g_SaveLibComponentKind=i;
                 }
             };
-            ImGui::TextDisabled("BUILD COMPONENTS");option(0);option(1);
+            AlterEgo::UI::MenuSectionHeading("BUILD COMPONENTS");option(0);option(1);
             if(sourceChar&&Composable::KindApplies("pets",sourceChar->profession))option(10);
             if(sourceChar&&Composable::KindApplies("legends",sourceChar->profession))option(11);
-            ImGui::Separator();ImGui::TextDisabled("EQUIPMENT COMPONENTS");
+            ImGui::Separator();AlterEgo::UI::MenuSectionHeading("EQUIPMENT COMPONENTS");
             if(g_SaveLibTarget==1)option(kSaveEntireEquipmentSet);
             for(int i:{2,4,6,5,3,8,7,9})option(i);
             ImGui::EndCombo();
@@ -11294,13 +11294,17 @@ static void NavigateToCharacterLoadoutCompare(const AlterEgo::Character& ch,cons
     g_LibComparePreviousSelection=g_LibCompareSelection;
     g_LibCompareBuildTab=-1;g_LibCompareEquipTab=0;
 }
-static void SavedLoadoutSelectorActions(const AlterEgo::SavedBuild& saved,const AlterEgo::Character* ch){
+static void RenderSavedLoadoutClipboardActions(const AlterEgo::SavedBuild& saved){
     using namespace AlterEgo::UI;
     CopyNameMenuItem(saved.name,"Copy Name",true);
     CopyNativeLinkMenuItem(saved.chat_link,"Copy Build Chat Link");
     if(MenuAction("Copy Portable Loadout",MenuIcon::Copy))ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy,saved);
     if(BeginActionMenu("Share",MenuIcon::Share)){RenderBuildShareMenuItems(saved);ImGui::EndMenu();}
-    ImGui::Separator();
+}
+static void SavedLoadoutSelectorActions(const AlterEgo::SavedBuild& saved,const AlterEgo::Character* ch,bool separateNavigation=true){
+    using namespace AlterEgo::UI;
+    RenderSavedLoadoutClipboardActions(saved);
+    if(separateNavigation)ImGui::Separator();
     if(MenuAction("Compare",MenuIcon::Compare,!LibraryDraftOpen(),"Finish the current Library draft first.")){
         if(ch)NavigateToCharacterLoadoutCompare(*ch,saved);else ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare,saved);
     }
@@ -12188,12 +12192,7 @@ static void RenderBuildLibrary() {
                 if(MenuAction("Edit",MenuIcon::Edit))ExecuteSavedLoadoutAction(SavedLoadoutAction::Edit,b);
                 if(MenuAction("Rename",MenuIcon::Rename))ExecuteSavedLoadoutAction(SavedLoadoutAction::Rename,b);
                 if(MenuAction("Duplicate",MenuIcon::Duplicate))ExecuteSavedLoadoutAction(SavedLoadoutAction::Duplicate,b);
-                ImGui::Separator();CopyNameMenuItem(b.name,"Copy Name",true);
-                CopyNativeLinkMenuItem(b.chat_link,"Copy Build Chat Link");
-                if(MenuAction("Copy Portable Loadout",MenuIcon::Copy))ExecuteSavedLoadoutAction(SavedLoadoutAction::Copy,b);
-                if(BeginActionMenu("Share",MenuIcon::Share)){
-                    RenderBuildShareMenuItems(b);ImGui::EndMenu();
-                }
+                ImGui::Separator();RenderSavedLoadoutClipboardActions(b);
                 ImGui::Separator();
                 if(MenuAction("Compare",MenuIcon::Compare))ExecuteSavedLoadoutAction(SavedLoadoutAction::Compare,b);
                 ImGui::Separator();
@@ -16761,38 +16760,47 @@ void AddonRender() {
                     // the character whose details happen to be selected.
                     const bool characterHovered=ImGui::IsItemHovered();
                     if (ImGui::BeginPopupContextItem("##character_actions")) {
-                        CopyNameMenuItem(ch.name);
-                        RenderCharacterLoadMenu("Load Character",ch.name,ch.account_name);
-                        if(const auto* loadout=CharacterContextLoadout(ch)){
-                            ImGui::Separator();RenderCharacterLoadoutContext(ch,loadout,false);ImGui::Separator();
-                        }
-                        const int activeBuild = ActiveBuildIndex(ch);
-                        const int activeEquip = ActiveEquipmentTab(ch);
-                        const auto refreshAddress=CharacterAddressFor(ch);
-                        const bool refreshBusy=AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress;
-                        const bool refreshReady=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
-                        if(AlterEgo::UI::MenuAction("Refresh Character",AlterEgo::UI::MenuIcon::Regenerate,
-                            refreshReady&&!refreshBusy&&bool(refreshAddress),
-                            !refreshReady?"Link or verify an API account in Nexus options.":
-                            refreshBusy?"A character or roster request is already in progress.":"Character identity is not verified.",
-                            "Retrieve the latest details, builds, equipment and crafting data for this character.")){
-                            AlterEgo::GW2API::RequestCharacterRefreshAddresses({*refreshAddress});
-                            if(MatchesSelection(g_SelectedCharacter,ch))g_DetailsFetched=false;
-                        }
-                        if (ImGui::MenuItem("Save to Library...", nullptr, false, activeBuild>=0||!ch.equipment.empty()))
-                            OpenSaveLiveBuildDialog(ch,activeBuild>=0?ch.build_tabs[activeBuild]:AlterEgo::BuildTemplate{},
-                                activeEquip,activeBuild>=0?-1:kSaveEntireEquipmentSet);
-                        if (ImGui::BeginMenu("Share", activeBuild >= 0)) {
-                            static AlterEgo::SavedBuild contextSnapshot;
-                            static std::string contextKey;
-                            const std::string key = ch.name + "#" +
-                                std::to_string(activeBuild) + "#" + std::to_string(activeEquip);
-                            if (ImGui::IsWindowAppearing() || contextKey != key) {
-                                contextSnapshot = MakeLiveShareSnapshot(ch, activeBuild, activeEquip);
-                                contextKey = key;
+                        using namespace AlterEgo::UI;
+                        const auto* loadout=CharacterContextLoadout(ch);
+                        const auto characterHeading=MenuObjectHeading("Character",ch.name);
+                        {
+                            MenuSection characterSection("character",loadout?characterHeading.c_str():nullptr);
+                            RenderCharacterIdentityMenuActions(ch.name,ch.account_name);
+                            const int activeBuild = ActiveBuildIndex(ch);
+                            const int activeEquip = ActiveEquipmentTab(ch);
+                            const auto refreshAddress=CharacterAddressFor(ch);
+                            const bool refreshBusy=AlterEgo::GW2API::GetFetchStatus()==AlterEgo::FetchStatus::InProgress;
+                            const bool refreshReady=AlterEgo::GW2API::GetAccountStatus()==AlterEgo::AccountStatus::Ready;
+                            if(AlterEgo::UI::MenuAction("Refresh Character",AlterEgo::UI::MenuIcon::Regenerate,
+                                refreshReady&&!refreshBusy&&bool(refreshAddress),
+                                !refreshReady?"Link or verify an API account in Nexus options.":
+                                refreshBusy?"A character or roster request is already in progress.":"Character identity is not verified.",
+                                "Retrieve the latest details, builds, equipment and crafting data for this character.")){
+                                AlterEgo::GW2API::RequestCharacterRefreshAddresses({*refreshAddress});
+                                if(MatchesSelection(g_SelectedCharacter,ch))g_DetailsFetched=false;
                             }
-                            RenderBuildShareMenuItems(contextSnapshot, &ch);
-                            ImGui::EndMenu();
+                            if(MenuAction("Save to Library...",MenuIcon::Save,activeBuild>=0||!ch.equipment.empty(),
+                                "No retrieved build or equipment available."))
+                                OpenSaveLiveBuildDialog(ch,activeBuild>=0?ch.build_tabs[activeBuild]:AlterEgo::BuildTemplate{},
+                                    activeEquip,activeBuild>=0?-1:kSaveEntireEquipmentSet);
+                            if(BeginActionMenu("Share",MenuIcon::Share,activeBuild>=0,"No retrieved build available.")){
+                                static AlterEgo::SavedBuild contextSnapshot;
+                                static std::optional<AlterEgo::Character> contextSource;
+                                static int contextBuild=-1,contextEquip=0;
+                                if(ImGui::IsWindowAppearing()||!contextSource||
+                                    contextSource->account_name!=ch.account_name||contextSource->name!=ch.name||
+                                    contextBuild!=activeBuild||contextEquip!=activeEquip){
+                                    contextSnapshot=MakeLiveShareSnapshot(ch,activeBuild,activeEquip);
+                                    contextSource=ch;contextBuild=activeBuild;contextEquip=activeEquip;
+                                }
+                                RenderLiveShareMenuItems(contextSnapshot,&*contextSource,contextBuild);
+                                ImGui::EndMenu();
+                            }
+                        }
+                        if(loadout){
+                            const auto heading=MenuObjectHeading("Loadout",loadout->name);
+                            MenuSection loadoutSection("loadout",heading.c_str(),true);
+                            SavedLoadoutSelectorActions(*loadout,&ch,false);
                         }
                         ImGui::EndPopup();
                     }
@@ -17184,8 +17192,7 @@ void AddonRender() {
                         RenderProfessionCharacterName(ch.name, ch.profession);
                         ImGui::PushID(ch.account_name.c_str());ImGui::PushID(ch.name.c_str());
                         AlterEgo::UI::EntityContext("##character_header_actions",[&]{
-                            CopyNameMenuItem(ch.name);
-                            if(FastLoadActionsEnabled()){ImGui::Separator();RenderCharacterLoadMenu("Load Character",ch.name,ch.account_name);}
+                            RenderCharacterIdentityMenuActions(ch.name,ch.account_name,true);
                         });
                         ImGui::PopID();ImGui::PopID();
 
@@ -17665,7 +17672,7 @@ void AddonRender() {
             const ImVec2 menuSize = ImGui::GetWindowSize();
             const bool libraryMouseOverMenu = ImGui::IsMouseHoveringRect(
                 menuPos, ImVec2(menuPos.x + menuSize.x, menuPos.y + menuSize.y), false);
-            ImGui::TextDisabled("COLLECTIONS");
+            AlterEgo::UI::MenuSectionHeading("COLLECTIONS");
             // Only the actually visible collection is checked. Merely opening
             // this dropdown from another tab does not select either collection.
             const bool onBuilds = g_MainTab == 1 && g_LibraryCollection == 0;
@@ -17717,7 +17724,7 @@ void AddonRender() {
             }
 
             ImGui::Separator();
-            ImGui::TextDisabled("TEMPLATE IMPORT");
+            AlterEgo::UI::MenuSectionHeading("TEMPLATE IMPORT");
             if (ImGui::MenuItem("Import from Link / URL",nullptr,false,!LibraryDraftOpen())) {
                 libraryActionSelected = true;
                 g_LibShowImport = true;
@@ -17732,7 +17739,7 @@ void AddonRender() {
                 ImGui::SetTooltip("%s", AlterEgo::BuildRelay::ImportTooltip());
 
             ImGui::Separator();
-            ImGui::TextDisabled("LIBRARIES");
+            AlterEgo::UI::MenuSectionHeading("LIBRARIES");
             if (ImGui::MenuItem("Import")) {
                 libraryActionSelected = true;
                 BeginLibraryBackupImport();

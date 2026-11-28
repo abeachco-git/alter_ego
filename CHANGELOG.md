@@ -23,6 +23,7 @@ This is a draft for the experimental branch, not a published or fully validated 
 - Validated Wiki reference schedules for raid bounties, fractals and selected Vault event timers, with daily-eligible build refresh and an embedded/SQLite fallback for event timers. Opted-in runtime event timer refresh is eligible after 30 days.
 
 ### Changed
+- Clarify mixed Character and Loadout context menus with object headings and consistent Share icons; keep actions independently targeted.
 - Protect shared refresh/status footers and build-detection toast backgrounds from excessive transparency; improve neutral footer metadata contrast without changing status semantics or layout.
 - Standardize tab spacing with extra width only at group dividers, use content-sized reference editors, and keep confirmation action pairs together.
 - Ranger pet and Revenant legend artwork now loads on demand through the same persistent artwork cache as skills, reducing the fixed DLL resources.

@@ -111,6 +111,16 @@ void MarkInventoryNavigation();
 bool FastLoadActionsEnabled();
 std::string CharacterLoadUnavailable(const std::string& character,const std::string& account);
 bool RenderCharacterLoadMenu(const char* label,const std::string& character,const std::string& account);
+// Compact identity actions for character headers, rows and inventory holders.
+// The caller owns the surrounding menu and chooses whether a local divider is useful.
+inline void RenderCharacterIdentityMenuActions(const std::string& character,const std::string& account,
+    bool separateLoad=false,const char* copyLabel="Copy Name"){
+    CopyNameMenuItem(character,copyLabel);
+    if(FastLoadActionsEnabled()){
+        if(separateLoad&&!character.empty())ImGui::Separator();
+        RenderCharacterLoadMenu("Load Character",character,account);
+    }
+}
 void ProcessCharacterLoad();
 std::string PlainItemDescription(const std::string& text);
 namespace AlterEgo { struct ItemInfo; }

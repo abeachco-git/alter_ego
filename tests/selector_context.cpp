@@ -138,6 +138,40 @@ int case_selector_context(int, char**) {
         const float gap=grouped[i].Min.x-grouped[i-1].Max.x;
         assert(std::abs(gap-base-(i==2?TabGroupExtraGap:0.f))<1.f);
     }
+    // Native menu IDs are independent of visible name and action label.
+    ImGui::NewFrame();
+    ImGui::SetNextWindowSize(ImVec2(400,300));
+    ImGui::Begin("Menu section test");
+    ImGui::OpenPopup("mixed");
+    if(ImGui::BeginPopup("mixed")){
+        const auto root=ImGui::GetID(MenuIconLabel("Copy Name").c_str());
+        ImGuiID characterCopy=0,characterShare=0;
+        {
+            MenuSection section("character","Character - Duplicate");
+            characterCopy=ImGui::GetID(MenuIconLabel("Copy Name").c_str());
+            characterShare=ImGui::GetID(MenuIconLabel("Share").c_str());
+            MenuAction("Copy Name",MenuIcon::Copy);
+            if(BeginActionMenu("Share",MenuIcon::Share))ImGui::EndMenu();
+        }
+        assert(ImGui::GetID(MenuIconLabel("Copy Name").c_str())==root);
+        {
+            MenuSection section("loadout","Loadout - Duplicate",true);
+            assert(ImGui::GetID(MenuIconLabel("Copy Name").c_str())!=characterCopy);
+            assert(ImGui::GetID(MenuIconLabel("Share").c_str())!=characterShare);
+            MenuAction("Copy Name",MenuIcon::Copy);
+            if(BeginActionMenu("Share",MenuIcon::Share))ImGui::EndMenu();
+        }
+        {
+            MenuSection section("character","Character - Renamed");
+            assert(ImGui::GetID(MenuIconLabel("Copy Name").c_str())==characterCopy);
+        }
+        assert(ImGui::GetID(MenuIconLabel("Copy Name").c_str())==root);
+        MenuSectionHeading(std::string(300,'W').c_str());
+        assert(ImGui::GetItemRectSize().x<=ImGui::GetFontSize()*24.f+1.f);
+        assert(MenuObjectHeading("Loadout","Mixed Case")=="Loadout - Mixed Case");
+        ImGui::CloseCurrentPopup();ImGui::EndPopup();
+    }else assert(false);
+    ImGui::End();ImGui::Render();
     // Exercise the shared background policy in the native ImGui context.
     assert(ClampWindowTransparency(-1)==0&&ClampWindowTransparency(100)==80);
     assert(ClampWindowTransparency(25)==25);

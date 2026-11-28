@@ -213,7 +213,35 @@ inline bool DestructiveMenuItem(const char* label, bool enabled = true) {
 // Original vector menu icons, compiled into the DLL. Keep native MenuItem/
 // BeginMenu responsible for navigation, selection, focus and popup closing.
 // A font-responsive text gutter reserves space; drawing is non-interactive.
-enum class MenuIcon { New, Paste, Edit, Rename, Duplicate, Copy, Share, Compare, Preview, Delete, Regenerate, Open, Detach, Link };
+// Muted menu headings are non-interactive; a bounded wrap avoids expanding a
+// popup to the length of an arbitrary character/Loadout name.
+inline void MenuSectionHeading(const char* title){
+    if(!title||!*title)return;
+    const float width=std::max(1.f,std::min(ImGui::GetFontSize()*24.f,
+        ImGui::GetIO().DisplaySize.x-2.f*ImGui::GetStyle().WindowPadding.x-16.f));
+    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+width);
+    ImGui::TextUnformatted(title);
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+}
+inline std::string MenuObjectHeading(const char* type,const std::string& name){
+    return name.empty()?std::string(type):std::string(type)+" - "+name;
+}
+// Role ID is stable independently of display text, with the enclosing popup
+// already scoped to its exact source. Identical action labels never collide.
+class MenuSection {
+public:
+    MenuSection(const char* role,const char* title=nullptr,bool separator=false){
+        if(separator)ImGui::Separator();
+        ImGui::PushID(role);
+        MenuSectionHeading(title);
+    }
+    ~MenuSection(){ImGui::PopID();}
+    MenuSection(const MenuSection&)=delete;
+    MenuSection& operator=(const MenuSection&)=delete;
+};
+enum class MenuIcon { New, Paste, Edit, Rename, Duplicate, Copy, Share, Compare, Preview, Delete, Regenerate, Open, Detach, Link, Save };
 inline std::string MenuIconLabel(const char* label){
     std::string gutter;
     const float width=ImGui::GetFontSize()*1.35f;
@@ -229,6 +257,7 @@ inline void DrawMenuIcon(ImDrawList* draw,ImVec2 pos,MenuIcon icon,ImU32 color,f
     auto rect=[&](float a,float b,float c,float d){draw->AddRect(p(a,b),p(c,d),color,s*.08f,0,thick);};
     auto circle=[&](float x,float y,float r){draw->AddCircle(p(x,y),s*r,color,12,thick);};
     switch(icon){
+    case MenuIcon::Save:rect(.12f,.08f,.88f,.92f);rect(.27f,.08f,.72f,.36f);rect(.29f,.56f,.71f,.92f);line(.62f,.14f,.62f,.29f);break;
     case MenuIcon::New:line(.12f,.5f,.88f,.5f);line(.5f,.12f,.5f,.88f);break;
     case MenuIcon::Paste:rect(.18f,.2f,.82f,.94f);rect(.35f,.04f,.65f,.27f);line(.34f,.48f,.66f,.48f);line(.34f,.68f,.66f,.68f);break;
     case MenuIcon::Edit:line(.15f,.85f,.25f,.55f);line(.25f,.55f,.72f,.08f);line(.72f,.08f,.92f,.28f);line(.92f,.28f,.45f,.75f);line(.45f,.75f,.15f,.85f);line(.61f,.19f,.81f,.39f);break;

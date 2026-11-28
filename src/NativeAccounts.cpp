@@ -1488,8 +1488,7 @@ void RenderItemAvailability(uint32_t id,const std::string& account,const std::st
         if(!s.character.empty()){
             ImGui::PushID(static_cast<int>(i));
             UI::EntityContext("##item_location_character",[&]{
-                CopyNameMenuItem(s.character,"Copy Character Name");
-                if(FastLoadActionsEnabled()){ImGui::Separator();RenderCharacterLoadMenu("Load Character",s.character,s.account);}
+                RenderCharacterIdentityMenuActions(s.character,s.account,true,"Copy Character Name");
             });
             ImGui::PopID();
         }
@@ -2111,8 +2110,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
                 const bool open=GroupBrowse::Expanded(expandedInventoryGroups,node.key,false,forceExpand);
                 if(UI::CatalogBranchRow(i,open,node.label,decorate)&&GroupBrowse::Toggle(expandedInventoryGroups,node.key,forceExpand))expansionChanged=true;
                 if(!node.character.empty())UI::EntityContext("##inventory_character_group",[&]{
-                    CopyNameMenuItem(node.character,"Copy Character Name");
-                    if(FastLoadActionsEnabled()){ImGui::Separator();RenderCharacterLoadMenu("Load Character",node.character,node.account);}
+                    RenderCharacterIdentityMenuActions(node.character,node.account,true,"Copy Character Name");
                 });
             }
             ImGui::PopID();
@@ -2180,10 +2178,15 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
         ImGui::Selectable((label+"###location").c_str(),false);
         if(ImGui::BeginPopupContextItem("##location_actions")){
             if(!slot.character.empty()){
-                CopyNameMenuItem(slot.character,"Copy Character Name");
-                RenderCharacterLoadMenu("Load Character",slot.character,slot.account);
+                const auto heading=UI::MenuObjectHeading("Character",slot.character);
+                UI::MenuSection characterSection("character",heading.c_str());
+                RenderCharacterIdentityMenuActions(slot.character,slot.account);
             }
-            CopyNameMenuItem(name);
+            {
+                const auto heading=UI::MenuObjectHeading("Item",name);
+                UI::MenuSection itemSection("item",slot.character.empty()?nullptr:heading.c_str(),!slot.character.empty());
+                CopyNameMenuItem(name);
+            }
             ImGui::EndPopup();
         }
         ImGui::TextDisabled("%s%s",BindingName(slot.binding),Fresh(*v,row)?"":" | Stale or failed");
