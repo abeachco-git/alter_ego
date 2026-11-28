@@ -445,16 +445,17 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
             [&](uint32_t id,const std::string& name){item[idField]=id;item[nameField]=name;g_ComponentCatalogSearch.clear();});
         ImGui::EndCombo();
     }else if (ImGui::BeginPopupContextItem("##native_upgrade_context")) {
-        const auto info=selectedId?AlterEgo::GW2API::GetItemInfo(selectedId):nullptr;
-        CopyEntityMenu(info&&!info->name.empty()?info->name:selected,AlterEgo::LINK_ITEM,selectedId);
         using AlterEgo::UI::MenuAction;
         using AlterEgo::UI::MenuIcon;
         const bool rune=std::strcmp(family,"runes")==0,sigil=std::strcmp(family,"sigils")==0;
+        const auto entity=ItemMenuEntity(rune?"Rune":sigil?"Sigil":"Relic",selectedId,selected);
+        const bool entities=RenderGearEntityMenu(entity,{}, {},{}, {},true);
+        {
+        AlterEgo::UI::MenuSection config("configuration",entities?"Configuration":nullptr,entities);
         const auto field=rune||sigil?GearCopyField::Upgrade:GearCopyField::Relic;
         const bool recorded=(item.contains(idField)||item.contains(nameField))&&
             (!item.contains(idField)||(item[idField].is_number_integer()&&item[idField]>=0&&item[idField]<=UINT32_MAX))&&
             (!item.contains(nameField)||item[nameField].is_string());
-        ImGui::Separator();
         if(MenuAction("Copy",MenuIcon::Copy,recorded)){
             GearClipboard clip;clip.valid=true;clip.field=field;
             clip.slot=rune?"Helm":sigil?"WeaponA1":"Relic";
@@ -472,8 +473,8 @@ static void ComponentNativeCatalogChoice(ComponentJson& item,
             if(nextId)item[idField]=nextId;else item.erase(idField);
             if(!name.empty())item[nameField]=name;else item.erase(nameField);
         }
-        ImGui::Separator();
         if (MenuAction("Clear",MenuIcon::Delete,recorded)) { item.erase(idField); item.erase(nameField); }
+        } // configuration ID scope
         ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -499,11 +500,13 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
     }else if(ImGui::BeginPopupContextItem("##native_stat_context")){
         using AlterEgo::UI::MenuAction;
         using AlterEgo::UI::MenuIcon;
-        CopyNameMenuItem(info&&!info->name.empty()?info->name:storedName);
+        const MenuEntity entity{"Stats",info&&!info->name.empty()?info->name:storedName,{}};
+        const bool entities=RenderGearEntityMenu(entity,{}, {},{}, {},true);
+        {
+        AlterEgo::UI::MenuSection config("configuration",entities?"Configuration":nullptr,entities);
         AlterEgo::BuildGearSlot checked;
         using namespace AlterEgo::GearEdit;
         const bool recorded=ReadComponentField(item,CopyField::Stats,true,checked);
-        ImGui::Separator();
         if(MenuAction("Copy",MenuIcon::Copy,recorded)){
             GearClipboard clip;clip.valid=true;clip.field=GearCopyField::Stats;clip.slot="Helm";clip.data=checked;
             g_GearClipboard=std::move(clip);
@@ -513,8 +516,8 @@ static void ComponentNativeStatChoice(ComponentJson& item) {
             ReadComponentField(item,CopyField::Stats,true,target,false);
         if(MenuAction("Paste",MenuIcon::Paste,compatible))
             ApplyComponentField(item,CopyField::Stats,true,g_GearClipboard.data,1);
-        ImGui::Separator();
         if(MenuAction("Clear",MenuIcon::Delete,recorded)){item.erase("stat_id");item.erase("stat_name");}
+        } // configuration ID scope
         ImGui::EndPopup();
     }
     ImGui::PopID();

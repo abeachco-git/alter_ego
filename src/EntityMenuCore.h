@@ -11,6 +11,7 @@ struct Entity {
     std::string role,name,link;
     bool Visible() const { return !name.empty()||!link.empty(); }
     std::string Label() const { return name.empty()?role:name; }
+    std::string Key() const { return link.empty()?"name:"+role+":"+name:"link:"+link; }
 };
 inline void AppendUnique(std::vector<Entity>& rows,Entity entity){
     if(!entity.Visible())return;

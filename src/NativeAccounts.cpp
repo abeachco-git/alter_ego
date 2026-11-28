@@ -1559,11 +1559,17 @@ std::vector<Account> SelectedAccounts(const View& v,const std::string& account){
     for(const auto& a:v.accounts)if(account.empty()||v.accounts.size()==1||a.id==account)out.push_back(a);
     return out;
 }
+void InventoryItemCopyActions(uint32_t id,const std::string& name,const std::string& chat,bool currency=false){
+    CopyNameMenuItem(name);
+    if(!currency){
+        if(!chat.empty())CopyNativeLinkMenuItem(chat);
+        else CopyEntityChatLink(AlterEgo::LINK_ITEM,id);
+    }
+}
 void ItemMenu(uint32_t id,const std::string& name,const std::string& chat,const std::map<std::pair<std::string,std::string>,int64_t>& targets={},bool currency=false){
     if(!ImGui::BeginPopupContextItem("##inventory_item_actions"))return;
     UI::MenuSectionHeading(name.c_str());ImGui::Separator();
-    CopyNameMenuItem(name);
-    if(!currency){if(!chat.empty())CopyNativeLinkMenuItem(chat,"Copy Item Chat Link");else CopyEntityChatLink(AlterEgo::LINK_ITEM,id,"Copy Item Chat Link");}
+    InventoryItemCopyActions(id,name,chat,currency);
     ReferenceWikiSearchAction(name);
     if(FastLoadActionsEnabled()&&!targets.empty()){
         ImGui::Separator();
@@ -2182,9 +2188,7 @@ void RenderInventory(const std::string& selectedAccount,const std::function<void
             {
                 const auto heading=UI::MenuObjectHeading("Item",name);
                 UI::MenuSection itemSection("item",slot.character.empty()?nullptr:heading.c_str(),!slot.character.empty());
-                CopyNameMenuItem(name);
-                if(!row.chat.empty())CopyNativeLinkMenuItem(row.chat);
-                else CopyEntityChatLink(AlterEgo::LINK_ITEM,group.id);
+                InventoryItemCopyActions(group.id,name,row.chat);
             }
             ImGui::EndPopup();
         }

@@ -2922,12 +2922,23 @@ static std::string BuildEquipSubtitle(const AlterEgo::EquipmentItem* eq) {
 using MenuEntity=AlterEgo::EntityMenu::Entity;
 static MenuEntity ItemMenuEntity(const char* role,uint32_t id,const std::string& stored={}){
     const auto info=id?AlterEgo::GW2API::GetItemInfo(id):nullptr;
-    return {role,info&&!info->name.empty()?info->name:stored,
-        AlterEgo::ChatLink::EncodeEntity(AlterEgo::LINK_ITEM,id)};
+    const auto name=info&&!info->name.empty()?info->name:stored;
+    const auto link=AlterEgo::ChatLink::EncodeEntity(AlterEgo::LINK_ITEM,id);
+    return {name.empty()&&!link.empty()?std::string(role)+" #"+std::to_string(id):std::string(role),name,link};
 }
 static void RenderMenuEntityCopy(const MenuEntity& entity){
     CopyNameMenuItem(entity.name);
     CopyNativeLinkMenuItem(entity.link);
+}
+template<class Render>
+static void RenderMenuEntitySubmenu(const MenuEntity& entity,Render render){
+    const auto key=entity.Key();
+    ImGui::PushID(key.c_str());
+    const auto label=entity.Label()+"###entity";
+    if(AlterEgo::UI::BeginActionMenu(label.c_str(),AlterEgo::UI::MenuIcon::Copy)){
+        render();ImGui::EndMenu();
+    }
+    ImGui::PopID();
 }
 static void AddMenuUpgrade(std::vector<MenuEntity>& rows,const char* role,uint32_t id,const std::string& stored={}){
     AlterEgo::EntityMenu::AppendUnique(rows,ItemMenuEntity(role,id,stored));
@@ -2959,15 +2970,8 @@ static bool RenderGearEntityMenu(const MenuEntity& item,const MenuEntity& skin,
     }
     if(hasUpgrades){
         MenuSection section("upgrades","Installed upgrades",rendered);
-        for(size_t i=0;i<upgrades.size();++i){
-            const auto& entity=upgrades[i];
-            ImGui::PushID(static_cast<int>(i));
-            const auto label=entity.Label()+"###installed_entity";
-            if(BeginActionMenu(label.c_str(),MenuIcon::Copy)){
-                RenderMenuEntityCopy(entity);ImGui::EndMenu();
-            }
-            ImGui::PopID();
-        }
+        for(const auto& entity:upgrades)
+            RenderMenuEntitySubmenu(entity,[&]{RenderMenuEntityCopy(entity);});
         rendered=true;
     }
     return rendered;
@@ -8283,9 +8287,14 @@ static void RenderGearCustomizeDialog() {
                     memset(g_GearStatSearch, 0, sizeof(g_GearStatSearch));
                 }
 
+                // The two physical sigil positions must own separate native popup IDs.
+                ImGui::PushID(sigilIdx);
                 if (ImGui::BeginPopupContextItem("##single_upgrade_edit")) {
-                    if(upgradeName)CopyNameMenuItem(*upgradeName);
-                    CopyEntityChatLink(AlterEgo::LINK_ITEM,isArmor?gs.rune_id:sigilIdx==1?gs.sigil2_id:gs.sigil_id);
+                    const auto entity=ItemMenuEntity(upgradeLabel,isArmor?gs.rune_id:sigilIdx==1?gs.sigil2_id:gs.sigil_id,
+                        upgradeName?*upgradeName:std::string{});
+                    const bool entities=RenderGearEntityMenu(entity,{}, {},{}, {},true);
+                    {
+                    AlterEgo::UI::MenuSection config("configuration",entities?"Configuration":nullptr,entities);
                     auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Upgrade);
                     if (isWeapon) {
                         if (sigilIdx == 1) {
@@ -8293,7 +8302,6 @@ static void RenderGearCustomizeDialog() {
                         }
                         snapshot.data.sigil2.clear(); snapshot.data.sigil2_id = 0;
                     }
-                    ImGui::Separator();
                     if (AlterEgo::UI::MenuAction("Copy",AlterEgo::UI::MenuIcon::Copy)) g_GearClipboard = snapshot;
                     const bool compatible = g_GearClipboard.valid &&
                         g_GearClipboard.field == GearCopyField::Upgrade &&
@@ -8311,15 +8319,16 @@ static void RenderGearCustomizeDialog() {
                     }
                     if (AlterEgo::UI::MenuAction("Copy to All Compatible Slots",AlterEgo::UI::MenuIcon::Copy))
                         CopyGearToGroup(*editBuild,snapshot,isArmor ? "Armor" : "Weapons");
-                    ImGui::Separator();
                     if (AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete)) {
                         if (isArmor) { ExpandSharedRune(*editBuild); gs.rune.clear(); gs.rune_id = 0; }
                         else if (sigilIdx == 1) { gs.sigil2.clear(); gs.sigil2_id = 0; }
                         else { gs.sigil.clear(); gs.sigil_id = 0; }
                         commitGear();
                     }
+                    } // configuration ID scope
                     ImGui::EndPopup();
                 }
+                ImGui::PopID();
                 ImVec2 tp(p.x + 6, p.y + 3);
                 if (!upgradeName->empty()) {
                     char buf[256];
@@ -8356,12 +8365,13 @@ static void RenderGearCustomizeDialog() {
                 }
                 bool removeInfusion = false;
                 if (ImGui::BeginPopupContextItem("##single_infusion_edit")) {
-                    CopyEntityMenu(item?item->name:std::string{},AlterEgo::LINK_ITEM,id);
+                    const bool entities=RenderGearEntityMenu(ItemMenuEntity("Infusion",id),{}, {},{}, {},true);
+                    {
+                    AlterEgo::UI::MenuSection config("configuration",entities?"Configuration":nullptr,entities);
                     auto snapshot = CaptureGearClipboard(*editBuild,g_GearDialogSlot,GearCopyField::Infusions);
                     snapshot.data.infusion_ids = {id};
                     snapshot.data.infusion_attributes = {attr};
                     snapshot.valid=id||!attr.empty();
-                    if(item)ImGui::Separator();
                     if (AlterEgo::UI::MenuAction("Copy",AlterEgo::UI::MenuIcon::Copy,snapshot.valid))
                         g_GearClipboard = snapshot;
                     const bool compatible = g_GearClipboard.valid &&
@@ -8377,8 +8387,8 @@ static void RenderGearCustomizeDialog() {
                             if (ImGui::MenuItem(group)) CopyGearToGroup(*editBuild,snapshot,group);
                         ImGui::EndMenu();
                     }
-                    ImGui::Separator();
                     if (AlterEgo::UI::MenuAction("Clear",AlterEgo::UI::MenuIcon::Delete)) removeInfusion = true;
+                    } // configuration ID scope
                     ImGui::EndPopup();
                 }
                 const bool clickedRemove=RenderInfusionRemoveButton();
@@ -11179,10 +11189,10 @@ static void RenderSavedVsLiveComparison(const AlterEgo::SavedBuild& saved) {
                             if(type==AlterEgo::LINK_SKILL){const auto info=AlterEgo::GW2API::GetSkillInfo(id);if(info)name=info->name;}
                             else if(type==AlterEgo::LINK_TRAIT){const auto info=AlterEgo::GW2API::GetTraitInfo(id);if(info)name=info->name;}
                             else if(type==AlterEgo::LINK_ITEM){const auto info=AlterEgo::GW2API::GetItemInfo(id);if(info)name=info->name;}
-                            ImGui::PushID(static_cast<int>(id));
-                            if(unique.size()>1){if(AlterEgo::UI::BeginActionMenu(name.empty()?("#"+std::to_string(id)).c_str():name.c_str(),AlterEgo::UI::MenuIcon::Copy)){ReferenceEntityActions(name,type,id);ImGui::EndMenu();}}
-                            else ReferenceEntityActions(name,type,id);
-                            ImGui::PopID();
+                            if(unique.size()>1){
+                                const MenuEntity entity{"#"+std::to_string(id),name,AlterEgo::ChatLink::EncodeEntity(type,id)};
+                                RenderMenuEntitySubmenu(entity,[&]{ReferenceEntityActions(name,type,id);});
+                            }else ReferenceEntityActions(name,type,id);
                         }});
                         for(size_t i=0;i<unique.size();++i)ImGui::PopID();ImGui::PopID();ImGui::PopID();
                     };

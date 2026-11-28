@@ -150,6 +150,8 @@ int case_selector_context(int, char**) {
     AppendUnique(entities,{"Infusion","Stored only",""});
     AppendUnique(entities,{"Infusion","Stored only",""});
     assert(entities.size()==3&&entities[0].name=="Equal"&&entities[1].link=="link-b");
+    assert(entities[0].Key()!=entities[1].Key());
+    assert(entities[0].Key()==(AlterEgo::EntityMenu::Entity{"Rune","Renamed","link-a"}.Key()));
     assert(entities[2].link.empty()&&entities[2].Label()=="Stored only");
     assert((AlterEgo::EntityMenu::Entity{"Unknown","","link-c"}.Label()=="Unknown"));
     // Native menu IDs are independent of visible name and action label.
@@ -180,6 +182,9 @@ int case_selector_context(int, char**) {
             assert(ImGui::GetID(MenuIconLabel("Copy Name").c_str())==characterCopy);
         }
         assert(ImGui::GetID(MenuIconLabel("Copy Name").c_str())==root);
+        ImGui::PushID(0);const auto firstSigil=ImGui::GetID("##single_upgrade_edit");ImGui::PopID();
+        ImGui::PushID(1);const auto secondSigil=ImGui::GetID("##single_upgrade_edit");ImGui::PopID();
+        assert(firstSigil!=secondSigil);
         MenuSectionHeading(std::string(300,'W').c_str());
         assert(ImGui::GetItemRectSize().x<=ImGui::GetFontSize()*24.f+1.f);
         assert(MenuObjectHeading("Loadout","Mixed Case")=="Loadout - Mixed Case");
