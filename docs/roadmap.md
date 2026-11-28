@@ -68,4 +68,4 @@ Parts 7–8 and other completed implementation acceptance, discretionary perform
 
 ## Component editor presentation (approved Skills / shared cleanup)
 
-- Verify the common editable skill strip, compact standalone Skills workspace, explicit JSON slot mutation, independent duplicate specialization scope and removal of the shared raw editor panel through the required DLL workflow and live checks. Other category-specific graphical editor consolidation and raw equipment detail presentation remain proposals pending review.
+- Verify the common editable skill strip, compact standalone Skills workspace, explicit JSON slot mutation, independent duplicate specialization scope and removal of the shared raw editor and gear slot raw panels through the required DLL workflow and live checks. Other category-specific graphical editor consolidation and raw equipment detail presentation remain proposals pending review.

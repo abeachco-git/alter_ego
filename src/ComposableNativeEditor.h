@@ -51,11 +51,6 @@ static std::string ComponentNativeProfession(const std::string& kind,
     return ComponentUIProfession(kind,data,id);
 }
 
-static std::string ComponentNativeSkillName(uint32_t id) {
-    if (!id) return "(empty)";
-    const auto skill = AlterEgo::GW2API::GetSkillInfo(id);
-    return skill ? skill->name : "#" + std::to_string(id);
-}
 static std::string ComponentNativeSpecName(uint32_t id) {
     if (!id) return "(empty)";
     const auto spec = AlterEgo::GW2API::GetSpecInfo(id);
@@ -753,12 +748,6 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         }
         if (kind == "infusions" || water) {
             ComponentNativeInfusionSlots(item,slot,profession);
-        }
-        if (ImGui::TreeNode("##slot_exact", "Exact stored slot fields (read only)")) {
-            for (auto field = item.begin(); field != item.end(); ++field)
-                ImGui::TextWrapped("%s: %s", field.key().c_str(),
-                                   field.value().dump().c_str());
-            ImGui::TreePop();
         }
     }
     ImGui::Separator();
