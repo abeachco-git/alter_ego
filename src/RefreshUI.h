@@ -98,6 +98,8 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
     const float buttonH = UI::ActionButtonHeight();
+    UI::DrawProtectedBackground(ImVec2(start.x-3.f,start.y-2.f),
+        ImVec2(start.x+width+3.f,start.y+buttonH+2.f));
     if (disabled) {
         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
@@ -150,7 +152,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     const ImVec4 statusColor = (state == State::Working || state == State::Waiting) ? ImVec4(0.98f, 0.80f, 0.34f, 1.0f) :
         state == State::Success ? ImVec4(0.48f, 0.82f, 0.52f, 1.0f) :
         state == State::Error ? ImVec4(0.98f, 0.42f, 0.40f, 1.0f) :
-        ImVec4(0.58f, 0.58f, 0.58f, 1.0f);
+        UI::ReadableMetadataColor(ImVec4(0.58f, 0.58f, 0.58f, 1.0f),UI::WindowTransparencyPercent);
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(statusColor, "%s", statusText.c_str());
     if (ImGui::IsItemHovered()){
@@ -161,7 +163,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
     ImGui::SameLine(0.0f, 0.0f);
     ImGui::SetCursorScreenPos(ImVec2(stampX,
         start.y + (buttonH - ImGui::GetTextLineHeight()) * 0.5f));
-    ImGui::TextDisabled("%s", stampLabel.c_str());
+    ImGui::TextColored(UI::ReadableMetadataColor(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),UI::WindowTransparencyPercent),"%s", stampLabel.c_str());
     if(ImGui::IsItemHovered()){
         if(coverage){
             std::string body=source;

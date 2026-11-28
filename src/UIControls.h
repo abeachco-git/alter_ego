@@ -34,21 +34,47 @@ inline int ClampWindowTransparency(double value){
     if(value>=MaxWindowTransparency)return MaxWindowTransparency;
     return static_cast<int>(value);
 }
-inline float BackgroundAlpha(float base,int percent){
-    return base*(1.f-ClampWindowTransparency(percent)/100.f);
+enum class BackgroundRole { Ordinary, Protected };
+inline constexpr float ProtectedBackgroundMinimum=.82f;
+inline float BackgroundAlpha(float base,int percent,BackgroundRole role=BackgroundRole::Ordinary){
+    const float ordinary=base*(1.f-ClampWindowTransparency(percent)/100.f);
+    return role==BackgroundRole::Protected?std::max(ordinary,std::min(base,ProtectedBackgroundMinimum)):ordinary;
+}
+// Composite a theme-colored local surface over an ordinary window to reach
+// the same protected alpha. The zero setting adds no drawing or color changes.
+inline float ProtectedOverlayAlpha(float base,int percent){
+    const float ordinary=BackgroundAlpha(base,percent);
+    const float target=BackgroundAlpha(base,percent,BackgroundRole::Protected);
+    return ordinary<target?(target-ordinary)/(1.f-ordinary):0.f;
+}
+inline ImVec4 ReadableMetadataColor(ImVec4 color,int percent){
+    const float blend=.45f*std::min(1.f,ClampWindowTransparency(percent)/50.f);
+    const auto& text=ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    color.x+=std::max(0.f,text.x-color.x)*blend;
+    color.y+=std::max(0.f,text.y-color.y)*blend;
+    color.z+=std::max(0.f,text.z-color.z)*blend;
+    return color;
 }
 inline bool PreserveChildBackground(const ImGuiWindow* parent){
     for(auto* w=parent;w;w=w->ParentWindow)
         if(w->Flags&(ImGuiWindowFlags_Popup|ImGuiWindowFlags_Tooltip|ImGuiWindowFlags_Modal))return true;
     return false;
 }
-inline void ApplyWindowBackground(ImGuiCol color){
+inline void ApplyWindowBackground(ImGuiCol color,BackgroundRole role=BackgroundRole::Ordinary){
     if(WindowTransparencyPercent)
-        ImGui::SetNextWindowBgAlpha(BackgroundAlpha(ImGui::GetStyleColorVec4(color).w*ImGui::GetStyle().Alpha,WindowTransparencyPercent));
+        ImGui::SetNextWindowBgAlpha(BackgroundAlpha(ImGui::GetStyleColorVec4(color).w*ImGui::GetStyle().Alpha,WindowTransparencyPercent,role));
 }
-inline bool BeginWindow(const char* name,bool* open=nullptr,ImGuiWindowFlags flags=0){
-    ApplyWindowBackground(ImGuiCol_WindowBg);
+inline bool BeginWindow(const char* name,bool* open=nullptr,ImGuiWindowFlags flags=0,BackgroundRole role=BackgroundRole::Ordinary){
+    ApplyWindowBackground(ImGuiCol_WindowBg,role);
     return ImGui::Begin(name,open,flags);
+}
+// Local decorative backing for compact status surfaces in ordinary windows.
+// No new item, cursor movement, hit target, style override or popup changes.
+inline void DrawProtectedBackground(ImVec2 min,ImVec2 max,float rounding=3.f){
+    if(!WindowTransparencyPercent||PreserveChildBackground(ImGui::GetCurrentWindowRead())||max.x<=min.x||max.y<=min.y)return;
+    ImVec4 color=ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    color.w=ProtectedOverlayAlpha(color.w*ImGui::GetStyle().Alpha,WindowTransparencyPercent);
+    if(color.w>0.f)ImGui::GetWindowDrawList()->AddRectFilled(min,max,ImGui::ColorConvertFloat4ToU32(color),rounding);
 }
 inline bool BeginChild(const char* id,ImVec2 size=ImVec2(0,0),bool border=false,ImGuiWindowFlags flags=0){
     if(!PreserveChildBackground(ImGui::GetCurrentWindowRead()))

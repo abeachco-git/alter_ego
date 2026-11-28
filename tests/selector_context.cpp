@@ -144,6 +144,15 @@ int case_selector_context(int, char**) {
     assert(BackgroundAlpha(.96f,0)==.96f);
     assert(std::abs(BackgroundAlpha(.96f,80)-.192f)<.0001f);
     assert(std::abs(BackgroundAlpha(.80f,50)-.4f)<.0001f);
+    assert(BackgroundAlpha(.96f,0,BackgroundRole::Protected)==.96f);
+    assert(BackgroundAlpha(.96f,50,BackgroundRole::Protected)==ProtectedBackgroundMinimum);
+    assert(BackgroundAlpha(.96f,80,BackgroundRole::Protected)==ProtectedBackgroundMinimum);
+    assert(BackgroundAlpha(.65f,50,BackgroundRole::Protected)==.65f);
+    assert(ProtectedOverlayAlpha(.96f,0)==0.f&&ProtectedOverlayAlpha(.96f,5)==0.f);
+    for(int p:{0,5,20,50,80}){
+        const float a=BackgroundAlpha(.96f,p),overlay=ProtectedOverlayAlpha(.96f,p);
+        assert(std::abs(a+(1.f-a)*overlay-BackgroundAlpha(.96f,p,BackgroundRole::Protected))<.0001f);
+    }
     const auto base=ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
     const auto child=ImGui::GetStyleColorVec4(ImGuiCol_ChildBg);
     WindowTransparencyPercent=50;
@@ -151,12 +160,25 @@ int case_selector_context(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(400,300));
     BeginWindow("Background test");
     assert(!PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+    const auto cursor=ImGui::GetCursorScreenPos();
+    const auto before=ImGui::GetWindowDrawList()->VtxBuffer.Size;
+    DrawProtectedBackground(cursor,ImVec2(cursor.x+100,cursor.y+30));
+    assert(ImGui::GetWindowDrawList()->VtxBuffer.Size>before);
+    assert(ImGui::GetCursorScreenPos().x==cursor.x&&ImGui::GetCursorScreenPos().y==cursor.y);
+    const ImVec4 dim(.2f,.2f,.2f,1.f);
+    assert(ReadableMetadataColor(dim,0).x==dim.x);
+    assert(ReadableMetadataColor(dim,50).x>dim.x);
+    assert(ReadableMetadataColor(dim,50).w==dim.w);
     BeginChild("Panel",ImVec2(100,80),true);
     assert(!PreserveChildBackground(ImGui::GetCurrentWindowRead()));
     ImGui::EndChild();
     ImGui::OpenPopup("Modal");
     if(ImGui::BeginPopupModal("Modal")){
         assert(PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+        const auto p=ImGui::GetCursorScreenPos();
+        const auto count=ImGui::GetWindowDrawList()->VtxBuffer.Size;
+        DrawProtectedBackground(p,ImVec2(p.x+100,p.y+30));
+        assert(ImGui::GetWindowDrawList()->VtxBuffer.Size==count);
         BeginChild("Modal panel",ImVec2(100,80),true);
         assert(PreserveChildBackground(ImGui::GetCurrentWindowRead()));
         ImGui::EndChild();

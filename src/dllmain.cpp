@@ -5997,7 +5997,7 @@ static void RenderBuildToast() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14, 12));
 
     bool open = true;
-    if (AlterEgo::UI::BeginWindow("Build Detected##AE_Toast", &open, flags)) {
+    if (AlterEgo::UI::BeginWindow("Build Detected##AE_Toast", &open, flags, AlterEgo::UI::BackgroundRole::Protected)) {
         // Track position for drag-to-reposition
         ImVec2 wp = ImGui::GetWindowPos();
         if (wp.x != posX || wp.y != posY) {

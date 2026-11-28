@@ -26,6 +26,8 @@ This is a draft for the experimental branch, not a published or fully validated 
 
 ### Changed
 
+- Protect shared refresh/status footers and build-detection toast backgrounds from excessive transparency; improve neutral footer metadata contrast without changing status semantics or layout.
+
 - Ranger pet and Revenant legend artwork now loads on demand through the same persistent artwork cache as skills, reducing the fixed DLL resources.
 
 - Track character activity locally and refresh character/inventory snapshots on visible demand; 10-minute active interval and post-logout grace, 10-minute active Bank/shared inventory/material storage and 30-minute Legendary Armory.
