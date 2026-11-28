@@ -8947,7 +8947,16 @@ static void RenderSaveToLibraryDialog() {
 
 
 // Render a single gear slot with icon for the build gear panel
-static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bool editable) {
+// Native component callers provide their own actions; a display projection
+// never becomes an aggregate Loadout editing target.
+struct ComponentGearCardActions {
+    std::function<void()> choose,context;
+    uint32_t icon=0;
+    std::string label;
+    bool recorded=false,selected=false,upgradeOnly=false;
+};
+static void RenderBuildGearSlot(AlterEgo::SavedBuild& build,const char* slot,bool editable,
+        const ComponentGearCardActions* component=nullptr) {
     // Check if off-hand is blocked by a two-handed main hand
     bool disabled = false;
     if (strcmp(slot, "WeaponA2") == 0 || strcmp(slot, "WeaponB2") == 0) {
@@ -8968,7 +8977,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     bool hasRelic = (strcmp(slot, "Relic") == 0 &&
                      (build.relic_id != 0 || !build.relic_name.empty() ||
                       (it != build.gear.end() && it->second.item_id != 0)));
-    bool hasData = hasStat || hasWeaponType || hasRelic;
+    bool hasData = hasStat || hasWeaponType || hasRelic || (component&&component->recorded) || (it!=build.gear.end()&&it->second.item_id);
     const auto* gearSlot = it != build.gear.end() ? &it->second : nullptr;
     size_t infusionCount = 0;
     if (gearSlot) {
@@ -8985,7 +8994,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     ImVec2 pos = ImGui::GetCursorScreenPos();
 
     // Try to render a real item icon
-    uint32_t iconItemId = GetGearSlotIconItemId(build, slot);
+    uint32_t iconItemId = component&&(component->icon||component->upgradeOnly)?component->icon:GetGearSlotIconItemId(build, slot);
     Texture_t* tex = nullptr;
     if (iconItemId != 0) {
         // The display icon's representative item is not the saved exact item.
@@ -9057,7 +9066,11 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
 
     // Only editable in edit mode; read-only gear can still show tooltips.
     ImGui::SetCursorScreenPos(pos);
-    if (disabled || !editable) {
+    if(component&&component->choose){
+        if(ImGui::InvisibleButton("##icon",ImVec2(iconSz,iconSz)))component->choose();
+        if(component->selected||ImGui::IsItemHovered())
+            ImGui::GetWindowDrawList()->AddRect(pos,ImVec2(pos.x+iconSz,pos.y+iconSz),IM_COL32(227,196,122,255),0.f,0,2.f);
+    }else if (disabled || !editable) {
         ImGui::Dummy(ImVec2(iconSz, iconSz));
     } else if (ImGui::InvisibleButton("##icon", ImVec2(iconSz, iconSz))) {
         AlterEgo::BuildGearSlot current;
@@ -9065,9 +9078,10 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         current.slot = slot;
         OpenGearDialog(build.id, slot, current);
     }
-    bool hovered = !disabled && ImGui::IsItemHovered();
+    bool hovered = (component||!disabled) && ImGui::IsItemHovered();
     bool clearAfter = false;
-    if (editable && !disabled) RenderGearEditContext(build,slot,clearAfter);
+    if(component&&component->context)AlterEgo::UI::EntityContext("##component_slot_context",component->context);
+    else if (editable && !disabled) RenderGearEditContext(build,slot,clearAfter);
     // Apply only after the menu returns; iterators below must not refer to erased slots.
     if (clearAfter) ClearGearSlot(build,slot,GearCopyField::All);
     it = build.gear.find(slot);
@@ -9082,7 +9096,9 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     // Line 1: stat/slot name
     char line1[256] = {};
     ImU32 line1Col;
-    if (isRelicSlot) {
+    if(component&&!component->label.empty()){
+        snprintf(line1,sizeof(line1),"%s",component->label.c_str());line1Col=hasData?IM_COL32(255,204,51,255):IM_COL32(128,128,128,255);
+    }else if (isRelicSlot) {
         if (!build.relic_name.empty()) {
             snprintf(line1, sizeof(line1), "%s", build.relic_name.c_str());
             line1Col = IM_COL32(128, 204, 204, 255);
@@ -9109,14 +9125,15 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
     auto savedGearActions=[&]{
         RenderSavedGearEntityMenu(gearSlot,isRelicSlot,build.relic_id,build.relic_name);
     };
-    if(!editable&&!disabled&&hasData)AlterEgo::UI::EntityContext("##saved_gear_name",savedGearActions);
+    if(!component&&!editable&&!disabled&&hasData)AlterEgo::UI::EntityContext("##saved_gear_name",savedGearActions);
     text.Line(line1,line1Col);
     if (!isRelicSlot && it != build.gear.end()) {
         text.Line(it->second.rune,IM_COL32(153,153,255,255));
         text.Line(it->second.sigil,IM_COL32(153,153,255,255));
         text.Line(it->second.sigil2,IM_COL32(153,153,255,255));
     }
-    if(!disabled&&hasData){text.ContextTarget();AlterEgo::UI::EntityContext("##saved_gear_text",savedGearActions);}
+    if(component&&component->context){text.ContextTarget();AlterEgo::UI::EntityContext("##saved_gear_text",component->context);}
+    else if(!component&&!disabled&&hasData){text.ContextTarget();AlterEgo::UI::EntityContext("##saved_gear_text",savedGearActions);}
     text.Finish();
 
     // Tooltip
@@ -9166,7 +9183,7 @@ static void RenderBuildGearSlot(AlterEgo::SavedBuild& build, const char* slot,bo
         ImGui::BeginTooltip();
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
             "%s%s", GearSlotDisplayName(slot),
-            editable ? " (click to customize)" : "");
+            editable||(component&&component->choose) ? " (click to customize)" : "");
         ImGui::EndTooltip();
     }
 

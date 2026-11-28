@@ -313,6 +313,79 @@ static void DemandComponentItemMetadata(const std::string& kind,const ComponentJ
     const auto stats=AlterEgo::Composable::Presentation::ComponentStatIds(kind,data);
     if(!stats.empty())AlterEgo::GW2API::FetchItemStatDetailsAsync(stats);
 }
+static AlterEgo::SavedBuild ComponentGearDisplay(const std::string& kind,const ComponentJson& data,const std::string& profession={}){
+    AlterEgo::SavedBuild build;build.profession=profession;
+    if(kind=="relic"){
+        build.relic_id=AlterEgo::TooltipCore::FieldId(data,"relic_id");
+        if(data.contains("relic_name")&&data.at("relic_name").is_string())build.relic_name=data.at("relic_name").get<std::string>();
+        if(build.relic_name.empty()&&build.relic_id){const auto info=AlterEgo::GW2API::GetItemInfo(build.relic_id);if(info)build.relic_name=info->name;}
+    }
+    if(data.contains("gear")&&data.at("gear").is_object())
+        for(auto it=data.at("gear").begin();it!=data.at("gear").end();++it){
+            if(!it.value().is_object())continue;
+            auto& slot=build.gear[it.key()];slot.slot=it.key();
+            const auto& item=it.value();
+            using namespace AlterEgo::GearEdit;
+            const bool armor=AlterEgo::Composable::SlotKind(it.key())=="armor"||it.key()=="HelmAquatic";
+            if(ComponentOwnsField(kind,it.key(),CopyField::Stats)){
+                slot.item_id=AlterEgo::TooltipCore::FieldId(item,"item_id");
+                if(item.contains("weapon_type")&&item.at("weapon_type").is_string())slot.weapon_type=item.at("weapon_type").get<std::string>();
+                ReadComponentField(item,CopyField::Stats,armor,slot,false);
+            }
+            if(ComponentOwnsField(kind,it.key(),CopyField::Upgrade))ReadComponentField(item,CopyField::Upgrade,armor,slot,false);
+            if(ComponentOwnsField(kind,it.key(),CopyField::Infusions))ReadComponentField(item,CopyField::Infusions,armor,slot,false);
+            auto name=[](uint32_t id,std::string& value){if(value.empty()&&id){const auto info=AlterEgo::GW2API::GetItemInfo(id);if(info)value=info->name;}};
+            name(slot.rune_id,slot.rune);name(slot.sigil_id,slot.sigil);name(slot.sigil2_id,slot.sigil2);
+            if(slot.stat_name.empty()&&slot.stat_id){const auto info=AlterEgo::GW2API::GetItemStatInfo(slot.stat_id);if(info)slot.stat_name=info->name;}
+        }
+    return build;
+}
+static unsigned ComponentEquipmentSections(const std::string& kind){
+    using namespace AlterEgo::UI;
+    if(kind=="armor"||kind=="runes")return ArmorSection;
+    if(kind=="trinkets")return TrinketSection;
+    if(kind=="weapons"||kind=="sigils")return WeaponSection;
+    if(kind=="infusions")return ArmorSection|TrinketSection|WeaponSection;
+    if(kind=="aquatic")return AquaticSection;
+    if(kind=="relic")return RelicSection;
+    return 0;
+}
+static void RenderComponentGearCards(const std::string& kind,const ComponentJson& data,const std::string& profession,
+        const std::function<void(const std::string&)>& choose={},const std::function<void(const std::string&)>& context={},
+        const std::string& selected={}){
+    auto build=ComponentGearDisplay(kind,data,profession);
+    AlterEgo::UI::EquipmentLayout("##component_cards",true,[&](const char* raw){
+        std::string slot=raw;
+        if(kind=="infusions"&&slot=="Amulet"){ImGui::TextDisabled("No infusion slot");return;}
+        const auto gear=data.find("gear");
+        if(gear!=data.end()&&gear->is_object()&&!gear->contains(slot)){
+            if(slot=="WeaponAquaticA"&&gear->contains("AquaticA"))slot="AquaticA";
+            if(slot=="WeaponAquaticB"&&gear->contains("AquaticB"))slot="AquaticB";
+        }
+        const bool recorded=gear!=data.end()&&gear->is_object()&&gear->contains(slot);
+        ComponentGearCardActions actions;
+        actions.recorded=recorded;actions.selected=slot==selected;
+        actions.upgradeOnly=kind=="runes"||kind=="sigils"||kind=="infusions";
+        const auto found=build.gear.find(slot);
+        if(found!=build.gear.end()){
+            const auto& item=found->second;
+            if(kind=="runes")actions.icon=item.rune_id;
+            else if(kind=="sigils")actions.icon=item.sigil_id?item.sigil_id:item.sigil2_id;
+            else if(kind=="infusions"&&!item.infusion_ids.empty())actions.icon=item.infusion_ids.front();
+            else actions.icon=item.item_id;
+        }
+        if(choose)actions.choose=[&]{choose(slot);};
+        if(recorded){
+            if(context)actions.context=[&]{context(slot);};
+            else actions.context=[&]{ComponentStoredNameActions(data.at("gear").at(slot));};
+        }
+        if(actions.upgradeOnly)actions.label=GearSlotDisplayName(slot);
+        if(recorded&&!gear->at(slot).is_object())actions.label=std::string(GearSlotDisplayName(slot))+" (unresolved)";
+        if(kind=="relic")actions.icon=build.relic_id;
+        RenderBuildGearSlot(build,slot.c_str(),false,&actions);
+    },[](const char* title,int){RenderSectionHeader(title,AlterEgo::UI::SectionGold);},ComponentEquipmentSections(kind));
+}
+
 static void RenderComponentInventory(const std::string& kind, const ComponentJson& data) {
     if (!data.is_object()) return;
     DemandComponentItemMetadata(kind,data);
@@ -330,20 +403,7 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
         ImGui::TextDisabled("%s",summary.known?"Functional totals (slot independent where applicable)":"Totals cannot be verified from saved fields");
         for(const auto& entry:summary.counts)ImGui::BulletText("%d x %s",entry.second,entry.first.c_str());
     }
-    if (kind == "relic") {
-        if (data.contains("relic_name") && data["relic_name"].is_string()){
-            const auto name=data["relic_name"].get<std::string>();
-            ImGui::Text("Relic: %s",name.c_str());
-            if(ImGui::BeginPopupContextItem("##component_relic_name")){
-                CopyNameMenuItem(name,"Copy Name",true);
-                if(data.contains("relic_id")&&data["relic_id"].is_number_integer()&&data["relic_id"]>0&&data["relic_id"]<=0xFFFFFFu)CopyEntityChatLink(AlterEgo::LINK_ITEM,data["relic_id"].get<uint32_t>());
-                ImGui::EndPopup();
-            }
-        }
-        if (data.contains("relic_id") && data["relic_id"].is_number_integer())
-            ImGui::Text("Item ID: %lld",
-                static_cast<long long>(data["relic_id"].get<int64_t>()));
-    }
+    if(kind=="relic")RenderComponentGearCards(kind,data,{});
     if(kind=="base_build"){
         const auto lines=AlterEgo::SkillEdit::JsonSpecializationLines<AlterEgo::SpecLine>(data);
         AlterEgo::GW2API::FetchSpecDetailsAsync({lines[0].spec_id,lines[1].spec_id,lines[2].spec_id});
@@ -375,54 +435,9 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             RenderInactiveRevenantOrder(*inactive,SE::ReadInactiveLegendContext(data),ICON_SIZE);
         else if(data.contains("inactive_rev_skills"))ImGui::TextDisabled("Unrecognized inactive utility order; retained");
     }
-    if (data.contains("gear") && data["gear"].is_object() &&
-        !data["gear"].empty()) {
-        ImGui::Separator();
-        ImGui::TextDisabled("Recorded physical equipment slots");
-        if (ImGui::BeginTable("##component_items", 2,
-              ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
-            ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 105.0f);
-            ImGui::TableSetupColumn("Stored details", ImGuiTableColumnFlags_WidthStretch);
-            for (const auto& slotName : AlterEgo::Composable::Presentation::SortedGearSlots(data["gear"])) {
-                const auto& item = data["gear"].at(slotName);
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(GearSlotDisplayName(slotName));
-                ImGui::TableSetColumnIndex(1);
-                ImGui::PushID(slotName.c_str());
-                const bool expanded=ImGui::TreeNodeEx("##component_slot",ImGuiTreeNodeFlags_NoTreePushOnOpen|ImGuiTreeNodeFlags_SpanAvailWidth,"%s",AlterEgo::Composable::Presentation::GearSlotSummary(kind,item).c_str());
-                if(ImGui::IsItemHovered()){
-                    const auto ids=AlterEgo::Composable::Presentation::ComponentItemIds(kind,ComponentJson{{"gear",{{slotName,item}}}});
-                    const auto exact=AlterEgo::TooltipCore::FieldId(item,"item_id");
-                    if(exact&&(kind=="armor"||kind=="weapons"||kind=="trinkets"||kind=="aquatic"))
-                        RenderSavedItemTooltip(exact,AlterEgo::TooltipCore::FieldId(item,"stat_id"));
-                    else if(ids.size()==1){
-                        const auto info=AlterEgo::GW2API::GetItemInfo(ids.front());
-                        if(info){
-                            if(info->type=="UpgradeComponent"||info->type=="Relic")RenderInstalledUpgradeTooltip(*info);
-                            else RenderItemDefinitionTooltip(*info);
-                        }
-                    }
-                }
-                if(ImGui::BeginPopupContextItem("##component_item_names")){
-                    ComponentStoredNameActions(item);ImGui::EndPopup();
-                }
-                if (expanded) {
-                    ImGui::Indent();
-                    if (item.is_object()) {
-                        for (auto field = item.begin(); field != item.end(); ++field)
-                            ImGui::TextWrapped("%s: %s", field.key().c_str(),
-                                               field.value().dump().c_str());
-                    } else {
-                        ImGui::TextWrapped("%s", item.dump(2).c_str());
-                    }
-                    ImGui::Unindent();
-                }
-                ImGui::PopID();
-            }
-            ImGui::EndTable();
-        }
-    }
+    if(ComponentEquipmentSections(kind)&&kind!="relic"&&
+       (kind!="infusions"||AlterEgo::Composable::InfusionPayloadMode(data)!=AlterEgo::InfusionMode::Totals))
+        RenderComponentGearCards(kind,data,ComponentUIProfession(kind,data));
 }
 
 #include "ComposableNativeEditor.h"

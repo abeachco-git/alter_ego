@@ -68,4 +68,4 @@ Parts 7–8 and other completed implementation acceptance, discretionary perform
 
 ## Part 15 — First-class graphical components (approved)
 
-- Complete category-scoped graphical equipment presentation and editing using the shared equipment layout and native component ownership rules; verify all twelve editors, preserve exact sparse and unknown data, keep graphical Base Build and Skills regression/verification outstanding until DLL delivery.
+- Verify category-scoped graphical equipment cards, shared specialization and Skills renderers and native ownership through the required DLL workflow and live checks. Remaining consolidation: replace residual field-specific standalone gear forms with canonical Gear Customize field panel adapters (preserving independent ownership), refine upgrade-only graphical pickers and inspect narrow layouts and unknown imported fields.

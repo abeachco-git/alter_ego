@@ -27,25 +27,28 @@ struct EquipmentText {
         ImGui::Dummy(ImVec2(0,0));
     }
 };
+enum EquipmentSections : unsigned { ArmorSection=1,TrinketSection=2,WeaponSection=4,RelicSection=8,AquaticSection=16,AllEquipmentSections=31 };
 template<class Slot,class Header>
-void EquipmentLayout(const char* id,bool aquatic,Slot slot,Header header){
+void EquipmentLayout(const char* id,bool aquatic,Slot slot,Header header,unsigned sections=AllEquipmentSections){
     ImGui::PushID(id);
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,ImVec2(4,2));
     constexpr const char* armor[]={"Helm","Shoulders","Coat","Gloves","Leggings","Boots"};
     constexpr const char* trinkets[]={"Backpack","Accessory1","Accessory2","Amulet","Ring1","Ring2"};
-    if(ImGui::BeginTable("##armor_trinkets",2,ImGuiTableFlags_SizingStretchSame|ImGuiTableFlags_RowBg)){
+    const bool showArmor=sections&ArmorSection,showTrinkets=sections&TrinketSection;
+    if((showArmor||showTrinkets)&&ImGui::BeginTable("##armor_trinkets",showArmor&&showTrinkets?2:1,ImGuiTableFlags_SizingStretchSame|ImGuiTableFlags_RowBg)){
         ImGui::TableNextRow();
-        ImGui::TableNextColumn();header("Armor",4);
-        ImGui::TableNextColumn();header("Trinkets",6);
+        if(showArmor){ImGui::TableNextColumn();header("Armor",4);}
+        if(showTrinkets){ImGui::TableNextColumn();header("Trinkets",6);}
         for(int n=0;n<6;++n){
             ImGui::TableNextRow();
-            ImGui::TableNextColumn();slot(armor[n]);
-            ImGui::TableNextColumn();slot(trinkets[n]);
+            if(showArmor){ImGui::TableNextColumn();slot(armor[n]);}
+            if(showTrinkets){ImGui::TableNextColumn();slot(trinkets[n]);}
         }
         ImGui::EndTable();
     }
-    ImGui::Spacing();header("Weapons",2);
     const bool narrow=ImGui::GetContentRegionAvail().x<360.f;
+    if(sections&WeaponSection){
+    ImGui::Spacing();header("Weapons",2);
     // Keep the set marker in its own compact column, sized to the current font.
     // At narrow widths the two weapons stack inside that same set's content cell.
     if(ImGui::BeginTable("##weapon_sets",narrow?2:3,ImGuiTableFlags_SizingStretchSame)){
@@ -76,8 +79,9 @@ void EquipmentLayout(const char* id,bool aquatic,Slot slot,Header header){
         }
         ImGui::EndTable();
     }
-    ImGui::Spacing();header("Relic",7);slot("Relic");
-    if(aquatic){
+    }
+    if(sections&RelicSection){ImGui::Spacing();header("Relic",7);slot("Relic");}
+    if(aquatic&&(sections&AquaticSection)){
         ImGui::Spacing();header("Aquatic",-1);slot("HelmAquatic");
         if(narrow){slot("WeaponAquaticA");slot("WeaponAquaticB");}
         else if(ImGui::BeginTable("##aquatic",2,ImGuiTableFlags_RowBg|ImGuiTableFlags_SizingStretchSame)){

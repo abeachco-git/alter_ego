@@ -445,56 +445,17 @@ static bool ComponentStoredNameActions(const ComponentJson& item,bool configurat
 }
 static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                                 const std::string& profession) {
-    ImGui::TextUnformatted("Equipment slots");
-    ImGui::SameLine();
-    ImGui::TextDisabled("(select a slot to customize)");
-    if (data.contains("gear") && !data["gear"].is_object()) {
-        ImGui::TextDisabled("Unrecognized gear data; preserved without alteration.");
-        return;
+    if(data.contains("gear")&&!data.at("gear").is_object()){
+        ImGui::TextDisabled("Unrecognized gear data; preserved without alteration.");return;
     }
-    ComponentJson empty = ComponentJson::object();
-    const ComponentJson& savedGear = data.contains("gear") ? data["gear"] : empty;
-    if (AlterEgo::UI::BeginCombo("Add equipment slot##component_gear", "Choose slot...")) {
-        for (const char* slot : kNativeGearSlots) {
-            if (!ComponentNativeSlotAllowed(kind, slot) || savedGear.contains(slot))
-                continue;
-            if (ImGui::Selectable(slot)) {
-                data["gear"][slot] = ComponentJson::object();
-                g_ComponentGearSelectedSlot = slot;
-                g_ComponentGearRemovalPending.clear();
-            }
-        }
-        ImGui::EndCombo();
-    }
-
-    if (!data.contains("gear") || data["gear"].empty()) {
-        ImGui::TextDisabled("No equipment recorded. Add a slot to start.");
-        return;
-    }
-    const auto slots = AlterEgo::Composable::Presentation::SortedGearSlots(data["gear"]);
     static ComponentJson copiedSlot;
-    static std::string copiedKind, copiedFrom;
-    if (g_ComponentGearSelectedSlot.empty() ||
-        !data["gear"].contains(g_ComponentGearSelectedSlot)) {
-        g_ComponentGearSelectedSlot = slots.front();
-        g_ComponentGearRemovalPending.clear();
-    }
-    // List and details each have independent scrolling; opening one item's
-    // customization no longer expands every armor/weapon/trinket field.
-    const float width = ImGui::GetContentRegionAvail().x;
-    const float listWidth = ImMin(195.0f, ImMax(135.0f, width * 0.30f));
-    const float height = ImMax(280.0f, ImMin(510.0f, ImGui::GetContentRegionAvail().y - 18.0f));
-    ImGui::BeginChild("##component_slot_list", ImVec2(listWidth, height), true);
-    for (const auto& slot : slots) {
-        ImGui::PushID(slot.c_str());
-        const bool selected = g_ComponentGearSelectedSlot == slot;
-        if (ImGui::Selectable(GearSlotDisplayName(slot), selected)) {
-            g_ComponentGearSelectedSlot = slot;
-            g_ComponentGearRemovalPending.clear();
-            g_ComponentCatalogSearch.clear();
-            g_ComponentStatSearch.clear();
-        }
-        if (ImGui::BeginPopupContextItem("##native_slot_context")) {
+    static std::string copiedKind,copiedFrom;
+    auto choose=[&](const std::string& slot){
+        if(!ComponentNativeSlotAllowed(kind,slot)&&!(data.contains("gear")&&data.at("gear").contains(slot)))return;
+        g_ComponentGearSelectedSlot=slot;g_ComponentGearRemovalPending.clear();
+        g_ComponentCatalogSearch.clear();g_ComponentStatSearch.clear();
+    };
+    auto menu=[&](const std::string& slot){
             const bool entities=ComponentStoredNameActions(data["gear"].at(slot),true);
             {
             AlterEgo::UI::MenuSection config("configuration",entities?"Configuration":nullptr,entities);
@@ -530,17 +491,31 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                 g_ComponentGearRemovalPending = slot;
             }
             } // configuration ID scope
-            ImGui::EndPopup();
+
+    };
+    ImGui::TextDisabled("Select a slot to customize; right-click for actions.");
+    const float width=ImGui::GetContentRegionAvail().x;
+    const bool sideBySide=width>=620.f;
+    if(sideBySide)AlterEgo::UI::BeginChild("##component_card_list",ImVec2(width*.48f,0),true);
+    RenderComponentGearCards(kind,data,profession,choose,menu,g_ComponentGearSelectedSlot);
+    if(data.contains("gear")&&data.at("gear").is_object())
+        for(const auto& slot:AlterEgo::Composable::Presentation::SortedGearSlots(data.at("gear"))){
+            if(std::find(std::begin(kNativeGearSlots),std::end(kNativeGearSlots),slot)!=std::end(kNativeGearSlots))continue;
+            ImGui::PushID(slot.c_str());
+            if(ImGui::Selectable(slot.c_str(),g_ComponentGearSelectedSlot==slot))choose(slot);
+            ImGui::PopID();
         }
-        if (ImGui::IsItemHovered()) {
-            const auto& entry = data["gear"].at(slot);
-            AlterEgo::UI::Hint(AlterEgo::Composable::Presentation::GearSlotSummary(kind, entry).c_str());
-        }
-        ImGui::PopID();
+    if(sideBySide){ImGui::EndChild();ImGui::SameLine();AlterEgo::UI::BeginChild("##component_slot_editor",ImVec2(0,0),true);}
+    else ImGui::Separator();
+    if(g_ComponentGearSelectedSlot.empty()){
+        ImGui::TextDisabled("Select an equipment slot.");
+        if(sideBySide)ImGui::EndChild();return;
     }
-    ImGui::EndChild();
-    ImGui::SameLine();
-    ImGui::BeginChild("##component_slot_editor", ImVec2(0, height), true);
+    if(!data.contains("gear")||!data.at("gear").contains(g_ComponentGearSelectedSlot)){
+        ImGui::Text("%s",GearSlotDisplayName(g_ComponentGearSelectedSlot));
+        if(RenderActionButton("Configure slot"))data["gear"][g_ComponentGearSelectedSlot]=ComponentJson::object();
+        if(sideBySide)ImGui::EndChild();return;
+    }
     const std::string slot = g_ComponentGearSelectedSlot;
     ImGui::PushID(slot.c_str());
     ImGui::Text("%s", GearSlotDisplayName(slot));
@@ -564,7 +539,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
                     ImGui::SameLine();
                 }
             }
-            if(id)ImGui::TextWrapped("%s (#%u)",info&&!info->name.empty()?info->name.c_str():"Item metadata pending",id);
+            if(id)ImGui::TextWrapped("%s",info&&!info->name.empty()?info->name.c_str():"Item metadata pending");
             else ImGui::TextDisabled("No exact item selected");
             if(info&&ImGui::IsItemHovered())RenderSavedItemTooltip(id,AlterEgo::TooltipCore::FieldId(item,"stat_id"));
             if(id)AlterEgo::UI::EntityContext("##native_exact_item", [&]{CopyEntityMenu(info?info->name:std::string{},AlterEgo::LINK_ITEM,id);});
@@ -659,7 +634,7 @@ static void ComponentNativeGear(ComponentJson& data, const std::string& kind,
         g_ComponentGearRemovalPending = slot;
     }
     ImGui::PopID();
-    ImGui::EndChild();
+    if(sideBySide)ImGui::EndChild();
 }
 
 static bool ComponentInfusionProjection(const ComponentJson& data,AlterEgo::SavedBuild& b) {
@@ -836,6 +811,7 @@ static void RenderComponentNativeEditor(const std::string& kind,
             RenderInactiveRevenantOrder(*inactive,AlterEgo::SkillEdit::ReadInactiveLegendContext(data),ICON_SIZE);
         else if(data.contains("inactive_rev_skills"))ImGui::TextDisabled("Unrecognized inactive utility order; retained");
     } else if (kind == "relic") {
+        RenderComponentGearCards(kind,data,{});
         ComponentNativeCatalogChoice(data, "relic_id", "relic_name", "relic");
         if (ImGui::TreeNode("##advanced_relic", "Advanced exact relic item ID")) {
             ComponentNativeNumber(data, "relic_id", "Relic item ID");
