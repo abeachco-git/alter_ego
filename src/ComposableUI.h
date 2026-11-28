@@ -293,16 +293,16 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
         RenderProfessionPairSection(legend,slots,false);
     }
     if (kind == "skills") {
+        namespace SE=AlterEgo::SkillEdit;
+        const auto evidence=SE::ReadPaletteEvidence(data);
         for (const auto* bar : {"skills", "aquatic_skills"}) {
             ImGui::PushID(bar);
-            ImGui::TextDisabled("%s", std::string(bar) == "skills"
-                ? "Terrestrial skills" : "Aquatic skills");
-            const auto evidence=AlterEgo::SkillEdit::ReadPaletteEvidence(data);
-            if(!data.contains(bar)&&!evidence)ImGui::TextDisabled("Not recorded");
+            const bool aquatic=std::string(bar)=="aquatic_skills";
+            ImGui::TextDisabled("%s", aquatic?"Aquatic skills":"Terrestrial skills");
+            if(!data.contains(bar)&&!SE::HasPaletteBarEvidence(evidence,aquatic))ImGui::TextDisabled("Not recorded");
             else if(data.contains(bar)&&!data[bar].is_object())ImGui::TextDisabled("Unrecognized skill data");
-            else RenderSkillBarPreview(AlterEgo::SkillEdit::WithPaletteBar(
-                AlterEgo::SkillEdit::JsonDisplayBar(data.value(bar,ComponentJson::object())),evidence,
-                std::string(bar)=="aquatic_skills"),ICON_SIZE,std::string(bar)=="aquatic_skills");
+            else RenderSkillBarPreview(SE::JsonPaletteDisplayBar(
+                data.value(bar,ComponentJson::object()),evidence,aquatic),ICON_SIZE,aquatic);
             ImGui::PopID();
         }
         if(data.contains("rev_active_palettes"))ImGui::TextDisabled("Original Revenant palette evidence retained");

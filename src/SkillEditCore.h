@@ -64,16 +64,31 @@ template<class Json> std::array<DisplaySlot,5> JsonDisplayBar(const Json& bar) {
 }
 // Keep the typed skill bar authoritative. Raw wire evidence only describes
 // the original slot; explicit replacement retires it even for zero -> zero.
-inline DisplaySlot WithPaletteEvidence(DisplaySlot slot,const std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic,size_t index){
+inline bool RetainedPaletteRow(const std::array<uint32_t,5>& row){
+    return row!=std::array<uint32_t,5>{};
+}
+inline bool HasPaletteBarEvidence(const std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic){
+    if(!evidence)return false;
+    const auto first=evidence->begin()+(aquatic?5:0);
+    return std::any_of(first,first+5,RetainedPaletteRow);
+}
+inline DisplaySlot WithPaletteEvidence(DisplaySlot slot,const std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic,size_t index,bool typedBar=true){
     if(!evidence||index>=5||slot.id)return slot;
     const auto& row=(*evidence)[(aquatic?5:0)+index];
+    // A retired all-zero row is not evidence of an omitted JSON slot.
+    // Typed loadout drafts retain their existing explicit-clear presentation.
+    if(!typedBar&&!RetainedPaletteRow(row))return slot;
     if(!row[1])slot.evidence=row[0]?SlotEvidence::Unresolved:SlotEvidence::Empty;
     return slot;
 }
 inline std::array<DisplaySlot,5> WithPaletteBar(std::array<DisplaySlot,5> slots,
-    const std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic){
-    for(size_t i=0;i<slots.size();++i)slots[i]=WithPaletteEvidence(slots[i],evidence,aquatic,i);
+    const std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic,bool typedBar=true){
+    for(size_t i=0;i<slots.size();++i)slots[i]=WithPaletteEvidence(slots[i],evidence,aquatic,i,typedBar);
     return slots;
+}
+template<class Json> std::array<DisplaySlot,5> JsonPaletteDisplayBar(const Json& bar,
+    const std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic){
+    return WithPaletteBar(JsonDisplayBar(bar),evidence,aquatic,false);
 }
 template<class Json> std::optional<RevenantActivePaletteEvidence> ReadPaletteEvidence(const Json& data){
     if(!data.is_object()||!data.contains("rev_active_palettes"))return std::nullopt;

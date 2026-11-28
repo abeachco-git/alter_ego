@@ -117,7 +117,7 @@ static bool ComponentNativeSkill(ComponentJson& parent,const char* key,const cha
         const std::optional<AlterEgo::RevenantActivePaletteEvidence>& evidence,size_t index){
     namespace SE=AlterEgo::SkillEdit;
     ImGui::PushID(key);
-    const auto slot=SE::WithPaletteEvidence(parent.contains(key)?SE::JsonDisplaySlot(parent[key]):SE::DisplaySlot{},evidence,aquatic,index);
+    const auto slot=SE::WithPaletteEvidence(parent.contains(key)?SE::JsonDisplaySlot(parent[key]):SE::DisplaySlot{},evidence,aquatic,index,false);
     const uint32_t id=slot.id;
     bool changed=false;
     const float available=ImGui::GetContentRegionAvail().x;
@@ -145,8 +145,13 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
                                     const std::vector<uint32_t>& specs,
                                     bool allowAnySpec) {
     if (!ImGui::TreeNodeEx(key, ImGuiTreeNodeFlags_DefaultOpen, "%s", title)) return;
-    // Missing bars are optional and must not be created by inspecting the editor.
-    if (!data.contains(key)) {
+    namespace SE=AlterEgo::SkillEdit;
+    const bool aquatic=std::string(key)=="aquatic_skills";
+    auto evidence=SE::ReadPaletteEvidence(data);
+    const bool missing=!data.contains(key);
+    // A genuinely absent bar still uses the explicit Add action. An evidence-
+    // only bar can use the normal slot editor without materializing on view.
+    if (missing&&!SE::HasPaletteBarEvidence(evidence,aquatic)) {
         if (RenderActionButton((std::string("Add ") + title + "##bar").c_str()))
             data[key] = {{"heal", 0},
                          {"utilities", ComponentJson::array({0, 0, 0})},
@@ -154,28 +159,30 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
         ImGui::TreePop();
         return;
     }
-    if (!data[key].is_object()) {
+    if (!missing&&!data[key].is_object()) {
         ImGui::TextDisabled("Unsupported skill format; existing value preserved.");
         ImGui::TreePop();
         return;
     }
-    namespace SE=AlterEgo::SkillEdit;
-    auto& bar = data[key];
-    const bool aquatic=std::string(key)=="aquatic_skills";
-    auto evidence=SE::ReadPaletteEvidence(data);
+    ComponentJson transient=ComponentJson::object();
+    auto& bar=missing?transient:data[key];
     const auto before=SE::JsonDisplayBar(bar);
     uint8_t explicitSlots=0;
     if(ComponentNativeSkill(bar, "heal", "Heal", "Heal",
                          profession, specs, allowAnySpec,aquatic,evidence,0))explicitSlots|=1;
     ComponentJson utilities = bar.contains("utilities") &&
         bar["utilities"].is_array() ? bar["utilities"] : ComponentJson::array();
-    while (utilities.size() < 3) utilities.push_back(0);
     for (int i = 0; i < 3; ++i) {
         ImGui::PushID(i);
-        ComponentJson field = {{"skill", utilities[i]}};
+        ComponentJson field=ComponentJson::object();
+        if(static_cast<size_t>(i)<utilities.size())field["skill"]=utilities[i];
         if (ComponentNativeSkill(field, "skill",
                 (std::string("Utility ") + std::to_string(i+1)).c_str(),
                 "Utility", profession, specs, allowAnySpec,aquatic,evidence,i+1)) {
+            // The established portable utility format is integer-only and
+            // positional. Pad only on an explicit edit, never on inspection.
+            while(utilities.size()<=static_cast<size_t>(i))utilities.push_back(0);
+            while(utilities.size()<3)utilities.push_back(0);
             SE::SetUtility(utilities,i,field["skill"].get<uint32_t>());
             bar["utilities"]=utilities;
             explicitSlots|=static_cast<uint8_t>(1u<<(i+1));
@@ -186,6 +193,7 @@ static void ComponentNativeSkillBar(ComponentJson& data, const char* key,
                          profession, specs, allowAnySpec,aquatic,evidence,4))explicitSlots|=16;
     if(SE::RetirePaletteEdits(evidence,aquatic,before,SE::JsonDisplayBar(bar),explicitSlots))
         data["rev_active_palettes"]=*evidence;
+    if(missing&&explicitSlots)data[key]=std::move(transient);
     ImGui::TreePop();
 }
 
