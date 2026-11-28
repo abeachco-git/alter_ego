@@ -190,8 +190,9 @@ jobs:
                   for skill in ids:
                       if isinstance(skill, int) and skill > 0:
                           roles.setdefault(skill, []).append((legend["code"], role))
-          candidates = {i for ids in palettes.values() if len(ids) > 1 for i in ids}
-          candidates.update(i for ids in palettes.values() if ids.intersection(roles) for i in ids)
+          print("Revenant distinct positive palettes:",len(palettes),"zero palette rows:",sum(not pair[0] for pair in rev["skills_by_palette"]))
+          candidates = {i for ids in palettes.values() for i in ids}
+          candidates.update(roles)
           candidates = sorted(candidates)
           details = {s["id"]:s for s in associated}
           missing = [i for i in candidates if i not in details]
@@ -199,8 +200,6 @@ jobs:
               details.update((s["id"],s) for s in get("/v2/skills?ids="+",".join(map(str,missing[i:i+200]))))
           print("Revenant candidate detail coverage:", sum(i in details for i in candidates), "/", len(candidates))
           for palette, ids in sorted(palettes.items()):
-              if len(ids) <= 1 and not ids.intersection(roles):
-                  continue
               print("Revenant palette",palette,[(i,details.get(i,{}).get("name"),details.get(i,{}).get("slot"),details.get(i,{}).get("specialization"),details.get(i,{}).get("flags"),roles.get(i,[])) for i in sorted(ids)])
           stats = get("/v2/itemstats?ids=all")
           print("Stat sample:",stats[0])

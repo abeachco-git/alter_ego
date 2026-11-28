@@ -54,6 +54,21 @@ def main(executable):
             markup.feed(body.decode("utf-8", errors="replace"))
             print("Armory embed counts:", dict(markup.embeds), flush=True)
             print("Explicit companion embed IDs:", markup.companions, flush=True)
+            # Report structural facts only, not retained guide prose or markup.
+            html = body.decode("utf-8", errors="replace")
+            start = html.find('id="skills"')
+            if start >= 0:
+                skill_section = html[start:]
+                tags = re.findall(r'<[^>]+data-armory-embed="(?:skills|specializations)"[^>]*>', skill_section, re.I)
+                for tag in tags[:16]:
+                    kind = re.search(r'data-armory-embed="([^"]+)"', tag)
+                    ids = re.search(r'data-armory-ids="([0-9,]*)"', tag)
+                    print("Skill section embed", kind.group(1) if kind else "?", ids.group(1) if ids else "absent",
+                          "attribute order", re.findall(r'data-armory-[a-z0-9-]+(?==)', tag, re.I), flush=True)
+            gear = html.find('id="gearset"')
+            if gear >= 0 and start > gear:
+                hints = re.findall(r'<span\s+class="text-neutral-400 text-sm ml-2">([^<]+)</span>', html[gear:start])
+                print("Equipment hints:", [hint for hint in hints if re.fullmatch(r"[A-Za-z0-9 -]{1,40}", hint)], flush=True)
             with tempfile.TemporaryDirectory() as tmp:
                 page = pathlib.Path(tmp) / "guide.html"
                 page.write_bytes(body)

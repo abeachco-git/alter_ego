@@ -257,7 +257,14 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     for (const auto& inf : parsed.infusions) totalInfusions += inf.count;
     if (parsed.name.empty() || parsed.gear.size() < 12 || parsed.relicId == 0 ||
         specIndex != 3 || skillIds.size() != 5 || std::any_of(skillIds.begin(),skillIds.end(),[](auto id){return !id;}) || totalInfusions == 0 || totalInfusions > 25) {
-        error = "Incomplete Snow Crows build: expected equipment, relic, skills, and three trait lines.";
+        error = "Incomplete Snow Crows build (missing or invalid:";
+        if(parsed.name.empty())error+=" name";
+        if(parsed.gear.size()<12)error+=" equipment";
+        if(!parsed.relicId)error+=" relic";
+        if(specIndex!=3)error+=" specializations";
+        if(skillIds.size()!=5||std::any_of(skillIds.begin(),skillIds.end(),[](auto id){return !id;}))error+=" skills";
+        if(totalInfusions==0||totalInfusions>25)error+=" infusions";
+        error+=").";
         return false;
     }
     out = std::move(parsed);
