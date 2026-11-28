@@ -87,6 +87,13 @@ int case_skill_edit_core(int,char**) {
         assert(!contextual(4572,0,6)&&contextual(4614,1,6)==201);
         assert(ContextualRevenantReverse(203,0,[&](uint16_t p){return contextual(p);})==4564);
         assert(!ContextualRevenantReverse(999,4564,[&](uint16_t p){return contextual(p);}));
+        // A shared direct pair cannot bypass unresolved legend or role context.
+        assert(!ContextualRevenantReverse(101,4614,[](uint16_t){return 0u;}));
+        assert(!ContextualRevenantReverse(201,4614,[&](uint16_t p){return contextual(p,0);}));
+        assert(!ContextualRevenantReverse(201,4614,[&](uint16_t p){return contextual(p,1,7);}));
+        assert(ContextualRevenantReverse(201,4614,[&](uint16_t p){return contextual(p,3);})==4614);
+        assert(ContextualRevenantReverse(999,999,[](uint16_t){return 0u;})==999);
+        assert(IsRevenantSharedRolePalette(4572)&&!IsRevenantSharedRolePalette(999));
         assert(!CompleteLegendRoles(200,std::vector<uint32_t>{201,201,203},204));
         assert(!CompleteLegendRoles(200,std::vector<uint32_t>{201,202},204));
         assert(CompleteLegendRoles(200,std::vector<uint32_t>{201,202,203},204)==target);

@@ -3717,7 +3717,8 @@ namespace AlterEgo {
     }
 
     uint32_t GW2API::ResolveRevenantPalette(uint16_t palette,uint32_t legend,int environment,int slot){
-        if(!palette||!legend||slot<0||slot>4||environment<0||environment>1)return 0;
+        if(!palette||!legend||legend>255||slot<0||slot>4||environment<0||environment>1)return 0;
+        if(IsRevenantSharedRolePalette(palette)&&RevenantSharedRole(palette,slot)<0)return 0;
         const auto catalog=PublicCatalog::Get();
         const auto* def=PublicCatalog::FindLegend(catalog->legends,legend);
         if(!def)return 0;
@@ -3749,6 +3750,9 @@ namespace AlterEgo {
     }
 
     uint16_t GW2API::ResolveRevenantSkillPalette(uint32_t skill,uint32_t legend,int environment,int slot){
+        if(!skill||!legend||legend>255||slot<0||slot>4||environment<0||environment>1)return 0;
+        const auto catalog=PublicCatalog::Get();
+        if(!PublicCatalog::FindLegend(catalog->legends,legend))return 0;
         const auto direct=GetPaletteIdFromSkill("Revenant",skill);
         if(environment&&skill){
             const auto info=GetSkillInfo(skill);

@@ -191,6 +191,9 @@ namespace AlterEgo {
         if(!sorted[0]||std::adjacent_find(sorted.begin(),sorted.end())!=sorted.end())return std::nullopt;
         return ids;
     }
+    inline bool IsRevenantSharedRolePalette(uint16_t palette){
+        return std::find(RevenantRolePalettes.begin(),RevenantRolePalettes.end(),palette)!=RevenantRolePalettes.end();
+    }
     inline int RevenantSharedRole(uint16_t palette,int slot){
         const auto it=std::find(RevenantRolePalettes.begin(),RevenantRolePalettes.end(),palette);
         if(it==RevenantRolePalettes.end()||slot<0||slot>4)return -1;
@@ -218,6 +221,10 @@ namespace AlterEgo {
         if(!id)return 0;
         if(direct){
             const auto contextual=resolve(direct);
+            // A shared wire role changes meaning with the legend. A unique
+            // profession-wide pair alone does not authorize that role in an
+            // unresolved context (including a different physical role).
+            if(IsRevenantSharedRolePalette(direct))return contextual==id?direct:0;
             return !contextual||contextual==id?direct:0;
         }
         uint16_t found=0;
