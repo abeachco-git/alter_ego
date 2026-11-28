@@ -6,21 +6,48 @@ Alter Ego is an addon for [Raidcore Nexus](https://raidcore.gg/Nexus) designed t
 
 Browse your characters without switching between them, organize reusable loadouts, compare equipment and builds, locate items across your accounts, and track your progress toward your next goal.
 
-This README describes the experimental branch, not a published independent release. Screenshots illustrate the existing workflow and may not show recent interface changes.
+**Availability:** This is an experimental development version, not yet a Nexus catalog release. Screenshots may differ from the current interface.
 
 ![Alter Ego - Characters](screenshots/characters-equipment.png)
+
+## Getting started
+
+**Requirements:** Guild Wars 2, [Raidcore Nexus](https://raidcore.gg/Nexus) (API v6), and a Guild Wars 2 API key for account features.
+
+1. Install Nexus and obtain a trusted experimental build of Alter Ego from the maintainer.
+2. Place `AlterEgo.dll` in your Guild Wars 2 `addons` directory and load it through Nexus. Do not load multiple copies simultaneously.
+3. Create an API key at the [Guild Wars 2 account website](https://account.guildwars2.com/applications).
+4. Open **Nexus → Alter Ego options**, enter your key and link your account.
+5. Open Alter Ego from its quick-access icon. Browse Characters, select a character, and use Refresh to retrieve its details. Enable Automatic API Refresh in Nexus options if desired.
+
+<details>
+<summary>API key permissions</summary>
+
+For full account functionality, enable:
+
+| Permission | Purpose |
+| --- | --- |
+| `account` | Account identification |
+| `characters` | Character information |
+| `builds` | Build and equipment templates |
+| `inventories` | Inventory and equipment |
+| `wallet` | Currency balances |
+| `unlocks` | Wardrobe and other unlocks |
+| `progression` | Achievements and account progress |
+| `guilds` | Guild information and accessible storage |
+| `tradingpost` | Trading Post delivery items |
+
+API keys are stored locally in Windows Credential Manager and are excluded from exports. Link additional accounts from the same options page.
+
+Optional Nexus integrations: **Events: Chat** for chat link detection and **Events: Alerts** for skin unlock and achievement completion notifications.
+
+</details>
 
 ## Features
 
 ### Characters
 
-- Browse characters, builds, equipment, crafting disciplines and gathering tools.
-- View equipment templates, upgrades, infusions and glyphs.
-- Recognize matching saved loadouts or assign an expected loadout to track outstanding differences.
-- View recorded Ranger pets and Revenant legends for land and underwater builds; Rangers also have a dedicated pet collection view with observed and manually tracked ownership.
-- Sort characters by name, profession, level, age, birthday, last login or custom order.
-- Quickly switch between eligible characters using Fast Load.
-- Personalize your character list with custom portraits.
+Browse your characters, equipment, build templates and gathering tools without switching characters. See recorded pets and legends, track your Ranger pet collection, and sort or personalize your character list. Fast Load lets you switch to eligible characters.
 
 | Character Builds | Gathering Tools |
 | --- | --- |
@@ -28,19 +55,11 @@ This README describes the experimental branch, not a published independent relea
 
 ### Library
 
-Build and maintain a personal collection of loadouts, reusable components, equipment sets and appearances.
+Save builds from your characters or create them independently. Import builds from Snow Crows, MetaBattle or supported build codes, and review updates before applying them.
 
-- Save complete loadouts directly from your characters.
-- Create and customize loadouts independently of your characters.
-- Reuse build, skill, profession-specific companion and equipment components across multiple loadouts, including optional underwater equipment.
-- Share Equipment Sets between loadouts, so changes can be managed in one place.
-- Organize loadouts by profession and game mode.
-- Save Fashion independently of combat builds.
-- Import builds from Snow Crows, MetaBattle, GW2 build links and compatible AE2 build codes using **Library → Import from Link / URL**.
-- Review source updates before applying them to saved loadouts, with private or explicitly shared edits.
-- Copy supported build and wardrobe links or transfer saved records using portable exports.
+A **Loadout** combines your build and equipment. Reusable **components** let multiple loadouts share individual parts, while **Equipment Sets** let them share groups of gear. Save **Fashion** separately from combat builds.
 
-Equipment Sets can contain only the equipment categories you want to share, allowing individual loadouts to retain their own equipment choices.
+To import a guide or build code, open **Library → Import from Link / URL**.
 
 | Loadouts | Components |
 | --- | --- |
@@ -50,28 +69,13 @@ Equipment Sets can contain only the equipment categories you want to share, allo
 
 ### Compare
 
-Compare your characters against saved loadouts to identify what needs to change.
-
-- Compare traits, skills, equipment, stats and upgrades.
-- Identify missing or mismatched equipment.
-- Find relevant items already owned by your account.
-- Compare individual equipment and build templates.
-- Recognize functional matches without requiring identical utility skill ordering.
+Check a character against a saved loadout to see missing or mismatched traits, skills, gear and upgrades. Find relevant items you already own, or assign an expected loadout to track differences as you prepare your character.
 
 ![Compare](screenshots/compare.png)
 
 ### Inventory
 
-Find what you own without manually searching through characters and storage.
-
-- Search across character inventories, equipped items, bank, shared inventory, material storage and Legendary Armory.
-- Locate individual items and their quantities, including exact storage slots where reported.
-- Browse flat results or grouped account, character and storage views.
-- Filter by character, storage location, rarity, item type and other attributes.
-- Browse wallet currencies and pin frequently used currencies.
-- Browse accessible guild bank storage and cached Trading Post delivery items when permissions allow.
-- View cached Trading Post prices and estimated proceeds for eligible owned stock.
-- Navigate directly to relevant inventory results from other areas of Alter Ego.
+Search your characters' bags and equipment, bank, shared inventory, material storage and Legendary Armory in one place. Filter or group results to locate items and quantities, browse wallet currencies and accessible guild storage, and view available Trading Post price estimates.
 
 | Item Locations | Inventory Filters |
 | --- | --- |
@@ -79,13 +83,7 @@ Find what you own without manually searching through characters and storage.
 
 ### Skins
 
-Explore your wardrobe and work toward completing your collection.
-
-- Browse unlocked and missing skins.
-- Filter by category, rarity, weapon type, armor weight and ownership.
-- View collection progress.
-- Browse using list or grid layouts.
-- Maintain a shopping list with Trading Post price estimates and eligible owned-stock information.
+Explore unlocked and missing wardrobe skins in list or grid view, track collection progress, and maintain a shopping list with Trading Post price estimates.
 
 ![Skin Browser](screenshots/skins-browser.png)
 
@@ -109,148 +107,51 @@ Link multiple Guild Wars 2 accounts and browse their characters, inventory, curr
 
 Your Loadout and Fashion libraries remain independent of your accounts, allowing saved builds and appearances to be reused across them.
 
-## Getting Started
+## Using Alter Ego
 
-### Requirements
+- **Preparing a build:** Import or save a loadout in Library, then use Compare to see what your character is missing.
+- **Finding an item:** Search Inventory and select a result to see its known locations.
+- **Tracking goals:** Pin achievements to the compact tracker or check Wizard's Vault and Clears for recurring objectives.
 
-- Guild Wars 2
-- [Raidcore Nexus](https://raidcore.gg/Nexus) (API v6)
-- A Guild Wars 2 API key for account-related features
+Most game entities with supported chat links offer copy actions through their context menus.
 
-Optional Nexus integrations:
+## Settings
 
-- **Events: Chat** — Chat link detection.
-- **Events: Alerts** — Skin unlock and achievement completion notifications.
+Open **Nexus → Alter Ego options** to manage linked accounts, enable automatic refresh (off by default), adjust window transparency and fonts, customize the character list, or configure Fast Load.
 
-### Installation
+Manual Refresh remains available even when automatic refresh is disabled. Guild Wars 2 API data can lag behind in-game changes; cached information remains available while retrieval is underway.
 
-1. Install Raidcore Nexus.
-2. Place `AlterEgo.dll` in your Guild Wars 2 `addons` directory.
-3. Load Alter Ego through Nexus.
-4. Open Alter Ego using its quick-access icon.
+### Custom character portraits
 
-> [!NOTE]
-> This version of Alter Ego is under active development and is not currently a published Nexus catalog release. Do not load multiple copies of Alter Ego simultaneously.
+Place a PNG or JPEG named exactly after your character (for example, `My Ranger.png`) in `<GW2>/addons/AlterEgo/portraits/` and reselect the character. Rename the file yourself if your character is renamed. Characters with identical names share a portrait.
 
-### API Key Setup
+For custom fonts, place a `.ttf` file in `<GW2>/addons/AlterEgo/fonts/` and select it in Nexus options.
 
-Create an API key at the [Guild Wars 2 account management website](https://account.guildwars2.com/applications).
+## Data and backups
 
-For full functionality, enable the following permissions:
+Alter Ego stores data in an `AlterEgo/` folder beside the DLL, normally `<GW2>/addons/AlterEgo/`.
 
-| Permission | Purpose |
-| --- | --- |
-| `account` | Account identification |
-| `characters` | Character information |
-| `builds` | Build and equipment templates |
-| `inventories` | Inventory and equipment |
-| `wallet` | Currency balances |
-| `unlocks` | Wardrobe and other unlocks |
-| `progression` | Achievements and account progress |
-| `guilds` | Guild information and accessible storage |
-| `tradingpost` | Delivery box / Trading Post account information |
+- Use **Library → Export** to back up selected library records, preferences and custom assets; use **Library → Import** to restore them or import supported original Alter Ego exports.
+- Portable backups exclude credentials, linked account registry records and rebuildable caches. Relink accounts after moving to a new installation.
+- Use **Storage & Cache** in Nexus options for cache maintenance. Rebuilding the cache preserves saved libraries and preferences.
+- For a full local backup, unload the addon and copy the entire data folder. Credentials remain separate in Windows Credential Manager.
 
-Open **Nexus → Alter Ego options** to enter your API key and link your account.
-
-Additional accounts can be linked from the same settings page.
-
-API keys are stored locally in Windows Credential Manager and are excluded from library exports.
-
-## Personalization
-
-In **Nexus → Alter Ego options**, adjust the interface to suit your play style:
-
-- **Appearance → Window Transparency:** 0–80% additional background transparency, with a reset to the original appearance. Text, icons and controls retain their theme opacity; status footers and build notifications have automatic contrast protection.
-- Choose the Nexus default font or a custom local font, with adjustable size for custom fonts.
-- Customize character list details, the quick-access icon and Fast Load (Disabled, Enabled or Enabled with confirmation).
-
-Preferences are stored locally and can be included in an export.
-
-## Automatic Refresh
-
-Alter Ego maintains a local cache of retrieved account information.
-
-Automatic refresh is off by default and can be enabled and configured individually for different types of account data. Refreshes are designed around actual usage, data freshness and API propagation delays rather than continuously retrieving everything.
-
-Automatic character refresh retrieves complete character data and can include other eligible cached characters on the same account in a single request. Manual refresh remains available for the visible character data or explicitly selected characters; Inventory can refresh independently. Cached data stays available while retrieval is underway.
-
-Guild Wars 2 API data may lag behind changes made in-game. Recently changed equipment, builds and inventory may not appear immediately.
-
-## Custom Character Portraits
-
-You can personalize your character profiles by adding custom portraits to:
-
-```text
-<GW2>/addons/AlterEgo/portraits/
-```
-
-Name the image exactly after the character's current name, including spaces, followed by `.png`, `.jpg`, or `.jpeg` (for example, `Nul Sul.png`). If you rename a character, rename its portrait file yourself. Characters with the same name use the same portrait; these are user-managed cosmetic files. Any older identity-qualified portrait files remain untouched and can be manually renamed to the current character name.
-
-Supported formats:
-
-- PNG
-- JPG
-- JPEG
-
-Re-select your character to display the updated portrait.
-
-## Data and Backups
-
-Alter Ego stores its local data in the `AlterEgo/` directory next to the loaded DLL, normally:
-
-```text
-<GW2>/addons/AlterEgo/
-```
-
-| Location | Contents |
-| --- | --- |
-| `library/` | Saved loadouts, components, equipment sets, Fashion, achievement pins and staged login history |
-| `config/` | Settings, preferences, activity history and durable account/character registry (not API keys) |
-| `cache/` | Rebuildable account snapshots, public reference information and downloaded artwork |
-| `portraits/` | Custom character portraits |
-| `fonts/` | Custom fonts |
-| `backups/` | Recovery snapshots and migration backups |
-
-The authoritative library (`library/library.db`) and account registry (`config/accounts.db`) use SQLite and are stored separately from rebuildable cached data (`cache/cache.db`).
-
-Use the **Import** and **Export** actions in the Library tab menu to transfer selected library records, preferences and custom assets. Portable exports exclude API keys, account registry links and rebuildable caches; relink accounts after restoring on another installation. Supported original Alter Ego build-library exports can also be imported.
-
-Cache inspection and startup-scheduled maintenance are available under **Storage & Cache** in Nexus options. Rebuilding the cache preserves your library, account registry and preferences; old files may be retained in a quarantine backup.
-
-For a full local backup, unload the addon and copy its entire data folder. Credentials remain separate in Windows Credential Manager. Regular backups are recommended, particularly before upgrading experimental builds.
-
-For more information about local storage, credentials and external services, see the [Privacy Policy](PRIVACY.md).
+See [Privacy](PRIVACY.md) for data handling and [Architecture](docs/architecture.md#storage-ownership-and-recovery) for detailed storage information.
 
 ## Limitations
 
-- Compare identifies differences but does not automatically equip items or apply builds.
-- Character and account information is subject to Guild Wars 2 API availability and update delays.
-- Some equipment, fashion, gathering tool and companion details may be incomplete when they are not reported by the API. Ranger pet ownership combines observed selections and manual tracking; an unobserved pet is not necessarily locked.
-- The experimental branch has passed automated build checks but still requires live in-game validation; see [development status](docs/development-status.md).
+- Compare shows differences; it does not automatically equip gear or apply builds.
+- Account details depend on API availability and may be delayed or incomplete. Unobserved Ranger pets are not necessarily locked, and owned items are not necessarily transferable.
 - Fast Load depends on compatibility with the current game version and verified character ownership.
-- Inventory ownership does not necessarily mean an item can be transferred or used by another character.
+- This experimental version still requires in-game validation. See [development status](docs/development-status.md).
 
 ## Development
 
-Alter Ego is written in C++ using the Nexus addon API, Dear ImGui and SQLite.
+Alter Ego is written in C++ using the Nexus addon API, Dear ImGui and SQLite. Windows x64 builds and automated tests run through GitHub Actions.
 
-Windows x64 UCRT builds and automated regression testing are performed through GitHub Actions.
+Contributions and bug reports are welcome. See [Contributing](CONTRIBUTING.md), [Changelog](CHANGELOG.md), [Roadmap](docs/roadmap.md) and [Security](SECURITY.md).
 
-Contributions, bug reports and feature suggestions are welcome.
-
-### Project Documentation
-
-- [Contributing](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
-- [Roadmap](docs/roadmap.md)
-- [Current development and validation status](docs/development-status.md)
-- [Release checklist](docs/release-checklist.md)
-- [Architecture](docs/architecture.md)
-- [UI Conventions](docs/ui-components.md)
-- [Regression Testing](docs/regression-testing.md)
-- [Shared Build Format](docs/shared-build-spec.md)
-- [Agent Instructions](AGENTS.md)
-- [Security](SECURITY.md)
+Developer references: [Architecture](docs/architecture.md), [UI conventions](docs/ui-components.md), [Regression testing](docs/regression-testing.md), [Shared build format](docs/shared-build-spec.md), [Release checklist](docs/release-checklist.md) and [Agent instructions](AGENTS.md).
 
 ## Credits
 
