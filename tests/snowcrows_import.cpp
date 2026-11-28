@@ -129,6 +129,44 @@ int case_snowcrows_import(int argc, char** argv) {
         assert(retained.name==out.name&&retained.gear.size()==out.gear.size());
         assert(error.find("Backpack")!=std::string::npos);
     }
+    {
+        // Live Snow Crows Revenant pages expose an invocation pair where
+        // other professions publish five typed skills. Use synthetic markup
+        // with the observed structural layout, not a copied guide snapshot.
+        AlterEgo::DecodedBuildLink code{};code.profession=AlterEgo::PROF_REVENANT;
+        code.legends[0]=8;code.legends[1]=2;code.legends[2]=3;code.legends[3]=4;
+        code.specs[0].spec_id=1;code.specs[1].spec_id=24;code.specs[2].spec_id=40;
+        for(int i=0;i<5;++i)code.terrestrial_skills[i]=static_cast<uint16_t>(100+i);
+        auto guide=sample;const std::string ids="21750,10232,10234,10202,29519";
+        guide.replace(guide.find(ids),ids.size(),"76610,28134");
+        const auto base=guide;
+        const std::string revUrl="https://snowcrows.com/builds/raids/revenant/build";
+        const auto withLink=[&](const auto& packet){
+            auto text=base;text.insert(text.find("<div id=\"gearset\">"),AlterEgo::ChatLink::EncodeBuild(packet));return text;
+        };
+        Page rev;assert(!Parse(revUrl,guide,rev,error)); // no native position evidence
+        guide=withLink(code);
+        assert((Parse(revUrl,guide,rev,error)&&rev.skills==std::array<uint32_t,5>{}));
+        assert((rev.legendInvocationSkills==std::array<uint32_t,2>{76610,28134}));
+        assert(!Parse(url,guide,rev,error)); // non-Revenant never treats pair as a skill bar
+        auto tier=[](uint32_t,uint32_t){return -1;};
+        auto invocation=[](uint32_t id)->uint32_t{return id==8?76610:id==2?28134:0;};
+        auto patch=AlterEgo::SourceRefresh::FromPage(rev,tier,false,AlterEgo::SourceRefresh::UnknownPaletteResolver{},
+            AlterEgo::SourceRefresh::UnknownPalettePair{},invocation);
+        assert(patch.warning.empty()&&patch.companions[0]==8&&patch.companions[1]==2&&patch.activePalettes);
+        for(const auto& skill:patch.skills)assert(!skill);
+        std::swap(rev.legendInvocationSkills[0],rev.legendInvocationSkills[1]);
+        patch=AlterEgo::SourceRefresh::FromPage(rev,tier,false,AlterEgo::SourceRefresh::UnknownPaletteResolver{},
+            AlterEgo::SourceRefresh::UnknownPalettePair{},invocation);
+        assert(patch.warning.empty()); // the pair is not positional
+        rev.legendInvocationSkills[0]=999;
+        patch=AlterEgo::SourceRefresh::FromPage(rev,tier,false,AlterEgo::SourceRefresh::UnknownPaletteResolver{},
+            AlterEgo::SourceRefresh::UnknownPalettePair{},invocation);
+        assert(!patch.warning.empty()&&patch.companions[0]==8&&patch.companions[1]==2);
+        code.legends[1]=0;assert(!Parse(revUrl,withLink(code),rev,error));
+        code.legends[1]=2;code.terrestrial_skills[2]=0;
+        assert(!Parse(revUrl,withLink(code),rev,error));
+    }
     const std::string previousName = out.name;
     assert(!Parse(url, "<html>error</html>", out, error));
     assert(out.name == previousName); // invalid refresh cannot destroy existing data

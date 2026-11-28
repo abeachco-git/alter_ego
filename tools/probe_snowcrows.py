@@ -74,6 +74,7 @@ def main(executable):
                 page.write_bytes(body)
                 result = subprocess.run([executable, "snowcrows_import", "--probe", url, str(page)], timeout=30, check=False)
                 failures += result.returncode != 0
+                print("Native parser exit:", result.returncode, flush=True)
         except Exception as exc:
             print("Probe unavailable:", type(exc).__name__, str(exc), flush=True)
             failures += 1

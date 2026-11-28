@@ -9270,8 +9270,13 @@ static AlterEgo::SourceRefresh::ItemCompatibility SourceItemCompatibility(const 
 }
 static AlterEgo::SourceRefresh::Patch ProjectSourcePage(const AlterEgo::SnowCrows::Page& page,bool initial=false){
     using namespace AlterEgo;
+    const auto catalog=PublicCatalog::Get();
     return SourceRefresh::FromPage(page,SourceTraitTier,initial,
-        GW2API::ResolveRevenantPalette,GW2API::HasRevenantPalettePair);
+        GW2API::ResolveRevenantPalette,GW2API::HasRevenantPalettePair,
+        [&](uint32_t code)->uint32_t{
+            const auto* legend=PublicCatalog::FindLegend(catalog->legends,code);
+            return legend?legend->swap:0;
+        });
 }
 static bool SourcePageToSavedBuild(const AlterEgo::SnowCrows::Page& page,AlterEgo::SavedBuild& result,std::string& error){
     using namespace AlterEgo;

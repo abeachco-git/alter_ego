@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include "AscendedStatNames.h"
+#include "ChatLink.h"
 
 namespace AlterEgo {
 namespace SnowCrows {
@@ -39,6 +40,9 @@ struct Page {
     std::string importWarning; // Non-fatal source gaps; do not fabricate unspecified values.
     std::array<Spec, 3> specs;
     std::array<uint32_t, 5> skills{};
+    // Snow Crows Revenant main embed publishes two invocation skill IDs,
+    // not the heal/utility/elite bar or necessarily active/inactive order.
+    std::array<uint32_t,2> legendInvocationSkills{};
     std::map<std::string, Gear> gear;
     uint32_t relicId = 0;
     std::string relicName;
@@ -141,6 +145,14 @@ inline std::vector<uint32_t> PositionalIds(const std::string& csv) {
     }
     return result;
 }
+inline bool CompletePublishedRevenantTemplate(const Page& page){
+    DecodedBuildLink link{};
+    if(page.profession!="Revenant"||!ChatLink::DecodeBuild(page.templateCode,link)||
+       link.profession!=PROF_REVENANT||!link.active_palettes_known||!link.companion_choices_known)
+        return false;
+    return link.legends[0]&&link.legends[1]&&link.legends[0]!=link.legends[1]&&
+        std::all_of(std::begin(link.terrestrial_skills),std::end(link.terrestrial_skills),[](uint16_t id){return id!=0;});
+}
 inline bool Parse(const std::string& url, const std::string& html, Page& out, std::string& error) {
     error.clear();
     const std::string normalized = NormalizeUrl(url);
@@ -187,8 +199,18 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     const std::string skillsHtml = html.substr(skillsAt);
     parsed.skills = {};
     auto skillIds = PositionalIds(Match(skillsHtml, R"SC(data-armory-embed="skills"\s+data-armory-ids="([0-9,]+)")SC"));
-    if (skillIds.size() == 5)
-        std::copy(skillIds.begin(), skillIds.end(), parsed.skills.begin());
+    bool skillLayoutComplete=skillIds.size()==5&&
+        std::all_of(skillIds.begin(),skillIds.end(),[](auto id){return id!=0;});
+    if(skillLayoutComplete)
+        std::copy(skillIds.begin(),skillIds.end(),parsed.skills.begin());
+    else if(skillIds.size()==2&&skillIds[0]&&skillIds[1]&&skillIds[0]!=skillIds[1]&&
+            CompletePublishedRevenantTemplate(parsed)){
+        // Real Power Conduit markup uses this layout. The native packet
+        // supplies exact positional companion/palette evidence; the two
+        // published IDs are independent non-positional corroboration.
+        std::copy(skillIds.begin(),skillIds.end(),parsed.legendInvocationSkills.begin());
+        skillLayoutComplete=true;
+    }
 
     const std::regex specsRe(R"SC(data-armory-embed="specializations"\s+data-armory-ids="([0-9]+)"\s+data-armory-[0-9]+-traits="([0-9,]*)")SC", std::regex::icase);
     size_t specIndex = 0;
@@ -271,7 +293,7 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     for (const auto& inf : parsed.infusions) totalInfusions += inf.count;
     const auto missingGear=MissingRequiredGear(parsed);
     if (parsed.name.empty() || !missingGear.empty() || parsed.relicId == 0 ||
-        specIndex != 3 || skillIds.size() != 5 || std::any_of(skillIds.begin(),skillIds.end(),[](auto id){return !id;}) || totalInfusions == 0 || totalInfusions > 25) {
+        specIndex != 3 || !skillLayoutComplete || totalInfusions == 0 || totalInfusions > 25) {
         error = "Incomplete Snow Crows build (missing or invalid:";
         if(parsed.name.empty())error+=" name";
         if(!missingGear.empty()){
@@ -281,7 +303,7 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
         }
         if(!parsed.relicId)error+=" relic";
         if(specIndex!=3)error+=" specializations";
-        if(skillIds.size()!=5||std::any_of(skillIds.begin(),skillIds.end(),[](auto id){return !id;}))error+=" skills";
+        if(!skillLayoutComplete)error+=" skills";
         if(totalInfusions==0||totalInfusions>25)error+=" infusions";
         error+=").";
         return false;

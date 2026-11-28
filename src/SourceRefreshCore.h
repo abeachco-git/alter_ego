@@ -51,14 +51,28 @@ struct UnknownPaletteResolver {
 struct UnknownPalettePair {
     bool operator()(uint16_t,uint32_t)const{return false;}
 };
-template<class Tier,class Resolve=UnknownPaletteResolver,class Match=UnknownPalettePair>
-Patch FromPage(const SnowCrows::Page& page,Tier tier,bool initial=false,Resolve resolve={},Match match={}){
+struct UnknownLegendInvocation {
+    uint32_t operator()(uint32_t)const{return 0;}
+};
+template<class Tier,class Resolve=UnknownPaletteResolver,class Match=UnknownPalettePair,class Invocation=UnknownLegendInvocation>
+Patch FromPage(const SnowCrows::Page& page,Tier tier,bool initial=false,Resolve resolve={},Match match={},Invocation invocation={}){
     Patch p;p.profession=page.profession;p.sourceUrl=page.sourceUrl;p.warning=page.importWarning;
     std::set<uint32_t> ids;
     if(!page.templateCode.empty()){
         DecodedBuildLink decoded{};
         if(ChatLink::DecodeBuild(page.templateCode,decoded)&&page.profession==ChatLink::ProfessionName(decoded.profession)){
             p.verifiedTemplate=page.templateCode;
+            if(decoded.profession==PROF_REVENANT&&decoded.companion_choices_known&&
+               page.legendInvocationSkills[0]&&page.legendInvocationSkills[1]){
+                const auto first=invocation(decoded.legends[0]),second=invocation(decoded.legends[1]);
+                if(first&&second){
+                    // Independent invocation IDs corroborate the pair, not
+                    // the active stance or the physical utility order.
+                    const auto a=page.legendInvocationSkills[0],b=page.legendInvocationSkills[1];
+                    if(!((a==first&&b==second)||(a==second&&b==first)))
+                        p.warning+=" Published legend invocation skills differ from the native template; review the template selections.";
+                }
+            }
             if(decoded.companion_choices_known&&(decoded.profession==PROF_RANGER||decoded.profession==PROF_REVENANT)){
                 for(size_t i=0;i<p.companions.size();++i){
                     const auto id=decoded.profession==PROF_RANGER?decoded.pets[i]:decoded.legends[i];
