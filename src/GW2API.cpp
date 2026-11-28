@@ -3763,6 +3763,36 @@ namespace AlterEgo {
         });
     }
 
+    SkillEdit::RetrievedSkillProjection GW2API::ProjectLiveSkills(const BuildTemplate& build,bool aquatic){
+        const auto catalog=PublicCatalog::Get();
+        const auto& legends=aquatic?build.legends.aquatic:build.legends.terrestrial;
+        const auto legend=PublicCatalog::LegendCode(catalog->legends,legends[0]);
+        return SkillEdit::ProjectRetrievedSkillBar(aquatic?build.aquatic_skills:build.terrestrial_skills,
+            build.profession=="Revenant",legend,aquatic?1:0,ResolveRevenantPalette);
+    }
+
+    void GW2API::CaptureLiveSkills(const BuildTemplate& build,SavedBuild& saved){
+        // Raw authenticated IDs remain in the character snapshot/cache. Capture
+        // uses the same cache-only projection as display and comparison.
+        saved.terrestrial_skills=build.terrestrial_skills;
+        saved.aquatic_skills=build.aquatic_skills;
+        for(int env=0;env<2;++env){
+            const auto projection=ProjectLiveSkills(build,env!=0);
+            auto& bar=env?saved.aquatic_skills:saved.terrestrial_skills;
+            SkillEdit::ApplyRetrievedSkillProjection(bar,projection);
+            if(build.profession!="Revenant")continue;
+             for(size_t i=0;i<5;++i){
+                if(projection.slots[i].evidence!=SkillEdit::SlotEvidence::Unresolved||!projection.sharedPalettes[i])continue;
+                if(!saved.rev_active_palettes)saved.rev_active_palettes=RevenantActivePaletteEvidence{};
+                // An unresolved API role is not a verified native export.
+                // Keep its role evidence but deliberately prohibit regeneration
+                // until explicitly replaced; do not fabricate an empty slot.
+                (*saved.rev_active_palettes)[env*5+i]={projection.sharedPalettes[i],0,256,256,
+                    build.specializations[2].spec_id<=255?build.specializations[2].spec_id:0};
+            }
+        }
+    }
+
     bool GW2API::HasRevenantPalettePair(uint16_t palette,uint32_t skill){
         std::lock_guard<std::mutex> lock(s_mutex);
         return ContainsPalettePair(s_revenant_palette_pairs,palette,skill);

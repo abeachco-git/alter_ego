@@ -4041,7 +4041,14 @@ static std::string EncodeBuildTabChatLink(const AlterEgo::BuildTemplate& bt) {
         if(!AlterEgo::SkillEdit::CompanionPairsRepresentable(slots))return {};
     }
     const auto catalog=AlterEgo::PublicCatalog::Get();
-    const auto link=AlterEgo::ProjectDerivedBuildLink(bt,
+    auto projected=bt;
+    for(int env=0;env<2;++env){
+        const auto skills=AlterEgo::GW2API::ProjectLiveSkills(bt,env!=0);
+        for(const auto& slot:skills.slots)
+            if(slot.evidence==AlterEgo::SkillEdit::SlotEvidence::Unresolved)return {};
+        AlterEgo::SkillEdit::ApplyRetrievedSkillProjection(env?projected.aquatic_skills:projected.terrestrial_skills,skills);
+    }
+    const auto link=AlterEgo::ProjectDerivedBuildLink(projected,
         [](uint32_t,int,int choice)->std::optional<int>{return choice;},
         [&](uint32_t id,int env,int slot,const AlterEgo::DecodedBuildLink& decoded)->std::optional<uint32_t>{
             if(!id)return 0u;
@@ -4127,8 +4134,7 @@ static AlterEgo::SavedBuild CaptureRetrievedBuildSnapshot(
             sb.game_mode = gameMode;
             sb.chat_link = chatLink;
             for (int i = 0; i < 3; ++i) sb.specializations[i] = capturedTab->specializations[i];
-            sb.terrestrial_skills = capturedTab->terrestrial_skills;
-            sb.aquatic_skills = capturedTab->aquatic_skills;
+            AlterEgo::GW2API::CaptureLiveSkills(*capturedTab,sb);
             sb.pets = capturedTab->pets;
             sb.weapons = capturedTab->weapons;
             if(sb.profession=="Ranger"){
@@ -4719,12 +4725,14 @@ static void RenderBuildPanel(const AlterEgo::Character& ch) {
     // The live API reports only recorded skills and explicit null slots.
     ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Heal / Utility / Elite");
     ImGui::PushID("live_land_skills");
-    RenderSkillBarPreview(AlterEgo::SkillEdit::DisplayBar(bt.terrestrial_skills,bt.terrestrial_skills.empty_slots),ICON_SIZE);
+    if(bt.profession=="Revenant")AlterEgo::GW2API::FetchProfessionInfoAsync(bt.profession);
+    RenderSkillBarPreview(AlterEgo::GW2API::ProjectLiveSkills(bt,false).slots,ICON_SIZE);
     ImGui::PopID();
     const auto& water=bt.aquatic_skills;
-    if(water.heal||water.elite||water.utilities[0]||water.utilities[1]||water.utilities[2]||water.empty_slots){
+    const auto projectedWater=AlterEgo::GW2API::ProjectLiveSkills(bt,true);
+    if(AlterEgo::SkillEdit::HasSkillSelection(projectedWater.slots)||water.empty_slots){
         if(ImGui::TreeNode("Aquatic skills##live")){
-            RenderSkillBarPreview(AlterEgo::SkillEdit::DisplayBar(water,water.empty_slots),ICON_SIZE,true);
+            RenderSkillBarPreview(projectedWater.slots,ICON_SIZE,true);
             ImGui::TreePop();
         }
     }
@@ -5698,6 +5706,14 @@ static void DemandBuildReferenceMetadata(const Build& build){
     DemandSkillBarMetadata(SkillEdit::DisplayBar(build.aquatic_skills),true);
     DemandSkillBarMetadata(SkillEdit::DisplayBar(build.terrestrial_skills),false);
     GW2API::FetchProfessionInfoAsync(build.profession);
+}
+static void DemandBuildReferenceMetadata(const AlterEgo::BuildTemplate& build){
+    using namespace AlterEgo;
+    GW2API::FetchSpecDetailsAsync({build.specializations[0].spec_id,build.specializations[1].spec_id,build.specializations[2].spec_id});
+    DemandSkillBarMetadata(GW2API::ProjectLiveSkills(build,true).slots,true);
+    DemandSkillBarMetadata(GW2API::ProjectLiveSkills(build,false).slots,false);
+    GW2API::FetchProfessionInfoAsync(build.profession);
+    if(build.profession=="Revenant")GW2API::FetchLegendsAsync();
 }
 static void FetchDetailsForSavedBuild(const AlterEgo::SavedBuild& build){
     DemandBuildReferenceMetadata(build);
@@ -7665,6 +7681,12 @@ static nlohmann::json RevenantTypedContext(const Build& build,const AlterEgo::Sk
     return J{{"profession",build.profession},{"specializations",J::array({J{{"id",build.specializations[0].spec_id}},
         J{{"id",build.specializations[1].spec_id}},J{{"id",build.specializations[2].spec_id}}})},
         {"legend_codes",slots.values},{"skills",bar(build.terrestrial_skills)},{"aquatic_skills",bar(build.aquatic_skills)}};
+}
+static nlohmann::json RevenantTypedContext(const AlterEgo::BuildTemplate& build,const AlterEgo::SkillEdit::CompanionProjection& slots){
+    auto projected=build;
+    AlterEgo::SkillEdit::ApplyRetrievedSkillProjection(projected.terrestrial_skills,AlterEgo::GW2API::ProjectLiveSkills(build,false));
+    AlterEgo::SkillEdit::ApplyRetrievedSkillProjection(projected.aquatic_skills,AlterEgo::GW2API::ProjectLiveSkills(build,true));
+    return RevenantTypedContext<AlterEgo::BuildTemplate>(projected,slots);
 }
 static void RenderRevenantContextWarnings(const nlohmann::json& raw,const std::string& owner={}){
     for(const auto& issue:AlterEgo::GW2API::RevenantContextWarnings(raw)){
@@ -10268,10 +10290,9 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     namespace SE=AlterEgo::SkillEdit;
     const auto compareSkills=[&](bool aquatic){
         const auto& a=aquatic?saved.aquatic_skills:saved.terrestrial_skills;
-        const auto& b=aquatic?live.aquatic_skills:live.terrestrial_skills;
         const auto slots=SE::WithPaletteBar(SE::DisplayBar(a),saved.rev_active_palettes,aquatic,false);
         AlterEgo::AddSkillBarComparison(result,aquatic?"Aquatic skills":"Terrestrial skills",
-            slots,SE::DisplayBar(b,b.empty_slots),skillName,!aquatic);
+            slots,AlterEgo::GW2API::ProjectLiveSkills(live,aquatic).slots,skillName,!aquatic);
     };
     compareSkills(false);compareSkills(true);
     if(saved.profession=="Ranger"||saved.profession=="Revenant"){

@@ -34,6 +34,39 @@ template<class Bar> std::array<DisplaySlot,5> DisplayBar(const Bar& bar,uint8_t 
     for(std::size_t i=0;i<ids.size();++i)result[i]=SlotDisplay(ids[i],(emptyMask&(1u<<i))!=0);
     return result;
 }
+// Authenticated pinned-schema paired native exports verified these five
+// reported Entity IDs as shared wire roles, including a physical utility swap.
+// They are not proof of the actual equipped skill in another legend.
+inline uint16_t RetrievedRevenantSharedPalette(uint32_t id){
+    constexpr std::array<uint32_t,5> reported={77043,77243,77291,76805,76968};
+    const auto it=std::find(reported.begin(),reported.end(),id);
+    return it==reported.end()?0:RevenantRolePalettes[static_cast<size_t>(it-reported.begin())];
+}
+struct RetrievedSkillProjection {
+    std::array<DisplaySlot,5> slots{};
+    std::array<uint16_t,5> sharedPalettes{};
+};
+template<class Bar,class Resolve> RetrievedSkillProjection ProjectRetrievedSkillBar(
+    const Bar& bar,bool revenant,uint32_t legend,int env,Resolve resolve){
+    RetrievedSkillProjection result;
+    result.slots=DisplayBar(bar,bar.empty_slots);
+    if(!revenant)return result;
+    for(size_t i=0;i<result.slots.size();++i){
+        auto& slot=result.slots[i];
+        const auto palette=RetrievedRevenantSharedPalette(slot.id);
+        if(!palette)continue; // do not rewrite unrelated or unknown IDs
+        result.sharedPalettes[i]=palette;
+        const auto id=RevenantSharedRole(palette,static_cast<int>(i))>=0&&legend?
+            resolve(palette,legend,env,static_cast<int>(i)):0u;
+        slot={id,id?SlotEvidence::Recorded:SlotEvidence::Unresolved};
+    }
+    return result;
+}
+template<class Bar> void ApplyRetrievedSkillProjection(Bar& bar,const RetrievedSkillProjection& projection){
+    bar.heal=projection.slots[0].id;
+    for(size_t i=0;i<3;++i)bar.utilities[i]=projection.slots[i+1].id;
+    bar.elite=projection.slots[4].id;
+}
 // Optional aquatic coverage follows recorded selections, including unresolved
 // nonzero palette evidence, not an empty or retired row.
 inline bool HasSkillSelection(const std::array<DisplaySlot,5>& slots){

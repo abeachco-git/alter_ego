@@ -627,6 +627,8 @@ namespace AlterEgo {
         static uint32_t ResolveRevenantPalette(uint16_t palette,uint32_t legend,int environment,int slot);
         static uint16_t ResolveRevenantSkillPalette(uint32_t skill,uint32_t legend,int environment,int slot);
         static bool HasRevenantPalettePair(uint16_t palette,uint32_t skill);
+        static SkillEdit::RetrievedSkillProjection ProjectLiveSkills(const BuildTemplate& build,bool aquatic);
+        static void CaptureLiveSkills(const BuildTemplate& build,SavedBuild& saved);
         static uint16_t GetPaletteIdFromSkill(const std::string& profession, uint32_t skill_id);
         static bool HasPaletteData(const std::string& profession);
         static void FetchProfessionPaletteAsync(const std::string& profession);

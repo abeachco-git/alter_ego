@@ -131,6 +131,30 @@ int case_skill_edit_core(int,char**) {
         assert(!RecordRevenantActivePalettes(packet,[](auto...){return 0u;}));
     }
     using namespace AlterEgo::SkillEdit;
+    {
+        struct RetrievedBar {uint32_t heal;uint32_t utilities[3];uint32_t elite;uint8_t empty_slots;};
+        RetrievedBar api{77043,{76805,77291,77243},76968,0};
+        auto resolve=[](uint16_t palette,uint32_t legend,int env,int slot)->uint32_t{
+            if(env||!(legend==2||legend==3))return 0;
+            const auto role=AlterEgo::RevenantSharedRole(palette,slot);
+            return role<0?0:1000*legend+static_cast<uint32_t>(role+1);
+        };
+        auto assassin=ProjectRetrievedSkillBar(api,true,2,0,resolve);
+        auto dwarf=ProjectRetrievedSkillBar(api,true,3,0,resolve);
+        assert(assassin.slots[0].id==2001&&assassin.slots[1].id==2004&&assassin.slots[2].id==2003&&assassin.slots[3].id==2002&&assassin.slots[4].id==2005);
+        assert(dwarf.slots[1].id==3004&&api.utilities[0]==76805);
+        auto unavailable=ProjectRetrievedSkillBar(api,true,0,0,resolve);
+        assert(unavailable.slots[1].evidence==SlotEvidence::Unresolved&&unavailable.sharedPalettes[1]==4564);
+        auto projected=api;ApplyRetrievedSkillProjection(projected,assassin);
+        assert(projected.utilities[0]==2004&&api.utilities[0]==76805);
+        RetrievedBar waterApi{77043,{0,0,0},0,30};
+        auto waterProjection=ProjectRetrievedSkillBar(waterApi,true,3,1,resolve);
+        assert(waterProjection.slots[0].evidence==SlotEvidence::Unresolved&&waterProjection.slots[1].evidence==SlotEvidence::Empty);
+        api.utilities[0]=77043;api.utilities[1]=999;
+        auto invalid=ProjectRetrievedSkillBar(api,true,2,0,resolve);
+        assert(invalid.slots[1].evidence==SlotEvidence::Unresolved&&invalid.slots[2].id==999);
+        assert(ProjectRetrievedSkillBar(api,false,2,0,resolve).slots[0].id==77043);
+    }
     TestBar land{1,{2,3,4},5},water{6,{7,8,9},10};
     assert(SetSlot(land,2,4));
     assert(land.utilities[1]==4&&land.utilities[2]==3);
