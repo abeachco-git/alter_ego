@@ -153,7 +153,7 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
         state == State::Success ? ImVec4(0.48f, 0.82f, 0.52f, 1.0f) :
         state == State::Error ? ImVec4(0.98f, 0.42f, 0.40f, 1.0f) :
         UI::ReadableMetadataColor(ImVec4(0.58f, 0.58f, 0.58f, 1.0f),UI::WindowTransparencyPercent);
-    ImGui::AlignTextToFramePadding();
+    UI::AlignTextToActionHeight(buttonH);
     ImGui::TextColored(statusColor, "%s", statusText.c_str());
     if (ImGui::IsItemHovered()){
         DiagnosticsTooltip(shortStatus,diagnostics);
@@ -161,8 +161,8 @@ inline bool Row(const char* id, std::time_t stamp, const char* source,
 
     // Keep timestamp in the same row even when a long API status is reported.
     ImGui::SameLine(0.0f, 0.0f);
-    ImGui::SetCursorScreenPos(ImVec2(stampX,
-        start.y + (buttonH - ImGui::GetTextLineHeight()) * 0.5f));
+    ImGui::SetCursorScreenPos(ImVec2(stampX,ImGui::GetCursorScreenPos().y));
+    UI::AlignTextToActionHeight(buttonH);
     ImGui::TextColored(UI::ReadableMetadataColor(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),UI::WindowTransparencyPercent),"%s", stampLabel.c_str());
     if(ImGui::IsItemHovered()){
         if(coverage){

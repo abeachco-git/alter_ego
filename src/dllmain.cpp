@@ -8120,7 +8120,7 @@ static void RenderGearCustomizeDialog() {
     ImGui::SetNextWindowSize(ImVec2(540, 440), ImGuiCond_FirstUseEver);
     g_GearDialogFocus.ApplyBeforeBegin();
     bool windowOpen=true;
-    if (!AlterEgo::UI::BeginWindow("Customize##GearDialog", &windowOpen, ImGuiWindowFlags_NoCollapse)) {
+    if (!AlterEgo::UI::BeginWindow("Customize##GearDialog", &windowOpen, ImGuiWindowFlags_NoCollapse,AlterEgo::UI::BackgroundRole::Editor)) {
         ImGui::End();
         return;
     }
@@ -8515,11 +8515,11 @@ static void RenderGearCustomizeDialog() {
 static void RenderSaveToLibraryDialog() {
     if (!g_SaveLibDialogOpen) return;
 
-    ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
+    AlterEgo::UI::ContentSizedWindow(420.f);
     g_SaveLibDialogFocus.ApplyBeforeBegin();
     bool windowOpen=true;
     if (!AlterEgo::UI::BeginWindow("Save to Library##SaveLibDialog", &windowOpen,
-            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize,AlterEgo::UI::BackgroundRole::Editor)) {
         ImGui::End();
         return;
     }
@@ -10305,7 +10305,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
     };
     auto itemName = [&](uint32_t id) {
         const auto info = AlterEgo::GW2API::GetItemInfo(id);
-        return info ? info->name : numberLabel(id);
+        return info&&!info->name.empty()?info->name:numberLabel(id);
     };
     auto addId = [&](const std::string& group, const std::string& field,
                      uint32_t a, uint32_t b, const std::function<std::string(uint32_t)>& display) {
@@ -10580,7 +10580,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 if(g.rune_id&&observed&&observed->upgrades_observed&&observed->upgrades.empty())
                     addId("Aquatic","Breather rune",g.rune_id,0,itemName);
                 else if(!g.rune_id||!observed||observed->upgrades.empty()||!observed->upgrades[0])
-                    result.AddUnverified("Aquatic","Breather rune",g.rune_id?numberLabel(g.rune_id):g.rune,"Unverified");
+                    result.AddUnverified("Aquatic","Breather rune",g.rune_id?itemName(g.rune_id):g.rune,"Unverified");
                 else {
                     auto expected=savedRunes,actual=liveRunes;
                     expected["gear"]["Helm"]={{"rune_id",g.rune_id}};
@@ -10647,11 +10647,11 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                 std::string expected,actual;
                 for(const auto& item:wanted){
                     if(!expected.empty())expected+=", ";
-                    expected+=item.attribute.empty()?"#"+std::to_string(item.exactId):InfusionAttributeLabel(item.attribute);
+                    expected+=item.attribute.empty()?itemName(item.exactId):InfusionAttributeLabel(item.attribute);
                 }
                 for(const auto& item:installed){
                     if(!actual.empty())actual+=", ";
-                    actual+="#"+std::to_string(item.itemId);
+                    actual+=itemName(item.itemId);
                 }
                 if(expected.empty())expected="(none)";
                 if(actual.empty())actual="(none)";
@@ -10674,7 +10674,7 @@ static AlterEgo::BuildComparison CalculateSavedVsLiveComparison(
                            saved.relic_name, info->name);
             else if (saved.relic_id && id)
                 addId("Relic", "Item ID", saved.relic_id, id, itemName);
-            else result.AddUnverified("Relic","Effect / item",saved.relic_name.empty()?numberLabel(saved.relic_id):saved.relic_name,"Unavailable");
+            else result.AddUnverified("Relic","Effect / item",saved.relic_name.empty()?itemName(saved.relic_id):saved.relic_name,"Unavailable");
             result.SetLastRowLinks(AlterEgo::LINK_ITEM,{saved.relic_id,0,0},{id,0,0});
         }
     }
@@ -11710,7 +11710,7 @@ static std::string g_StorageMaintenanceMessage;
 #include "ComposableUI.h"
 
 static bool OtherLibraryEditorOpen(){
-    return g_FashionDialog||g_ComponentEditorOpen||g_ComponentEditorSaveQueued||
+    return g_FashionDialog||g_ComponentEditorOpen||g_ComponentEditorSaveQueued||!g_ComponentNameTarget.id.empty()||
         g_ReferenceEditor.open||g_ReferenceEditor.queued||g_SaveLibDialogOpen;
 }
 static bool LibraryDraftOpen(){

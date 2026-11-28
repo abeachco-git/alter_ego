@@ -1,4 +1,5 @@
 #include "../src/UIControls.h"
+#include "../src/RefreshUI.h"
 #include "../src/EntityMenuCore.h"
 #include "../src/FastLoadUIState.h"
 #include <cassert>
@@ -201,6 +202,15 @@ int case_selector_context(int, char**) {
     assert(BackgroundAlpha(.96f,50,BackgroundRole::Protected)==ProtectedBackgroundMinimum);
     assert(BackgroundAlpha(.96f,80,BackgroundRole::Protected)==ProtectedBackgroundMinimum);
     assert(BackgroundAlpha(.65f,50,BackgroundRole::Protected)==.65f);
+    for(int p:{0,20,80})assert(BackgroundAlpha(.65f,p,BackgroundRole::Editor)==.65f);
+    NameActionDraft draft;
+    draft.Start("Original",false,NameActionDraft::Mode::Custom);
+    assert(!draft.Dirty());
+    draft.Regenerate("Original");
+    assert(draft.Dirty()&&draft.mode==NameActionDraft::Mode::Automatic);
+    draft.ManualEdit();assert(!draft.Dirty());
+    draft.Regenerate("Generated");assert(draft.Dirty()&&draft.name=="Generated");
+    draft.Start("Original",true);assert(!draft.Dirty()&&draft.name=="Original - Copy");
     assert(ProtectedOverlayAlpha(.96f,0)==0.f&&ProtectedOverlayAlpha(.96f,5)==0.f);
     for(int p:{0,5,20,50,80}){
         const float a=BackgroundAlpha(.96f,p),overlay=ProtectedOverlayAlpha(.96f,p);
@@ -237,7 +247,20 @@ int case_selector_context(int, char**) {
         ImGui::EndChild();
         ImGui::CloseCurrentPopup();ImGui::EndPopup();
     }
-    ImGui::End();ImGui::Render();
+    const float footerY=ImGui::GetCursorScreenPos().y;
+    const float expectedY=footerY+(ActionButtonHeight()-ImGui::GetTextLineHeight())*.5f;
+    AlterEgo::RefreshUI::Row("test_footer",0,"test",AlterEgo::RefreshUI::State::Ready,"");
+    assert(std::abs(ImGui::GetItemRectMin().y-expectedY)<=1.f);
+    ImGui::End();
+    ImGui::SetNextWindowSize(ImVec2(400,300));
+    BeginWindow("Editor background test",nullptr,0,BackgroundRole::Editor);
+    assert(PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+    BeginChild("Editor panel",ImVec2(100,80),true);
+    assert(PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+    BeginChild("Nested panel",ImVec2(50,40),true);
+    assert(PreserveChildBackground(ImGui::GetCurrentWindowRead()));
+    ImGui::EndChild();ImGui::EndChild();ImGui::End();
+    ImGui::Render();
     assert(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).w==base.w);
     assert(ImGui::GetStyleColorVec4(ImGuiCol_ChildBg).w==child.w);
     WindowTransparencyPercent=0;

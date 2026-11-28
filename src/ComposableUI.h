@@ -86,7 +86,7 @@ static bool g_ComponentCloseRequested=false;
 static ComponentJson g_ComponentEditorBaseline;
 static std::string g_ComponentEditorInitialName;
 static bool g_ComponentEditorNew = false;
-static std::string g_ComponentEditorMode; // create, duplicate, rename, edit, copy_for_loadout
+static std::string g_ComponentEditorMode; // create, duplicate, edit, copy_for_loadout
 static bool g_ComponentEditorSaveQueued = false;
 static std::string g_ComponentEditorPrivateLoadoutId;
 static std::string g_ComponentStatus;
@@ -442,27 +442,44 @@ static bool ComponentUIEditorCanCommit() {
     }
     return true;
 }
+// Both name-only actions share a revision-qualified draft and generator.
+static std::string ComponentUIRegeneratedName(const std::string& kind,const std::string& id,const ComponentJson& item){
+    const auto proposed=AlterEgo::GW2API::SuggestLibraryComponentName(kind,item.at("data"),true);
+    AlterEgo::Composable::Document doc;std::string error;
+    return AlterEgo::Composable::FromJson(ComponentUISnapshot(),doc,error)?
+        AlterEgo::Composable::UniqueComponentName(doc,kind,proposed,id):proposed;
+}
 static void RenderComponentUIEditor() {
     using API=AlterEgo::GW2API;
     if(!g_ComponentNameTarget.id.empty()){
-        const bool valid=g_ComponentNameTarget.Current(API::GetBuildLibraryRevision())&&
-            ComponentUIFind(ComponentUISnapshot(),g_ComponentNameKind,g_ComponentNameTarget.id);
+        const auto* item=ComponentUIFind(ComponentUISnapshot(),g_ComponentNameKind,g_ComponentNameTarget.id);
+        const bool valid=g_ComponentNameTarget.Current(API::GetBuildLibraryRevision())&&item;
+        using Mode=AlterEgo::UI::NameActionDraft::Mode;
+        using Origin=AlterEgo::Composable::NameOrigin;
+        std::function<std::string()> generate;
+        if(!g_ComponentNameAction.duplicate)generate=[&]{
+            return item?ComponentUIRegeneratedName(g_ComponentNameKind,g_ComponentNameTarget.id,*item):g_ComponentNameAction.name;
+        };
         AlterEgo::UI::RenderNameAction("Name Component##component_name_action",g_ComponentNameAction,valid,
             g_ComponentNameAction.duplicate?"Create an independent exact copy. Existing references stay with the original.":"Only the name will change.",
             [&](const std::string& name,bool duplicate){
                 std::string savedId;
                 const bool ok=duplicate?API::DuplicateLoadoutComponent(g_ComponentNameKind,g_ComponentNameTarget.id,name,&savedId,g_ComponentNameTarget.revision):
-                    API::RenameLoadoutComponent(g_ComponentNameKind,g_ComponentNameTarget.id,name,g_ComponentNameTarget.revision);
+                    API::RenameLoadoutComponent(g_ComponentNameKind,g_ComponentNameTarget.id,name,g_ComponentNameTarget.revision,
+                        g_ComponentNameAction.mode==Mode::Automatic?Origin::Automatic:Origin::Manual);
                 if(ok&&duplicate)ComponentUIOpenLibrary(g_ComponentNameKind,savedId);
                 if(ok)g_ComponentNameTarget={};
                 return ok;
-            });
+            },generate,ComponentLabel(g_ComponentNameKind));
         if(!ImGui::IsPopupOpen("Name Component##component_name_action")&&!g_ComponentNameAction.pending)g_ComponentNameTarget={};
     }
     if (g_ComponentEditorOpen && !ImGui::IsPopupOpen("Component editor##ae_components"))
         ImGui::OpenPopup("Component editor##ae_components");
-    ImGui::SetNextWindowSize(ImVec2(750.0f, 660.0f), ImGuiCond_Appearing);
     if(!g_ComponentEditorOpen)return;
+    const auto display=ImGui::GetIO().DisplaySize;
+    const ImVec2 maxSize(std::max(1.f,display.x-24.f),std::max(1.f,display.y-24.f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(750.f,maxSize.x),std::min(660.f,maxSize.y)),ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(340.f,maxSize.x),std::min(240.f,maxSize.y)),maxSize);
     bool windowOpen=true;
     if (!ImGui::BeginPopupModal("Component editor##ae_components",&windowOpen)){
         if(!windowOpen)g_ComponentCloseRequested=true;
@@ -473,7 +490,7 @@ static void RenderComponentUIEditor() {
                 g_ComponentEditorMode == "edit" ? "Edit shared data" :
                 g_ComponentEditorMode == "duplicate" ? "Duplicate & edit" :
                 g_ComponentEditorMode == "copy_for_loadout" ? "Edit private copy" :
-                g_ComponentEditorMode == "create" ? "Create" : "Rename");
+                "Create");
     const int uses = ComponentUIUsage(ComponentUISnapshot(), g_ComponentEditorKind,
                                       g_ComponentEditorId);
     if (g_ComponentEditorMode == "edit") {
@@ -517,8 +534,9 @@ static void RenderComponentUIEditor() {
         g_ComponentEditorName=AlterEgo::GW2API::SuggestLibraryComponentName(g_ComponentEditorKind,g_ComponentEditorDraft,changed);
         if(changed){g_ComponentNameRequestedDraft=g_ComponentEditorDraft;g_ComponentNameRequested=true;}
     }
+    ImGui::TextUnformatted("Name");
     ImGui::SetNextItemWidth(-1);
-    if (AlterEgo::UI::InputText("Name##component_name", g_ComponentEditorName)){
+    if (AlterEgo::UI::InputText("##component_name", g_ComponentEditorName)){
         g_ComponentEditorAutoName=false;
         g_ComponentEditorNameOrigin=AlterEgo::Composable::NameOrigin::Manual;
     }
@@ -536,7 +554,7 @@ static void RenderComponentUIEditor() {
     }
     // Cache candidate results by draft and committed revision. All match
     // checks use native exact equality and verified profession context.
-    if (g_ComponentEditorMode != "rename") {
+    {
         using namespace AlterEgo;
         static ComponentJson matchedDraft;
         static std::string matchedKind, matchedId, matchedMode, matchedLoadout, similarName;
@@ -626,7 +644,7 @@ static void RenderComponentUIEditor() {
                 AlterEgo::UI::Hint("Exact saved fields differ. Both records remain independent.");
         }
     }
-    if (g_ComponentEditorMode != "rename") {
+    {
         ImGui::Separator();
         AlterEgo::UI::BeginChild("##component_native_editor", ImVec2(0, -110.0f), false);
         RenderComponentNativeEditor(g_ComponentEditorKind, g_ComponentEditorId,
@@ -665,8 +683,6 @@ static void RenderComponentUIEditor() {
                 g_ComponentEditorMode == "duplicate") {
                 cmd.type = ComponentUICommand::Create;
                 cmd.data = g_ComponentEditorDraft;
-            } else if (g_ComponentEditorMode == "rename") {
-                cmd.type = ComponentUICommand::Rename;
             } else {
                 cmd.type = ComponentUICommand::EditShared;
                 cmd.data = g_ComponentEditorDraft;
@@ -993,7 +1009,7 @@ static void RenderReferenceEditor(){
     if(!e.open)return;
     const char* popup=e.newSet?"New Equipment Set###ae_reference_editor":e.isSet?"Edit Equipment Set###ae_reference_editor":"Edit Loadout Components###ae_reference_editor";
     if(!ImGui::IsPopupOpen(popup))ImGui::OpenPopup(popup);
-    UI::ContentSizedModal(580.f);
+    UI::ContentSizedWindow(580.f);
     bool windowOpen=true;
     if(!ImGui::BeginPopupModal(popup,&windowOpen,ImGuiWindowFlags_AlwaysAutoResize)){
         if(!windowOpen)e.closeRequested=true;
@@ -1248,7 +1264,7 @@ static void RenderLoadoutSaveReview(){
 
 // Both surfaces invoke one action dispatcher; destructive confirmation is
 // owned by the page rather than a row popup or a transient item pointer.
-enum class ComponentAction { Edit, Rename, Duplicate, Copy, Delete };
+enum class ComponentAction { Edit, Rename, Regenerate, Duplicate, Copy, Delete };
 struct ComponentDeleteDraft {std::string kind,id,name;uint64_t revision=0;bool pending=false;std::string error;};
 static ComponentDeleteDraft g_ComponentDelete;
 static void RunComponentAction(ComponentAction action,const std::string& kind,const ComponentJson& item){
@@ -1259,9 +1275,18 @@ static void RunComponentAction(ComponentAction action,const std::string& kind,co
     switch(action){
     case ComponentAction::Edit:ComponentUIStartEditor("edit",kind,id,&item);break;
     case ComponentAction::Rename:
-    case ComponentAction::Duplicate:
+    case ComponentAction::Regenerate:
+    case ComponentAction::Duplicate:{
+        using Mode=AlterEgo::UI::NameActionDraft::Mode;
+        using Origin=AlterEgo::Composable::NameOrigin;
+        auto origin=Origin::Unknown;AlterEgo::Composable::DecodeNameOrigin(item,origin);
+        const auto mode=AlterEgo::Composable::IsAutomaticName(origin)?Mode::Automatic:
+            origin==Origin::Manual?Mode::Custom:Mode::Existing;
         g_ComponentNameKind=kind;g_ComponentNameTarget={id,name,AlterEgo::GW2API::GetBuildLibraryRevision()};
-        g_ComponentNameAction.Start(name,action==ComponentAction::Duplicate);break;
+        g_ComponentNameAction.Start(name,action==ComponentAction::Duplicate,mode);
+        if(action==ComponentAction::Regenerate)g_ComponentNameAction.Regenerate(ComponentUIRegeneratedName(kind,id,item));
+        break;
+    }
     case ComponentAction::Copy:{
         AlterEgo::Composable::Component exported;
         exported.name=name;exported.data=item.at("data");
@@ -1317,12 +1342,7 @@ static void ComponentRowMenu(const ComponentJson& doc,const std::string& kind,co
     if(MenuAction("Copy Component",MenuIcon::Copy))RunComponentAction(ComponentAction::Copy,kind,item);
     if(mutableActions){
         ImGui::Separator();
-        if(MenuAction("Regenerate Name",MenuIcon::Regenerate)){
-            if(ComponentUIStartEditor("rename",kind,id,&item)){
-                g_ComponentEditorAutoName=true;g_ComponentNameRequested=false;g_ComponentNameRegenerate=true;
-                g_ComponentEditorNameOrigin=AlterEgo::Composable::NameOrigin::Automatic;
-            }
-        }
+        if(MenuAction("Regenerate Name",MenuIcon::Regenerate))RunComponentAction(ComponentAction::Regenerate,kind,item);
     }
     if(!reference&&mutableActions){
         ImGui::Separator();

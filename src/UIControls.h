@@ -34,9 +34,10 @@ inline int ClampWindowTransparency(double value){
     if(value>=MaxWindowTransparency)return MaxWindowTransparency;
     return static_cast<int>(value);
 }
-enum class BackgroundRole { Ordinary, Protected };
+enum class BackgroundRole { Ordinary, Protected, Editor };
 inline constexpr float ProtectedBackgroundMinimum=.82f;
 inline float BackgroundAlpha(float base,int percent,BackgroundRole role=BackgroundRole::Ordinary){
+    if(role==BackgroundRole::Editor)return base;
     const float ordinary=base*(1.f-ClampWindowTransparency(percent)/100.f);
     return role==BackgroundRole::Protected?std::max(ordinary,std::min(base,ProtectedBackgroundMinimum)):ordinary;
 }
@@ -55,18 +56,22 @@ inline ImVec4 ReadableMetadataColor(ImVec4 color,int percent){
     color.z+=std::max(0.f,text.z-color.z)*blend;
     return color;
 }
+inline ImGuiID EditorBackgroundKey(){return ImHashStr("AlterEgo.EditorBackgroundRole");}
 inline bool PreserveChildBackground(const ImGuiWindow* parent){
     for(auto* w=parent;w;w=w->ParentWindow)
-        if(w->Flags&(ImGuiWindowFlags_Popup|ImGuiWindowFlags_Tooltip|ImGuiWindowFlags_Modal))return true;
+        if((w->Flags&(ImGuiWindowFlags_Popup|ImGuiWindowFlags_Tooltip|ImGuiWindowFlags_Modal))||
+            w->StateStorage.GetBool(EditorBackgroundKey()))return true;
     return false;
 }
 inline void ApplyWindowBackground(ImGuiCol color,BackgroundRole role=BackgroundRole::Ordinary){
-    if(WindowTransparencyPercent)
+    if(WindowTransparencyPercent&&role!=BackgroundRole::Editor)
         ImGui::SetNextWindowBgAlpha(BackgroundAlpha(ImGui::GetStyleColorVec4(color).w*ImGui::GetStyle().Alpha,WindowTransparencyPercent,role));
 }
 inline bool BeginWindow(const char* name,bool* open=nullptr,ImGuiWindowFlags flags=0,BackgroundRole role=BackgroundRole::Ordinary){
     ApplyWindowBackground(ImGuiCol_WindowBg,role);
-    return ImGui::Begin(name,open,flags);
+    const bool visible=ImGui::Begin(name,open,flags);
+    ImGui::GetCurrentWindow()->StateStorage.SetBool(EditorBackgroundKey(),role==BackgroundRole::Editor);
+    return visible;
 }
 // Local decorative backing for compact status surfaces in ordinary windows.
 // No new item, cursor movement, hit target, style override or popup changes.
@@ -110,6 +115,11 @@ inline void ClippedTextHint(bool hovered,const std::string& label,float availabl
 }
 using TooltipCore::FriendlyAttribute;
 inline float ActionButtonHeight() { return std::max(ActionHeight, ImGui::GetFrameHeight()); }
+// Use the native same-line baseline for text next to a custom-height action.
+inline void AlignTextToActionHeight(float height){
+    auto& dc=ImGui::GetCurrentWindow()->DC;
+    dc.CurrLineTextBaseOffset=std::max(dc.CurrLineTextBaseOffset,(height-ImGui::GetTextLineHeight())*.5f);
+}
 
 enum class ButtonRole { Standard, Compact, Destructive, CompactDestructive };
 inline bool Button(const char* label, ImVec2 size = ImVec2(0,0),
@@ -421,25 +431,50 @@ inline bool InputTextMultiline(const char* label, std::string& str, const ImVec2
     return ImGui::InputTextMultiline(label, str.data(), str.capacity() + 1, size,
         flags | ImGuiInputTextFlags_CallbackResize, ResizeString, &str);
 }
+// Small forms have a stable responsive width but natural content height.
+// At small display heights the window scrolls, including its footer; no
+// unconditional child-height or hidden-message reserve is needed.
+inline void ContentSizedWindow(float preferredWidth,float margin=24.f){
+    const auto display=ImGui::GetIO().DisplaySize;
+    const float width=std::max(1.f,std::min(preferredWidth,display.x-margin));
+    const float height=std::max(1.f,display.y-margin);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width,0),ImVec2(width,height));
+}
 // Name-only record operations. The caller owns the stable target, validation
 // and commit. Failed transactions leave the name and popup intact.
 struct NameActionDraft{
+    enum class Mode { Existing, Custom, Automatic };
     std::string name,error,initialName;
+    Mode mode=Mode::Existing,initialMode=Mode::Existing;
     bool pending=false,duplicate=false;
-    void Start(const std::string& original,bool copy){
+    void Start(const std::string& original,bool copy,Mode origin=Mode::Existing){
         name=original+(copy?" - Copy":"");initialName=name;error.clear();duplicate=copy;pending=true;
+        mode=initialMode=origin;
     }
+    void ManualEdit(){mode=Mode::Custom;}
+    void Regenerate(const std::string& generated){name=generated;mode=Mode::Automatic;}
+    bool Dirty() const{return name!=initialName||mode!=initialMode;}
 };
 template<class Commit>
-inline void RenderNameAction(const char* popup,NameActionDraft& draft,bool valid,const char* explanation,Commit commit){
+inline void RenderNameAction(const char* popup,NameActionDraft& draft,bool valid,const char* explanation,Commit commit,
+                             const std::function<std::string()>& generate={},const char* category=nullptr){
     if(draft.pending){draft.pending=false;ImGui::OpenPopup(popup);}
+    if(!ImGui::IsPopupOpen(popup))return;
+    ContentSizedWindow(std::max(340.f,ImGui::GetFontSize()*26.f));
     if(!ImGui::BeginPopupModal(popup,nullptr,ImGuiWindowFlags_AlwaysAutoResize))return;
     ImGui::TextUnformatted(draft.duplicate?"Duplicate record":"Rename record");
+    if(category&&*category)ImGui::TextDisabled("%s",category);
     if(explanation&&*explanation)ImGui::TextWrapped("%s",explanation);
     if(!valid)ImGui::TextWrapped("Record changed. Cancel and review again.");
-    ImGui::SetNextItemWidth(std::max(220.f,ImGui::GetFontSize()*22.f));
-    InputText("Name",draft.name);
-    const bool dirty=draft.name!=draft.initialName;
+    ImGui::TextUnformatted("Name");
+    ImGui::SetNextItemWidth(-1);
+    if(InputText("##name",draft.name)&&generate)draft.ManualEdit();
+    if(generate){
+        if(AvailableActionButton("Regenerate Name",ButtonRole::Standard,valid,"Record changed; reopen this dialog."))draft.Regenerate(generate());
+        ImGui::TextDisabled("%s",draft.mode==NameActionDraft::Mode::Automatic?"Automatic":
+            draft.mode==NameActionDraft::Mode::Custom?"Custom name":"Existing name");
+    }
+    const bool dirty=draft.Dirty();
     const bool named=draft.name.find_first_not_of(" \t\r\n")!=std::string::npos;
     const bool canSave=EditorLifecycle::CanSave(valid&&named,dirty,draft.duplicate);
     const char* reason=!valid?"Record changed; reopen this dialog.":!named?"Enter a name.":"No changes to save.";
@@ -557,15 +592,6 @@ inline bool MultiFilterChoice(const char* label,std::set<std::string>& selected,
     }
     ImGui::PopID();
     return changed;
-}
-// Reference editors have a stable responsive width but natural content height.
-// At small display heights the modal scrolls, including its footer; no
-// unconditional child-height or hidden-message reserve is needed.
-inline void ContentSizedModal(float preferredWidth,float margin=24.f){
-    const auto display=ImGui::GetIO().DisplaySize;
-    const float width=std::max(1.f,std::min(preferredWidth,display.x-margin));
-    const float height=std::max(1.f,display.y-margin);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(width,0),ImVec2(width,height));
 }
 // Group boundaries alone receive 3 extra pixels on each side. The native
 // resize-down layout owns width calculation and clipping. Reserve the group

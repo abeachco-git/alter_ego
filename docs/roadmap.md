@@ -61,6 +61,10 @@ Remaining approved batch: targeted 9B.3 audit and narrowly evidenced corrections
 
 Future implementation batches retain the exact-commit regression/build/DLL-delivery gate in AGENTS.md. Current component and storage contracts are maintained in [Architecture](architecture.md#vocabulary-and-components), not duplicated here.
 
+## Approved UI refinement — pending verification
+
+- Verify the shared status/timestamp baseline, cached Compare infusion names, editor background ancestry, unified component Rename/Regenerate Name, and content-driven small forms with bounded full editor dimensions. Remove this entry only after required CI and matching DLL delivery; in-game visual acceptance remains separate.
+
 ## Verification and release
 
 Parts 7–8 and other completed implementation acceptance, discretionary performance measurements and non-live verification remain in [development status](development-status.md); release-only gates remain in [release checklist](release-checklist.md). Do not duplicate those lists here. No approved implementation is complete without exact-commit required build gates and verified DLL delivery per AGENTS.md.

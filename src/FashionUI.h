@@ -217,7 +217,7 @@ static void RenderFashionDialog() {
     g_FashionDialogFocus.ApplyBeforeBegin();
     bool windowOpen=true;
     if (!AlterEgo::UI::BeginWindow("Save Fashion##ae_fashion", &windowOpen,
-        ImGuiWindowFlags_NoCollapse)) {
+        ImGuiWindowFlags_NoCollapse,AlterEgo::UI::BackgroundRole::Editor)) {
         ImGui::End();
         return;
     }
