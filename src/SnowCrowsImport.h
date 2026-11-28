@@ -47,6 +47,20 @@ struct Page {
     std::vector<InfusionTotal> infusions;
 };
 
+// Shared provider completeness policy: exact required slots, never a
+// count that can be satisfied by extra weapon or duplicate slot entries.
+// MetaBattle also requires the displayed stat name; Snow Crows retains
+// its existing missing-name tolerance.
+inline std::vector<std::string> MissingRequiredGear(const Page& page,bool requireStatName=false){
+    std::vector<std::string> missing;
+    for(const char* slot:{"Helm","Shoulders","Coat","Gloves","Leggings","Boots",
+                          "Backpack","Accessory1","Accessory2","Amulet","Ring1","Ring2"}){
+        const auto it=page.gear.find(slot);
+        if(it==page.gear.end()||!it->second.itemId||(requireStatName&&it->second.statName.empty()))
+            missing.emplace_back(slot);
+    }
+    return missing;
+}
 inline std::string NormalizeUrl(std::string url) {
     const auto begin = url.find_first_not_of(" \t\r\n");
     if (begin == std::string::npos) return {};
@@ -255,11 +269,16 @@ inline bool Parse(const std::string& url, const std::string& html, Page& out, st
     }
     int totalInfusions = 0;
     for (const auto& inf : parsed.infusions) totalInfusions += inf.count;
-    if (parsed.name.empty() || parsed.gear.size() < 12 || parsed.relicId == 0 ||
+    const auto missingGear=MissingRequiredGear(parsed);
+    if (parsed.name.empty() || !missingGear.empty() || parsed.relicId == 0 ||
         specIndex != 3 || skillIds.size() != 5 || std::any_of(skillIds.begin(),skillIds.end(),[](auto id){return !id;}) || totalInfusions == 0 || totalInfusions > 25) {
         error = "Incomplete Snow Crows build (missing or invalid:";
         if(parsed.name.empty())error+=" name";
-        if(parsed.gear.size()<12)error+=" equipment";
+        if(!missingGear.empty()){
+            error+=" equipment [";
+            for(size_t i=0;i<missingGear.size();++i){if(i)error+=", ";error+=missingGear[i];}
+            error+="]";
+        }
         if(!parsed.relicId)error+=" relic";
         if(specIndex!=3)error+=" specializations";
         if(skillIds.size()!=5||std::any_of(skillIds.begin(),skillIds.end(),[](auto id){return !id;}))error+=" skills";

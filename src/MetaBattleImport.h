@@ -283,16 +283,7 @@ inline bool Parse(const std::string& url, const std::string& html,
     // Require every standard armor and trinket slot independently. A simple
     // "12 or more slots" count still accepted pages that dropped a backpiece
     // or rings while having enough weapon entries to pass that threshold.
-    std::vector<std::string> missingSlots;
-    for (const char* required : {
-            "Helm", "Shoulders", "Coat", "Gloves", "Leggings", "Boots",
-            "Backpack", "Accessory1", "Accessory2", "Amulet",
-            "Ring1", "Ring2"}) {
-        const auto it = page.gear.find(required);
-        if (it == page.gear.end() || it->second.itemId == 0 ||
-            it->second.statName.empty())
-            missingSlots.emplace_back(required);
-    }
+    const auto missingSlots=SnowCrows::MissingRequiredGear(page,true);
     if (!missingSlots.empty()) {
         error = "MetaBattle equipment incomplete: missing ";
         for (size_t i = 0; i < missingSlots.size(); ++i) {

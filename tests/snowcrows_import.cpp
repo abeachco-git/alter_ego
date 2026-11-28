@@ -115,6 +115,20 @@ int case_snowcrows_import(int argc, char** argv) {
     assert(out.infusions.size() == 2);
     assert(out.infusions[0].itemId == 39619 && out.infusions[0].count == 15);
     assert(out.infusions[1].itemId == 85971 && out.infusions[1].count == 3);
+    assert(MissingRequiredGear(out,true).empty());
+    {
+        auto missing=out;missing.gear.erase("Backpack");
+        assert(missing.gear.size()>=12&&MissingRequiredGear(missing)==std::vector<std::string>{"Backpack"});
+        missing=out;missing.gear.at("Ring1").statName.clear();
+        assert(MissingRequiredGear(missing).empty()&&MissingRequiredGear(missing,true)==std::vector<std::string>{"Ring1"});
+        auto damaged=sample;
+        const auto backpiece=row(79837,"Viper&#039;s","Backpiece",1268,"");
+        const auto at=damaged.find(backpiece);assert(at!=std::string::npos);
+        damaged.erase(at,backpiece.size());
+        Page retained=out;assert(!Parse(url,damaged,retained,error));
+        assert(retained.name==out.name&&retained.gear.size()==out.gear.size());
+        assert(error.find("Backpack")!=std::string::npos);
+    }
     const std::string previousName = out.name;
     assert(!Parse(url, "<html>error</html>", out, error));
     assert(out.name == previousName); // invalid refresh cannot destroy existing data
