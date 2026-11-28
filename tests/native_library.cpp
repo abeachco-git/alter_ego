@@ -124,6 +124,8 @@ int case_native_library(int,char**) {
         active[0]={4572,0,2,1,42};
         active[9]={65535,123,0,3,42};
         input["builds"][1]["rev_active_palettes"]=active;
+        const AlterEgo::InactiveLegendContext inactiveContext={AlterEgo::LegendPaletteContext{2,1,42},AlterEgo::UnknownLegendPaletteContext};
+        input["builds"][1]["rev_inactive_context"]=inactiveContext;
         Native::Snapshot source;
         assert(C::SplitLegacy(input,source.loadouts,error));
         auto* ranger=C::FindLoadout(source.loadouts,"ranger");
@@ -163,10 +165,15 @@ int case_native_library(int,char**) {
         const auto* revSkills=C::Find(restored.loadouts,"skills",rev->refs.at("skills"));
         assert(revSkills&&revSkills->data.at("inactive_rev_skills")==input["builds"][1]["inactive_rev_skills"]);
         assert(revSkills->data.at("rev_active_palettes")==input["builds"][1]["rev_active_palettes"]);
+        assert(revSkills->data.at("rev_inactive_context")==input["builds"][1]["rev_inactive_context"]);
+        assert(AlterEgo::SkillEdit::ReadInactiveLegendContext(revSkills->data)==inactiveContext);
         auto invalidPalettes=C::ExportComponent("skills",*revSkills);
         invalidPalettes["data"]["inactive_rev_skills"][0]=65536;
         std::string importedKind;C::Component imported;
         assert(!C::ImportComponent(invalidPalettes,importedKind,imported,error));
+        auto invalidContext=C::ExportComponent("skills",*revSkills);
+        invalidContext["data"]["rev_inactive_context"][0][0]=256;
+        assert(!C::ImportComponent(invalidContext,importedKind,imported,error));
         auto sparseLegend=C::ExportComponent("legends",*persistedLegend);
         assert(C::ImportComponent(sparseLegend,importedKind,imported,error));
         sparseLegend["data"]["legend_codes"][3]=std::string(257,'x');

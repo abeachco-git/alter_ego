@@ -42,8 +42,23 @@ int case_skill_edit_core(int,char**) {
         assert(!ProjectDerivedBuildLink(b,trait,palette,oversizedLegend));
         auto knownLegend=[](int i)->std::optional<uint32_t>{return static_cast<uint32_t>(13+i);};
         InactiveLegendPalettes raw={1,0,65535,4,5,6};
-        auto rev=ProjectDerivedBuildLink(b,trait,palette,knownLegend,raw);
+        const InactiveLegendContext context={LegendPaletteContext{13,14,0},LegendPaletteContext{15,16,0}};
+        assert(!ProjectDerivedBuildLink(b,trait,palette,knownLegend,raw));
+        auto rev=ProjectDerivedBuildLink(b,trait,palette,knownLegend,raw,context);
         assert(rev&&rev->legends[3]==16&&rev->inactive_rev_skills[2]==65535);
+        auto changed=context;changed[1][1]=12;
+        assert(!ProjectDerivedBuildLink(b,trait,palette,knownLegend,raw,changed));
+        auto partial=context;partial[1]=UnknownLegendPaletteContext;
+        assert(!ProjectDerivedBuildLink(b,trait,palette,knownLegend,raw,partial));
+        InactiveLegendPalettes landOnly={1,0,65535,0,0,0};
+        assert(ProjectDerivedBuildLink(b,trait,palette,knownLegend,landOnly,partial));
+        b.specializations[2].spec_id=4;
+        assert(!ProjectDerivedBuildLink(b,trait,palette,knownLegend,raw,context));
+        b.specializations[2].spec_id=0;
+        const auto slots=SkillEdit::InactiveUtilityDisplay(raw,context[0],0,[](uint16_t p,uint32_t legend,int env,int slot){
+            return p==1&&legend==14&&env==0&&slot==1?123u:0u;
+        });
+        assert(slots[0].id==123&&slots[1].evidence==SkillEdit::SlotEvidence::Empty&&slots[2].evidence==SkillEdit::SlotEvidence::Unresolved);
         b.profession="Unknown";assert(!project());
     }
     {

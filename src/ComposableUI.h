@@ -306,8 +306,9 @@ static void RenderComponentInventory(const std::string& kind, const ComponentJso
             ImGui::PopID();
         }
         if(data.contains("rev_active_palettes"))ImGui::TextDisabled("Original Revenant palette evidence retained");
-        if(data.contains("inactive_rev_skills"))
-            ImGui::TextDisabled("Inactive Revenant utility order recorded");
+        if(const auto inactive=SE::ReadInactivePalettes(data))
+            RenderInactiveRevenantOrder(*inactive,SE::ReadInactiveLegendContext(data),ICON_SIZE);
+        else if(data.contains("inactive_rev_skills"))ImGui::TextDisabled("Unrecognized inactive utility order; retained");
     }
     if (data.contains("gear") && data["gear"].is_object() &&
         !data["gear"].empty()) {

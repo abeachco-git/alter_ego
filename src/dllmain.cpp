@@ -3980,23 +3980,43 @@ static bool RenderEditableSkillIcon(uint32_t skill_id, float size,bool nameMenu=
 static void RenderSkillIcon(uint32_t skill_id, float size);
 // Shared display-only strip. Metadata admission remains with the ordinary
 // visible skill owner; no per-view cache, timer or request policy.
-static void DemandSkillBarMetadata(const std::array<AlterEgo::SkillEdit::DisplaySlot,5>& slots,bool aquatic){
+template<size_t N> static void DemandSkillBarMetadata(const std::array<AlterEgo::SkillEdit::DisplaySlot,N>& slots,bool aquatic){
     const auto ids=AlterEgo::SkillEdit::RecordedSkillIds(slots);
     if(!ids.empty())AlterEgo::GW2API::FetchSkillDetailsAsync(ids,aquatic);
 }
-static void RenderSkillBarPreview(const std::array<AlterEgo::SkillEdit::DisplaySlot,5>& slots,float size,bool aquatic=false) {
+template<size_t N> static void RenderSkillBarPreview(const std::array<AlterEgo::SkillEdit::DisplaySlot,N>& slots,float size,bool aquatic=false,size_t firstSlot=0) {
     namespace SE=AlterEgo::SkillEdit;
     DemandSkillBarMetadata(slots,aquatic);
-    const auto columns=SE::IconColumns(ImGui::GetContentRegionAvail().x,size,ImGui::GetStyle().ItemSpacing.x,5);
+    const auto columns=SE::IconColumns(ImGui::GetContentRegionAvail().x,size,ImGui::GetStyle().ItemSpacing.x,static_cast<int>(N));
     ImGui::PushID("skill_bar_preview");
     for(size_t i=0;i<slots.size();++i){
         if(i%columns)ImGui::SameLine();
         ImGui::PushID(static_cast<int>(i));
-        RenderSkillIconCore(slots[i].id,size,false,true,{},SE::SlotLabel(i),
+        RenderSkillIconCore(slots[i].id,size,false,true,{},SE::SlotLabel(i+firstSlot),
             slots[i].evidence==SE::SlotEvidence::Empty,slots[i].evidence==SE::SlotEvidence::Unresolved);
         ImGui::PopID();
     }
     ImGui::PopID();
+}
+// Read-only original wire order, never the catalog order or a live stance.
+static void RenderInactiveRevenantOrder(const AlterEgo::InactiveLegendPalettes& values,
+        const std::optional<AlterEgo::InactiveLegendContext>& provenance,float size,
+        const std::optional<AlterEgo::InactiveLegendContext>& current=std::nullopt){
+    using namespace AlterEgo;
+    for(size_t env=0;env<2;++env){
+        if(!HasInactivePaletteGroup(values,env))continue;
+        ImGui::PushID(static_cast<int>(env));
+        ImGui::TextDisabled("%s inactive utilities (recorded template)",env?"Aquatic":"Terrestrial");
+        const bool known=provenance&&KnownLegendPaletteContext((*provenance)[env]);
+        const auto verdict=current?InactivePaletteContextVerdict(provenance,env,(*current)[env]):
+            known?InactiveContextVerdict::Matches:InactiveContextVerdict::Unknown;
+        if(verdict==InactiveContextVerdict::Matches){
+            const auto slots=SkillEdit::InactiveUtilityDisplay(values,(*provenance)[env],env,GW2API::ResolveRevenantPalette);
+            RenderSkillBarPreview(slots,size,env!=0,1);
+        }else ImGui::TextDisabled("%s",verdict==InactiveContextVerdict::Different?
+            "Legend context changed; original order retained":"Original legend context unverified");
+        ImGui::PopID();
+    }
 }
 static bool DecodeBuildLink(const std::string& link, const std::string& name,
                             AlterEgo::GameMode mode, AlterEgo::SavedBuild& out);
@@ -5652,6 +5672,7 @@ static bool DecodeBuildLink(const std::string& link, const std::string& name,
     out.pets_recorded=decoded.profession==AlterEgo::PROF_RANGER&&decoded.companion_choices_known;
     out.legends_recorded=decoded.profession==AlterEgo::PROF_REVENANT&&decoded.companion_choices_known;
     out.inactive_rev_skills=AlterEgo::RecordedInactiveLegendPalettes(decoded);
+    out.rev_inactive_context=AlterEgo::RecordedInactiveLegendContext(decoded);
 
     // Weapons
     out.weapons.clear();
@@ -10067,7 +10088,15 @@ static void RenderSavedBuildPreview(const AlterEgo::SavedBuild& source) {
             else{g_EditDraft.pets_recorded=true;g_EditDraft.pets_source_slots=std::move(payload);}
             MarkEditDirty();
         }
-        if(legend)RenderRevenantContextWarnings(RevenantTypedContext(skillSrc,slots));
+        if(legend){
+            RenderRevenantContextWarnings(RevenantTypedContext(skillSrc,slots));
+            if(skillSrc.inactive_rev_skills){
+                const AlterEgo::InactiveLegendContext context={{
+                    {skillSrc.legend_codes[0],skillSrc.legend_codes[1],skillSrc.specializations[2].spec_id},
+                    {skillSrc.legend_codes[2],skillSrc.legend_codes[3],skillSrc.specializations[2].spec_id}}};
+                RenderInactiveRevenantOrder(*skillSrc.inactive_rev_skills,skillSrc.rev_inactive_context,skillSz,context);
+            }
+        }
     }
 
     ImGui::Spacing();

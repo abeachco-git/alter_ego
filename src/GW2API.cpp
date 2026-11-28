@@ -2386,7 +2386,7 @@ namespace AlterEgo {
                 return value?std::optional<uint32_t>(value):std::nullopt;
             },
             [&](int i)->std::optional<uint32_t>{return b.legend_codes[i];},
-            b.inactive_rev_skills);
+            b.inactive_rev_skills,b.rev_inactive_context);
         return link?ChatLink::EncodeBuild(*link):std::string{};
     }
 
@@ -2528,6 +2528,7 @@ namespace AlterEgo {
         if(b.pets_recorded||b.pets_source_slots.is_array()||Composable::HasCompanionSelection(pets))bj["pets"]=b.CompanionPayload(false);
         if(b.legends_recorded||b.legends_source_slots.is_array()||Composable::HasCompanionSelection(legends))bj["legend_codes"]=b.CompanionPayload(true);
         if(b.inactive_rev_skills)bj["inactive_rev_skills"]=*b.inactive_rev_skills;
+        if(b.rev_inactive_context)bj["rev_inactive_context"]=*b.rev_inactive_context;
         if(b.rev_active_palettes)bj["rev_active_palettes"]=*b.rev_active_palettes;
         if (!b.weapons.empty()) bj["weapons"] = b.weapons;
 
@@ -2677,14 +2678,10 @@ namespace AlterEgo {
             b.legend_codes[i]=static_cast<uint8_t>(legends[i]);
         }
         b.rev_active_palettes=SkillEdit::ReadPaletteEvidence(bj);
-        b.inactive_rev_skills.reset();
-        if(const auto it=bj.find("inactive_rev_skills");it!=bj.end()){
-            // An anomalous extension is preserved in the native graph,
-            // but cannot become a typed protocol value by truncation.
-            std::string fieldError;
-            if(Composable::ValidatePortablePayload("skills",json{{"inactive_rev_skills",*it}},fieldError))
-                b.inactive_rev_skills=it->get<InactiveLegendPalettes>();
-        }
+        // An anomalous extension is preserved in the native graph,
+        // but cannot become a typed protocol value by truncation.
+        b.inactive_rev_skills=SkillEdit::ReadInactivePalettes(bj);
+        b.rev_inactive_context=SkillEdit::ReadInactiveLegendContext(bj);
         if (bj.contains("weapons") && bj["weapons"].is_array()) {
             for (const auto& w : bj["weapons"])
                 b.weapons.push_back(w.get<uint32_t>());

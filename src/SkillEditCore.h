@@ -42,7 +42,7 @@ inline bool HasSkillSelection(const std::array<DisplaySlot,5>& slots){
     });
 }
 // Request only exact recorded IDs; unresolved palette evidence is not a skill ID.
-inline std::vector<uint32_t> RecordedSkillIds(const std::array<DisplaySlot,5>& slots) {
+template<size_t N> inline std::vector<uint32_t> RecordedSkillIds(const std::array<DisplaySlot,N>& slots) {
     std::vector<uint32_t> ids;
     for(const auto& slot:slots)if(slot.evidence==SlotEvidence::Recorded&&slot.id)ids.push_back(slot.id);
     std::sort(ids.begin(),ids.end());
@@ -111,6 +111,47 @@ template<class Json> std::optional<RevenantActivePaletteEvidence> ReadPaletteEvi
         }
     }
     return ValidRevenantActivePaletteEvidence(result)?std::optional<RevenantActivePaletteEvidence>(result):std::nullopt;
+}
+template<class Json> std::optional<InactiveLegendContext> ParseInactiveLegendContext(const Json& rows){
+    if(!rows.is_array()||rows.size()!=2)return std::nullopt;
+    InactiveLegendContext result{};
+    for(size_t env=0;env<2;++env){
+        if(!rows[env].is_array()||rows[env].size()!=3)return std::nullopt;
+        for(size_t i=0;i<3;++i){
+            const auto slot=JsonDisplaySlot(rows[env][i],256);
+            if(slot.evidence==SlotEvidence::Unrecorded)return std::nullopt;
+            result[env][i]=slot.id;
+        }
+        if(!ValidLegendPaletteContext(result[env]))return std::nullopt;
+    }
+    return result;
+}
+template<class Json> std::optional<InactiveLegendContext> ReadInactiveLegendContext(const Json& data){
+    if(!data.is_object()||!data.contains("rev_inactive_context"))return std::nullopt;
+    return ParseInactiveLegendContext(data.at("rev_inactive_context"));
+}
+template<class Json> std::optional<InactiveLegendPalettes> ReadInactivePalettes(const Json& data){
+    if(!data.is_object()||!data.contains("inactive_rev_skills"))return std::nullopt;
+    const auto& rows=data.at("inactive_rev_skills");
+    if(!rows.is_array()||rows.size()!=6)return std::nullopt;
+    InactiveLegendPalettes values{};
+    for(size_t i=0;i<6;++i){
+        const auto slot=JsonDisplaySlot(rows[i],65535);
+        if(slot.evidence==SlotEvidence::Unrecorded)return std::nullopt;
+        values[i]=static_cast<uint16_t>(slot.id);
+    }
+    return values;
+}
+template<class Resolve> std::array<DisplaySlot,3> InactiveUtilityDisplay(
+    const InactiveLegendPalettes& values,const LegendPaletteContext& context,size_t env,Resolve resolve){
+    std::array<DisplaySlot,3> slots{};
+    if(!KnownLegendPaletteContext(context))return slots;
+    for(size_t i=0;i<3;++i){
+        const auto palette=values[env*3+i];
+        const auto id=palette?resolve(palette,context[1],static_cast<int>(env),static_cast<int>(i+1)):0u;
+        slots[i]={id,id?SlotEvidence::Recorded:palette?SlotEvidence::Unresolved:SlotEvidence::Empty};
+    }
+    return slots;
 }
 inline bool RetirePaletteEdits(std::optional<RevenantActivePaletteEvidence>& evidence,bool aquatic,
     const std::array<DisplaySlot,5>& before,const std::array<DisplaySlot,5>& after,uint8_t explicitSlots=0){

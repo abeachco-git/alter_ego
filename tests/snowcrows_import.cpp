@@ -95,6 +95,7 @@ int case_snowcrows_import(int, char**) {
         uint32_t rune_id=0,relic_id=0;SpecLine specializations[3];Bar terrestrial_skills,aquatic_skills;
         struct Pets {uint32_t terrestrial[2]={},aquatic[2]={};} pets;
         uint8_t legend_codes[4]={};std::optional<InactiveLegendPalettes> inactive_rev_skills;
+        std::optional<InactiveLegendContext> rev_inactive_context;
         std::optional<RevenantActivePaletteEvidence> rev_active_palettes;
         std::map<std::string,Slot> gear;std::vector<Requirement> infusion_totals;
         bool infusion_summary_present=false;int infusion_ar_total=0;std::map<std::string,int> infusion_stat_totals;};
@@ -234,6 +235,8 @@ int case_snowcrows_import(int, char**) {
             auto land=SR::FromPage(guide,tier);
             assert(SR::Apply(local,land,merged,report,error,two));
             assert((merged.inactive_rev_skills==InactiveLegendPalettes{99,98,97,40,50,60}));
+            assert(merged.rev_inactive_context&&(*merged.rev_inactive_context)[0]==LegendPaletteContext({5,2,0})&&
+                (*merged.rev_inactive_context)[1]==UnknownLegendPaletteContext);
             auto absent=local;absent.inactive_rev_skills.reset();
             assert(SR::Apply(absent,land,merged,report,error,two)&&!merged.inactive_rev_skills);
             code.legends[2]=3;code.legends[3]=4;
@@ -241,6 +244,7 @@ int case_snowcrows_import(int, char**) {
             guide.templateCode=ChatLink::EncodeBuild(code);
             assert(SR::Apply(absent,SR::FromPage(guide,tier),merged,report,error,two));
             assert((merged.inactive_rev_skills==InactiveLegendPalettes{99,98,97,96,95,94}));
+            assert(merged.rev_inactive_context&&(*merged.rev_inactive_context)[1]==LegendPaletteContext({3,4,0}));
             code.legends[0]=2;
         }
         guide.templateCode=ChatLink::EncodeBuild(code);

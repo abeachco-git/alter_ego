@@ -108,6 +108,36 @@ namespace AlterEgo {
 
     // Keep opaque protocol IDs rather than guessing legend-specific aliases.
     using InactiveLegendPalettes=std::array<uint16_t,6>;
+    // Each environment retains its independent original exact wire context.
+    // An all-256 row is unknown provenance, never a real protocol identity.
+    using LegendPaletteContext=std::array<uint32_t,3>;
+    using InactiveLegendContext=std::array<LegendPaletteContext,2>;
+    inline constexpr LegendPaletteContext UnknownLegendPaletteContext={256,256,256};
+    inline constexpr InactiveLegendContext UnknownInactiveLegendContext={UnknownLegendPaletteContext,UnknownLegendPaletteContext};
+    inline bool ValidLegendPaletteContext(const LegendPaletteContext& row){
+        return row==UnknownLegendPaletteContext||
+            std::all_of(row.begin(),row.end(),[](uint32_t v){return v<=255;});
+    }
+    inline bool KnownLegendPaletteContext(const LegendPaletteContext& row){
+        return row[0]&&row[1]&&row[0]!=row[1]&&row[0]<=255&&row[1]<=255&&row[2]<=255;
+    }
+    inline LegendPaletteContext WireLegendPaletteContext(const DecodedBuildLink& link,size_t env){
+        return {link.legends[env*2],link.legends[env*2+1],link.specs[2].spec_id};
+    }
+    inline bool HasInactivePaletteGroup(const InactiveLegendPalettes& values,size_t env){
+        return std::any_of(values.begin()+env*3,values.begin()+env*3+3,[](uint16_t v){return v!=0;});
+    }
+    enum class InactiveContextVerdict { Unknown, Matches, Different };
+    inline InactiveContextVerdict InactivePaletteContextVerdict(
+        const std::optional<InactiveLegendContext>& context,size_t env,const LegendPaletteContext& current){
+        if(!context||!KnownLegendPaletteContext((*context)[env]))return InactiveContextVerdict::Unknown;
+        if(!KnownLegendPaletteContext(current))return InactiveContextVerdict::Unknown;
+        return (*context)[env]==current?InactiveContextVerdict::Matches:InactiveContextVerdict::Different;
+    }
+    inline std::optional<InactiveLegendContext> RecordedInactiveLegendContext(const DecodedBuildLink& link){
+        if(link.profession!=PROF_REVENANT||!link.inactive_rev_skills_known||!link.companion_choices_known)return std::nullopt;
+        return InactiveLegendContext{WireLegendPaletteContext(link,0),WireLegendPaletteContext(link,1)};
+    }
     inline std::optional<InactiveLegendPalettes> RecordedInactiveLegendPalettes(const DecodedBuildLink& link) {
         if(link.profession!=PROF_REVENANT||!link.inactive_rev_skills_known)return std::nullopt;
         InactiveLegendPalettes values{};
@@ -199,7 +229,8 @@ namespace AlterEgo {
     template<class Build,class TraitChoice,class Palette,class LegendChoice>
     std::optional<DecodedBuildLink> ProjectDerivedBuildLink(const Build& b,
         TraitChoice traitChoice,Palette palette,LegendChoice legendChoice,
-        const std::optional<InactiveLegendPalettes>& inactive=std::nullopt) {
+        const std::optional<InactiveLegendPalettes>& inactive=std::nullopt,
+        const std::optional<InactiveLegendContext>& inactiveContext=std::nullopt) {
         DecodedBuildLink link{};
         static constexpr const char* professions[]={"Guardian","Warrior","Engineer",
             "Ranger","Thief","Elementalist","Mesmer","Necromancer","Revenant"};
@@ -228,6 +259,13 @@ namespace AlterEgo {
                 if(!id||*id>255)return std::nullopt;
                 link.legends[i]=static_cast<uint8_t>(*id);
             }
+            // Do not re-label an old inactive utility order as belonging
+            // to a new legend or specialization. Keep original bytes in
+            // Skills and refuse derived links with unqualified nonzero data.
+            if(inactive)for(size_t env=0;env<2;++env)
+                if(HasInactivePaletteGroup(*inactive,env)&&
+                   InactivePaletteContextVerdict(inactiveContext,env,WireLegendPaletteContext(link,env))!=InactiveContextVerdict::Matches)
+                    return std::nullopt;
             ApplyInactiveLegendPalettes(link,inactive);
         }
         auto bar=[&](const auto& source,uint16_t (&target)[5],int env){

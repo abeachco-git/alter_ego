@@ -23,6 +23,7 @@ struct Patch {
     std::array<Field<uint32_t>,5> skills;
     std::array<Field<uint32_t>,4> companions;
     std::optional<InactiveLegendPalettes> inactivePalettes;
+    std::optional<InactiveLegendContext> inactiveContext;
     std::optional<RevenantActivePaletteEvidence> activePalettes;
     std::string verifiedTemplate;
     std::map<std::string,GearPatch> gear;
@@ -64,6 +65,7 @@ Patch FromPage(const SnowCrows::Page& page,Tier tier,bool initial=false,Resolve 
                     if(id)p.companions[i]=id; // guide zero is ambiguous, never a deletion
                 }
                 p.inactivePalettes=RecordedInactiveLegendPalettes(decoded);
+                p.inactiveContext=RecordedInactiveLegendContext(decoded);
             }
             p.activePalettes=RecordRevenantActivePalettes(decoded,resolve);
             // Published exact skill IDs are independent positive evidence.
@@ -253,17 +255,27 @@ template<class Build,class TwoHanded,class Compatibility=UnknownCompatibility> b
         // palettes were supplied and accepted. An absent prior six-slot
         // block cannot represent one known group without inventing zeros.
         if(legend&&p.inactivePalettes){
-            if(initial)b.inactive_rev_skills=p.inactivePalettes;
-            else{
+            if(initial){
+                b.inactive_rev_skills=p.inactivePalettes;
+                b.rev_inactive_context=p.inactiveContext;
+            }else{
                 for(size_t env=0;env<2;++env){
                     const auto first=p.inactivePalettes->begin()+env*3;
+                    const LegendPaletteContext current={b.legend_codes[env*2],b.legend_codes[env*2+1],b.specializations[2].spec_id};
                     acceptedEnvironment[env]=acceptedEnvironment[env]&&
-                        std::all_of(first,first+3,[](uint16_t id){return id!=0;});
+                        std::all_of(first,first+3,[](uint16_t id){return id!=0;})&&
+                        InactivePaletteContextVerdict(p.inactiveContext,env,current)==InactiveContextVerdict::Matches;
                 }
-                if(acceptedEnvironment[0]&&acceptedEnvironment[1])b.inactive_rev_skills=p.inactivePalettes;
-                else if(b.inactive_rev_skills)
-                    for(size_t env=0;env<2;++env)if(acceptedEnvironment[env])
+                if(acceptedEnvironment[0]&&acceptedEnvironment[1]){
+                    b.inactive_rev_skills=p.inactivePalettes;
+                    b.rev_inactive_context=p.inactiveContext;
+                }else if(b.inactive_rev_skills){
+                    for(size_t env=0;env<2;++env)if(acceptedEnvironment[env]){
                         std::copy_n(p.inactivePalettes->begin()+env*3,3,b.inactive_rev_skills->begin()+env*3);
+                        if(!b.rev_inactive_context)b.rev_inactive_context=UnknownInactiveLegendContext;
+                        (*b.rev_inactive_context)[env]=(*p.inactiveContext)[env];
+                    }
+                }
             }
         }
     }

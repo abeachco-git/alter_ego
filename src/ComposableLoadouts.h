@@ -321,7 +321,7 @@ inline const std::map<std::string, std::string>& RootOwnership() {
         {"profession","base_build"}, {"specializations","base_build"},
         {"pets","pets"}, {"legend_codes","legends"},
         {"weapons","base_build"}, // In-game Build Template weapon skills, NOT equipped items.
-        {"skills","skills"}, {"aquatic_skills","skills"}, {"inactive_rev_skills","skills"}, {"rev_active_palettes","skills"},
+        {"skills","skills"}, {"aquatic_skills","skills"}, {"inactive_rev_skills","skills"}, {"rev_inactive_context","skills"}, {"rev_active_palettes","skills"},
         {"rune_name","runes"}, {"rune_id","runes"},
         {"relic_name","relic"}, {"relic_id","relic"},
         {"infusion_totals","infusions"},
@@ -1186,6 +1186,8 @@ inline bool ValidatePortablePayload(const std::string& kind,
                    row[3].get<uint64_t>()>256||row[4].get<uint64_t>()>UINT8_MAX||
                    (row[0]==0&&row[1]!=0)||((row[2]==256||row[3]==256)&&row[1]!=0))return Fail(error,"Invalid active legend palette evidence range.");
             }
+        } else if (field == "rev_inactive_context") {
+            if(!SkillEdit::ParseInactiveLegendContext(value))return Fail(error,"Invalid inactive legend context.");
         } else if (field == "inactive_rev_skills") {
             if(!value.is_array()||value.size()!=6)return Fail(error,"Invalid inactive legend palette array.");
             for(const auto& palette:value){
@@ -1537,7 +1539,7 @@ inline Json ReplaceCapturedFieldsPreservingExtensions(const Json& previous,
                         result["gear"][slot.key()][field.key()] = field.value();
                 }
             }
-        } else if ((!RootOwnership().count(it.key())||it.key()=="inactive_rev_skills"||it.key()=="rev_active_palettes") &&
+        } else if ((!RootOwnership().count(it.key())||it.key()=="inactive_rev_skills"||it.key()=="rev_inactive_context"||it.key()=="rev_active_palettes") &&
                    !result.contains(it.key())) {
             result[it.key()] = it.value();
         }
@@ -1694,7 +1696,7 @@ inline const std::set<std::string>& KnownLegacyKeys() {
         "id", "name", "source_character", "source_identity", "source_url", "import_warning",
         "chat_link", "ae2_code", "profession", "game_mode", "game_modes",
         "notes", "created", "specializations", "skills", "aquatic_skills",
-        "pets", "legend_codes", "inactive_rev_skills", "rev_active_palettes", "weapons", "gear", "infusion_totals",
+        "pets", "legend_codes", "inactive_rev_skills", "rev_inactive_context", "rev_active_palettes", "weapons", "gear", "infusion_totals",
         "infusion_summary_present", "infusion_ar_total", "infusion_stat_totals",
         "rune_name", "rune_id", "relic_name", "relic_id"
     };

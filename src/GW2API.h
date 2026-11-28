@@ -339,6 +339,7 @@ namespace AlterEgo {
             return result;
         }
         std::optional<InactiveLegendPalettes> inactive_rev_skills; // exact wire order; absent if not reported
+        std::optional<InactiveLegendContext> rev_inactive_context; // independent original environment contexts
         std::optional<RevenantActivePaletteEvidence> rev_active_palettes; // conditional imported wire evidence
         std::vector<uint32_t> weapons;
         // Gear (user-entered)
